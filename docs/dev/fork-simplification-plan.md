@@ -2,7 +2,7 @@
 
 > 基于 `architecture.md` 的架构现状，规划精简版本的具体操作
 > 最后更新：2026-06-19（残留清理收尾）
-> 状态：已执行完成，当前版本 0.0.1
+> 状态：已执行完成，当前版本 0.0.2
 
 ---
 
@@ -735,8 +735,8 @@ ExtensionsPage 入口不变（4 项保留）。PromptPage 内部变化：
 
 | 属性 | 值 | 说明 |
 |------|------|------|
-| 起始 `versionName` | `0.0.1` | Fork 后首个精简版本 |
-| 起始 `versionCode` | `1` | 从 1 重新计数 |
+| 起始 `versionName` | `0.0.1` → `0.0.2` | Fork 后精简版本，0.0.2 为 MCP 管理重构版 |
+| 起始 `versionCode` | `1` → `2` | 从 1 重新计数 |
 | 原项目版本 | `2.3.1`（versionCode `164`） | RikkaHub fork 源头 |
 | 版本号规范 | SemVer（`MAJOR.MINOR.PATCH`） | 遵循语义化版本 |
 
