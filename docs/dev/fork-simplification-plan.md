@@ -15,7 +15,7 @@
 | `applicationId` | `me.rerere.rikkahub` → `net.weero.mersix.pilot` | `app/build.gradle.kts` |
 | `namespace` | `me.rerere.rikkahub` → `net.weero.mersix.pilot` | `app/build.gradle.kts` |
 | 包名目录 | `me/rerere/rikkahub/` → `net/weero/mersix/pilot/` | `app/src/main/java/` 全部子目录 |
-| `app_name` | RikkaHub → Mersix Pilot（中文：小麦助手） | `app/src/main/res/values*/strings.xml` 共 6 个文件（values、values-zh、values-zh-rTW、values-ja、values-ko-rKR、values-ru） |
+| `app_name` | RikkaHub → Mersix Pilot（中文：小麦助手） | `app/src/main/res/values*/strings.xml` 共 5 个文件（values、values-zh、values-ja、values-ko-rKR、values-ru） |
 | 启动图标 | `ic_launcher` | `app/src/main/res/mipmap-*/ic_launcher*` 及 `ic_launcher_round*` |
 | User-Agent | `RikkaHub-Android/${VERSION}` → `MersixPilot-Android/${VERSION}` | `di/DataSourceModule.kt` OkHttpClient 拦截器 |
 
@@ -697,7 +697,7 @@ ExtensionsPage 入口不变（4 项保留）。PromptPage 内部变化：
 
 **D. 死字符串清理（6 语言文件 × 59 条/文件 = 354 条删除 + 12 条文本更新）**：
 
-6 个 `strings.xml` 文件（`values`/`values-zh`/`values-zh-rTW`/`values-ja`/`values-ko-rKR`/`values-ru`）各删除 59 条死字符串：
+6 个 `strings.xml` 文件（`values`/`values-zh`/`values-ja`/`values-ko-rKR`/`values-ru`）各删除 59 条死字符串（注：繁体中文 values-zh-rTW 已在后续清理中移除，详见 9.9 节）：
 
 - `assistant_importer_*`（10 条，代码零引用）
 - `*lorebook*`（10 条）

@@ -684,6 +684,14 @@
   <string name="setting_mcp_page_header_value">Header Value</string>
   <string name="setting_mcp_page_header_value_placeholder">e.g.: Bearer token123</string>
   <string name="setting_mcp_page_import_confirm">Import</string>
+  <string name="setting_mcp_page_import_scan_qr">Scan QR Code</string>
+  <string name="setting_mcp_page_import_pick_image">Scan QR from Gallery</string>
+  <string name="setting_mcp_page_import_paste_json">Paste JSON Config</string>
+  <string name="setting_mcp_page_import_added">Imported %d config(s)</string>
+  <string name="setting_mcp_page_import_unsupported">Unsupported config: %s</string>
+  <string name="setting_mcp_page_conflict_title">Config Conflict</string>
+  <string name="setting_mcp_page_conflict_message">%d config(s) with the same name already exist:\n%s\n\nOverwrite existing config(s)?</string>
+  <string name="setting_mcp_page_conflict_overwrite">Overwrite</string>
   <string name="setting_mcp_page_import_desc">Paste MCP Server JSON config, supports standard mcpServers format</string>
   <string name="setting_mcp_page_import_no_valid_config">No valid MCP Server configuration found</string>
   <string name="setting_mcp_page_import_parse_error">JSON parse failed: %1$s</string>

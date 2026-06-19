@@ -81,9 +81,11 @@ Built with Jetpack Compose, Kotlin, and follows Material Design 3 principles.
   may also maintain their own `values*/strings.xml`
 - Use `stringResource(R.string.key_name)` in Compose
 - Page-specific strings should use page prefix (e.g., `setting_page_`)
-- If the user does not explicitly request localization, prioritize implementing functionality without considering
-  localization. (e.g `Text("Hello world")`)
-- If the user explicitly requests localization, all languages should be supported.
-- English(en) is the default language. Chinese(zh), Japanese(ja), Traditional Chinese(zh-rTW), Korean(ko-rKR), and
-  Russian(ru) are supported.
+- **Localization is mandatory for all user-facing strings.** Never hardcode user-visible text in Kotlin code;
+  always define a string resource in `values/strings.xml` (English, the source language) first.
+- English(en) is the default language. Chinese(zh), Japanese(ja), Korean(ko-rKR), and
+  Russian(ru) are supported. 5 files total.
+- When adding a new feature: define strings in all 5 `strings.xml` files. If a translation is not immediately
+  available, duplicate the English text as a placeholder and translate later.
+- For non-Composable code, use `context.getString(R.string.key, args...)`.
 - When localization is needed, use the `locale-tui-localization` skill for managing string resources.

@@ -4,7 +4,9 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.AlertCircle
 import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.ArrowUp01
+import me.rerere.hugeicons.stroke.Camera01
 import me.rerere.hugeicons.stroke.FileImport
+import me.rerere.hugeicons.stroke.Image02
 import me.rerere.hugeicons.stroke.MessageBlocked
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.Settings03
@@ -12,6 +14,12 @@ import me.rerere.hugeicons.stroke.Console
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.Upload02
 import me.rerere.hugeicons.stroke.Cancel01
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
+import io.github.g00fy2.quickie.QRResult
+import io.github.g00fy2.quickie.ScanQRCode
+import android.net.Uri
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,6 +43,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -46,6 +55,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SecondaryTabRow
@@ -75,10 +85,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.dokar.sonner.ToastType
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -89,14 +101,18 @@ import me.rerere.ai.core.InputSchema
 import me.rerere.hugeicons.stroke.McpServer
 import net.weero.mersix.pilot.R
 import net.weero.mersix.pilot.data.ai.mcp.McpManager
+import net.weero.mersix.pilot.data.ai.mcp.McpParseResult
 import net.weero.mersix.pilot.data.ai.mcp.McpServerConfig
 import net.weero.mersix.pilot.data.ai.mcp.McpCommonOptions
 import net.weero.mersix.pilot.data.ai.mcp.McpStatus
 import net.weero.mersix.pilot.data.ai.mcp.McpTool
+import net.weero.mersix.pilot.data.ai.mcp.parseMcpServersFromJson
 import net.weero.mersix.pilot.ui.components.nav.BackButton
+import net.weero.mersix.pilot.utils.ImageUtils
 import net.weero.mersix.pilot.ui.components.ui.FormItem
 import net.weero.mersix.pilot.ui.components.ui.Tag
 import net.weero.mersix.pilot.ui.components.ui.TagType
+import net.weero.mersix.pilot.ui.context.LocalToaster
 import net.weero.mersix.pilot.ui.hooks.EditState
 import net.weero.mersix.pilot.ui.hooks.EditStateContent
 import net.weero.mersix.pilot.ui.hooks.useEditState
@@ -129,6 +145,37 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
             ))
     }
     var showImportDialog by remember { mutableStateOf(false) }
+    var showImportMethodDialog by remember { mutableStateOf(false) }
+    var pendingConflicts by remember { mutableStateOf<List<Pair<McpServerConfig, McpServerConfig>>?>(null) }
+    val toaster = LocalToaster.current
+    val context = LocalContext.current
+
+    val scanQrCodeLauncher = rememberLauncherForActivityResult(ScanQRCode()) { result ->
+        when (result) {
+            is QRResult.QRSuccess -> handleMcpImport(result.content.rawValue ?: "", vm, toaster, context) { conflicts ->
+                pendingConflicts = conflicts
+            }
+            is QRResult.QRError -> toaster.show(context.getString(R.string.setting_provider_page_scan_error, result), type = ToastType.Error)
+            QRResult.QRMissingPermission -> toaster.show(context.getString(R.string.setting_provider_page_no_permission), type = ToastType.Error)
+            QRResult.QRUserCanceled -> {}
+        }
+    }
+
+    val pickImageLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        uri?.let {
+            val qrContent = ImageUtils.decodeQRCodeFromUri(context, it)
+            if (qrContent.isNullOrEmpty()) {
+                toaster.show(context.getString(R.string.setting_provider_page_no_qr_found), type = ToastType.Error)
+            } else {
+                handleMcpImport(qrContent, vm, toaster, context) { conflicts ->
+                    pendingConflicts = conflicts
+                }
+            }
+        }
+    }
+
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
         topBar = {
@@ -142,7 +189,7 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
                 actions = {
                     IconButton(
                         onClick = {
-                            showImportDialog = true
+                            showImportMethodDialog = true
                         }
                     ) {
                         Icon(HugeIcons.FileImport, null)
@@ -166,7 +213,8 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
         val status by mcpManager.syncingStatus.collectAsStateWithLifecycle()
         val scope = rememberCoroutineScope()
         val state = rememberPullToRefreshState()
-        val loading = status.values.any { it == McpStatus.Connecting || it is McpStatus.Reconnecting }
+        val loading = mcpConfigs.any { it.commonOptions.enable } &&
+            status.values.any { it == McpStatus.Connecting || it is McpStatus.Reconnecting }
         PullToRefreshBox(
             isRefreshing = loading,
             onRefresh = {
@@ -218,15 +266,46 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
     }
     McpServerConfigModal(creationState)
     McpServerConfigModal(editState)
+
+    if (showImportMethodDialog) {
+        McpImportMethodDialog(
+            onDismiss = { showImportMethodDialog = false },
+            onScanQr = {
+                showImportMethodDialog = false
+                scanQrCodeLauncher.launch(null)
+            },
+            onPickImage = {
+                showImportMethodDialog = false
+                pickImageLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            },
+            onPasteJson = {
+                showImportMethodDialog = false
+                showImportDialog = true
+            }
+        )
+    }
+
     if (showImportDialog) {
         McpImportModal(
             onDismiss = { showImportDialog = false },
-            onImport = { newConfigs ->
-                val existingIds = mcpConfigs.map { it.commonOptions.name }.toSet()
-                val toAdd = newConfigs.filter { it.commonOptions.name.isNotBlank() && it.commonOptions.name !in existingIds }
-                vm.updateSettings(settings.copy(mcpServers = mcpConfigs + toAdd))
+            onImport = { jsonText ->
                 showImportDialog = false
+                handleMcpImport(jsonText, vm, toaster, context) { conflicts ->
+                    pendingConflicts = conflicts
+                }
             }
+        )
+    }
+
+    pendingConflicts?.let { conflicts ->
+        McpConflictDialog(
+            conflicts = conflicts,
+            onConfirm = {
+                vm.confirmOverwriteMcpServers(conflicts.map { it.first })
+                toaster.show(context.getString(R.string.setting_mcp_page_conflict_overwrite), type = ToastType.Success)
+                pendingConflicts = null
+            },
+            onDismiss = { pendingConflicts = null }
         )
     }
 }
@@ -726,7 +805,13 @@ private fun McpCommonOptionsConfigure(
                 Button(
                     onClick = {
                         val updatedHeaders = config.commonOptions.headers.toMutableList()
-                        updatedHeaders.add("" to "")
+                        val hasAuth = updatedHeaders.any { it.first.equals("Authorization", ignoreCase = true) }
+                        val newHeader = if (!hasAuth) {
+                            "Authorization" to "Bearer api_key"
+                        } else {
+                            "" to ""
+                        }
+                        updatedHeaders.add(newHeader)
                         update(
                             when (config) {
                                 is McpServerConfig.SseTransportServer -> config.copy(
@@ -917,36 +1002,15 @@ private fun McpToolCard(
 }
 
 private fun isValidMcpName(name: String): Boolean {
-    return name.isEmpty() || name.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' }
-}
-
-private fun parseMcpServersFromJson(json: String): List<McpServerConfig> {
-    val root = Json.parseToJsonElement(json).jsonObject
-    val mcpServers = root["mcpServers"]?.jsonObject ?: return emptyList()
-    return mcpServers.entries.mapNotNull { (name, element) ->
-        val obj = element.jsonObject
-        val type = obj["type"]?.jsonPrimitive?.contentOrNull ?: "streamable_http"
-        val url = obj["url"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-        val headers = obj["headers"]?.jsonObject?.entries?.map { (k, v) ->
-            k to (v.jsonPrimitive.contentOrNull ?: "")
-        } ?: emptyList()
-        val commonOptions = McpCommonOptions(name = name, headers = headers)
-        when (type) {
-            "sse" -> McpServerConfig.SseTransportServer(commonOptions = commonOptions, url = url)
-            else -> McpServerConfig.StreamableHTTPServer(commonOptions = commonOptions, url = url)
-        }
-    }
+    return name.isEmpty() || name.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' || it == '_' }
 }
 
 @Composable
 private fun McpImportModal(
     onDismiss: () -> Unit,
-    onImport: (List<McpServerConfig>) -> Unit,
+    onImport: (String) -> Unit,
 ) {
     var jsonText by remember { mutableStateOf("") }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    val noValidConfigMsg = stringResource(R.string.setting_mcp_page_import_no_valid_config)
-    val parseErrorMsg = stringResource(R.string.setting_mcp_page_import_parse_error)
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -968,16 +1032,11 @@ private fun McpImportModal(
             )
             OutlinedTextField(
                 value = jsonText,
-                onValueChange = {
-                    jsonText = it
-                    errorMessage = null
-                },
+                onValueChange = { jsonText = it },
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
                 placeholder = { Text("{ \"mcpServers\": { ... } }") },
-                isError = errorMessage != null,
-                supportingText = errorMessage?.let { msg -> { Text(msg, color = MaterialTheme.colorScheme.error) } }
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -987,22 +1046,141 @@ private fun McpImportModal(
                     Text(stringResource(R.string.cancel))
                 }
                 Button(
-                    onClick = {
-                        try {
-                            val configs = parseMcpServersFromJson(jsonText.trim())
-                            if (configs.isEmpty()) {
-                                errorMessage = noValidConfigMsg
-                            } else {
-                                onImport(configs)
-                            }
-                        } catch (e: Exception) {
-                            errorMessage = parseErrorMsg.format(e.message ?: "")
-                        }
-                    }
+                    onClick = { onImport(jsonText.trim()) }
                 ) {
                     Text(stringResource(R.string.setting_mcp_page_import_confirm))
                 }
             }
         }
     }
+}
+
+/**
+ * 处理 MCP JSON 导入：解析 → 导入合并 → 反馈结果 → 回调冲突
+ */
+private fun handleMcpImport(
+    json: String,
+    vm: SettingVM,
+    toaster: com.dokar.sonner.ToasterState,
+    context: android.content.Context,
+    onConflicts: (List<Pair<McpServerConfig, McpServerConfig>>) -> Unit,
+) {
+    runCatching {
+        val result = parseMcpServersFromJson(json)
+        if (result.servers.isEmpty() && result.unsupportedNames.isEmpty()) {
+            toaster.show(context.getString(R.string.setting_mcp_page_import_no_valid_config), type = ToastType.Error)
+            return
+        }
+
+        val importResult = vm.importMcpServers(result.servers)
+
+        if (result.unsupportedNames.isNotEmpty()) {
+            toaster.show(context.getString(R.string.setting_mcp_page_import_unsupported, result.unsupportedNames.joinToString()), type = ToastType.Error)
+        }
+
+        if (importResult.added.isNotEmpty()) {
+            toaster.show(context.getString(R.string.setting_mcp_page_import_added, importResult.added.size), type = ToastType.Success)
+        }
+
+        if (importResult.conflicts.isNotEmpty()) {
+            onConflicts(importResult.conflicts)
+        }
+    }.onFailure { e ->
+        toaster.show(
+            context.getString(R.string.setting_mcp_page_import_parse_error, e.message ?: ""),
+            type = ToastType.Error
+        )
+    }
+}
+
+@Composable
+private fun McpImportMethodDialog(
+    onDismiss: () -> Unit,
+    onScanQr: () -> Unit,
+    onPickImage: () -> Unit,
+    onPasteJson: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.setting_provider_page_import_dialog_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(
+                    stringResource(R.string.setting_provider_page_import_dialog_message),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(
+                    onClick = onScanQr,
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    shape = MaterialTheme.shapes.large
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(HugeIcons.Camera01, null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text(stringResource(R.string.setting_provider_page_scan_qr_code), style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+                OutlinedButton(
+                    onClick = onPickImage,
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    shape = MaterialTheme.shapes.large
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(HugeIcons.Image02, null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text(stringResource(R.string.setting_mcp_page_import_pick_image), style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+                OutlinedButton(
+                    onClick = onPasteJson,
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    shape = MaterialTheme.shapes.large
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(HugeIcons.FileImport, null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text(stringResource(R.string.setting_mcp_page_import_paste_json), style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+        }
+    )
+}
+
+@Composable
+private fun McpConflictDialog(
+    conflicts: List<Pair<McpServerConfig, McpServerConfig>>,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.setting_mcp_page_conflict_title)) },
+        text = {
+            Text(stringResource(R.string.setting_mcp_page_conflict_message, conflicts.size, conflicts.joinToString { it.first.commonOptions.name }))
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text(stringResource(R.string.setting_mcp_page_conflict_overwrite)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+        }
+    )
 }

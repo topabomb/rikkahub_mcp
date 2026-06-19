@@ -13,9 +13,6 @@
 ./gradlew lint                   # 运行 Android Lint
 ```
 
-构建应用需要在 `app/` 下提供 `google-services.json`（用于 Firebase）。
-`web` 模块会在 `preBuild` 阶段构建 `web-ui/` 并复制静态资源，需要本地可用 `pnpm`。
-
 ## Coding Style & Naming Conventions
 
 本仓库使用 `.editorconfig` 统一格式：
@@ -41,22 +38,21 @@
 - **document**: Document parsing module for handling PDF, DOCX, PPTX, and EPUB files
 - **highlight**: Code syntax highlighting implementation
 - **material3**: Material color utility extensions used by the app UI
-- **search**: Search functionality SDK for multiple providers (Exa, Tavily, Zhipu, Bing, Brave, SearXNG, and others)
+- **search**: Search functionality SDK for multiple providers (Bing, Tavily, SearXNG, Custom JS)
 - **speech**: Speech module for TTS and ASR implementations
-- **web**: Embedded web server module that provides Ktor server startup function and hosts static frontend build files (
-  built from web-ui/ React project)
+- **workspace**: Local workspace module providing file tools and sandbox environments
 
 ## Concepts
 
 - **Assistant**: An assistant configuration with system prompts, model parameters, and conversation isolation. Each
   assistant maintains its own settings including temperature, context size, custom headers, tools, memory options, regex
-  transformations, and prompt injections (mode/lorebook). Assistants provide isolated chat environments with specific
-  behaviors and capabilities. (app/src/main/java/me/rerere/rikkahub/data/model/Assistant.kt)
+  transformations, and prompt injections (mode). Assistants provide isolated chat environments with specific
+  behaviors and capabilities. (app/src/main/java/net/weero/mersix/pilot/data/model/Assistant.kt)
 
 - **Conversation**: A persistent conversation thread between the user and an assistant. Each conversation maintains a
   list of MessageNodes in a tree structure to support message branching, along with metadata like title, creation time,
   update time, pin status, chat suggestions, optional conversation-level system prompt, and prompt injection bindings. (
-  app/src/main/java/me/rerere/rikkahub/data/model/Conversation.kt)
+  app/src/main/java/net/weero/mersix/pilot/data/model/Conversation.kt)
 
 - **UIMessage**: A platform-agnostic message abstraction that encapsulates chat messages with different types of content
   parts (text, images, documents, reasoning, tool calls/results, etc.). Each message has a role (USER, ASSISTANT,
@@ -66,7 +62,7 @@
 - **MessageNode**: A container holding one or more UIMessages to implement message branching functionality. Each node
   maintains a list of alternative messages and tracks which message is currently selected (selectIndex). This enables
   users to regenerate responses and switch between different conversation branches, creating a tree-like conversation
-  structure. (app/src/main/java/me/rerere/rikkahub/data/model/Conversation.kt)
+  structure. (app/src/main/java/net/weero/mersix/pilot/data/model/Conversation.kt)
 
 - **Message Transformer**: A pipeline mechanism for transforming messages before sending to AI providers (
   InputMessageTransformer) or after receiving responses (OutputMessageTransformer). Transformers can modify message
@@ -81,14 +77,19 @@
 
   Output transformers support `visualTransform()` for UI display during streaming and `onGenerationFinish()` for final
   processing after generation completes.
-  (app/src/main/java/me/rerere/rikkahub/data/ai/transformers/Transformer.kt)
+  (app/src/main/java/net/weero/mersix/pilot/data/ai/transformers/Transformer.kt)
 
 ## Internationalization
 
-- String resources are usually located in `app/src/main/res/values*/strings.xml`; feature modules such as `search`
+- String resources are located in `app/src/main/res/values*/strings.xml`; feature modules such as `search`
   may also maintain their own `values*/strings.xml`
 - Use `stringResource(R.string.key_name)` in Compose
 - Page-specific strings should use page prefix (e.g., `setting_page_`)
-- If the user does not explicitly request localization, prioritize implementing functionality without considering
-  localization. (e.g `Text("Hello world")`)
+- **Localization is mandatory for all user-facing strings.** Never hardcode user-visible text in Kotlin code;
+  always define a string resource in `values/strings.xml` (English, the source language) first.
+- Supported locales: English(`values`), Chinese(`values-zh`), Japanese(`values-ja`),
+  Korean(`values-ko-rKR`), Russian(`values-ru`). 5 files total.
+- When adding a new feature: define strings in all 5 `strings.xml` files. If a translation is not immediately
+  available, duplicate the English text as a placeholder and translate later.
+- For non-Composable code (e.g. ViewModel, utility functions), use `context.getString(R.string.key, args...)`.
 - For `locale-tui` operations, use the `locale-tui-localization` skill.

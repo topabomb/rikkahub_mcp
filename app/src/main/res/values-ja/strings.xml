@@ -674,6 +674,14 @@
   <string name="setting_mcp_page_header_value">ヘッダー値</string>
   <string name="setting_mcp_page_header_value_placeholder">例：Bearer token123</string>
   <string name="setting_mcp_page_import_confirm">インポート</string>
+  <string name="setting_mcp_page_import_scan_qr">QRコードをスキャン</string>
+  <string name="setting_mcp_page_import_pick_image">ギャラリーからQRコードを選択</string>
+  <string name="setting_mcp_page_import_paste_json">JSON設定を貼り付け</string>
+  <string name="setting_mcp_page_import_added">%d 件の設定をインポートしました</string>
+  <string name="setting_mcp_page_import_unsupported">未対応の設定: %s</string>
+  <string name="setting_mcp_page_conflict_title">設定の競合</string>
+  <string name="setting_mcp_page_conflict_message">同名の設定が %d 件既に存在します：\n%s\n\n既存の設定を上書きしますか？</string>
+  <string name="setting_mcp_page_conflict_overwrite">上書き</string>
   <string name="setting_mcp_page_import_desc">MCPサーバーJSON設定を貼り付けます。標準のmcpServers形式に対応</string>
   <string name="setting_mcp_page_import_no_valid_config">有効なMCPサーバー設定が見つかりません</string>
   <string name="setting_mcp_page_import_parse_error">JSON解析に失敗しました: %1$s</string>

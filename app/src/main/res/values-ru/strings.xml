@@ -674,6 +674,14 @@
   <string name="setting_mcp_page_header_value">Значение заголовка</string>
   <string name="setting_mcp_page_header_value_placeholder">например: Bearer token123</string>
   <string name="setting_mcp_page_import_confirm">Импорт</string>
+  <string name="setting_mcp_page_import_scan_qr">Сканировать QR-код</string>
+  <string name="setting_mcp_page_import_pick_image">Выбрать QR-код из галереи</string>
+  <string name="setting_mcp_page_import_paste_json">Вставить JSON-конфигурацию</string>
+  <string name="setting_mcp_page_import_added">Импортировано конфигураций: %d</string>
+  <string name="setting_mcp_page_import_unsupported">Неподдерживаемая конфигурация: %s</string>
+  <string name="setting_mcp_page_conflict_title">Конфликт конфигураций</string>
+  <string name="setting_mcp_page_conflict_message">%d конфигураций с таким именем уже существуют:\n%s\n\nПерезаписать существующие?</string>
+  <string name="setting_mcp_page_conflict_overwrite">Перезаписать</string>
   <string name="setting_mcp_page_import_desc">Вставьте JSON-конфигурацию MCP-сервера, поддерживается стандартный формат mcpServers</string>
   <string name="setting_mcp_page_import_no_valid_config">Не найдена допустимая конфигурация сервера MCP</string>
   <string name="setting_mcp_page_import_parse_error">Ошибка разбора JSON: %1$s</string>

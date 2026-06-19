@@ -43,8 +43,6 @@ languages:
     is_source: true
   - code: "values-zh"
     name: "Chinese (Simplified)"
-  - code: "values-zh-rTW"
-    name: "Chinese (Traditional)"
   - code: "values-ja"
     name: "Japanese"
   - code: "values-ko-rKR"

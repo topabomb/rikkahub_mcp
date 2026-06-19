@@ -18,7 +18,6 @@ import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams
 import io.modelcontextprotocol.kotlin.sdk.types.ImageContent
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
-import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -31,7 +30,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.ClassDiscriminatorMode
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import me.rerere.ai.core.InputSchema
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.mersix.pilot.AppScope
 import net.weero.mersix.pilot.data.datastore.SettingsStore
@@ -93,7 +91,7 @@ class McpManager(
                         val currentConfigs = clients.keys.toList()
                         val (toAdd, toRemove) = currentConfigs.checkDifferent(
                             other = newConfigs,
-                            eq = { a, b -> a.id == b.id }
+                            eq = { a, b -> a.connectionKey == b.connectionKey }
                         )
                         Log.i(TAG, "to_add: $toAdd")
                         Log.i(TAG, "to_remove: $toRemove")
@@ -138,22 +136,28 @@ class McpManager(
         val config = entry.key
         Log.i(TAG, "callTool: $toolName / $args (server: ${config.commonOptions.name})")
 
-        if (client.transport == null) client.connect(getTransport(config))
-        val result = client.callTool(
-            request = CallToolRequest(
-                params = CallToolRequestParams(
-                    name = toolName,
-                    arguments = args,
+        return runCatching {
+            if (client.transport == null) client.connect(getTransport(config))
+            val result = client.callTool(
+                request = CallToolRequest(
+                    params = CallToolRequestParams(
+                        name = toolName,
+                        arguments = args,
+                    ),
                 ),
-            ),
-            options = RequestOptions(timeout = 120.seconds),
-        )
-        return result.content.map {
-            when(it) {
-                is TextContent -> UIMessagePart.Text(it.text)
-                is ImageContent -> convertImageContentToFilePart(it)
-                else -> UIMessagePart.Text(JsonInstant.encodeToString(it))
+                options = RequestOptions(timeout = 120.seconds),
+            )
+            result.content.map {
+                when (it) {
+                    is TextContent -> UIMessagePart.Text(it.text)
+                    is ImageContent -> convertImageContentToFilePart(it)
+                    else -> UIMessagePart.Text(JsonInstant.encodeToString(it))
+                }
             }
+        }.onFailure { e ->
+            setStatus(config, McpStatus.Error(e.message ?: e.javaClass.name))
+        }.getOrElse { e ->
+            listOf(UIMessagePart.Text("Failed to execute tool: ${e.message}"))
         }
     }
 
@@ -242,13 +246,16 @@ class McpManager(
             reconnectAttempts[config.id] = 0 // 重置重连计数
             Log.i(TAG, "addClient: connected ${config.commonOptions.name}")
         }.onFailure {
+            clients.remove(config)
             it.printStackTrace()
             setStatus(config = config, status = McpStatus.Error(it.message ?: it.javaClass.name))
         }
     }
 
     private suspend fun sync(config: McpServerConfig) {
-        val client = clients[config] ?: return
+        // 用 id 查找 client（tools 更新后 config 对象会变，不能直接用 config 作为 Map key）
+        val entry = clients.entries.find { it.key.id == config.id }
+        val client = entry?.value ?: return
 
         setStatus(config = config, status = McpStatus.Connecting)
 
@@ -263,48 +270,17 @@ class McpManager(
                 mcpServers = old.mcpServers.map { serverConfig ->
                     if (serverConfig.id != config.id) return@map serverConfig
                     val common = serverConfig.commonOptions
-                    val tools = common.tools.toMutableList()
+                    val mergedTools = mergeTools(serverTools, common.tools)
 
-                    // 基于server对比
-                    serverTools.forEach { serverTool ->
-                        val tool = tools.find { it.name == serverTool.name }
-                        if (tool == null) {
-                            tools.add(
-                                McpTool(
-                                    name = serverTool.name,
-                                    description = serverTool.description,
-                                    enable = true,
-                                    inputSchema = serverTool.inputSchema.toSchema()
-                                )
-                            )
-                        } else {
-                            val index = tools.indexOf(tool)
-                            tools[index] = tool.copy(
-                                description = serverTool.description,
-                                inputSchema = serverTool.inputSchema.toSchema()
-                            )
-                        }
-                    }
-
-                    // 删除不在server内的
-                    tools.removeIf { tool -> serverTools.none { it.name == tool.name } }
-
-                    // 更新clients
-                    clients.remove(config)
-                    clients.put(
-                        config.clone(
-                            commonOptions = common.copy(
-                                tools = tools
-                            )
-                        ), client
+                    val newConfig = serverConfig.clone(
+                        commonOptions = common.copy(tools = mergedTools)
                     )
 
-                    // 返回新的serverConfig，更新到settings store
-                    serverConfig.clone(
-                        commonOptions = common.copy(
-                            tools = tools
-                        )
-                    )
+                    // 更新 clients Map 的 key（用 id 移除旧 key，放入新 key）
+                    entry.key.let { clients.remove(it) }
+                    clients[newConfig] = client
+
+                    newConfig
                 }
             )
         }
@@ -313,9 +289,15 @@ class McpManager(
     }
 
     suspend fun syncAll() = withContext(Dispatchers.IO) {
-        clients.keys.toList().forEach { config ->
+        val latestConfigs = settingsStore.settingsFlow.value.mcpServers
+            .filter { it.commonOptions.enable && it.commonOptions.name.isNotBlank() }
+        latestConfigs.forEach { config ->
             runCatching {
-                sync(config)
+                if (getClient(config) == null) {
+                    addClient(config)
+                } else {
+                    sync(config)
+                }
             }.onFailure {
                 it.printStackTrace()
                 setStatus(config, McpStatus.Error(it.message ?: it.javaClass.name))
@@ -433,11 +415,17 @@ class McpManager(
 
         clients[config] = client
         setStatus(config, McpStatus.Connecting)
-        client.connect(transport)
-        sync(config)
-        setStatus(config, McpStatus.Connected)
-        reconnectAttempts[config.id] = 0 // 重置重连计数
-        Log.i(TAG, "Reconnected successfully: ${config.commonOptions.name}")
+        runCatching {
+            client.connect(transport)
+            sync(config)
+            setStatus(config, McpStatus.Connected)
+            reconnectAttempts[config.id] = 0
+            Log.i(TAG, "Reconnected successfully: ${config.commonOptions.name}")
+        }.onFailure {
+            clients.remove(config)
+            it.printStackTrace()
+            setStatus(config, McpStatus.Error(it.message ?: it.javaClass.name))
+        }
     }
 
     private suspend fun setStatus(config: McpServerConfig, status: McpStatus) {
@@ -459,8 +447,4 @@ internal val McpJson: Json by lazy {
         classDiscriminatorMode = ClassDiscriminatorMode.NONE
         explicitNulls = false
     }
-}
-
-private fun ToolSchema.toSchema(): InputSchema {
-    return InputSchema.Obj(properties = this.properties ?: JsonObject(emptyMap()), required = this.required)
 }

@@ -683,6 +683,14 @@
   <string name="setting_mcp_page_header_value">请求头值</string>
   <string name="setting_mcp_page_header_value_placeholder">例如：Bearer token123</string>
   <string name="setting_mcp_page_import_confirm">导入</string>
+  <string name="setting_mcp_page_import_scan_qr">扫描二维码</string>
+  <string name="setting_mcp_page_import_pick_image">从相册选择二维码</string>
+  <string name="setting_mcp_page_import_paste_json">粘贴 JSON 配置</string>
+  <string name="setting_mcp_page_import_added">已导入 %d 个配置</string>
+  <string name="setting_mcp_page_import_unsupported">不支持的配置: %s</string>
+  <string name="setting_mcp_page_conflict_title">配置冲突</string>
+  <string name="setting_mcp_page_conflict_message">以下 %d 个配置名称已存在：\n%s\n\n是否覆盖现有配置？</string>
+  <string name="setting_mcp_page_conflict_overwrite">覆盖</string>
   <string name="setting_mcp_page_import_desc">粘贴 MCP 服务器 JSON 配置，支持标准 mcpServers 格式</string>
   <string name="setting_mcp_page_import_no_valid_config">未找到有效的 MCP Server 配置</string>
   <string name="setting_mcp_page_import_parse_error">JSON 解析失败：%1$s</string>

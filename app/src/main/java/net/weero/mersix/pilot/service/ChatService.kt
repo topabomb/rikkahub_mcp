@@ -568,7 +568,7 @@ class ChatService(
                         val invalidNames = allTools
                             .map { it.second }
                             .distinct()
-                            .filter { name -> name.isEmpty() || !name.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' } }
+                            .filter { name -> name.isEmpty() || !name.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' || it == '_' } }
                         if (invalidNames.isNotEmpty()) {
                             addError(
                                 error = IllegalStateException(

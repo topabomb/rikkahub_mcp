@@ -65,10 +65,10 @@ fun McpPickerButton(
 ) {
     var showMcpPicker by remember { mutableStateOf(false) }
     val status by mcpManager.syncingStatus.collectAsStateWithLifecycle()
-    val loading = status.values.any { it == McpStatus.Connecting }
     val enabledServers = servers.fastFilter {
         it.commonOptions.enable && assistant.mcpServers.contains(it.id)
     }
+    val loading = enabledServers.isNotEmpty() && status.values.any { it == McpStatus.Connecting }
     ToggleSurface(
         modifier = modifier,
         checked = assistant.mcpServers.isNotEmpty(),
@@ -169,10 +169,10 @@ fun McpPickerListItem(
 ) {
     var showMcpPicker by remember { mutableStateOf(false) }
     val status by mcpManager.syncingStatus.collectAsStateWithLifecycle()
-    val loading = status.values.any { it == McpStatus.Connecting }
     val enabledServers = servers.fastFilter {
         it.commonOptions.enable && assistant.mcpServers.contains(it.id)
     }
+    val loading = enabledServers.isNotEmpty() && status.values.any { it == McpStatus.Connecting }
 
     ListItem(
         leadingContent = {
