@@ -693,6 +693,7 @@
   <string name="setting_mcp_page_no_mcp_servers_found">Серверы MCP не найдены</string>
   <string name="setting_mcp_page_save">Сохранить</string>
   <string name="setting_mcp_page_server_url">URL сервера</string>
+  <string name="setting_mcp_page_share_title">Поделиться MCP-сервером</string>
   <string name="setting_mcp_page_sse_url_desc">URL-адрес сервера SSE-транспорта</string>
   <string name="setting_mcp_page_sse_url_placeholder">https://example.com/sse</string>
   <string name="setting_mcp_page_streamable_http_url_desc">URL-адрес для HTTP-сервера Streamable</string>
@@ -852,6 +853,7 @@
   <string name="setting_provider_page_no_permission">Нет разрешения</string>
   <string name="setting_provider_page_no_qr_found">Не найдено действительного QR-кода</string>
   <string name="setting_provider_page_output_modality">Формат вывода</string>
+  <string name="setting_provider_page_paste_config">Вставить конфигурацию</string>
   <string name="setting_provider_page_private_key">Приватный ключ</string>
   <string name="setting_provider_page_project_id">Идентификатор проекта</string>
   <string name="setting_provider_page_provider_override">Переопределение поставщика</string>

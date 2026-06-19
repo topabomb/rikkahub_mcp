@@ -693,6 +693,7 @@
   <string name="setting_mcp_page_no_mcp_servers_found">MCPサーバーが見つかりません</string>
   <string name="setting_mcp_page_save">保存</string>
   <string name="setting_mcp_page_server_url">サーバーURL</string>
+  <string name="setting_mcp_page_share_title">MCPサーバーを共有</string>
   <string name="setting_mcp_page_sse_url_desc">SSE転送サーバーのURLアドレス</string>
   <string name="setting_mcp_page_sse_url_placeholder">https://example.com/sse</string>
   <string name="setting_mcp_page_streamable_http_url_desc">ストリーミングHTTPサーバーのURLアドレス</string>
@@ -852,6 +853,7 @@
   <string name="setting_provider_page_no_permission">権限がありません</string>
   <string name="setting_provider_page_no_qr_found">有効なQRコードが見つかりません</string>
   <string name="setting_provider_page_output_modality">出力モダリティ</string>
+  <string name="setting_provider_page_paste_config">設定を貼り付け</string>
   <string name="setting_provider_page_private_key">秘密鍵</string>
   <string name="setting_provider_page_project_id">プロジェクト ID</string>
   <string name="setting_provider_page_provider_override">プロバイダーオーバーライド</string>

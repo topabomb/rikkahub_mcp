@@ -703,6 +703,7 @@
   <string name="setting_mcp_page_no_mcp_servers_found">No MCP servers found</string>
   <string name="setting_mcp_page_save">Save</string>
   <string name="setting_mcp_page_server_url">Server URL</string>
+  <string name="setting_mcp_page_share_title">Share MCP Server</string>
   <string name="setting_mcp_page_sse_url_desc">URL address for SSE transport server</string>
   <string name="setting_mcp_page_sse_url_placeholder">https://example.com/sse</string>
   <string name="setting_mcp_page_streamable_http_url_desc">URL address for Streamable HTTP server</string>
@@ -878,6 +879,7 @@
   <string name="setting_provider_page_no_permission">No permission</string>
   <string name="setting_provider_page_no_qr_found">No valid QR code found</string>
   <string name="setting_provider_page_output_modality">Output Modality</string>
+  <string name="setting_provider_page_paste_config">Paste Config</string>
   <string name="setting_provider_page_private_key">Private Key</string>
   <string name="setting_provider_page_project_id">Project Id</string>
   <string name="setting_provider_page_provider_override">Provider Override</string>

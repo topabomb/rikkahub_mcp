@@ -693,6 +693,7 @@
   <string name="setting_mcp_page_no_mcp_servers_found">MCP 서버를 찾을 수 없습니다</string>
   <string name="setting_mcp_page_save">저장</string>
   <string name="setting_mcp_page_server_url">서버 URL</string>
+  <string name="setting_mcp_page_share_title">MCP 서버 공유</string>
   <string name="setting_mcp_page_sse_url_desc">SSE 전송 서버의 URL 주소</string>
   <string name="setting_mcp_page_sse_url_placeholder">https://example.com/sse</string>
   <string name="setting_mcp_page_streamable_http_url_desc">스트리밍 HTTP 서버의 URL 주소</string>
@@ -852,6 +853,7 @@
   <string name="setting_provider_page_no_permission">권한 없음</string>
   <string name="setting_provider_page_no_qr_found">유효한 QR 코드를 찾을 수 없습니다</string>
   <string name="setting_provider_page_output_modality">출력 모달리티</string>
+  <string name="setting_provider_page_paste_config">구성 붙여넣기</string>
   <string name="setting_provider_page_private_key">개인 키</string>
   <string name="setting_provider_page_project_id">프로젝트 ID</string>
   <string name="setting_provider_page_provider_override">제공업체 재정의</string>

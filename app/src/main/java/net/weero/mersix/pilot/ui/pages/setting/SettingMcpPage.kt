@@ -14,6 +14,11 @@ import me.rerere.hugeicons.stroke.Console
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.Upload02
 import me.rerere.hugeicons.stroke.Cancel01
+import me.rerere.hugeicons.stroke.Share01
+import android.content.Intent
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.PickVisualMediaRequest
@@ -107,9 +112,11 @@ import net.weero.mersix.pilot.data.ai.mcp.McpCommonOptions
 import net.weero.mersix.pilot.data.ai.mcp.McpStatus
 import net.weero.mersix.pilot.data.ai.mcp.McpTool
 import net.weero.mersix.pilot.data.ai.mcp.parseMcpServersFromJson
+import net.weero.mersix.pilot.data.ai.mcp.encodeForShare
 import net.weero.mersix.pilot.ui.components.nav.BackButton
 import net.weero.mersix.pilot.utils.ImageUtils
 import net.weero.mersix.pilot.ui.components.ui.FormItem
+import net.weero.mersix.pilot.ui.components.ui.QRCode
 import net.weero.mersix.pilot.ui.components.ui.Tag
 import net.weero.mersix.pilot.ui.components.ui.TagType
 import net.weero.mersix.pilot.ui.context.LocalToaster
@@ -147,6 +154,7 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
     var showImportDialog by remember { mutableStateOf(false) }
     var showImportMethodDialog by remember { mutableStateOf(false) }
     var pendingConflicts by remember { mutableStateOf<List<Pair<McpServerConfig, McpServerConfig>>?>(null) }
+    var shareConfig by remember { mutableStateOf<McpServerConfig?>(null) }
     val toaster = LocalToaster.current
     val context = LocalContext.current
 
@@ -244,6 +252,9 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
                                 )
                             )
                         },
+                        onShare = {
+                            shareConfig = mcpConfig
+                        },
                         modifier = Modifier.animateItem()
                     )
                 }
@@ -266,6 +277,13 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
     }
     McpServerConfigModal(creationState)
     McpServerConfigModal(editState)
+
+    shareConfig?.let { config ->
+        McpShareSheet(
+            config = config,
+            onDismiss = { shareConfig = null }
+        )
+    }
 
     if (showImportMethodDialog) {
         McpImportMethodDialog(
@@ -316,6 +334,7 @@ private fun McpServerItem(
     modifier: Modifier = Modifier,
     onDelete: () -> Unit,
     onEdit: (McpServerConfig) -> Unit,
+    onShare: () -> Unit,
 ) {
     val mcpManager = koinInject<McpManager>()
     val status by mcpManager.getStatus(item).collectAsStateWithLifecycle(McpStatus.Idle)
@@ -420,6 +439,12 @@ private fun McpServerItem(
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
+                }
+
+                IconButton(
+                    onClick = onShare
+                ) {
+                    Icon(HugeIcons.Share01, null)
                 }
 
                 IconButton(
@@ -1184,3 +1209,62 @@ private fun McpConflictDialog(
         }
     )
 }
+
+@Composable
+private fun McpShareSheet(
+    config: McpServerConfig,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val shareJson = remember(config) { config.encodeForShare() }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberBottomSheetState(
+            initialValue = SheetValue.Hidden,
+            enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    stringResource(R.string.setting_mcp_page_share_title),
+                    style = MaterialTheme.typography.titleLarge
+                )
+
+                IconButton(
+                    onClick = {
+                        val intent = Intent(Intent.ACTION_SEND)
+                        intent.type = "text/plain"
+                        intent.putExtra(Intent.EXTRA_TEXT, shareJson)
+                        try {
+                            context.startActivity(Intent.createChooser(intent, null))
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                ) {
+                    Icon(HugeIcons.Share01, null)
+                }
+            }
+
+            QRCode(
+                value = shareJson,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+            )
+        }
+    }
+}
+

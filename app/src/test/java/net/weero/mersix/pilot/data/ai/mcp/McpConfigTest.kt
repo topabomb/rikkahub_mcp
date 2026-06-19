@@ -2,7 +2,9 @@ package net.weero.mersix.pilot.data.ai.mcp
 
 import io.modelcontextprotocol.kotlin.sdk.types.Tool
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import net.weero.mersix.pilot.utils.checkDifferent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -460,5 +462,106 @@ class McpConfigTest {
 
         assertEquals(1, result.servers.size)
         assertEquals("server1", result.servers[0].commonOptions.name)
+    }
+
+    // ==================== encodeForShare 测试 ====================
+
+    @Test
+    fun `encodeForShare should produce parseable streamable http config`() {
+        val original = McpServerConfig.StreamableHTTPServer(
+            commonOptions = McpCommonOptions(name = "my-server"),
+            url = "https://example.com/mcp"
+        )
+
+        val json = original.encodeForShare()
+        val result = parseMcpServersFromJson(json)
+
+        assertEquals(1, result.servers.size)
+        val parsed = result.servers[0]
+        assertTrue(parsed is McpServerConfig.StreamableHTTPServer)
+        assertEquals("my-server", parsed.commonOptions.name)
+        assertEquals("https://example.com/mcp", (parsed as McpServerConfig.StreamableHTTPServer).url)
+        assertTrue(parsed.commonOptions.headers.isEmpty())
+    }
+
+    @Test
+    fun `encodeForShare should produce parseable sse config`() {
+        val original = McpServerConfig.SseTransportServer(
+            commonOptions = McpCommonOptions(name = "sse-server"),
+            url = "https://example.com/sse"
+        )
+
+        val json = original.encodeForShare()
+        val result = parseMcpServersFromJson(json)
+
+        assertEquals(1, result.servers.size)
+        val parsed = result.servers[0]
+        assertTrue(parsed is McpServerConfig.SseTransportServer)
+        assertEquals("sse-server", parsed.commonOptions.name)
+        assertEquals("https://example.com/sse", (parsed as McpServerConfig.SseTransportServer).url)
+    }
+
+    @Test
+    fun `encodeForShare should include headers when present`() {
+        val original = McpServerConfig.StreamableHTTPServer(
+            commonOptions = McpCommonOptions(
+                name = "auth-server",
+                headers = listOf("Authorization" to "Bearer token123")
+            ),
+            url = "https://example.com/mcp"
+        )
+
+        val json = original.encodeForShare()
+        val result = parseMcpServersFromJson(json)
+
+        val parsed = result.servers[0]
+        assertEquals(1, parsed.commonOptions.headers.size)
+        assertEquals("Authorization" to "Bearer token123", parsed.commonOptions.headers[0])
+    }
+
+    @Test
+    fun `encodeForShare should exclude headers when empty`() {
+        val original = McpServerConfig.StreamableHTTPServer(
+            commonOptions = McpCommonOptions(name = "no-headers"),
+            url = "https://example.com/mcp"
+        )
+
+        val json = original.encodeForShare()
+        val root = Json.parseToJsonElement(json).jsonObject
+        val serverObj = root["no-headers"]!!.jsonObject
+        assertTrue(!serverObj.containsKey("headers"))
+    }
+
+    @Test
+    fun `encodeForShare should use default name when blank`() {
+        val original = McpServerConfig.StreamableHTTPServer(
+            commonOptions = McpCommonOptions(name = ""),
+            url = "https://example.com/mcp"
+        )
+
+        val json = original.encodeForShare()
+        assertTrue(json.contains("mcp_server"))
+    }
+
+    @Test
+    fun `encodeForShare should exclude id and tools`() {
+        val original = McpServerConfig.StreamableHTTPServer(
+            id = Uuid.parse("12345678-1234-1234-1234-123456789abc"),
+            commonOptions = McpCommonOptions(
+                name = "server-with-tools",
+                tools = listOf(McpTool(name = "tool_a"))
+            ),
+            url = "https://example.com/mcp"
+        )
+
+        val json = original.encodeForShare()
+        val root = Json.parseToJsonElement(json).jsonObject
+        val serverObj = root["server-with-tools"]!!.jsonObject
+        // id should not be in the JSON
+        assertTrue(!serverObj.containsKey("id"))
+        // tools should not be in the JSON
+        assertTrue(!serverObj.containsKey("tools"))
+        // enable should not be in the JSON
+        assertTrue(!serverObj.containsKey("enable"))
     }
 }

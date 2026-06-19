@@ -5,9 +5,11 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import kotlin.uuid.Uuid
 
@@ -185,4 +187,33 @@ fun parseMcpServersFromJson(json: String): McpParseResult {
     }
 
     return McpParseResult(servers = servers, unsupportedNames = unsupported)
+}
+
+/**
+ * 将单个 MCP 服务器配置编码为可分享的 JSON 字符串。
+ * 格式与 parseMcpServersFromJson 兼容（OpenCode 风格，外层 key 为服务器名）。
+ * 不含 id/tools/enable（导入时自动生成/获取）。
+ */
+fun McpServerConfig.encodeForShare(): String {
+    val type = when (this) {
+        is McpServerConfig.SseTransportServer -> "sse"
+        is McpServerConfig.StreamableHTTPServer -> "streamable_http"
+    }
+    val url = when (this) {
+        is McpServerConfig.SseTransportServer -> this.url
+        is McpServerConfig.StreamableHTTPServer -> this.url
+    }
+    val serverObj = buildJsonObject {
+        put("type", type)
+        put("url", url)
+        if (commonOptions.headers.isNotEmpty()) {
+            put("headers", buildJsonObject {
+                commonOptions.headers.forEach { (k, v) -> put(k, v) }
+            })
+        }
+    }
+    val root = buildJsonObject {
+        put(commonOptions.name.ifBlank { "mcp_server" }, serverObj)
+    }
+    return Json.encodeToString(JsonObject.serializer(), root)
 }

@@ -162,9 +162,9 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
                 },
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { searchQuery = "" }) {
-                            Icon(HugeIcons.Cancel01, contentDescription = "Clear")
-                        }
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(HugeIcons.Cancel01, contentDescription = null)
+                            }
                     }
                 },
                 singleLine = true,
@@ -230,6 +230,7 @@ private fun ImportProviderButton(
     val toaster = LocalToaster.current
     val context = LocalContext.current
     var showImportDialog by remember { mutableStateOf(false) }
+    var showPasteDialog by remember { mutableStateOf(false) }
 
     val scanQrCodeLauncher = rememberLauncherForActivityResult(ScanQRCode()) { result ->
         handleQRResult(result, onAdd, toaster, context)
@@ -335,6 +336,35 @@ private fun ImportProviderButton(
                                 )
                             }
                         }
+
+                        // 第三操作：粘贴配置字符串
+                        OutlinedButton(
+                            onClick = {
+                                showImportDialog = false
+                                showPasteDialog = true
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp),
+                            shape = MaterialTheme.shapes.large
+                        ) {
+                            Row(
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(
+                                    imageVector = HugeIcons.FileImport,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    text = stringResource(R.string.setting_provider_page_paste_config),
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                            }
+                        }
                     }
                 }
             },
@@ -347,6 +377,28 @@ private fun ImportProviderButton(
                     Text(
                         text = stringResource(R.string.cancel),
                         style = MaterialTheme.typography.labelLarge
+                    )
+                }
+            }
+        )
+    }
+
+    if (showPasteDialog) {
+        ProviderPasteImportDialog(
+            onDismiss = { showPasteDialog = false },
+            onImport = { text ->
+                runCatching {
+                    val setting = decodeProviderSetting(text.trim())
+                    onAdd(setting)
+                    toaster.show(
+                        context.getString(R.string.setting_provider_page_import_success),
+                        type = ToastType.Success
+                    )
+                    showPasteDialog = false
+                }.onFailure { error ->
+                    toaster.show(
+                        context.getString(R.string.setting_provider_page_qr_decode_failed, error.message ?: ""),
+                        type = ToastType.Error
                     )
                 }
             }
@@ -543,4 +595,40 @@ private fun ProviderItem(
             dragHandle()
         }
     }
+}
+
+@Composable
+private fun ProviderPasteImportDialog(
+    onDismiss: () -> Unit,
+    onImport: (String) -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.setting_provider_page_paste_config)) },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("ai-provider:v1:...") },
+                singleLine = false,
+                minLines = 3,
+                maxLines = 6
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onImport(text) },
+                enabled = text.isNotBlank()
+            ) {
+                Text(stringResource(R.string.setting_provider_page_import_dialog_title))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
 }

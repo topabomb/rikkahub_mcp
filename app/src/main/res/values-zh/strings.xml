@@ -702,6 +702,7 @@
   <string name="setting_mcp_page_no_mcp_servers_found">未找到 MCP 服务器</string>
   <string name="setting_mcp_page_save">保存</string>
   <string name="setting_mcp_page_server_url">服务器地址</string>
+  <string name="setting_mcp_page_share_title">分享 MCP 服务器</string>
   <string name="setting_mcp_page_sse_url_desc">SSE传输服务器的URL地址</string>
   <string name="setting_mcp_page_sse_url_placeholder">https://example.com/sse</string>
   <string name="setting_mcp_page_streamable_http_url_desc">流式HTTP服务器的URL地址</string>
@@ -861,6 +862,7 @@
   <string name="setting_provider_page_no_permission">没有权限</string>
   <string name="setting_provider_page_no_qr_found">未找到有效的二维码</string>
   <string name="setting_provider_page_output_modality">输出模态</string>
+  <string name="setting_provider_page_paste_config">粘贴配置</string>
   <string name="setting_provider_page_private_key">私钥</string>
   <string name="setting_provider_page_project_id">项目 ID</string>
   <string name="setting_provider_page_provider_override">提供商重写</string>

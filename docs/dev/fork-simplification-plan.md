@@ -727,6 +727,18 @@ ExtensionsPage 入口不变（4 项保留）。PromptPage 内部变化：
 | `./gradlew :ai:testDebugUnitTest` | ✅ 140 tests, 0 failures |
 | `./gradlew lint` | ✅ 全模块 Lint 通过 |
 
+### 9.9 R8 Strict Full Mode 兼容性修复（2026-06-19）
+
+**问题**：AGP 9.2.1 默认启用 `android.r8.strictFullModeForKeepRules=true`，ML Kit barcode-scanning 17.3.0 的 consumer ProGuard rules 不兼容 strict full mode。Release 构建在真机上扫码时 `BarcodeScanner.getClient()` 抛出 `NullPointerException`（内部类 `zzg`/`zzh` 被 R8 裁剪）。
+
+**初始修复尝试**：在 `proguard-rules.pro` 中添加 ML Kit keep rules。但 `-keep class com.google.mlkit.vision.barcode.** { *; }` 过于宽泛，改变了 R8 类图分析和优化路径，导致 release 构建在 Android 16 真机上启动即闪退。
+
+**最终修复**：在 `gradle.properties` 中设置 `android.r8.strictFullModeForKeepRules=false`，回退到 AGP 8 的 keep rules 处理行为。ML Kit consumer rules 正常工作，不改变 R8 对其他类的优化行为。
+
+**参考**：[googlesamples/mlkit#1007](https://github.com/googlesamples/mlkit/issues/1007)
+
+**验证**：Android 13 真机 release 正常启动 + 扫码正常。
+
 ---
 
 ## 八、版本规约
