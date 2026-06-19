@@ -1,7 +1,7 @@
 # Fork 精简版规划
 
 > 基于 `architecture.md` 的架构现状，规划精简版本的具体操作
-> 最后更新：2026-06-19
+> 最后更新：2026-06-19（残留清理收尾）
 > 状态：已执行完成，当前版本 0.0.1
 
 ---
@@ -438,9 +438,9 @@ ExtensionsPage 入口不变（4 项保留）。PromptPage 内部变化：
 ### 7.1 编译验证检查清单
 
 - [x] `./gradlew assembleDebug` 编译通过
-- [x] `./gradlew :app:testDebugUnitTest` 单元测试通过（86 tests, 0 failures）
-- [x] `./gradlew :ai:testDebugUnitTest` AI 模块测试通过
-- [ ] `./gradlew lint` Lint 通过
+- [x] `./gradlew :app:testDebugUnitTest` 单元测试通过（106 tests, 0 failures）
+- [x] `./gradlew :ai:testDebugUnitTest` AI 模块测试通过（140 tests, 0 failures）
+- [x] `./gradlew lint` Lint 通过（全模块）
 - [ ] 应用可安装、可启动
 - [ ] 基础对话：发送消息 → 收到流式响应
 - [ ] 工具调用：LocalTools 能执行
@@ -562,12 +562,13 @@ ExtensionsPage 入口不变（4 项保留）。PromptPage 内部变化：
 | DefaultProvidersTest 补充 Claude/DeepSeek 禁用断言 | ✅ |
 | README.md 重写（聚焦 fork 项目架构/开发） | ✅ |
 | ProotShellRunner 进程名更新（rikkahub→mersixpilot） | ✅ |
+| 残留清理收尾（功能缺陷修复 + 死代码/死依赖/死字符串移除 + 配置文档更新） | ✅ |
 
 ### 9.2 待完成 — 运行时验证（需真机/模拟器）
 
 > 以下项需在设备上验证，编译与单元测试已通过。
 
-- [ ] `./gradlew lint` Lint 通过
+- [x] `./gradlew lint` Lint 通过（全模块，2026-06-19）
 - [ ] 应用可安装、可启动（曾遇 `INSTALL_FAILED_USER_RESTRICTED`，需开启 USB 安装权限）
 - [ ] 基础对话：发送消息 → 收到流式响应
 - [ ] 工具调用：LocalTools 能执行
@@ -663,6 +664,68 @@ ExtensionsPage 入口不变（4 项保留）。PromptPage 内部变化：
 | `slf4j.api` / `slf4j.android` | Ktor Client 日志路由到 logcat |
 | `zxing.core` / `quickie.bundled` / `barcode.scanning` | 二维码扫描（Provider 导入等） |
 | `sqlite.android` | Room 底层 SQLite（FTS5 支持） |
+| `ktor-serialization-kotlinx-json` | Ktor Client 共享，Web 模块删除后仍需保留 |
+
+### 9.8 残留清理收尾（2026-06-19）
+
+> 精简版核心目标已全部落地，但功能移除过程中遗留了少量死代码、死依赖和死字符串。本次清理全部收尾，验证编译/测试/Lint 全部通过。
+
+**A. 功能缺陷修复（1 项）**：
+
+| 文件 | 修复 |
+|------|------|
+| `ImportExportTab.kt` | 移除 "Import from other app" section（Chatbox/Cherry Studio 导入按钮），删除 `importType` 变量，简化 `openDocumentLauncher` 回调为直接执行本地备份导入。修复了点击导入显示"成功"但实际无操作执行的缺陷。 |
+
+**B. 死代码移除（4 处）**：
+
+| 文件 | 移除 |
+|------|------|
+| `ImageUtils.kt` | 删除 `getTavernCharacterMeta()` 函数 + 3 个 `com.drew` import（无调用方） |
+| `AIIconMatcher.kt` | 删除 `PATTERN_TAVERN` 匹配分支和正则定义 |
+| `assets/icons/tavern.png` | 删除酒馆角色卡图标资产 |
+| `web/` 空壳目录 | 删除（仅剩空 `src/main/resources/static/`，模块已从 settings.gradle.kts 移除） |
+
+**C. 死依赖移除（5 组，均在 `gradle/libs.versions.toml`）**：
+
+| 依赖 | 移除理由 |
+|------|----------|
+| `metadata-extractor` | 仅被已删除的 `getTavernCharacterMeta()` 使用，`app/build.gradle.kts` 引用一并移除 |
+| `ktor-server-*`（13 个） | Web 模块已删除，零 build.gradle.kts 引用。`ktor-serialization-kotlinx-json` 被 Ktor Client 共享，保留 |
+| `dom4j` | 全部 `*.kts` 零引用 |
+| `sqlite-vector` | 全部 `*.kts` 零引用（与 `sqlite-android` 不同，后者保留） |
+| `androidx-navigation2`（nav2） | 全部 `*.kts` 零引用，项目已迁移到 Navigation 3 |
+
+**D. 死字符串清理（6 语言文件 × 59 条/文件 = 354 条删除 + 12 条文本更新）**：
+
+6 个 `strings.xml` 文件（`values`/`values-zh`/`values-zh-rTW`/`values-ja`/`values-ko-rKR`/`values-ru`）各删除 59 条死字符串：
+
+- `assistant_importer_*`（10 条，代码零引用）
+- `*lorebook*`（10 条）
+- `backup_page_import_*chatbox*`/`*cherry*`/`*other_app*`（5 条）
+- `donate_page_*`（5 条）+ `setting_page_donate*`（2 条）+ `setting_page_sponsor_alert_*`（4 条）
+- `notification_*web_server*`（4 条）+ `setting_page_web_server*`（17 条）
+- `chat_page_menu_ai_translator`（1 条）
+- `setting_model_page_prompt_translation`（1 条）
+
+更新 2 条描述字符串（移除 "lorebooks" 提及）：
+- `assistant_detail_extensions_desc`
+- `assistant_page_allow_conversation_prompt_injection_desc`
+
+**E. 配置/文档更新（3 处）**：
+
+| 文件 | 更新 |
+|------|------|
+| `settings.gradle.kts` | `rootProject.name` 从 `"rikkahub"` 改为 `"MersixPilot"` |
+| `CLAUDE.md` | 完全重写，与 `AGENTS.md` 对齐：项目名 RikkaHub→Mersix Pilot、移除 web 模块、包路径 `me/rerere/rikkahub/`→`net/weero/mersix/pilot/`、移除 lorebook 提及、搜索 provider 列表更新 |
+
+**F. 验证结果（全部通过）**：
+
+| 验证项 | 结果 |
+|--------|------|
+| `./gradlew assembleDebug` | ✅ 编译通过 |
+| `./gradlew :app:testDebugUnitTest` | ✅ 106 tests, 0 failures |
+| `./gradlew :ai:testDebugUnitTest` | ✅ 140 tests, 0 failures |
+| `./gradlew lint` | ✅ 全模块 Lint 通过 |
 
 ---
 

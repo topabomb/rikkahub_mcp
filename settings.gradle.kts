@@ -32,7 +32,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "rikkahub"
+rootProject.name = "MersixPilot"
 include(":app")
 include(":highlight")
 include(":ai")

@@ -47,8 +47,6 @@ fun ImportExportTab(
     var isExporting by remember { mutableStateOf(false) }
     var isRestoring by remember { mutableStateOf(false) }
 
-    // 导入类型：local 为本地备份，chatbox 为 Chatbox 导入，cherry 为 Cherry Studio 导入
-    var importType by remember { mutableStateOf("local") }
     val backupSuccess = stringResource(R.string.backup_page_backup_success)
     val restoreSuccess = stringResource(R.string.backup_page_restore_success)
     val restoreFailedFmt = stringResource(R.string.backup_page_restore_failed)
@@ -98,26 +96,21 @@ fun ImportExportTab(
             scope.launch {
                 isRestoring = true
                 runCatching {
-                    when (importType) {
-                        "local" -> {
-                            // 本地备份导入：处理zip文件
-                            val tempFile =
-                                File(context.cacheDir, "temp_restore_${System.currentTimeMillis()}.zip")
+                    // 本地备份导入：处理zip文件
+                    val tempFile =
+                        File(context.cacheDir, "temp_restore_${System.currentTimeMillis()}.zip")
 
-                            context.contentResolver.openInputStream(sourceUri)?.use { inputStream ->
-                                FileOutputStream(tempFile).use { outputStream ->
-                                    inputStream.copyTo(outputStream)
-                                }
-                            }
-
-                            // 从临时文件恢复
-                            vm.restoreFromLocalFile(tempFile)
-
-                            // 清理临时文件
-                            tempFile.delete()
+                    context.contentResolver.openInputStream(sourceUri)?.use { inputStream ->
+                        FileOutputStream(tempFile).use { outputStream ->
+                            inputStream.copyTo(outputStream)
                         }
-
                     }
+
+                    // 从临时文件恢复
+                    vm.restoreFromLocalFile(tempFile)
+
+                    // 清理临时文件
+                    tempFile.delete()
 
                     toaster.show(
                         restoreSuccess,
@@ -179,7 +172,6 @@ fun ImportExportTab(
                 item(
                     onClick = if (!isRestoring) {
                         {
-                            importType = "local"
                             openDocumentLauncher.launch(arrayOf("application/zip"))
                         }
                     } else null,
@@ -204,50 +196,5 @@ fun ImportExportTab(
             }
         }
 
-        stickyHeader {
-            StickyHeader {
-                Text(stringResource(R.string.backup_page_import_from_other_app))
-            }
-        }
-
-        item {
-            CardGroup {
-                item(
-                    onClick = if (!isRestoring) {
-                        {
-                            importType = "chatbox"
-                            openDocumentLauncher.launch(arrayOf("application/json"))
-                        }
-                    } else null,
-                    headlineContent = { Text(stringResource(R.string.backup_page_import_from_chatbox)) },
-                    supportingContent = { Text(stringResource(R.string.backup_page_import_chatbox_desc)) },
-                    leadingContent = {
-                        if (isRestoring && importType == "chatbox") {
-                            CircularWavyProgressIndicator(modifier = Modifier.size(24.dp))
-                        } else {
-                            Icon(HugeIcons.FileImport, null)
-                        }
-                    },
-                )
-
-                item(
-                    onClick = if (!isRestoring) {
-                        {
-                            importType = "cherry"
-                            openDocumentLauncher.launch(arrayOf("application/zip"))
-                        }
-                    } else null,
-                    headlineContent = { Text(stringResource(R.string.backup_page_import_from_cherry_studio)) },
-                    supportingContent = { Text(stringResource(R.string.backup_page_import_cherry_studio_desc)) },
-                    leadingContent = {
-                        if (isRestoring && importType == "cherry") {
-                            CircularWavyProgressIndicator(modifier = Modifier.size(24.dp))
-                        } else {
-                            Icon(HugeIcons.FileImport, null)
-                        }
-                    },
-                )
-            }
-        }
     }
 }

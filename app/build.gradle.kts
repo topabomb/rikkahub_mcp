@@ -169,10 +169,6 @@ dependencies {
     // DataStore
     implementation(libs.androidx.datastore.preferences)
 
-    // Image metadata extractor
-    // https://github.com/drewnoakes/metadata-extractor
-    implementation(libs.metadata.extractor)
-
     // Haze (background blur)
     implementation(libs.haze)
     implementation(libs.haze.blur)
