@@ -9,21 +9,19 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
-    alias(libs.plugins.google.services)
-    alias(libs.plugins.firebase.crashlytics)
     alias(libs.plugins.baselineprofile)
 }
 
 android {
-    namespace = "me.rerere.rikkahub"
+    namespace = "net.weero.mersix.pilot"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "me.rerere.rikkahub"
+        applicationId = "net.weero.mersix.pilot"
         minSdk = 26
         targetSdk = 37
-        versionCode = 164
-        versionName = "2.3.1"
+        versionCode = 1
+        versionName = "0.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -151,7 +149,6 @@ dependencies {
     implementation(libs.androidx.browser)
     implementation(libs.androidx.profileinstaller)
     implementation(libs.termux.terminal.view)
-    implementation(libs.guava.listenablefuture)
 
     // Compose
     implementation(libs.androidx.activity.compose)
@@ -168,12 +165,6 @@ dependencies {
     implementation(libs.androidx.navigation3.ui)
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
     implementation(libs.androidx.material3.adaptive.navigation3)
-
-    // Firebase
-    implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.analytics)
-    implementation(libs.firebase.crashlytics)
-    implementation(libs.firebase.config)
 
     // DataStore
     implementation(libs.androidx.datastore.preferences)
@@ -199,8 +190,6 @@ dependencies {
     // okhttp
     implementation(libs.okhttp)
     implementation(libs.okhttp.sse)
-    implementation(libs.retrofit)
-    implementation(libs.retrofit.serialization.json)
 
     // ktor client
     implementation(libs.ktor.client.core)
@@ -271,9 +260,6 @@ dependencies {
     // mcp
     implementation(libs.modelcontextprotocol.kotlin.sdk)
 
-    // jmDNS (mDNS/Bonjour for .local hostname)
-    implementation(libs.jmdns)
-
     // SLF4J Android binding — routes Ktor/SLF4J logs to logcat
     implementation(libs.slf4j.api)
     implementation(libs.slf4j.android)
@@ -283,7 +269,6 @@ dependencies {
 
     // modules
     implementation(project(":ai"))
-    implementation(project(":web"))
     implementation(project(":document"))
     implementation(project(":highlight"))
     implementation(project(":search"))

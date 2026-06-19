@@ -437,10 +437,6 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
-    val QWEN_MT = defineModel {
-        tokens("qwen", "mt")
-    }
-
     private val ALL_MODELS = listOf(
         GPT4O,
         GPT_4_1,
@@ -511,7 +507,6 @@ object ModelRegistry {
         XIAOMI_MIMO_V2_PRO,
         XIAOMI_MIMO_V2_5,
         XIAOMI_MIMO_V2_5_PRO,
-        QWEN_MT
     )
 
     val MODEL_INPUT_MODALITIES = ModelData { modelId ->

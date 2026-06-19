@@ -1,13 +1,13 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <resources>
-  <string name="about_page_github">GitHub</string>
   <string name="about_page_license">Лицензия</string>
+  <string name="about_page_documentation">Документация</string>
   <string name="about_page_system">Система</string>
   <string name="about_page_title">О приложении</string>
   <string name="about_page_version">Версия</string>
   <string name="about_page_website">Веб-сайт</string>
   <string name="add">Добавить</string>
-  <string name="app_name">RikkaHub</string>
+  <string name="app_name">Mersix Pilot</string>
   <string name="asr_button_content_description">Распознавание речи</string>
   <string name="asr_button_stop">Стоп</string>
   <string name="assistant_detail_basic_desc">Настройте имя, аватар, модель и параметры</string>
@@ -309,7 +309,7 @@
   <string name="code_block_copy">Копировать код</string>
   <string name="code_block_expand">Развернуть</string>
   <string name="code_block_preview">Предпросмотр</string>
-  <string name="collapse_translation">Свернуть перевод</string>
+
   <string name="confirm">Подтвердить</string>
   <string name="confirm_delete">Подтвердить удаление</string>
   <string name="copied">Скопировано</string>
@@ -337,8 +337,7 @@
   <string name="error_title_send_message">Не удалось отправить сообщение</string>
   <string name="error_title_tool_approval">Сбой обработки вызова инструмента</string>
   <string name="error_title_tool_unavailable">Инструмент недоступен</string>
-  <string name="error_title_translate_message">Ошибка перевода сообщения</string>
-  <string name="expand_translation">Развернуть перевод</string>
+
   <string name="export_cancel">Отмена</string>
   <string name="export_image_warning">Приведённый выше контент сгенерирован искусственным интеллектом и может содержать неточности.</string>
   <string name="export_import_failed">Ошибка импорта: %s</string>
@@ -408,15 +407,7 @@
   <string name="imggen_page_save_failed">Не удалось сохранить: %1$s</string>
   <string name="imggen_page_settings_title">Настройки генерации изображений</string>
   <string name="imggen_page_title">Генерация изображений</string>
-  <string name="language_english">🇺🇸 Английский</string>
-  <string name="language_french">🇫🇷 Французский</string>
-  <string name="language_german">🇩🇪 Немецкий</string>
-  <string name="language_italian">🇮🇹 Итальянский</string>
-  <string name="language_japanese">🇯🇵 Японский</string>
-  <string name="language_korean">🇰🇷 Корейский</string>
-  <string name="language_simplified_chinese">🇷🇺 Упрощённый китайский</string>
-  <string name="language_spanish">🇪🇸 Испанский</string>
-  <string name="language_traditional_chinese">🇨🇳 繁體中文</string>
+
   <string name="mcp_picker_syncing">Синхронизация MCP-серверов…</string>
   <string name="mcp_picker_title">Серверы MCP</string>
   <string name="menu">Меню</string>
@@ -548,13 +539,13 @@
   <string name="regenerate">Сгенерировать заново</string>
   <string name="regenerate_confirm_message">Вы уверены, что хотите перегенерировать это сообщение?</string>
   <string name="render_with_webview">Отображать в WebView</string>
-  <string name="rikkahub_provider_description">Официальный бесплатный AI-сервис, использующий средства спонсоров для предоставления новым пользователям бесплатных моделей в качестве резерва; API-ключ не требуется. Действуют строгие ограничения по частоте запросов. Если у вас есть собственный провайдер, используйте его по возможности.</string>
   <string name="safe_mode_assistants">Помощники</string>
   <string name="safe_mode_copy">Копировать</string>
   <string name="safe_mode_crash_report">Отчёт о сбое</string>
   <string name="safe_mode_current_assistant">Текущий ассистент: %s</string>
   <string name="safe_mode_default_assistant">Ассистент по умолчанию</string>
   <string name="safe_mode_description">При последнем запуске приложение завершилось с ошибкой. Вы можете переключиться на другого ассистента, чтобы решить проблему.</string>
+  <string name="safe_mode_enter_app">Войти в приложение</string>
   <string name="safe_mode_switch_assistant">Переключить помощника</string>
   <string name="safe_mode_title">Безопасный режим</string>
   <string name="search_ability_scrape">Собрать</string>
@@ -755,9 +746,7 @@
   <string name="setting_model_page_title">Настройки модели</string>
   <string name="setting_model_page_title_model">Модель сводки заголовков</string>
   <string name="setting_model_page_title_model_desc">Модель для генерации заголовков бесед. Если не задана, используется быстрая модель</string>
-  <string name="setting_model_page_translate_model">Модель перевода</string>
-  <string name="setting_model_page_translate_model_desc">Модель, используемая для функций перевода</string>
-  <string name="setting_model_page_translate_prompt_vars">Переменные: Исходный текст: {source_text}, Целевой язык: {target_lang}</string>
+
   <string name="setting_page_about">О приложении</string>
   <string name="setting_page_about_desc">Об этом приложении</string>
   <string name="setting_page_assistant">Ассистент</string>
@@ -819,7 +808,7 @@
   <string name="setting_page_search_title">Служба поиска</string>
   <string name="setting_page_share">Поделиться</string>
   <string name="setting_page_share_desc">Поделиться этим приложением с друзьями</string>
-  <string name="setting_page_share_text">RikkaHub — открытый Android-ассистент с ИИ\n\nСайт: https://rikka-ai.com/</string>
+  <string name="setting_page_share_text">Mersix Pilot — Android AI-ассистент\n\nСайт: https://mersix.weero.net/</string>
   <string name="setting_page_sponsor_alert_confirm">Пожертвовать</string>
   <string name="setting_page_sponsor_alert_desc">Вы запустили приложение более 100 раз! Если вам нравится им пользоваться, пожалуйста, поддержите разработчика.</string>
   <string name="setting_page_sponsor_alert_dismiss">Не сейчас</string>
@@ -847,7 +836,6 @@
   <string name="setting_page_web_server_address_note_desc">LAN-адрес: использует IP-адрес устройства в Wi-Fi, доступен другим устройствам в той же сети. Недоступен при использовании мобильных данных.
 Локальный адрес: использует localhost, доступен только на этом устройстве.
 Адрес mDNS: использует имя хоста .local, доступен по имени с других устройств в той же сети без знания IP-адреса.</string>
-  <string name="setting_page_web_server_desc">Разрешить доступ к RikkaHub через веб</string>
   <string name="setting_page_web_server_error">Ошибка</string>
   <string name="setting_page_web_server_jwt_enable">Включить аутентификацию</string>
   <string name="setting_page_web_server_jwt_enable_desc">Требовать проверку пароля при доступе к веб-интерфейсу</string>
@@ -1055,16 +1043,7 @@
   <string name="theme_name_spring">Луговой зелёный</string>
   <string name="title_activity_safe_mode">Безопасный режим</string>
   <string name="tools_warning">Текущая модель не поддерживает вызов инструментов. Чтобы использовать функции поиска/MCP, включите возможности инструментов модели в настройках.</string>
-  <string name="translate">Перевести</string>
-  <string name="translating">Перевод...</string>
-  <string name="translation_clear">Очистить перевод</string>
-  <string name="translation_language_selection_title">Выберите язык перевода</string>
-  <string name="translation_text">Перевод</string>
-  <string name="translator_page_cancel">Отмена</string>
-  <string name="translator_page_input_placeholder">Введите текст для перевода...</string>
-  <string name="translator_page_result_placeholder">Результат перевода будет показан здесь</string>
-  <string name="translator_page_title">Переводчик</string>
-  <string name="translator_page_translate">Перевести</string>
+
   <string name="tts">TTS</string>
   <string name="unpin_chat">Открепить чат</string>
   <string name="update_card_check_failed">Проверка обновления не удалась</string>

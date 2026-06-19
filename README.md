@@ -1,95 +1,115 @@
-<div align="center">
-  <img src="docs/icon.png" alt="App Icon" width="100" />
-  <h1>RikkaHub</h1>
+# Mersix Pilot
 
-  [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/rikkahub/rikkahub)
-  [![Ask DeepWiki](https://img.shields.io/badge/zread.ai-blue?style=flat&logo=readthedocs)](https://zread.ai/rikkahub/rikkahub)
+> 小麦助手 — 基于 [RikkaHub](https://github.com/re-ovo/rikkahub)（原作者 [re-ovo](https://github.com/re-ovo)）精简 fork 的原生 Android LLM 聊天客户端。
 
-A native Android LLM chat client that supports switching between different providers for
-conversations 🤖💬
+Fork 源头：RikkaHub v2.3.1（versionCode 164），提交 `5b9be301`。感谢原项目提供的优秀架构和功能基础。
 
-Click to join our Discord server 👉 [【RikkaHub】](https://discord.gg/9weBqxe5c4)
+**版本起点**：本 fork 从 `0.0.1`（versionCode 1）开始，采用 SemVer 语义化版本管理。详见 [版本规约](docs/dev/fork-simplification-plan.md#八版本规约)。
 
-[简体中文](README_ZH_CN.md) | [繁體中文](README_ZH_TW.md) | English
-</div>
+## 架构概览
 
-<div align="center">
-  <img src="docs/img/chat.png" alt="Chat Interface" width="150" />
-  <img src="docs/img/desktop.png" alt="Models Picker" width="450" />
-</div>
+```
+app/          主应用（UI + ViewModel + 数据层）
+ai/           AI SDK 抽象层（Provider 适配 + 消息模型 + 工具定义）
+search/       搜索引擎 SDK（Bing / Tavily / SearXNG / Custom JS）
+speech/       语音 SDK（TTS + ASR）
+workspace/    工作空间（proot Linux 沙箱）
+document/     文档解析（PDF / DOCX / PPTX / EPUB）
+highlight/    代码语法高亮
+material3/    Material3 颜色工具扩展
+common/       通用工具
+```
 
-## 🚀 Download
+**核心概念**：
 
-🔗 [Download from Website](https://rikka-ai.com/download) (Recommended)
+| 概念 | 说明 |
+|------|------|
+| Assistant | 助手配置：系统提示词、模型参数、对话隔离 |
+| Conversation | 对话线程，MessageNode 树形结构支持消息分支 |
+| UIMessage | 平台无关的消息抽象，支持流式更新和多种内容类型 |
+| Provider | AI 服务商适配层（OpenAI / Google / Claude / DeepSeek 等兼容 API） |
+| MCP | Model Context Protocol，工具调用与外部服务集成 |
+| Transformer | 消息变换管道（模板、正则、OCR、Think 标签提取等） |
 
-🔗 [Download from Google Play](https://play.google.com/store/apps/details?id=me.rerere.rikkahub)
+## 功能特性
 
-## 💖 Sponsors
+- **多 Provider 对话**：OpenAI / Gemini / Claude / DeepSeek（4 个预设，全部默认禁用）
+- **MCP 协议**：连接外部工具服务器
+- **工具调用 + HITL 审批**：安全的工具执行机制
+- **工作空间沙箱**：proot Linux 环境执行命令
+- **消息分支**：重新生成、切换对话分支
+- **Markdown 渲染**：代码高亮、LaTeX、Mermaid 图表
+- **多模态输入**：图片、PDF、DOCX 文档
+- **全文搜索**：FTS5 + jieba 中文分词
+- **备份同步**：WebDAV / S3
+- **AI 生图**：文生图演示功能
+- **Skills 系统**：可扩展的技能框架
+- **语音合成**：System TTS / OpenAI / Gemini
 
-<div align="center">
-  <img src="app/src/main/assets/icons/aihubmix-color.svg" alt="Aihubmix" width="50" />
-  <p style="font-size: 16px; font-weight: bold;">Aihubmix</p>
-  <p style="font-size: 14px;">Thanks to <a href="https://aihubmix.com?aff=pG7r">aihubmix.com</a> for their financial support. We recommend using aihubmix as a one-stop shop for mainstream models worldwide. (OpenAI, Claude, Google Gemini, DeepSeek, Qwen, and hundreds more).</p>
-</div>
+## 技术栈
 
-## ✨ Features
+| 类别 | 技术 |
+|------|------|
+| 语言 | Kotlin |
+| UI | Jetpack Compose + Material3 + Navigation3 |
+| DI | Koin |
+| 网络 | OkHttp + Ktor Client |
+| 序列化 | kotlinx.serialization |
+| 数据库 | Room（版本 2，含 Migration 样本） |
+| 异步 | Coroutines + Flow |
+| 图片 | Coil |
 
-- 🎨 Material You Design and 🌙 Dark mode
-- 📦 Workspace: a proot-based Linux agent environment
-- 🔄 Multiple AI Provider Support: custom API / URL / models (all OpenAI, Google, Anthropic compatible api)
-- 🖼️ Multimodal input support (Image, Text Documentation, PDF, Docx)
-- 🖥️ Web access for multi-platform use
-- 🛠️ MCP support
-- 📝 Markdown Rendering (with code highlighting, Latex formulas, tables, Mermaid)
-- 🪾 Message Branching
-- 🔍 Search capabilities (Exa, Tavily, Zhipu, LinkUp, Brave, Perplexity, etc.)
-- 🧩 Prompt variables (model name, time, etc.)
-- 🤳 QR code export and import for providers
-- 🤖 Agent customization
-- 🧠 ChatGPT-like memory feature
-- 📝 AI Translation
-- 🌐 Custom HTTP request headers and request bodies
-- 💌 Silly Tavern character card import
+## 构建与开发
 
-## ✨ Contributing
+### 环境要求
 
-This project is developed using [Android Studio](https://developer.android.com/studio). PRs are
-welcome!
+- Android Studio（最新稳定版）
+- JDK 17+
+- Android SDK 37
 
-Technology stack documentation:
+### 常用命令
 
-- [Kotlin](https://kotlinlang.org/) (Development language)
-- [Koin](https://insert-koin.io/) (Dependency Injection)
-- [Jetpack Compose](https://developer.android.com/jetpack/compose) (UI framework)
-- [DataStore](https://developer.android.com/topic/libraries/architecture/datastore) (Preference data
-  storage)
-- [Room](https://developer.android.com/training/data-storage/room) (Database)
-- [Coil](https://coil-kt.github.io/coil/) (Image loading)
-- [Material You](https://m3.material.io/) (UI design)
-- [Navigation 3](https://developer.android.com/guide/navigation/navigation-3) (Navigation)
-- [Okhttp](https://square.github.io/okhttp/) (HTTP client)
-- [kotlinx.serialization](https://github.com/Kotlin/kotlinx.serialization) (JSON serialization)
+```bash
+./gradlew assembleDebug              # 构建 Debug APK
+./gradlew test                       # 运行所有 JVM 单元测试
+./gradlew :app:testDebugUnitTest     # 运行 app 模块单元测试
+./gradlew :ai:testDebugUnitTest      # 运行 AI 模块单元测试
+./gradlew connectedDebugAndroidTest  # 运行设备/模拟器测试
+./gradlew lint                       # 运行 Android Lint
+```
 
-> [!TIP]
-> You need a `google-services.json` file at `app` folder to build the app.
+### 配置
 
-> [!IMPORTANT]  
-> The following PRs will be rejected: 
-> 1. Translation related changes, such as adding new languages or updating existing translations
-> 2. Adding new features, this project is opinionated and will not accept pull requests for new features
-> 3. Large-scale refactoring and changes generated by AI
+| 项目 | 值 |
+|------|-----|
+| 版本 | `0.0.1`（versionCode 1） |
+| 包名 | `net.weero.mersix.pilot` |
+| 最低 SDK | 26（Android 8.0） |
+| 目标 SDK | 37 |
+| 数据库 | Room `mersix_pilot`（version 2） |
+| SharedPreferences | `mersixpilot.preferences` |
 
-## 💰 Donate
+首次启动时 4 个预设 Provider 均为禁用状态，需手动启用并配置 API Key。
 
-* [Patreon](https://patreon.com/rikkahub)
-* [爱发电](https://afdian.com/a/reovo)
+## 精简说明
 
-## ⭐ Star History
+本 fork 相比原项目移除了以下功能：
 
-If you like this project, please give it a star ⭐
+- Firebase（RemoteConfig / Crashlytics / Analytics）
+- Retrofit（改用 OkHttp + Ktor Client）
+- Web 服务器模块（Ktor Server + React 前端 + mDNS）
+- 酒馆角色卡 / Chatbox / CherryStudio 导入
+- Lorebook / 世界书（保留 ModeInjection）
+- 翻译功能
+- 大量预设 Provider（18→4）和搜索引擎（17→4）
 
-[![Star History Chart](https://api.star-history.com/svg?repos=re-ovo/rikkahub&type=Date)](https://star-history.com/#re-ovo/rikkahub&Date)
+详细变更记录见 [Fork 精简计划](docs/dev/fork-simplification-plan.md)。
 
-## 📄 License
+## 文档
 
-[License](LICENSE)
+- [架构文档](docs/dev/architecture.md) — 原项目 RikkaHub 架构详解
+- [Fork 精简计划](docs/dev/fork-simplification-plan.md) — 变更记录与执行状态
+
+## 许可
+
+[LICENSE](LICENSE)

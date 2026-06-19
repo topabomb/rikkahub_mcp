@@ -1,14 +1,29 @@
+# ---- IDE / 编辑器 ----
 *.iml
-.gradle
-/local.properties
 /.idea
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
-local.properties
+.vscode
 .cursor
 .history
+.zed
+
+# ---- 构建产物 ----
+.gradle
+/build
+.externalNativeBuild
+.cxx
 .kotlin
+local.properties
+.DS_Store
+/captures
+
+# ---- AI Agent 配置 ----
 .codebuddy
+.claude
+.copilot
+.windsurf
+.cline
+.aider
+.continue
+
+# ---- 临时文件 ----
+/build_*.txt

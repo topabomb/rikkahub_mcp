@@ -90,7 +90,7 @@ sealed class ASRProviderSetting {
             listOf(
                 OpenAIRealtime::class,
                 DashScope::class,
-                Volcengine::class,
+                Volcengine::class, // 保留以兼容旧数据反序列化，但 UI 不再允许新增
             )
         }
     }

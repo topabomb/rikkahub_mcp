@@ -1,13 +1,13 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <resources>
-  <string name="about_page_github">Github</string>
   <string name="about_page_license">授權條款</string>
+  <string name="about_page_documentation">使用文件</string>
   <string name="about_page_system">系統</string>
   <string name="about_page_title">關於</string>
   <string name="about_page_version">版本</string>
   <string name="about_page_website">官網</string>
   <string name="add">添加</string>
-  <string name="app_name">RikkaHub</string>
+  <string name="app_name">小麥助手</string>
   <string name="asr_button_content_description">語音辨識</string>
   <string name="asr_button_stop">停止</string>
   <string name="assistant_detail_basic_desc">設定名稱、頭像、模型與參數</string>
@@ -309,7 +309,6 @@
   <string name="code_block_copy">複製代碼</string>
   <string name="code_block_expand">展開</string>
   <string name="code_block_preview">預覽</string>
-  <string name="collapse_translation">收合翻譯</string>
   <string name="confirm">確認</string>
   <string name="confirm_delete">確認刪除</string>
   <string name="copied">已複製</string>
@@ -337,8 +336,7 @@
   <string name="error_title_send_message">訊息傳送失敗</string>
   <string name="error_title_tool_approval">工具呼叫處理失敗</string>
   <string name="error_title_tool_unavailable">工具無法使用</string>
-  <string name="error_title_translate_message">訊息翻譯失敗</string>
-  <string name="expand_translation">展開翻譯</string>
+
   <string name="export_cancel">取消</string>
   <string name="export_image_warning">「以上內容由人工智慧生成，可能包含不準確之處。」</string>
   <string name="export_import_failed">匯入失敗：%s</string>
@@ -408,15 +406,7 @@
   <string name="imggen_page_save_failed">保存失敗： %1$s</string>
   <string name="imggen_page_settings_title">圖片生成設定</string>
   <string name="imggen_page_title">圖片生成</string>
-  <string name="language_english">🇺🇸 English</string>
-  <string name="language_french">🇫🇷 Français</string>
-  <string name="language_german">🇩🇪 Deutsch</string>
-  <string name="language_italian">🇮🇹 Italiano</string>
-  <string name="language_japanese">🇯🇵 日本語</string>
-  <string name="language_korean">🇰🇷 한국어</string>
-  <string name="language_simplified_chinese">🇨🇳 简体中文</string>
-  <string name="language_spanish">🇪🇸 西班牙文</string>
-  <string name="language_traditional_chinese">🇨🇳 繁體中文</string>
+
   <string name="mcp_picker_syncing">正在同步MCP伺服器...</string>
   <string name="mcp_picker_title">MCP伺服器</string>
   <string name="menu">選單</string>
@@ -548,13 +538,13 @@
   <string name="regenerate">重新生成</string>
   <string name="regenerate_confirm_message">您確定要重新產生這則訊息嗎？</string>
   <string name="render_with_webview">網頁視圖渲染</string>
-  <string name="rikkahub_provider_description">官方免費 AI 服務，使用用戶贊助資金為新用戶提供部分免費模型作為備用，無需 API 金鑰。具有嚴格速率限制，若您已購買自己的提供者，請盡量使用自有提供者。</string>
   <string name="safe_mode_assistants">助理</string>
   <string name="safe_mode_copy">複製</string>
   <string name="safe_mode_crash_report">當機報告</string>
   <string name="safe_mode_current_assistant">目前助理：%s</string>
   <string name="safe_mode_default_assistant">預設助理</string>
   <string name="safe_mode_description">應用程式在上次啟動時崩潰。您可以切換到其他助理來解決此問題。</string>
+  <string name="safe_mode_enter_app">進入應用</string>
   <string name="safe_mode_switch_assistant">切換助理</string>
   <string name="safe_mode_title">安全模式</string>
   <string name="search_ability_scrape">爬取</string>
@@ -755,9 +745,7 @@
   <string name="setting_model_page_title">模型設定</string>
   <string name="setting_model_page_title_model">標題摘要模型</string>
   <string name="setting_model_page_title_model_desc">用於總結對話標題的模型。未設置時使用快速模型</string>
-  <string name="setting_model_page_translate_model">翻譯模型</string>
-  <string name="setting_model_page_translate_model_desc">用於翻譯功能的模型</string>
-  <string name="setting_model_page_translate_prompt_vars">變數: 原始文字: {source_text}, 目標語言: {target_lang}</string>
+
   <string name="setting_page_about">關於</string>
   <string name="setting_page_about_desc">關於本APP</string>
   <string name="setting_page_assistant">助手</string>
@@ -819,7 +807,7 @@
   <string name="setting_page_search_title">搜尋服務</string>
   <string name="setting_page_share">分享</string>
   <string name="setting_page_share_desc">分享本APP給朋友</string>
-  <string name="setting_page_share_text">RikkaHub - 開源安卓AI助手\n\n官網: https://rikka-ai.com/</string>
+  <string name="setting_page_share_text">Mersix Pilot - Android AI 助手\n\n官網: https://mersix.weero.net/</string>
   <string name="setting_page_sponsor_alert_confirm">捐款</string>
   <string name="setting_page_sponsor_alert_desc">您已啟動應用程式超過 100 次！如果您喜歡使用它，請考慮支持開發者。</string>
   <string name="setting_page_sponsor_alert_dismiss">稍後再說</string>
@@ -845,7 +833,6 @@
   <string name="setting_page_web_server">Web伺服器</string>
   <string name="setting_page_web_server_address_note">位址備註</string>
   <string name="setting_page_web_server_address_note_desc">LAN 位址：使用裝置 WiFi IP，可供同一網路上的其他裝置存取。行動數據無法使用。\n本機位址：使用 localhost，僅供本裝置存取。\nmDNS 位址：使用 .local 主機名稱，可供同一網路上的其他裝置透過名稱存取，無需知道 IP。</string>
-  <string name="setting_page_web_server_desc">允許您透過網頁存取 RikkaHub</string>
   <string name="setting_page_web_server_error">錯誤</string>
   <string name="setting_page_web_server_jwt_enable">啟用身分驗證</string>
   <string name="setting_page_web_server_jwt_enable_desc">存取網頁介面時需要密碼驗證</string>
@@ -1053,16 +1040,7 @@
   <string name="theme_name_spring">原野綠</string>
   <string name="title_activity_safe_mode">安全模式</string>
   <string name="tools_warning">當前模型未開啟工具調用，請在設定內啟用模型的工具能力，再使用搜尋/MCP等功能</string>
-  <string name="translate">翻譯</string>
-  <string name="translating">翻譯中...</string>
-  <string name="translation_clear">清空翻譯</string>
-  <string name="translation_language_selection_title">選擇翻譯語言</string>
-  <string name="translation_text">譯文</string>
-  <string name="translator_page_cancel">取消</string>
-  <string name="translator_page_input_placeholder">請輸入要翻譯的文字...</string>
-  <string name="translator_page_result_placeholder">翻譯結果將顯示在這裡</string>
-  <string name="translator_page_title">翻譯</string>
-  <string name="translator_page_translate">翻譯</string>
+
   <string name="tts">語音</string>
   <string name="unpin_chat">取消釘選聊天</string>
   <string name="update_card_check_failed">檢查更新失敗</string>
