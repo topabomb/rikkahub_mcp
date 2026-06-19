@@ -98,3 +98,16 @@
   available, duplicate the English text as a placeholder and translate later.
 - For non-Composable code (e.g. ViewModel, utility functions), use `context.getString(R.string.key, args...)`.
 - For `locale-tui` operations, use the `locale-tui-localization` skill.
+
+## Development Documentation
+
+`docs/dev/` 维护以下文档，贡献者应了解其定位和维护规则：
+
+| 文档 | 定位 | 维护规则 |
+|------|------|----------|
+| `original-architecture.md` | Fork 前（RikkaHub）的完整架构说明，供追溯源头 | 冻结归档，不再更新（反映精简前状态） |
+| `fork-simplification-plan.md` | Fork 精简规划与落地记录（0.0.1 → 0.0.2） | 冻结归档，不再更新（精简已完成） |
+| `changelog.md` | 精简落地后的功能迭代清单（0.0.3 起） | **每次功能迭代提交时更新**，新增版本条目记录变更 |
+
+**功能迭代时**：在 `changelog.md` 顶部新增版本条目（版本号、日期、新增/修复/变更摘要），并同步递增 `app/build.gradle.kts` 的 `versionCode` 和 `versionName`。
+
