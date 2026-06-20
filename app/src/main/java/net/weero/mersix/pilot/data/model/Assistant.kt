@@ -23,7 +23,7 @@ data class Assistant(
     val topP: Float? = null,
     val contextMessageSize: Int = 0,
     val streamOutput: Boolean = true,
-    val enableMemory: Boolean = false,
+    val enableMemory: Boolean = true,
     val useGlobalMemory: Boolean = false, // 使用全局共享记忆而非助手隔离记忆
     val enableRecentChatsReference: Boolean = false,
     val messageTemplate: String = "{{ message }}",
@@ -35,7 +35,7 @@ data class Assistant(
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBodies: List<CustomBody> = emptyList(),
     val mcpServers: Set<Uuid> = emptySet(),
-    val localTools: List<LocalToolOption> = listOf(LocalToolOption.TimeInfo),
+    val localTools: List<LocalToolOption> = listOf(LocalToolOption.TimeInfo, LocalToolOption.Tts, LocalToolOption.AskUser),
     val workspaceId: Uuid? = null,
     val background: String? = null, // 聊天页背景图地址(本地文件 URI 或网络 URL), 为 null 时无背景
     val backgroundOpacity: Float = 1.0f, // 背景图不透明度(0~1)

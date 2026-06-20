@@ -346,9 +346,9 @@ class SettingsStore(
             preferences[WEBDAV_CONFIG] = JsonInstant.encodeToString(settings.webDavConfig)
             preferences[S3_CONFIG] = JsonInstant.encodeToString(settings.s3Config)
             preferences[TTS_PROVIDERS] = JsonInstant.encodeToString(settings.ttsProviders)
-            settings.selectedTTSProviderId?.let {
+            settings.selectedTTSProviderId.let {
                 preferences[SELECTED_TTS_PROVIDER] = it.toString()
-            } ?: preferences.remove(SELECTED_TTS_PROVIDER)
+            }
             preferences[ASR_PROVIDERS] = JsonInstant.encodeToString(settings.asrProviders)
             settings.selectedASRProviderId?.let {
                 preferences[SELECTED_ASR_PROVIDER] = it.toString()
@@ -513,12 +513,12 @@ data class DisplaySetting(
     val showMessageJumper: Boolean = true,
     val messageJumperOnLeft: Boolean = false,
     val fontSizeRatio: Float = 1.0f,
-    val enableMessageGenerationHapticEffect: Boolean = false,
+    val enableMessageGenerationHapticEffect: Boolean = true,
     val skipCropImage: Boolean = true,
-    val enableNotificationOnMessageGeneration: Boolean = false,
-    val enableLiveUpdateNotification: Boolean = false,
-    val codeBlockAutoWrap: Boolean = false,
-    val codeBlockAutoCollapse: Boolean = false,
+    val enableNotificationOnMessageGeneration: Boolean = true,
+    val enableLiveUpdateNotification: Boolean = true,
+    val codeBlockAutoWrap: Boolean = true,
+    val codeBlockAutoCollapse: Boolean = true,
     val showLineNumbers: Boolean = false,
     val ttsOnlyReadQuoted: Boolean = false,
     val autoPlayTTSAfterGeneration: Boolean = false,
@@ -595,7 +595,7 @@ fun Settings.getQuickMessagesOfAssistant(assistant: Assistant) =
     quickMessages.filter { it.id in assistant.quickMessageIds }
 
 fun Settings.getSelectedTTSProvider(): TTSProviderSetting? {
-    return selectedTTSProviderId?.let { id ->
+    return selectedTTSProviderId.let { id ->
         ttsProviders.find { it.id == id }
     } ?: ttsProviders.firstOrNull()
 }
@@ -645,6 +645,8 @@ internal val DEFAULT_ASSISTANTS = listOf(
             ## Hint
             - If the user does not specify a language, reply in the user's primary language.
             - Remember to use Markdown syntax for formatting, and use latex for mathematical expressions.
+            - Use the text_to_speech tool to read aloud important conclusions or summaries.
+            - Use the memory system to save, retrieve, and maintain user preferences and key information.
         """.trimIndent()
     ),
 )
