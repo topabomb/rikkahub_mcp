@@ -2,7 +2,7 @@
 
 > 本文档记录 Fork 精简落地（0.0.2）后的功能迭代历史。
 > 精简过程见 `fork-simplification-plan.md`，精简前架构见 `original-architecture.md`。
-> 每次功能迭代提交时更新本文档。
+> 每次功能迭代提交时必须更新本文档，该文档保持精简描述的风格。
 
 ---
 
