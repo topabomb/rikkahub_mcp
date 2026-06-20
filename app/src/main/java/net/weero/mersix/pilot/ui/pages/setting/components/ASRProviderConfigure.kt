@@ -34,7 +34,6 @@ fun ASRProviderConfigure(
                 value = when (setting) {
                     is ASRProviderSetting.OpenAIRealtime -> "OpenAI Realtime"
                     is ASRProviderSetting.DashScope -> "DashScope"
-                    is ASRProviderSetting.Volcengine -> "Volcengine"
                 },
                 onValueChange = {},
                 readOnly = true,
@@ -57,7 +56,6 @@ fun ASRProviderConfigure(
         when (setting) {
             is ASRProviderSetting.OpenAIRealtime -> OpenAIRealtimeASRConfiguration(setting, onValueChange)
             is ASRProviderSetting.DashScope -> DashScopeASRConfiguration(setting, onValueChange)
-            is ASRProviderSetting.Volcengine -> VolcengineASRConfiguration(setting, onValueChange)
         }
     }
 }
@@ -263,56 +261,4 @@ private fun DashScopeASRConfiguration(
     }
 }
 
-@Composable
-private fun VolcengineASRConfiguration(
-    setting: ASRProviderSetting.Volcengine,
-    onValueChange: (ASRProviderSetting) -> Unit
-) {
-    FormItem(
-        label = { Text(stringResource(R.string.setting_asr_configure_api_key)) },
-        description = { Text(stringResource(R.string.setting_asr_configure_volcengine_api_key_desc)) }
-    ) {
-        OutlinedTextField(
-            value = setting.apiKey,
-            onValueChange = { onValueChange(setting.copy(apiKey = it)) },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("your-api-key") }
-        )
-    }
 
-    FormItem(
-        label = { Text(stringResource(R.string.setting_asr_configure_websocket_url)) },
-        description = { Text(stringResource(R.string.setting_asr_configure_volcengine_websocket_desc)) }
-    ) {
-        OutlinedTextField(
-            value = setting.websocketUrl,
-            onValueChange = { onValueChange(setting.copy(websocketUrl = it)) },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("wss://openspeech.bytedance.com/api/v3/sauc/bigmodel") }
-        )
-    }
-
-    FormItem(
-        label = { Text(stringResource(R.string.setting_asr_configure_resource_id)) },
-        description = { Text(stringResource(R.string.setting_asr_configure_resource_id_desc)) }
-    ) {
-        OutlinedTextField(
-            value = setting.resourceId,
-            onValueChange = { onValueChange(setting.copy(resourceId = it)) },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("volc.bigasr.sauc.duration") }
-        )
-    }
-
-    FormItem(
-        label = { Text(stringResource(R.string.setting_asr_configure_language)) },
-        description = { Text(stringResource(R.string.setting_asr_configure_language_code_desc)) }
-    ) {
-        OutlinedTextField(
-            value = setting.language,
-            onValueChange = { onValueChange(setting.copy(language = it)) },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("auto") }
-        )
-    }
-}

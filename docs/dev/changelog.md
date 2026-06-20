@@ -10,15 +10,12 @@
 
 ### 新增
 
-- **MCP 服务器分享**：MCP 列表页每个条目新增分享按钮，点击弹出二维码 + 系统文本分享。新增 `McpServerConfig.encodeForShare()` 导出 OpenCode 格式 JSON，与 `parseMcpServersFromJson` 双向兼容（扫码/相册/粘贴三种导入方式均可识别）。
-- **Provider 粘贴导入**：Provider 导入对话框新增"粘贴配置字符串"选项，复用 `decodeProviderSetting` 解码，与扫码、相册共三种导入方式统一。
+- MCP 服务器分享功能（二维码 + 文本分享）
+- Provider 粘贴导入功能
 
-### 测试
+### 清理
 
-- 新增 7 个 `encodeForShare` 单元测试（streamable_http/sse 往返、headers 含/空、空名称回退、排除 id/tools/enable）。
-
-### 文档
-
-- `architecture.md` → `original-architecture.md`（更名，明确为精简前架构）
-- 新建 `changelog.md`（功能迭代清单）
-- 整理 `fork-simplification-plan.md`、`AGENTS.md` 文档维护规则
+- 移除遗留兼容死代码约 700 行
+- 新增 `decodeListLenient<T>()` 逐元素反序列化
+- 清理未使用字符串资源（5 语言文件共 55 条）
+- 替换应用图标，移除 RikkaHub 品牌资源

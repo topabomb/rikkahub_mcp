@@ -64,33 +64,11 @@ sealed class ASRProviderSetting {
         }
     }
 
-    @Serializable
-    @SerialName("volcengine")
-    data class Volcengine(
-        override val id: Uuid = Uuid.random(),
-        override val name: String = "Volcengine ASR",
-        val apiKey: String = "",
-        val websocketUrl: String = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel",
-        val resourceId: String = "volc.seedasr.sauc.duration",
-        val language: String = "",
-    ) : ASRProviderSetting() {
-        override fun copyProvider(
-            id: Uuid,
-            name: String,
-        ): ASRProviderSetting {
-            return this.copy(
-                id = id,
-                name = name,
-            )
-        }
-    }
-
     companion object {
         val Types by lazy {
             listOf(
                 OpenAIRealtime::class,
                 DashScope::class,
-                Volcengine::class, // 保留以兼容旧数据反序列化，但 UI 不再允许新增
             )
         }
     }

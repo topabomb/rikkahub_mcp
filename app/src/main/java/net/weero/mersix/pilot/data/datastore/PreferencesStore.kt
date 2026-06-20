@@ -40,6 +40,7 @@ import net.weero.mersix.pilot.data.sync.s3.S3Config
 import net.weero.mersix.pilot.ui.theme.CustomTheme
 import net.weero.mersix.pilot.ui.theme.PresetThemes
 import net.weero.mersix.pilot.utils.JsonInstant
+import net.weero.mersix.pilot.utils.decodeListLenient
 import net.weero.mersix.pilot.utils.toMutableStateFlow
 import me.rerere.search.SearchCommonOptions
 import me.rerere.search.SearchServiceOptions
@@ -170,8 +171,8 @@ class SettingsStore(
                 developerMode = preferences[DEVELOPER_MODE] == true,
                 displaySetting = JsonInstant.decodeFromString(preferences[DISPLAY_SETTING] ?: "{}"),
                 searchServices = preferences[SEARCH_SERVICES]?.let {
-                    JsonInstant.decodeFromString(it)
-                } ?: listOf(SearchServiceOptions.DEFAULT),
+                    JsonInstant.decodeListLenient<SearchServiceOptions>(it)
+                }?.ifEmpty { listOf(SearchServiceOptions.DEFAULT) } ?: listOf(SearchServiceOptions.DEFAULT),
                 searchCommonOptions = preferences[SEARCH_COMMON]?.let {
                     JsonInstant.decodeFromString(it)
                 } ?: SearchCommonOptions(),
@@ -186,12 +187,12 @@ class SettingsStore(
                     JsonInstant.decodeFromString(it)
                 } ?: S3Config(),
                 ttsProviders = preferences[TTS_PROVIDERS]?.let {
-                    JsonInstant.decodeFromString(it)
+                    JsonInstant.decodeListLenient<TTSProviderSetting>(it)
                 } ?: emptyList(),
                 selectedTTSProviderId = preferences[SELECTED_TTS_PROVIDER]?.let { Uuid.parse(it) }
                     ?: DEFAULT_SYSTEM_TTS_ID,
                 asrProviders = preferences[ASR_PROVIDERS]?.let {
-                    JsonInstant.decodeFromString(it)
+                    JsonInstant.decodeListLenient<ASRProviderSetting>(it)
                 } ?: emptyList(),
                 selectedASRProviderId = preferences[SELECTED_ASR_PROVIDER]?.let { Uuid.parse(it) },
                 modeInjections = preferences[MODE_INJECTIONS]?.let {

@@ -112,10 +112,6 @@ private class CustomAsrStateImpl(
                 if (provider.apiKey.isBlank()) return null
                 DashScopeASRController(context, httpClient, provider)
             }
-
-            is ASRProviderSetting.Volcengine -> {
-                null // Volcengine controller removed, kept for serialization compat
-            }
         }
     }
 }

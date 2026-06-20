@@ -21,10 +21,6 @@ class TTSManager(private val context: Context) {
             is TTSProviderSetting.OpenAI -> openAIProvider.generateSpeech(context, providerSetting, request)
             is TTSProviderSetting.Gemini -> geminiProvider.generateSpeech(context, providerSetting, request)
             is TTSProviderSetting.SystemTTS -> systemProvider.generateSpeech(context, providerSetting, request)
-            // 以下分支保留以兼容旧数据，实际不应被调用
-            is TTSProviderSetting.MiniMax, is TTSProviderSetting.Qwen, is TTSProviderSetting.Groq,
-            is TTSProviderSetting.XAI, is TTSProviderSetting.MiMo ->
-                throw UnsupportedOperationException("This TTS provider is no longer supported")
         }
     }
 }

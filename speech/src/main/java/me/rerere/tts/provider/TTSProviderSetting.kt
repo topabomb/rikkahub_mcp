@@ -84,26 +84,4 @@ sealed class TTSProviderSetting {
             )
         }
     }
-
-    // 以下子类保留以兼容旧数据反序列化，不在 Types 中注册，UI 不允许新增
-    @Serializable @SerialName("minimax")
-    data class MiniMax(override var id: Uuid = Uuid.random(), override var name: String = "MiniMax TTS", val apiKey: String = "", val baseUrl: String = "", val model: String = "", val voiceId: String = "", val emotion: String = "", val speed: Float = 1.0f) : TTSProviderSetting() {
-        override fun copyProvider(id: Uuid, name: String) = copy(id = id, name = name)
-    }
-    @Serializable @SerialName("qwen")
-    data class Qwen(override var id: Uuid = Uuid.random(), override var name: String = "Qwen TTS", val apiKey: String = "", val baseUrl: String = "", val model: String = "", val voice: String = "", val languageType: String = "") : TTSProviderSetting() {
-        override fun copyProvider(id: Uuid, name: String) = copy(id = id, name = name)
-    }
-    @Serializable @SerialName("groq")
-    data class Groq(override var id: Uuid = Uuid.random(), override var name: String = "Groq TTS", val apiKey: String = "", val baseUrl: String = "", val model: String = "", val voice: String = "") : TTSProviderSetting() {
-        override fun copyProvider(id: Uuid, name: String) = copy(id = id, name = name)
-    }
-    @Serializable @SerialName("xai")
-    data class XAI(override var id: Uuid = Uuid.random(), override var name: String = "xAI TTS", val apiKey: String = "", val baseUrl: String = "", val voiceId: String = "", val language: String = "") : TTSProviderSetting() {
-        override fun copyProvider(id: Uuid, name: String) = copy(id = id, name = name)
-    }
-    @Serializable @SerialName("mimo")
-    data class MiMo(override var id: Uuid = Uuid.random(), override var name: String = "MiMo TTS", val apiKey: String = "", val baseUrl: String = "", val model: String = "", val voice: String = "") : TTSProviderSetting() {
-        override fun copyProvider(id: Uuid, name: String) = copy(id = id, name = name)
-    }
 }
