@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt">
+
+    <!-- 1. 静态的矢量图形定义 -->
+    <aapt:attr name="android:drawable">
+        <vector
+            android:width="120dp"
+            android:height="120dp"
+            android:viewportWidth="1024"
+            android:viewportHeight="1024">
+
+            <!-- Static: 4 flowing petals -->
+            <group android:name="root">
+                <path
+                    android:fillColor="#00000000"
+                    android:strokeColor="#333333"
+                    android:strokeWidth="44"
+                    android:strokeLineCap="round"
+                    android:pathData="M 340,340 Q 512,100 684,340" />
+                <path
+                    android:fillColor="#00000000"
+                    android:strokeColor="#333333"
+                    android:strokeWidth="44"
+                    android:strokeLineCap="round"
+                    android:pathData="M 684,340 Q 924,512 684,684" />
+                <path
+                    android:fillColor="#00000000"
+                    android:strokeColor="#333333"
+                    android:strokeWidth="44"
+                    android:strokeLineCap="round"
+                    android:pathData="M 684,684 Q 512,924 340,684" />
+                <path
+                    android:fillColor="#00000000"
+                    android:strokeColor="#333333"
+                    android:strokeWidth="44"
+                    android:strokeLineCap="round"
+                    android:pathData="M 340,684 Q 100,512 340,340" />
+            </group>
+
+            <!-- Animated: central core -->
+            <group
+                android:name="core"
+                android:pivotX="512"
+                android:pivotY="512">
+                <path
+                    android:fillColor="#333333"
+                    android:pathData="M 512,512 m -100,0 a 100,100 0 1,0 200,0 a 100,100 0 1,0 -200,0" />
+                <path
+                    android:fillColor="#333333"
+                    android:fillAlpha="0.7"
+                    android:pathData="M 512,512 m -60,0 a 60,60 0 1,0 120,0 a 60,60 0 1,0 -120,0" />
+                <path
+                    android:fillColor="#333333"
+                    android:pathData="M 516,508 m -28,0 a 28,28 0 1,0 56,0 a 28,28 0 1,0 -56,0" />
+                <path
+                    android:fillColor="#FFFFFF"
+                    android:fillAlpha="0.95"
+                    android:pathData="M 532,492 m -14,0 a 14,9 0 1,0 28,0 a 14,9 0 1,0 -28,0" />
+            </group>
+        </vector>
+    </aapt:attr>
+
+    <!-- 2. 动画定义：1650ms 一个循环 -->
+    <target android:name="core">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:duration="1800"
+                android:propertyName="translateX"
+                android:repeatCount="infinite"
+                android:interpolator="@android:interpolator/fast_out_slow_in">
+                <propertyValuesHolder android:propertyName="translateX">
+                    <!-- 0ms: 中心 -->
+                    <keyframe android:fraction="0.0" android:value="0.0" />
+                    <!-- 400ms: 左看 -->
+                    <keyframe android:fraction="0.222" android:value="-100.0" />
+                    <!-- 500ms: 停在左 100ms -->
+                    <keyframe android:fraction="0.278" android:value="-100.0" />
+                    <!-- 900ms: 回中心 -->
+                    <keyframe android:fraction="0.5" android:value="0.0" />
+                    <!-- 1300ms: 右看 -->
+                    <keyframe android:fraction="0.722" android:value="100.0" />
+                    <!-- 1400ms: 停在右 100ms -->
+                    <keyframe android:fraction="0.778" android:value="100.0" />
+                    <!-- 1700ms: 回中心 -->
+                    <keyframe android:fraction="0.944" android:value="0.0" />
+                    <!-- 1800ms: 停在中心 100ms -->
+                    <keyframe android:fraction="1.0" android:value="0.0" />
+                </propertyValuesHolder>
+            </objectAnimator>
+        </aapt:attr>
+    </target>
+</animated-vector>

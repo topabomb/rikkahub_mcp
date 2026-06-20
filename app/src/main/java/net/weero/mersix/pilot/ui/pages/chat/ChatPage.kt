@@ -28,8 +28,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.adaptive.currentWindowDpSize
 import androidx.compose.material3.rememberBottomSheetState
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -131,9 +132,11 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
         }
     }
 
-    val windowAdaptiveInfo = currentWindowDpSize()
-    val isBigScreen =
-        windowAdaptiveInfo.width > windowAdaptiveInfo.height && windowAdaptiveInfo.width >= 1100.dp
+    val windowInfo = LocalWindowInfo.current
+    val density = LocalDensity.current
+    val windowWidthDp = with(density) { windowInfo.containerSize.width.toDp() }
+    val windowHeightDp = with(density) { windowInfo.containerSize.height.toDp() }
+    val isBigScreen = windowWidthDp > windowHeightDp && windowWidthDp >= 1100.dp
 
     // 修复平板横竖屏旋转后模态抽屉残留问题
     LaunchedEffect(isBigScreen) {

@@ -73,6 +73,23 @@
 
 ---
 
+## 本地改进（偏离上游）
+
+### 2026-06-20 - 修复废弃 API
+
+**问题**：上游使用了已废弃的 `currentWindowDpSize()` API，编译时会产生警告。
+
+**修复**：
+- 移除：`import androidx.compose.material3.adaptive.currentWindowDpSize`
+- 添加：`import androidx.compose.ui.platform.LocalDensity` + `import androidx.compose.ui.platform.LocalWindowInfo`
+- 替换：使用 `LocalWindowInfo.current.containerSize` + `LocalDensity` 计算窗口尺寸
+
+**文件**：`app/src/main/java/net/weero/mersix/pilot/ui/pages/chat/ChatPage.kt`
+
+**影响**：功能逻辑不变，仅 API 调用方式更新
+
+---
+
 ## 同步检查频率
 
 建议每 **2 周** 检查一次上游提交，或在以下情况时检查：
