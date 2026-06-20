@@ -19,3 +19,9 @@
 - 新增 `decodeListLenient<T>()` 逐元素反序列化
 - 清理未使用字符串资源（5 语言文件共 55 条）
 - 替换应用图标，移除 RikkaHub 品牌资源
+
+### 上游同步
+
+- 同步 RikkaHub 2.3.2 更新（OCR 修复、平板 UI 修复、依赖更新）
+- 修复废弃 API（`currentWindowDpSize` → `LocalWindowInfo`）
+- 新增 `upstream-sync.md` 检查点记录文档
