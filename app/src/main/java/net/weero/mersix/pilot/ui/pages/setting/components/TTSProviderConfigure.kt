@@ -51,6 +51,7 @@ fun TTSProviderConfigure(
                         is TTSProviderSetting.OpenAI -> "OpenAI"
                         is TTSProviderSetting.Gemini -> "Gemini"
                         is TTSProviderSetting.SystemTTS -> "System TTS"
+                        is TTSProviderSetting.MiMo -> "MiMo"
                     },
                     onValueChange = {},
                     readOnly = true,
@@ -73,6 +74,7 @@ fun TTSProviderConfigure(
                                         TTSProviderSetting.OpenAI::class -> "OpenAI"
                                         TTSProviderSetting.Gemini::class -> "Gemini"
                                         TTSProviderSetting.SystemTTS::class -> "System TTS"
+                                        TTSProviderSetting.MiMo::class -> "MiMo"
                                         else -> providerClass.simpleName ?: "Unknown"
                                     }
                                 )
@@ -93,6 +95,11 @@ fun TTSProviderConfigure(
                                     TTSProviderSetting.SystemTTS::class -> TTSProviderSetting.SystemTTS(
                                         id = setting.id,
                                         name = "System TTS"
+                                    )
+
+                                    TTSProviderSetting.MiMo::class -> TTSProviderSetting.MiMo(
+                                        id = setting.id,
+                                        name = "MiMo TTS"
                                     )
 
                                     else -> setting
@@ -125,6 +132,7 @@ fun TTSProviderConfigure(
             is TTSProviderSetting.OpenAI -> OpenAITTSConfiguration(setting, onValueChange)
             is TTSProviderSetting.Gemini -> GeminiTTSConfiguration(setting, onValueChange)
             is TTSProviderSetting.SystemTTS -> SystemTTSConfiguration(setting, onValueChange)
+            is TTSProviderSetting.MiMo -> MiMoTTSConfiguration(setting, onValueChange)
         }
     }
 }
@@ -327,4 +335,168 @@ private fun SystemTTSConfiguration(
     }
 }
 
+@Composable
+private fun MiMoTTSConfiguration(
+    setting: TTSProviderSetting.MiMo,
+    onValueChange: (TTSProviderSetting) -> Unit
+) {
+    // API Key
+    FormItem(
+        label = { Text(stringResource(R.string.setting_tts_page_api_key)) },
+        description = { Text(stringResource(R.string.setting_tts_page_api_key_description)) }
+    ) {
+        OutlinedTextField(
+            value = setting.apiKey,
+            onValueChange = { newApiKey ->
+                onValueChange(setting.copy(apiKey = newApiKey))
+            },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text(stringResource(R.string.setting_tts_page_api_key_placeholder_openai)) },
+        )
+    }
+
+    // Base URL
+    FormItem(
+        label = { Text(stringResource(R.string.setting_tts_page_base_url)) },
+        description = { Text(stringResource(R.string.setting_tts_page_base_url_description)) }
+    ) {
+        OutlinedTextField(
+            value = setting.baseUrl,
+            onValueChange = { newBaseUrl ->
+                onValueChange(setting.copy(baseUrl = newBaseUrl))
+            },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text(stringResource(R.string.setting_tts_page_base_url_placeholder)) }
+        )
+    }
+
+    // Model（可下拉选择预设，也可自定义输入）
+    val models = listOf("mimo-v2.5-tts", "mimo-v2.5-tts-voicedesign")
+    var modelExpanded by remember { mutableStateOf(false) }
+
+    FormItem(
+        label = { Text(stringResource(R.string.setting_tts_page_model)) },
+        description = { Text(stringResource(R.string.setting_tts_page_model_description)) }
+    ) {
+        ExposedDropdownMenuBox(
+            expanded = modelExpanded,
+            onExpandedChange = { modelExpanded = !modelExpanded }
+        ) {
+            OutlinedTextField(
+                value = setting.model,
+                onValueChange = { newModel ->
+                    onValueChange(setting.copy(model = newModel))
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(MenuAnchorType.PrimaryEditable),
+                trailingIcon = {
+                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelExpanded)
+                }
+            )
+            ExposedDropdownMenu(
+                expanded = modelExpanded,
+                onDismissRequest = { modelExpanded = false }
+            ) {
+                models.forEach { model ->
+                    DropdownMenuItem(
+                        text = { Text(model) },
+                        onClick = {
+                            modelExpanded = false
+                            onValueChange(setting.copy(model = model))
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    // 按模型动态切换字段：voicedesign 模型音色由 user message 决定，不接受 voice；
+    // 标准模型用 voice 选预置音色，user message 作可选的风格指令。
+    // contains("voicedesign") 同时覆盖用户自定义模型名（如 mimo-v2.5-tts-voiceclone 不含 voicedesign，正确走标准路径）
+    val isVoiceDesign = setting.model.contains("voicedesign")
+
+    // Voice（仅标准模型显示；中文预置音色下拉 + 可自定义输入，默认 mimo_default）
+    if (!isVoiceDesign) {
+        val voices = listOf("mimo_default", "冰糖", "茉莉", "苏打", "白桦", "Mia", "Chloe", "Milo", "Dean")
+        var voiceExpanded by remember { mutableStateOf(false) }
+
+        FormItem(
+            label = { Text(stringResource(R.string.setting_tts_page_voice)) },
+            description = { Text(stringResource(R.string.setting_tts_page_voice_description_mimo)) }
+        ) {
+            ExposedDropdownMenuBox(
+                expanded = voiceExpanded,
+                onExpandedChange = { voiceExpanded = !voiceExpanded }
+            ) {
+                OutlinedTextField(
+                    value = setting.voice,
+                    onValueChange = { newVoice ->
+                        onValueChange(setting.copy(voice = newVoice))
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(MenuAnchorType.PrimaryEditable),
+                    trailingIcon = {
+                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = voiceExpanded)
+                    }
+                )
+                ExposedDropdownMenu(
+                    expanded = voiceExpanded,
+                    onDismissRequest = { voiceExpanded = false }
+                ) {
+                    voices.forEach { voice ->
+                        DropdownMenuItem(
+                            text = { Text(voice) },
+                            onClick = {
+                                voiceExpanded = false
+                                onValueChange(setting.copy(voice = voice))
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // 音色描述 / 风格指令：user message 内容
+    // - voicedesign 模型：必填（音色设计描述），为空会 API 报错
+    // - 标准模型：可选（自然语言风格指令，如「用轻快上扬的语调」）
+    val promptLabel = if (isVoiceDesign) {
+        stringResource(R.string.setting_tts_page_voice_design_prompt_required)
+    } else {
+        stringResource(R.string.setting_tts_page_style_instruction_optional)
+    }
+    val promptDesc = if (isVoiceDesign) {
+        stringResource(R.string.setting_tts_page_voice_design_prompt_description)
+    } else {
+        stringResource(R.string.setting_tts_page_style_instruction_description)
+    }
+    val promptPlaceholder = if (isVoiceDesign) {
+        stringResource(R.string.setting_tts_page_voice_design_prompt_placeholder)
+    } else {
+        stringResource(R.string.setting_tts_page_style_instruction_placeholder)
+    }
+    // voicedesign 模型下描述为空时标红
+    val isPromptEmpty = setting.voiceDesignPrompt.isBlank()
+    val showRequiredError = isVoiceDesign && isPromptEmpty
+
+    FormItem(
+        label = { Text(promptLabel) },
+        description = { Text(promptDesc) }
+    ) {
+        OutlinedTextField(
+            value = setting.voiceDesignPrompt,
+            onValueChange = { newPrompt ->
+                onValueChange(setting.copy(voiceDesignPrompt = newPrompt))
+            },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text(promptPlaceholder) },
+            isError = showRequiredError,
+            supportingText = if (showRequiredError) {
+                { Text(stringResource(R.string.setting_tts_page_voice_design_prompt_error_required)) }
+            } else null,
+        )
+    }
+}
 

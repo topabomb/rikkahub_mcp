@@ -898,6 +898,15 @@
   <string name="setting_tts_page_provider_gemini">Gemini</string>
   <string name="setting_tts_page_provider_openai">OpenAI</string>
   <string name="setting_tts_page_provider_system">系统TTS</string>
+  <string name="setting_tts_page_provider_mimo">MiMo</string>
+  <string name="setting_tts_page_voice_design_prompt_description">仅 \"mimo-v2.5-tts-voicedesign\" 模型生效，留空则不传递。示例：「温柔的女声，语调亲切，语速舒缓」</string>
+  <string name="setting_tts_page_voice_design_prompt_placeholder">如：温柔的女声，语调亲切</string>
+  <string name="setting_tts_page_voice_description_mimo">预置音色或自定义输入。默认 mimo_default（中国集群为冰糖）</string>
+  <string name="setting_tts_page_voice_design_prompt_required">音色设计描述（必填）</string>
+  <string name="setting_tts_page_voice_design_prompt_error_required">音色设计模型需要填写音色描述</string>
+  <string name="setting_tts_page_style_instruction_optional">风格指令（可选）</string>
+  <string name="setting_tts_page_style_instruction_description">标准模型下作为 user message 发送的自然语言风格指令。示例：「轻快上扬的语调，语速稍快」。留空则不发送。</string>
+  <string name="setting_tts_page_style_instruction_placeholder">如：轻快上扬的语调，语速稍快，带着兴奋</string>
   <string name="setting_tts_page_provider_type">提供商类型</string>
   <string name="setting_tts_page_provider_type_description">选择TTS提供商类型</string>
   <string name="setting_tts_page_selected">已选择</string>

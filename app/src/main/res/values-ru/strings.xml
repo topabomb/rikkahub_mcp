@@ -889,6 +889,15 @@
   <string name="setting_tts_page_provider_gemini">Gemini</string>
   <string name="setting_tts_page_provider_openai">OpenAI</string>
   <string name="setting_tts_page_provider_system">Системное TTS</string>
+  <string name="setting_tts_page_provider_mimo">MiMo</string>
+  <string name="setting_tts_page_voice_design_prompt_description">Действует только с моделью \"mimo-v2.5-tts-voicedesign\". Если пусто — не отправляется. Пример: «Тёплый женский голос, мягкий тон, спокойный темп речи»</string>
+  <string name="setting_tts_page_voice_design_prompt_placeholder">напр. Тёплый женский голос, мягкий тон</string>
+  <string name="setting_tts_page_voice_description_mimo">Предустановленный голос или ввод вручную. По умолчанию mimo_default (китайский кластер — 冰糖)</string>
+  <string name="setting_tts_page_voice_design_prompt_required">Подсказка для дизайна голоса (Обязательно)</string>
+  <string name="setting_tts_page_voice_design_prompt_error_required">Для модели дизайна голоса требуется описание голоса</string>
+  <string name="setting_tts_page_style_instruction_optional">Указание стиля (необязательно)</string>
+  <string name="setting_tts_page_style_instruction_description">Указание стиля естественным языком, отправляемое как user message для стандартной модели. Пример: «Яркий, упругий тон, быстрый темп». Если пусто — не отправляется.</string>
+  <string name="setting_tts_page_style_instruction_placeholder">напр. Яркий, упругий тон, быстрый темп, с волнением</string>
   <string name="setting_tts_page_provider_type">Тип поставщика</string>
   <string name="setting_tts_page_provider_type_description">Выберите тип поставщика TTS</string>
   <string name="setting_tts_page_selected">Выбрано</string>

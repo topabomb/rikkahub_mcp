@@ -889,6 +889,15 @@
   <string name="setting_tts_page_provider_gemini">Gemini</string>
   <string name="setting_tts_page_provider_openai">OpenAI</string>
   <string name="setting_tts_page_provider_system">システムTTS</string>
+  <string name="setting_tts_page_provider_mimo">MiMo</string>
+  <string name="setting_tts_page_voice_design_prompt_description">\"mimo-v2.5-tts-voicedesign\" モデルでのみ有効。空欄なら送信されません。例：「温かい女性の声、穏やかなトーン、ゆっくりした話速」</string>
+  <string name="setting_tts_page_voice_design_prompt_placeholder">例：温かい女性の声、穏やかなトーン</string>
+  <string name="setting_tts_page_voice_description_mimo">プリセット音声またはカスタム入力。デフォルト mimo_default（中国クラスターは冰糖）</string>
+  <string name="setting_tts_page_voice_design_prompt_required">ボイスデザインプロンプト（必須）</string>
+  <string name="setting_tts_page_voice_design_prompt_error_required">ボイスデザインモデルには音声の説明が必要です</string>
+  <string name="setting_tts_page_style_instruction_optional">スタイル指示（任意）</string>
+  <string name="setting_tts_page_style_instruction_description">標準モデルで user message として送信する自然言語のスタイル指示。例：「明るく弾むトーン、早口」。空欄なら送信されません。</string>
+  <string name="setting_tts_page_style_instruction_placeholder">例：明るく弾むトーン、早口、興奮気味に</string>
   <string name="setting_tts_page_provider_type">プロバイダーの種類</string>
   <string name="setting_tts_page_provider_type_description">TTSプロバイダーの種類を選択</string>
   <string name="setting_tts_page_selected">選択済み</string>

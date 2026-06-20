@@ -668,6 +668,7 @@ private fun TTSProviderItem(
                             is TTSProviderSetting.OpenAI -> stringResource(R.string.setting_tts_page_provider_openai)
                             is TTSProviderSetting.Gemini -> stringResource(R.string.setting_tts_page_provider_gemini)
                             is TTSProviderSetting.SystemTTS -> stringResource(R.string.setting_tts_page_provider_system)
+                            is TTSProviderSetting.MiMo -> stringResource(R.string.setting_tts_page_provider_mimo)
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

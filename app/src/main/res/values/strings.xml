@@ -915,6 +915,15 @@
   <string name="setting_tts_page_provider_gemini">Gemini</string>
   <string name="setting_tts_page_provider_openai">OpenAI</string>
   <string name="setting_tts_page_provider_system">System TTS</string>
+  <string name="setting_tts_page_provider_mimo">MiMo</string>
+  <string name="setting_tts_page_voice_design_prompt_description">Only takes effect with the \"mimo-v2.5-tts-voicedesign\" model. Left blank = not sent. Example: \"A warm female voice, gentle tone, speaking at a relaxed pace\"</string>
+  <string name="setting_tts_page_voice_design_prompt_placeholder">e.g. A warm female voice with a gentle tone</string>
+  <string name="setting_tts_page_voice_description_mimo">Preset voice or custom input. Default mimo_default (China cluster defaults to 冰糖)</string>
+  <string name="setting_tts_page_voice_design_prompt_required">Voice Design Prompt (Required)</string>
+  <string name="setting_tts_page_voice_design_prompt_error_required">Voice design model requires a voice description</string>
+  <string name="setting_tts_page_style_instruction_optional">Style Instruction (Optional)</string>
+  <string name="setting_tts_page_style_instruction_description">Natural-language style hint sent as the user message for the standard model. Example: \"Bright, bouncy tone, fast pace\". Left blank = not sent.</string>
+  <string name="setting_tts_page_style_instruction_placeholder">e.g. Bright, bouncy, slightly sing-song tone, fast pace</string>
   <string name="setting_tts_page_provider_type">Provider Type</string>
   <string name="setting_tts_page_provider_type_description">Select the TTS provider type</string>
   <string name="setting_tts_page_selected">Selected</string>

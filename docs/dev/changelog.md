@@ -6,10 +6,15 @@
 
 ---
 
-## 0.0.3（versionCode 3）— 2026-06-19
+## 0.0.3（versionCode 3）— 2026-06-20
 
 ### 新增
 
+- MiMo TTS provider（小米 MiMo 语音合成），从上游 `5b9be301` 移植，按官方 v2.5 文档实现协议
+  - 支持 `mimo-v2.5-tts`（标准）和 `mimo-v2.5-tts-voicedesign`（音色设计）两个模型，UI 按模型动态切换字段
+  - 标准模型：Voice 下拉选预置音色（mimo_default/冰糖/茉莉等），风格指令可选；voicedesign：隐藏 Voice，音色描述必填
+  - 请求体协议 curl 实测验证通过；单测 9 case 覆盖 SSE 解码/协议边界/请求体条件构造
+  - 默认不预置，用户在「添加 TTS Provider」下拉主动选 MiMo；图标复用既有 `xiaomimimo.svg`
 - MCP 服务器分享功能（二维码 + 文本分享）
 - Provider 粘贴导入功能
 
@@ -25,3 +30,7 @@
 - 同步 RikkaHub 2.3.2 更新（OCR 修复、平板 UI 修复、依赖更新）
 - 修复废弃 API（`currentWindowDpSize` → `LocalWindowInfo`）
 - 新增 `upstream-sync.md` 检查点记录文档
+
+### 已知技术债
+
+- TTS 流式聚合：`TtsSynthesizer.collectToResponse()` 将 Flow 全量缓冲再播放，MiMo 等流式 provider 首音延迟优势被抹平。流式播放重构列为独立后续 issue。
