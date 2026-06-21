@@ -73,39 +73,44 @@ class LocalTools(private val context: Context, private val eventBus: AppEventBus
             execute = {
                 val logs = arrayListOf<String>()
                 val context = QuickJSContext.create()
-                context.setConsole(object : QuickJSContext.Console {
-                    override fun log(info: String?) {
-                        logs.add("[LOG] $info")
-                    }
-
-                    override fun info(info: String?) {
-                        logs.add("[INFO] $info")
-                    }
-
-                    override fun warn(info: String?) {
-                        logs.add("[WARN] $info")
-                    }
-
-                    override fun error(info: String?) {
-                        logs.add("[ERROR] $info")
-                    }
-                })
-                val code = it.jsonObject["code"]?.jsonPrimitive?.contentOrNull
-                val result = context.evaluate(code)
-                val payload = buildJsonObject {
-                    if (logs.isNotEmpty()) {
-                        put("logs", JsonPrimitive(logs.joinToString("\n")))
-                    }
-                    put(
-                        key = "result",
-                        element = when (result) {
-                            null -> JsonNull
-                            is QuickJSObject -> JsonPrimitive(result.stringify())
-                            else -> JsonPrimitive(result.toString())
+                try {
+                    context.setConsole(object : QuickJSContext.Console {
+                        override fun log(info: String?) {
+                            logs.add("[LOG] $info")
                         }
-                    )
+
+                        override fun info(info: String?) {
+                            logs.add("[INFO] $info")
+                        }
+
+                        override fun warn(info: String?) {
+                            logs.add("[WARN] $info")
+                        }
+
+                        override fun error(info: String?) {
+                            logs.add("[ERROR] $info")
+                        }
+                    })
+                    val code = it.jsonObject["code"]?.jsonPrimitive?.contentOrNull
+                    val result = context.evaluate(code)
+                    val payload = buildJsonObject {
+                        if (logs.isNotEmpty()) {
+                            put("logs", JsonPrimitive(logs.joinToString("\n")))
+                        }
+                        put(
+                            key = "result",
+                            element = when (result) {
+                                null -> JsonNull
+                                is QuickJSObject -> JsonPrimitive(result.stringify())
+                                else -> JsonPrimitive(result.toString())
+                            }
+                        )
+                    }
+                    listOf(UIMessagePart.Text(payload.toString()))
+                } finally {
+                    // 确保无论执行成功或抛异常都释放原生 JS runtime, 避免内存泄漏
+                    context.destroy()
                 }
-                listOf(UIMessagePart.Text(payload.toString()))
             }
         )
     }

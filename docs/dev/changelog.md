@@ -6,6 +6,15 @@
 
 ---
 
+## 0.0.4（versionCode 4）— 2026-06-21
+
+### 修复
+
+- `eval_javascript` 工具的 QuickJS Context 内存泄漏：`QuickJSContext.create()` 后未调用 `destroy()`，每次执行都泄漏原生 JS runtime。改为 `try/finally` 保证释放（对齐 `CustomJsSearchService` 既有写法）
+- `McpManager` 连接状态更新非原子：`syncingStatus` 的 read-modify-write 在多服务器并发时会互相覆盖。改为 `MutableStateFlow.update {}`（CAS 原子更新），消除 UI 状态错乱
+
+---
+
 ## 0.0.3（versionCode 3）— 2026-06-20
 
 ### 新增

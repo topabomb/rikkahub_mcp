@@ -25,6 +25,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.ClassDiscriminatorMode
@@ -315,7 +316,7 @@ class McpManager(
                 it.printStackTrace()
             }
             clients.remove(entry.key)
-            syncingStatus.emit(syncingStatus.value.toMutableMap().apply { remove(entry.key.id) })
+            syncingStatus.update { it - entry.key.id }
             Log.i(TAG, "removeClient: ${entry.key} / ${entry.key.commonOptions.name}")
         }
         reconnectAttempts.remove(config.id)
@@ -429,9 +430,8 @@ class McpManager(
     }
 
     private suspend fun setStatus(config: McpServerConfig, status: McpStatus) {
-        syncingStatus.emit(syncingStatus.value.toMutableMap().apply {
-            put(config.id, status)
-        })
+        // 使用原子的 CAS 更新, 避免并发场景下多个服务器的状态更新互相覆盖
+        syncingStatus.update { it + (config.id to status) }
     }
 
     fun getStatus(config: McpServerConfig): Flow<McpStatus> {
