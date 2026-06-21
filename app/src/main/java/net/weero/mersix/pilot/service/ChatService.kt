@@ -88,9 +88,11 @@ import net.weero.mersix.pilot.data.repository.WorkspaceRepository
 import net.weero.mersix.pilot.utils.applyPlaceholders
 import net.weero.mersix.pilot.utils.sendNotification
 import net.weero.mersix.pilot.utils.cancelNotification
+import net.weero.mersix.pilot.utils.SoundEffectPlayer
 import me.rerere.workspace.WorkspaceShellStatus
 import java.time.Instant
 import java.util.Locale
+import kotlinx.datetime.LocalDateTime
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.Uuid
 
@@ -151,6 +153,7 @@ class ChatService(
     private val filesManager: FilesManager,
     private val skillManager: SkillManager,
     private val workspaceRepository: WorkspaceRepository,
+    private val soundEffectPlayer: SoundEffectPlayer,
 ) {
     // workspace 系统提示注入 (依赖 workspaceRepository, 故在类内构造)
     private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
@@ -202,6 +205,13 @@ class ChatService(
     init {
         // 添加生命周期观察者
         ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
+        // 预加载 loop 声音反馈资源
+        soundEffectPlayer.preload(
+            R.raw.loop_complete,
+            R.raw.loop_failed,
+            R.raw.loop_step,
+            R.raw.loop_approval
+        )
     }
 
     fun cleanup() = runCatching {
@@ -523,6 +533,9 @@ class ChatService(
 
             // start generating
             val session = getOrCreateSession(conversationId)
+            // loop 声音反馈状态跟踪
+            var previousFinishedAt: LocalDateTime? = null
+            val previousPendingToolIds = mutableSetOf<String>()
             generationHandler.generateText(
                 settings = settings,
                 model = model,
@@ -623,6 +636,25 @@ class ChatService(
                         if (!isForeground.value && settings.displaySetting.enableNotificationOnMessageGeneration && settings.displaySetting.enableLiveUpdateNotification) {
                             sendLiveUpdateNotification(conversationId, chunk.messages, senderName)
                         }
+
+                        // 前台声音反馈: 单步生成完成 + 工具待审批
+                        if (isForeground.value && settings.displaySetting.enableMessageGenerationSoundEffect) {
+                            // 单步生成完成: 最后一条消息 finishedAt 变为新值
+                            // (每步完成时 GenerationHandler 设置新时间戳, 流式 emit 保留旧值, 可区分)
+                            val lastMsg = chunk.messages.lastOrNull()
+                            if (lastMsg != null && lastMsg.finishedAt != null && lastMsg.finishedAt != previousFinishedAt) {
+                                soundEffectPlayer.play(R.raw.loop_step)
+                            }
+                            previousFinishedAt = lastMsg?.finishedAt
+
+                            // 工具待审批: Tool isPending 从 false 变 true
+                            chunk.messages.flatMap { it.getTools() }.forEach { tool ->
+                                if (tool.isPending && tool.toolCallId !in previousPendingToolIds) {
+                                    soundEffectPlayer.play(R.raw.loop_approval)
+                                    previousPendingToolIds.add(tool.toolCallId)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -634,7 +666,19 @@ class ChatService(
             addError(it, conversationId, title = context.getString(R.string.error_title_generation))
             Logging.log(TAG, "handleMessageComplete: $it")
             Logging.log(TAG, it.stackTraceToString())
+
+            // loop 异常失败: 排除用户主动取消 (runCatching 会捕获 CancellationException, 需手动过滤)
+            if (it !is CancellationException && isForeground.value && settings.displaySetting.enableMessageGenerationSoundEffect) {
+                soundEffectPlayer.play(R.raw.loop_failed)
+            }
         }.onSuccess {
+            // loop 正常完成: 排除待审批暂停场景 (flow 因 break 正常结束, 但实际是等待用户操作)
+            val hasPendingApproval = getConversationFlow(conversationId).value
+                .currentMessages.lastOrNull()?.getTools()?.any { it.isPending } == true
+            if (!hasPendingApproval && isForeground.value && settings.displaySetting.enableMessageGenerationSoundEffect) {
+                soundEffectPlayer.play(R.raw.loop_complete)
+            }
+
             val finalConversation = getConversationFlow(conversationId).value
             saveConversation(conversationId, finalConversation)
 

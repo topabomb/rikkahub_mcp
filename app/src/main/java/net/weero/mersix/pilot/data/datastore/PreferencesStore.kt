@@ -514,6 +514,7 @@ data class DisplaySetting(
     val messageJumperOnLeft: Boolean = false,
     val fontSizeRatio: Float = 1.0f,
     val enableMessageGenerationHapticEffect: Boolean = true,
+    val enableMessageGenerationSoundEffect: Boolean = true,
     val skipCropImage: Boolean = true,
     val enableNotificationOnMessageGeneration: Boolean = true,
     val enableLiveUpdateNotification: Boolean = true,

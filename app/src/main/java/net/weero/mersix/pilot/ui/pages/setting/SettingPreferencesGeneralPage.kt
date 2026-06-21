@@ -173,6 +173,18 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
                         },
                     )
                     item(
+                        headlineContent = { Text(stringResource(R.string.setting_display_page_enable_message_generation_sound_effect_title)) },
+                        supportingContent = { Text(stringResource(R.string.setting_display_page_enable_message_generation_sound_effect_desc)) },
+                        trailingContent = {
+                            Switch(
+                                checked = displaySetting.enableMessageGenerationSoundEffect,
+                                onCheckedChange = {
+                                    updateDisplaySetting(displaySetting.copy(enableMessageGenerationSoundEffect = it))
+                                }
+                            )
+                        },
+                    )
+                    item(
                         headlineContent = { Text(stringResource(R.string.setting_display_page_skip_crop_image_title)) },
                         supportingContent = { Text(stringResource(R.string.setting_display_page_skip_crop_image_desc)) },
                         trailingContent = {
