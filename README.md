@@ -1,4 +1,4 @@
-# Mersix Pilot
+﻿# Measix Pilot
 
 > 小麦助手 — 基于 [RikkaHub](https://github.com/re-ovo/rikkahub)（原作者 [re-ovo](https://github.com/re-ovo)）精简 fork 的原生 Android LLM 聊天客户端。
 
@@ -83,11 +83,11 @@ common/       通用工具
 | 项目 | 值 |
 |------|-----|
 | 版本 | `0.0.1`（versionCode 1） |
-| 包名 | `net.weero.mersix.pilot` |
+| 包名 | `net.weero.measix.pilot` |
 | 最低 SDK | 26（Android 8.0） |
 | 目标 SDK | 37 |
-| 数据库 | Room `mersix_pilot`（version 2） |
-| SharedPreferences | `mersixpilot.preferences` |
+| 数据库 | Room `measix_pilot`（version 2） |
+| SharedPreferences | `MeasixPilot.preferences` |
 
 首次启动时 4 个预设 Provider 均为禁用状态，需手动启用并配置 API Key。
 

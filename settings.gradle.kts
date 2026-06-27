@@ -1,4 +1,4 @@
-pluginManagement {
+﻿pluginManagement {
     repositories {
         google {
             content {
@@ -32,7 +32,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "MersixPilot"
+rootProject.name = "MeasixPilot"
 include(":app")
 include(":highlight")
 include(":ai")

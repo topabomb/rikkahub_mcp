@@ -1,10 +1,10 @@
-# CLAUDE.md
+﻿# CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-Mersix Pilot is a native Android LLM chat client that supports switching between different AI providers for conversations.
+Measix Pilot is a native Android LLM chat client that supports switching between different AI providers for conversations.
 Built with Jetpack Compose, Kotlin, and follows Material Design 3 principles.
 
 ## Architecture Overview
@@ -41,16 +41,16 @@ Built with Jetpack Compose, Kotlin, and follows Material Design 3 principles.
 
 ### Concepts
 
-- **Assistant**: An assistant configuration with system prompts, model parameters, and conversation isolation. Each assistant maintains its own settings including temperature, context size, custom headers, tools, memory options, regex transformations, and prompt injections (mode). Assistants provide isolated chat environments with specific behaviors and capabilities. (app/src/main/java/net/weero/mersix/pilot/data/model/Assistant.kt)
+- **Assistant**: An assistant configuration with system prompts, model parameters, and conversation isolation. Each assistant maintains its own settings including temperature, context size, custom headers, tools, memory options, regex transformations, and prompt injections (mode). Assistants provide isolated chat environments with specific behaviors and capabilities. (app/src/main/java/net/weero/measix/pilot/data/model/Assistant.kt)
 
 - **Conversation**: A persistent conversation thread between the user and an assistant. Each conversation maintains a
   list of MessageNodes in a tree structure to support message branching, along with metadata like title, creation time,
   update time, pin status, chat suggestions, optional conversation-level system prompt, and prompt injection bindings. (
-  app/src/main/java/net/weero/mersix/pilot/data/model/Conversation.kt)
+  app/src/main/java/net/weero/measix/pilot/data/model/Conversation.kt)
 
 - **UIMessage**: A platform-agnostic message abstraction that encapsulates chat messages with different types of content parts (text, images, documents, reasoning, tool calls/results, etc.). Each message has a role (USER, ASSISTANT, SYSTEM, TOOL), creation timestamp, model ID, token usage information, and optional annotations. UIMessages support streaming updates through chunk merging. (ai/src/main/java/me/rerere/ai/ui/Message.kt)
 
-- **MessageNode**: A container holding one or more UIMessages to implement message branching functionality. Each node maintains a list of alternative messages and tracks which message is currently selected (selectIndex). This enables users to regenerate responses and switch between different conversation branches, creating a tree-like conversation structure. (app/src/main/java/net/weero/mersix/pilot/data/model/Conversation.kt)
+- **MessageNode**: A container holding one or more UIMessages to implement message branching functionality. Each node maintains a list of alternative messages and tracks which message is currently selected (selectIndex). This enables users to regenerate responses and switch between different conversation branches, creating a tree-like conversation structure. (app/src/main/java/net/weero/measix/pilot/data/model/Conversation.kt)
 
 - **Message Transformer**: A pipeline mechanism for transforming messages before sending to AI providers (InputMessageTransformer) or after receiving responses (OutputMessageTransformer). Transformers can modify message content, add metadata, apply templates, handle special tags, convert formats, and perform OCR. Common transformers include:
   - TemplateTransformer: Apply Pebble templates to user messages with variables like time/date
@@ -61,7 +61,7 @@ Built with Jetpack Compose, Kotlin, and follows Material Design 3 principles.
   - OcrTransformer: Perform OCR on images to extract text
 
   Output transformers support `visualTransform()` for UI display during streaming and `onGenerationFinish()` for final processing after generation completes.
-  (app/src/main/java/net/weero/mersix/pilot/data/ai/transformers/Transformer.kt)
+  (app/src/main/java/net/weero/measix/pilot/data/ai/transformers/Transformer.kt)
 
 ## Development Guidelines
 

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
   xmlns:tools="http://schemas.android.com/tools">
 
@@ -27,7 +27,7 @@
   </queries>
 
   <application
-    android:name=".MersixPilotApp"
+    android:name=".MeasixPilotApp"
     android:largeHeap="true"
     android:allowBackup="true"
     android:appCategory="productivity"
@@ -37,20 +37,20 @@
     android:icon="@mipmap/ic_launcher"
     android:label="@string/app_name"
     android:supportsRtl="true"
-    android:theme="@style/Theme.Mersix"
+    android:theme="@style/Theme.Measix"
     android:usesCleartextTraffic="true"
     tools:targetApi="33">
     <activity
       android:name=".ui.activity.SafeModeActivity"
       android:exported="false"
       android:label="@string/title_activity_safe_mode"
-      android:theme="@style/Theme.Mersix" />
+      android:theme="@style/Theme.Measix" />
     <activity
       android:name=".RouteActivity"
       android:configChanges="keyboardHidden|orientation|screenSize"
       android:exported="true"
       android:importantForAutofill="noExcludeDescendants"
-      android:theme="@style/Theme.Mersix"
+      android:theme="@style/Theme.Measix"
       android:windowSoftInputMode="adjustResize">
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
@@ -87,7 +87,7 @@
 
         <data
           android:host="shortcut"
-          android:scheme="mersix" />
+          android:scheme="measix" />
       </intent-filter>
     </activity>
     <activity

@@ -1,4 +1,4 @@
-import com.android.build.api.dsl.Packaging
+﻿import com.android.build.api.dsl.Packaging
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import java.io.FileInputStream
@@ -13,15 +13,15 @@ plugins {
 }
 
 android {
-    namespace = "net.weero.mersix.pilot"
+    namespace = "net.weero.measix.pilot"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "net.weero.mersix.pilot"
+        applicationId = "net.weero.measix.pilot"
         minSdk = 26
         targetSdk = 37
-        versionCode = 4
-        versionName = "0.0.4"
+        versionCode = 5
+        versionName = "0.0.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

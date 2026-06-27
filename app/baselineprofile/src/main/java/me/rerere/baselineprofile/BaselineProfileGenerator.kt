@@ -1,4 +1,4 @@
-package me.rerere.baselineprofile
+﻿package me.rerere.baselineprofile
 
 import androidx.benchmark.macro.junit4.BaselineProfileRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -65,7 +65,7 @@ class BaselineProfileGenerator {
             if (input != null) {
                 input.click()
                 input.text = """
-                    # Hello MersixPilot
+                    # Hello MeasixPilot
 
                     这是一段 **Markdown** 文本，包含 *斜体*、`行内代码` 和列表：
 

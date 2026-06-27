@@ -6,6 +6,31 @@
 
 ---
 
+## 0.0.5（versionCode 5）— 2026-06-27
+
+### 变更
+
+- **品牌名称更正**：`Mersix Pilot` → `Measix Pilot`
+  - 包名变更：`net.weero.mersix.pilot` → `net.weero.measix.pilot`（需卸载重装）
+  - 数据库名：`mersix_pilot` → `measix_pilot`
+  - 域名：`mersix.weero.net` → `measix.weero.net`
+  - DeepLink scheme：`mersix://` → `measix://`
+  - S3/WebDAV 备份路径：`mersix_pilot_backups/` → `measix_pilot_backups/`
+  - 全项目 358 个文件中的 "mersix" 拼写错误已更正为 "measix"
+
+### 数据迁移说明
+
+由于包名变更，用户需要手动迁移数据：
+
+1. 在旧 app（`net.weero.mersix.pilot`）中导出本地备份（设置 → 备份 → 本地导入导出 → 导出备份）
+2. 卸载旧 app
+3. 安装新 app（`net.weero.measix.pilot`）
+4. 在新 app 中导入备份（设置 → 备份 → 本地导入导出 → 导入备份）
+
+> 注意：`settings.json` 中的助手、MCP、提供商配置可完整恢复。旧备份中的数据库文件（`mersix_pilot.db`）会被跳过。
+
+---
+
 ## 0.0.4（versionCode 4）— 2026-06-21
 
 ### 新增

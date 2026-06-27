@@ -1,4 +1,4 @@
-<?xml version='1.0' encoding='UTF-8'?>
+﻿<?xml version='1.0' encoding='UTF-8'?>
 <resources>
   <string name="about_page_license">License</string>
   <string name="about_page_documentation">使用文档</string>
@@ -778,7 +778,7 @@
   <string name="setting_page_search_title">搜索服务</string>
   <string name="setting_page_share">分享</string>
   <string name="setting_page_share_desc">分享本APP给朋友</string>
-  <string name="setting_page_share_text">Mersix Pilot - Android AI 助手\n\n官网: https://mersix.weero.net/</string>
+  <string name="setting_page_share_text">Measix Pilot - Android AI 助手\n\n官网: https://measix.weero.net/</string>
   <string name="setting_page_theme_setting">主题</string>
   <string name="setting_page_theme_setting_desc">自定义应用配色方案</string>
   <string name="setting_theme_page_preset_themes">预设主题</string>

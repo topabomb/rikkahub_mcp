@@ -1,4 +1,4 @@
-package me.rerere.workspace
+﻿package me.rerere.workspace
 
 import java.io.File
 
@@ -101,7 +101,7 @@ class ProotShellRunner(
             "-c",
             // 命令通过位置参数传入, 避免任何转义; eval "$2" 对命令文本只求值一次, 等价于 bash -c "$cmd"
             "cd -- \"\$1\" && eval \"\$2\"",
-            "mersixpilot",
+            "MeasixPilot",
             context.prootCwd(),
             context.command,
         )

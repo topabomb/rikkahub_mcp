@@ -1,4 +1,4 @@
-package me.rerere.ai.util
+﻿package me.rerere.ai.util
 
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -30,8 +30,8 @@ fun Request.Builder.configureReferHeaders(url: String): Request.Builder {
 
         "openrouter.ai" -> {
             this
-                .addHeader("X-Title", "MersixPilot")
-                .addHeader("HTTP-Referer", "https://mersix.weero.net")
+                .addHeader("X-Title", "MeasixPilot")
+                .addHeader("HTTP-Referer", "https://measix.weero.net")
         }
 
         else -> this

@@ -1,4 +1,4 @@
-# Fork 精简版规划
+﻿# Fork 精简版规划
 
 > 基于 `original-architecture.md`（精简前架构）的架构现状，规划并记录精简版本的具体操作。
 > 本文档为已完成的历史记录，后续功能迭代见 `changelog.md`。
@@ -13,12 +13,12 @@
 
 | 配置项 | 当前值 | 修改位置 |
 |--------|--------|----------|
-| `applicationId` | `me.rerere.rikkahub` → `net.weero.mersix.pilot` | `app/build.gradle.kts` |
-| `namespace` | `me.rerere.rikkahub` → `net.weero.mersix.pilot` | `app/build.gradle.kts` |
-| 包名目录 | `me/rerere/rikkahub/` → `net/weero/mersix/pilot/` | `app/src/main/java/` 全部子目录 |
-| `app_name` | RikkaHub → Mersix Pilot（中文：小麦助手） | `app/src/main/res/values*/strings.xml` 共 5 个文件（values、values-zh、values-ja、values-ko-rKR、values-ru） |
+| `applicationId` | `me.rerere.rikkahub` → `net.weero.measix.pilot` | `app/build.gradle.kts` |
+| `namespace` | `me.rerere.rikkahub` → `net.weero.measix.pilot` | `app/build.gradle.kts` |
+| 包名目录 | `me/rerere/rikkahub/` → `net/weero/measix/pilot/` | `app/src/main/java/` 全部子目录 |
+| `app_name` | RikkaHub → Measix Pilot（中文：小麦助手） | `app/src/main/res/values*/strings.xml` 共 5 个文件（values、values-zh、values-ja、values-ko-rKR、values-ru） |
 | 启动图标 | `ic_launcher` | `app/src/main/res/mipmap-*/ic_launcher*` 及 `ic_launcher_round*` |
-| User-Agent | `RikkaHub-Android/${VERSION}` → `MersixPilot-Android/${VERSION}` | `di/DataSourceModule.kt` OkHttpClient 拦截器 |
+| User-Agent | `RikkaHub-Android/${VERSION}` → `MeasixPilot-Android/${VERSION}` | `di/DataSourceModule.kt` OkHttpClient 拦截器 |
 
 各子模块包名不改（`me.rerere.ai`/`me.rerere.search` 等）。
 
@@ -26,10 +26,10 @@
 
 | 标识 | 当前值 | 修改位置 | 说明 |
 |------|--------|----------|------|
-| 数据库名 | `rikka_hub` | `di/DataSourceModule.kt` 第 53 行 `databaseBuilder` 第三个参数 | 改为新应用标识（如 `mersix_pilot`） |
+| 数据库名 | `rikka_hub` | `di/DataSourceModule.kt` 第 53 行 `databaseBuilder` 第三个参数 | 改为新应用标识（如 `measix_pilot`） |
 | 数据库备份引用 | `rikka_hub` | `data/sync/webdav/WebDavSync.kt` 第 152-252 行，`data/sync/S3Sync.kt` 第 129-252 行 | `getDatabasePath("rikka_hub")` 及 `rikka_hub.db`/`rikka_hub-wal`/`rikka_hub-shm` 引用均需同步修改 |
 | DataStore 名称 | `settings` | `data/datastore/PreferencesStore.kt` 第 59 行 `preferencesDataStore(name = ...)` | 可保留 `"settings"` 或改为新名称 |
-| SharedPreferences | `rikkahub.preferences` | `ui/hooks/SharedPreferences.kt` 共 6 处 `getSharedPreferences` | 改为 `mersixpilot.preferences` 或类似标识 |
+| SharedPreferences | `rikkahub.preferences` | `ui/hooks/SharedPreferences.kt` 共 6 处 `getSharedPreferences` | 改为 `MeasixPilot.preferences` 或类似标识 |
 | CrashHandler SP | `crash_handler` | `utils/CrashHandler.kt` 第 8 行 `PREFS_NAME` | 与包名无关，可保留 |
 | 文件目录 | `workspaces/`、`uploads/`、`tool_outputs/`、`skills/` | `data/files/FileFolders` | 路径基于 `filesDir`，与包名无关，无需改 |
 
@@ -39,9 +39,9 @@
 |------|------|------|
 | `SponsorAPI` baseUrl | `data/api/SponsorAPI.kt` | 随赞助功能删除 |
 | `RikkaHubAPI` 空接口 | `data/api/RikkaHubAPI.kt` | 随 Retrofit 删除 |
-| `UpdateChecker` API_URL | `utils/UpdateChecker.kt` 第 20 行 | 替换为 `https://mersix.weero.net/mobile/` |
-| `UpdateChecker` User-Agent | `utils/UpdateChecker.kt` 第 36 行 | `RikkaHub` 替换为 `MersixPilot` |
-| 关于页应用名硬编码 | `ui/pages/setting/SettingAboutPage.kt` 第 124 行 `text = "RikkaHub"` | 替换为 `Mersix Pilot`，删除 GitHub 链接，官网改为 `https://mersix.weero.net/` |
+| `UpdateChecker` API_URL | `utils/UpdateChecker.kt` 第 20 行 | 替换为 `https://measix.weero.net/mobile/` |
+| `UpdateChecker` User-Agent | `utils/UpdateChecker.kt` 第 36 行 | `RikkaHub` 替换为 `MeasixPilot` |
+| 关于页应用名硬编码 | `ui/pages/setting/SettingAboutPage.kt` 第 124 行 `text = "RikkaHub"` | 替换为 `Measix Pilot`，删除 GitHub 链接，官网改为 `https://measix.weero.net/` |
 | `RemoteConfig` 默认值 | `app/src/main/res/xml/remote_config_defaults.xml` | 随 Firebase 删除 |
 
 ---
@@ -546,7 +546,7 @@ ExtensionsPage 入口不变（4 项保留）。PromptPage 内部变化：
 | 搜索引擎精简（17→4，含 RikkaHub 移除） | ✅ |
 | TTS 精简（8→3）/ ASR 精简（3→2）/ 默认 TTS 仅 SystemTTS | ✅ |
 | ResponseAPI + Vertex AI 保留（按决定不精简） | ✅ |
-| UpdateChecker API_URL → `https://mersix.weero.net/mobile/` | ✅ |
+| UpdateChecker API_URL → `https://measix.weero.net/mobile/` | ✅ |
 | SettingAboutPage 更新 + 文档入口新增 | ✅ |
 | 默认助手精简（2→1） | ✅ |
 | assembleDebug 编译通过 | ✅ |
@@ -554,7 +554,7 @@ ExtensionsPage 入口不变（4 项保留）。PromptPage 内部变化：
 | :ai:testDebugUnitTest（140 tests, 0 failures） | ✅ |
 | 8.4 现有测试更新 | ✅ 全部完成 |
 | 翻译 UI 残留清理（ChatMessageTranslation.kt + 6语言字符串） | ✅ |
-| ai/Request.kt OpenRouter 请求头更新（RikkaHub→MersixPilot） | ✅ |
+| ai/Request.kt OpenRouter 请求头更新（RikkaHub→MeasixPilot） | ✅ |
 | SettingProviderPage.kt AiHubMix 死代码清理 | ✅ |
 | workspace 模块 RikkaHub 注释更新 | ✅ |
 | BaselineProfileGenerator 测试文本更新 | ✅ |
@@ -562,7 +562,7 @@ ExtensionsPage 入口不变（4 项保留）。PromptPage 内部变化：
 | RikkaConfirmDialog→ConfirmDialog 重命名（9处引用） | ✅ |
 | DefaultProvidersTest 补充 Claude/DeepSeek 禁用断言 | ✅ |
 | README.md 重写（聚焦 fork 项目架构/开发） | ✅ |
-| ProotShellRunner 进程名更新（rikkahub→mersixpilot） | ✅ |
+| ProotShellRunner 进程名更新（rikkahub→MeasixPilot） | ✅ |
 | 残留清理收尾（功能缺陷修复 + 死代码/死依赖/死字符串移除 + 配置文档更新） | ✅ |
 
 ### 9.2 待完成 — 运行时验证（需真机/模拟器）
@@ -597,18 +597,18 @@ ExtensionsPage 入口不变（4 项保留）。PromptPage 内部变化：
 - 临时文件 `build_err2.txt` / `build_errors.txt` / `build_output.txt` 已删除
 - `.gitignore` 已补充构建日志和旧包名 schema 忽略规则
 - 旧包名 schema `app/schemas/me.rerere.rikkahub.data.db.AppDatabase/`（v1-23）已从 git 移除并从磁盘删除
-- 新包名 schema `app/schemas/net.weero.mersix.pilot.data.db.AppDatabase/`（v1-2）已纳入 git 跟踪（Migration_1_2_Test 依赖）
+- 新包名 schema `app/schemas/net.weero.measix.pilot.data.db.AppDatabase/`（v1-2）已纳入 git 跟踪（Migration_1_2_Test 依赖）
 
 ### 9.5 域名规划（2026-06-19）
 
-> 原则：域名少，路径区分功能。统一使用 `mersix.weero.net` 一个域名。
+> 原则：域名少，路径区分功能。统一使用 `measix.weero.net` 一个域名。
 
 | 路径 | 用途 | 引用位置 |
 |------|------|----------|
-| `https://mersix.weero.net/` | 官网首页 | SettingAboutPage |
-| `https://mersix.weero.net/mobile/` | 移动端更新 API（UpdateChecker） | UpdateChecker.kt |
-| `https://mersix.weero.net/mobile/docs` | 使用文档 | SettingPage 关于分组 |
-| `https://mersix.weero.net/mobile/license` | 开源许可 | SettingAboutPage |
+| `https://measix.weero.net/` | 官网首页 | SettingAboutPage |
+| `https://measix.weero.net/mobile/` | 移动端更新 API（UpdateChecker） | UpdateChecker.kt |
+| `https://measix.weero.net/mobile/docs` | 使用文档 | SettingPage 关于分组 |
+| `https://measix.weero.net/mobile/license` | 开源许可 | SettingAboutPage |
 
 > 分享文本中的官网引用同步更新。
 
@@ -620,31 +620,31 @@ ExtensionsPage 入口不变（4 项保留）。PromptPage 内部变化：
 |--------|------|------|
 | QQ 群按钮 + 底部弹窗（"RikkaHub 一/二/三群"） | 删除 | 原项目群组，无效 |
 | Discord 按钮（`discord.gg/9weBqxe5c4`） | 删除 | 原项目社群，无效 |
-| 使用文档（`docs.rikka-ai.com`） | URL 更新为 `mersix.weero.net/mobile/docs` | 原项目文档站，无效 |
-| 分享（shareText 含 "RikkaHub" + `rikka-ai.com`） | 更新文本为 Mersix Pilot | 品牌不一致 |
+| 使用文档（`docs.rikka-ai.com`） | URL 更新为 `measix.weero.net/mobile/docs` | 原项目文档站，无效 |
+| 分享（shareText 含 "RikkaHub" + `rikka-ai.com`） | 更新文本为 Measix Pilot | 品牌不一致 |
 | 请求日志 | 保留 | 功能正常 |
 
 **SettingAboutPage 更新**：
 
 | 项目 | 变化 |
 |------|------|
-| 官网 | `mersix-pilot.weero.net` → `mersix.weero.net` |
-| 开源许可 | `mersix-pilot.weero.net/mobile/license` → `mersix.weero.net/mobile/license` |
-| 使用文档 | 新增入口 `mersix.weero.net/mobile/docs` |
+| 官网 | `mersix-pilot.weero.net` → `measix.weero.net` |
+| 开源许可 | `mersix-pilot.weero.net/mobile/license` → `measix.weero.net/mobile/license` |
+| 使用文档 | 新增入口 `measix.weero.net/mobile/docs` |
 
 **残留 RikkaHub 标识清理**：
 
 | 位置 | 原值 | 新值 |
 |------|------|------|
-| `RikkaHubApp.kt` 文件名 + 类名 + TAG | `RikkaHubApp` | `MersixPilotApp` |
-| `AndroidManifest.xml` | `android:name=".RikkaHubApp"` | `.MersixPilotApp` |
-| `Theme.kt` 函数名 | `RikkahubTheme` | `MersixTheme`（含 5 个引用文件） |
-| `ContextUtil.kt` 截图文件名 | `RikkaHub_*.png` | `MersixPilot_*.png` |
-| `S3Sync.kt` / `PreferencesStore.kt` S3 路径 | `rikkahub_backups` | `mersix_pilot_backups` |
-| `ImportExportTab.kt` 备份文件名 | `rikkahub_backup_` | `mersix_pilot_backup_` |
-| `WebViewPage.kt` / `HighlightCodeBlock.kt` baseUrl | `https://rikkahub.local` | `https://mersix.local` |
+| `RikkaHubApp.kt` 文件名 + 类名 + TAG | `RikkaHubApp` | `MeasixPilotApp` |
+| `AndroidManifest.xml` | `android:name=".RikkaHubApp"` | `.MeasixPilotApp` |
+| `Theme.kt` 函数名 | `RikkahubTheme` | `MeasixTheme`（含 5 个引用文件） |
+| `ContextUtil.kt` 截图文件名 | `RikkaHub_*.png` | `MeasixPilot_*.png` |
+| `S3Sync.kt` / `PreferencesStore.kt` S3 路径 | `rikkahub_backups` | `measix_pilot_backups` |
+| `ImportExportTab.kt` 备份文件名 | `rikkahub_backup_` | `measix_pilot_backup_` |
+| `WebViewPage.kt` / `HighlightCodeBlock.kt` baseUrl | `https://rikkahub.local` | `https://measix.local` |
 | `strings.xml` `about_page_github` | 残留未使用 | 删除（6 个语言文件） |
-| `strings.xml` `setting_page_share_text` | "RikkaHub - ... rikka-ai.com" | "Mersix Pilot - ... mersix.weero.net" |
+| `strings.xml` `setting_page_share_text` | "RikkaHub - ... rikka-ai.com" | "Measix Pilot - ... measix.weero.net" |
 
 > 保留项：`AIIconMatcher.kt` 的 `PATTERN_RIKKAHUB`（匹配 "rikka|auto"，可能匹配其他 provider 名，保留无害）；`SearchService.kt` 的 `RikkaHubOptions` 密封类子类（兼容旧数据反序列化）；`SettingSearchDetailPage.kt` 的空分支（满足 when 穷举性）。
 
@@ -716,8 +716,8 @@ ExtensionsPage 入口不变（4 项保留）。PromptPage 内部变化：
 
 | 文件 | 更新 |
 |------|------|
-| `settings.gradle.kts` | `rootProject.name` 从 `"rikkahub"` 改为 `"MersixPilot"` |
-| `CLAUDE.md` | 完全重写，与 `AGENTS.md` 对齐：项目名 RikkaHub→Mersix Pilot、移除 web 模块、包路径 `me/rerere/rikkahub/`→`net/weero/mersix/pilot/`、移除 lorebook 提及、搜索 provider 列表更新 |
+| `settings.gradle.kts` | `rootProject.name` 从 `"rikkahub"` 改为 `"MeasixPilot"` |
+| `CLAUDE.md` | 完全重写，与 `AGENTS.md` 对齐：项目名 RikkaHub→Measix Pilot、移除 web 模块、包路径 `me/rerere/rikkahub/`→`net/weero/measix/pilot/`、移除 lorebook 提及、搜索 provider 列表更新 |
 
 **F. 验证结果（全部通过）**：
 
@@ -760,8 +760,8 @@ ExtensionsPage 入口不变（4 项保留）。PromptPage 内部变化：
 | 使用位置 | 文件 | 说明 |
 |----------|------|------|
 | 关于页显示 | `SettingAboutPage.kt` | `VERSION_NAME / VERSION_CODE` |
-| 更新检查 User-Agent | `UpdateChecker.kt` | `MersixPilot VERSION_NAME #VERSION_CODE` |
-| HTTP User-Agent | `DataSourceModule.kt` | `MersixPilot-Android/VERSION_NAME` |
+| 更新检查 User-Agent | `UpdateChecker.kt` | `MeasixPilot VERSION_NAME #VERSION_CODE` |
+| HTTP User-Agent | `DataSourceModule.kt` | `MeasixPilot-Android/VERSION_NAME` |
 | 版本比较 | `UpdateCard.kt` | `Version(BuildConfig.VERSION_NAME)` 与服务端比较 |
 
 ### 8.3 独立于应用版本的版本号

@@ -1,4 +1,4 @@
-# 上游同步检查记录
+﻿# 上游同步检查记录
 
 > 本文档记录对原项目 [RikkaHub](https://github.com/rikkahub/rikkahub) 提交的检查历史，避免重复检查。
 
@@ -84,7 +84,7 @@
 - 添加：`import androidx.compose.ui.platform.LocalDensity` + `import androidx.compose.ui.platform.LocalWindowInfo`
 - 替换：使用 `LocalWindowInfo.current.containerSize` + `LocalDensity` 计算窗口尺寸
 
-**文件**：`app/src/main/java/net/weero/mersix/pilot/ui/pages/chat/ChatPage.kt`
+**文件**：`app/src/main/java/net/weero/measix/pilot/ui/pages/chat/ChatPage.kt`
 
 **影响**：功能逻辑不变，仅 API 调用方式更新
 

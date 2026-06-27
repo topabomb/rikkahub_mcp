@@ -1,4 +1,4 @@
-# RikkaHub 架构文档
+﻿# RikkaHub 架构文档
 
 > 面向 Fork 维护者的完整架构指南
 > 最后更新：2026-06-19
@@ -7,7 +7,7 @@
 
 ## 源头追踪（Provenance）
 
-本文档描述的是 Fork 前的原项目（RikkaHub）架构，供 Mersix Pilot 维护者追踪源头、对比差异。
+本文档描述的是 Fork 前的原项目（RikkaHub）架构，供 Measix Pilot 维护者追踪源头、对比差异。
 
 | 项目 | 值 |
 |------|------|
@@ -15,8 +15,8 @@
 | 原项目版本 | 2.3.1（versionCode 164） |
 | 上游源头提交 | `5b9be3017fed06e77f79236a1d88be9b36a52454` — "Add toggle for request logging"（2026-06-18 19:27） |
 | Fork 起点提交 | `22aa916bed06de81580cf34967f0a3c76fc4bd1d` — "Fork 调研和初始化"（2026-06-19 07:54） |
-| Fork 后包名 | `net.weero.mersix.pilot` |
-| Fork 后应用名 | Mersix Pilot（小麦助手） |
+| Fork 后包名 | `net.weero.measix.pilot` |
+| Fork 后应用名 | Measix Pilot（小麦助手） |
 | Fork 规划文档 | `docs/dev/fork-simplification-plan.md` |
 
 > 追溯上游代码：`git show 5b9be301:<path>` 或 `git diff 5b9be301..HEAD -- <path>`

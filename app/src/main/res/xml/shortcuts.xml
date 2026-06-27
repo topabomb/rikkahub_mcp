@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
     <shortcut
         android:shortcutId="camera"
@@ -8,8 +8,8 @@
         android:shortcutLongLabel="@string/shortcut_take_picture">
         <intent
             android:action="android.intent.action.VIEW"
-            android:targetClass="net.weero.mersix.pilot.ui.activity.ShortcutHandlerActivity"
-            android:data="mersix://shortcut" />
+            android:targetClass="net.weero.measix.pilot.ui.activity.ShortcutHandlerActivity"
+            android:data="measix://shortcut" />
         <categories android:name="android.shortcut.conversation" />
     </shortcut>
 </shortcuts>

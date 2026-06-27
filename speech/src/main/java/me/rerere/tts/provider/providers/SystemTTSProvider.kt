@@ -1,4 +1,4 @@
-package me.rerere.tts.provider.providers
+﻿package me.rerere.tts.provider.providers
 
 import android.content.Context
 import android.speech.tts.TextToSpeech
@@ -46,7 +46,7 @@ class SystemTTSProvider : TTSProvider<TTSProviderSetting.SystemTTS> {
                 ttsInstance.setSpeechRate(providerSetting.speechRate)
                 ttsInstance.setPitch(providerSetting.pitch)
 
-                // Create temporary file for audio output using temp directory like MersixPilotApp
+                // Create temporary file for audio output using temp directory like MeasixPilotApp
                 val tempDir = context.appTempFolder
                 val audioFile = File(tempDir, "tts_${System.currentTimeMillis()}.wav")
 
