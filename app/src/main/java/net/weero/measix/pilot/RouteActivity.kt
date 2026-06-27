@@ -125,6 +125,7 @@ import net.weero.measix.pilot.ui.pages.webview.WebViewPage
 import net.weero.measix.pilot.ui.theme.LocalDarkMode
 import net.weero.measix.pilot.ui.theme.MeasixTheme
 import net.weero.measix.pilot.utils.CrashHandler
+import net.weero.measix.pilot.utils.openUsageAccessSettings
 import okhttp3.OkHttpClient
 import org.koin.android.ext.android.inject
 import org.koin.compose.koinInject
@@ -239,6 +240,7 @@ class RouteActivity : ComponentActivity() {
             eventBus.events.collect { event ->
                 when (event) {
                     is AppEvent.Speak -> tts.speak(event.text)
+                    is AppEvent.OpenUsageAccessSettings -> this@RouteActivity.openUsageAccessSettings()
                 }
             }
         }

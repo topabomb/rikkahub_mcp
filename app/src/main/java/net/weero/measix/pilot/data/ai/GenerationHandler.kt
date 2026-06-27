@@ -45,7 +45,6 @@ import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
-import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.utils.applyPlaceholders
 import java.util.Locale
@@ -68,7 +67,6 @@ class GenerationHandler(
     private val providerManager: ProviderManager,
     private val json: Json,
     private val memoryRepo: MemoryRepository,
-    private val conversationRepo: ConversationRepository,
 ) {
     fun generateText(
         settings: Settings,
@@ -376,10 +374,6 @@ class GenerationHandler(
                 if (assistant.enableMemory) {
                     appendLine()
                     append(buildMemoryPrompt(memories = memories))
-                }
-                if (assistant.enableRecentChatsReference) {
-                    appendLine()
-                    append(buildRecentChatsPrompt(assistant, conversationRepo))
                 }
 
                 // 工具prompt

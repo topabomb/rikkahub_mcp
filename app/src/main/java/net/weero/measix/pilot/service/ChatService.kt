@@ -55,7 +55,8 @@ import net.weero.measix.pilot.RouteActivity
 import net.weero.measix.pilot.data.ai.GenerationChunk
 import net.weero.measix.pilot.data.ai.GenerationHandler
 import net.weero.measix.pilot.data.ai.mcp.McpManager
-import net.weero.measix.pilot.data.ai.tools.LocalTools
+import net.weero.measix.pilot.data.ai.tools.local.LocalTools
+import net.weero.measix.pilot.data.ai.tools.createConversationTools
 import net.weero.measix.pilot.data.ai.tools.createSearchTools
 import net.weero.measix.pilot.data.ai.tools.createSkillTools
 import net.weero.measix.pilot.data.ai.tools.createWorkspaceTools
@@ -567,6 +568,9 @@ class ChatService(
                         addAll(createSearchTools(settings))
                     }
                     addAll(localTools.getTools(assistant.localTools))
+                    if (assistant.enableRecentChatsReference) {
+                        addAll(createConversationTools(conversationRepo, assistant.id))
+                    }
                     addAll(createWorkspaceToolsIfReady(assistant.workspaceId?.toString(), conversation.workspaceCwd))
                     if (assistant.enabledSkills.isNotEmpty()) {
                         addAll(

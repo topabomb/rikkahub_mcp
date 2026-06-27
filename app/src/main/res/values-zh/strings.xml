@@ -54,6 +54,7 @@
   <string name="assistant_page_context_message_count">上下文消息数量: %d</string>
   <string name="assistant_page_context_message_desc">控制多少条历史消息会被作为上下文发送给模型, 超过此数量的消息会被忽略，只有最近的N条消息会被保留，可以节省token</string>
   <string name="assistant_page_context_message_size">上下文消息数量</string>
+  <string name="assistant_page_context_message_truncation_warning">限制上下文可能导致频繁的上下文截断，并阻止提示词缓存</string>
   <string name="assistant_page_context_message_unlimited">无限制的上下文消息</string>
   <string name="assistant_page_creative">创造</string>
   <string name="assistant_page_current_assistant">当前助手</string>
@@ -73,6 +74,9 @@
   <string name="assistant_page_invalid_json">无效的 JSON: %s</string>
   <string name="assistant_page_local_tools_ask_user_desc">允许 AI 向你提问以获得更多信息</string>
   <string name="assistant_page_local_tools_ask_user_title">询问用户</string>
+  <string name="assistant_page_local_tools_screen_time_desc">允许 AI 读取你的应用屏幕使用时间</string>
+  <string name="assistant_page_local_tools_screen_time_permission_required">请在设置中授予「使用情况访问」权限以使用屏幕使用时间</string>
+  <string name="assistant_page_local_tools_screen_time_title">屏幕使用时间</string>
   <string name="assistant_page_local_tools_clipboard_desc">读取或写入设备剪贴板中的纯文本</string>
   <string name="assistant_page_local_tools_clipboard_title">剪贴板</string>
   <string name="assistant_page_local_tools_javascript_engine_desc">使用 QuickJS 引擎执行 JavaScript 代码，进行计算和脚本处理</string>
@@ -100,7 +104,7 @@
   <string name="assistant_page_quick_message_title">标题</string>
   <string name="assistant_page_quick_messages">快捷消息</string>
   <string name="assistant_page_recent_chats">参考历史聊天记录</string>
-  <string name="assistant_page_recent_chats_desc">启用后，助手将参考最近的聊天历史记录来提供更有上下文的回应</string>
+  <string name="assistant_page_recent_chats_desc">启用后，允许助手在过去的对话中搜索相关信息</string>
   <string name="assistant_page_regex_affecting_scopes">影响范围：</string>
   <string name="assistant_page_regex_desc">定义正则表达式模式，在发送/接收消息前对其进行转换</string>
   <string name="assistant_page_regex_find_regex">查找正则表达式</string>
@@ -238,6 +242,10 @@
   <string name="chat_message_tool_get_time">获取时间信息</string>
   <string name="chat_message_tool_scrape_prefix">抓取网站：%1$s</string>
   <string name="chat_message_tool_scrape_web">抓取网页</string>
+  <string name="chat_message_tool_conversation_search">搜索历史：%1$s</string>
+  <string name="chat_message_tool_screen_time">读取屏幕使用时间</string>
+  <string name="tool_ui_screen_time_total">总屏幕使用时间</string>
+  <string name="chat_message_tool_recent_chats">查看最近的对话</string>
   <string name="chat_message_tool_search_prefix">搜索: %1$s</string>
   <string name="chat_message_tool_search_results_count">共 %1$d 条结果</string>
   <string name="chat_message_tool_search_web">搜索网页: %1$s</string>

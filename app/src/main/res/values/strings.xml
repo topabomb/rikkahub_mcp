@@ -54,6 +54,7 @@
   <string name="assistant_page_context_message_count">Context Message Size: %d</string>
   <string name="assistant_page_context_message_desc">Controls how many historical messages will be sent to the model as context. Messages exceeding this number will be ignored, only the most recent N messages will be retained, which can save tokens</string>
   <string name="assistant_page_context_message_size">Context Message Size</string>
+  <string name="assistant_page_context_message_truncation_warning">Limiting context may cause frequent context truncation and prevent prompt caching</string>
   <string name="assistant_page_context_message_unlimited">Unlimited context messages</string>
   <string name="assistant_page_creative">Creative</string>
   <string name="assistant_page_current_assistant">Current Assistant</string>
@@ -73,6 +74,9 @@
   <string name="assistant_page_invalid_json">Invalid JSON: %s</string>
   <string name="assistant_page_local_tools_ask_user_desc">Allow the AI to ask you questions for clarification</string>
   <string name="assistant_page_local_tools_ask_user_title">Ask User</string>
+  <string name="assistant_page_local_tools_screen_time_desc">Let the AI read your app screen usage time</string>
+  <string name="assistant_page_local_tools_screen_time_permission_required">Please grant the Usage access permission in settings to use screen time</string>
+  <string name="assistant_page_local_tools_screen_time_title">Screen Time</string>
   <string name="assistant_page_local_tools_clipboard_desc">Read or write plain text from the device clipboard</string>
   <string name="assistant_page_local_tools_clipboard_title">Clipboard</string>
   <string name="assistant_page_local_tools_javascript_engine_desc">Execute JavaScript code with QuickJS engine for calculations and scripting</string>
@@ -100,7 +104,7 @@
   <string name="assistant_page_quick_message_title">Title</string>
   <string name="assistant_page_quick_messages">Quick Messages</string>
   <string name="assistant_page_recent_chats">Reference Recent Chats</string>
-  <string name="assistant_page_recent_chats_desc">When enabled, the assistant will reference recent chat history to provide more contextual responses</string>
+  <string name="assistant_page_recent_chats_desc">When enabled, allows the assistant to search past conversations for relevant information</string>
   <string name="assistant_page_regex_affecting_scopes">Affecting Scopes:</string>
   <string name="assistant_page_regex_desc">Define regex patterns to transform messages before sending/receiving</string>
   <string name="assistant_page_regex_find_regex">Find Regex</string>
@@ -238,6 +242,10 @@
   <string name="chat_message_tool_get_time">Get time info</string>
   <string name="chat_message_tool_scrape_prefix">Scrape website: %1$s</string>
   <string name="chat_message_tool_scrape_web">Scrape web page</string>
+  <string name="chat_message_tool_conversation_search">Search history: %1$s</string>
+  <string name="chat_message_tool_screen_time">Read screen time</string>
+  <string name="tool_ui_screen_time_total">Total screen time</string>
+  <string name="chat_message_tool_recent_chats">View recent chats</string>
   <string name="chat_message_tool_search_prefix">Search: %1$s</string>
   <string name="chat_message_tool_search_results_count">%1$d results</string>
   <string name="chat_message_tool_search_web">Search web: %1$s</string>

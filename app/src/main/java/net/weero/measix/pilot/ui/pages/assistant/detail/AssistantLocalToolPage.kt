@@ -16,15 +16,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.dokar.sonner.ToastType
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.ai.tools.LocalToolOption
+import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.CardGroup
+import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.CustomColors
+import net.weero.measix.pilot.utils.hasUsageStatsPermission
+import net.weero.measix.pilot.utils.openUsageAccessSettings
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 
@@ -153,6 +158,32 @@ private fun AssistantLocalToolContent(
                     Switch(
                         checked = assistant.localTools.contains(LocalToolOption.AskUser),
                         onCheckedChange = { toggleLocalTool(LocalToolOption.AskUser, it) }
+                    )
+                }
+            )
+            item(
+                headlineContent = {
+                    Text(stringResource(R.string.assistant_page_local_tools_screen_time_title))
+                },
+                supportingContent = {
+                    Text(stringResource(R.string.assistant_page_local_tools_screen_time_desc))
+                },
+                trailingContent = {
+                    val context = LocalContext.current
+                    val toaster = LocalToaster.current
+                    Switch(
+                        checked = assistant.localTools.contains(LocalToolOption.ScreenTime),
+                        onCheckedChange = { enabled ->
+                            if (enabled && !context.hasUsageStatsPermission()) {
+                                context.openUsageAccessSettings()
+                                toaster.show(
+                                    message = context.getString(R.string.assistant_page_local_tools_screen_time_permission_required),
+                                    type = ToastType.Warning,
+                                )
+                                return@Switch
+                            }
+                            toggleLocalTool(LocalToolOption.ScreenTime, enabled)
+                        }
                     )
                 }
             )

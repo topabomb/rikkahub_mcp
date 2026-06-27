@@ -3,7 +3,7 @@
 import kotlinx.serialization.json.Json
 import me.rerere.highlight.Highlighter
 import net.weero.measix.pilot.AppScope
-import net.weero.measix.pilot.data.ai.tools.LocalTools
+import net.weero.measix.pilot.data.ai.tools.local.LocalTools
 import net.weero.measix.pilot.data.event.AppEventBus
 import net.weero.measix.pilot.service.ChatService
 import net.weero.measix.pilot.utils.EmojiData

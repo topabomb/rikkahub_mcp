@@ -7,7 +7,7 @@ import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.core.ReasoningLevel
-import net.weero.measix.pilot.data.ai.tools.LocalToolOption
+import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import kotlin.uuid.Uuid
 
 @Serializable

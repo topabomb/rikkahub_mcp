@@ -7,7 +7,7 @@
   <string name="about_page_version">バージョン</string>
   <string name="about_page_website">ウェブサイト</string>
   <string name="add">追加</string>
-  <string name="app_name">Measix Pilot</string>
+  <string name="app_name">Measix パイロット</string>
   <string name="asr_button_content_description">音声認識</string>
   <string name="asr_button_stop">停止</string>
   <string name="assistant_detail_basic_desc">名前、アバター、モデル、パラメータを設定</string>
@@ -54,6 +54,7 @@
   <string name="assistant_page_context_message_count">コンテキストメッセージサイズ: %d</string>
   <string name="assistant_page_context_message_desc">モデルに送信される履歴メッセージの数を制御します。この数を超えるメッセージは無視され、最新のN個のメッセージのみが保持されます。これによりトークンを節約できます</string>
   <string name="assistant_page_context_message_size">コンテキストメッセージサイズ</string>
+  <string name="assistant_page_context_message_truncation_warning">コンテキストを制限すると、頻繁なコンテキストの切り詰めが発生し、プロンプトキャッシュが妨げられる可能性があります。</string>
   <string name="assistant_page_context_message_unlimited">無制限のコンテキストメッセージ</string>
   <string name="assistant_page_creative">創造的</string>
   <string name="assistant_page_current_assistant">現在のアシスタント</string>
@@ -73,6 +74,9 @@
   <string name="assistant_page_invalid_json">無効なJSON: %s</string>
   <string name="assistant_page_local_tools_ask_user_desc">AIがあなたに質問して情報を確認できるようにします</string>
   <string name="assistant_page_local_tools_ask_user_title">ユーザーに質問</string>
+  <string name="assistant_page_local_tools_screen_time_desc">AIがアプリのスクリーン使用時間を読み取れるようにします</string>
+  <string name="assistant_page_local_tools_screen_time_permission_required">スクリーンタイムを使用するには、設定で使用状況アクセス権限を付与してください</string>
+  <string name="assistant_page_local_tools_screen_time_title">スクリーンタイム</string>
   <string name="assistant_page_local_tools_clipboard_desc">デバイスのクリップボードからテキストを読み取りまたは書き込み</string>
   <string name="assistant_page_local_tools_clipboard_title">クリップボード</string>
   <string name="assistant_page_local_tools_javascript_engine_desc">QuickJSエンジンでJavaScriptコードを実行し、計算とスクリプト処理を行います</string>
@@ -100,7 +104,7 @@
   <string name="assistant_page_quick_message_title">タイトル</string>
   <string name="assistant_page_quick_messages">クイックメッセージ</string>
   <string name="assistant_page_recent_chats">最近のチャット履歴を参照</string>
-  <string name="assistant_page_recent_chats_desc">有効にすると、アシスタントは最近のチャット履歴を参照して、より文脈に沿った応答を提供します</string>
+  <string name="assistant_page_recent_chats_desc">有効にすると、アシスタントが過去の会話から関連情報を検索できるようになります</string>
   <string name="assistant_page_regex_affecting_scopes">影響範囲：</string>
   <string name="assistant_page_regex_desc">メッセージの送受信前に変換する正規表現パターンを定義</string>
   <string name="assistant_page_regex_find_regex">正規表現を検索</string>
@@ -236,6 +240,10 @@
   <string name="chat_message_tool_get_time">時刻情報を取得</string>
   <string name="chat_message_tool_scrape_prefix">ウェブサイトをスクレイピング: %1$s</string>
   <string name="chat_message_tool_scrape_web">ウェブページを取得</string>
+  <string name="chat_message_tool_conversation_search">検索履歴: %1$s</string>
+  <string name="chat_message_tool_screen_time">スクリーンタイムを読み取る</string>
+  <string name="tool_ui_screen_time_total">合計スクリーンタイム</string>
+  <string name="chat_message_tool_recent_chats">最近のチャットを表示</string>
   <string name="chat_message_tool_search_prefix">検索: %1$s</string>
   <string name="chat_message_tool_search_results_count">%1$d件の結果</string>
   <string name="chat_message_tool_search_web">ウェブ検索: %1$s</string>

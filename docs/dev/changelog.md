@@ -6,6 +6,28 @@
 
 ---
 
+## 0.0.6（versionCode 6）— 2026-06-27
+
+### 新增
+
+- **屏幕使用时间工具**（`get_screen_time`）：查询设备应用前台使用时长，支持 `today/week` 预设和自定义时间区间，含权限引导。需授予「使用情况访问」权限
+- **对话工具**（`recent_chats` / `conversation_search`）：将最近聊天引用从静态注入 system prompt 改为按需工具，避免动态内容破坏 prompt cache，提升缓存命中率
+- **搜索结果图片展示**：Tavily 搜索结果新增图片字段，展开 Sheet 中显示横向滚动缩略图行
+- **Workspace 上传目录挂载**：`/upload` 目录挂载到 workspace，AI 可直接读取原始上传文件
+
+### 变更
+
+- **LocalTools 拆分**：将单体 `LocalTools.kt` 拆分为 `tools/local/` 目录下 8 个独立文件，提升可维护性
+- **LaTeX 字体跟随聊天设置**：公式字号从硬编码改为跟随用户设置的聊天字体大小
+- **上下文截断警告**：限制上下文消息数时显示警告，提示可能影响 prompt cache
+- **快捷消息菜单宽度约束**：DropdownMenu 最大宽度限制为 360dp，避免过宽
+
+### 修复
+
+- `DocumentAsPromptTransformer` 改用 `<UploadFile>` 标签，附带 workspace 内路径
+
+---
+
 ## 0.0.5（versionCode 5）— 2026-06-27
 
 ### 变更

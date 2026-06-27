@@ -3,11 +3,8 @@
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
-import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.utils.JsonInstantPretty
-import net.weero.measix.pilot.utils.toLocalDate
 
 internal fun buildMemoryPrompt(memories: List<AssistantMemory>) =
     buildString {
@@ -27,33 +24,3 @@ internal fun buildMemoryPrompt(memories: List<AssistantMemory>) =
         append(JsonInstantPretty.encodeToString(json))
         appendLine()
     }
-
-internal suspend fun buildRecentChatsPrompt(
-    assistant: Assistant,
-    conversationRepo: ConversationRepository
-): String {
-    val recentConversations = conversationRepo.getRecentConversations(
-        assistantId = assistant.id,
-        limit = 10,
-    )
-    if (recentConversations.isNotEmpty()) {
-        return buildString {
-            appendLine()
-            append("**Recent Chats**")
-            appendLine()
-            append("These are some of the user's recent conversations. You can use them to understand user preferences:")
-            appendLine()
-            val json = buildJsonArray {
-                recentConversations.forEach { conversation ->
-                    add(buildJsonObject {
-                        put("title", conversation.title)
-                        put("last_chat", conversation.updateAt.toLocalDate())
-                    })
-                }
-            }
-            append(JsonInstantPretty.encodeToString(json))
-            appendLine()
-        }
-    }
-    return ""
-}
