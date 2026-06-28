@@ -25,6 +25,7 @@ import net.weero.measix.pilot.data.db.fts.MessageFtsManager
 import net.weero.measix.pilot.data.db.fts.SimpleDictManager
 import net.weero.measix.pilot.data.db.migrations.Migration_1_2
 import net.weero.measix.pilot.data.ai.mcp.McpManager
+import net.weero.measix.pilot.data.ai.mcp.NetworkMonitor
 import net.weero.measix.pilot.data.sync.webdav.WebDavSync
 import me.rerere.search.SearchService
 import net.weero.measix.pilot.data.sync.S3Sync
@@ -139,7 +140,9 @@ val dataSourceModule = module {
         MessageFtsManager(get())
     }
 
-    single { McpManager(settingsStore = get(), appScope = get(), filesManager = get()) }
+    single { McpManager(settingsStore = get(), appScope = get(), filesManager = get(), networkMonitor = get()) }
+
+    single { NetworkMonitor(get()) }
 
     single {
         GenerationHandler(

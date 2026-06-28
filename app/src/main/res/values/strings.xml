@@ -780,6 +780,12 @@
   <string name="setting_page_interaction_notification_settings">Interaction &amp;amp; Notifications</string>
   <string name="setting_page_mcp">MCP</string>
   <string name="setting_page_mcp_desc">Configure MCP Servers</string>
+  <string name="mcp_status_idle">Idle</string>
+  <string name="mcp_status_connecting">Connecting</string>
+  <string name="mcp_status_connected">Connected</string>
+  <string name="mcp_status_reconnecting">Reconnecting (%1$d/%2$d)</string>
+  <string name="mcp_status_dormant">Dormant, retrying in %1$d seconds</string>
+  <string name="mcp_status_error">Error: %1$s</string>
   <string name="setting_page_message_display_settings">Message Display</string>
   <string name="setting_page_model_and_services">Models &amp; Services</string>
   <string name="setting_page_no_share_app">No sharing app found</string>

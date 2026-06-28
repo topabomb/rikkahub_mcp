@@ -1,4 +1,6 @@
-﻿package net.weero.measix.pilot
+﻿@file:Suppress("OPT_IN_IS_NOT_ENABLED")
+
+package net.weero.measix.pilot
 
 import android.annotation.SuppressLint
 import android.content.Intent
@@ -48,6 +50,7 @@ import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import coil3.ImageLoader
+import coil3.annotation.ExperimentalCoilApi
 import coil3.compose.setSingletonImageLoaderFactory
 import coil3.gif.AnimatedImageDecoder
 import coil3.gif.GifDecoder
@@ -170,6 +173,7 @@ class RouteActivity : ComponentActivity() {
                     ImageLoader.Builder(context)
                         .crossfade(true)
                         .components {
+                            @OptIn(ExperimentalCoilApi::class)
                             add(OkHttpNetworkFetcherFactory(
                                 callFactory = { okHttpClient },
                                 cacheStrategy = { CacheControlCacheStrategy() },
@@ -228,7 +232,8 @@ class RouteActivity : ComponentActivity() {
             navStack?.add(Screen.Chat(text))
         }    }
 
-    @OptIn(ExperimentalComposeUiApi::class)
+    @OptIn(ExperimentalComposeUiApi::class, ExperimentalCoilApi::class)
+    @Suppress("OPT_IN_IS_NOT_ENABLED")
     @Composable
     fun AppRoutes() {
         val toastState = rememberToasterState()

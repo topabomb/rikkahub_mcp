@@ -535,7 +535,33 @@ fun UIMessage.finishPendingTools(
     transform: (UIMessagePart.Tool) -> UIMessagePart.Tool
 ): UIMessage {
     val updatedParts = parts.map { part ->
-        if (part is UIMessagePart.Tool && !part.isExecuted) {
+        if (part is UIMessagePart.Tool && !part.isExecuted && part.approvalState is ToolApprovalState.Pending) {
+            transform(part)
+        } else {
+            part
+        }
+    }
+
+    if (updatedParts == parts) {
+        return this
+    }
+
+    return copy(
+        parts = updatedParts,
+        finishedAt = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
+    ).finishReasoning()
+}
+
+/**
+ * 标记执行中断的工具（output 为空但 approvalState 非 Pending）。
+ * 用于超时/异常导致工具执行被中断但未被正常清理的场景。
+ * 保留原 approvalState（不标记为 Denied），仅填充中断标记 output。
+ */
+fun UIMessage.finishInterruptedTools(
+    transform: (UIMessagePart.Tool) -> UIMessagePart.Tool
+): UIMessage {
+    val updatedParts = parts.map { part ->
+        if (part is UIMessagePart.Tool && !part.isExecuted && part.approvalState !is ToolApprovalState.Pending) {
             transform(part)
         } else {
             part

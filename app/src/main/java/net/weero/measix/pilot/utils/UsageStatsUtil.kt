@@ -16,6 +16,7 @@ private const val TAG = "UsageStatsUtil"
  */
 fun Context.hasUsageStatsPermission(): Boolean {
     val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+    @Suppress("DEPRECATION")
     val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         appOps.unsafeCheckOpNoThrow(
             AppOpsManager.OPSTR_GET_USAGE_STATS,

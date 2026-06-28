@@ -43,6 +43,7 @@ import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.canResumeToolExecution
+import me.rerere.ai.ui.finishInterruptedTools
 import me.rerere.ai.ui.finishPendingTools
 import me.rerere.ai.ui.finishReasoning
 import me.rerere.ai.ui.isEmptyInputMessage
@@ -519,7 +520,7 @@ class ChatService(
 
             // memory tool
             if (!model.abilities.contains(ModelAbility.TOOL)) {
-                if (settings.enableWebSearch || mcpManager.getAllAvailableTools().isNotEmpty()) {
+                if (settings.enableWebSearch || mcpManager.getAllAvailableTools(assistant).isNotEmpty()) {
                     addError(
                         IllegalStateException(context.getString(R.string.tools_warning)),
                         conversationId,
@@ -581,7 +582,7 @@ class ChatService(
                             )
                         )
                     }
-                    mcpManager.getAllAvailableTools().also { allTools ->
+                    mcpManager.getAllAvailableTools(assistant).also { allTools ->
                         val invalidNames = allTools
                             .map { it.second }
                             .distinct()
@@ -668,8 +669,8 @@ class ChatService(
 
             it.printStackTrace()
             addError(it, conversationId, title = context.getString(R.string.error_title_generation))
-            Logging.log(TAG, "handleMessageComplete: $it")
-            Logging.log(TAG, it.stackTraceToString())
+            Logging.log(TAG, "handleMessageComplete failed: ${it.message}")
+            Logging.log(TAG, it.stackTraceToString().lines().take(6).joinToString("\n"))
 
             // loop 异常失败: 排除用户主动取消 (runCatching 会捕获 CancellationException, 需手动过滤)
             if (it !is CancellationException && isForeground.value && settings.displaySetting.enableMessageGenerationSoundEffect) {
@@ -769,11 +770,32 @@ class ChatService(
         )
     }
 
+    /**
+     * 标记执行中断的工具（超时、异常等导致 output 为空但 approvalState 非 Pending）。
+     * 与 [cancelToolByUser] 区分: 这不是用户主动取消，而是执行过程中被中断。
+     * 保留原 approvalState（Auto/Approved），不标记为 Denied。
+     */
+    private fun markInterruptedTool(tool: UIMessagePart.Tool): UIMessagePart.Tool {
+        return tool.copy(
+            output = listOf(
+                UIMessagePart.Text(
+                    """{"status":"interrupted","error":"Tool execution was interrupted before completion."}"""
+                )
+            )
+        )
+    }
+
     private suspend fun finishInterruptedPendingTools(conversationId: Uuid) {
         val currentConversation = getConversationFlow(conversationId).value
         val lastNode = currentConversation.messageNodes.lastOrNull() ?: return
         val lastMessage = lastNode.currentMessage
-        val updatedMessage = lastMessage.finishPendingTools(::cancelToolByUser)
+
+        // 1. 处理 Pending 工具（等待用户审批但被中断）→ 标记为用户取消
+        var updatedMessage = lastMessage.finishPendingTools(::cancelToolByUser)
+
+        // 2. 处理执行中断的工具（非 Pending 但 output 为空，如超时/异常中断）→ 标记为中断
+        updatedMessage = updatedMessage.finishInterruptedTools(::markInterruptedTool)
+
         if (updatedMessage == lastMessage) {
             return
         }

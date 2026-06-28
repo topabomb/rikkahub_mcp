@@ -15,6 +15,8 @@ import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.Upload02
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Share01
+import me.rerere.hugeicons.stroke.Clock02
+import kotlin.uuid.Uuid
 import android.content.Intent
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -218,11 +220,11 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
         containerColor = CustomColors.topBarColors.containerColor
     ) { innerPadding ->
         val mcpManager = koinInject<McpManager>()
-        val status by mcpManager.syncingStatus.collectAsStateWithLifecycle()
+        val status: Map<Uuid, McpStatus> by mcpManager.syncingStatus.collectAsStateWithLifecycle()
         val scope = rememberCoroutineScope()
         val state = rememberPullToRefreshState()
         val loading = mcpConfigs.any { it.commonOptions.enable } &&
-            status.values.any { it == McpStatus.Connecting || it is McpStatus.Reconnecting }
+            status.values.any { it == McpStatus.Connecting || it is McpStatus.Reconnecting || it is McpStatus.Dormant }
         PullToRefreshBox(
             isRefreshing = loading,
             onRefresh = {
@@ -337,7 +339,7 @@ private fun McpServerItem(
     onShare: () -> Unit,
 ) {
     val mcpManager = koinInject<McpManager>()
-    val status by mcpManager.getStatus(item).collectAsStateWithLifecycle(McpStatus.Idle)
+    val status by mcpManager.getStatus(item.id).collectAsStateWithLifecycle(McpStatus.Idle)
     val dismissBoxState = rememberSwipeToDismissBoxState()
     val scope = rememberCoroutineScope()
     SwipeToDismissBox(
@@ -392,6 +394,7 @@ private fun McpServerItem(
                     is McpStatus.Reconnecting -> CircularProgressIndicator(
                         modifier = Modifier.size(24.dp)
                     )
+                    is McpStatus.Dormant -> Icon(HugeIcons.Clock02, null)
                     is McpStatus.Error -> Icon(HugeIcons.AlertCircle, null)
                 }
 
@@ -433,6 +436,24 @@ private fun McpServerItem(
                     if (status is McpStatus.Error) {
                         Text(
                             text = (status as McpStatus.Error).message,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (status is McpStatus.Reconnecting) {
+                        Text(
+                            text = stringResource(R.string.mcp_status_reconnecting, (status as McpStatus.Reconnecting).attempt, (status as McpStatus.Reconnecting).maxAttempts),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (status is McpStatus.Dormant) {
+                        Text(
+                            text = stringResource(R.string.mcp_status_dormant, ((status as McpStatus.Dormant).nextRetryInMs / 1000).toInt()),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.error,
                             maxLines = 3,
@@ -874,7 +895,7 @@ private fun McpToolsConfigure(
         verticalArrangement = Arrangement.spacedBy(8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        if (mcpManager.getClient(config) == null) {
+        if (mcpManager.getClient(config.id) == null) {
             item {
                 Text(stringResource(R.string.setting_mcp_page_tools_unavailable_message))
             }

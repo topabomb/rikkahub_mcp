@@ -45,6 +45,8 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Alert01
 import me.rerere.hugeicons.stroke.Icon1stBracket
 import me.rerere.hugeicons.stroke.McpServer
+import me.rerere.hugeicons.stroke.Clock02
+import kotlin.uuid.Uuid
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
@@ -64,7 +66,7 @@ fun McpPickerButton(
     onUpdateAssistant: (Assistant) -> Unit
 ) {
     var showMcpPicker by remember { mutableStateOf(false) }
-    val status by mcpManager.syncingStatus.collectAsStateWithLifecycle()
+    val status: Map<Uuid, McpStatus> by mcpManager.syncingStatus.collectAsStateWithLifecycle()
     val enabledServers = servers.fastFilter {
         it.commonOptions.enable && assistant.mcpServers.contains(it.id)
     }
@@ -168,7 +170,7 @@ fun McpPickerListItem(
     onUpdateAssistant: (Assistant) -> Unit
 ) {
     var showMcpPicker by remember { mutableStateOf(false) }
-    val status by mcpManager.syncingStatus.collectAsStateWithLifecycle()
+    val status: Map<Uuid, McpStatus> by mcpManager.syncingStatus.collectAsStateWithLifecycle()
     val enabledServers = servers.fastFilter {
         it.commonOptions.enable && assistant.mcpServers.contains(it.id)
     }
@@ -284,7 +286,7 @@ fun McpPicker(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         items(servers.fastFilter { it.commonOptions.enable }) { server ->
-            val status by mcpManager.getStatus(server).collectAsStateWithLifecycle(McpStatus.Idle)
+            val status by mcpManager.getStatus(server.id).collectAsStateWithLifecycle(McpStatus.Idle)
             Card {
                 Row(
                     modifier = Modifier
@@ -305,6 +307,7 @@ fun McpPicker(
                         is McpStatus.Reconnecting -> CircularProgressIndicator(
                             modifier = Modifier.size(24.dp)
                         )
+                        is McpStatus.Dormant -> Icon(HugeIcons.Clock02, null)
                         is McpStatus.Error -> Icon(HugeIcons.Alert01, null)
                     }
                     Column(
@@ -317,11 +320,12 @@ fun McpPicker(
                         )
                         Text(
                             text = when (val s = status) {
-                                is McpStatus.Idle -> "Idle"
-                                is McpStatus.Connecting -> "Connecting"
-                                is McpStatus.Connected -> "Connected"
-                                is McpStatus.Reconnecting -> "Reconnecting (${s.attempt}/${s.maxAttempts})"
-                                is McpStatus.Error -> "Error: ${s.message}"
+                                is McpStatus.Idle -> stringResource(R.string.mcp_status_idle)
+                                is McpStatus.Connecting -> stringResource(R.string.mcp_status_connecting)
+                                is McpStatus.Connected -> stringResource(R.string.mcp_status_connected)
+                                is McpStatus.Reconnecting -> stringResource(R.string.mcp_status_reconnecting, s.attempt, s.maxAttempts)
+                                is McpStatus.Dormant -> stringResource(R.string.mcp_status_dormant, (s.nextRetryInMs / 1000).toInt())
+                                is McpStatus.Error -> stringResource(R.string.mcp_status_error, s.message)
                             },
                             style = MaterialTheme.typography.labelSmall,
                             color = LocalContentColor.current.copy(alpha = 0.8f),

@@ -757,6 +757,12 @@
   <string name="setting_page_interaction_notification_settings">Взаимодействие и уведомления</string>
   <string name="setting_page_mcp">MCP</string>
   <string name="setting_page_mcp_desc">Настроить серверы MCP</string>
+  <string name="mcp_status_idle">Простой</string>
+  <string name="mcp_status_connecting">Подключение</string>
+  <string name="mcp_status_connected">Подключено</string>
+  <string name="mcp_status_reconnecting">Переподключение (%1$d/%2$d)</string>
+  <string name="mcp_status_dormant">Спящий режим, повтор через %1$d сек.</string>
+  <string name="mcp_status_error">Ошибка: %1$s</string>
   <string name="setting_page_message_display_settings">Отображение сообщений</string>
   <string name="setting_page_model_and_services">Модели и службы</string>
   <string name="setting_page_no_share_app">Приложение для обмена не найдено</string>

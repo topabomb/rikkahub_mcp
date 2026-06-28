@@ -3,6 +3,7 @@
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -93,7 +94,7 @@ class GenerationHandler(
 
             val toolsInternal = buildList {
                 Log.i(TAG, "generateInternal: build tools($assistant)")
-                if (assistant?.enableMemory == true) {
+                if (assistant.enableMemory) {
                     val memoryAssistantId = if (assistant.useGlobalMemory) {
                         MemoryRepository.GLOBAL_MEMORY_ID
                     } else {
@@ -288,9 +289,28 @@ class GenerationHandler(
                                 output = maybeTruncateToolOutput(tool.toolCallId, result, hasShellAccess)
                             )
                         }.onFailure {
-                            // 取消必须向上传播，否则停止生成会被误报为工具执行错误
+                            // 1. 工具超时: TimeoutCancellationException 是 CancellationException 子类
+                            //    → 降级为错误 JSON 返回给 AI，不中断对话
+                            if (it is TimeoutCancellationException) {
+                                Log.w(TAG, "Tool ${tool.toolName} timed out: ${it.message}")
+                                executedTools += tool.copy(
+                                    output = listOf(
+                                        UIMessagePart.Text(
+                                            json.encodeToString(
+                                                buildJsonObject {
+                                                    put("error", JsonPrimitive("Tool '${tool.toolName}' timed out"))
+                                                    put("type", JsonPrimitive("timeout"))
+                                                }
+                                            )
+                                        )
+                                    )
+                                )
+                                return@onFailure
+                            }
+                            // 2. 取消必须向上传播，否则停止生成会被误报为工具执行错误
                             if (it is CancellationException) throw it
-                            it.printStackTrace()
+                            // 3. 其他异常: 包装为结构化错误 JSON 返回给 AI
+                            Log.w(TAG, "Tool ${tool.toolName} failed: ${it.message}", it)
                             executedTools += tool.copy(
                                 output = listOf(
                                     UIMessagePart.Text(
@@ -298,11 +318,9 @@ class GenerationHandler(
                                             buildJsonObject {
                                                 put(
                                                     "error",
-                                                    JsonPrimitive(buildString {
-                                                        append("[${it.javaClass.name}] ${it.message}")
-                                                        append("\n${it.stackTraceToString()}")
-                                                    })
+                                                    JsonPrimitive("[${it.javaClass.simpleName}] ${it.message ?: "Unknown error"}")
                                                 )
+                                                put("type", JsonPrimitive("error"))
                                             }
                                         )
                                     )

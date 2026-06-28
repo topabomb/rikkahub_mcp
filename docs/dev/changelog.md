@@ -6,6 +6,42 @@
 
 ---
 
+## 0.0.7（versionCode 7）— 2026-06-27/28
+
+### MCP 生命周期架构级重构
+
+> 详细技术分析见 `docs/dev/mcp-lifecycle-analysis.md`，本节为功能摘要。
+
+**三条恢复链**覆盖移动端全部场景：① settings 变更 → add/remove Client；② `ProcessLifecycleOwner.onStart` → syncAll 健康检查；③ `ConnectivityManager.NetworkCallback.onAvailable` → syncAll（WiFi↔蜂窝切换，比 transport.onClose 快 10-30s）。
+
+**重连分层**：5 次指数退避（31s 总计）→ Dormant 休眠（60s × 30 次 = 30 分钟兜底）→ Error。网络离线时不消耗重连尝试（省电），每 10s 检查恢复。
+
+**工具执行**：四级异常分级（超时→降级文本 / 取消→传播 / 连接错误→重连 / 其他→错误文本）；`finishPendingTools`（仅 Pending）+ `finishInterruptedTools`（非 Pending 中断）互补处理，根治超时工具误报"已拒绝"。
+
+**架构**：SettingsStore（配置唯一数据源）、McpManager（连接+状态+策略，Uuid key + per-server Mutex + cleanupServer）、ChatService（按助手过滤消费）。状态机 6 态含 Dormant，UI 全部状态有图标+文案。
+
+**质量**：32+8 回归测试 / 15 处 runCatching CancellationException 审计 / 通知 `tools/list_changed` / 5 locale 翻译。
+
+**日志质量**：消息上限 500 字符防 UI 撑爆；TextLog 配额 400（翻倍）彻底消除跨 tag 挤占；工具调用日志改为结果导向（成功/失败/超时），去除 "Calling tool" 噪声；失败日志追加异常类名（如 `McpError`）；ChatService/FilesManager 不再写完整 stack trace 到 LogPage（仅保留 message + 前 5 帧）；通知处理器和 closeClient 失败路径补日志。
+
+#### Bug 修复摘要
+
+| 问题 | 严重 | 修复方式 |
+|------|------|----------|
+| stale state：停启 MCP 服务器后会话故障 | **致命** | cleanupServer() + syncAll() 重建 |
+| 自取消：reconnectClient 取消自身 Job | **致命** | closeClient（不取消 Job）/ cancelAllJobs 拆分 |
+| 计数器回溯：cleanupServer 清除计数 → 永远不进 Dormant | **致命** | 仅在 removeClient 时重置 |
+| syncAll 死锁：持 Mutex 调 addClient | **致命** | 外部持锁后调用 |
+| CancellationException 被吞：runCatching 未 rethrow | 高 | 15 处全部 audit |
+| TimeoutCancellationException 误中断对话 | 高 | 优先于 CancellationException 检测 |
+| "已拒绝"误报：非 Pending 工具被标记 Denied | 高 | finishPendingTools→Pending only + finishInterruptedTools 新增 |
+| callTool 绕生命周期：transport==null 时直连 | 高 | 改为触发正常重连 |
+| syncAll 假 Error：stale client 不重连 | 中 | transport==null → addClient |
+| Logging 不分类型：请求日志挤掉生命周期日志 | 中 | 独立配额 200/100 |
+| 硬编码英文状态字符串 | 低 | stringResource + 5 locale |
+
+---
+
 ## 0.0.6（versionCode 6）— 2026-06-27
 
 ### 新增

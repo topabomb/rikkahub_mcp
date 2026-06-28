@@ -985,3 +985,105 @@ clients[newConfig] = client
 | clients Map key 是 config 对象 | 低 | sync 期间 getClient 可能返回 null | sync 执行期间 |
 | 重连期间工具调用失败 | 中 | 瞬态错误 | 重连期间调用工具 |
 | 无状态恢复机制 | 低 | 应用重启后状态重置 | 应用重启 |
+
+---
+
+## 十三、改进落地（0.0.7）
+
+> 以下问题已在 0.0.7 版本中修复，详见 `changelog.md`。
+
+### 改进对照表
+
+| 原问题 | 严重程度 | 改进措施 | 状态 |
+|--------|----------|----------|------|
+| 达到最大重连次数后不会自动恢复 | **高** | 新增 `Dormant` 状态：快速 5 次重连失败后进入休眠，60s 周期重试最多 30 次（共 30 分钟兜底窗口） | ✅ 已修复 |
+| callTool 失败不触发重连 | 中 | callTool 区分连接错误（触发 `scheduleReconnect`）与工具错误（仅标记 Error） | ✅ 已修复 |
+| 重连期间工具调用失败 | 中 | per-server `Mutex` 序列化 + `cleanupServer()` 统一清理后重建，消除窗口期 | ✅ 已修复 |
+| Reconnecting 状态下配置被禁用时状态不清理 | 低 | `scheduleReconnect`/`enterDormant` 每次重试前检查 `enable`，禁用时 `cleanupServer` + 移除 status | ✅ 已修复 |
+| addClient/removeClient 并行竞态 | 低 | per-server `Mutex` 序列化所有操作（addClient/removeClient/callTool/syncTools/reconnectClient） | ✅ 已修复 |
+| clients Map key 是 config 对象 | 低 | key 改为 `Uuid`，sync 更新 tools 不再改变 key | ✅ 已修复 |
+| sync 触发 settingsFlow 连锁反应 | 低 | 保留（可接受开销）：connectionKey 不含 tools，settingsFlow 触发后 init block 无实际操作 | ✅ 已评估可接受 |
+| 无状态恢复机制 | 低 | 保留（设计决策）：内存状态重启后重置是正确行为 | ✅ 设计合理 |
+| **[新] syncAll 死锁** | **致命** | `syncAll` 不在持有 Mutex 时调用 `addClient`（Mutex 非重入） | ✅ 已修复 |
+| **[新] 无工具变更通知** | 中 | 接入 `notifications/tools/list_changed`，服务器工具变更自动 sync | ✅ 已新增 |
+| **[新] stale state（停止→开启服务器）** | **高** | `cleanupServer()` 彻底清理 + `syncAll()` 重建断连连接，模拟"退出重进"效果 | ✅ 已修复 |
+| **[新] 硬编码字符串** | 中 | MCP 状态字符串改用 stringResource，补充 5 locale 翻译 | ✅ 已修复 |
+
+### 架构变更
+
+#### 状态机（0.0.7）
+
+```kotlin
+sealed class McpStatus {
+    data object Idle : McpStatus()
+    data object Connecting : McpStatus()
+    data object Connected : McpStatus()
+    data class Reconnecting(val attempt: Int, val maxAttempts: Int) : McpStatus()
+    data class Dormant(val nextRetryInMs: Long) : McpStatus()  // 新增
+    data class Error(val message: String) : McpStatus()
+}
+```
+
+#### McpManager 成员变量（0.0.7）
+
+| 变量 | 类型 | 变更说明 |
+|------|------|----------|
+| `clients` | `ConcurrentHashMap<Uuid, Client>` | key 从 `McpServerConfig` 改为 `Uuid` |
+| `_status` | `MutableStateFlow<Map<Uuid, McpStatus>>` | 新增 `Dormant` 子状态 |
+| `serverLocks` | `ConcurrentHashMap<Uuid, Mutex>` | **新增**：per-server 互斥锁 |
+| `dormantJobs` | `ConcurrentHashMap<Uuid, Job>` | **新增**：Dormant 周期重试协程 |
+| `reconnectJobs` | `ConcurrentHashMap<Uuid, Job>` | 类型从 MutableMap 改为 ConcurrentHashMap |
+| `reconnectAttempts` | `ConcurrentHashMap<Uuid, Int>` | 类型从 MutableMap 改为 ConcurrentHashMap |
+
+#### 重连分层（0.0.7）
+
+```
+transport 断连 (onClose/onError)
+  ↓ 仅在 Connected 状态时触发
+scheduleReconnect(configId)
+  ↓ 快速重连: 5次指数退避 (1s→2s→4s→8s→16s)
+  ↓ 失败超过上限
+enterDormant(configId)
+  ↓ 休眠重试: 60s × 30次 (共 30 分钟兜底窗口)
+  ↓ 全部失败
+Error("MCP reconnect failed after 30 dormant retries")
+```
+
+#### 数据同步链路（0.0.7）
+
+```
+server schema 变更
+  → tools/list_changed 通知 (新增)
+  → McpManager.syncTools()
+  → mergeTools(serverSchema, 现有偏好)
+  → 写回 settingsStore (保留 enable/needsApproval)
+
+用户改偏好 (enable/needsApproval)
+  → 直接写 settingsStore
+  → 下次 getAllAvailableTools 读到新值
+
+getAllAvailableTools(assistant)
+  → 从 settingsStore 读 (唯一数据源)
+  → 按 assistant.mcpServers 过滤
+```
+
+#### 职责分层（0.0.7）
+
+```
+SettingsStore（配置 + 工具缓存层，唯一持久化数据源）
+  └─ Settings.mcpServers: List<McpServerConfig>
+     — McpCommonOptions 保留 tools 字段（混合 schema + 用户偏好）
+     — sync 写回此处，getAllAvailableTools 直接读取
+
+McpManager（连接 + 状态机层，纯内存态）
+  ├─ 连接池: ConcurrentHashMap<Uuid, Client>
+  ├─ 状态机: StateFlow<Map<Uuid, McpStatus>> (6 态)
+  ├─ 重连: 快速 5 次 → Dormant 60s×30 周期（30 分钟兜底窗口）+ 离线感知跳过
+  ├─ 恢复链: settings Flow / ProcessLifecycle onStart / NetworkCallback onAvailable
+  ├─ 通知: setNotificationHandler<ToolListChangedNotification>
+  ├─ per-server Mutex: 序列化所有操作
+  └─ cleanupServer: 统一彻底清理
+
+ChatService（消费层）
+  └─ getAllAvailableTools(assistant) — 按 assistant 候选集过滤
+```

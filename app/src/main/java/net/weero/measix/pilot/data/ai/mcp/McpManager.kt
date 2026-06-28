@@ -1,16 +1,25 @@
 ﻿package net.weero.measix.pilot.data.ai.mcp
 
+import androidx.annotation.VisibleForTesting
 import android.util.Log
 import androidx.core.net.toUri
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import io.ktor.client.HttpClient
+import me.rerere.common.android.Logging
+import net.weero.measix.pilot.data.ai.RequestLoggingInterceptor
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.sse.SSE
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.util.StringValues
 import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.client.ClientOptions
 import io.modelcontextprotocol.kotlin.sdk.client.SseClientTransport
 import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpClientTransport
+import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpError
+import io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities
 import io.modelcontextprotocol.kotlin.sdk.shared.AbstractTransport
 import io.modelcontextprotocol.kotlin.sdk.shared.RequestOptions
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
@@ -18,15 +27,23 @@ import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams
 import io.modelcontextprotocol.kotlin.sdk.types.ImageContent
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
+import io.modelcontextprotocol.kotlin.sdk.types.ToolListChangedNotification
+import io.modelcontextprotocol.kotlin.sdk.types.Method.Defined.NotificationsToolsListChanged
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.ClassDiscriminatorMode
 import kotlinx.serialization.json.Json
@@ -34,36 +51,65 @@ import kotlinx.serialization.json.JsonObject
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.getCurrentAssistant
+import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.files.saveUploadFromBytes
 import net.weero.measix.pilot.utils.JsonInstant
-import net.weero.measix.pilot.utils.checkDifferent
 import okhttp3.OkHttpClient
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.io.encoding.Base64
 import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.Uuid
 
 private const val TAG = "McpManager"
-private const val MAX_RECONNECT_ATTEMPTS = 5
-private const val BASE_RECONNECT_DELAY_MS = 1000L
-private const val MAX_RECONNECT_DELAY_MS = 30000L
 
+/**
+ * MCP 服务器连接管理器
+ *
+ * 职责:
+ * 1. **连接生命周期**: 管理 Client 连接池，响应 settings 变更自动 add/remove
+ * 2. **重连策略**: transport 断连 → 指数退避（5次）→ Dormant 长间隔兜底（10次×60s）→ Error
+ * 3. **网络感知**: NetworkCallback 网络恢复 → 主动 syncAll；离线时跳过重连节省电池
+ * 4. **前台恢复**: ProcessLifecycle onStart → syncAll 健康检查
+ * 5. **工具管理**: 连接成功后 syncTools 拉取 schema + 合并用户偏好；监听 list_changed 通知
+ * 6. **状态追踪**: StateFlow<Map<Uuid, McpStatus>> 驱动 UI 实时显示连接状态
+ *
+ * 线程安全:
+ * - 每个 server 有独立的 Mutex，序列化所有操作（connect/reconnect/syncTools/callTool）
+ * - clients/reconnectJobs/dormantJobs 使用 ConcurrentHashMap
+ *
+ * 关键设计决策:
+ * - reconnectClient 只调用 closeClient（不取消自身运行的 reconnectJob），否则 connect() 会抛 CancellationException
+ * - 所有 runCatching 均显式 rethrow CancellationException，防止破坏结构化并发
+ * - transport.onClose/onError 回调仅在 Connected 状态下触发重连，避免重复触发
+ */
 class McpManager(
     private val settingsStore: SettingsStore,
     private val appScope: AppScope,
     private val filesManager: FilesManager,
+    private val networkMonitor: NetworkMonitor,
 ) {
+    companion object {
+        const val MAX_RECONNECT_ATTEMPTS = 5
+        const val BASE_RECONNECT_DELAY_MS = 1000L
+        const val MAX_RECONNECT_DELAY_MS = 30000L
+        const val DORMANT_RETRY_INTERVAL_MS = 60_000L
+        const val DORMANT_MAX_RETRIES = 30
+        /** 离线时重连检查间隔：不执行实际重连，仅检查网络是否恢复 */
+        const val OFFLINE_CHECK_INTERVAL_MS = 10_000L
+    }
+
     private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.MINUTES)
         .writeTimeout(120, TimeUnit.SECONDS)
         .followSslRedirects(true)
         .followRedirects(true)
+        .addNetworkInterceptor(RequestLoggingInterceptor())
         .build()
 
-    private val client = HttpClient(OkHttp) {
+    private val ktorClient = HttpClient(OkHttp) {
         engine {
             preconfigured = okHttpClient
         }
@@ -76,89 +122,120 @@ class McpManager(
         install(SSE)
     }
 
-    private val clients: MutableMap<McpServerConfig, Client> = mutableMapOf()
-    private val reconnectJobs: MutableMap<Uuid, Job> = mutableMapOf()
-    private val reconnectAttempts: MutableMap<Uuid, Int> = mutableMapOf()
-    val syncingStatus = MutableStateFlow<Map<Uuid, McpStatus>>(mapOf())
+    // === 连接池 ===
+    private val clients = ConcurrentHashMap<Uuid, Client>()
 
+    // === 状态机 ===
+    private val _status = MutableStateFlow<Map<Uuid, McpStatus>>(emptyMap())
+    val syncingStatus: StateFlow<Map<Uuid, McpStatus>> = _status
+
+    // === 重连管理 ===
+    private val reconnectJobs = ConcurrentHashMap<Uuid, Job>()
+    private val dormantJobs = ConcurrentHashMap<Uuid, Job>()
+    private val reconnectAttempts = ConcurrentHashMap<Uuid, Int>()
+
+    // === per-server 互斥锁 ===
+    private val serverLocks = ConcurrentHashMap<Uuid, Mutex>()
+    private fun getServerLock(serverId: Uuid) = serverLocks.getOrPut(serverId) { Mutex() }
+
+    // === 日志辅助: Logcat + LogPage ===
+    private fun logMcp(serverName: String, message: String) {
+        Log.i(TAG, "[$serverName] $message")
+        Logging.log("MCP", "[$serverName] $message")
+    }
+
+    // init: 三条恢复链
     init {
+        // 链 1: settings 变更 → 自动 add/remove
         appScope.launch {
             settingsStore.settingsFlow
-                .map { settings -> settings.mcpServers }
-                .collect { mcpServerConfigs ->
-                    runCatching {
-                        Log.i(TAG, "update configs: $mcpServerConfigs")
-                        val newConfigs = mcpServerConfigs.filter { it.commonOptions.enable && it.commonOptions.name.isNotBlank() }
-                        val currentConfigs = clients.keys.toList()
-                        val (toAdd, toRemove) = currentConfigs.checkDifferent(
-                            other = newConfigs,
-                            eq = { a, b -> a.connectionKey == b.connectionKey }
-                        )
-                        Log.i(TAG, "to_add: $toAdd")
-                        Log.i(TAG, "to_remove: $toRemove")
-                        toAdd.forEach { cfg ->
-                            appScope.launch {
-                                runCatching { addClient(cfg) }
-                                    .onFailure { it.printStackTrace() }
-                            }
-                        }
-                        toRemove.forEach { cfg ->
-                            appScope.launch { removeClient(cfg) }
-                        }
-                    }.onFailure {
-                        it.printStackTrace()
-                    }
+                .map { it.mcpServers }
+                .distinctUntilChanged()
+                .collect { configs ->
+                    val enabled = configs.filter { it.commonOptions.enable && it.commonOptions.name.isNotBlank() }
+                    val enabledIds = enabled.map { it.id }.toSet()
+                    val currentIds = clients.keys
+                    enabled.filter { it.id !in currentIds }.forEach { appScope.launch { addClient(it) } }
+                    currentIds.filter { it !in enabledIds }.forEach { id -> appScope.launch { removeClient(id) } }
                 }
+        }
+
+        // 链 2: 前台恢复 → syncAll（OS 可能在后台静默断开 SSE/HTTP）
+        ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
+            override fun onStart(owner: LifecycleOwner) {
+                if (clients.isNotEmpty()) {
+                    appScope.launch { syncAll() }
+                }
+            }
+        })
+
+        // 链 3: 网络恢复 → syncAll（WiFi↔蜂窝切换、离线恢复后主动重建）
+        // 这是最可靠的恢复信号，比 transport.onClose 回调快 10-30s
+        networkMonitor.onNetworkAvailable = {
+            appScope.launch { syncAll() }
         }
     }
 
-    fun getClient(config: McpServerConfig): Client? {
-        return clients.entries.find { it.key.id == config.id }?.value
-    }
+    fun getClient(serverId: Uuid): Client? = clients[serverId]
 
-    fun getAllAvailableTools(): List<Triple<Uuid, String, McpTool>> {
+    fun getAllAvailableTools(assistant: Assistant): List<Triple<Uuid, String, McpTool>> {
         val settings = settingsStore.settingsFlow.value
-        val assistant = settings.getCurrentAssistant()
         return settings.mcpServers
-            .filter {
-                it.commonOptions.enable && it.id in assistant.mcpServers
-            }
+            .filter { it.commonOptions.enable && it.id in assistant.mcpServers }
             .flatMap { server ->
                 server.commonOptions.tools
-                    .filter { tool -> tool.enable }
-                    .map { tool -> Triple(server.id, server.commonOptions.name, tool) }
+                    .filter { it.enable }
+                    .map { Triple(server.id, server.commonOptions.name, it) }
             }
     }
 
     suspend fun callTool(serverId: Uuid, toolName: String, args: JsonObject): List<UIMessagePart> {
-        val entry = clients.entries.find { it.key.id == serverId }
-        val client = entry?.value
-            ?: return listOf(UIMessagePart.Text("Failed to execute tool, because no such mcp client for the tool"))
-        val config = entry.key
-        Log.i(TAG, "callTool: $toolName / $args (server: ${config.commonOptions.name})")
+        return getServerLock(serverId).withLock {
+            val client = clients[serverId]
+                ?: return@withLock listOf(UIMessagePart.Text("MCP server not connected"))
+            val config = settingsStore.settingsFlow.value.mcpServers.find { it.id == serverId }
+                ?: return@withLock listOf(UIMessagePart.Text("MCP server config not found"))
 
-        return runCatching {
-            if (client.transport == null) client.connect(getTransport(config))
-            val result = client.callTool(
-                request = CallToolRequest(
-                    params = CallToolRequestParams(
-                        name = toolName,
-                        arguments = args,
-                    ),
-                ),
-                options = RequestOptions(timeout = 120.seconds),
-            )
-            result.content.map {
-                when (it) {
-                    is TextContent -> UIMessagePart.Text(it.text)
-                    is ImageContent -> convertImageContentToFilePart(it)
-                    else -> UIMessagePart.Text(JsonInstant.encodeToString(it))
-                }
+            if (client.transport == null) {
+                setStatus(serverId, McpStatus.Reconnecting(1, MAX_RECONNECT_ATTEMPTS))
+                scheduleReconnect(serverId)
+                return@withLock listOf(UIMessagePart.Text("MCP server not connected, reconnecting"))
             }
-        }.onFailure { e ->
-            setStatus(config, McpStatus.Error(e.message ?: e.javaClass.name))
-        }.getOrElse { e ->
-            listOf(UIMessagePart.Text("Failed to execute tool: ${e.message}"))
+
+            val serverName = config.commonOptions.name
+
+            runCatching {
+                val result = client.callTool(
+                    CallToolRequest(CallToolRequestParams(name = toolName, arguments = args)),
+                    RequestOptions(timeout = 120.seconds)
+                )
+                result.content.map {
+                    when (it) {
+                        is TextContent -> UIMessagePart.Text(it.text)
+                        is ImageContent -> convertImageContentToFilePart(it)
+                        else -> UIMessagePart.Text(JsonInstant.encodeToString(it))
+                    }
+                }.also { logMcp(serverName, "Tool '$toolName' succeeded") }
+            }.getOrElse { e ->
+                // 1. 工具超时: TimeoutCancellationException 是 CancellationException 子类，但表示工具超时
+                //    → 降级为错误文本返回给 AI，不中断对话，不重连（服务器还活着）
+                if (e is kotlinx.coroutines.TimeoutCancellationException) {
+                    logMcp(serverName, "Tool '$toolName' timed out (120s)")
+                    return@withLock listOf(UIMessagePart.Text("MCP tool '$toolName' timed out (120s)"))
+                }
+                // 2. 真正的协程取消: 必须向上传播，不吞不处理
+                if (e is CancellationException) throw e
+                // 3. 连接错误: 触发重连 + 返回错误文本
+                if (isConnectionError(e)) {
+                    logMcp(serverName, "Tool '$toolName' connection error: ${e.message}")
+                    setStatus(serverId, McpStatus.Reconnecting(1, MAX_RECONNECT_ATTEMPTS))
+                    scheduleReconnect(serverId)
+                    return@withLock listOf(UIMessagePart.Text("MCP tool '$toolName' failed: connection error (${e.message})"))
+                }
+                // 4. 其他错误（McpException / 服务器返回错误等）: 返回错误文本，不重连
+                logMcp(serverName, "Tool '$toolName' failed (${e.javaClass.simpleName}): ${e.message}")
+                listOf(UIMessagePart.Text("MCP tool '$toolName' failed: ${e.message}"))
+            }
         }
     }
 
@@ -172,273 +249,322 @@ class McpManager(
             mimeType = image.mimeType,
         )
         val uri = filesManager.getFile(entity).toUri()
-        Log.i(TAG, "convertImageContentToFilePart: saved mcp image to $uri")
         return UIMessagePart.Image(url = uri.toString())
     }
 
-    private fun getTransport(config: McpServerConfig): AbstractTransport = when (config) {
-        is McpServerConfig.SseTransportServer -> {
-            SseClientTransport(
-                urlString = config.url,
-                client = client,
-                requestBuilder = {
-                    headers.appendAll(StringValues.build {
-                        config.commonOptions.headers.forEach {
-                            append(it.first, it.second)
-                        }
-                    })
-                },
-            )
+    private fun getTransport(config: McpServerConfig): AbstractTransport {
+        val customHeaders = StringValues.build {
+            config.commonOptions.headers.forEach { append(it.first, it.second) }
         }
-
-        is McpServerConfig.StreamableHTTPServer -> {
-            StreamableHttpClientTransport(
+        return when (config) {
+            is McpServerConfig.SseTransportServer -> SseClientTransport(
+                urlString = config.url,
+                client = ktorClient,
+                requestBuilder = { headers.appendAll(customHeaders) },
+            )
+            is McpServerConfig.StreamableHTTPServer -> StreamableHttpClientTransport(
                 url = config.url,
-                client = client,
-                requestBuilder = {
-                    headers.appendAll(StringValues.build {
-                        config.commonOptions.headers.forEach {
-                            append(it.first, it.second)
-                        }
-                    })
-                }
+                client = ktorClient,
+                requestBuilder = { headers.appendAll(customHeaders) },
             )
         }
     }
+
+    // ==================== 连接管理 ====================
 
     suspend fun addClient(config: McpServerConfig) = withContext(Dispatchers.IO) {
-        removeClient(config) // Remove first
-        cancelReconnect(config.id)
-        reconnectAttempts[config.id] = 0
-
-        val transport = getTransport(config)
-        val client = Client(
-            clientInfo = Implementation(
-                name = config.commonOptions.name,
-                version = "1.0",
-            )
-        )
-
-        // 注册 transport 回调以支持自动重连
-        transport.onClose {
-            Log.i(TAG, "Transport closed for ${config.commonOptions.name}")
-            val currentStatus = syncingStatus.value[config.id]
-            // 只有在已连接状态下才触发重连，避免正常关闭时重连
-            if (currentStatus == McpStatus.Connected) {
-                scheduleReconnect(config)
-            }
-        }
-
-        transport.onError { error ->
-            Log.e(TAG, "Transport error for ${config.commonOptions.name}: ${error.message}")
-            val currentStatus = syncingStatus.value[config.id]
-            // 只有在已连接状态下才触发重连
-            if (currentStatus == McpStatus.Connected) {
-                scheduleReconnect(config)
-            }
-        }
-
-        clients[config] = client
-        runCatching {
-            setStatus(config = config, status = McpStatus.Connecting)
-            client.connect(transport)
-            sync(config)
-            setStatus(config = config, status = McpStatus.Connected)
-            reconnectAttempts[config.id] = 0 // 重置重连计数
-            Log.i(TAG, "addClient: connected ${config.commonOptions.name}")
-        }.onFailure {
-            clients.remove(config)
-            it.printStackTrace()
-            setStatus(config = config, status = McpStatus.Error(it.message ?: it.javaClass.name))
+        getServerLock(config.id).withLock {
+            cancelAllJobs(config.id)
+            closeClient(config.id)
+            createAndConnect(config)
         }
     }
 
-    private suspend fun sync(config: McpServerConfig) {
-        // 用 id 查找 client（tools 更新后 config 对象会变，不能直接用 config 作为 Map key）
-        val entry = clients.entries.find { it.key.id == config.id }
-        val client = entry?.value ?: return
-
-        setStatus(config = config, status = McpStatus.Connecting)
-
-        // Update tools
-        if (client.transport == null) {
-            client.connect(getTransport(config))
+    suspend fun removeClient(serverId: Uuid) = withContext(Dispatchers.IO) {
+        getServerLock(serverId).withLock {
+            val name = settingsStore.settingsFlow.value.mcpServers
+                .find { it.id == serverId }?.commonOptions?.name ?: serverId.toString()
+            cancelAllJobs(serverId)
+            closeClient(serverId)
+            reconnectAttempts.remove(serverId)
+            _status.update { it - serverId }
+            logMcp(name, "Disconnected (removed)")
         }
-        val serverTools = client.listTools().tools
-        Log.i(TAG, "sync: tools: $serverTools")
-        settingsStore.update { old ->
-            old.copy(
-                mcpServers = old.mcpServers.map { serverConfig ->
-                    if (serverConfig.id != config.id) return@map serverConfig
-                    val common = serverConfig.commonOptions
-                    val mergedTools = mergeTools(serverTools, common.tools)
-
-                    val newConfig = serverConfig.clone(
-                        commonOptions = common.copy(tools = mergedTools)
-                    )
-
-                    // 更新 clients Map 的 key（用 id 移除旧 key，放入新 key）
-                    entry.key.let { clients.remove(it) }
-                    clients[newConfig] = client
-
-                    newConfig
-                }
-            )
-        }
-
-        setStatus(config = config, status = McpStatus.Connected)
     }
 
+    /**
+     * 手动同步全部服务器（下拉刷新 / 前台恢复 / 网络恢复）
+     *
+     * 策略:
+     * - Client 存在且 transport 存活 → syncTools 刷新（若失败且为连接错误 → 触发重连）
+     * - Client 不存在或 transport 已断开 → addClient 完全重建
+     */
     suspend fun syncAll() = withContext(Dispatchers.IO) {
-        val latestConfigs = settingsStore.settingsFlow.value.mcpServers
+        val configs = settingsStore.settingsFlow.value.mcpServers
             .filter { it.commonOptions.enable && it.commonOptions.name.isNotBlank() }
-        latestConfigs.forEach { config ->
-            runCatching {
-                if (getClient(config) == null) {
-                    addClient(config)
-                } else {
-                    sync(config)
+        configs.forEach { config ->
+            val existingClient = clients[config.id]
+            if (existingClient != null && existingClient.transport != null) {
+                getServerLock(config.id).withLock {
+                    val client = clients[config.id]
+                    if (client != null && client.transport != null) {
+                        runCatching { syncTools(config.id) }
+                            .onFailure {
+                                if (it is CancellationException) throw it
+                                if (isConnectionError(it)) {
+                                    // 半开连接：syncTools 失败说明连接实际已断，触发重连
+                                    logMcp(config.commonOptions.name, "syncAll detected stale connection: ${it.message}")
+                                    scheduleReconnect(config.id)
+                                } else {
+                                    setStatus(config.id, McpStatus.Error(it.message ?: ""))
+                                    logMcp(config.commonOptions.name, "syncTools failed: ${it.message}")
+                                }
+                            }
+                    }
                 }
-            }.onFailure {
-                it.printStackTrace()
-                setStatus(config, McpStatus.Error(it.message ?: it.javaClass.name))
+            } else {
+                runCatching { addClient(config) }
+                    .onFailure { if (it is CancellationException) throw it }
             }
         }
     }
 
-    suspend fun removeClient(config: McpServerConfig) = withContext(Dispatchers.IO) {
-        cancelReconnect(config.id)
-        val toRemove = clients.entries.filter { it.key.id == config.id }
-        toRemove.forEach { entry ->
-            runCatching {
-                entry.value.close()
-            }.onFailure {
-                it.printStackTrace()
-            }
-            clients.remove(entry.key)
-            syncingStatus.update { it - entry.key.id }
-            Log.i(TAG, "removeClient: ${entry.key} / ${entry.key.commonOptions.name}")
-        }
-        reconnectAttempts.remove(config.id)
-    }
+    // ==================== 重连策略 ====================
 
-    private fun scheduleReconnect(config: McpServerConfig) {
-        val configId = config.id
-        val currentAttempt = (reconnectAttempts[configId] ?: 0) + 1
+    /**
+     * 快速重连：指数退避（5次），失败后转入 Dormant。
+     * 网络不可用时跳过实际重连，仅周期检查网络恢复。
+     */
+    private fun scheduleReconnect(configId: Uuid) {
+        val attempt = (reconnectAttempts[configId] ?: 0) + 1
 
-        if (currentAttempt > MAX_RECONNECT_ATTEMPTS) {
-            Log.w(TAG, "Max reconnect attempts reached for ${config.commonOptions.name}")
-            appScope.launch {
-                setStatus(config, McpStatus.Error("连接断开，已达最大重连次数"))
-            }
+        if (attempt > MAX_RECONNECT_ATTEMPTS) {
+            enterDormant(configId)
             return
         }
 
-        reconnectAttempts[configId] = currentAttempt
-
-        // 取消之前的重连任务
+        reconnectAttempts[configId] = attempt
         reconnectJobs[configId]?.cancel()
-
-        // 计算指数退避延迟
-        val delayMs = calculateBackoffDelay(currentAttempt)
-        Log.i(TAG, "Scheduling reconnect for ${config.commonOptions.name}, attempt $currentAttempt/$MAX_RECONNECT_ATTEMPTS, delay ${delayMs}ms")
+        val delayMs = calculateBackoffDelay(attempt)
 
         reconnectJobs[configId] = appScope.launch {
             try {
-                setStatus(config, McpStatus.Reconnecting(currentAttempt, MAX_RECONNECT_ATTEMPTS))
-                delay(delayMs)
-
-                // 检查配置是否仍然启用
-                val currentConfig = settingsStore.settingsFlow.value.mcpServers
-                    .find { it.id == configId && it.commonOptions.enable }
-
-                if (currentConfig == null) {
-                    Log.i(TAG, "Config disabled or removed, cancelling reconnect for ${config.commonOptions.name}")
+                val serverName = getServerName(configId)
+                // 网络不可用时不浪费重连尝试，等待网络恢复
+                if (!networkMonitor.isOnline.value) {
+                    setStatus(configId, McpStatus.Reconnecting(attempt, MAX_RECONNECT_ATTEMPTS))
+                    logMcp(serverName, "Network offline, waiting for connectivity...")
+                    delay(OFFLINE_CHECK_INTERVAL_MS)
+                    // 网络仍未恢复 → 不消耗 attempt，递归重新调度
+                    reconnectAttempts[configId] = attempt - 1
+                    scheduleReconnect(configId)
                     return@launch
                 }
 
-                Log.i(TAG, "Attempting reconnect for ${config.commonOptions.name}")
+                setStatus(configId, McpStatus.Reconnecting(attempt, MAX_RECONNECT_ATTEMPTS))
+                logMcp(serverName, "Reconnecting (attempt $attempt/$MAX_RECONNECT_ATTEMPTS, ${delayMs}ms delay)")
+                delay(delayMs)
+
+                val currentConfig = settingsStore.settingsFlow.value.mcpServers
+                    .find { it.id == configId && it.commonOptions.enable }
+                if (currentConfig == null) {
+                    cancelAllJobs(configId)
+                    closeClient(configId)
+                    _status.update { it - configId }
+                    return@launch
+                }
+
                 reconnectClient(currentConfig)
             } catch (e: CancellationException) {
-                Log.i(TAG, "Reconnect cancelled for ${config.commonOptions.name}")
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Reconnect failed for ${config.commonOptions.name}", e)
-                // 继续尝试重连
-                scheduleReconnect(config)
+                scheduleReconnect(configId)
             }
         }
     }
 
-    private fun cancelReconnect(configId: Uuid) {
-        reconnectJobs[configId]?.cancel()
-        reconnectJobs.remove(configId)
+    /**
+     * Dormant 长间隔兜底重试：60s × 30 次，全部失败后标记 Error。
+     * 这保证了即使快速重连全部失败，仍有长达 30 分钟的恢复窗口。
+     */
+    private fun enterDormant(configId: Uuid) {
+        setStatus(configId, McpStatus.Dormant(DORMANT_RETRY_INTERVAL_MS))
+        val serverName = getServerName(configId)
+        logMcp(serverName, "Entering dormant mode (${DORMANT_RETRY_INTERVAL_MS / 1000}s interval, max $DORMANT_MAX_RETRIES retries)")
+
+        dormantJobs[configId] = appScope.launch {
+            var retries = 0
+            while (retries < DORMANT_MAX_RETRIES && isActive) {
+                delay(DORMANT_RETRY_INTERVAL_MS)
+                retries++
+
+                val currentConfig = settingsStore.settingsFlow.value.mcpServers
+                    .find { it.id == configId && it.commonOptions.enable }
+                if (currentConfig == null) {
+                    cancelAllJobs(configId)
+                    closeClient(configId)
+                    _status.update { it - configId }
+                    return@launch
+                }
+
+                try {
+                    reconnectClient(currentConfig)
+                    return@launch
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    setStatus(configId, McpStatus.Dormant(DORMANT_RETRY_INTERVAL_MS))
+                }
+            }
+            setStatus(configId, McpStatus.Error("MCP reconnect failed after $DORMANT_MAX_RETRIES dormant retries"))
+            logMcp(serverName, "All reconnection attempts exhausted (Error)")
+        }
     }
 
-    private fun calculateBackoffDelay(attempt: Int): Long {
-        // 指数退避: baseDelay * 2^(attempt-1)，最大不超过 maxDelay
+    @VisibleForTesting
+    internal fun calculateBackoffDelay(attempt: Int): Long {
         val exponentialDelay = BASE_RECONNECT_DELAY_MS * (1L shl (attempt - 1).coerceAtMost(10))
         return exponentialDelay.coerceAtMost(MAX_RECONNECT_DELAY_MS)
     }
 
-    private suspend fun reconnectClient(config: McpServerConfig) = withContext(Dispatchers.IO) {
-        // 先关闭旧客户端
-        val oldEntry = clients.entries.find { it.key.id == config.id }
-        if (oldEntry != null) {
-            runCatching { oldEntry.value.close() }.onFailure { it.printStackTrace() }
-            clients.remove(oldEntry.key)
-        }
+    // ==================== 内部连接逻辑 ====================
 
+    /**
+     * 创建 Client + Transport + 注册回调 + connect + syncTools。
+     * 由 addClient 和 reconnectClient 共享调用（持锁上下文）。
+     *
+     * @return true=连接成功, false=连接失败
+     */
+    private suspend fun createAndConnect(config: McpServerConfig): Boolean {
         val transport = getTransport(config)
         val client = Client(
-            clientInfo = Implementation(
-                name = config.commonOptions.name,
-                version = "1.0",
-            )
+            clientInfo = Implementation(name = config.commonOptions.name, version = "1.0"),
+            options = ClientOptions(capabilities = ClientCapabilities())
         )
+        setupNotificationHandlers(client, config)
 
-        // 注册回调
+        val configId = config.id
         transport.onClose {
-            Log.i(TAG, "Transport closed for ${config.commonOptions.name}")
-            val currentStatus = syncingStatus.value[config.id]
-            if (currentStatus == McpStatus.Connected) {
-                scheduleReconnect(config)
-            }
+            if (_status.value[configId] == McpStatus.Connected) scheduleReconnect(configId)
+        }
+        transport.onError {
+            if (_status.value[configId] == McpStatus.Connected) scheduleReconnect(configId)
         }
 
-        transport.onError { error ->
-            Log.e(TAG, "Transport error for ${config.commonOptions.name}: ${error.message}")
-            val currentStatus = syncingStatus.value[config.id]
-            if (currentStatus == McpStatus.Connected) {
-                scheduleReconnect(config)
-            }
-        }
+        clients[config.id] = client
+        setStatus(config.id, McpStatus.Connecting)
 
-        clients[config] = client
-        setStatus(config, McpStatus.Connecting)
-        runCatching {
+        return runCatching {
             client.connect(transport)
-            sync(config)
-            setStatus(config, McpStatus.Connected)
+            val toolCount = syncTools(config.id)
+            setStatus(config.id, McpStatus.Connected)
             reconnectAttempts[config.id] = 0
-            Log.i(TAG, "Reconnected successfully: ${config.commonOptions.name}")
+            logMcp(config.commonOptions.name, "Connected ($toolCount tools synced)")
+            true
         }.onFailure {
-            clients.remove(config)
-            it.printStackTrace()
-            setStatus(config, McpStatus.Error(it.message ?: it.javaClass.name))
+            if (it is CancellationException) throw it
+            closeClient(config.id)
+            setStatus(config.id, McpStatus.Error(it.message ?: it.javaClass.name))
+            logMcp(config.commonOptions.name, "Connection failed: ${it.message}")
+        }.getOrElse { false }
+    }
+
+    /**
+     * 重连：关闭旧 Client → createAndConnect。
+     * 不调用 cancelAllJobs（reconnectClient 运行在 reconnectJob 中，取消自身会导致 connect 抛 CancellationException）。
+     */
+    private suspend fun reconnectClient(config: McpServerConfig) = withContext(Dispatchers.IO) {
+        getServerLock(config.id).withLock {
+            closeClient(config.id)
+            val success = createAndConnect(config)
+            if (!success) {
+                // createAndConnect 已设置 Error 状态，这里抛异常让上层重试
+                throw RuntimeException("Reconnect failed")
+            }
         }
     }
 
-    private suspend fun setStatus(config: McpServerConfig, status: McpStatus) {
-        // 使用原子的 CAS 更新, 避免并发场景下多个服务器的状态更新互相覆盖
-        syncingStatus.update { it + (config.id to status) }
+    private suspend fun syncTools(configId: Uuid): Int {
+        val client = clients[configId] ?: return 0
+        val serverTools = client.listTools().tools
+
+        val existingConfig = settingsStore.settingsFlow.value.mcpServers
+            .find { it.id == configId } ?: return 0
+
+        val merged = mergeTools(serverTools, existingConfig.commonOptions.tools)
+        val newConfig = existingConfig.clone(
+            commonOptions = existingConfig.commonOptions.copy(tools = merged)
+        )
+        settingsStore.update { old ->
+            old.copy(
+                mcpServers = old.mcpServers.map {
+                    if (it.id == configId) newConfig else it
+                }
+            )
+        }
+        return merged.size
     }
 
-    fun getStatus(config: McpServerConfig): Flow<McpStatus> {
-        return syncingStatus.map { it[config.id] ?: McpStatus.Idle }
+    private fun setupNotificationHandlers(client: Client, config: McpServerConfig) {
+        val configId = config.id
+        val configName = config.commonOptions.name
+        client.setNotificationHandler<ToolListChangedNotification>(
+            NotificationsToolsListChanged
+        ) {
+            logMcp(configName, "Received tools/list_changed notification")
+            appScope.launch {
+                runCatching { syncTools(configId) }
+                    .onFailure { e ->
+                        if (e is CancellationException) throw e
+                        Log.e(TAG, "Failed to sync tools after list_changed for $configName", e)
+                        logMcp(configName, "syncTools after list_changed failed: ${e.message}")
+                    }
+            }
+            CompletableDeferred(Unit)
+        }
     }
+
+    private fun getServerName(configId: Uuid): String {
+        return settingsStore.settingsFlow.value.mcpServers
+            .find { it.id == configId }?.commonOptions?.name ?: configId.toString()
+    }
+
+    private suspend fun closeClient(serverId: Uuid) {
+        clients[serverId]?.let {
+            runCatching { it.close() }.onFailure { e ->
+                if (e is CancellationException) throw e
+                val name = getServerName(serverId)
+                Log.w(TAG, "Failed to close MCP client for $serverId: ${e.message}")
+                logMcp(name, "Failed to close client: ${e.message}")
+            }
+        }
+        clients.remove(serverId)
+    }
+
+    private fun cancelAllJobs(serverId: Uuid) {
+        reconnectJobs[serverId]?.cancel()
+        reconnectJobs.remove(serverId)
+        dormantJobs[serverId]?.cancel()
+        dormantJobs.remove(serverId)
+    }
+
+    @VisibleForTesting
+    internal fun isConnectionError(e: Throwable): Boolean {
+        return e is java.io.IOException
+            || e is StreamableHttpError
+            || e.message?.contains("connection", ignoreCase = true) == true
+            || e.message?.contains("timeout", ignoreCase = true) == true
+            || e.message?.contains("closed", ignoreCase = true) == true
+    }
+
+    private fun setStatus(serverId: Uuid, status: McpStatus) {
+        _status.update { it + (serverId to status) }
+    }
+
+    fun getStatus(serverId: Uuid): Flow<McpStatus> = _status.map { it[serverId] ?: McpStatus.Idle }
 }
 
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 internal val McpJson: Json by lazy {
     Json {
         ignoreUnknownKeys = true

@@ -252,6 +252,7 @@ internal class WorkspaceTerminalViewClient(
         val inputMethodManager = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         view.post {
             view.requestFocus()
+            @Suppress("DEPRECATION")
             inputMethodManager.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
         }
     }

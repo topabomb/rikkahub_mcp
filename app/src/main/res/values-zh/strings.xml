@@ -766,6 +766,12 @@
   <string name="setting_page_interaction_notification_settings">互动与通知</string>
   <string name="setting_page_mcp">MCP</string>
   <string name="setting_page_mcp_desc">配置MCP服务器</string>
+  <string name="mcp_status_idle">空闲</string>
+  <string name="mcp_status_connecting">连接中</string>
+  <string name="mcp_status_connected">已连接</string>
+  <string name="mcp_status_reconnecting">重连中 (%1$d/%2$d)</string>
+  <string name="mcp_status_dormant">休眠中，%1$d 秒后重试</string>
+  <string name="mcp_status_error">错误: %1$s</string>
   <string name="setting_page_message_display_settings">消息显示</string>
   <string name="setting_page_model_and_services">模型与服务</string>
   <string name="setting_page_no_share_app">找不到分享应用</string>

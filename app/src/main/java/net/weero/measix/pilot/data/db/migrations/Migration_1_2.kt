@@ -15,6 +15,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * 3. 迁移完成后旧数据自动获得默认值，不影响现有对话
  */
 val Migration_1_2 = object : Migration(1, 2) {
+    @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE")
     override fun migrate(database: SupportSQLiteDatabase) {
         database.execSQL(
             "ALTER TABLE conversations ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'"
