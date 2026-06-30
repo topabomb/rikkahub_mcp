@@ -6,6 +6,28 @@
 
 ---
 
+## 0.0.8（versionCode 8）— 2026-06-30
+
+### 新增
+
+- **日历查询与创建工具**（`calendar_query` / `calendar_create`）：AI 可查询设备日历事件（支持 `today/week/month` 预设、自定义时间区间、关键词筛选，返回事件标题/描述/地点/时间/日历名）和创建新事件（需用户审批确认）。开关开启时通过 PermissionManager 框架申请 `READ_CALENDAR` + `WRITE_CALENDAR` 权限。聊天中工具调用步骤显示日历图标 + 事件摘要
+
+### 修复
+
+- **屏幕使用时间统计偏差**：改用 `UsageEvents` 事件配对计算真实前台时长（`MOVE_TO_FOREGROUND`/`MOVE_TO_BACKGROUND`/`SCREEN_NON_INTERACTIVE` 逐事件结算），排除桌面 launcher，新增 12h 向前回看 + 区间裁剪，结果更贴近系统"屏幕使用时间"
+- **S3/COS 备份恢复下载丢数据**：`downloadObjectToFile` 改用 `toInputStream().copyTo()` 替代手动 `readAvailable` 循环，修复竞态导致文件末尾数据丢失；`AwsSignatureV4` 修复腾讯云 COS endpoint（`bucket.cos.region.myqcloud.com`）已含 bucket 名时重复拼接的问题
+- **Skills 扩展面板角标计数偏大**：外部删除 `/skills/` 目录后 `enabledSkills` 残留"幽灵"技能名，新增 `pruneOrphanedEnabledSkills()` 在打开扩展面板时自动清理
+- **后台文本生成默认推理级别**：标题/摘要/建议的后台生成从 `ReasoningLevel.OFF` 改为 `AUTO`，让支持推理的模型自动利用推理能力
+- **聊天页动态渐变背景动画循环跳变**：`phase` 函数增加 `loops` 参数，通过最小公倍数圈数（20/1/10/10）消除 `2π→0` 回归跳变
+- **IME 展开时输入栏底部圆角不贴合**：键盘弹出时输入栏底部两角变直角，贴合 IME
+- **助手头像选图无裁剪**：选图后进入 1:1 裁剪流程（UCrop），锁定正方形比例，裁剪后保存
+
+### 上游同步
+
+- 同步 rikkahub 上游 `a6e7a305..upstream/master`（2026-06-27 ~ 2026-06-30）的 9 个提交，详见 `docs/dev/upstream-sync.md` 第三批检查记录
+
+---
+
 ## 0.0.7（versionCode 7）— 2026-06-27/28
 
 ### MCP 生命周期架构级重构

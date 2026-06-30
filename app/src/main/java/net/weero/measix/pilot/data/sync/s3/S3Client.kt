@@ -13,7 +13,6 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpMethod
 import io.ktor.http.isSuccess
 import io.ktor.utils.io.jvm.javaio.toInputStream
-import io.ktor.utils.io.readAvailable
 import io.ktor.util.cio.readChannel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -178,13 +177,9 @@ class S3Client(
                 }
 
                 val channel = response.bodyAsChannel()
-                targetFile.outputStream().use { outputStream ->
-                    val buffer = ByteArray(8192)
-                    while (!channel.isClosedForRead) {
-                        val bytesRead = channel.readAvailable(buffer)
-                        if (bytesRead > 0) {
-                            outputStream.write(buffer, 0, bytesRead)
-                        }
+                channel.toInputStream().use { input ->
+                    targetFile.outputStream().use { output ->
+                        input.copyTo(output)
                     }
                 }
                 Log.d(TAG, "downloadObjectToFile success: downloaded ${targetFile.length()} bytes")

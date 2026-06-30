@@ -20,9 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.files.SkillManager
@@ -30,8 +28,6 @@ import net.weero.measix.pilot.data.files.SkillMetadata
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.ui.components.ai.ExtensionEmptyState
-
-
 import net.weero.measix.pilot.ui.components.ai.ModeInjectionsContent
 import net.weero.measix.pilot.ui.components.ai.QuickMessagesContent
 import net.weero.measix.pilot.ui.components.ai.SkillsContent
@@ -54,9 +50,9 @@ fun ExtensionSelector(
     var skills by remember { mutableStateOf<List<SkillMetadata>>(emptyList()) }
 
     LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) {
-            skills = skillManager.listSkills()
-        }
+        // 打开扩展面板时清理运行时被删除的技能（残留的 enabledSkills 引用），
+        // prune 顺带返回现存技能列表，避免重复读盘
+        skills = skillManager.pruneOrphanedEnabledSkills()
     }
 
     val useConversationInjections =

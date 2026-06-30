@@ -45,8 +45,16 @@ internal object AwsSignatureV4 {
             path
         }.let { if (it.isEmpty()) "/" else it }
 
+        // 当 host 已包含 bucket 名时(如腾讯云 COS 的 bucket.cos.region.myqcloud.com 格式),
+        // 不再重复拼接 bucket 前缀, 避免签名错误
+        val hostAlreadyContainsBucket = host.startsWith("${config.bucket}.")
+
         val allHeaders = mutableMapOf(
-            "host" to (if (config.pathStyle) host else "${config.bucket}.$host"),
+            "host" to when {
+                config.pathStyle -> host
+                hostAlreadyContainsBucket -> host
+                else -> "${config.bucket}.$host"
+            },
             "x-amz-content-sha256" to resolvedPayloadHash,
             "x-amz-date" to amzDate,
         )
@@ -102,7 +110,13 @@ internal object AwsSignatureV4 {
 
         val url = buildString {
             append(if (config.isHttps) "https://" else "http://")
-            append(if (config.pathStyle) host else "${config.bucket}.$host")
+            append(
+                when {
+                    config.pathStyle -> host
+                    hostAlreadyContainsBucket -> host
+                    else -> "${config.bucket}.$host"
+                }
+            )
             append(canonicalUri)
             if (canonicalQueryString.isNotEmpty()) {
                 append("?$canonicalQueryString")

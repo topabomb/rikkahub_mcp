@@ -4,6 +4,45 @@
 
 ---
 
+## 工作方法与同步原则
+
+### 工作方法
+
+1. **逐提交精确分析**：用 `git show <hash> --stat` 查看影响范围，`git show <hash> -- <path>` 逐文件查看完整 diff
+2. **本地核对**：用 `search_content` / `read_file` 打开本地对应文件逐行对比，确认是否存在同样问题或是否已有对应实现
+3. **确认最终态**：对涉及多次修复的文件（如后续提交修正前序提交），以最后一次提交的最终代码为准合并改动
+4. **包名映射**：上游 `me.rerere.rikkahub` → 本地 `net.weero.measix.pilot`，核对时忽略此差异
+
+### 同步判断原则
+
+| 判定 | 条件 |
+|------|------|
+| **引入** | bug 修复（本地确认存在同样问题）/ 本地工具新增或优化 / 架构改进无破坏性 / 针对性能的优化 |
+| **必要同步** | **本地工具（local tools）的优化和新增**——作为移动端 Pilot 能力增强的必要项 / 界面或用户体验优化 / MCP相关功能或优化|
+| **引入** | **安全修复**：涉及权限提升、敏感数据处理、注入防护等安全相关的修复优先引入 |
+| **按需引入** | **测试用例**：上游对已有功能的测试补充按需引入；新功能的测试应配套引入 |
+| **单独评估** | **依赖更新**：上游的依赖版本升级需评估是否与本地依赖冲突、是否引入 ABI 变化，不盲目跟从 |
+| **单独评估** | **新增依赖/API 级别**：上游引入新依赖或提高 minSdk 需确认本地兼容性，不降低适配范围 |
+| **跳过** | 与 Fork 精简方向直接冲突（新 Provider / 赞助商 / 新搜索引擎 / 新 TTS） |
+| **跳过** | 版本号升级（我们版本线独立） |
+
+### 同步操作约定
+
+- **重复提交合并**：一个功能分多次提交时，合并最终态一次引入，不逐个引入
+- **本地偏离保留**：本地有合理偏离上游的改动，需要审查合理性，确定最终的的正确、最佳实现版本
+- **多文件改动核对**：每次同步后逐文件与上游最终态核对，确认逻辑一致（仅包名差异）
+
+### 持久化与迁移影响检查
+
+每次同步前需确认改动是否影响持久化配置或数据：
+
+- **`@Serializable` data class 新增字段**：检查是否有 `@SerialName` 和默认值，确保旧配置可正常反序列化
+- **密封类/枚举新增项**：检查 `@SerialName` 确保序列化稳定，旧 `settings.json` 无此字段时默认不启用，无迁移风险
+- **Room 数据库 schema 变更**：确认是否涉及 Room entity 变更，如有需新增 Migration
+- **`AndroidManifest.xml` 权限/intent 新增**：运行时权限需确认申请时机（如首次开启工具开关时），不影响已安装用户；`<queries>` intent 声明仅影响可见性，无运行时行为变化
+
+---
+
 ## 检查点格式
 
 ```
@@ -24,6 +63,69 @@
 ---
 
 ## 检查记录
+
+### 2026-06-30 - 检查 a6e7a305+ 更新（第三批）
+
+> **同步状态：✅ 全部完成（编译通过 + 单元测试通过 + 逐文件核对一致）**
+
+**检查范围**：`a6e7a305..upstream/master`（2026-06-27 ~ 2026-06-30，共 12 个提交）
+
+**原项目信息**：
+- Fork 基线：2.3.1（versionCode 164）- 2026-06-18
+- 本次检查最新上游提交：`4b2fd4b9`（2026-06-30）
+- 上次检查时间：2026-06-27（第二批，`a6e7a305`）
+
+**核对方法**：添加 `upstream` remote 后 `git fetch`，逐提交 `git show` 获取完整 diff，与本地文件逐行核对最终态（合并多次修复为一份），子代理交叉验证全部 10 组改动逻辑一致。
+
+---
+
+#### 已同步（9 个提交）
+
+| # | 提交 | 描述 | 改动量 | 类别 | 状态 |
+|---|------|------|--------|------|------|
+| 1 | `5b46c8de` | screen_time 改用事件配对计算 | ~93 行 / 2 文件 | bug 修复 | ✅ |
+| 2 | `40b613eb` | screen_time 排除桌面 launcher | ~27 行 / 2 文件 | bug 修复（配套 #1） | ✅ |
+| 3 | `4b2fd4b9` | S3/COS 下载丢数据 + COS endpoint | ~27 行 / 2 文件 | bug 修复 | ✅ |
+| 4 | `18addd23` | Skills 扩展面板清理已删除技能残留 | ~33 行 / 2 文件 | bug 修复 | ✅ |
+| 5 | `4559397b` | 后台文本生成默认 AUTO 推理级别 | 2 行 / 1 文件 + 单测 | 改进 | ✅ |
+| 6 | `3341dfd0` | 渐变背景动画循环跳变 | ~17 行 / 1 文件 | UI 修复 | ✅ |
+| 7 | `cad7029e` | IME 展开时隐藏输入栏底部圆角 | ~25 行 / 1 文件 | UI 修复 | ✅ |
+| 8 | `f502bcbf` | 助手头像支持图片裁剪 | ~57 行 / 2 文件 | 功能增强 | ✅ |
+| 9 | `d677707d` | 新增日历查询与创建工具 | ~597 行 / 13 文件 | 新功能（必要同步） | ✅ |
+
+**关键改动详述**：
+
+**#1+#2 screen_time 事件配对 + 排除 launcher**（合并为一份最终态）：
+- `ScreenTimeTool.kt`：用 `queryEvents` + `computeForegroundTime` 替代 `queryAndAggregateUsageStats`；12h 向前回看 + 区间裁剪；`resolveLauncherPackages` 排除桌面；`AndroidManifest.xml` 新增 LAUNCHER + HOME intent 查询
+
+**#3 S3/COS 修复**：
+- `S3Client.kt`：`downloadObjectToFile` 改用 `toInputStream().copyTo()`
+- `AwsSignatureV4.kt`：新增 `hostAlreadyContainsBucket` 判断（腾讯云 COS `bucket.cos.region.myqcloud.com` 不重复拼接）
+
+**#9 日历工具**（新功能）：
+- `CalendarTool.kt`（新建，438 行）：`calendar_query`（Instances 查询）+ `calendar_create`（需审批）
+- 集成：`LocalToolOption.Calendar` + `LocalTools` 注册 + `AssistantLocalToolPage` 开关（PermissionManager 申请权限）+ `BuiltinToolUIs` 渲染 + `ToolUI` 注册 + Manifest 权限 + 5 语言 × 8 string
+
+---
+
+#### 跳过 / 忽略（3 个提交）
+
+| 提交 | 描述 | 原因 |
+|------|------|------|
+| `a383c209` | 版本升级 2.3.3 (166) | 版本线独立，不适用 |
+| `7b64059e` | 版本升级 2.3.4 (167) | 同上 |
+| `f7566e1` | docs: add chat generation pipeline doc | 上游内部文档，我们已有 `AGENTS.md` / `original-architecture.md` 等等价架构文档 |
+
+---
+
+#### 持久化影响评估
+
+- **`LocalToolOption.Calendar`**：`@SerialName("calendar")` 新增枚举，旧 `settings.json` 无此字段时默认不启用，**无迁移风险**
+- **Room 数据库**：本次同步不涉及 Room entity 变更，**无需 Migration**
+- **权限新增**：`READ_CALENDAR`/`WRITE_CALENDAR` 为运行时权限，首次开启日历工具时通过 PermissionManager 框架申请，**不影响已安装用户**
+- **`Manifest <queries>` 新增**：LAUNCHER/HOME intent 查询仅声明可见性，**无运行时行为变化**
+
+---
 
 ### 2026-06-27 - 检查 2.3.2+ 更新（第二批）
 
@@ -299,4 +401,4 @@
 
 ---
 
-*最后更新：2026-06-27*
+*最后更新：2026-06-30*

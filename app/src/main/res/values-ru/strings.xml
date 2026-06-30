@@ -243,6 +243,14 @@
   <string name="chat_message_tool_conversation_search">История поиска: %1$s</string>
   <string name="chat_message_tool_screen_time">Читать время экрана</string>
   <string name="tool_ui_screen_time_total">Общее время экрана</string>
+  <string name="permission_calendar_read">Чтение календаря</string>
+  <string name="permission_calendar_read_desc">Чтение событий календаря для ответа на вопросы, связанные с расписанием</string>
+  <string name="permission_calendar_write">Запись в календарь</string>
+  <string name="permission_calendar_write_desc">Создание событий календаря от вашего имени</string>
+  <string name="assistant_page_local_tools_calendar_title">Календарь</string>
+  <string name="assistant_page_local_tools_calendar_desc">Позволить ИИ запрашивать и создавать события календаря</string>
+  <string name="chat_message_tool_calendar_query">Запросить события календаря</string>
+  <string name="chat_message_tool_calendar_create">Создать событие: %1$s</string>
   <string name="chat_message_tool_recent_chats">Посмотреть недавние чаты</string>
   <string name="chat_message_tool_search_prefix">Поиск: %1$s</string>
   <string name="chat_message_tool_search_results_count">%1$d результатов</string>

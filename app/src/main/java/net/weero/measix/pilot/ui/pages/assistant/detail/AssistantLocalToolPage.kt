@@ -26,6 +26,9 @@ import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.CardGroup
+import net.weero.measix.pilot.ui.components.ui.permission.PermissionInfo
+import net.weero.measix.pilot.ui.components.ui.permission.PermissionManager
+import net.weero.measix.pilot.ui.components.ui.permission.rememberPermissionState
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.utils.hasUsageStatsPermission
@@ -73,7 +76,39 @@ private fun AssistantLocalToolContent(
     assistant: Assistant,
     onUpdate: (Assistant) -> Unit
 ) {
+    val context = LocalContext.current
+    val toaster = LocalToaster.current
+    val permissionRequiredText =
+        stringResource(R.string.assistant_page_local_tools_screen_time_permission_required)
+
+    val calendarPermissionState = rememberPermissionState(
+        permissions = setOf(
+            PermissionInfo(
+                permission = android.Manifest.permission.READ_CALENDAR,
+                displayName = { Text(stringResource(R.string.permission_calendar_read)) },
+                usage = { Text(stringResource(R.string.permission_calendar_read_desc)) },
+                required = true
+            ),
+            PermissionInfo(
+                permission = android.Manifest.permission.WRITE_CALENDAR,
+                displayName = { Text(stringResource(R.string.permission_calendar_write)) },
+                usage = { Text(stringResource(R.string.permission_calendar_write_desc)) },
+                required = true
+            ),
+        )
+    )
+    PermissionManager(permissionState = calendarPermissionState)
+
     fun toggleLocalTool(option: LocalToolOption, enabled: Boolean) {
+        if (enabled && option == LocalToolOption.ScreenTime && !context.hasUsageStatsPermission()) {
+            toaster.show(message = permissionRequiredText, type = ToastType.Warning)
+            context.openUsageAccessSettings()
+            return
+        }
+        if (enabled && option == LocalToolOption.Calendar && !calendarPermissionState.allPermissionsGranted) {
+            calendarPermissionState.requestPermissions()
+            return
+        }
         val newLocalTools = if (enabled) {
             assistant.localTools + option
         } else {
@@ -169,21 +204,23 @@ private fun AssistantLocalToolContent(
                     Text(stringResource(R.string.assistant_page_local_tools_screen_time_desc))
                 },
                 trailingContent = {
-                    val context = LocalContext.current
-                    val toaster = LocalToaster.current
                     Switch(
                         checked = assistant.localTools.contains(LocalToolOption.ScreenTime),
-                        onCheckedChange = { enabled ->
-                            if (enabled && !context.hasUsageStatsPermission()) {
-                                context.openUsageAccessSettings()
-                                toaster.show(
-                                    message = context.getString(R.string.assistant_page_local_tools_screen_time_permission_required),
-                                    type = ToastType.Warning,
-                                )
-                                return@Switch
-                            }
-                            toggleLocalTool(LocalToolOption.ScreenTime, enabled)
-                        }
+                        onCheckedChange = { toggleLocalTool(LocalToolOption.ScreenTime, it) }
+                    )
+                }
+            )
+            item(
+                headlineContent = {
+                    Text(stringResource(R.string.assistant_page_local_tools_calendar_title))
+                },
+                supportingContent = {
+                    Text(stringResource(R.string.assistant_page_local_tools_calendar_desc))
+                },
+                trailingContent = {
+                    Switch(
+                        checked = assistant.localTools.contains(LocalToolOption.Calendar),
+                        onCheckedChange = { toggleLocalTool(LocalToolOption.Calendar, it) }
                     )
                 }
             )

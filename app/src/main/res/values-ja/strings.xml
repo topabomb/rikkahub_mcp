@@ -243,6 +243,14 @@
   <string name="chat_message_tool_conversation_search">検索履歴: %1$s</string>
   <string name="chat_message_tool_screen_time">スクリーンタイムを読み取る</string>
   <string name="tool_ui_screen_time_total">合計スクリーンタイム</string>
+  <string name="permission_calendar_read">カレンダーの読み取り</string>
+  <string name="permission_calendar_read_desc">スケジュールに関する質問に答えるため、カレンダーのイベントを読み取ります</string>
+  <string name="permission_calendar_write">カレンダーの書き込み</string>
+  <string name="permission_calendar_write_desc">あなたに代わってカレンダーのイベントを作成します</string>
+  <string name="assistant_page_local_tools_calendar_title">カレンダー</string>
+  <string name="assistant_page_local_tools_calendar_desc">AIにカレンダーのイベントを検索・作成させます</string>
+  <string name="chat_message_tool_calendar_query">カレンダーイベントを検索</string>
+  <string name="chat_message_tool_calendar_create">イベントを作成: %1$s</string>
   <string name="chat_message_tool_recent_chats">最近のチャットを表示</string>
   <string name="chat_message_tool_search_prefix">検索: %1$s</string>
   <string name="chat_message_tool_search_results_count">%1$d件の結果</string>

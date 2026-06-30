@@ -37,9 +37,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import java.security.MessageDigest
-import kotlin.math.abs
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -47,14 +46,20 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import androidx.core.net.toUri
 import coil3.compose.AsyncImage
+import me.rerere.common.android.appTempFolder
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Edit03
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Avatar
+import net.weero.measix.pilot.ui.components.ai.useCropLauncher
 import net.weero.measix.pilot.ui.hooks.rememberAvatarShape
 import org.koin.compose.koinInject
+import java.io.File
+import java.security.MessageDigest
+import kotlin.math.abs
 
 @Composable
 fun TextAvatar(
@@ -95,18 +100,47 @@ fun UIAvatar(
     onClick: (() -> Unit)? = null
 ) {
     val filesManager: FilesManager = koinInject()
+    val context = LocalContext.current
     var showPickOption by remember { mutableStateOf(false) }
     var showEmojiPicker by remember { mutableStateOf(false) }
     var showUrlInput by remember { mutableStateOf(false) }
     var urlInput by remember { mutableStateOf("") }
+    var preCropTempFile by remember { mutableStateOf<File?>(null) }
+
+    fun saveAvatarImage(uri: Uri) {
+        val localUris = filesManager.createChatFilesByContents(listOf(uri))
+        localUris.firstOrNull()?.let { localUri ->
+            onUpdate?.invoke(Avatar.Image(localUri.toString()))
+        }
+    }
+
+    val (_, launchImageCrop) = useCropLauncher(
+        onCroppedImageReady = { croppedUri ->
+            saveAvatarImage(croppedUri)
+        },
+        onCleanup = {
+            preCropTempFile?.delete()
+            preCropTempFile = null
+        },
+        aspectRatio = 1f to 1f,
+        freeStyleCropEnabled = false
+    )
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
-        uri?.let {
-            val localUris = filesManager.createChatFilesByContents(listOf(it))
-            localUris.firstOrNull()?.let { localUri ->
-                onUpdate?.invoke(Avatar.Image(localUri.toString()))
+        uri?.let { selectedUri ->
+            val tempFile = File(context.appTempFolder, "avatar_pick_${System.currentTimeMillis()}.jpg")
+            runCatching {
+                context.contentResolver.openInputStream(selectedUri)?.use { input ->
+                    tempFile.outputStream().use { output -> input.copyTo(output) }
+                } ?: error("Failed to open input stream for $selectedUri")
+                preCropTempFile?.delete()
+                preCropTempFile = tempFile
+                launchImageCrop(tempFile.toUri())
+            }.onFailure {
+                tempFile.delete()
+                launchImageCrop(selectedUri)
             }
         }
     }

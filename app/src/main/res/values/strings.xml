@@ -245,6 +245,14 @@
   <string name="chat_message_tool_conversation_search">Search history: %1$s</string>
   <string name="chat_message_tool_screen_time">Read screen time</string>
   <string name="tool_ui_screen_time_total">Total screen time</string>
+  <string name="permission_calendar_read">Read Calendar</string>
+  <string name="permission_calendar_read_desc">Read calendar events to answer your schedule-related questions</string>
+  <string name="permission_calendar_write">Write Calendar</string>
+  <string name="permission_calendar_write_desc">Create calendar events on your behalf</string>
+  <string name="assistant_page_local_tools_calendar_title">Calendar</string>
+  <string name="assistant_page_local_tools_calendar_desc">Let the AI query and create calendar events</string>
+  <string name="chat_message_tool_calendar_query">Query calendar events</string>
+  <string name="chat_message_tool_calendar_create">Create event: %1$s</string>
   <string name="chat_message_tool_recent_chats">View recent chats</string>
   <string name="chat_message_tool_search_prefix">Search: %1$s</string>
   <string name="chat_message_tool_search_results_count">%1$d results</string>

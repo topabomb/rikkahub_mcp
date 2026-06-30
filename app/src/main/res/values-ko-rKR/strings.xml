@@ -243,6 +243,14 @@
   <string name="chat_message_tool_conversation_search">검색 기록: %1$s</string>
   <string name="chat_message_tool_screen_time">스크린 타임 읽기</string>
   <string name="tool_ui_screen_time_total">총 스크린 타임</string>
+  <string name="permission_calendar_read">캘린더 읽기</string>
+  <string name="permission_calendar_read_desc">일정 관련 질문에 답하기 위해 캘린더 이벤트를 읽습니다</string>
+  <string name="permission_calendar_write">캘린더 쓰기</string>
+  <string name="permission_calendar_write_desc">사용자를 대신하여 캘린더 이벤트를 생성합니다</string>
+  <string name="assistant_page_local_tools_calendar_title">캘린더</string>
+  <string name="assistant_page_local_tools_calendar_desc">AI가 캘린더 이벤트를 조회하고 생성하도록 합니다</string>
+  <string name="chat_message_tool_calendar_query">캘린더 이벤트 조회</string>
+  <string name="chat_message_tool_calendar_create">이벤트 생성: %1$s</string>
   <string name="chat_message_tool_recent_chats">최근 채팅 보기</string>
   <string name="chat_message_tool_search_prefix">검색: %1$s</string>
   <string name="chat_message_tool_search_results_count">%1$d개 결과</string>

@@ -245,6 +245,14 @@
   <string name="chat_message_tool_conversation_search">搜索历史：%1$s</string>
   <string name="chat_message_tool_screen_time">读取屏幕使用时间</string>
   <string name="tool_ui_screen_time_total">总屏幕使用时间</string>
+  <string name="permission_calendar_read">读取日历</string>
+  <string name="permission_calendar_read_desc">读取日历事件，以回答您与日程相关的问题</string>
+  <string name="permission_calendar_write">写入日历</string>
+  <string name="permission_calendar_write_desc">代表您创建日历事件</string>
+  <string name="assistant_page_local_tools_calendar_title">日历</string>
+  <string name="assistant_page_local_tools_calendar_desc">让AI查询和创建日历事件</string>
+  <string name="chat_message_tool_calendar_query">查询日历事件</string>
+  <string name="chat_message_tool_calendar_create">创建事件: %1$s</string>
   <string name="chat_message_tool_recent_chats">查看最近的对话</string>
   <string name="chat_message_tool_search_prefix">搜索: %1$s</string>
   <string name="chat_message_tool_search_results_count">共 %1$d 条结果</string>

@@ -100,6 +100,8 @@ object ToolUIRegistry {
         RecentChatsToolUI,
         ConversationSearchToolUI,
         GetScreenTimeToolUI,
+        CalendarQueryToolUI,
+        CalendarCreateToolUI,
         EditFileToolUI,
         ReadFileToolUI,
         WriteFileToolUI,

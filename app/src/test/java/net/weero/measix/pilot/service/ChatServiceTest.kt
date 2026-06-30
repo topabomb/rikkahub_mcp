@@ -31,16 +31,16 @@ class ChatServiceTest {
         val params = backgroundTextGenerationParams(model)
 
         assertEquals(model, params.model)
-        assertEquals(ReasoningLevel.OFF, params.reasoningLevel)
+        assertEquals(ReasoningLevel.AUTO, params.reasoningLevel)
         assertEquals(headers, params.customHeaders)
         assertEquals(bodies, params.customBody)
     }
 
     @Test
-    fun `background generation params default reasoning level is OFF`() {
+    fun `background generation params default reasoning level is AUTO`() {
         val model = Model(modelId = "test-model")
         val params = backgroundTextGenerationParams(model)
-        assertEquals(ReasoningLevel.OFF, params.reasoningLevel)
+        assertEquals(ReasoningLevel.AUTO, params.reasoningLevel)
     }
 
     @Test
