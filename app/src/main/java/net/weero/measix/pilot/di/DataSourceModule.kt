@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.di
+package net.weero.measix.pilot.di
 
 import androidx.room.Room
 import androidx.room.RoomDatabase
@@ -137,10 +137,14 @@ val dataSourceModule = module {
     }
 
     single {
+        get<AppDatabase>().folderDao()
+    }
+
+    single {
         MessageFtsManager(get())
     }
 
-    single { McpManager(settingsStore = get(), appScope = get(), filesManager = get(), networkMonitor = get()) }
+    single { McpManager(settingsStore = get(), appScope = get(), filesManager = get(), networkMonitor = get(), appEventBus = get()) }
 
     single { NetworkMonitor(get()) }
 

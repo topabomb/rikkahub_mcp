@@ -1,4 +1,4 @@
-﻿<?xml version='1.0' encoding='UTF-8'?>
+<?xml version='1.0' encoding='UTF-8'?>
 <resources>
   <string name="about_page_license">Лицензия</string>
   <string name="about_page_documentation">Документация</string>
@@ -274,6 +274,17 @@
   <string name="chat_page_conversation_system_prompt_hint">Переопределить системный промпт ассистента для этого разговора</string>
   <string name="chat_page_conversation_system_prompt_save">Сохранить</string>
   <string name="chat_page_delete">Удалить</string>
+  <string name="chat_page_move_to_folder">Переместить в папку</string>
+  <string name="chat_page_remove_from_folder">Убрать из папки</string>
+  <string name="chat_page_create_folder">Новая папка</string>
+  <string name="chat_page_folder_name">Имя папки</string>
+  <string name="chat_page_rename_folder">Переименовать папку</string>
+  <string name="chat_page_delete_folder">Удалить папку</string>
+  <string name="chat_page_rename">Переименовать</string>
+  <string name="chat_page_folder_default">Чат</string>
+  <string name="chat_page_folder_add">Новая</string>
+  <string name="chat_page_delete_folder_confirm">Удалить папку \"%1$s\"? Беседы внутри не будут удалены, только исключены из папки.</string>
+  <string name="chat_page_delete_folder_generating">Некоторые беседы в этой папке все еще генерируются. Пожалуйста, остановите их перед удалением.</string>
   <string name="chat_page_dismiss_error">Скрыть ошибку</string>
   <string name="chat_page_edit_nickname">Изменить ник</string>
   <string name="chat_page_edit_title">Изменить название</string>
@@ -399,7 +410,7 @@
   <string name="imggen_page_title">Генерация изображений</string>
 
   <string name="mcp_picker_syncing">Синхронизация MCP-серверов…</string>
-  <string name="mcp_picker_title">Серверы MCP</string>
+  <string name="mcp_picker_title">MCP</string>
   <string name="menu">Меню</string>
   <string name="menu_page_afternoon_greeting">Добрый день👋</string>
   <string name="menu_page_evening_greeting">Добрый вечер👋</string>
@@ -771,6 +782,18 @@
   <string name="mcp_status_reconnecting">Переподключение (%1$d/%2$d)</string>
   <string name="mcp_status_dormant">Спящий режим, повтор через %1$d сек.</string>
   <string name="mcp_status_error">Ошибка: %1$s</string>
+    <string name="mcp_status_needs_authorization">Требуется авторизация</string>
+    <string name="mcp_status_authorizing">Авторизация</string>
+    <string name="mcp_oauth_authorize">Авторизоваться</string>
+    <string name="mcp_oauth_authorizing_hint">Авторизация, завершите в браузере…</string>
+    <string name="mcp_oauth_cancel_authorization">Отменить авторизацию</string>
+<string name="mcp_oauth_client_id">Client ID</string>
+<string name="mcp_oauth_client_secret">Client Secret (необязательно)</string>
+<string name="mcp_oauth_client_id_hint">Преднастроенный OAuth Client ID (для серверов без DCR)</string>
+<string name="mcp_oauth_clear">Очистить авторизацию</string>
+<string name="mcp_oauth_server_config">Конфигурация сервера</string>
+<string name="mcp_oauth_authorize_with_credentials">Авторизоваться с учётными данными</string>
+<string name="mcp_retry">Повторить</string>
   <string name="setting_page_message_display_settings">Отображение сообщений</string>
   <string name="setting_page_model_and_services">Модели и службы</string>
   <string name="setting_page_no_share_app">Приложение для обмена не найдено</string>

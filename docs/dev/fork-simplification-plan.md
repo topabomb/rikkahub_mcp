@@ -16,7 +16,7 @@
 | `applicationId` | `me.rerere.rikkahub` → `net.weero.measix.pilot` | `app/build.gradle.kts` |
 | `namespace` | `me.rerere.rikkahub` → `net.weero.measix.pilot` | `app/build.gradle.kts` |
 | 包名目录 | `me/rerere/rikkahub/` → `net/weero/measix/pilot/` | `app/src/main/java/` 全部子目录 |
-| `app_name` | RikkaHub → Measix Pilot（中文：小麦助手） | `app/src/main/res/values*/strings.xml` 共 5 个文件（values、values-zh、values-ja、values-ko-rKR、values-ru） |
+| `app_name` | RikkaHub → Measix Pilot（中文：小睿助手） | `app/src/main/res/values*/strings.xml` 共 5 个文件（values、values-zh、values-ja、values-ko-rKR、values-ru） |
 | 启动图标 | `ic_launcher` | `app/src/main/res/mipmap-*/ic_launcher*` 及 `ic_launcher_round*` |
 | User-Agent | `RikkaHub-Android/${VERSION}` → `MeasixPilot-Android/${VERSION}` | `di/DataSourceModule.kt` OkHttpClient 拦截器 |
 

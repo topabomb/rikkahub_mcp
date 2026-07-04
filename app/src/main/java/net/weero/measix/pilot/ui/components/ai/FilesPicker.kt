@@ -1,4 +1,4 @@
-﻿ackage net.weero.measix.pilot.ui.components.ai
+﻿package net.weero.measix.pilot.ui.components.ai
 
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable

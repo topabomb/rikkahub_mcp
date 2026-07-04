@@ -1087,3 +1087,215 @@ McpManager（连接 + 状态机层，纯内存态）
 ChatService（消费层）
   └─ getAllAvailableTools(assistant) — 按 assistant 候选集过滤
 ```
+
+---
+
+## 十四、OAuth 2.1 授权扩展（0.0.8）
+
+> 以下变更在 0.0.8 版本中引入，实现 MCP 授权规范 (2025-11-25) 的完整 OAuth 流程。
+
+### 14.1 新增文件
+
+| 文件 | 职责 |
+|------|------|
+| `McpOAuthClient.kt` | OAuth 2.1 HTTP 客户端：PRM/AS 元数据发现、DCR、PKCE、令牌交换/刷新 |
+| `McpOAuthCallback.kt` | redirect URI 常量 + Chrome Custom Tabs 启动函数 |
+| `McpOAuthCallbackActivity.kt` | 透明 Activity 接收 deep link 回调，经 AppEventBus 转发 |
+| `AppEvent.kt` | 新增 `McpOAuthCallback(state, code, error)` 事件 |
+
+### 14.2 数据结构变更
+
+#### McpStatus 新增 2 个状态
+
+```kotlin
+sealed class McpStatus {
+    // ... 0.0.7 的 6 个状态 ...
+    data object NeedsAuthorization : McpStatus()  // 服务器返回 401，需用户授权
+    data object Authorizing : McpStatus()          // 正在进行 OAuth 授权流程
+}
+```
+
+#### McpCommonOptions 新增 oauth 字段
+
+```kotlin
+data class McpCommonOptions(
+    // ... 原有字段 ...
+    val oauth: McpOAuthState? = null,  // 新增：OAuth 授权状态
+)
+```
+
+#### McpOAuthState（新增）
+
+```kotlin
+@Serializable
+data class McpOAuthState(
+    val enabled: Boolean = false,
+    val clientId: String? = null,
+    val clientSecret: String? = null,
+    val authorizationEndpoint: String? = null,
+    val tokenEndpoint: String? = null,
+    val registrationEndpoint: String? = null,
+    val scope: String? = null,
+    val accessToken: String? = null,
+    val refreshToken: String? = null,
+    val expiresAt: Long = 0L,
+)
+```
+
+#### McpServerConfig 新增 serverUrl 扩展属性
+
+```kotlin
+val McpServerConfig.serverUrl: String
+    get() = when (this) {
+        is McpServerConfig.SseTransportServer -> url
+        is McpServerConfig.StreamableHTTPServer -> url
+    }
+```
+
+### 14.3 McpManager 成员变量变更
+
+| 变量 | 类型 | 变更说明 |
+|------|------|----------|
+| `appEventBus` | `AppEventBus` | **新增**：OAuth 回调事件传递 |
+| `oauthClient` | `McpOAuthClient` | **新增**：OAuth HTTP 客户端 |
+| `authorizationJobs` | `ConcurrentHashMap<Uuid, Job>` | **新增**：OAuth 授权协程管理 |
+| `okHttpClient` | `OkHttpClient` | 新增 `RequestLoggingInterceptor` |
+
+### 14.4 新增常量
+
+| 常量 | 值 | 用途 |
+|------|-----|------|
+| `TOKEN_REFRESH_LEEWAY_MS` | 60_000L | 令牌到期前 60s 视为需要刷新 |
+| `OAUTH_CALLBACK_TIMEOUT` | 5.minutes | OAuth 回调等待超时 |
+
+### 14.5 新增方法
+
+| 方法 | 职责 |
+|------|------|
+| `resolveHeaders()` | 合并用户 headers 与 OAuth Bearer token |
+| `startAuthorization(config, context)` | 发起 OAuth 授权流程（浏览器） |
+| `cancelAuthorization(config)` | 取消进行中的授权 |
+| `authorizeInternal(config, context)` | 完整 9 步 OAuth 流程 |
+| `clearAuthorization(config)` | 清除 OAuth 状态（登出） |
+| `ensureFreshToken(config)` | 令牌即将过期时提前刷新 |
+| `persistOAuthState(configId, oauth)` | 持久化 OAuth 状态到 settingsStore |
+| `computeExpiry(expiresIn)` | 计算令牌过期时间戳 |
+| `needsAuthorization(config, error)` | 判断失败是否应引导 OAuth 授权 |
+| `looksUnauthorized(error)` | 错误文本是否疑似 401/invalid_token |
+
+### 14.6 callTool 增强
+
+`callTool` 在获取 config 后、transport 检查前新增令牌刷新逻辑：
+
+```
+callTool(serverId, toolName, args)
+  ↓ getServerLock(serverId).withLock
+  ↓ 获取 client + config
+  ↓ ensureFreshToken(config)
+  ↓ 若令牌已刷新:
+    → cancelAllJobs(serverId)     // 清理所有待处理任务
+    → closeClient(serverId)       // 关闭旧连接（携带过期令牌）
+    → createAndConnect(freshConfig) // 用新令牌重建连接
+    → 重新获取 client + config
+  ↓ transport 检查 → callTool → 结果转换
+```
+
+### 14.7 createAndConnect 增强
+
+连接失败时新增 OAuth 授权探测：
+
+```
+createAndConnect(config)
+  ↓ connect + syncTools
+  ↓ onFailure:
+    → needsAuthorization(config, error)?
+      → true:  setStatus(NeedsAuthorization)  // 引导用户授权
+      → false: setStatus(Error(...))           // 普通错误
+```
+
+`needsAuthorization` 三层检测：
+1. `looksUnauthorized(error)` — 错误文本匹配 401/unauthorized/invalid_token
+2. `oauth.enabled == true` — 已开启 OAuth，令牌失效 → 引导重新授权
+3. `hasManualAuth` — 用户手动配置 Authorization header → 尊重手动模式，不触发 OAuth
+4. `discoverProtectedResource(serverUrl)` — 主动探测 PRM 元数据，确认服务器支持 OAuth
+
+### 14.8 reconnectClient 增强
+
+重连失败时同样检测 `NeedsAuthorization`，若需要授权则停止重连：
+
+```
+reconnectClient(config)
+  ↓ ensureFreshToken → closeClient → createAndConnect
+  ↓ 若 createAndConnect 返回 false:
+    → status == NeedsAuthorization?
+      → cancelAllJobs(config.id)  // 停止重连，等待用户操作
+      → return
+    → 否则抛异常让上层重试
+```
+
+### 14.9 cancelAllJobs 增强
+
+新增 `authorizationJobs` 清理，确保禁用/移除服务器时 OAuth 授权协程也被取消：
+
+```kotlin
+private fun cancelAllJobs(serverId: Uuid) {
+    reconnectJobs[serverId]?.cancel()
+    dormantJobs[serverId]?.cancel()
+    authorizationJobs[serverId]?.cancel()  // 新增
+    // ... remove ...
+}
+```
+
+### 14.10 transport headers 变更
+
+transport 构建从 `config.commonOptions.headers` 改为 `config.resolveHeaders()`：
+
+```kotlin
+private fun McpServerConfig.resolveHeaders(): List<Pair<String, String>> {
+    val base = commonOptions.headers
+    val token = commonOptions.oauth?.takeIf { it.enabled }?.accessToken
+    val hasAuthHeader = base.any { it.first.equals("Authorization", ignoreCase = true) }
+    return if (!token.isNullOrBlank() && !hasAuthHeader) {
+        base + ("Authorization" to "Bearer $token")
+    } else {
+        base
+    }
+}
+```
+
+### 14.11 状态转换新增
+
+| 当前状态 | 触发条件 | 目标状态 |
+|----------|----------|----------|
+| 任意 | connect 失败 + needsAuthorization | NeedsAuthorization |
+| NeedsAuthorization | 用户点击"授权" | Authorizing |
+| Authorizing | 授权流程完成 + connect 成功 | Connected |
+| Authorizing | 授权流程失败 | Error |
+| Authorizing | 用户点击"取消授权" | NeedsAuthorization |
+| Reconnecting | reconnect 失败 + needsAuthorization | NeedsAuthorization |
+| Connected | callTool 前令牌刷新 | Connected（经 createAndConnect 重建） |
+
+### 14.12 日志体系
+
+0.0.7 引入 `logMcp(serverName, message)` 双日志机制（Logcat + LogPage），0.0.8 确保所有 OAuth 相关日志均使用此机制：
+
+```
+logMcp(name, "Connected (N tools synced)")       // 连接成功
+logMcp(name, "Connection failed: ...")             // 连接失败
+logMcp(name, "Needs OAuth authorization")          // 需要授权
+logMcp(name, "OAuth authorization failed: ...")    // 授权失败
+logMcp(name, "Token refreshed during callTool...") // 令牌刷新
+logMcp(name, "Token refresh failed: ...")          // 刷新失败
+logMcp(name, "OAuth probe failed: ...")            // PRM 探测失败
+```
+
+`McpOAuthClient` 内部的发现日志仍使用 `Log.i`（仅 Logcat），因为它是底层 HTTP 工具类，关键错误已由 `McpManager` 的 `logMcp` 捕获并写入 LogPage。
+
+### 14.13 持久化影响
+
+| 改动 | 持久化影响 | 风险 |
+|------|-----------|------|
+| `McpCommonOptions.oauth` 新增字段 | `@Serializable` + 默认值 `null`，旧 `settings.json` 无此字段时默认不启用 | **无迁移风险** |
+| `McpOAuthState` 持久化在 DataStore | OAuth 令牌/刷新令牌存储在 `settings.json` | 令牌为明文存储（与上游一致） |
+| deep link `measix://mcp-oauth-callback` | 仅 Manifest 声明 | **无运行时行为变化** |
+| `McpStatus` 新增 `NeedsAuthorization`/`Authorizing` | 内存状态，不持久化 | **无风险** |

@@ -1,5 +1,6 @@
 ﻿package net.weero.measix.pilot.data.db
 
+import androidx.room.AutoMigration
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
@@ -7,6 +8,7 @@ import androidx.room.TypeConverters
 import me.rerere.ai.core.TokenUsage
 import net.weero.measix.pilot.data.db.dao.ConversationDAO
 import net.weero.measix.pilot.data.db.dao.FavoriteDAO
+import net.weero.measix.pilot.data.db.dao.FolderDAO
 import net.weero.measix.pilot.data.db.dao.GenMediaDAO
 import net.weero.measix.pilot.data.db.dao.ManagedFileDAO
 import net.weero.measix.pilot.data.db.dao.MemoryDAO
@@ -14,6 +16,7 @@ import net.weero.measix.pilot.data.db.dao.MessageNodeDAO
 import net.weero.measix.pilot.data.db.dao.WorkspaceDAO
 import net.weero.measix.pilot.data.db.entity.ConversationEntity
 import net.weero.measix.pilot.data.db.entity.FavoriteEntity
+import net.weero.measix.pilot.data.db.entity.FolderEntity
 import net.weero.measix.pilot.data.db.entity.GenMediaEntity
 import net.weero.measix.pilot.data.db.entity.ManagedFileEntity
 import net.weero.measix.pilot.data.db.entity.MemoryEntity
@@ -30,8 +33,12 @@ import net.weero.measix.pilot.utils.JsonInstant
         ManagedFileEntity::class,
         FavoriteEntity::class,
         WorkspaceEntity::class,
+        FolderEntity::class,
     ],
-    version = 2,
+    version = 3,
+    autoMigrations = [
+        AutoMigration(from = 2, to = 3),
+    ]
 )
 @TypeConverters(TokenUsageConverter::class)
 abstract class AppDatabase : RoomDatabase() {
@@ -48,6 +55,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun favoriteDao(): FavoriteDAO
 
     abstract fun workspaceDao(): WorkspaceDAO
+
+    abstract fun folderDao(): FolderDAO
 }
 
 object TokenUsageConverter {

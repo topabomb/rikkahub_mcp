@@ -1,4 +1,4 @@
-﻿@file:Suppress("OPT_IN_IS_NOT_ENABLED")
+@file:Suppress("OPT_IN_IS_NOT_ENABLED")
 
 package net.weero.measix.pilot
 
@@ -246,6 +246,7 @@ class RouteActivity : ComponentActivity() {
                 when (event) {
                     is AppEvent.Speak -> tts.speak(event.text)
                     is AppEvent.OpenUsageAccessSettings -> this@RouteActivity.openUsageAccessSettings()
+                    is AppEvent.McpOAuthCallback -> Unit // 由 McpManager 消费
                 }
             }
         }

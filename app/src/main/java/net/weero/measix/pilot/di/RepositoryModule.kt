@@ -6,6 +6,7 @@ import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.FavoriteRepository
+import net.weero.measix.pilot.data.repository.FolderRepository
 import net.weero.measix.pilot.data.repository.FilesRepository
 import net.weero.measix.pilot.data.repository.GenMediaRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
@@ -20,6 +21,10 @@ import java.io.File
 val repositoryModule = module {
     single {
         ConversationRepository(get(), get(), get(), get(), get(), get())
+    }
+
+    single {
+        FolderRepository(get(), get())
     }
 
     single {

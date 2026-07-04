@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.setting
+package net.weero.measix.pilot.ui.pages.setting
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.AlertCircle
@@ -16,6 +16,8 @@ import me.rerere.hugeicons.stroke.Upload02
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Share01
 import me.rerere.hugeicons.stroke.Clock02
+import me.rerere.hugeicons.stroke.ShieldKey
+import me.rerere.hugeicons.stroke.Logout01
 import kotlin.uuid.Uuid
 import android.content.Intent
 import androidx.compose.foundation.layout.aspectRatio
@@ -223,8 +225,13 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
         val status: Map<Uuid, McpStatus> by mcpManager.syncingStatus.collectAsStateWithLifecycle()
         val scope = rememberCoroutineScope()
         val state = rememberPullToRefreshState()
-        val loading = mcpConfigs.any { it.commonOptions.enable } &&
-            status.values.any { it == McpStatus.Connecting || it is McpStatus.Reconnecting || it is McpStatus.Dormant }
+        val loading = mcpConfigs.filter { it.commonOptions.enable }.any { config ->
+                val s = status[config.id]
+                s == McpStatus.Connecting ||
+                    s is McpStatus.Reconnecting ||
+                    s is McpStatus.Dormant ||
+                    s == McpStatus.Authorizing
+            }
         PullToRefreshBox(
             isRefreshing = loading,
             onRefresh = {
@@ -379,8 +386,8 @@ private fun McpServerItem(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.Top,
             ) {
                 when (status) {
                     McpStatus.Idle -> Icon(HugeIcons.MessageBlocked, null)
@@ -396,6 +403,10 @@ private fun McpServerItem(
                     )
                     is McpStatus.Dormant -> Icon(HugeIcons.Clock02, null)
                     is McpStatus.Error -> Icon(HugeIcons.AlertCircle, null)
+                    McpStatus.NeedsAuthorization -> Icon(HugeIcons.AlertCircle, null)
+                    McpStatus.Authorizing -> CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp)
+                    )
                 }
 
                 Column(
@@ -425,12 +436,23 @@ private fun McpServerItem(
 
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Tag(type = TagType.SUCCESS) {
                             when (item) {
                                 is McpServerConfig.SseTransportServer -> Text("SSE")
                                 is McpServerConfig.StreamableHTTPServer -> Text("Streamable HTTP")
                             }
+                        }
+                        val oauthState = item.commonOptions.oauth
+                        if (oauthState?.enabled == true) {
+                            Icon(
+                                imageVector = HugeIcons.ShieldKey,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = if (oauthState.isAuthorized) MaterialTheme.extendColors.green6
+                                       else MaterialTheme.colorScheme.error,
+                            )
                         }
                     }
                     if (status is McpStatus.Error) {
@@ -441,6 +463,15 @@ private fun McpServerItem(
                             maxLines = 3,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        TextButton(
+                            onClick = { scope.launch { mcpManager.retryConnect(item) } },
+                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.mcp_retry),
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
                     }
                     if (status is McpStatus.Reconnecting) {
                         Text(
@@ -460,20 +491,119 @@ private fun McpServerItem(
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                }
-
-                IconButton(
-                    onClick = onShare
-                ) {
-                    Icon(HugeIcons.Share01, null)
-                }
-
-                IconButton(
-                    onClick = {
-                        onEdit(item)
+                    if (status == McpStatus.NeedsAuthorization) {
+                        val context = LocalContext.current
+                        var showManualConfig by remember { mutableStateOf(false) }
+                        var clientIdText by remember(item.id) {
+                            mutableStateOf(item.commonOptions.oauth?.clientId ?: "")
+                        }
+                        var clientSecretText by remember(item.id) {
+                            mutableStateOf(item.commonOptions.oauth?.clientSecret ?: "")
+                        }
+                        Text(
+                            text = stringResource(R.string.mcp_status_needs_authorization),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        // 主授权按钮：尝试 DCR 动态注册
+                        Button(
+                            onClick = { mcpManager.startAuthorization(item, context) },
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                        ) {
+                            Text(stringResource(R.string.mcp_oauth_authorize))
+                        }
+                        // 展开服务器配置（用于不支持 DCR 的服务器，如 GitHub）
+                        TextButton(
+                            onClick = { showManualConfig = !showManualConfig },
+                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.mcp_oauth_server_config),
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                        if (showManualConfig) {
+                            OutlinedTextField(
+                                value = clientIdText,
+                                onValueChange = { clientIdText = it },
+                                label = { Text(stringResource(R.string.mcp_oauth_client_id)) },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                supportingText = { Text(stringResource(R.string.mcp_oauth_client_id_hint)) },
+                            )
+                            OutlinedTextField(
+                                value = clientSecretText,
+                                onValueChange = { clientSecretText = it },
+                                label = { Text(stringResource(R.string.mcp_oauth_client_secret)) },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                            )
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        val updated = mcpManager.setOAuthClientCredentials(
+                                            item, clientIdText.trim(), clientSecretText.trim().ifBlank { null }
+                                        )
+                                        mcpManager.startAuthorization(updated, context)
+                                    }
+                                },
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                            ) {
+                                Text(stringResource(R.string.mcp_oauth_authorize_with_credentials))
+                            }
+                        }
                     }
+                    if (status == McpStatus.Authorizing) {
+                        Text(
+                            text = stringResource(R.string.mcp_oauth_authorizing_hint),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                        TextButton(
+                            onClick = { mcpManager.cancelAuthorization(item) },
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                        ) {
+                            Text(stringResource(R.string.mcp_oauth_cancel_authorization))
+                        }
+                    }
+                    // 已授权时提供取消授权入口（非授权中/非需要授权状态）
+                    if (status != McpStatus.NeedsAuthorization &&
+                        status != McpStatus.Authorizing &&
+                        item.commonOptions.oauth?.isAuthorized == true) {
+                        TextButton(
+                            onClick = { scope.launch { mcpManager.clearAuthorization(item) } },
+                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                        ) {
+                            Icon(
+                                imageVector = HugeIcons.Logout01,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                text = stringResource(R.string.mcp_oauth_clear),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    Icon(HugeIcons.Settings03, null)
+                    IconButton(
+                        onClick = onShare,
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(HugeIcons.Share01, null, modifier = Modifier.size(18.dp))
+                    }
+                    IconButton(
+                        onClick = { onEdit(item) },
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(HugeIcons.Settings03, null, modifier = Modifier.size(18.dp))
+                    }
                 }
             }
         }

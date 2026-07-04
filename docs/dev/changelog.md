@@ -6,6 +6,33 @@
 
 ---
 
+## 0.0.9（versionCode 9）— 2026-07-04
+
+### 新增
+
+- **MCP OAuth 2.1 授权**：支持 MCP 服务器 OAuth 授权流程（元数据发现、DCR/PKCE、浏览器授权、令牌自动刷新），不支持 DCR 的服务器可手动填写 Client ID
+- **会话文件夹分组**：助手内文件夹分组，会话可移入/移出文件夹，支持新建/重命名/删除（DB Migration 2→3）
+- **workspace `/tmp` 免审批**：`/tmp` 纳入可写安全区白名单
+
+### 修复
+
+- **附件菜单按钮居中**：FlowRow 折行后未与首行左对齐
+- **粗体字重**：SemiBold → Bold，修复 OEM 字体下粗体不生效
+- **OpenAI 工具调用参数残缺 JSON**：流式中断导致 arguments 不完整，改用 `inputAsJson()` 归一化
+- **Google/OpenAI 多模态工具调用**：工具返回的图片/视频/音频不再被丢弃
+
+### 变更
+
+- MCP SDK 0.13.0 → 0.14.0
+- MCP UI 文本统一为"MCP"，Loading 指示器修复为按配置精确匹配
+- MCP OAuth 健壮性增强（Job 自杀修复、连接泄露修复、清除授权立即断开），详见 `docs/dev/mcp-lifecycle-analysis.md` 第十四章
+
+### 上游同步
+
+- 同步 rikkahub 上游 `4b2fd4b9..upstream/master`（2026-07-01 ~ 2026-07-03）的 9 个提交，详见 `docs/dev/upstream-sync.md` 第四批检查记录
+
+---
+
 ## 0.0.8（versionCode 8）— 2026-06-30
 
 ### 新增

@@ -64,6 +64,7 @@ val appModule = module {
             filesManager = get(),
             skillManager = get(),
             workspaceRepository = get(),
+            folderRepository = get(),
             soundEffectPlayer = get()
         )
     }

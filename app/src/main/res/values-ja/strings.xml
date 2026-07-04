@@ -1,4 +1,4 @@
-﻿<?xml version='1.0' encoding='UTF-8'?>
+<?xml version='1.0' encoding='UTF-8'?>
 <resources>
   <string name="about_page_license">ライセンス</string>
   <string name="about_page_documentation">ドキュメント</string>
@@ -274,6 +274,17 @@
   <string name="chat_page_conversation_system_prompt_hint">この会話でアシスタントのシステムプロンプトを上書き</string>
   <string name="chat_page_conversation_system_prompt_save">保存</string>
   <string name="chat_page_delete">削除</string>
+  <string name="chat_page_move_to_folder">フォルダに移動</string>
+  <string name="chat_page_remove_from_folder">フォルダから削除</string>
+  <string name="chat_page_create_folder">新規フォルダ</string>
+  <string name="chat_page_folder_name">フォルダ名</string>
+  <string name="chat_page_rename_folder">フォルダ名を変更</string>
+  <string name="chat_page_delete_folder">フォルダを削除</string>
+  <string name="chat_page_rename">名前を変更</string>
+  <string name="chat_page_folder_default">チャット</string>
+  <string name="chat_page_folder_add">新規</string>
+  <string name="chat_page_delete_folder_confirm">フォルダ \"%1$s\" を削除しますか？内部の会話は削除されず、フォルダから取り除かれるだけです。</string>
+  <string name="chat_page_delete_folder_generating">フォルダ内の一部の会話がまだ生成中です。削除する前にそれらを停止してください。</string>
   <string name="chat_page_dismiss_error">エラーを閉じる</string>
   <string name="chat_page_edit_nickname">ニックネームを編集</string>
   <string name="chat_page_edit_title">タイトルを編集</string>
@@ -399,7 +410,7 @@
   <string name="imggen_page_title">画像生成</string>
 
   <string name="mcp_picker_syncing">MCPサーバーを同期中...</string>
-  <string name="mcp_picker_title">MCPサーバー</string>
+  <string name="mcp_picker_title">MCP</string>
   <string name="menu">メニュー</string>
   <string name="menu_page_afternoon_greeting">こんにちは\uD83D\uDC4B</string>
   <string name="menu_page_evening_greeting">こんばんは\uD83D\uDC4B</string>
@@ -771,6 +782,18 @@
   <string name="mcp_status_reconnecting">再接続中 (%1$d/%2$d)</string>
   <string name="mcp_status_dormant">休眠中、%1$d秒後に再試行</string>
   <string name="mcp_status_error">エラー: %1$s</string>
+    <string name="mcp_status_needs_authorization">認証が必要です</string>
+    <string name="mcp_status_authorizing">認証中</string>
+    <string name="mcp_oauth_authorize">認証</string>
+    <string name="mcp_oauth_authorizing_hint">認証中、ブラウザで完了してください…</string>
+    <string name="mcp_oauth_cancel_authorization">認証をキャンセル</string>
+<string name="mcp_oauth_client_id">Client ID</string>
+<string name="mcp_oauth_client_secret">Client Secret（任意）</string>
+<string name="mcp_oauth_client_id_hint">事前設定済み OAuth Client ID（DCR 未対応サーバー用）</string>
+<string name="mcp_oauth_clear">認証をクリア</string>
+<string name="mcp_oauth_server_config">サーバー設定</string>
+<string name="mcp_oauth_authorize_with_credentials">資格情報で認証</string>
+<string name="mcp_retry">再試行</string>
   <string name="setting_page_message_display_settings">メッセージ表示</string>
   <string name="setting_page_model_and_services">モデルとサービス</string>
   <string name="setting_page_no_share_app">共有アプリが見つかりません</string>

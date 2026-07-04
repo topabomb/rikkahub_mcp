@@ -1,6 +1,6 @@
 ﻿# Measix Pilot
 
-> 小麦助手 — 基于 [RikkaHub](https://github.com/re-ovo/rikkahub)（原作者 [re-ovo](https://github.com/re-ovo)）精简 fork 的原生 Android LLM 聊天客户端。
+> 小睿助手(Measix Pilot) — 基于 [RikkaHub](https://github.com/re-ovo/rikkahub)（原作者 [re-ovo](https://github.com/re-ovo)）fork 的原生 Android LLM 聊天客户端，Measix Pilot 的主要目标是以MCP为中心的用户体验和交互流程的优化。
 
 Fork 源头：RikkaHub v2.3.1（versionCode 164），提交 `5b9be301`。感谢原项目提供的优秀架构和功能基础。
 

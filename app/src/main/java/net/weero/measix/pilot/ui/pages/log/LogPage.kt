@@ -1,16 +1,21 @@
 ﻿package net.weero.measix.pilot.ui.pages.log
 
 import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.Copy01
 import me.rerere.hugeicons.stroke.Delete01
+import android.content.ClipData
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
@@ -32,8 +37,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -43,9 +51,11 @@ import me.rerere.common.android.Logging
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.JsonTree
+import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.ui.theme.JetbrainsMono
 import net.weero.measix.pilot.utils.JsonInstantPretty
+import com.dokar.sonner.ToastType
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -179,6 +189,9 @@ private fun RequestLoggingSwitchCard(
 @Composable
 private fun RequestLogCard(log: LogEntry.RequestLog, onClick: () -> Unit) {
     val dateFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    val toaster = LocalToaster.current
 
     Card(
         modifier = Modifier
@@ -192,7 +205,8 @@ private fun RequestLogCard(log: LogEntry.RequestLog, onClick: () -> Unit) {
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     text = log.method,
@@ -200,11 +214,35 @@ private fun RequestLogCard(log: LogEntry.RequestLog, onClick: () -> Unit) {
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
                 )
-                Text(
-                    text = dateFormat.format(Date(log.timestamp)),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = dateFormat.format(Date(log.timestamp)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    IconButton(
+                        onClick = {
+                            scope.launch {
+                                val text = buildString {
+                                    appendLine("${log.method} ${log.url}")
+                                    log.responseCode?.let { appendLine("Status: $it") }
+                                    log.durationMs?.let { appendLine("Duration: ${it}ms") }
+                                    log.error?.let { appendLine("Error: $it") }
+                                }
+                                clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Request log", text)))
+                                toaster.show("Copied", ToastType.Success)
+                            }
+                        },
+                        modifier = Modifier.size(24.dp),
+                    ) {
+                        Icon(
+                            HugeIcons.Copy01,
+                            contentDescription = "Copy log",
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
             }
 
             Text(
@@ -396,29 +434,51 @@ private fun HeaderItem(key: String, value: String) {
 @Composable
 private fun TextLogCard(log: LogEntry.TextLog) {
     val dateFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    val toaster = LocalToaster.current
 
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CustomColors.cardColorsOnSurfaceContainer,
     ) {
-        SelectionContainer {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = log.tag,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = log.tag,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = dateFormat.format(Date(log.timestamp)),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Spacer(Modifier.width(4.dp))
+                    IconButton(
+                        onClick = {
+                            scope.launch {
+                                clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(log.tag, log.message)))
+                                toaster.show("Copied", ToastType.Success)
+                            }
+                        },
+                        modifier = Modifier.size(24.dp),
+                    ) {
+                        Icon(
+                            HugeIcons.Copy01,
+                            contentDescription = "Copy log",
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
                 }
+            }
+            SelectionContainer {
                 Text(
                     text = log.message,
                     style = MaterialTheme.typography.bodySmall,

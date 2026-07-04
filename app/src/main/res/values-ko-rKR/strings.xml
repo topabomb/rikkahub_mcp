@@ -1,4 +1,4 @@
-﻿<?xml version='1.0' encoding='UTF-8'?>
+<?xml version='1.0' encoding='UTF-8'?>
 <resources>
   <string name="about_page_license">라이선스</string>
   <string name="about_page_documentation">문서</string>
@@ -274,6 +274,17 @@
   <string name="chat_page_conversation_system_prompt_hint">이 대화에서 어시스턴트의 시스템 프롬프트를 재정의합니다</string>
   <string name="chat_page_conversation_system_prompt_save">저장</string>
   <string name="chat_page_delete">삭제</string>
+  <string name="chat_page_move_to_folder">폴더로 이동</string>
+  <string name="chat_page_remove_from_folder">폴더에서 제거</string>
+  <string name="chat_page_create_folder">새 폴더</string>
+  <string name="chat_page_folder_name">폴더 이름</string>
+  <string name="chat_page_rename_folder">폴더 이름 바꾸기</string>
+  <string name="chat_page_delete_folder">폴더 삭제</string>
+  <string name="chat_page_rename">이름 변경</string>
+  <string name="chat_page_folder_default">채팅</string>
+  <string name="chat_page_folder_add">새로 만들기</string>
+  <string name="chat_page_delete_folder_confirm">폴더 \"%1$s\"를 삭제하시겠습니까? 내부의 대화는 삭제되지 않고 폴더에서만 제거됩니다.</string>
+  <string name="chat_page_delete_folder_generating">이 폴더의 일부 대화가 아직 생성 중입니다. 삭제하기 전에 중지해 주세요.</string>
   <string name="chat_page_dismiss_error">오류 닫기</string>
   <string name="chat_page_edit_nickname">이름 편집</string>
   <string name="chat_page_edit_title">제목 편집</string>
@@ -399,7 +410,7 @@
   <string name="imggen_page_title">이미지 생성</string>
 
   <string name="mcp_picker_syncing">MCP 서버 동기화 중...</string>
-  <string name="mcp_picker_title">MCP 서버</string>
+  <string name="mcp_picker_title">MCP</string>
   <string name="menu">메뉴</string>
   <string name="menu_page_afternoon_greeting">좋은 오후입니다\uD83D\uDC4B</string>
   <string name="menu_page_evening_greeting">좋은 저녁입니다\uD83D\uDC4B</string>
@@ -771,6 +782,18 @@
   <string name="mcp_status_reconnecting">재연결 중 (%1$d/%2$d)</string>
   <string name="mcp_status_dormant">휴면 중, %1$d초 후 재시도</string>
   <string name="mcp_status_error">오류: %1$s</string>
+    <string name="mcp_status_needs_authorization">인증이 필요합니다</string>
+    <string name="mcp_status_authorizing">인증 중</string>
+    <string name="mcp_oauth_authorize">인증</string>
+    <string name="mcp_oauth_authorizing_hint">인증 중, 브라우저에서 완료하세요…</string>
+    <string name="mcp_oauth_cancel_authorization">인증 취소</string>
+<string name="mcp_oauth_client_id">Client ID</string>
+<string name="mcp_oauth_client_secret">Client Secret (선택)</string>
+<string name="mcp_oauth_client_id_hint">사전 구성된 OAuth Client ID (DCR 미지원 서버용)</string>
+<string name="mcp_oauth_clear">인증 지우기</string>
+<string name="mcp_oauth_server_config">서버 설정</string>
+<string name="mcp_oauth_authorize_with_credentials">자격 증명으로 인증</string>
+<string name="mcp_retry">재시도</string>
   <string name="setting_page_message_display_settings">메시지 표시</string>
   <string name="setting_page_model_and_services">모델 및 서비스</string>
   <string name="setting_page_no_share_app">공유 앱을 찾을 수 없습니다</string>
