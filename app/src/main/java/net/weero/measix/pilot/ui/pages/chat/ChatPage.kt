@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.chat
+package net.weero.measix.pilot.ui.pages.chat
 
 import android.net.Uri
 import android.util.Log
@@ -451,7 +451,7 @@ private fun ChatPageContent(
                 onJumpToMessage = { index ->
                     previewMode = false
                     scope.launch {
-                        chatListState.animateScrollToItem(index)
+                        chatListState.requestScrollToItem(index)
                     }
                 },
                 onToolApproval = { toolCallId, approved, reason ->

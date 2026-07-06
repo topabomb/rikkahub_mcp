@@ -13,6 +13,7 @@
 - **MCP OAuth 2.1 授权**：支持 MCP 服务器 OAuth 授权流程（元数据发现、DCR/PKCE、浏览器授权、令牌自动刷新），不支持 DCR 的服务器可手动填写 Client ID
 - **会话文件夹分组**：助手内文件夹分组，会话可移入/移出文件夹，支持新建/重命名/删除（DB Migration 2→3）
 - **workspace `/tmp` 免审批**：`/tmp` 纳入可写安全区白名单
+- **化学公式渲染**：KaTeX 新增 mhchem 扩展（mark.html），jlatexmath 1.4→1.5，支持 `\ce{}` 等化学公式语法
 
 ### 修复
 
@@ -20,16 +21,22 @@
 - **粗体字重**：SemiBold → Bold，修复 OEM 字体下粗体不生效
 - **OpenAI 工具调用参数残缺 JSON**：流式中断导致 arguments 不完整，改用 `inputAsJson()` 归一化
 - **Google/OpenAI 多模态工具调用**：工具返回的图片/视频/音频不再被丢弃
+- **预览搜索跳转被打断**：`animateScrollToItem` → `requestScrollToItem`，避免键盘滚动打断跳转
+- **搜索选择面板空白**：不支持内置搜索的模型残留 `BuiltInTools.Search` 状态时面板空白且无入口关闭，改为已开启时也显示开关
 
 ### 变更
 
 - MCP SDK 0.13.0 → 0.14.0
 - MCP UI 文本统一为"MCP"，Loading 指示器修复为按配置精确匹配
 - MCP OAuth 健壮性增强（Job 自杀修复、连接泄露修复、清除授权立即断开），详见 `docs/dev/mcp-lifecycle-analysis.md` 第十四章
+- 压缩上下文对话框保留消息数改为手动输入（OutlinedNumberInput 替换分段按钮）
+- Compose BOM 2026.06.00→2026.06.01、Material3 1.5.0-alpha22→1.5.0-alpha23、Navigation3 1.1.2→1.1.4
+- 预存偏离对齐：material3AdaptiveNav3 1.3.0-beta02→1.3.0-rc01、lifecycleViewmodelNav3 2.10.0→2.11.0、lifecycleRuntimeKtx 2.10.0→2.11.0
 
 ### 上游同步
 
 - 同步 rikkahub 上游 `4b2fd4b9..upstream/master`（2026-07-01 ~ 2026-07-03）的 9 个提交，详见 `docs/dev/upstream-sync.md` 第四批检查记录
+- 同步 rikkahub 上游 `5b39e05d..upstream/master`（2026-07-05）的 6 个提交，详见 `docs/dev/upstream-sync.md` 第五批检查记录
 
 ---
 

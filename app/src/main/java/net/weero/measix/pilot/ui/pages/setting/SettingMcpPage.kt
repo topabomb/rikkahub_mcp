@@ -162,13 +162,18 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
     val toaster = LocalToaster.current
     val context = LocalContext.current
 
+    val scanErrorText = stringResource(R.string.setting_provider_page_scan_error)
+    val noPermissionText = stringResource(R.string.setting_provider_page_no_permission)
+    val noQrFoundText = stringResource(R.string.setting_provider_page_no_qr_found)
+    val conflictOverwriteText = stringResource(R.string.setting_mcp_page_conflict_overwrite)
+
     val scanQrCodeLauncher = rememberLauncherForActivityResult(ScanQRCode()) { result ->
         when (result) {
             is QRResult.QRSuccess -> handleMcpImport(result.content.rawValue ?: "", vm, toaster, context) { conflicts ->
                 pendingConflicts = conflicts
             }
-            is QRResult.QRError -> toaster.show(context.getString(R.string.setting_provider_page_scan_error, result), type = ToastType.Error)
-            QRResult.QRMissingPermission -> toaster.show(context.getString(R.string.setting_provider_page_no_permission), type = ToastType.Error)
+            is QRResult.QRError -> toaster.show(scanErrorText, type = ToastType.Error)
+            QRResult.QRMissingPermission -> toaster.show(noPermissionText, type = ToastType.Error)
             QRResult.QRUserCanceled -> {}
         }
     }
@@ -179,7 +184,7 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
         uri?.let {
             val qrContent = ImageUtils.decodeQRCodeFromUri(context, it)
             if (qrContent.isNullOrEmpty()) {
-                toaster.show(context.getString(R.string.setting_provider_page_no_qr_found), type = ToastType.Error)
+                toaster.show(noQrFoundText, type = ToastType.Error)
             } else {
                 handleMcpImport(qrContent, vm, toaster, context) { conflicts ->
                     pendingConflicts = conflicts
@@ -329,7 +334,7 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
             conflicts = conflicts,
             onConfirm = {
                 vm.confirmOverwriteMcpServers(conflicts.map { it.first })
-                toaster.show(context.getString(R.string.setting_mcp_page_conflict_overwrite), type = ToastType.Success)
+                toaster.show(conflictOverwriteText, type = ToastType.Success)
                 pendingConflicts = null
             },
             onDismiss = { pendingConflicts = null }

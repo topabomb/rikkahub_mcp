@@ -384,6 +384,8 @@ private fun ImportProviderButton(
     }
 
     if (showPasteDialog) {
+        val importSuccessText = stringResource(R.string.setting_provider_page_import_success)
+        val qrDecodeFailedText = stringResource(R.string.setting_provider_page_qr_decode_failed)
         ProviderPasteImportDialog(
             onDismiss = { showPasteDialog = false },
             onImport = { text ->
@@ -391,13 +393,13 @@ private fun ImportProviderButton(
                     val setting = decodeProviderSetting(text.trim())
                     onAdd(setting)
                     toaster.show(
-                        context.getString(R.string.setting_provider_page_import_success),
+                        importSuccessText,
                         type = ToastType.Success
                     )
                     showPasteDialog = false
                 }.onFailure { error ->
                     toaster.show(
-                        context.getString(R.string.setting_provider_page_qr_decode_failed, error.message ?: ""),
+                        qrDecodeFailedText,
                         type = ToastType.Error
                     )
                 }

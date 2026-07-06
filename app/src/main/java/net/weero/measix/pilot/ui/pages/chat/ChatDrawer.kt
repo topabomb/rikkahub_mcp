@@ -595,6 +595,7 @@ fun ChatDrawerContent(
 
     // 删除文件夹确认
     folderToDelete?.let { folder ->
+        val deleteFolderGeneratingText = stringResource(R.string.chat_page_delete_folder_generating)
         AlertDialog(
             onDismissRequest = { folderToDelete = null },
             title = { Text(stringResource(R.string.chat_page_delete_folder)) },
@@ -606,7 +607,7 @@ fun ChatDrawerContent(
                             folderToDelete = null
                             conversations.refresh()
                         } else {
-                            toaster.show(context.getString(R.string.chat_page_delete_folder_generating), type = ToastType.Warning)
+                            toaster.show(deleteFolderGeneratingText, type = ToastType.Warning)
                         }
                     }
                 ) { Text(stringResource(R.string.chat_page_delete)) }
