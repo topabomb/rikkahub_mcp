@@ -11,4 +11,6 @@ class AppEventBus {
     suspend fun emit(event: AppEvent) {
         _events.emit(event)
     }
+
+    fun tryEmit(event: AppEvent): Boolean = _events.tryEmit(event)
 }

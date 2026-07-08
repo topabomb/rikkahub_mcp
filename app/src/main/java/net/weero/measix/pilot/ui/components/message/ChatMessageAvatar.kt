@@ -8,6 +8,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import me.rerere.ai.core.MessageRole
@@ -106,7 +107,8 @@ fun ChatMessageAssistantAvatar(
                         Text(
                             text = model.displayName,
                             style = MaterialTheme.typography.labelLargeEmphasized,
-                            maxLines = 1,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
