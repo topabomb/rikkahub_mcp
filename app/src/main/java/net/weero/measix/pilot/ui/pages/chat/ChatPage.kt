@@ -87,6 +87,7 @@ import net.weero.measix.pilot.ui.context.Navigator
 import net.weero.measix.pilot.ui.hooks.ChatInputState
 import net.weero.measix.pilot.ui.hooks.EditStateContent
 import net.weero.measix.pilot.ui.hooks.useEditState
+import net.weero.measix.pilot.utils.ImageUtils
 import net.weero.measix.pilot.utils.base64Decode
 import net.weero.measix.pilot.utils.isAllowedFileType
 import net.weero.measix.pilot.utils.navigateToChatPage
@@ -570,8 +571,14 @@ private fun ChatFilesPickerSheet(
                 } else if (selectedUris.size == 1) {
                     val tempFile = File(context.appTempFolder, "pick_temp_${System.currentTimeMillis()}.jpg")
                     runCatching {
-                        context.contentResolver.openInputStream(selectedUris.first())?.use { input ->
-                            tempFile.outputStream().use { output -> input.copyTo(output) }
+                        val source = selectedUris.first()
+                        // HEIF/HEIC（尤其 HDR HEIF）交给 UCrop 前先解码转为 JPEG，规避裁剪解码失败
+                        val converted = ImageUtils.isHeifImage(context, source) &&
+                            ImageUtils.convertHeifToJpeg(context, source, tempFile)
+                        if (!converted) {
+                            context.contentResolver.openInputStream(source)?.use { input ->
+                                tempFile.outputStream().use { output -> input.copyTo(output) }
+                            }
                         }
                         preCropTempFile = tempFile
                         launchImageCrop(tempFile.toUri())

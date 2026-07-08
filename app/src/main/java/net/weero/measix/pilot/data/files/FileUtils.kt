@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.files
+package net.weero.measix.pilot.data.files
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -115,6 +115,17 @@ object FileUtils {
                 .contentEquals(byteArrayOf(0x57, 0x45, 0x42, 0x50))
         ) {
             return "image/webp"
+        }
+        // HEIF/HEIC/AVIF: ISO-BMFF 容器，"ftyp" box 位于字节 4..8，主品牌码位于 8..12
+        if (read >= 12 && header.sliceArray(4..7).toString(Charsets.US_ASCII) == "ftyp") {
+            when (header.sliceArray(8..11).toString(Charsets.US_ASCII)) {
+                "heic", "heix", "heim", "heis",
+                "hevc", "hevx", "hevm", "hevs",
+                "mif1", "msf1", "heif",
+                    -> return "image/heic"
+
+                "avif", "avis" -> return "image/avif"
+            }
         }
 
         val textSample = runCatching {

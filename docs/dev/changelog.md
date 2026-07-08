@@ -6,7 +6,7 @@
 
 ---
 
-## 0.0.9（versionCode 9）— 2026-07-04
+## 0.0.9（versionCode 9）— 2026-07-04 ~ 2026-07-08
 
 ### 新增
 
@@ -14,15 +14,24 @@
 - **会话文件夹分组**：助手内文件夹分组，会话可移入/移出文件夹，支持新建/重命名/删除（DB Migration 2→3）
 - **workspace `/tmp` 免审批**：`/tmp` 纳入可写安全区白名单
 - **化学公式渲染**：KaTeX 新增 mhchem 扩展（mark.html），jlatexmath 1.4→1.5，支持 `\ce{}` 等化学公式语法
+- **HEIF/HEIC 图片上传与裁剪**：扩展 HEIF/HEIC/AVIF 品牌码识别（heix/hevc/mif1 等 12 种），裁剪前自动将 HEIF 转为 JPEG 规避 UCrop 解码失败
+- **imggen 自定义尺寸输入**：`ImageAspectRatio` 枚举替换为 `ImageGenSize`（携带实际 size 值），设置面板新增自定义尺寸输入框
+- **TTS 直角引号朗读**：`extractQuotedContent()` 新增直角引号 `「」` 和白直角引号 `『』` 匹配
+- **模型注册扩展**：新增 GLM-5.2、HY3、LongCat-2.0、Qwen 3.5/3.6/3.7 MAX、Doubao 2.0/2.1 模型检测
 
 ### 修复
 
 - **附件菜单按钮居中**：FlowRow 折行后未与首行左对齐
 - **粗体字重**：SemiBold → Bold，修复 OEM 字体下粗体不生效
 - **OpenAI 工具调用参数残缺 JSON**：流式中断导致 arguments 不完整，改用 `inputAsJson()` 归一化
-- **Google/OpenAI 多模态工具调用**：工具返回的图片/视频/音频不再被丢弃
+- **Google/OpenAI 多模态工具调用**：工具返回的图片按模型输入模态回传，不支持图片的模型以文本占位替代；简化为仅处理文字和图片（移除 Video/Audio）
 - **预览搜索跳转被打断**：`animateScrollToItem` → `requestScrollToItem`，避免键盘滚动打断跳转
 - **搜索选择面板空白**：不支持内置搜索的模型残留 `BuiltInTools.Search` 状态时面板空白且无入口关闭，改为已开启时也显示开关
+- **化学公式 `\ce{}` 渲染**：mhchem 改为 side-effect import + 传入已加载 mhchem 的 katex 实例给 markdown-it-katex 插件，修复插件使用内部自带 katex 实例导致 `\ce` 无法识别
+- **中文弯引号匹配**：raw string 中的 Unicode 弯引号改为 `\u201C`/`\u201D`/`\u2018`/`\u2019` 转义，修复正则无法匹配
+- **状态栏沉浸**：助手详情页（Basic/LocalTool/Memory/Prompt/Request/Mcp）和设置页（Files/Mcp）的 innerPadding 移入滚动容器内部，内容可滚动到顶栏下方
+- **扩展管理按钮关闭面板**：导航回调改为直接关闭内外两层 sheet 并立即跳转，消除面板残留视觉割裂
+- **工作区导入按钮遮挡**：FAB 移至顶栏 IconButton，避免遮挡文件菜单上下文菜单
 
 ### 变更
 
@@ -32,11 +41,16 @@
 - 压缩上下文对话框保留消息数改为手动输入（OutlinedNumberInput 替换分段按钮）
 - Compose BOM 2026.06.00→2026.06.01、Material3 1.5.0-alpha22→1.5.0-alpha23、Navigation3 1.1.2→1.1.4
 - 预存偏离对齐：material3AdaptiveNav3 1.3.0-beta02→1.3.0-rc01、lifecycleViewmodelNav3 2.10.0→2.11.0、lifecycleRuntimeKtx 2.10.0→2.11.0
+- **fileSizeToString 统一重构**：合并 4 处分散的 `formatBytes` 实现，统一为三位有效数字 + 支持到 TB
+- **移除 Google Imagen 图像生成**：`Provider.generateImage` 改为默认 `error()` 实现，删除 GoogleProvider 的 Imagen predict 接口
+- **imggen 移除重复模型选择器**：设置面板中的 ModelSelector 与页面顶部重复，已移除
+- Gradle 9.5.0 → 9.6.1
 
 ### 上游同步
 
 - 同步 rikkahub 上游 `4b2fd4b9..upstream/master`（2026-07-01 ~ 2026-07-03）的 9 个提交，详见 `docs/dev/upstream-sync.md` 第四批检查记录
 - 同步 rikkahub 上游 `5b39e05d..upstream/master`（2026-07-05）的 6 个提交，详见 `docs/dev/upstream-sync.md` 第五批检查记录
+- 同步 rikkahub 上游 `ef564dca..upstream/master`（2026-07-06 ~ 2026-07-08）的 17 个提交（16 个同步 + 1 个补充同步），详见 `docs/dev/upstream-sync.md` 第六批检查记录
 
 ---
 
