@@ -522,6 +522,7 @@ class McpManager(
             if (_status.value[configId] == McpStatus.Connected) scheduleReconnect(configId)
         }
         transport.onError {
+            if (isSseStreamGiveUpError(it)) return@onError
             if (_status.value[configId] == McpStatus.Connected) scheduleReconnect(configId)
         }
 
@@ -953,6 +954,18 @@ class McpManager(
             message.contains("invalid access token") ||
             message.contains("missing or invalid") ||
             message.contains("missing required authorization")
+    }
+
+    /**
+     * StreamableHttpClientTransport 会额外开一条 GET SSE 长连接，部分 server 不支持或主动关闭。
+     * SDK 内部重试耗尽后 emit "Maximum reconnection attempts exceeded"，此时 POST 通道仍健康，
+     * 旧逻辑据此重建整个客户端，形成无限重连循环 (#1294)。
+     */
+    private fun isSseStreamGiveUpError(error: Throwable): Boolean {
+        val message = generateSequence(error) { it.cause }
+            .mapNotNull { it.message }
+            .joinToString(" ")
+        return message.contains("Maximum reconnection attempts exceeded", ignoreCase = true)
     }
 }
 

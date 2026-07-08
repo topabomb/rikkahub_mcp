@@ -18,6 +18,8 @@
 - **imggen 自定义尺寸输入**：`ImageAspectRatio` 枚举替换为 `ImageGenSize`（携带实际 size 值），设置面板新增自定义尺寸输入框
 - **TTS 直角引号朗读**：`extractQuotedContent()` 新增直角引号 `「」` 和白直角引号 `『』` 匹配
 - **模型注册扩展**：新增 GLM-5.2、HY3、LongCat-2.0、Qwen 3.5/3.6/3.7 MAX、Doubao 2.0/2.1 模型检测
+- **TTS 语气标记引导**：TTSProvider 新增可选 `promptGuidance`，text_to_speech 工具启用时将当前选中 provider 的引导注入 system prompt；MiMo 硬编码风格/音频标签引导
+- **生成通知解耦**：新增 ChatNotificationManager 通过 AppEventBus 消费生成事件，承接 Live Update/完成通知、前后台判断与 1s 节流，ChatService 只发事件
 
 ### 修复
 
@@ -32,6 +34,10 @@
 - **状态栏沉浸**：助手详情页（Basic/LocalTool/Memory/Prompt/Request/Mcp）和设置页（Files/Mcp）的 innerPadding 移入滚动容器内部，内容可滚动到顶栏下方
 - **扩展管理按钮关闭面板**：导航回调改为直接关闭内外两层 sheet 并立即跳转，消除面板残留视觉割裂
 - **工作区导入按钮遮挡**：FAB 移至顶栏 IconButton，避免遮挡文件菜单上下文菜单
+- **流式输出丢字**：所有 Provider 的 callbackFlow 改为无界缓冲（`Channel.UNLIMITED`），trySend 失败记录日志；ClaudeProvider 将 trySend 移到 close() 前修复最后一个 chunk 丢失
+- **MCP SSE 无限重连**：StreamableHttpClientTransport 的 SSE 通知流重试耗尽不再触发整体重连，新增 `isSseStreamGiveUpError` 过滤
+- **聊天头部模型名截断**：`provider/model` 格式的长模型名 `maxLines` 改为 2 + `TextOverflow.Ellipsis`
+- **输入框底部间距**：键盘收起时增加 8dp 底部呼吸间距
 
 ### 变更
 
@@ -44,16 +50,17 @@
 - **fileSizeToString 统一重构**：合并 4 处分散的 `formatBytes` 实现，统一为三位有效数字 + 支持到 TB
 - **移除 Google Imagen 图像生成**：`Provider.generateImage` 改为默认 `error()` 实现，删除 GoogleProvider 的 Imagen predict 接口
 - **imggen 移除重复模型选择器**：设置面板中的 ModelSelector 与页面顶部重复，已移除
+- **replaceRegexes 正则缓存**：流式输出时正则编译结果用 `SimpleCache` 缓存（10 分钟过期），避免长回复期间重复编译
 - Gradle 9.5.0 → 9.6.1
 - **清理历史兼容代码**：移除 `UIMessagePart.Search/ToolCall/ToolResult` 废弃类型及全部关联迁移函数（`migrateToolMessages`/`migrateToolNodes`/`migrateToolParts`/`toSortedMessageParts`），fork 无历史数据负担
 - **默认助手提示词增强**：system prompt 新增 SVG/Mermaid 图表建议，引导 LLM 主动使用可视化图表辅助说明
-- **upstream-sync 跳过规则补充**：新增"对历史版本的兼容（fork 起点之前）"作为跳过项
 
 ### 上游同步
 
 - 同步 rikkahub 上游 `4b2fd4b9..upstream/master`（2026-07-01 ~ 2026-07-03）的 9 个提交，详见 `docs/dev/upstream-sync.md` 第四批检查记录
 - 同步 rikkahub 上游 `5b39e05d..upstream/master`（2026-07-05）的 6 个提交，详见 `docs/dev/upstream-sync.md` 第五批检查记录
 - 同步 rikkahub 上游 `ef564dca..upstream/master`（2026-07-06 ~ 2026-07-08）的 17 个提交（16 个同步 + 1 个补充同步），详见 `docs/dev/upstream-sync.md` 第六批检查记录
+- 同步 rikkahub 上游 `624ab635..upstream/master`（2026-07-08）的 5 个提交，详见 `docs/dev/upstream-sync.md` 第七批检查记录
 
 ---
 

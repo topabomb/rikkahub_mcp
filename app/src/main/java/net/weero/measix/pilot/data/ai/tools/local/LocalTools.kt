@@ -2,16 +2,23 @@ package net.weero.measix.pilot.data.ai.tools.local
 
 import android.content.Context
 import me.rerere.ai.core.Tool
+import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.event.AppEventBus
+import me.rerere.tts.provider.TTSManager
 
-class LocalTools(private val context: Context, private val eventBus: AppEventBus) {
+class LocalTools(
+    private val context: Context,
+    private val eventBus: AppEventBus,
+    private val ttsManager: TTSManager,
+    private val settingsStore: SettingsStore,
+) {
     val javascriptTool by lazy { buildJavascriptTool() }
 
     val timeTool by lazy { buildTimeInfoTool() }
 
     val clipboardTool by lazy { buildClipboardTool(context) }
 
-    val ttsTool by lazy { buildTextToSpeechTool(eventBus) }
+    val ttsTool by lazy { buildTextToSpeechTool(eventBus, ttsManager, settingsStore) }
 
     val askUserTool by lazy { buildAskUserTool() }
 
