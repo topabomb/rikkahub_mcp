@@ -45,6 +45,9 @@
 - **移除 Google Imagen 图像生成**：`Provider.generateImage` 改为默认 `error()` 实现，删除 GoogleProvider 的 Imagen predict 接口
 - **imggen 移除重复模型选择器**：设置面板中的 ModelSelector 与页面顶部重复，已移除
 - Gradle 9.5.0 → 9.6.1
+- **清理历史兼容代码**：移除 `UIMessagePart.Search/ToolCall/ToolResult` 废弃类型及全部关联迁移函数（`migrateToolMessages`/`migrateToolNodes`/`migrateToolParts`/`toSortedMessageParts`），fork 无历史数据负担
+- **默认助手提示词增强**：system prompt 新增 SVG/Mermaid 图表建议，引导 LLM 主动使用可视化图表辅助说明
+- **upstream-sync 跳过规则补充**：新增"对历史版本的兼容（fork 起点之前）"作为跳过项
 
 ### 上游同步
 

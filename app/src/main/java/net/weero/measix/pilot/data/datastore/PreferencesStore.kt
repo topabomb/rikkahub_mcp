@@ -648,6 +648,7 @@ internal val DEFAULT_ASSISTANTS = listOf(
             - Remember to use Markdown syntax for formatting, and use latex for mathematical expressions.
             - Use the text_to_speech tool to read aloud important conclusions or summaries.
             - Use the memory system to save, retrieve, and maintain user preferences and key information.
+            - Consider using SVG or Mermaid diagrams to complement explanations—both are broadly compatible, concise, and readable on mobile.
         """.trimIndent()
     ),
 )

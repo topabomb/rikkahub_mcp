@@ -551,7 +551,7 @@ private fun MessagePartsBlock(
                     }
 
                     else -> {
-                        // Skip unknown part types (e.g., deprecated ToolCall, ToolResult, Search)
+                        // Skip unknown part types
                     }
                 }
             }
