@@ -521,10 +521,10 @@ class McpManager(
         transport.onClose {
             if (_status.value[configId] == McpStatus.Connected) scheduleReconnect(configId)
         }
-transport.onError {
-if (isSseStreamGiveUpError(it)) return@onError
-if (_status.value[configId] == McpStatus.Connected) scheduleReconnect(configId)
-}
+        transport.onError {
+            if (isSseStreamGiveUpError(it)) return@onError
+            if (_status.value[configId] == McpStatus.Connected) scheduleReconnect(configId)
+        }
 
         clients[config.id] = client
         setStatus(config.id, McpStatus.Connecting)
