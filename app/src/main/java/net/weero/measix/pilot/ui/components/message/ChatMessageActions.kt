@@ -60,6 +60,7 @@ import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.context.LocalTTSState
 import net.weero.measix.pilot.utils.copyMessageToClipboard
 import net.weero.measix.pilot.utils.extractQuotedContentAsText
+import net.weero.measix.pilot.utils.removeBracketedContent
 import net.weero.measix.pilot.utils.toLocalString
 import net.weero.measix.pilot.utils.toMessageTimeString
 
@@ -134,10 +135,12 @@ fun ColumnScope.ChatMessageActionButtons(
                         onClick = {
                             if (!isSpeaking) {
                                 val text = message.toText()
-                                val textToSpeak = if (settings.displaySetting.ttsOnlyReadQuoted) {
-                                    text.extractQuotedContentAsText() ?: text
-                                } else {
-                                    text
+                                var textToSpeak = text
+                                if (settings.displaySetting.ttsOnlyReadQuoted) {
+                                    textToSpeak = textToSpeak.extractQuotedContentAsText() ?: textToSpeak
+                                }
+                                if (settings.displaySetting.ttsOnlyReadOutsideBrackets) {
+                                    textToSpeak = textToSpeak.removeBracketedContent() ?: textToSpeak
                                 }
                                 tts.speak(textToSpeak)
                             } else {
