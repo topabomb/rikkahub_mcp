@@ -83,7 +83,7 @@
   <string name="assistant_page_local_tools_javascript_engine_title">JavaScript 引擎</string>
   <string name="assistant_page_local_tools_time_info_desc">从设备获取当前日期、星期、时间和时区信息</string>
   <string name="assistant_page_local_tools_time_info_title">时间信息</string>
-  <string name="assistant_page_local_tools_tts_desc">让AI使用设备TTS引擎为您朗读文本</string>
+  <string name="assistant_page_local_tools_tts_desc">让AI使用您所选的TTS服务为您朗读文本</string>
   <string name="assistant_page_local_tools_tts_title">文字转语音</string>
   <string name="assistant_page_manage_memory_title">管理记忆</string>
   <string name="assistant_page_max_tokens">最大Token数</string>
@@ -666,8 +666,10 @@
   <string name="setting_display_page_skip_crop_image_desc">导入图片或拍照后跳过裁剪界面</string>
   <string name="setting_display_page_skip_crop_image_title">跳过图片编辑</string>
   <string name="setting_display_page_title">显示设置</string>
-  <string name="setting_display_page_tts_only_read_quoted_desc">启用后，TTS 仅朗读引号（包括 “”、‘’、「」、『』）内的内容</string>
+  <string name="setting_display_page_tts_only_read_quoted_desc">启用后，TTS 仅朗读引号（包括\" \"、\' \'、“”,‘’、「」、『』）内的内容</string>
   <string name="setting_display_page_tts_only_read_quoted_title">TTS仅朗读引用内容</string>
+  <string name="setting_display_page_tts_read_outside_brackets_desc">启用后，TTS将不朗读括号内的内容</string>
+  <string name="setting_display_page_tts_read_outside_brackets_title">TTS不朗读括号内的内容</string>
   <string name="setting_display_page_use_app_icon_style_loading_indicator_desc">使用应用图标动画替代默认的圆形加载指示器</string>
   <string name="setting_display_page_use_app_icon_style_loading_indicator_title">使用APP图标风格的加载指示器</string>
   <string name="setting_display_page_volume_key_scroll_desc">使用音量键翻页，非常适合电子墨水屏</string>

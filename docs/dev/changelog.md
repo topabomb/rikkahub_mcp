@@ -6,7 +6,7 @@
 
 ---
 
-## 0.0.9（versionCode 9）— 2026-07-04 ~ 2026-07-08
+## 0.0.9（versionCode 9）— 2026-07-04 ~ 2026-07-11
 
 ### 新增
 
@@ -20,6 +20,7 @@
 - **模型注册扩展**：新增 GLM-5.2、HY3、LongCat-2.0、Qwen 3.5/3.6/3.7 MAX、Doubao 2.0/2.1 模型检测
 - **TTS 语气标记引导**：TTSProvider 新增可选 `promptGuidance`，text_to_speech 工具启用时将当前选中 provider 的引导注入 system prompt；MiMo 硬编码风格/音频标签引导
 - **生成通知解耦**：新增 ChatNotificationManager 通过 AppEventBus 消费生成事件，承接 Live Update/完成通知、前后台判断与 1s 节流，ChatService 只发事件
+- **TTS 不朗读括号内容**：新增 `removeBracketedContent()` 函数与 `ttsOnlyReadOutsideBrackets` 设置开关，与引号过滤叠加生效，支持中英文括号
 
 ### 修复
 
@@ -38,6 +39,12 @@
 - **MCP SSE 无限重连**：StreamableHttpClientTransport 的 SSE 通知流重试耗尽不再触发整体重连，新增 `isSseStreamGiveUpError` 过滤
 - **聊天头部模型名截断**：`provider/model` 格式的长模型名 `maxLines` 改为 2 + `TextOverflow.Ellipsis`
 - **输入框底部间距**：键盘收起时增加 8dp 底部呼吸间距
+- **WebView 预览崩溃**：大段 HTML 通过导航参数传递撑爆 `SaveableStateRegistry` 触发 `TransactionTooLargeException`，改为写入 `cacheDir` 文件缓存并仅传递 SHA-256 内容 ID，7 天自动清理
+- **工作区恢复备份后误删**：`checkIntegrity()` 目录缺失时从删除记录+清理引用改为标记 `BROKEN` 状态，保留记录与助手绑定
+- **CustomJsSearch scrape 参数校验失败**：`urls` 数组缺少 `items` 字段导致 Gemini/Claude API 400，补全 `items: { type: string }`
+- **TTS 引号描述显示不全**：中英文 `tts_only_read_quoted_desc` 补全直引号 `" "`/`' '` 显示
+- **TTS 工具描述不准确**："设备 TTS 引擎" 改为 "所选 TTS 服务"
+- **建议回复提示词优化**：`responses to the assistant` → `responses to help the assistant improve its answers`
 
 ### 变更
 
@@ -61,6 +68,7 @@
 - 同步 rikkahub 上游 `5b39e05d..upstream/master`（2026-07-05）的 6 个提交，详见 `docs/dev/upstream-sync.md` 第五批检查记录
 - 同步 rikkahub 上游 `ef564dca..upstream/master`（2026-07-06 ~ 2026-07-08）的 17 个提交（16 个同步 + 1 个补充同步），详见 `docs/dev/upstream-sync.md` 第六批检查记录
 - 同步 rikkahub 上游 `624ab635..upstream/master`（2026-07-08）的 5 个提交，详见 `docs/dev/upstream-sync.md` 第七批检查记录
+- 同步 rikkahub 上游 `8e872e5f..upstream/master`（2026-07-09 ~ 2026-07-11）的 8 个提交，详见 `docs/dev/upstream-sync.md` 第八批检查记录
 
 ---
 

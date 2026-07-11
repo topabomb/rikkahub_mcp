@@ -522,6 +522,7 @@ data class DisplaySetting(
     val codeBlockAutoCollapse: Boolean = true,
     val showLineNumbers: Boolean = false,
     val ttsOnlyReadQuoted: Boolean = false,
+    val ttsOnlyReadOutsideBrackets: Boolean = false,
     val autoPlayTTSAfterGeneration: Boolean = false,
     val pasteLongTextAsFile: Boolean = false,
     val pasteLongTextThreshold: Int = 1000,
