@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.extensions.workspace
+package net.weero.measix.pilot.ui.pages.extensions.workspace
 
 import android.graphics.Typeface
 import android.view.MotionEvent

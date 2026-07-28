@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.extensions.workspace
+package net.weero.measix.pilot.ui.pages.extensions.workspace
 
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -71,6 +71,11 @@ internal fun createWorkspaceTerminalSession(
         "PROOT_LOADER=${loader.absolutePath}",
         "PROOT_TMP_DIR=${tempDir.absolutePath}",
         "TMPDIR=${tempDir.absolutePath}",
+        // Disable seccomp-based ptrace acceleration: on some Android devices the
+        // system seccomp policy conflicts with proot's filter, causing the traced
+        // process to receive SIGILL (signal 4). Falling back to ptrace-only mode
+        // is slower but compatible with all devices.
+        "PROOT_NO_SECCOMP=1",
     )
 
     return TerminalSession(

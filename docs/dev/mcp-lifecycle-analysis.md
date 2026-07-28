@@ -12,28 +12,33 @@
 | 文件 | 职责 |
 |------|------|
 | `app/.../data/ai/mcp/McpManager.kt` | MCP 连接管理器，生命周期核心 |
-| `app/.../data/ai/mcp/McpConfig.kt` | 配置数据结构（McpServerConfig、McpCommonOptions、McpTool、ConnectionKey） |
+| `app/.../data/ai/mcp/McpConfig.kt` | 配置数据结构（McpServerConfig、McpCommonOptions、McpTool） |
+| `app/.../data/ai/mcp/McpConnectionKey.kt` | 连接参数键（McpConnectionKey、connectionKey()、hasSameConnectionParameters） |
 | `app/.../data/ai/mcp/McpStatus.kt` | 状态枚举定义 |
 | `app/.../service/ChatService.kt` | MCP 工具的消费方（构建工具列表、调用工具） |
-| `app/.../utils/CollectionUtils.kt` | `checkDifferent` 工具函数 |
 | `app/.../data/datastore/PreferencesStore.kt` | SettingsStore，配置持久化 |
 
 ---
 
 ## 二、数据结构
 
-### 2.1 McpManager 成员变量（McpManager.kt:53-82）
+### 2.1 McpManager 成员变量
+
+> 以下为 0.0.10 当前状态。0.0.7~0.0.9 的历史变量见各版本章节。
 
 | 变量 | 类型 | 用途 |
 |------|------|------|
 | `okHttpClient` | `OkHttpClient` | 底层 HTTP 客户端。20s 连接超时，10min 读超时，120s 写超时 |
 | `client` | `Ktor HttpClient` | 基于 OkHttp，安装 ContentNegotiation + SSE 插件。所有 transport 共享此客户端 |
-| `clients` | `MutableMap<McpServerConfig, Client>` | 活跃连接池。key 是配置对象，value 是 MCP SDK Client |
-| `reconnectJobs` | `MutableMap<Uuid, Job>` | 重连协程。key 是 config.id |
-| `reconnectAttempts` | `MutableMap<Uuid, Int>` | 重连计数。key 是 config.id |
-| `syncingStatus` | `MutableStateFlow<Map<Uuid, McpStatus>>` | 状态跟踪。key 是 config.id，UI 通过此变量展示状态 |
+| `clients` | `ConcurrentHashMap<Uuid, Client>` | 活跃连接池。key 是 config.id，value 是 MCP SDK Client |
+| `connectedConfigs` | `ConcurrentHashMap<Uuid, McpServerConfig>` | 记录每个连接建立时使用的配置，用于 `hasSameConnectionParameters()` 判断参数变化 |
+| `reconnectJobs` | `ConcurrentHashMap<Uuid, Job>` | 重连协程。key 是 config.id |
+| `reconnectAttempts` | `ConcurrentHashMap<Uuid, Int>` | 重连计数。key 是 config.id |
+| `_status` | `MutableStateFlow<Map<Uuid, McpStatus>>` | 状态跟踪。key 是 config.id，UI 通过 `getStatus()` 展示状态 |
 
-### 2.2 McpStatus 状态定义（McpStatus.kt:3-9）
+### 2.2 McpStatus 状态定义
+
+> 0.0.10 当前状态（含 0.0.8 OAuth 状态和 0.0.10 Error.detail）。
 
 ```kotlin
 sealed class McpStatus {
@@ -41,24 +46,33 @@ sealed class McpStatus {
     data object Connecting : McpStatus()                                    // 正在连接或同步工具
     data object Connected : McpStatus()                                     // 已连接，可调用工具
     data class Reconnecting(val attempt: Int, val maxAttempts: Int) : McpStatus()  // 正在重连
-    data class Error(val message: String) : McpStatus()                     // 错误状态
+    data class Dormant(val nextRetryInMs: Long) : McpStatus()               // 休眠等待重试（0.0.7 新增）
+    data class Error(val message: String, val detail: String? = null) : McpStatus()  // 错误状态（0.0.10 新增 detail）
+    data object NeedsAuthorization : McpStatus()                            // 需 OAuth 授权（0.0.8 新增）
+    data object Authorizing : McpStatus()                                   // 正在授权（0.0.8 新增）
 }
 ```
 
-**注意**：`getStatus(config)` 在 map 中找不到时返回 `Idle`（McpManager.kt:438）。
+`Error.from(throwable, fallbackMessage?)` 工厂方法自动提取 message + stackTraceToString。 `getStatus()` 返回的 Flow 添加了 `distinctUntilChanged()`（0.0.10 修复）。
 
-### 2.3 ConnectionKey（McpConfig.kt:51-56）
+### 2.3 McpConnectionKey（McpConnectionKey.kt）
+
+> 0.0.10 新增，替代旧版 `McpConfig.ConnectionKey`（已删除）。
 
 ```kotlin
-data class ConnectionKey(
-    val id: Uuid,
-    val transportType: String,  // "sse" 或 "streamable_http"
-    val url: String,
-    val headers: List<Pair<String, String>>,
+internal data class McpConnectionKey(
+    val transportType: String,   // "sse" 或 "streamable_http"
+    val serverUrl: String,
+    val clientName: String,      // commonOptions.name，用作 MCP initialize 的 clientInfo.name
+    val headers: List<Pair<String, String>>,  // 含 OAuth Bearer token
 )
 ```
 
-**确定**：`tools` 和 `name` **不参与** ConnectionKey 的构成。ConnectionKey 用于判断两个配置是否需要重建连接。
+`connectionKey()` 扩展函数从 `McpServerConfig` 提取连接键；`hasSameConnectionParameters(left, right)` 比较两个配置的连接键是否相同。
+
+**设计**：`tools` 和 `enable` **不参与**连接键。修改 URL/transport/headers/OAuth token/clientName 会触发重连；仅工具开关或 Schema 变化时不重连（由 `syncTools` 自然刷新）。
+
+> `clientName` 参与连接键是因为 `createAndConnect` 将 `commonOptions.name` 作为 MCP `initialize` 请求的 `clientInfo.name` 发送给服务端，改名后需重建连接。
 
 ### 2.4 McpCommonOptions（McpConfig.kt:17-22）
 
@@ -87,218 +101,204 @@ data class McpTool(
 
 密封类，两个子类：
 
-- `SseTransportServer`：SSE 传输，`connectionKey.transportType = "sse"`
-- `StreamableHTTPServer`：Streamable HTTP 传输，`connectionKey.transportType = "streamable_http"`
+- `SseTransportServer`：SSE 传输
+- `StreamableHTTPServer`：Streamable HTTP 传输
 
-两者结构相同：`id: Uuid`、`commonOptions: McpCommonOptions`、`url: String`。
+两者结构相同：`id: Uuid`、`commonOptions: McpCommonOptions`、`url: String`。`serverUrl` 扩展属性统一获取 URL。
 
 ---
 
-## 三、常量定义（McpManager.kt:48-51）
+## 三、常量定义（McpManager.kt:104-111）
+
+> 0.0.10 当前状态。0.0.7 仅含前 3 个常量；Dormant/离线检查常量为 0.0.7 改进新增。
 
 | 常量 | 值 | 用途 |
 |------|-----|------|
-| `MAX_RECONNECT_ATTEMPTS` | 5 | 最大重连次数 |
+| `MAX_RECONNECT_ATTEMPTS` | 5 | 指数退避最大重连次数 |
 | `BASE_RECONNECT_DELAY_MS` | 1000L | 基础重连延迟（1 秒） |
 | `MAX_RECONNECT_DELAY_MS` | 30000L | 最大重连延迟（30 秒） |
+| `DORMANT_RETRY_INTERVAL_MS` | 60_000L | Dormant 模式重试间隔（60 秒） |
+| `DORMANT_MAX_RETRIES` | 30 | Dormant 模式最大重试次数（30 分钟兜底） |
+| `OFFLINE_CHECK_INTERVAL_MS` | 10_000L | 离线时网络恢复检查间隔（10 秒） |
 
 ---
 
-## 四、McpManager 初始化（McpManager.kt:84-113）
+## 四、McpManager 初始化（McpManager.kt:171-219）
+
+> 0.0.10 当前状态。0.0.7 使用 `checkDifferent` 三步走（过滤→比较→并行 add/remove）；0.0.10 改为三路分类 + `hasSameConnectionParameters` 连接参数检测，详见第十六章。
 
 ```
 McpManager 被 Koin 创建
     │
     ▼
-init 块启动
+init 块启动三条恢复链
     │
-    ▼
-appScope.launch {
-    settingsStore.settingsFlow
-        .map { settings -> settings.mcpServers }  // 只提取 mcpServers 字段
-        .collect { mcpServerConfigs -> 处理配置变更 }
-}
+    ├── 链 1: settings 变更 → 自动 add/remove/重连
+    │     appScope.launch {
+    │         settingsStore.settingsFlow
+    │             .map { it.mcpServers }
+    │             .distinctUntilChanged()
+    │             .collect { configs -> 三路分类处理 }
+    │     }
+    │
+    ├── 链 2: 前台恢复 → syncAll
+    │     ProcessLifecycleOwner.onStart → syncAll()
+    │
+    └── 链 3: 网络恢复 → syncAll
+          ConnectivityManager.NetworkCallback.onAvailable → syncAll()
 ```
 
-### 4.1 配置变更处理逻辑
+### 4.1 配置变更处理逻辑（链 1）
 
 ```
 收到新的 mcpServerConfigs
     │
     ▼
 第一步：过滤
-    newConfigs = mcpServerConfigs.filter {
+    enabled = configs.filter {
         it.commonOptions.enable && it.commonOptions.name.isNotBlank()
     }
+    enabledIds = enabled.map { it.id }.toSet()
     │
     ▼
-第二步：比较（使用 checkDifferent）
-    currentConfigs = clients.keys.toList()
-    (toAdd, toRemove) = currentConfigs.checkDifferent(
-        other = newConfigs,
-        eq = { a, b -> a.connectionKey == b.connectionKey }
-    )
+第二步：三路分类（跳过授权流程中的 server）
     │
-    // toAdd = newConfigs 中存在，但 currentConfigs 中不存在的
-    // toRemove = currentConfigs 中存在，但 newConfigs 中不存在的
+    ├── 新增 server：id 不在 clients 中 且 不在授权流程中
+    │     → appScope.launch { addClient(it) }
     │
-    ▼
-第三步：并行执行
-    toAdd.forEach { cfg -> appScope.launch { addClient(cfg) } }
-    toRemove.forEach { cfg -> appScope.launch { removeClient(cfg) } }
+    ├── 已存在 server：id 在 clients 中 且 不在授权流程中
+    │     → hasSameConnectionParameters(connectedConfigs[id], config)
+    │       false（URL/transport/headers/token 变化）→ addClient 重连
+    │       true（仅工具开关/Schema 变化）→ 跳过，由 syncAll 的 syncTools 刷新
+    │
+    └── 删除 server：id 在 clients 中但已不在 enabled 列表
+          → appScope.launch { removeClient(id) }
 ```
 
 **确定**：
 
-- `checkDifferent` 的比较依据是 `connectionKey`（包含 id、transportType、url、headers）
+- `hasSameConnectionParameters` 比较连接键（transportType/serverUrl/clientName/headers），不包含 tools/enable
+- 仅工具开关变化时**不触发重连**，由下次 `syncAll` 的 `syncTools` 自然刷新
 - `addClient` 和 `removeClient` 是**并行**执行的（各自启动独立协程）
-- 只有 `enable=true && name.isNotBlank()` 的配置才会被添加
-
-### 4.2 checkDifferent 函数（CollectionUtils.kt:3-14）
-
-```kotlin
-fun <E> Collection<E>.checkDifferent(
-    other: Collection<E>,
-    eq: (E, E) -> Boolean,
-): Pair<List<E>, List<E>> {
-    val added = other.filter { e -> this.none { eq(it, e) } }    // other 中有，this 中没有
-    val removed = this.filter { e -> other.none { eq(it, e) } }  // this 中有，other 中没有
-    return added to removed
-}
-```
+- 授权流程中的 server（NeedsAuthorization/Authorizing）被跳过，避免与授权竞争
 
 ---
 
 ## 五、单个 MCP 服务器的完整生命周期
 
-### 5.1 添加阶段：addClient(config)（McpManager.kt:209-254）
+### 5.1 添加阶段：addClient + createAndConnect（McpManager.kt:357-379 / 556-598）
+
+> 0.0.10 当前状态。0.0.7 `addClient` 内联全部逻辑；0.0.10 拆分为 `addClient`（配置重读 + 清理）+ `createAndConnect`（transport + client + 连接），并新增 `connectedConfigs` 追踪。
 
 ```
-addClient(config)
+addClient(configInput)
     │
     ▼
-withContext(Dispatchers.IO) {
+withContext(Dispatchers.IO) + getServerLock(configInput.id).withLock {
     │
-    ├── 第一步：清理旧状态
-    │   removeClient(config)              // 先移除同 id 的旧连接
-    │   cancelReconnect(config.id)        // 取消重连任务
-    │   reconnectAttempts[config.id] = 0  // 重置重连计数
-    │
-    ▼
-    ├── 第二步：创建 transport 和 client
-    │   transport = getTransport(config)
-    │   // SseTransportServer → SseClientTransport(urlString, client, requestBuilder)
-    │   // StreamableHTTPServer → StreamableHttpClientTransport(url, client, requestBuilder)
-    │
-    │   client = Client(clientInfo = Implementation(
-    │       name = config.commonOptions.name,
-    │       version = "1.0"
-    │   ))
-    │
-    ▼
-    ├── 第三步：注册 transport 回调
-    │   transport.onClose {
-    │       val currentStatus = syncingStatus.value[config.id]
-    │       if (currentStatus == McpStatus.Connected) {  // 只有 Connected 才触发重连
-    │           scheduleReconnect(config)
-    │       }
-    │   }
-    │
-    │   transport.onError { error ->
-    │       val currentStatus = syncingStatus.value[config.id]
-    │       if (currentStatus == McpStatus.Connected) {  // 只有 Connected 才触发重连
-    │           scheduleReconnect(config)
-    │       }
+    ├── 第一步：重读最新配置（0.0.10 新增）
+    │   desiredConfig = settingsStore.settingsFlow.value.mcpServers
+    │       .find { it.id == configInput.id }
+    │   if (desiredConfig == null || !enable || name.isBlank()) {
+    │       cancelAllJobs / closeClient / cleanup → return  // 配置已删除/禁用
     │   }
     │
     ▼
-    ├── 第四步：放入连接池
-    │   clients[config] = client
+    ├── 第二步：刷新 OAuth token + 清理旧状态
+    │   config = ensureFreshToken(desiredConfig)
+    │   cancelAllJobs(config.id)
+    │   closeClient(config.id)
     │
     ▼
-    ├── 第五步：连接流程
-    │   runCatching {
-    │       setStatus(config, Connecting)      // 状态 → Connecting
-    │       client.connect(transport)           // MCP 协议握手
-    │       sync(config)                        // 同步工具列表（见 5.2）
-    │       setStatus(config, Connected)        // 状态 → Connected
-    │       reconnectAttempts[config.id] = 0    // 重置重连计数
-    │   }
-    │
-    ▼
-    └── 第六步：失败处理
-        .onFailure {
-            clients.remove(config)                      // 从连接池移除
-            setStatus(config, Error(it.message ?: ...)) // 状态 → Error
-        }
+    └── 第三步：委托 createAndConnect(config)
 }
+
+createAndConnect(config)
+    │
+    ▼
+    ├── 创建 transport 和 client
+    │   transport = getTransport(config)
+    │   client = Client(clientInfo = Implementation(name, version = "1.0"))
+    │   setupNotificationHandlers(client, config)  // tools/list_changed 监听
+    │
+    ├── 注册 transport 回调
+    │   transport.onClose { if (Connected) scheduleReconnect(id) }
+    │   transport.onError { if (isSseStreamGiveUpError) return; if (Connected) scheduleReconnect(id) }
+    │
+    ├── 放入连接池 + 记录配置快照
+    │   clients[config.id] = client
+    │   connectedConfigs[config.id] = config   // 0.0.10 新增
+    │
+    ├── 连接流程
+    │   setStatus(Connecting)
+    │   client.connect(transport)              // MCP 协议握手
+    │   syncTools(config.id)                   // 同步工具列表（见 5.2）
+    │   setStatus(Connected)
+    │   reconnectAttempts[config.id] = 0
+    │
+    └── 失败处理
+        closeClient(config.id)                 // 清理坏连接
+        if (CancellationException) throw it
+        if (needsAuthorization) → NeedsAuthorization
+        else → Error.from(it)                  // 0.0.10 新增 detail
 ```
 
 **确定**：
 
-- `addClient` 会先调用 `removeClient` 清理同 id 的旧连接
+- `addClient` 从 `settingsStore` 重读配置，避免协程排队期间 config 过期（0.0.10）
+- `addClient` 和 `createAndConnect` 在同一个 `getServerLock` 保护下，序列化所有操作
+- `connectedConfigs` 在 `createAndConnect` 中写入，在 `closeClient` 中清除
 - transport 回调只在 `Connected` 状态下触发重连，避免正常关闭时重连
-- `sync` 在 `connect` 之后、`Connected` 之前调用
-- 失败时从 `clients` 移除，状态设为 `Error`
+- `syncTools` 在 `connect` 之后、`Connected` 之前调用
+- 401 错误设置 `NeedsAuthorization` 状态而非 `Error`
 
-### 5.2 同步阶段：sync(config)（McpManager.kt:256-290）
+### 5.2 同步阶段：syncTools(configId)（McpManager.kt:622-641）
+
+> 0.0.10 当前状态。0.0.7 `sync(config)` 按对象查找 client 并更新 clients Map key；0.0.10 简化为 `syncTools(configId)` 按 Uuid 查找，不再更新 Map key（clients 以 id 为 key）。
 
 ```
-sync(config)
+syncTools(configId)
     │
     ▼
 第一步：查找 client
-    entry = clients.entries.find { it.key.id == config.id }
-    client = entry?.value
-    if (client == null) return  // 找不到则直接返回
+    client = clients[configId]
+    if (client == null) return 0  // 找不到则直接返回
     │
     ▼
-第二步：设置状态
-    setStatus(config, Connecting)
-    │
-    ▼
-第三步：确保 transport 存在
-    if (client.transport == null) {
-        client.connect(getTransport(config))
-    }
-    │
-    ▼
-第四步：获取服务器工具列表
+第二步：获取服务器工具列表
     serverTools = client.listTools().tools  // MCP 协议调用
     │
     ▼
-第五步：更新 settingsStore（持久化）
+第三步：读取当前配置 + 合并工具
+    existingConfig = settingsStore.settingsFlow.value.mcpServers
+        .find { it.id == configId } ?: return 0
+    │
+    ├── mergedTools = mergeTools(serverTools, existingConfig.commonOptions.tools)
+    │   // mergeTools 逻辑（McpConfig.kt:mergeTools 函数）：
+    │   // - 服务器有，本地无 → 新增（enable=true）
+    │   // - 服务器有，本地有 → 更新 description/inputSchema，保留 enable/needsApproval
+    │   // - 服务器无，本地有 → 移除
+    │
+    ▼
+第四步：更新 settingsStore（持久化）
     settingsStore.update { old ->
-        old.copy(mcpServers = old.mcpServers.map { serverConfig ->
-            if (serverConfig.id != config.id) return@map serverConfig
-            │
-            ├── mergedTools = mergeTools(serverTools, common.tools)
-            │   // mergeTools 逻辑（McpConfig.kt:95-124）：
-            │   // - 服务器有，本地无 → 新增（enable=true）
-            │   // - 服务器有，本地有 → 更新 description/inputSchema，保留 enable/needsApproval
-            │   // - 服务器无，本地有 → 移除
-            │
-            ├── newConfig = serverConfig.clone(commonOptions = common.copy(tools = mergedTools))
-            │
-            ├── 更新 clients Map 的 key（因为 config 对象变了）
-            │   clients.remove(entry.key)
-            │   clients[newConfig] = client
-            │
-            └── return newConfig
+        old.copy(mcpServers = old.mcpServers.map {
+            if (it.id == configId) existingConfig.clone(
+                commonOptions = existingConfig.commonOptions.copy(tools = merged)
+            ) else it
         })
     }
     │
     ▼
-第六步：恢复状态
-    setStatus(config, Connected)
+返回 merged.size
 ```
 
 **确定**：
 
-- `sync` 会**修改 settingsStore**，这会触发 `settingsFlow` 的监听器
-- `sync` 会**更新 clients Map 的 key**（因为 tools 变了，config 对象变了）
-- `sync` 前后状态变化：`Connecting → Connected`
+- `syncTools` 会**修改 settingsStore**，这会触发 `settingsFlow` 的监听器（链 1）
+- clients Map 以 `id: Uuid` 为 key，工具合并不改变 key（0.0.10 简化）
 - `mergeTools` 是单向同步：以服务器为准，本地只保留 enable/needsApproval 的用户偏好
+- `tools/list_changed` 通知也会触发 `syncTools`（见 `setupNotificationHandlers`）
 
 ### 5.3 运行阶段
 
@@ -325,7 +325,9 @@ val currentStatus = syncingStatus.value[config.id]
 
 **确定**：只有在 `Connected` 状态下才会触发重连。
 
-#### 5.4.2 scheduleReconnect(config)（McpManager.kt:325-371）
+#### 5.4.2 scheduleReconnect(configId)（McpManager.kt:456-530）
+
+> 0.0.10 当前状态。0.0.7 仅 5 次指数退避后 Error；改进后 5 次退避 → Dormant（60s×30 次）→ Error，并新增离线检查。Dormant/离线检查详见第十三章。
 
 ```
 scheduleReconnect(config)
@@ -337,7 +339,7 @@ scheduleReconnect(config)
     ▼
 第二步：检查是否超过最大次数
     if (currentAttempt > MAX_RECONNECT_ATTEMPTS) {  // MAX_RECONNECT_ATTEMPTS = 5
-        setStatus(config, Error("连接断开，已达最大重连次数"))
+        enterDormant(configId)  // 60s 周期重试，最多 30 次
         return
     }
     │
@@ -358,7 +360,11 @@ scheduleReconnect(config)
 第六步：启动重连协程
     reconnectJobs[configId] = appScope.launch {
         │
-        ├── setStatus(config, Reconnecting(currentAttempt, MAX_RECONNECT_ATTEMPTS))
+        ├── 网络离线？
+        │   ├── 是：Reconnecting → 等待 10s → 回退本次 attempt → 重新调度
+        │   └── 否：继续（离线等待不消耗快速重试次数）
+        │
+        ├── setStatus(configId, Reconnecting(currentAttempt, MAX_RECONNECT_ATTEMPTS))
         │
         ├── delay(delayMs)
         │
@@ -367,7 +373,8 @@ scheduleReconnect(config)
         │       .find { it.id == configId && it.commonOptions.enable }
         │
         │   if (currentConfig == null) {
-        │       return@launch  // 配置已禁用或移除，静默退出
+        │       cancelAllJobs + closeClient + 移除 status
+        │       return@launch
         │   }
         │
         ├── 尝试重连
@@ -389,9 +396,10 @@ scheduleReconnect(config)
 - 重连前会检查配置是否仍然启用
 - 重连失败会递归调用 `scheduleReconnect` 继续尝试
 - 重连成功后 `reconnectAttempts` 在 `reconnectClient` 中重置为 0
-- 超过 5 次后状态变为 `Error`，**不再自动重连**
+- 超过 5 次后进入 `Dormant`，每 60 秒自动重试，最多 30 次
+- Dormant 重试全部失败后才进入 `Error`
 
-#### 5.4.3 calculateBackoffDelay(attempt)（McpManager.kt:378-382）
+#### 5.4.3 calculateBackoffDelay(attempt)（McpManager.kt:538-542）
 
 ```kotlin
 private fun calculateBackoffDelay(attempt: Int): Long {
@@ -410,109 +418,69 @@ private fun calculateBackoffDelay(attempt: Int): Long {
 | 4 | 1000 * 2^3 | 8s |
 | 5 | 1000 * 2^4 | 16s |
 
-#### 5.4.4 reconnectClient(config)（McpManager.kt:384-430）
+#### 5.4.4 reconnectClient(configInput)（McpManager.kt:604-620）
+
+> 0.0.10 当前状态。0.0.7 内联全部逻辑；0.0.10 委托 `createAndConnect`，复用连接逻辑。
 
 ```
-reconnectClient(config)
+reconnectClient(configInput)
     │
     ▼
-withContext(Dispatchers.IO) {
+withContext(Dispatchers.IO) + getServerLock(configInput.id).withLock {
     │
-    ├── 第一步：关闭旧客户端
-    │   oldEntry = clients.entries.find { it.key.id == config.id }
-    │   if (oldEntry != null) {
-    │       oldEntry.value.close()
-    │       clients.remove(oldEntry.key)
-    │   }
+    ├── 重读最新配置 + ensureFreshToken
+    │   config = settingsStore.settingsFlow.value.mcpServers
+    │       .find { it.id == configInput.id } ?: return
     │
-    ▼
-    ├── 第二步：创建新的 transport 和 client
-    │   transport = getTransport(config)
-    │   client = Client(clientInfo = Implementation(...))
+    ├── closeClient(config.id)    // 关闭旧客户端（不取消自身 reconnectJob）
     │
-    ▼
-    ├── 第三步：注册新的回调（同 addClient）
-    │   transport.onClose { if (status == Connected) scheduleReconnect(config) }
-    │   transport.onError { if (status == Connected) scheduleReconnect(config) }
-    │
-    ▼
-    ├── 第四步：放入连接池
-    │   clients[config] = client
-    │
-    ▼
-    ├── 第五步：设置状态
-    │   setStatus(config, Connecting)
-    │
-    ▼
-    ├── 第六步：连接流程
-    │   runCatching {
-    │       client.connect(transport)
-    │       sync(config)
-    │       setStatus(config, Connected)
-    │       reconnectAttempts[config.id] = 0  // 重置重连计数
-    │   }
-    │
-    ▼
-    └── 第七步：失败处理
-        .onFailure {
-            clients.remove(config)
-            setStatus(config, Error(it.message ?: ...))
-        }
+    └── createAndConnect(config)  // 委托创建+连接（同 addClient 路径）
 }
 ```
 
 **确定**：
 
-- `reconnectClient` 与 `addClient` 的流程几乎相同
-- 区别：`reconnectClient` 不调用 `removeClient`（因为已经在第一步手动清理了）
-- 重连成功后 `reconnectAttempts` 重置为 0
+- `reconnectClient` 运行在 `reconnectJob` 中，**不调用 `cancelAllJobs`**（取消自身会导致 `connect` 抛 `CancellationException`）
+- 仅调用 `closeClient`（关闭 client + 清理 `clients`/`connectedConfigs`），不取消 Job
+- 委托 `createAndConnect` 复用与 `addClient` 相同的连接逻辑
+- 重连成功后 `reconnectAttempts` 在 `createAndConnect` 中重置为 0
 
-### 5.5 移除阶段：removeClient(config)（McpManager.kt:309-323）
+### 5.5 移除阶段：removeClient(serverId)（McpManager.kt:382-392）
+
+> 0.0.10 当前状态。0.0.7 按 config 对象查找；0.0.10 简化为按 Uuid 查找 + `getServerLock` 保护 + `cancelAllJobs`。
 
 ```
-removeClient(config)
+removeClient(serverId)
     │
     ▼
-withContext(Dispatchers.IO) {
+withContext(Dispatchers.IO) + getServerLock(serverId).withLock {
     │
-    ├── 第一步：取消重连任务
-    │   cancelReconnect(config.id)
-    │   // cancelReconnect: reconnectJobs[id]?.cancel(), reconnectJobs.remove(id)
-    │
-    ▼
-    ├── 第二步：找到所有匹配的 entries
-    │   toRemove = clients.entries.filter { it.key.id == config.id }
-    │
-    ▼
-    ├── 第三步：逐个清理
-    │   toRemove.forEach { entry ->
-    │       entry.value.close()                       // 关闭 MCP 客户端
-    │       clients.remove(entry.key)                 // 从连接池移除
-    │       syncingStatus.update { it - entry.key.id }  // 从状态表移除
-    │   }
-    │
-    ▼
-    └── 第四步：清理重连计数
-        reconnectAttempts.remove(config.id)
+    ├── cancelAllJobs(serverId)     // 取消重连/Dormant/授权任务
+    ├── closeClient(serverId)       // 关闭 client + 清理 clients/connectedConfigs
+    ├── reconnectAttempts.remove(serverId)
+    ├── _status.update { it - serverId }  // 从状态表移除
+    └── logMcp(name, "Disconnected (removed)")
 }
 ```
 
 **确定**：
 
-- `removeClient` 会取消重连任务
-- `removeClient` 会从 `syncingStatus` 中移除状态（状态变为不存在，`getStatus` 返回 `Idle`）
-- `removeClient` 会从 `reconnectAttempts` 中移除计数
+- `removeClient` 在 `getServerLock` 保护下序列化执行
+- `cancelAllJobs` 取消重连/Dormant/授权三类 Job
+- `closeClient` 清理 `clients` 和 `connectedConfigs`（0.0.10）
+- 移除后状态从 `_status` 中消失，`getStatus` 返回 `Idle`
 
 ---
 
 ## 六、工具调用链路
 
-### 6.1 getAllAvailableTools()（McpManager.kt:119-131）
+### 6.1 getAllAvailableTools(assistant)（McpManager.kt:230-239）
+
+> 0.0.10 当前状态。签名 `getAllAvailableTools(assistant: Assistant)` — 外部传入 assistant，比上游 `getAllAvailableTools()` 内部 getCurrentAssistant 更显式。
 
 ```kotlin
-fun getAllAvailableTools(): List<Triple<Uuid, String, McpTool>> {
+fun getAllAvailableTools(assistant: Assistant): List<Triple<Uuid, String, McpTool>> {
     val settings = settingsStore.settingsFlow.value
-    val assistant = settings.getCurrentAssistant()
     return settings.mcpServers
         .filter {
             it.commonOptions.enable && it.id in assistant.mcpServers
@@ -532,62 +500,49 @@ fun getAllAvailableTools(): List<Triple<Uuid, String, McpTool>> {
 - 返回的是 `settingsStore` 中的工具列表，**不是** `clients` 中的
 - 使用 `getCurrentAssistant()` 获取当前助手（PreferencesStore.kt:587-589）
 
-### 6.2 callTool(serverId, toolName, args)（McpManager.kt:133-163）
+### 6.2 callTool(serverId, toolName, args)（McpManager.kt:241-310）
+
+> 0.0.10 当前状态。0.0.7 简单 try-catch + Error；改进后四级异常分级 + `ensureFreshToken` + `hasSameConnectionParameters` 重连检测。
 
 ```
 callTool(serverId, toolName, args)
     │
     ▼
-第一步：查找 client
-    entry = clients.entries.find { it.key.id == serverId }
-    client = entry?.value
-    if (client == null) {
-        return "Failed to execute tool, because no such mcp client for the tool"
-    }
-    config = entry.key
+getServerLock(serverId).withLock {
     │
-    ▼
-第二步：确保 transport 存在
-    if (client.transport == null) {
-        client.connect(getTransport(config))
-    }
+    ├── 查找 client + config
+    │   client = clients[serverId] ?: return "not connected"
+    │   config = settingsStore.settingsFlow.value.mcpServers.find{ it.id == serverId }
     │
-    ▼
-第三步：调用工具
-    runCatching {
-        result = client.callTool(
-            request = CallToolRequest(params = CallToolRequestParams(name=toolName, arguments=args)),
-            options = RequestOptions(timeout = 120.seconds)
-        )
-        │
-        ▼
-        第四步：转换结果
-        result.content.map {
-            when (it) {
-                is TextContent → UIMessagePart.Text(it.text)
-                is ImageContent → convertImageContentToFilePart(it)  // 保存图片到本地
-                else → UIMessagePart.Text(JsonInstant.encodeToString(it))
-            }
-        }
-    }
+    ├── ensureFreshToken + 连接参数变化检测（0.0.10）
+    │   freshConfig = ensureFreshToken(config)
+    │   if (!hasSameConnectionParameters(connectedConfigs[serverId], freshConfig)) {
+    │       cancelAllJobs / closeClient / createAndConnect  // 重建连接
+    │   }
     │
-    ▼
-    第五步：失败处理
-    .onFailure { e ->
-        setStatus(config, McpStatus.Error(e.message ?: e.javaClass.name))
-    }
-    .getOrElse { e ->
-        listOf(UIMessagePart.Text("Failed to execute tool: ${e.message}"))
-    }
+    ├── transport 为 null → scheduleReconnect + return
+    │
+    ├── 调用工具（120s 超时）
+    │   runCatching { client.callTool(...) }
+    │
+    └── 四级异常分级
+        1. TimeoutCancellationException → 降级文本（不中断、不重连）
+        2. CancellationException → 向上传播（不吞）
+        3. looksUnauthorized → NeedsAuthorization 状态 + 文本
+        4. isConnectionError → scheduleReconnect + 错误文本
+        5. 其他 → 错误文本（不重连）
+}
 ```
 
 **确定**：
 
-- `callTool` 会先检查 `client.transport`，如果为 null 会重新连接
-- `callTool` 失败会将状态设为 `Error`，但**不会触发重连**
-- `callTool` 的超时是 120 秒
+- `callTool` 在 `getServerLock` 保护下执行，与其他操作序列化
+- 调用前检查 OAuth token 新鲜度 + 连接参数变化（0.0.10）
+- 超时降级为文本返回给 AI，不中断对话
+- 连接错误触发重连，其他错误仅返回错误文本
+- `transport == null` 时触发 `scheduleReconnect` 而非直接连接
 
-### 6.3 ChatService 中的使用（ChatService.kt:565-609）
+### 6.3 ChatService 中的使用（ChatService.kt:519+）
 
 ```
 ChatService.handleMessageComplete()
@@ -598,7 +553,7 @@ ChatService.handleMessageComplete()
         // ... 其他工具（搜索、本地、工作空间、Skill）...
         │
         ▼
-        mcpManager.getAllAvailableTools()  // 获取可用工具
+        mcpManager.getAllAvailableTools(assistant)  // 获取可用工具
             │
             ▼
             验证服务器名称
@@ -642,20 +597,18 @@ ChatService.handleMessageComplete()
 
 ```
 addClient(config)
-  → connect 成功
-  → sync(config)
+  → createAndConnect 成功
+  → syncTools(configId)
     → client.listTools() 获取工具
     → settingsStore.update(...)  // 更新 tools
     → settingsFlow 发出新值
     → init 块的 collect 被触发
-    → checkDifferent 比较 connectionKey
-    → connectionKey 相同（只是 tools 变了）
-    → toAdd = [], toRemove = []
-    → 不触发任何操作
-  → setStatus(config, Connected)
+    → hasSameConnectionParameters(connectedConfigs[id], config) → true（只是 tools 变了）
+    → 不触发 addClient/removeClient
+  → setStatus(config.id, Connected)
 ```
 
-**确定**：`sync` 更新 `settingsStore` 会触发 `settingsFlow`，但由于 `connectionKey` 没变，不会产生额外的 `addClient`/`removeClient`。
+**确定**：`syncTools` 更新 `settingsStore` 会触发 `settingsFlow`，但由于连接键没变（tools 不参与比较），不会产生额外的 `addClient`/`removeClient`。
 
 ---
 
@@ -693,7 +646,7 @@ addClient(config)
     → reconnectAttempts = 0
 ```
 
-### 场景 C：服务端长时间不可用（达到最大重连次数）
+### 场景 C：服务端长时间不可用（快速重连耗尽）
 
 ```
 状态：Connected
@@ -706,24 +659,26 @@ addClient(config)
   → 第 4 次：Reconnecting(4, 5), delay=8s → 失败 → scheduleReconnect
   → 第 5 次：Reconnecting(5, 5), delay=16s → 失败 → scheduleReconnect
   → 第 6 次：currentAttempt(6) > MAX_RECONNECT_ATTEMPTS(5)
-  → status = Error("连接断开，已达最大重连次数")
-  → 停止重连
+  → status = Dormant(nextRetryInMs=60000)
+  → 每 60s 重试一次，最多 30 次
+  → 任意一次成功：Connected，reconnectAttempts = 0
+  → 30 次全部失败：Error("MCP reconnect failed after 30 dormant retries")
 ```
 
-**确定**：达到最大重连次数后，**不会自动恢复**。此时 `clients` 中已无该配置（`reconnectClient` 失败时移除）。
+**确定**：快速重连耗尽后仍有约 30 分钟的自动恢复窗口；只有 Dormant 重试也全部失败才停止自动重连。
 
 ### 场景 D：用户修改 MCP 服务器 URL
+
+> 0.0.10 后使用 `hasSameConnectionParameters` 检测。
 
 ```
 用户修改 URL
   → settingsStore 更新
   → settingsFlow 发出新配置
-  → checkDifferent 比较 connectionKey
-  → 旧 connectionKey.url != 新 connectionKey.url
-  → toRemove = [旧配置], toAdd = [新配置]
-  → 并行执行：
-    → removeClient(旧配置)：关闭连接，清理状态
-    → addClient(新配置)：创建新连接
+  → init block: 已存在 server 的 connectedConfigs[id] 与新配置比较
+  → hasSameConnectionParameters → false（URL 变了）
+  → appScope.launch { addClient(config) }  // 完全重建
+  → addClient 内部: closeClient → createAndConnect
 ```
 
 ### 场景 E：用户禁用 MCP 服务器（enable = false）
@@ -733,21 +688,21 @@ addClient(config)
   → settingsStore 更新
   → settingsFlow 发出新配置
   → 过滤：enable=false 的被排除
-  → toRemove = [被禁用的配置]
-  → removeClient(config)：关闭连接，清理状态，从 syncingStatus 移除
+  → 不在 enabled 列表 → removeClient
+  → 关闭连接，清理状态，从 _status 移除
 ```
 
 ### 场景 F：用户修改工具开关（tool.enable = false）
+
+> 0.0.10 后使用 `hasSameConnectionParameters` 检测。
 
 ```
 用户禁用某个工具
   → settingsStore 更新
   → settingsFlow 发出新配置
-  → checkDifferent 比较 connectionKey
-  → connectionKey 相同（tools 不参与比较）
-  → toAdd = [], toRemove = []
-  → 不触发任何连接操作
-  → 下次 getAllAvailableTools() 时该工具不会出现
+  → init block: hasSameConnectionParameters → true（tools 不参与比较）
+  → 不触发重连
+  → 下次 syncAll 的 syncTools 会自然刷新工具列表
 ```
 
 ### 场景 G：重连期间用户修改配置
@@ -757,16 +712,13 @@ addClient(config)
   → 用户修改 URL
   → settingsStore 更新
   → settingsFlow 发出新配置
-  → checkDifferent 比较 connectionKey
-  → 旧 connectionKey 存在于 clients 中
-  → 新 connectionKey 不同于旧 connectionKey
-  → toRemove = [旧配置], toAdd = [新配置]
-  → 并行执行：
-    → removeClient(旧配置)：cancelReconnect → 关闭连接 → 清理状态
-    → addClient(新配置)：创建新连接
+  → init block: 已存在 server，hasSameConnectionParameters → false（URL 变化）
+  → addClient(新配置)：cancelAllJobs → closeClient → createAndConnect
+  → cancelAllJobs 取消正在进行的重连协程
+  → createAndConnect 使用新 URL 建立连接
 ```
 
-**确定**：`removeClient` 会调用 `cancelReconnect`，取消正在进行的重连协程。
+**确定**：`addClient` 内部的 `cancelAllJobs` 会取消正在进行的重连协程。
 
 ### 场景 H：重连期间配置被禁用
 
@@ -776,8 +728,8 @@ addClient(config)
   → settingsStore 更新
   → settingsFlow 发出新配置
   → 过滤：enable=false 的被排除
-  → toRemove = [被禁用的配置]
-  → removeClient(config)：cancelReconnect → 关闭连接 → 清理状态
+  → id 在 clients 中但不在 enabled 列表
+  → removeClient(id)：cancelAllJobs → closeClient → 清理状态
 ```
 
 同时，如果重连协程在 `delay` 之后才检查配置：
@@ -793,17 +745,23 @@ addClient(config)
 
 ## 九、状态转换汇总
 
+> 0.0.10 当前状态。0.0.7 简单状态机；改进后新增 Dormant/NeedsAuthorization/Authorizing 状态 + 四级异常分级。
+
 | 当前状态 | 触发条件 | 目标状态 | 代码位置 |
 |----------|----------|----------|----------|
-| （不存在） | addClient 成功 | Connected | McpManager.kt:246 |
-| （不存在） | addClient 失败 | Error | McpManager.kt:252 |
-| Connected | transport.onClose/onError | Reconnecting | McpManager.kt:348 |
-| Reconnecting | reconnectClient 成功 | Connected | McpManager.kt:422 |
-| Reconnecting | reconnectClient 失败 | Error | McpManager.kt:428 |
-| Reconnecting | 超过最大重连次数 | Error | McpManager.kt:332 |
-| Reconnecting | 配置被禁用/移除 | （退出，不改状态） | McpManager.kt:357 |
-| 任意 | removeClient | （从 map 移除） | McpManager.kt:319 |
-| 任意 | callTool 失败 | Error | McpManager.kt:159 |
+| （不存在） | createAndConnect 成功 | Connected | McpManager.kt:580 |
+| （不存在） | createAndConnect 失败 | Error / NeedsAuthorization | McpManager.kt:584-596 |
+| Connected | transport.onClose/onError | Reconnecting | McpManager.kt:566-570 |
+| Reconnecting | reconnectClient 成功 | Connected | McpManager.kt:580 |
+| Reconnecting | 超过 MAX_RECONNECT_ATTEMPTS | Dormant | McpManager.kt:465+ |
+| Dormant | Dormant 重试成功 | Connected | McpManager.kt:580 |
+| Dormant | Dormant 重试耗尽 | Error | McpManager.kt:465+ |
+| Reconnecting/Dormant | 配置被禁用/移除 | （退出，不改状态） | McpManager.kt:383+ |
+| 任意 | removeClient | （从 _status 移除） | McpManager.kt:389 |
+| 任意 | callTool 超时 | （不改状态） | McpManager.kt:283 |
+| 任意 | callTool 连接错误 | Reconnecting | McpManager.kt:300 |
+| 任意 | callTool 授权错误 | NeedsAuthorization | McpManager.kt:293 |
+| NeedsAuthorization | 用户完成 OAuth | Connected | McpOAuthCoordinator |
 
 ---
 
@@ -811,15 +769,18 @@ addClient(config)
 
 1. **全局单例**：McpManager 是应用级单例，所有 MCP 连接全局管理
 2. **配置驱动**：连接的创建和销毁由 `settingsStore.settingsFlow` 驱动
-3. **ConnectionKey 判断**：只有 id/transportType/url/headers 变化才触发重建连接
-4. **自动重连**：Connected 状态下断联会自动重连，最多 5 次，指数退避
-5. **重连不恢复**：超过 5 次后停止，需要用户手动操作（如同步配置）
-6. **sync 触连锁**：sync 更新 settingsStore 会触发 settingsFlow，但因 ConnectionKey 不变不会产生额外操作
-7. **并行操作**：addClient 和 removeClient 通过独立协程并行执行
+3. **连接键检测**：`hasSameConnectionParameters` 精确区分连接参数变化（URL/transport/headers/token）与工具开关变化，后者不触发重连
+4. **分层重连**：5 次指数退避 → Dormant（60s×30 次）→ Error；网络离线时跳过重连，每 10s 检查恢复
+5. **三条恢复链**：settings 变更 + 前台恢复 + 网络恢复，覆盖移动端全部场景
+6. **per-server Mutex**：每个 server 有独立锁，序列化所有操作
+7. **四级异常分级**：超时降级 / 协程取消传播 / 授权错误引导 / 连接错误重连
+8. **并行操作**：addClient 和 removeClient 通过独立协程并行执行
 
 ---
 
-## 十一、存在的问题
+## 十一、存在的问题（0.0.7 基线）
+
+> 以下为 0.0.7 基线分析中发现的问题。全部已在 0.0.7~0.0.10 中修复，详见第十三章改进对照表。
 
 ### 问题 1：达到最大重连次数后不会自动恢复
 
@@ -1299,3 +1260,141 @@ logMcp(name, "OAuth probe failed: ...")            // PRM 探测失败
 | `McpOAuthState` 持久化在 DataStore | OAuth 令牌/刷新令牌存储在 `settings.json` | 令牌为明文存储（与上游一致） |
 | deep link `measix://mcp-oauth-callback` | 仅 Manifest 声明 | **无运行时行为变化** |
 | `McpStatus` 新增 `NeedsAuthorization`/`Authorizing` | 内存状态，不持久化 | **无风险** |
+
+---
+
+## 十五、上游对比与修正（0.0.9）
+
+> 基于 upstream `McpSessionRegistry` (460 行) 与本地 `McpManager` (~1000 行) 的逐项对比。
+
+### 15.1 架构对比
+
+| 维度 | 上游 (McpSessionRegistry) | 本地 (McpManager) | 评价 |
+|------|--------------------------|-------------------|------|
+| 类拆分 | McpSessionRegistry + McpStatusStore + McpOAuthCoordinator | 单体 McpManager | 本地单体可工作，但维护成本更高 |
+| 状态载体 | McpSession (config + client + connectedConfig + Mutex) | 独立 ConcurrentHashMap (clients + connectedConfigs + serverLocks) | 功能等价 |
+| ConnectResult | sealed interface (Success/Stale/NeedsAuthorization/Failed) | 无，直接返回 Boolean | 上游更健壮（见 15.3） |
+| requestReconnect | 集中去重，检查 `reconnectJob?.isActive` | cancel-and-restart | 上游更高效，但本地保证 delay 从最后断连开始 |
+| OAuth 令牌刷新锁 | 独立 `refreshLocks` (per-server Mutex) | 复用 `serverLocks` | 本地可行：ensureFreshToken 始终在 serverLock 内调用 |
+
+### 15.2 本地合理增强（保留）
+
+| 增强 | 上游无 | 理由 |
+|------|--------|------|
+| **Dormant 模式** (60s × 30 = 30 分钟兜底) | ✅ | 移动端网络不稳定，5 次 31 秒不够；30 分钟窗口覆盖服务端重启 |
+| **NetworkMonitor** (离线跳过 + 恢复主动 syncAll) | ✅ | 省电 + 加速恢复；比 transport.onClose 回调快 10-30s |
+| **ProcessLifecycle** (前台恢复 syncAll) | ✅ | Android 后台静默断连 SSE/HTTP 的标准应对 |
+| **isSseStreamGiveUpError** | ✅ | 上游也有，一致 |
+| **tools/list_changed 通知** | ✅ | 上游也有，一致 |
+| **OAuth 2.1 完整流程** | ✅ | 上游也有，功能等价 |
+| **logMcp 双日志** (Logcat + LogPage) | ✅ | 上游仅 Logcat，本地增强用户可查 |
+
+### 15.3 已修复问题
+
+| 问题 | 上游做法 | 本地缺陷 | 修复 |
+|------|----------|----------|------|
+| `getStatus` 缺少 `distinctUntilChanged()` | `.distinctUntilChanged()` | 无 — 任意 server 状态变更都触发所有 server 的 Flow emit | ✅ 添加 `distinctUntilChanged()` |
+| `addClient` 未从 settingsStore 重读配置 | 内部 `settingsStore.settingsFlow.value.find{...}` 重读 | 直接用 `configInput` 参数 — 协程排队期间 config 可能已变更 | ✅ 添加重读逻辑，config 不存在/已禁用时直接清理 |
+| `ensureFreshToken` 未从 settingsStore 重读 | 内部重读最新 config | 直接用参数 — token 刷新可能基于过期 URL，且 `persistOAuthState` 可能覆盖用户并发修改 | ✅ 添加重读逻辑 |
+| `callTool` 仅比较 `accessToken` | `hasSameConnectionParameters(connectedConfig, freshConfig)` | `accessToken !=` — 遗漏 URL/headers 变更，不触发重连 | ✅ 改用 `hasSameConnectionParameters(connectedConfigs[serverId], freshConfig)` |
+
+### 15.4 上游模式未引入（设计差异，非缺陷）
+
+| 上游模式 | 不引入理由 |
+|----------|-----------|
+| McpSession 抽象类 | 本地用独立 Map 已实现等价功能，引入 Session 类增加间接层无明确收益 |
+| ConnectResult sealed interface | 本地 per-server Mutex 保证操作串行，config 在操作期间不会被修改（settingsStore 变更触发 init block 排队等锁），Stale 场景不成立 |
+| McpOAuthCoordinator 独立类 | 本地 ensureFreshToken 始终在 serverLock 内调用，无需额外 refreshLocks；拆分增加类间耦合 |
+| `reconnectAfterDelay` 用 `NonCancellable` 清理 job 引用 | 本地 `cancelAllJobs` 从外部统一清理，覆盖面更广（包括 dormantJobs/authorizationJobs） |
+
+---
+
+## 十六、连接参数检测重构（0.0.10）
+
+> 上游 `0f5b3f3e` 拆分 McpManager 并引入 `McpConnectionKey`，本地选择性引入连接键 + Error.detail，保留单体架构。
+
+### 16.1 McpConnectionKey
+
+**文件**：`McpConnectionKey.kt`（新建）
+
+替代旧版 `McpConfig.ConnectionKey`（已删除）。旧版按 `id` 比较（`checkDifferent`），无法区分「连接参数变化」与「工具开关变化」——用户改 URL 时需要 remove+add 两条操作；用户改工具开关时不触发任何操作但也不会刷新。
+
+新版 `connectionKey()` 扩展函数提取连接键（transportType/serverUrl/clientName/headers），`hasSameConnectionParameters()` 比较两个配置的连接键。
+
+**`clientName` 参与连接键的理由**：`createAndConnect` 将 `commonOptions.name` 作为 MCP `initialize` 请求的 `clientInfo.name` 发送给服务端。改名后需重建连接以更新服务端感知的客户端身份。
+
+### 16.2 connectedConfigs 追踪 Map
+
+**新增成员**：`connectedConfigs: ConcurrentHashMap<Uuid, McpServerConfig>`
+
+记录每个连接**建立时**使用的配置快照。在 `createAndConnect` 中写入，在 `closeClient` 中清除。
+
+**三处使用点**：
+
+| 位置 | 用途 |
+|------|------|
+| init block | 已存在 server：比较 `connectedConfigs[id]` 与新配置，参数变化时 `addClient` 重连 |
+| `callTool` | `ensureFreshToken` 后比较，token/URL/headers 变化时重建连接 |
+| `syncAll` | 同上，参数变化时 `addClient` 而非仅 `syncTools` |
+
+### 16.3 init block 重构
+
+旧版使用 `checkDifferent` 三步走（过滤 → 比较 → 并行 add/remove）。新版改为三路分类：
+
+```
+收到新配置
+  │
+  ├── 新增 server：id 不在 clients 中 且 不在授权流程中 → addClient
+  │
+  ├── 已存在 server：hasSameConnectionParameters(connectedConfigs[id], config)
+  │     → false（参数变化）→ addClient 重连
+  │     → true（仅工具变化）→ 跳过，由 syncAll 的 syncTools 刷新
+  │
+  └── 删除 server：id 在 clients 中但已不在 enabled 列表 → removeClient
+```
+
+**改进**：用户仅切换工具开关时不再触发 remove+add 假重连（旧版 `checkDifferent` 因 `connectionKey` 不含 tools 返回空集，但不刷新已有连接的工具列表；新版跳过后由 `syncAll` 的 `syncTools` 自然刷新）。
+
+### 16.4 McpStatus.Error 增强
+
+```kotlin
+data class Error(val message: String, val detail: String? = null) : McpStatus() {
+    companion object {
+        fun from(throwable: Throwable, fallbackMessage: String? = null): Error
+    }
+}
+```
+
+- `message`：简短摘要，用于列表内联展示
+- `detail`：完整堆栈（`throwable.stackTraceToString()`），用于展开查看与复制
+- `Error.from()` 自动提取 message（优先 throwable.message，其次 fallbackMessage，最后类名）
+
+`SettingMcpPage` 中 Error 文本可点击展开 `AlertDialog`，含 `SelectionContainer` + 复制按钮。
+
+### 16.5 addClient 重读配置
+
+`addClient(configInput)` 从 `settingsStore.settingsFlow.value` 重读最新配置，而非直接使用 `configInput`。协程排队期间 config 可能已变更（用户修改 URL 后又禁用），重读确保使用最新配置，config 不存在/已禁用时直接清理并返回。
+
+### 16.6 ensureFreshToken 重读配置
+
+同上，`ensureFreshToken(configInput)` 从 `settingsStore` 重读最新配置后再检查 token 过期。避免基于过期 URL 刷新 token，且 `persistOAuthState` 不会覆盖用户并发修改。
+
+### 16.7 死代码清理
+
+| 删除项 | 原因 |
+|--------|------|
+| `McpConfig.ConnectionKey` 数据类 | 被 `McpConnectionKey.connectionKey()` 替代 |
+| `McpServerConfig.connectionKey` 抽象属性 | 同上 |
+| `McpConfigTest` 中 9 个 `connectionKey`/`checkDifferent` 测试 | 被替换为 `McpConnectionKeyTest` 3 个测试 |
+| `CollectionUtils.checkDifferent` 的 MCP 用例 | init block 不再使用（`checkDifferent` 函数本身保留，其他模块可能使用） |
+
+### 16.8 职责划分分析
+
+| 组件 | 职责 | 评价 |
+|------|------|------|
+| `McpConnectionKey.kt` | 连接键定义 + 比较函数 | 独立文件，职责单一，可独立测试 |
+| `McpManager` | 连接生命周期管理 + 连接参数变化检测 | `connectedConfigs` 作为追踪 Map 内聚于 McpManager，与 `clients` Map 同步维护 |
+| `McpStatus.Error` | 错误状态 + 详情 | `Error.from()` 工厂方法封装异常提取逻辑，调用方简洁 |
+| `SettingMcpPage` | 错误详情 UI 展示 | 纯 UI 层，通过 `McpStatus.Error` 的 `detail` 字段获取数据 |
+
+**结论**：各组件职责清晰，连接键逻辑独立于 McpManager 便于测试，`connectedConfigs` 追踪 Map 与 `clients` Map 同步维护无一致性风险（均在 `createAndConnect`/`closeClient` 中配对操作，且在 `getServerLock` 保护下）。

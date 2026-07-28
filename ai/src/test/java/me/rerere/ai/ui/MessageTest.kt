@@ -11,113 +11,84 @@ class MessageTest {
     // ==================== limitContext Tests ====================
 
     @Test
-    fun `limitContext with size 0 should return original list`() {
-        val messages = createTestMessages(5)
-        val result = messages.limitContext(0)
-        assertEquals(messages, result)
+    fun `limitContext should preserve the original list when disabled or within threshold`() {
+        val messages = createAlternatingMessages(10)
+
+        assertEquals(messages, messages.limitContext(0))
+        assertEquals(messages, messages.limitContext(-1))
+        assertEquals(messages, messages.limitContext(10))
+        assertEquals(emptyList<UIMessage>(), emptyList<UIMessage>().limitContext(10))
     }
 
     @Test
-    fun `limitContext with negative size should return original list`() {
-        val messages = createTestMessages(5)
-        val result = messages.limitContext(-1)
-        assertEquals(messages, result)
+    fun `limitContext should keep a stable user-turn boundary within one step`() {
+        val messages = createAlternatingMessages(30)
+
+        val startsWithinStep = (11..14).map { size ->
+            messages.subList(0, size).limitContext(10).first()
+        }
+
+        assertEquals(1, startsWithinStep.distinct().size)
+        assertEquals(MessageRole.USER, startsWithinStep.first().role)
+        assertEquals(messages[4], startsWithinStep.first())
+        assertEquals(messages[10], messages.subList(0, 15).limitContext(10).first())
     }
 
     @Test
-    fun `limitContext with size greater than list size should return original list`() {
-        val messages = createTestMessages(3)
-        val result = messages.limitContext(5)
-        assertEquals(messages, result)
-    }
-
-    @Test
-    fun `limitContext with normal size should return last N messages`() {
-        val messages = createTestMessages(5)
-        val result = messages.limitContext(3)
-        assertEquals(3, result.size)
-        assertEquals(messages.subList(2, 5), result)
-    }
-
-    @Test
-    fun `limitContext with executed tool at start should include corresponding tool call`() {
+    fun `limitContext should align an assistant start to its preceding user turn`() {
         val messages = listOf(
-            UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text("User message"))),
+            UIMessage.user("Old question"),
+            UIMessage.assistant("Old answer"),
+            UIMessage.user("Question with tool"),
             UIMessage(
-                role = MessageRole.ASSISTANT, parts = listOf(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(
                     UIMessagePart.Tool(
-                        toolCallId = "call1",
-                        toolName = "test_tool",
-                        input = "{}",
-                        output = emptyList() // Not executed
-                    )
-                )
-            ),
-            UIMessage(
-                role = MessageRole.ASSISTANT, parts = listOf(
-                    UIMessagePart.Tool(
-                        toolCallId = "call1",
-                        toolName = "test_tool",
-                        input = "{}",
-                        output = listOf(UIMessagePart.Text("result")) // Executed
-                    )
-                )
-            ),
-            UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("Final response")))
-        )
-
-        val result = messages.limitContext(2)
-        assertEquals(4, result.size)
-        assertEquals(messages, result)
-    }
-
-    @Test
-    fun `limitContext with tool call at start should include corresponding user message`() {
-        val messages = listOf(
-            UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text("User query"))),
-            UIMessage(
-                role = MessageRole.ASSISTANT, parts = listOf(
-                    UIMessagePart.Tool(
-                        toolCallId = "call1",
-                        toolName = "test_tool",
-                        input = "{}",
-                        output = emptyList()
-                    )
-                )
-            ),
-            UIMessage(
-                role = MessageRole.ASSISTANT, parts = listOf(
-                    UIMessagePart.Tool(
-                        toolCallId = "call1",
+                        toolCallId = "call-1",
                         toolName = "test_tool",
                         input = "{}",
                         output = listOf(UIMessagePart.Text("result"))
                     )
                 )
             ),
-            UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("Final response")))
+            UIMessage.assistant("Final answer"),
+            UIMessage.user("Newest question")
         )
 
-        val result = messages.limitContext(2)
-        assertEquals(4, result.size)
-        assertEquals(messages, result)
+        // limit=4 produces a stepped start at index 4 (an assistant message);
+        // the implementation must move it back to the user at index 2.
+        val result = messages.limitContext(4)
+
+        assertEquals(messages.subList(2, messages.size), result)
+        assertEquals(MessageRole.USER, result.first().role)
     }
 
     @Test
-    fun `limitContext with empty list should return empty list`() {
-        val messages = emptyList<UIMessage>()
-        val result = messages.limitContext(5)
-        assertEquals(emptyList<UIMessage>(), result)
-    }
-
-    @Test
-    fun `limitContext with single message should return that message`() {
+    fun `findUserTurnStart should preserve complete turns`() {
         val messages = listOf(
-            UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text("Single message")))
+            UIMessage.user("First question"),
+            UIMessage.assistant("First answer"),
+            UIMessage.user("Second question"),
+            UIMessage.assistant("Second answer")
         )
-        val result = messages.limitContext(1)
-        assertEquals(1, result.size)
-        assertEquals(messages, result)
+
+        assertEquals(2, messages.findUserTurnStart(3))
+        assertEquals(2, messages.findUserTurnStart(2))
+        assertEquals(0, emptyList<UIMessage>().findUserTurnStart(3))
+    }
+
+    @Test
+    fun `limitContext should remain a suffix and retain at least half the threshold`() {
+        val messages = createAlternatingMessages(120)
+
+        for (size in 11..120) {
+            val source = messages.subList(0, size)
+            val result = source.limitContext(10)
+
+            assertTrue("size=$size retained ${result.size}", result.size >= 5)
+            assertEquals(MessageRole.USER, result.first().role)
+            assertEquals(source.takeLast(result.size), result)
+        }
     }
 
     // ==================== isValidToUpload Tests ====================
@@ -174,14 +145,11 @@ class MessageTest {
         assertTrue(message.isValidToUpload())
     }
 
-    // ==================== Helper Functions ====================
-
-    private fun createTestMessages(count: Int): List<UIMessage> {
-        return (0 until count).map { i ->
-            UIMessage(
-                role = if (i % 2 == 0) MessageRole.USER else MessageRole.ASSISTANT,
-                parts = listOf(UIMessagePart.Text("Message $i"))
-            )
+    private fun createAlternatingMessages(count: Int): List<UIMessage> = List(count) { index ->
+        if (index % 2 == 0) {
+            UIMessage.user("Question $index")
+        } else {
+            UIMessage.assistant("Answer $index")
         }
     }
 }

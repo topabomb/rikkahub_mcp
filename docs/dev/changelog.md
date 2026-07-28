@@ -6,7 +6,102 @@
 
 ---
 
-## 0.0.9（versionCode 9）— 2026-07-04 ~ 2026-07-11
+## 0.0.11（versionCode 11）— 2026-07-18 ~ 2026-07-28
+
+### 新增
+
+- **极简白和 Claude 主题**：新增 Minimal（纯白底 + 中性灰层级 + 低饱和蓝强调色）和 Claude（象牙白暖底 + 赤陶橙强调色）两个预设主题，主题选择器由横向滚动改为 FlowRow 四列网格布局
+- **SAF 支持复制/移动文件到 workspace**：Root 加上 `FLAG_SUPPORTS_CREATE`，实现 `copyDocument`/`moveDocument`，文件管理器可将 workspace 作为粘贴/保存目标
+- **Mermaid 内置离线加载**：将 mermaid 11.16.0 的 JS（3.5MB）打包进 assets，通过 `WebViewLocalAssets` 拦截虚拟域名 `measix.local/assets/**` 映射到 assets 目录，内嵌 WebView 与全屏预览页共用同一 baseUrl，首次渲染不再依赖 CDN
+- **新会话就绪引导**：未配置可用对话模型时，在“配置此会话”前展示与设置页复用的紧凑阻断卡片；配置卡使用主题常规表面色，仅对话模型行使用警告图标和状态标签。MCP、本地能力和本地工作区保持可选，状态文案压缩为短标签；模型项复用输入框底部的选择面板，其余项进入对应配置入口。已有消息的会话仅在模型不可用时显示对应提示
+- **会话就绪回归测试**：覆盖未配置、未选择、Provider 全禁用、仅有非对话模型、MCP 未配置/全禁用/已选择和工作区绑定状态
+- **上下文管理双层策略**：Assistant 可显式开启请求级阶梯裁剪，默认关闭，开启后默认 80 条、范围 40～512；裁剪锚点按完整 USER 轮次分段移动，减少相邻请求的提示缓存前缀漂移且不改写会话。用户触发的语义压缩继续负责用摘要替换较早历史
+- **本地生成链路参考文档**：基于上游有价值的生成管线文档，按 Measix Pilot 的通知解耦、Workspace、MCP、工具集合及上下文策略重写，并新增上下文管理决策文档
+
+### 修复
+
+- **消息模板时间破坏 prompt 缓存**：`TemplateTransformer` 改为取 `UIMessage.createdAt` 而非 `Instant.now()`，历史消息的 `time`/`date` 变量在每轮请求中保持稳定
+- **Response API 内置工具覆盖自定义函数工具**：`buildRequestBody` 中两次 `putJsonArray("tools")` 互相覆盖，改为合并到同一个 key 下
+- **图片裁剪失败静默忽略**：UCrop 返回 `RESULT_ERROR` 时弹出错误 toast 并记录日志
+- **月之暗面 K2.6 保留式思考**：思考开启时发送 `thinking.keep=all`，K2.5 不支持 keep 参数不发送
+- **cached tokens 按 provider 方言兜底解析**：OpenAI 嵌套 → Moonshot 顶层 `cached_tokens` → DeepSeek `prompt_cache_hit_tokens`
+- **Kimi K3 裸 id 适配**：补充 `KIMI_K3_ALIAS` 匹配不带 kimi 前缀的裸模型 id "k3"
+- **图标匹配 k3 模型 id**：`PATTERN_KIMI` 正则增加 `k3` 匹配
+- **本地备份继承 WebDAV items 过滤**：`exportToFile`/`restoreFromLocalFile` 强制使用 `BackupItem.entries` 包含所有项
+- **Skills 从 metadata 目录解析**：`createSkillTools` 移除 `SkillManager` 依赖，改用 `SkillFrontmatterParser` 和 `SkillPaths` 直接操作 `SkillMetadata`
+- **工作区 bind mount 文件读取**：`workspace_read_file` 统一通过 `WorkspaceManager` 解析
+  `/workspace`、`/skills`、`/upload` 与 rootfs 内部路径；PRoot 和文件工具共享同一挂载表，
+  并为文本/图片读取统一保留 8 MiB 限制
+- **TTS 下拉菜单小屏崩溃**：Provider、OpenAI voice、MiMo model/voice 改用有高度上限的
+  `SelectTextField`，避免输入法弹出时 `ExposedDropdownMenuPositionProvider` 范围非法
+- **MCP 导入冲突提示格式**：五语言字符串改用位置参数 `%1$d`/`%2$s`，消除 Android
+  资源编译的多参数格式警告并确保参数顺序可本地化
+- **无签名环境无法构建 Release**：仅在 `local.properties` 的四项签名信息完整时创建并
+  绑定 release signingConfig；普通开发环境可生成 unsigned release，正式签名配置行为不变
+- **Fork 后 Compose 稳定性配置仍引用旧包名**：`Conversation`、`MessageNode` 改为当前
+  `net.weero.measix.pilot` 包名，并清除 release baseline profile 中已删除的 `limitContext` 规则
+- **长按发送绕过模型校验**：普通发送与长按发送共用同一模型前置条件和本地化错误提示；生成服务也统一拒绝禁用 Provider 中的模型
+- **Bing 忽略结果数量设置**：抓取结果统一遵守 `SearchCommonOptions.resultSize`
+- **Room v1→v2 迁移使用错误表名**：`Migration_1_2` 改为迁移 v1 schema 中真实存在的
+  `ConversationEntity` 表；迁移测试同步适配当前 SQLite API，并在模拟器上验证旧会话数据保留及
+  `tags` 默认值
+- **仪器测试配置漂移**：为 `highlight`、`material3`、`search` 补齐 AndroidX Test 依赖；
+  `speech` 样板测试的包路径与期望 packageName 对齐当前 `me.rerere.speech` namespace
+- **上下文压缩拆散对话轮次**：保留最近消息和 256 条分块的切点统一回退到 USER 边界，避免摘要输入或保留历史从孤立的助手/工具回复开始；压缩提示明确摘要会替换旧历史且不可撤销
+- **本地能力说明误含语音识别**：会话配置卡改为列举语音播报、剪贴板和屏幕使用时间，和实际 Local Tools 注册表一致
+
+### 变更
+
+- **许可证变更为纯 AGPL-3.0**：上游 RikkaHub 将许可证从"分段双重许可（Segmented Dual Licensing）"改为纯 AGPL-3.0，移除了商业用途限制和用户数量门槛。本地 LICENSE 文件已同步更新为 GNU 官方 AGPL-3.0 全文
+- **上下文限制改为阶梯式裁剪**：先移除会逐轮移动并破坏提示缓存的旧 `contextMessageSize`，再以新字段 `contextMessageLimit` 适配引入上游 `2d61ba9`。本地没有照搬上游边界和参数：完整轮次对齐、显式开关、异常值归一化，并明确消息条数不是 token/window 上限；旧字段仍由 `JsonInstant.ignoreUnknownKeys` 安全忽略
+- **SkillFrontmatterParser 抽离为独立文件**：从 `SkillManager.kt` 抽离到独立的 `SkillFrontmatterParser.kt`
+- **移除 Custom JS 搜索**：删除任意脚本搜索运行时、配置 UI、资源和 search 模块 QuickJS 依赖；旧 `custom_js` 落盘项通过宽容解码安全跳过，若无其他 provider 则回退到默认 Bing
+- **搜索模块职责收敛**：`search` 只负责 provider 配置、schema 和网络执行；说明文案迁移至 app UI；新增显式 `SearchProviderType` 工厂，移除 Compose 依赖和反射创建
+- **抽屉助手入口重构**：当前助手区域改为独立选择器，头像、“当前助手”标签、名称和下拉箭头共同构成切换入口；右侧独立编辑按钮管理当前助手，下方助手设置继续负责全局管理，避免切换与管理语义混杂
+- **阶段复核制度化**：首份九批复核改名为 [phase-1-review-2026-07-28.md](upstream-sync/phase-1-review-2026-07-28.md)，并在 [upstream-sync.md](upstream-sync.md) 中明确阶段复核的目标、价值、命名和冻结规则
+- 依赖升级：material3 1.5.0-alpha23 → 1.5.0-alpha24；kotlin 2.4.0 → 2.4.10；ksp 2.3.4 → 2.3.10；sonner 0.3.9 → 0.4.0
+
+### 上游同步
+
+- 同步 rikkahub 上游 `8eebe950..2d61ba95`（2026-07-18 ~ 2026-07-28）的 22 个提交（19 个同步 + 3 个按 Fork 边界跳过），详见 `docs/dev/upstream-sync.md` 第九批检查记录
+- 完整审查：补齐 bind mount 与 TTS 两个 P0，恢复上游五组回归测试并增加 K3 边界测试；修复 Crop 文案本地化、K3 图标误匹配、BOM、WebView 虚拟域名/遗漏文件及同步台账范围连续性
+- 阶段复核：九批范围 `5b9be301..2d61ba95` 共 131 个上游提交连续闭合，无间隙、无重复；修正首批失效哈希、第六/七批检查点重叠和各批数量口径，详见 [阶段 1 复核](upstream-sync/phase-1-review-2026-07-28.md)
+
+---
+
+## 0.0.10（versionCode 10）— 2026-07-10 ~ 2026-07-17
+
+### 新增
+
+- **工作区文件编辑与预览**：点击工作区文件按类型分派——文本文件打开应用内编辑页（FILES 区可编辑保存，LINUX 区只读预览），图片走可缩放预览弹窗，其他文件交给系统应用打开。文件过大预览错误改用 `FileTooLargeException` 异常 + UI 层本地化格式化，避免硬编码中文异常消息在非中文 locale 下直接显示
+- **一键清理聊天文件**：文件管理页新增清理按钮，一键删除分类下全部文件
+- **Kimi K3 模型定义**：新增 Kimi K3 模型检测（vision + tool reasoning）
+
+### 修复
+
+- **WebView 预览崩溃**：HTML 内容从导航参数移出，改为写入 cacheDir 并传递 SHA-256 内容 ID，避免大段 HTML 撑爆 SaveableStateRegistry 触发 TransactionTooLargeException
+- **CustomJs 搜索 API 400**：scrape 参数的 urls 数组补全 items 类型声明，修复 Gemini/Claude API 校验失败
+- **工作区恢复备份后误删**：目录缺失时标记 BROKEN 而非删除记录，避免误删用户工作区与助手绑定
+- **folder sync 孤儿记录**：syncFolder 改为双向同步，补录未登记文件 + 清理磁盘已删除的孤儿记录
+- **proot 终端 SIGILL 崩溃**：部分 Android 设备上 proot 的 seccomp 加速与系统 seccomp 策略冲突，导致被追踪进程收到 SIGILL（signal 4）立即退出；为 ProotShellRunner 和 WorkspaceTerminalSession 添加 `PROOT_NO_SECCOMP=1` 环境变量，回退到纯 ptrace 模式以保证全设备兼容
+- **AndroidManifest XML 解析失败**：移除 `AndroidManifest.xml` 开头多余的双 BOM 字符，修复"前言中不允许有内容"解析错误
+
+### 变更
+
+- **网络搜索开关迁移到助手级**：`enableWebSearch` 从全局 Settings 迁移到 Assistant，每个助手独立记忆是否启用网络搜索
+- **TTS 工具描述更新**：从"设备 TTS 引擎"改为"所选 TTS 服务"，反映多 TTS provider 支持
+- **建议回复提示词优化**：新增"help the assistant improve its answers"引导
+- **TTS 引号描述补全**：补全中英文直引号显示，引号间加空格
+- **MCP Error 详情展示**：McpStatus.Error 新增 detail 字段（含堆栈），SettingMcpPage 支持点击展开错误详情并复制；新增 McpConnectionKey 连接键机制——通过 connectedConfigs 追踪 Map 记录每个连接的配置，init 链 1 和 syncAll() 使用 hasSameConnectionParameters() 检测连接参数变化（URL/transport/headers/oauth token），变化时重连、仅工具开关变化时跳过（由下次 syncTools 自然刷新）+ 3 个单元测试
+- 依赖升级：okhttp 5.4.0 / coil 3.5.0 / koin 4.2.2 / ktor 3.5.1 / slf4j 2.0.18 / uiautomator 2.4.0 / baselineprofile alpha07
+
+### 上游同步
+
+- 同步 rikkahub 上游 `449ce1e6..upstream/master`（2026-07-10 ~ 2026-07-16）的 24 个提交（11 个同步 + 2 个选择性引入 + 11 个跳过），详见 `docs/dev/upstream-sync.md` 第八批检查记录
+
+---
+
+## 0.0.9（versionCode 9）— 2026-07-04 ~ 2026-07-08
 
 ### 新增
 
@@ -20,7 +115,6 @@
 - **模型注册扩展**：新增 GLM-5.2、HY3、LongCat-2.0、Qwen 3.5/3.6/3.7 MAX、Doubao 2.0/2.1 模型检测
 - **TTS 语气标记引导**：TTSProvider 新增可选 `promptGuidance`，text_to_speech 工具启用时将当前选中 provider 的引导注入 system prompt；MiMo 硬编码风格/音频标签引导
 - **生成通知解耦**：新增 ChatNotificationManager 通过 AppEventBus 消费生成事件，承接 Live Update/完成通知、前后台判断与 1s 节流，ChatService 只发事件
-- **TTS 不朗读括号内容**：新增 `removeBracketedContent()` 函数与 `ttsOnlyReadOutsideBrackets` 设置开关，与引号过滤叠加生效，支持中英文括号
 
 ### 修复
 
@@ -39,12 +133,6 @@
 - **MCP SSE 无限重连**：StreamableHttpClientTransport 的 SSE 通知流重试耗尽不再触发整体重连，新增 `isSseStreamGiveUpError` 过滤
 - **聊天头部模型名截断**：`provider/model` 格式的长模型名 `maxLines` 改为 2 + `TextOverflow.Ellipsis`
 - **输入框底部间距**：键盘收起时增加 8dp 底部呼吸间距
-- **WebView 预览崩溃**：大段 HTML 通过导航参数传递撑爆 `SaveableStateRegistry` 触发 `TransactionTooLargeException`，改为写入 `cacheDir` 文件缓存并仅传递 SHA-256 内容 ID，7 天自动清理
-- **工作区恢复备份后误删**：`checkIntegrity()` 目录缺失时从删除记录+清理引用改为标记 `BROKEN` 状态，保留记录与助手绑定
-- **CustomJsSearch scrape 参数校验失败**：`urls` 数组缺少 `items` 字段导致 Gemini/Claude API 400，补全 `items: { type: string }`
-- **TTS 引号描述显示不全**：中英文 `tts_only_read_quoted_desc` 补全直引号 `" "`/`' '` 显示
-- **TTS 工具描述不准确**："设备 TTS 引擎" 改为 "所选 TTS 服务"
-- **建议回复提示词优化**：`responses to the assistant` → `responses to help the assistant improve its answers`
 
 ### 变更
 
@@ -68,7 +156,6 @@
 - 同步 rikkahub 上游 `5b39e05d..upstream/master`（2026-07-05）的 6 个提交，详见 `docs/dev/upstream-sync.md` 第五批检查记录
 - 同步 rikkahub 上游 `ef564dca..upstream/master`（2026-07-06 ~ 2026-07-08）的 17 个提交（16 个同步 + 1 个补充同步），详见 `docs/dev/upstream-sync.md` 第六批检查记录
 - 同步 rikkahub 上游 `624ab635..upstream/master`（2026-07-08）的 5 个提交，详见 `docs/dev/upstream-sync.md` 第七批检查记录
-- 同步 rikkahub 上游 `8e872e5f..upstream/master`（2026-07-09 ~ 2026-07-11）的 8 个提交，详见 `docs/dev/upstream-sync.md` 第八批检查记录
 
 ---
 

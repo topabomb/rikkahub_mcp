@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.datastore.WebDavConfig
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.sync.webdav.WebDavBackupItem
 import net.weero.measix.pilot.data.sync.webdav.WebDavSync
@@ -80,13 +81,18 @@ class BackupVM(
     }
 
     suspend fun exportToFile(): File {
-        val file = webDavSync.prepareBackupFile(settings.value.webDavConfig.copy())
+        val file = webDavSync.prepareBackupFile(
+            settings.value.webDavConfig.copy(items = WebDavConfig.BackupItem.entries)
+        )
         recordBackupTime()
         return file
     }
 
     suspend fun restoreFromLocalFile(file: File) {
-        webDavSync.restoreFromLocalFile(file, settings.value.webDavConfig)
+        webDavSync.restoreFromLocalFile(
+            file,
+            settings.value.webDavConfig.copy(items = WebDavConfig.BackupItem.entries),
+        )
     }
 
     // S3 Backup methods

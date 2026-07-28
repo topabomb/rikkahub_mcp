@@ -97,6 +97,7 @@ import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.ui.components.message.ChatMessage
 import net.weero.measix.pilot.ui.components.ui.ErrorCardsDisplay
 import net.weero.measix.pilot.ui.components.ui.ListSelectableItem
+import net.weero.measix.pilot.ui.components.ui.ProviderConfigWarningCard
 import net.weero.measix.pilot.ui.components.ui.RabbitLoadingIndicator
 import net.weero.measix.pilot.ui.components.ui.Tooltip
 import net.weero.measix.pilot.ui.hooks.ImeLazyListAutoScroller
@@ -110,7 +111,7 @@ private const val LoadingIndicatorKey = "LoadingIndicator"
 private const val ScrollBottomKey = "ScrollBottomKey"
 
 @Composable
-fun ChatList(
+internal fun ChatList(
     innerPadding: PaddingValues,
     conversation: Conversation,
     state: LazyListState,
@@ -118,6 +119,7 @@ fun ChatList(
     processingStatus: String? = null,
     previewMode: Boolean,
     settings: Settings,
+    readiness: ConversationReadiness,
     hazeState: HazeState,
     errors: List<ChatError> = emptyList(),
     onDismissError: (Uuid) -> Unit = {},
@@ -129,6 +131,11 @@ fun ChatList(
     onUpdateMessage: (MessageNode) -> Unit = {},
     onClickSuggestion: (String) -> Unit = {},
     onJumpToMessage: (Int) -> Unit = {},
+    onProviderConfigClick: () -> Unit,
+    onReadinessModelClick: () -> Unit,
+    onReadinessMcpClick: () -> Unit,
+    onReadinessLocalToolsClick: () -> Unit,
+    onReadinessWorkspaceClick: () -> Unit,
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
     onToggleFavorite: ((MessageNode) -> Unit)? = null,
@@ -158,6 +165,7 @@ fun ChatList(
                 loading = loading,
                 processingStatus = processingStatus,
                 settings = settings,
+                readiness = readiness,
                 hazeState = hazeState,
                 errors = errors,
                 onDismissError = onDismissError,
@@ -168,6 +176,11 @@ fun ChatList(
                 onDelete = onDelete,
                 onUpdateMessage = onUpdateMessage,
                 onClickSuggestion = onClickSuggestion,
+                onProviderConfigClick = onProviderConfigClick,
+                onReadinessModelClick = onReadinessModelClick,
+                onReadinessMcpClick = onReadinessMcpClick,
+                onReadinessLocalToolsClick = onReadinessLocalToolsClick,
+                onReadinessWorkspaceClick = onReadinessWorkspaceClick,
                 animatedVisibilityScope = this@AnimatedContent,
                 onToolApproval = onToolApproval,
                 onToolAnswer = onToolAnswer,
@@ -186,6 +199,7 @@ private fun ChatListNormal(
     loading: Boolean,
     processingStatus: String? = null,
     settings: Settings,
+    readiness: ConversationReadiness,
     hazeState: HazeState,
     errors: List<ChatError>,
     onDismissError: (Uuid) -> Unit,
@@ -196,6 +210,11 @@ private fun ChatListNormal(
     onDelete: (UIMessage) -> Unit,
     onUpdateMessage: (MessageNode) -> Unit,
     onClickSuggestion: (String) -> Unit,
+    onProviderConfigClick: () -> Unit,
+    onReadinessModelClick: () -> Unit,
+    onReadinessMcpClick: () -> Unit,
+    onReadinessLocalToolsClick: () -> Unit,
+    onReadinessWorkspaceClick: () -> Unit,
     animatedVisibilityScope: AnimatedVisibilityScope,
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
@@ -263,6 +282,8 @@ private fun ChatListNormal(
             .associateBy { it.id }
     }
     val lastMessageIndex = conversation.messageNodes.lastIndex
+    val isEmptyConversation = conversation.messageNodes.isEmpty()
+    val showsConfigurationPrompt = isEmptyConversation || !readiness.canSend
 
     Box(
         modifier = Modifier
@@ -298,7 +319,12 @@ private fun ChatListNormal(
         ChatFontProvider(displaySetting = settings.displaySetting) {
             LazyColumn(
                 state = state,
-                contentPadding = PaddingValues(16.dp) + PaddingValues(bottom = 32.dp + innerPadding.calculateBottomPadding()),
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    top = if (showsConfigurationPrompt) 8.dp else 16.dp,
+                    end = 16.dp,
+                    bottom = 48.dp + innerPadding.calculateBottomPadding(),
+                ),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier
@@ -306,6 +332,41 @@ private fun ChatListNormal(
                     .hazeSource(state = hazeState)
                     .padding(top = innerPadding.calculateTopPadding()),
             ) {
+            if (isEmptyConversation) {
+                item(key = "ConversationSetup") {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (readiness.requiresProviderConfiguration) {
+                            ProviderConfigWarningCard(onClick = onProviderConfigClick)
+                        }
+                        ConversationReadinessCard(
+                            readiness = readiness,
+                            compact = false,
+                            onModelClick = onReadinessModelClick,
+                            onMcpClick = onReadinessMcpClick,
+                            onLocalToolsClick = onReadinessLocalToolsClick,
+                            onWorkspaceClick = onReadinessWorkspaceClick,
+                        )
+                    }
+                }
+            } else if (readiness.requiresProviderConfiguration) {
+                item(key = "ProviderConfigWarning") {
+                    ProviderConfigWarningCard(onClick = onProviderConfigClick)
+                }
+            } else if (!readiness.canSend) {
+                item(key = "ConversationModelReadiness") {
+                    ConversationReadinessCard(
+                        readiness = readiness,
+                        compact = true,
+                        onModelClick = onReadinessModelClick,
+                        onMcpClick = onReadinessMcpClick,
+                        onLocalToolsClick = onReadinessLocalToolsClick,
+                        onWorkspaceClick = onReadinessWorkspaceClick,
+                    )
+                }
+            }
+
             itemsIndexed(
                 items = conversation.messageNodes,
                 key = { index, item -> item.id },

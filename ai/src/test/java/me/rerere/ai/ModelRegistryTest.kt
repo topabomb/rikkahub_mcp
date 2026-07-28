@@ -62,6 +62,19 @@ class ModelRegistryTest {
     }
 
     @Test
+    fun testK3Alias() {
+        assertEquals(
+            listOf(Modality.TEXT, Modality.IMAGE),
+            ModelRegistry.MODEL_INPUT_MODALITIES.getData("k3")
+        )
+        assertEquals(
+            listOf(ModelAbility.TOOL, ModelAbility.REASONING),
+            ModelRegistry.MODEL_ABILITIES.getData("k3")
+        )
+        assertEquals(emptyList<ModelAbility>(), ModelRegistry.MODEL_ABILITIES.getData("k30"))
+    }
+
+    @Test
     fun testOpenAIOModels() {
         assertTrue(ModelRegistry.OPENAI_O_MODELS.match("o1"))
         assertTrue(ModelRegistry.OPENAI_O_MODELS.match("o3-mini"))

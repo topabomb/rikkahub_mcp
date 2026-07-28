@@ -10,8 +10,12 @@ class WorkspaceManager(
     private val baseDir: File,
     private val config: WorkspaceConfig = WorkspaceConfig(),
     private val shellRunner: WorkspaceShellRunner = HostShellRunner(),
+    private val bindMounts: List<WorkspaceBindMount> = emptyList(),
 ) {
     private val fileSystem = WorkspaceFileSystem(config)
+
+    // Longest target first so that /a/b is matched before /a.
+    private val sortedBindMounts = bindMounts.sortedByDescending { it.target.trimEnd('/').length }
 
     init {
         baseDir.mkdirs()
@@ -96,6 +100,57 @@ class WorkspaceManager(
         outputStream.use { out -> file.inputStream().use { it.copyTo(out) } }
     }
 
+    /**
+     * Maps an absolute path inside the rootfs to the corresponding host file.
+     *
+     * Bind mount sources are ordinary Android directories and can be read directly. Resolving
+     * them under [WorkspaceStorageArea.LINUX] would instead point at the empty mount point.
+     */
+    fun resolveRootfsPath(root: String, path: String): RootfsLocation {
+        val trimmed = path.trim().trimEnd('/').ifBlank { "/" }
+        require(trimmed.startsWith("/")) { "Rootfs path must be absolute: $path" }
+
+        sortedBindMounts.forEach { mount ->
+            val target = mount.target.trimEnd('/')
+            if (trimmed == target) return RootfsLocation(mount.source, "")
+            if (trimmed.startsWith("$target/")) {
+                return RootfsLocation(mount.source, trimmed.removePrefix("$target/"))
+            }
+        }
+
+        if (trimmed == ROOTFS_WORKSPACE_DIR || trimmed.startsWith("$ROOTFS_WORKSPACE_DIR/")) {
+            return RootfsLocation(
+                rootDir = filesDir(root),
+                relativePath = trimmed.removePrefix(ROOTFS_WORKSPACE_DIR).trimStart('/'),
+            )
+        }
+
+        KERNEL_FS_MOUNTS.firstOrNull { trimmed == it || trimmed.startsWith("$it/") }?.let {
+            error("$it is a kernel filesystem and cannot be read as a file, use workspace_shell instead")
+        }
+
+        return RootfsLocation(linuxDir(root), trimmed.trimStart('/'))
+    }
+
+    fun rootfsFileSize(root: String, path: String): Long =
+        resolveRootfsFile(root, path).also { it.requireReadableFile(path) }.length()
+
+    fun exportRootfsFile(root: String, path: String, outputStream: OutputStream) {
+        val file = resolveRootfsFile(root, path)
+        file.requireReadableFile(path)
+        outputStream.use { out -> file.inputStream().use { it.copyTo(out) } }
+    }
+
+    private fun resolveRootfsFile(root: String, path: String): File {
+        val location = resolveRootfsPath(root, path)
+        return fileSystem.resolve(location.rootDir, location.relativePath)
+    }
+
+    private fun File.requireReadableFile(path: String) {
+        require(exists()) { "File does not exist: $path" }
+        require(isFile) { "Path is not a file: $path" }
+    }
+
     fun deleteFile(
         root: String,
         path: String,
@@ -143,6 +198,7 @@ class WorkspaceManager(
                 workingDir = workingDir,
                 timeoutMillis = timeoutMillis,
                 stdin = stdin,
+                bindMounts = bindMounts,
             )
         )
     }
@@ -176,6 +232,16 @@ class WorkspaceManager(
         private const val LINUX_DIR = "linux"
         private const val TEMP_DIR = "tmp"
         const val DEFAULT_COMMAND_TIMEOUT_MS = 30_000L
+
+        const val ROOTFS_WORKSPACE_DIR = "/workspace"
+
+        val KERNEL_FS_MOUNTS = listOf("/dev", "/proc", "/sys")
+
         private val ROOT_NAME_REGEX = Regex("[A-Za-z0-9._-]+")
     }
 }
+
+data class RootfsLocation(
+    val rootDir: File,
+    val relativePath: String,
+)

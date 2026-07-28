@@ -2,6 +2,7 @@
 
 import android.content.Intent
 import android.provider.OpenableColumns
+import android.webkit.MimeTypeMap
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -73,6 +74,7 @@ import androidx.compose.ui.res.stringResource
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
+import net.weero.measix.pilot.ui.components.ui.ImagePreviewDialog
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.utils.fileSizeToString
@@ -96,6 +98,7 @@ fun WorkspaceDetailPage(id: String) {
     val scope = rememberCoroutineScope()
     var deleteTarget by remember { mutableStateOf<WorkspaceFileEntry?>(null) }
     var showInstallDialog by remember { mutableStateOf(false) }
+    var previewImageUri by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
@@ -193,14 +196,48 @@ fun WorkspaceDetailPage(id: String) {
                     contentPadding = PaddingValues(),
                     onSelectArea = vm::selectArea,
                     onGoUp = vm::goUp,
-                    onOpen = vm::open,
+                    onOpen = { entry ->
+                        when {
+                            entry.isDirectory -> vm.open(entry)
+
+                            else -> when (entry.detectFileType()) {
+                                WorkspaceFileType.TEXT -> navController.navigate(
+                                    Screen.WorkspaceFileEditor(id, state.area.name, entry.path)
+                                )
+
+                                WorkspaceFileType.IMAGE -> vm.exportToCacheFile(entry, context.cacheDir) { file ->
+                                    // 传绝对路径 (而非 content:// URI): Coil 可直接加载,
+                                    // 预览弹窗的保存按钮 saveMessageImage 只认 "/" 开头路径, content URI 会报错
+                                    previewImageUri = file.absolutePath
+                                }
+
+                                WorkspaceFileType.OTHER -> vm.exportToCacheFile(entry, context.cacheDir) { file ->
+                                    val uri = FileProvider.getUriForFile(
+                                        context,
+                                        "${context.packageName}.fileprovider",
+                                        file,
+                                    )
+                                    val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(
+                                        file.extension.lowercase()
+                                    ) ?: "*/*"
+                                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                                        setDataAndType(uri, mime)
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    runCatching {
+                                        context.startActivity(Intent.createChooser(intent, null))
+                                    }
+                                }
+                            }
+                        }
+                    },
                     onDelete = { deleteTarget = it },
                     onExport = { entry ->
                         exportTarget = entry
                         exportLauncher.launch(entry.name)
                     },
                     onShare = { entry ->
-                        vm.shareFile(entry, context.cacheDir) { file ->
+                        vm.exportToCacheFile(entry, context.cacheDir) { file ->
                             val uri = FileProvider.getUriForFile(
                                 context,
                                 "${context.packageName}.fileprovider",
@@ -242,6 +279,13 @@ fun WorkspaceDetailPage(id: String) {
                     Text(stringResource(R.string.common_confirm))
                 }
             },
+        )
+    }
+
+    previewImageUri?.let { uri ->
+        ImagePreviewDialog(
+            images = listOf(uri),
+            onDismissRequest = { previewImageUri = null },
         )
     }
 
@@ -651,7 +695,7 @@ private fun WorkspaceFileCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (entry.isDirectory) Modifier.clickable(onClick = onOpen) else Modifier),
+            .clickable(onClick = onOpen),
         colors = CustomColors.cardColorsOnSurfaceContainer,
     ) {
         Row(

@@ -60,12 +60,12 @@ import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.utils.plus
 import me.rerere.search.SearchCommonOptions
+import me.rerere.search.SearchProviderType
 import me.rerere.search.SearchService
 import me.rerere.search.SearchServiceOptions
 import org.koin.androidx.compose.koinViewModel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
-import kotlin.reflect.full.primaryConstructor
 
 @Composable
 fun SettingSearchPage(vm: SettingVM = koinViewModel()) {
@@ -198,7 +198,7 @@ private fun AddProviderDialog(
     onConfirm: (SearchServiceOptions) -> Unit
 ) {
     var selectedType by remember {
-        mutableStateOf(SearchServiceOptions.TYPES.keys.first())
+        mutableStateOf(SearchProviderType.entries.first())
     }
 
     AlertDialog(
@@ -210,8 +210,8 @@ private fun AddProviderDialog(
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                items(SearchServiceOptions.TYPES.keys.toList()) { type ->
-                    val name = SearchServiceOptions.TYPES[type] ?: "Unknown"
+                items(SearchProviderType.entries) { type ->
+                    val name = type.displayName
                     val isSelected = selectedType == type
                     Card(
                         onClick = { selectedType = type },
@@ -251,8 +251,7 @@ private fun AddProviderDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    val instance = selectedType.primaryConstructor!!.callBy(mapOf())
-                    onConfirm(instance)
+                    onConfirm(selectedType.createOptions())
                 }
             ) {
                 Text(stringResource(R.string.confirm))

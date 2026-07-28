@@ -4,6 +4,8 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.runtime.Composable
 import net.weero.measix.pilot.ui.theme.presets.AutumnThemePreset
 import net.weero.measix.pilot.ui.theme.presets.BlackThemePreset
+import net.weero.measix.pilot.ui.theme.presets.ClaudeThemePreset
+import net.weero.measix.pilot.ui.theme.presets.MinimalThemePreset
 import net.weero.measix.pilot.ui.theme.presets.OceanThemePreset
 import net.weero.measix.pilot.ui.theme.presets.SakuraThemePreset
 import net.weero.measix.pilot.ui.theme.presets.SpringThemePreset
@@ -26,6 +28,8 @@ val PresetThemes by lazy {
         SpringThemePreset,
         AutumnThemePreset,
         BlackThemePreset,
+        MinimalThemePreset,
+        ClaudeThemePreset,
     )
 }
 

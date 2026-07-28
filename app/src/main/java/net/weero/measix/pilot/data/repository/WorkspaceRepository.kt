@@ -18,6 +18,7 @@ import me.rerere.workspace.WorkspaceFileEntry
 import me.rerere.workspace.WorkspaceManager
 import me.rerere.workspace.WorkspaceShellStatus
 import me.rerere.workspace.WorkspaceStorageArea
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import kotlin.uuid.Uuid
@@ -158,6 +159,31 @@ class WorkspaceRepository(
         manager.readText(workspace.root, path)
     }
 
+    /**
+     * 读取文本用于应用内预览/编辑, 支持两个存储区.
+     * FILES 区走 [WorkspaceManager.readText] (自带大小保护); LINUX 区通过 exportFile 读入内存,
+     * 因此这里对 LINUX 区显式做大小限制, 避免大文件撑爆内存.
+     */
+    suspend fun readTextForPreview(
+        id: String,
+        area: WorkspaceStorageArea,
+        path: String,
+    ): String = withContext(Dispatchers.IO) {
+        val workspace = dao.getById(id) ?: error("Workspace not found: $id")
+        manager.ensureWorkspace(workspace.root)
+        when (area) {
+            WorkspaceStorageArea.FILES -> manager.readText(workspace.root, path)
+            WorkspaceStorageArea.LINUX -> {
+                val size = manager.fileSize(workspace.root, path, area)
+                if (size > MAX_PREVIEW_BYTES) throw FileTooLargeException(size)
+                ByteArrayOutputStream().use { out ->
+                    manager.exportFile(workspace.root, path, area, out)
+                    out.toString(Charsets.UTF_8.name())
+                }
+            }
+        }
+    }
+
     suspend fun writeText(
         id: String,
         path: String,
@@ -198,6 +224,25 @@ class WorkspaceRepository(
     ) = withContext(Dispatchers.IO) {
         val workspace = dao.getById(id) ?: error("Workspace not found: $id")
         manager.exportFile(workspace.root, path, area, outputStream)
+    }
+
+    suspend fun rootfsFileSize(
+        id: String,
+        path: String,
+    ): Long = withContext(Dispatchers.IO) {
+        val workspace = dao.getById(id) ?: error("Workspace not found: $id")
+        manager.ensureWorkspace(workspace.root)
+        manager.rootfsFileSize(workspace.root, path)
+    }
+
+    suspend fun exportRootfsFile(
+        id: String,
+        path: String,
+        outputStream: OutputStream,
+    ) = withContext(Dispatchers.IO) {
+        val workspace = dao.getById(id) ?: error("Workspace not found: $id")
+        manager.ensureWorkspace(workspace.root)
+        manager.exportRootfsFile(workspace.root, path, outputStream)
     }
 
     suspend fun deleteFile(
@@ -285,5 +330,11 @@ class WorkspaceRepository(
 
     companion object {
         private const val TAG = "WorkspaceRepository"
+        private const val MAX_PREVIEW_BYTES = 512L * 1024
     }
 }
+
+/**
+ * 工作区预览文件过大时抛出, 由 UI 层捕获并展示本地化的提示信息.
+ */
+class FileTooLargeException(val size: Long) : RuntimeException()

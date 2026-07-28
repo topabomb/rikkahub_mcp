@@ -51,11 +51,6 @@
   <string name="assistant_page_chat_model_desc">アシスタントのデフォルトチャットモデルを設定します。設定しない場合は、グローバルデフォルトチャットモデルが使用されます</string>
   <string name="assistant_page_clone">複製</string>
   <string name="assistant_page_confirm">確認</string>
-  <string name="assistant_page_context_message_count">コンテキストメッセージサイズ: %d</string>
-  <string name="assistant_page_context_message_desc">モデルに送信される履歴メッセージの数を制御します。この数を超えるメッセージは無視され、最新のN個のメッセージのみが保持されます。これによりトークンを節約できます</string>
-  <string name="assistant_page_context_message_size">コンテキストメッセージサイズ</string>
-  <string name="assistant_page_context_message_truncation_warning">コンテキストを制限すると、頻繁なコンテキストの切り詰めが発生し、プロンプトキャッシュが妨げられる可能性があります。</string>
-  <string name="assistant_page_context_message_unlimited">無制限のコンテキストメッセージ</string>
   <string name="assistant_page_creative">創造的</string>
   <string name="assistant_page_current_assistant">現在のアシスタント</string>
   <string name="assistant_page_custom_bodies">カスタムボディ</string>
@@ -262,12 +257,12 @@
   <string name="chat_page_compress_additional_prompt">追加指示（オプション）</string>
   <string name="chat_page_compress_additional_prompt_hint">保持または重点的に扱う内容を指定</string>
   <string name="chat_page_compress_context">履歴を圧縮</string>
-  <string name="chat_page_compress_context_desc">会話を要約して圧縮し、トークンを節約します</string>
+  <string name="chat_page_compress_context_desc">古い完全な会話ターンを要約し、最近のメッセージを保持します。</string>
   <string name="chat_page_compress_context_title">会話履歴を圧縮</string>
-  <string name="chat_page_compress_keep_recent">最近のメッセージを保持</string>
+  <string name="chat_page_compress_keep_recent">保持する最近のメッセージの最小数</string>
   <string name="chat_page_compress_not_enough_messages">圧縮するためのメッセージが不足しています。保持するメッセージ数を減らすか、メッセージを追加してください。</string>
-  <string name="chat_page_compress_target_tokens">ターゲットトークンサイズ</string>
-  <string name="chat_page_compress_warning">⚠️ コンテキストを圧縮すると、現在の会話のすべてのメッセージがリセットされます</string>
+  <string name="chat_page_compress_target_tokens">要約の目標（トークン）</string>
+  <string name="chat_page_compress_warning">圧縮すると、古いメッセージが AI 生成の要約に置き換わります。重要な内容を先に確認してください。この操作は元に戻せません。</string>
   <string name="chat_page_compressing">圧縮中…</string>
   <string name="chat_page_conversation_system_prompt">会話システムプロンプト</string>
   <string name="chat_page_conversation_system_prompt_clear">クリア</string>
@@ -318,7 +313,6 @@
   <string name="code_block_copy">コードをコピー</string>
   <string name="code_block_expand">展開</string>
   <string name="code_block_preview">プレビュー</string>
-
   <string name="confirm">確認</string>
   <string name="confirm_delete">削除を確認</string>
   <string name="copied">コピーしました</string>
@@ -341,7 +335,6 @@
   <string name="error_title_send_message">メッセージ送信失敗</string>
   <string name="error_title_tool_approval">ツール呼び出し処理に失敗しました</string>
   <string name="error_title_tool_unavailable">ツールが利用できません</string>
-
   <string name="export_cancel">キャンセル</string>
   <string name="export_image_warning">上記の内容は人工知能によって生成されており、誤りを含む可能性があります。</string>
   <string name="export_import_failed">インポートに失敗しました: %s</string>
@@ -404,7 +397,6 @@
   <string name="imggen_page_save_failed">保存に失敗しました: %1$s</string>
   <string name="imggen_page_settings_title">画像生成設定</string>
   <string name="imggen_page_title">画像生成</string>
-
   <string name="mcp_picker_syncing">MCPサーバーを同期中...</string>
   <string name="mcp_picker_title">MCP</string>
   <string name="menu">メニュー</string>
@@ -540,15 +532,10 @@
   <string name="search_ability_search">検索</string>
   <string name="search_detail_api_key">APIキー</string>
   <string name="search_detail_api_url">API URL</string>
-  <string name="search_detail_custom_search_placeholder">マイカスタム検索</string>
   <string name="search_detail_depth">深度</string>
   <string name="search_detail_engines">エンジン</string>
   <string name="search_detail_language">言語</string>
-  <string name="search_detail_name">名前</string>
   <string name="search_detail_password">パスワード</string>
-  <string name="search_detail_scrape_script">スクリプトをスクレイプ</string>
-  <string name="search_detail_scrape_script_desc">オプション。scrape(urls)を実装し、{ urls: [{ url, content, metadata? }] }を返してください</string>
-  <string name="search_detail_search_script">スクリプトを検索</string>
   <string name="search_detail_unknown_error">不明なエラー</string>
   <string name="search_detail_username">ユーザー名</string>
   <string name="search_page_hint">キーワードを入力して検索ボタンを押すとメッセージを検索できます</string>
@@ -659,14 +646,20 @@
   <string name="setting_display_page_title">表示設定</string>
   <string name="setting_display_page_tts_only_read_quoted_desc">有効にすると、TTSは引用符（“”、‘’、「」、『』）内のコンテンツのみを読み上げます</string>
   <string name="setting_display_page_tts_only_read_quoted_title">引用部分のみTTSで読み上げ</string>
-  <string name="setting_display_page_tts_read_outside_brackets_title">TTS 括弧内を読み上げない</string>
   <string name="setting_display_page_tts_read_outside_brackets_desc">有効にすると、TTS は括弧内の内容を読み上げません</string>
+  <string name="setting_display_page_tts_read_outside_brackets_title">TTS 括弧内を読み上げない</string>
   <string name="setting_display_page_use_app_icon_style_loading_indicator_desc">デフォルトの円形読み込みインジケーターの代わりに、アプリアイコンのアニメーションを使用します</string>
   <string name="setting_display_page_use_app_icon_style_loading_indicator_title">アプリアイコン風の読み込みインジケーターを使用</string>
   <string name="setting_display_page_volume_key_scroll_desc">音量キーでページをスクロール、電子ペーパー画面に最適</string>
   <string name="setting_display_page_volume_key_scroll_ratio">スクロロール量</string>
   <string name="setting_display_page_volume_key_scroll_title">音量キーでページスクロール</string>
   <string name="setting_files_page_cancel_action">キャンセル</string>
+  <string name="setting_files_page_clean_action">クリーンアップ</string>
+  <string name="setting_files_page_clean_confirmation">このカテゴリのすべてのファイルを完全に削除します。この操作は元に戻せません。</string>
+  <string name="setting_files_page_clean_content_description">ファイルをクリーンアップ</string>
+  <string name="setting_files_page_clean_failed_toast">一部のファイルを削除できませんでした</string>
+  <string name="setting_files_page_clean_title">ファイルをクリーンアップしますか？</string>
+  <string name="setting_files_page_cleaned_toast">ファイルをクリーンアップしました</string>
   <string name="setting_files_page_delete_action">削除</string>
   <string name="setting_files_page_delete_content_description">削除</string>
   <string name="setting_files_page_delete_failed_toast">削除に失敗しました</string>
@@ -694,7 +687,7 @@
   <string name="setting_mcp_page_import_added">%d 件の設定をインポートしました</string>
   <string name="setting_mcp_page_import_unsupported">未対応の設定: %s</string>
   <string name="setting_mcp_page_conflict_title">設定の競合</string>
-  <string name="setting_mcp_page_conflict_message">同名の設定が %d 件既に存在します：\n%s\n\n既存の設定を上書きしますか？</string>
+  <string name="setting_mcp_page_conflict_message">同名の設定が %1$d 件既に存在します：\n%2$s\n\n既存の設定を上書きしますか？</string>
   <string name="setting_mcp_page_conflict_overwrite">上書き</string>
   <string name="setting_mcp_page_import_desc">MCPサーバーJSON設定を貼り付けます。標準のmcpServers形式に対応</string>
   <string name="setting_mcp_page_import_no_valid_config">有効なMCPサーバー設定が見つかりません</string>
@@ -734,7 +727,6 @@
   <string name="setting_model_page_title">モデル設定</string>
   <string name="setting_model_page_title_model">タイトル要約モデル</string>
   <string name="setting_model_page_title_model_desc">会話タイトルを要約するモデル。設定されていない場合は高速モデルを使用します</string>
-
   <string name="setting_page_about">アプリについて</string>
   <string name="setting_page_about_desc">このアプリについて</string>
   <string name="setting_page_assistant">アシスタント</string>
@@ -755,8 +747,8 @@
   <string name="setting_page_color_mode_light">ライト</string>
   <string name="setting_page_color_mode_system">システム設定に従う</string>
   <string name="setting_page_config">設定</string>
-  <string name="setting_page_config_api_desc">APIとモデルを設定してください</string>
-  <string name="setting_page_config_api_title">APIとモデルを設定してください</string>
+  <string name="setting_page_config_api_desc">API と会話モデルを設定すると、会話を開始できます。</string>
+  <string name="setting_page_config_api_title">API とモデルを設定してください</string>
   <string name="setting_page_data_backup">データバックアップ</string>
   <string name="setting_page_data_backup_desc">アプリデータのバックアップと復元</string>
   <string name="setting_page_data_settings">データ設定</string>
@@ -780,18 +772,18 @@
   <string name="mcp_status_reconnecting">再接続中 (%1$d/%2$d)</string>
   <string name="mcp_status_dormant">休眠中、%1$d秒後に再試行</string>
   <string name="mcp_status_error">エラー: %1$s</string>
-    <string name="mcp_status_needs_authorization">認証が必要です</string>
-    <string name="mcp_status_authorizing">認証中</string>
-    <string name="mcp_oauth_authorize">認証</string>
-    <string name="mcp_oauth_authorizing_hint">認証中、ブラウザで完了してください…</string>
-    <string name="mcp_oauth_cancel_authorization">認証をキャンセル</string>
-<string name="mcp_oauth_client_id">Client ID</string>
-<string name="mcp_oauth_client_secret">Client Secret（任意）</string>
-<string name="mcp_oauth_client_id_hint">事前設定済み OAuth Client ID（DCR 未対応サーバー用）</string>
-<string name="mcp_oauth_clear">認証をクリア</string>
-<string name="mcp_oauth_server_config">サーバー設定</string>
-<string name="mcp_oauth_authorize_with_credentials">資格情報で認証</string>
-<string name="mcp_retry">再試行</string>
+  <string name="mcp_status_needs_authorization">認証が必要です</string>
+  <string name="mcp_status_authorizing">認証中</string>
+  <string name="mcp_oauth_authorize">認証</string>
+  <string name="mcp_oauth_authorizing_hint">認証中、ブラウザで完了してください…</string>
+  <string name="mcp_oauth_cancel_authorization">認証をキャンセル</string>
+  <string name="mcp_oauth_client_id">Client ID</string>
+  <string name="mcp_oauth_client_secret">Client Secret（任意）</string>
+  <string name="mcp_oauth_client_id_hint">事前設定済み OAuth Client ID（DCR 未対応サーバー用）</string>
+  <string name="mcp_oauth_clear">認証をクリア</string>
+  <string name="mcp_oauth_server_config">サーバー設定</string>
+  <string name="mcp_oauth_authorize_with_credentials">資格情報で認証</string>
+  <string name="mcp_retry">再試行</string>
   <string name="setting_page_message_display_settings">メッセージ表示</string>
   <string name="setting_page_model_and_services">モデルとサービス</string>
   <string name="setting_page_no_share_app">共有アプリが見つかりません</string>
@@ -1023,12 +1015,13 @@
   <string name="text_area_save">保存</string>
   <string name="theme_name_autumn">秋の黄色</string>
   <string name="theme_name_black">ニュートラルブラック</string>
+  <string name="theme_name_claude">Claude</string>
+  <string name="theme_name_minimal">ミニマルホワイト</string>
   <string name="theme_name_ocean">オーシャンブルー</string>
   <string name="theme_name_sakura">サクラピンク</string>
   <string name="theme_name_spring">メドウグリーン</string>
   <string name="title_activity_safe_mode">セーフモード</string>
   <string name="tools_warning">現在のモデルではツール呼び出しが有効になっていません。設定でモデルのツール機能を有効にしてから、検索/MCPなどの機能を使用してください。</string>
-
   <string name="tts">音声</string>
   <string name="unpin_chat">チャットのピン留めを解除</string>
   <string name="update_card_check_failed">更新チェックに失敗しました</string>
@@ -1183,5 +1176,40 @@
   <string name="error_mcp_invalid_server_name">無効なMCPサーバー名です（英数字のみ使用可能）：%1$s</string>
   <string name="log_page_record_requests">リクエスト記録</string>
   <string name="log_page_record_requests_desc">リクエストヘッダー、ボディ、レスポンスメタデータをキャプチャします</string>
+  <string name="workspace_file_editor_saved">保存しました</string>
+  <string name="workspace_file_editor_save_failed">保存に失敗しました</string>
+  <string name="workspace_file_editor_read_failed">ファイルの読み取りに失敗しました</string>
+  <string name="workspace_file_editor_too_large">ファイルが大きすぎてプレビューできません（%d バイト）</string>
+  <string name="image_crop_failed">画像の切り抜きに失敗しました</string>
+  <string name="chat_readiness_title">この会話を設定</string>
+  <string name="chat_readiness_model_required_toast">送信する前に会話モデルを選択してください。</string>
+  <string name="chat_readiness_model_title">会話モデル</string>
+  <string name="chat_readiness_model_not_configured">未設定</string>
+  <string name="chat_readiness_model_not_selected">未選択</string>
+  <string name="chat_readiness_model_description">モデルを選択してタスクを開始します。高性能なモデルほど、通常はコストも高くなります。</string>
+  <string name="chat_readiness_mcp_title">MCP（アシスタント機能）</string>
+  <string name="chat_readiness_mcp_not_configured">未設定</string>
+  <string name="chat_readiness_mcp_all_disabled">無効</string>
+  <string name="chat_readiness_mcp_none_selected">未使用</string>
+  <string name="chat_readiness_mcp_ready">%1$d 件有効</string>
+  <string name="chat_readiness_mcp_description">MCP 機能を追加し、Measix Device Remote Control のデバイスを切り替えます。</string>
+  <string name="chat_readiness_local_tools_title">ローカル機能</string>
+  <string name="chat_readiness_local_tools_count">%1$d 件有効</string>
+  <string name="chat_readiness_local_tools_description">音声読み上げ、クリップボード、スクリーンタイムなど端末上の機能を有効にします。</string>
+  <string name="chat_readiness_workspace_title">ローカルワークスペース</string>
+  <string name="chat_readiness_workspace_not_configured">利用不可</string>
+  <string name="chat_readiness_workspace_not_bound">未連携</string>
+  <string name="chat_readiness_workspace_description">ローカルの作業環境を接続し、アシスタントがファイルやスクリプトにアクセスできるようにします。</string>
+  <string name="search_provider_bing_description">Bing 検索はページのスクレイピングを使用するため、不安定な場合があります。</string>
+  <string name="search_provider_tavily_api_key">Tavily API キーを取得</string>
+  <string name="search_provider_searxng_description">settings.yml で JSON 形式のサポートを有効にしてください：</string>
+  <string name="search_provider_searxng_config">search:\n  formats:\n    - html\n    - json</string>
+  <string name="assistant_picker_current">現在のアシスタント</string>
+  <string name="assistant_picker_manage_current">現在のアシスタントを管理</string>
+  <string name="assistant_page_context_message_limit">コンテキストの自動整理</string>
+  <string name="assistant_page_context_message_limit_desc">メッセージ数がこの値を超えると、古い会話ターンを段階的に削除し、リクエストのプレフィックスを安定させます。</string>
+  <string name="assistant_page_context_message_limit_count">%d 件を超えると整理</string>
+  <string name="assistant_page_context_message_limit_unlimited">コンテキストを自動整理しない</string>
+  <string name="assistant_page_context_message_limit_warning">メッセージ数はトークン上限ではありません。整理時にはプロンプトキャッシュが無効になる場合があります。</string>
 </resources>
 

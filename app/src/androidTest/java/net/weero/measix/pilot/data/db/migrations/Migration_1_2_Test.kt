@@ -1,6 +1,7 @@
 ﻿package net.weero.measix.pilot.data.db.migrations
 
 import android.content.ContentValues
+import android.database.sqlite.SQLiteDatabase
 import androidx.room.testing.MigrationTestHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -42,7 +43,7 @@ class Migration_1_2_Test {
         val db = helper.runMigrationsAndValidate(TEST_DB, 2, true, Migration_1_2)
 
         // 验证 tags 列存在
-        val cursor = db.query("SELECT * FROM conversations LIMIT 0")
+        val cursor = db.query("SELECT * FROM ConversationEntity LIMIT 0")
         val columnNames = cursor.columnNames.toList()
         cursor.close()
 
@@ -70,7 +71,9 @@ class Migration_1_2_Test {
             put("mode_injection_ids", "[]")
             put("workspace_cwd", "")
         }
-        db.insert("conversations", null, values)
+        assertTrue(
+            db.insert("ConversationEntity", SQLiteDatabase.CONFLICT_NONE, values) != -1L
+        )
         db.close()
 
         // 运行迁移到版本 2
@@ -78,7 +81,7 @@ class Migration_1_2_Test {
 
         // 验证数据仍然存在
         val cursor = migratedDb.query(
-            "SELECT id, title, tags FROM conversations WHERE id = ?",
+            "SELECT id, title, tags FROM ConversationEntity WHERE id = ?",
             arrayOf(conversationId)
         )
         assertTrue("Conversation should exist after migration", cursor.moveToFirst())

@@ -27,6 +27,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -37,21 +38,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import me.rerere.highlight.LocalHighlighter
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.nav.BackButton
-import net.weero.measix.pilot.ui.components.richtext.HighlightCodeVisualTransformation
 import net.weero.measix.pilot.ui.components.ui.FormItem
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.theme.CustomColors
-import net.weero.measix.pilot.ui.theme.JetbrainsMono
-import net.weero.measix.pilot.ui.theme.LocalDarkMode
 import net.weero.measix.pilot.utils.plus
 import me.rerere.search.SearchCommonOptions
 import me.rerere.search.SearchResult
@@ -144,7 +142,7 @@ fun SettingSearchDetailPage(
                         )
 
                         ProvideTextStyle(MaterialTheme.typography.labelMedium) {
-                            SearchService.getService(options).Description()
+                            SearchProviderDescription(options)
                         }
                     }
                 }
@@ -174,8 +172,28 @@ private fun SearchServiceOptionsEditor(
             SearXNGOptions(options) { onUpdateOptions(it) }
         }
         is SearchServiceOptions.BingLocalOptions -> {}
-        is SearchServiceOptions.CustomJsOptions -> {
-            CustomJsOptions(options) { onUpdateOptions(it) }
+    }
+}
+
+@Composable
+private fun SearchProviderDescription(options: SearchServiceOptions) {
+    when (options) {
+        is SearchServiceOptions.BingLocalOptions -> {
+            Text(stringResource(R.string.search_provider_bing_description))
+        }
+
+        is SearchServiceOptions.TavilyOptions -> {
+            val uriHandler = LocalUriHandler.current
+            TextButton(onClick = { uriHandler.openUri("https://app.tavily.com/home") }) {
+                Text(stringResource(R.string.search_provider_tavily_api_key))
+            }
+        }
+
+        is SearchServiceOptions.SearXNGOptions -> {
+            Column {
+                Text(stringResource(R.string.search_provider_searxng_description))
+                Text(stringResource(R.string.search_provider_searxng_config))
+            }
         }
     }
 }
@@ -416,84 +434,6 @@ internal fun SearXNGOptions(
                 onUpdateOptions(options.copy(password = it))
             },
             modifier = Modifier.fillMaxWidth()
-        )
-    }
-}
-
-@Composable
-internal fun CustomJsOptions(
-    options: SearchServiceOptions.CustomJsOptions,
-    onUpdateOptions: (SearchServiceOptions.CustomJsOptions) -> Unit
-) {
-    FormItem(
-        label = {
-            Text(stringResource(R.string.search_detail_name))
-        }
-    ) {
-        OutlinedTextField(
-            value = options.name,
-            onValueChange = {
-                onUpdateOptions(options.copy(name = it))
-            },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text(stringResource(R.string.search_detail_custom_search_placeholder)) }
-        )
-    }
-
-    val highlighter = LocalHighlighter.current
-    val darkMode = LocalDarkMode.current
-
-    FormItem(
-        label = {
-            Text(stringResource(R.string.search_detail_search_script))
-        }
-    ) {
-        OutlinedTextField(
-            value = options.searchScript,
-            onValueChange = {
-                onUpdateOptions(options.copy(searchScript = it))
-            },
-            modifier = Modifier.fillMaxWidth(),
-            minLines = 8,
-            maxLines = 20,
-            visualTransformation = HighlightCodeVisualTransformation(
-                language = "javascript",
-                highlighter = highlighter,
-                darkMode = darkMode
-            ),
-            textStyle = MaterialTheme.typography.bodySmall.merge(fontFamily = JetbrainsMono),
-        )
-    }
-
-    FormItem(
-        label = {
-            Text(stringResource(R.string.search_detail_scrape_script))
-        },
-        description = {
-            Text(stringResource(R.string.search_detail_scrape_script_desc))
-        }
-    ) {
-        OutlinedTextField(
-            value = options.scrapeScript,
-            onValueChange = {
-                onUpdateOptions(options.copy(scrapeScript = it))
-            },
-            modifier = Modifier.fillMaxWidth(),
-            minLines = 4,
-            maxLines = 20,
-            placeholder = {
-                Text(
-                    text = SearchServiceOptions.CustomJsOptions.DEFAULT_SCRAPE_SCRIPT.trimIndent(),
-                    style = MaterialTheme.typography.bodySmall.merge(fontFamily = JetbrainsMono),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                )
-            },
-            visualTransformation = HighlightCodeVisualTransformation(
-                language = "javascript",
-                highlighter = highlighter,
-                darkMode = darkMode
-            ),
-            textStyle = MaterialTheme.typography.bodySmall.merge(fontFamily = JetbrainsMono),
         )
     }
 }

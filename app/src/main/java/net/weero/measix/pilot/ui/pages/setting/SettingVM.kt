@@ -56,7 +56,7 @@ class SettingVM(
 
     /**
      * 覆盖已存在的 MCP 服务器配置，保留原 id。
-     * id 不变但 connectionKey 可能变化，McpManager 会自动检测并重建连接。
+     * id 不变但连接参数可能变化，McpManager 会通过 hasSameConnectionParameters 自动检测并重建连接。
      */
     fun confirmOverwriteMcpServers(toOverwrite: List<McpServerConfig>) {
         val current = settings.value

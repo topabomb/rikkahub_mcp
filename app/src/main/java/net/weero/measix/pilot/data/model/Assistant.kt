@@ -12,6 +12,10 @@ import net.weero.measix.pilot.utils.SimpleCache
 import java.util.concurrent.TimeUnit
 import kotlin.uuid.Uuid
 
+internal const val MIN_CONTEXT_MESSAGE_LIMIT = 40
+internal const val DEFAULT_CONTEXT_MESSAGE_LIMIT = 80
+internal const val MAX_CONTEXT_MESSAGE_LIMIT = 512
+
 @Serializable
 data class Assistant(
     val id: Uuid = Uuid.random(),
@@ -23,7 +27,8 @@ data class Assistant(
     val systemPrompt: String = "",
     val temperature: Float? = null,
     val topP: Float? = null,
-    val contextMessageSize: Int = 0,
+    // Message-count threshold for stepped context trimming; 0 disables trimming.
+    val contextMessageLimit: Int = 0,
     val streamOutput: Boolean = true,
     val enableMemory: Boolean = true,
     val useGlobalMemory: Boolean = false, // 使用全局共享记忆而非助手隔离记忆
@@ -38,6 +43,7 @@ data class Assistant(
     val customBodies: List<CustomBody> = emptyList(),
     val mcpServers: Set<Uuid> = emptySet(),
     val localTools: List<LocalToolOption> = listOf(LocalToolOption.TimeInfo, LocalToolOption.Tts, LocalToolOption.AskUser),
+    val enableWebSearch: Boolean = false, // 网络搜索开关(每个助手独立)
     val workspaceId: Uuid? = null,
     val background: String? = null, // 聊天页背景图地址(本地文件 URI 或网络 URL), 为 null 时无背景
     val backgroundOpacity: Float = 1.0f, // 背景图不透明度(0~1)
@@ -48,6 +54,14 @@ data class Assistant(
     val allowConversationSystemPrompt: Boolean = false, // 允许对话单独重写 system prompt
     val allowConversationPromptInjection: Boolean = false, // 允许对话单独绑定提示词注入
 )
+
+internal fun Assistant.effectiveContextMessageLimit(): Int {
+    return if (contextMessageLimit > 0) {
+        contextMessageLimit.coerceIn(MIN_CONTEXT_MESSAGE_LIMIT, MAX_CONTEXT_MESSAGE_LIMIT)
+    } else {
+        0
+    }
+}
 
 @Serializable
 data class QuickMessage(

@@ -17,7 +17,7 @@ Built with Jetpack Compose, Kotlin, and follows Material Design 3 principles.
 - **document**: Document parsing module for handling PDF, DOCX, PPTX, and EPUB files
 - **highlight**: Code syntax highlighting implementation
 - **material3**: Material color utility extensions used by the app UI
-- **search**: Search functionality SDK for multiple providers (Bing, Tavily, SearXNG, CustomJs)
+- **search**: Search functionality SDK for supported providers (Bing, Tavily, SearXNG)
 - **speech**: Speech module for TTS and ASR implementations
 - **workspace**: Local workspace module providing file tools and sandbox environments
 

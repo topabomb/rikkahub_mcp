@@ -79,7 +79,7 @@ private const val TAG = "McpManager"
  *
  * 职责:
  * 1. **连接生命周期**: 管理 Client 连接池，响应 settings 变更自动 add/remove
- * 2. **重连策略**: transport 断连 → 指数退避（5次）→ Dormant 长间隔兜底（10次×60s）→ Error
+ * 2. **重连策略**: transport 断连 → 指数退避（5次）→ Dormant 长间隔兜底（30次×60s）→ Error
  * 3. **网络感知**: NetworkCallback 网络恢复 → 主动 syncAll；离线时跳过重连节省电池
  * 4. **前台恢复**: ProcessLifecycle onStart → syncAll 健康检查
  * 5. **工具管理**: 连接成功后 syncTools 拉取 schema + 合并用户偏好；监听 list_changed 通知
@@ -141,6 +141,9 @@ class McpManager(
 
     // === 连接池 ===
     private val clients = ConcurrentHashMap<Uuid, Client>()
+    // 记录每个连接建立时使用的配置，用于 hasSameConnectionParameters() 判断
+    // 配置变更时仅需重连（URL/headers/token 变化）还是仅刷新工具（工具开关/Schema 变化）
+    private val connectedConfigs = ConcurrentHashMap<Uuid, McpServerConfig>()
 
     // === 状态机 ===
     private val _status = MutableStateFlow<Map<Uuid, McpStatus>>(emptyMap())
@@ -177,8 +180,8 @@ class McpManager(
                     val enabled = configs.filter { it.commonOptions.enable && it.commonOptions.name.isNotBlank() }
                     val enabledIds = enabled.map { it.id }.toSet()
                     val currentIds = clients.keys
-                    // 只对「不在 clients 中 且 不在授权流程中」的 server 发起连接
                     val currentStatus = _status.value
+                    // 新增 server：不在 clients 中 且 不在授权流程中 → 发起连接
                     enabled
                         .filter { it.id !in currentIds }
                         .filter { id ->
@@ -186,6 +189,22 @@ class McpManager(
                             st != McpStatus.NeedsAuthorization && st != McpStatus.Authorizing
                         }
                         .forEach { appScope.launch { addClient(it) } }
+                    // 已存在 server：检查连接参数是否变化（URL/transport/headers/oauth token）
+                    // 仅工具开关/Schema 变化时不重连，下次 syncAll 的 syncTools 会自然刷新
+                    enabled
+                        .filter { it.id in currentIds }
+                        .filter { id ->
+                            val st = currentStatus[id.id]
+                            st != McpStatus.NeedsAuthorization && st != McpStatus.Authorizing
+                        }
+                        .forEach { config ->
+                            val connected = connectedConfigs[config.id]
+                            if (connected != null && !hasSameConnectionParameters(connected, config)) {
+                                logMcp(config.commonOptions.name, "Connection parameters changed, reconnecting")
+                                appScope.launch { addClient(config) }
+                            }
+                        }
+                    // 删除 server：在 clients 中但已不在 enabled 列表 → 断开
                     currentIds.filter { it !in enabledIds }.forEach { id -> appScope.launch { removeClient(id) } }
                 }
         }
@@ -226,15 +245,15 @@ class McpManager(
             var config = settingsStore.settingsFlow.value.mcpServers.find { it.id == serverId }
                 ?: return@withLock listOf(UIMessagePart.Text("MCP server config not found"))
 
-            // 调用前确保 OAuth 令牌新鲜。若发生刷新，已连接的 transport 仍携带过期令牌
+            // 调用前确保 OAuth 令牌新鲜。若连接参数变化（token 刷新 / URL / headers 变更），需重建连接
             val freshConfig = ensureFreshToken(config)
-            if (freshConfig.commonOptions.oauth?.accessToken != config.commonOptions.oauth?.accessToken) {
-                logMcp(config.commonOptions.name, "Token refreshed during callTool, reconnecting")
+            if (!hasSameConnectionParameters(connectedConfigs[serverId], freshConfig)) {
+                logMcp(config.commonOptions.name, "Connection parameters changed during callTool, reconnecting")
                 cancelAllJobs(serverId)
                 closeClient(serverId)
                 createAndConnect(freshConfig)
                 client = clients[serverId]
-                    ?: return@withLock listOf(UIMessagePart.Text("MCP server not connected after token refresh"))
+                    ?: return@withLock listOf(UIMessagePart.Text("MCP server not connected after reconnection"))
                 config = freshConfig
             }
 
@@ -337,7 +356,23 @@ class McpManager(
 
     suspend fun addClient(configInput: McpServerConfig) = withContext(Dispatchers.IO) {
         getServerLock(configInput.id).withLock {
-            val config = ensureFreshToken(configInput)
+            // Re-read from settingsStore to avoid stale config.
+            // configInput may come from a delayed coroutine that was queued before a config change;
+            // using it directly could connect with an outdated URL/headers.
+            val desiredConfig = settingsStore.settingsFlow.value.mcpServers
+                .find { it.id == configInput.id }
+            if (desiredConfig == null ||
+                !desiredConfig.commonOptions.enable ||
+                desiredConfig.commonOptions.name.isBlank()
+            ) {
+                // Config was removed or disabled between call and execution
+                cancelAllJobs(configInput.id)
+                closeClient(configInput.id)
+                reconnectAttempts.remove(configInput.id)
+                _status.update { it - configInput.id }
+                return@withLock
+            }
+            val config = ensureFreshToken(desiredConfig)
             cancelAllJobs(config.id)
             closeClient(config.id)
             createAndConnect(config)
@@ -360,6 +395,7 @@ class McpManager(
      * 手动同步全部服务器（下拉刷新 / 前台恢复 / 网络恢复）
      *
      * 策略:
+     * - 连接参数变化（URL/headers/token）→ addClient 完全重建
      * - Client 存在且 transport 存活 → syncTools 刷新（若失败且为连接错误 → 触发重连）
      * - Client 不存在或 transport 已断开 → addClient 完全重建
      */
@@ -370,6 +406,14 @@ class McpManager(
             // 跳过授权流程中的 server，避免与授权竞争
             val st = _status.value[config.id]
             if (st == McpStatus.NeedsAuthorization || st == McpStatus.Authorizing) return@forEach
+            // 连接参数变化（如后台修改了 URL/headers/token）→ 重连而非仅刷新工具
+            val connected = connectedConfigs[config.id]
+            if (connected != null && !hasSameConnectionParameters(connected, config)) {
+                logMcp(config.commonOptions.name, "syncAll: connection parameters changed, reconnecting")
+                runCatching { addClient(config) }
+                    .onFailure { if (it is CancellationException) throw it }
+                return@forEach
+            }
             val existingClient = clients[config.id]
             if (existingClient != null && existingClient.transport != null) {
                 getServerLock(config.id).withLock {
@@ -389,7 +433,7 @@ class McpManager(
                                     logMcp(config.commonOptions.name, "syncAll detected stale connection: ${it.message}${if (code.isNotEmpty()) " [$code]" else ""}")
                                     scheduleReconnect(config.id)
                                 } else {
-                                    setStatus(config.id, McpStatus.Error(it.message ?: ""))
+                                    setStatus(config.id, McpStatus.Error.from(it, "syncTools failed"))
                                     val code = extractHttpCode(it)
                                     logMcp(config.commonOptions.name, "syncTools failed: ${it.message}${if (code.isNotEmpty()) " [$code]" else ""}")
                                 }
@@ -527,6 +571,7 @@ class McpManager(
         }
 
         clients[config.id] = client
+        connectedConfigs[config.id] = config
         setStatus(config.id, McpStatus.Connecting)
 
         return try {
@@ -544,7 +589,7 @@ class McpManager(
                 setStatus(config.id, McpStatus.NeedsAuthorization)
                 logMcp(config.commonOptions.name, "Needs OAuth authorization${extractHttpCode(it).let { c -> if (c.isNotEmpty()) " ($c)" else "" }}")
             } else {
-                setStatus(config.id, McpStatus.Error(it.message ?: it.javaClass.name))
+                setStatus(config.id, McpStatus.Error.from(it))
                 val code = extractHttpCode(it)
                 logMcp(config.commonOptions.name, "Connection failed: ${it.message}${if (code.isNotEmpty()) " [$code]" else ""}")
             }
@@ -629,6 +674,7 @@ class McpManager(
             }
         }
         clients.remove(serverId)
+        connectedConfigs.remove(serverId)
     }
 
     private fun cancelAllJobs(serverId: Uuid) {
@@ -655,7 +701,8 @@ class McpManager(
         _status.update { it + (serverId to status) }
     }
 
-    fun getStatus(serverId: Uuid): Flow<McpStatus> = _status.map { it[serverId] ?: McpStatus.Idle }
+    fun getStatus(serverId: Uuid): Flow<McpStatus> =
+        _status.map { it[serverId] ?: McpStatus.Idle }.distinctUntilChanged()
 
     // =====================================================================
     // OAuth 2.1 授权 (MCP 规范 2025-11-25)
@@ -848,7 +895,11 @@ class McpManager(
     }
 
     /** 若令牌即将过期且存在 refresh_token，则提前刷新并持久化，返回更新后的配置。 */
-    private suspend fun ensureFreshToken(config: McpServerConfig): McpServerConfig {
+    private suspend fun ensureFreshToken(configInput: McpServerConfig): McpServerConfig {
+        // Re-read from settingsStore to avoid overwriting concurrent user config changes.
+        // If the user modified URL/headers while a coroutine was queued, we must use the latest config.
+        val config = settingsStore.settingsFlow.value.mcpServers.find { it.id == configInput.id }
+            ?: configInput
         val oauth = config.commonOptions.oauth ?: return config
         if (!oauth.enabled || oauth.refreshToken.isNullOrBlank()) return config
         val expired = oauth.expiresAt > 0 &&

@@ -1,10 +1,5 @@
 package me.rerere.search
 
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.res.stringResource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -28,20 +23,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 private const val TAG = "TavilySearchService"
 
 object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
-    override val name: String = "Tavily"
-
-    @Composable
-    override fun Description() {
-        val urlHandler = LocalUriHandler.current
-        TextButton(
-            onClick = {
-                urlHandler.openUri("https://app.tavily.com/home")
-            }
-        ) {
-            Text(stringResource(R.string.click_to_get_api_key))
-        }
-    }
-
     override fun parameters(options: SearchServiceOptions.TavilyOptions): InputSchema? =
         InputSchema.Obj(
             properties = buildJsonObject {

@@ -120,6 +120,8 @@ fun ChatInput(
     state: ChatInputState,
     loading: Boolean,
     settings: Settings,
+    assistant: Assistant,
+    modelListState: ModelListState,
     hazeState: HazeState,
     enableSearch: Boolean,
     onToggleSearch: (Boolean) -> Unit,
@@ -134,7 +136,6 @@ fun ChatInput(
     onLongSendClick: () -> Unit,
 ) {
     val toaster = LocalToaster.current
-    val assistant = settings.getCurrentAssistant()
     val hazeTintColor = MaterialTheme.colorScheme.surfaceContainerLow
     val inputHazeStyle = HazeMaterials.thin(containerColor = hazeTintColor)
 
@@ -256,6 +257,7 @@ fun ChatInput(
                             ModelSelector(
                                 modelId = assistant.chatModelId ?: settings.chatModelId,
                                 providers = settings.providers,
+                                state = modelListState,
                                 onSelect = {
                                     onUpdateChatModel(it)
                                 },

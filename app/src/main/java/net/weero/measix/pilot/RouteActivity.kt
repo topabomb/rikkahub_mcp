@@ -63,6 +63,7 @@ import com.dokar.sonner.rememberToasterState
 import kotlinx.serialization.Serializable
 import me.rerere.highlight.Highlighter
 import me.rerere.highlight.LocalHighlighter
+import me.rerere.workspace.WorkspaceStorageArea
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.DatabaseMigrationTracker
 import net.weero.measix.pilot.data.db.MigrationState
@@ -100,6 +101,7 @@ import net.weero.measix.pilot.ui.pages.extensions.skills.SkillDetailPage
 import net.weero.measix.pilot.ui.pages.extensions.skills.SkillsPage
 import net.weero.measix.pilot.ui.pages.extensions.workspace.WorkspacePage
 import net.weero.measix.pilot.ui.pages.extensions.workspace.WorkspaceDetailPage
+import net.weero.measix.pilot.ui.pages.extensions.workspace.WorkspaceFileEditorPage
 import net.weero.measix.pilot.ui.pages.extensions.workspace.WorkspaceTerminalPage
 import net.weero.measix.pilot.ui.pages.favorite.FavoritePage
 import net.weero.measix.pilot.ui.pages.history.HistoryPage
@@ -495,6 +497,14 @@ class RouteActivity : ComponentActivity() {
                                 WorkspaceTerminalPage(key.id)
                             }
 
+                            entry<Screen.WorkspaceFileEditor> { key ->
+                                WorkspaceFileEditorPage(
+                                    id = key.id,
+                                    area = WorkspaceStorageArea.valueOf(key.area),
+                                    path = key.path,
+                                )
+                            }
+
                             entry<Screen.SkillDetail> { key ->
                                 SkillDetailPage(skillName = key.skillName)
                             }
@@ -684,6 +694,9 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data class WorkspaceTerminal(val id: String) : Screen
+
+    @Serializable
+    data class WorkspaceFileEditor(val id: String, val area: String, val path: String) : Screen
 
     @Serializable
     data class SkillDetail(val skillName: String) : Screen

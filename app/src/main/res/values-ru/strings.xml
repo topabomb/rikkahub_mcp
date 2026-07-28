@@ -51,11 +51,6 @@
   <string name="assistant_page_chat_model_desc">Установить модель чата по умолчанию для ассистента. Если не задано, будет использована глобальная модель чата по умолчанию</string>
   <string name="assistant_page_clone">Клонировать</string>
   <string name="assistant_page_confirm">Подтвердить</string>
-  <string name="assistant_page_context_message_count">Размер контекстных сообщений: %d</string>
-  <string name="assistant_page_context_message_desc">Управляет количеством исторических сообщений, отправляемых модели в качестве контекста. Сообщения, превышающие это число, будут игнорироваться; будут сохранены только последние N сообщений, что позволяет экономить токены</string>
-  <string name="assistant_page_context_message_size">Размер контекстного сообщения</string>
-  <string name="assistant_page_context_message_truncation_warning">Ограничение контекста может привести к частому усечению контекста и предотвратить кэширование промптов</string>
-  <string name="assistant_page_context_message_unlimited">Неограниченные контекстные сообщения</string>
   <string name="assistant_page_creative">Творческий</string>
   <string name="assistant_page_current_assistant">Текущий ассистент</string>
   <string name="assistant_page_custom_bodies">Пользовательский контекст</string>
@@ -262,12 +257,12 @@
   <string name="chat_page_compress_additional_prompt">Дополнительные инструкции (по желанию)</string>
   <string name="chat_page_compress_additional_prompt_hint">Укажите, что сохранить или на чём сосредоточиться</string>
   <string name="chat_page_compress_context">Сжать историю</string>
-  <string name="chat_page_compress_context_desc">Сжать переписку в краткое резюме, чтобы сэкономить токены</string>
+  <string name="chat_page_compress_context_desc">Сводит старые полные ходы диалога в резюме, сохраняя недавние сообщения.</string>
   <string name="chat_page_compress_context_title">Сжать историю чата</string>
-  <string name="chat_page_compress_keep_recent">Сохранять недавние сообщения</string>
+  <string name="chat_page_compress_keep_recent">Минимум сохраняемых недавних сообщений</string>
   <string name="chat_page_compress_not_enough_messages">Недостаточно сообщений для сжатия. Уменьшите количество сохраняемых сообщений или добавьте больше сообщений.</string>
-  <string name="chat_page_compress_target_tokens">Целевой размер токенов</string>
-  <string name="chat_page_compress_warning">⚠️ Сжатие контекста приведёт к сбросу всех сообщений в текущем диалоге</string>
+  <string name="chat_page_compress_target_tokens">Целевой размер резюме (токены)</string>
+  <string name="chat_page_compress_warning">При сжатии старые сообщения заменяются резюме, созданным ИИ. Сначала проверьте важные детали: отменить это действие нельзя.</string>
   <string name="chat_page_compressing">Сжатие...</string>
   <string name="chat_page_conversation_system_prompt">Системный запрос для беседы</string>
   <string name="chat_page_conversation_system_prompt_clear">Очистить</string>
@@ -318,7 +313,6 @@
   <string name="code_block_copy">Копировать код</string>
   <string name="code_block_expand">Развернуть</string>
   <string name="code_block_preview">Предпросмотр</string>
-
   <string name="confirm">Подтвердить</string>
   <string name="confirm_delete">Подтвердить удаление</string>
   <string name="copied">Скопировано</string>
@@ -341,7 +335,6 @@
   <string name="error_title_send_message">Не удалось отправить сообщение</string>
   <string name="error_title_tool_approval">Сбой обработки вызова инструмента</string>
   <string name="error_title_tool_unavailable">Инструмент недоступен</string>
-
   <string name="export_cancel">Отмена</string>
   <string name="export_image_warning">Приведённый выше контент сгенерирован искусственным интеллектом и может содержать неточности.</string>
   <string name="export_import_failed">Ошибка импорта: %s</string>
@@ -404,7 +397,6 @@
   <string name="imggen_page_save_failed">Не удалось сохранить: %1$s</string>
   <string name="imggen_page_settings_title">Настройки генерации изображений</string>
   <string name="imggen_page_title">Генерация изображений</string>
-
   <string name="mcp_picker_syncing">Синхронизация MCP-серверов…</string>
   <string name="mcp_picker_title">MCP</string>
   <string name="menu">Меню</string>
@@ -540,15 +532,10 @@
   <string name="search_ability_search">Поиск</string>
   <string name="search_detail_api_key">Ключ API</string>
   <string name="search_detail_api_url">URL API</string>
-  <string name="search_detail_custom_search_placeholder">Мой поиск</string>
   <string name="search_detail_depth">Глубина</string>
   <string name="search_detail_engines">Двигатели</string>
   <string name="search_detail_language">Язык</string>
-  <string name="search_detail_name">Имя</string>
   <string name="search_detail_password">Пароль</string>
-  <string name="search_detail_scrape_script">Скрипт скрапинга</string>
-  <string name="search_detail_scrape_script_desc">Необязательно. Реализуйте scrape(urls), возвращающий { urls: [{ url, content, metadata? }] }</string>
-  <string name="search_detail_search_script">Поиск сценария</string>
   <string name="search_detail_unknown_error">Неизвестная ошибка</string>
   <string name="search_detail_username">Имя пользователя</string>
   <string name="search_page_hint">Введите ключевые слова и нажмите «Поиск», чтобы найти сообщения</string>
@@ -659,14 +646,20 @@
   <string name="setting_display_page_title">Настройки отображения</string>
   <string name="setting_display_page_tts_only_read_quoted_desc">Если включено, TTS читает только текст в кавычках (включая “”, ‘’, 「」, 『』)</string>
   <string name="setting_display_page_tts_only_read_quoted_title">TTS читать только цитированный контент</string>
-  <string name="setting_display_page_tts_read_outside_brackets_title">TTS не читает текст в скобках</string>
   <string name="setting_display_page_tts_read_outside_brackets_desc">Если включено, TTS не будет читать содержимое в скобках</string>
+  <string name="setting_display_page_tts_read_outside_brackets_title">TTS не читает текст в скобках</string>
   <string name="setting_display_page_use_app_icon_style_loading_indicator_desc">Использовать анимированный значок приложения вместо стандартного круглого индикатора загрузки</string>
   <string name="setting_display_page_use_app_icon_style_loading_indicator_title">Использовать индикатор загрузки в стиле значка приложения</string>
   <string name="setting_display_page_volume_key_scroll_desc">Прокрутка страниц клавишами громкости, идеально для экранов электронных чернил</string>
   <string name="setting_display_page_volume_key_scroll_ratio">Величина прокрутки</string>
   <string name="setting_display_page_volume_key_scroll_title">Прокрутка страниц клавишами громкости</string>
   <string name="setting_files_page_cancel_action">Отмена</string>
+  <string name="setting_files_page_clean_action">Очистить</string>
+  <string name="setting_files_page_clean_confirmation">Все файлы в этой категории будут удалены без возможности восстановления.</string>
+  <string name="setting_files_page_clean_content_description">Очистить файлы</string>
+  <string name="setting_files_page_clean_failed_toast">Не удалось удалить некоторые файлы</string>
+  <string name="setting_files_page_clean_title">Очистить файлы?</string>
+  <string name="setting_files_page_cleaned_toast">Файлы удалены</string>
   <string name="setting_files_page_delete_action">Удалить</string>
   <string name="setting_files_page_delete_content_description">Удалить</string>
   <string name="setting_files_page_delete_failed_toast">Не удалось удалить</string>
@@ -694,7 +687,7 @@
   <string name="setting_mcp_page_import_added">Импортировано конфигураций: %d</string>
   <string name="setting_mcp_page_import_unsupported">Неподдерживаемая конфигурация: %s</string>
   <string name="setting_mcp_page_conflict_title">Конфликт конфигураций</string>
-  <string name="setting_mcp_page_conflict_message">%d конфигураций с таким именем уже существуют:\n%s\n\nПерезаписать существующие?</string>
+  <string name="setting_mcp_page_conflict_message">%1$d конфигураций с таким именем уже существуют:\n%2$s\n\nПерезаписать существующие?</string>
   <string name="setting_mcp_page_conflict_overwrite">Перезаписать</string>
   <string name="setting_mcp_page_import_desc">Вставьте JSON-конфигурацию MCP-сервера, поддерживается стандартный формат mcpServers</string>
   <string name="setting_mcp_page_import_no_valid_config">Не найдена допустимая конфигурация сервера MCP</string>
@@ -734,7 +727,6 @@
   <string name="setting_model_page_title">Настройки модели</string>
   <string name="setting_model_page_title_model">Модель сводки заголовков</string>
   <string name="setting_model_page_title_model_desc">Модель для генерации заголовков бесед. Если не задана, используется быстрая модель</string>
-
   <string name="setting_page_about">О приложении</string>
   <string name="setting_page_about_desc">Об этом приложении</string>
   <string name="setting_page_assistant">Ассистент</string>
@@ -755,7 +747,7 @@
   <string name="setting_page_color_mode_light">Светлая</string>
   <string name="setting_page_color_mode_system">Системная</string>
   <string name="setting_page_config">Настроить</string>
-  <string name="setting_page_config_api_desc">Вы ещё не настроили API и модель, пожалуйста, сначала выполните настройку</string>
+  <string name="setting_page_config_api_desc">Настройте API и модель диалога, чтобы начать общение.</string>
   <string name="setting_page_config_api_title">Настройте API и модель</string>
   <string name="setting_page_data_backup">Резервное копирование данных</string>
   <string name="setting_page_data_backup_desc">Резервное копирование и восстановление данных приложения</string>
@@ -780,18 +772,18 @@
   <string name="mcp_status_reconnecting">Переподключение (%1$d/%2$d)</string>
   <string name="mcp_status_dormant">Спящий режим, повтор через %1$d сек.</string>
   <string name="mcp_status_error">Ошибка: %1$s</string>
-    <string name="mcp_status_needs_authorization">Требуется авторизация</string>
-    <string name="mcp_status_authorizing">Авторизация</string>
-    <string name="mcp_oauth_authorize">Авторизоваться</string>
-    <string name="mcp_oauth_authorizing_hint">Авторизация, завершите в браузере…</string>
-    <string name="mcp_oauth_cancel_authorization">Отменить авторизацию</string>
-<string name="mcp_oauth_client_id">Client ID</string>
-<string name="mcp_oauth_client_secret">Client Secret (необязательно)</string>
-<string name="mcp_oauth_client_id_hint">Преднастроенный OAuth Client ID (для серверов без DCR)</string>
-<string name="mcp_oauth_clear">Очистить авторизацию</string>
-<string name="mcp_oauth_server_config">Конфигурация сервера</string>
-<string name="mcp_oauth_authorize_with_credentials">Авторизоваться с учётными данными</string>
-<string name="mcp_retry">Повторить</string>
+  <string name="mcp_status_needs_authorization">Требуется авторизация</string>
+  <string name="mcp_status_authorizing">Авторизация</string>
+  <string name="mcp_oauth_authorize">Авторизоваться</string>
+  <string name="mcp_oauth_authorizing_hint">Авторизация, завершите в браузере…</string>
+  <string name="mcp_oauth_cancel_authorization">Отменить авторизацию</string>
+  <string name="mcp_oauth_client_id">Client ID</string>
+  <string name="mcp_oauth_client_secret">Client Secret (необязательно)</string>
+  <string name="mcp_oauth_client_id_hint">Преднастроенный OAuth Client ID (для серверов без DCR)</string>
+  <string name="mcp_oauth_clear">Очистить авторизацию</string>
+  <string name="mcp_oauth_server_config">Конфигурация сервера</string>
+  <string name="mcp_oauth_authorize_with_credentials">Авторизоваться с учётными данными</string>
+  <string name="mcp_retry">Повторить</string>
   <string name="setting_page_message_display_settings">Отображение сообщений</string>
   <string name="setting_page_model_and_services">Модели и службы</string>
   <string name="setting_page_no_share_app">Приложение для обмена не найдено</string>
@@ -1023,12 +1015,13 @@
   <string name="text_area_save">Сохранить</string>
   <string name="theme_name_autumn">Осенний жёлтый</string>
   <string name="theme_name_black">Нейтральный чёрный</string>
+  <string name="theme_name_claude">Claude</string>
+  <string name="theme_name_minimal">Минимальный белый</string>
   <string name="theme_name_ocean">Океанический синий</string>
   <string name="theme_name_sakura">Сакура Розовый</string>
   <string name="theme_name_spring">Луговой зелёный</string>
   <string name="title_activity_safe_mode">Безопасный режим</string>
   <string name="tools_warning">Текущая модель не поддерживает вызов инструментов. Чтобы использовать функции поиска/MCP, включите возможности инструментов модели в настройках.</string>
-
   <string name="tts">TTS</string>
   <string name="unpin_chat">Открепить чат</string>
   <string name="update_card_check_failed">Проверка обновления не удалась</string>
@@ -1183,5 +1176,40 @@
   <string name="error_mcp_invalid_server_name">Недопустимое имя сервера MCP (допускаются только буквенно-цифровые символы): %1$s</string>
   <string name="log_page_record_requests">Записывать запросы</string>
   <string name="log_page_record_requests_desc">Записывать заголовки запросов, тела и метаданные ответов</string>
+  <string name="workspace_file_editor_saved">Сохранено</string>
+  <string name="workspace_file_editor_save_failed">Ошибка сохранения</string>
+  <string name="workspace_file_editor_read_failed">Ошибка чтения файла</string>
+  <string name="workspace_file_editor_too_large">Файл слишком велик для предпросмотра (%d байт)</string>
+  <string name="image_crop_failed">Не удалось обрезать изображение</string>
+  <string name="chat_readiness_title">Настроить этот диалог</string>
+  <string name="chat_readiness_model_required_toast">Перед отправкой выберите модель диалога.</string>
+  <string name="chat_readiness_model_title">Модель диалога</string>
+  <string name="chat_readiness_model_not_configured">Не настроено</string>
+  <string name="chat_readiness_model_not_selected">Не выбрано</string>
+  <string name="chat_readiness_model_description">Выберите модель и начните задачу. Более мощные модели обычно стоят дороже.</string>
+  <string name="chat_readiness_mcp_title">MCP (возможности ассистента)</string>
+  <string name="chat_readiness_mcp_not_configured">Не настроено</string>
+  <string name="chat_readiness_mcp_all_disabled">Отключено</string>
+  <string name="chat_readiness_mcp_none_selected">Не включено</string>
+  <string name="chat_readiness_mcp_ready">Включено: %1$d</string>
+  <string name="chat_readiness_mcp_description">Добавляйте возможности MCP и переключайте устройства Measix Device Remote Control.</string>
+  <string name="chat_readiness_local_tools_title">Локальные возможности</string>
+  <string name="chat_readiness_local_tools_count">Включено: %1$d</string>
+  <string name="chat_readiness_local_tools_description">Включите локальные функции устройства, например озвучивание, буфер обмена и экранное время.</string>
+  <string name="chat_readiness_workspace_title">Локальное рабочее пространство</string>
+  <string name="chat_readiness_workspace_not_configured">Недоступно</string>
+  <string name="chat_readiness_workspace_not_bound">Не связано</string>
+  <string name="chat_readiness_workspace_description">Подключите локальную рабочую среду, чтобы ассистент мог обращаться к её файлам и сценариям.</string>
+  <string name="search_provider_bing_description">Поиск Bing использует извлечение данных со страниц и может работать нестабильно.</string>
+  <string name="search_provider_tavily_api_key">Получить API-ключ Tavily</string>
+  <string name="search_provider_searxng_description">Включите поддержку формата JSON в settings.yml:</string>
+  <string name="search_provider_searxng_config">search:\n  formats:\n    - html\n    - json</string>
+  <string name="assistant_picker_current">Текущий ассистент</string>
+  <string name="assistant_picker_manage_current">Управлять текущим ассистентом</string>
+  <string name="assistant_page_context_message_limit">Автоматическая очистка контекста</string>
+  <string name="assistant_page_context_message_limit_desc">Когда число сообщений превышает этот порог, старые полные ходы диалога удаляются ступенчато, сохраняя стабильный префикс запроса.</string>
+  <string name="assistant_page_context_message_limit_count">Очищать после %d сообщений</string>
+  <string name="assistant_page_context_message_limit_unlimited">Не очищать контекст автоматически</string>
+  <string name="assistant_page_context_message_limit_warning">Число сообщений не является лимитом токенов. Каждая очистка всё равно может сбросить кеш промпта.</string>
 </resources>
 
