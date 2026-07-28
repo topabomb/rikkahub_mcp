@@ -51,11 +51,6 @@
   <string name="assistant_page_chat_model_desc">设置助手的默认聊天模型，如果不设置，则使用全局默认聊天模型</string>
   <string name="assistant_page_clone">复制</string>
   <string name="assistant_page_confirm">确定</string>
-  <string name="assistant_page_context_message_count">上下文消息数量: %d</string>
-  <string name="assistant_page_context_message_desc">控制多少条历史消息会被作为上下文发送给模型, 超过此数量的消息会被忽略，只有最近的N条消息会被保留，可以节省token</string>
-  <string name="assistant_page_context_message_size">上下文消息数量</string>
-  <string name="assistant_page_context_message_truncation_warning">限制上下文可能导致频繁的上下文截断，并阻止提示词缓存</string>
-  <string name="assistant_page_context_message_unlimited">无限制的上下文消息</string>
   <string name="assistant_page_creative">创造</string>
   <string name="assistant_page_current_assistant">当前助手</string>
   <string name="assistant_page_custom_bodies">自定义 Body</string>
@@ -264,12 +259,12 @@
   <string name="chat_page_compress_additional_prompt">附加说明（可选）</string>
   <string name="chat_page_compress_additional_prompt_hint">指定要保留或关注的内容</string>
   <string name="chat_page_compress_context">压缩历史</string>
-  <string name="chat_page_compress_context_desc">将对话压缩为摘要以节省令牌</string>
+  <string name="chat_page_compress_context_desc">将较早的完整对话轮次总结为摘要，并保留最近消息。</string>
   <string name="chat_page_compress_context_title">压缩对话历史</string>
-  <string name="chat_page_compress_keep_recent">保留最近的消息</string>
+  <string name="chat_page_compress_keep_recent">至少保留最近消息</string>
   <string name="chat_page_compress_not_enough_messages">消息数量不足，无法压缩。请减少保留的消息数量或添加更多消息。</string>
-  <string name="chat_page_compress_target_tokens">目标Token大小</string>
-  <string name="chat_page_compress_warning">⚠️ 压缩上下文将重置当前对话中的所有消息</string>
+  <string name="chat_page_compress_target_tokens">摘要目标长度（token）</string>
+  <string name="chat_page_compress_warning">压缩会用 AI 生成的摘要替换较早消息。请先确认重要细节；此操作无法撤销。</string>
   <string name="chat_page_compressing">正在压缩...</string>
   <string name="chat_page_conversation_system_prompt">对话系统提示</string>
   <string name="chat_page_conversation_system_prompt_clear">清除</string>
@@ -320,7 +315,6 @@
   <string name="code_block_copy">复制代码</string>
   <string name="code_block_expand">展开</string>
   <string name="code_block_preview">预览</string>
-
   <string name="confirm">确认</string>
   <string name="confirm_delete">确认删除</string>
   <string name="copied">已复制</string>
@@ -343,7 +337,6 @@
   <string name="error_title_send_message">消息发送失败</string>
   <string name="error_title_tool_approval">工具调用处理失败</string>
   <string name="error_title_tool_unavailable">工具不可用</string>
-
   <string name="export_cancel">取消</string>
   <string name="export_image_warning">以上内容由人工智能生成，可能包含不准确信息。</string>
   <string name="export_import_failed">导入失败：%s</string>
@@ -406,7 +399,6 @@
   <string name="imggen_page_save_failed">保存失败: %1$s</string>
   <string name="imggen_page_settings_title">图片生成设置</string>
   <string name="imggen_page_title">图片生成</string>
-
   <string name="mcp_picker_syncing">正在同步MCP服务器...</string>
   <string name="mcp_picker_title">MCP</string>
   <string name="menu">菜单</string>
@@ -542,15 +534,10 @@
   <string name="search_ability_search">搜索</string>
   <string name="search_detail_api_key">API密钥</string>
   <string name="search_detail_api_url">API URL</string>
-  <string name="search_detail_custom_search_placeholder">我的自定义搜索</string>
   <string name="search_detail_depth">深度</string>
   <string name="search_detail_engines">引擎</string>
   <string name="search_detail_language">语言</string>
-  <string name="search_detail_name">名称</string>
   <string name="search_detail_password">密码</string>
-  <string name="search_detail_scrape_script">抓取脚本</string>
-  <string name="search_detail_scrape_script_desc">可选。实现 scrape(urls) 并返回 { urls: [{ url, content, metadata? }] }</string>
-  <string name="search_detail_search_script">搜索脚本</string>
   <string name="search_detail_unknown_error">未知错误</string>
   <string name="search_detail_username">用户名</string>
   <string name="search_page_hint">输入关键词并点击搜索以查找消息</string>
@@ -668,8 +655,8 @@
   <string name="setting_display_page_title">显示设置</string>
   <string name="setting_display_page_tts_only_read_quoted_desc">启用后，TTS 仅朗读引号（包括\" \", \' \', \u201C\u201D, \u2018\u2019, 「」, 『』）内的内容</string>
   <string name="setting_display_page_tts_only_read_quoted_title">TTS仅朗读引用内容</string>
-<string name="setting_display_page_tts_read_outside_brackets_desc">启用后，TTS将不朗读括号内的内容</string>
-<string name="setting_display_page_tts_read_outside_brackets_title">TTS不朗读括号内的内容</string>
+  <string name="setting_display_page_tts_read_outside_brackets_desc">启用后，TTS将不朗读括号内的内容</string>
+  <string name="setting_display_page_tts_read_outside_brackets_title">TTS不朗读括号内的内容</string>
   <string name="setting_display_page_use_app_icon_style_loading_indicator_desc">使用应用图标动画替代默认的圆形加载指示器</string>
   <string name="setting_display_page_use_app_icon_style_loading_indicator_title">使用APP图标风格的加载指示器</string>
   <string name="setting_display_page_volume_key_scroll_desc">使用音量键翻页，非常适合电子墨水屏</string>
@@ -709,7 +696,7 @@
   <string name="setting_mcp_page_import_added">已导入 %d 个配置</string>
   <string name="setting_mcp_page_import_unsupported">不支持的配置: %s</string>
   <string name="setting_mcp_page_conflict_title">配置冲突</string>
-  <string name="setting_mcp_page_conflict_message">以下 %d 个配置名称已存在：\n%s\n\n是否覆盖现有配置？</string>
+  <string name="setting_mcp_page_conflict_message">以下 %1$d 个配置名称已存在：\n%2$s\n\n是否覆盖现有配置？</string>
   <string name="setting_mcp_page_conflict_overwrite">覆盖</string>
   <string name="setting_mcp_page_import_desc">粘贴 MCP 服务器 JSON 配置，支持标准 mcpServers 格式</string>
   <string name="setting_mcp_page_import_no_valid_config">未找到有效的 MCP Server 配置</string>
@@ -749,7 +736,6 @@
   <string name="setting_model_page_title">模型设置</string>
   <string name="setting_model_page_title_model">标题总结模型</string>
   <string name="setting_model_page_title_model_desc">用于总结对话标题的模型。未设置时使用快速模型</string>
-
   <string name="setting_page_about">关于</string>
   <string name="setting_page_about_desc">关于本APP</string>
   <string name="setting_page_assistant">助手</string>
@@ -770,8 +756,8 @@
   <string name="setting_page_color_mode_light">浅色</string>
   <string name="setting_page_color_mode_system">跟随系统</string>
   <string name="setting_page_config">配置</string>
-  <string name="setting_page_config_api_desc">你还没有配置API和模型，请先配置</string>
-  <string name="setting_page_config_api_title">请配置API和模型</string>
+  <string name="setting_page_config_api_desc">配置 API 和对话模型后即可开始会话。</string>
+  <string name="setting_page_config_api_title">请配置 API 和模型</string>
   <string name="setting_page_data_backup">数据备份</string>
   <string name="setting_page_data_backup_desc">备份和恢复应用数据</string>
   <string name="setting_page_data_settings">数据设置</string>
@@ -795,18 +781,18 @@
   <string name="mcp_status_reconnecting">重连中 (%1$d/%2$d)</string>
   <string name="mcp_status_dormant">休眠中，%1$d 秒后重试</string>
   <string name="mcp_status_error">错误: %1$s</string>
-    <string name="mcp_status_needs_authorization">需要授权</string>
-    <string name="mcp_status_authorizing">授权中</string>
-    <string name="mcp_oauth_authorize">授权</string>
-    <string name="mcp_oauth_authorizing_hint">正在授权，请在浏览器中完成…</string>
-    <string name="mcp_oauth_cancel_authorization">取消授权</string>
-<string name="mcp_oauth_client_id">Client ID</string>
-<string name="mcp_oauth_client_secret">Client Secret（可选）</string>
-<string name="mcp_oauth_client_id_hint">预配置 OAuth Client ID（用于不支持动态注册的服务器）</string>
-<string name="mcp_oauth_clear">清除授权</string>
-<string name="mcp_oauth_server_config">服务器配置</string>
-<string name="mcp_oauth_authorize_with_credentials">使用凭据授权</string>
-<string name="mcp_retry">重试</string>
+  <string name="mcp_status_needs_authorization">需要授权</string>
+  <string name="mcp_status_authorizing">授权中</string>
+  <string name="mcp_oauth_authorize">授权</string>
+  <string name="mcp_oauth_authorizing_hint">正在授权，请在浏览器中完成…</string>
+  <string name="mcp_oauth_cancel_authorization">取消授权</string>
+  <string name="mcp_oauth_client_id">Client ID</string>
+  <string name="mcp_oauth_client_secret">Client Secret（可选）</string>
+  <string name="mcp_oauth_client_id_hint">预配置 OAuth Client ID（用于不支持动态注册的服务器）</string>
+  <string name="mcp_oauth_clear">清除授权</string>
+  <string name="mcp_oauth_server_config">服务器配置</string>
+  <string name="mcp_oauth_authorize_with_credentials">使用凭据授权</string>
+  <string name="mcp_retry">重试</string>
   <string name="setting_page_message_display_settings">消息显示</string>
   <string name="setting_page_model_and_services">模型与服务</string>
   <string name="setting_page_no_share_app">找不到分享应用</string>
@@ -1038,12 +1024,13 @@
   <string name="text_area_save">保存</string>
   <string name="theme_name_autumn">秋黄</string>
   <string name="theme_name_black">中性黑</string>
+  <string name="theme_name_claude">Claude</string>
+  <string name="theme_name_minimal">极简白</string>
   <string name="theme_name_ocean">海湾蓝</string>
   <string name="theme_name_sakura">樱花粉</string>
   <string name="theme_name_spring">原野绿</string>
   <string name="title_activity_safe_mode">安全模式</string>
   <string name="tools_warning">当前模型未开启工具调用，请在设置内启用模型的工具能力，再使用搜索/MCP等功能</string>
-
   <string name="tts">语音</string>
   <string name="unpin_chat">取消置顶聊天</string>
   <string name="update_card_check_failed">检查更新失败</string>
@@ -1193,4 +1180,35 @@
   <string name="workspace_file_editor_save_failed">保存失败</string>
   <string name="workspace_file_editor_read_failed">读取文件失败</string>
   <string name="workspace_file_editor_too_large">文件过大，无法预览（%d 字节）</string>
+  <string name="image_crop_failed">图片裁剪失败</string>
+  <string name="chat_readiness_title">配置此会话</string>
+  <string name="chat_readiness_model_required_toast">发送前请选择对话模型。</string>
+  <string name="chat_readiness_model_title">对话模型</string>
+  <string name="chat_readiness_model_not_configured">未配置</string>
+  <string name="chat_readiness_model_not_selected">未选择</string>
+  <string name="chat_readiness_model_description">选择大模型开始任务；能力越强的模型通常成本越高。</string>
+  <string name="chat_readiness_mcp_title">MCP（助手能力）</string>
+  <string name="chat_readiness_mcp_not_configured">未配置</string>
+  <string name="chat_readiness_mcp_all_disabled">已停用</string>
+  <string name="chat_readiness_mcp_none_selected">未启用</string>
+  <string name="chat_readiness_mcp_ready">已启用 %1$d 项</string>
+  <string name="chat_readiness_mcp_description">扩展助手能力，也可在此切换小睿远控设备。</string>
+  <string name="chat_readiness_local_tools_title">本地能力</string>
+  <string name="chat_readiness_local_tools_count">已启用 %1$d 项</string>
+  <string name="chat_readiness_local_tools_description">启用语音播报、剪贴板、屏幕使用时间等设备本地能力。</string>
+  <string name="chat_readiness_workspace_title">本地工作区</string>
+  <string name="chat_readiness_workspace_not_configured">暂无</string>
+  <string name="chat_readiness_workspace_not_bound">未绑定</string>
+  <string name="chat_readiness_workspace_description">连接设备本地的工作环境，让助手访问工作区内的文件和脚本。</string>
+  <string name="search_provider_bing_description">Bing 搜索通过抓取页面工作，可能不稳定。</string>
+  <string name="search_provider_tavily_api_key">获取 Tavily API Key</string>
+  <string name="search_provider_searxng_description">在 settings.yml 中启用 JSON 格式支持：</string>
+  <string name="search_provider_searxng_config">search:\n  formats:\n    - html\n    - json</string>
+  <string name="assistant_picker_current">当前助手</string>
+  <string name="assistant_picker_manage_current">管理当前助手</string>
+  <string name="assistant_page_context_message_limit">自动裁剪上下文</string>
+  <string name="assistant_page_context_message_limit_desc">消息数超过阈值后，分段移除较早的完整对话轮次，避免每轮移动请求前缀。</string>
+  <string name="assistant_page_context_message_limit_count">超过 %d 条消息后裁剪</string>
+  <string name="assistant_page_context_message_limit_unlimited">不自动裁剪上下文</string>
+  <string name="assistant_page_context_message_limit_warning">消息条数不等于 token 上限；每次裁剪仍可能使提示词缓存失效。</string>
 </resources>
