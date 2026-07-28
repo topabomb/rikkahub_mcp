@@ -79,7 +79,7 @@ private const val TAG = "McpManager"
  *
  * 职责:
  * 1. **连接生命周期**: 管理 Client 连接池，响应 settings 变更自动 add/remove
- * 2. **重连策略**: transport 断连 → 指数退避（5次）→ Dormant 长间隔兜底（10次×60s）→ Error
+ * 2. **重连策略**: transport 断连 → 指数退避（5次）→ Dormant 长间隔兜底（30次×60s）→ Error
  * 3. **网络感知**: NetworkCallback 网络恢复 → 主动 syncAll；离线时跳过重连节省电池
  * 4. **前台恢复**: ProcessLifecycle onStart → syncAll 健康检查
  * 5. **工具管理**: 连接成功后 syncTools 拉取 schema + 合并用户偏好；监听 list_changed 通知

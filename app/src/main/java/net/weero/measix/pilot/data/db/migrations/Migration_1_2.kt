@@ -18,7 +18,7 @@ val Migration_1_2 = object : Migration(1, 2) {
     @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE")
     override fun migrate(database: SupportSQLiteDatabase) {
         database.execSQL(
-            "ALTER TABLE conversations ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'"
+            "ALTER TABLE ConversationEntity ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'"
         )
     }
 }

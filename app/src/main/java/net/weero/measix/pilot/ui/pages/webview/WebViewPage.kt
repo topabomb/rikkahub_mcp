@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import me.rerere.hugeicons.stroke.MoreVertical
 import net.weero.measix.pilot.ui.components.nav.BackButton
+import net.weero.measix.pilot.ui.components.webview.WEB_VIEW_BASE_URL
 import net.weero.measix.pilot.ui.components.webview.WebView
 import net.weero.measix.pilot.ui.components.webview.WebViewContentCache
 import net.weero.measix.pilot.ui.components.webview.rememberWebViewState
@@ -61,7 +62,7 @@ fun WebViewPage(url: String, contentId: String) {
         }
         rememberWebViewState(
             data = content,
-            baseUrl = "https://measix.local",
+            baseUrl = WEB_VIEW_BASE_URL,
             mimeType = "text/html",
             settings = {
                 builtInZoomControls = true

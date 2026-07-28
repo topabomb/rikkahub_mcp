@@ -38,6 +38,7 @@ import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.findUserTurnStart
 import me.rerere.ai.ui.canResumeToolExecution
 import me.rerere.ai.ui.finishInterruptedTools
 import me.rerere.ai.ui.finishPendingTools
@@ -71,6 +72,7 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.datastore.getAssistantById
+import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.datastore.getCurrentAssistant
 import net.weero.measix.pilot.data.datastore.getCurrentChatModel
 import net.weero.measix.pilot.data.files.FilesManager
@@ -501,7 +503,7 @@ class ChatService(
         val initialConversation = getConversationFlow(conversationId).value
         val assistant = settings.getAssistantById(initialConversation.assistantId)
             ?: settings.getCurrentAssistant()
-        val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId) ?: return
+        val model = settings.getChatModel(assistant) ?: return
 
         val senderName = if (assistant.useAssistantAvatar) {
             assistant.name.ifEmpty { context.getString(R.string.assistant_page_default_assistant) }
@@ -574,7 +576,6 @@ class ChatService(
                             createSkillTools(
                                 enabledSkills = assistant.enabledSkills,
                                 allSkills = skillManager.listSkills(),
-                                skillManager = skillManager,
                             )
                         )
                     }
@@ -937,8 +938,12 @@ class ChatService(
         val messagesToKeep: List<UIMessage>
 
         if (keepRecentMessages > 0 && allMessages.size > keepRecentMessages) {
-            messagesToCompress = allMessages.dropLast(keepRecentMessages)
-            messagesToKeep = allMessages.takeLast(keepRecentMessages)
+            val keepStartIndex = allMessages.findUserTurnStart(allMessages.size - keepRecentMessages)
+            messagesToCompress = allMessages.take(keepStartIndex)
+            messagesToKeep = allMessages.drop(keepStartIndex)
+            if (messagesToCompress.isEmpty()) {
+                throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
+            }
         } else if (keepRecentMessages > 0) {
             // Not enough messages to compress while keeping recent ones
             throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
@@ -949,7 +954,8 @@ class ChatService(
 
         fun splitMessages(messages: List<UIMessage>): List<List<UIMessage>> {
             if (messages.size <= maxMessagesPerChunk) return listOf(messages)
-            val mid = messages.size / 2
+            val rawMid = messages.size / 2
+            val mid = messages.findUserTurnStart(rawMid).takeIf { it > 0 } ?: rawMid
             val left = splitMessages(messages.subList(0, mid))
             val right = splitMessages(messages.subList(mid, messages.size))
             return left + right
@@ -982,7 +988,7 @@ class ChatService(
                 .awaitAll()
         }
 
-        // Create new conversation with compressed history as multiple user messages + kept messages
+        // Replace older history with summary messages while preserving complete recent turns.
         val newMessageNodes = buildList {
             compressedSummaries.forEach { summary ->
                 add(UIMessage.user(summary).toMessageNode())
