@@ -226,6 +226,25 @@ class WorkspaceRepository(
         manager.exportFile(workspace.root, path, area, outputStream)
     }
 
+    suspend fun rootfsFileSize(
+        id: String,
+        path: String,
+    ): Long = withContext(Dispatchers.IO) {
+        val workspace = dao.getById(id) ?: error("Workspace not found: $id")
+        manager.ensureWorkspace(workspace.root)
+        manager.rootfsFileSize(workspace.root, path)
+    }
+
+    suspend fun exportRootfsFile(
+        id: String,
+        path: String,
+        outputStream: OutputStream,
+    ) = withContext(Dispatchers.IO) {
+        val workspace = dao.getById(id) ?: error("Workspace not found: $id")
+        manager.ensureWorkspace(workspace.root)
+        manager.exportRootfsFile(workspace.root, path, outputStream)
+    }
+
     suspend fun deleteFile(
         id: String,
         area: WorkspaceStorageArea,

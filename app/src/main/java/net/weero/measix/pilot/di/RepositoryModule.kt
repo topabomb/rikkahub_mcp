@@ -49,21 +49,21 @@ val repositoryModule = module {
             baseDir = File(context.filesDir, "workspaces"),
             shellRunner = ProotShellRunner(
                 nativeLibraryDir = File(context.applicationInfo.nativeLibraryDir),
-                extraBindMounts = listOf(
-                    WorkspaceBindMount(
-                        source = File(context.filesDir, FileFolders.SKILLS).apply { mkdirs() },
-                        target = "/skills",
-                    ),
-                    WorkspaceBindMount(
-                        source = File(context.filesDir, FileFolders.TOOL_OUTPUTS).apply { mkdirs() },
-                        target = "/tool_outputs",
-                    ),
-                    WorkspaceBindMount(
-                        source = File(context.filesDir, FileFolders.UPLOAD).apply { mkdirs() },
-                        target = "/upload",
-                    ),
+            ),
+            bindMounts = listOf(
+                WorkspaceBindMount(
+                    source = File(context.filesDir, FileFolders.SKILLS).apply { mkdirs() },
+                    target = "/skills",
                 ),
-            )
+                WorkspaceBindMount(
+                    source = File(context.filesDir, FileFolders.TOOL_OUTPUTS).apply { mkdirs() },
+                    target = "/tool_outputs",
+                ),
+                WorkspaceBindMount(
+                    source = File(context.filesDir, FileFolders.UPLOAD).apply { mkdirs() },
+                    target = "/upload",
+                ),
+            ),
         )
     }
 
