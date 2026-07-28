@@ -111,7 +111,9 @@ class ModelListState internal constructor(
         private set
 
     val currentModel: Model?
-        get() = modelId?.let { providers.findModelById(it) }
+        get() = modelId
+            ?.let { filteredProviders.findModelById(it) }
+            ?.takeIf { it.type == type }
 
     val filteredProviders: List<ProviderSetting>
         get() = providers.fastFilter { provider ->
@@ -163,12 +165,17 @@ fun ModelSelector(
     modelId: Uuid?,
     providers: List<ProviderSetting>,
     type: ModelType,
+    state: ModelListState = rememberModelListState(
+        modelId = modelId,
+        providers = providers,
+        type = type,
+    ),
     modifier: Modifier = Modifier,
     onlyIcon: Boolean = false,
     allowClear: Boolean = false,
     onSelect: (Model) -> Unit
 ) {
-    val state = rememberModelListState(
+    state.update(
         modelId = modelId,
         providers = providers,
         type = type,
@@ -304,9 +311,10 @@ private fun ColumnScope.ModelList(
         .collectAsStateWithLifecycle()
 
     val favoriteModels = settings.value.favoriteModels.mapNotNull { modelId ->
-        val model = settings.value.providers.findModelById(modelId) ?: return@mapNotNull null
+        val model = providers.findModelById(modelId) ?: return@mapNotNull null
         if (model.type != modelType) return@mapNotNull null
-        val provider = model.findProvider(providers = settings.value.providers, checkOverwrite = false) ?: return@mapNotNull null
+        val provider = model.findProvider(providers = providers, checkOverwrite = false)
+            ?: return@mapNotNull null
         model to provider
     }
 

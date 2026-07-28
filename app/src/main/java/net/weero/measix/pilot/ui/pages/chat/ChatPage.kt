@@ -56,7 +56,7 @@ import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ModelType
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.common.android.appTempFolder
 import me.rerere.hugeicons.HugeIcons
@@ -65,8 +65,10 @@ import me.rerere.hugeicons.stroke.LeftToRightListBullet
 import me.rerere.hugeicons.stroke.Menu03
 import me.rerere.hugeicons.stroke.MessageAdd01
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findProvider
+import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.datastore.getCurrentAssistant
 import net.weero.measix.pilot.data.datastore.getCurrentChatModel
 import net.weero.measix.pilot.data.files.FilesManager
@@ -76,6 +78,8 @@ import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.ui.components.ai.ChatInput
 import net.weero.measix.pilot.ui.components.ai.FilesPicker
+import net.weero.measix.pilot.ui.components.ai.WorkspaceSelectSheet
+import net.weero.measix.pilot.ui.components.ai.rememberModelListState
 import net.weero.measix.pilot.ui.components.ai.completion.WorkspaceCompletionProvider
 import net.weero.measix.pilot.ui.components.ai.useCropLauncher
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionCamera
@@ -112,7 +116,6 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
     val conversation by vm.conversation.collectAsStateWithLifecycle()
     val loadingJob by vm.conversationJob.collectAsStateWithLifecycle()
     val processingStatus by vm.processingStatus.collectAsStateWithLifecycle()
-    val currentChatModel by vm.currentChatModel.collectAsStateWithLifecycle()
     val enableWebSearch by vm.enableWebSearch.collectAsStateWithLifecycle()
     val errors by vm.errors.collectAsStateWithLifecycle()
 
@@ -214,7 +217,6 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
                     vm = vm,
                     chatListState = chatListState,
                     enableWebSearch = enableWebSearch,
-                    currentChatModel = currentChatModel,
                     bigScreen = true,
                     errors = errors,
                     onDismissError = { vm.dismissError(it) },
@@ -246,7 +248,6 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
                     vm = vm,
                     chatListState = chatListState,
                     enableWebSearch = enableWebSearch,
-                    currentChatModel = currentChatModel,
                     bigScreen = false,
                     errors = errors,
                     onDismissError = { vm.dismissError(it) },
@@ -273,7 +274,6 @@ private fun ChatPageContent(
     vm: ChatVM,
     chatListState: LazyListState,
     enableWebSearch: Boolean,
-    currentChatModel: Model?,
     errors: List<ChatError>,
     onDismissError: (Uuid) -> Unit,
     onClearAllErrors: () -> Unit,
@@ -281,10 +281,32 @@ private fun ChatPageContent(
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
     val workspaceRepository: WorkspaceRepository = koinInject()
+    val workspaces by workspaceRepository.listFlow().collectAsStateWithLifecycle(initialValue = emptyList())
     var previewMode by rememberSaveable { mutableStateOf(false) }
     val hazeState = rememberHazeState()
-    val assistant = setting.getCurrentAssistant()
+    val assistant = setting.getAssistantById(conversation.assistantId)
+        ?: setting.getCurrentAssistant()
     var showFilesSheet by remember { mutableStateOf(false) }
+    var showWorkspaceSheet by remember { mutableStateOf(false) }
+    val workspaceNamesById = remember(workspaces) {
+        workspaces.mapNotNull { workspace ->
+            runCatching { Uuid.parse(workspace.id) }
+                .getOrNull()
+                ?.let { it to workspace.name }
+        }.toMap()
+    }
+    val readiness = remember(setting, assistant, workspaceNamesById) {
+        setting.buildConversationReadiness(
+            assistant = assistant,
+            workspaceNamesById = workspaceNamesById,
+        )
+    }
+    val modelListState = rememberModelListState(
+        modelId = assistant.chatModelId ?: setting.chatModelId,
+        providers = setting.providers,
+        type = ModelType.CHAT,
+    )
+    val modelRequiredMessage = stringResource(R.string.chat_readiness_model_required_toast)
 
     val completionProviders = remember(assistant.workspaceId, conversation.workspaceCwd, workspaceRepository) {
         assistant.workspaceId?.let { workspaceId ->
@@ -329,6 +351,8 @@ private fun ChatPageContent(
                     state = inputState,
                     loading = loadingJob != null,
                     settings = setting,
+                    assistant = assistant,
+                    modelListState = modelListState,
                     hazeState = hazeState,
                     completionProviders = completionProviders,
                     onCancelClick = {
@@ -342,8 +366,8 @@ private fun ChatPageContent(
                         )
                     },
                     onSendClick = {
-                        if (currentChatModel == null) {
-                            toaster.show("请先选择模型", type = ToastType.Error)
+                        if (!readiness.canSend) {
+                            toaster.show(modelRequiredMessage, type = ToastType.Error)
                             return@ChatInput
                         }
                         if (inputState.isEditing()) {
@@ -360,6 +384,10 @@ private fun ChatPageContent(
                         inputState.clearInput()
                     },
                     onLongSendClick = {
+                        if (!readiness.canSend) {
+                            toaster.show(modelRequiredMessage, type = ToastType.Error)
+                            return@ChatInput
+                        }
                         if (inputState.isEditing()) {
                             vm.handleMessageEdit(
                                 parts = inputState.getContents(),
@@ -374,7 +402,7 @@ private fun ChatPageContent(
                         inputState.clearInput()
                     },
                     onUpdateChatModel = {
-                        vm.setChatModel(assistant = setting.getCurrentAssistant(), model = it)
+                        vm.setChatModel(assistant = assistant, model = it)
                     },
                     onUpdateAssistant = {
                         vm.updateSettings(
@@ -411,6 +439,7 @@ private fun ChatPageContent(
                 processingStatus = processingStatus,
                 previewMode = previewMode,
                 settings = setting,
+                readiness = readiness,
                 hazeState = hazeState,
                 errors = errors,
                 onDismissError = onDismissError,
@@ -471,6 +500,28 @@ private fun ChatPageContent(
                     vm.updateConversation(conversation.copy(customSystemPrompt = newPrompt))
                     vm.saveConversationAsync()
                 },
+                onProviderConfigClick = {
+                    navController.navigate(Screen.SettingProvider)
+                },
+                onReadinessModelClick = {
+                    modelListState.open()
+                },
+                onReadinessMcpClick = {
+                    if (
+                        readiness.mcpState == McpReadiness.NOT_CONFIGURED ||
+                        readiness.mcpState == McpReadiness.ALL_DISABLED
+                    ) {
+                        navController.navigate(Screen.SettingMcp)
+                    } else {
+                        navController.navigate(Screen.AssistantMcp(assistant.id.toString()))
+                    }
+                },
+                onReadinessLocalToolsClick = {
+                    navController.navigate(Screen.AssistantLocalTool(assistant.id.toString()))
+                },
+                onReadinessWorkspaceClick = {
+                    showWorkspaceSheet = true
+                },
             )
         }
 
@@ -482,6 +533,38 @@ private fun ChatPageContent(
                 assistant = assistant,
                 vm = vm,
                 onDismiss = { showFilesSheet = false },
+            )
+        }
+
+        if (showWorkspaceSheet) {
+            WorkspaceSelectSheet(
+                assistant = assistant,
+                workspaces = workspaces,
+                onSelect = { workspaceId ->
+                    val selectedWorkspaceId = workspaceId?.let { Uuid.parse(it) }
+                    if (selectedWorkspaceId != assistant.workspaceId) {
+                        val updatedAssistant = assistant.copy(workspaceId = selectedWorkspaceId)
+                        vm.updateSettings(
+                            setting.copy(
+                                assistants = setting.assistants.map {
+                                    if (it.id == updatedAssistant.id) updatedAssistant else it
+                                },
+                            ),
+                        )
+                        if (conversation.workspaceCwd != null) {
+                            vm.updateConversation(conversation.copy(workspaceCwd = null))
+                            vm.saveConversationAsync()
+                        }
+                    }
+                    showWorkspaceSheet = false
+                },
+                onManage = {
+                    showWorkspaceSheet = false
+                    navController.navigate(Screen.Workspaces)
+                },
+                onDismiss = {
+                    showWorkspaceSheet = false
+                },
             )
         }
     }

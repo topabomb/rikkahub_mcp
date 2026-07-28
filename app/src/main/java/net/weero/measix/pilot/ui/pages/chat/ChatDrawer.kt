@@ -300,7 +300,7 @@ fun ChatDrawerContent(
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-                onClickSetting = {
+                onManageAssistant = {
                     val currentAssistantId = settings.assistantId
                     navController.navigate(Screen.AssistantDetail(id = currentAssistantId.toString()))
                 }

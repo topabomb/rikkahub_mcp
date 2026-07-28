@@ -1,5 +1,6 @@
 ﻿package net.weero.measix.pilot.ui.components.ai
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -23,7 +25,6 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberBottomSheetState
@@ -35,14 +36,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.Edit03
-import me.rerere.hugeicons.stroke.LookTop
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
@@ -57,41 +59,73 @@ fun AssistantPicker(
     settings: Settings,
     onUpdateSettings: (Settings) -> Unit,
     modifier: Modifier = Modifier,
-    onClickSetting: () -> Unit,
+    onManageAssistant: () -> Unit,
 ) {
     val state = rememberAssistantState(settings, onUpdateSettings)
     val defaultAssistantName = stringResource(R.string.assistant_page_default_assistant)
     var showPicker by remember { mutableStateOf(false) }
 
-    NavigationDrawerItem(
-        icon = {
-            Icon(HugeIcons.LookTop, contentDescription = null)
-        },
-        label = {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(MaterialTheme.shapes.medium)
+                    .clickable { showPicker = true }
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = state.currentAssistant.name.ifEmpty { defaultAssistantName },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                Spacer(Modifier.weight(1f))
-
                 UIAvatar(
                     name = state.currentAssistant.name.ifEmpty { defaultAssistantName },
                     value = state.currentAssistant.avatar,
-                    onClick = onClickSetting
+                    modifier = Modifier.size(36.dp),
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(1.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.assistant_picker_current),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                    )
+                    Text(
+                        text = state.currentAssistant.name.ifEmpty { defaultAssistantName },
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Icon(
+                    imageVector = HugeIcons.ArrowDown01,
+                    contentDescription = stringResource(R.string.safe_mode_switch_assistant),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
                 )
             }
-        },
-        onClick = {
-            showPicker = true
-        },
-        modifier = modifier,
-        selected = false,
-    )
+            FilledTonalIconButton(
+                onClick = onManageAssistant,
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(
+                    imageVector = HugeIcons.Edit03,
+                    contentDescription = stringResource(R.string.assistant_picker_manage_current),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+    }
 
     if (showPicker) {
         AssistantPickerSheet(
@@ -145,7 +179,7 @@ private fun AssistantPickerSheet(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                text = stringResource(R.string.assistant_page_title),
+                text = stringResource(R.string.safe_mode_switch_assistant),
                 style = MaterialTheme.typography.titleLarge,
                 modifier = Modifier.padding(bottom = 8.dp)
             )
@@ -216,13 +250,6 @@ private fun AssistantItem(
     onEdit: () -> Unit
 ) {
     ListItem(
-        headlineContent = {
-            Text(
-                text = assistant.name.ifEmpty { defaultAssistantName },
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        },
         leadingContent = {
             UIAvatar(
                 name = assistant.name.ifEmpty { defaultAssistantName },
@@ -243,5 +270,11 @@ private fun AssistantItem(
             }
         },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-    )
+    ) {
+        Text(
+            text = assistant.name.ifEmpty { defaultAssistantName },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }

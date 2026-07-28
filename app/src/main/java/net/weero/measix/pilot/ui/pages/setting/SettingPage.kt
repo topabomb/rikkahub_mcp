@@ -4,27 +4,16 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -32,9 +21,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -42,7 +29,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.AiMagic
-import me.rerere.hugeicons.stroke.Alert01
 import me.rerere.hugeicons.stroke.Book01
 import me.rerere.hugeicons.stroke.Book03
 import me.rerere.hugeicons.stroke.Bookshelf01
@@ -67,9 +53,9 @@ import net.weero.measix.pilot.data.datastore.isNotConfigured
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.CardGroup
+import net.weero.measix.pilot.ui.components.ui.ProviderConfigWarningCard
 import net.weero.measix.pilot.ui.components.ui.Select
 import net.weero.measix.pilot.ui.context.LocalNavController
-import net.weero.measix.pilot.ui.context.Navigator
 import net.weero.measix.pilot.ui.hooks.rememberColorMode
 import net.weero.measix.pilot.ui.theme.ColorMode
 import net.weero.measix.pilot.ui.theme.CustomColors
@@ -108,7 +94,10 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
         ) {
             if (settings.isNotConfigured()) {
                 item {
-                    ProviderConfigWarningCard(navController)
+                    ProviderConfigWarningCard(
+                        onClick = { navController.navigate(Screen.SettingProvider) },
+                        modifier = Modifier.padding(horizontal = 8.dp),
+                    )
                 }
             }
 
@@ -289,46 +278,6 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                         headlineContent = { Text(stringResource(R.string.setting_page_share)) },
                     )
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProviderConfigWarningCard(navController: Navigator) {
-    Card(
-        modifier = Modifier.padding(8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(8.dp),
-            horizontalAlignment = Alignment.End
-        ) {
-            ListItem(
-                headlineContent = {
-                    Text(stringResource(R.string.setting_page_config_api_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.setting_page_config_api_desc))
-                },
-                leadingContent = {
-                    Icon(HugeIcons.Alert01, null)
-                },
-                colors = ListItemDefaults.colors(
-                    containerColor = Color.Transparent
-                )
-            )
-
-            TextButton(
-                onClick = {
-                    navController.navigate(Screen.SettingProvider)
-                }
-            ) {
-                Text(stringResource(R.string.setting_page_config))
             }
         }
     }
