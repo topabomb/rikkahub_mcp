@@ -339,7 +339,7 @@ scheduleReconnect(config)
     ▼
 第二步：检查是否超过最大次数
     if (currentAttempt > MAX_RECONNECT_ATTEMPTS) {  // MAX_RECONNECT_ATTEMPTS = 5
-        setStatus(config, Error("连接断开，已达最大重连次数"))
+        enterDormant(configId)  // 60s 周期重试，最多 30 次
         return
     }
     │
@@ -360,7 +360,11 @@ scheduleReconnect(config)
 第六步：启动重连协程
     reconnectJobs[configId] = appScope.launch {
         │
-        ├── setStatus(config, Reconnecting(currentAttempt, MAX_RECONNECT_ATTEMPTS))
+        ├── 网络离线？
+        │   ├── 是：Reconnecting → 等待 10s → 回退本次 attempt → 重新调度
+        │   └── 否：继续（离线等待不消耗快速重试次数）
+        │
+        ├── setStatus(configId, Reconnecting(currentAttempt, MAX_RECONNECT_ATTEMPTS))
         │
         ├── delay(delayMs)
         │
@@ -369,7 +373,8 @@ scheduleReconnect(config)
         │       .find { it.id == configId && it.commonOptions.enable }
         │
         │   if (currentConfig == null) {
-        │       return@launch  // 配置已禁用或移除，静默退出
+        │       cancelAllJobs + closeClient + 移除 status
+        │       return@launch
         │   }
         │
         ├── 尝试重连
@@ -391,7 +396,8 @@ scheduleReconnect(config)
 - 重连前会检查配置是否仍然启用
 - 重连失败会递归调用 `scheduleReconnect` 继续尝试
 - 重连成功后 `reconnectAttempts` 在 `reconnectClient` 中重置为 0
-- 超过 5 次后状态变为 `Error`，**不再自动重连**
+- 超过 5 次后进入 `Dormant`，每 60 秒自动重试，最多 30 次
+- Dormant 重试全部失败后才进入 `Error`
 
 #### 5.4.3 calculateBackoffDelay(attempt)（McpManager.kt:538-542）
 
@@ -640,7 +646,7 @@ addClient(config)
     → reconnectAttempts = 0
 ```
 
-### 场景 C：服务端长时间不可用（达到最大重连次数）
+### 场景 C：服务端长时间不可用（快速重连耗尽）
 
 ```
 状态：Connected
@@ -653,11 +659,13 @@ addClient(config)
   → 第 4 次：Reconnecting(4, 5), delay=8s → 失败 → scheduleReconnect
   → 第 5 次：Reconnecting(5, 5), delay=16s → 失败 → scheduleReconnect
   → 第 6 次：currentAttempt(6) > MAX_RECONNECT_ATTEMPTS(5)
-  → status = Error("连接断开，已达最大重连次数")
-  → 停止重连
+  → status = Dormant(nextRetryInMs=60000)
+  → 每 60s 重试一次，最多 30 次
+  → 任意一次成功：Connected，reconnectAttempts = 0
+  → 30 次全部失败：Error("MCP reconnect failed after 30 dormant retries")
 ```
 
-**确定**：达到最大重连次数后，**不会自动恢复**。此时 `clients` 中已无该配置（`reconnectClient` 失败时移除）。
+**确定**：快速重连耗尽后仍有约 30 分钟的自动恢复窗口；只有 Dormant 重试也全部失败才停止自动重连。
 
 ### 场景 D：用户修改 MCP 服务器 URL
 

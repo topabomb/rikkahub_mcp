@@ -6,6 +6,69 @@
 
 ---
 
+## 0.0.11（versionCode 11）— 2026-07-18 ~ 2026-07-28
+
+### 新增
+
+- **极简白和 Claude 主题**：新增 Minimal（纯白底 + 中性灰层级 + 低饱和蓝强调色）和 Claude（象牙白暖底 + 赤陶橙强调色）两个预设主题，主题选择器由横向滚动改为 FlowRow 四列网格布局
+- **SAF 支持复制/移动文件到 workspace**：Root 加上 `FLAG_SUPPORTS_CREATE`，实现 `copyDocument`/`moveDocument`，文件管理器可将 workspace 作为粘贴/保存目标
+- **Mermaid 内置离线加载**：将 mermaid 11.16.0 的 JS（3.5MB）打包进 assets，通过 `WebViewLocalAssets` 拦截虚拟域名 `measix.local/assets/**` 映射到 assets 目录，内嵌 WebView 与全屏预览页共用同一 baseUrl，首次渲染不再依赖 CDN
+- **新会话就绪引导**：未配置可用对话模型时，在“配置此会话”前展示与设置页复用的紧凑阻断卡片；配置卡使用主题常规表面色，仅对话模型行使用警告图标和状态标签。MCP、本地能力和本地工作区保持可选，状态文案压缩为短标签；模型项复用输入框底部的选择面板，其余项进入对应配置入口。已有消息的会话仅在模型不可用时显示对应提示
+- **会话就绪回归测试**：覆盖未配置、未选择、Provider 全禁用、仅有非对话模型、MCP 未配置/全禁用/已选择和工作区绑定状态
+- **上下文管理双层策略**：Assistant 可显式开启请求级阶梯裁剪，默认关闭，开启后默认 80 条、范围 40～512；裁剪锚点按完整 USER 轮次分段移动，减少相邻请求的提示缓存前缀漂移且不改写会话。用户触发的语义压缩继续负责用摘要替换较早历史
+- **本地生成链路参考文档**：基于上游有价值的生成管线文档，按 Measix Pilot 的通知解耦、Workspace、MCP、工具集合及上下文策略重写，并新增上下文管理决策文档
+
+### 修复
+
+- **消息模板时间破坏 prompt 缓存**：`TemplateTransformer` 改为取 `UIMessage.createdAt` 而非 `Instant.now()`，历史消息的 `time`/`date` 变量在每轮请求中保持稳定
+- **Response API 内置工具覆盖自定义函数工具**：`buildRequestBody` 中两次 `putJsonArray("tools")` 互相覆盖，改为合并到同一个 key 下
+- **图片裁剪失败静默忽略**：UCrop 返回 `RESULT_ERROR` 时弹出错误 toast 并记录日志
+- **月之暗面 K2.6 保留式思考**：思考开启时发送 `thinking.keep=all`，K2.5 不支持 keep 参数不发送
+- **cached tokens 按 provider 方言兜底解析**：OpenAI 嵌套 → Moonshot 顶层 `cached_tokens` → DeepSeek `prompt_cache_hit_tokens`
+- **Kimi K3 裸 id 适配**：补充 `KIMI_K3_ALIAS` 匹配不带 kimi 前缀的裸模型 id "k3"
+- **图标匹配 k3 模型 id**：`PATTERN_KIMI` 正则增加 `k3` 匹配
+- **本地备份继承 WebDAV items 过滤**：`exportToFile`/`restoreFromLocalFile` 强制使用 `BackupItem.entries` 包含所有项
+- **Skills 从 metadata 目录解析**：`createSkillTools` 移除 `SkillManager` 依赖，改用 `SkillFrontmatterParser` 和 `SkillPaths` 直接操作 `SkillMetadata`
+- **工作区 bind mount 文件读取**：`workspace_read_file` 统一通过 `WorkspaceManager` 解析
+  `/workspace`、`/skills`、`/upload` 与 rootfs 内部路径；PRoot 和文件工具共享同一挂载表，
+  并为文本/图片读取统一保留 8 MiB 限制
+- **TTS 下拉菜单小屏崩溃**：Provider、OpenAI voice、MiMo model/voice 改用有高度上限的
+  `SelectTextField`，避免输入法弹出时 `ExposedDropdownMenuPositionProvider` 范围非法
+- **MCP 导入冲突提示格式**：五语言字符串改用位置参数 `%1$d`/`%2$s`，消除 Android
+  资源编译的多参数格式警告并确保参数顺序可本地化
+- **无签名环境无法构建 Release**：仅在 `local.properties` 的四项签名信息完整时创建并
+  绑定 release signingConfig；普通开发环境可生成 unsigned release，正式签名配置行为不变
+- **Fork 后 Compose 稳定性配置仍引用旧包名**：`Conversation`、`MessageNode` 改为当前
+  `net.weero.measix.pilot` 包名，并清除 release baseline profile 中已删除的 `limitContext` 规则
+- **长按发送绕过模型校验**：普通发送与长按发送共用同一模型前置条件和本地化错误提示；生成服务也统一拒绝禁用 Provider 中的模型
+- **Bing 忽略结果数量设置**：抓取结果统一遵守 `SearchCommonOptions.resultSize`
+- **Room v1→v2 迁移使用错误表名**：`Migration_1_2` 改为迁移 v1 schema 中真实存在的
+  `ConversationEntity` 表；迁移测试同步适配当前 SQLite API，并在模拟器上验证旧会话数据保留及
+  `tags` 默认值
+- **仪器测试配置漂移**：为 `highlight`、`material3`、`search` 补齐 AndroidX Test 依赖；
+  `speech` 样板测试的包路径与期望 packageName 对齐当前 `me.rerere.speech` namespace
+- **上下文压缩拆散对话轮次**：保留最近消息和 256 条分块的切点统一回退到 USER 边界，避免摘要输入或保留历史从孤立的助手/工具回复开始；压缩提示明确摘要会替换旧历史且不可撤销
+- **本地能力说明误含语音识别**：会话配置卡改为列举语音播报、剪贴板和屏幕使用时间，和实际 Local Tools 注册表一致
+
+### 变更
+
+- **许可证变更为纯 AGPL-3.0**：上游 RikkaHub 将许可证从"分段双重许可（Segmented Dual Licensing）"改为纯 AGPL-3.0，移除了商业用途限制和用户数量门槛。本地 LICENSE 文件已同步更新为 GNU 官方 AGPL-3.0 全文
+- **上下文限制改为阶梯式裁剪**：先移除会逐轮移动并破坏提示缓存的旧 `contextMessageSize`，再以新字段 `contextMessageLimit` 适配引入上游 `2d61ba9`。本地没有照搬上游边界和参数：完整轮次对齐、显式开关、异常值归一化，并明确消息条数不是 token/window 上限；旧字段仍由 `JsonInstant.ignoreUnknownKeys` 安全忽略
+- **SkillFrontmatterParser 抽离为独立文件**：从 `SkillManager.kt` 抽离到独立的 `SkillFrontmatterParser.kt`
+- **移除 Custom JS 搜索**：删除任意脚本搜索运行时、配置 UI、资源和 search 模块 QuickJS 依赖；旧 `custom_js` 落盘项通过宽容解码安全跳过，若无其他 provider 则回退到默认 Bing
+- **搜索模块职责收敛**：`search` 只负责 provider 配置、schema 和网络执行；说明文案迁移至 app UI；新增显式 `SearchProviderType` 工厂，移除 Compose 依赖和反射创建
+- **抽屉助手入口重构**：当前助手区域改为独立选择器，头像、“当前助手”标签、名称和下拉箭头共同构成切换入口；右侧独立编辑按钮管理当前助手，下方助手设置继续负责全局管理，避免切换与管理语义混杂
+- **阶段复核制度化**：首份九批复核改名为 [phase-1-review-2026-07-28.md](upstream-sync/phase-1-review-2026-07-28.md)，并在 [upstream-sync.md](upstream-sync.md) 中明确阶段复核的目标、价值、命名和冻结规则
+- 依赖升级：material3 1.5.0-alpha23 → 1.5.0-alpha24
+
+### 上游同步
+
+- 同步 rikkahub 上游 `8eebe950..2d61ba95`（2026-07-18 ~ 2026-07-28）的 22 个提交（19 个同步 + 3 个按 Fork 边界跳过），详见 `docs/dev/upstream-sync.md` 第九批检查记录
+- 完整审查：补齐 bind mount 与 TTS 两个 P0，恢复上游五组回归测试并增加 K3 边界测试；修复 Crop 文案本地化、K3 图标误匹配、BOM、WebView 虚拟域名/遗漏文件及同步台账范围连续性
+- 阶段复核：九批范围 `5b9be301..2d61ba95` 共 131 个上游提交连续闭合，无间隙、无重复；修正首批失效哈希、第六/七批检查点重叠和各批数量口径，详见 [阶段 1 复核](upstream-sync/phase-1-review-2026-07-28.md)
+
+---
+
 ## 0.0.10（versionCode 10）— 2026-07-10 ~ 2026-07-17
 
 ### 新增

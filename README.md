@@ -11,7 +11,7 @@ Fork 源头：RikkaHub v2.3.1（versionCode 164），提交 `5b9be301`。感谢�
 ```
 app/          主应用（UI + ViewModel + 数据层）
 ai/           AI SDK 抽象层（Provider 适配 + 消息模型 + 工具定义）
-search/       搜索引擎 SDK（Bing / Tavily / SearXNG / Custom JS）
+search/       搜索引擎 SDK（Bing / Tavily / SearXNG）
 speech/       语音 SDK（TTS + ASR）
 workspace/    工作空间（proot Linux 沙箱）
 document/     文档解析（PDF / DOCX / PPTX / EPUB）
