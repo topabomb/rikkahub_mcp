@@ -59,7 +59,7 @@
 - **搜索模块职责收敛**：`search` 只负责 provider 配置、schema 和网络执行；说明文案迁移至 app UI；新增显式 `SearchProviderType` 工厂，移除 Compose 依赖和反射创建
 - **抽屉助手入口重构**：当前助手区域改为独立选择器，头像、“当前助手”标签、名称和下拉箭头共同构成切换入口；右侧独立编辑按钮管理当前助手，下方助手设置继续负责全局管理，避免切换与管理语义混杂
 - **阶段复核制度化**：首份九批复核改名为 [phase-1-review-2026-07-28.md](upstream-sync/phase-1-review-2026-07-28.md)，并在 [upstream-sync.md](upstream-sync.md) 中明确阶段复核的目标、价值、命名和冻结规则
-- 依赖升级：material3 1.5.0-alpha23 → 1.5.0-alpha24
+- 依赖升级：material3 1.5.0-alpha23 → 1.5.0-alpha24；kotlin 2.4.0 → 2.4.10；ksp 2.3.4 → 2.3.10；sonner 0.3.9 → 0.4.0
 
 ### 上游同步
 
