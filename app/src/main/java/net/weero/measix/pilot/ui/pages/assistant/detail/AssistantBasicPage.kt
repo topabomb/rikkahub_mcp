@@ -39,6 +39,10 @@ import me.rerere.ai.provider.ModelType
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.data.model.DEFAULT_CONTEXT_MESSAGE_LIMIT
+import net.weero.measix.pilot.data.model.MAX_CONTEXT_MESSAGE_LIMIT
+import net.weero.measix.pilot.data.model.MIN_CONTEXT_MESSAGE_LIMIT
+import net.weero.measix.pilot.data.model.effectiveContextMessageLimit
 import net.weero.measix.pilot.ui.components.ai.ModelSelector
 import net.weero.measix.pilot.ui.components.ai.ReasoningButton
 import net.weero.measix.pilot.ui.components.nav.BackButton
@@ -106,6 +110,8 @@ internal fun AssistantBasicContent(
     onUpdate: (Assistant) -> Unit,
     vm: AssistantDetailVM
 ) {
+    val effectiveContextMessageLimit = assistant.effectiveContextMessageLimit()
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -315,6 +321,68 @@ internal fun AssistantBasicContent(
             FormItem(
                 modifier = Modifier.padding(8.dp),
                 label = {
+                    Text(stringResource(R.string.assistant_page_context_message_limit))
+                },
+                description = {
+                    Text(stringResource(R.string.assistant_page_context_message_limit_desc))
+                },
+                tail = {
+                    Switch(
+                        checked = effectiveContextMessageLimit > 0,
+                        onCheckedChange = { enabled ->
+                            onUpdate(
+                                assistant.copy(
+                                    contextMessageLimit = if (enabled) {
+                                        DEFAULT_CONTEXT_MESSAGE_LIMIT
+                                    } else {
+                                        0
+                                    }
+                                )
+                            )
+                        }
+                    )
+                }
+            ) {
+                if (effectiveContextMessageLimit > 0) {
+                    Slider(
+                        value = effectiveContextMessageLimit.toFloat(),
+                        onValueChange = { value ->
+                            onUpdate(
+                                assistant.copy(
+                                    contextMessageLimit = value.roundToInt()
+                                        .coerceIn(MIN_CONTEXT_MESSAGE_LIMIT, MAX_CONTEXT_MESSAGE_LIMIT)
+                                )
+                            )
+                        },
+                        valueRange = MIN_CONTEXT_MESSAGE_LIMIT.toFloat()..MAX_CONTEXT_MESSAGE_LIMIT.toFloat(),
+                        steps = 0,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        text = stringResource(
+                            R.string.assistant_page_context_message_limit_count,
+                            effectiveContextMessageLimit
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.75f),
+                    )
+                    Text(
+                        text = stringResource(R.string.assistant_page_context_message_limit_warning),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                } else {
+                    Text(
+                        text = stringResource(R.string.assistant_page_context_message_limit_unlimited),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.75f),
+                    )
+                }
+            }
+            HorizontalDivider()
+            FormItem(
+                modifier = Modifier.padding(8.dp),
+                label = {
                     Text(stringResource(R.string.assistant_page_top_p))
                 },
                 description = {
@@ -361,49 +429,6 @@ internal fun AssistantBasicContent(
                         supportingText = {
                             Text("0 - 1")
                         }
-                    )
-                }
-            }
-            HorizontalDivider()
-            FormItem(
-                modifier = Modifier.padding(8.dp),
-                label = {
-                    Text(stringResource(R.string.assistant_page_context_message_size))
-                },
-                description = {
-                    Text(
-                        text = stringResource(R.string.assistant_page_context_message_desc),
-                    )
-                }
-            ) {
-                Slider(
-                    value = assistant.contextMessageSize.toFloat(),
-                    onValueChange = {
-                        onUpdate(
-                            assistant.copy(
-                                contextMessageSize = it.roundToInt()
-                            )
-                        )
-                    },
-                    valueRange = 0f..512f,
-                    steps = 0,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Text(
-                    text = if (assistant.contextMessageSize > 0) stringResource(
-                        R.string.assistant_page_context_message_count,
-                        assistant.contextMessageSize
-                    ) else stringResource(R.string.assistant_page_context_message_unlimited),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.75f),
-                )
-
-                if (assistant.contextMessageSize > 0) {
-                    Text(
-                        text = stringResource(R.string.assistant_page_context_message_truncation_warning),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
                     )
                 }
             }

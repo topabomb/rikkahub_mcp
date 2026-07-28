@@ -11,6 +11,7 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.Model
 import me.rerere.ai.util.json
+import kotlin.math.roundToInt
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
@@ -269,49 +270,51 @@ fun List<UIMessagePart>.isEmptyUIMessage(): Boolean {
     }
 }
 
-fun List<UIMessage>.limitContext(size: Int): List<UIMessage> {
-    if (size <= 0 || this.size <= size) return this
+/**
+ * Fraction of the configured threshold kept immediately after a context trim.
+ *
+ * A lower ratio moves the trim point less often, improving prompt-cache reuse at
+ * the cost of discarding more history at each step.
+ */
+private const val CONTEXT_KEEP_RATIO = 0.5f
 
-    val startIndex = this.size - size
-    var adjustedStartIndex = startIndex
+/**
+ * Limits conversation history with a stepped (hysteresis) strategy.
+ *
+ * Unlike a sliding window, the start point only moves after [limit] is crossed
+ * by a full stride. Appending messages inside the same stride therefore keeps
+ * the request prefix stable. The result starts at a user message whenever the
+ * retained history contains one, so an assistant reply and its tool activity
+ * are never detached from the user turn that caused them.
+ *
+ * [limit] is a message-count trimming threshold, not a token or model context
+ * window limit. Values less than or equal to zero disable automatic trimming.
+ */
+fun List<UIMessage>.limitContext(limit: Int): List<UIMessage> {
+    if (limit <= 0 || size <= limit) return this
 
-    // 循环往前查找，直到满足所有依赖条件
-    var needsAdjustment = true
-    val visitedIndices = mutableSetOf<Int>()
+    val target = (limit * CONTEXT_KEEP_RATIO).roundToInt().coerceIn(1, limit)
+    val stride = (limit - target).coerceAtLeast(1)
+    val steppedStartIndex = (
+        ((size - limit) / stride + 1) * stride
+        ).coerceAtMost(lastIndex)
 
-    while (needsAdjustment && adjustedStartIndex > 0) {
-        needsAdjustment = false
+    return subList(findUserTurnStart(steppedStartIndex), size)
+}
 
-        // 防止无限循环
-        if (adjustedStartIndex in visitedIndices) break
-        visitedIndices.add(adjustedStartIndex)
-
-        val currentMessage = this[adjustedStartIndex]
-
-        // 如果当前消息包含已执行的tool（有output），往前查找对应的tool call
-        if (currentMessage.getTools().any { it.isExecuted }) {
-            for (i in adjustedStartIndex - 1 downTo 0) {
-                if (this[i].getTools().any { !it.isExecuted }) {
-                    adjustedStartIndex = i
-                    needsAdjustment = true
-                    break
-                }
-            }
-        }
-
-        // 如果当前消息包含未执行的tool call，往前查找对应的用户消息
-        if (currentMessage.getTools().any { !it.isExecuted }) {
-            for (i in adjustedStartIndex - 1 downTo 0) {
-                if (this[i].role == MessageRole.USER) {
-                    adjustedStartIndex = i
-                    needsAdjustment = true
-                    break
-                }
-            }
-        }
+/**
+ * Finds the nearest user-message boundary at or before [startIndex].
+ *
+ * This is shared by request-time trimming and persistent conversation
+ * compression so neither path starts from an orphaned assistant/tool response.
+ */
+fun List<UIMessage>.findUserTurnStart(startIndex: Int): Int {
+    if (isEmpty()) return 0
+    val safeStartIndex = startIndex.coerceIn(0, lastIndex)
+    for (index in safeStartIndex downTo 0) {
+        if (this[index].role == MessageRole.USER) return index
     }
-
-    return this.subList(adjustedStartIndex, this.size)
+    return safeStartIndex
 }
 
 @Serializable

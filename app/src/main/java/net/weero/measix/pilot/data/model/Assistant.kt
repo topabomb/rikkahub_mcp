@@ -12,6 +12,10 @@ import net.weero.measix.pilot.utils.SimpleCache
 import java.util.concurrent.TimeUnit
 import kotlin.uuid.Uuid
 
+internal const val MIN_CONTEXT_MESSAGE_LIMIT = 40
+internal const val DEFAULT_CONTEXT_MESSAGE_LIMIT = 80
+internal const val MAX_CONTEXT_MESSAGE_LIMIT = 512
+
 @Serializable
 data class Assistant(
     val id: Uuid = Uuid.random(),
@@ -23,7 +27,8 @@ data class Assistant(
     val systemPrompt: String = "",
     val temperature: Float? = null,
     val topP: Float? = null,
-    val contextMessageSize: Int = 0,
+    // Message-count threshold for stepped context trimming; 0 disables trimming.
+    val contextMessageLimit: Int = 0,
     val streamOutput: Boolean = true,
     val enableMemory: Boolean = true,
     val useGlobalMemory: Boolean = false, // 使用全局共享记忆而非助手隔离记忆
@@ -49,6 +54,14 @@ data class Assistant(
     val allowConversationSystemPrompt: Boolean = false, // 允许对话单独重写 system prompt
     val allowConversationPromptInjection: Boolean = false, // 允许对话单独绑定提示词注入
 )
+
+internal fun Assistant.effectiveContextMessageLimit(): Int {
+    return if (contextMessageLimit > 0) {
+        contextMessageLimit.coerceIn(MIN_CONTEXT_MESSAGE_LIMIT, MAX_CONTEXT_MESSAGE_LIMIT)
+    } else {
+        0
+    }
+}
 
 @Serializable
 data class QuickMessage(

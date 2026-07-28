@@ -21,6 +21,7 @@ import kotlinx.serialization.Transient
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
@@ -571,7 +572,9 @@ data class BackupReminderConfig(
     val lastBackupTime: Long = 0L,
 )
 
-fun Settings.isNotConfigured() = providers.all { it.models.isEmpty() }
+fun Settings.isNotConfigured() = providers.none { provider ->
+    provider.enabled && provider.models.isNotEmpty()
+}
 
 fun Settings.findModelById(uuid: Uuid?, fallback: Uuid? = null): Model? {
     if (uuid == null && fallback == null) return null
@@ -590,9 +593,16 @@ fun List<ProviderSetting>.findModelById(uuid: Uuid): Model? {
     return null
 }
 
-fun Settings.getCurrentChatModel(): Model? {
-    return findModelById(this.getCurrentAssistant().chatModelId ?: this.chatModelId)
-}
+fun Settings.getChatModel(assistant: Assistant): Model? =
+    providers.asSequence()
+        .filter { it.enabled }
+        .flatMap { it.models.asSequence() }
+        .firstOrNull { model ->
+            model.id == (assistant.chatModelId ?: chatModelId) &&
+                model.type == ModelType.CHAT
+        }
+
+fun Settings.getCurrentChatModel(): Model? = getChatModel(getCurrentAssistant())
 
 fun Settings.getCurrentAssistant(): Assistant {
     return this.assistants.find { it.id == assistantId } ?: this.assistants.first()
@@ -618,7 +628,7 @@ fun Settings.getSelectedASRProvider(): ASRProviderSetting? {
 }
 
 fun Model.findProvider(providers: List<ProviderSetting>, checkOverwrite: Boolean = true): ProviderSetting? {
-    val provider = findModelProviderFromList(providers) ?: return null
+    val provider = findModelProviderFromList(providers.filter { it.enabled }) ?: return null
     val providerOverwrite = this.providerOverwrite
     if (checkOverwrite && providerOverwrite != null) {
         return providerOverwrite.copyProvider(models = emptyList())

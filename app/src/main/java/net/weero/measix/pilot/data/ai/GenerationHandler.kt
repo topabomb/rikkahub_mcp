@@ -46,6 +46,7 @@ import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
+import net.weero.measix.pilot.data.model.effectiveContextMessageLimit
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.utils.applyPlaceholders
 import java.util.Locale
@@ -376,6 +377,7 @@ class GenerationHandler(
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
     ) {
+        val contextMessages = messages.limitContext(assistant.effectiveContextMessageLimit())
         val internalMessages = buildList {
             val system = buildString {
                 val effectiveSystemPrompt =
@@ -397,11 +399,11 @@ class GenerationHandler(
                 // 工具prompt
                 tools.forEach { tool ->
                     appendLine()
-                    append(tool.systemPrompt(model, messages))
+                    append(tool.systemPrompt(model, contextMessages))
                 }
             }
             if (system.isNotBlank()) add(UIMessage.system(prompt = system))
-            addAll(messages.limitContext(assistant.contextMessageSize))
+            addAll(contextMessages)
         }.transforms(
             transformers = transformers,
             context = context,
