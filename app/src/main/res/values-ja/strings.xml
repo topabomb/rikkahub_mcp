@@ -1192,7 +1192,8 @@
   <string name="chat_readiness_mcp_all_disabled">無効</string>
   <string name="chat_readiness_mcp_none_selected">未使用</string>
   <string name="chat_readiness_mcp_ready">%1$d 件有効</string>
-  <string name="chat_readiness_mcp_description">MCP 機能を追加し、Measix Device Remote Control のデバイスを切り替えます。</string>
+  <string name="chat_readiness_mcp_description">MCP 機能を追加し、%1$s のデバイスを切り替えます。</string>
+  <string name="chat_readiness_mcp_highlight_term">Measix Device Remote Control</string>
   <string name="chat_readiness_local_tools_title">ローカル機能</string>
   <string name="chat_readiness_local_tools_count">%1$d 件有効</string>
   <string name="chat_readiness_local_tools_description">音声読み上げ、クリップボード、スクリーンタイムなど端末上の機能を有効にします。</string>

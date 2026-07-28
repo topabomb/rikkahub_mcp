@@ -14,6 +14,7 @@ import net.weero.measix.pilot.data.datastore.DisplaySetting
 import java.io.File
 
 val LocalChatFontFamily = staticCompositionLocalOf<FontFamily?> { null }
+val LocalChatFontSizeRatio = staticCompositionLocalOf<Float> { 1.0f }
 
 @Composable
 fun ChatFontProvider(
@@ -21,7 +22,10 @@ fun ChatFontProvider(
     content: @Composable () -> Unit,
 ) {
     val chatFontFamily = rememberChatFontFamily(displaySetting)
-    CompositionLocalProvider(LocalChatFontFamily provides chatFontFamily) {
+    CompositionLocalProvider(
+        LocalChatFontFamily provides chatFontFamily,
+        LocalChatFontSizeRatio provides displaySetting.fontSizeRatio,
+    ) {
         content()
     }
 }

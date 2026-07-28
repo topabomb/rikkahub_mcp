@@ -1192,7 +1192,8 @@
   <string name="chat_readiness_mcp_all_disabled">Disabled</string>
   <string name="chat_readiness_mcp_none_selected">Not enabled</string>
   <string name="chat_readiness_mcp_ready">%1$d enabled</string>
-  <string name="chat_readiness_mcp_description">Add MCP capabilities and switch Measix Device Remote Control devices.</string>
+  <string name="chat_readiness_mcp_description">Add MCP capabilities and switch %1$s devices.</string>
+  <string name="chat_readiness_mcp_highlight_term">Measix Device Remote Control</string>
   <string name="chat_readiness_local_tools_title">Local capabilities</string>
   <string name="chat_readiness_local_tools_count">%1$d enabled</string>
   <string name="chat_readiness_local_tools_description">Enable on-device capabilities such as speech playback, clipboard access, and screen time.</string>

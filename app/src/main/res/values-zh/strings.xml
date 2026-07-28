@@ -1192,7 +1192,8 @@
   <string name="chat_readiness_mcp_all_disabled">已停用</string>
   <string name="chat_readiness_mcp_none_selected">未启用</string>
   <string name="chat_readiness_mcp_ready">已启用 %1$d 项</string>
-  <string name="chat_readiness_mcp_description">扩展助手能力，也可在此切换小睿远控设备。</string>
+  <string name="chat_readiness_mcp_description">扩展助手能力，也可在此切换%1$s设备。</string>
+  <string name="chat_readiness_mcp_highlight_term">小睿远控</string>
   <string name="chat_readiness_local_tools_title">本地能力</string>
   <string name="chat_readiness_local_tools_count">已启用 %1$d 项</string>
   <string name="chat_readiness_local_tools_description">启用语音播报、剪贴板、屏幕使用时间等设备本地能力。</string>

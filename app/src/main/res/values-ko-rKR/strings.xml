@@ -1192,7 +1192,8 @@
   <string name="chat_readiness_mcp_all_disabled">비활성</string>
   <string name="chat_readiness_mcp_none_selected">사용 안 함</string>
   <string name="chat_readiness_mcp_ready">%1$d개 사용</string>
-  <string name="chat_readiness_mcp_description">MCP 기능을 추가하고 Measix Device Remote Control 기기를 전환합니다.</string>
+  <string name="chat_readiness_mcp_description">MCP 기능을 추가하고 %1$s 기기를 전환합니다.</string>
+  <string name="chat_readiness_mcp_highlight_term">Measix Device Remote Control</string>
   <string name="chat_readiness_local_tools_title">로컬 기능</string>
   <string name="chat_readiness_local_tools_count">%1$d개 사용</string>
   <string name="chat_readiness_local_tools_description">음성 재생, 클립보드, 스크린 타임 등 기기 내 기능을 활성화합니다.</string>

@@ -21,7 +21,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import me.rerere.ai.provider.ModelType
 import me.rerere.hugeicons.HugeIcons
@@ -34,6 +38,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.ui.theme.LocalChatFontSizeRatio
 import kotlin.uuid.Uuid
 
 internal enum class ModelReadiness {
@@ -124,6 +129,8 @@ internal fun ConversationReadinessCard(
     onWorkspaceClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val rawScale = LocalChatFontSizeRatio.current
+    val scale = (1.0f + (rawScale - 1.0f) * 0.4f).coerceIn(0.85f, 1.35f)
     Card(
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -137,7 +144,10 @@ internal fun ConversationReadinessCard(
             if (!compact) {
                 Text(
                     text = stringResource(R.string.chat_readiness_title),
-                    style = MaterialTheme.typography.titleSmall,
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontSize = MaterialTheme.typography.titleMedium.fontSize * scale,
+                        lineHeight = MaterialTheme.typography.titleMedium.lineHeight * scale,
+                    ),
                     modifier = Modifier.padding(
                         start = 6.dp,
                         end = 6.dp,
@@ -162,6 +172,7 @@ internal fun ConversationReadinessCard(
                 description = stringResource(R.string.chat_readiness_model_description),
                 blocked = !readiness.canSend,
                 onClick = onModelClick,
+                scale = scale,
             )
 
             if (!compact) {
@@ -183,8 +194,13 @@ internal fun ConversationReadinessCard(
                             readiness.selectedMcpCount,
                         )
                     },
-                    description = stringResource(R.string.chat_readiness_mcp_description),
+                    description = stringResource(
+                        R.string.chat_readiness_mcp_description,
+                        stringResource(R.string.chat_readiness_mcp_highlight_term),
+                    ),
+                    highlightTerm = stringResource(R.string.chat_readiness_mcp_highlight_term),
                     onClick = onMcpClick,
+                    scale = scale,
                 )
                 ReadinessRow(
                     icon = HugeIcons.Wrench01,
@@ -195,6 +211,7 @@ internal fun ConversationReadinessCard(
                     ),
                     description = stringResource(R.string.chat_readiness_local_tools_description),
                     onClick = onLocalToolsClick,
+                    scale = scale,
                 )
                 ReadinessRow(
                     icon = HugeIcons.Codesandbox,
@@ -210,6 +227,7 @@ internal fun ConversationReadinessCard(
                     },
                     description = stringResource(R.string.chat_readiness_workspace_description),
                     onClick = onWorkspaceClick,
+                    scale = scale,
                 )
             }
         }
@@ -224,6 +242,8 @@ private fun ReadinessRow(
     description: String,
     blocked: Boolean = false,
     onClick: () -> Unit,
+    scale: Float,
+    highlightTerm: String? = null,
 ) {
     Row(
         modifier = Modifier
@@ -255,7 +275,10 @@ private fun ReadinessRow(
             ) {
                 Text(
                     text = label,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontSize = MaterialTheme.typography.bodyLarge.fontSize * scale,
+                        lineHeight = MaterialTheme.typography.bodyLarge.lineHeight * scale,
+                    ),
                     modifier = Modifier.weight(1f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -263,15 +286,45 @@ private fun ReadinessRow(
                 ReadinessStatus(
                     text = status,
                     blocked = blocked,
+                    scale = scale,
                 )
             }
-            Text(
-                text = description,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            if (highlightTerm != null && description.contains(highlightTerm)) {
+                val annotated = buildAnnotatedString {
+                    val start = description.indexOf(highlightTerm)
+                    append(description.substring(0, start))
+                    withStyle(
+                        SpanStyle(
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    ) {
+                        append(highlightTerm)
+                    }
+                    append(description.substring(start + highlightTerm.length))
+                }
+                Text(
+                    text = annotated,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = MaterialTheme.typography.bodySmall.fontSize * scale,
+                        lineHeight = MaterialTheme.typography.bodySmall.lineHeight * scale,
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            } else {
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = MaterialTheme.typography.bodySmall.fontSize * scale,
+                        lineHeight = MaterialTheme.typography.bodySmall.lineHeight * scale,
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         Icon(
             imageVector = HugeIcons.ArrowRight01,
@@ -286,6 +339,7 @@ private fun ReadinessRow(
 private fun ReadinessStatus(
     text: String,
     blocked: Boolean,
+    scale: Float,
 ) {
     Surface(
         shape = RoundedCornerShape(50),
@@ -302,7 +356,10 @@ private fun ReadinessStatus(
     ) {
         Text(
             text = text,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelMedium.copy(
+                fontSize = MaterialTheme.typography.labelMedium.fontSize * scale,
+                lineHeight = MaterialTheme.typography.labelMedium.lineHeight * scale,
+            ),
             modifier = Modifier
                 .widthIn(max = 156.dp)
                 .padding(horizontal = 7.dp, vertical = 2.dp),

@@ -1192,7 +1192,8 @@
   <string name="chat_readiness_mcp_all_disabled">Отключено</string>
   <string name="chat_readiness_mcp_none_selected">Не включено</string>
   <string name="chat_readiness_mcp_ready">Включено: %1$d</string>
-  <string name="chat_readiness_mcp_description">Добавляйте возможности MCP и переключайте устройства Measix Device Remote Control.</string>
+  <string name="chat_readiness_mcp_description">Добавляйте возможности MCP и переключайте устройства %1$s.</string>
+  <string name="chat_readiness_mcp_highlight_term">Measix Device Remote Control</string>
   <string name="chat_readiness_local_tools_title">Локальные возможности</string>
   <string name="chat_readiness_local_tools_count">Включено: %1$d</string>
   <string name="chat_readiness_local_tools_description">Включите локальные функции устройства, например озвучивание, буфер обмена и экранное время.</string>

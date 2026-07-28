@@ -21,12 +21,15 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Alert01
 import me.rerere.hugeicons.stroke.ArrowRight01
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.ui.theme.LocalChatFontSizeRatio
 
 @Composable
 fun ProviderConfigWarningCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val rawScale = LocalChatFontSizeRatio.current
+    val scale = (1.0f + (rawScale - 1.0f) * 0.4f).coerceIn(0.85f, 1.35f)
     Card(
         onClick = onClick,
         modifier = modifier.fillMaxWidth(),
@@ -51,13 +54,19 @@ fun ProviderConfigWarningCard(
             ) {
                 Text(
                     text = stringResource(R.string.setting_page_config_api_title),
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontSize = MaterialTheme.typography.bodyLarge.fontSize * scale,
+                        lineHeight = MaterialTheme.typography.bodyLarge.lineHeight * scale,
+                    ),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = stringResource(R.string.setting_page_config_api_desc),
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = MaterialTheme.typography.bodySmall.fontSize * scale,
+                        lineHeight = MaterialTheme.typography.bodySmall.lineHeight * scale,
+                    ),
                     color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.78f),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
