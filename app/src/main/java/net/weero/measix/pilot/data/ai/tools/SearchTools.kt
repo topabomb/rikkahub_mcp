@@ -17,6 +17,12 @@ import java.time.LocalDate
 import kotlin.uuid.Uuid
 
 fun createSearchTools(settings: Settings): Set<Tool> {
+    val options = settings.searchServices.getOrElse(
+        index = settings.searchServiceSelected,
+        defaultValue = { SearchServiceOptions.DEFAULT },
+    )
+    val service = SearchService.getService(options)
+
     return buildSet {
         add(
             Tool(
@@ -46,17 +52,9 @@ fun createSearchTools(settings: Settings): Set<Tool> {
                     The population is about 2.1 million. [citation,example.com](abc123) [citation,example2.com](def456)
                     """.trimIndent(),
                 parameters = {
-                    val options = settings.searchServices.getOrElse(
-                        index = settings.searchServiceSelected,
-                        defaultValue = { SearchServiceOptions.DEFAULT })
-                    val service = SearchService.getService(options)
                     service.parameters(options)
                 },
                 execute = {
-                    val options = settings.searchServices.getOrElse(
-                        index = settings.searchServiceSelected,
-                        defaultValue = { SearchServiceOptions.DEFAULT })
-                    val service = SearchService.getService(options)
                     val result = service.search(
                         params = it.jsonObject,
                         commonOptions = settings.searchCommonOptions,
@@ -79,10 +77,6 @@ fun createSearchTools(settings: Settings): Set<Tool> {
             )
         )
 
-        val options = settings.searchServices.getOrElse(
-            index = settings.searchServiceSelected,
-            defaultValue = { SearchServiceOptions.DEFAULT })
-        val service = SearchService.getService(options)
         if (service.scrapingParameters(options) != null) {
             add(
                 Tool(
@@ -93,17 +87,9 @@ fun createSearchTools(settings: Settings): Set<Tool> {
                         Avoid using it for common questions unless the user asks.
                         """.trimIndent(),
                     parameters = {
-                        val options = settings.searchServices.getOrElse(
-                            index = settings.searchServiceSelected,
-                            defaultValue = { SearchServiceOptions.DEFAULT })
-                        val service = SearchService.getService(options)
                         service.scrapingParameters(options)
                     },
                     execute = {
-                        val options = settings.searchServices.getOrElse(
-                            index = settings.searchServiceSelected,
-                            defaultValue = { SearchServiceOptions.DEFAULT })
-                        val service = SearchService.getService(options)
                         val result = service.scrape(
                             params = it.jsonObject,
                             commonOptions = settings.searchCommonOptions,

@@ -1,7 +1,6 @@
 package me.rerere.search
 
 import android.content.Context
-import androidx.compose.runtime.Composable
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -20,14 +19,9 @@ import kotlin.coroutines.resumeWithException
 import kotlin.uuid.Uuid
 
 interface SearchService<T : SearchServiceOptions> {
-    val name: String
-
     fun parameters(options: T): InputSchema?
 
     fun scrapingParameters(options: T): InputSchema?
-
-    @Composable
-    fun Description()
 
     suspend fun search(
         params: JsonObject,
@@ -48,7 +42,6 @@ interface SearchService<T : SearchServiceOptions> {
                 is SearchServiceOptions.TavilyOptions -> TavilySearchService
                 is SearchServiceOptions.BingLocalOptions -> BingSearchService
                 is SearchServiceOptions.SearXNGOptions -> SearXNGService
-                is SearchServiceOptions.CustomJsOptions -> CustomJsSearchService
             } as SearchService<T>
         }
 
@@ -120,17 +113,17 @@ sealed class SearchServiceOptions {
     abstract val id: Uuid
 
     open val displayName: String
-        get() = TYPES[this::class] ?: "Unknown"
+        get() = providerType.displayName
+
+    val providerType: SearchProviderType
+        get() = when (this) {
+            is BingLocalOptions -> SearchProviderType.BING
+            is TavilyOptions -> SearchProviderType.TAVILY
+            is SearXNGOptions -> SearchProviderType.SEARXNG
+        }
 
     companion object {
         val DEFAULT = BingLocalOptions()
-
-        val TYPES = mapOf(
-            BingLocalOptions::class to "Bing",
-            TavilyOptions::class to "Tavily",
-            SearXNGOptions::class to "SearXNG",
-            CustomJsOptions::class to "Custom JS",
-        )
     }
 
     @Serializable
@@ -157,52 +150,18 @@ sealed class SearchServiceOptions {
         val username: String = "",
         val password: String = "",
     ) : SearchServiceOptions()
+}
 
-    @Serializable
-    @SerialName("custom_js")
-    data class CustomJsOptions(
-        override val id: Uuid = Uuid.random(),
-        val name: String = "",
-        val searchScript: String = DEFAULT_SEARCH_SCRIPT,
-        val scrapeScript: String = "",
-    ) : SearchServiceOptions() {
-        override val displayName: String
-            get() = name.ifBlank { "Custom JS" }
-        companion object {
-            const val DEFAULT_SCRAPE_SCRIPT = """// Implement scrape(urls) function
-// urls is an array of URL strings
-// Use fetch(url, options?) for HTTP requests
-// fetch() returns { status, ok, text(), json() }
-// Return { urls: [{ url, content, metadata?: { title?, description?, language? } }] }
+enum class SearchProviderType(val displayName: String) {
+    BING("Bing"),
+    TAVILY("Tavily"),
+    SEARXNG("SearXNG");
 
-function scrape(urls) {
-  return {
-    urls: urls.map(function(url) {
-      const res = fetch(url);
-      const body = res.text();
-      return { url: url, content: body };
-    })
-  };
-}"""
-
-            const val DEFAULT_SEARCH_SCRIPT = """// Implement search(query, resultSize) function
-// Use fetch(url, options?) for HTTP requests
-// fetch() returns { status, ok, text(), json() }
-// Return { items: [{ title, url, text }], answer?: string }
-
-function search(query, resultSize) {
-  const encoded = encodeURIComponent(query);
-  const res = fetch("https://example.com/search?q=" + encoded + "&limit=" + resultSize);
-  const data = res.json();
-  return {
-    items: data.results.map(function(r) {
-      return { title: r.title, url: r.url, text: r.snippet };
-    })
-  };
-}"""
-        }
+    fun createOptions(): SearchServiceOptions = when (this) {
+        BING -> SearchServiceOptions.BingLocalOptions()
+        TAVILY -> SearchServiceOptions.TavilyOptions()
+        SEARXNG -> SearchServiceOptions.SearXNGOptions()
     }
-
 }
 
 internal suspend fun Call.await(): Response {

@@ -1,8 +1,5 @@
 package me.rerere.search
 
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.res.stringResource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -16,13 +13,6 @@ import java.net.URLEncoder
 import java.util.Locale
 
 object BingSearchService : SearchService<SearchServiceOptions.BingLocalOptions> {
-    override val name: String = "Bing"
-
-    @Composable
-    override fun Description() {
-        Text(stringResource(R.string.bing_desc))
-    }
-
     override fun parameters(options: SearchServiceOptions.BingLocalOptions): InputSchema? =
         InputSchema.Obj(
             properties = buildJsonObject {
@@ -62,16 +52,18 @@ object BingSearchService : SearchService<SearchServiceOptions.BingLocalOptions> 
                 .get()
 
             // 解析搜索结果
-            val results = doc.select("li.b_algo").map { element ->
-                val title = element.select("h2").text()
-                val link = element.select("h2 > a").attr("href")
-                val snippet = element.select(".b_caption p").text()
-                SearchResultItem(
-                    title = title,
-                    url = link,
-                    text = snippet
-                )
-            }
+            val results = doc.select("li.b_algo")
+                .take(commonOptions.resultSize.coerceAtLeast(0))
+                .map { element ->
+                    val title = element.select("h2").text()
+                    val link = element.select("h2 > a").attr("href")
+                    val snippet = element.select(".b_caption p").text()
+                    SearchResultItem(
+                        title = title,
+                        url = link,
+                        text = snippet
+                    )
+                }
 
             require(results.isNotEmpty()) {
                 "Search failed: no results found"

@@ -1,9 +1,6 @@
 package me.rerere.search
 
 import android.util.Log
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.res.stringResource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -24,14 +21,6 @@ import java.net.URLEncoder
 private const val TAG = "SearXNGService"
 
 object SearXNGService : SearchService<SearchServiceOptions.SearXNGOptions> {
-    override val name: String = "SearXNG"
-
-    @Composable
-    override fun Description() {
-        Text(stringResource(R.string.searxng_desc_1))
-        Text(stringResource(R.string.searxng_desc_2))
-    }
-
     override fun parameters(options: SearchServiceOptions.SearXNGOptions): InputSchema? =
         InputSchema.Obj(
             properties = buildJsonObject {
@@ -111,7 +100,7 @@ object SearXNGService : SearchService<SearchServiceOptions.SearXNGOptions> {
 
                 return@withContext Result.success(SearchResult(items = items))
             } else {
-                val errorBody = response.body?.string()
+                val errorBody = response.body.string()
                 println("SearXNG API error: ${response.code} - $errorBody")
                 error("SearXNG request failed with status ${response.code}")
             }
