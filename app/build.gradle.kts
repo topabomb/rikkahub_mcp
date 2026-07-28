@@ -20,8 +20,8 @@ android {
         applicationId = "net.weero.measix.pilot"
         minSdk = 26
         targetSdk = 37
-        versionCode = 9
-        versionName = "0.0.9"
+        versionCode = 10
+        versionName = "0.0.10"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

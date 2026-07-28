@@ -83,7 +83,7 @@
   <string name="assistant_page_local_tools_javascript_engine_title">JavaScript 引擎</string>
   <string name="assistant_page_local_tools_time_info_desc">从设备获取当前日期、星期、时间和时区信息</string>
   <string name="assistant_page_local_tools_time_info_title">时间信息</string>
-  <string name="assistant_page_local_tools_tts_desc">让AI使用设备TTS引擎为您朗读文本</string>
+  <string name="assistant_page_local_tools_tts_desc">让AI使用您所选的TTS服务为您朗读文本</string>
   <string name="assistant_page_local_tools_tts_title">文字转语音</string>
   <string name="assistant_page_manage_memory_title">管理记忆</string>
   <string name="assistant_page_max_tokens">最大Token数</string>
@@ -666,7 +666,7 @@
   <string name="setting_display_page_skip_crop_image_desc">导入图片或拍照后跳过裁剪界面</string>
   <string name="setting_display_page_skip_crop_image_title">跳过图片编辑</string>
   <string name="setting_display_page_title">显示设置</string>
-  <string name="setting_display_page_tts_only_read_quoted_desc">启用后，TTS 仅朗读引号（包括 “”、‘’、「」、『』）内的内容</string>
+  <string name="setting_display_page_tts_only_read_quoted_desc">启用后，TTS 仅朗读引号（包括\" \", \' \', \u201C\u201D, \u2018\u2019, 「」, 『』）内的内容</string>
   <string name="setting_display_page_tts_only_read_quoted_title">TTS仅朗读引用内容</string>
 <string name="setting_display_page_tts_read_outside_brackets_desc">启用后，TTS将不朗读括号内的内容</string>
 <string name="setting_display_page_tts_read_outside_brackets_title">TTS不朗读括号内的内容</string>
@@ -676,6 +676,12 @@
   <string name="setting_display_page_volume_key_scroll_ratio">滚动幅度</string>
   <string name="setting_display_page_volume_key_scroll_title">音量键翻页</string>
   <string name="setting_files_page_cancel_action">取消</string>
+  <string name="setting_files_page_clean_action">清理</string>
+  <string name="setting_files_page_clean_confirmation">将永久删除此分类中的全部文件，此操作无法撤销。</string>
+  <string name="setting_files_page_clean_content_description">清理文件</string>
+  <string name="setting_files_page_clean_failed_toast">部分文件清理失败</string>
+  <string name="setting_files_page_clean_title">清理文件？</string>
+  <string name="setting_files_page_cleaned_toast">文件已清理</string>
   <string name="setting_files_page_delete_action">删除</string>
   <string name="setting_files_page_delete_content_description">删除</string>
   <string name="setting_files_page_delete_failed_toast">删除失败</string>
@@ -1183,4 +1189,8 @@
   <string name="error_mcp_invalid_server_name">无效的MCP服务器名称（仅允许字母数字字符）：%1$s</string>
   <string name="log_page_record_requests">记录请求</string>
   <string name="log_page_record_requests_desc">捕获请求标头、正文和响应元数据</string>
+  <string name="workspace_file_editor_saved">已保存</string>
+  <string name="workspace_file_editor_save_failed">保存失败</string>
+  <string name="workspace_file_editor_read_failed">读取文件失败</string>
+  <string name="workspace_file_editor_too_large">文件过大，无法预览（%d 字节）</string>
 </resources>

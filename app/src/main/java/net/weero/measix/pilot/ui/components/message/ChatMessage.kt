@@ -82,6 +82,7 @@ import net.weero.measix.pilot.data.model.replaceRegexes
 import net.weero.measix.pilot.ui.components.richtext.MarkdownBlock
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.ui.components.richtext.buildMarkdownPreviewHtml
+import net.weero.measix.pilot.ui.components.webview.WebViewContentCache
 import net.weero.measix.pilot.ui.components.ui.ChainOfThought
 import net.weero.measix.pilot.ui.components.ui.Favicon
 import net.weero.measix.pilot.ui.context.LocalNavController
@@ -91,7 +92,6 @@ import net.weero.measix.pilot.ui.theme.LocalChatFontFamily
 import net.weero.measix.pilot.ui.theme.rememberChatFontFamily
 import net.weero.measix.pilot.ui.theme.extendColors
 import net.weero.measix.pilot.utils.JsonInstant
-import net.weero.measix.pilot.utils.base64Encode
 import net.weero.measix.pilot.utils.openUrl
 import net.weero.measix.pilot.utils.urlDecode
 
@@ -230,7 +230,8 @@ fun ChatMessage(
                         markdown = textContent,
                         colorScheme = colorScheme
                     )
-                    navController.navigate(Screen.WebView(content = htmlContent.base64Encode()))
+                    val contentId = WebViewContentCache.store(context.cacheDir, htmlContent)
+                    navController.navigate(Screen.WebView(contentId = contentId))
                 }
             },
             onDismissRequest = {

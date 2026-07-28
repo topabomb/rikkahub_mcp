@@ -1,4 +1,4 @@
-﻿package me.rerere.workspace
+package me.rerere.workspace
 
 import java.io.File
 
@@ -51,6 +51,11 @@ class ProotShellRunner(
                 environment()["PROOT_LOADER"] = loader.absolutePath
                 environment()["PROOT_TMP_DIR"] = context.tempDir.absolutePath
                 environment()["TMPDIR"] = context.tempDir.absolutePath
+                // Disable seccomp-based ptrace acceleration: on some Android devices the
+                // system seccomp policy conflicts with proot's filter, causing the traced
+                // process to receive SIGILL (signal 4). Falling back to ptrace-only mode
+                // is slower but compatible with all devices.
+                environment()["PROOT_NO_SECCOMP"] = "1"
             }
             .start()
 

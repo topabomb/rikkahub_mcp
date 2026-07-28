@@ -29,11 +29,11 @@ import me.rerere.hugeicons.stroke.View
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.ui.components.webview.WebView
+import net.weero.measix.pilot.ui.components.webview.WebViewContentCache
 import net.weero.measix.pilot.ui.components.webview.rememberWebViewState
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.LocalDarkMode
-import net.weero.measix.pilot.utils.base64Encode
 import net.weero.measix.pilot.utils.escapeHtml
 import net.weero.measix.pilot.utils.exportImage
 import net.weero.measix.pilot.utils.toCssHex
@@ -126,7 +126,8 @@ fun Mermaid(
             ) {
                 IconButton(
                     onClick = {
-                        navController.navigate(Screen.WebView(content = html.base64Encode()))
+                        val contentId = WebViewContentCache.store(context.cacheDir, html)
+                        navController.navigate(Screen.WebView(contentId = contentId))
                     },
                 ) {
                     Icon(

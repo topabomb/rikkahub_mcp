@@ -83,7 +83,7 @@
   <string name="assistant_page_local_tools_javascript_engine_title">자바스크립트 엔진</string>
   <string name="assistant_page_local_tools_time_info_desc">기기에서 현재 날짜, 요일, 시간, 시간대 정보 가져오기</string>
   <string name="assistant_page_local_tools_time_info_title">시간 정보</string>
-  <string name="assistant_page_local_tools_tts_desc">AI가 기기의 TTS 엔진을 사용해 텍스트를 음성으로 읽어줍니다</string>
+  <string name="assistant_page_local_tools_tts_desc">AI가 선택한 TTS 서비스를 사용해 텍스트를 음성으로 읽어줍니다</string>
   <string name="assistant_page_local_tools_tts_title">텍스트 음성 변환</string>
   <string name="assistant_page_manage_memory_title">기억 관리</string>
   <string name="assistant_page_max_tokens">최대 토큰</string>
@@ -667,6 +667,12 @@
   <string name="setting_display_page_volume_key_scroll_ratio">스크롤 양</string>
   <string name="setting_display_page_volume_key_scroll_title">볼륨 키 페이지 스크롤</string>
   <string name="setting_files_page_cancel_action">취소</string>
+  <string name="setting_files_page_clean_action">정리</string>
+  <string name="setting_files_page_clean_confirmation">이 카테고리의 모든 파일이 영구적으로 삭제됩니다. 이 작업은 실행 취소할 수 없습니다.</string>
+  <string name="setting_files_page_clean_content_description">파일 정리</string>
+  <string name="setting_files_page_clean_failed_toast">일부 파일을 정리하지 못했습니다</string>
+  <string name="setting_files_page_clean_title">파일을 정리할까요?</string>
+  <string name="setting_files_page_cleaned_toast">파일을 정리했습니다</string>
   <string name="setting_files_page_delete_action">삭제</string>
   <string name="setting_files_page_delete_content_description">삭제</string>
   <string name="setting_files_page_delete_failed_toast">삭제 실패</string>
@@ -1183,5 +1189,9 @@
   <string name="error_mcp_invalid_server_name">유효하지 않은 MCP 서버 이름입니다 (영숫자만 허용됨): %1$s</string>
   <string name="log_page_record_requests">요청 기록</string>
   <string name="log_page_record_requests_desc">요청 헤더, 본문 및 응답 메타데이터를 기록합니다.</string>
+  <string name="workspace_file_editor_saved">저장됨</string>
+  <string name="workspace_file_editor_save_failed">저장 실패</string>
+  <string name="workspace_file_editor_read_failed">파일 읽기 실패</string>
+  <string name="workspace_file_editor_too_large">파일이 너무 커서 미리볼 수 없습니다 (%d 바이트)</string>
 </resources>
 

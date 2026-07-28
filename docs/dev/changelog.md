@@ -6,6 +6,38 @@
 
 ---
 
+## 0.0.10（versionCode 10）— 2026-07-10 ~ 2026-07-17
+
+### 新增
+
+- **工作区文件编辑与预览**：点击工作区文件按类型分派——文本文件打开应用内编辑页（FILES 区可编辑保存，LINUX 区只读预览），图片走可缩放预览弹窗，其他文件交给系统应用打开。文件过大预览错误改用 `FileTooLargeException` 异常 + UI 层本地化格式化，避免硬编码中文异常消息在非中文 locale 下直接显示
+- **一键清理聊天文件**：文件管理页新增清理按钮，一键删除分类下全部文件
+- **Kimi K3 模型定义**：新增 Kimi K3 模型检测（vision + tool reasoning）
+
+### 修复
+
+- **WebView 预览崩溃**：HTML 内容从导航参数移出，改为写入 cacheDir 并传递 SHA-256 内容 ID，避免大段 HTML 撑爆 SaveableStateRegistry 触发 TransactionTooLargeException
+- **CustomJs 搜索 API 400**：scrape 参数的 urls 数组补全 items 类型声明，修复 Gemini/Claude API 校验失败
+- **工作区恢复备份后误删**：目录缺失时标记 BROKEN 而非删除记录，避免误删用户工作区与助手绑定
+- **folder sync 孤儿记录**：syncFolder 改为双向同步，补录未登记文件 + 清理磁盘已删除的孤儿记录
+- **proot 终端 SIGILL 崩溃**：部分 Android 设备上 proot 的 seccomp 加速与系统 seccomp 策略冲突，导致被追踪进程收到 SIGILL（signal 4）立即退出；为 ProotShellRunner 和 WorkspaceTerminalSession 添加 `PROOT_NO_SECCOMP=1` 环境变量，回退到纯 ptrace 模式以保证全设备兼容
+- **AndroidManifest XML 解析失败**：移除 `AndroidManifest.xml` 开头多余的双 BOM 字符，修复"前言中不允许有内容"解析错误
+
+### 变更
+
+- **网络搜索开关迁移到助手级**：`enableWebSearch` 从全局 Settings 迁移到 Assistant，每个助手独立记忆是否启用网络搜索
+- **TTS 工具描述更新**：从"设备 TTS 引擎"改为"所选 TTS 服务"，反映多 TTS provider 支持
+- **建议回复提示词优化**：新增"help the assistant improve its answers"引导
+- **TTS 引号描述补全**：补全中英文直引号显示，引号间加空格
+- **MCP Error 详情展示**：McpStatus.Error 新增 detail 字段（含堆栈），SettingMcpPage 支持点击展开错误详情并复制；新增 McpConnectionKey 连接键机制——通过 connectedConfigs 追踪 Map 记录每个连接的配置，init 链 1 和 syncAll() 使用 hasSameConnectionParameters() 检测连接参数变化（URL/transport/headers/oauth token），变化时重连、仅工具开关变化时跳过（由下次 syncTools 自然刷新）+ 3 个单元测试
+- 依赖升级：okhttp 5.4.0 / coil 3.5.0 / koin 4.2.2 / ktor 3.5.1 / slf4j 2.0.18 / uiautomator 2.4.0 / baselineprofile alpha07
+
+### 上游同步
+
+- 同步 rikkahub 上游 `449ce1e6..upstream/master`（2026-07-10 ~ 2026-07-16）的 24 个提交（11 个同步 + 2 个选择性引入 + 11 个跳过），详见 `docs/dev/upstream-sync.md` 第八批检查记录
+
+---
+
 ## 0.0.9（versionCode 9）— 2026-07-04 ~ 2026-07-08
 
 ### 新增

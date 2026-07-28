@@ -83,7 +83,7 @@
   <string name="assistant_page_local_tools_javascript_engine_title">Движок JavaScript</string>
   <string name="assistant_page_local_tools_time_info_desc">Получить текущую дату, день недели, время и часовой пояс с устройства</string>
   <string name="assistant_page_local_tools_time_info_title">Информация о времени</string>
-  <string name="assistant_page_local_tools_tts_desc">Позвольте ИИ озвучить текст с помощью системного движка TTS устройства</string>
+  <string name="assistant_page_local_tools_tts_desc">Позвольте ИИ озвучить текст с помощью выбранного вами сервиса TTS</string>
   <string name="assistant_page_local_tools_tts_title">Преобразование текста в речь</string>
   <string name="assistant_page_manage_memory_title">Управление памятью</string>
   <string name="assistant_page_max_tokens">Макс. токенов</string>
@@ -667,6 +667,12 @@
   <string name="setting_display_page_volume_key_scroll_ratio">Величина прокрутки</string>
   <string name="setting_display_page_volume_key_scroll_title">Прокрутка страниц клавишами громкости</string>
   <string name="setting_files_page_cancel_action">Отмена</string>
+  <string name="setting_files_page_clean_action">Очистить</string>
+  <string name="setting_files_page_clean_confirmation">Все файлы в этой категории будут удалены без возможности восстановления.</string>
+  <string name="setting_files_page_clean_content_description">Очистить файлы</string>
+  <string name="setting_files_page_clean_failed_toast">Не удалось удалить некоторые файлы</string>
+  <string name="setting_files_page_clean_title">Очистить файлы?</string>
+  <string name="setting_files_page_cleaned_toast">Файлы удалены</string>
   <string name="setting_files_page_delete_action">Удалить</string>
   <string name="setting_files_page_delete_content_description">Удалить</string>
   <string name="setting_files_page_delete_failed_toast">Не удалось удалить</string>
@@ -1183,5 +1189,9 @@
   <string name="error_mcp_invalid_server_name">Недопустимое имя сервера MCP (допускаются только буквенно-цифровые символы): %1$s</string>
   <string name="log_page_record_requests">Записывать запросы</string>
   <string name="log_page_record_requests_desc">Записывать заголовки запросов, тела и метаданные ответов</string>
+  <string name="workspace_file_editor_saved">Сохранено</string>
+  <string name="workspace_file_editor_save_failed">Ошибка сохранения</string>
+  <string name="workspace_file_editor_read_failed">Ошибка чтения файла</string>
+  <string name="workspace_file_editor_too_large">Файл слишком велик для предпросмотра (%d байт)</string>
 </resources>
 

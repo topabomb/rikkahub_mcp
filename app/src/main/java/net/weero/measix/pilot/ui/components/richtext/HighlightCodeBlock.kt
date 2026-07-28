@@ -71,6 +71,7 @@ import me.rerere.hugeicons.stroke.View
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.ui.components.webview.WebView
+import net.weero.measix.pilot.ui.components.webview.WebViewContentCache
 import net.weero.measix.pilot.ui.components.webview.rememberWebViewState
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalSettings
@@ -80,7 +81,6 @@ import net.weero.measix.pilot.ui.theme.AtomOneDarkPalette
 import net.weero.measix.pilot.ui.theme.AtomOneLightPalette
 import net.weero.measix.pilot.ui.theme.JetbrainsMono
 import net.weero.measix.pilot.ui.theme.LocalDarkMode
-import net.weero.measix.pilot.utils.base64Encode
 import net.weero.measix.pilot.utils.toDp
 import kotlin.time.Clock
 
@@ -365,6 +365,7 @@ private fun HighlightCodeActions(
     canInlinePreview: Boolean = false,
     onTogglePreviewMode: () -> Unit = {},
 ) {
+    val context = LocalContext.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
@@ -461,7 +462,8 @@ private fun HighlightCodeActions(
                         .clip(RoundedCornerShape(4.dp))
                         .onClick {
                             val content = buildCodePreviewHtml(code = code, language = normalizedLanguage)
-                            navController.navigate(Screen.WebView(content = content.base64Encode()))
+                            val contentId = WebViewContentCache.store(context.cacheDir, content)
+                            navController.navigate(Screen.WebView(contentId = contentId))
                         }
                         .padding(4.dp)
                         .size(iconSize)

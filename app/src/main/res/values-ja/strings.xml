@@ -83,7 +83,7 @@
   <string name="assistant_page_local_tools_javascript_engine_title">JavaScriptエンジン</string>
   <string name="assistant_page_local_tools_time_info_desc">デバイスから現在の日付、曜日、時刻、タイムゾーン情報を取得</string>
   <string name="assistant_page_local_tools_time_info_title">時刻情報</string>
-  <string name="assistant_page_local_tools_tts_desc">AIがデバイスのTTSエンジンを使ってテキストを読み上げます</string>
+  <string name="assistant_page_local_tools_tts_desc">AIが選択したTTSサービスを使ってテキストを読み上げます</string>
   <string name="assistant_page_local_tools_tts_title">テキスト読み上げ</string>
   <string name="assistant_page_manage_memory_title">記憶を管理</string>
   <string name="assistant_page_max_tokens">最大トークン数</string>
@@ -667,6 +667,12 @@
   <string name="setting_display_page_volume_key_scroll_ratio">スクロロール量</string>
   <string name="setting_display_page_volume_key_scroll_title">音量キーでページスクロール</string>
   <string name="setting_files_page_cancel_action">キャンセル</string>
+  <string name="setting_files_page_clean_action">クリーンアップ</string>
+  <string name="setting_files_page_clean_confirmation">このカテゴリのすべてのファイルを完全に削除します。この操作は元に戻せません。</string>
+  <string name="setting_files_page_clean_content_description">ファイルをクリーンアップ</string>
+  <string name="setting_files_page_clean_failed_toast">一部のファイルを削除できませんでした</string>
+  <string name="setting_files_page_clean_title">ファイルをクリーンアップしますか？</string>
+  <string name="setting_files_page_cleaned_toast">ファイルをクリーンアップしました</string>
   <string name="setting_files_page_delete_action">削除</string>
   <string name="setting_files_page_delete_content_description">削除</string>
   <string name="setting_files_page_delete_failed_toast">削除に失敗しました</string>
@@ -1183,5 +1189,9 @@
   <string name="error_mcp_invalid_server_name">無効なMCPサーバー名です（英数字のみ使用可能）：%1$s</string>
   <string name="log_page_record_requests">リクエスト記録</string>
   <string name="log_page_record_requests_desc">リクエストヘッダー、ボディ、レスポンスメタデータをキャプチャします</string>
+  <string name="workspace_file_editor_saved">保存しました</string>
+  <string name="workspace_file_editor_save_failed">保存に失敗しました</string>
+  <string name="workspace_file_editor_read_failed">ファイルの読み取りに失敗しました</string>
+  <string name="workspace_file_editor_too_large">ファイルが大きすぎてプレビューできません（%d バイト）</string>
 </resources>
 

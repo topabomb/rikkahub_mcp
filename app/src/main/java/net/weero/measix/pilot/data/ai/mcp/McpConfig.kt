@@ -76,21 +76,6 @@ sealed class McpServerConfig {
         commonOptions: McpCommonOptions = this.commonOptions
     ): McpServerConfig
 
-    /**
-     * 连接标识：用于判断两个配置是否需要重建连接。
-     * 包含影响连接的关键字段（传输类型、URL、headers），
-     * 不包含 tools（由 sync 自动更新）和 name（不影响连接）。
-     * 修改这些字段会触发 McpManager 断开旧连接并建立新连接。
-     */
-    abstract val connectionKey: ConnectionKey
-
-    data class ConnectionKey(
-        val id: Uuid,
-        val transportType: String,
-        val url: String,
-        val headers: List<Pair<String, String>>,
-    )
-
     @Serializable
     @SerialName("sse")
     data class SseTransportServer(
@@ -98,9 +83,6 @@ sealed class McpServerConfig {
         override val commonOptions: McpCommonOptions = McpCommonOptions(),
         val url: String = "",
     ) : McpServerConfig() {
-        override val connectionKey: ConnectionKey
-            get() = ConnectionKey(id, "sse", url, commonOptions.headers)
-
         override fun clone(id: Uuid, commonOptions: McpCommonOptions): McpServerConfig {
             return copy(id = id, commonOptions = commonOptions)
         }
@@ -113,9 +95,6 @@ sealed class McpServerConfig {
         override val commonOptions: McpCommonOptions = McpCommonOptions(),
         val url: String = "",
     ) : McpServerConfig() {
-        override val connectionKey: ConnectionKey
-            get() = ConnectionKey(id, "streamable_http", url, commonOptions.headers)
-
         override fun clone(id: Uuid, commonOptions: McpCommonOptions): McpServerConfig {
             return copy(id = id, commonOptions = commonOptions)
         }
