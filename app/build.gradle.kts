@@ -1,8 +1,31 @@
 import com.android.build.api.dsl.Packaging
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.TaskAction
+import java.io.File
 import java.io.FileInputStream
 import java.util.Properties
+
+abstract class RenameApkTask : DefaultTask() {
+    @get:Input
+    abstract val versionName: Property<String>
+
+    @get:InputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun rename() {
+        outputDir.get().asFile.listFiles()?.filter { it.name.startsWith("app-") && it.name.endsWith(".apk") }?.forEach { file ->
+            val newName = file.name.replace(Regex("^app-"), "MeasixPilot_${versionName.get()}_")
+            file.renameTo(File(file.parentFile, newName))
+        }
+    }
+}
 
 plugins {
     alias(libs.plugins.android.application)
@@ -120,6 +143,13 @@ android {
         compilerOptions.optIn.add("kotlinx.coroutines.ExperimentalCoroutinesApi")
     }
 }
+
+// Rename APK output: app-arm64-v8a-release.apk → MeasixPilot_0.0.11_arm64-v8a-release.apk
+tasks.register<RenameApkTask>("renameReleaseApk") {
+    versionName.set(android.defaultConfig.versionName ?: "unknown")
+    outputDir.set(layout.buildDirectory.dir("outputs/apk/release"))
+}
+tasks.matching { it.name == "assembleRelease" }.configureEach { finalizedBy("renameReleaseApk") }
 
 composeCompiler {
     stabilityConfigurationFiles.add(
