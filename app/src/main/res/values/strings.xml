@@ -1181,7 +1181,8 @@
   <string name="workspace_file_editor_read_failed">Failed to read file</string>
   <string name="workspace_file_editor_too_large">File too large to preview (%d bytes)</string>
   <string name="image_crop_failed">Failed to crop image</string>
-  <string name="chat_readiness_title">Configure this conversation</string>
+  <string name="chat_readiness_title_prefix">Configure for</string>
+  <string name="chat_readiness_title_suffix"></string>
   <string name="chat_readiness_model_required_toast">Select a conversation model before sending.</string>
   <string name="chat_readiness_model_title">Conversation model</string>
   <string name="chat_readiness_model_not_configured">Not configured</string>
@@ -1201,6 +1202,10 @@
   <string name="chat_readiness_workspace_not_configured">Unavailable</string>
   <string name="chat_readiness_workspace_not_bound">Not linked</string>
   <string name="chat_readiness_workspace_description">Connect a local working environment so the assistant can access its files and scripts.</string>
+  <string name="chat_readiness_memory_title">Memory</string>
+  <string name="chat_readiness_memory_disabled">Not enabled</string>
+  <string name="chat_readiness_memory_count">%1$d entries</string>
+  <string name="chat_readiness_memory_description">Remembers preferences and key details for later chats.</string>
   <string name="search_provider_bing_description">Bing search uses page scraping and may be unstable.</string>
   <string name="search_provider_tavily_api_key">Get a Tavily API key</string>
   <string name="search_provider_searxng_description">Enable JSON format support in settings.yml:</string>

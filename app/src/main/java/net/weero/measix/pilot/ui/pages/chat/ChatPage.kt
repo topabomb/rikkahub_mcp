@@ -55,6 +55,8 @@ import com.dokar.sonner.ToastType
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.ui.UIMessagePart
@@ -74,8 +76,10 @@ import net.weero.measix.pilot.data.datastore.getCurrentChatModel
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import net.weero.measix.pilot.service.ChatError
+import net.weero.measix.pilot.ui.components.ai.AssistantPickerSheet
 import net.weero.measix.pilot.ui.components.ai.ChatInput
 import net.weero.measix.pilot.ui.components.ai.FilesPicker
 import net.weero.measix.pilot.ui.components.ai.WorkspaceSelectSheet
@@ -288,6 +292,7 @@ private fun ChatPageContent(
         ?: setting.getCurrentAssistant()
     var showFilesSheet by remember { mutableStateOf(false) }
     var showWorkspaceSheet by remember { mutableStateOf(false) }
+    var showAssistantPicker by remember { mutableStateOf(false) }
     val workspaceNamesById = remember(workspaces) {
         workspaces.mapNotNull { workspace ->
             runCatching { Uuid.parse(workspace.id) }
@@ -295,10 +300,24 @@ private fun ChatPageContent(
                 ?.let { it to workspace.name }
         }.toMap()
     }
-    val readiness = remember(setting, assistant, workspaceNamesById) {
+    val memoryRepository: MemoryRepository = koinInject()
+    val memoryCountFlow = remember(assistant.id, assistant.enableMemory, assistant.useGlobalMemory) {
+        if (assistant.enableMemory) {
+            if (assistant.useGlobalMemory) {
+                memoryRepository.getGlobalMemoriesFlow()
+            } else {
+                memoryRepository.getMemoriesOfAssistantFlow(assistant.id.toString())
+            }.map { it.size }
+        } else {
+            emptyFlow()
+        }
+    }
+    val memoryCount by memoryCountFlow.collectAsStateWithLifecycle(initialValue = 0)
+    val readiness = remember(setting, assistant, workspaceNamesById, memoryCount) {
         setting.buildConversationReadiness(
             assistant = assistant,
             workspaceNamesById = workspaceNamesById,
+            memoryCount = memoryCount,
         )
     }
     val modelListState = rememberModelListState(
@@ -440,6 +459,7 @@ private fun ChatPageContent(
                 previewMode = previewMode,
                 settings = setting,
                 readiness = readiness,
+                assistant = assistant,
                 hazeState = hazeState,
                 errors = errors,
                 onDismissError = onDismissError,
@@ -522,6 +542,13 @@ private fun ChatPageContent(
                 onReadinessWorkspaceClick = {
                     showWorkspaceSheet = true
                 },
+                onSwitchAssistant = { showAssistantPicker = true },
+                onManageAssistant = {
+                    navController.navigate(Screen.AssistantDetail(assistant.id.toString()))
+                },
+                onMemoryClick = {
+                    navController.navigate(Screen.AssistantMemory(assistant.id.toString()))
+                },
             )
         }
 
@@ -533,6 +560,18 @@ private fun ChatPageContent(
                 assistant = assistant,
                 vm = vm,
                 onDismiss = { showFilesSheet = false },
+            )
+        }
+
+        if (showAssistantPicker) {
+            AssistantPickerSheet(
+                settings = setting,
+                currentAssistant = assistant,
+                onAssistantSelected = { newAssistant ->
+                    showAssistantPicker = false
+                    vm.moveConversationToAssistant(conversation, newAssistant.id)
+                },
+                onDismiss = { showAssistantPicker = false },
             )
         }
 

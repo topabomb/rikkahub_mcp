@@ -146,16 +146,8 @@ fun UIAvatar(
     }
 
     Box(modifier = modifier.then(Modifier.size(32.dp))) {
-        Surface(
-            shape = rememberAvatarShape(loading),
-            modifier = Modifier.fillMaxSize(),
-            onClick = {
-                onClick?.invoke()
-                if (onUpdate != null) showPickOption = true
-            },
-            tonalElevation = 4.dp,
-            color = MaterialTheme.colorScheme.secondaryContainer,
-        ) {
+        val avatarShape = rememberAvatarShape(loading)
+        val avatarContent: @Composable () -> Unit = {
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier.fillMaxSize()
@@ -191,6 +183,29 @@ fun UIAvatar(
                     }
                 }
             }
+        }
+        val handleClick = {
+            onClick?.invoke()
+            if (onUpdate != null) showPickOption = true
+        }
+
+        if (onClick != null || onUpdate != null) {
+            Surface(
+                shape = avatarShape,
+                modifier = Modifier.fillMaxSize(),
+                onClick = handleClick,
+                tonalElevation = 4.dp,
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                content = avatarContent,
+            )
+        } else {
+            Surface(
+                shape = avatarShape,
+                modifier = Modifier.fillMaxSize(),
+                tonalElevation = 4.dp,
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                content = avatarContent,
+            )
         }
 
         // Show edit icon when editable

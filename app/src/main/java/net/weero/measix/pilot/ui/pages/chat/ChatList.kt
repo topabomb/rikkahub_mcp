@@ -91,6 +91,7 @@ import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getAssistantById
+import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ChatError
@@ -120,6 +121,7 @@ internal fun ChatList(
     previewMode: Boolean,
     settings: Settings,
     readiness: ConversationReadiness,
+    assistant: Assistant,
     hazeState: HazeState,
     errors: List<ChatError> = emptyList(),
     onDismissError: (Uuid) -> Unit = {},
@@ -136,6 +138,9 @@ internal fun ChatList(
     onReadinessMcpClick: () -> Unit,
     onReadinessLocalToolsClick: () -> Unit,
     onReadinessWorkspaceClick: () -> Unit,
+    onSwitchAssistant: () -> Unit,
+    onManageAssistant: () -> Unit,
+    onMemoryClick: () -> Unit,
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
     onToggleFavorite: ((MessageNode) -> Unit)? = null,
@@ -166,6 +171,7 @@ internal fun ChatList(
                 processingStatus = processingStatus,
                 settings = settings,
                 readiness = readiness,
+                assistant = assistant,
                 hazeState = hazeState,
                 errors = errors,
                 onDismissError = onDismissError,
@@ -181,6 +187,9 @@ internal fun ChatList(
                 onReadinessMcpClick = onReadinessMcpClick,
                 onReadinessLocalToolsClick = onReadinessLocalToolsClick,
                 onReadinessWorkspaceClick = onReadinessWorkspaceClick,
+                onSwitchAssistant = onSwitchAssistant,
+                onManageAssistant = onManageAssistant,
+                onMemoryClick = onMemoryClick,
                 animatedVisibilityScope = this@AnimatedContent,
                 onToolApproval = onToolApproval,
                 onToolAnswer = onToolAnswer,
@@ -200,6 +209,7 @@ private fun ChatListNormal(
     processingStatus: String? = null,
     settings: Settings,
     readiness: ConversationReadiness,
+    assistant: Assistant,
     hazeState: HazeState,
     errors: List<ChatError>,
     onDismissError: (Uuid) -> Unit,
@@ -215,6 +225,9 @@ private fun ChatListNormal(
     onReadinessMcpClick: () -> Unit,
     onReadinessLocalToolsClick: () -> Unit,
     onReadinessWorkspaceClick: () -> Unit,
+    onSwitchAssistant: () -> Unit,
+    onManageAssistant: () -> Unit,
+    onMemoryClick: () -> Unit,
     animatedVisibilityScope: AnimatedVisibilityScope,
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
@@ -273,7 +286,7 @@ private fun ChatListNormal(
         )
     }
 
-    val assistant = remember(settings.assistants, conversation.assistantId) {
+    val messageAssistant = remember(settings.assistants, conversation.assistantId) {
         settings.getAssistantById(conversation.assistantId)
     }
     val modelById = remember(settings.providers) {
@@ -342,11 +355,15 @@ private fun ChatListNormal(
                         }
                         ConversationReadinessCard(
                             readiness = readiness,
+                            assistant = assistant,
                             compact = false,
                             onModelClick = onReadinessModelClick,
                             onMcpClick = onReadinessMcpClick,
                             onLocalToolsClick = onReadinessLocalToolsClick,
                             onWorkspaceClick = onReadinessWorkspaceClick,
+                            onSwitchAssistant = onSwitchAssistant,
+                            onManageAssistant = onManageAssistant,
+                            onMemoryClick = onMemoryClick,
                         )
                     }
                 }
@@ -358,11 +375,15 @@ private fun ChatListNormal(
                 item(key = "ConversationModelReadiness") {
                     ConversationReadinessCard(
                         readiness = readiness,
+                        assistant = assistant,
                         compact = true,
                         onModelClick = onReadinessModelClick,
                         onMcpClick = onReadinessMcpClick,
                         onLocalToolsClick = onReadinessLocalToolsClick,
                         onWorkspaceClick = onReadinessWorkspaceClick,
+                        onSwitchAssistant = onSwitchAssistant,
+                        onManageAssistant = onManageAssistant,
+                        onMemoryClick = onMemoryClick,
                     )
                 }
             }
@@ -387,7 +408,7 @@ private fun ChatListNormal(
                         ChatMessage(
                             node = node,
                             model = node.currentMessage.modelId?.let(modelById::get),
-                            assistant = assistant,
+                            assistant = messageAssistant,
                             loading = loading && index == lastMessageIndex,
                             onRegenerate = {
                                 onRegenerate(node.currentMessage)
@@ -422,7 +443,7 @@ private fun ChatListNormal(
                 }
             }
 
-            if (!loading && assistant?.allowConversationSystemPrompt == true && onConversationSystemPromptChange != null) {
+            if (!loading && messageAssistant?.allowConversationSystemPrompt == true && onConversationSystemPromptChange != null) {
                 item(key = "ConversationSystemPrompt") {
                     ConversationSystemPromptButton(
                         customSystemPrompt = conversation.customSystemPrompt,

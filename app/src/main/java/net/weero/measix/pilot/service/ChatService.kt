@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.service
+package net.weero.measix.pilot.service
 
 import android.app.Application
 import android.util.Log
@@ -1068,12 +1068,14 @@ class ChatService(
 
     suspend fun saveConversation(conversationId: Uuid, conversation: Conversation) {
         val exists = conversationRepo.existsConversationById(conversation.id)
-        if (!exists && conversation.title.isBlank() && conversation.messageNodes.isEmpty()) {
-            return // 新会话且为空时不保存
-        }
-
         val updatedConversation = conversation.copy()
+
+        // 始终更新内存状态，即使空会话不持久化到 DB
         updateConversation(conversationId, updatedConversation)
+
+        if (!exists && conversation.title.isBlank() && conversation.messageNodes.isEmpty()) {
+            return // 新会话且为空时不持久化到 DB
+        }
 
         if (!exists) {
             conversationRepo.insertConversation(updatedConversation)

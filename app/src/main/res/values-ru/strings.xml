@@ -1181,7 +1181,8 @@
   <string name="workspace_file_editor_read_failed">Ошибка чтения файла</string>
   <string name="workspace_file_editor_too_large">Файл слишком велик для предпросмотра (%d байт)</string>
   <string name="image_crop_failed">Не удалось обрезать изображение</string>
-  <string name="chat_readiness_title">Настроить этот диалог</string>
+  <string name="chat_readiness_title_prefix">Настроить для</string>
+  <string name="chat_readiness_title_suffix"></string>
   <string name="chat_readiness_model_required_toast">Перед отправкой выберите модель диалога.</string>
   <string name="chat_readiness_model_title">Модель диалога</string>
   <string name="chat_readiness_model_not_configured">Не настроено</string>
@@ -1201,6 +1202,10 @@
   <string name="chat_readiness_workspace_not_configured">Недоступно</string>
   <string name="chat_readiness_workspace_not_bound">Не связано</string>
   <string name="chat_readiness_workspace_description">Подключите локальную рабочую среду, чтобы ассистент мог обращаться к её файлам и сценариям.</string>
+  <string name="chat_readiness_memory_title">Память</string>
+  <string name="chat_readiness_memory_disabled">Отключено</string>
+  <string name="chat_readiness_memory_count">%1$d записей</string>
+  <string name="chat_readiness_memory_description">Память о предпочтениях и важных деталях.</string>
   <string name="search_provider_bing_description">Поиск Bing использует извлечение данных со страниц и может работать нестабильно.</string>
   <string name="search_provider_tavily_api_key">Получить API-ключ Tavily</string>
   <string name="search_provider_searxng_description">Включите поддержку формата JSON в settings.yml:</string>

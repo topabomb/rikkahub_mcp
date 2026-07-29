@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -30,7 +31,9 @@ import androidx.compose.ui.unit.dp
 import me.rerere.ai.provider.ModelType
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowRight01
+import me.rerere.hugeicons.stroke.Brain02
 import me.rerere.hugeicons.stroke.Codesandbox
+import me.rerere.hugeicons.stroke.Edit03
 import me.rerere.hugeicons.stroke.McpServer
 import me.rerere.hugeicons.stroke.Settings03
 import me.rerere.hugeicons.stroke.Wrench01
@@ -38,6 +41,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.theme.LocalChatFontSizeRatio
 import kotlin.uuid.Uuid
 
@@ -60,6 +64,11 @@ internal enum class WorkspaceReadiness {
     READY,
 }
 
+internal enum class MemoryReadiness {
+    DISABLED,
+    READY,
+}
+
 internal data class ConversationReadiness(
     val modelState: ModelReadiness,
     val modelName: String?,
@@ -67,6 +76,8 @@ internal data class ConversationReadiness(
     val selectedMcpCount: Int,
     val enabledMcpCount: Int,
     val localToolCount: Int,
+    val memoryState: MemoryReadiness,
+    val memoryCount: Int,
     val workspaceState: WorkspaceReadiness,
     val workspaceName: String?,
 ) {
@@ -80,6 +91,7 @@ internal data class ConversationReadiness(
 internal fun Settings.buildConversationReadiness(
     assistant: Assistant,
     workspaceNamesById: Map<Uuid, String>,
+    memoryCount: Int,
 ): ConversationReadiness {
     val hasAvailableChatModel = providers.any { provider ->
         provider.enabled && provider.models.any { it.type == ModelType.CHAT }
@@ -107,6 +119,8 @@ internal fun Settings.buildConversationReadiness(
         else -> WorkspaceReadiness.READY
     }
 
+    val memoryState = if (assistant.enableMemory) MemoryReadiness.READY else MemoryReadiness.DISABLED
+
     return ConversationReadiness(
         modelState = modelState,
         modelName = selectedModel?.displayName?.ifBlank { selectedModel.modelId },
@@ -114,6 +128,8 @@ internal fun Settings.buildConversationReadiness(
         selectedMcpCount = selectedMcpCount,
         enabledMcpCount = enabledMcpServers.size,
         localToolCount = assistant.localTools.distinct().size,
+        memoryState = memoryState,
+        memoryCount = memoryCount,
         workspaceState = workspaceState,
         workspaceName = workspaceName,
     )
@@ -122,10 +138,14 @@ internal fun Settings.buildConversationReadiness(
 @Composable
 internal fun ConversationReadinessCard(
     readiness: ConversationReadiness,
+    assistant: Assistant,
     compact: Boolean,
+    onSwitchAssistant: () -> Unit,
+    onManageAssistant: () -> Unit,
     onModelClick: () -> Unit,
     onMcpClick: () -> Unit,
     onLocalToolsClick: () -> Unit,
+    onMemoryClick: () -> Unit,
     onWorkspaceClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -142,18 +162,11 @@ internal fun ConversationReadinessCard(
             modifier = Modifier.padding(if (compact) 4.dp else 8.dp),
         ) {
             if (!compact) {
-                Text(
-                    text = stringResource(R.string.chat_readiness_title),
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontSize = MaterialTheme.typography.titleMedium.fontSize * scale,
-                        lineHeight = MaterialTheme.typography.titleMedium.lineHeight * scale,
-                    ),
-                    modifier = Modifier.padding(
-                        start = 6.dp,
-                        end = 6.dp,
-                        top = 2.dp,
-                        bottom = 4.dp,
-                    ),
+                ReadinessTitleRow(
+                    assistant = assistant,
+                    scale = scale,
+                    onSwitchAssistant = onSwitchAssistant,
+                    onManageAssistant = onManageAssistant,
                 )
             }
 
@@ -203,6 +216,23 @@ internal fun ConversationReadinessCard(
                     scale = scale,
                 )
                 ReadinessRow(
+                    icon = HugeIcons.Brain02,
+                    label = stringResource(R.string.chat_readiness_memory_title),
+                    status = when (readiness.memoryState) {
+                        MemoryReadiness.DISABLED ->
+                            stringResource(R.string.chat_readiness_memory_disabled)
+
+                        MemoryReadiness.READY -> stringResource(
+                            R.string.chat_readiness_memory_count,
+                            readiness.memoryCount,
+                        )
+                    },
+                    description = stringResource(R.string.chat_readiness_memory_description),
+                    descriptionMaxLines = 1,
+                    onClick = onMemoryClick,
+                    scale = scale,
+                )
+                ReadinessRow(
                     icon = HugeIcons.Wrench01,
                     label = stringResource(R.string.chat_readiness_local_tools_title),
                     status = stringResource(
@@ -244,6 +274,7 @@ private fun ReadinessRow(
     onClick: () -> Unit,
     scale: Float,
     highlightTerm: String? = null,
+    descriptionMaxLines: Int = 2,
 ) {
     Row(
         modifier = Modifier
@@ -310,7 +341,7 @@ private fun ReadinessRow(
                         lineHeight = MaterialTheme.typography.bodySmall.lineHeight * scale,
                     ),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
+                    maxLines = descriptionMaxLines,
                     overflow = TextOverflow.Ellipsis,
                 )
             } else {
@@ -321,7 +352,7 @@ private fun ReadinessRow(
                         lineHeight = MaterialTheme.typography.bodySmall.lineHeight * scale,
                     ),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
+                    maxLines = descriptionMaxLines,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -366,5 +397,93 @@ private fun ReadinessStatus(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+    }
+}
+
+@Composable
+private fun ReadinessTitleRow(
+    assistant: Assistant,
+    scale: Float,
+    onSwitchAssistant: () -> Unit,
+    onManageAssistant: () -> Unit,
+) {
+    val defaultAssistantName = stringResource(R.string.assistant_page_default_assistant)
+    val displayName = assistant.name.ifEmpty { defaultAssistantName }
+    val titlePrefix = stringResource(R.string.chat_readiness_title_prefix)
+    val titleSuffix = stringResource(R.string.chat_readiness_title_suffix)
+    val titleStyle = MaterialTheme.typography.titleMedium.copy(
+        fontSize = MaterialTheme.typography.titleMedium.fontSize * scale,
+        lineHeight = MaterialTheme.typography.titleMedium.lineHeight * scale,
+    )
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                start = 6.dp,
+                end = 6.dp,
+                top = 2.dp,
+                bottom = 4.dp,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // 左侧：prefix + 可点击的头像+名称 + suffix，作为一个不可分割的整体
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            if (titlePrefix.isNotBlank()) {
+                Text(
+                    text = titlePrefix,
+                    style = titleStyle,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+            // 可点击的交互区：头像 + 助手名称
+            Row(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onSwitchAssistant)
+                    .padding(horizontal = 1.dp, vertical = 1.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                UIAvatar(
+                    name = displayName,
+                    value = assistant.avatar,
+                    modifier = Modifier.size((20 * scale).dp),
+                )
+                Text(
+                    text = displayName,
+                    style = titleStyle,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (titleSuffix.isNotBlank()) {
+                Text(
+                    text = titleSuffix,
+                    style = titleStyle,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
+        // 右侧：配置助手按钮，右对齐
+        FilledTonalIconButton(
+            onClick = onManageAssistant,
+            modifier = Modifier.size(30.dp),
+        ) {
+            Icon(
+                imageVector = HugeIcons.Edit03,
+                contentDescription = stringResource(R.string.assistant_picker_manage_current),
+                modifier = Modifier.size(15.dp),
+            )
+        }
     }
 }

@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.chat
+package net.weero.measix.pilot.ui.pages.chat
 
 import android.app.Application
 import android.content.Context
@@ -272,12 +272,16 @@ class ChatVM(
 
     fun moveConversationToAssistant(conversation: Conversation, targetAssistantId: Uuid) {
         viewModelScope.launch {
-            val conversationFull = conversationRepo.getConversationById(conversation.id) ?: return@launch
+            val conversationFull = if (conversation.id == _conversationId) {
+                // 活跃会话以内存状态为准，避免 DB 中的旧快照覆盖尚未落库的更新。
+                this@ChatVM.conversation.value
+            } else {
+                conversationRepo.getConversationById(conversation.id) ?: conversation
+            }
+            val updatedConversation = conversationFull.withAssistant(targetAssistantId)
+            if (updatedConversation === conversationFull) return@launch
+
             // 文件夹是助手内分组，切换助手后原文件夹在新助手下不可见，需清空归属避免会话丢失
-            val updatedConversation = conversationFull.copy(
-                assistantId = targetAssistantId,
-                folderId = null,
-            )
             if (conversation.id == _conversationId) {
                 chatService.saveConversation(_conversationId, updatedConversation)
                 settingsStore.updateAssistant(targetAssistantId)
@@ -337,3 +341,13 @@ class ChatVM(
     }
 
 }
+
+internal fun Conversation.withAssistant(targetAssistantId: Uuid): Conversation =
+    if (assistantId == targetAssistantId) {
+        this
+    } else {
+        copy(
+            assistantId = targetAssistantId,
+            folderId = null,
+        )
+    }

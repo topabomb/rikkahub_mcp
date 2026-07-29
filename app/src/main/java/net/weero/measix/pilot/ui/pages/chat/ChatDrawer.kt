@@ -789,7 +789,6 @@ private fun AssistantItem(
             UIAvatar(
                 name = assistant.name,
                 value = assistant.avatar,
-                onUpdate = {},
                 modifier = Modifier.size(40.dp),
             )
             Column(

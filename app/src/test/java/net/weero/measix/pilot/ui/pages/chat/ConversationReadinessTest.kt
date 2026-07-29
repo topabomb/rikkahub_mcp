@@ -24,11 +24,13 @@ class ConversationReadinessTest {
         ).buildConversationReadiness(
             assistant = assistant,
             workspaceNamesById = emptyMap(),
+            memoryCount = 0,
         )
 
         assertEquals(ModelReadiness.NOT_CONFIGURED, readiness.modelState)
         assertEquals(McpReadiness.NOT_CONFIGURED, readiness.mcpState)
         assertEquals(WorkspaceReadiness.NOT_CONFIGURED, readiness.workspaceState)
+        assertEquals(MemoryReadiness.READY, readiness.memoryState)
         assertFalse(readiness.canSend)
         assertTrue(readiness.requiresProviderConfiguration)
     }
@@ -43,6 +45,7 @@ class ConversationReadinessTest {
         ).buildConversationReadiness(
             assistant = assistant,
             workspaceNamesById = emptyMap(),
+            memoryCount = 0,
         )
 
         assertEquals(ModelReadiness.NOT_SELECTED, readiness.modelState)
@@ -65,6 +68,7 @@ class ConversationReadinessTest {
         ).buildConversationReadiness(
             assistant = assistant,
             workspaceNamesById = emptyMap(),
+            memoryCount = 0,
         )
 
         assertEquals(ModelReadiness.NOT_CONFIGURED, readiness.modelState)
@@ -86,6 +90,7 @@ class ConversationReadinessTest {
         ).buildConversationReadiness(
             assistant = assistant,
             workspaceNamesById = emptyMap(),
+            memoryCount = 0,
         )
 
         assertEquals(ModelReadiness.NOT_CONFIGURED, readiness.modelState)
@@ -110,6 +115,7 @@ class ConversationReadinessTest {
         ).buildConversationReadiness(
             assistant = assistant,
             workspaceNamesById = mapOf(workspaceId to "Factory project"),
+            memoryCount = 3,
         )
 
         assertEquals(ModelReadiness.READY, readiness.modelState)
@@ -120,6 +126,8 @@ class ConversationReadinessTest {
         assertEquals(3, readiness.localToolCount)
         assertEquals(WorkspaceReadiness.READY, readiness.workspaceState)
         assertEquals("Factory project", readiness.workspaceName)
+        assertEquals(MemoryReadiness.READY, readiness.memoryState)
+        assertEquals(3, readiness.memoryCount)
         assertTrue(readiness.canSend)
     }
 
@@ -136,10 +144,45 @@ class ConversationReadinessTest {
         ).buildConversationReadiness(
             assistant = assistant,
             workspaceNamesById = emptyMap(),
+            memoryCount = 0,
         )
 
         assertEquals(McpReadiness.ALL_DISABLED, readiness.mcpState)
         assertEquals(0, readiness.enabledMcpCount)
         assertEquals(0, readiness.selectedMcpCount)
+    }
+
+    @Test
+    fun `disabled memory reports disabled state`() {
+        val assistant = Assistant(enableMemory = false)
+        val readiness = Settings(
+            providers = emptyList(),
+            assistants = listOf(assistant),
+            mcpServers = emptyList(),
+        ).buildConversationReadiness(
+            assistant = assistant,
+            workspaceNamesById = emptyMap(),
+            memoryCount = 0,
+        )
+
+        assertEquals(MemoryReadiness.DISABLED, readiness.memoryState)
+        assertEquals(0, readiness.memoryCount)
+    }
+
+    @Test
+    fun `enabled memory with entries reports ready state and count`() {
+        val assistant = Assistant(enableMemory = true)
+        val readiness = Settings(
+            providers = emptyList(),
+            assistants = listOf(assistant),
+            mcpServers = emptyList(),
+        ).buildConversationReadiness(
+            assistant = assistant,
+            workspaceNamesById = emptyMap(),
+            memoryCount = 5,
+        )
+
+        assertEquals(MemoryReadiness.READY, readiness.memoryState)
+        assertEquals(5, readiness.memoryCount)
     }
 }

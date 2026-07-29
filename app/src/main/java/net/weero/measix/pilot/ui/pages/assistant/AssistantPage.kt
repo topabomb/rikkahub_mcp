@@ -64,6 +64,7 @@ import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANTS_IDS
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
+import net.weero.measix.pilot.data.model.DEFAULT_SYSTEM_PROMPT
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.FormItem
 import net.weero.measix.pilot.ui.components.ui.Tag
@@ -121,7 +122,7 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
                 actions = {
                     IconButton(
                         onClick = {
-                            createState.open(Assistant())
+                            createState.open(Assistant(systemPrompt = DEFAULT_SYSTEM_PROMPT))
                         }) {
                         Icon(HugeIcons.Add01, stringResource(R.string.assistant_page_add))
                     }

@@ -33,6 +33,7 @@ import net.weero.measix.pilot.data.ai.prompts.LEARNING_MODE_PROMPT
 import me.rerere.asr.ASRProviderSetting
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
+import net.weero.measix.pilot.data.model.DEFAULT_SYSTEM_PROMPT
 import net.weero.measix.pilot.data.model.InjectionPosition
 import net.weero.measix.pilot.data.model.PromptInjection
 import net.weero.measix.pilot.data.model.QuickMessage
@@ -652,24 +653,7 @@ internal val DEFAULT_ASSISTANTS = listOf(
     Assistant(
         id = DEFAULT_ASSISTANT_ID,
         name = "",
-        systemPrompt = """
-            You are a helpful assistant, called {{char}}, based on model {{model_name}}.
-
-            ## Info
-            - Time: {{cur_datetime}}
-            - Locale: {{locale}}
-            - Timezone: {{timezone}}
-            - Device Info: {{device_info}}
-            - System Version: {{system_version}}
-            - User Nickname: {{user}}
-
-            ## Hint
-            - If the user does not specify a language, reply in the user's primary language.
-            - Remember to use Markdown syntax for formatting, and use latex for mathematical expressions.
-            - Use the text_to_speech tool to read aloud important conclusions or summaries.
-            - Use the memory system to save, retrieve, and maintain user preferences and key information.
-            - Consider using HTML, SVG, or Mermaid to complement explanations—all are broadly compatible, concise, and readable on mobile.
-        """.trimIndent()
+        systemPrompt = DEFAULT_SYSTEM_PROMPT,
     ),
 )
 

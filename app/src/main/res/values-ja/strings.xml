@@ -1181,7 +1181,8 @@
   <string name="workspace_file_editor_read_failed">ファイルの読み取りに失敗しました</string>
   <string name="workspace_file_editor_too_large">ファイルが大きすぎてプレビューできません（%d バイト）</string>
   <string name="image_crop_failed">画像の切り抜きに失敗しました</string>
-  <string name="chat_readiness_title">この会話を設定</string>
+  <string name="chat_readiness_title_prefix"></string>
+  <string name="chat_readiness_title_suffix">の会話を設定</string>
   <string name="chat_readiness_model_required_toast">送信する前に会話モデルを選択してください。</string>
   <string name="chat_readiness_model_title">会話モデル</string>
   <string name="chat_readiness_model_not_configured">未設定</string>
@@ -1201,6 +1202,10 @@
   <string name="chat_readiness_workspace_not_configured">利用不可</string>
   <string name="chat_readiness_workspace_not_bound">未連携</string>
   <string name="chat_readiness_workspace_description">ローカルの作業環境を接続し、アシスタントがファイルやスクリプトにアクセスできるようにします。</string>
+  <string name="chat_readiness_memory_title">メモリ</string>
+  <string name="chat_readiness_memory_disabled">無効</string>
+  <string name="chat_readiness_memory_count">%1$d 件</string>
+  <string name="chat_readiness_memory_description">好みや重要情報を記録し、今後の会話に活用します。</string>
   <string name="search_provider_bing_description">Bing 検索はページのスクレイピングを使用するため、不安定な場合があります。</string>
   <string name="search_provider_tavily_api_key">Tavily API キーを取得</string>
   <string name="search_provider_searxng_description">settings.yml で JSON 形式のサポートを有効にしてください：</string>
