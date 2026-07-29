@@ -39,6 +39,12 @@ internal fun createWorkspaceTerminalSession(
         "--root-id",
         "--link2symlink",
         "--kill-on-exit",
+        // Spoof kernel version: modern glibc (2.33+) uses newer syscalls like
+        // faccessat2 (added in kernel 5.8) that proot's ptrace interception cannot
+        // handle, causing getcwd() and other calls to return ENOSYS ("Function not
+        // implemented"). Reporting kernel 4.14.0 makes glibc fall back to older,
+        // well-supported syscalls that proot intercepts correctly.
+        "-k", KERNEL_RELEASE,
         "-r",
         linuxDir.absolutePath,
         "-w",
@@ -64,6 +70,11 @@ internal fun createWorkspaceTerminalSession(
         "LC_ALL=C.UTF-8",
         "USER=root",
         "SHELL=/bin/bash",
+        // Defense-in-depth: even with -k kernel spoofing, some edge-case devices may
+        // still have getcwd() issues. PWD gives bash a reliable CWD fallback that
+        // matches proot's -w flag, avoiding the "shell-init: error retrieving current
+        // directory" warning.
+        "PWD=$WORKSPACE_DIR",
         "/bin/bash",
     )
 
@@ -71,11 +82,9 @@ internal fun createWorkspaceTerminalSession(
         "PROOT_LOADER=${loader.absolutePath}",
         "PROOT_TMP_DIR=${tempDir.absolutePath}",
         "TMPDIR=${tempDir.absolutePath}",
-        // Disable seccomp-based ptrace acceleration: on some Android devices the
-        // system seccomp policy conflicts with proot's filter, causing the traced
-        // process to receive SIGILL (signal 4). Falling back to ptrace-only mode
-        // is slower but compatible with all devices.
-        "PROOT_NO_SECCOMP=1",
+        // Do NOT set PROOT_NO_SECCOMP=1: see ProotShellRunner for detailed rationale.
+        // In short, proot's seccomp filter is required for reliable syscall interception
+        // (mkdir, stat, etc.) on Android 14+.
     )
 
     return TerminalSession(
@@ -321,6 +330,9 @@ internal class WorkspaceTerminalViewClient(
 
 private const val WORKSPACE_DIR = "/workspace"
 private const val SKILLS_DIR = "/skills"
+// 4.14.0 is the LTS kernel used by Android 8-9; old enough to avoid newer syscalls
+// (faccessat2 etc.) that proot can't intercept, new enough for all modern glibc.
+private const val KERNEL_RELEASE = "4.14.0"
 
 // 一个 URL 最多还原跨越的软换行行数(向上/向下各算), 足够覆盖任意真实 URL
 private const val URL_MAX_WRAP_ROWS = 50

@@ -47,21 +47,37 @@ class ProotShellRunner(
             .directory(context.filesDir)
             .redirectErrorStream(false)
             .apply {
-                environment()["PROOT_LOADER"] = loader.absolutePath
-                environment()["PROOT_TMP_DIR"] = context.tempDir.absolutePath
-                environment()["TMPDIR"] = context.tempDir.absolutePath
-                // Disable seccomp-based ptrace acceleration: on some Android devices the
-                // system seccomp policy conflicts with proot's filter, causing the traced
-                // process to receive SIGILL (signal 4). Falling back to ptrace-only mode
-                // is slower but compatible with all devices.
-                environment()["PROOT_NO_SECCOMP"] = "1"
+                buildEnvironment(loader, context.tempDir).forEach { (k, v) ->
+                    environment()[k] = v
+                }
             }
             .start()
 
         return process.readResult(context.timeoutMillis, context.stdin)
     }
 
-    private fun buildCommand(
+    /**
+     * Builds the environment variables for the proot process.
+     *
+     * IMPORTANT: Do NOT add PROOT_NO_SECCOMP=1 here. proot's built-in seccomp filter is
+     * essential for reliable syscall interception on Android 14+. The filter returns
+     * SECCOMP_RET_TRACE for syscalls proot needs to translate (mkdirat, newfstatat,
+     * getcwd, etc.), triggering PTRACE_EVENT_SECCOMP which is far more reliable than
+     * the fallback PTRACE_SYSCALL approach.
+     *
+     * The previous PROOT_NO_SECCOMP=1 was added to fix SIGILL on x86_64 emulators,
+     * but that was actually caused by architecture mismatch (arm64 rootfs on x86_64
+     * CPU), not by seccomp conflicts. On real devices with matching architecture,
+     * proot's seccomp filter works correctly and is required for mkdir/stat/rename
+     * etc. to function.
+     */
+    internal fun buildEnvironment(loader: File, tempDir: File): Map<String, String> = mapOf(
+        "PROOT_LOADER" to loader.absolutePath,
+        "PROOT_TMP_DIR" to tempDir.absolutePath,
+        "TMPDIR" to tempDir.absolutePath,
+    )
+
+    internal fun buildCommand(
         context: WorkspaceShellContext,
         proot: File,
     ): List<String> {
@@ -70,6 +86,13 @@ class ProotShellRunner(
             "--root-id",
             "--link2symlink",
             "--kill-on-exit",
+            // Spoof kernel version: modern glibc (2.33+) uses newer syscalls like
+            // faccessat2 (added in kernel 5.8) that proot's ptrace interception cannot
+            // handle, causing getcwd() and other calls to return ENOSYS ("Function not
+            // implemented"). Reporting kernel 4.14.0 (a widely-used LTS version) makes
+            // glibc fall back to older, well-supported syscalls that proot intercepts
+            // correctly. See: qaliblog/xterm PR #12 and #13.
+            "-k", KERNEL_RELEASE,
             "-r",
             context.linuxDir.absolutePath,
             "-w",
@@ -92,6 +115,7 @@ class ProotShellRunner(
             }
         }
 
+        val prootCwd = context.prootCwd()
         command += listOf(
             "/usr/bin/env",
             "-i",
@@ -100,13 +124,23 @@ class ProotShellRunner(
             "TERM=xterm-256color",
             "LANG=C.UTF-8",
             "LC_ALL=C.UTF-8",
+            // PWD gives bash a reliable CWD fallback that matches proot's -w flag,
+            // avoiding the "shell-init: error retrieving current directory" warning
+            // when getcwd() returns ENOSYS on Android 14+.
+            "PWD=$prootCwd",
             "/bin/bash",
-            "-l",
             "-c",
-            // 命令通过位置参数传入, 避免任何转义; eval "$2" 对命令文本只求值一次, 等价于 bash -c "$cmd"
-            "cd -- \"\$1\" && eval \"\$2\"",
+            // CWD is set by proot's -w flag (virtual path translation, no chdir
+            // syscall needed). The upstream uses `cd -- "$1" && eval "$2"` here,
+            // but the `cd` is redundant since -w already sets the initial CWD.
+            // We omit it for simplicity: fewer positional args, and avoids any
+            // edge case where chdir() might fail (e.g. if someone re-enables
+            // PROOT_NO_SECCOMP on a device with a known kernel seccomp bug).
+            //
+            // Command text is passed as positional arg ($1) to avoid any escaping;
+            // eval "$1" evaluates it exactly once, equivalent to bash -c "$cmd".
+            "eval \"\$1\"",
             "MeasixPilot",
-            context.prootCwd(),
             context.command,
         )
         return command
@@ -115,9 +149,9 @@ class ProotShellRunner(
     private fun WorkspaceShellContext.prootCwd(): String {
         val normalized = cwd.trim().trim('/')
         return if (normalized.isBlank()) {
-            WorkspaceManager.ROOTFS_WORKSPACE_DIR
+            WORKSPACE_DIR
         } else {
-            "${WorkspaceManager.ROOTFS_WORKSPACE_DIR}/$normalized"
+            "$WORKSPACE_DIR/$normalized"
         }
     }
 
@@ -128,5 +162,8 @@ class ProotShellRunner(
         private const val PROOT_EXEC = "libproot_exec.so"
         private const val PROOT_LOADER = "libproot_loader.so"
         private const val WORKSPACE_DIR = WorkspaceManager.ROOTFS_WORKSPACE_DIR
+        // 4.14.0 is the LTS kernel used by Android 8-9; old enough to avoid newer syscalls
+        // (faccessat2 etc.) that proot can't intercept, new enough for all modern glibc.
+        private const val KERNEL_RELEASE = "4.14.0"
     }
 }

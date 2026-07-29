@@ -6,7 +6,7 @@
 
 ---
 
-## 0.0.11（versionCode 11）— 2026-07-18 ~ 2026-07-28
+## 0.0.11（versionCode 11）— 2026-07-18 ~ 2026-07-29
 
 ### 新增
 
@@ -49,6 +49,7 @@
   `speech` 样板测试的包路径与期望 packageName 对齐当前 `me.rerere.speech` namespace
 - **上下文压缩拆散对话轮次**：保留最近消息和 256 条分块的切点统一回退到 USER 边界，避免摘要输入或保留历史从孤立的助手/工具回复开始；压缩提示明确摘要会替换旧历史且不可撤销
 - **本地能力说明误含语音识别**：会话配置卡改为列举语音播报、剪贴板和屏幕使用时间，和实际 Local Tools 注册表一致
+- **工作区 proot Android 14+ 兼容性**：移除误加的 `PROOT_NO_SECCOMP=1`（恢复 seccomp 过滤器，修复 `mkdir`/`cd` 返回 ENOSYS）；附加 `-k 4.14.0` 内核伪装、`PWD` 回退、移除冗余 `cd` 和 `bash -l`。详见 `docs/references/workspace-architecture.md`
 
 ### 变更
 
