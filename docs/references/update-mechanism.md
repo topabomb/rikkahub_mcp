@@ -1,0 +1,540 @@
+# 版本检查与自动更新机制
+
+> 本文档以 Measix Pilot 当前代码为准，详细记录版本检查、SemVer 比较、更新下载、
+> UI 交互、CI 构建与发行版托管的完整链路。
+> 上游 RikkaHub 的客户端实现结构完全一致，差异仅在 API 端点、User-Agent、包名和 CI 策略。
+> 代码变更时应同步更新本文档。
+
+## 目录
+
+1. [模块概览](#模块概览)
+2. [核心组件与职责](#核心组件与职责)
+3. [网络交互](#网络交互)
+4. [SemVer 版本比较](#semver-版本比较)
+5. [UI 交互流程](#ui-交互流程)
+6. [Play Store 安装来源检测](#play-store-安装来源检测)
+7. [CI 构建与发行版托管](#ci-构建与发行版托管)
+8. [与上游 RikkaHub 的差异](#与上游-rikkahub-的差异)
+9. [架构注意事项](#架构注意事项)
+
+---
+
+## 模块概览
+
+应用内置轻量的版本检查与更新机制，在用户打开聊天抽屉时自动向后端 API 发起一次请求，
+获取最新版本信息（版本号、发布时间、changelog、下载列表），通过 SemVer 比较判断是否有新版本。
+如果有，在抽屉顶部展示可关闭的更新卡片；用户点击卡片后弹出 BottomSheet 展示完整 changelog 和
+下载选项，选择后委托系统 DownloadManager 在后台下载 APK。
+
+整体设计原则：
+
+- **非阻断**：更新检查失败或无新版本时，用户完全无感知，不影响正常使用
+- **可关闭**：更新卡片有关闭按钮，用户可以 dismiss 当前版本的提醒
+- **可禁用**：设置页有"显示更新"开关，Play Store 安装的版本自动隐藏
+- **委托系统下载**：不自行管理下载进度，使用 Android DownloadManager 统一处理
+
+### 文件结构
+
+```
+app/                                    # 应用模块
+├── utils/
+│   ├── UpdateChecker.kt              # 核心逻辑：API 请求、下载委托、Version 值类
+│   ├── PlayStoreUtil.kt              # 安装来源检测
+│   └── ContextUtil.kt                # openUrl 扩展（下载失败时的浏览器兜底）
+├── ui/
+│   ├── components/ui/
+│   │   └── UpdateCard.kt             # 更新卡片 + BottomSheet 详情 UI
+│   └── hooks/
+│       └── PlayStore.kt              # rememberIsPlayStoreVersion() Composable
+├── di/
+│   └── AppModule.kt                  # UpdateChecker 单例注册
+├── data/datastore/
+│   └── PreferencesStore.kt           # showUpdates 布尔设置项
+└── build.gradle.kts                  # ABI splits、签名配置、版本号
+
+.github/workflows/
+└── release.yml                       # 手动触发的 Release 构建 CI
+```
+
+---
+
+## 核心组件与职责
+
+| 组件 | 所在文件 | 职责 |
+|------|----------|------|
+| `UpdateChecker` | `utils/UpdateChecker.kt` | 发起版本检查 HTTP 请求；解析 JSON 响应；委托 DownloadManager 下载 APK |
+| `Version` | `utils/UpdateChecker.kt` | SemVer 值类，封装版本号字符串并提供 `Comparable` 比较 |
+| `UpdateInfo` / `UpdateDownload` | `utils/UpdateChecker.kt` | 序列化数据模型，描述远程版本信息 |
+| `UiState<T>` | `utils/UiState.kt` | 通用 UI 状态密封类（Idle / Loading / Success / Error） |
+| `UpdateCard` | `ui/components/ui/UpdateCard.kt` | Compose UI：更新通知卡片 + 详情 BottomSheet |
+| `PlayStoreUtil` | `utils/PlayStoreUtil.kt` | 检测 APK 是否由 Play Store 安装 |
+| `rememberIsPlayStoreVersion` | `ui/hooks/PlayStore.kt` | Compose 侧的 Play Store 安装检测 Hook |
+
+### 依赖注入
+
+```kotlin
+// AppModule.kt
+single {
+    UpdateChecker(get())  // 注入全局 OkHttpClient 单例
+}
+```
+
+`UpdateChecker` 作为 Koin 单例注册，在 `ChatVM` 构造时注入。
+
+---
+
+## 网络交互
+
+### API 端点
+
+```kotlin
+// Measix Pilot（当前 Fork）
+private const val API_URL = "https://measix.weero.net/mobile/"
+
+// 上游 RikkaHub
+private const val API_URL = "https://updates.rikka-ai.com/"
+```
+
+### 请求
+
+- **方法**：HTTP GET
+- **User-Agent**：`MeasixPilot ${VERSION_NAME} #${VERSION_CODE}`
+  - 示例：`MeasixPilot 0.0.11 #11`
+  - 上游：`RikkaHub 2.4.3 #171`
+- **客户端**：复用全局 `OkHttpClient` 单例（与 AI Provider、搜索等功能共享连接池）
+- **线程**：`flowOn(Dispatchers.IO)`
+
+### 响应模型
+
+```kotlin
+@Serializable
+data class UpdateInfo(
+    val version: String,         // 最新版本号，如 "0.0.11"
+    val publishedAt: String,     // ISO 8601 发布时间
+    val changelog: String,       // Markdown 格式的变更日志
+    val downloads: List<UpdateDownload>  // 下载选项列表
+)
+
+@Serializable
+data class UpdateDownload(
+    val name: String,   // 文件名，如 "MeasixPilot_0.0.11_arm64-v8a.apk"
+    val url: String,    // 下载地址
+    val size: String    // 文件大小描述，如 "45.2 MB"
+)
+```
+
+### 状态流
+
+```kotlin
+fun checkUpdate(): Flow<UiState<UpdateInfo>> = flow {
+    emit(UiState.Loading)
+    emit(
+        UiState.Success(
+            data = try {
+                // 执行 HTTP 请求并解析 JSON
+                ...
+            } catch (e: Exception) {
+                throw Exception("Failed to fetch update info", e)
+            }
+        )
+    )
+}.catch {
+    emit(UiState.Error(it))
+}.flowOn(Dispatchers.IO)
+```
+
+`UiState` 是项目通用的 UI 状态密封类：
+
+```kotlin
+sealed class UiState<out T> {
+    object Idle : UiState<Nothing>()
+    object Loading : UiState<Nothing>()
+    data class Success<T>(val data: T) : UiState<T>()
+    data class Error(val error: Throwable) : UiState<Nothing>()
+}
+```
+
+### 在 ChatVM 中的消费
+
+```kotlin
+// ChatVM.kt
+val updateState =
+    updateChecker.checkUpdate().stateIn(viewModelScope, SharingStarted.Eagerly, UiState.Loading)
+```
+
+使用 `stateIn` + `SharingStarted.Eagerly` 将 Flow 转为 StateFlow：
+
+- **Eagerly**：ViewModel 创建时立即发起请求（不等第一个订阅者）
+- **初始值**：`UiState.Loading`
+- **生命周期**：绑定 `viewModelScope`，ViewModel 销毁时自动取消
+
+> **注意**：这意味着每次打开聊天页都会触发一次版本检查请求。由于 ChatVM 是按会话 ID 创建的，
+> 切换会话时如果 ViewModel 被销毁重建，可能重复请求。当前未做节流或缓存。
+
+### APK 下载
+
+```kotlin
+fun downloadUpdate(context: Context, download: UpdateDownload) {
+    runCatching {
+        val request = DownloadManager.Request(download.url.toUri()).apply {
+            setTitle(download.name)
+            setDescription("正在下载更新包...")
+            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE)
+            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, download.name)
+            setMimeType("application/vnd.android.package-archive")
+        }
+        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        dm.enqueue(request)
+    }.onFailure {
+        Toast.makeText(context, "Failed to update", Toast.LENGTH_SHORT).show()
+        context.openUrl(download.url)  // 兜底：浏览器打开下载链接
+    }
+}
+```
+
+委托给系统 `DownloadManager`：
+
+- 下载到公共 `Downloads` 目录
+- 通知栏显示进度，完成后保留通知
+- 支持 WiFi 和移动网络
+- MIME 类型设为 APK，完成后可直接点击安装
+- 下载失败时通过 `context.openUrl()` 用 Chrome Custom Tabs 打开下载链接兜底
+
+---
+
+## SemVer 版本比较
+
+`Version` 是一个 `@JvmInline value class`，实现 `Comparable<Version>`，支持完整的
+[SemVer 2.0.0](https://semver.org/) 规范。
+
+### 解析
+
+```text
+输入: "1.2.3-alpha.1+build.42"
+
+1. 去掉 build metadata: "1.2.3-alpha.1"
+2. 分离 core 和 prerelease:
+   - core = [1, 2, 3]
+   - prerelease = ["alpha", "1"]
+```
+
+### 比较规则
+
+1. **主版本号**：逐段比较数值，缺位补 0
+   - `1.2` < `1.2.1`（等价于 `1.2.0` < `1.2.1`）
+2. **预发布标识符**：有 prerelease 的版本 < 无 prerelease 的版本
+   - `1.0.0-alpha` < `1.0.0`
+3. **预发布段逐个比较**：
+   - 数字段按数值比较：`alpha.1` < `alpha.2`
+   - 字符串段按字典序比较：`alpha` < `beta` < `rc`
+   - 数字段优先级低于字符串段：`1` < `alpha`
+   - 字段少的优先级低：`alpha` < `alpha.1`
+
+### 在 UI 中的使用
+
+```kotlin
+// UpdateCard.kt
+val current = remember { Version(BuildConfig.VERSION_NAME) }   // 当前安装版本
+val latest = remember(info) { Version(info.version) }           // 远程最新版本
+if (latest > current && !dismissed) {
+    // 显示更新卡片
+}
+```
+
+---
+
+## UI 交互流程
+
+### 展示条件
+
+```kotlin
+// ChatDrawer.kt
+val isPlayStore = rememberIsPlayStoreVersion()
+if (settings.displaySetting.showUpdates && !isPlayStore) {
+    UpdateCard(vm)
+}
+```
+
+需要同时满足两个条件：
+
+1. `showUpdates == true`（设置 > 通知 > 显示更新，默认开启）
+2. 非 Play Store 安装（Play Store 版本由商店自动更新，无需应用内检查）
+
+### 三种 UI 状态
+
+#### 1. 检查失败（`UiState.Error`）
+
+展示一个简单的错误卡片，显示错误标题和消息。
+
+#### 2. 有新版本（`UiState.Success` + `latest > current`）
+
+展示可关闭的更新通知卡片，预览 changelog（最多 200dp 高）。
+
+- 点击卡片 → 打开详情 BottomSheet
+- 点击关闭按钮 → 关闭卡片（`dismissed = true`，本次会话不再显示）
+
+#### 3. 详情 BottomSheet
+
+- 展示版本号、发布时间和完整 changelog（Markdown 渲染，300dp 可滚动区域）
+- 下载列表使用 `OutlinedCard` + `ListItem`，每个条目显示文件名和大小
+- 点击下载项 → 调用 `downloadUpdate()`，关闭 BottomSheet，显示 toast 提示
+
+### 防抖
+
+下载按钮使用 `useThrottle(500)` 防抖，500ms 内只响应一次点击，避免重复触发下载。
+
+---
+
+## Play Store 安装来源检测
+
+```kotlin
+// PlayStoreUtil.kt
+object PlayStoreUtil {
+    fun isInstalledFromPlayStore(context: Context): Boolean {
+        return try {
+            getInstallerPackageName(context) == "com.android.vending"
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun getInstallerPackageName(context: Context): String? {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                // API 30+：使用 getInstallSourceInfo
+                context.packageManager
+                    .getInstallSourceInfo(context.packageName)
+                    .installingPackageName
+            } else {
+                // API < 30：使用已废弃的 getInstallerPackageName
+                @Suppress("DEPRECATION")
+                context.packageManager
+                    .getInstallerPackageName(context.packageName)
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+}
+```
+
+```kotlin
+// PlayStore.kt — Compose Hook
+@Composable
+fun rememberIsPlayStoreVersion(): Boolean {
+    val context = LocalContext.current
+    return remember { PlayStoreUtil.isInstalledFromPlayStore(context) }
+}
+```
+
+检测安装来源为 `com.android.vending`（Play Store 的包名）。Play Store 安装的版本由商店
+自动更新，应用内更新检查被跳过，避免重复提醒。
+
+---
+
+## CI 构建与发行版托管
+
+### 构建配置（`app/build.gradle.kts`）
+
+#### ABI Splits
+
+```kotlin
+splits {
+    abi {
+        val isBuildingBundle = gradle.startParameter.taskNames
+            .any { it.lowercase().contains("bundle") }
+        isEnable = !isBuildingBundle
+        reset()
+        include("arm64-v8a", "x86_64")
+        isUniversalApk = true
+    }
+}
+```
+
+构建 APK 时按 ABI 拆分为 `arm64-v8a`、`x86_64` 和 universal 三个变体；
+构建 AAB（bundle）时禁用拆分，由 Play Store 处理 ABI 分发。
+
+#### 签名配置
+
+```kotlin
+signingConfigs {
+    val localProperties = Properties()
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localProperties.load(FileInputStream(localPropertiesFile))
+    }
+    val storeFilePath = localProperties.getProperty("storeFile")
+    val storePasswordValue = localProperties.getProperty("storePassword")
+    val keyAliasValue = localProperties.getProperty("keyAlias")
+    val keyPasswordValue = localProperties.getProperty("keyPassword")
+
+    if (!storeFilePath.isNullOrBlank() && !storePasswordValue.isNullOrBlank() &&
+        !keyAliasValue.isNullOrBlank() && !keyPasswordValue.isNullOrBlank()) {
+        create("release") {
+            storeFile = file(storeFilePath)
+            storePassword = storePasswordValue
+            keyAlias = keyAliasValue
+            keyPassword = keyPasswordValue
+        }
+    }
+}
+```
+
+签名信息从 `local.properties` 读取，四项完整时才创建 `release` 签名配置。
+普通开发环境（无签名信息）可生成 unsigned release，CI 环境通过 Secrets 注入。
+
+#### Release 构建特征
+
+- `isMinifyEnabled = true`：R8 代码裁剪
+- `isShrinkResources = true`：资源裁剪
+- `proguard-rules.pro` 中 `-dontobfuscate`：启用裁剪但不混淆类名，便于 crash 堆栈定位
+- `gradle.properties` 中 `android.r8.strictFullModeForKeepRules=false`：回退到 AGP 8 的
+  keep rules 处理行为，兼容部分依赖库的 consumer ProGuard 规则
+
+### 当前项目 CI（`.github/workflows/release.yml`）
+
+```yaml
+name: Release Build
+on:
+  workflow_dispatch:          # 仅手动触发
+```
+
+流程：
+
+1. **Checkout**：`fetch-depth: 0` 获取完整历史
+2. **JDK**：Temurin 17
+3. **Gradle 缓存**：按 `*.gradle*` 和 `gradle-wrapper.properties` 哈希缓存
+4. **准备签名文件**：
+   - `secrets.KEY_BASE64` → base64 解码 → `app/app.key`
+   - `secrets.SIGNING_CONFIG` → 写入 `local.properties`
+   - `secrets.GOOGLE_SERVICES_JSON` → 写入 `app/google-services.json`
+5. **构建**：`./gradlew assembleRelease`
+6. **上传产物**：`actions/upload-artifact@v4`，上传 `app/build/outputs/apk/release/*.apk`
+
+产物以 GitHub Artifact 形式托管，手动下载。不自动发布到 GitHub Releases，
+也不自动更新后端 API 的版本信息——这些步骤需要手动操作。
+
+### 上游 RikkaHub CI（`.github/workflows/daily-build.yml`）
+
+```yaml
+name: Daily Build
+on:
+  schedule:
+    - cron: '0 18 * * *'      # 每天 UTC 18:00（北京时间次日 02:00）
+  workflow_dispatch:           # 也支持手动触发
+```
+
+上游采用每日自动构建策略，流程：
+
+1. **提交检查**：定时触发时检查过去 24 小时是否有新提交，无则跳过；手动触发时无条件构建
+2. **Checkout**：`fetch-depth: 0` + `submodules: recursive`
+3. **JDK**：Temurin 17
+4. **pnpm + Node**：上游包含 `web-ui/` 前端模块（React Router 前端），构建前需
+   `pnpm install --frozen-lockfile` + `pnpm run build`
+5. **准备签名文件**：与当前项目相同的三组 Secrets
+6. **构建**：`./gradlew assembleRelease`
+7. **发布 Prerelease**：使用 `softprops/action-gh-release@v2` 发布到 GitHub Releases：
+   - 固定 tag `nightly`，每晚覆盖同一个"最新每日构建"
+   - `prerelease: true`，标记为预发布
+   - body 注明 commit SHA 和"开发版本，可能不稳定，仅供测试"
+   - files 直接上传 `app/build/outputs/apk/release/*.apk`
+
+### 上游的更新后端
+
+上游 API 端点 `https://updates.rikka-ai.com/` 返回的 `UpdateInfo.downloads[].url` 指向
+GitHub Releases 的 nightly 预发布 APK 下载链接。因此上游的完整更新链路是：
+
+```text
+daily-build CI → GitHub Releases (nightly tag) → updates.rikka-ai.com API → 客户端检查
+```
+
+### 当前项目的更新后端
+
+当前项目 API 端点 `https://measix.weero.net/mobile/` 由独立的后端服务维护。
+CI 构建的 APK 以 GitHub Artifact 形式托管，不自动发布到 Releases，也不自动更新后端 API。
+版本信息的发布和 APK 托管地址需要手动维护。
+
+### APK 产物命名
+
+```kotlin
+// app/build.gradle.kts
+android.applicationVariants.configureEach {
+    outputs.configureEach {
+        val fileName = (this as ApkVariantOutput).outputFileName
+        (this as ApkVariantOutput).outputFileName =
+            fileName.replace(Regex("^app-"), "MeasixPilot_${versionName.get()}_")
+    }
+}
+```
+
+Release APK 命名格式：`MeasixPilot_{versionName}_{abi}.apk`，
+如 `MeasixPilot_0.0.11_arm64-v8a.apk`。
+
+---
+
+## 与上游 RikkaHub 的差异
+
+### 客户端代码
+
+Fork 时完整保留了上游的版本检查机制，仅做了以下适配：
+
+| 维度 | Measix Pilot（当前 Fork） | 上游 RikkaHub |
+|------|--------------------------|---------------|
+| API 端点 | `https://measix.weero.net/mobile/` | `https://updates.rikka-ai.com/` |
+| User-Agent | `MeasixPilot {version} #{code}` | `RikkaHub {version} #{code}` |
+| 包名 | `net.weero.measix.pilot` | `me.rerere.rikkahub` |
+| 代码逻辑 | 完全一致 | — |
+| 数据模型 | 完全一致 | — |
+| UI 组件 | 完全一致 | — |
+| Version 比较逻辑 | 完全一致 | — |
+| Play Store 检测 | 完全一致 | — |
+
+### CI 与发行版托管
+
+| 维度 | Measix Pilot（当前 Fork） | 上游 RikkaHub |
+|------|--------------------------|---------------|
+| CI 文件 | `release.yml` | `daily-build.yml` |
+| 触发方式 | 仅手动 `workflow_dispatch` | 每日定时 + 手动 |
+| 前端模块 | 无（精简移除） | `web-ui/`（pnpm + React Router） |
+| 子模块 | 无 | `submodules: recursive` |
+| 产物托管 | GitHub Artifacts（手动下载） | GitHub Releases（nightly 预发布） |
+| 后端 API | `measix.weero.net`（独立维护） | `updates.rikka-ai.com`（自动关联 Releases） |
+| 签名 Secrets | `KEY_BASE64` / `SIGNING_CONFIG` / `GOOGLE_SERVICES_JSON` | 相同 |
+| 签名配置容错 | 四项完整才创建 release 配置 | 始终创建 release 配置（可能为空） |
+
+---
+
+## 架构注意事项
+
+### 当前设计的局限
+
+1. **无请求节流**：每次创建 ChatVM（进入聊天页）都会发起一次 API 请求，频繁切换会话可能
+   产生多余请求。可考虑加入时间窗口节流（如 30 分钟内不重复检查）或使用 DataStore 缓存
+   上次检查结果。
+
+2. **dismiss 状态非持久化**：`dismissed` 是 `remember { mutableStateOf(false) }`，仅在
+   当前 Composable 生命周期内有效。切换会话或重启应用后，如果仍有新版本，卡片会重新出现。
+
+3. **下载完成无自动安装**：DownloadManager 下载完成后仅在通知栏提示，用户需手动点击通知
+   安装 APK。未监听下载完成广播来弹出自定义安装引导。
+
+4. **错误状态无重试**：检查失败时仅展示静态错误卡片，无重试按钮。
+
+5. **无强制更新**：所有更新都是可选的，用户可以永久忽略。没有 minimumVersion 机制来
+   强制用户升级到安全版本。
+
+6. **下载无 MD5/SHA 校验**：下载完成后未验证 APK 完整性，依赖 HTTPS 传输保证安全性。
+
+7. **CI 产物未自动发布**：当前 CI 仅上传 Artifact，不自动发布到 GitHub Releases，
+   也不自动更新后端 API 版本信息。用户通过应用内更新检查看到的新版本需要手动维护后端数据。
+
+### 演进方向
+
+- **检查频率控制**：在 `PreferencesStore` 中记录 `lastUpdateCheckTime`，配合时间窗口节流
+- **dismiss 持久化**：将 dismissed 的版本号存入 DataStore，避免重复打扰
+- **下载完成监听**：注册 `DownloadManager.ACTION_DOWNLOAD_COMPLETE` 广播，下载完成后
+  弹出安装确认对话框
+- **CI 自动发布**：CI 构建后自动发布到 GitHub Releases，并触发后端 API 更新版本信息
+- **增量更新**：考虑接入 APK 增量更新（如 bsdiff/delta）减少下载体积
+- **多渠道分发**：支持 GitHub Releases、自建 CDN 等多下载源，提供备选链接

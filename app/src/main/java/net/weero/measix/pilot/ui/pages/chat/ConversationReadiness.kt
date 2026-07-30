@@ -157,6 +157,7 @@ internal fun ConversationReadinessCard(
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
             contentColor = MaterialTheme.colorScheme.onSurface,
         ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Column(
             modifier = Modifier.padding(if (compact) 4.dp else 8.dp),
@@ -228,7 +229,6 @@ internal fun ConversationReadinessCard(
                         )
                     },
                     description = stringResource(R.string.chat_readiness_memory_description),
-                    descriptionMaxLines = 1,
                     onClick = onMemoryClick,
                     scale = scale,
                 )
@@ -274,14 +274,13 @@ private fun ReadinessRow(
     onClick: () -> Unit,
     scale: Float,
     highlightTerm: String? = null,
-    descriptionMaxLines: Int = 2,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 6.dp, vertical = 6.dp),
+            .padding(horizontal = 6.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -341,8 +340,6 @@ private fun ReadinessRow(
                         lineHeight = MaterialTheme.typography.bodySmall.lineHeight * scale,
                     ),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = descriptionMaxLines,
-                    overflow = TextOverflow.Ellipsis,
                 )
             } else {
                 Text(
@@ -352,8 +349,6 @@ private fun ReadinessRow(
                         lineHeight = MaterialTheme.typography.bodySmall.lineHeight * scale,
                     ),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = descriptionMaxLines,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
