@@ -16,6 +16,13 @@ local.properties
 .DS_Store
 /captures
 
+# ---- 签名与敏感配置 ----
+*.jks
+*.keystore
+*.key
+app/app.key
+app/google-services.json
+
 # ---- AI Agent 配置 ----
 .codebuddy
 .claude

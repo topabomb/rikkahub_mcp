@@ -397,23 +397,162 @@ signingConfigs {
 ```yaml
 name: Release Build
 on:
-  workflow_dispatch:          # 仅手动触发
+  push:
+    tags:
+      - 'v*.*.*'            # 推送版本 tag 触发正式发布
+  workflow_dispatch:           # 手动触发（可选发布 Release 或仅构建 Artifact）
+    inputs:
+      publish_release:
+        description: '发布到 GitHub Releases（否则仅上传 Artifact）'
 ```
 
 流程：
 
-1. **Checkout**：`fetch-depth: 0` 获取完整历史
+1. **Checkout**：`fetch-depth: 0` 获取完整历史 + `submodules: recursive`（含 `material-color-utilities` 子模块）
 2. **JDK**：Temurin 17
-3. **Gradle 缓存**：按 `*.gradle*` 和 `gradle-wrapper.properties` 哈希缓存
+3. **Gradle Setup**：`gradle/actions/setup-gradle@v4`（自动缓存 + config-cache 兼容）
 4. **准备签名文件**：
    - `secrets.KEY_BASE64` → base64 解码 → `app/app.key`
    - `secrets.SIGNING_CONFIG` → 写入 `local.properties`
    - `secrets.GOOGLE_SERVICES_JSON` → 写入 `app/google-services.json`
-5. **构建**：`./gradlew assembleRelease`
-6. **上传产物**：`actions/upload-artifact@v4`，上传 `app/build/outputs/apk/release/*.apk`
+5. **构建**：`./gradlew assembleRelease`（R8 裁剪 + 资源裁剪 + ABI 拆分）
+6. **提取版本号与 changelog**：
+   - tag 触发时从 `GITHUB_REF_NAME` 提取版本号（`v0.0.12` → `0.0.12`）
+   - 手动触发时从 `app/build.gradle.kts` 的 `versionName` 提取
+   - 用 `awk` 从 `docs/dev/changelog.md` 提取对应版本段落作为 Release notes
+7. **发布 GitHub Release**（tag 触发或手动选择发布时）：
+   - `softprops/action-gh-release@v3` 自动创建 GitHub Release
+   - 上传 `app/build/outputs/apk/release/*.apk`（arm64-v8a、x86_64、universal 三个变体）
+   - Release body 使用从 changelog.md 提取的内容
+   - `make_latest: true` 标记为最新版本
+8. **上传 Artifact**（手动触发且未选择发布时）：
+   - `actions/upload-artifact@v4` 上传 APK，供手动下载
+9. **清理**：构建后删除签名文件，减少残留风险
 
-产物以 GitHub Artifact 形式托管，手动下载。不自动发布到 GitHub Releases，
-也不自动更新后端 API 的版本信息——这些步骤需要手动操作。
+安全措施：
+
+- **最小权限**：`permissions: contents: write`，仅授予发布 Release 所需权限
+- **`.gitignore` 补全**：`*.jks`、`*.keystore`、`*.key`、`app/app.key`、
+  `app/google-services.json` 全部忽略，防止误提交
+- **签名文件清理**：`if: always()` 确保 CI 结束后删除临时签名文件
+
+产物以 GitHub Releases 形式自动托管，用户可通过应用内更新检查下载。
+后端 API 版本信息仍需手动维护（或后续通过 CI webhook 自动更新）。
+
+### Submodule 注意事项
+
+项目通过 git submodule 引入 `material-color-utilities` 库（`material3/material-color-utilities/`），
+CI checkout 时必须配置 `submodules: recursive`，否则 `DynamicSchemeExt.kt` 会因找不到
+`dynamiccolor` 包而编译失败。
+
+submodule 指向的 commit 必须在上游仓库的分支/tag 上可达。如果对 submodule 做了本地修改
+（如移除不安全的 `!!` 断言），该 commit 不会被推送到上游仓库，CI 将无法 fetch。解决方式：
+
+1. 将修改推送到自己 fork 的 submodule 仓库，并更新 `.gitmodules` 的 URL 指向 fork
+2. 或者直接将修改提交到上游 PR，合并后更新 submodule 指向
+3. 或者 vendor 源码（移除 submodule，将文件直接提交到主仓库）
+
+当前 submodule 指向上游 `material-foundation/material-color-utilities` 的 `main` 分支最新 commit。
+
+### GitHub Secrets 配置
+
+CI 需要以下 GitHub Secrets（仓库 **Settings → Secrets and variables → Actions**）：
+
+| Secret 名 | 说明 | 格式 |
+|-----------|------|------|
+| `KEY_BASE64` | keystore 文件的 base64 编码 | `base64 -w0 keystore.jks` 的输出 |
+| `SIGNING_CONFIG` | 写入 `local.properties` 的签名配置 | `storeFile=app.key` + 密码/别名（多行文本） |
+| `GOOGLE_SERVICES_JSON` | google-services.json 全文（可选） | JSON 文件内容 |
+
+`SIGNING_CONFIG` 的内容格式（注意 `storeFile` 是相对路径 `app.key`，不是本地绝对路径）：
+
+```properties
+storeFile=app.key
+storePassword=<keystore 密码>
+keyAlias=<key 别名>
+keyPassword=<key 密码>
+```
+
+> 项目未使用 Firebase/Google Services，`GOOGLE_SERVICES_JSON` 可不配置，
+> workflow 会自动跳过该步骤。
+
+签名 Secrets 存为 Repository secrets（仓库级，所有 workflow 可访问）。
+使用 `gh` CLI 配置示例：
+
+```bash
+# 生成 keystore 的 base64
+base64 -w0 keystore.jks | gh secret set KEY_BASE64 --repo <owner>/<repo>
+
+# 写入签名配置
+echo -e "storeFile=app.key\nstorePassword=xxx\nkeyAlias=xxx\nkeyPassword=xxx" | gh secret set SIGNING_CONFIG --repo <owner>/<repo>
+```
+
+### 正式发版操作流程（Release SOP）
+
+#### 1. 更新版本号
+
+编辑 `app/build.gradle.kts`：
+
+```kotlin
+versionCode = 12          // 递增
+versionName = "0.0.12"    // 与 tag 对应
+```
+
+#### 2. 更新 changelog
+
+在 `docs/dev/changelog.md` 顶部新增版本条目：
+
+```markdown
+## 0.0.12（versionCode 12）— 2026-07-30
+
+### 新增
+- xxx
+
+### 修复
+- xxx
+
+### 变更
+- xxx
+```
+
+> changelog 的版本段落会被 CI 自动提取为 GitHub Release 的 body。
+
+#### 3. 提交并打 tag
+
+```bash
+git add app/build.gradle.kts docs/dev/changelog.md
+git commit -m "release: 0.0.12"
+git tag v0.0.12              # tag 必须以 v 开头，格式 v*.*.*
+git push origin master --tags
+```
+
+#### 4. CI 自动执行
+
+推送 tag 后 GitHub Actions 自动触发：
+
+1. 构建 release APK（R8 裁剪 + 签名 + ABI 拆分，约 8 分钟）
+2. 从 `GITHUB_REF_NAME` 提取版本号（`v0.0.12` → `0.0.12`）
+3. 从 `changelog.md` 提取 `## 0.0.12` 段落作为 Release notes
+4. 使用 `softprops/action-gh-release@v3` 创建 GitHub Release
+5. 上传 3 个 APK 变体（`arm64-v8a`、`x86_64`、`universal`）
+
+#### 5. 验证 Release
+
+打开仓库 **Releases** 页面，确认：
+
+- Release 标题：`MeasixPilot 0.0.12`
+- Release body：changelog.md 中 `## 0.0.12` 段落内容
+- 附件：3 个 APK 文件
+
+#### 6. 更新后端 API（手动）
+
+GitHub Release 的 APK 下载 URL 格式固定：
+
+```text
+https://github.com/{owner}/{repo}/releases/download/v{version}/MeasixPilot_{version}_{abi}-release.apk
+```
+
+在后端服务中更新 `UpdateInfo`，`downloads[].url` 指向 GitHub Release 的 asset 下载链接。
 
 ### 上游 RikkaHub CI（`.github/workflows/daily-build.yml`）
 
@@ -452,8 +591,8 @@ daily-build CI → GitHub Releases (nightly tag) → updates.rikka-ai.com API �
 ### 当前项目的更新后端
 
 当前项目 API 端点 `https://measix.weero.net/mobile/` 由独立的后端服务维护。
-CI 构建的 APK 以 GitHub Artifact 形式托管，不自动发布到 Releases，也不自动更新后端 API。
-版本信息的发布和 APK 托管地址需要手动维护。
+CI tag 驱动构建后自动发布到 GitHub Releases，但后端 API 的版本信息仍需手动更新。
+`downloads[].url` 指向 GitHub Release 的 asset 下载链接，格式固定。
 
 ### APK 产物命名
 
@@ -495,13 +634,16 @@ Fork 时完整保留了上游的版本检查机制，仅做了以下适配：
 | 维度 | Measix Pilot（当前 Fork） | 上游 RikkaHub |
 |------|--------------------------|---------------|
 | CI 文件 | `release.yml` | `daily-build.yml` |
-| 触发方式 | 仅手动 `workflow_dispatch` | 每日定时 + 手动 |
+| 触发方式 | tag 驱动 (`push: tags: v*.*.*`) + 手动 | 每日定时 + 手动 |
 | 前端模块 | 无（精简移除） | `web-ui/`（pnpm + React Router） |
-| 子模块 | 无 | `submodules: recursive` |
-| 产物托管 | GitHub Artifacts（手动下载） | GitHub Releases（nightly 预发布） |
+| 子模块 | `material-color-utilities`（`submodules: recursive`） | `submodules: recursive` |
+| 产物托管 | GitHub Releases（正式版）+ Artifacts（手动构建） | GitHub Releases（nightly 预发布） |
+| Release notes | 从 `docs/dev/changelog.md` 自动提取 | commit SHA + 固定文案 |
 | 后端 API | `measix.weero.net`（独立维护） | `updates.rikka-ai.com`（自动关联 Releases） |
 | 签名 Secrets | `KEY_BASE64` / `SIGNING_CONFIG` / `GOOGLE_SERVICES_JSON` | 相同 |
 | 签名配置容错 | 四项完整才创建 release 配置 | 始终创建 release 配置（可能为空） |
+| 权限收敛 | `permissions: contents: write` | 默认 |
+| 签名清理 | `if: always()` 删除临时文件 | 无 |
 
 ---
 
@@ -524,10 +666,12 @@ Fork 时完整保留了上游的版本检查机制，仅做了以下适配：
 5. **无强制更新**：所有更新都是可选的，用户可以永久忽略。没有 minimumVersion 机制来
    强制用户升级到安全版本。
 
-6. **下载无 MD5/SHA 校验**：下载完成后未验证 APK 完整性，依赖 HTTPS 传输保证安全性。
+6. **下载无 SHA 校验**：CI 构建后未生成 APK 的 SHA-256 校验文件，用户无法
+   验证下载完整性。依赖 HTTPS 传输保证安全性。后续可在 Release 中附带 `.sha256` 文件。
 
-7. **CI 产物未自动发布**：当前 CI 仅上传 Artifact，不自动发布到 GitHub Releases，
-   也不自动更新后端 API 版本信息。用户通过应用内更新检查看到的新版本需要手动维护后端数据。
+7. **后端 API 未自动更新**：CI 已自动发布到 GitHub Releases，但后端 API
+   （`measix.weero.net/mobile/`）的版本信息仍需手动维护。后续可通过 CI webhook
+   在发版后自动通知后端更新 `UpdateInfo`。
 
 ### 演进方向
 
@@ -535,6 +679,7 @@ Fork 时完整保留了上游的版本检查机制，仅做了以下适配：
 - **dismiss 持久化**：将 dismissed 的版本号存入 DataStore，避免重复打扰
 - **下载完成监听**：注册 `DownloadManager.ACTION_DOWNLOAD_COMPLETE` 广播，下载完成后
   弹出安装确认对话框
-- **CI 自动发布**：CI 构建后自动发布到 GitHub Releases，并触发后端 API 更新版本信息
+- **CI 自动发布**：CI 已实现 tag 驱动自动发布到 GitHub Releases；后续可扩展
+  为发版后自动触发后端 API webhook 更新版本信息，实现全链路自动化
 - **增量更新**：考虑接入 APK 增量更新（如 bsdiff/delta）减少下载体积
 - **多渠道分发**：支持 GitHub Releases、自建 CDN 等多下载源，提供备选链接

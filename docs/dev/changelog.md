@@ -67,6 +67,7 @@
 - 依赖升级：material3 1.5.0-alpha23 → 1.5.0-alpha24；kotlin 2.4.0 → 2.4.10；ksp 2.3.4 → 2.3.10；sonner 0.3.9 → 0.4.0
 - **配置卡片标题行与文案优化**：标题从纯文本"配置此会话"改为"为 [头像][高亮助手名] 配置此会话"左右布局，右侧设置按钮与抽屉风格一致；MCP/本地能力状态文案从"已启用n项"简化为"启用n项"；五语言适配前后缀拆分
 - **默认系统提示词抽离常量**：将默认助手系统提示词从 `PreferencesStore` 硬编码抽离为 `Assistant.kt` 中的 `DEFAULT_SYSTEM_PROMPT` 常量，新建助手时自动填入
+- **CI 自动化发行**：`release.yml` 从仅手动触发 + Artifact 下载改为 tag 驱动（`push: tags: v*.*.*`）自动发布 GitHub Releases；新增 `permissions: contents: write` 权限收敛、changelog 自动提取、签名文件清理；`.gitignore` 补全 `*.jks`/`*.keystore`/`*.key`/`app/app.key`/`app/google-services.json`；修复 submodule 未 checkout（`submodules: recursive`）和版本号 grep 匹配到 `RenameApkTask` 属性的问题；更新 `material-color-utilities` submodule 到上游最新可用 commit；`docs/references/update-mechanism.md` 新增 Submodule 注意事项、Secrets 配置和正式发版操作流程章节
 
 ### 上游同步
 

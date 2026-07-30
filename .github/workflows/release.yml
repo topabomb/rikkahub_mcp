@@ -1,16 +1,28 @@
 name: Release Build
 
 on:
+  push:
+    tags:
+      - 'v*.*.*'
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: '发布到 GitHub Releases（否则仅上传 Artifact）'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: write
+
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: recursive
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -18,33 +30,74 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Gradle cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
 
-      - name: Prepare build files
+      - name: Prepare signing files
+        env:
+          KEY_BASE64: ${{ secrets.KEY_BASE64 }}
+          SIGNING_CONFIG: ${{ secrets.SIGNING_CONFIG }}
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
-          # 解码base64编码的keystore文件
-          echo "${{ secrets.KEY_BASE64 }}" | base64 -d > app/app.key
-          
-          # 写入签名配置到local.properties
-          echo "${{ secrets.SIGNING_CONFIG }}" > local.properties
-          
-          # 写入Google Services配置
-          echo '${{ secrets.GOOGLE_SERVICES_JSON }}' > app/google-services.json
+          # 解码 base64 编码的 keystore 文件
+          echo "$KEY_BASE64" | base64 -d > app/app.key
 
-      - name: Gradle Build
+          # 写入签名配置到 local.properties
+          printf '%s\n' "$SIGNING_CONFIG" > local.properties
+
+          # 写入 Google Services 配置（如果配置了该 Secret）
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s\n' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+          fi
+
+      - name: Build Release APK
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        if: success()
+      - name: Extract version and changelog
+        id: release_info
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION=$(grep -E '^\s*versionName\s*=' app/build.gradle.kts | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+          # 从 docs/dev/changelog.md 提取对应版本段落作为 Release notes
+          CHANGELOG=$(awk -v ver="$VERSION" '/^## / {flag = ($0 ~ "^## " ver)} flag' docs/dev/changelog.md)
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="Release ${VERSION}"
+          fi
+
+          {
+            echo "changelog<<EOF"
+            echo "$CHANGELOG"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag' || inputs.publish_release == true
+        uses: softprops/action-gh-release@v3
         with:
-          name: artifacts
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.release_info.outputs.version) }}
+          target_commitish: ${{ github.sha }}
+          name: MeasixPilot ${{ steps.release_info.outputs.version }}
+          body: ${{ steps.release_info.outputs.changelog }}
+          files: app/build/outputs/apk/release/*.apk
+          generate_release_notes: false
+          make_latest: true
+          fail_on_unmatched_files: true
+
+      - name: Upload artifacts (non-release)
+        if: github.ref_type != 'tag' && inputs.publish_release != true
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeasixPilot-${{ steps.release_info.outputs.version }}-artifacts
           path: app/build/outputs/apk/release/*.apk
+
+      - name: Cleanup signing files
+        if: always()
+        run: |
+          rm -f app/app.key local.properties app/google-services.json
