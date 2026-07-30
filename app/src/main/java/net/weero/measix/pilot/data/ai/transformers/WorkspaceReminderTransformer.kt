@@ -25,7 +25,9 @@ class WorkspaceReminderTransformer(
         // 与 ChatService.createWorkspaceToolsIfReady 保持一致: 仅在 shell 就绪时注入
         if (workspace.shellStatus != WorkspaceShellStatus.READY.name) return messages
 
-        val prompt = buildWorkspacePrompt(workspace, ctx.workspaceCwd)
+        // 设计权衡：不注入 cwd（当前工作目录）。模型自己执行了 cd，结果已记录在对话历史中。
+        // 注入 cwd 到 System 消息会导致任何目录切换都破坏整条请求的缓存前缀。
+        val prompt = buildWorkspacePrompt(workspace)
 
         // 追加到第一条 system 消息; 若不存在则插入一条
         val systemIndex = messages.indexOfFirst { it.role == MessageRole.SYSTEM }
@@ -39,7 +41,7 @@ class WorkspaceReminderTransformer(
     }
 }
 
-private fun buildWorkspacePrompt(workspace: WorkspaceEntity, cwd: String? = null): String = buildString {
+private fun buildWorkspacePrompt(workspace: WorkspaceEntity): String = buildString {
     appendLine("<workspace>")
     appendLine("You have access to a persistent Linux workspace named \"${workspace.name}\", running in a sandboxed proot rootfs environment.")
     appendLine("- The workspace files area is mounted at `/workspace`. Use it as your working directory; files written there persist across turns of this conversation.")
@@ -51,9 +53,6 @@ private fun buildWorkspacePrompt(workspace: WorkspaceEntity, cwd: String? = null
     appendLine("- Prefer `workspace_shell` for tasks that standard Unix tools handle well, and prefer `workspace_edit_file` for targeted edits over rewriting whole files.")
     appendLine("- The skills directory is mounted at `/skills`. Each skill is a subdirectory `/skills/<skill-name>/` containing a `SKILL.md` (with `name` and `description` frontmatter) plus any supporting files. Read a skill's `SKILL.md` before using it, and follow its instructions.")
     appendLine("- Files the user uploaded are mounted at `/upload`. Treat `/upload` as READ-ONLY: read uploaded files from `/upload/<file-name>`, but never modify, overwrite, or delete anything there. If you need to change an uploaded file, copy it into `/workspace` first and edit the copy.")
-    if (!cwd.isNullOrBlank()) {
-        appendLine("- Current working directory: `$cwd`. Use this as the default context for file operations and shell commands.")
-    }
     append("</workspace>")
 }
 

@@ -1,7 +1,6 @@
 ﻿package net.weero.measix.pilot.data.ai.transformers
 
 import android.content.Context
-import android.os.BatteryManager
 import android.os.Build
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -16,8 +15,6 @@ import net.weero.measix.pilot.data.model.Assistant
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.get
 import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.time.temporal.Temporal
@@ -64,14 +61,6 @@ object DefaultPlaceholderProvider : PlaceholderProvider {
             LocalDate.now().toDateString()
         }
 
-        placeholder("cur_time", { Text(stringResource(R.string.placeholder_current_time)) }) {
-            LocalTime.now().toTimeString()
-        }
-
-        placeholder("cur_datetime", { Text(stringResource(R.string.placeholder_current_datetime)) }) {
-            LocalDateTime.now().toDateTimeString()
-        }
-
         placeholder("model_id", { Text(stringResource(R.string.placeholder_model_id)) }) {
             it.model.modelId
         }
@@ -96,10 +85,10 @@ object DefaultPlaceholderProvider : PlaceholderProvider {
             "${Build.BRAND} ${Build.MODEL}"
         }
 
-        placeholder("battery_level", { Text(stringResource(R.string.placeholder_battery_level)) }) {
-            it.context.batteryLevel().toString()
-        }
-
+        // 设计权衡：battery_level 每请求必变，会持续破坏提示词缓存前缀。
+        // 默认提示词未使用此占位符，故直接移除而不做兼容降级。
+        // cur_time/cur_datetime 同理已移除，但保留降级替换（兼容旧用户可能手动配置）。
+        // cur_date 一天一变，多数 Provider 缓存 TTL 短于一天，保留。
         placeholder("nickname", { Text(stringResource(R.string.placeholder_nickname)) }) {
             it.settingsStore.settingsFlow.value.displaySetting.userNickname.ifBlank { "user" }
         }
@@ -117,21 +106,6 @@ object DefaultPlaceholderProvider : PlaceholderProvider {
         .ofLocalizedDate(FormatStyle.MEDIUM)
         .withLocale(Locale.getDefault())
         .format(this)
-
-    private fun Temporal.toTimeString() = DateTimeFormatter
-        .ofLocalizedTime(FormatStyle.MEDIUM)
-        .withLocale(Locale.getDefault())
-        .format(this)
-
-    private fun Temporal.toDateTimeString() = DateTimeFormatter
-        .ofLocalizedDateTime(FormatStyle.MEDIUM)
-        .withLocale(Locale.getDefault())
-        .format(this)
-
-    private fun Context.batteryLevel(): Int {
-        val batteryManager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-        return batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-    }
 }
 
 object PlaceholderTransformer : InputMessageTransformer, KoinComponent {
@@ -176,6 +150,17 @@ object PlaceholderTransformer : InputMessageTransformer, KoinComponent {
                 .replace(oldValue = "{{$key}}", newValue = value, ignoreCase = true)
                 .replace(oldValue = "{$key}", newValue = value, ignoreCase = true)
         }
+
+        // 向后兼容：cur_time / cur_datetime 已移除，降级为 cur_date 避免破坏已有用户配置的提示词缓存
+        val dateValue = DateTimeFormatter
+            .ofLocalizedDate(FormatStyle.MEDIUM)
+            .withLocale(Locale.getDefault())
+            .format(LocalDate.now())
+        result = result
+            .replace("{{cur_time}}", dateValue, ignoreCase = true)
+            .replace("{cur_time}", dateValue, ignoreCase = true)
+            .replace("{{cur_datetime}}", dateValue, ignoreCase = true)
+            .replace("{cur_datetime}", dateValue, ignoreCase = true)
 
         return result
     }

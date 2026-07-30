@@ -54,6 +54,13 @@
 - **空会话切换助手无效**：`moveConversationToAssistant` 对未持久化的空会话 DB 查询返回 null 后直接退出；改为使用内存状态 fallback。`saveConversation` 对空会话跳过内存状态更新，改为始终更新内存状态、仅跳过 DB 持久化
 - **助手头像点击无响应**：`UIAvatar` 在没有自身操作时仍拦截父级点击，导致配置会话标题和助手列表中的头像成为无响应区域；改为仅在编辑或显式点击时消费事件，头像与助手名称现在触发同一切换操作
 - **切换助手覆盖会话状态**：活动会话改以内存状态为准，避免数据库旧快照覆盖尚未落库的更新；重复选择当前助手按无操作处理，不再意外清空会话文件夹归属
+- **Grok 生图 size 参数 400**：`generateImage` 检测 Grok（x.ai baseUrl 或 grok modelId）时跳过 `size` 参数
+- **删除会话未等待即跳转**：`deleteConversation` 返回 `Job`，抽屉 `onDelete` 等待删除完成后再刷新列表和导航
+- **切换助手后新对话归属旧助手**：`updateSettings` 返回 `Job`，`AssistantPicker` 等待持久化完成后再创建新会话
+- **cur_time/cur_datetime 占位符破坏提示词缓存**：移除这两个每次请求都变化的占位符，默认提示词改用 `{{cur_date}}`；已配置旧占位符的用户自动降级为日期值
+- **battery_level 占位符破坏提示词缓存**：移除该每请求必变占位符，无需兼容（默认提示词未使用）
+- **Workspace cwd 注入破坏 System 消息缓存前缀**：移除 workspace 引导中的 cwd 行，模型执行 cd 的结果已记录在对话历史中，System 消息不再随目录切换而变化
+
 
 ### 变更
 
