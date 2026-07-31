@@ -584,8 +584,10 @@
   <string name="setting_display_page_amoled_dark_mode_title">AMOLED 다크 모드</string>
   <string name="setting_display_page_auto_collapse_thinking_desc">사고 완료 후 자동으로 사고 내용 접기</string>
   <string name="setting_display_page_auto_collapse_thinking_title">사고 자동 접기</string>
-  <string name="setting_display_page_auto_play_tts_desc">어시스턴트 메시지 생성 완료 후 TTS 자동 재생</string>
-  <string name="setting_display_page_auto_play_tts_title">생성 후 TTS 자동 재생</string>
+  <string name="setting_display_page_auto_play_tts_desc">생성 완료 후 어시스턴트의 전체 응답을 자동으로 읽어줍니다</string>
+  <string name="setting_display_page_auto_play_tts_title">생성 후 자동 읽기</string>
+  <string name="setting_display_page_tts_tool_sequential_playback_desc">한 번의 생성에서 음성 도구가 여러 번 호출되면, 매번 중단하지 않고 순서대로 재생합니다</string>
+  <string name="setting_display_page_tts_tool_sequential_playback_title">도구 음성 순차 재생</string>
   <string name="setting_display_page_chat_font_family_default">기본</string>
   <string name="setting_display_page_chat_font_family_monospace">고정폭</string>
   <string name="setting_display_page_chat_font_family_serif">명조체</string>

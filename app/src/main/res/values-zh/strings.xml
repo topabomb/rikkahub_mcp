@@ -586,8 +586,10 @@
   <string name="setting_display_page_amoled_dark_mode_title">AMOLED 暗色模式</string>
   <string name="setting_display_page_auto_collapse_thinking_desc">思考完成自动折叠思考内容</string>
   <string name="setting_display_page_auto_collapse_thinking_title">自动折叠思考</string>
-  <string name="setting_display_page_auto_play_tts_desc">助手消息生成完成后自动播放TTS</string>
-  <string name="setting_display_page_auto_play_tts_title">生成后自动播放TTS</string>
+  <string name="setting_display_page_auto_play_tts_desc">生成完成后自动朗读助手的完整回复</string>
+  <string name="setting_display_page_auto_play_tts_title">生成后自动朗读</string>
+  <string name="setting_display_page_tts_tool_sequential_playback_desc">同一轮对话中多次调用语音工具时，按顺序连续播放而非每次打断</string>
+  <string name="setting_display_page_tts_tool_sequential_playback_title">工具语音顺序播放</string>
   <string name="setting_display_page_chat_font_family_default">默认</string>
   <string name="setting_display_page_chat_font_family_custom">自定义</string>
   <string name="setting_display_page_chat_font_family_monospace">等宽字体</string>

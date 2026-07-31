@@ -586,8 +586,10 @@
   <string name="setting_display_page_amoled_dark_mode_title">AMOLED Dark Mode</string>
   <string name="setting_display_page_auto_collapse_thinking_desc">Automatically collapse thinking content after thinking is complete</string>
   <string name="setting_display_page_auto_collapse_thinking_title">Auto Collapse Thinking</string>
-  <string name="setting_display_page_auto_play_tts_desc">Automatically play TTS after assistant message generation completes</string>
-  <string name="setting_display_page_auto_play_tts_title">Auto-play TTS After Generation</string>
+  <string name="setting_display_page_auto_play_tts_desc">Automatically read the full assistant response after generation completes</string>
+  <string name="setting_display_page_auto_play_tts_title">Auto-read Response After Generation</string>
+  <string name="setting_display_page_tts_tool_sequential_playback_desc">When the speech tool is called multiple times in one generation, play sequentially instead of interrupting each time</string>
+  <string name="setting_display_page_tts_tool_sequential_playback_title">Sequential Tool Speech</string>
   <string name="setting_display_page_chat_font_family_default">Default</string>
   <string name="setting_display_page_chat_font_family_custom">Custom</string>
   <string name="setting_display_page_chat_font_family_monospace">Monospace</string>

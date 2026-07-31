@@ -584,8 +584,10 @@
   <string name="setting_display_page_amoled_dark_mode_title">AMOLED-тёмная тема</string>
   <string name="setting_display_page_auto_collapse_thinking_desc">Автоматически сворачивать блок мышления после его завершения</string>
   <string name="setting_display_page_auto_collapse_thinking_title">Автоматически сворачивать мысли</string>
-  <string name="setting_display_page_auto_play_tts_desc">Автоматически воспроизводить TTS после завершения генерации ответа ассистента</string>
-  <string name="setting_display_page_auto_play_tts_title">Автовоспроизведение TTS после генерации</string>
+  <string name="setting_display_page_auto_play_tts_desc">Автоматически озвучивать полный ответ ассистента после завершения генерации</string>
+  <string name="setting_display_page_auto_play_tts_title">Автоозвучка после генерации</string>
+  <string name="setting_display_page_tts_tool_sequential_playback_desc">При многократном вызове речевого инструмента в одной генерации воспроизводить последовательно, не прерывая каждый раз</string>
+  <string name="setting_display_page_tts_tool_sequential_playback_title">Последовательное воспроизведение речи</string>
   <string name="setting_display_page_chat_font_family_default">По умолчанию</string>
   <string name="setting_display_page_chat_font_family_monospace">Моноширинный</string>
   <string name="setting_display_page_chat_font_family_serif">С засечками</string>

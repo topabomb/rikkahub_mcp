@@ -18,6 +18,7 @@
 - **上下文管理双层策略**：Assistant 可显式开启请求级阶梯裁剪，默认关闭，开启后默认 80 条、范围 40～512；裁剪锚点按完整 USER 轮次分段移动，减少相邻请求的提示缓存前缀漂移且不改写会话。用户触发的语义压缩继续负责用摘要替换较早历史
 - **本地生成链路参考文档**：基于上游有价值的生成管线文档，按 Measix Pilot 的通知解耦、Workspace、MCP、工具集合及上下文策略重写，并新增上下文管理决策文档
 - **版本检查与自动更新参考文档**：调研本项目与上游 RikkaHub 的版本检查机制（架构、网络交互、SemVer 比较、UI 交互流程、Play Store 安装来源检测），输出 `docs/references/update-mechanism.md`
+- **TTS 工具顺序播放**：同一轮生成中 AI 多次调用 `text_to_speech` 工具时，首次打断之前播放、后续追加到队列末尾顺序播放；新增 `ttsToolSequentialPlayback` 设置项（默认开启，可关闭恢复每次打断行为）。`AppEvent.Speak` 新增 `flush` 参数区分打断与追加；`autoPlayTTSAfterGeneration` 文案同步更新为"生成后自动朗读"
 
 ### 修复
 

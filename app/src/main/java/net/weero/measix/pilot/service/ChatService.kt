@@ -499,6 +499,9 @@ class ChatService(
         conversationId: Uuid,
         messageRange: ClosedRange<Int>? = null
     ) {
+        // 重置 TTS 工具顺序播放标志，确保本轮生成首次调用 text_to_speech 时 flush
+        localTools.ttsCalledInCurrentGeneration.set(false)
+
         val settings = settingsStore.settingsFlow.first()
         val initialConversation = getConversationFlow(conversationId).value
         val assistant = settings.getAssistantById(initialConversation.assistantId)

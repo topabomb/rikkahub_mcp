@@ -584,8 +584,10 @@
   <string name="setting_display_page_amoled_dark_mode_title">AMOLED ダークモード</string>
   <string name="setting_display_page_auto_collapse_thinking_desc">思考が完了したら思考内容を自動的に折りたたむ</string>
   <string name="setting_display_page_auto_collapse_thinking_title">思考を自動折りたたむ</string>
-  <string name="setting_display_page_auto_play_tts_desc">アシスタントのメッセージ生成完了後にTTSを自動再生</string>
-  <string name="setting_display_page_auto_play_tts_title">生成後にTTSを自動再生</string>
+  <string name="setting_display_page_auto_play_tts_desc">生成完了後、アシスタントの完全な返信を自動的に音読</string>
+  <string name="setting_display_page_auto_play_tts_title">生成後に自動で音読</string>
+  <string name="setting_display_page_tts_tool_sequential_playback_desc">同一生成内で音声ツールが複数回呼び出された場合、毎回中断せず順番に再生します</string>
+  <string name="setting_display_page_tts_tool_sequential_playback_title">ツール音声の順次再生</string>
   <string name="setting_display_page_chat_font_family_default">デフォルト</string>
   <string name="setting_display_page_chat_font_family_monospace">等幅</string>
   <string name="setting_display_page_chat_font_family_serif">明朝体</string>

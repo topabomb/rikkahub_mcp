@@ -18,6 +18,7 @@ internal fun buildTextToSpeechTool(
     eventBus: AppEventBus,
     ttsManager: TTSManager,
     settingsStore: SettingsStore,
+    localTools: LocalTools,
 ): Tool = Tool(
     name = "text_to_speech",
     description = """
@@ -46,7 +47,21 @@ internal fun buildTextToSpeechTool(
     execute = {
         val text = it.jsonObject["text"]?.jsonPrimitive?.contentOrNull
             ?: error("text is required")
-        eventBus.emit(AppEvent.Speak(text))
+
+        // 顺序播放：开启时首次调用 flush 打断之前播放，后续调用 append 追加到队列末尾；
+        // 关闭时始终 flush，每次调用都打断重新播放。
+        // 注意：朗读内容是 AI 指定的 text 参数，不经过 ttsOnlyReadQuoted /
+        // ttsOnlyReadOutsideBrackets 过滤（与手动朗读/autoPlay 不同），
+        // 因为 AI 已经在生成时决定了要朗读的内容。
+        val sequentialEnabled = settingsStore.settingsFlow.value
+            .displaySetting.ttsToolSequentialPlayback
+        val flush = if (sequentialEnabled) {
+            localTools.ttsCalledInCurrentGeneration.compareAndSet(false, true)
+        } else {
+            true
+        }
+
+        eventBus.emit(AppEvent.Speak(text, flush = flush))
         val payload = buildJsonObject {
             put("success", true)
         }

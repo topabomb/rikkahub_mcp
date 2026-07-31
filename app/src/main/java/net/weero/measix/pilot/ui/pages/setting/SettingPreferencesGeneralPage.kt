@@ -309,6 +309,18 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
                             )
                         },
                     )
+                    item(
+                        headlineContent = { Text(stringResource(R.string.setting_display_page_tts_tool_sequential_playback_title)) },
+                        supportingContent = { Text(stringResource(R.string.setting_display_page_tts_tool_sequential_playback_desc)) },
+                        trailingContent = {
+                            Switch(
+                                checked = displaySetting.ttsToolSequentialPlayback,
+                                onCheckedChange = {
+                                    updateDisplaySetting(displaySetting.copy(ttsToolSequentialPlayback = it))
+                                }
+                            )
+                        },
+                    )
                 }
             }
         }
