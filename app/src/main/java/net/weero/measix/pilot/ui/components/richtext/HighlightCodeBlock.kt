@@ -52,13 +52,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
-import me.rerere.highlight.HighlightText
+import me.rerere.highlight.CodeHighlightText
 import me.rerere.highlight.HighlightTextColorPalette
-import me.rerere.highlight.Highlighter
-import me.rerere.highlight.LocalHighlighter
+import me.rerere.highlight.CodeHighlighter
 import me.rerere.highlight.buildHighlightText
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowDown01
@@ -70,6 +68,7 @@ import me.rerere.hugeicons.stroke.Eye
 import me.rerere.hugeicons.stroke.View
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
+import net.weero.measix.pilot.ui.components.webview.WEB_VIEW_BASE_URL
 import net.weero.measix.pilot.ui.components.webview.WebView
 import net.weero.measix.pilot.ui.components.webview.WebViewContentCache
 import net.weero.measix.pilot.ui.components.webview.rememberWebViewState
@@ -277,7 +276,7 @@ private fun CodeBlockWithLineNumbersWrapped(
                         softWrap = false,
                         modifier = Modifier.padding(end = 8.dp)
                     )
-                    HighlightText(
+                    CodeHighlightText(
                         code = line,
                         language = language,
                         fontSize = textStyle.fontSize,
@@ -337,7 +336,7 @@ private fun CodeBlockDefault(
 
         // 代码列
         SelectionContainer {
-            HighlightText(
+            CodeHighlightText(
                 code = displayCode,
                 language = language,
                 modifier = Modifier.animateContentSize(),
@@ -481,7 +480,7 @@ private fun CodeBlockPreview(
 ) {
     val state = rememberWebViewState(
         data = buildCodePreviewHtml(code = code, language = language),
-        baseUrl = "https://measix.local",
+        baseUrl = WEB_VIEW_BASE_URL,
         mimeType = "text/html",
         settings = {
             builtInZoomControls = true
@@ -507,7 +506,7 @@ private fun buildCodePreviewHtml(code: String, language: String): String {
 
 class HighlightCodeVisualTransformation(
     val language: String,
-    val highlighter: Highlighter,
+    val highlighter: CodeHighlighter,
     val darkMode: Boolean
 ) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
@@ -516,12 +515,10 @@ class HighlightCodeVisualTransformation(
             if (text.text.isEmpty()) {
                 AnnotatedString("")
             } else {
-                runBlocking {
-                    val tokens = highlighter.highlight(text.text, language)
-                    buildAnnotatedString {
-                        tokens.forEach { token ->
-                            buildHighlightText(token, colorPalette)
-                        }
+                val tokens = highlighter.highlight(text.text, language)
+                buildAnnotatedString {
+                    tokens.forEach { token ->
+                        buildHighlightText(token, colorPalette)
                     }
                 }
             }
@@ -532,15 +529,6 @@ class HighlightCodeVisualTransformation(
         return TransformedText(
             text = annotatedString,
             offsetMapping = OffsetMapping.Identity
-        )
-    }
-
-    companion object {
-        @Composable
-        fun regex() = HighlightCodeVisualTransformation(
-            language = "regex",
-            highlighter = LocalHighlighter.current,
-            darkMode = LocalDarkMode.current,
         )
     }
 }

@@ -15,6 +15,7 @@
 local.properties
 .DS_Store
 /captures
+node_modules/
 
 # ---- 签名与敏感配置 ----
 *.jks

@@ -122,6 +122,69 @@
 
 ## 检查记录
 
+### 2026-08-02 - 检查 3a18dae8+ 更新（第十批）
+
+> **同步状态：✅ 全部完成（7 个同步 + 1 个按需引入 + 4 个跳过；编译通过 + 单元测试通过）**
+>
+> 详细分析文档：[batch-10-2026-08-02.md](upstream-sync/batch-10-2026-08-02.md)
+
+**检查范围**：`3a18dae8..8349ef25`（2026-07-30 ~ 2026-07-31，共 12 个提交）
+
+**原项目信息**：
+- Fork 基线：2.3.1（versionCode 164）- 2026-06-18
+- 本次检查最新上游提交：`8349ef25`（2026-07-31）
+- 上次检查时间：2026-07-30（第九批扩容，`3a18dae8`）
+
+**版本号对应关系**：
+
+| 维度 | 上游 | 本地 | 说明 |
+|------|------|------|------|
+| 版本名 | 2.4.5 | 0.0.12 | 版本线独立，不跟随上游版本号 |
+| versionCode | 172 | 12 | 独立递增 |
+| DB 版本 | v24 | v3 | 本地从 v1 重建，无历史 migration 包袱 |
+
+> 本轮同步涉及持久化变更（新增 `defaultTTSPlaybackSpeed` Settings 字段）和 highlight 模块
+> 大规模重写（QuickJS + prism.js → 纯 Kotlin，30+ 语言）。已递增本地版本号至 `0.0.12`（versionCode 12）。
+
+**已同步（7 个提交）**：
+
+| # | 提交 | 描述 | 类别 |
+|---|------|------|------|
+| 1 | `d7897022` | Kotlin 原生实现语法高亮（含 WIP `16be94e8`） | 架构改进 |
+| 2 | `952fa019` | 声明 legacy storage 权限 | bug 修复 |
+| 3 | `12368ace` | TTS 默认播放速度 | 功能增强 |
+| 4 | `3b577b6e` | SkillsPage LazyColumn key 修复 | bug 修复（UI） |
+| 5 | `dc6e077b` | workspace 支持 HEIC/HEIF/AVIF/ICO 图片 | bug 修复 |
+| 6 | `262e8ab0` | Moonshot K2.5/K3 temperature 过滤 | bug 修复 |
+| 7 | `e7971589` | 依赖升级（material3 alpha25 / nav3 1.1.5 / baselineprofile beta01） | 依赖升级 |
+
+**按需引入（1 个提交）**：
+
+| 提交 | 描述 | 判定 | 原因 |
+|------|------|------|------|
+| `26613c10` | 更新 baseline profile | ⚠️ 按需引入 | 需在 highlight 重写同步完成后在目标设备上重新生成 |
+
+**跳过（4 个提交）**：
+
+| 提交 | 描述 | 原因 |
+|------|------|------|
+| `16be94e8` | kotlin 原生实现语法高亮(wip) | WIP 提交，被 `d7897022` 最终态完全覆盖 |
+| `d2af7b8a` | 修复最近改动挂掉的 JVM 测试 | 本地测试已在 batch 7/8/9 中按本地实现对齐 |
+| `5f39f1c1` | bump to 2.4.5 (172) | 版本线独立 |
+| `8349ef25` | 上下文限制警告文案改用"无限制"表述 | 本地文案已在 batch 9 按 Fork 语义重写，不引用"0"值，上游修复的问题不存在 |
+
+> 完整分析（逐文件 diff、本地代码核对、**合理性/完整性/价值三维复核**、适配要点、持久化影响评估、highlight 模块重写策略）见详细文档。
+>
+> **同步执行要点**（2026-08-02）：
+> - highlight 模块完全重写为纯 Kotlin 实现，保留本地 `HighlightTextColorPalette` + `buildHighlightText` + `getStyleForTokenType` 于 `HighlightStyle.kt`，兼容自定义 Atom One Dark/Light 配色
+> - `CodeColor.kt` 无需修改（`HighlightTextColorPalette` 仍保留）；`HighlightCodeBlock.kt` 移除 `runBlocking`、类型重命名、`HighlightCodeVisualTransformation` 重写（移除死代码 `regex()` companion）；`CodeBlockPreview` 硬编码 URL 改用 `WEB_VIEW_BASE_URL` 常量
+> - `RouteActivity.kt` / `Export.kt` 移除 `Highlighter` DI 注入和 `LocalHighlighter` provides（`LocalCodeHighlighter` 有默认实例）
+> - `WebViewPage.kt` 使用 `WEB_VIEW_BASE_URL` 常量已在本轮分析期间同步落地
+> - golden fixture 测试因 Windows CRLF 行尾失败，修复 `HljsFixtures.kt` 规范化行尾 + 添加 `.gitattributes` 规则
+> - `ChatCompletionsAPI.kt` 修正：K2.6 不在 temperature 限制范围内（支持 temperature）
+
+---
+
 ### 2026-07-28 - 检查 8eebe950+ 更新（第九批）
 
 > **同步状态：✅ 全部完成（24/24 已同步，3 个按 Fork 边界跳过；范围扩展至 `3a18dae8`）**
@@ -618,4 +681,4 @@
 
 ---
 
-*最后更新：2026-07-30（第九批扩容至 `3a18dae8`，24/24 同步完成；阶段范围 `5b9be301..2d61ba95` 共 131 个提交已连续闭合复核）*
+*最后更新：2026-08-02（第十批同步完成 + 编译通过 + 单元测试通过，`3a18dae8..8349ef25` 共 12 个提交，7 同步 + 1 按需 + 4 跳过）*

@@ -6,6 +6,28 @@
 
 ---
 
+## 0.0.12（versionCode 12）— 2026-07-31 ~ 2026-08-02
+
+### 新增
+
+- **Kotlin 原生语法高亮引擎**：将 highlight 模块从 QuickJS + prism.js 完全重写为纯 Kotlin 实现，移植 highlight.js 11.11.1 的 Mode 栈解析架构，支持 30+ 种语言（bash, c, cmake, cpp, csharp, css, dart, diff, dockerfile, glsl, go, ini/toml, java, javascript, json, kotlin, latex, lua, markdown, php, powershell, properties, python, ruby, rust, sql, swift, typescript, xml, yaml），配套 60+ golden fixture 单元测试
+- **TTS 默认播放速度**：新增 `defaultTTSPlaybackSpeed` 设置项（DataStore 持久化，范围 0.5x～2.0x，默认 1.0x），在设置 > 语音 > TTS tab 顶部提供 Slider 调节，自动应用到所有 TTS provider
+
+### 修复
+
+- **Moonshot K2.5/K3 temperature 参数报错**：K2.5/K3/K3_ALIAS 模型不支持 `temperature` 参数，发送时导致 API 400 报错；`isModelAllowTemperature` 新增 KIMI 系列检查
+- **workspace 不支持 HEIC/AVIF/ICO 图片**：`IMAGE_EXTENSIONS` 扩展 `heic`, `heif`, `avif`, `ico`，工具描述同步更新；AI 读取这些格式图片不再返回乱码
+- **Skills 列表同名冲突**：LazyColumn `key` 从 `it.name` 改为 `it.skillDir.absolutePath`，避免同名 skill 在不同目录时列表渲染异常
+- **API 26-28 文件写入失败**：声明 `WRITE_EXTERNAL_STORAGE`（`maxSdkVersion="28"`），修复 Android 8.0-9.0 设备上备份导出等文件写入操作失败
+
+### 变更
+
+- **依赖升级**：material3 `1.5.0-alpha24` → `1.5.0-alpha25`，Navigation 3 `1.1.4` → `1.1.5`，baselineprofile `1.5.0-alpha07` → `1.5.0-beta01`
+- **highlight 模块依赖清理**：移除 `quickjs`、`kotlinx-serialization-json`、`kotlinx-coroutines-core` 依赖和 `kotlin.serialization` 插件；`common` 模块的 QuickJS 依赖保留（`eval_javascript` 工具 + `QuickJSFetch` 仍需使用）
+- **代码清理**：移除 `HighlightCodeVisualTransformation` 中无调用方的 `regex()` 死代码；`CodeBlockPreview` 硬编码 URL 改用 `WEB_VIEW_BASE_URL` 常量统一
+
+---
+
 ## 0.0.11（versionCode 11）— 2026-07-18 ~ 2026-07-29
 
 ### 新增
