@@ -43,8 +43,8 @@ android {
         applicationId = "net.weero.measix.pilot"
         minSdk = 26
         targetSdk = 37
-        versionCode = 11
-        versionName = "0.0.11"
+        versionCode = 12
+        versionName = "0.0.12"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -144,7 +144,7 @@ android {
     }
 }
 
-// Rename APK output: app-arm64-v8a-release.apk → MeasixPilot_0.0.11_arm64-v8a-release.apk
+// Rename APK output: app-arm64-v8a-release.apk → MeasixPilot_0.0.12_arm64-v8a-release.apk
 tasks.register<RenameApkTask>("renameReleaseApk") {
     versionName.set(android.defaultConfig.versionName ?: "unknown")
     outputDir.set(layout.buildDirectory.dir("outputs/apk/release"))
