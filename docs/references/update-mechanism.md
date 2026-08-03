@@ -386,9 +386,8 @@ signingConfigs {
 
 #### Release 构建特征
 
-- `isMinifyEnabled = true`：R8 代码裁剪
-- `isShrinkResources = true`：资源裁剪
-- `proguard-rules.pro` 中 `-dontobfuscate`：启用裁剪但不混淆类名，便于 crash 堆栈定位
+- `optimization { enable = true }`：使用 AGP 9 统一启用 R8 代码优化、混淆与资源裁剪
+- `app/src/main/keepRules/rikkahub.keep`：只保留反射、按名称加载和 JNI 所需的运行时规则；mapping 用于还原混淆堆栈
 - `gradle.properties` 中 `android.r8.strictFullModeForKeepRules=false`：回退到 AGP 8 的
   keep rules 处理行为，兼容部分依赖库的 consumer ProGuard 规则
 

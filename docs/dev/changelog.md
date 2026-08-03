@@ -6,15 +6,31 @@
 
 ---
 
-## 0.0.12（versionCode 12）— 2026-08-03
+## 0.0.12（versionCode 12）— 2026-07-31 ~ 2026-08-03
 
 ### 新增
 
+- **Kotlin 原生语法高亮引擎**：将 highlight 模块从 QuickJS + prism.js 完全重写为纯 Kotlin 实现，移植 highlight.js 11.11.1 的 Mode 栈解析架构，支持 30+ 种语言（bash, c, cmake, cpp, csharp, css, dart, diff, dockerfile, glsl, go, ini/toml, java, javascript, json, kotlin, latex, lua, markdown, php, powershell, properties, python, ruby, rust, sql, swift, typescript, xml, yaml），配套 60+ golden fixture 单元测试
+- **TTS 默认播放速度**：新增 `defaultTTSPlaybackSpeed` 设置项（DataStore 持久化，范围 0.5x～2.0x，默认 1.0x），在设置 > 语音 > TTS tab 顶部提供 Slider 调节，自动应用到所有 TTS provider
 - **TTS 工具顺序播放**：同一轮生成中 AI 多次调用 `text_to_speech` 工具时，首次打断之前播放、后续追加到队列末尾顺序播放；新增 `ttsToolSequentialPlayback` 设置项（默认开启，可关闭恢复每次打断行为）。`AppEvent.Speak` 新增 `flush` 参数区分打断与追加；`autoPlayTTSAfterGeneration` 文案同步更新为“生成后自动朗读”
+- **MCP 请求头隐私保护**：请求头值默认按密码遮罩，允许逐项临时显示；显示/隐藏按钮补充 5 语言无障碍文案
 
 ### 修复
 
+- **Moonshot K2.5/K3 temperature 参数报错**：K2.5/K3/K3_ALIAS 模型不支持 `temperature` 参数，发送时导致 API 400 报错；`isModelAllowTemperature` 新增 KIMI 系列检查
+- **workspace 不支持 HEIC/AVIF/ICO 图片**：`IMAGE_EXTENSIONS` 扩展 `heic`, `heif`, `avif`, `ico`，工具描述同步更新；AI 读取这些格式图片不再返回乱码
+- **Skills 列表同名冲突**：LazyColumn `key` 从 `it.name` 改为 `it.skillDir.absolutePath`，避免同名 skill 在不同目录时列表渲染异常
+- **API 26-28 文件写入失败**：声明 `WRITE_EXTERNAL_STORAGE`（`maxSdkVersion="28"`），修复 Android 8.0-9.0 设备上备份导出等文件写入操作失败
 - **顺播状态跨对话干扰**：每轮生成创建独立的 TTS 工具播放状态，并在更新顺播状态前拒绝空白朗读文本，避免并发对话互相重置或无效调用占用首次打断机会
+- **MCP 请求头显示状态错位**：删除请求头时同步重映射临时显示状态，避免上游按列表位置保存状态导致另一条密钥被意外显示
+
+### 变更
+
+- **依赖升级**：material3 `1.5.0-alpha24` → `1.5.0-alpha25`，Navigation 3 `1.1.4` → `1.1.5`，baselineprofile `1.5.0-alpha07` → `1.5.0-beta01`
+- **highlight 模块依赖清理**：移除 `quickjs`、`kotlinx-serialization-json`、`kotlinx-coroutines-core` 依赖和 `kotlin.serialization` 插件；`common` 模块的 QuickJS 依赖保留（`eval_javascript` 工具 + `QuickJSFetch` 仍需使用）
+- **代码清理**：移除 `HighlightCodeVisualTransformation` 中无调用方的 `regex()` 死代码；`CodeBlockPreview` 硬编码 URL 改用 `WEB_VIEW_BASE_URL` 常量统一
+- **构建配置收敛**：新增 Android library / Compose convention plugin，统一 compileSdk、minSdk、Java/Kotlin 17 和测试 runner；模块脚本仅保留自身差异
+- **Release 优化规则精简**：改用 AGP 9 `optimization` 与 source-set keep rules，删除 library 空规则和模板文件；保留有真机扫码崩溃依据的 strict-full-mode 兼容开关
 
 ---
 

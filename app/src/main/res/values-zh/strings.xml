@@ -443,7 +443,6 @@
   <string name="pinned_chats">置顶聊天</string>
   <string name="placeholder_char">助手名称</string>
   <string name="placeholder_current_date">日期</string>
-
   <string name="placeholder_device_info">设备信息</string>
   <string name="placeholder_locale">语言环境</string>
   <string name="placeholder_model_id">模型ID</string>
@@ -921,6 +920,8 @@
   <string name="setting_tts_page_base_url_description">API基础URL端点</string>
   <string name="setting_tts_page_base_url_placeholder">https://api.openai.com/v1</string>
   <string name="setting_tts_page_default_name">系统TTS</string>
+  <string name="setting_tts_page_default_playback_speed">默认播放速度</string>
+  <string name="setting_tts_page_default_playback_speed_description">本地应用于所有 TTS 提供商，不更改其合成设置。</string>
   <string name="setting_tts_page_edit_provider">编辑提供商</string>
   <string name="setting_tts_page_model">模型</string>
   <string name="setting_tts_page_model_description">要使用的TTS模型</string>
@@ -1217,4 +1218,6 @@
   <string name="assistant_page_context_message_limit_count">超过 %d 条消息后裁剪</string>
   <string name="assistant_page_context_message_limit_unlimited">不自动裁剪上下文</string>
   <string name="assistant_page_context_message_limit_warning">消息条数不等于 token 上限；每次裁剪仍可能使提示词缓存失效。</string>
+  <string name="setting_mcp_page_show_header_value">显示请求头值</string>
+  <string name="setting_mcp_page_hide_header_value">隐藏请求头值</string>
 </resources>

@@ -1,7 +1,6 @@
 ﻿package net.weero.measix.pilot.di
 
 import kotlinx.serialization.json.Json
-import me.rerere.highlight.Highlighter
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.ai.tools.local.LocalTools
 import net.weero.measix.pilot.data.event.AppEventBus
@@ -17,10 +16,6 @@ import org.koin.dsl.module
 
 val appModule = module {
     single<Json> { JsonInstant }
-
-    single {
-        Highlighter(get())
-    }
 
     single {
         AppEventBus()

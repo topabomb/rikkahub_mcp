@@ -16,7 +16,7 @@
 ## Build Configuration Notes
 
 - `gradle.properties` 中 `android.r8.strictFullModeForKeepRules=false`：AGP 9 默认启用 R8 strict full mode，部分依赖库（如 ML Kit barcode-scanning 17.3.0）的 consumer ProGuard rules 不兼容，导致 release 构建运行时崩溃。此项回退到 AGP 8 的 keep rules 处理行为。当所有依赖库更新兼容后可移除。
-- `app/proguard-rules.pro` 中 `-dontobfuscate`：启用 R8 裁剪但不混淆类名，便于 crash 堆栈定位。
+- Release 使用 AGP 9 `optimization { enable = true }`，必要运行时规则集中在 `app/src/main/keepRules/rikkahub.keep`；构建生成的 mapping 用于还原混淆堆栈。
 
 ## Coding Style & Naming Conventions
 

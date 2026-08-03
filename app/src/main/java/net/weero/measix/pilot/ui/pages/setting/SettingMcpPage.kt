@@ -18,6 +18,8 @@ import me.rerere.hugeicons.stroke.Share01
 import me.rerere.hugeicons.stroke.Clock02
 import me.rerere.hugeicons.stroke.ShieldKey
 import me.rerere.hugeicons.stroke.Logout01
+import me.rerere.hugeicons.stroke.View
+import me.rerere.hugeicons.stroke.ViewOff
 import kotlin.uuid.Uuid
 import android.content.Intent
 import androidx.compose.foundation.layout.aspectRatio
@@ -102,6 +104,8 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -950,6 +954,8 @@ private fun McpCommonOptionsConfigure(
                 Text(stringResource(R.string.setting_mcp_page_custom_headers_desc))
             }
         ) {
+            var visibleHeaderIndices by remember(config.id) { mutableStateOf(emptySet<Int>()) }
+
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -1008,12 +1014,44 @@ private fun McpCommonOptionsConfigure(
                                 },
                                 label = { Text(stringResource(R.string.setting_mcp_page_header_value)) },
                                 modifier = Modifier.fillMaxWidth(),
+                                visualTransformation = if (index in visibleHeaderIndices) {
+                                    VisualTransformation.None
+                                } else {
+                                    PasswordVisualTransformation()
+                                },
+                                trailingIcon = {
+                                    val headerValueVisible = index in visibleHeaderIndices
+                                    IconButton(
+                                        onClick = {
+                                            visibleHeaderIndices = if (headerValueVisible) {
+                                                visibleHeaderIndices - index
+                                            } else {
+                                                visibleHeaderIndices + index
+                                            }
+                                        }
+                                    ) {
+                                        Icon(
+                                            if (headerValueVisible) HugeIcons.ViewOff else HugeIcons.View,
+                                            contentDescription = stringResource(
+                                                if (headerValueVisible) {
+                                                    R.string.setting_mcp_page_hide_header_value
+                                                } else {
+                                                    R.string.setting_mcp_page_show_header_value
+                                                }
+                                            )
+                                        )
+                                    }
+                                },
                                 placeholder = { Text(stringResource(R.string.setting_mcp_page_header_value_placeholder)) }
                             )
                         }
                         IconButton(onClick = {
                             val updatedHeaders = config.commonOptions.headers.toMutableList()
                             updatedHeaders.removeAt(index)
+                            visibleHeaderIndices = remapVisibleHeaderIndicesAfterRemoval(
+                                visibleHeaderIndices,
+                                index
+                            )
                             update(
                                 when (config) {
                                     is McpServerConfig.SseTransportServer -> config.copy(
@@ -1067,6 +1105,17 @@ private fun McpCommonOptionsConfigure(
                 }
             }
         }
+    }
+}
+
+internal fun remapVisibleHeaderIndicesAfterRemoval(
+    visibleIndices: Set<Int>,
+    removedIndex: Int,
+): Set<Int> = visibleIndices.mapNotNullTo(mutableSetOf()) { visibleIndex ->
+    when {
+        visibleIndex == removedIndex -> null
+        visibleIndex > removedIndex -> visibleIndex - 1
+        else -> visibleIndex
     }
 }
 

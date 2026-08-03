@@ -80,8 +80,6 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.isEmptyUIMessage
 import me.rerere.ai.util.encodeBase64
 import me.rerere.common.android.appTempFolder
-import me.rerere.highlight.Highlighter
-import me.rerere.highlight.LocalHighlighter
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findModelById
@@ -104,7 +102,6 @@ import net.weero.measix.pilot.utils.getActivity
 import net.weero.measix.pilot.utils.JsonInstantPretty
 import net.weero.measix.pilot.utils.jsonPrimitiveOrNull
 import net.weero.measix.pilot.utils.toLocalString
-import org.koin.compose.koinInject
 import java.io.FileOutputStream
 import java.time.LocalDateTime
 import kotlin.time.Duration.Companion.seconds
@@ -457,12 +454,10 @@ private fun ExportedChatImage(
 ) {
     val navBackStack = remember { mutableStateListOf<NavKey>() }
     val navigator = Navigator(navBackStack)
-    val highlighter = koinInject<Highlighter>()
     val toasterState = rememberToasterState()
     MeasixTheme {
         CompositionLocalProvider(
             LocalNavController provides navigator,
-            LocalHighlighter provides highlighter,
             LocalToaster provides toasterState
         ) {
             Surface(

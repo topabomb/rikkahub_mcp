@@ -1,2 +1,6 @@
 # Baseline Profile 生成文件：标记为文本，统一使用 LF 换行，避免 CRLF 抖动
 app/src/release/generated/baselineProfiles/*.txt text eol=lf
+
+# highlight 模块 golden fixture：源码和期望 token 文件统一使用 LF，避免跨平台测试失败
+highlight/src/test/resources/hljs/**/*.txt text eol=lf
+highlight/src/test/resources/hljs/**/*.tokens text eol=lf
