@@ -40,6 +40,7 @@ import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
+import me.rerere.ai.util.HttpException
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeBase64
@@ -63,6 +64,11 @@ import okhttp3.sse.EventSources
 import kotlin.time.Clock
 
 private const val TAG = "ResponseAPI"
+
+internal class ResponseStreamState {
+    val toolCallIdsByItemId = mutableMapOf<String, String>()
+    val toolArgumentDeltasSeenByItemId = mutableSetOf<String>()
+}
 
 class ResponseAPI(
     private val client: OkHttpClient,
@@ -91,7 +97,7 @@ class ResponseAPI(
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
+        Log.d(TAG, "generateText: model=${params.model.modelId}")
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
@@ -99,8 +105,8 @@ class ResponseAPI(
         }
 
         val bodyStr = response.body?.string() ?: ""
-        Log.i(TAG, "generateText: $bodyStr")
         val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
+        parseResponseObjectError(bodyJson)?.let { throw it }
         val output = parseResponseOutput(bodyJson)
 
         return output
@@ -111,6 +117,9 @@ class ResponseAPI(
         messages: List<UIMessage>,
         params: TextGenerationParams
     ): Flow<MessageChunk> = callbackFlow {
+        // 每个 SSE 请求独立维护 item_id -> call_id 映射。OpenAI 的 fc_* 输出项 ID
+        // 与下一轮 function_call_output 必须使用的 call_* ID 是两个不同字段，不能混用。
+        val streamState = ResponseStreamState()
         val requestBody = buildRequestBody(
             providerSetting = providerSetting,
             messages = messages,
@@ -128,7 +137,7 @@ class ResponseAPI(
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
+        Log.d(TAG, "streamText: model=${params.model.modelId}")
 
         val listener = object : EventSourceListener() {
             override fun onEvent(
@@ -141,38 +150,48 @@ class ResponseAPI(
                     close()
                     return
                 }
-                Log.d(TAG, "onEvent: $id/$type $data")
-                val json = json.parseToJsonElement(data).jsonObject
-                val chunk = parseResponseDelta(json)
-                if (chunk != null) {
-                    trySend(chunk).onFailure { e ->
-                        Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
+                try {
+                    val eventJson = json.parseToJsonElement(data).jsonObject
+                    val eventType = eventJson["type"]?.jsonPrimitive?.contentOrNull
+                        ?: error("response event type not found")
+                    val chunk = parseResponseDelta(eventJson, streamState)
+                    if (chunk != null) {
+                        trySend(chunk).onFailure { e ->
+                            Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
+                        }
                     }
-                }
-                if (type == "response.completed") {
-                    close()
+
+                    // Responses 的真实终态由 JSON type 定义。部分兼容服务不会设置 SSE event 名称，
+                    // 因此不能只依赖 EventSourceListener 的 type 参数判断是否结束。
+                    val terminalError = parseResponseStreamError(eventJson)
+                    when {
+                        terminalError != null -> close(terminalError)
+                        eventType == "response.completed" -> close()
+                    }
+                } catch (e: Throwable) {
+                    Log.w(TAG, "onEvent: failed to process response event (sseType=$type)", e)
+                    close(e)
                 }
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 var exception = t
 
-                t?.printStackTrace()
-                println("[onFailure] 发生错误: ${t?.javaClass?.name} ${t?.message} / $response")
+                if (t != null) {
+                    Log.w(TAG, "onFailure: stream transport failed (http=${response?.code})", t)
+                }
 
                 val bodyRaw = response?.body?.stringSafe()
                 try {
                     if (!bodyRaw.isNullOrBlank()) {
                         val bodyElement = Json.parseToJsonElement(bodyRaw)
-                        println(bodyElement)
                         exception = bodyElement.parseErrorDetail()
-                        Log.i(TAG, "onFailure: $exception")
                     }
                 } catch (e: Throwable) {
-                    Log.w(TAG, "onFailure: failed to parse from $bodyRaw")
-                    e.printStackTrace()
+                    Log.w(TAG, "onFailure: failed to parse error response", e)
+                    if (exception == null) exception = e
                 } finally {
-                    close(exception)
+                    close(exception ?: HttpException("Response stream failed without an error detail"))
                 }
             }
 
@@ -185,7 +204,7 @@ class ResponseAPI(
             .newEventSource(request, listener)
 
         awaitClose {
-            println("[awaitClose] 关闭eventSource ")
+            Log.d(TAG, "awaitClose: cancel event source")
             eventSource.cancel()
         }
         // trySend 在缓冲满时会静默丢弃 delta，导致回复中间缺字 (#1295)，因此缓冲必须无界
@@ -211,15 +230,20 @@ class ResponseAPI(
             if (params.maxTokens != null) put("max_output_tokens", params.maxTokens)
 
             // system instructions
-            if (messages.any { it.role == MessageRole.SYSTEM }) {
-                val parts = messages.first { it.role == MessageRole.SYSTEM }.parts
+            val instructions = messages
+                .filter { it.role == MessageRole.SYSTEM }
+                .flatMap { it.parts }
+                .filterIsInstance<UIMessagePart.Text>()
+                .joinToString("\n") { it.text }
+            if (instructions.isNotEmpty()) {
                 put(
                     "instructions",
-                    parts.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text })
+                    instructions
+                )
             }
 
             // messages
-            put("input", buildMessages(messages))
+            put("input", buildMessages(messages, capabilities))
 
             // reasoning
             if (params.model.abilities.contains(ModelAbility.REASONING)) {
@@ -229,10 +253,21 @@ class ResponseAPI(
                         put("summary", "auto")
                     }
                     if (level != ReasoningLevel.AUTO) {
-                        put("effort", level.effort)
+                        // OpenAI 旧 o-series 并非都支持 none；OFF 在这些模型上保持既有 low 回退。
+                        // GPT-5、DeepSeek 与其他 Responses endpoint 则保留模型声明的 none 语义。
+                        val effort = if (
+                            isOfficialOpenAIHost(host) &&
+                            ModelRegistry.OPENAI_O_MODELS.match(params.model.modelId) &&
+                            level == ReasoningLevel.OFF
+                        ) {
+                            "low"
+                        } else {
+                            level.effort
+                        }
+                        put("effort", effort)
                     }
                 })
-                if (capabilities.supportEncryptedContent) {
+                if (capabilities.supportsEncryptedContent) {
                     put("include", buildJsonArray {
                         add("reasoning.encrypted_content")
                     })
@@ -252,6 +287,9 @@ class ResponseAPI(
                                 put("type", "function")
                                 put("name", tool.name)
                                 put("description", tool.description)
+                                // Responses 省略 strict 会尝试严格模式；显式 false 保持项目原有
+                                // Chat Completions 的非严格工具语义，避免既有 JSON Schema 被隐式收紧。
+                                put("strict", false)
                                 put(
                                     "parameters",
                                     json.encodeToJsonElement(
@@ -285,19 +323,28 @@ class ResponseAPI(
         }.mergeCustomBody(params.customBody)
     }
 
-    internal fun buildMessages(messages: List<UIMessage>) = buildJsonArray {
+    internal fun buildMessages(
+        messages: List<UIMessage>,
+        capabilities: ResponseProviderCapabilities = ResponseProviderCapabilities(),
+    ) = buildJsonArray {
         messages
-            .filter { it.isValidToUpload() && it.role != MessageRole.SYSTEM }
+            .filter { message ->
+                message.role != MessageRole.SYSTEM &&
+                        (message.isValidToUpload() || message.hasReplayableResponseReasoningState(capabilities))
+            }
             .forEach { message ->
                 if (message.role == MessageRole.ASSISTANT) {
-                    addAssistantItems(message)
+                    addAssistantItems(message, capabilities)
                 } else {
                     addUserItems(message)
                 }
             }
     }
 
-    private fun JsonArrayBuilder.addAssistantItems(message: UIMessage) {
+    private fun JsonArrayBuilder.addAssistantItems(
+        message: UIMessage,
+        capabilities: ResponseProviderCapabilities,
+    ) {
         val groups = groupPartsByToolBoundary(message.parts)
         val contentBuffer = mutableListOf<UIMessagePart>()
 
@@ -313,20 +360,33 @@ class ResponseAPI(
                                     contentBuffer.clear()
                                 }
                                 // 输出 reasoning item
-                                val reasoningMetadata = part.metadataAs<OpenAIReasoningMetadata>()
                                 add(buildJsonObject {
                                     put("type", "reasoning")
-                                    reasoningMetadata?.reasoningId?.let {
-                                        put("id", it)
-                                    }
-                                    put("summary", buildJsonArray {
-                                        add(buildJsonObject {
-                                            put("type", "summary_text")
-                                            put("text", part.reasoning)
+                                    if (capabilities.usesReasoningTextContent) {
+                                        // DeepSeek Responses 把可回传的明文思考放在 content/reasoning_text；
+                                        // 它不接受 OpenAI reasoning item 的 summary/encrypted_content 作为历史状态。
+                                        putJsonArray("content") {
+                                            add(buildJsonObject {
+                                                put("type", "reasoning_text")
+                                                put("text", part.reasoning)
+                                            })
+                                        }
+                                    } else {
+                                        val reasoningMetadata = part.metadataAs<OpenAIReasoningMetadata>()
+                                        reasoningMetadata?.reasoningId?.let {
+                                            put("id", it)
+                                        }
+                                        put("summary", buildJsonArray {
+                                            if (part.reasoning.isNotEmpty()) {
+                                                add(buildJsonObject {
+                                                    put("type", "summary_text")
+                                                    put("text", part.reasoning)
+                                                })
+                                            }
                                         })
-                                    })
-                                    reasoningMetadata?.encryptedContent?.let {
-                                        put("encrypted_content", it)
+                                        reasoningMetadata?.encryptedContent?.let {
+                                            put("encrypted_content", it)
+                                        }
                                     }
                                 })
                             }
@@ -456,11 +516,14 @@ class ResponseAPI(
         })
     }
 
-    private fun parseResponseDelta(jsonObject: JsonObject): MessageChunk? {
+    internal fun parseResponseDelta(
+        jsonObject: JsonObject,
+        streamState: ResponseStreamState = ResponseStreamState(),
+    ): MessageChunk? {
         val chunkType = jsonObject["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
 
         when (chunkType) {
-            "response.output_text.delta" -> {
+            "response.output_text.delta", "response.refusal.delta" -> {
                 return MessageChunk(
                     id = jsonObject["item_id"]?.jsonPrimitive?.contentOrNull ?: "",
                     model = "",
@@ -507,6 +570,8 @@ class ResponseAPI(
                 val type = item["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
                 val id = item["id"]?.jsonPrimitive?.content ?: error("chunk id not found")
                 if (type == "function_call") {
+                    val callId = item["call_id"]?.jsonPrimitive?.contentOrNull ?: id
+                    streamState.toolCallIdsByItemId[id] = callId
                     return MessageChunk(
                         id = id,
                         model = "",
@@ -518,7 +583,8 @@ class ResponseAPI(
                                     role = MessageRole.ASSISTANT,
                                     parts = listOf(
                                         UIMessagePart.Tool(
-                                            toolCallId = id,
+                                            // UIMessagePart.Tool 持久化的是协议关联 ID；item_id 只用于定位 SSE 输出项。
+                                            toolCallId = callId,
                                             toolName = item["name"]?.jsonPrimitive?.content ?: "",
                                             input = item["arguments"]?.jsonPrimitive?.content
                                                 ?: "",
@@ -630,12 +696,16 @@ class ResponseAPI(
             }
 
             "response.function_call_arguments.done" -> {
-                val toolCallId =
-                    jsonObject["item_id"]?.jsonPrimitive?.content ?: error("item_id not found")
+                val itemId = jsonObject["item_id"]?.jsonPrimitive?.content ?: error("item_id not found")
+                val toolCallId = streamState.toolCallIdsByItemId.remove(itemId) ?: itemId
+                val receivedDeltas = streamState.toolArgumentDeltasSeenByItemId.remove(itemId)
                 val arguments =
                     jsonObject["arguments"]?.jsonPrimitive?.content ?: error("arguments not found")
+                // 官方流会先发送参数 delta，再在 done 中给出完整参数。Tool.merge() 采用字符串追加，
+                // 所以已消费 delta 时不能再次追加完整值；没有 delta 的兼容服务仍用 done 兜底。
+                if (receivedDeltas) return null
                 return MessageChunk(
-                    id = toolCallId,
+                    id = itemId,
                     model = "",
                     choices = listOf(
                         UIMessageChoice(
@@ -658,12 +728,44 @@ class ResponseAPI(
                 )
             }
 
-            "response.completed" -> {
+            "response.function_call_arguments.delta" -> {
+                val itemId = jsonObject["item_id"]?.jsonPrimitive?.content ?: error("item_id not found")
+                val toolCallId = streamState.toolCallIdsByItemId[itemId] ?: itemId
+                val delta = jsonObject["delta"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (delta.isNotEmpty()) {
+                    streamState.toolArgumentDeltasSeenByItemId += itemId
+                }
+                return MessageChunk(
+                    id = itemId,
+                    model = "",
+                    choices = listOf(
+                        UIMessageChoice(
+                            index = 0,
+                            delta = UIMessage(
+                                role = MessageRole.ASSISTANT,
+                                parts = listOf(
+                                    UIMessagePart.Tool(
+                                        toolCallId = toolCallId,
+                                        toolName = "",
+                                        input = delta,
+                                        output = emptyList(),
+                                    )
+                                )
+                            ),
+                            message = null,
+                            finishReason = null,
+                        )
+                    )
+                )
+            }
+
+            "response.completed", "response.incomplete", "response.failed" -> {
+                val response = jsonObject["response"]?.jsonObjectOrNull
                 return MessageChunk(
                     id = jsonObject["item_id"]?.jsonPrimitive?.contentOrNull ?: "",
                     model = "",
                     choices = emptyList(),
-                    usage = parseTokenUsage(jsonObject["response"]?.jsonObject?.get("usage")?.jsonObject)
+                    usage = parseTokenUsage(response?.get("usage")?.jsonObjectOrNull)
                 )
             }
         }
@@ -671,8 +773,7 @@ class ResponseAPI(
         return null
     }
 
-    private fun parseResponseOutput(jsonObject: JsonObject): MessageChunk {
-        println(jsonObject)
+    internal fun parseResponseOutput(jsonObject: JsonObject): MessageChunk {
         val outputs = jsonObject["output"]?.jsonArray ?: error("output not found")
         val parts = arrayListOf<UIMessagePart>()
 
@@ -681,21 +782,43 @@ class ResponseAPI(
             val type = output["type"]?.jsonPrimitive?.content ?: error("output type not found")
             when (type) {
                 "reasoning" -> {
-                    val summary = output["summary"]?.jsonArray ?: error("summary not found")
-                    summary.map { it.jsonObject }.forEach { part ->
-                        val partType = part["type"]?.jsonPrimitive?.content ?: error("part type not found")
-                        when (partType) {
-                            "summary_text" -> {
-                                val text = part["text"]?.jsonPrimitive?.content ?: error("text not found")
-                                parts.add(
-                                    UIMessagePart.Reasoning(
-                                        reasoning = text,
-                                        createdAt = Clock.System.now(),
-                                        finishedAt = Clock.System.now()
-                                    )
-                                )
-                            }
-                        }
+                    // DeepSeek 返回完整 reasoning_text，OpenAI 通常返回 summary_text。
+                    // content 优先可避免 DeepSeek 同时携带空 summary 时丢失正文；最终合并成一个 part，
+                    // 使同一 reasoning item 的 id/encrypted_content 只保存和回传一次。
+                    val reasoningTextParts = output["content"]?.jsonArray
+                        ?.map { it.jsonObject }
+                        ?.filter { it["type"]?.jsonPrimitive?.contentOrNull == "reasoning_text" }
+                        .orEmpty()
+                    val summaryTextParts = output["summary"]?.jsonArray
+                        ?.map { it.jsonObject }
+                        ?.filter { it["type"]?.jsonPrimitive?.contentOrNull == "summary_text" }
+                        .orEmpty()
+                    val selectedParts = reasoningTextParts.ifEmpty { summaryTextParts }
+                    val reasoningText = selectedParts.joinToString(separator = "") {
+                        it["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    }
+                    val reasoningId = output["id"]?.jsonPrimitive?.contentOrNull
+                    val encryptedContent = output["encrypted_content"]?.jsonPrimitive?.contentOrNull
+                    val metadata = if (reasoningId != null || encryptedContent != null) {
+                        OpenAIReasoningMetadata(
+                            reasoningId = reasoningId,
+                            encryptedContent = encryptedContent,
+                        ).toMetadata()
+                    } else {
+                        null
+                    }
+
+                    // summary 可以为空，但 encrypted_content 仍是无状态续轮必须回传的协议状态。
+                    // 因此不能以“是否有可见摘要”决定是否保留 reasoning item。
+                    if (reasoningText.isNotEmpty() || metadata != null) {
+                        parts.add(
+                            UIMessagePart.Reasoning(
+                                reasoning = reasoningText,
+                                createdAt = Clock.System.now(),
+                                finishedAt = Clock.System.now(),
+                                metadata = metadata,
+                            )
+                        )
                     }
                 }
 
@@ -728,7 +851,14 @@ class ResponseAPI(
                                 )
                             }
 
-                            else -> error("unknown part type $partType")
+                            "refusal" -> {
+                                val refusal = part["refusal"]?.jsonPrimitive?.content
+                                    ?: error("refusal not found")
+                                parts.add(UIMessagePart.Text(refusal))
+                            }
+
+                            // Responses 会持续增加新的输出 part；未知 part 不应让已有文本/工具结果整体失败。
+                            else -> Unit
                         }
                     }
                 }
@@ -749,7 +879,7 @@ class ResponseAPI(
                     delta = null
                 )
             ),
-            usage = parseTokenUsage(jsonObject["usage"]?.jsonObject)
+            usage = parseTokenUsage(jsonObject["usage"]?.jsonObjectOrNull)
         )
     }
 
@@ -762,6 +892,54 @@ class ResponseAPI(
             cachedTokens = jsonObject["input_tokens_details"]?.jsonObjectOrNull?.get("cached_tokens")?.jsonPrimitive?.intOrNull
                 ?: 0
         )
+    }
+
+    /**
+     * A Responses request can be HTTP-successful while the response object itself is failed or incomplete.
+     * Surface that protocol status instead of falling through to a misleading "output not found" parse error.
+     */
+    internal fun parseResponseObjectError(response: JsonObject): HttpException? {
+        return when (response["status"]?.jsonPrimitive?.contentOrNull) {
+            "failed" -> response["error"]?.parseErrorDetail()
+                ?: HttpException("Response failed without an error detail")
+
+            "incomplete" -> {
+                val reason = response["incomplete_details"]
+                    ?.jsonObjectOrNull
+                    ?.get("reason")
+                    ?.jsonPrimitiveOrNull
+                    ?.contentOrNull
+                    ?: "unknown reason"
+                HttpException("Response incomplete: $reason")
+            }
+
+            else -> null
+        }
+    }
+
+    /** Parse terminal error events carried inside an otherwise successful SSE connection. */
+    internal fun parseResponseStreamError(event: JsonObject): HttpException? {
+        return when (event["type"]?.jsonPrimitive?.contentOrNull) {
+            "response.failed", "response.incomplete" -> event["response"]
+                ?.jsonObjectOrNull
+                ?.let(::parseResponseObjectError)
+                ?: HttpException("Response stream ended without a terminal status detail")
+
+            "error" -> event["error"]?.parseErrorDetail()
+                ?: event.parseErrorDetail()
+
+            else -> null
+        }
+    }
+
+    private fun UIMessage.hasReplayableResponseReasoningState(
+        capabilities: ResponseProviderCapabilities,
+    ): Boolean {
+        if (capabilities.usesReasoningTextContent) return false
+        return parts.filterIsInstance<UIMessagePart.Reasoning>().any { part ->
+            val metadata = part.metadataAs<OpenAIReasoningMetadata>()
+            metadata?.reasoningId != null || metadata?.encryptedContent != null
+        }
     }
 }
 
@@ -777,14 +955,29 @@ private fun List<UIMessagePart>.isOnlyTextPart(): Boolean {
 
 internal data class ResponseProviderCapabilities(
     val supportsReasoningSummary: Boolean = true,
-    val supportEncryptedContent: Boolean = true
+    val supportsEncryptedContent: Boolean = true,
+    val usesReasoningTextContent: Boolean = false,
 )
 
+/**
+ * Responses 的字段形状属于 endpoint 线协议，只能由实际连接的 host 决定。
+ * modelId 可以决定模型能力，但不能用来猜测未知代理背后的供应商或改变代理对外声明的协议；
+ * 因此这里使用固定、内置的 host 适配，不增加 ProviderDialect 或网关类型等用户配置。
+ */
 internal fun resolveResponseProviderCapabilities(host: String): ResponseProviderCapabilities {
     return when (host) {
         "ark.cn-beijing.volces.com" -> ResponseProviderCapabilities(
             supportsReasoningSummary = false,
-            supportEncryptedContent = false
+            supportsEncryptedContent = false,
+        )
+
+        // Responses 的线协议由实际连接的 endpoint 决定。直连 api.deepseek.com 且用户已选择
+        // Responses 时，兼容其 reasoning_text 形状；代理 host 继续使用其声明的 OpenAI Responses
+        // 格式，不能根据后端模型名猜测代理方言，也不在客户端维护易过期的模型白名单。
+        "api.deepseek.com" -> ResponseProviderCapabilities(
+            supportsReasoningSummary = false,
+            supportsEncryptedContent = false,
+            usesReasoningTextContent = true,
         )
 
         else -> ResponseProviderCapabilities()

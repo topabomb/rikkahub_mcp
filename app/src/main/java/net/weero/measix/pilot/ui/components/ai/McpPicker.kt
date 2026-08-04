@@ -234,7 +234,9 @@ fun McpPicker(
                                 is McpStatus.Connected -> stringResource(R.string.mcp_status_connected)
                                 is McpStatus.Reconnecting -> stringResource(R.string.mcp_status_reconnecting, s.attempt, s.maxAttempts)
                                 is McpStatus.Dormant -> stringResource(R.string.mcp_status_dormant, (s.nextRetryInMs / 1000).toInt())
-                                is McpStatus.Error -> stringResource(R.string.mcp_status_error, s.message)
+                                is McpStatus.Error -> s.message?.let {
+                                    stringResource(R.string.mcp_status_error, it)
+                                } ?: stringResource(R.string.error_title_operation)
                                 is McpStatus.NeedsAuthorization -> stringResource(R.string.mcp_status_needs_authorization)
                                 is McpStatus.Authorizing -> stringResource(R.string.mcp_status_authorizing)
                             },

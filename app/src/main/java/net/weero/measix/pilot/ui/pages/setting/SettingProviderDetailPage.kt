@@ -123,6 +123,7 @@ import net.weero.measix.pilot.ui.pages.setting.components.ProviderConfigure
 import net.weero.measix.pilot.ui.pages.setting.components.ProviderConnectionTester
 import net.weero.measix.pilot.ui.pages.setting.components.SettingProviderBalanceOption
 import net.weero.measix.pilot.ui.pages.setting.components.isUsingDefaultBaseUrl
+import net.weero.measix.pilot.ui.pages.setting.components.providerTypeNameRes
 import net.weero.measix.pilot.ui.pages.setting.components.resetBaseUrlToDefault
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.ui.theme.extendColors
@@ -1319,12 +1320,9 @@ private fun ModelCard(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        if (model.providerOverwrite != null) {
+                        model.providerOverwrite?.let { providerOverwrite ->
                             Tag(type = TagType.INFO) {
-                                Text(
-                                    model.providerOverwrite?.javaClass?.simpleName ?: model.providerOverwrite?.name
-                                    ?: "ProviderOverwrite"
-                                )
+                                Text(stringResource(providerOverwrite.providerTypeNameRes()))
                             }
                         }
                         ModelTypeTag(model = model)

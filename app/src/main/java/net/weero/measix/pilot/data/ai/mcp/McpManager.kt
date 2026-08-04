@@ -303,7 +303,9 @@ class McpManager(
                 }
                 // 5. 其他错误（McpException / 服务器返回错误等）: 返回错误文本，不重连
                 val code = extractHttpCode(e)
-                logMcp(serverName, "Tool '$toolName' failed (${e.javaClass.simpleName}): ${e.message}${if (code.isNotEmpty()) " [$code]" else ""}")
+                // Do not expose runtime class names here: R8 obfuscates them in Release and the
+                // resulting short names look like corrupted UI. The detailed exception is logged elsewhere.
+                logMcp(serverName, "Tool '$toolName' failed: ${e.message}${if (code.isNotEmpty()) " [$code]" else ""}")
                 listOf(UIMessagePart.Text("MCP tool '$toolName' failed: ${e.message}"))
             }
         }

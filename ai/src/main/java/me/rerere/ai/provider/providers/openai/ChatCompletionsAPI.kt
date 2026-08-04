@@ -42,6 +42,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.util.HttpException
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeBase64
@@ -91,7 +92,7 @@ class ChatCompletionsAPI(
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
+        Log.d(TAG, "generateText: model=${params.model.modelId}")
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
@@ -149,10 +150,7 @@ class ChatCompletionsAPI(
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
-
-        // just for debugging response body
-        // println(client.newCall(request).await().body?.string())
+        Log.d(TAG, "streamText: model=${params.model.modelId}")
 
         val listener = object : EventSourceListener() {
             override fun onEvent(
@@ -162,78 +160,82 @@ class ChatCompletionsAPI(
                 data: String
             ) {
                 if (data == "[DONE]") {
-                    println("[onEvent] (done) 结束流: $data")
                     close()
                     return
                 }
-                Log.d(TAG, "onEvent: $data")
-                data
-                    .trim()
-                    .split("\n")
-                    .filter { it.isNotBlank() }
-                    .map { json.parseToJsonElement(it).jsonObject }
-                    .forEach {
-                        if (it["error"] != null) {
-                            val error = it["error"]!!.parseErrorDetail()
-                            throw error
-                        }
-                        val id = it["id"]?.jsonPrimitive?.contentOrNull ?: ""
-                        val model = it["model"]?.jsonPrimitive?.contentOrNull ?: ""
+                try {
+                    data
+                        .trim()
+                        .split("\n")
+                        .filter { it.isNotBlank() }
+                        .map { json.parseToJsonElement(it).jsonObject }
+                        .forEach {
+                            // OpenAI-compatible gateways can report an application error inside an HTTP 200 SSE
+                            // stream. Throwing from OkHttp's callback would bypass the Flow collector; close it with
+                            // the parsed cause so the UI receives the failure through the normal generation path.
+                            if (it["error"] != null) {
+                                close(it["error"]!!.parseErrorDetail())
+                                return
+                            }
+                            val id = it["id"]?.jsonPrimitive?.contentOrNull ?: ""
+                            val model = it["model"]?.jsonPrimitive?.contentOrNull ?: ""
 
-                        val choices = it["choices"]?.jsonArray ?: JsonArray(emptyList())
-                        val choiceList = buildList {
-                            if (choices.isNotEmpty()) {
-                                val choice = choices[0].jsonObject
-                                val message =
-                                    choice["delta"]?.jsonObject ?: choice["message"]?.jsonObject
-                                    ?: throw Exception("delta/message is null")
-                                val finishReason =
-                                    choice["finish_reason"]?.jsonPrimitive?.contentOrNull
-                                        ?: "unknown"
-                                add(
-                                    UIMessageChoice(
-                                        index = 0,
-                                        delta = parseMessage(message),
-                                        message = null,
-                                        finishReason = finishReason,
+                            val choices = it["choices"]?.jsonArray ?: JsonArray(emptyList())
+                            val choiceList = buildList {
+                                if (choices.isNotEmpty()) {
+                                    val choice = choices[0].jsonObject
+                                    val message =
+                                        choice["delta"]?.jsonObject ?: choice["message"]?.jsonObject
+                                        ?: throw Exception("delta/message is null")
+                                    val finishReason =
+                                        choice["finish_reason"]?.jsonPrimitive?.contentOrNull
+                                            ?: "unknown"
+                                    add(
+                                        UIMessageChoice(
+                                            index = 0,
+                                            delta = parseMessage(message),
+                                            message = null,
+                                            finishReason = finishReason,
+                                        )
                                     )
-                                )
+                                }
+                            }
+                            val usage = parseTokenUsage(it["usage"] as? JsonObject)
+
+                            val messageChunk = MessageChunk(
+                                id = id,
+                                model = model,
+                                choices = choiceList,
+                                usage = usage
+                            )
+                            trySend(messageChunk).onFailure { e ->
+                                Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
                             }
                         }
-                        val usage = parseTokenUsage(it["usage"] as? JsonObject)
-
-                        val messageChunk = MessageChunk(
-                            id = id,
-                            model = model,
-                            choices = choiceList,
-                            usage = usage
-                        )
-                        trySend(messageChunk).onFailure { e ->
-                            Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
-                        }
-                    }
+                } catch (e: Throwable) {
+                    Log.w(TAG, "onEvent: failed to process chat completion event", e)
+                    close(e)
+                }
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 var exception = t
 
-                t?.printStackTrace()
-                println("[onFailure] 发生错误: ${t?.javaClass?.name} ${t?.message} / $response")
+                if (t != null) {
+                    Log.w(TAG, "onFailure: stream transport failed (http=${response?.code})", t)
+                }
 
                 val bodyRaw = response?.body?.stringSafe()
                 try {
                     if (!bodyRaw.isNullOrBlank()) {
                         val bodyElement = Json.parseToJsonElement(bodyRaw)
-                        println(bodyElement)
                         exception = bodyElement.parseErrorDetail()
-                        Log.i(TAG, "onFailure: $exception")
                     }
                 } catch (e: Throwable) {
-                    Log.w(TAG, "onFailure: failed to parse from $bodyRaw")
-                    e.printStackTrace()
-                    exception = e
+                    Log.w(TAG, "onFailure: failed to parse error response", e)
+                    if (exception == null) exception = e
                 } finally {
-                    close(exception)
+                    close(exception ?: HttpException("Chat completion stream failed without an error detail"))
                 }
             }
 
@@ -245,7 +247,7 @@ class ChatCompletionsAPI(
         val eventSource = EventSources.createFactory(client).newEventSource(request, listener)
 
         awaitClose {
-            println("[awaitClose] 关闭eventSource ")
+            Log.d(TAG, "awaitClose: cancel event source")
             eventSource.cancel()
         }
         // trySend 在缓冲满时会静默丢弃 delta，导致回复中间缺字 (#1295)，因此缓冲必须无界
@@ -259,14 +261,28 @@ class ChatCompletionsAPI(
         stream: Boolean = false,
     ): JsonObject {
         val host = providerSetting.baseUrl.toHttpUrl().host
+        val isOfficialOpenAI = isOfficialOpenAIHost(host)
         return buildJsonObject {
             put("model", params.model.modelId)
             put(
                 "messages",
                 buildMessages(
                     messages = messages,
-                    includeHistoryReasoning = providerSetting.includeHistoryReasoning,
-                    supportInputModalities = params.model.inputModalities,
+                    // OpenAI 官方 Chat Completions 不定义 reasoning_content，且 tool 消息只接受文本。
+                    // 兼容服务仍保留原扩展能力；这里按固定 host 自动收敛，不增加用户配置或方言选择。
+                    includeHistoryReasoning = providerSetting.includeHistoryReasoning && !isOfficialOpenAI,
+                    supportToolResultModalities = if (isOfficialOpenAI) {
+                        listOf(Modality.TEXT)
+                    } else {
+                        params.model.inputModalities
+                    },
+                    requiresToolReasoningReplay = requiresDeepSeekToolReasoningReplay(
+                        host = host,
+                        modelId = params.model.modelId,
+                    ),
+                    useDeveloperRoleForSystemMessages = isOfficialOpenAI &&
+                            (ModelRegistry.OPENAI_O_MODELS.match(params.model.modelId) ||
+                                    ModelRegistry.GPT_5.match(params.model.modelId)),
                 )
             )
 
@@ -274,7 +290,11 @@ class ChatCompletionsAPI(
                 if (params.temperature != null) put("temperature", params.temperature)
                 if (params.topP != null) put("top_p", params.topP)
             }
-            if (params.maxTokens != null) put("max_tokens", params.maxTokens)
+            if (params.maxTokens != null) {
+                // max_tokens 已被 OpenAI 官方弃用，且不兼容 o-series；兼容服务继续使用旧字段，
+                // 避免把官方协议升级扩散到尚未支持 max_completion_tokens 的第三方网关。
+                put(if (isOfficialOpenAI) "max_completion_tokens" else "max_tokens", params.maxTokens)
+            }
 
             put("stream", stream)
             if (stream) {
@@ -418,10 +438,19 @@ class ChatCompletionsAPI(
                     }
 
                     else -> {
-                        // OpenAI 官方
-                        // 文档中，completions API 只支持 "low", "medium", "high"
+                        // OpenAI 官方 GPT-5 支持 none，OFF 应保持真实的关闭语义；
+                        // 旧 o-series 与未知兼容模型并非都支持 none，继续保守回退到 low。
                         if (level != ReasoningLevel.AUTO) {
-                            put("reasoning_effort", if (level.effort == "none") "low" else level.effort)
+                            val effort = if (
+                                isOfficialOpenAI &&
+                                ModelRegistry.GPT_5.match(params.model.modelId) &&
+                                level == ReasoningLevel.OFF
+                            ) {
+                                "none"
+                            } else {
+                                if (level.effort == "none") "low" else level.effort
+                            }
+                            put("reasoning_effort", effort)
                         }
                     }
                 }
@@ -458,10 +487,12 @@ class ChatCompletionsAPI(
                !isMoonshotRestricted
     }
 
-    private fun buildMessages(
+    internal fun buildMessages(
         messages: List<UIMessage>,
         includeHistoryReasoning: Boolean = true,
-        supportInputModalities: List<Modality> = listOf(Modality.TEXT, Modality.IMAGE),
+        supportToolResultModalities: List<Modality> = listOf(Modality.TEXT, Modality.IMAGE),
+        requiresToolReasoningReplay: Boolean = false,
+        useDeveloperRoleForSystemMessages: Boolean = false,
     ) = buildJsonArray {
         val filteredMessages = messages.filter { it.isValidToUpload() }
 
@@ -469,49 +500,53 @@ class ChatCompletionsAPI(
             if (message.role == MessageRole.ASSISTANT) {
                 addAssistantMessages(
                     message = message,
-                    includeReasoning = includeHistoryReasoning,
-                    supportInputModalities = supportInputModalities,
+                    includeHistoryReasoning = includeHistoryReasoning,
+                    supportToolResultModalities = supportToolResultModalities,
+                    requiresToolReasoningReplay = requiresToolReasoningReplay,
                 )
             } else {
-                addNonAssistantMessage(message)
+                addNonAssistantMessage(message, useDeveloperRoleForSystemMessages)
             }
         }
     }
 
     private fun JsonArrayBuilder.addAssistantMessages(
         message: UIMessage,
-        includeReasoning: Boolean,
-        supportInputModalities: List<Modality>,
+        includeHistoryReasoning: Boolean,
+        supportToolResultModalities: List<Modality>,
+        requiresToolReasoningReplay: Boolean,
     ) {
         val groups = groupPartsByToolBoundary(message.parts)
         val contentBuffer = mutableListOf<UIMessagePart>()
-        var reasoningPart: UIMessagePart.Reasoning? = null
+        val reasoningBuffer = mutableListOf<String>()
 
         for (group in groups) {
             when (group) {
                 is PartGroup.Content -> {
-                    // 从当前 group 中提取 reasoning（保持顺序）
-                    if (includeReasoning) {
-                        group.parts.filterIsInstance<UIMessagePart.Reasoning>().firstOrNull()?.let {
-                            reasoningPart = it
-                        }
-                    }
+                    group.parts
+                        .filterIsInstance<UIMessagePart.Reasoning>()
+                        .mapTo(reasoningBuffer) { it.reasoning }
                     group.parts
                         .filter { it is UIMessagePart.Text || it is UIMessagePart.Image }
                         .forEach { contentBuffer.add(it) }
                 }
 
                 is PartGroup.Tools -> {
+                    // DeepSeek 将工具调用前的 reasoning_content 视为后续请求必须携带的协议状态。
+                    // 因此这里只对“即将绑定 tool_calls 的 assistant 消息”强制回传；末尾普通回答仍由
+                    // includeHistoryReasoning 控制，避免把协议要求误扩散到其他历史思考内容。
                     // 输出 assistant 消息（包含累积的内容 + tool_calls）
                     buildAssistantMessageJson(
                         contentParts = contentBuffer,
                         tools = group.tools,
-                        reasoningPart = reasoningPart
+                        reasoningContent = reasoningBuffer
+                            .takeIf { includeHistoryReasoning || requiresToolReasoningReplay }
+                            ?.joinToString(separator = ""),
                     )?.let { assistantMessage ->
                         add(assistantMessage)
                     }
                     contentBuffer.clear()
-                    reasoningPart = null // 清空，下一个 group 可能有新的 reasoning
+                    reasoningBuffer.clear()
 
                     // 紧跟 tool 结果消息
                     group.tools.forEach { tool ->
@@ -519,7 +554,7 @@ class ChatCompletionsAPI(
                             put("role", "tool")
                             put("name", tool.toolName)
                             put("tool_call_id", tool.toolCallId)
-                            put("content", tool.toToolResultContent(supportInputModalities))
+                            put("content", tool.toToolResultContent(supportToolResultModalities))
                         })
                     }
                 }
@@ -527,11 +562,13 @@ class ChatCompletionsAPI(
         }
 
         // 输出剩余内容
-        if (contentBuffer.isNotEmpty() || reasoningPart != null) {
+        if (contentBuffer.isNotEmpty() || (includeHistoryReasoning && reasoningBuffer.isNotEmpty())) {
             buildAssistantMessageJson(
                 contentParts = contentBuffer,
                 tools = emptyList(),
-                reasoningPart = reasoningPart
+                reasoningContent = reasoningBuffer
+                    .takeIf { includeHistoryReasoning }
+                    ?.joinToString(separator = ""),
             )?.let { assistantMessage ->
                 add(assistantMessage)
             }
@@ -541,7 +578,7 @@ class ChatCompletionsAPI(
     private fun buildAssistantMessageJson(
         contentParts: List<UIMessagePart>,
         tools: List<UIMessagePart.Tool>,
-        reasoningPart: UIMessagePart.Reasoning?
+        reasoningContent: String?,
     ): JsonObject? {
         val hasUsableContent = contentParts.any { part ->
             when (part) {
@@ -550,7 +587,7 @@ class ChatCompletionsAPI(
                 else -> false
             }
         }
-        val hasReasoning = !reasoningPart?.reasoning.isNullOrBlank()
+        val hasReasoning = !reasoningContent.isNullOrBlank()
         if (!hasUsableContent && !hasReasoning && tools.isEmpty()) {
             return null
         }
@@ -560,7 +597,7 @@ class ChatCompletionsAPI(
 
             // reasoning_content
             if (hasReasoning) {
-                put("reasoning_content", reasoningPart.reasoning)
+                put("reasoning_content", reasoningContent)
             }
 
             // content
@@ -619,9 +656,18 @@ class ChatCompletionsAPI(
         }
     }
 
-    private fun JsonArrayBuilder.addNonAssistantMessage(message: UIMessage) {
+    private fun JsonArrayBuilder.addNonAssistantMessage(
+        message: UIMessage,
+        useDeveloperRoleForSystemMessages: Boolean,
+    ) {
         add(buildJsonObject {
-            put("role", JsonPrimitive(message.role.name.lowercase()))
+            val role = if (message.role == MessageRole.SYSTEM && useDeveloperRoleForSystemMessages) {
+                // OpenAI 官方要求 o1 及更新推理模型用 developer 取代旧 system 角色。
+                "developer"
+            } else {
+                message.role.name.lowercase()
+            }
+            put("role", JsonPrimitive(role))
 
             if (message.parts.isOnlyTextPart()) {
                 put("content", message.parts.filterIsInstance<UIMessagePart.Text>().first().text)
@@ -706,13 +752,25 @@ class ChatCompletionsAPI(
         }
     }
 
-    private fun parseMessage(jsonObject: JsonObject): UIMessage {
+    internal fun parseMessage(jsonObject: JsonObject): UIMessage {
         val role = MessageRole.valueOf(
             jsonObject["role"]?.jsonPrimitive?.contentOrNull?.uppercase() ?: "ASSISTANT"
         )
 
         // 也许支持其他模态的输出content?
-        val content = jsonObject["content"]?.jsonPrimitiveOrNull?.contentOrNull ?: ""
+        val content = when (val contentElement = jsonObject["content"]) {
+            is JsonPrimitive -> contentElement.contentOrNull.orEmpty()
+            is JsonArray -> contentElement.mapNotNull { element ->
+                val part = element.jsonObjectOrNull ?: return@mapNotNull null
+                when (part["type"]?.jsonPrimitiveOrNull?.contentOrNull) {
+                    "text" -> part["text"]?.jsonPrimitiveOrNull?.contentOrNull
+                    "refusal" -> part["refusal"]?.jsonPrimitiveOrNull?.contentOrNull
+                    else -> null
+                }
+            }.joinToString(separator = "")
+            else -> ""
+        }
+        val refusal = jsonObject["refusal"]?.jsonPrimitiveOrNull?.contentOrNull
         val reasoning = jsonObject["reasoning_content"]?.jsonPrimitiveOrNull?.contentOrNull
             ?: jsonObject["reasoning"]?.jsonPrimitiveOrNull?.contentOrNull
             ?: jsonObject["content"]?.takeIf { it is JsonArray }?.let { arr ->
@@ -755,6 +813,9 @@ class ChatCompletionsAPI(
                     )
                 }
                 if (content.isNotEmpty()) add(UIMessagePart.Text(content))
+                // 官方 Chat Completions 的拒答可能位于顶层 refusal，也可能位于 content part。
+                // UI 暂无独立拒答 part，按可见文本保存，确保非流式和流式响应都不会静默丢失。
+                if (!refusal.isNullOrEmpty() && refusal != content) add(UIMessagePart.Text(refusal))
                 images.forEach { image ->
                     val imageObject = image.jsonObjectOrNull ?: return@forEach
                     val type = imageObject["type"]?.jsonPrimitive?.contentOrNull ?: return@forEach
@@ -812,3 +873,16 @@ class ChatCompletionsAPI(
         return gonnaSend == texts && texts == 1
     }
 }
+
+/**
+ * 判断 Chat Completions 工具步骤是否必须回传 DeepSeek reasoning_content。
+ *
+ * 直连 DeepSeek 时 host 可以覆盖自定义模型别名；经过代理时只能依赖可识别的 DeepSeek V4 modelId。
+ * 未知代理上的其他模型保持原行为，不会因为使用 OpenAI 兼容接口而被误判为 DeepSeek。
+ */
+internal fun requiresDeepSeekToolReasoningReplay(host: String, modelId: String): Boolean {
+    if (isOfficialOpenAIHost(host)) return false
+    return host == "api.deepseek.com" || ModelRegistry.DEEPSEEK_V4.match(modelId)
+}
+
+internal fun isOfficialOpenAIHost(host: String): Boolean = host == "api.openai.com"

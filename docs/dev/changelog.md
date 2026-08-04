@@ -6,7 +6,7 @@
 
 ---
 
-## 0.0.12（versionCode 12）— 2026-07-31 ~ 2026-08-03
+## 0.0.12（versionCode 12）— 2026-07-31 ~ 2026-08-04
 
 ### 新增
 
@@ -17,6 +17,10 @@
 
 ### 修复
 
+- **Release 界面运行时类名被混淆**：提供商切换、模型覆盖和 TTS 类型标签改用显式本地化映射；模板预览与 MCP 错误不再把异常类名作为界面兜底，避免 R8 将 OpenAI/Google/Claude 或异常类型显示为 `y48`/`v48`/`r48` 等短名
+- **DeepSeek V4 工具思考回传**：即使关闭“回传历史思考过程”，带工具调用的 DeepSeek V4 assistant 消息仍按协议完整回传 `reasoning_content`；普通历史回答继续遵守原设置，并避免多段思考内容只保留首段
+- **DeepSeek Responses 思考格式**：直连 `api.deepseek.com` 时使用 `content[].reasoning_text` 回传思考内容，不再请求 OpenAI encrypted reasoning；非流式响应同时兼容 DeepSeek `reasoning_text` 与 OpenAI `summary_text`
+- **OpenAI Chat/Responses 协议适配**：官方 Chat 改用 `max_completion_tokens`，o-series/GPT-5 使用 `developer` 指令角色，并过滤非官方 `reasoning_content` 与工具图片；两套流协议正确传播 JSON 内错误且不再记录完整 payload；Responses 另修正 `item_id`/`call_id` 混用、函数参数 delta 重复风险、失败/不完整终态静默、空摘要加密推理状态丢失、拒答输出及非严格函数工具语义
 - **Moonshot K2.5/K3 temperature 参数报错**：K2.5/K3/K3_ALIAS 模型不支持 `temperature` 参数，发送时导致 API 400 报错；`isModelAllowTemperature` 新增 KIMI 系列检查
 - **workspace 不支持 HEIC/AVIF/ICO 图片**：`IMAGE_EXTENSIONS` 扩展 `heic`, `heif`, `avif`, `ico`，工具描述同步更新；AI 读取这些格式图片不再返回乱码
 - **Skills 列表同名冲突**：LazyColumn `key` 从 `it.name` 改为 `it.skillDir.absolutePath`，避免同名 skill 在不同目录时列表渲染异常

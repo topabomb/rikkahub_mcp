@@ -1,5 +1,6 @@
 package me.rerere.ai.provider.providers.openai
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
@@ -14,8 +15,10 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.ui.OpenAIReasoningMetadata
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.metadataAs
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -42,8 +45,11 @@ class ResponseAPIMessageTest {
     }
 
     // Helper to invoke buildMessages method
-    private fun invokeBuildMessages(messages: List<UIMessage>): JsonArray {
-        return api.buildMessages(messages)
+    private fun invokeBuildMessages(
+        messages: List<UIMessage>,
+        host: String = "api.openai.com"
+    ): JsonArray {
+        return api.buildMessages(messages, resolveResponseProviderCapabilities(host))
     }
 
     private fun invokeBuildRequestBody(
@@ -54,11 +60,14 @@ class ResponseAPIMessageTest {
         return api.buildRequestBody(providerSetting, listOf(UIMessage.user("hello")), params, stream)
     }
 
-    private fun createReasoningParams(reasoningLevel: ReasoningLevel = ReasoningLevel.OFF): TextGenerationParams {
+    private fun createReasoningParams(
+        reasoningLevel: ReasoningLevel = ReasoningLevel.OFF,
+        modelId: String = "test-model"
+    ): TextGenerationParams {
         return TextGenerationParams(
             model = Model(
-                modelId = "test-model",
-                displayName = "test-model",
+                modelId = modelId,
+                displayName = modelId,
                 abilities = listOf(ModelAbility.REASONING)
             ),
             reasoningLevel = reasoningLevel
@@ -343,6 +352,450 @@ class ResponseAPIMessageTest {
     }
 
     @Test
+    fun `openai responses should keep off semantics for gpt5 and use low fallback for old o series`() {
+        val provider = ProviderSetting.OpenAI(baseUrl = "https://api.openai.com/v1")
+        val gpt5Body = invokeBuildRequestBody(
+            providerSetting = provider,
+            params = createReasoningParams(reasoningLevel = ReasoningLevel.OFF, modelId = "gpt-5")
+        )
+        val o3Body = invokeBuildRequestBody(
+            providerSetting = provider,
+            params = createReasoningParams(reasoningLevel = ReasoningLevel.OFF, modelId = "o3")
+        )
+
+        assertEquals("none", gpt5Body["reasoning"]?.jsonObject?.get("effort")?.jsonPrimitive?.content)
+        assertEquals("low", o3Body["reasoning"]?.jsonObject?.get("effort")?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `unknown response proxy should retain openai reasoning format`() {
+        val providerSetting = ProviderSetting.OpenAI(
+            baseUrl = "https://proxy.example.com/v1"
+        )
+        val requestBody = invokeBuildRequestBody(
+            providerSetting = providerSetting,
+            params = createReasoningParams(reasoningLevel = ReasoningLevel.HIGH)
+        )
+        val capabilities = resolveResponseProviderCapabilities("proxy.example.com")
+
+        assertTrue(capabilities.supportsReasoningSummary)
+        assertTrue(capabilities.supportsEncryptedContent)
+        assertFalse(capabilities.usesReasoningTextContent)
+        assertEquals("auto", requestBody["reasoning"]?.jsonObject?.get("summary")?.jsonPrimitive?.content)
+        assertTrue(requestBody.containsKey("include"))
+    }
+
+    @Test
+    fun `deepseek response api should omit openai reasoning summary and encrypted include`() {
+        val providerSetting = ProviderSetting.OpenAI(
+            baseUrl = "https://api.deepseek.com/v1"
+        )
+        val requestBody = invokeBuildRequestBody(
+            providerSetting = providerSetting,
+            params = createReasoningParams(
+                reasoningLevel = ReasoningLevel.HIGH,
+                modelId = "deepseek-v4-flash"
+            )
+        )
+
+        val reasoning = requestBody["reasoning"]?.jsonObject
+        assertTrue("reasoning should exist", reasoning != null)
+        assertEquals("high", reasoning!!["effort"]?.jsonPrimitive?.content)
+        assertFalse("deepseek should not include reasoning.summary", reasoning.containsKey("summary"))
+        assertFalse("deepseek should not request encrypted reasoning", requestBody.containsKey("include"))
+    }
+
+    @Test
+    fun `deepseek response history should encode reasoning as reasoning_text content`() {
+        val messages = listOf(
+            UIMessage.user("Question"),
+            UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(
+                    UIMessagePart.Reasoning(reasoning = "Thinking"),
+                    UIMessagePart.Text("Answer")
+                )
+            )
+        )
+
+        val result = invokeBuildMessages(messages, host = "api.deepseek.com")
+        val reasoningItem = result.first {
+            it.jsonObject["type"]?.jsonPrimitive?.content == "reasoning"
+        }.jsonObject
+        val reasoningContent = reasoningItem["content"]?.jsonArray
+
+        assertFalse(reasoningItem.containsKey("summary"))
+        assertEquals(1, reasoningContent?.size)
+        assertEquals("reasoning_text", reasoningContent!![0].jsonObject["type"]?.jsonPrimitive?.content)
+        assertEquals("Thinking", reasoningContent[0].jsonObject["text"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `openai response history should keep summary reasoning format`() {
+        val messages = listOf(
+            UIMessage.user("Question"),
+            UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(UIMessagePart.Reasoning(reasoning = "Thinking"))
+            )
+        )
+
+        val result = invokeBuildMessages(messages)
+        val reasoningItem = result.first {
+            it.jsonObject["type"]?.jsonPrimitive?.content == "reasoning"
+        }.jsonObject
+
+        assertTrue(reasoningItem.containsKey("summary"))
+        assertFalse(reasoningItem.containsKey("content"))
+    }
+
+    @Test
+    fun `deepseek non streaming response should parse reasoning_text content`() {
+        val response = Json.parseToJsonElement(
+            """
+            {
+              "id": "resp_1",
+              "model": "deepseek-v4-flash",
+              "output": [
+                {
+                  "id": "rs_1",
+                  "type": "reasoning",
+                  "content": [
+                    {"type": "reasoning_text", "text": "DeepSeek "},
+                    {"type": "reasoning_text", "text": "thinking"}
+                  ],
+                  "summary": []
+                },
+                {
+                  "type": "message",
+                  "role": "assistant",
+                  "content": [
+                    {"type": "output_text", "text": "Final answer"}
+                  ]
+                }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        val result = api.parseResponseOutput(response)
+        val message = result.choices.single().message!!
+        val reasoning = message.parts.filterIsInstance<UIMessagePart.Reasoning>().single()
+        val text = message.parts.filterIsInstance<UIMessagePart.Text>().single()
+
+        assertEquals("DeepSeek thinking", reasoning.reasoning)
+        assertEquals("rs_1", reasoning.metadataAs<OpenAIReasoningMetadata>()?.reasoningId)
+        assertEquals("Final answer", text.text)
+    }
+
+    @Test
+    fun `openai non streaming response should combine summary and preserve metadata once`() {
+        val response = Json.parseToJsonElement(
+            """
+            {
+              "id": "resp_2",
+              "model": "gpt-5",
+              "output": [
+                {
+                  "id": "rs_2",
+                  "type": "reasoning",
+                  "encrypted_content": "encrypted-state",
+                  "summary": [
+                    {"type": "summary_text", "text": "First "},
+                    {"type": "summary_text", "text": "summary"}
+                  ]
+                }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        val result = api.parseResponseOutput(response)
+        val reasoning = result.choices.single().message!!.parts
+            .filterIsInstance<UIMessagePart.Reasoning>()
+            .single()
+        val metadata = reasoning.metadataAs<OpenAIReasoningMetadata>()
+
+        assertEquals("First summary", reasoning.reasoning)
+        assertEquals("rs_2", metadata?.reasoningId)
+        assertEquals("encrypted-state", metadata?.encryptedContent)
+    }
+
+    @Test
+    fun `openai non streaming response should preserve encrypted reasoning when summary is empty`() {
+        val response = Json.parseToJsonElement(
+            """
+            {
+              "id": "resp_empty_summary",
+              "model": "gpt-5",
+              "output": [
+                {
+                  "id": "rs_empty_summary",
+                  "type": "reasoning",
+                  "encrypted_content": "encrypted-only-state",
+                  "summary": []
+                }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        val result = api.parseResponseOutput(response)
+        val reasoning = result.choices.single().message!!.parts
+            .filterIsInstance<UIMessagePart.Reasoning>()
+            .single()
+        val metadata = reasoning.metadataAs<OpenAIReasoningMetadata>()
+
+        assertEquals("", reasoning.reasoning)
+        assertEquals("rs_empty_summary", metadata?.reasoningId)
+        assertEquals("encrypted-only-state", metadata?.encryptedContent)
+
+        val replay = invokeBuildMessages(
+            listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(reasoning)))
+        ).single().jsonObject
+        assertEquals(0, replay["summary"]?.jsonArray?.size)
+        assertEquals("encrypted-only-state", replay["encrypted_content"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `responses parser should preserve refusal and ignore unknown message parts`() {
+        val response = Json.parseToJsonElement(
+            """
+            {
+              "id": "resp_refusal",
+              "model": "gpt-5",
+              "output": [
+                {
+                  "type": "message",
+                  "role": "assistant",
+                  "content": [
+                    {"type": "unsupported_future_part", "value": "ignored"},
+                    {"type": "refusal", "refusal": "I cannot help with that."}
+                  ]
+                }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        val message = api.parseResponseOutput(response).choices.single().message!!
+
+        assertEquals("I cannot help with that.", message.parts.filterIsInstance<UIMessagePart.Text>().single().text)
+    }
+
+    @Test
+    fun `responses streaming function call should persist call id instead of output item id`() {
+        val streamState = ResponseStreamState()
+        val events = listOf(
+            """
+            {
+              "type": "response.output_item.added",
+              "item": {
+                "id": "fc_123",
+                "call_id": "call_123",
+                "type": "function_call",
+                "name": "lookup",
+                "arguments": ""
+              }
+            }
+            """,
+            """
+            {
+              "type": "response.function_call_arguments.done",
+              "item_id": "fc_123",
+              "arguments": "{\"query\":\"test\"}"
+            }
+            """
+        ).mapNotNull { event ->
+            api.parseResponseDelta(Json.parseToJsonElement(event.trimIndent()).jsonObject, streamState)
+        }
+
+        val message = events.fold(
+            UIMessage(role = MessageRole.ASSISTANT, parts = emptyList())
+        ) { current, chunk ->
+            current + chunk
+        }
+        val tool = message.parts.filterIsInstance<UIMessagePart.Tool>().single()
+
+        assertEquals("call_123", tool.toolCallId)
+        assertEquals("lookup", tool.toolName)
+        assertEquals("{\"query\":\"test\"}", tool.input)
+
+        val replay = invokeBuildMessages(
+            listOf(
+                message.copy(
+                    parts = message.parts.map {
+                        if (it is UIMessagePart.Tool) {
+                            it.copy(output = listOf(UIMessagePart.Text("result")))
+                        } else {
+                            it
+                        }
+                    }
+                )
+            )
+        )
+        assertEquals(
+            listOf("call_123", "call_123"),
+            replay.map { it.jsonObject["call_id"]?.jsonPrimitive?.content }
+        )
+    }
+
+    @Test
+    fun `responses streaming function arguments should merge deltas once and not duplicate done value`() {
+        val streamState = ResponseStreamState()
+        val events = listOf(
+            """
+            {
+              "type": "response.output_item.added",
+              "item": {
+                "id": "fc_delta",
+                "call_id": "call_delta",
+                "type": "function_call",
+                "name": "lookup",
+                "arguments": ""
+              }
+            }
+            """,
+            """
+            {
+              "type": "response.function_call_arguments.delta",
+              "item_id": "fc_delta",
+              "delta": "{\"query\":"
+            }
+            """,
+            """
+            {
+              "type": "response.function_call_arguments.delta",
+              "item_id": "fc_delta",
+              "delta": "\"test\"}"
+            }
+            """,
+            """
+            {
+              "type": "response.function_call_arguments.done",
+              "item_id": "fc_delta",
+              "arguments": "{\"query\":\"test\"}"
+            }
+            """
+        ).mapNotNull { event ->
+            api.parseResponseDelta(Json.parseToJsonElement(event.trimIndent()).jsonObject, streamState)
+        }
+
+        val message = events.fold(
+            UIMessage(role = MessageRole.ASSISTANT, parts = emptyList())
+        ) { current, chunk ->
+            current + chunk
+        }
+        val tool = message.parts.filterIsInstance<UIMessagePart.Tool>().single()
+
+        assertEquals("call_delta", tool.toolCallId)
+        assertEquals("lookup", tool.toolName)
+        assertEquals("{\"query\":\"test\"}", tool.input)
+        assertTrue(streamState.toolCallIdsByItemId.isEmpty())
+        assertTrue(streamState.toolArgumentDeltasSeenByItemId.isEmpty())
+    }
+
+    @Test
+    fun `responses terminal statuses should expose failed incomplete and generic stream errors`() {
+        val failed = Json.parseToJsonElement(
+            """
+            {
+              "type": "response.failed",
+              "response": {
+                "status": "failed",
+                "error": {"code": "server_error", "message": "generation failed"}
+              }
+            }
+            """.trimIndent()
+        ).jsonObject
+        val incomplete = Json.parseToJsonElement(
+            """
+            {
+              "type": "response.incomplete",
+              "response": {
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"}
+              }
+            }
+            """.trimIndent()
+        ).jsonObject
+        val genericError = Json.parseToJsonElement(
+            """
+            {
+              "type": "error",
+              "error": {"message": "stream error"}
+            }
+            """.trimIndent()
+        ).jsonObject
+        val completed = Json.parseToJsonElement(
+            """
+            {
+              "type": "response.completed",
+              "response": {"status": "completed"}
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        assertEquals("generation failed", api.parseResponseStreamError(failed)?.message)
+        assertEquals("Response incomplete: max_output_tokens", api.parseResponseStreamError(incomplete)?.message)
+        assertEquals("stream error", api.parseResponseStreamError(genericError)?.message)
+        assertEquals(null, api.parseResponseStreamError(completed))
+    }
+
+    @Test
+    fun `responses non streaming incomplete object should report protocol reason`() {
+        val response = Json.parseToJsonElement(
+            """
+            {
+              "id": "resp_incomplete",
+              "status": "incomplete",
+              "incomplete_details": {"reason": "content_filter"},
+              "output": []
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        assertEquals("Response incomplete: content_filter", api.parseResponseObjectError(response)?.message)
+    }
+
+    @Test
+    fun `deepseek streaming reasoning events should merge text with item metadata`() {
+        val events = listOf(
+            """
+            {
+              "type": "response.output_item.added",
+              "item": {"id": "rs_stream", "type": "reasoning"}
+            }
+            """,
+            """
+            {
+              "type": "response.reasoning_text.delta",
+              "item_id": "rs_stream",
+              "delta": "Streaming thinking"
+            }
+            """,
+            """
+            {
+              "type": "response.output_item.done",
+              "item": {"id": "rs_stream", "type": "reasoning"}
+            }
+            """
+        ).mapNotNull { event ->
+            api.parseResponseDelta(Json.parseToJsonElement(event.trimIndent()).jsonObject)
+        }
+
+        val message = events.fold(
+            UIMessage(role = MessageRole.ASSISTANT, parts = emptyList())
+        ) { current, chunk ->
+            current + chunk
+        }
+        val reasoning = message.parts.filterIsInstance<UIMessagePart.Reasoning>().single()
+
+        assertEquals("Streaming thinking", reasoning.reasoning)
+        assertEquals("rs_stream", reasoning.metadataAs<OpenAIReasoningMetadata>()?.reasoningId)
+    }
+
+    @Test
     fun `volc response api should keep reasoning effort when non auto`() {
         val providerSetting = ProviderSetting.OpenAI(
             baseUrl = "https://ark.cn-beijing.volces.com/api/v3"
@@ -386,6 +839,7 @@ class ResponseAPIMessageTest {
         assertEquals(1, tools?.size)
         assertEquals("function", tools!![0].jsonObject["type"]?.jsonPrimitive?.content)
         assertEquals("get_weather", tools[0].jsonObject["name"]?.jsonPrimitive?.content)
+        assertFalse(tools[0].jsonObject["strict"]?.jsonPrimitive?.content?.toBoolean() ?: true)
     }
 
     @Test

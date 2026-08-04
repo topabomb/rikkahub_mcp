@@ -280,6 +280,10 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
+    val DEEPSEEK_V4 = defineGroup {
+        add(DEEPSEEK_V4_FLASH, DEEPSEEK_V4_PRO)
+    }
+
     private val DEEPSEEK_R1 = defineGroup {
         add(DEEPSEEK_R1_MODEL, DEEPSEEK_REASONER)
     }

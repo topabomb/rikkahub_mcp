@@ -63,7 +63,7 @@ fun ProviderConfigure(
                             index = index,
                             count = ProviderSetting.Types.size
                         ),
-                        label = { Text(type.simpleName ?: "") },
+                        label = { Text(stringResource(providerTypeNameRes(type))) },
                         selected = provider::class == type,
                         onClick = { onEdit(provider.convertTo(type)) }
                     )

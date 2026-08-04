@@ -3,6 +3,7 @@
 import me.rerere.ai.provider.BalanceOption
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
+import net.weero.measix.pilot.R
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -11,6 +12,14 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class ProviderConfigureConvertToTest {
+
+    @Test
+    fun `provider type labels use stable resources instead of runtime class names`() {
+        assertEquals(R.string.setting_provider_type_openai, providerTypeNameRes(ProviderSetting.OpenAI::class))
+        assertEquals(R.string.setting_provider_type_google, providerTypeNameRes(ProviderSetting.Google::class))
+        assertEquals(R.string.setting_provider_type_claude, providerTypeNameRes(ProviderSetting.Claude::class))
+    }
+
     @Test
     fun `convertTo should keep common fields and switch official endpoint to target default`() {
         val model = Model(

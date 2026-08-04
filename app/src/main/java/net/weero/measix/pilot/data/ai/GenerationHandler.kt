@@ -319,7 +319,9 @@ class GenerationHandler(
                                             buildJsonObject {
                                                 put(
                                                     "error",
-                                                    JsonPrimitive("[${it.javaClass.simpleName}] ${it.message ?: "Unknown error"}")
+                                                    // Exception class names are obfuscated in Release; the full type and
+                                                    // stack remain in Logcat, while protocol output stays stable.
+                                                    JsonPrimitive(it.message ?: "Unknown error")
                                                 )
                                                 put("type", JsonPrimitive("error"))
                                             }

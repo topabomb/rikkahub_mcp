@@ -17,6 +17,7 @@ import net.weero.measix.pilot.ui.components.ui.FormItem
 import net.weero.measix.pilot.ui.components.ui.OutlinedNumberInput
 import net.weero.measix.pilot.ui.components.ui.SelectTextField
 import me.rerere.tts.provider.TTSProviderSetting
+import kotlin.reflect.KClass
 
 @Composable
 fun TTSProviderConfigure(
@@ -30,30 +31,25 @@ fun TTSProviderConfigure(
     ) {
         // Provider type selector
         val providers = remember { TTSProviderSetting.Types }
+        // Provider classes are obfuscated in Release. Keep the selector independent of runtime
+        // class names and reuse the existing localized provider labels for every closed type.
+        val providerLabels = mapOf<KClass<out TTSProviderSetting>, String>(
+            TTSProviderSetting.OpenAI::class to stringResource(R.string.setting_tts_page_provider_openai),
+            TTSProviderSetting.Gemini::class to stringResource(R.string.setting_tts_page_provider_gemini),
+            TTSProviderSetting.SystemTTS::class to stringResource(R.string.setting_tts_page_provider_system),
+            TTSProviderSetting.MiMo::class to stringResource(R.string.setting_tts_page_provider_mimo),
+        )
 
         FormItem(
             label = { Text(stringResource(R.string.setting_tts_page_provider_type)) },
             description = { Text(stringResource(R.string.setting_tts_page_provider_type_description)) },
         ) {
             SelectTextField(
-                value = when (setting) {
-                    is TTSProviderSetting.OpenAI -> "OpenAI"
-                    is TTSProviderSetting.Gemini -> "Gemini"
-                    is TTSProviderSetting.SystemTTS -> "System TTS"
-                    is TTSProviderSetting.MiMo -> "MiMo"
-                },
+                value = providerLabels.getValue(setting::class),
                 options = providers,
                 readOnly = true,
                 modifier = Modifier.fillMaxWidth(),
-                optionToString = { providerClass ->
-                    when (providerClass) {
-                        TTSProviderSetting.OpenAI::class -> "OpenAI"
-                        TTSProviderSetting.Gemini::class -> "Gemini"
-                        TTSProviderSetting.SystemTTS::class -> "System TTS"
-                        TTSProviderSetting.MiMo::class -> "MiMo"
-                        else -> providerClass.simpleName ?: "Unknown"
-                    }
-                },
+                optionToString = { providerClass -> providerLabels.getValue(providerClass) },
                 onOptionSelected = { providerClass ->
                     val newSetting = when (providerClass) {
                         TTSProviderSetting.OpenAI::class -> TTSProviderSetting.OpenAI(

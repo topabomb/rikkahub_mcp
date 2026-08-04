@@ -183,6 +183,14 @@ class McpManagerTest {
     }
 
     @Test
+    fun `McpStatus Error should not expose an obfuscated runtime class as its message`() {
+        val status = McpStatus.Error.from(RuntimeException())
+
+        assertEquals(null, status.message)
+        assertTrue(status.detail?.contains("RuntimeException") == true)
+    }
+
+    @Test
     fun `McpStatus sealed class should have exactly 6 subtypes`() {
         val subtypes = listOf(
             McpStatus.Idle,

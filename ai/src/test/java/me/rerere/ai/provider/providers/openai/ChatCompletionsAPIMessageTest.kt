@@ -1,12 +1,18 @@
 package me.rerere.ai.provider.providers.openai
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.provider.Modality
+import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ModelAbility
+import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.KeyRoulette
@@ -31,19 +37,34 @@ class ChatCompletionsAPIMessageTest {
         api = ChatCompletionsAPI(OkHttpClient(), KeyRoulette.default())
     }
 
-    // Helper to invoke private buildMessages method via reflection
+    // Helper for the compatible-provider default message format.
     private fun invokeBuildMessages(
         messages: List<UIMessage>,
-        includeHistoryReasoning: Boolean = true
+        includeHistoryReasoning: Boolean = true,
+        modelId: String = "test-model",
+        host: String = "proxy.example.com",
     ): JsonArray {
-        val method = ChatCompletionsAPI::class.java.getDeclaredMethod(
-            "buildMessages",
-            List::class.java,
-            Boolean::class.javaPrimitiveType,
-            List::class.java
+        return api.buildMessages(
+            messages = messages,
+            includeHistoryReasoning = includeHistoryReasoning,
+            supportToolResultModalities = listOf(Modality.TEXT, Modality.IMAGE),
+            requiresToolReasoningReplay = requiresDeepSeekToolReasoningReplay(host, modelId),
         )
-        method.isAccessible = true
-        return method.invoke(api, messages, includeHistoryReasoning, listOf(Modality.TEXT, Modality.IMAGE)) as JsonArray
+    }
+
+    private fun invokeBuildRequest(
+        messages: List<UIMessage>,
+        params: TextGenerationParams,
+        providerSetting: ProviderSetting.OpenAI,
+    ) = ChatCompletionsAPI::class.java.getDeclaredMethod(
+        "buildChatCompletionRequest",
+        List::class.java,
+        TextGenerationParams::class.java,
+        ProviderSetting.OpenAI::class.java,
+        Boolean::class.javaPrimitiveType,
+    ).run {
+        isAccessible = true
+        invoke(api, messages, params, providerSetting, false) as kotlinx.serialization.json.JsonObject
     }
 
     @Test
@@ -201,6 +222,191 @@ class ChatCompletionsAPIMessageTest {
             assertFalse("Assistant should not have reasoning_content",
                 msg.jsonObject.containsKey("reasoning_content"))
         }
+    }
+
+    @Test
+    fun `deepseek v4 tool reasoning should be replayed when history reasoning disabled`() {
+        val messages = listOf(
+            UIMessage.user("Use a tool"),
+            UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(
+                    UIMessagePart.Reasoning(reasoning = "Tool-step thinking"),
+                    UIMessagePart.Text("Calling the tool"),
+                    createExecutedTool("call_1", "lookup", "{}", "result"),
+                    UIMessagePart.Reasoning(reasoning = "Final thinking"),
+                    UIMessagePart.Text("Done")
+                )
+            )
+        )
+
+        val result = invokeBuildMessages(
+            messages = messages,
+            includeHistoryReasoning = false,
+            modelId = "Pro/deepseek-ai/DeepSeek-V4-Flash"
+        )
+        val assistantMessages = result.filter {
+            it.jsonObject["role"]?.jsonPrimitive?.content == "assistant"
+        }
+
+        assertEquals(2, assistantMessages.size)
+        assertEquals(
+            "Tool-step thinking",
+            assistantMessages[0].jsonObject["reasoning_content"]?.jsonPrimitive?.content
+        )
+        assertTrue(assistantMessages[0].jsonObject.containsKey("tool_calls"))
+        assertFalse(assistantMessages[1].jsonObject.containsKey("reasoning_content"))
+    }
+
+    @Test
+    fun `deepseek v4 should combine all reasoning fragments before a tool call`() {
+        val messages = listOf(
+            UIMessage.user("Use a tool"),
+            UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(
+                    UIMessagePart.Reasoning(reasoning = "First "),
+                    UIMessagePart.Reasoning(reasoning = "second"),
+                    createExecutedTool("call_1", "lookup", "{}", "result")
+                )
+            )
+        )
+
+        val result = invokeBuildMessages(
+            messages = messages,
+            includeHistoryReasoning = false,
+            modelId = "deepseek-v4-pro"
+        )
+        val toolAssistant = result.first {
+            it.jsonObject["role"]?.jsonPrimitive?.content == "assistant" &&
+                    it.jsonObject.containsKey("tool_calls")
+        }.jsonObject
+
+        assertEquals("First second", toolAssistant["reasoning_content"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `non deepseek tool reasoning should remain excluded when history reasoning disabled`() {
+        val messages = listOf(
+            UIMessage.user("Use a tool"),
+            UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(
+                    UIMessagePart.Reasoning(reasoning = "Optional thinking"),
+                    createExecutedTool("call_1", "lookup", "{}", "result")
+                )
+            )
+        )
+
+        val result = invokeBuildMessages(
+            messages = messages,
+            includeHistoryReasoning = false,
+            modelId = "gpt-5"
+        )
+        val toolAssistant = result.first {
+            it.jsonObject["role"]?.jsonPrimitive?.content == "assistant"
+        }.jsonObject
+
+        assertFalse(toolAssistant.containsKey("reasoning_content"))
+    }
+
+    @Test
+    fun `direct deepseek host should require tool reasoning for a custom model alias`() {
+        val messages = listOf(
+            UIMessage.user("Use a tool"),
+            UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(
+                    UIMessagePart.Reasoning(reasoning = "Required thinking"),
+                    createExecutedTool("call_1", "lookup", "{}", "result")
+                )
+            )
+        )
+
+        val result = invokeBuildMessages(
+            messages = messages,
+            includeHistoryReasoning = false,
+            modelId = "company-model-alias",
+            host = "api.deepseek.com"
+        )
+        val toolAssistant = result.first {
+            it.jsonObject["role"]?.jsonPrimitive?.content == "assistant"
+        }.jsonObject
+
+        assertEquals("Required thinking", toolAssistant["reasoning_content"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `official openai chat request should use official fields and suppress compatibility extensions`() {
+        val messages = listOf(
+            UIMessage.system("Follow the application instructions"),
+            UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(
+                    UIMessagePart.Reasoning(reasoning = "private reasoning"),
+                    UIMessagePart.Tool(
+                        toolCallId = "call_1",
+                        toolName = "lookup",
+                        input = "{}",
+                        output = listOf(UIMessagePart.Image(url = "data:image/png;base64,iVBORw0KGgo=")),
+                    )
+                )
+            )
+        )
+        val body = invokeBuildRequest(
+            messages = messages,
+            params = TextGenerationParams(
+                model = Model(
+                    modelId = "gpt-5",
+                    displayName = "gpt-5",
+                    inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
+                    abilities = listOf(ModelAbility.REASONING),
+                ),
+                maxTokens = 123,
+                reasoningLevel = ReasoningLevel.OFF,
+            ),
+            providerSetting = ProviderSetting.OpenAI(
+                baseUrl = "https://api.openai.com/v1",
+                includeHistoryReasoning = true,
+            ),
+        )
+
+        assertEquals(123, body["max_completion_tokens"]?.jsonPrimitive?.content?.toInt())
+        assertFalse(body.containsKey("max_tokens"))
+        assertEquals("developer", body["messages"]!!.jsonArray[0].jsonObject["role"]?.jsonPrimitive?.content)
+        assertEquals("none", body["reasoning_effort"]?.jsonPrimitive?.content)
+        val assistant = body["messages"]!!.jsonArray[1].jsonObject
+        assertFalse(assistant.containsKey("reasoning_content"))
+        val toolResult = body["messages"]!!.jsonArray[2].jsonObject["content"] as JsonPrimitive
+        assertTrue(toolResult.content.contains("Image output omitted"))
+        assertFalse(requiresDeepSeekToolReasoningReplay("api.openai.com", "deepseek-v4-flash"))
+    }
+
+    @Test
+    fun `compatible chat proxy should keep legacy max tokens field`() {
+        val body = invokeBuildRequest(
+            messages = listOf(UIMessage.system("system prompt"), UIMessage.user("hello")),
+            params = TextGenerationParams(
+                model = Model(modelId = "compatible-model", displayName = "compatible-model"),
+                maxTokens = 321,
+            ),
+            providerSetting = ProviderSetting.OpenAI(baseUrl = "https://proxy.example.com/v1"),
+        )
+
+        assertEquals(321, body["max_tokens"]?.jsonPrimitive?.content?.toInt())
+        assertFalse(body.containsKey("max_completion_tokens"))
+        assertEquals("system", body["messages"]!!.jsonArray.first().jsonObject["role"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `chat parser should preserve official refusal text`() {
+        val message = api.parseMessage(
+            Json.parseToJsonElement(
+                """{"role":"assistant","content":null,"refusal":"I cannot help with that."}"""
+            ).jsonObject
+        )
+
+        assertEquals("I cannot help with that.", message.parts.filterIsInstance<UIMessagePart.Text>().single().text)
     }
 
     private fun createMultiRoundReasoningMessages(): List<UIMessage> {

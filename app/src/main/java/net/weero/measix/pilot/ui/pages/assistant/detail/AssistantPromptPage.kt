@@ -372,7 +372,8 @@ private fun AssistantPromptContent(
                 }
                 preview.onError {
                     Text(
-                        text = it.message ?: it.javaClass.name,
+                        // Runtime class names are obfuscated in Release and are not meaningful UI text.
+                        text = it.message ?: stringResource(R.string.error_title_operation),
                         color = MaterialTheme.colorScheme.error
                     )
                 }

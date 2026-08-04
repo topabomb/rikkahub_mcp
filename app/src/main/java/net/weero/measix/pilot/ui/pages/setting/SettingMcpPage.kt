@@ -375,7 +375,7 @@ private fun McpServerItem(
     val context = LocalContext.current
 
     errorDetail?.let { error ->
-        val fullText = error.detail ?: error.message
+        val fullText = error.detail ?: error.message ?: stringResource(R.string.error_title_operation)
         AlertDialog(
             onDismissRequest = { errorDetail = null },
             title = { Text(item.commonOptions.name.ifBlank { "MCP" }) },
@@ -516,7 +516,7 @@ private fun McpServerItem(
                     if (status is McpStatus.Error) {
                         val error = status as McpStatus.Error
                         Text(
-                            text = error.message,
+                            text = error.message ?: stringResource(R.string.error_title_operation),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.error,
                             maxLines = 3,

@@ -1220,5 +1220,8 @@
   <string name="assistant_page_context_message_limit_warning">Message count is not a token limit. Each trim can still invalidate the prompt cache.</string>
   <string name="setting_mcp_page_show_header_value">Show header value</string>
   <string name="setting_mcp_page_hide_header_value">Hide header value</string>
+  <string name="setting_provider_type_openai">OpenAI</string>
+  <string name="setting_provider_type_google">Google</string>
+  <string name="setting_provider_type_claude">Claude</string>
 </resources>
 

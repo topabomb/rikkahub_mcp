@@ -107,6 +107,10 @@ class ModelRegistryTest {
     @Test
     fun testDeepseekV4() {
         val reasonerAbilities = ModelRegistry.MODEL_ABILITIES.getData("deepseek-reasoner")
+        assertTrue(ModelRegistry.DEEPSEEK_V4.match("deepseek-v4-flash"))
+        assertTrue(ModelRegistry.DEEPSEEK_V4.match("Pro/deepseek-ai/DeepSeek-V4-Flash"))
+        assertTrue(ModelRegistry.DEEPSEEK_V4.match("deepseek-v4-pro"))
+        assertFalse(ModelRegistry.DEEPSEEK_V4.match("deepseek-v3.2"))
         assertEquals(
             reasonerAbilities,
             ModelRegistry.MODEL_ABILITIES.getData("deepseek-v4-flash")

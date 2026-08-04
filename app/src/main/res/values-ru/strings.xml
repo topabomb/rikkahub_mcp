@@ -1220,5 +1220,8 @@
   <string name="assistant_page_context_message_limit_warning">Число сообщений не является лимитом токенов. Каждая очистка всё равно может сбросить кеш промпта.</string>
   <string name="setting_mcp_page_show_header_value">Показать значение заголовка</string>
   <string name="setting_mcp_page_hide_header_value">Скрыть значение заголовка</string>
+  <string name="setting_provider_type_openai">OpenAI</string>
+  <string name="setting_provider_type_google">Google</string>
+  <string name="setting_provider_type_claude">Claude</string>
 </resources>
 
