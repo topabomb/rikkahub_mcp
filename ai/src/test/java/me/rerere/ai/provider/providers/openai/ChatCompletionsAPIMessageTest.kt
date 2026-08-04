@@ -13,8 +13,11 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.handleMessageChunk
 import me.rerere.ai.util.KeyRoulette
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
@@ -283,6 +286,154 @@ class ChatCompletionsAPIMessageTest {
         }.jsonObject
 
         assertEquals("First second", toolAssistant["reasoning_content"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `deepseek assistant envelope should keep content before tool boundary`() {
+        val parsed = api.parseMessage(
+            Json.parseToJsonElement(
+                """
+                {
+                  "role": "assistant",
+                  "reasoning_content": "Need lookup",
+                  "content": "Calling lookup",
+                  "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"}
+                  }]
+                }
+                """.trimIndent()
+            ).jsonObject
+        )
+
+        assertEquals(
+            listOf(
+                UIMessagePart.Reasoning::class,
+                UIMessagePart.Text::class,
+                UIMessagePart.Tool::class,
+            ),
+            parsed.parts.map { it::class },
+        )
+
+        val executed = parsed.copy(
+            parts = parsed.parts.map { part ->
+                if (part is UIMessagePart.Tool) {
+                    part.copy(output = listOf(UIMessagePart.Text("lookup result")))
+                } else {
+                    part
+                }
+            }
+        )
+        val history = invokeBuildMessages(
+            messages = listOf(UIMessage.user("Use a tool"), executed),
+            includeHistoryReasoning = false,
+            modelId = "deepseek-v4-flash",
+            host = "api.deepseek.com",
+        )
+        val assistant = history.first {
+            it.jsonObject["role"]?.jsonPrimitive?.content == "assistant"
+        }.jsonObject
+
+        assertEquals("Need lookup", assistant["reasoning_content"]?.jsonPrimitive?.content)
+        assertEquals("Calling lookup", assistant["content"]?.jsonPrimitive?.content)
+        assertEquals("call-1", assistant["tool_calls"]?.jsonArray?.single()
+            ?.jsonObject?.get("id")?.jsonPrimitive?.content)
+        assertEquals("tool", history[2].jsonObject["role"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `deepseek replay should survive tool delta arriving before reasoning and content`() {
+        var messages = listOf(UIMessage.user("Use a tool"))
+        listOf(
+            """
+            {
+              "role": "assistant",
+              "tool_calls": [{
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"}
+              }]
+            }
+            """,
+            """{"role":"assistant","reasoning_content":"Late reasoning"}""",
+            """{"role":"assistant","content":"Late content"}""",
+        ).forEach { deltaJson ->
+            messages = messages.handleMessageChunk(
+                MessageChunk(
+                    id = "chunk",
+                    model = "deepseek-v4-flash-free",
+                    choices = listOf(
+                        UIMessageChoice(
+                            index = 0,
+                            delta = api.parseMessage(
+                                Json.parseToJsonElement(deltaJson.trimIndent()).jsonObject
+                            ),
+                            message = null,
+                            finishReason = null,
+                        )
+                    ),
+                )
+            )
+        }
+        messages = messages.dropLast(1) + messages.last().copy(
+            parts = messages.last().parts.map { part ->
+                if (part is UIMessagePart.Tool) {
+                    part.copy(output = listOf(UIMessagePart.Text("result")))
+                } else {
+                    part
+                }
+            }
+        )
+
+        val history = invokeBuildMessages(
+            messages = messages,
+            includeHistoryReasoning = false,
+            modelId = "deepseek-v4-flash-free",
+            host = "api.deepseek.com",
+        )
+        val assistant = history.first {
+            it.jsonObject["role"]?.jsonPrimitive?.content == "assistant"
+        }.jsonObject
+
+        assertEquals("Late reasoning", assistant["reasoning_content"]?.jsonPrimitive?.content)
+        assertEquals("Late content", assistant["content"]?.jsonPrimitive?.content)
+        assertTrue(assistant.containsKey("tool_calls"))
+    }
+
+    @Test
+    fun `parallel tool argument deltas should merge by official tool call index`() {
+        val streamState = ChatCompletionsStreamState()
+        var messages = listOf(UIMessage.user("Use parallel tools"))
+        listOf(
+            """{"role":"assistant","tool_calls":[{"index":0,"id":"call-0","type":"function","function":{"name":"first","arguments":"{"}}]}""",
+            """{"role":"assistant","tool_calls":[{"index":1,"id":"call-1","type":"function","function":{"name":"second","arguments":"["}}]}""",
+            """{"role":"assistant","tool_calls":[{"index":0,"function":{"arguments":"}"}}]}""",
+            """{"role":"assistant","tool_calls":[{"index":1,"function":{"arguments":"]"}}]}""",
+        ).forEach { deltaJson ->
+            messages = messages.handleMessageChunk(
+                MessageChunk(
+                    id = "chunk",
+                    model = "gpt-5",
+                    choices = listOf(
+                        UIMessageChoice(
+                            index = 0,
+                            delta = api.parseMessage(
+                                Json.parseToJsonElement(deltaJson).jsonObject,
+                                streamState,
+                            ),
+                            message = null,
+                            finishReason = null,
+                        )
+                    ),
+                )
+            )
+        }
+
+        val tools = messages.last().parts.filterIsInstance<UIMessagePart.Tool>()
+        assertEquals(listOf("call-0", "call-1"), tools.map { it.toolCallId })
+        assertEquals(listOf("first", "second"), tools.map { it.toolName })
+        assertEquals(listOf("{}", "[]"), tools.map { it.input })
     }
 
     @Test

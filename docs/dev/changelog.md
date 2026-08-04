@@ -19,6 +19,7 @@
 
 - **Release 界面运行时类名被混淆**：提供商切换、模型覆盖和 TTS 类型标签改用显式本地化映射；模板预览与 MCP 错误不再把异常类名作为界面兜底，避免 R8 将 OpenAI/Google/Claude 或异常类型显示为 `y48`/`v48`/`r48` 等短名
 - **DeepSeek V4 工具思考回传**：即使关闭“回传历史思考过程”，带工具调用的 DeepSeek V4 assistant 消息仍按协议完整回传 `reasoning_content`；普通历史回答继续遵守原设置，并避免多段思考内容只保留首段
+- **DeepSeek 工具步骤原子关联**：Chat 非流式响应按 `reasoning_content`、`content`、`tool_calls` 的原始 assistant 关系保存；流式响应将迟到的思考和正文归入当前未完成工具步骤，并按 `tool_calls[].index` 关联并行工具参数分片，避免 delta 顺序导致下一轮工具历史缺少思考、正文错位或并行工具串参
 - **DeepSeek Responses 思考格式**：直连 `api.deepseek.com` 时使用 `content[].reasoning_text` 回传思考内容，不再请求 OpenAI encrypted reasoning；非流式响应同时兼容 DeepSeek `reasoning_text` 与 OpenAI `summary_text`
 - **OpenAI Chat/Responses 协议适配**：官方 Chat 改用 `max_completion_tokens`，o-series/GPT-5 使用 `developer` 指令角色，并过滤非官方 `reasoning_content` 与工具图片；两套流协议正确传播 JSON 内错误且不再记录完整 payload；Responses 另修正 `item_id`/`call_id` 混用、函数参数 delta 重复风险、失败/不完整终态静默、空摘要加密推理状态丢失、拒答输出及非严格函数工具语义
 - **Moonshot K2.5/K3 temperature 参数报错**：K2.5/K3/K3_ALIAS 模型不支持 `temperature` 参数，发送时导致 API 400 报错；`isModelAllowTemperature` 新增 KIMI 系列检查
@@ -30,6 +31,7 @@
 
 ### 变更
 
+- **上游消息类型结构同步**：同步上游 `b106e8bb` 的文件拆分，将 `UIMessagePart` 与 `UIMessageAnnotation` 移至独立源码文件；保留本 fork 已完成的类型精简，不恢复废弃的 `Search`、`ToolCall`、`ToolResult`
 - **依赖升级**：material3 `1.5.0-alpha24` → `1.5.0-alpha25`，Navigation 3 `1.1.4` → `1.1.5`，baselineprofile `1.5.0-alpha07` → `1.5.0-beta01`
 - **highlight 模块依赖清理**：移除 `quickjs`、`kotlinx-serialization-json`、`kotlinx-coroutines-core` 依赖和 `kotlin.serialization` 插件；`common` 模块的 QuickJS 依赖保留（`eval_javascript` 工具 + `QuickJSFetch` 仍需使用）
 - **代码清理**：移除 `HighlightCodeVisualTransformation` 中无调用方的 `regex()` 死代码；`CodeBlockPreview` 硬编码 URL 改用 `WEB_VIEW_BASE_URL` 常量统一

@@ -3,17 +3,12 @@ package me.rerere.ai.ui
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.Model
-import me.rerere.ai.util.json
 import kotlin.math.roundToInt
 import kotlin.time.Clock
-import kotlin.time.Instant
 import kotlin.uuid.Uuid
 
 // 公共消息抽象, 具体的Provider实现会转换为API接口需要的DTO
@@ -34,6 +29,28 @@ data class UIMessage(
         val choice = chunk.choices.getOrNull(0)
         val message = choice?.delta ?: choice?.message
         return message?.let { delta ->
+            /*
+             * 一个 UIMessage 会承载同一用户轮次中的多次 assistant -> tool 子步骤，已执行 Tool
+             * 就是这些步骤之间的边界。流式协议并不保证 reasoning/content/tool_calls 总在同一
+             * delta 中到达，因此当前未完成步骤不能简单按 delta 到达顺序追加：DeepSeek 要求
+             * reasoning_content、content 与 tool_calls 在下一次请求中仍属于同一 assistant 消息。
+             *
+             * 这里仅规范化“最后一个已执行 Tool 之后”的当前步骤，保持既有存储结构和历史步骤
+             * 不变，并确保当前步骤始终为 Reasoning -> Content -> pending Tool(s)。
+             */
+            fun List<UIMessagePart>.currentStepStart(): Int =
+                indexOfLast { it is UIMessagePart.Tool && it.isExecuted } + 1
+
+            fun List<UIMessagePart>.firstPendingToolIndex(stepStart: Int): Int {
+                val relativeIndex = subList(stepStart, size).indexOfFirst {
+                    it is UIMessagePart.Tool && !it.isExecuted
+                }
+                return if (relativeIndex >= 0) stepStart + relativeIndex else size
+            }
+
+            fun List<UIMessagePart>.insertAt(index: Int, part: UIMessagePart): List<UIMessagePart> =
+                toMutableList().apply { add(index, part) }
+
             // Handle Parts
             var newParts = delta.parts.fold(parts) { acc, deltaPart ->
                 when (deltaPart) {
@@ -42,30 +59,47 @@ data class UIMessage(
                         if (deltaPart.text.isEmpty()) {
                             acc
                         } else {
-                            val lastPart = acc.lastOrNull()
+                            val stepStart = acc.currentStepStart()
+                            val insertIndex = acc.firstPendingToolIndex(stepStart)
+                            val lastPart = acc.getOrNull(insertIndex - 1)
                             if (lastPart is UIMessagePart.Text) {
-                                // Append to the last Text part
-                                acc.dropLast(1) + lastPart.copy(text = lastPart.text + deltaPart.text)
+                                // 合并当前步骤的文本，即使 Tool delta 已先到达也不能把文本放到 Tool 后面。
+                                acc.mapIndexed { index, part ->
+                                    if (index == insertIndex - 1) {
+                                        lastPart.copy(text = lastPart.text + deltaPart.text)
+                                    } else {
+                                        part
+                                    }
+                                }
                             } else {
-                                // Create new Text part
-                                acc + deltaPart
+                                acc.insertAt(insertIndex, deltaPart)
                             }
                         }
                     }
 
                     is UIMessagePart.Image -> {
-                        val lastPart = acc.lastOrNull()
+                        val stepStart = acc.currentStepStart()
+                        val insertIndex = acc.firstPendingToolIndex(stepStart)
+                        val lastPart = acc.getOrNull(insertIndex - 1)
                         if (lastPart is UIMessagePart.Image) {
-                            // Append to the last Image part (for streaming base64)
-                            acc.dropLast(1) + lastPart.copy(
-                                url = lastPart.url + deltaPart.url,
-                                metadata = deltaPart.metadata ?: lastPart.metadata
-                            )
+                            // Append to the current step's last Image part (for streaming base64)
+                            acc.mapIndexed { index, part ->
+                                if (index == insertIndex - 1) {
+                                    lastPart.copy(
+                                        url = lastPart.url + deltaPart.url,
+                                        metadata = deltaPart.metadata ?: lastPart.metadata
+                                    )
+                                } else {
+                                    part
+                                }
+                            }
                         } else {
-                            // Create new Image part
-                            acc + UIMessagePart.Image(
-                                url = "data:image/png;base64,${deltaPart.url}",
-                                metadata = deltaPart.metadata,
+                            acc.insertAt(
+                                insertIndex,
+                                UIMessagePart.Image(
+                                    url = "data:image/png;base64,${deltaPart.url}",
+                                    metadata = deltaPart.metadata,
+                                )
                             )
                         }
                     }
@@ -75,27 +109,39 @@ data class UIMessage(
                         if (deltaPart.reasoning.isEmpty() && deltaPart.metadata == null) {
                             acc
                         } else {
-                            val lastPart = acc.lastOrNull()
-                            if (lastPart is UIMessagePart.Reasoning) {
-                                // Append to the last Reasoning part
-                                acc.dropLast(1) + UIMessagePart.Reasoning(
-                                    reasoning = lastPart.reasoning + deltaPart.reasoning,
-                                    createdAt = lastPart.createdAt,
-                                    finishedAt = null,
-                                ).also {
-                                    it.metadata = deltaPart.metadata ?: lastPart.metadata
+                            val stepStart = acc.currentStepStart()
+                            val reasoningIndex = (acc.lastIndex downTo stepStart).firstOrNull { index ->
+                                acc[index] is UIMessagePart.Reasoning
+                            }
+                            if (reasoningIndex != null) {
+                                val existing = acc[reasoningIndex] as UIMessagePart.Reasoning
+                                acc.mapIndexed { index, part ->
+                                    if (index == reasoningIndex) {
+                                        UIMessagePart.Reasoning(
+                                            reasoning = existing.reasoning + deltaPart.reasoning,
+                                            createdAt = existing.createdAt,
+                                            finishedAt = null,
+                                        ).also {
+                                            it.metadata = deltaPart.metadata ?: existing.metadata
+                                        }
+                                    } else {
+                                        part
+                                    }
                                 }
                             } else {
-                                // Create new Reasoning part
-                                acc + deltaPart
+                                // Reasoning 属于整个 assistant 工具步骤，必须位于该步骤内容和 Tool 之前。
+                                acc.insertAt(stepStart, deltaPart)
                             }
                         }
                     }
 
                     is UIMessagePart.Tool -> {
                         if (deltaPart.toolCallId.isBlank()) {
-                            // No ID yet - append to the last Tool if it also has no ID
-                            val lastTool = acc.lastOrNull { it is UIMessagePart.Tool } as? UIMessagePart.Tool
+                            // A blank-ID delta continues the latest pending tool in this assistant step.
+                            // Never cross an executed Tool boundary: that would mutate an earlier request's history.
+                            val stepStart = acc.currentStepStart()
+                            val lastTool = acc.subList(stepStart, acc.size)
+                                .lastOrNull { it is UIMessagePart.Tool && !it.isExecuted } as? UIMessagePart.Tool
                             if (lastTool != null) {
                                 acc.map { part ->
                                     if (part === lastTool) part.merge(deltaPart) else part
@@ -104,8 +150,10 @@ data class UIMessage(
                                 acc + deltaPart.copy()
                             }
                         } else {
-                            // Has ID - find and update by ID, or insert new
-                            val existsPart = acc.find {
+                            // Has ID - only merge inside the current assistant step. Some compatible
+                            // services reuse ids; an old executed Tool must remain immutable history.
+                            val stepStart = acc.currentStepStart()
+                            val existsPart = acc.subList(stepStart, acc.size).find {
                                 it is UIMessagePart.Tool && it.toolCallId == deltaPart.toolCallId
                             } as? UIMessagePart.Tool
                             if (existsPart == null) {
@@ -317,127 +365,6 @@ fun List<UIMessage>.findUserTurnStart(startIndex: Int): Int {
     return safeStartIndex
 }
 
-@Serializable
-sealed class ToolApprovalState {
-    @Serializable
-    @SerialName("auto")
-    data object Auto : ToolApprovalState()
-
-    @Serializable
-    @SerialName("pending")
-    data object Pending : ToolApprovalState()
-
-    @Serializable
-    @SerialName("approved")
-    data object Approved : ToolApprovalState()
-
-    @Serializable
-    @SerialName("denied")
-    data class Denied(val reason: String = "") : ToolApprovalState()
-
-    @Serializable
-    @SerialName("answered")
-    data class Answered(val answer: String) : ToolApprovalState()
-}
-
-fun ToolApprovalState.canResumeToolExecution(): Boolean {
-    return when (this) {
-        ToolApprovalState.Approved -> true
-        is ToolApprovalState.Denied -> true
-        is ToolApprovalState.Answered -> true
-        ToolApprovalState.Auto,
-        ToolApprovalState.Pending,
-            -> false
-    }
-}
-
-@Serializable
-sealed class UIMessagePart {
-    abstract val metadata: JsonObject?
-
-    @Serializable
-    @SerialName("text")
-    data class Text(
-        val text: String,
-        override var metadata: JsonObject? = null
-    ) : UIMessagePart()
-
-    @Serializable
-    @SerialName("image")
-    data class Image(
-        val url: String,
-        override var metadata: JsonObject? = null
-    ) : UIMessagePart()
-
-    @Serializable
-    @SerialName("video")
-    data class Video(
-        val url: String,
-        override var metadata: JsonObject? = null
-    ) : UIMessagePart()
-
-    @Serializable
-    @SerialName("audio")
-    data class Audio(
-        val url: String,
-        override var metadata: JsonObject? = null
-    ) : UIMessagePart()
-
-    @Serializable
-    @SerialName("document")
-    data class Document(
-        val url: String,
-        val fileName: String,
-        val mime: String = "text/*",
-        override var metadata: JsonObject? = null
-    ) : UIMessagePart()
-
-    @Serializable
-    @SerialName("reasoning")
-    data class Reasoning(
-        val reasoning: String,
-        val createdAt: Instant = Clock.System.now(),
-        val finishedAt: Instant? = Clock.System.now(),
-        override var metadata: JsonObject? = null
-    ) : UIMessagePart()
-
-    @Serializable
-    @SerialName("tool")
-    data class Tool(
-        val toolCallId: String,
-        val toolName: String,
-        val input: String,
-        val output: List<UIMessagePart> = emptyList(),
-        val approvalState: ToolApprovalState = ToolApprovalState.Auto,
-        override var metadata: JsonObject? = null
-    ) : UIMessagePart() {
-        /** Whether the tool has been executed (has output) */
-        val isExecuted: Boolean get() = output.isNotEmpty()
-
-        /** Whether the tool is pending user approval */
-        val isPending: Boolean get() = approvalState is ToolApprovalState.Pending
-
-        /** Whether generation can resume and handle this tool immediately */
-        val canResumeExecution: Boolean get() = !isExecuted && approvalState.canResumeToolExecution()
-
-        /** Parse input string as JsonElement */
-        fun inputAsJson(): JsonElement = runCatching {
-            json.parseToJsonElement(input.ifBlank { "{}" })
-        }.getOrElse { JsonObject(emptyMap()) }
-
-        fun merge(other: Tool): Tool {
-            return Tool(
-                toolCallId = toolCallId,
-                toolName = toolName + other.toolName,
-                input = input + other.input,
-                output = output + other.output,
-                approvalState = approvalState,
-                metadata = if (other.metadata != null) other.metadata else metadata,
-            )
-        }
-    }
-}
-
 fun UIMessage.finishReasoning(): UIMessage {
     return copy(
         parts = parts.map { part ->
@@ -503,16 +430,6 @@ fun UIMessage.finishInterruptedTools(
         parts = updatedParts,
         finishedAt = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
     ).finishReasoning()
-}
-
-@Serializable
-sealed class UIMessageAnnotation {
-    @Serializable
-    @SerialName("url_citation")
-    data class UrlCitation(
-        val title: String,
-        val url: String
-    ) : UIMessageAnnotation()
 }
 
 @Serializable

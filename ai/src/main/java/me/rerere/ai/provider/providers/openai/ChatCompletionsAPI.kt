@@ -68,6 +68,23 @@ import kotlin.time.Clock
 
 private const val TAG = "ChatCompletionsAPI"
 
+/**
+ * Chat Completions may interleave argument deltas for parallel tool calls. Later deltas may omit
+ * id/name while retaining the stable array [index]. Keep this mapping per SSE request so an id-less
+ * continuation is merged into the correct tool instead of whichever tool arrived most recently.
+ */
+internal class ChatCompletionsStreamState {
+    private val toolCallIdsByIndex = mutableMapOf<Int, String>()
+
+    fun resolveToolCallId(index: Int?, announcedId: String?): String? {
+        if (index != null && !announcedId.isNullOrBlank()) {
+            toolCallIdsByIndex[index] = announcedId
+        }
+        return announcedId?.takeIf { it.isNotBlank() }
+            ?: index?.let(toolCallIdsByIndex::get)
+    }
+}
+
 class ChatCompletionsAPI(
     private val client: OkHttpClient,
     private val keyRoulette: KeyRoulette
@@ -152,6 +169,8 @@ class ChatCompletionsAPI(
 
         Log.d(TAG, "streamText: model=${params.model.modelId}")
 
+        val streamState = ChatCompletionsStreamState()
+
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -193,7 +212,7 @@ class ChatCompletionsAPI(
                                     add(
                                         UIMessageChoice(
                                             index = 0,
-                                            delta = parseMessage(message),
+                                            delta = parseMessage(message, streamState),
                                             message = null,
                                             finishReason = finishReason,
                                         )
@@ -752,7 +771,10 @@ class ChatCompletionsAPI(
         }
     }
 
-    internal fun parseMessage(jsonObject: JsonObject): UIMessage {
+    internal fun parseMessage(
+        jsonObject: JsonObject,
+        streamState: ChatCompletionsStreamState? = null,
+    ): UIMessage {
         val role = MessageRole.valueOf(
             jsonObject["role"]?.jsonPrimitive?.contentOrNull?.uppercase() ?: "ASSISTANT"
         )
@@ -786,29 +808,15 @@ class ChatCompletionsAPI(
         return UIMessage(
             role = role,
             parts = buildList {
+                // Chat Completions 的 reasoning_content、content、tool_calls 属于同一个 assistant envelope。
+                // UIMessage 使用 Tool 作为历史重建边界，因此必须先保存 Reasoning/Content，再保存 Tool；
+                // 否则工具执行后 content 会被错误地移动到 tool result 之后，DeepSeek 无法原样校验该步骤。
                 if (!reasoning.isNullOrEmpty()) {
                     add(
                         UIMessagePart.Reasoning(
                             reasoning = reasoning,
                             createdAt = Clock.System.now(),
                             finishedAt = null
-                        )
-                    )
-                }
-                toolCalls.forEach { toolCalls ->
-                    val type = toolCalls.jsonObject["type"]?.jsonPrimitive?.contentOrNull
-                    if (!type.isNullOrEmpty() && type != "function") error("tool call type not supported: $type")
-                    val toolCallId = toolCalls.jsonObject["id"]?.jsonPrimitive?.contentOrNull
-                    val toolName =
-                        toolCalls.jsonObject["function"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull
-                    val arguments =
-                        toolCalls.jsonObject["function"]?.jsonObject?.get("arguments")?.jsonPrimitive?.contentOrNull
-                    add(
-                        UIMessagePart.Tool(
-                            toolCallId = toolCallId ?: "",
-                            toolName = toolName ?: "",
-                            input = arguments ?: "",
-                            output = emptyList()
                         )
                     )
                 }
@@ -823,6 +831,28 @@ class ChatCompletionsAPI(
                     val url = imageObject["image_url"]?.jsonObjectOrNull?.get("url")?.jsonPrimitive?.contentOrNull ?: return@forEach
                     require(url.startsWith("data:image")) { "Only data uri is supported" }
                     add(UIMessagePart.Image(url.substringAfter("data:image/png;base64,")))
+                }
+                toolCalls.forEach { toolCall ->
+                    val type = toolCall.jsonObject["type"]?.jsonPrimitive?.contentOrNull
+                    if (!type.isNullOrEmpty() && type != "function") error("tool call type not supported: $type")
+                    val toolCallIndex = toolCall.jsonObject["index"]?.jsonPrimitive?.intOrNull
+                    val announcedToolCallId = toolCall.jsonObject["id"]?.jsonPrimitive?.contentOrNull
+                    // Official Chat chunks may omit id after the first delta. Resolve it through index so
+                    // interleaved parallel calls never append their argument fragments to another call.
+                    val toolCallId = streamState?.resolveToolCallId(toolCallIndex, announcedToolCallId)
+                        ?: announcedToolCallId
+                    val toolName =
+                        toolCall.jsonObject["function"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull
+                    val arguments =
+                        toolCall.jsonObject["function"]?.jsonObject?.get("arguments")?.jsonPrimitive?.contentOrNull
+                    add(
+                        UIMessagePart.Tool(
+                            toolCallId = toolCallId ?: "",
+                            toolName = toolName ?: "",
+                            input = arguments ?: "",
+                            output = emptyList()
+                        )
+                    )
                 }
             },
             annotations = parseAnnotations(

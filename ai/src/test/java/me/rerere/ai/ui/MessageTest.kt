@@ -145,6 +145,155 @@ class MessageTest {
         assertTrue(message.isValidToUpload())
     }
 
+    @Test
+    fun `current assistant step should normalize out of order tool content and reasoning deltas`() {
+        var messages = listOf(UIMessage.user("Use a tool"))
+
+        messages = messages.handleMessageChunk(
+            assistantChunk(
+                UIMessagePart.Tool(
+                    toolCallId = "call-1",
+                    toolName = "lookup",
+                    input = "{}",
+                )
+            )
+        )
+        messages = messages.handleMessageChunk(assistantChunk(UIMessagePart.Text("Calling lookup")))
+        messages = messages.handleMessageChunk(
+            assistantChunk(UIMessagePart.Reasoning(reasoning = "Need lookup"))
+        )
+
+        val parts = messages.last().parts
+        assertEquals(3, parts.size)
+        assertTrue(parts[0] is UIMessagePart.Reasoning)
+        assertTrue(parts[1] is UIMessagePart.Text)
+        assertTrue(parts[2] is UIMessagePart.Tool)
+        assertEquals("Need lookup", (parts[0] as UIMessagePart.Reasoning).reasoning)
+        assertEquals("Calling lookup", (parts[1] as UIMessagePart.Text).text)
+    }
+
+    @Test
+    fun `normalizing current assistant step should not move completed tool history`() {
+        val completedTool = UIMessagePart.Tool(
+            toolCallId = "call-1",
+            toolName = "first",
+            input = "{}",
+            output = listOf(UIMessagePart.Text("first result")),
+        )
+        var messages = listOf(
+            UIMessage.user("Use tools"),
+            UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(
+                    UIMessagePart.Reasoning(reasoning = "First reasoning"),
+                    UIMessagePart.Text("First content"),
+                    completedTool,
+                ),
+            ),
+        )
+
+        messages = messages.handleMessageChunk(
+            assistantChunk(
+                UIMessagePart.Tool(
+                    toolCallId = "call-2",
+                    toolName = "second",
+                    input = "{}",
+                )
+            )
+        )
+        messages = messages.handleMessageChunk(assistantChunk(UIMessagePart.Text("Second content")))
+        messages = messages.handleMessageChunk(
+            assistantChunk(UIMessagePart.Reasoning(reasoning = "Second reasoning"))
+        )
+
+        val parts = messages.last().parts
+        assertEquals(
+            listOf(
+                UIMessagePart.Reasoning::class,
+                UIMessagePart.Text::class,
+                UIMessagePart.Tool::class,
+                UIMessagePart.Reasoning::class,
+                UIMessagePart.Text::class,
+                UIMessagePart.Tool::class,
+            ),
+            parts.map { it::class },
+        )
+        assertEquals("call-1", (parts[2] as UIMessagePart.Tool).toolCallId)
+        assertEquals("call-2", (parts[5] as UIMessagePart.Tool).toolCallId)
+    }
+
+    @Test
+    fun `blank tool delta should not merge into a completed tool step`() {
+        val completedTool = UIMessagePart.Tool(
+            toolCallId = "call-1",
+            toolName = "first",
+            input = "{}",
+            output = listOf(UIMessagePart.Text("first result")),
+        )
+        var messages = listOf(
+            UIMessage.user("Use another tool"),
+            UIMessage(role = MessageRole.ASSISTANT, parts = listOf(completedTool)),
+        )
+
+        messages = messages.handleMessageChunk(
+            assistantChunk(
+                UIMessagePart.Tool(
+                    toolCallId = "",
+                    toolName = "second",
+                    input = "{",
+                )
+            )
+        )
+
+        val tools = messages.last().parts.filterIsInstance<UIMessagePart.Tool>()
+        assertEquals(2, tools.size)
+        assertEquals(completedTool, tools[0])
+        assertEquals("second", tools[1].toolName)
+    }
+
+    @Test
+    fun `reused nonblank tool id should not mutate a completed tool step`() {
+        val completedTool = UIMessagePart.Tool(
+            toolCallId = "reused-id",
+            toolName = "first",
+            input = "{}",
+            output = listOf(UIMessagePart.Text("first result")),
+        )
+        var messages = listOf(
+            UIMessage.user("Use another tool"),
+            UIMessage(role = MessageRole.ASSISTANT, parts = listOf(completedTool)),
+        )
+
+        messages = messages.handleMessageChunk(
+            assistantChunk(
+                UIMessagePart.Tool(
+                    toolCallId = "reused-id",
+                    toolName = "second",
+                    input = "[]",
+                )
+            )
+        )
+
+        val tools = messages.last().parts.filterIsInstance<UIMessagePart.Tool>()
+        assertEquals(2, tools.size)
+        assertEquals(completedTool, tools[0])
+        assertEquals("second", tools[1].toolName)
+        assertEquals("[]", tools[1].input)
+    }
+
+    private fun assistantChunk(vararg parts: UIMessagePart) = MessageChunk(
+        id = "chunk",
+        model = "test-model",
+        choices = listOf(
+            UIMessageChoice(
+                index = 0,
+                delta = UIMessage(role = MessageRole.ASSISTANT, parts = parts.toList()),
+                message = null,
+                finishReason = null,
+            )
+        ),
+    )
+
     private fun createAlternatingMessages(count: Int): List<UIMessage> = List(count) { index ->
         if (index % 2 == 0) {
             UIMessage.user("Question $index")
