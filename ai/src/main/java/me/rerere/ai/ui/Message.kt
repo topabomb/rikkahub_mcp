@@ -4,6 +4,7 @@ import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.Model
@@ -23,7 +24,9 @@ data class UIMessage(
     val finishedAt: LocalDateTime? = null,
     val modelId: Uuid? = null,
     val usage: TokenUsage? = null,
-    val translation: String? = null
+    val translation: String? = null,
+    /** Provider protocol state used for lossless stateless replay; never rendered as user content. */
+    val providerMetadata: JsonObject? = null,
 ) {
     private fun appendChunk(chunk: MessageChunk): UIMessage {
         val choice = chunk.choices.getOrNull(0)
@@ -192,6 +195,7 @@ data class UIMessage(
             copy(
                 parts = newParts,
                 annotations = newAnnotations,
+                providerMetadata = mergeMessageMetadata(providerMetadata, delta.providerMetadata),
             )
         } ?: this
     }

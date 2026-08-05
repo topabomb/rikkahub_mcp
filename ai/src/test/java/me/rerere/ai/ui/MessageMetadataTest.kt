@@ -4,8 +4,10 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import me.rerere.ai.core.MessageRole
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -123,6 +125,77 @@ class MessageMetadataTest {
         val meta = restored.metadataAs<OpenAIReasoningMetadata>()
         assertEquals("rs_1", meta?.reasoningId)
         assertEquals("enc", meta?.encryptedContent)
+    }
+
+    @Test
+    fun `response output metadata round trip via persistence is stable`() {
+        val json = Json { ignoreUnknownKeys = true }
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(UIMessagePart.Text("answer")),
+            providerMetadata = OpenAIResponseMetadata(
+                wireFormat = OpenAIResponseWireFormat.DEEPSEEK,
+                outputItemGroups = listOf(
+                    listOf(buildJsonObject {
+                        put("id", "rs_1")
+                        put("type", "reasoning")
+                        put("provider_field", buildJsonObject { put("kept", true) })
+                    })
+                ),
+            ).toMetadata(),
+        )
+
+        val restored = json.decodeFromString<UIMessage>(json.encodeToString(message))
+        val metadata = restored.metadataAs<OpenAIResponseMetadata>()
+
+        assertEquals(OpenAIResponseWireFormat.DEEPSEEK, metadata?.wireFormat)
+        assertEquals("rs_1", metadata?.outputItemGroups?.single()?.single()?.get("id")?.jsonPrimitive?.content)
+        assertEquals(
+            "true",
+            metadata?.outputItemGroups?.single()?.single()?.get("provider_field")
+                ?.jsonObject?.get("kept")?.jsonPrimitive?.content,
+        )
+    }
+
+    @Test
+    fun `response output metadata accumulates tool steps in order`() {
+        fun metadata(id: String, format: OpenAIResponseWireFormat) = OpenAIResponseMetadata(
+            wireFormat = format,
+            outputItemGroups = listOf(
+                listOf(buildJsonObject {
+                    put("id", id)
+                    put("type", "message")
+                })
+            ),
+        ).toMetadata()
+
+        val merged = mergeMessageMetadata(
+            metadata("msg_1", OpenAIResponseWireFormat.OPENAI),
+            metadata("msg_2", OpenAIResponseWireFormat.OPENAI),
+        )
+        val decoded = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = emptyList(),
+            providerMetadata = merged,
+        ).metadataAs<OpenAIResponseMetadata>()
+
+        assertEquals(
+            listOf(listOf("msg_1"), listOf("msg_2")),
+            decoded?.outputItemGroups?.map { group ->
+                group.map { it["id"]?.jsonPrimitive?.content }
+            },
+        )
+        assertEquals(
+            OpenAIResponseWireFormat.DEEPSEEK,
+            UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = emptyList(),
+                providerMetadata = mergeMessageMetadata(
+                    merged,
+                    metadata("msg_3", OpenAIResponseWireFormat.DEEPSEEK),
+                ),
+            ).metadataAs<OpenAIResponseMetadata>()?.wireFormat,
+        )
     }
 
     @Test

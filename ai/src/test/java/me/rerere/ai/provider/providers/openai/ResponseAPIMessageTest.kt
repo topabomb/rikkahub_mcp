@@ -16,9 +16,12 @@ import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.OpenAIReasoningMetadata
+import me.rerere.ai.ui.OpenAIResponseMetadata
+import me.rerere.ai.ui.OpenAIResponseWireFormat
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
+import me.rerere.ai.ui.toMetadata
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -49,7 +52,7 @@ class ResponseAPIMessageTest {
         messages: List<UIMessage>,
         host: String = "api.openai.com"
     ): JsonArray {
-        return api.buildMessages(messages, resolveResponseProviderCapabilities(host))
+        return api.buildMessages(messages, resolveResponseEndpointProfile(host))
     }
 
     private fun invokeBuildRequestBody(
@@ -172,7 +175,7 @@ class ResponseAPIMessageTest {
     }
 
     @Test
-    fun `parallel tool calls should produce sequential function_call and output pairs`() {
+    fun `parallel tool calls should keep all calls before their outputs`() {
         // Multiple tools called together
         val assistantMessage = UIMessage(
             role = MessageRole.ASSISTANT,
@@ -203,27 +206,24 @@ class ResponseAPIMessageTest {
         assertEquals(3, functionCalls.size)
         assertEquals(3, functionOutputs.size)
 
-        // Verify each function_call is followed by its output (in pairs)
-        val callIds = listOf("call_1", "call_2", "call_3")
-        for (callId in callIds) {
-            var callIndex = -1
-            var outputIndex = -1
-            for (i in result.indices) {
-                val item = result[i].jsonObject
-                if (item["type"]?.jsonPrimitive?.content == "function_call" &&
-                    item["call_id"]?.jsonPrimitive?.content == callId) {
-                    callIndex = i
-                }
-                if (item["type"]?.jsonPrimitive?.content == "function_call_output" &&
-                    item["call_id"]?.jsonPrimitive?.content == callId) {
-                    outputIndex = i
-                }
-            }
-            assertTrue("Should find function_call for $callId", callIndex >= 0)
-            assertTrue("Should find function_call_output for $callId", outputIndex >= 0)
-            assertEquals("Output should immediately follow call for $callId",
-                callIndex + 1, outputIndex)
-        }
+        val toolItems = result.filter {
+            it.jsonObject["type"]?.jsonPrimitive?.content in setOf("function_call", "function_call_output")
+        }.map { it.jsonObject }
+        assertEquals(
+            listOf(
+                "function_call",
+                "function_call",
+                "function_call",
+                "function_call_output",
+                "function_call_output",
+                "function_call_output",
+            ),
+            toolItems.map { it["type"]?.jsonPrimitive?.content },
+        )
+        assertEquals(
+            listOf("call_1", "call_2", "call_3", "call_1", "call_2", "call_3"),
+            toolItems.map { it["call_id"]?.jsonPrimitive?.content },
+        )
     }
 
     @Test
@@ -334,6 +334,11 @@ class ResponseAPIMessageTest {
         val reasoning = requestBody["reasoning"]?.jsonObject
         assertTrue("reasoning should exist", reasoning != null)
         assertFalse("volc should not include reasoning.summary", reasoning!!.containsKey("summary"))
+        assertEquals(
+            "reasoning.encrypted_content",
+            requestBody["include"]?.jsonArray?.single()?.jsonPrimitive?.content,
+        )
+        assertFalse(resolveResponseEndpointProfile("ark.cn-beijing.volces.com").supportsMultimodalFunctionOutput)
     }
 
     @Test
@@ -376,11 +381,12 @@ class ResponseAPIMessageTest {
             providerSetting = providerSetting,
             params = createReasoningParams(reasoningLevel = ReasoningLevel.HIGH)
         )
-        val capabilities = resolveResponseProviderCapabilities("proxy.example.com")
+        val endpointProfile = resolveResponseEndpointProfile("proxy.example.com")
 
-        assertTrue(capabilities.supportsReasoningSummary)
-        assertTrue(capabilities.supportsEncryptedContent)
-        assertFalse(capabilities.usesReasoningTextContent)
+        assertEquals(ResponseEndpointProfile.OPENAI, endpointProfile)
+        assertTrue(endpointProfile.supportsReasoningSummary)
+        assertTrue(endpointProfile.supportsEncryptedContent)
+        assertFalse(endpointProfile.usesReasoningTextContent)
         assertEquals("auto", requestBody["reasoning"]?.jsonObject?.get("summary")?.jsonPrimitive?.content)
         assertTrue(requestBody.containsKey("include"))
     }
@@ -412,7 +418,10 @@ class ResponseAPIMessageTest {
             UIMessage(
                 role = MessageRole.ASSISTANT,
                 parts = listOf(
-                    UIMessagePart.Reasoning(reasoning = "Thinking"),
+                    UIMessagePart.Reasoning(
+                        reasoning = "Thinking",
+                        metadata = OpenAIReasoningMetadata(reasoningId = "rs_history").toMetadata(),
+                    ),
                     UIMessagePart.Text("Answer")
                 )
             )
@@ -425,9 +434,35 @@ class ResponseAPIMessageTest {
         val reasoningContent = reasoningItem["content"]?.jsonArray
 
         assertFalse(reasoningItem.containsKey("summary"))
+        assertEquals("rs_history", reasoningItem["id"]?.jsonPrimitive?.content)
         assertEquals(1, reasoningContent?.size)
         assertEquals("reasoning_text", reasoningContent!![0].jsonObject["type"]?.jsonPrimitive?.content)
         assertEquals("Thinking", reasoningContent[0].jsonObject["text"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `deepseek function output should remain a string when a tool returns an image`() {
+        val assistant = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "call_image",
+                    toolName = "capture",
+                    input = "{}",
+                    output = listOf(
+                        UIMessagePart.Text("Captured image"),
+                        UIMessagePart.Image("data:image/png;base64,AA=="),
+                    ),
+                )
+            ),
+        )
+
+        val output = invokeBuildMessages(
+            listOf(assistant),
+            host = "api.deepseek.com",
+        ).single { it.jsonObject["type"]?.jsonPrimitive?.content == "function_call_output" }.jsonObject
+
+        assertEquals("Captured image", output["output"]?.jsonPrimitive?.content)
     }
 
     @Test
@@ -486,6 +521,276 @@ class ResponseAPIMessageTest {
         assertEquals("DeepSeek thinking", reasoning.reasoning)
         assertEquals("rs_1", reasoning.metadataAs<OpenAIReasoningMetadata>()?.reasoningId)
         assertEquals("Final answer", text.text)
+    }
+
+    @Test
+    fun `deepseek parsed reasoning item should be replayed with tool call and id`() {
+        val response = Json.parseToJsonElement(
+            """
+            {
+              "id": "resp_tool",
+              "model": "deepseek-v4-flash",
+              "output": [
+                {
+                  "id": "rs_tool",
+                  "type": "reasoning",
+                  "content": [
+                    {"type": "reasoning_text", "text": "Need the tool"}
+                  ]
+                },
+                {
+                  "id": "fc_item",
+                  "type": "function_call",
+                  "call_id": "call_tool",
+                  "name": "lookup",
+                  "arguments": "{}"
+                }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+        val parsed = api.parseResponseOutput(
+            response,
+            ResponseEndpointProfile.DEEPSEEK,
+        ).choices.single().message!!
+        val executedParts = parsed.parts.map { part ->
+            if (part is UIMessagePart.Tool) {
+                part.copy(output = listOf(UIMessagePart.Text("result")))
+            } else {
+                part
+            }
+        }
+
+        val replay = invokeBuildMessages(
+            listOf(UIMessage.user("Question"), parsed.copy(parts = executedParts)),
+            host = "api.deepseek.com",
+        )
+        val replayItems = replay.map { it.jsonObject }
+        val reasoning = replayItems.first { it["type"]?.jsonPrimitive?.content == "reasoning" }
+
+        assertEquals(
+            listOf("message", "reasoning", "function_call", "function_call_output"),
+            replayItems.map { it["type"]?.jsonPrimitive?.content ?: "message" },
+        )
+        assertEquals("rs_tool", reasoning["id"]?.jsonPrimitive?.content)
+        assertEquals(
+            "Need the tool",
+            reasoning["content"]?.jsonArray?.single()?.jsonObject?.get("text")?.jsonPrimitive?.content,
+        )
+    }
+
+    @Test
+    fun `openai store false replay should preserve every response output item`() {
+        val response = Json.parseToJsonElement(
+            """
+            {
+              "id": "resp_raw",
+              "model": "gpt-5",
+              "output": [
+                {
+                  "id": "ws_1",
+                  "type": "web_search_call",
+                  "status": "completed",
+                  "action": {"type": "search", "query": "official docs"}
+                },
+                {
+                  "id": "fc_1",
+                  "type": "function_call",
+                  "call_id": "call_1",
+                  "name": "lookup",
+                  "arguments": "{}",
+                  "status": "completed"
+                },
+                {
+                  "id": "msg_1",
+                  "type": "message",
+                  "role": "assistant",
+                  "phase": "final_answer",
+                  "status": "completed",
+                  "content": [{"type": "output_text", "text": "Result", "annotations": []}]
+                },
+                {
+                  "id": "future_1",
+                  "type": "future_output_item",
+                  "provider_field": {"kept": true}
+                }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+        val parsed = api.parseResponseOutput(response).choices.single().message!!
+        val executed = parsed.copy(
+            parts = parsed.parts.map { part ->
+                if (part is UIMessagePart.Tool) {
+                    part.copy(output = listOf(UIMessagePart.Text("tool result")))
+                } else {
+                    part
+                }
+            }
+        )
+
+        val replay = invokeBuildMessages(listOf(UIMessage.user("Question"), executed))
+            .drop(1)
+            .map { it.jsonObject }
+
+        assertEquals(
+            listOf(
+                "web_search_call",
+                "function_call",
+                "message",
+                "future_output_item",
+                "function_call_output",
+            ),
+            replay.map { it["type"]?.jsonPrimitive?.content },
+        )
+        assertEquals("official docs", replay[0]["action"]?.jsonObject?.get("query")?.jsonPrimitive?.content)
+        assertEquals("final_answer", replay[2]["phase"]?.jsonPrimitive?.content)
+        assertTrue(replay[3]["provider_field"]?.jsonObject?.get("kept")?.jsonPrimitive?.content == "true")
+        assertEquals("call_1", replay[4]["call_id"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `raw response items should not cross incompatible endpoint wire formats`() {
+        val response = Json.parseToJsonElement(
+            """
+            {
+              "id": "resp_deepseek",
+              "model": "deepseek-v4-flash",
+              "output": [
+                {
+                  "id": "rs_deepseek",
+                  "type": "reasoning",
+                  "content": [{"type": "reasoning_text", "text": "Thinking"}]
+                },
+                {
+                  "id": "msg_deepseek",
+                  "type": "message",
+                  "role": "assistant",
+                  "content": [{"type": "output_text", "text": "Answer"}]
+                }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+        val parsed = api.parseResponseOutput(
+            response,
+            ResponseEndpointProfile.DEEPSEEK,
+        ).choices.single().message!!
+
+        val replay = invokeBuildMessages(listOf(parsed), host = "api.openai.com")
+        val reasoning = replay.single {
+            it.jsonObject["type"]?.jsonPrimitive?.content == "reasoning"
+        }.jsonObject
+
+        assertTrue(reasoning.containsKey("summary"))
+        assertFalse(reasoning.containsKey("content"))
+    }
+
+    @Test
+    fun `raw replay should keep repeated compatible call ids at their tool boundaries`() {
+        val response = Json.parseToJsonElement(
+            """
+            {
+              "id": "resp_reused",
+              "model": "proxy-model",
+              "output": [
+                {
+                  "id": "fc_a",
+                  "type": "function_call",
+                  "call_id": "call_reused",
+                  "name": "first",
+                  "arguments": "{}"
+                },
+                {
+                  "id": "fc_b",
+                  "type": "function_call",
+                  "call_id": "call_reused",
+                  "name": "second",
+                  "arguments": "{}"
+                }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+        val parsed = api.parseResponseOutput(response).choices.single().message!!
+        val executed = parsed.copy(
+            parts = parsed.parts.map { part ->
+                if (part is UIMessagePart.Tool) {
+                    part.copy(output = listOf(UIMessagePart.Text("${part.toolName} result")))
+                } else {
+                    part
+                }
+            }
+        )
+
+        val replay = invokeBuildMessages(listOf(executed)).map { it.jsonObject }
+
+        assertEquals(
+            listOf("function_call", "function_call", "function_call_output", "function_call_output"),
+            replay.map { it["type"]?.jsonPrimitive?.content },
+        )
+        assertEquals("first result", replay[2]["output"]?.jsonPrimitive?.content)
+        assertEquals("second result", replay[3]["output"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `raw replay should keep response batch boundaries across tool continuations`() {
+        fun response(id: String, output: String) = Json.parseToJsonElement(
+            """
+            {
+              "id": "$id",
+              "model": "gpt-5",
+              "output": $output
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        val firstChunk = api.parseResponseOutput(response(
+            id = "resp_tools",
+            output = """
+              [
+                {"id":"fc_1","type":"function_call","call_id":"call_1","name":"first","arguments":"{}"},
+                {"id":"fc_2","type":"function_call","call_id":"call_2","name":"second","arguments":"{}"}
+              ]
+            """.trimIndent(),
+        ))
+        val firstMessage = firstChunk.choices.single().message!!.copy(
+            parts = firstChunk.choices.single().message!!.parts.map { part ->
+                if (part is UIMessagePart.Tool) {
+                    part.copy(output = listOf(UIMessagePart.Text("${part.toolName} result")))
+                } else {
+                    part
+                }
+            }
+        )
+        val secondChunk = api.parseResponseOutput(response(
+            id = "resp_answer",
+            output = """
+              [
+                {"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}
+              ]
+            """.trimIndent(),
+        ))
+        val merged = firstMessage + secondChunk
+
+        val replay = invokeBuildMessages(listOf(merged)).map { it.jsonObject }
+
+        assertEquals(
+            listOf(
+                "function_call",
+                "function_call",
+                "function_call_output",
+                "function_call_output",
+                "message",
+            ),
+            replay.map { it["type"]?.jsonPrimitive?.content ?: "message" },
+        )
+        assertEquals(
+            listOf(listOf("fc_1", "fc_2"), listOf("msg_1")),
+            merged.metadataAs<OpenAIResponseMetadata>()?.outputItemGroups?.map { group ->
+                group.map { it["id"]?.jsonPrimitive?.content }
+            },
+        )
     }
 
     @Test
@@ -743,6 +1048,77 @@ class ResponseAPIMessageTest {
     }
 
     @Test
+    fun `response stream close requires an explicit terminal marker`() {
+        val state = ResponseStreamState()
+
+        assertEquals(
+            "Response stream closed before a terminal event",
+            state.prematureCloseError()?.message,
+        )
+
+        state.markTerminal()
+        assertEquals(null, state.prematureCloseError())
+    }
+
+    @Test
+    fun `stream completed event should persist full output for the next stateless request`() {
+        val state = ResponseStreamState()
+        val added = Json.parseToJsonElement(
+            """
+            {
+              "type": "response.output_item.added",
+              "item": {
+                "id": "ws_stream",
+                "type": "web_search_call",
+                "status": "in_progress"
+              }
+            }
+            """.trimIndent()
+        ).jsonObject
+        val completed = Json.parseToJsonElement(
+            """
+            {
+              "type": "response.completed",
+              "response": {
+                "id": "resp_stream",
+                "status": "completed",
+                "output": [
+                  {
+                    "id": "ws_stream",
+                    "type": "web_search_call",
+                    "status": "completed",
+                    "action": {"type": "search", "query": "Responses API"}
+                  },
+                  {
+                    "id": "msg_stream",
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "final_answer",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "Done"}]
+                  }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
+              }
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        api.parseResponseDelta(added, state)
+        val terminalChunk = api.parseResponseDelta(completed, state)!!
+        val message = UIMessage(role = MessageRole.ASSISTANT, parts = emptyList()) + terminalChunk
+        val metadata = message.metadataAs<OpenAIResponseMetadata>()!!
+
+        assertEquals(OpenAIResponseWireFormat.OPENAI, metadata.wireFormat)
+        val outputItems = metadata.outputItemGroups.single()
+        assertEquals(listOf("web_search_call", "message"), outputItems.map {
+            it["type"]?.jsonPrimitive?.content
+        })
+        assertEquals("final_answer", outputItems[1]["phase"]?.jsonPrimitive?.content)
+        assertEquals(3, terminalChunk.usage?.totalTokens)
+    }
+
+    @Test
     fun `responses non streaming incomplete object should report protocol reason`() {
         val response = Json.parseToJsonElement(
             """
@@ -760,6 +1136,7 @@ class ResponseAPIMessageTest {
 
     @Test
     fun `deepseek streaming reasoning events should merge text with item metadata`() {
+        val streamState = ResponseStreamState()
         val events = listOf(
             """
             {
@@ -776,12 +1153,28 @@ class ResponseAPIMessageTest {
             """,
             """
             {
+              "type": "response.reasoning_text.done",
+              "item_id": "rs_stream",
+              "text": "Streaming thinking"
+            }
+            """,
+            """
+            {
               "type": "response.output_item.done",
-              "item": {"id": "rs_stream", "type": "reasoning"}
+              "item": {
+                "id": "rs_stream",
+                "type": "reasoning",
+                "content": [
+                  {"type": "reasoning_text", "text": "Streaming thinking"}
+                ]
+              }
             }
             """
         ).mapNotNull { event ->
-            api.parseResponseDelta(Json.parseToJsonElement(event.trimIndent()).jsonObject)
+            api.parseResponseDelta(
+                Json.parseToJsonElement(event.trimIndent()).jsonObject,
+                streamState,
+            )
         }
 
         val message = events.fold(
@@ -793,6 +1186,47 @@ class ResponseAPIMessageTest {
 
         assertEquals("Streaming thinking", reasoning.reasoning)
         assertEquals("rs_stream", reasoning.metadataAs<OpenAIReasoningMetadata>()?.reasoningId)
+        assertTrue(streamState.reasoningTextEmittedByItemId.isEmpty())
+    }
+
+    @Test
+    fun `deepseek streaming reasoning done should supply text when deltas are absent`() {
+        val streamState = ResponseStreamState()
+        val events = listOf(
+            """
+            {
+              "type": "response.output_item.added",
+              "item": {"id": "rs_done", "type": "reasoning"}
+            }
+            """,
+            """
+            {
+              "type": "response.reasoning_text.done",
+              "item_id": "rs_done",
+              "text": "Done-only thinking"
+            }
+            """,
+            """
+            {
+              "type": "response.output_item.done",
+              "item": {"id": "rs_done", "type": "reasoning"}
+            }
+            """,
+        ).mapNotNull { event ->
+            api.parseResponseDelta(
+                Json.parseToJsonElement(event.trimIndent()).jsonObject,
+                streamState,
+            )
+        }
+
+        val message = events.fold(
+            UIMessage(role = MessageRole.ASSISTANT, parts = emptyList())
+        ) { current, chunk -> current + chunk }
+        val reasoning = message.parts.filterIsInstance<UIMessagePart.Reasoning>().single()
+
+        assertEquals("Done-only thinking", reasoning.reasoning)
+        assertEquals("rs_done", reasoning.metadataAs<OpenAIReasoningMetadata>()?.reasoningId)
+        assertTrue(streamState.reasoningTextEmittedByItemId.isEmpty())
     }
 
     @Test

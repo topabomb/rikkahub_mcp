@@ -35,6 +35,8 @@ import me.rerere.ai.provider.providers.groupPartsByToolBoundary
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.OpenAIReasoningMetadata
+import me.rerere.ai.ui.OpenAIResponseMetadata
+import me.rerere.ai.ui.OpenAIResponseWireFormat
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
@@ -61,6 +63,7 @@ import okhttp3.Response
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Clock
 
 private const val TAG = "ResponseAPI"
@@ -68,6 +71,27 @@ private const val TAG = "ResponseAPI"
 internal class ResponseStreamState {
     val toolCallIdsByItemId = mutableMapOf<String, String>()
     val toolArgumentDeltasSeenByItemId = mutableSetOf<String>()
+    val reasoningTextEmittedByItemId = mutableSetOf<String>()
+    private val outputItemsById = linkedMapOf<String, JsonObject>()
+    private val terminalSeen = AtomicBoolean(false)
+
+    fun recordOutputItem(item: JsonObject) {
+        val id = item["id"]?.jsonPrimitive?.contentOrNull ?: return
+        // Replacing an existing key in LinkedHashMap preserves the original output order.
+        outputItemsById[id] = item
+    }
+
+    fun outputItems(): List<JsonObject> = outputItemsById.values.toList()
+
+    fun markTerminal() {
+        terminalSeen.set(true)
+    }
+
+    fun prematureCloseError(): HttpException? = if (terminalSeen.get()) {
+        null
+    } else {
+        HttpException("Response stream closed before a terminal event")
+    }
 }
 
 class ResponseAPI(
@@ -107,7 +131,8 @@ class ResponseAPI(
         val bodyStr = response.body?.string() ?: ""
         val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
         parseResponseObjectError(bodyJson)?.let { throw it }
-        val output = parseResponseOutput(bodyJson)
+        val endpointProfile = resolveResponseEndpointProfile(providerSetting.baseUrl.toHttpUrl().host)
+        val output = parseResponseOutput(bodyJson, endpointProfile)
 
         return output
     }
@@ -120,6 +145,7 @@ class ResponseAPI(
         // 每个 SSE 请求独立维护 item_id -> call_id 映射。OpenAI 的 fc_* 输出项 ID
         // 与下一轮 function_call_output 必须使用的 call_* ID 是两个不同字段，不能混用。
         val streamState = ResponseStreamState()
+        val endpointProfile = resolveResponseEndpointProfile(providerSetting.baseUrl.toHttpUrl().host)
         val requestBody = buildRequestBody(
             providerSetting = providerSetting,
             messages = messages,
@@ -147,6 +173,17 @@ class ResponseAPI(
                 data: String
             ) {
                 if (data == "[DONE]") {
+                    // Legacy-compatible endpoints may still emit [DONE]. Treat it as an explicit terminal marker,
+                    // while official Responses endpoints terminate with a typed response.completed event.
+                    buildResponseOutputStateChunk(
+                        outputItems = streamState.outputItems(),
+                        endpointProfile = endpointProfile,
+                    )?.let { chunk ->
+                        trySend(chunk).onFailure { e ->
+                            Log.w(TAG, "onEvent: terminal protocol state dropped (${e?.message})")
+                        }
+                    }
+                    streamState.markTerminal()
                     close()
                     return
                 }
@@ -154,7 +191,7 @@ class ResponseAPI(
                     val eventJson = json.parseToJsonElement(data).jsonObject
                     val eventType = eventJson["type"]?.jsonPrimitive?.contentOrNull
                         ?: error("response event type not found")
-                    val chunk = parseResponseDelta(eventJson, streamState)
+                    val chunk = parseResponseDelta(eventJson, streamState, endpointProfile)
                     if (chunk != null) {
                         trySend(chunk).onFailure { e ->
                             Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
@@ -165,8 +202,15 @@ class ResponseAPI(
                     // 因此不能只依赖 EventSourceListener 的 type 参数判断是否结束。
                     val terminalError = parseResponseStreamError(eventJson)
                     when {
-                        terminalError != null -> close(terminalError)
-                        eventType == "response.completed" -> close()
+                        terminalError != null -> {
+                            streamState.markTerminal()
+                            close(terminalError)
+                        }
+
+                        eventType == "response.completed" -> {
+                            streamState.markTerminal()
+                            close()
+                        }
                     }
                 } catch (e: Throwable) {
                     Log.w(TAG, "onEvent: failed to process response event (sseType=$type)", e)
@@ -196,7 +240,8 @@ class ResponseAPI(
             }
 
             override fun onClosed(eventSource: EventSource) {
-                close()
+                val error = streamState.prematureCloseError()
+                if (error == null) close() else close(error)
             }
         }
 
@@ -217,7 +262,7 @@ class ResponseAPI(
         stream: Boolean
     ): JsonObject {
         val host = providerSetting.baseUrl.toHttpUrl().host
-        val capabilities = resolveResponseProviderCapabilities(host)
+        val endpointProfile = resolveResponseEndpointProfile(host)
         return buildJsonObject {
             put("model", params.model.modelId)
             put("stream", stream)
@@ -243,13 +288,13 @@ class ResponseAPI(
             }
 
             // messages
-            put("input", buildMessages(messages, capabilities))
+            put("input", buildMessages(messages, endpointProfile))
 
             // reasoning
             if (params.model.abilities.contains(ModelAbility.REASONING)) {
                 val level = params.reasoningLevel
                 put("reasoning", buildJsonObject {
-                    if (capabilities.supportsReasoningSummary) {
+                    if (endpointProfile.supportsReasoningSummary) {
                         put("summary", "auto")
                     }
                     if (level != ReasoningLevel.AUTO) {
@@ -267,7 +312,7 @@ class ResponseAPI(
                         put("effort", effort)
                     }
                 })
-                if (capabilities.supportsEncryptedContent) {
+                if (endpointProfile.supportsEncryptedContent) {
                     put("include", buildJsonArray {
                         add("reasoning.encrypted_content")
                     })
@@ -325,16 +370,16 @@ class ResponseAPI(
 
     internal fun buildMessages(
         messages: List<UIMessage>,
-        capabilities: ResponseProviderCapabilities = ResponseProviderCapabilities(),
+        endpointProfile: ResponseEndpointProfile = ResponseEndpointProfile.OPENAI,
     ) = buildJsonArray {
         messages
             .filter { message ->
                 message.role != MessageRole.SYSTEM &&
-                        (message.isValidToUpload() || message.hasReplayableResponseReasoningState(capabilities))
+                        (message.isValidToUpload() || message.hasReplayableResponseState(endpointProfile))
             }
             .forEach { message ->
                 if (message.role == MessageRole.ASSISTANT) {
-                    addAssistantItems(message, capabilities)
+                    addAssistantItems(message, endpointProfile)
                 } else {
                     addUserItems(message)
                 }
@@ -343,8 +388,17 @@ class ResponseAPI(
 
     private fun JsonArrayBuilder.addAssistantItems(
         message: UIMessage,
-        capabilities: ResponseProviderCapabilities,
+        endpointProfile: ResponseEndpointProfile,
     ) {
+        val responseMetadata = message.metadataAs<OpenAIResponseMetadata>()
+        if (responseMetadata != null &&
+            responseMetadata.wireFormat == endpointProfile.wireFormat &&
+            responseMetadata.outputItemGroups.any { it.isNotEmpty() }
+        ) {
+            addPreservedResponseItems(message, responseMetadata.outputItemGroups, endpointProfile)
+            return
+        }
+
         val groups = groupPartsByToolBoundary(message.parts)
         val contentBuffer = mutableListOf<UIMessagePart>()
 
@@ -362,7 +416,11 @@ class ResponseAPI(
                                 // 输出 reasoning item
                                 add(buildJsonObject {
                                     put("type", "reasoning")
-                                    if (capabilities.usesReasoningTextContent) {
+                                    val reasoningMetadata = part.metadataAs<OpenAIReasoningMetadata>()
+                                    // id 是 Responses output item 的公共信封字段，保留它是通用协议保真；
+                                    // DeepSeek 工具续轮明确强制要求的内容是下方 plaintext reasoning_text。
+                                    reasoningMetadata?.reasoningId?.let { put("id", it) }
+                                    if (endpointProfile.usesReasoningTextContent) {
                                         // DeepSeek Responses 把可回传的明文思考放在 content/reasoning_text；
                                         // 它不接受 OpenAI reasoning item 的 summary/encrypted_content 作为历史状态。
                                         putJsonArray("content") {
@@ -372,10 +430,6 @@ class ResponseAPI(
                                             })
                                         }
                                     } else {
-                                        val reasoningMetadata = part.metadataAs<OpenAIReasoningMetadata>()
-                                        reasoningMetadata?.reasoningId?.let {
-                                            put("id", it)
-                                        }
                                         put("summary", buildJsonArray {
                                             if (part.reasoning.isNotEmpty()) {
                                                 add(buildJsonObject {
@@ -415,7 +469,7 @@ class ResponseAPI(
                         contentBuffer.clear()
                     }
 
-                    // 输出 function_call + function_call_output
+                    // Responses 官方顺序是先追加该 response 的全部 function_call，再追加执行结果。
                     group.tools.forEach { tool ->
                         add(buildJsonObject {
                             put("type", "function_call")
@@ -424,40 +478,9 @@ class ResponseAPI(
                             // 使用 inputAsJson() 归一化，避免流式中断导致的残缺 JSON 被发送
                             put("arguments", tool.inputAsJson().toString())
                         })
-                        add(buildJsonObject {
-                            put("type", "function_call_output")
-                            put("call_id", tool.toolCallId)
-                            val hasImage = tool.output.any { it is UIMessagePart.Image }
-                            if (hasImage) {
-                                putJsonArray("output") {
-                                    tool.output.forEach { part ->
-                                        when (part) {
-                                            is UIMessagePart.Image -> add(buildJsonObject {
-                                                part.encodeBase64().onSuccess { encoded ->
-                                                    put("type", "input_image")
-                                                    put("image_url", encoded.base64)
-                                                }.onFailure {
-                                                    it.printStackTrace()
-                                                    put("type", "input_text")
-                                                    put("text", "Error: Failed to encode image to base64")
-                                                }
-                                            })
-                                            is UIMessagePart.Text -> add(buildJsonObject {
-                                                put("type", "input_text")
-                                                put("text", part.text)
-                                            })
-                                            else -> {}
-                                        }
-                                    }
-                                }
-                            } else {
-                                put(
-                                    "output",
-                                    tool.output.filterIsInstance<UIMessagePart.Text>()
-                                        .joinToString("\n") { it.text }
-                                )
-                            }
-                        })
+                    }
+                    group.tools.forEach { tool ->
+                        if (tool.isExecuted) addFunctionCallOutput(tool, endpointProfile)
                     }
                 }
             }
@@ -467,6 +490,81 @@ class ResponseAPI(
         if (contentBuffer.isNotEmpty()) {
             addContentItem(MessageRole.ASSISTANT, contentBuffer)
         }
+    }
+
+    /**
+     * `store=false` 的 Responses 历史必须回放完整、有序的 `response.output`，而不是从 UI 文本反推。
+     * 每批原始 output 完整回放后，再按调用顺序追加本地 function_call_output；其余内置工具、
+     * phase/status 和未知 item 均保持服务端原始 JSON，从而不会因 UI 当前不认识它们而丢失协议状态。
+     */
+    private fun JsonArrayBuilder.addPreservedResponseItems(
+        message: UIMessage,
+        outputItemGroups: List<List<JsonObject>>,
+        endpointProfile: ResponseEndpointProfile,
+    ) {
+        val toolsByCallId = message.parts
+            .filterIsInstance<UIMessagePart.Tool>()
+            .groupBy { it.toolCallId }
+        val consumedToolsByCallId = mutableMapOf<String, Int>()
+        outputItemGroups.forEach { outputItems ->
+            outputItems.forEach { item -> add(item) }
+            outputItems.forEach { item ->
+                if (item["type"]?.jsonPrimitive?.contentOrNull == "function_call") {
+                    val callId = item["call_id"]?.jsonPrimitive?.contentOrNull
+                    val tool = callId?.let { id ->
+                        val index = consumedToolsByCallId.getOrDefault(id, 0)
+                        consumedToolsByCallId[id] = index + 1
+                        toolsByCallId[id]?.getOrNull(index)
+                    }
+                    if (tool?.isExecuted == true) addFunctionCallOutput(tool, endpointProfile)
+                }
+            }
+        }
+    }
+
+    private fun JsonArrayBuilder.addFunctionCallOutput(
+        tool: UIMessagePart.Tool,
+        endpointProfile: ResponseEndpointProfile,
+    ) {
+        add(buildJsonObject {
+            put("type", "function_call_output")
+            put("call_id", tool.toolCallId)
+            val hasImage = tool.output.any { it is UIMessagePart.Image }
+            if (hasImage && endpointProfile.supportsMultimodalFunctionOutput) {
+                putJsonArray("output") {
+                    tool.output.forEach { part ->
+                        when (part) {
+                            is UIMessagePart.Image -> add(buildJsonObject {
+                                part.encodeBase64().onSuccess { encoded ->
+                                    put("type", "input_image")
+                                    put("image_url", encoded.base64)
+                                }.onFailure {
+                                    it.printStackTrace()
+                                    put("type", "input_text")
+                                    put("text", "Error: Failed to encode image to base64")
+                                }
+                            })
+
+                            is UIMessagePart.Text -> add(buildJsonObject {
+                                put("type", "input_text")
+                                put("text", part.text)
+                            })
+
+                            else -> Unit
+                        }
+                    }
+                }
+            } else {
+                val textOutput = tool.output.filterIsInstance<UIMessagePart.Text>()
+                    .joinToString("\n") { it.text }
+                put(
+                    "output",
+                    textOutput.ifEmpty {
+                        if (tool.output.isEmpty()) "" else "Tool returned non-text output"
+                    }
+                )
+            }
+        })
     }
 
     private fun JsonArrayBuilder.addUserItems(message: UIMessage) {
@@ -519,6 +617,7 @@ class ResponseAPI(
     internal fun parseResponseDelta(
         jsonObject: JsonObject,
         streamState: ResponseStreamState = ResponseStreamState(),
+        endpointProfile: ResponseEndpointProfile = ResponseEndpointProfile.OPENAI,
     ): MessageChunk? {
         val chunkType = jsonObject["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
 
@@ -540,7 +639,7 @@ class ResponseAPI(
                 )
             }
 
-            "response.reasoning_summary_text.delta", "response.reasoning_text.delta" -> {
+            "response.reasoning_summary_text.delta" -> {
                 return MessageChunk(
                     id = jsonObject["item_id"]?.jsonPrimitive?.contentOrNull ?: "",
                     model = "",
@@ -567,6 +666,7 @@ class ResponseAPI(
 
             "response.output_item.added" -> {
                 val item = jsonObject["item"]?.jsonObject ?: error("chunk item not found")
+                streamState.recordOutputItem(item)
                 val type = item["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
                 val id = item["id"]?.jsonPrimitive?.content ?: error("chunk id not found")
                 if (type == "function_call") {
@@ -644,10 +744,18 @@ class ResponseAPI(
 
             "response.output_item.done" -> {
                 val item = jsonObject["item"]?.jsonObject ?: error("chunk item not found")
+                streamState.recordOutputItem(item)
                 val type = item["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
                 val id = item["id"]?.jsonPrimitive?.content ?: error("chunk id not found")
                 if (type == "reasoning") {
                     val encryptedContent = item["encrypted_content"]?.jsonPrimitive?.content
+                    val reasoningText = if (streamState.reasoningTextEmittedByItemId.remove(id)) {
+                        ""
+                    } else {
+                        // DeepSeek 的标准流会发送 reasoning_text.delta/done；部分兼容实现只在
+                        // output_item.done 的完整 item 中提供正文，不能因此把必需的回传状态丢掉。
+                        item.reasoningTextContent()
+                    }
                     return MessageChunk(
                         id = id,
                         model = "",
@@ -659,7 +767,7 @@ class ResponseAPI(
                                     role = MessageRole.ASSISTANT,
                                     parts = listOf(
                                         UIMessagePart.Reasoning(
-                                            reasoning = "",
+                                            reasoning = reasoningText,
                                             createdAt = Clock.System.now(),
                                             finishedAt = null,
                                             metadata = OpenAIReasoningMetadata(
@@ -728,6 +836,25 @@ class ResponseAPI(
                 )
             }
 
+            "response.reasoning_text.delta" -> {
+                val itemId = jsonObject["item_id"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val delta = jsonObject["delta"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (delta.isNotEmpty()) {
+                    streamState.reasoningTextEmittedByItemId += itemId
+                }
+                return reasoningTextChunk(itemId, delta)
+            }
+
+            "response.reasoning_text.done" -> {
+                val itemId = jsonObject["item_id"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val text = jsonObject["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                // DeepSeek 会在 done 中再次给出完整 reasoning_text。UIMessage 的流式合并采用
+                // 字符串追加，因此已有 delta 时不能重复追加；兼容只发送 done 的实现则用它兜底。
+                if (text.isEmpty()) return null
+                if (!streamState.reasoningTextEmittedByItemId.add(itemId)) return null
+                return reasoningTextChunk(itemId, text)
+            }
+
             "response.function_call_arguments.delta" -> {
                 val itemId = jsonObject["item_id"]?.jsonPrimitive?.content ?: error("item_id not found")
                 val toolCallId = streamState.toolCallIdsByItemId[itemId] ?: itemId
@@ -761,19 +888,92 @@ class ResponseAPI(
 
             "response.completed", "response.incomplete", "response.failed" -> {
                 val response = jsonObject["response"]?.jsonObjectOrNull
-                return MessageChunk(
-                    id = jsonObject["item_id"]?.jsonPrimitive?.contentOrNull ?: "",
-                    model = "",
-                    choices = emptyList(),
-                    usage = parseTokenUsage(response?.get("usage")?.jsonObjectOrNull)
-                )
+                val outputItems = response?.get("output")?.jsonArray
+                    ?.map { it.jsonObject }
+                    ?.ifEmpty { null }
+                    ?: streamState.outputItems()
+                val usage = parseTokenUsage(response?.get("usage")?.jsonObjectOrNull)
+                return if (chunkType == "response.completed") {
+                    buildResponseOutputStateChunk(
+                        responseId = response?.get("id")?.jsonPrimitiveOrNull?.contentOrNull.orEmpty(),
+                        outputItems = outputItems,
+                        endpointProfile = endpointProfile,
+                        usage = usage,
+                    ) ?: MessageChunk(id = "", model = "", choices = emptyList(), usage = usage)
+                } else {
+                    MessageChunk(id = "", model = "", choices = emptyList(), usage = usage)
+                }
             }
         }
 
         return null
     }
 
-    internal fun parseResponseOutput(jsonObject: JsonObject): MessageChunk {
+    private fun buildResponseOutputStateChunk(
+        responseId: String = "",
+        outputItems: List<JsonObject>,
+        endpointProfile: ResponseEndpointProfile,
+        usage: TokenUsage? = null,
+    ): MessageChunk? {
+        if (outputItems.isEmpty()) return null
+        return MessageChunk(
+            id = responseId,
+            model = "",
+            choices = listOf(
+                UIMessageChoice(
+                    index = 0,
+                    delta = UIMessage(
+                        role = MessageRole.ASSISTANT,
+                        parts = emptyList(),
+                        providerMetadata = OpenAIResponseMetadata(
+                            wireFormat = endpointProfile.wireFormat,
+                            outputItemGroups = listOf(outputItems),
+                        ).toMetadata(),
+                    ),
+                    message = null,
+                    finishReason = null,
+                )
+            ),
+            usage = usage,
+        )
+    }
+
+    private fun reasoningTextChunk(itemId: String, text: String): MessageChunk {
+        return MessageChunk(
+            id = itemId,
+            model = "",
+            choices = listOf(
+                UIMessageChoice(
+                    index = 0,
+                    delta = UIMessage(
+                        role = MessageRole.ASSISTANT,
+                        parts = listOf(
+                            UIMessagePart.Reasoning(
+                                reasoning = text,
+                                createdAt = Clock.System.now(),
+                                finishedAt = null,
+                            )
+                        )
+                    ),
+                    message = null,
+                    finishReason = null,
+                )
+            )
+        )
+    }
+
+    private fun JsonObject.reasoningTextContent(): String {
+        return this["content"]?.jsonArray
+            ?.map { it.jsonObject }
+            ?.filter { it["type"]?.jsonPrimitive?.contentOrNull == "reasoning_text" }
+            ?.joinToString(separator = "") { it["text"]?.jsonPrimitive?.contentOrNull.orEmpty() }
+            .orEmpty()
+    }
+
+    internal fun parseResponseOutput(
+        jsonObject: JsonObject,
+        endpointProfile: ResponseEndpointProfile = ResponseEndpointProfile.OPENAI,
+    ): MessageChunk {
         val outputs = jsonObject["output"]?.jsonArray ?: error("output not found")
         val parts = arrayListOf<UIMessagePart>()
 
@@ -874,6 +1074,10 @@ class ResponseAPI(
                     message = UIMessage(
                         role = MessageRole.ASSISTANT,
                         parts = parts,
+                        providerMetadata = OpenAIResponseMetadata(
+                            wireFormat = endpointProfile.wireFormat,
+                            outputItemGroups = listOf(outputs.map { it.jsonObject }),
+                        ).toMetadata(),
                     ),
                     finishReason = null,
                     delta = null
@@ -932,10 +1136,11 @@ class ResponseAPI(
         }
     }
 
-    private fun UIMessage.hasReplayableResponseReasoningState(
-        capabilities: ResponseProviderCapabilities,
+    private fun UIMessage.hasReplayableResponseState(
+        endpointProfile: ResponseEndpointProfile,
     ): Boolean {
-        if (capabilities.usesReasoningTextContent) return false
+        if (metadataAs<OpenAIResponseMetadata>()?.outputItemGroups?.any { it.isNotEmpty() } == true) return true
+        if (endpointProfile.usesReasoningTextContent) return false
         return parts.filterIsInstance<UIMessagePart.Reasoning>().any { part ->
             val metadata = part.metadataAs<OpenAIReasoningMetadata>()
             metadata?.reasoningId != null || metadata?.encryptedContent != null
@@ -953,34 +1158,59 @@ private fun List<UIMessagePart>.isOnlyTextPart(): Boolean {
     return gonnaSend == texts && texts == 1
 }
 
-internal data class ResponseProviderCapabilities(
-    val supportsReasoningSummary: Boolean = true,
-    val supportsEncryptedContent: Boolean = true,
-    val usesReasoningTextContent: Boolean = false,
-)
+/**
+ * 内部 endpoint profile 只描述已经由官方协议证实的线格式差异，不暴露为用户配置。
+ * 使用枚举而不是自由组合布尔值，避免生成诸如“DeepSeek reasoning_text 同时请求 OpenAI encrypted content”
+ * 这类无效状态。新增 profile 必须同时具备官方依据和协议回归测试。
+ */
+internal enum class ResponseEndpointProfile(
+    val wireFormat: OpenAIResponseWireFormat,
+    val supportsReasoningSummary: Boolean,
+    val supportsEncryptedContent: Boolean,
+    val usesReasoningTextContent: Boolean,
+    val supportsMultimodalFunctionOutput: Boolean,
+) {
+    OPENAI(
+        wireFormat = OpenAIResponseWireFormat.OPENAI,
+        supportsReasoningSummary = true,
+        supportsEncryptedContent = true,
+        usesReasoningTextContent = false,
+        supportsMultimodalFunctionOutput = true,
+    ),
+    VOLC_ARK(
+        wireFormat = OpenAIResponseWireFormat.OPENAI,
+        supportsReasoningSummary = false,
+        // 方舟默认生成 thinking summary，但手动无状态续轮仍需通过 include 请求 encrypted_content。
+        supportsEncryptedContent = true,
+        usesReasoningTextContent = false,
+        // 方舟官方 Responses SDK 与示例将 function_call_output.output 定义为字符串。
+        supportsMultimodalFunctionOutput = false,
+    ),
+    DEEPSEEK(
+        wireFormat = OpenAIResponseWireFormat.DEEPSEEK,
+        supportsReasoningSummary = false,
+        supportsEncryptedContent = false,
+        usesReasoningTextContent = true,
+        // DeepSeek Responses 的 function_call_output.output 只接受字符串。
+        supportsMultimodalFunctionOutput = false,
+    ),
+}
 
 /**
  * Responses 的字段形状属于 endpoint 线协议，只能由实际连接的 host 决定。
  * modelId 可以决定模型能力，但不能用来猜测未知代理背后的供应商或改变代理对外声明的协议；
  * 因此这里使用固定、内置的 host 适配，不增加 ProviderDialect 或网关类型等用户配置。
  */
-internal fun resolveResponseProviderCapabilities(host: String): ResponseProviderCapabilities {
+internal fun resolveResponseEndpointProfile(host: String): ResponseEndpointProfile {
     return when (host) {
-        "ark.cn-beijing.volces.com" -> ResponseProviderCapabilities(
-            supportsReasoningSummary = false,
-            supportsEncryptedContent = false,
-        )
+        "ark.cn-beijing.volces.com" -> ResponseEndpointProfile.VOLC_ARK
 
         // Responses 的线协议由实际连接的 endpoint 决定。直连 api.deepseek.com 且用户已选择
         // Responses 时，兼容其 reasoning_text 形状；代理 host 继续使用其声明的 OpenAI Responses
         // 格式，不能根据后端模型名猜测代理方言，也不在客户端维护易过期的模型白名单。
-        "api.deepseek.com" -> ResponseProviderCapabilities(
-            supportsReasoningSummary = false,
-            supportsEncryptedContent = false,
-            usesReasoningTextContent = true,
-        )
+        "api.deepseek.com" -> ResponseEndpointProfile.DEEPSEEK
 
-        else -> ResponseProviderCapabilities()
+        else -> ResponseEndpointProfile.OPENAI
     }
 }
 

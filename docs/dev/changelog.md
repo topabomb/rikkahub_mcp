@@ -6,6 +6,16 @@
 
 ---
 
+## 0.0.13（versionCode 13）— 2026-08-05
+
+### 修复
+
+- **Responses 无状态历史回放**：持久化每次响应完整且有批次边界的 `response.output`，按官方顺序先回放整批 output、再追加函数执行结果，避免内置工具、`phase/status`、未来 output item 和并行工具关系丢失；流式响应在终态写入同一协议状态，并将未见终态的连接关闭显式报错
+- **DeepSeek Responses 协议适配**：仅直连 `api.deepseek.com` 时使用 `content[].reasoning_text`；兼容 `reasoning_text.delta`、`reasoning_text.done` 与完整 output item 且避免重复追加，保留 reasoning 信封和明文思考；图片型工具结果按官方约束降级为字符串输出
+- **火山方舟加密思考回传**：保持方舟默认生成 thinking summary 的行为，同时按官方文档请求 `reasoning.encrypted_content`，确保 `store=false` 工具续轮可手动回传完整思考状态
+
+---
+
 ## 0.0.12（versionCode 12）— 2026-07-31 ~ 2026-08-04
 
 ### 新增

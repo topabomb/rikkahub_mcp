@@ -18,7 +18,11 @@ import me.rerere.ai.util.json
  * 所有字段必须可空且 key 与历史数据保持一致(必要时用 [SerialName]),
  * 否则旧会话中持久化的 metadata 将无法解析
  */
-sealed interface PartMetadata
+sealed interface Metadata
+
+sealed interface PartMetadata : Metadata
+
+sealed interface MessageMetadata : Metadata
 
 /**
  * Claude thinking block 的元数据, 回传时需要携带 signature
@@ -38,6 +42,33 @@ data class OpenAIReasoningMetadata(
     @SerialName("encrypted_content")
     val encryptedContent: String? = null,
 ) : PartMetadata
+
+/**
+ * OpenAI Responses 在 `store=false` 时需要由客户端把上一轮完整的 `response.output`
+ * 作为下一轮 input 回放。可见的 [UIMessagePart] 只是 UI 投影，无法无损表达 web_search_call、
+ * image_generation_call、message.phase 以及未来新增的 output item，因此原始输出项单独保存在消息元数据中。
+ *
+ * [wireFormat] 记录产生这些输出项的线协议形状。它由实际 endpoint 自动确定，不是用户配置；
+ * 当会话切换到不同形状的 endpoint 时，provider 会回退到 UIMessage 重建，避免跨协议原样发送。
+ * [outputItemGroups] 按每次 response 保留批次边界，因为协议要求先回放该 response 的全部 output，
+ * 再追加这一批函数调用的本地执行结果；把多次工具续轮压平成单列表会破坏并行调用的顺序。
+ */
+@Serializable
+data class OpenAIResponseMetadata(
+    @SerialName("wire_format")
+    val wireFormat: OpenAIResponseWireFormat,
+    @SerialName("output_item_groups")
+    val outputItemGroups: List<List<JsonObject>>,
+) : MessageMetadata
+
+@Serializable
+enum class OpenAIResponseWireFormat {
+    @SerialName("openai")
+    OPENAI,
+
+    @SerialName("deepseek")
+    DEEPSEEK,
+}
 
 /**
  * Google Gemini 部件(functionCall/inlineData)的 thoughtSignature, 回传时需要携带
@@ -66,10 +97,40 @@ inline fun <reified T : PartMetadata> UIMessagePart.metadataAs(): T? = metadata?
     runCatching { json.decodeFromJsonElement<T>(it) }.getOrNull()
 }
 
+inline fun <reified T : MessageMetadata> UIMessage.metadataAs(): T? = providerMetadata?.let {
+    runCatching { json.decodeFromJsonElement<T>(it) }.getOrNull()
+}
+
 /**
  * 将类型化的 [PartMetadata] 编码为 metadata [JsonObject]
  *
  * 由于 json 配置了 explicitNulls = false, 值为 null 的字段不会写入
  */
-inline fun <reified T : PartMetadata> T.toMetadata(): JsonObject =
+inline fun <reified T : Metadata> T.toMetadata(): JsonObject =
     json.encodeToJsonElement(this).jsonObject
+
+/**
+ * 流式 Responses 会在终态一次交付一组 output items，而同一个 UIMessage 可能包含多次
+ * assistant -> tool 子步骤。相同线协议的元数据必须按生成顺序累积，不能覆盖前一工具步骤。
+ */
+internal fun mergeMessageMetadata(current: JsonObject?, incoming: JsonObject?): JsonObject? {
+    if (incoming == null) return current
+    if (current == null) return incoming
+
+    val currentResponse = runCatching {
+        json.decodeFromJsonElement<OpenAIResponseMetadata>(current)
+    }.getOrNull()
+    val incomingResponse = runCatching {
+        json.decodeFromJsonElement<OpenAIResponseMetadata>(incoming)
+    }.getOrNull()
+    return if (currentResponse != null &&
+        incomingResponse != null &&
+        currentResponse.wireFormat == incomingResponse.wireFormat
+    ) {
+        currentResponse.copy(
+            outputItemGroups = currentResponse.outputItemGroups + incomingResponse.outputItemGroups
+        ).toMetadata()
+    } else {
+        incoming
+    }
+}
