@@ -1,18 +1,26 @@
 package me.rerere.ai.provider.providers
 
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.ClaudePromptCacheTtl
+import me.rerere.ai.ui.ClaudeReasoningMetadata
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.metadataAs
+import me.rerere.ai.ui.toMetadata
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import kotlin.uuid.Uuid
 
 /**
  * Unit tests for ClaudeProvider message building logic.
@@ -43,6 +51,12 @@ class ClaudeProviderMessageTest {
         )
         method.isAccessible = true
         return method.invoke(provider, messages, false, ClaudePromptCacheTtl.FIVE_MINUTES) as JsonArray
+    }
+
+    private fun invokeParseMessage(content: JsonArray): UIMessage {
+        val method = ClaudeProvider::class.java.getDeclaredMethod("parseMessage", JsonArray::class.java)
+        method.isAccessible = true
+        return method.invoke(provider, content) as UIMessage
     }
 
     @Test
@@ -348,6 +362,56 @@ class ClaudeProviderMessageTest {
             it.jsonObject["type"]?.jsonPrimitive?.content == "text"
         }?.jsonObject
         assertEquals("Hello, how are you?", textBlock?.get("text")?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `redacted thinking should be persisted and replayed unchanged`() {
+        val parsed = invokeParseMessage(buildJsonArray {
+            add(buildJsonObject {
+                put("type", "redacted_thinking")
+                put("data", "opaque-redacted-data")
+            })
+            add(buildJsonObject {
+                put("type", "text")
+                put("text", "visible answer")
+            })
+        })
+        val redacted = parsed.parts.filterIsInstance<UIMessagePart.Reasoning>().single()
+        assertEquals(
+            "opaque-redacted-data",
+            redacted.metadataAs<ClaudeReasoningMetadata>()?.redactedData,
+        )
+
+        val rebuilt = invokeBuildMessages(listOf(UIMessage.user("question"), parsed))
+        val block = rebuilt
+            .flatMap { it.jsonObject["content"]?.jsonArray ?: JsonArray(emptyList()) }
+            .map { it.jsonObject }
+            .single { it["type"]?.jsonPrimitive?.content == "redacted_thinking" }
+        assertEquals("opaque-redacted-data", block["data"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `thinking from a different configured model should be stripped`() {
+        val oldModelId = Uuid.random()
+        val activeModelId = Uuid.random()
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            modelId = oldModelId,
+            parts = listOf(
+                UIMessagePart.Reasoning(
+                    reasoning = "old thinking",
+                    metadata = ClaudeReasoningMetadata(signature = "old-signature").toMetadata(),
+                ),
+                UIMessagePart.Text("visible answer"),
+            ),
+        )
+
+        val stripped = stripClaudeThinkingFromOtherModels(listOf(message), activeModelId).single()
+        assertTrue(stripped.parts.none { it is UIMessagePart.Reasoning })
+        assertEquals("visible answer", (stripped.parts.single() as UIMessagePart.Text).text)
+
+        val unchanged = stripClaudeThinkingFromOtherModels(listOf(message), oldModelId).single()
+        assertTrue(unchanged.parts.first() is UIMessagePart.Reasoning)
     }
 
     // ==================== Helper Functions ====================

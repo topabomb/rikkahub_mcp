@@ -1,12 +1,26 @@
 package me.rerere.ai.provider.providers
 
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.Tool
+import me.rerere.ai.provider.BuiltInTools
+import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ModelAbility
+import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.ui.GoogleThoughtMetadata
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.metadataAs
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -40,6 +54,25 @@ class GoogleProviderMessageTest {
         )
         method.isAccessible = true
         return method.invoke(provider, messages) as JsonArray
+    }
+
+    private fun invokeBuildRequest(
+        messages: List<UIMessage>,
+        params: TextGenerationParams,
+    ): JsonObject {
+        val method = GoogleProvider::class.java.getDeclaredMethod(
+            "buildCompletionRequestBody",
+            List::class.java,
+            TextGenerationParams::class.java,
+        )
+        method.isAccessible = true
+        return method.invoke(provider, messages, params) as JsonObject
+    }
+
+    private fun invokeParsePart(part: JsonObject): UIMessagePart {
+        val method = GoogleProvider::class.java.getDeclaredMethod("parseMessagePart", JsonObject::class.java)
+        method.isAccessible = true
+        return method.invoke(provider, part) as UIMessagePart
     }
 
     @Test
@@ -413,6 +446,109 @@ class GoogleProviderMessageTest {
             response?.containsKey("result") == true)
         assertTrue("Result should contain expected output",
             response?.get("result")?.jsonPrimitive?.content?.contains("Expected output value") == true)
+    }
+
+    @Test
+    fun `function declarations and built in tools should coexist and preserve enum`() {
+        val modeSchema = buildJsonObject {
+            put("type", "string")
+            putJsonArray("enum") {
+                add(JsonPrimitive("fast"))
+                add(JsonPrimitive("accurate"))
+            }
+        }
+        val tool = Tool(
+            name = "run_task",
+            description = "Run a task",
+            parameters = {
+                InputSchema.Obj(
+                    properties = buildJsonObject { put("mode", modeSchema) },
+                    required = listOf("mode"),
+                )
+            },
+            execute = { emptyList() },
+        )
+        val body = invokeBuildRequest(
+            messages = listOf(UIMessage.user("hello")),
+            params = TextGenerationParams(
+                model = Model(
+                    modelId = "gemini-3-pro",
+                    displayName = "gemini-3-pro",
+                    abilities = listOf(ModelAbility.TOOL),
+                    tools = setOf(BuiltInTools.Search),
+                ),
+                tools = listOf(tool),
+            ),
+        )
+
+        val tools = body["tools"]!!.jsonArray
+        assertEquals(2, tools.size)
+        val declaration = tools.first().jsonObject["functionDeclarations"]!!.jsonArray.single().jsonObject
+        val mode = declaration["parameters"]!!.jsonObject["properties"]!!.jsonObject["mode"]!!.jsonObject
+        assertEquals(listOf("fast", "accurate"), mode["enum"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertTrue(tools.any { it.jsonObject.containsKey("googleSearch") })
+    }
+
+    @Test
+    fun `gemini function call id and thought signature should round trip exactly`() {
+        val parsed = invokeParsePart(buildJsonObject {
+            put("functionCall", buildJsonObject {
+                put("id", "server_call_1")
+                put("name", "lookup")
+                put("args", buildJsonObject { put("query", "test") })
+            })
+            put("thoughtSignature", "tool_signature")
+        }) as UIMessagePart.Tool
+        val executed = parsed.copy(output = listOf(UIMessagePart.Text("result")))
+
+        assertEquals("server_call_1", parsed.toolCallId)
+        assertEquals("server_call_1", parsed.metadataAs<GoogleThoughtMetadata>()?.functionCallId)
+
+        val contents = invokeBuildContents(listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(executed))))
+        val functionCallPart = contents[0].jsonObject["parts"]!!.jsonArray.single().jsonObject
+        val functionResponsePart = contents[1].jsonObject["parts"]!!.jsonArray.single().jsonObject
+        assertEquals(
+            "server_call_1",
+            functionCallPart["functionCall"]!!.jsonObject["id"]?.jsonPrimitive?.content,
+        )
+        assertEquals("tool_signature", functionCallPart["thoughtSignature"]?.jsonPrimitive?.content)
+        assertEquals(
+            "server_call_1",
+            functionResponsePart["functionResponse"]!!.jsonObject["id"]?.jsonPrimitive?.content,
+        )
+    }
+
+    @Test
+    fun `gemini text reasoning and draft image protocol state should round trip`() {
+        val text = invokeParsePart(buildJsonObject {
+            put("text", "answer")
+            put("thoughtSignature", "text_signature")
+        })
+        val reasoning = invokeParsePart(buildJsonObject {
+            put("text", "thinking")
+            put("thought", true)
+            put("thoughtSignature", "reasoning_signature")
+        })
+        val draft = invokeParsePart(buildJsonObject {
+            put("inlineData", buildJsonObject {
+                put("mimeType", "image/png")
+                put("data", "draft_base64")
+            })
+            put("thought", true)
+            put("thoughtSignature", "draft_signature")
+        })
+
+        val contents = invokeBuildContents(
+            listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(reasoning, draft, text)))
+        )
+        val parts = contents.single().jsonObject["parts"]!!.jsonArray.map { it.jsonObject }
+
+        assertEquals("reasoning_signature", parts[0]["thoughtSignature"]?.jsonPrimitive?.content)
+        assertEquals("thinking", parts[0]["text"]?.jsonPrimitive?.content)
+        assertEquals("draft_signature", parts[1]["thoughtSignature"]?.jsonPrimitive?.content)
+        assertEquals("draft_base64", parts[1]["inlineData"]!!.jsonObject["data"]?.jsonPrimitive?.content)
+        assertEquals("text_signature", parts[2]["thoughtSignature"]?.jsonPrimitive?.content)
+        assertEquals("answer", parts[2]["text"]?.jsonPrimitive?.content)
     }
 
     // ==================== Helper Functions ====================

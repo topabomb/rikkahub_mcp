@@ -6,13 +6,23 @@
 
 ---
 
-## 0.0.13（versionCode 13）— 2026-08-05
+## 0.0.13（versionCode 13）— 2026-08-05 ~ 2026-08-09
 
 ### 修复
 
+- **Gemini 工具与思考状态回放**：保留任意 Part 的 `thoughtSignature`、服务端 `functionCall.id` 和思考草稿图原始数据，工具结果按同一 id 回传；带签名的空文本 Part 不再被流式合并吞掉，流式 JSON 解析失败会显式终止生成
+- **Gemini 工具定义完整性**：自定义 Function 与内置工具合并到同一个 `tools` 数组，避免后写覆盖；保留官方支持的 JSON Schema `enum`
+- **Claude 不透明思考状态**：持久化并原样回传 `redacted_thinking.data`；切换到不同模型配置时剥离旧模型 thinking/redacted blocks，避免签名跨模型复用
+- **OpenAI/方舟 Responses 状态隔离**：除 `wireFormat` 外新增 endpoint `sourceProfile`，消息级 output items 与 Part 级 reasoning id/encrypted content 均按来源隔离，同时兼容没有新字段的旧会话
+- **模型代际与 reasoning effort**：GPT-5 系列共享 developer role/temperature 行为，但基础版、点版本、Pro、Codex 分别按官方支持范围映射 effort；DeepSeek 项目级 LOW/MEDIUM/HIGH/XHIGH 映射为官方 high/max，不再透传无效枚举值
 - **Responses 无状态历史回放**：持久化每次响应完整且有批次边界的 `response.output`，按官方顺序先回放整批 output、再追加函数执行结果，避免内置工具、`phase/status`、未来 output item 和并行工具关系丢失；流式响应在终态写入同一协议状态，并将未见终态的连接关闭显式报错
 - **DeepSeek Responses 协议适配**：仅直连 `api.deepseek.com` 时使用 `content[].reasoning_text`；兼容 `reasoning_text.delta`、`reasoning_text.done` 与完整 output item 且避免重复追加，保留 reasoning 信封和明文思考；图片型工具结果按官方约束降级为字符串输出
 - **火山方舟加密思考回传**：保持方舟默认生成 thinking summary 的行为，同时按官方文档请求 `reasoning.encrypted_content`，确保 `store=false` 工具续轮可手动回传完整思考状态
+
+### 变更
+
+- **LLM endpoint 职责收敛**：新增内部 `OpenAIEndpointProfile`，集中维护 host → vendor、Responses profile 和有限参数映射；不增加用户配置，不按 modelId 猜测代理线协议
+- **协议架构文档重整**：按 2026-08-09 的 OpenAI、DeepSeek、Anthropic、Gemini 与火山方舟官方文档完整修订 `protocol-reference.md`，集中披露职责边界、模型特例、持久化兼容、测试基线与已知风险
 
 ---
 

@@ -3,9 +3,11 @@ package me.rerere.ai.provider.providers.openai
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
@@ -17,6 +19,7 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.OpenAIReasoningMetadata
 import me.rerere.ai.ui.OpenAIResponseMetadata
+import me.rerere.ai.ui.OpenAIResponseSourceProfile
 import me.rerere.ai.ui.OpenAIResponseWireFormat
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -357,7 +360,7 @@ class ResponseAPIMessageTest {
     }
 
     @Test
-    fun `openai responses should keep off semantics for gpt5 and use low fallback for old o series`() {
+    fun `openai responses should map base gpt5 and old o series to supported off fallbacks`() {
         val provider = ProviderSetting.OpenAI(baseUrl = "https://api.openai.com/v1")
         val gpt5Body = invokeBuildRequestBody(
             providerSetting = provider,
@@ -368,7 +371,7 @@ class ResponseAPIMessageTest {
             params = createReasoningParams(reasoningLevel = ReasoningLevel.OFF, modelId = "o3")
         )
 
-        assertEquals("none", gpt5Body["reasoning"]?.jsonObject?.get("effort")?.jsonPrimitive?.content)
+        assertEquals("minimal", gpt5Body["reasoning"]?.jsonObject?.get("effort")?.jsonPrimitive?.content)
         assertEquals("low", o3Body["reasoning"]?.jsonObject?.get("effort")?.jsonPrimitive?.content)
     }
 
@@ -383,7 +386,7 @@ class ResponseAPIMessageTest {
         )
         val endpointProfile = resolveResponseEndpointProfile("proxy.example.com")
 
-        assertEquals(ResponseEndpointProfile.OPENAI, endpointProfile)
+        assertEquals(ResponseEndpointProfile.OPENAI_COMPATIBLE, endpointProfile)
         assertTrue(endpointProfile.supportsReasoningSummary)
         assertTrue(endpointProfile.supportsEncryptedContent)
         assertFalse(endpointProfile.usesReasoningTextContent)
@@ -409,6 +412,109 @@ class ResponseAPIMessageTest {
         assertEquals("high", reasoning!!["effort"]?.jsonPrimitive?.content)
         assertFalse("deepseek should not include reasoning.summary", reasoning.containsKey("summary"))
         assertFalse("deepseek should not request encrypted reasoning", requestBody.containsKey("include"))
+    }
+
+    @Test
+    fun `deepseek responses should never send app-only reasoning effort values`() {
+        val provider = ProviderSetting.OpenAI(baseUrl = "https://api.deepseek.com")
+        val expected = mapOf(
+            ReasoningLevel.OFF to null,
+            ReasoningLevel.AUTO to null,
+            ReasoningLevel.LOW to "high",
+            ReasoningLevel.MEDIUM to "high",
+            ReasoningLevel.HIGH to "high",
+            ReasoningLevel.XHIGH to "max",
+        )
+
+        expected.forEach { (level, effort) ->
+            val body = invokeBuildRequestBody(
+                providerSetting = provider,
+                params = createReasoningParams(level, "deepseek-v4-flash"),
+            )
+            assertEquals(level.name, effort, body["reasoning"]?.jsonObject?.get("effort")?.jsonPrimitive?.content)
+        }
+    }
+
+    @Test
+    fun `responses raw state should not cross endpoint source profiles`() {
+        val rawItem = buildJsonObject {
+            put("type", "web_search_call")
+            put("id", "ws_1")
+            put("status", "completed")
+        }
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(UIMessagePart.Text("visible answer")),
+            providerMetadata = OpenAIResponseMetadata(
+                wireFormat = OpenAIResponseWireFormat.OPENAI,
+                outputItemGroups = listOf(listOf(rawItem)),
+                sourceProfile = OpenAIResponseSourceProfile.OPENAI,
+            ).toMetadata(),
+        )
+
+        val arkReplay = invokeBuildMessages(listOf(message), host = "ark.cn-beijing.volces.com")
+        assertFalse(arkReplay.any { it.jsonObject["id"]?.jsonPrimitive?.content == "ws_1" })
+        assertEquals("assistant", arkReplay.single().jsonObject["role"]?.jsonPrimitive?.content)
+        assertEquals("visible answer", arkReplay.single().jsonObject["content"]?.jsonPrimitive?.content)
+
+        val openAIReplay = invokeBuildMessages(listOf(message), host = "api.openai.com")
+        assertEquals("ws_1", openAIReplay.single().jsonObject["id"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `responses part-level opaque reasoning should not cross endpoint source profiles`() {
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Reasoning(
+                    reasoning = "visible summary",
+                    metadata = OpenAIReasoningMetadata(
+                        reasoningId = "rs_openai",
+                        encryptedContent = "encrypted_openai",
+                        sourceProfile = OpenAIResponseSourceProfile.OPENAI,
+                    ).toMetadata(),
+                ),
+                UIMessagePart.Text("visible answer"),
+            ),
+        )
+
+        val arkReasoning = invokeBuildMessages(
+            listOf(message),
+            host = "ark.cn-beijing.volces.com",
+        ).first { it.jsonObject["type"]?.jsonPrimitive?.content == "reasoning" }.jsonObject
+        assertFalse(arkReasoning.containsKey("id"))
+        assertFalse(arkReasoning.containsKey("encrypted_content"))
+        assertEquals(
+            "visible summary",
+            arkReasoning["summary"]?.jsonArray?.single()?.jsonObject?.get("text")?.jsonPrimitive?.content,
+        )
+
+        val openAIReasoning = invokeBuildMessages(
+            listOf(message),
+            host = "api.openai.com",
+        ).first { it.jsonObject["type"]?.jsonPrimitive?.content == "reasoning" }.jsonObject
+        assertEquals("rs_openai", openAIReasoning["id"]?.jsonPrimitive?.content)
+        assertEquals("encrypted_openai", openAIReasoning["encrypted_content"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `legacy responses metadata without source should remain replayable`() {
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = emptyList(),
+            providerMetadata = OpenAIResponseMetadata(
+                wireFormat = OpenAIResponseWireFormat.OPENAI,
+                outputItemGroups = listOf(listOf(buildJsonObject {
+                    put("type", "message")
+                    put("id", "legacy_msg")
+                    put("role", "assistant")
+                    put("content", JsonArray(emptyList()))
+                })),
+            ).toMetadata(),
+        )
+
+        val replay = invokeBuildMessages(listOf(message), host = "ark.cn-beijing.volces.com")
+        assertEquals("legacy_msg", replay.single().jsonObject["id"]?.jsonPrimitive?.content)
     }
 
     @Test

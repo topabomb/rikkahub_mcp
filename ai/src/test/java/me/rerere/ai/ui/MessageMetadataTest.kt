@@ -159,7 +159,11 @@ class MessageMetadataTest {
 
     @Test
     fun `response output metadata accumulates tool steps in order`() {
-        fun metadata(id: String, format: OpenAIResponseWireFormat) = OpenAIResponseMetadata(
+        fun metadata(
+            id: String,
+            format: OpenAIResponseWireFormat,
+            source: OpenAIResponseSourceProfile? = null,
+        ) = OpenAIResponseMetadata(
             wireFormat = format,
             outputItemGroups = listOf(
                 listOf(buildJsonObject {
@@ -167,6 +171,7 @@ class MessageMetadataTest {
                     put("type", "message")
                 })
             ),
+            sourceProfile = source,
         ).toMetadata()
 
         val merged = mergeMessageMetadata(
@@ -199,11 +204,118 @@ class MessageMetadataTest {
     }
 
     @Test
+    fun `response metadata does not merge conflicting endpoint sources`() {
+        fun metadata(id: String, source: OpenAIResponseSourceProfile) = OpenAIResponseMetadata(
+            wireFormat = OpenAIResponseWireFormat.OPENAI,
+            outputItemGroups = listOf(listOf(buildJsonObject { put("id", id) })),
+            sourceProfile = source,
+        ).toMetadata()
+
+        val merged = mergeMessageMetadata(
+            metadata("openai", OpenAIResponseSourceProfile.OPENAI),
+            metadata("ark", OpenAIResponseSourceProfile.VOLC_ARK),
+        )
+        val decoded = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = emptyList(),
+            providerMetadata = merged,
+        ).metadataAs<OpenAIResponseMetadata>()
+
+        assertEquals(OpenAIResponseSourceProfile.VOLC_ARK, decoded?.sourceProfile)
+        assertEquals("ark", decoded?.outputItemGroups?.single()?.single()?.get("id")?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `response metadata upgrades legacy source while preserving groups`() {
+        val legacy = OpenAIResponseMetadata(
+            wireFormat = OpenAIResponseWireFormat.OPENAI,
+            outputItemGroups = listOf(listOf(buildJsonObject { put("id", "legacy") })),
+        ).toMetadata()
+        val current = OpenAIResponseMetadata(
+            wireFormat = OpenAIResponseWireFormat.OPENAI,
+            outputItemGroups = listOf(listOf(buildJsonObject { put("id", "current") })),
+            sourceProfile = OpenAIResponseSourceProfile.OPENAI,
+        ).toMetadata()
+
+        val decoded = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = emptyList(),
+            providerMetadata = mergeMessageMetadata(legacy, current),
+        ).metadataAs<OpenAIResponseMetadata>()
+
+        assertEquals(OpenAIResponseSourceProfile.OPENAI, decoded?.sourceProfile)
+        assertEquals(listOf("legacy", "current"), decoded?.outputItemGroups?.flatten()?.map {
+            it["id"]?.jsonPrimitive?.content
+        })
+    }
+
+    @Test
     fun `legacy json null thought signature does not survive rewrite`() {
         // 旧数据含 JsonNull -> 解析 -> 重新写出: JsonNull 被清理而非保留
         val legacy = reasoningWith(buildJsonObject { put("thoughtSignature", JsonNull) })
         val rewritten = legacy.metadataAs<GoogleThoughtMetadata>()?.toMetadata()
         assertEquals(JsonObject(emptyMap()), rewritten)
+    }
+
+    @Test
+    fun `signed empty text part remains a separate streaming boundary`() {
+        val initial = UIMessage(role = MessageRole.ASSISTANT, parts = emptyList())
+        fun chunk(part: UIMessagePart) = MessageChunk(
+            id = "chunk",
+            model = "gemini-3-pro",
+            choices = listOf(
+                UIMessageChoice(
+                    index = 0,
+                    delta = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(part)),
+                    message = null,
+                    finishReason = null,
+                )
+            ),
+        )
+
+        val merged = initial + chunk(UIMessagePart.Text("answer")) + chunk(
+            UIMessagePart.Text(
+                text = "",
+                metadata = GoogleThoughtMetadata(thoughtSignature = "signature").toMetadata(),
+            )
+        )
+
+        assertEquals(2, merged.parts.size)
+        assertEquals("answer", (merged.parts[0] as UIMessagePart.Text).text)
+        assertEquals(
+            "signature",
+            merged.parts[1].metadataAs<GoogleThoughtMetadata>()?.thoughtSignature,
+        )
+    }
+
+    @Test
+    fun `redacted claude reasoning remains separate from visible thinking`() {
+        val initial = UIMessage(role = MessageRole.ASSISTANT, parts = emptyList())
+        fun chunk(part: UIMessagePart) = MessageChunk(
+            id = "chunk",
+            model = "claude",
+            choices = listOf(
+                UIMessageChoice(
+                    index = 0,
+                    delta = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(part)),
+                    message = null,
+                    finishReason = null,
+                )
+            ),
+        )
+
+        val merged = initial + chunk(UIMessagePart.Reasoning("visible thinking")) + chunk(
+            UIMessagePart.Reasoning(
+                reasoning = "",
+                metadata = ClaudeReasoningMetadata(redactedData = "opaque").toMetadata(),
+            )
+        )
+
+        assertEquals(2, merged.parts.filterIsInstance<UIMessagePart.Reasoning>().size)
+        assertEquals(
+            "opaque",
+            merged.parts.last().metadataAs<ClaudeReasoningMetadata>()?.redactedData,
+        )
     }
 
     @Test

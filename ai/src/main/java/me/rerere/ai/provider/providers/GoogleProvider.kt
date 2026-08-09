@@ -293,8 +293,9 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
                     }
                 } catch (e: Exception) {
-                    e.printStackTrace()
-                    println("[onEvent] 解析错误: $data")
+                    Log.w(TAG, "onEvent: failed to parse Gemini stream event", e)
+                    eventSource.cancel()
+                    close(e)
                 }
             }
 
@@ -419,39 +420,36 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             buildContents(messages)
         )
 
-        // Tools
-        if (params.tools.isNotEmpty() && params.model.abilities.contains(ModelAbility.TOOL)) {
+        // Function declarations and model built-in tools share one tools array. Writing this key
+        // twice silently replaces the first value and makes mixed tool requests incomplete.
+        val useFunctionTools = params.tools.isNotEmpty() && params.model.abilities.contains(ModelAbility.TOOL)
+        if (useFunctionTools || params.model.tools.isNotEmpty()) {
             put("tools", buildJsonArray {
-                add(buildJsonObject {
-                    put("functionDeclarations", buildJsonArray {
-                        params.tools.forEach { tool ->
-                            add(buildJsonObject {
-                                put("name", JsonPrimitive(tool.name))
-                                put("description", JsonPrimitive(tool.description))
-                                put(
-                                    key = "parameters",
-                                    element = json.encodeToJsonElement(tool.parameters())
-                                        .removeElements(
-                                            listOf(
-                                                "const",
-                                                "exclusiveMaximum",
-                                                "exclusiveMinimum",
-                                                "format",
-                                                "additionalProperties",
-                                                "enum",
+                if (useFunctionTools) {
+                    add(buildJsonObject {
+                        put("functionDeclarations", buildJsonArray {
+                            params.tools.forEach { tool ->
+                                add(buildJsonObject {
+                                    put("name", JsonPrimitive(tool.name))
+                                    put("description", JsonPrimitive(tool.description))
+                                    put(
+                                        key = "parameters",
+                                        element = json.encodeToJsonElement(tool.parameters())
+                                            .removeElements(
+                                                listOf(
+                                                    "const",
+                                                    "exclusiveMaximum",
+                                                    "exclusiveMinimum",
+                                                    "format",
+                                                    "additionalProperties",
+                                                )
                                             )
-                                        )
-                                )
-                            })
-                        }
+                                    )
+                                })
+                            }
+                        })
                     })
-                })
-            })
-        }
-        // Model BuiltIn Tools
-        // 目前不能和工具调用兼容
-        if (params.model.tools.isNotEmpty()) {
-            put("tools", buildJsonArray {
+                }
                 params.model.tools.forEach { builtInTool ->
                     when (builtInTool) {
                         BuiltInTools.Search -> {
@@ -556,21 +554,35 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             jsonObject.containsKey("text") -> {
                 val thought = jsonObject["thought"]?.jsonPrimitive?.booleanOrNull ?: false
                 val text = jsonObject["text"]?.jsonPrimitive?.content ?: ""
+                val thoughtSignature = jsonObject["thoughtSignature"]?.jsonPrimitive?.contentOrNull
+                val metadata = if (thought || thoughtSignature != null) {
+                    GoogleThoughtMetadata(
+                        thoughtSignature = thoughtSignature,
+                        thought = if (thought) true else null,
+                    ).toMetadata()
+                } else {
+                    null
+                }
                 if (thought) UIMessagePart.Reasoning(
                     reasoning = text,
                     createdAt = Clock.System.now(),
-                    finishedAt = null
-                ) else UIMessagePart.Text(text)
+                    finishedAt = null,
+                    metadata = metadata,
+                ) else UIMessagePart.Text(text, metadata = metadata)
             }
 
             jsonObject.containsKey("functionCall") -> {
+                val functionCall = jsonObject["functionCall"]!!.jsonObject
+                val functionCallId = functionCall["id"]?.jsonPrimitive?.contentOrNull
+                val thoughtSignature = jsonObject["thoughtSignature"]?.jsonPrimitive?.contentOrNull
                 UIMessagePart.Tool(
-                    toolCallId = Uuid.random().toString(),
-                    toolName = jsonObject["functionCall"]!!.jsonObject["name"]!!.jsonPrimitive.content,
-                    input = json.encodeToString(jsonObject["functionCall"]!!.jsonObject["args"]),
+                    toolCallId = functionCallId ?: Uuid.random().toString(),
+                    toolName = functionCall["name"]!!.jsonPrimitive.content,
+                    input = json.encodeToString(functionCall["args"]),
                     output = emptyList(),
                     metadata = GoogleThoughtMetadata(
-                        thoughtSignature = jsonObject["thoughtSignature"]?.jsonPrimitive?.contentOrNull
+                        thoughtSignature = thoughtSignature,
+                        functionCallId = functionCallId,
                     ).toMetadata()
                 )
             }
@@ -584,17 +596,24 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 require(mime.startsWith("image/")) {
                     "Only image mime type is supported"
                 }
-                // 如果是思考过程中的草稿图，直接忽略
+                // UI 使用占位文本显示草稿图，metadata 保留原始 Part 供下一轮无损回放。
                 if (thought) {
                     return UIMessagePart.Reasoning(
                         reasoning = "[Draft Image]\n",
                         createdAt = Clock.System.now(),
-                        finishedAt = null
+                        finishedAt = null,
+                        metadata = GoogleThoughtMetadata(
+                            thoughtSignature = thoughtSignature,
+                            thought = true,
+                            inlineData = inlineData,
+                        ).toMetadata(),
                     )
                 }
                 UIMessagePart.Image(
                     url = data,
-                    metadata = GoogleThoughtMetadata(thoughtSignature = thoughtSignature).toMetadata()
+                    metadata = thoughtSignature?.let {
+                        GoogleThoughtMetadata(thoughtSignature = it).toMetadata()
+                    },
                 )
             }
 
@@ -669,6 +688,9 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
     private fun UIMessagePart.toGooglePart(): JsonObject? = when (this) {
         is UIMessagePart.Text -> buildJsonObject {
             put("text", text)
+            metadataAs<GoogleThoughtMetadata>()?.thoughtSignature?.let {
+                put("thoughtSignature", it)
+            }
         }
 
         is UIMessagePart.Image -> {
@@ -707,81 +729,104 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             }
         }
 
+        is UIMessagePart.Reasoning -> {
+            val thoughtMetadata = metadataAs<GoogleThoughtMetadata>()
+            when {
+                thoughtMetadata?.inlineData != null -> buildJsonObject {
+                    put("inlineData", thoughtMetadata.inlineData)
+                    put("thought", true)
+                    thoughtMetadata.thoughtSignature?.let { put("thoughtSignature", it) }
+                }
+
+                thoughtMetadata?.thought == true || thoughtMetadata?.thoughtSignature != null -> buildJsonObject {
+                    put("text", reasoning)
+                    put("thought", true)
+                    thoughtMetadata.thoughtSignature?.let { put("thoughtSignature", it) }
+                }
+
+                else -> null
+            }
+        }
+
         else -> null
     }
 
     private fun UIMessagePart.Tool.toFunctionCallPart() = buildJsonObject {
+        val thoughtMetadata = metadataAs<GoogleThoughtMetadata>()
         put("functionCall", buildJsonObject {
             put("name", toolName)
             put("args", inputAsJson())
+            thoughtMetadata?.functionCallId?.let { put("id", it) }
         })
-        metadataAs<GoogleThoughtMetadata>()?.thoughtSignature?.let {
+        thoughtMetadata?.thoughtSignature?.let {
             put("thoughtSignature", it)
         }
     }
 
     private fun UIMessagePart.Tool.toFunctionResponsePart() = buildJsonObject {
-            put("functionResponse", buildJsonObject {
-                put("name", toolName)
+        val thoughtMetadata = metadataAs<GoogleThoughtMetadata>()
+        put("functionResponse", buildJsonObject {
+            put("name", toolName)
+            thoughtMetadata?.functionCallId?.let { put("id", it) }
 
-                // 1. 拆分出纯文本部分
-                val textParts = output.filterIsInstance<UIMessagePart.Text>()
-                
-                // 2. 提取所有的多模态(图片/视频/音频)，并直接转为 Google 要求的格式
-                // 过滤出最终包含 inlineData 的数据块
-                val mediaGoogleParts = output
-                    .filter { it !is UIMessagePart.Text }
-                    .mapNotNull { it.toGooglePart() }
-                    .filter { it.containsKey("inlineData") } 
+            // 1. 拆分出纯文本部分
+            val textParts = output.filterIsInstance<UIMessagePart.Text>()
 
-                // 3. 构建给模型看的结构化 response 节点
-                put("response", buildJsonObject {
-                    // 处理文本结果
-                    if (textParts.isNotEmpty()) {
-                        put(
-                            "result", 
-                            textParts.joinToString("\n") { it.text }
-                        )
-                    } else if (mediaGoogleParts.isEmpty()) {
-                        // 如果工具啥都没返回，给个兜底成功状态
-                        put("result", " ")
-                    }
+            // 2. 提取所有的多模态(图片/视频/音频)，并直接转为 Google 要求的格式
+            // 过滤出最终包含 inlineData 的数据块
+            val mediaGoogleParts = output
+                .filter { it !is UIMessagePart.Text }
+                .mapNotNull { it.toGooglePart() }
+                .filter { it.containsKey("inlineData") }
 
-                    // 处理媒体数据（图片、音频、视频），打上 $ref 标签
-                    mediaGoogleParts.forEachIndexed { index, _ ->
-                        val refName = "media_ref_$index"
-                        put(refName, buildJsonObject {
-                            put("\$ref", refName)
-                        })
-                    }
-                })
+            // 3. 构建给模型看的结构化 response 节点
+            put("response", buildJsonObject {
+                // 处理文本结果
+                if (textParts.isNotEmpty()) {
+                    put(
+                        "result",
+                        textParts.joinToString("\n") { it.text }
+                    )
+                } else if (mediaGoogleParts.isEmpty()) {
+                    // 如果工具啥都没返回，给个兜底成功状态
+                    put("result", " ")
+                }
 
-                // 4. 将真实的 Base64 多媒体数据挂载到 parts 中，并建立指针绑定
-                if (mediaGoogleParts.isNotEmpty()) {
-                    putJsonArray("parts") {
-                        mediaGoogleParts.forEachIndexed { index, googlePart ->
-                            val refName = "media_ref_$index"
-                            val inlineData = googlePart["inlineData"]!!.jsonObject
-
-                            add(buildJsonObject {
-                                // 重新组装 inlineData，并在内部注入 displayName
-                                put("inlineData", buildJsonObject {
-                                    // 复制原有的 mimeType 和 data
-                                    inlineData.forEach { (k, v) -> put(k, v) }
-                                    // 添加能够让 $ref 认出它的唯一名称
-                                    put("displayName", refName)
-                                })
-                                
-                                // 保留可能存在的其他字段
-                                googlePart.forEach { (k, v) ->
-                                    if (k != "inlineData") put(k, v)
-                                }
-                            })
-                        }
-                    }
+                // 处理媒体数据（图片、音频、视频），打上 $ref 标签
+                mediaGoogleParts.forEachIndexed { index, _ ->
+                    val refName = "media_ref_$index"
+                    put(refName, buildJsonObject {
+                        put("\$ref", refName)
+                    })
                 }
             })
-        }
+
+            // 4. 将真实的 Base64 多媒体数据挂载到 parts 中，并建立指针绑定
+            if (mediaGoogleParts.isNotEmpty()) {
+                putJsonArray("parts") {
+                    mediaGoogleParts.forEachIndexed { index, googlePart ->
+                        val refName = "media_ref_$index"
+                        val inlineData = googlePart["inlineData"]!!.jsonObject
+
+                        add(buildJsonObject {
+                            // 重新组装 inlineData，并在内部注入 displayName
+                            put("inlineData", buildJsonObject {
+                                // 复制原有的 mimeType 和 data
+                                inlineData.forEach { (k, v) -> put(k, v) }
+                                // 添加能够让 $ref 认出它的唯一名称
+                                put("displayName", refName)
+                            })
+
+                            // 保留可能存在的其他字段
+                            googlePart.forEach { (k, v) ->
+                                if (k != "inlineData") put(k, v)
+                            }
+                        })
+                    }
+                }
+            }
+        })
+    }
 
     private fun parseUsageMeta(jsonObject: JsonObject?): TokenUsage? {
         if (jsonObject == null) {

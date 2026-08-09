@@ -22,6 +22,7 @@ import me.rerere.ai.util.KeyRoulette
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -525,7 +526,7 @@ class ChatCompletionsAPIMessageTest {
         assertEquals(123, body["max_completion_tokens"]?.jsonPrimitive?.content?.toInt())
         assertFalse(body.containsKey("max_tokens"))
         assertEquals("developer", body["messages"]!!.jsonArray[0].jsonObject["role"]?.jsonPrimitive?.content)
-        assertEquals("none", body["reasoning_effort"]?.jsonPrimitive?.content)
+        assertEquals("minimal", body["reasoning_effort"]?.jsonPrimitive?.content)
         val assistant = body["messages"]!!.jsonArray[1].jsonObject
         assertFalse(assistant.containsKey("reasoning_content"))
         val toolResult = body["messages"]!!.jsonArray[2].jsonObject["content"] as JsonPrimitive
@@ -547,6 +548,93 @@ class ChatCompletionsAPIMessageTest {
         assertEquals(321, body["max_tokens"]?.jsonPrimitive?.content?.toInt())
         assertFalse(body.containsKey("max_completion_tokens"))
         assertEquals("system", body["messages"]!!.jsonArray.first().jsonObject["role"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `standard gpt5 point releases should use current openai chat behavior`() {
+        listOf("gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.5", "gpt-5.6").forEach { modelId ->
+            val body = invokeBuildRequest(
+                messages = listOf(UIMessage.system("instructions"), UIMessage.user("hello")),
+                params = TextGenerationParams(
+                    model = Model(
+                        modelId = modelId,
+                        displayName = modelId,
+                        abilities = listOf(ModelAbility.REASONING),
+                    ),
+                    temperature = 0.7f,
+                    topP = 0.8f,
+                    reasoningLevel = ReasoningLevel.OFF,
+                ),
+                providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.openai.com/v1"),
+            )
+
+            assertEquals(
+                modelId,
+                "developer",
+                body["messages"]!!.jsonArray.first().jsonObject["role"]?.jsonPrimitive?.content,
+            )
+            assertEquals(modelId, "none", body["reasoning_effort"]?.jsonPrimitive?.content)
+            assertFalse("$modelId must omit temperature", body.containsKey("temperature"))
+            assertFalse("$modelId must omit top_p", body.containsKey("top_p"))
+        }
+    }
+
+    @Test
+    fun `official openai special variants should use only documented reasoning efforts`() {
+        assertEquals("minimal", mapOfficialOpenAIReasoningEffort("gpt-5", ReasoningLevel.OFF))
+        assertEquals("high", mapOfficialOpenAIReasoningEffort("gpt-5", ReasoningLevel.XHIGH))
+        assertEquals("none", mapOfficialOpenAIReasoningEffort("gpt-5.1", ReasoningLevel.OFF))
+        assertEquals("high", mapOfficialOpenAIReasoningEffort("gpt-5.1", ReasoningLevel.XHIGH))
+        assertEquals("low", mapOfficialOpenAIReasoningEffort("gpt-5.3-codex", ReasoningLevel.OFF))
+        assertEquals("xhigh", mapOfficialOpenAIReasoningEffort("gpt-5.3-codex", ReasoningLevel.XHIGH))
+        assertEquals("high", mapOfficialOpenAIReasoningEffort("gpt-5-pro", ReasoningLevel.LOW))
+        assertEquals("medium", mapOfficialOpenAIReasoningEffort("gpt-5.4-pro", ReasoningLevel.OFF))
+        assertEquals("xhigh", mapOfficialOpenAIReasoningEffort("gpt-5.4-pro", ReasoningLevel.XHIGH))
+        assertNull(mapOfficialOpenAIReasoningEffort("gpt-5.3-chat-latest", ReasoningLevel.HIGH))
+        assertEquals("low", mapOfficialOpenAIReasoningEffort("gpt-5.10", ReasoningLevel.OFF))
+    }
+
+    @Test
+    fun `deepseek chat reasoning levels should map to documented high and max values`() {
+        val expected = mapOf(
+            ReasoningLevel.OFF to null,
+            ReasoningLevel.AUTO to null,
+            ReasoningLevel.LOW to "high",
+            ReasoningLevel.MEDIUM to "high",
+            ReasoningLevel.HIGH to "high",
+            ReasoningLevel.XHIGH to "max",
+        )
+
+        expected.forEach { (level, effort) ->
+            val body = invokeBuildRequest(
+                messages = listOf(UIMessage.user("hello")),
+                params = TextGenerationParams(
+                    model = Model(
+                        modelId = "deepseek-v4-pro",
+                        displayName = "deepseek-v4-pro",
+                        abilities = listOf(ModelAbility.REASONING),
+                    ),
+                    reasoningLevel = level,
+                ),
+                providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.deepseek.com"),
+            )
+
+            assertEquals(level.name, effort, body["reasoning_effort"]?.jsonPrimitive?.content)
+            assertEquals(
+                level.name,
+                if (level == ReasoningLevel.OFF) "disabled" else "enabled",
+                body["thinking"]?.jsonObject?.get("type")?.jsonPrimitive?.content,
+            )
+        }
+    }
+
+    @Test
+    fun `known openai compatible hosts should resolve through one endpoint registry`() {
+        assertEquals(OpenAIEndpointVendor.OPENAI, resolveOpenAIEndpointVendor("api.openai.com"))
+        assertEquals(OpenAIEndpointVendor.VOLC_ARK, resolveOpenAIEndpointVendor("ark.cn-beijing.volces.com"))
+        assertEquals(OpenAIEndpointVendor.DEEPSEEK, resolveOpenAIEndpointVendor("api.deepseek.com"))
+        assertEquals(OpenAIEndpointVendor.MISTRAL, resolveOpenAIEndpointVendor("api.mistral.ai"))
+        assertEquals(OpenAIEndpointVendor.COMPATIBLE, resolveOpenAIEndpointVendor("proxy.example.com"))
     }
 
     @Test

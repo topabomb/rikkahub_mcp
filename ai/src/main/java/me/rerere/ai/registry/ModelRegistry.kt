@@ -87,6 +87,21 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
+    /** GPT-5 protocol behavior shared by the base model and independently defined point releases. */
+    val OPENAI_GPT_5_SERIES = defineGroup {
+        add(
+            GPT_5,
+            GPT_5_1,
+            GPT_5_2,
+            GPT_5_3,
+            GPT_5_4,
+            GPT_5_4_MINI,
+            GPT_5_4_NANO,
+            GPT_5_5,
+            GPT_5_6,
+        )
+    }
+
     private val GEMINI_20_FLASH = defineModel {
         tokens("gemini", "2", "0", "flash")
         visionInput()

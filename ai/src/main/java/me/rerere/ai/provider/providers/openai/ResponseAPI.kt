@@ -297,19 +297,15 @@ class ResponseAPI(
                     if (endpointProfile.supportsReasoningSummary) {
                         put("summary", "auto")
                     }
-                    if (level != ReasoningLevel.AUTO) {
-                        // OpenAI 旧 o-series 并非都支持 none；OFF 在这些模型上保持既有 low 回退。
-                        // GPT-5、DeepSeek 与其他 Responses endpoint 则保留模型声明的 none 语义。
-                        val effort = if (
-                            isOfficialOpenAIHost(host) &&
-                            ModelRegistry.OPENAI_O_MODELS.match(params.model.modelId) &&
-                            level == ReasoningLevel.OFF
-                        ) {
-                            "low"
+                    if (endpointProfile == ResponseEndpointProfile.DEEPSEEK) {
+                        mapDeepSeekReasoningEffort(level)?.let { put("effort", it) }
+                    } else if (level != ReasoningLevel.AUTO) {
+                        val effort = if (isOfficialOpenAIHost(host)) {
+                            mapOfficialOpenAIReasoningEffort(params.model.modelId, level)
                         } else {
                             level.effort
                         }
-                        put("effort", effort)
+                        effort?.let { put("effort", it) }
                     }
                 })
                 if (endpointProfile.supportsEncryptedContent) {
@@ -393,6 +389,8 @@ class ResponseAPI(
         val responseMetadata = message.metadataAs<OpenAIResponseMetadata>()
         if (responseMetadata != null &&
             responseMetadata.wireFormat == endpointProfile.wireFormat &&
+            (responseMetadata.sourceProfile == null ||
+                    responseMetadata.sourceProfile == endpointProfile.sourceProfile) &&
             responseMetadata.outputItemGroups.any { it.isNotEmpty() }
         ) {
             addPreservedResponseItems(message, responseMetadata.outputItemGroups, endpointProfile)
@@ -417,6 +415,10 @@ class ResponseAPI(
                                 add(buildJsonObject {
                                     put("type", "reasoning")
                                     val reasoningMetadata = part.metadataAs<OpenAIReasoningMetadata>()
+                                        ?.takeIf { metadata ->
+                                            metadata.sourceProfile == null ||
+                                                    metadata.sourceProfile == endpointProfile.sourceProfile
+                                        }
                                     // id 是 Responses output item 的公共信封字段，保留它是通用协议保真；
                                     // DeepSeek 工具续轮明确强制要求的内容是下方 plaintext reasoning_text。
                                     reasoningMetadata?.reasoningId?.let { put("id", it) }
@@ -731,6 +733,7 @@ class ResponseAPI(
                                             metadata = OpenAIReasoningMetadata(
                                                 reasoningId = id,
                                                 encryptedContent = encryptedContent,
+                                                sourceProfile = endpointProfile.sourceProfile,
                                             ).toMetadata()
                                         )
                                     )
@@ -773,6 +776,7 @@ class ResponseAPI(
                                             metadata = OpenAIReasoningMetadata(
                                                 reasoningId = id,
                                                 encryptedContent = encryptedContent,
+                                                sourceProfile = endpointProfile.sourceProfile,
                                             ).toMetadata()
                                         )
                                     )
@@ -928,6 +932,7 @@ class ResponseAPI(
                         providerMetadata = OpenAIResponseMetadata(
                             wireFormat = endpointProfile.wireFormat,
                             outputItemGroups = listOf(outputItems),
+                            sourceProfile = endpointProfile.sourceProfile,
                         ).toMetadata(),
                     ),
                     message = null,
@@ -1003,6 +1008,7 @@ class ResponseAPI(
                         OpenAIReasoningMetadata(
                             reasoningId = reasoningId,
                             encryptedContent = encryptedContent,
+                            sourceProfile = endpointProfile.sourceProfile,
                         ).toMetadata()
                     } else {
                         null
@@ -1077,6 +1083,7 @@ class ResponseAPI(
                         providerMetadata = OpenAIResponseMetadata(
                             wireFormat = endpointProfile.wireFormat,
                             outputItemGroups = listOf(outputs.map { it.jsonObject }),
+                            sourceProfile = endpointProfile.sourceProfile,
                         ).toMetadata(),
                     ),
                     finishReason = null,
@@ -1139,78 +1146,35 @@ class ResponseAPI(
     private fun UIMessage.hasReplayableResponseState(
         endpointProfile: ResponseEndpointProfile,
     ): Boolean {
-        if (metadataAs<OpenAIResponseMetadata>()?.outputItemGroups?.any { it.isNotEmpty() } == true) return true
+        val responseMetadata = metadataAs<OpenAIResponseMetadata>()
+        if (responseMetadata != null &&
+            responseMetadata.wireFormat == endpointProfile.wireFormat &&
+            (responseMetadata.sourceProfile == null ||
+                    responseMetadata.sourceProfile == endpointProfile.sourceProfile) &&
+            responseMetadata.outputItemGroups.any { it.isNotEmpty() }
+        ) {
+            return true
+        }
         if (endpointProfile.usesReasoningTextContent) return false
         return parts.filterIsInstance<UIMessagePart.Reasoning>().any { part ->
             val metadata = part.metadataAs<OpenAIReasoningMetadata>()
-            metadata?.reasoningId != null || metadata?.encryptedContent != null
+            val sourceCompatible = metadata?.sourceProfile == null ||
+                    metadata.sourceProfile == endpointProfile.sourceProfile
+            sourceCompatible && (metadata?.reasoningId != null || metadata?.encryptedContent != null)
         }
     }
 }
 
 private fun isModelAllowTemperature(model: Model): Boolean {
-    return !ModelRegistry.OPENAI_O_MODELS.match(model.modelId) && !ModelRegistry.GPT_5.match(model.modelId)
+    val isOpenAIReasoningModel = ModelRegistry.OPENAI_GPT_5_SERIES.match(model.modelId) &&
+            model.abilities.contains(ModelAbility.REASONING)
+    return !ModelRegistry.OPENAI_O_MODELS.match(model.modelId) &&
+            !isOpenAIReasoningModel
 }
 
 private fun List<UIMessagePart>.isOnlyTextPart(): Boolean {
     val gonnaSend = filter { it is UIMessagePart.Text || it is UIMessagePart.Image }.size
     val texts = filter { it is UIMessagePart.Text }.size
     return gonnaSend == texts && texts == 1
-}
-
-/**
- * 内部 endpoint profile 只描述已经由官方协议证实的线格式差异，不暴露为用户配置。
- * 使用枚举而不是自由组合布尔值，避免生成诸如“DeepSeek reasoning_text 同时请求 OpenAI encrypted content”
- * 这类无效状态。新增 profile 必须同时具备官方依据和协议回归测试。
- */
-internal enum class ResponseEndpointProfile(
-    val wireFormat: OpenAIResponseWireFormat,
-    val supportsReasoningSummary: Boolean,
-    val supportsEncryptedContent: Boolean,
-    val usesReasoningTextContent: Boolean,
-    val supportsMultimodalFunctionOutput: Boolean,
-) {
-    OPENAI(
-        wireFormat = OpenAIResponseWireFormat.OPENAI,
-        supportsReasoningSummary = true,
-        supportsEncryptedContent = true,
-        usesReasoningTextContent = false,
-        supportsMultimodalFunctionOutput = true,
-    ),
-    VOLC_ARK(
-        wireFormat = OpenAIResponseWireFormat.OPENAI,
-        supportsReasoningSummary = false,
-        // 方舟默认生成 thinking summary，但手动无状态续轮仍需通过 include 请求 encrypted_content。
-        supportsEncryptedContent = true,
-        usesReasoningTextContent = false,
-        // 方舟官方 Responses SDK 与示例将 function_call_output.output 定义为字符串。
-        supportsMultimodalFunctionOutput = false,
-    ),
-    DEEPSEEK(
-        wireFormat = OpenAIResponseWireFormat.DEEPSEEK,
-        supportsReasoningSummary = false,
-        supportsEncryptedContent = false,
-        usesReasoningTextContent = true,
-        // DeepSeek Responses 的 function_call_output.output 只接受字符串。
-        supportsMultimodalFunctionOutput = false,
-    ),
-}
-
-/**
- * Responses 的字段形状属于 endpoint 线协议，只能由实际连接的 host 决定。
- * modelId 可以决定模型能力，但不能用来猜测未知代理背后的供应商或改变代理对外声明的协议；
- * 因此这里使用固定、内置的 host 适配，不增加 ProviderDialect 或网关类型等用户配置。
- */
-internal fun resolveResponseEndpointProfile(host: String): ResponseEndpointProfile {
-    return when (host) {
-        "ark.cn-beijing.volces.com" -> ResponseEndpointProfile.VOLC_ARK
-
-        // Responses 的线协议由实际连接的 endpoint 决定。直连 api.deepseek.com 且用户已选择
-        // Responses 时，兼容其 reasoning_text 形状；代理 host 继续使用其声明的 OpenAI Responses
-        // 格式，不能根据后端模型名猜测代理方言，也不在客户端维护易过期的模型白名单。
-        "api.deepseek.com" -> ResponseEndpointProfile.DEEPSEEK
-
-        else -> ResponseEndpointProfile.OPENAI
-    }
 }
 

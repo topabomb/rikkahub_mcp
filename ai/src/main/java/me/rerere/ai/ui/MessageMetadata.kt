@@ -30,10 +30,12 @@ sealed interface MessageMetadata : Metadata
 @Serializable
 data class ClaudeReasoningMetadata(
     val signature: String? = null,
+    val redactedData: String? = null,
 ) : PartMetadata
 
 /**
- * OpenAI Responses API reasoning item 的元数据, 回传时需要携带 id 和 encrypted_content
+ * OpenAI Responses API reasoning item 的元数据。id/encrypted_content 是 endpoint 产生的不透明状态，
+ * 只有 [sourceProfile] 与当前请求来源兼容时才能回传；旧会话缺少来源时保留向后兼容。
  */
 @Serializable
 data class OpenAIReasoningMetadata(
@@ -41,6 +43,8 @@ data class OpenAIReasoningMetadata(
     val reasoningId: String? = null,
     @SerialName("encrypted_content")
     val encryptedContent: String? = null,
+    @SerialName("source_profile")
+    val sourceProfile: OpenAIResponseSourceProfile? = null,
 ) : PartMetadata
 
 /**
@@ -48,8 +52,9 @@ data class OpenAIReasoningMetadata(
  * 作为下一轮 input 回放。可见的 [UIMessagePart] 只是 UI 投影，无法无损表达 web_search_call、
  * image_generation_call、message.phase 以及未来新增的 output item，因此原始输出项单独保存在消息元数据中。
  *
- * [wireFormat] 记录产生这些输出项的线协议形状。它由实际 endpoint 自动确定，不是用户配置；
- * 当会话切换到不同形状的 endpoint 时，provider 会回退到 UIMessage 重建，避免跨协议原样发送。
+ * [wireFormat] 记录产生这些输出项的线协议形状，[sourceProfile] 记录更严格的 endpoint 来源。
+ * 它们由实际 endpoint 自动确定，不是用户配置；当会话切换到不同形状或来源的 endpoint 时，
+ * provider 会回退到 UIMessage 重建，避免跨协议/来源原样发送不透明状态。
  * [outputItemGroups] 按每次 response 保留批次边界，因为协议要求先回放该 response 的全部 output，
  * 再追加这一批函数调用的本地执行结果；把多次工具续轮压平成单列表会破坏并行调用的顺序。
  */
@@ -59,6 +64,8 @@ data class OpenAIResponseMetadata(
     val wireFormat: OpenAIResponseWireFormat,
     @SerialName("output_item_groups")
     val outputItemGroups: List<List<JsonObject>>,
+    @SerialName("source_profile")
+    val sourceProfile: OpenAIResponseSourceProfile? = null,
 ) : MessageMetadata
 
 @Serializable
@@ -70,12 +77,30 @@ enum class OpenAIResponseWireFormat {
     DEEPSEEK,
 }
 
+@Serializable
+enum class OpenAIResponseSourceProfile {
+    @SerialName("openai")
+    OPENAI,
+
+    @SerialName("openai_compatible")
+    OPENAI_COMPATIBLE,
+
+    @SerialName("volc_ark")
+    VOLC_ARK,
+
+    @SerialName("deepseek")
+    DEEPSEEK,
+}
+
 /**
  * Google Gemini 部件(functionCall/inlineData)的 thoughtSignature, 回传时需要携带
  */
 @Serializable
 data class GoogleThoughtMetadata(
     val thoughtSignature: String? = null,
+    val functionCallId: String? = null,
+    val thought: Boolean? = null,
+    val inlineData: JsonObject? = null,
 ) : PartMetadata
 
 /**
@@ -123,12 +148,17 @@ internal fun mergeMessageMetadata(current: JsonObject?, incoming: JsonObject?): 
     val incomingResponse = runCatching {
         json.decodeFromJsonElement<OpenAIResponseMetadata>(incoming)
     }.getOrNull()
+    val sourceProfilesCompatible = currentResponse?.sourceProfile == null ||
+            incomingResponse?.sourceProfile == null ||
+            currentResponse.sourceProfile == incomingResponse.sourceProfile
     return if (currentResponse != null &&
         incomingResponse != null &&
-        currentResponse.wireFormat == incomingResponse.wireFormat
+        currentResponse.wireFormat == incomingResponse.wireFormat &&
+        sourceProfilesCompatible
     ) {
         currentResponse.copy(
-            outputItemGroups = currentResponse.outputItemGroups + incomingResponse.outputItemGroups
+            outputItemGroups = currentResponse.outputItemGroups + incomingResponse.outputItemGroups,
+            sourceProfile = incomingResponse.sourceProfile ?: currentResponse.sourceProfile,
         ).toMetadata()
     } else {
         incoming

@@ -62,6 +62,7 @@ import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 import kotlin.time.Clock
+import kotlin.uuid.Uuid
 
 private const val TAG = "ClaudeProvider"
 private const val ANTHROPIC_VERSION = "2023-06-01"
@@ -277,7 +278,11 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             put("model", params.model.modelId)
             put(
                 "messages",
-                buildMessages(messages, providerSetting.promptCaching, providerSetting.promptCacheTtl)
+                buildMessages(
+                    stripClaudeThinkingFromOtherModels(messages, params.model.id),
+                    providerSetting.promptCaching,
+                    providerSetting.promptCacheTtl,
+                )
             )
             put("max_tokens", params.maxTokens ?: 64_000)
 
@@ -493,10 +498,18 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             }
         }
 
-        is UIMessagePart.Reasoning -> buildJsonObject {
-            put("type", "thinking")
-            put("thinking", reasoning)
-            metadataAs<ClaudeReasoningMetadata>()?.signature?.let { put("signature", it) }
+        is UIMessagePart.Reasoning -> {
+            val reasoningMetadata = metadataAs<ClaudeReasoningMetadata>()
+            reasoningMetadata?.redactedData?.let { redactedData ->
+                buildJsonObject {
+                    put("type", "redacted_thinking")
+                    put("data", redactedData)
+                }
+            } ?: buildJsonObject {
+                put("type", "thinking")
+                put("thinking", reasoning)
+                reasoningMetadata?.signature?.let { put("signature", it) }
+            }
         }
 
         else -> null
@@ -550,7 +563,16 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
 
                 "redacted_thinking" -> {
                     val data = block["data"]?.jsonPrimitiveOrNull?.contentOrNull
-                    println(data)
+                    if (data != null) {
+                        parts.add(
+                            UIMessagePart.Reasoning(
+                                reasoning = "",
+                                createdAt = Clock.System.now(),
+                                finishedAt = null,
+                                metadata = ClaudeReasoningMetadata(redactedData = data).toMetadata(),
+                            )
+                        )
+                    }
                 }
 
                 "tool_use" -> {
@@ -605,5 +627,25 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             totalTokens = promptTokens + completionTokens,
             cachedTokens = cachedInputTokens,
         )
+    }
+}
+
+/**
+ * Anthropic thinking signatures are bound to the model that produced them. When the selected model
+ * changes, keep the visible answer and tool history but strip thinking/redacted blocks from messages
+ * that are known to have been produced by another configured model. Legacy messages without modelId
+ * remain untouched for persistence compatibility.
+ */
+internal fun stripClaudeThinkingFromOtherModels(
+    messages: List<UIMessage>,
+    activeModelId: Uuid,
+): List<UIMessage> = messages.map { message ->
+    if (message.role == MessageRole.ASSISTANT &&
+        message.modelId != null &&
+        message.modelId != activeModelId
+    ) {
+        message.copy(parts = message.parts.filterNot { it is UIMessagePart.Reasoning })
+    } else {
+        message
     }
 }

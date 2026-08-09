@@ -280,7 +280,8 @@ class ChatCompletionsAPI(
         stream: Boolean = false,
     ): JsonObject {
         val host = providerSetting.baseUrl.toHttpUrl().host
-        val isOfficialOpenAI = isOfficialOpenAIHost(host)
+        val endpointVendor = resolveOpenAIEndpointVendor(host)
+        val isOfficialOpenAI = endpointVendor == OpenAIEndpointVendor.OPENAI
         return buildJsonObject {
             put("model", params.model.modelId)
             put(
@@ -301,7 +302,7 @@ class ChatCompletionsAPI(
                     ),
                     useDeveloperRoleForSystemMessages = isOfficialOpenAI &&
                             (ModelRegistry.OPENAI_O_MODELS.match(params.model.modelId) ||
-                                    ModelRegistry.GPT_5.match(params.model.modelId)),
+                                    ModelRegistry.OPENAI_GPT_5_SERIES.match(params.model.modelId)),
                 )
             )
 
@@ -317,7 +318,7 @@ class ChatCompletionsAPI(
 
             put("stream", stream)
             if (stream) {
-                if (host != "api.mistral.ai") { // mistral 不支持 stream_options
+                if (endpointVendor != OpenAIEndpointVendor.MISTRAL) { // Mistral 不支持 stream_options
                     put("stream_options", buildJsonObject {
                         put("include_usage", true)
                     })
@@ -325,7 +326,7 @@ class ChatCompletionsAPI(
             }
 
             // open router适配
-            if(host == "openrouter.ai") {
+            if (endpointVendor == OpenAIEndpointVendor.OPENROUTER) {
                 if(params.model.outputModalities.contains(Modality.IMAGE)) {
                     put("modalities", buildJsonArray {
                         add("image")
@@ -336,8 +337,8 @@ class ChatCompletionsAPI(
 
             if (params.model.abilities.contains(ModelAbility.REASONING)) {
                 val level = params.reasoningLevel
-                when (host) {
-                    "openrouter.ai" -> {
+                when (endpointVendor) {
+                    OpenAIEndpointVendor.OPENROUTER -> {
                         // https://openrouter.ai/docs/use-cases/reasoning-tokens
                         put("reasoning", buildJsonObject {
                             when (level) {
@@ -348,31 +349,31 @@ class ChatCompletionsAPI(
                         })
                     }
 
-                    "dashscope.aliyuncs.com" -> {
+                    OpenAIEndpointVendor.DASHSCOPE -> {
                         // 阿里云百炼
                         // https://bailian.console.aliyun.com/console?tab=doc#/doc/?type=model&url=https%3A%2F%2Fhelp.aliyun.com%2Fdocument_detail%2F2870973.html&renderType=iframe
                         put("enable_thinking", level.isEnabled)
                         if (level != ReasoningLevel.AUTO) put("thinking_budget", level.budgetTokens)
                     }
 
-                    "ark.cn-beijing.volces.com" -> {
+                    OpenAIEndpointVendor.VOLC_ARK -> {
                         // 豆包 (火山)
                         put("thinking", buildJsonObject {
                             put("type", if (!level.isEnabled) "disabled" else "enabled")
                         })
                     }
 
-                    "api.mistral.ai" -> {
+                    OpenAIEndpointVendor.MISTRAL -> {
                         // Mistral 不支持
                     }
 
-                    "chat.intern-ai.org.cn" -> {
+                    OpenAIEndpointVendor.INTERN -> {
                         // 书生
                         // https://internlm.intern-ai.org.cn/api/document?lang=zh
                         put("thinking_mode", level.isEnabled)
                     }
 
-                    "api.siliconflow.cn" -> {
+                    OpenAIEndpointVendor.SILICONFLOW -> {
                         // https://docs.siliconflow.cn/cn/userguide/capabilities/reasoning#3-1-api-%E5%8F%82%E6%95%B0
                         val modelId = params.model.modelId
                         val siliconflowThinkingModels = setOf(
@@ -407,13 +408,13 @@ class ChatCompletionsAPI(
                         }
                     }
 
-                    "open.bigmodel.cn" -> {
+                    OpenAIEndpointVendor.BIGMODEL -> {
                         put("thinking", buildJsonObject {
                             put("type", if (!level.isEnabled) "disabled" else "enabled")
                         })
                     }
 
-                    "api.moonshot.cn" -> {
+                    OpenAIEndpointVendor.MOONSHOT -> {
                         put("thinking", buildJsonObject {
                             put("type", if (!level.isEnabled) "disabled" else "enabled")
                             // K2.6 的 thinking.keep 默认为 null（忽略历史思考），思考开启时
@@ -424,16 +425,14 @@ class ChatCompletionsAPI(
                         })
                     }
 
-                    "api.deepseek.com" -> {
+                    OpenAIEndpointVendor.DEEPSEEK -> {
                         put("thinking", buildJsonObject {
                             put("type", if (!level.isEnabled) "disabled" else "enabled")
                         })
-                        if (level.isEnabled && level != ReasoningLevel.AUTO) {
-                            put("reasoning_effort", level.effort)
-                        }
+                        mapDeepSeekReasoningEffort(level)?.let { put("reasoning_effort", it) }
                     }
 
-                    "integrate.api.nvidia.com" -> {
+                    OpenAIEndpointVendor.NVIDIA -> {
                         if ("deepseek-v4" in params.model.modelId.lowercase()) {
                             if (level != ReasoningLevel.AUTO) {
                                 val effort = when (level) {
@@ -450,26 +449,23 @@ class ChatCompletionsAPI(
                         }
                     }
 
-                    "opencode.ai" -> {
+                    OpenAIEndpointVendor.OPENCODE -> {
                         if (level != ReasoningLevel.AUTO) {
                             put("reasoning_effort", level.effort)
                         }
                     }
 
-                    else -> {
-                        // OpenAI 官方 GPT-5 支持 none，OFF 应保持真实的关闭语义；
-                        // 旧 o-series 与未知兼容模型并非都支持 none，继续保守回退到 low。
+                    OpenAIEndpointVendor.OPENAI,
+                    OpenAIEndpointVendor.COMPATIBLE,
+                        -> {
                         if (level != ReasoningLevel.AUTO) {
-                            val effort = if (
-                                isOfficialOpenAI &&
-                                ModelRegistry.GPT_5.match(params.model.modelId) &&
-                                level == ReasoningLevel.OFF
-                            ) {
-                                "none"
+                            val effort = if (isOfficialOpenAI) {
+                                mapOfficialOpenAIReasoningEffort(params.model.modelId, level)
                             } else {
+                                // Unknown compatible gateways retain the existing conservative OFF fallback.
                                 if (level.effort == "none") "low" else level.effort
                             }
-                            put("reasoning_effort", effort)
+                            effort?.let { put("reasoning_effort", it) }
                         }
                     }
                 }
@@ -501,8 +497,10 @@ class ChatCompletionsAPI(
         val isMoonshotRestricted = ModelRegistry.KIMI_K2_5.match(model.modelId) ||
                 ModelRegistry.KIMI_K3.match(model.modelId) ||
                 ModelRegistry.KIMI_K3_ALIAS.match(model.modelId)
+        val isOpenAIReasoningModel = ModelRegistry.OPENAI_GPT_5_SERIES.match(model.modelId) &&
+                model.abilities.contains(ModelAbility.REASONING)
         return !ModelRegistry.OPENAI_O_MODELS.match(model.modelId) &&
-               !ModelRegistry.GPT_5.match(model.modelId) &&
+               !isOpenAIReasoningModel &&
                !isMoonshotRestricted
     }
 
@@ -911,8 +909,7 @@ class ChatCompletionsAPI(
  * 未知代理上的其他模型保持原行为，不会因为使用 OpenAI 兼容接口而被误判为 DeepSeek。
  */
 internal fun requiresDeepSeekToolReasoningReplay(host: String, modelId: String): Boolean {
-    if (isOfficialOpenAIHost(host)) return false
-    return host == "api.deepseek.com" || ModelRegistry.DEEPSEEK_V4.match(modelId)
+    val endpointVendor = resolveOpenAIEndpointVendor(host)
+    if (endpointVendor == OpenAIEndpointVendor.OPENAI) return false
+    return endpointVendor == OpenAIEndpointVendor.DEEPSEEK || ModelRegistry.DEEPSEEK_V4.match(modelId)
 }
-
-internal fun isOfficialOpenAIHost(host: String): Boolean = host == "api.openai.com"

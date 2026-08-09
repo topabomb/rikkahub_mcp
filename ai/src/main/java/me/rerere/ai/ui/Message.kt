@@ -54,18 +54,29 @@ data class UIMessage(
             fun List<UIMessagePart>.insertAt(index: Int, part: UIMessagePart): List<UIMessagePart> =
                 toMutableList().apply { add(index, part) }
 
+            fun UIMessagePart.hasProviderPartBoundary(): Boolean {
+                val googleMetadata = metadataAs<GoogleThoughtMetadata>()
+                val claudeMetadata = metadataAs<ClaudeReasoningMetadata>()
+                return googleMetadata?.thoughtSignature != null ||
+                        googleMetadata?.inlineData != null ||
+                        claudeMetadata?.redactedData != null
+            }
+
             // Handle Parts
             var newParts = delta.parts.fold(parts) { acc, deltaPart ->
                 when (deltaPart) {
                     is UIMessagePart.Text -> {
                         // Skip empty text deltas
-                        if (deltaPart.text.isEmpty()) {
+                        if (deltaPart.text.isEmpty() && deltaPart.metadata == null) {
                             acc
                         } else {
                             val stepStart = acc.currentStepStart()
                             val insertIndex = acc.firstPendingToolIndex(stepStart)
                             val lastPart = acc.getOrNull(insertIndex - 1)
-                            if (lastPart is UIMessagePart.Text) {
+                            if (lastPart is UIMessagePart.Text &&
+                                !lastPart.hasProviderPartBoundary() &&
+                                !deltaPart.hasProviderPartBoundary()
+                            ) {
                                 // 合并当前步骤的文本，即使 Tool delta 已先到达也不能把文本放到 Tool 后面。
                                 acc.mapIndexed { index, part ->
                                     if (index == insertIndex - 1) {
@@ -84,7 +95,10 @@ data class UIMessage(
                         val stepStart = acc.currentStepStart()
                         val insertIndex = acc.firstPendingToolIndex(stepStart)
                         val lastPart = acc.getOrNull(insertIndex - 1)
-                        if (lastPart is UIMessagePart.Image) {
+                        if (lastPart is UIMessagePart.Image &&
+                            !lastPart.hasProviderPartBoundary() &&
+                            !deltaPart.hasProviderPartBoundary()
+                        ) {
                             // Append to the current step's last Image part (for streaming base64)
                             acc.mapIndexed { index, part ->
                                 if (index == insertIndex - 1) {
@@ -116,7 +130,10 @@ data class UIMessage(
                             val reasoningIndex = (acc.lastIndex downTo stepStart).firstOrNull { index ->
                                 acc[index] is UIMessagePart.Reasoning
                             }
-                            if (reasoningIndex != null) {
+                            if (reasoningIndex != null &&
+                                !acc[reasoningIndex].hasProviderPartBoundary() &&
+                                !deltaPart.hasProviderPartBoundary()
+                            ) {
                                 val existing = acc[reasoningIndex] as UIMessagePart.Reasoning
                                 acc.mapIndexed { index, part ->
                                     if (index == reasoningIndex) {
@@ -133,7 +150,8 @@ data class UIMessage(
                                 }
                             } else {
                                 // Reasoning 属于整个 assistant 工具步骤，必须位于该步骤内容和 Tool 之前。
-                                acc.insertAt(stepStart, deltaPart)
+                                val insertIndex = reasoningIndex?.plus(1) ?: stepStart
+                                acc.insertAt(insertIndex, deltaPart)
                             }
                         }
                     }
