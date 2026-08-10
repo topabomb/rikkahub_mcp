@@ -1,5 +1,7 @@
+@file:SuppressLint("ClickableViewAccessibility")
 package net.weero.measix.pilot.ui.pages.extensions.workspace
 
+import android.annotation.SuppressLint
 import android.graphics.Typeface
 import android.view.MotionEvent
 import androidx.compose.foundation.background
@@ -194,8 +196,9 @@ private fun WorkspaceTerminalContent(
                             attachSession(session)
                             sessionClient.terminalView = this
                             viewClient.terminalView = this
-                            setOnTouchListener { _, event ->
+                            setOnTouchListener { v, event ->
                                 if (event.action == MotionEvent.ACTION_UP) {
+                                    v.performClick()
                                     viewClient.focusAndShowKeyboard()
                                 }
                                 false
@@ -213,8 +216,9 @@ private fun WorkspaceTerminalContent(
                         terminalView.setTerminalViewClient(viewClient)
                         sessionClient.terminalView = terminalView
                         viewClient.terminalView = terminalView
-                        terminalView.setOnTouchListener { _, event ->
+                        terminalView.setOnTouchListener { v, event ->
                             if (event.action == MotionEvent.ACTION_UP) {
+                                v.performClick()
                                 viewClient.focusAndShowKeyboard()
                             }
                             false

@@ -1,8 +1,10 @@
-﻿package net.weero.measix.pilot.ui.components.ai
+package net.weero.measix.pilot.ui.components.ai
 
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,13 +27,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.SheetValue
-import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -78,6 +77,7 @@ import net.weero.measix.pilot.ui.components.ui.ExtensionSelector
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionCamera
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionManager
 import net.weero.measix.pilot.ui.components.ui.permission.rememberPermissionState
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.hooks.ChatInputState
@@ -114,6 +114,7 @@ internal fun FilesPicker(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         FlowRow(
@@ -187,9 +188,6 @@ internal fun FilesPicker(
                     contentDescription = stringResource(R.string.assistant_page_tab_extensions),
                 )
             },
-            headlineContent = {
-                Text(stringResource(R.string.assistant_page_tab_extensions))
-            },
             trailingContent = {
                 if (activeCount > 0) {
                     Text(
@@ -207,7 +205,9 @@ internal fun FilesPicker(
                 .clickable {
                     onShowInjectionSheetChange(true)
                 },
-        )
+        ) {
+            Text(stringResource(R.string.assistant_page_tab_extensions))
+        }
 
         // Compress History Button
         ListItem(
@@ -216,9 +216,6 @@ internal fun FilesPicker(
                     imageVector = HugeIcons.Package01,
                     contentDescription = stringResource(R.string.chat_page_compress_context),
                 )
-            },
-            headlineContent = {
-                Text(stringResource(R.string.chat_page_compress_context))
             },
             trailingContent = {
                 if (conversation.messageNodes.isNotEmpty()) {
@@ -237,7 +234,9 @@ internal fun FilesPicker(
                 .clickable {
                     onShowCompressDialogChange(true)
                 },
-        )
+        ) {
+            Text(stringResource(R.string.chat_page_compress_context))
+        }
 
         // Workspace CWD
         val boundWorkspace = remember(workspaces, assistant.workspaceId) {
@@ -322,9 +321,6 @@ private fun WorkspacePickerListItem(
                 contentDescription = stringResource(R.string.assistant_page_workspace),
             )
         },
-        headlineContent = {
-            Text(stringResource(R.string.assistant_page_workspace))
-        },
         supportingContent = {
             Text(
                 text = boundWorkspace?.name ?: stringResource(R.string.assistant_page_workspace_unbound),
@@ -360,7 +356,9 @@ private fun WorkspacePickerListItem(
         modifier = Modifier
             .clip(MaterialTheme.shapes.large)
             .clickable { showSheet = true },
-    )
+    ) {
+        Text(stringResource(R.string.assistant_page_workspace))
+    }
 
     if (showSheet) {
         WorkspaceSelectSheet(
@@ -395,12 +393,10 @@ private fun InjectionQuickConfigSheet(
     onDismiss: () -> Unit,
     onDismissAll: () -> Unit,
 ) {
-    val sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
     val navController = LocalNavController.current
 
-    ModalBottomSheet(
+    AdaptiveModal(
         onDismissRequest = onDismiss,
-        sheetState = sheetState,
     ) {
         Column(
             modifier = Modifier

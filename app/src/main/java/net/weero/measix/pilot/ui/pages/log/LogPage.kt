@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.log
+package net.weero.measix.pilot.ui.pages.log
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Copy01
@@ -24,7 +24,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
@@ -142,7 +142,7 @@ private fun UnifiedLogList(
     }
 
     selectedLog?.let { log ->
-        ModalBottomSheet(
+        AdaptiveModal(
             onDismissRequest = { selectedLog = null },
             sheetState = sheetState
         ) {

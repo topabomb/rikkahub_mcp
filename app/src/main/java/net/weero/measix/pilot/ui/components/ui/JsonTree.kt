@@ -14,7 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import androidx.compose.material3.Text
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberBottomSheetState
@@ -62,7 +62,7 @@ fun JsonTree(
     }
 
     selectedString?.let { content ->
-        ModalBottomSheet(
+        AdaptiveModal(
             onDismissRequest = { selectedString = null },
             sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
         ) {

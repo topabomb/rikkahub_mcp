@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ai
+package net.weero.measix.pilot.ui.components.ai
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -103,6 +103,7 @@ import net.weero.measix.pilot.ui.components.ai.completion.ChatCompletionContext
 import net.weero.measix.pilot.ui.components.ai.completion.ChatCompletionItem
 import net.weero.measix.pilot.ui.components.ai.completion.ChatCompletionList
 import net.weero.measix.pilot.ui.components.ai.completion.ChatCompletionProvider
+import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.components.ui.KeepScreenOn
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionManager
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionRecordAudio
@@ -136,6 +137,7 @@ fun ChatInput(
     onLongSendClick: () -> Unit,
 ) {
     val toaster = LocalToaster.current
+    val useCompactHeightLayout = LocalAdaptiveLayoutInfo.current.useCompactChatInput
     val hazeTintColor = MaterialTheme.colorScheme.surfaceContainerLow
     val inputHazeStyle = HazeMaterials.thin(containerColor = hazeTintColor)
 
@@ -204,7 +206,7 @@ fun ChatInput(
                 .imePadding()
                 .navigationBarsPadding()
                 .padding(horizontal = 8.dp)
-                .padding(bottom = if (imeVisible) 0.dp else 8.dp),
+                .padding(bottom = if (imeVisible) 0.dp else 4.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Surface(
@@ -234,16 +236,9 @@ fun ChatInput(
                         MediaFileInputRow(state = state)
                     }
 
-                    TextInputRow(
-                        state = state,
-                        completionProviders = completionProviders,
-                        onSendMessage = { sendMessage() }
-                    )
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 4.dp),
+                    val actionRow: @Composable (Modifier) -> Unit = { actionModifier ->
+                        Row(
+                        modifier = actionModifier.padding(horizontal = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
@@ -390,6 +385,31 @@ fun ChatInput(
                                 }
                             }
                         }
+                        }
+                    }
+
+                    if (useCompactHeightLayout && state.messageContent.isEmpty()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            TextInputRow(
+                                state = state,
+                                completionProviders = completionProviders,
+                                onSendMessage = { sendMessage() },
+                                modifier = Modifier.weight(1f),
+                                maxHeightInLines = 2,
+                            )
+                            actionRow(Modifier.fillMaxWidth(0.42f))
+                        }
+                    } else {
+                        TextInputRow(
+                            state = state,
+                            completionProviders = completionProviders,
+                            onSendMessage = { sendMessage() },
+                        )
+                        actionRow(Modifier.fillMaxWidth())
                     }
                 }
             }
@@ -423,6 +443,8 @@ private fun TextInputRow(
     state: ChatInputState,
     completionProviders: List<ChatCompletionProvider>,
     onSendMessage: () -> Unit,
+    modifier: Modifier = Modifier,
+    maxHeightInLines: Int = 5,
 ) {
     val settings = LocalSettings.current
     val filesManager: FilesManager = koinInject()
@@ -432,7 +454,7 @@ private fun TextInputRow(
     }
 
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         if (state.isEditing()) {
@@ -559,7 +581,7 @@ private fun TextInputRow(
             placeholder = {
                 Text(stringResource(R.string.chat_input_placeholder))
             },
-            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 5),
+            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = maxHeightInLines),
             keyboardOptions = KeyboardOptions(
                 imeAction = if (settings.displaySetting.sendOnEnter) ImeAction.Send else ImeAction.Default
             ),

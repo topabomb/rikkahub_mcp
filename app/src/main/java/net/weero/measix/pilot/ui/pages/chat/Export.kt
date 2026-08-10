@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.chat
+package net.weero.measix.pilot.ui.pages.chat
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -31,7 +31,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Surface
@@ -122,7 +122,7 @@ fun ChatExportSheet(
     var imageExportOptions by remember { mutableStateOf(ImageExportOptions()) }
 
     if (visible) {
-        ModalBottomSheet(
+        AdaptiveModal(
             onDismissRequest = onDismissRequest,
             sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)),
         ) {
@@ -149,16 +149,15 @@ fun ChatExportSheet(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     ListItem(
-                        headlineContent = {
-                            Text(stringResource(id = R.string.chat_page_export_markdown))
-                        },
                         supportingContent = {
                             Text(stringResource(id = R.string.chat_page_export_markdown_desc))
                         },
                         leadingContent = {
                             Icon(HugeIcons.File02, contentDescription = null)
                         }
-                    )
+                    ) {
+                        Text(stringResource(id = R.string.chat_page_export_markdown))
+                    }
                 }
 
                 val imageSuccessMessage =
@@ -168,21 +167,19 @@ fun ChatExportSheet(
                 ) {
                     Column {
                         ListItem(
-                            headlineContent = {
-                                Text(stringResource(id = R.string.chat_page_export_image))
-                            },
                             supportingContent = {
                                 Text(stringResource(id = R.string.chat_page_export_image_desc))
                             },
                             leadingContent = {
                                 Icon(HugeIcons.Image02, contentDescription = null)
                             }
-                        )
+                        ) {
+                            Text(stringResource(id = R.string.chat_page_export_image))
+                        }
 
                         HorizontalDivider()
 
                         ListItem(
-                            headlineContent = { Text(stringResource(R.string.chat_page_export_image_expand_reasoning)) },
                             trailingContent = {
                                 Switch(
                                     checked = imageExportOptions.expandReasoning,
@@ -191,7 +188,9 @@ fun ChatExportSheet(
                                     }
                                 )
                             }
-                        )
+                        ) {
+                            Text(stringResource(R.string.chat_page_export_image_expand_reasoning))
+                        }
 
                         Row(
                             modifier = Modifier

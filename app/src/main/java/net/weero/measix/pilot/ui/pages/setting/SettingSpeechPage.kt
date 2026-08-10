@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.setting
+package net.weero.measix.pilot.ui.pages.setting
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Tick01
@@ -35,7 +35,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.RadioButton
@@ -175,7 +175,7 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
         val bottomSheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
         var currentProvider by remember(provider) { mutableStateOf(provider) }
 
-        ModalBottomSheet(
+        AdaptiveModal(
             onDismissRequest = {
                 editingTTSProvider = null
             },
@@ -238,7 +238,7 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
         val bottomSheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
         var currentProvider by remember(provider) { mutableStateOf(provider) }
 
-        ModalBottomSheet(
+        AdaptiveModal(
             onDismissRequest = {
                 editingASRProvider = null
             },
@@ -519,7 +519,7 @@ private fun AddTTSProviderButton(onAdd: (TTSProviderSetting) -> Unit) {
 
     if (showBottomSheet) {
         val bottomSheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
-        ModalBottomSheet(
+        AdaptiveModal(
             onDismissRequest = {
                 showBottomSheet = false
             },
@@ -614,7 +614,7 @@ private fun AddASRProviderButton(onAdd: (ASRProviderSetting) -> Unit) {
 
     if (showBottomSheet) {
         val bottomSheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
-        ModalBottomSheet(
+        AdaptiveModal(
             onDismissRequest = {
                 showBottomSheet = false
             },
@@ -746,7 +746,7 @@ private fun TTSProviderItem(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 状态标签
+                // ״̬��ǩ
                 if (isSelected) {
                     Tag(type = TagType.SUCCESS) {
                         Text(stringResource(R.string.setting_tts_page_selected))
@@ -755,7 +755,7 @@ private fun TTSProviderItem(
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // TTS测试播放按钮
+                // TTS���Բ��Ű�ť
                 if (isSelected && isAvailable) {
                     val testText = stringResource(R.string.setting_tts_page_test_text)
                     IconButton(

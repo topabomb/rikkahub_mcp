@@ -1223,5 +1223,9 @@
   <string name="setting_provider_type_openai">OpenAI</string>
   <string name="setting_provider_type_google">Google</string>
   <string name="setting_provider_type_claude">Claude</string>
+  <string name="chat_sidebar_collapse">Свернуть боковую панель чатов</string>
+  <string name="chat_sidebar_expand">Развернуть боковую панель чатов</string>
+  <string name="chat_navigation_open_drawer">Открыть навигацию по чатам</string>
+  <string name="chat_page_chat_options">Параметры чата</string>
 </resources>
 

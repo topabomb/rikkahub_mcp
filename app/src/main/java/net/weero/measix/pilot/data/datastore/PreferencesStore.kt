@@ -128,6 +128,9 @@ class SettingsStore(
 
         // 统计
         val LAUNCH_COUNT = intPreferencesKey("launch_count")
+
+        // 更新检查
+        val IGNORED_UPDATE_VERSION = stringPreferencesKey("ignored_update_version")
     }
 
     private val dataStore = context.settingsStore
@@ -208,6 +211,7 @@ class SettingsStore(
                     JsonInstant.decodeFromString(it)
                 } ?: BackupReminderConfig(),
                 launchCount = preferences[LAUNCH_COUNT] ?: 0,
+                ignoredUpdateVersion = preferences[IGNORED_UPDATE_VERSION] ?: "",
             )
         }
         .map {
@@ -359,6 +363,7 @@ class SettingsStore(
             preferences[QUICK_MESSAGES] = JsonInstant.encodeToString(settings.quickMessages)
             preferences[BACKUP_REMINDER_CONFIG] = JsonInstant.encodeToString(settings.backupReminderConfig)
             preferences[LAUNCH_COUNT] = settings.launchCount
+            preferences[IGNORED_UPDATE_VERSION] = settings.ignoredUpdateVersion
         }
     }
 
@@ -491,6 +496,7 @@ data class Settings(
     val quickMessages: List<QuickMessage> = emptyList(),
     val backupReminderConfig: BackupReminderConfig = BackupReminderConfig(),
     val launchCount: Int = 0,
+    val ignoredUpdateVersion: String = "",
 ) {
     companion object {
         // 构造一个用于初始化的settings, 但它不能用于保存，防止使用初始值存储

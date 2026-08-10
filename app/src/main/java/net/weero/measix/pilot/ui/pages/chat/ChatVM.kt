@@ -38,7 +38,6 @@ import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.service.ChatService
 import net.weero.measix.pilot.ui.hooks.writeStringPreference
 import net.weero.measix.pilot.ui.hooks.ChatInputState
-import net.weero.measix.pilot.utils.UiState
 import net.weero.measix.pilot.utils.UpdateChecker
 import java.util.Locale
 import kotlin.uuid.Uuid
@@ -90,7 +89,6 @@ class ChatVM(
     }
 
     override fun onCleared() {
-        super.onCleared()
         // 移除对话引用
         chatService.removeConversationReference(_conversationId)
     }
@@ -161,9 +159,8 @@ class ChatVM(
         }
     }
 
-    // Update checker
-    val updateState =
-        updateChecker.checkUpdate().stateIn(viewModelScope, SharingStarted.Eagerly, UiState.Loading)
+    // Update checker — 共享 UpdateChecker 的缓存 StateFlow，App 生命周期内只请求一次
+    val updateState = updateChecker.updateState
 
     /**
      * 处理消息发送

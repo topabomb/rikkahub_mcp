@@ -70,7 +70,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -87,8 +86,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
-import androidx.compose.material3.SheetValue
-import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -128,6 +125,7 @@ import net.weero.measix.pilot.data.ai.mcp.McpTool
 import net.weero.measix.pilot.data.ai.mcp.parseMcpServersFromJson
 import net.weero.measix.pilot.data.ai.mcp.encodeForShare
 import net.weero.measix.pilot.ui.components.nav.BackButton
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.utils.ImageUtils
 import net.weero.measix.pilot.ui.components.ui.FormItem
 import net.weero.measix.pilot.ui.components.ui.QRCode
@@ -565,14 +563,14 @@ private fun McpServerItem(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.error,
                         )
-                        // 主授权按钮：尝试 DCR 动态注册
+                        // 主授权按钮：尝试 DCR 动态注�?
                         Button(
                             onClick = { mcpManager.startAuthorization(item, context) },
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                         ) {
                             Text(stringResource(R.string.mcp_oauth_authorize))
                         }
-                        // 展开服务器配置（用于不支持 DCR 的服务器，如 GitHub）
+                        // 展开服务器配置（用于不支�?DCR 的服务器，如 GitHub�?
                         TextButton(
                             onClick = { showManualConfig = !showManualConfig },
                             contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
@@ -625,7 +623,7 @@ private fun McpServerItem(
                             Text(stringResource(R.string.mcp_oauth_cancel_authorization))
                         }
                     }
-                    // 已授权时提供取消授权入口（非授权中/非需要授权状态）
+                    // 已授权时提供取消授权入口（非授权�?非需要授权状态）
                     if (status != McpStatus.NeedsAuthorization &&
                         status != McpStatus.Authorizing &&
                         item.commonOptions.oauth?.isAuthorized == true) {
@@ -675,11 +673,10 @@ private fun McpServerConfigModal(state: EditState<McpServerConfig>) {
     state.EditStateContent { config, updateValue ->
         val pagerState = rememberPagerState { 2 }
         val scope = rememberCoroutineScope()
-        ModalBottomSheet(
-            onDismissRequest = {
-                state.dismiss()
-            },
-            sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
+        AdaptiveModal(
+            onDismissRequest = state::dismiss,
+            dialogMaxWidth = 840.dp,
+            dialogMaxHeight = 900.dp,
         ) {
             Column(
                 modifier = Modifier
@@ -741,6 +738,9 @@ private fun McpServerConfigModal(state: EditState<McpServerConfig>) {
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
                 ) {
+                    TextButton(onClick = state::dismiss) {
+                        Text(stringResource(R.string.cancel))
+                    }
                     TextButton(
                         onClick = {
                             if (config.commonOptions.name.isNotBlank() && isValidMcpName(config.commonOptions.name)) {
@@ -769,7 +769,7 @@ private fun McpCommonOptionsConfigure(
             .imePadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 启用/禁用开关
+        // 启用/禁用开�?
         FormItem(
             label = {
                 Text(stringResource(R.string.setting_mcp_page_enable))
@@ -806,7 +806,7 @@ private fun McpCommonOptionsConfigure(
 
         HorizontalDivider()
 
-        // 名称输入框
+        // 名称输入�?
         FormItem(
             label = {
                 Text(stringResource(R.string.setting_mcp_page_name))
@@ -945,7 +945,7 @@ private fun McpCommonOptionsConfigure(
 
         HorizontalDivider()
 
-        // 请求头配置
+        // 请求头配�?
         FormItem(
             label = {
                 Text(stringResource(R.string.setting_mcp_page_custom_headers))
@@ -1192,7 +1192,7 @@ private fun McpToolCard(
                 .padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            // 第一行：工具名字和3个按钮
+            // 第一行：工具名字�?个按�?
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1205,7 +1205,7 @@ private fun McpToolCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                // 需要审批开关
+                // 需要审批开�?
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -1220,7 +1220,7 @@ private fun McpToolCard(
                         size = SwitchSize.Small
                     )
                 }
-                // 启用开关
+                // 启用开�?
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -1293,9 +1293,9 @@ private fun McpImportModal(
 ) {
     var jsonText by remember { mutableStateOf("") }
 
-    ModalBottomSheet(
+    AdaptiveModal(
         onDismissRequest = onDismiss,
-        sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
+        dialogMaxWidth = 680.dp,
     ) {
         Column(
             modifier = Modifier
@@ -1337,7 +1337,7 @@ private fun McpImportModal(
 }
 
 /**
- * 处理 MCP JSON 导入：解析 → 导入合并 → 反馈结果 → 回调冲突
+ * 处理 MCP JSON 导入：解�?�?导入合并 �?反馈结果 �?回调冲突
  */
 private fun handleMcpImport(
     json: String,
@@ -1474,12 +1474,9 @@ private fun McpShareSheet(
     val context = LocalContext.current
     val shareJson = remember(config) { config.encodeForShare() }
 
-    ModalBottomSheet(
+    AdaptiveModal(
         onDismissRequest = onDismiss,
-        sheetState = rememberBottomSheetState(
-            initialValue = SheetValue.Hidden,
-            enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)
-        )
+        dialogMaxWidth = 520.dp,
     ) {
         Column(
             modifier = Modifier

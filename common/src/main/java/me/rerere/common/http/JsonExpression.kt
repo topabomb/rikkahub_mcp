@@ -1,3 +1,4 @@
+@file:Suppress("REDUNDANT_ELSE_IN_WHEN")
 package me.rerere.common.http
 
 import kotlinx.serialization.json.JsonArray

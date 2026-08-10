@@ -1,4 +1,4 @@
-ï»¿package net.weero.measix.pilot.ui.pages.setting
+package net.weero.measix.pilot.ui.pages.setting
 
 import android.net.Uri
 import me.rerere.hugeicons.HugeIcons
@@ -275,7 +275,7 @@ private fun ImportProviderButton(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        // ä¸»è¦æ“ä½œï¼šæ‰«æäºŒç»´ç 
+                        // Ö÷Òª²Ù×÷£ºÉ¨Ãè¶şÎ¬Âë
                         Button(
                             onClick = {
                                 showImportDialog = false
@@ -304,7 +304,7 @@ private fun ImportProviderButton(
                             }
                         }
 
-                        // æ¬¡è¦æ“ä½œï¼šä»ç›¸å†Œé€‰æ‹©
+                        // ´ÎÒª²Ù×÷£º´ÓÏà²áÑ¡Ôñ
                         OutlinedButton(
                             onClick = {
                                 showImportDialog = false
@@ -337,7 +337,7 @@ private fun ImportProviderButton(
                             }
                         }
 
-                        // ç¬¬ä¸‰æ“ä½œï¼šç²˜è´´é…ç½®å­—ç¬¦ä¸²
+                        // µÚÈı²Ù×÷£ºÕ³ÌùÅäÖÃ×Ö·û´®
                         OutlinedButton(
                             onClick = {
                                 showImportDialog = false
@@ -458,7 +458,7 @@ private fun handleImageQRCode(
     context: android.content.Context
 ) {
     runCatching {
-        // ä½¿ç”¨ImageUtilsè§£æäºŒç»´ç 
+        // Ê¹ÓÃImageUtils½âÎö¶şÎ¬Âë
         val qrContent = ImageUtils.decodeQRCodeFromUri(context, uri)
 
         if (qrContent.isNullOrEmpty()) {

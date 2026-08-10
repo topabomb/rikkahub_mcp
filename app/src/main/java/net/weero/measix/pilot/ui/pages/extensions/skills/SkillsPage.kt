@@ -26,7 +26,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -320,7 +320,7 @@ private fun SkillImportSheet(
     onImportFromFile: () -> Unit,
     onImportFromGitHub: () -> Unit,
 ) {
-    ModalBottomSheet(
+    AdaptiveModal(
         onDismissRequest = onDismiss,
         sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)),
     ) {
@@ -362,11 +362,12 @@ private fun SkillImportSheetItem(
 ) {
     ListItem(
         leadingContent = icon,
-        headlineContent = { Text(text) },
         modifier = Modifier
             .clip(MaterialTheme.shapes.large)
             .clickable(onClick = onClick),
-    )
+    ) {
+        Text(text)
+    }
 }
 
 @Composable

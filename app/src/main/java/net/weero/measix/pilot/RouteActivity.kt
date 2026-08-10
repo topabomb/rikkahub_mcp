@@ -68,6 +68,8 @@ import net.weero.measix.pilot.data.db.MigrationState
 import net.weero.measix.pilot.data.event.AppEvent
 import net.weero.measix.pilot.data.event.AppEventBus
 import net.weero.measix.pilot.ui.activity.SafeModeActivity
+import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
+import net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.components.ui.TTSController
 import net.weero.measix.pilot.ui.context.LocalASRState
 import net.weero.measix.pilot.ui.context.LocalNavController
@@ -265,6 +267,7 @@ class RouteActivity : ComponentActivity() {
         )
 
         val backStack = rememberNavBackStack(startScreen)
+        val adaptiveLayoutInfo = rememberAdaptiveLayoutInfo()
         SideEffect { this@RouteActivity.navStack = backStack }
 
         ShareHandler(backStack)
@@ -277,6 +280,7 @@ class RouteActivity : ComponentActivity() {
                 LocalToaster provides toastState,
                 LocalTTSState provides tts,
                 LocalASRState provides asr,
+                LocalAdaptiveLayoutInfo provides adaptiveLayoutInfo,
             ) {
                 Toaster(
                     state = toastState,

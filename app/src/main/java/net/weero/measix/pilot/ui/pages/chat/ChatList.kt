@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.chat
+package net.weero.measix.pilot.ui.pages.chat
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Tick01
@@ -31,11 +31,13 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyListState
@@ -95,6 +97,7 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ChatError
+import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import net.weero.measix.pilot.ui.components.message.ChatMessage
 import net.weero.measix.pilot.ui.components.ui.ErrorCardsDisplay
 import net.weero.measix.pilot.ui.components.ui.ListSelectableItem
@@ -149,6 +152,7 @@ internal fun ChatList(
     AnimatedContent(
         targetState = previewMode,
         label = "ChatListMode",
+        contentAlignment = Alignment.TopCenter,
         transitionSpec = {
             (fadeIn() + scaleIn(initialScale = 0.8f) togetherWith fadeOut() + scaleOut(targetScale = 0.8f))
         }
@@ -301,6 +305,7 @@ private fun ChatListNormal(
     Box(
         modifier = Modifier
             .fillMaxSize(),
+        contentAlignment = Alignment.TopCenter,
     ) {
         // 自动滚动到底部
         if (settings.displaySetting.enableAutoScroll) {
@@ -334,14 +339,16 @@ private fun ChatListNormal(
                 state = state,
                 contentPadding = PaddingValues(
                     start = 16.dp,
-                    top = if (showsConfigurationPrompt) 8.dp else 16.dp,
+                    top = if (showsConfigurationPrompt) 8.dp else 0.dp,
                     end = 16.dp,
-                    bottom = 48.dp + innerPadding.calculateBottomPadding(),
+                    bottom = 24.dp + innerPadding.calculateBottomPadding(),
                 ),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier
-                    .fillMaxSize()
+                    .widthIn(max = AdaptiveLayoutDefaults.ReadableContentMaxWidth)
+                    .fillMaxWidth()
+                    .fillMaxHeight()
                     .hazeSource(state = hazeState)
                     .padding(top = innerPadding.calculateTopPadding()),
             ) {
@@ -691,7 +698,9 @@ private fun ChatListPreview(
     Column(
         modifier = Modifier
             .padding(top = innerPadding.calculateTopPadding())
-            .fillMaxSize()
+            .widthIn(max = AdaptiveLayoutDefaults.ReadableContentMaxWidth)
+            .fillMaxWidth()
+            .fillMaxHeight()
             .hazeSource(state = hazeState),
     ) {
         // 搜索框
@@ -727,7 +736,7 @@ private fun ChatListPreview(
 
         // 消息预览
         LazyColumn(
-            contentPadding = PaddingValues(16.dp) + PaddingValues(bottom = 32.dp + innerPadding.calculateBottomPadding()),
+            contentPadding = PaddingValues(16.dp) + PaddingValues(bottom = 24.dp + innerPadding.calculateBottomPadding()),
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier
                 .fillMaxWidth()

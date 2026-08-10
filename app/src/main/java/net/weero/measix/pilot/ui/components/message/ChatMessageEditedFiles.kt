@@ -16,7 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -144,7 +144,7 @@ internal fun EditedFilesList(
     if (selectedPath != null) {
         val path = selectedPath!!
         val fileName = remember(path) { path.substringAfterLast('/') }
-        ModalBottomSheet(
+        AdaptiveModal(
             onDismissRequest = { selectedPath = null },
             sheetState = rememberBottomSheetState(
                 initialValue = SheetValue.Hidden,

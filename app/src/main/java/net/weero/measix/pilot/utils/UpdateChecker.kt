@@ -4,23 +4,54 @@ import android.app.DownloadManager
 import android.content.Context
 import android.os.Environment
 import android.widget.Toast
+import androidx.compose.runtime.mutableStateOf
 import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import me.rerere.common.http.await
+import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.BuildConfig
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
 private const val API_URL = "https://measix.weero.net/mobile/"
 
-class UpdateChecker(private val client: OkHttpClient) {
+class UpdateChecker(
+    private val client: OkHttpClient,
+    appScope: AppScope,
+) {
     private val json = Json { ignoreUnknownKeys = true }
+
+    /**
+     * App 生命周期内共享的更新检查 StateFlow。
+     *
+     * 使用 [SharingStarted.WhileSubscribed]：仅当有订阅者（即 UpdateCard 组合、用户开启了
+     * `showUpdates`）时才发起网络请求；无订阅者时不发请求，避免关闭开关后仍偷偷请求。
+     * 5 秒的订阅超时让配置变更/短暂重组不重复请求。
+     */
+    val updateState: StateFlow<UiState<UpdateInfo>> by lazy {
+        checkUpdate().stateIn(appScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
+    }
+
+    /**
+     * 进程级：本次 App 生命周期内"检查失败"卡片是否已被用户关闭。
+     *
+     * 错误是临时状态（网络/上游问题），下次启动应重试，所以不持久化到 DataStore；但同
+     * 一进程内跨会话切换不应重复打扰用户，故放在 Koin singleton 上共享。
+     */
+    val errorDismissed = mutableStateOf(false)
+
+    fun dismissError() {
+        errorDismissed.value = true
+    }
 
     fun checkUpdate(): Flow<UiState<UpdateInfo>> = flow {
         emit(UiState.Loading)

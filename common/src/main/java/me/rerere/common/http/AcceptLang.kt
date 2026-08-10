@@ -52,6 +52,7 @@ class AcceptLanguageBuilder private constructor(
         }
 
         // Android 的系统 Locale 列表获取
+        @Suppress("DEPRECATION")
         private fun systemLocalesAndroid(context: android.content.Context): List<Locale> {
             val cfg = context.resources.configuration
             return if (android.os.Build.VERSION.SDK_INT >= 24) {

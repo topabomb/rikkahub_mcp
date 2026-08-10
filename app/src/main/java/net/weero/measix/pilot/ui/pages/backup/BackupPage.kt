@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.backup
+package net.weero.measix.pilot.ui.pages.backup
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize

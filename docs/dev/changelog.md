@@ -6,6 +6,39 @@
 
 ---
 
+## 0.0.14（versionCode 14）— 2026-08-10
+
+### 新增
+
+- **折叠屏与宽屏聊天双栏**：≥600dp 宽且 ≥480dp 高时切换为“会话列表 + 聊天”双栏，避开铰链区域；宽屏可折叠会话栏（宽度动画），窄屏保持模态抽屉
+- **矮横屏紧凑输入**：可用高度低于 480dp 时输入与操作压缩到同一行
+- **宽屏弹层居中面板**：高频选择器在宽屏以居中 Dialog 呈现，窄屏维持底部弹层
+- **自适应布局策略测试**：600dp/480dp 边界值、折叠姿态、铰链、tabletop 纯函数策略测试
+
+### 修复
+
+- **侧栏留白优化**：Column 子项 spacedBy 从 4dp 减至 2dp，外层移除冗余 vertical padding；用户头像行 padding 从 4dp 减至 2dp；对话列表 spacedBy 从 8dp 减至 2dp，列表项 padding vertical 从 6dp 减至 5dp，日期/置顶头 padding 从 8dp 减至 4dp；列表项字号明确为 bodyLarge
+- **AMOLED 暗色模式选中对话不可辨**：选中项背景从 `surfaceColorAtElevation(8.dp)`（AMOLED 下变纯黑）改为 `surfaceContainerHighest`（tonal 色不受 AMOLED 覆盖）
+- **检查更新重复请求**：将 `UpdateChecker.updateState` 上提为 AppScope 级 `by lazy` 缓存 StateFlow，所有 ChatVM 共享同一实例，切换会话不再重复发起网络请求；`SharingStarted.Eagerly` 改为 `WhileSubscribed(5s)`，仅当用户开启 `showUpdates` 且 UpdateCard 组合（订阅）时才发起网络请求，关闭开关后不再偷偷请求
+- **检查更新关闭不持久**：原 `remember` 关闭状态在导航离开聊天页再返回时丢失，卡片重现；成功卡片改为持久化到 DataStore（`ignoredUpdateVersion`），用户关掉的版本不再弹，新版本发布时自动恢复提示；错误卡片改为进程级状态（`UpdateChecker.errorDismissed`），本次 App 生命周期内跨会话不再重复打扰，下次启动重试
+- **标题栏头像偏小**：TopBar 头像从 36dp 增至 40dp，匹配标题+副标题文字列高度
+- **顶部/底部留白**：Scaffold `contentWindowInsets(0)` + TopAppBar 自避让；消息列表 contentPadding 从 16/48dp 减至 0/24dp
+- **工具授权按钮醒目度**：批准/拒绝分别使用 primaryContainer/errorContainer 色，尺寸与图标增大
+- **TopAppBar 标题放大**：标题从 bodyMedium 改为 titleMedium，副标题从 8sp 改为 bodySmall
+- **Theme.kt Activity 获取**：改用 `LocalActivity` 替代 `view.context as Activity`
+- **chatLayoutMode 冗余铰链检查**：移除 `hasUsefulHingeSplit` 死代码
+- **宽屏弹层底部操作误判为外部点击**：`AdaptiveDialogContainer` 原用手写坐标 hit-test 判定“点内容区外关闭”，但 `fillMaxHeight`/`weight` 布局的实际渲染会溢出内容测量边界，导致底部操作行（保存/确认/筛选输入框）在部分窗口尺寸下被误判为 scrim 点击——点击被吞掉、保存失效或弹窗误关闭（窄屏 BottomSheet 与部分真机恰好不受影响，折叠屏模拟器等窗口上必现）。改为显式双层方案：底层铺满窗口的 scrim 层负责关闭，内容层在其上吸收表面内点击，彻底消除对“内容测量边界”的依赖
+- **宽屏弹层输入框圆角不协调**：模型编辑表单（Model ID、Display Name）与 ModelPicker 筛选输入框统一为 `extraLarge` 圆角，与居中 Dialog 面板保持一致
+- **宽屏弹层回归测试**：新增 `AdaptiveDialogContainerTest`，锁定“点 scrim 关闭 / 点内容区不关闭 / 点底部操作行触发且不关闭”三项契约
+
+### 变更
+
+- **自适应架构重新实现**：从 `ae895469` 基线重新实现，仅保留聊天双栏核心；移除设置场景化 Dialog、全局 ListDetailSceneStrategy 等过度设计；RouteActivity 恢复为简单的全屏逐页导航 + `LocalAdaptiveLayoutInfo` provider
+- **宽屏弹层 sheetState 语义说明**：Dialog 路径不组合 sheet，`sheetState.hide()/show()` 立即完成，调用方应基于自身弹窗状态（如 `useEditState`）而非读取 `sheetState`
+- **姿态判定文档化**：`hasSeparatingVerticalHinge`/`isTabletop` 补充文档，明确模拟器/无铰链设备报告 `false` 属平台能力而非策略 bug
+
+---
+
 ## 0.0.13（versionCode 13）— 2026-08-05 ~ 2026-08-09
 
 ### 修复

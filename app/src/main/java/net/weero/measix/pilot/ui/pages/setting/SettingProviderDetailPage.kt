@@ -48,7 +48,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import androidx.compose.material3.MultiChoiceSegmentedButtonRow
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -582,7 +582,8 @@ private fun ModelSettingsForm(
                                     Text(stringResource(R.string.setting_provider_page_model_id_placeholder))
                                 }
                             },
-                            enabled = !isEdit
+                            enabled = !isEdit,
+                            shape = MaterialTheme.shapes.extraLarge,
                         )
 
                         OutlinedTextField(
@@ -596,7 +597,8 @@ private fun ModelSettingsForm(
                                 if (!isEdit) {
                                     Text(stringResource(R.string.setting_provider_page_model_display_name_placeholder))
                                 }
-                            }
+                            },
+                            shape = MaterialTheme.shapes.extraLarge,
                         )
 
                         ModelTypeSelector(
@@ -765,7 +767,7 @@ private fun AddModelButton(
     if (dialogState.isEditing) {
         dialogState.currentState?.let { modelState ->
             val sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
-            ModalBottomSheet(
+            AdaptiveModal(
                 onDismissRequest = {
                     dialogState.dismiss()
                 },
@@ -848,7 +850,7 @@ private fun ModelPicker(
 ) {
     var showModal by remember { mutableStateOf(false) }
     if (showModal) {
-        ModalBottomSheet(
+        AdaptiveModal(
             onDismissRequest = { showModal = false },
             sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)),
         ) {
@@ -990,6 +992,7 @@ private fun ModelPicker(
                     placeholder = {
                         Text(stringResource(R.string.setting_provider_page_filter_example))
                     },
+                    shape = MaterialTheme.shapes.extraLarge,
                 )
             }
         }
@@ -1175,7 +1178,7 @@ private fun ModelCard(
     if (dialogState.isEditing) {
         dialogState.currentState?.let { editingModel ->
             val sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
-            ModalBottomSheet(
+            AdaptiveModal(
                 onDismissRequest = {
                     dialogState.dismiss()
                 },
@@ -1509,7 +1512,7 @@ private fun ProviderOverrideSettings(
 
         // Provider configuration modal
         if (showProviderConfig && editingProvider != null) {
-            ModalBottomSheet(
+            AdaptiveModal(
                 onDismissRequest = {
                     showProviderConfig = false
                     editingProvider = null

@@ -5,9 +5,21 @@ import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
@@ -17,20 +29,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.PermanentNavigationDrawer
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.rememberBottomSheetState
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -40,6 +46,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -47,7 +54,6 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
@@ -66,6 +72,7 @@ import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.LeftToRightListBullet
 import me.rerere.hugeicons.stroke.Menu03
 import me.rerere.hugeicons.stroke.MessageAdd01
+import me.rerere.hugeicons.stroke.PanelLeftOpen
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
@@ -79,7 +86,12 @@ import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import net.weero.measix.pilot.service.ChatError
+import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
+import net.weero.measix.pilot.ui.adaptive.ChatLayoutMode
+import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.components.ai.AssistantPickerSheet
+import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.components.ai.ChatInput
 import net.weero.measix.pilot.ui.components.ai.FilesPicker
 import net.weero.measix.pilot.ui.components.ai.WorkspaceSelectSheet
@@ -94,6 +106,7 @@ import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.context.Navigator
 import net.weero.measix.pilot.ui.hooks.ChatInputState
 import net.weero.measix.pilot.ui.hooks.EditStateContent
+import net.weero.measix.pilot.ui.hooks.rememberSharedPreferenceBoolean
 import net.weero.measix.pilot.ui.hooks.useEditState
 import net.weero.measix.pilot.utils.ImageUtils
 import net.weero.measix.pilot.utils.base64Decode
@@ -140,15 +153,17 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
         }
     }
 
-    val windowInfo = LocalWindowInfo.current
-    val density = LocalDensity.current
-    val windowWidthDp = with(density) { windowInfo.containerSize.width.toDp() }
-    val windowHeightDp = with(density) { windowInfo.containerSize.height.toDp() }
-    val isBigScreen = windowWidthDp > windowHeightDp && windowWidthDp >= 1100.dp
+    val adaptiveLayoutInfo = LocalAdaptiveLayoutInfo.current
+    val usesListDetailLayout = adaptiveLayoutInfo.chatLayoutMode == ChatLayoutMode.ListDetail
+    // 在宽屏下会话侧栏可折叠；折叠后由 AnimatedPane 播放滑出动画，而非硬切换组合。
+    var sidebarExpanded by rememberSharedPreferenceBoolean("chat_sidebar_expanded", true)
+    val canCollapseSidebar = adaptiveLayoutInfo.canCollapseChatSidebar
+    // 不可折叠时侧栏始终展开（如铰链双屏），可折叠时由 sidebarExpanded 决定。
+    val sidebarVisible = usesListDetailLayout && (!canCollapseSidebar || sidebarExpanded)
 
     // 修复平板横竖屏旋转后模态抽屉残留问题
-    LaunchedEffect(isBigScreen) {
-        if (isBigScreen && drawerState.isOpen) {
+    LaunchedEffect(usesListDetailLayout) {
+        if (usesListDetailLayout && drawerState.isOpen) {
             drawerState.close()
         }
     }
@@ -198,38 +213,72 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
         }
     }
 
-    when {
-        isBigScreen -> {
-            PermanentNavigationDrawer(
-                drawerContent = {
-                    ChatDrawerContent(
+    when (adaptiveLayoutInfo.chatLayoutMode) {
+        ChatLayoutMode.ListDetail -> {
+            // 侧栏宽度在 0 与目标值之间平滑动画；折叠时连续收窄到 0，展开时连续展开到目标宽度，
+            // 配合 clipToBounds 裁剪溢出内容，避免 AnimatedVisibility"先占位再消失"的突兀感。
+            val sidebarTargetWidth = if (canCollapseSidebar && !sidebarExpanded) {
+                0.dp
+            } else {
+                adaptiveLayoutInfo.listPaneWidth
+            }
+            val sidebarWidth by animateDpAsState(
+                targetValue = sidebarTargetWidth,
+                animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy),
+                label = "chatSidebarWidth",
+            )
+            Row(Modifier.fillMaxSize()) {
+                Surface(
+                    modifier = Modifier
+                        .width(sidebarWidth)
+                        .fillMaxHeight()
+                        .clipToBounds(),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                ) {
+                    // 宽度为 0 时仍保留组合以维持状态（滚动位置等），内容被 clipToBounds 裁剪不可见。
+                    if (sidebarWidth > 0.dp) {
+                        ChatDrawerContent(
+                            navController = navController,
+                            current = conversation,
+                            vm = vm,
+                            settings = setting,
+                            permanent = true,
+                            onCollapse = if (canCollapseSidebar) {
+                                { sidebarExpanded = false }
+                            } else {
+                                null
+                            },
+                        )
+                    }
+                }
+                // 聊天详情区：占满剩余宽度；侧栏折叠时显示展开按钮。
+                Box(Modifier.weight(1f).fillMaxHeight()) {
+                    ChatPageContent(
+                        inputState = inputState,
+                        loadingJob = loadingJob,
+                        processingStatus = processingStatus,
+                        setting = setting,
+                        conversation = conversation,
+                        drawerState = drawerState,
                         navController = navController,
-                        current = conversation,
                         vm = vm,
-                        settings = setting
+                        chatListState = chatListState,
+                        enableWebSearch = enableWebSearch,
+                        navigationAction = if (canCollapseSidebar && !sidebarExpanded) {
+                            ChatNavigationAction.ExpandSidebar
+                        } else {
+                            ChatNavigationAction.None
+                        },
+                        onNavigationClick = { sidebarExpanded = true },
+                        errors = errors,
+                        onDismissError = { vm.dismissError(it) },
+                        onClearAllErrors = { vm.clearAllErrors() },
                     )
                 }
-            ) {
-                ChatPageContent(
-                    inputState = inputState,
-                    loadingJob = loadingJob,
-                    processingStatus = processingStatus,
-                    setting = setting,
-                    conversation = conversation,
-                    drawerState = drawerState,
-                    navController = navController,
-                    vm = vm,
-                    chatListState = chatListState,
-                    enableWebSearch = enableWebSearch,
-                    bigScreen = true,
-                    errors = errors,
-                    onDismissError = { vm.dismissError(it) },
-                    onClearAllErrors = { vm.clearAllErrors() },
-                )
             }
         }
 
-        else -> {
+        ChatLayoutMode.SinglePane -> {
             ModalNavigationDrawer(
                 drawerState = drawerState,
                 drawerContent = {
@@ -237,7 +286,13 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
                         navController = navController,
                         current = conversation,
                         vm = vm,
-                        settings = setting
+                        settings = setting,
+                        navigateFromDrawer = { navigate ->
+                            scope.launch {
+                                drawerState.close()
+                                navigate()
+                            }
+                        },
                     )
                 }
             ) {
@@ -252,14 +307,11 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
                     vm = vm,
                     chatListState = chatListState,
                     enableWebSearch = enableWebSearch,
-                    bigScreen = false,
+                    navigationAction = ChatNavigationAction.OpenDrawer,
                     errors = errors,
                     onDismissError = { vm.dismissError(it) },
                     onClearAllErrors = { vm.clearAllErrors() },
                 )
-            }
-            BackHandler(drawerState.isOpen) {
-                scope.launch { drawerState.close() }
             }
         }
     }
@@ -271,7 +323,7 @@ private fun ChatPageContent(
     loadingJob: Job?,
     processingStatus: String? = null,
     setting: Settings,
-    bigScreen: Boolean,
+    navigationAction: ChatNavigationAction,
     conversation: Conversation,
     drawerState: DrawerState,
     navController: Navigator,
@@ -279,6 +331,7 @@ private fun ChatPageContent(
     chatListState: LazyListState,
     enableWebSearch: Boolean,
     errors: List<ChatError>,
+    onNavigationClick: (() -> Unit)? = null,
     onDismissError: (Uuid) -> Unit,
     onClearAllErrors: () -> Unit,
 ) {
@@ -347,12 +400,17 @@ private fun ChatPageContent(
     ) {
         AssistantBackground(setting = setting, modifier = Modifier.hazeSource(hazeState))
         Scaffold(
+            contentWindowInsets = WindowInsets(0),
             topBar = {
                 TopBar(
                     settings = setting,
                     conversation = conversation,
-                    bigScreen = bigScreen,
-                    drawerState = drawerState,
+                    navigationAction = navigationAction,
+                    onNavigationClick = onNavigationClick ?: {
+                        scope.launch { drawerState.open() }
+                        Unit
+                    },
+                    loading = loadingJob != null,
                     previewMode = previewMode,
                     onNewChat = {
                         navigateToChatPage(navController)
@@ -366,87 +424,95 @@ private fun ChatPageContent(
                 )
             },
             bottomBar = {
-                ChatInput(
-                    state = inputState,
-                    loading = loadingJob != null,
-                    settings = setting,
-                    assistant = assistant,
-                    modelListState = modelListState,
-                    hazeState = hazeState,
-                    completionProviders = completionProviders,
-                    onCancelClick = {
-                        vm.stopGeneration()
-                    },
-                    enableSearch = enableWebSearch,
-                    onToggleSearch = {
-                        vm.updateAssistantWebSearch(
-                            setting.getCurrentAssistant().id,
-                            !enableWebSearch,
-                        )
-                    },
-                    onSendClick = {
-                        if (!readiness.canSend) {
-                            toaster.show(modelRequiredMessage, type = ToastType.Error)
-                            return@ChatInput
-                        }
-                        if (inputState.isEditing()) {
-                            vm.handleMessageEdit(
-                                parts = inputState.getContents(),
-                                messageId = inputState.editingMessage!!,
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    ChatInput(
+                        modifier = Modifier
+                            .widthIn(max = AdaptiveLayoutDefaults.ReadableContentMaxWidth)
+                            .fillMaxWidth(),
+                        state = inputState,
+                        loading = loadingJob != null,
+                        settings = setting,
+                        assistant = assistant,
+                        modelListState = modelListState,
+                        hazeState = hazeState,
+                        completionProviders = completionProviders,
+                        onCancelClick = {
+                            vm.stopGeneration()
+                        },
+                        enableSearch = enableWebSearch,
+                        onToggleSearch = {
+                            vm.updateAssistantWebSearch(
+                                setting.getCurrentAssistant().id,
+                                !enableWebSearch,
                             )
-                        } else {
-                            vm.handleMessageSend(inputState.getContents())
-                            scope.launch {
-                                chatListState.requestScrollToItem(conversation.currentMessages.size + 5)
+                        },
+                        onSendClick = {
+                            if (!readiness.canSend) {
+                                toaster.show(modelRequiredMessage, type = ToastType.Error)
+                                return@ChatInput
                             }
-                        }
-                        inputState.clearInput()
-                    },
-                    onLongSendClick = {
-                        if (!readiness.canSend) {
-                            toaster.show(modelRequiredMessage, type = ToastType.Error)
-                            return@ChatInput
-                        }
-                        if (inputState.isEditing()) {
-                            vm.handleMessageEdit(
-                                parts = inputState.getContents(),
-                                messageId = inputState.editingMessage!!,
-                            )
-                        } else {
-                            vm.handleMessageSend(content = inputState.getContents(), answer = false)
-                            scope.launch {
-                                chatListState.requestScrollToItem(conversation.currentMessages.size + 5)
-                            }
-                        }
-                        inputState.clearInput()
-                    },
-                    onUpdateChatModel = {
-                        vm.setChatModel(assistant = assistant, model = it)
-                    },
-                    onUpdateAssistant = {
-                        vm.updateSettings(
-                            setting.copy(
-                                assistants = setting.assistants.map { assistant ->
-                                    if (assistant.id == it.id) {
-                                        it
-                                    } else {
-                                        assistant
-                                    }
+                            if (inputState.isEditing()) {
+                                vm.handleMessageEdit(
+                                    parts = inputState.getContents(),
+                                    messageId = inputState.editingMessage!!,
+                                )
+                            } else {
+                                vm.handleMessageSend(inputState.getContents())
+                                scope.launch {
+                                    chatListState.requestScrollToItem(conversation.currentMessages.size + 5)
                                 }
+                            }
+                            inputState.clearInput()
+                        },
+                        onLongSendClick = {
+                            if (!readiness.canSend) {
+                                toaster.show(modelRequiredMessage, type = ToastType.Error)
+                                return@ChatInput
+                            }
+                            if (inputState.isEditing()) {
+                                vm.handleMessageEdit(
+                                    parts = inputState.getContents(),
+                                    messageId = inputState.editingMessage!!,
+                                )
+                            } else {
+                                vm.handleMessageSend(content = inputState.getContents(), answer = false)
+                                scope.launch {
+                                    chatListState.requestScrollToItem(conversation.currentMessages.size + 5)
+                                }
+                            }
+                            inputState.clearInput()
+                        },
+                        onUpdateChatModel = {
+                            vm.setChatModel(assistant = assistant, model = it)
+                        },
+                        onUpdateAssistant = {
+                            vm.updateSettings(
+                                setting.copy(
+                                    assistants = setting.assistants.map { assistant ->
+                                        if (assistant.id == it.id) {
+                                            it
+                                        } else {
+                                            assistant
+                                        }
+                                    }
+                                )
                             )
-                        )
-                    },
-                    onUpdateSearchService = { index ->
-                        vm.updateSettings(
-                            setting.copy(
-                                searchServiceSelected = index
+                        },
+                        onUpdateSearchService = { index ->
+                            vm.updateSettings(
+                                setting.copy(
+                                    searchServiceSelected = index
+                                )
                             )
-                        )
-                    },
-                    onMoreClick = {
-                        showFilesSheet = true
-                    },
-                )
+                        },
+                        onMoreClick = {
+                            showFilesSheet = true
+                        },
+                    )
+                }
             },
             containerColor = Color.Transparent,
         ) { innerPadding ->
@@ -769,13 +835,9 @@ private fun ChatFilesPickerSheet(
             }
         }
 
-    val filesSheetState = rememberBottomSheetState(
-        initialValue = SheetValue.Hidden,
-        enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)
-    )
-    ModalBottomSheet(
-        sheetState = filesSheetState,
+    AdaptiveModal(
         onDismissRequest = { dismissAll() },
+        dialogMaxHeight = 800.dp,
     ) {
         FilesPicker(
             conversation = conversation,
@@ -816,18 +878,24 @@ private fun ChatFilesPickerSheet(
     }
 }
 
+private enum class ChatNavigationAction {
+    None,
+    OpenDrawer,
+    ExpandSidebar,
+}
+
 @Composable
 private fun TopBar(
     settings: Settings,
     conversation: Conversation,
-    drawerState: DrawerState,
-    bigScreen: Boolean,
+    navigationAction: ChatNavigationAction,
+    onNavigationClick: () -> Unit,
     previewMode: Boolean,
     onClickMenu: () -> Unit,
     onNewChat: () -> Unit,
-    onUpdateTitle: (String) -> Unit
+    onUpdateTitle: (String) -> Unit,
+    loading: Boolean = false,
 ) {
-    val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
     val titleState = useEditState<String> {
         onUpdateTitle(it)
@@ -836,13 +904,24 @@ private fun TopBar(
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
         navigationIcon = {
-            if (!bigScreen) {
-                IconButton(
-                    onClick = {
-                        scope.launch { drawerState.open() }
+            when (navigationAction) {
+                ChatNavigationAction.None -> Unit
+                ChatNavigationAction.OpenDrawer -> {
+                    IconButton(onClick = onNavigationClick) {
+                        Icon(
+                            imageVector = HugeIcons.Menu03,
+                            contentDescription = stringResource(R.string.chat_navigation_open_drawer),
+                        )
                     }
-                ) {
-                    Icon(HugeIcons.Menu03, "Messages")
+                }
+
+                ChatNavigationAction.ExpandSidebar -> {
+                    IconButton(onClick = onNavigationClick) {
+                        Icon(
+                            imageVector = HugeIcons.PanelLeftOpen,
+                            contentDescription = stringResource(R.string.chat_sidebar_expand),
+                        )
+                    }
                 }
             }
         },
@@ -858,26 +937,39 @@ private fun TopBar(
                 },
                 color = Color.Transparent,
             ) {
-                Column {
-                    val assistant = settings.getCurrentAssistant()
-                    val model = settings.getCurrentChatModel()
-                    val provider = model?.findProvider(providers = settings.providers, checkOverwrite = false)
-                    Text(
-                        text = conversation.title.ifBlank { stringResource(R.string.chat_page_new_chat) },
-                        maxLines = 1,
-                        style = MaterialTheme.typography.bodyMedium,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (model != null && provider != null) {
-                        Text(
-                            text = "${assistant.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) }} / ${model.displayName} (${provider.name})",
-                            overflow = TextOverflow.Ellipsis,
-                            maxLines = 1,
-                            color = LocalContentColor.current.copy(0.65f),
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontSize = 8.sp,
-                            )
+                val assistant = settings.getCurrentAssistant()
+                val showAvatar = assistant.useAssistantAvatar &&
+                    LocalAdaptiveLayoutInfo.current.chatLayoutMode == ChatLayoutMode.ListDetail
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (showAvatar) {
+                        UIAvatar(
+                            name = assistant.name,
+                            value = assistant.avatar,
+                            modifier = Modifier.size(40.dp),
+                            loading = loading,
                         )
+                    }
+                    Column {
+                        val model = settings.getCurrentChatModel()
+                        val provider = model?.findProvider(providers = settings.providers, checkOverwrite = false)
+                        Text(
+                            text = conversation.title.ifBlank { stringResource(R.string.chat_page_new_chat) },
+                            maxLines = 1,
+                            style = MaterialTheme.typography.titleMedium,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (model != null && provider != null) {
+                            Text(
+                                text = "${assistant.name.ifBlank { stringResource(R.string.assistant_page_default_assistant) }} / ${model.displayName} (${provider.name})",
+                                overflow = TextOverflow.Ellipsis,
+                                maxLines = 1,
+                                color = LocalContentColor.current.copy(0.65f),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                     }
                 }
             }
@@ -888,7 +980,10 @@ private fun TopBar(
                     onClickMenu()
                 }
             ) {
-                Icon(if (previewMode) HugeIcons.Cancel01 else HugeIcons.LeftToRightListBullet, "Chat Options")
+                Icon(
+                    if (previewMode) HugeIcons.Cancel01 else HugeIcons.LeftToRightListBullet,
+                    stringResource(R.string.chat_page_chat_options)
+                )
             }
 
             IconButton(
@@ -896,7 +991,7 @@ private fun TopBar(
                     onNewChat()
                 }
             ) {
-                Icon(HugeIcons.MessageAdd01, "New Message")
+                Icon(HugeIcons.MessageAdd01, stringResource(R.string.chat_page_new_chat))
             }
         },
     )

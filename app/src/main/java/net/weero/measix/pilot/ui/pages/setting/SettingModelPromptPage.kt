@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -120,7 +120,7 @@ private fun PromptSettingItem(
     }
 
     if (showEditor) {
-        ModalBottomSheet(
+        AdaptiveModal(
             onDismissRequest = { showEditor = false },
         ) {
             Column(

@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.setting
+package net.weero.measix.pilot.ui.pages.setting
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Book01
@@ -57,13 +57,13 @@ fun SettingAboutPage() {
     val navController = LocalNavController.current
     val emojiOptions = remember {
         listOf(
-            "🎉", "✨", "🌟", "💫", "🎊", "🥳", "🎈", "🎆", "🎇", "🧨",
-            "🌈", "🧧", "🎁", "🍬", "🍭", "🍉", "🍓", "🍒", "🍍", "🥭",
-            "🐱", "🐶", "🦊", "🐼", "🦁", "🐯", "🐵", "🦄",
-            "❤️", "🧡", "💛", "💚", "💙", "💜",
-            "🇨🇳", "🌏", "🌍", "🌎",
-            "🤗", "🤩", "😆", "😺", "😸", "🤡",
-            "💡", "🔥", "💥", "🚀", "⭐", "🌙"
+            "??", "?", "??", "??", "??", "??", "??", "??", "??", "??",
+            "??", "??", "??", "??", "??", "??", "??", "??", "??", "??",
+            "??", "??", "??", "??", "??", "??", "??", "??",
+            "??", "??", "??", "??", "??", "??",
+            "????", "??", "??", "??",
+            "??", "??", "??", "??", "??", "??",
+            "??", "??", "??", "??", "?", "??"
         )
     }
     var logoCenterPx by remember { mutableStateOf(Offset.Zero) }

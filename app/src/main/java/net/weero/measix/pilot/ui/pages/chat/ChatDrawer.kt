@@ -1,6 +1,7 @@
-﻿package net.weero.measix.pilot.ui.pages.chat
+package net.weero.measix.pilot.ui.pages.chat
 
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -9,8 +10,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,9 +25,10 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -33,6 +37,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -64,6 +69,7 @@ import me.rerere.hugeicons.stroke.InLove
 import me.rerere.hugeicons.stroke.LanguageCircle
 import me.rerere.hugeicons.stroke.LookTop
 import me.rerere.hugeicons.stroke.PencilEdit01
+import me.rerere.hugeicons.stroke.PanelLeftClose
 import me.rerere.hugeicons.stroke.Search01
 import me.rerere.hugeicons.stroke.Settings03
 import me.rerere.hugeicons.stroke.Sparkles
@@ -101,6 +107,10 @@ fun ChatDrawerContent(
     vm: ChatVM,
     settings: Settings,
     current: Conversation,
+    modifier: Modifier = Modifier,
+    permanent: Boolean = false,
+    onCollapse: (() -> Unit)? = null,
+    navigateFromDrawer: ((() -> Unit) -> Unit) = { navigate -> navigate() },
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -108,7 +118,8 @@ fun ChatDrawerContent(
     val isPlayStore = rememberIsPlayStoreVersion()
     val repo = koinInject<ConversationRepository>()
 
-    val activity = context as ComponentActivity
+    val activity = LocalActivity.current as? ComponentActivity
+        ?: error("ChatDrawerContent requires a ComponentActivity host")
     val drawerVm: ChatDrawerVM = koinViewModel(viewModelStoreOwner = activity)
 
     val conversations = drawerVm.conversations.collectAsLazyPagingItems()
@@ -128,6 +139,16 @@ fun ChatDrawerContent(
             .collectLatest { (index, offset) ->
                 drawerVm.saveScrollPosition(index, offset)
             }
+    }
+
+    // 离开组合（折叠/切换布局）前同步保存一次滚动位置，避免异步保存滞后导致位置回退
+    DisposableEffect(conversationListState) {
+        onDispose {
+            drawerVm.saveScrollPosition(
+                conversationListState.firstVisibleItemIndex,
+                conversationListState.firstVisibleItemScrollOffset,
+            )
+        }
     }
 
     val conversationJobs by vm.conversationJobs.collectAsStateWithLifecycle(
@@ -161,27 +182,18 @@ fun ChatDrawerContent(
     // Menu popup 状态
     var showMenuPopup by remember { mutableStateOf(false) }
 
-    ModalDrawerSheet(
-        modifier = Modifier.width(300.dp)
-    ) {
+    val drawerBody: @Composable (Modifier) -> Unit = { bodyModifier ->
         Column(
-            modifier = Modifier.padding(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = bodyModifier
+                .fillMaxSize()
+                .padding(horizontal = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            if (settings.displaySetting.showUpdates && !isPlayStore) {
-                UpdateCard(vm)
-            }
-
-            BackupReminderCard(
-                settings = settings,
-                onClick = { navController.navigate(Screen.Backup) },
-            )
-
             // 用户头像和昵称自定义区域
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
             ) {
@@ -220,7 +232,7 @@ fun ChatDrawerContent(
 
                         Icon(
                             imageVector = HugeIcons.PencilEdit01,
-                            contentDescription = "Edit",
+                            contentDescription = stringResource(R.string.edit),
                             modifier = Modifier
                                 .onClick {
                                     nicknameEditState.open(settings.displaySetting.userNickname)
@@ -232,9 +244,36 @@ fun ChatDrawerContent(
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
+
+                if (permanent && onCollapse != null) {
+                    Tooltip(
+                        tooltip = { Text(stringResource(R.string.chat_sidebar_collapse)) },
+                    ) {
+                        IconButton(onClick = onCollapse) {
+                            Icon(
+                                imageVector = HugeIcons.PanelLeftClose,
+                                contentDescription = stringResource(R.string.chat_sidebar_collapse),
+                            )
+                        }
+                    }
+                }
             }
 
-            DrawerActions(navController = navController)
+            if (settings.displaySetting.showUpdates && !isPlayStore) {
+                UpdateCard(vm)
+            }
+
+            BackupReminderCard(
+                settings = settings,
+                onClick = {
+                    navigateFromDrawer { navController.navigate(Screen.Backup) }
+                },
+            )
+
+            DrawerActions(
+                navController = navController,
+                navigateFromDrawer = navigateFromDrawer,
+            )
 
             FolderBar(
                 folders = folders,
@@ -254,7 +293,9 @@ fun ChatDrawerContent(
                     .fillMaxWidth()
                     .weight(1f),
                 onClick = {
-                    navigateToChatPage(navController, it.id)
+                    navigateFromDrawer {
+                        navigateToChatPage(navController, it.id)
+                    }
                 },
                 onRegenerateTitle = {
                     vm.generateTitle(it, true)
@@ -264,7 +305,9 @@ fun ChatDrawerContent(
                         vm.deleteConversation(it).join()
                         conversations.refresh()
                         if (it.id == current.id) {
-                            navigateToChatPage(navController)
+                            navigateFromDrawer {
+                                navigateToChatPage(navController)
+                            }
                         }
                     }
                 },
@@ -296,13 +339,17 @@ fun ChatDrawerContent(
                                 .firstOrNull()
                                 ?.id ?: Uuid.random()
                         }
-                        navigateToChatPage(navigator = navController, chatId = id)
+                        navigateFromDrawer {
+                            navigateToChatPage(navigator = navController, chatId = id)
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
                 onManageAssistant = {
                     val currentAssistantId = settings.assistantId
-                    navController.navigate(Screen.AssistantDetail(id = currentAssistantId.toString()))
+                    navigateFromDrawer {
+                        navController.navigate(Screen.AssistantDetail(id = currentAssistantId.toString()))
+                    }
                 }
             )
 
@@ -324,14 +371,14 @@ fun ChatDrawerContent(
                         Text(stringResource(R.string.assistant_page_title))
                     },
                     onClick = {
-                        navController.navigate(Screen.Assistant)
+                        navigateFromDrawer { navController.navigate(Screen.Assistant) }
                     },
                 )
 
                 Box {
                     DrawerAction(
                         icon = {
-                            Icon(HugeIcons.Sparkles, "Menu")
+                            Icon(HugeIcons.Sparkles, stringResource(R.string.menu))
                         },
                         label = {
                             Text(stringResource(R.string.menu))
@@ -349,7 +396,7 @@ fun ChatDrawerContent(
                             leadingIcon = { Icon(HugeIcons.Image02, null) },
                             onClick = {
                                 showMenuPopup = false
-                                navController.navigate(Screen.ImageGen)
+                                navigateFromDrawer { navController.navigate(Screen.ImageGen) }
                             }
                         )
                     }
@@ -363,19 +410,19 @@ fun ChatDrawerContent(
                         Text(stringResource(R.string.favorite_page_title))
                     },
                     onClick = {
-                        navController.navigate(Screen.Favorite)
+                        navigateFromDrawer { navController.navigate(Screen.Favorite) }
                     },
                 )
 
                 DrawerAction(
                     icon = {
-                        Icon(HugeIcons.ChartColumn, "统计数据")
+                        Icon(HugeIcons.ChartColumn, stringResource(R.string.stats_page_title))
                     },
                     label = {
-                        Text("统计数据")
+                        Text(stringResource(R.string.stats_page_title))
                     },
                     onClick = {
-                        navController.navigate(Screen.Stats)
+                        navigateFromDrawer { navController.navigate(Screen.Stats) }
                     },
                 )
 
@@ -387,10 +434,27 @@ fun ChatDrawerContent(
                     },
                     label = { Text(stringResource(R.string.settings)) },
                     onClick = {
-                        navController.navigate(Screen.Setting)
+                        navigateFromDrawer {
+                            navController.navigate(Screen.Setting)
+                        }
                     },
                 )
             }
+        }
+    }
+
+    if (permanent) {
+        Surface(
+            modifier = modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+        ) {
+            drawerBody(Modifier.statusBarsPadding())
+        }
+    } else {
+        ModalDrawerSheet(
+            modifier = modifier.width(300.dp),
+        ) {
+            drawerBody(Modifier)
         }
     }
 
@@ -446,7 +510,7 @@ fun ChatDrawerContent(
                 }
             }
         }
-        ModalBottomSheet(
+        AdaptiveModal(
             onDismissRequest = {
                 showMoveToFolderSheet = false
                 conversationToMoveFolder = null
@@ -482,7 +546,7 @@ fun ChatDrawerContent(
                             .fillMaxWidth()
                             .padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Icon(HugeIcons.Folder01, null)
                         Text(
@@ -493,7 +557,7 @@ fun ChatDrawerContent(
                 }
 
                 LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     items(folders) { folder ->
                         val isCurrent = folder.id == conversationToMoveFolder?.folderId
@@ -513,7 +577,7 @@ fun ChatDrawerContent(
                                     .fillMaxWidth()
                                     .padding(16.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 Icon(HugeIcons.Folder01, null)
                                 Text(
@@ -622,7 +686,7 @@ fun ChatDrawerContent(
 
     // 移动到助手 Bottom Sheet
     if (showMoveToAssistantSheet) {
-        ModalBottomSheet(
+        AdaptiveModal(
             onDismissRequest = {
                 showMoveToAssistantSheet = false
                 conversationToMove = null
@@ -643,7 +707,7 @@ fun ChatDrawerContent(
                 )
 
                 LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     items(settings.assistants) { assistant ->
                         AssistantItem(
@@ -668,11 +732,16 @@ fun ChatDrawerContent(
 }
 
 @Composable
-private fun DrawerActions(navController: Navigator) {
+private fun DrawerActions(
+    navController: Navigator,
+    navigateFromDrawer: ((() -> Unit) -> Unit),
+) {
     Column {
         // 搜索入口
         Surface(
-            onClick = { navController.navigate(Screen.MessageSearch) },
+            onClick = {
+                navigateFromDrawer { navController.navigate(Screen.MessageSearch) }
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 4.dp),
@@ -702,7 +771,9 @@ private fun DrawerActions(navController: Navigator) {
 
         // 历史记录入口
         Surface(
-            onClick = { navController.navigate(Screen.History) },
+            onClick = {
+                navigateFromDrawer { navController.navigate(Screen.History) }
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 4.dp),
@@ -784,7 +855,7 @@ private fun AssistantItem(
                 .fillMaxWidth()
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             UIAvatar(
                 name = assistant.name,
@@ -904,7 +975,7 @@ private fun FolderChip(
             )
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {

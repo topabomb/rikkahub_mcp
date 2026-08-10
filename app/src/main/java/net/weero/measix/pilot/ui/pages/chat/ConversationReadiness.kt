@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.chat
+package net.weero.measix.pilot.ui.pages.chat
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -41,6 +41,8 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.ui.adaptive.ChatLayoutMode
+import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.theme.LocalChatFontSizeRatio
 import kotlin.uuid.Uuid
@@ -436,7 +438,7 @@ private fun ReadinessTitleRow(
                     maxLines = 1,
                 )
             }
-            // 可点击的交互区：头像 + 助手名称
+            // 可点击的交互区：头像 + 助手名称（宽屏+useAssistantAvatar 时头像已显示在 TopAppBar，此处隐藏）
             Row(
                 modifier = Modifier
                     .weight(1f, fill = false)
@@ -446,11 +448,15 @@ private fun ReadinessTitleRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                UIAvatar(
-                    name = displayName,
-                    value = assistant.avatar,
-                    modifier = Modifier.size((20 * scale).dp),
-                )
+                val hideAvatar = assistant.useAssistantAvatar &&
+                    LocalAdaptiveLayoutInfo.current.chatLayoutMode == ChatLayoutMode.ListDetail
+                if (!hideAvatar) {
+                    UIAvatar(
+                        name = displayName,
+                        value = assistant.avatar,
+                        modifier = Modifier.size((20 * scale).dp),
+                    )
+                }
                 Text(
                     text = displayName,
                     style = titleStyle,

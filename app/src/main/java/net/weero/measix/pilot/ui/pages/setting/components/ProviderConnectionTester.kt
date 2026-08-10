@@ -15,7 +15,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.SheetValue
@@ -266,7 +266,7 @@ private fun TestResultItem(
         val stackTrace = remember(state.error) {
             state.error.stackTraceToString()
         }
-        ModalBottomSheet(
+        AdaptiveModal(
             onDismissRequest = { showErrorSheet = false },
             sheetState = sheetState,
         ) {

@@ -1,4 +1,4 @@
-ï»¿package net.weero.measix.pilot.ui.pages.setting
+package net.weero.measix.pilot.ui.pages.setting
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Clean
@@ -71,7 +71,7 @@ fun SettingFilesPage(
     val toaster = LocalToaster.current
     val folders = remember { listOf(FileFolders.UPLOAD) }
 
-    // é¢„å…ˆèŽ·å–å­—ç¬¦ä¸²èµ„æº
+    // Ô¤ÏÈ»ñÈ¡×Ö·û´®×ÊÔ´
     val deletedToast = stringResource(R.string.setting_files_page_deleted_toast)
     val deleteFailedToast = stringResource(R.string.setting_files_page_delete_failed_toast)
     val cleanedToast = stringResource(R.string.setting_files_page_cleaned_toast)
@@ -198,7 +198,7 @@ fun SettingFilesPage(
                     verticalItemSpacing = 8.dp,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     state = gridState,
-                    columns = StaggeredGridCells.Fixed(2)
+                    columns = StaggeredGridCells.Adaptive(minSize = 180.dp)
                 ) {
                     items(files, key = { it.id }) { file ->
                         FileItem(

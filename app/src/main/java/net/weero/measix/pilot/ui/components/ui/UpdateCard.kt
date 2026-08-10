@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -14,12 +13,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Text
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -28,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastForEach
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -37,6 +37,7 @@ import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Download01
 import net.weero.measix.pilot.BuildConfig
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.components.richtext.MarkdownBlock
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.hooks.useThrottle
@@ -54,70 +55,88 @@ import kotlin.time.toJavaInstant
 @Composable
 fun UpdateCard(vm: ChatVM) {
     val state by vm.updateState.collectAsStateWithLifecycle()
+    val settings by vm.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val toaster = LocalToaster.current
     state.onError {
-        Card {
-            Column(
-                modifier = Modifier
-                    .padding(8.dp)
-                    .fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = stringResource(R.string.update_card_check_failed),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.error
-                )
-                Text(
-                    text = it.message ?: stringResource(R.string.update_card_unknown_error),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error
-                )
+        val errorDismissed by remember { derivedStateOf { vm.updateChecker.errorDismissed.value } }
+        if (!errorDismissed) {
+            Card {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.update_card_check_failed),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        Text(
+                            text = it.message ?: stringResource(R.string.update_card_unknown_error),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    IconButton(onClick = { vm.updateChecker.dismissError() }) {
+                        Icon(
+                            imageVector = HugeIcons.Cancel01,
+                            contentDescription = stringResource(R.string.update_card_close),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
         }
     }
     state.onSuccess { info ->
         var showDetail by remember { mutableStateOf(false) }
-        var dismissed by remember { mutableStateOf(false) }
         val current = remember { Version(BuildConfig.VERSION_NAME) }
         val latest = remember(info) { Version(info.version) }
-        if (latest > current && !dismissed) {
+        // 持久化关闭：用户关掉的版本不再弹，新版本发布自动恢复提示
+        val dismissedByVersion = settings.ignoredUpdateVersion == info.version
+        if (latest > current && !dismissedByVersion) {
             Card(
-                onClick = {
-                    showDetail = true
-                }
+                onClick = { showDetail = true },
             ) {
-                Column(
+                Row(
                     modifier = Modifier
-                        .padding(8.dp)
-                        .fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = stringResource(R.string.update_card_new_version_found, info.version),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(onClick = { dismissed = true }) {
-                            Icon(
-                                imageVector = HugeIcons.Cancel01,
-                                contentDescription = stringResource(R.string.update_card_close),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    MarkdownBlock(
-                        content = info.changelog,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.heightIn(max = 200.dp)
+                    Icon(
+                        imageVector = HugeIcons.Download01,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
                     )
+                    Text(
+                        text = stringResource(R.string.update_card_new_version_found, info.version),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(
+                        onClick = {
+                            vm.updateSettings(
+                                settings.copy(ignoredUpdateVersion = info.version)
+                            )
+                        },
+                    ) {
+                        Icon(
+                            imageVector = HugeIcons.Cancel01,
+                            contentDescription = stringResource(R.string.update_card_close),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
@@ -128,9 +147,12 @@ fun UpdateCard(vm: ChatVM) {
                 showDetail = false
                 toaster.show(downloadingText, type = ToastType.Info)
             }
-            ModalBottomSheet(
+            AdaptiveModal(
                 onDismissRequest = { showDetail = false },
-                sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)),
+                sheetState = rememberBottomSheetState(
+                    initialValue = SheetValue.Hidden,
+                    enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded),
+                ),
             ) {
                 Column(
                     modifier = Modifier
@@ -164,11 +186,6 @@ fun UpdateCard(vm: ChatVM) {
                             },
                         ) {
                             ListItem(
-                                headlineContent = {
-                                    Text(
-                                        text = downloadItem.name,
-                                    )
-                                },
                                 supportingContent = {
                                     Text(
                                         text = downloadItem.size
@@ -180,7 +197,11 @@ fun UpdateCard(vm: ChatVM) {
                                         contentDescription = null
                                     )
                                 }
-                            )
+                            ) {
+                                Text(
+                                    text = downloadItem.name,
+                                )
+                            }
                         }
                     }
                 }

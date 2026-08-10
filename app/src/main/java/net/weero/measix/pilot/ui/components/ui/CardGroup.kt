@@ -115,7 +115,6 @@ private fun CardGroupListItem(
     )
 
     ListItem(
-        headlineContent = item.headlineContent,
         modifier = item.modifier
             .fillMaxWidth()
             .clip(
@@ -140,7 +139,9 @@ private fun CardGroupListItem(
         leadingContent = item.leadingContent,
         trailingContent = item.trailingContent,
         colors = item.colors ?: CustomColors.listItemColors,
-    )
+    ) {
+        item.headlineContent()
+    }
 }
 
 @Composable

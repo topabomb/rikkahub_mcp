@@ -1,4 +1,4 @@
-ï»¿package net.weero.measix.pilot.ui.pages.assistant
+package net.weero.measix.pilot.ui.pages.assistant
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Copy01
@@ -31,7 +31,7 @@ import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -92,14 +92,14 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
     val navController = LocalNavController.current
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
-    // æœç´¢å…³é”®è¯çŠ¶æ€
+    // ËÑË÷¹Ø¼ü´Ê×´Ì¬
     var searchQuery by remember { mutableStateOf("") }
-    // æ ‡ç­¾è¿‡æ»¤çŠ¶æ€
+    // ±êÇ©¹ıÂË×´Ì¬
     var selectedTagIds by remember { mutableStateOf(emptySet<Uuid>()) }
-    // æ“ä½œèœå•çŠ¶æ€
+    // ²Ù×÷²Ëµ¥×´Ì¬
     var actionSheetAssistant by remember { mutableStateOf<Assistant?>(null) }
 
-    // æ ¹æ®æœç´¢å…³é”®è¯å’Œé€‰ä¸­çš„æ ‡ç­¾è¿‡æ»¤åŠ©æ‰‹
+    // ¸ù¾İËÑË÷¹Ø¼ü´ÊºÍÑ¡ÖĞµÄ±êÇ©¹ıÂËÖúÊÖ
     val filteredAssistants = remember(settings.assistants, selectedTagIds, searchQuery) {
         settings.assistants.filter { assistant ->
             val matchesSearch = searchQuery.isBlank() ||
@@ -154,7 +154,7 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
             }
             val haptic = LocalHapticFeedback.current
 
-            // æœç´¢æ¡†
+            // ËÑË÷¿ò
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
@@ -176,7 +176,7 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
                 shape = RoundedCornerShape(12.dp)
             )
 
-            // æ ‡ç­¾è¿‡æ»¤å™¨
+            // ±êÇ©¹ıÂËÆ÷
             AssistantTagsFilterRow(
                 settings = settings,
                 vm = vm,
@@ -239,7 +239,7 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
 
     AssistantCreationSheet(createState)
 
-    // æ“ä½œèœå• Bottom Sheet
+    // ²Ù×÷²Ëµ¥ Bottom Sheet
     actionSheetAssistant?.let { assistant ->
         AssistantActionSheet(
             assistant = assistant,
@@ -324,7 +324,7 @@ private fun AssistantCreationSheet(
     state: EditState<Assistant>,
 ) {
     state.EditStateContent { assistant, update ->
-        ModalBottomSheet(
+        AdaptiveModal(
             onDismissRequest = {
                 state.dismiss()
             },
@@ -482,7 +482,7 @@ private fun AssistantActionSheet(
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
 
-    ModalBottomSheet(
+    AdaptiveModal(
         onDismissRequest = onDismiss
     ) {
         Column(
@@ -490,7 +490,7 @@ private fun AssistantActionSheet(
                 .fillMaxWidth()
                 .padding(bottom = 32.dp)
         ) {
-            // åŠ©æ‰‹ä¿¡æ¯å¤´éƒ¨
+            // ÖúÊÖĞÅÏ¢Í·²¿
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -511,9 +511,8 @@ private fun AssistantActionSheet(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            // å…‹éš†é€‰é¡¹
+            // ¿ËÂ¡Ñ¡Ïî
             ListItem(
-                headlineContent = { Text(stringResource(R.string.assistant_page_clone)) },
                 leadingContent = {
                     Icon(
                         imageVector = HugeIcons.Copy01,
@@ -523,17 +522,13 @@ private fun AssistantActionSheet(
                 },
                 modifier = Modifier.onClick { onCopy() },
                 colors = ListItemDefaults.colors(containerColor = Color.Transparent)
-            )
+            ) {
+                Text(stringResource(R.string.assistant_page_clone))
+            }
 
-            // åˆ é™¤é€‰é¡¹ï¼ˆä»…éé»˜è®¤åŠ©æ‰‹æ˜¾ç¤ºï¼‰
+            // É¾³ıÑ¡Ïî£¨½ö·ÇÄ¬ÈÏÖúÊÖÏÔÊ¾£©
             if (assistant.id !in DEFAULT_ASSISTANTS_IDS) {
                 ListItem(
-                    headlineContent = {
-                        Text(
-                            stringResource(R.string.assistant_page_delete),
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    },
                     leadingContent = {
                         Icon(
                             imageVector = HugeIcons.Delete01,
@@ -543,7 +538,12 @@ private fun AssistantActionSheet(
                     },
                     modifier = Modifier.onClick { showDeleteDialog = true },
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent)
-                )
+                ) {
+                    Text(
+                        stringResource(R.string.assistant_page_delete),
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         }
     }

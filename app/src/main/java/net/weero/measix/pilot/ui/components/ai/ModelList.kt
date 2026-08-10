@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ai
+package net.weero.measix.pilot.ui.components.ai
 
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.combinedClickable
@@ -28,14 +28,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.material3.SheetValue
-import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -81,6 +78,7 @@ import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
 import net.weero.measix.pilot.ui.components.ui.Tag
 import net.weero.measix.pilot.ui.components.ui.TagType
@@ -165,12 +163,12 @@ fun ModelSelector(
     modelId: Uuid?,
     providers: List<ProviderSetting>,
     type: ModelType,
+    modifier: Modifier = Modifier,
     state: ModelListState = rememberModelListState(
         modelId = modelId,
         providers = providers,
         type = type,
     ),
-    modifier: Modifier = Modifier,
     onlyIcon: Boolean = false,
     allowClear: Boolean = false,
     onSelect: (Model) -> Unit
@@ -255,24 +253,14 @@ fun ModelListSheet(
 ) {
     if (!state.visible) return
 
-    val coroutineScope = rememberCoroutineScope()
-    val sheetState = rememberBottomSheetState(
-        initialValue = SheetValue.Hidden,
-        enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)
-    )
-
     fun dismiss() {
-        coroutineScope.launch {
-            sheetState.hide()
-            state.close()
-        }
+        state.close()
     }
 
-    ModalBottomSheet(
+    AdaptiveModal(
         onDismissRequest = {
             state.close()
         },
-        sheetState = sheetState,
     ) {
         Column(
             modifier = Modifier

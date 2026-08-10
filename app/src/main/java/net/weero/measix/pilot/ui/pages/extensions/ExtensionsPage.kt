@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.extensions
+package net.weero.measix.pilot.ui.pages.extensions
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues

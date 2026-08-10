@@ -22,11 +22,8 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.SheetValue
-import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +47,7 @@ import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
 import net.weero.measix.pilot.data.ai.mcp.McpStatus
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.components.ui.Tag
 import net.weero.measix.pilot.ui.components.ui.TagType
 import org.koin.compose.koinInject
@@ -90,9 +88,6 @@ fun McpPickerListItem(
                 )
             }
         },
-        headlineContent = {
-            Text(stringResource(R.string.mcp_picker_title))
-        },
         trailingContent = {
             if (enabledServers.isNotEmpty()) {
                 Text(
@@ -110,7 +105,9 @@ fun McpPickerListItem(
             .clickable {
                 showMcpPicker = true
             },
-    )
+    ) {
+        Text(stringResource(R.string.mcp_picker_title))
+    }
 
     if (showMcpPicker) {
         McpPickerSheet(
@@ -131,9 +128,8 @@ private fun McpPickerSheet(
     onUpdateAssistant: (Assistant) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(
+    AdaptiveModal(
         onDismissRequest = onDismiss,
-        sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
     ) {
         Column(
             modifier = Modifier
