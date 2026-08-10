@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.message
+package net.weero.measix.pilot.ui.components.message
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
@@ -132,25 +133,34 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     FilledTonalIconButton(
                         onClick = { showDenyDialog = true },
-                        modifier = Modifier.size(28.dp),
+                        modifier = Modifier.size(32.dp),
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        ),
                     ) {
                         Icon(
                             imageVector = HugeIcons.Cancel01,
                             contentDescription = stringResource(R.string.chat_message_tool_deny),
-                            modifier = Modifier.size(14.dp)
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                     FilledTonalIconButton(
                         onClick = { onToolApproval(tool.toolCallId, true, "") },
-                        modifier = Modifier.size(28.dp),
+                        modifier = Modifier.size(32.dp),
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        ),
                     ) {
                         Icon(
                             imageVector = HugeIcons.Tick01,
                             contentDescription = stringResource(R.string.chat_message_tool_approve),
-                            modifier = Modifier.size(14.dp)
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }

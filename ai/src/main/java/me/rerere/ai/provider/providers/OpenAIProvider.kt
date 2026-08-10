@@ -1,3 +1,4 @@
+@file:Suppress("UNNECESSARY_SAFE_CALL")
 package me.rerere.ai.provider.providers
 
 import android.content.Context

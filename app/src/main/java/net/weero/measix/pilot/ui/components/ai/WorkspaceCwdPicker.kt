@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ai
+package net.weero.measix.pilot.ui.components.ai
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,7 +17,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -74,7 +74,7 @@ fun WorkspaceCwdPickerSheet(
         }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    AdaptiveModal(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -125,13 +125,6 @@ fun WorkspaceCwdPickerSheet(
                 val dirs = entries.filter { it.isDirectory }
                 items(dirs, key = { it.path }) { entry ->
                     ListItem(
-                        headlineContent = {
-                            Text(
-                                text = entry.name,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        },
                         leadingContent = {
                             Icon(
                                 imageVector = HugeIcons.Folder01,
@@ -144,7 +137,13 @@ fun WorkspaceCwdPickerSheet(
                         modifier = Modifier.clickable {
                             browsePath = entry.path
                         },
-                    )
+                    ) {
+                        Text(
+                            text = entry.name,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
 
                 if (!loading && dirs.isEmpty()) {

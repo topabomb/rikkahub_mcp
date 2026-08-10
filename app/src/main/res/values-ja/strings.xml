@@ -400,10 +400,10 @@
   <string name="mcp_picker_syncing">MCPサーバーを同期中...</string>
   <string name="mcp_picker_title">MCP</string>
   <string name="menu">メニュー</string>
-  <string name="menu_page_afternoon_greeting">こんにちは\uD83D\uDC4B</string>
-  <string name="menu_page_evening_greeting">こんばんは\uD83D\uDC4B</string>
-  <string name="menu_page_morning_greeting">おはようございます\uD83D\uDC4B</string>
-  <string name="menu_page_night_greeting">夜更かしですね、お気をつけて\uD83D\uDC4B</string>
+  <string name="menu_page_afternoon_greeting">こんにちは👋</string>
+  <string name="menu_page_evening_greeting">こんばんは👋</string>
+  <string name="menu_page_morning_greeting">おはようございます👋</string>
+  <string name="menu_page_night_greeting">夜更かしですね、お気をつけて👋</string>
   <string name="mermaid_export">エクスポート</string>
   <string name="mermaid_export_failed">エクスポートに失敗しました</string>
   <string name="mermaid_export_success">エクスポートに成功しました</string>
@@ -1223,5 +1223,9 @@
   <string name="setting_provider_type_openai">OpenAI</string>
   <string name="setting_provider_type_google">Google</string>
   <string name="setting_provider_type_claude">Claude</string>
+  <string name="chat_sidebar_collapse">会話サイドバーを折りたたむ</string>
+  <string name="chat_sidebar_expand">会話サイドバーを展開</string>
+  <string name="chat_navigation_open_drawer">会話ナビゲーションを開く</string>
+  <string name="chat_page_chat_options">チャットオプション</string>
 </resources>
 

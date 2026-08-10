@@ -403,10 +403,10 @@
   <string name="mcp_picker_syncing">Syncing MCP servers...</string>
   <string name="mcp_picker_title">MCP</string>
   <string name="menu">Menu</string>
-  <string name="menu_page_afternoon_greeting">Good afternoon\uD83D\uDC4B</string>
-  <string name="menu_page_evening_greeting">Good evening\uD83D\uDC4B</string>
-  <string name="menu_page_morning_greeting">Good morning\uD83D\uDC4B</string>
-  <string name="menu_page_night_greeting">It\'s late, take care\uD83D\uDC4B</string>
+  <string name="menu_page_afternoon_greeting">Good afternoon👋</string>
+  <string name="menu_page_evening_greeting">Good evening👋</string>
+  <string name="menu_page_morning_greeting">Good morning👋</string>
+  <string name="menu_page_night_greeting">It\'s late, take care👋</string>
   <string name="mermaid_export">Export</string>
   <string name="mermaid_export_failed">Export failed</string>
   <string name="mermaid_export_success">Export successful</string>
@@ -1223,5 +1223,9 @@
   <string name="setting_provider_type_openai">OpenAI</string>
   <string name="setting_provider_type_google">Google</string>
   <string name="setting_provider_type_claude">Claude</string>
+  <string name="chat_sidebar_collapse">Collapse conversation sidebar</string>
+  <string name="chat_sidebar_expand">Expand conversation sidebar</string>
+  <string name="chat_navigation_open_drawer">Open conversation navigation</string>
+  <string name="chat_page_chat_options">Chat Options</string>
 </resources>
 

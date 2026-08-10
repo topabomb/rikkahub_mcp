@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ai
+package net.weero.measix.pilot.ui.components.ai
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,15 +24,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.SheetValue
-import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,7 +37,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.Edit03
@@ -49,6 +44,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.hooks.rememberAssistantState
@@ -149,8 +145,6 @@ internal fun AssistantPickerSheet(
     onAssistantSelected: (Assistant) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
-    val scope = rememberCoroutineScope()
     val defaultAssistantName = stringResource(R.string.assistant_page_default_assistant)
 
     // 标签过滤状态
@@ -167,9 +161,8 @@ internal fun AssistantPickerSheet(
         }
     }
 
-    ModalBottomSheet(
+    AdaptiveModal(
         onDismissRequest = onDismiss,
-        sheetState = sheetState,
     ) {
         Column(
             modifier = Modifier
@@ -229,11 +222,8 @@ internal fun AssistantPickerSheet(
                             assistant = assistant,
                             defaultAssistantName = defaultAssistantName,
                             onEdit = {
-                                scope.launch {
-                                    sheetState.hide()
-                                    onDismiss()
-                                    navController.navigate(Screen.AssistantDetail(assistant.id.toString()))
-                                }
+                                onDismiss()
+                                navController.navigate(Screen.AssistantDetail(assistant.id.toString()))
                             }
                         )
                     }

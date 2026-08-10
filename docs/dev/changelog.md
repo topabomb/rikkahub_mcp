@@ -6,6 +6,32 @@
 
 ---
 
+## 0.0.14（versionCode 14）— 2026-08-10
+
+### 新增
+
+- **折叠屏与宽屏聊天双栏**：在根界面统一计算 Material 3 窗口尺寸等级和折叠姿态；聊天页在手机上保持模态会话抽屉，在展开窗口（≥600dp 宽且 ≥480dp 高）切换为"会话列表 + 聊天"双栏，并避开物理铰链区域
+- **宽屏会话栏折叠**：展开窗口允许主动折叠/恢复会话列表（`animateDpAsState` 宽度动画 + `clipToBounds`），状态持久化到 SharedPreferences；任何窗口尺寸都不会出现永久三栏聊天布局
+- **矮横屏紧凑输入**：可用高度低于 480dp 时输入文本与全部操作压缩到同一行
+- **宽屏弹层居中面板**：与聊天双栏一致（≥600dp 宽且 ≥480dp 高），高频选择器（助手、模型、文件、MCP、搜索、推理、Workspace）以居中 Dialog 呈现，窄屏维持底部弹层
+- **自适应布局策略测试**：补充 600dp/480dp 精确边界值、折叠姿态、铰链、tabletop 等纯函数策略测试
+
+### 修复
+
+- **顶部留白**：聊天页 `Scaffold(contentWindowInsets = WindowInsets(0))` + TopAppBar 自避让状态栏；消息列表 contentPadding top 从 16dp 减至 0dp；会话栏 body padding vertical 从 8dp 减至 4dp；会话栏子项 spacedBy 从 8dp 减至 4dp；用户头部行 padding vertical 从 8dp 减至 4dp；搜索/历史条目 padding vertical 从 10dp 减至 8dp
+- **底部留白**：消息列表 contentPadding bottom 从 48dp 减至 24dp；输入框底部 padding 从 8dp 减至 4dp
+- **工具授权按钮醒目度**：批准按钮使用 `FilledTonalIconButton`（primaryContainer 色）+ 拒绝按钮使用 `FilledTonalIconButton`（errorContainer 色），尺寸从 28dp 增至 32dp，图标从 14dp 增至 18dp
+- **Theme.kt Activity 获取**：改用 `LocalActivity` 替代 `view.context as Activity`，更安全
+- **Emoji 问候语**：Unicode 转义 `\uD83D\uDC4B` 改为直接 emoji 字符
+- **chatLayoutMode 冗余铰链检查**：移除 `hasUsefulHingeSplit` 死代码（宽度检查已覆盖铰链场景），铰链仅影响 `canCollapseChatSidebar`
+- **TopAppBar 标题放大**：对话标题从 `bodyMedium`(14sp) 改为 `titleMedium`(16sp)；助手/模型副标题从 `labelSmall.copy(fontSize=8.sp)` 改为 `bodySmall`(12sp)，充分利用 TopAppBar 64dp 高度
+
+### 变更
+
+- **自适应架构重新实现**：从 `ae895469` 基线重新实现，仅保留聊天双栏核心；移除设置场景化 Dialog、全局 ListDetailSceneStrategy、AdaptiveContentContainer 等过度设计；RouteActivity 恢复为简单的全屏逐页导航 + `LocalAdaptiveLayoutInfo` provider
+
+---
+
 ## 0.0.13（versionCode 13）— 2026-08-05 ~ 2026-08-09
 
 ### 修复

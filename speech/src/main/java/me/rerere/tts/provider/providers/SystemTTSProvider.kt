@@ -1,4 +1,4 @@
-﻿package me.rerere.tts.provider.providers
+package me.rerere.tts.provider.providers
 
 import android.content.Context
 import android.speech.tts.TextToSpeech
@@ -76,6 +76,7 @@ class SystemTTSProvider : TTSProvider<TTSProviderSetting.SystemTTS> {
                         }
                     }
 
+                    @Deprecated("Deprecated in Java")
                     override fun onError(utteranceId: String?) {
                         Log.e(TAG, "onError: TTS synthesis failed!")
                         audioFile.delete()
@@ -109,7 +110,7 @@ class SystemTTSProvider : TTSProvider<TTSProviderSetting.SystemTTS> {
         tts = TextToSpeech(context, listener)
 
         continuation.invokeOnCancellation {
-            tts?.shutdown()
+            tts.shutdown()
         }
     }
 

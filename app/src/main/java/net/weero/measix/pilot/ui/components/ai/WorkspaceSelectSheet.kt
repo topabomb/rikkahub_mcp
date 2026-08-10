@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ai
+package net.weero.measix.pilot.ui.components.ai
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,10 +13,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,6 +29,7 @@ import me.rerere.hugeicons.stroke.Tick02
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.pages.extensions.workspace.toShellStatusLabel
 
 @Composable
@@ -42,12 +40,8 @@ internal fun WorkspaceSelectSheet(
     onManage: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(
+    AdaptiveModal(
         onDismissRequest = onDismiss,
-        sheetState = rememberBottomSheetState(
-            initialValue = SheetValue.Hidden,
-            enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)
-        ),
     ) {
         Column(
             modifier = Modifier
@@ -91,9 +85,6 @@ internal fun WorkspaceSelectSheet(
                 leadingContent = {
                     Icon(HugeIcons.Codesandbox, contentDescription = null)
                 },
-                headlineContent = {
-                    Text(stringResource(R.string.workspace_manage))
-                },
                 trailingContent = {
                     Icon(
                         imageVector = HugeIcons.ArrowRight01,
@@ -105,7 +96,9 @@ internal fun WorkspaceSelectSheet(
                 modifier = Modifier
                     .clip(MaterialTheme.shapes.large)
                     .clickable { onManage() },
-            )
+            ) {
+                Text(stringResource(R.string.workspace_manage))
+            }
         }
     }
 }
@@ -120,13 +113,6 @@ private fun WorkspaceSelectRow(
     ListItem(
         leadingContent = {
             Icon(HugeIcons.Codesandbox, contentDescription = null)
-        },
-        headlineContent = {
-            Text(
-                text = title,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
         },
         supportingContent = status?.let {
             {
@@ -158,5 +144,11 @@ private fun WorkspaceSelectRow(
         modifier = Modifier
             .clip(MaterialTheme.shapes.large)
             .clickable { onClick() },
-    )
+    ) {
+        Text(
+            text = title,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }

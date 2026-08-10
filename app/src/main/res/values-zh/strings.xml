@@ -402,10 +402,10 @@
   <string name="mcp_picker_syncing">正在同步MCP服务器...</string>
   <string name="mcp_picker_title">MCP</string>
   <string name="menu">菜单</string>
-  <string name="menu_page_afternoon_greeting">下午好\uD83D\uDC4B</string>
-  <string name="menu_page_evening_greeting">晚上好\uD83D\uDC4B</string>
-  <string name="menu_page_morning_greeting">早上好\uD83D\uDC4B</string>
-  <string name="menu_page_night_greeting">夜深了，注意休息\uD83D\uDC4B</string>
+  <string name="menu_page_afternoon_greeting">下午好👋</string>
+  <string name="menu_page_evening_greeting">晚上好👋</string>
+  <string name="menu_page_morning_greeting">早上好👋</string>
+  <string name="menu_page_night_greeting">夜深了，注意休息👋</string>
   <string name="mermaid_export">导出</string>
   <string name="mermaid_export_failed">导出失败</string>
   <string name="mermaid_export_success">导出成功</string>
@@ -1223,4 +1223,8 @@
   <string name="setting_provider_type_openai">OpenAI</string>
   <string name="setting_provider_type_google">Google</string>
   <string name="setting_provider_type_claude">Claude</string>
+  <string name="chat_sidebar_collapse">收起会话侧栏</string>
+  <string name="chat_sidebar_expand">展开会话侧栏</string>
+  <string name="chat_navigation_open_drawer">打开会话导航</string>
+  <string name="chat_page_chat_options">聊天选项</string>
 </resources>

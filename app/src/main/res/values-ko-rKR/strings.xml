@@ -400,10 +400,10 @@
   <string name="mcp_picker_syncing">MCP 서버 동기화 중...</string>
   <string name="mcp_picker_title">MCP</string>
   <string name="menu">메뉴</string>
-  <string name="menu_page_afternoon_greeting">좋은 오후입니다\uD83D\uDC4B</string>
-  <string name="menu_page_evening_greeting">좋은 저녁입니다\uD83D\uDC4B</string>
-  <string name="menu_page_morning_greeting">좋은 아침입니다\uD83D\uDC4B</string>
-  <string name="menu_page_night_greeting">늦었으니 휴식하세요\uD83D\uDC4B</string>
+  <string name="menu_page_afternoon_greeting">좋은 오후입니다👋</string>
+  <string name="menu_page_evening_greeting">좋은 저녁입니다👋</string>
+  <string name="menu_page_morning_greeting">좋은 아침입니다👋</string>
+  <string name="menu_page_night_greeting">늦었으니 휴식하세요👋</string>
   <string name="mermaid_export">내보내기</string>
   <string name="mermaid_export_failed">내보내기 실패</string>
   <string name="mermaid_export_success">내보내기 성공</string>
@@ -1223,5 +1223,9 @@
   <string name="setting_provider_type_openai">OpenAI</string>
   <string name="setting_provider_type_google">Google</string>
   <string name="setting_provider_type_claude">Claude</string>
+  <string name="chat_sidebar_collapse">대화 사이드바 접기</string>
+  <string name="chat_sidebar_expand">대화 사이드바 펼치기</string>
+  <string name="chat_navigation_open_drawer">대화 탐색 열기</string>
+  <string name="chat_page_chat_options">채팅 옵션</string>
 </resources>
 
