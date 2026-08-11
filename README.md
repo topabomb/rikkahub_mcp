@@ -1,10 +1,24 @@
 ﻿# Measix Pilot
 
-> 小睿助手(Measix Pilot) — 基于 [RikkaHub](https://github.com/re-ovo/rikkahub)（原作者 [re-ovo](https://github.com/re-ovo)）fork 的原生 Android LLM 聊天客户端，Measix Pilot 的主要目标是以MCP为中心的用户体验和交互流程的优化。
+> 小睿助手（Measix Pilot）— 基于 [RikkaHub](https://github.com/rikkahub/rikkahub)（原作者 [re-ovo](https://github.com/re-ovo)）fork 的原生 Android LLM 聊天客户端。
+>
+> Fork 源头：RikkaHub v2.3.1（versionCode 164），提交 `5b9be301`。
 
-Fork 源头：RikkaHub v2.3.1（versionCode 164），提交 `5b9be301`。感谢原项目提供的优秀架构和功能基础。
+## 功能特性
 
-**版本起点**：本 fork 从 `0.0.1`（versionCode 1）开始，采用 SemVer 语义化版本管理。详见 [版本规约](docs/dev/fork-simplification-plan.md#八版本规约)。
+- **多 Provider 对话**：OpenAI / Gemini / Claude / DeepSeek 兼容 API，支持 Chat Completions 与 Responses 两套协议
+- **MCP 协议**：连接外部工具服务器，支持 OAuth 2.1 授权与 DCR 动态注册
+- **工具调用 + HITL 审批**：安全的工具执行机制，支持人工审批
+- **工作空间沙箱**：基于 PRoot 的 Linux 环境，AI 可执行命令、读写文件
+- **消息分支**：重新生成、切换对话分支
+- **Markdown 渲染**：Kotlin 原生语法高亮（30+ 语言）、LaTeX、Mermaid 图表
+- **多模态输入**：图片、PDF、DOCX 文档
+- **全文搜索**：FTS5 + jieba 中文分词
+- **备份同步**：WebDAV / S3
+- **AI 生图**：文生图演示功能
+- **Skills 系统**：可扩展的技能框架
+- **语音合成**：System TTS / OpenAI / Gemini / MiMo
+- **自适应 UI**：折叠屏双栏、矮横屏紧凑输入、宽屏弹层居中面板
 
 ## 架构概览
 
@@ -13,49 +27,25 @@ app/          主应用（UI + ViewModel + 数据层）
 ai/           AI SDK 抽象层（Provider 适配 + 消息模型 + 工具定义）
 search/       搜索引擎 SDK（Bing / Tavily / SearXNG）
 speech/       语音 SDK（TTS + ASR）
-workspace/    工作空间（proot Linux 沙箱）
+workspace/    工作空间（PRoot Linux 沙箱）
 document/     文档解析（PDF / DOCX / PPTX / EPUB）
-highlight/    代码语法高亮
+highlight/    代码语法高亮（纯 Kotlin 实现）
 material3/    Material3 颜色工具扩展
 common/       通用工具
 ```
 
-**核心概念**：
-
-| 概念 | 说明 |
-|------|------|
-| Assistant | 助手配置：系统提示词、模型参数、对话隔离 |
-| Conversation | 对话线程，MessageNode 树形结构支持消息分支 |
-| UIMessage | 平台无关的消息抽象，支持流式更新和多种内容类型 |
-| Provider | AI 服务商适配层（OpenAI / Google / Claude / DeepSeek 等兼容 API） |
-| MCP | Model Context Protocol，工具调用与外部服务集成 |
-| Transformer | 消息变换管道（模板、正则、OCR、Think 标签提取等） |
-
-## 功能特性
-
-- **多 Provider 对话**：OpenAI / Gemini / Claude / DeepSeek（4 个预设，全部默认禁用）
-- **MCP 协议**：连接外部工具服务器
-- **工具调用 + HITL 审批**：安全的工具执行机制
-- **工作空间沙箱**：proot Linux 环境执行命令
-- **消息分支**：重新生成、切换对话分支
-- **Markdown 渲染**：代码高亮、LaTeX、Mermaid 图表
-- **多模态输入**：图片、PDF、DOCX 文档
-- **全文搜索**：FTS5 + jieba 中文分词
-- **备份同步**：WebDAV / S3
-- **AI 生图**：文生图演示功能
-- **Skills 系统**：可扩展的技能框架
-- **语音合成**：System TTS / OpenAI / Gemini
+**核心概念**：Assistant（助手配置）、Conversation（对话线程）、UIMessage（消息抽象）、Provider（服务商适配）、MCP（工具协议）、Transformer（消息变换管道）。详见 [界面架构参考](docs/references/ui-architecture.md)。
 
 ## 技术栈
 
 | 类别 | 技术 |
 |------|------|
 | 语言 | Kotlin |
-| UI | Jetpack Compose + Material3 + Navigation3 |
+| UI | Jetpack Compose + Material Expressive (M3) + Navigation 3 |
 | DI | Koin |
 | 网络 | OkHttp + Ktor Client |
 | 序列化 | kotlinx.serialization |
-| 数据库 | Room（版本 2，含 Migration 样本） |
+| 数据库 | Room |
 | 异步 | Coroutines + Flow |
 | 图片 | Coil |
 
@@ -71,9 +61,8 @@ common/       通用工具
 
 ```bash
 ./gradlew assembleDebug              # 构建 Debug APK
+./gradlew assembleRelease            # 构建 Release APK
 ./gradlew test                       # 运行所有 JVM 单元测试
-./gradlew :app:testDebugUnitTest     # 运行 app 模块单元测试
-./gradlew :ai:testDebugUnitTest      # 运行 AI 模块单元测试
 ./gradlew connectedDebugAndroidTest  # 运行设备/模拟器测试
 ./gradlew lint                       # 运行 Android Lint
 ```
@@ -82,34 +71,37 @@ common/       通用工具
 
 | 项目 | 值 |
 |------|-----|
-| 版本 | `0.0.1`（versionCode 1） |
 | 包名 | `net.weero.measix.pilot` |
 | 最低 SDK | 26（Android 8.0） |
 | 目标 SDK | 37 |
-| 数据库 | Room `measix_pilot`（version 2） |
-| SharedPreferences | `MeasixPilot.preferences` |
 
-首次启动时 4 个预设 Provider 均为禁用状态，需手动启用并配置 API Key。
-
-## 精简说明
-
-本 fork 相比原项目移除了以下功能：
-
-- Firebase（RemoteConfig / Crashlytics / Analytics）
-- Retrofit（改用 OkHttp + Ktor Client）
-- Web 服务器模块（Ktor Server + React 前端 + mDNS）
-- 酒馆角色卡 / Chatbox / CherryStudio 导入
-- Lorebook / 世界书（保留 ModeInjection）
-- 翻译功能
-- 大量预设 Provider（18→4）和搜索引擎（17→4）
-
-详细变更记录见 [Fork 精简计划](docs/dev/fork-simplification-plan.md)。
+首次启动时预设 Provider 均为禁用状态，需手动启用并配置 API Key。
 
 ## 文档
 
-- [架构文档](docs/dev/architecture.md) — 原项目 RikkaHub 架构详解
-- [Fork 精简计划](docs/dev/fork-simplification-plan.md) — 变更记录与执行状态
+### 参考文档（`docs/references/`）
+
+| 文档 | 说明 |
+|------|------|
+| [界面架构参考](docs/references/ui-architecture.md) | UI 架构层次、导航体系、自适应布局策略、折叠屏适配方案 |
+| [消息生成链路](docs/references/chat-generation-pipeline.md) | 从用户发送到模型回复落盘的完整数据流 |
+| [AI 协议参考](docs/references/protocol-reference.md) | 四类基础协议规范、Provider 差异映射、模型级适配 |
+| [工作区架构](docs/references/workspace-architecture.md) | PRoot 技术原理、Android 14+ 兼容性、工具调用生命周期 |
+| [更新机制](docs/references/update-mechanism.md) | 版本检查、SemVer 比较、CI 构建与发行版托管 |
+
+### 开发文档（`docs/dev/`）
+
+| 文档 | 说明 |
+|------|------|
+| [功能迭代清单](docs/dev/changelog.md) | 0.0.3 起的功能迭代历史（每次迭代更新） |
+| [Fork 精简计划](docs/dev/fork-simplification-plan.md) | Fork 精简规划与落地记录（已归档） |
+| [原始架构文档](docs/dev/original-architecture.md) | Fork 前 RikkaHub 架构详解（已归档） |
+| [上游同步记录](docs/dev/upstream-sync.md) | RikkaHub 上游提交检查与同步历史 |
+
+## Fork 说明
+
+相比原项目 RikkaHub，本 fork 移除了 Firebase、Retrofit、Web 服务器模块、酒馆角色卡导入、Lorebook、翻译功能，精简了预设 Provider（18→4）和搜索引擎（17→4）。许可证同步上游变更为纯 AGPL-3.0。详见 [Fork 精简计划](docs/dev/fork-simplification-plan.md)。
 
 ## 许可
 
-[LICENSE](LICENSE)
+[AGPL-3.0](LICENSE)
