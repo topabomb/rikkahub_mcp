@@ -84,6 +84,8 @@ common/       通用工具
 | 文档 | 说明 |
 |------|------|
 | [界面架构参考](docs/references/ui-architecture.md) | UI 架构层次、导航体系、自适应布局策略、折叠屏适配方案 |
+| [消息渲染管线](docs/references/message-rendering-pipeline.md) | UIMessage.parts 到像素的完整渲染管线、Markdown 双路径、WebView 封装 |
+| [助手配置与对话交互](docs/references/assistant-configuration.md) | 助手完整配置项、阻断性条件、对话交互流程、LLM 干预与微调机制 |
 | [消息生成链路](docs/references/chat-generation-pipeline.md) | 从用户发送到模型回复落盘的完整数据流 |
 | [AI 协议参考](docs/references/protocol-reference.md) | 四类基础协议规范、Provider 差异映射、模型级适配 |
 | [工作区架构](docs/references/workspace-architecture.md) | PRoot 技术原理、Android 14+ 兼容性、工具调用生命周期 |

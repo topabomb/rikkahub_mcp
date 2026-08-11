@@ -12,7 +12,7 @@
 > - **Google Gemini**：已通过 `@google/genai` TypeScript v2.16.0 SDK 源码核对 Gemini API 类型定义。
 > - **DeepSeek**：已与 `api-docs.deepseek.com` 官方文档完整核对。
 > - **火山方舟**：已核对 Responses 工具调用与深度思考官方文档（最近更新时间分别为 2026-08-04、2026-08-06）。
-> - 项目代码描述已与当前 0.0.13 实现逐行比对；SDK 快照与当前在线文档冲突时，以当前官方文档为准。
+> - 项目代码描述已与当前实现逐行比对；SDK 快照与当前在线文档冲突时，以当前官方文档为准。
 
 ---
 
@@ -147,7 +147,7 @@ buildChatCompletionRequest()
 | **阿里云百炼** | `dashscope.aliyuncs.com` | `enable_thinking` + `thinking_budget` | — | — |
 | **Mistral** | `api.mistral.ai` | 不支持 reasoning | — | 不支持 `stream_options`；thinking 在 content 数组内 |
 | **书生** | `chat.intern-ai.org.cn` | `thinking_mode` (boolean) | — | — |
-| **SiliconFlow** | `api.siliconflow.cn` | `enable_thinking` (boolean) | — | 需维护模型白名单（约 25 个模型 ID） |
+| **SiliconFlow** | `api.siliconflow.cn` | `enable_thinking` (boolean) | — | 需维护模型白名单 |
 | **智谱** | `open.bigmodel.cn` | `thinking.type` | — | — |
 | **Moonshot** | `api.moonshot.cn` | `thinking.type` + `thinking.keep` | — | K2.5/K3 不支持 temperature；K2.6 需 `keep: "all"` |
 | **NVIDIA** | `integrate.api.nvidia.com` | `reasoning_effort` | DeepSeek V4 特殊映射 | — |
@@ -554,7 +554,7 @@ when {
 | **Moonshot K2.6** | `thinking.keep = "all"` | `ChatCompletionsAPI` Moonshot 分支 | K2.6 需显式传 keep 才是保留式思考 |
 | **Gemini 2.5 Pro** | OFF 时不设置 thinkingBudget | `GoogleProvider` | Pro 无法完全关闭思考 |
 | **Gemini 3 系列** | 使用 `thinkingLevel` 而非 `thinkingBudget` | `GoogleProvider` | Gemini 3 API 变更 |
-| **SiliconFlow 模型** | 模型白名单控制 `enable_thinking`（25 个模型 ID） | `ChatCompletionsAPI` SiliconFlow 分支 | 只有特定模型支持该参数 |
+| **SiliconFlow 模型** | 模型白名单控制 `enable_thinking` | `ChatCompletionsAPI` SiliconFlow 分支 | 只有特定模型支持该参数 |
 
 ### 6.3 ModelRegistry 中的模型分组
 
@@ -604,7 +604,7 @@ Provider 实现层
 
 模型注册表
   ModelRegistry
-    └── ALL_MODELS: List<ModelDefinition>  (~80 个模型定义)
+    └── ALL_MODELS: List<ModelDefinition>
 ```
 
 ### 7.2 职责分离
@@ -737,11 +737,11 @@ ai/.../provider/providers/
 
 ---
 
-## 九、0.0.13 核心目标重审
+## 九、协议保真核心目标重审
 
 ### 9.1 从架构角度审视
 
-0.0.13 的核心目标可以归纳为：**在四协议体系下，确保推理状态在工具调用续轮中正确回传**。
+当前协议层的核心目标可以归纳为：**在四协议体系下，确保推理状态在工具调用续轮中正确回传**。
 
 具体涉及三个层面：
 
@@ -762,7 +762,7 @@ ai/.../provider/providers/
 
 ### 9.2 从职责角度审视
 
-0.0.13 修复中各组件的职责变化：
+协议保真修复中各组件的职责变化：
 
 | 组件 | 修复前职责 | 修复后新增/变更 |
 |------|-----------|----------------|
@@ -775,7 +775,7 @@ ai/.../provider/providers/
 
 ### 9.3 协议适配的"正确性"标准
 
-0.0.13 确立了一个重要原则：**协议适配的正确性不等于功能对等，而是线协议保真**。
+协议保真工作确立了一个重要原则：**协议适配的正确性不等于功能对等，而是线协议保真**。
 
 - Chat Completions 的 `reasoning_content` 是 DeepSeek 扩展，不是 OpenAI 官方字段
 - Responses API 的 `reasoning_text` 是 DeepSeek 扩展，不是 OpenAI 官方的 `summary_text`
@@ -784,9 +784,9 @@ ai/.../provider/providers/
 
 每个协议的推理状态回传机制都是**不同的**，不能用统一的"includeHistoryReasoning"策略覆盖所有场景。
 
-### 9.4 0.0.13 架构续补
+### 9.4 架构续补
 
-本轮 0.0.13 内部整理在既有协议保真基础上补齐“身份、模型行为、不可见状态”三条边界：
+本轮内部整理在既有协议保真基础上补齐“身份、模型行为、不可见状态”三条边界：
 
 - `OpenAIEndpointProfile.kt` 成为 OpenAI-compatible host 身份和 Responses profile 的单一来源。
 - `OPENAI_GPT_5_SERIES` 负责点版本的共享协议行为，不改变各模型自身能力定义。
@@ -816,16 +816,13 @@ ai/.../provider/providers/
 | Claude | thinking signature、redacted data 原样回放、跨模型 stripping |
 | 通用回归 | 多工具、并行工具、流式终态、错误传播、token usage |
 
-2026-08-09 本地串行验证基线：
+本地串行验证基线（`test`、`lint`、`assembleDebug`、`assembleRelease` 均通过）：
 
-- `:ai:testDebugUnitTest`：195 项测试，0 失败、0 错误、0 跳过。
-- 全仓 `test`：522 项测试，0 失败、0 错误、9 跳过。
-- `lint`：成功；345 个任务中 37 个执行、308 个 up-to-date。
-- `assembleDebug`：成功；生成 arm64-v8a、x86_64、universal 三个 Debug APK，包版本保持 `versionCode=13`、`versionName=0.0.13`。
-- `assembleRelease`：成功；391 个任务中 38 个执行、353 个 up-to-date。三个 Release APK 均通过 `apksigner`（v2、单一签名者）和 `aapt` 复核，包版本均为 `versionCode=13`、`versionName=0.0.13`。
-- `git diff --check`：无空白错误，仅有工作区 LF/CRLF 转换提示。
+- `:ai:testDebugUnitTest` 与全仓 `test` 全部通过，无失败项。
+- `lint` 成功。
+- `assembleDebug` / `assembleRelease` 成功，三个 ABI 变体（arm64-v8a、x86_64、universal）均通过签名复核。
 
-上述结果只证明本地编译、静态检查和离线回归；本次没有使用真实供应商账号或设备仪器测试，不能据此证明账号权限、地区开放、服务端灰度、计费/限流或未知兼容网关的真实行为。
+上述结果只证明本地编译、静态检查和离线回归；没有使用真实供应商账号或设备仪器测试，不能据此证明账号权限、地区开放、服务端灰度、计费/限流或未知兼容网关的真实行为。
 
 ---
 
@@ -947,17 +944,17 @@ ai/.../provider/providers/
 | Gemini `thoughtSignature` 在 `Part` 接口上 | `@google/genai` TS v2.16.0 `Part.thoughtSignature` |
 | Gemini `HarmCategory` 包含 5+ 个分类 | `@google/genai` TS v2.16.0 `HarmCategory` 枚举 |
 | Gemini 内置工具 `google_search`/`url_context` | `@google/genai` TS v2.16.0 Blob/BlobData 注释 |
-| DeepSeek Responses `store` 恒为 `false` | DeepSeek 官方文档 + `ResponseAPI.kt:269` |
+| DeepSeek Responses `store` 恒为 `false` | DeepSeek 官方文档 + `ResponseAPI.kt` |
 | DeepSeek Responses 不支持 `include`/`truncation`/`stream_options` | DeepSeek 官方文档兼容性明细表 |
 | DeepSeek Responses 仅支持 `deepseek-v4-flash` | DeepSeek 官方文档 |
 | DeepSeek 工具续轮必须回传 `reasoning_content` | DeepSeek 官方文档 Tool Calls 节 |
 | `ResponseEndpointProfile` 的 4 个来源 profile | `OpenAIEndpointProfile.kt` |
 | `resolveResponseEndpointProfile` 只用 host | `OpenAIEndpointProfile.kt` |
 | Claude `redacted_thinking` 持久化与回传 | `ClaudeProvider.kt` + 回归测试 |
-| Gemini 认证三种方式 | `GoogleProvider.kt:96-115` |
-| Gemini Safety Settings 5 个 category 全 OFF | `GoogleProvider.kt:476-497` |
-| Gemini 2.5 Pro OFF 时不设置 thinkingBudget | `GoogleProvider.kt:391-398` |
-| ALL_MODELS 79 个模型定义 | `ModelRegistry.kt:499-579` 逐行计数 |
+| Gemini 认证三种方式 | `GoogleProvider.kt` |
+| Gemini Safety Settings 5 个 category 全 OFF | `GoogleProvider.kt` |
+| Gemini 2.5 Pro OFF 时不设置 thinkingBudget | `GoogleProvider.kt` |
+| ALL_MODELS 模型定义 | `ModelRegistry.kt` |
 
 ### C.3 2026-08-09 已解决的存疑项
 

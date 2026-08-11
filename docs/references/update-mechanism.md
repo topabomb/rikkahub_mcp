@@ -156,20 +156,27 @@ sealed class UiState<out T> {
 
 ### 在 ChatVM 中的消费
 
+`UpdateChecker` 是 Koin 单例，`updateState` 绑定在 AppScope 上，所有 ChatVM 共享同一 StateFlow：
+
 ```kotlin
-// ChatVM.kt
-val updateState =
-    updateChecker.checkUpdate().stateIn(viewModelScope, SharingStarted.Eagerly, UiState.Loading)
+// UpdateChecker.kt
+val updateState: StateFlow<UiState<UpdateInfo>> by lazy {
+    checkUpdate().stateInOnce(appScope, UiState.Loading)
+}
+
+// stateInOnce 使用 Lazily 策略
+internal fun <T> Flow<T>.stateInOnce(scope: CoroutineScope, initialValue: T): StateFlow<T> =
+    stateIn(scope, SharingStarted.Lazily, initialValue)
+
+// ChatVM.kt — 直接访问单例的 updateState
+val updateState = updateChecker.updateState
 ```
 
-使用 `stateIn` + `SharingStarted.Eagerly` 将 Flow 转为 StateFlow：
-
-- **Eagerly**：ViewModel 创建时立即发起请求（不等第一个订阅者）
+- **Lazily**：首次有订阅者（即 `UpdateCard` 组合且用户开启 `showUpdates`）时才发起请求
 - **初始值**：`UiState.Loading`
-- **生命周期**：绑定 `viewModelScope`，ViewModel 销毁时自动取消
-
-> **注意**：这意味着每次打开聊天页都会触发一次版本检查请求。由于 ChatVM 是按会话 ID 创建的，
-> 切换会话时如果 ViewModel 被销毁重建，可能重复请求。当前未做节流或缓存。
+- **生命周期**：绑定 `appScope`（进程级），不随 ViewModel 销毁而取消
+- **共享**：同一 App 进程内最多请求一次；切换会话或 ViewModel 重建不会重复请求
+- **错误关闭**：`errorDismissed` 是 `UpdateChecker` 单例上的进程级状态，跨会话不重复打扰，但下次启动会重试
 
 ### APK 下载
 
@@ -650,32 +657,25 @@ Fork 时完整保留了上游的版本检查机制，仅做了以下适配：
 
 ### 当前设计的局限
 
-1. **无请求节流**：每次创建 ChatVM（进入聊天页）都会发起一次 API 请求，频繁切换会话可能
-   产生多余请求。可考虑加入时间窗口节流（如 30 分钟内不重复检查）或使用 DataStore 缓存
-   上次检查结果。
+1. **错误 dismiss 非持久化**：`errorDismissed` 是 `UpdateChecker` 单例上的进程级状态，跨会话不重复打扰，但重启应用后会重试。成功版本的关闭状态写入 `Settings.ignoredUpdateVersion`，只有版本变化后才再次提示。
 
-2. **dismiss 状态非持久化**：`dismissed` 是 `remember { mutableStateOf(false) }`，仅在
-   当前 Composable 生命周期内有效。切换会话或重启应用后，如果仍有新版本，卡片会重新出现。
-
-3. **下载完成无自动安装**：DownloadManager 下载完成后仅在通知栏提示，用户需手动点击通知
+2. **下载完成无自动安装**：DownloadManager 下载完成后仅在通知栏提示，用户需手动点击通知
    安装 APK。未监听下载完成广播来弹出自定义安装引导。
 
-4. **错误状态无重试**：检查失败时仅展示静态错误卡片，无重试按钮。
+3. **错误状态无重试**：检查失败时仅展示静态错误卡片，无重试按钮。
 
-5. **无强制更新**：所有更新都是可选的，用户可以永久忽略。没有 minimumVersion 机制来
+4. **无强制更新**：所有更新都是可选的，用户可以永久忽略。没有 minimumVersion 机制来
    强制用户升级到安全版本。
 
-6. **下载无 SHA 校验**：CI 构建后未生成 APK 的 SHA-256 校验文件，用户无法
+5. **下载无 SHA 校验**：CI 构建后未生成 APK 的 SHA-256 校验文件，用户无法
    验证下载完整性。依赖 HTTPS 传输保证安全性。后续可在 Release 中附带 `.sha256` 文件。
 
-7. **后端 API 未自动更新**：CI 已自动发布到 GitHub Releases，但后端 API
+6. **后端 API 未自动更新**：CI 已自动发布到 GitHub Releases，但后端 API
    （`measix.weero.net/mobile/`）的版本信息仍需手动维护。后续可通过 CI webhook
    在发版后自动通知后端更新 `UpdateInfo`。
 
 ### 演进方向
 
-- **检查频率控制**：在 `PreferencesStore` 中记录 `lastUpdateCheckTime`，配合时间窗口节流
-- **dismiss 持久化**：将 dismissed 的版本号存入 DataStore，避免重复打扰
 - **下载完成监听**：注册 `DownloadManager.ACTION_DOWNLOAD_COMPLETE` 广播，下载完成后
   弹出安装确认对话框
 - **CI 自动发布**：CI 已实现 tag 驱动自动发布到 GitHub Releases；后续可扩展

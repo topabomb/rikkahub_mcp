@@ -1,8 +1,25 @@
-# 消息渲染管线
+# 消息渲染管线参考
 
-> 本文档记录 LLM 回复内容从 `UIMessage.parts` 到最终像素的完整渲染管线，涵盖各内容类型的渲染方式、WebView 的生命周期/交互/布局机制。
+> 本文档以 Measix Pilot 当前代码为准，描述 LLM 回复内容从 `UIMessage.parts` 到最终像素的完整渲染管线，
+> 涵盖各内容类型的渲染方式、WebView 的生命周期/交互/布局机制。
 >
-> 适用于 `richtext/` 组件目录的维护者。
+> **相关文档**：[界面架构参考](ui-architecture.md) | [消息生成链路](chat-generation-pipeline.md)
+
+---
+
+## 目录
+
+1. [架构总览](#1-架构总览)
+2. [第一层：Part 分组与分发](#2-第一层part-分组与分发)
+3. [第二层：Markdown 解析与节点分发](#3-第二层markdown-解析与节点分发)
+4. [代码块渲染](#4-代码块渲染highlightcodeblock)
+5. [Mermaid WebView 渲染](#5-mermaid-webview-渲染)
+6. [HTML/SVG 代码预览](#6-htmlsvg-代码预览)
+7. [WebView 核心封装层](#7-webview-核心封装层)
+8. [全屏 WebView 页面](#8-全屏-webview-页面)
+9. [Markdown 全文预览](#9-markdown-全文预览)
+10. [渲染方式汇总](#10-渲染方式汇总)
+11. [关键设计决策](#11-关键设计决策)
 
 ---
 
@@ -115,7 +132,7 @@ Text part 在传入 `MarkdownBlock` 之前，先经过 `replaceRegexes()` 处理
 - `ReasoningStep` → `ChatMessageReasoningStep`（推理文本）
 - `ToolStep` → `ChatMessageToolStep`（工具调用卡片，含输入/输出/审批）
 
-> 工具步骤中，文件编辑类工具（如 `str_replace_based_edit_tool`）的输出通过 `DiffView`
+> 工具步骤中，工作空间文件编辑工具（`workspace_edit_file`）的输出通过 `DiffView`
 > （`DiffView.kt`）渲染统一 diff，支持折叠摘要与展开全量视图。
 
 ---
@@ -130,13 +147,13 @@ Text part 在传入 `MarkdownBlock` 之前，先经过 `replaceRegexes()` 处理
 2. 将 `\(...\)` 替换为 `$...$`（行内 LaTeX）
 3. 将 `\[...\]` 替换为 `$$...$$`（块级 LaTeX）
 
-### 3.1.1 异步 AST 解析
+### 3.2 异步 AST 解析
 
 `MarkdownBlock` 使用 `snapshotFlow` + `mapLatest` + `flowOn(Dispatchers.Default)` 在后台线程解析 AST 树，
 防止流式更新频繁重组时掉帧。初次渲染使用同步解析结果（`parseMarkdown(content)`），后续更新通过
 Flow 异步收集。
 
-### 3.2 双路径分发
+### 3.3 双路径分发
 
 解析 AST 后，检查是否包含 HTML 节点（`HTML_BLOCK` 或 `HTML_TAG`）：
 
@@ -202,7 +219,7 @@ HighlightCodeBlock(code, language, completeCodeBlock)
 - **语法高亮**：`highlight` 模块（`HighlightText` / `Highlighter`）
 - **配色**：`AtomOneDarkPalette` / `AtomOneLightPalette`（跟随 `LocalDarkMode`）
 - **字体**：`JetbrainsMono`
-- **功能**：复制、下载（`CreateDocument`）、折叠/展开（`codeBlockAutoCollapse` 开启时 > 10 行自动折叠）
+- **功能**：复制、下载（`CreateDocument`）、折叠/展开（`codeBlockAutoCollapse` 开启时超过阈值自动折叠）
 - **行号**：`showLineNumbers` 开关控制
 - **换行**：`codeBlockAutoWrap` 开关控制
 
@@ -219,16 +236,16 @@ HighlightCodeBlock(code, language, completeCodeBlock)
 `Mermaid.kt` 中 `buildMermaidHtml()` 动态构建完整 HTML 文档：
 
 - Mermaid 代码经 `escapeHtml()` 转义后嵌入 `<pre class="mermaid">` 标签
-- 加载 CDN 脚本：`https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js`
+- 加载 Mermaid 脚本：通过 `WEB_VIEW_ASSET_URL` 从本地 assets 加载 `mermaid.min.js`（离线可用，不依赖 CDN）
 - `mermaid.initialize()` 配置 `theme: 'base'`，通过 `themeVariables` 注入 M3 配色
 
 ### 5.2 配色同步
 
-从 `MaterialTheme.colorScheme` 提取 11 个颜色，通过 `toCssHex()`（`ComposeExt.kt`）转为 CSS Hex 字符串：
+从 `MaterialTheme.colorScheme` 提取颜色，通过 `toCssHex()`（`ComposeExt.kt`）转为 CSS Hex 字符串：
 
 | M3 颜色 | Mermaid themeVariable |
 |---|---|
-| `primaryContainer` | `primaryColor` / `primaryBorderColor` / `mainBkg` / `nodeBorder` / `actorBorder` / `clusterBorder` / `taskBorderColor` / `taskBkgColor` |
+| `primaryContainer` | `primaryColor` / `primaryBorderColor` / `mainBkg` / `nodeBorder` / `actorBorder` / `actorLineColor` / `clusterBorder` / `taskBorderColor` / `taskBkgColor` |
 | `onPrimaryContainer` | `primaryTextColor` / `taskTextLightColor` |
 | `secondaryContainer` | `secondaryColor` / `secondBkg` / `secondaryBorderColor` |
 | `onSecondaryContainer` | `secondaryTextColor` |
@@ -292,7 +309,7 @@ WebViewState
   ├─ isLoading / loadingProgress ─ 加载状态（WebChromeClient 驱动）
   ├─ webView: WebView?           ─ 持有原生实例引用（用于 JS 交互）
   ├─ interfaces: Map<String, Any> ─ JS 接口映射
-  ├─ consoleMessages             ─ 控制台日志（最多 64 条）
+  ├─ consoleMessages             ─ 控制台日志（有上限）
   └─ settings: WebSettings.() -> Unit ─ WebSettings 配置块
 ```
 
@@ -338,19 +355,20 @@ WebViewState
 `MarkdownWeb.kt` 读取 `assets/html/mark.html` 模板，替换占位符：
 
 - `{{MARKDOWN_BASE64}}` — Markdown 内容（Base64 编码）
-- 9 个 M3 配色变量：`BACKGROUND_COLOR`、`ON_BACKGROUND_COLOR`、`SURFACE_COLOR`、`ON_SURFACE_COLOR`、
+- M3 配色变量：`BACKGROUND_COLOR`、`ON_BACKGROUND_COLOR`、`SURFACE_COLOR`、`ON_SURFACE_COLOR`、
   `SURFACE_VARIANT_COLOR`、`ON_SURFACE_VARIANT_COLOR`、`PRIMARY_COLOR`、`OUTLINE_COLOR`、`OUTLINE_VARIANT_COLOR`
 
 模板内部集成：
 
 | 库 | CDN | 用途 |
 |---|---|---|
-| markdown-it@14 | esm.sh | Markdown 解析 |
+| markdown-it@14.0.0 | esm.sh | Markdown 解析 |
 | @vscode/markdown-it-katex | esm.sh | LaTeX 公式（KaTeX 渲染） |
-| katex@0.16.8 + mhchem | esm.sh | 化学公式 `\ce{}` |
-| highlight.js@11.9 | esm.sh | 语法高亮 |
+| katex@0.16.8 + mhchem | esm.sh + jsdelivr (CSS) | 化学公式 `\ce{}` |
+| highlight.js@11.9.0 | esm.sh + jsdelivr (CSS) | 语法高亮 |
 | mermaid@10.6.1 | esm.sh | Mermaid 图表 |
-| markdown-it-task-lists | esm.sh | 任务列表 |
+| markdown-it-task-lists@2.1.1 | esm.sh | 任务列表 |
+| js-base64@3.7.5 | esm.sh | Base64 解码 |
 
 > 全文预览的 Mermaid 主题通过 `prefers-color-scheme` 媒体查询自动适配深色/浅色，
 > 而非像内联 Mermaid 那样注入 M3 变量。
@@ -365,7 +383,7 @@ WebViewState
 | 代码块（普通语言） | 原生 | `HighlightCodeBlock` → `HighlightText` | highlight 模块 |
 | LaTeX 行内公式 | 原生 Canvas | `MathInline` → `LatexText` | JLatexMathDrawable |
 | LaTeX 块级公式 | 原生 Canvas | `MathBlock` → `LatexText` | JLatexMathDrawable |
-| Mermaid 图表 | WebView | `Mermaid` | mermaid.min.js + JS Bridge |
+| Mermaid 图表 | WebView | `Mermaid` | 本地 mermaid.min.js + JS Bridge |
 | HTML/SVG 代码 | WebView | `CodeBlockPreview` | loadDataWithBaseURL |
 | 图片 | 原生 | `ZoomableAsyncImage` | Coil3 |
 | 表格 | 原生 | `DataTable` | Compose 自定义布局 |
@@ -392,3 +410,5 @@ WebViewState
 7. **防重复加载**：`WebViewState` 通过 `lastLoadedData` 和 `forceReload` 机制，避免 Compose 重组时重复触发 `loadDataWithBaseURL`。
 
 8. **JS 接口安全**：`@JavascriptInterface` 仅暴露必要方法，在 `onReset`/`onRelease` 时主动 `removeJavascriptInterface` 清理。
+
+9. **内联 Mermaid 离线可用**：Mermaid 脚本从本地 assets 加载（`WEB_VIEW_ASSET_URL`），不依赖 CDN，确保离线环境下图表正常渲染。全文预览的 Mermaid 仍使用 CDN（esm.sh）。

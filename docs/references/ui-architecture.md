@@ -593,6 +593,7 @@ ChatList (LazyColumn)
 ```
 
 消息生成链路的完整描述见 [消息生成链路](chat-generation-pipeline.md)。
+渲染管线的完整描述见 [消息渲染管线](message-rendering-pipeline.md)。
 
 ---
 
