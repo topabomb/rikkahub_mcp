@@ -10,12 +10,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
-import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.getCurrentAssistant
+import net.weero.measix.pilot.data.model.Assistant
 
 @Composable
-fun AssistantBackground(setting: Settings, modifier: Modifier) {
-    val assistant = setting.getCurrentAssistant()
+fun AssistantBackground(assistant: Assistant, modifier: Modifier) {
     if (assistant.useGradientBackground) {
         MeshGradientBackground(modifier = modifier)
         return

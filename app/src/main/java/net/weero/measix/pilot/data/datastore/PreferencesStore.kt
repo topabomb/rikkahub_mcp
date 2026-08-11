@@ -625,6 +625,10 @@ fun Settings.getAssistantById(id: Uuid): Assistant? {
     return this.assistants.find { it.id == id }
 }
 
+/** Resolves the assistant owned by a conversation, falling back only if it was deleted. */
+fun Settings.getConversationAssistant(assistantId: Uuid): Assistant =
+    getAssistantById(assistantId) ?: getCurrentAssistant()
+
 fun Settings.getQuickMessagesOfAssistant(assistant: Assistant) =
     quickMessages.filter { it.id in assistant.quickMessageIds }
 

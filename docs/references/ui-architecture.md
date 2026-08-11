@@ -10,16 +10,16 @@
 ```
 RouteActivity (ComponentActivity)
   └─ MeasixTheme (主题入口)
+       ├─ LocalDarkMode / LocalExtendColors (主题状态)
        └─ AppRoutes() (导航根)
-            ├─ CompositionLocalProvider (全局状态注入)
+            ├─ CompositionLocalProvider (应用状态注入)
             │    ├─ LocalAdaptiveLayoutInfo  — 窗口尺寸/折叠姿态/布局策略
             │    ├─ LocalNavController       — 导航控制器
             │    ├─ LocalSettings            — 全局设置
             │    ├─ LocalSharedTransitionScope — 共享元素动画
-            │    ├─ LocalToaster / LocalTTSState / LocalASRState
-            │    └─ LocalDarkMode / LocalExtendColors
+            │    └─ LocalToaster / LocalTTSState / LocalASRState
             └─ NavDisplay (Navigation 3)
-                 └─ entry<Screen.*> (全屏逐页导航, 45 个路由)
+                 └─ entry<Screen.*> (全屏逐页导航)
 ```
 
 ### 技术栈
@@ -60,7 +60,7 @@ class Navigator(private val backStack: MutableList<NavKey>) {
 }
 ```
 
-- `Screen` 是 `sealed interface : NavKey`，共 45 个路由（均为 `@Serializable` data class/object）
+- `Screen` 是 `sealed interface : NavKey`，路由均为可序列化的 data class/object
 - 路由以**全屏页面切换**为主，`fadeIn/fadeOut` 用于根级切换，`slideInHorizontally + scaleOut` 用于层级切换
 - `entryDecorators` 包含 `rememberSaveableStateHolderNavEntryDecorator()` 和 `rememberViewModelStoreNavEntryDecorator()`，保证页面状态保持与 ViewModel 生命周期正确
 
@@ -89,7 +89,7 @@ MeasixTheme(colorMode)
   │    ├─ 动态色 (S+): dynamicLight/DarkColorScheme(context)
   │    └─ 预设/自定义: findThemeById → getColorScheme(dark)
   ├─ AMOLED 暗色: background + surface → #000000 (仅 dark + amoled 时)
-  ├─ 状态栏图标: isAppearanceLightStatusBars/Bars = !darkTheme
+  ├─ 系统栏图标: isAppearanceLightStatusBars / isAppearanceLightNavigationBars = !darkTheme
   └─ MaterialExpressiveTheme(colorScheme, typography, motionScheme.expressive())
 ```
 
@@ -143,15 +143,22 @@ enum class ColorMode { SYSTEM, LIGHT, DARK }
 data class AdaptiveLayoutInfo(
     val windowSize: DpSize,
     val windowAdaptiveInfo: WindowAdaptiveInfo,
+    val separatingVerticalHingeBounds: List<AdaptiveHingeBounds>,
+    val separatingHorizontalHingeBounds: List<AdaptiveHingeBounds>,
 ) {
     val widthClass: AdaptiveWidthClass          // Compact/Medium/Expanded/Large/ExtraLarge
-    val hasSeparatingVerticalHinge: Boolean     // 是否有竖向分隔铰链
+    val primaryVerticalHingeBounds: AdaptiveHingeBounds?   // 真实竖向铰链窗口坐标（dp）
+    val primaryHorizontalHingeBounds: AdaptiveHingeBounds? // 真实横向铰链窗口坐标（dp）
+    val hasSeparatingVerticalHinge: Boolean
     val isTabletop: Boolean                      // 是否为桌面半折姿态
     val chatLayoutMode: ChatLayoutMode           // SinglePane / ListDetail
     val useExpandedModal: Boolean                // 居中 Dialog vs 底部 Sheet
     val canCollapseChatSidebar: Boolean          // 侧栏是否可折叠
+    val verticalPaneSplit: VerticalPaneSplit
     val useCompactChatInput: Boolean             // 紧凑输入模式
-    val listPaneWidth: Dp                        // 侧栏宽度 (300dp / 360dp)
+    val listPaneWidth: Dp                        // 平面窗口 300/360dp；铰链窗口为 hinge.left
+    val verticalHingeSpacerWidth: Dp             // 物理铰链宽度
+    val tabletopContentHeight: Dp?               // Tabletop 上半屏可用高度
 }
 ```
 
@@ -167,17 +174,17 @@ ExtraLargeWidthBreakpoint = 1600f
 MinimumDualPaneHeight = 480f    // 双栏/弹层/紧凑输入共用的高度阈值
 ```
 
-### 4.4 Material 3 Window Size Class 对照
+### 4.4 项目宽度分档与聊天策略
 
-| Width Class | dp 范围 | Material 默认 pane 数 | 项目 chatLayoutMode |
-|-------------|---------|----------------------|-------------------|
-| Compact | 0–599 | 1 | SinglePane |
-| Medium | 600–839 | 1（推荐）或 2 | **ListDetail**（项目放宽） |
-| Expanded | 840–1199 | 2 | ListDetail |
-| Large | 1200–1599 | 2 | ListDetail |
-| ExtraLarge | 1600+ | 2 | ListDetail |
+| Width Class | dp 范围 | 高度 ≥480dp 且非 Tabletop 时的聊天模式 |
+|-------------|---------|------------------------------------------|
+| Compact | 0–599 | SinglePane |
+| Medium | 600–839 | ListDetail |
+| Expanded | 840–1199 | ListDetail |
+| Large | 1200–1599 | ListDetail |
+| ExtraLarge | 1600+ | ListDetail |
 
-项目将 Medium 档（600dp）就允许双栏，低于 Material 默认的 840dp。原因：国内主流折叠屏展开内屏宽度集中在 916–962dp（详见附录 A），全部位于 Expanded 档。采用 600dp 阈值让 600–840dp 的窗口（如 7–8 英寸横屏平板）也能启用双栏。
+宽度分档只负责描述窗口；最终布局还必须同时满足高度和姿态条件。项目从 600dp 起允许聊天双栏，使中等宽度窗口也能利用横向空间，而设置等次要页面不随该分档改成双栏。
 
 ### 4.5 核心策略函数
 
@@ -188,9 +195,9 @@ chatLayoutMode(widthDp, heightDp, isTabletop):
   if (widthDp >= 600) → ListDetail
   else → SinglePane
 
-// 弹层模式（与 chatLayoutMode 完全一致）
+// 弹层模式；Tabletop 强制使用受限 Dialog，避免 BottomSheet 穿过横向铰链
 useExpandedModal(widthDp, heightDp, isTabletop):
-  widthDp >= 600 && heightDp >= 480 && !isTabletop
+  isTabletop || (widthDp >= 600 && heightDp >= 480)
 
 // 紧凑输入（矮横屏）
 useCompactChatInput(heightDp): heightDp < 480
@@ -198,6 +205,11 @@ useCompactChatInput(heightDp): heightDp < 480
 // 侧栏可折叠（铰链场景不可折叠）
 canCollapseChatSidebar(widthDp, heightDp, hasHinge, isTabletop):
   chatLayoutMode == ListDetail && !hasSeparatingVerticalHinge
+
+// 竖向铰链分区
+verticalPaneSplit(windowWidthDp, fallbackListWidthDp, hingeBounds):
+  flat → fallbackListWidth + 0 + remainingWidth
+  hinge → hinge.left + hinge.width + (windowWidth - hinge.right)
 ```
 
 ### 4.6 布局常量（AdaptiveLayoutDefaults）
@@ -209,18 +221,18 @@ canCollapseChatSidebar(widthDp, heightDp, hasHinge, isTabletop):
 | `SheetMaxHeight` | 760.dp | 居中 Dialog 默认最大高度 |
 | `ListPaneWidth` | 300.dp | Medium/Expanded 侧栏宽度（与 ModalDrawerSheet 一致） |
 | `WideListPaneWidth` | 360.dp | Large/ExtraLarge 侧栏宽度 |
-| `HingePaneMinWidth` | 320.dp | 铰链场景最小面板宽度 |
 | `DialogPadding` | 24.dp | Dialog 外边距 |
 
 ### 4.7 AdaptiveModal
 
-聊天上下文中的临时选择器使用 `AdaptiveModal` 包裹：
+短生命周期选择器使用 `AdaptiveModal` 包裹，页面本身仍保持全屏逐页导航：
 
-- **宽屏**（`useExpandedModal = true`）：居中 `Dialog`，限制最大宽高，铰链场景靠右半屏
+- **宽屏**（`useExpandedModal = true`）：居中 `Dialog`，限制最大宽高
+- **竖向铰链**：根据真实 `hinge.right` 将 Dialog 限制在右侧 detail pane
+- **Tabletop**：根据真实 `hinge.top` 将 Dialog 限制在上半屏
 - **窄屏**：`ModalBottomSheet`，贴底弹层
 
-已迁移到 AdaptiveModal 的 10 个高频 picker：
-`AssistantPicker`、`ModelList`、`FilesPicker`、`McpPicker`、`SearchPicker`、`ReasoningPicker`、`WorkspaceSelectSheet`、`WorkspaceCwdPicker`、`ExtensionContent`、`Export`
+聊天链路中的助手、模型、文件、MCP、搜索、推理、Workspace、扩展与导出等临时内容均复用该容器；设置等页面也可以复用 `AdaptiveModal`，但这不会改变其页面导航结构。
 
 ### 4.8 AdaptiveDialogContainer
 
@@ -229,7 +241,7 @@ canCollapseChatSidebar(widthDp, heightDp, hasHinge, isTabletop):
 - 底层 scrim：铺满整个窗口的 `clickable` 层，任何落到其上的点击触发 `onDismissRequest`
 - 上层内容层：`clipToBounds()` 防止浮动工具栏等子内容溢出 Dialog 边界；内部通过 `detectTapGestures` 吸收落在表面空白区的点击，使它们不会穿透到 scrim；子控件（按钮/输入框/分段按钮/滚动区）优先消费各自手势，不受影响
 
-> 曾用手写坐标 hit-test（`PointerEventPass.Initial` + `onGloballyPositioned` 记录内容边界）判断点击是否在内容区外，但 `fillMaxHeight`/`weight` 布局的实际渲染会溢出内容测量边界，导致底部操作行（保存/确认/筛选输入框）在部分窗口尺寸下被误判为外部点击——保存失效或弹窗误关闭。回归测试见 `AdaptiveDialogContainerTest`。
+该分层避免依赖内容测量边界；`AdaptiveDialogContainerTest` 锁定“点击 scrim 关闭、点击内容不关闭、底部操作可执行”三项交互契约。
 
 ---
 
@@ -246,6 +258,7 @@ when (adaptiveLayoutInfo.chatLayoutMode) {
         Surface(width = sidebarWidth, color = surfaceContainerLow) {
             ChatDrawerContent(permanent = true, onCollapse = ...)
         }
+        Spacer(width = verticalHingeSpacerWidth) // 平面窗口为 0dp
         // 右侧：聊天详情区（weight(1f)）
         Box {
             ChatPageContent(navigationAction = ExpandSidebar / None)
@@ -260,13 +273,15 @@ when (adaptiveLayoutInfo.chatLayoutMode) {
 }
 ```
 
+Tabletop 且存在有效横向铰链坐标时，以上单栏内容再由外层容器限制到 `hinge.top`，不会跨入下半屏。
+
 ### 5.2 侧栏折叠动画
 
 采用**宽度动画**（`animateDpAsState`）而非 `ListDetailPaneScaffold` 或 `AnimatedVisibility`：
 
 - `ListDetailPaneScaffold` 的 `adaptStrategies` 默认"有空间就展示所有 pane"，用户手动折叠后 pane 仍被强制展开
 - `AnimatedVisibility` 在 Row 中 exit 动画期间内容仍占满宽度，表现为"先留白占位再消失"
-- **正确方案**：侧栏 `Surface` 宽度在 `0.dp` 和 `listPaneWidth` 之间 `animateDpAsState` + `clipToBounds()`，宽度为 0 时仍保留组合维持状态（滚动位置等），内容被裁剪不可见
+- **当前方案**：侧栏 `Surface` 宽度在 `0.dp` 和 `listPaneWidth` 之间使用 `animateDpAsState` + `clipToBounds()`；动画期间内容随容器裁剪，宽度到 0 后停止组合侧栏内容。会话列表数据与滚动状态由 Activity 级 `ChatDrawerVM` 管理
 
 侧栏展开状态持久化到 SharedPreferences（key `chat_sidebar_expanded`，默认展开）。折叠后 TopBar 显示 `PanelLeftOpen` 按钮恢复侧栏。
 
@@ -282,8 +297,9 @@ when (adaptiveLayoutInfo.chatLayoutMode) {
 
 ```
 ChatDrawerContent
-  ├─ DismissibleNavigationDrawer / ModalNavigationDrawer (根据 permanent 参数)
-  └─ Column (body)
+  ├─ permanent = true  → Surface + statusBarsPadding
+  ├─ permanent = false → ModalDrawerSheet（外层 ModalNavigationDrawer 由 ChatPage 持有）
+  └─ Column (drawerBody)
        ├─ 用户头像行 (UIAvatar 50dp + 昵称 + 编辑入口)
        ├─ DrawerActions (搜索入口 + 历史入口，两个独立 Surface)
        ├─ FolderBar (文件夹选择栏)
@@ -321,10 +337,10 @@ ChatPageContent
 | 位置 | 值 | 说明 |
 |------|-----|------|
 | Scaffold `contentWindowInsets` | `WindowInsets(0)` | 让 TopAppBar 自己处理状态栏避让，避免双重留白 |
-| ChatList contentPadding top | 0dp | TopAppBar 已提供间距 |
+| ChatList contentPadding top | 0dp；配置提示存在时 8dp | TopAppBar 已提供主要间距 |
 | ChatList contentPadding bottom | 24dp | 输入框上方滚动余量 |
 | ChatDrawer body padding | horizontal 8dp | 侧栏左右边距 |
-| ChatInput bottom padding | 4dp | 输入区底部边距 |
+| ChatInput bottom padding | 键盘隐藏时 4dp，显示时 0dp | 另由 `navigationBarsPadding()` 与 `imePadding()` 处理系统区域 |
 
 ---
 
@@ -344,7 +360,6 @@ ui/components/
   │    ├─ ReasoningPicker.kt    (推理等级选择 AdaptiveModal)
   │    ├─ WorkspaceSelectSheet.kt / WorkspaceCwdPicker.kt
   │    ├─ ExtensionContent.kt   (扩展面板 AdaptiveModal)
-  │    ├─ Export.kt             (导出 AdaptiveModal)
   │    └─ completion/           (输入补全提供者)
   ├─ message/     — 消息渲染
   │    ├─ ChatMessage.kt        (单条消息容器)
@@ -367,8 +382,9 @@ ui/components/
   │    ├─ UpdateCard.kt         (应用更新检查卡片)
   │    ├─ Greeting.kt           (问候语)
   │    ├─ JsonTree.kt           (JSON 树形查看器)
-  │    ├─ DataTable.kt          (数据表格)
   │    └─ permission/           (权限管理)
+  ├─ table/       — 数据表格
+  │    └─ DataTable.kt
   ├─ nav/         — 导航组件
   │    └─ BackButton.kt
   ├─ easteregg/   — 彩蛋
@@ -380,9 +396,9 @@ ui/components/
 
 ```
 ui/pages/
-  ├─ chat/        — 聊天主界面 (ChatPage, ChatDrawer, ChatList, ConversationList, ChatVM, ChatDrawerVM)
-  ├─ setting/     — 设置页面群 (SettingPage 入口 + 15 个子页面)
-  ├─ assistant/   — 助手配置 (AssistantPage 列表 + detail/ 8 个详情页)
+  ├─ chat/        — 聊天主界面 (ChatPage, ChatDrawer, ChatList, Export, ConversationList, ChatVM, ChatDrawerVM)
+  ├─ setting/     — 设置入口及各设置子页面
+  ├─ assistant/   — 助手列表与 detail/ 配置页面
   ├─ extensions/  — 扩展管理 (ExtensionsPage + skills/ + workspace/)
   ├─ history/     — 历史记录
   ├─ favorite/    — 收藏
@@ -442,35 +458,44 @@ Koin 模块在 `di/AppModule.kt` 和 `di/DatabaseModule.kt` 等文件中定义�
 - `LocalTools` — 本地工具集
 - `TTSManager` / `SoundEffectPlayer` / `EmojiData`
 
-### 7.3 更新检查状态流
+### 7.3 会话助手归属
+
+`Conversation.assistantId` 是已创建会话的助手权威来源。聊天页通过
+`Settings.getConversationAssistant(conversation.assistantId)` 解析助手，并将同一对象传给标题、背景、模型、搜索、推理、快捷消息、文件能力和生成前检查；只有会话引用的助手已被删除时，才回退到当前全局助手。
+
+切换会话助手时，`ChatVM.switchConversationAssistant` 负责更新会话的 `assistantId` 和目标模型。全局 `Settings.assistantId` 只表示新建会话等全局入口的当前选择，不应直接驱动已有会话的聊天界面。
+
+### 7.4 更新检查状态流
 
 ```kotlin
 class UpdateChecker(...) {
-    val updateState: StateFlow<UpdateState> by lazy {
-        checkForUpdates()
-            .stateIn(AppScope, SharingStarted.WhileSubscribed, UpdateState.Loading)
+    val updateState: StateFlow<UiState<UpdateInfo>> by lazy {
+        checkUpdate().stateInOnce(appScope, UiState.Loading)
     }
 }
+
+stateInOnce(scope, initialValue) =
+    stateIn(scope, SharingStarted.Lazily, initialValue)
 ```
 
-所有 `ChatVM` 共享同一 `UpdateChecker` 单例的 `updateState`，切换会话不会重复发起网络请求。
+所有 `ChatVM` 共享 Koin 单例 `UpdateChecker` 的同一 `StateFlow`。首次组合 `UpdateCard` 并订阅时才启动检查；启动后即使订阅暂时消失也不会重建冷 Flow，因此同一 App 进程内最多请求一次。成功版本的关闭状态写入 `Settings.ignoredUpdateVersion`，只有版本变化后才再次提示；失败卡片的关闭状态保存在 `UpdateChecker.errorDismissed`，下次进程启动可重试。
 
 ---
 
 ## 8. 屏幕适配方案
 
-### 8.1 窄屏（手机竖屏 / Compact < 600dp）
+### 8.1 普通窄屏（widthDp < 600dp）
 
 | 方面 | 方案 |
 |------|------|
 | 聊天布局 | `ModalNavigationDrawer` + 单栏聊天 |
 | 抽屉触发 | TopBar 汉堡按钮 `Menu03` |
 | 弹层 | `ModalBottomSheet`（贴底） |
-| 输入区 | 正常两行布局（附件预览 + 输入框 + 操作行） |
+| 输入区 | 高度 ≥480dp 时为正常布局；低于 480dp 时为紧凑布局 |
 | 次要页面 | 全屏逐页导航 |
 | 安全区 | `safeDrawingPadding` / 系统栏避让 |
 
-### 8.2 宽屏（平板 / 桌面 / Expanded ≥ 840dp）
+### 8.2 普通宽屏（widthDp ≥ 600dp、heightDp ≥ 480dp、非 Tabletop）
 
 | 方面 | 方案 |
 |------|------|
@@ -485,22 +510,22 @@ class UpdateChecker(...) {
 
 ### 8.3 折叠屏（Foldable）
 
-#### 展开态（~916–962dp，属 Expanded 档）
+#### 有竖向分隔铰链
 
 | 方面 | 方案 |
 |------|------|
-| 聊天布局 | 双栏，会话列表和聊天分别位于铰链两侧 |
+| 聊天布局 | 使用真实铰链坐标分为 `hinge.left + hinge.width + detail`，会话列表和聊天严格位于铰链两侧 |
 | 侧栏折叠 | **不可折叠**（`canCollapseChatSidebar = false`），避免聊天面板跨越铰链 |
-| 弹层 | `AdaptiveModal` 居中 Dialog，铰链场景限制到右半屏（`Alignment.CenterEnd`） |
-| 弹层宽度 | `min(SheetMaxWidth, windowWidth/2 - DialogPadding)`，最小 `HingePaneMinWidth(320dp)` |
+| 弹层 | `AdaptiveModal` 使用 `Alignment.CenterEnd`，限制到铰链真实右边界之后 |
+| 弹层宽度 | `min(SheetMaxWidth, windowWidth - hinge.right - safeInsets - 2×DialogPadding)` |
 
-#### 折叠态（外屏 ~443dp，属 Compact 档）
+#### 无竖向分隔铰链
 
-与窄屏手机完全一致：单栏 + ModalNavigationDrawer + ModalBottomSheet。
+回到纯尺寸策略：满足普通宽屏条件时使用可折叠双栏，否则使用单栏；不会根据设备型号或“展开/闭合”名称猜测布局。
 
 #### 桌面半折（Tabletop）
 
-`isTabletop = true` 时强制 `SinglePane`，不进入双栏模式，避免聊天内容跨越铰链。
+`isTabletop = true` 时强制 `SinglePane`。存在有效横向铰链坐标时，聊天页限制在 `hinge.top` 以上，输入区按上半屏实际高度决定是否紧凑，临时弹层使用上半屏受限 Dialog。若平台只报告 Tabletop 姿态而未提供有效坐标，仍保持单栏和 Dialog，但无法进一步按铰链位置裁切。
 
 ### 8.4 矮横屏（heightDp < 480dp）
 
@@ -512,13 +537,12 @@ class UpdateChecker(...) {
 
 | 场景 | widthDp | heightDp | chatLayoutMode | 弹层 | 输入 | 侧栏折叠 |
 |------|---------|----------|---------------|------|------|---------|
-| 手机竖屏 | 390 | 844 | SinglePane | BottomSheet | 正常 | N/A |
-| 手机横屏 | 844 | 390 | SinglePane | BottomSheet | 紧凑 | N/A |
-| 折叠屏闭合 | 443 | 970 | SinglePane | BottomSheet | 正常 | N/A |
-| 折叠屏展开 | 962 | 854 | ListDetail | Dialog | 正常 | 不可折叠 |
-| 7寸平板横屏 | 600 | 480 | ListDetail | Dialog | 正常 | 可折叠 |
-| 10寸平板 | 1280 | 800 | ListDetail | Dialog | 正常 | 可折叠 |
-| 桌面半折 | 1000 | 800 | SinglePane | BottomSheet | 正常 | N/A |
+| 普通窄屏 | 390 | 844 | SinglePane | BottomSheet | 正常 | N/A |
+| 普通矮横屏 | 844 | 390 | SinglePane | BottomSheet | 紧凑 | N/A |
+| 竖向铰链窗口 | 900 | 800 | ListDetail | 右侧 Dialog | 正常 | 不可折叠 |
+| 中等宽屏边界 | 600 | 480 | ListDetail | Dialog | 正常 | 可折叠 |
+| 大宽屏 | 1280 | 800 | ListDetail | Dialog | 正常 | 可折叠 |
+| Tabletop（有横向铰链） | 1000 | 800 | SinglePane（上半屏） | 上半屏 Dialog | 按上半屏高度 | N/A |
 
 ---
 
@@ -536,6 +560,7 @@ class UpdateChecker(...) {
 
 - 聊天页 `Scaffold` 设置 `contentWindowInsets = WindowInsets(0)`，让 TopAppBar 自己处理状态栏避让，避免 Scaffold 与 TopAppBar 重复计算状态栏高度导致顶部留白过多
 - 永久会话栏使用 `statusBarsPadding()` 处理顶部安全区
+- `ChatInput` 使用 `navigationBarsPadding()` 与 `imePadding()` 处理底部系统栏和软键盘
 - `AdaptiveModal` 居中 Dialog 使用 `safeDrawingPadding()` 确保不与系统栏重叠
 - edge-to-edge 模式下 `disableNavigationBarContrast()` 关闭系统导航栏对比度强制
 
@@ -579,18 +604,21 @@ ChatList (LazyColumn)
 
 | Transformer | 作用 |
 |-------------|------|
-| TemplateTransformer | 应用 Pebble 模板（时间/日期变量） |
+| TimeReminderTransformer | 按助手设置注入时间提醒 |
+| PromptInjectionTransformer | 合并助手与会话启用的提示注入 |
+| PlaceholderTransformer | 处理消息中的占位符 |
 | DocumentAsPromptTransformer | 文档附件转文本提示 |
 | OcrTransformer | 图片 OCR 文字提取 |
-| Base64ImageToLocalFileTransformer | Base64 图片转本地文件引用 |
+| TemplateTransformer | 应用 Pebble 模板 |
+| WorkspaceReminderTransformer | 注入 Workspace 上下文提醒 |
 
 ### 输出管道（OutputMessageTransformer）
 
 | Transformer | 作用 |
 |-------------|------|
 | ThinkTagTransformer | 提取 `<think>` 标签转为推理部分 |
+| Base64ImageToLocalFileTransformer | 生成完成后将 Base64 图片转为本地文件引用 |
 | RegexOutputTransformer | 正则替换助手响应 |
-| OcrTransformer | 生成结束后 OCR 处理 |
 
 输出 Transformer 支持 `visualTransform()`（流式显示期间）和 `onGenerationFinish()`（生成结束后最终处理）。
 
@@ -598,46 +626,46 @@ ChatList (LazyColumn)
 
 ## 13. 测试
 
-### 自适应策略测试
+### JVM 单元测试
 
-`AdaptiveLayoutPolicyTest`（253 行）覆盖：
+`AdaptiveLayoutPolicyTest` 覆盖：
 
 - Width Class 边界值（599/600/840/1200/1600）
 - 手机竖屏 SinglePane
 - 矮横屏 SinglePane + 紧凑输入
-- 折叠屏展开 ListDetail（vivo X Fold3 Pro ~962dp / Samsung Z Fold6 ~924dp）
+- 代表性的竖向折叠宽屏 ListDetail
 - 平板 ListDetail
 - 铰链不影响 chatLayoutMode 但阻止侧栏折叠
 - Tabletop 强制 SinglePane
-- useExpandedModal 与 chatLayoutMode 边界一致
+- 普通窗口 useExpandedModal 与 chatLayoutMode 边界一致，Tabletop 使用铰链安全 Dialog
 - 600dp/480dp 精确边界值
+- 真实竖向铰链坐标的 list / gap / detail 分配
+- 无效铰链过滤与多铰链中心选择
+
+`ConversationAssistantSwitchTest` 覆盖会话助手切换、重复切换幂等，以及已删除助手的回退规则。`UpdateCheckerTest` 覆盖首次订阅启动、订阅离开后不重启，以及同一共享流只执行一次上游请求。
+
+### 设备仪器测试
+
+`AdaptiveDialogContainerTest` 覆盖 Dialog 的 scrim、内容区和底部操作区点击契约。设备手工验证还应至少覆盖：
+
+- 普通窄屏、普通宽屏、竖向铰链展开、折叠外屏和 Tabletop 姿态切换
+- 会话栏折叠/展开、单栏抽屉、宽屏 Dialog 与窄屏 BottomSheet
+- 切换会话助手后标题、模型、搜索、推理、快捷消息及实际请求模型保持一致
+- 设置等非聊天页面在宽屏下仍沿用原有全屏布局
 
 ---
 
-## 14. 已知限制
+## 14. 设计边界与平台回退
 
-| # | 问题 | 严重度 | 说明 |
-|---|------|--------|------|
-| 1 | 顶部留白以 TopAppBar 高度（~64dp + 状态栏 ~24dp = ~88dp）为主导 | P3 | TopAppBar 标准高度，无法在不影响状态栏避让的前提下进一步缩减 |
-| 2 | 底部留白以 `navigationBarsPadding()`（~48dp 手势导航）为主导 | P3 | 系统导航栏避让，无法移除 |
-| 3 | 设置页面保持全屏逐页导航，宽屏不限宽 | P3 | 按设计决策，设置页不纳入自适应改造 |
-| 4 | 旋转后 `chat_sidebar_expanded` 可能残留折叠态 | P3 | LayoutMode 切换时未重置 |
+- 双栏只属于聊天主界面；设置、历史、统计等页面保持原有全屏逐页导航，这是当前职责边界，不是待补齐的自适应场景
+- 折叠策略只使用 WindowManager 实际报告且通过窗口边界校验的 separating hinge；未报告铰链时按普通窗口处理，不根据机型、分辨率或屏幕比例猜测
+- `chat_sidebar_expanded` 是持久化的用户偏好；普通宽屏恢复时沿用上次状态，竖向分隔铰链场景则无条件显示两侧面板
+- Tabletop 需要有效横向铰链坐标才能裁切到上半屏；只有姿态而没有坐标时采用安全回退：单栏 + Dialog，但不执行位置猜测
+- Dialog 分支不组合 BottomSheet，调用方必须维护自己的可见状态；传入的 `sheetState` 只对 BottomSheet 分支有实际 UI 含义
 
 ---
 
-## 附录 A：折叠屏展开宽度计算
-
-| 机型 | 内屏分辨率 | ppi | 展开宽 (dp) | 档位 |
-|------|-----------|-----|-----------|------|
-| vivo X Fold3 Pro | 2480×2200 | ~412 | ~962 | Expanded |
-| Samsung Galaxy Z Fold6 | 2160×1856 | 374 | ~924 | Expanded |
-| Huawei Mate X5 | 2496×2224 | ~426 | ~937 | Expanded |
-| OPPO Find N3 | 2268×2440 | 426 | ~916 | Expanded |
-| Xiaomi MIX Fold 4 | 2488×2248 | ~418 | ~952 | Expanded |
-
-所有 2024 年前后上市的主流折叠屏展开内屏宽度均在 Expanded 档（840–1199dp，集中在 916–962dp）。
-
-## 附录 B：设计依据
+## 附录：相关设计资料
 
 - [Material 3 Canonical layouts](https://m3.material.io/foundations/layout/canonical-layouts/list-detail)
 - [Android Developers: Support different screen sizes](https://developer.android.com/develop/ui/compose/layouts/adaptive/support-different-screen-sizes)

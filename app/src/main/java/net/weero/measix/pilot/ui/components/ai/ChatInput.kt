@@ -93,8 +93,7 @@ import me.rerere.hugeicons.stroke.FullScreen
 import me.rerere.hugeicons.stroke.Zap
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.getCurrentAssistant
-import net.weero.measix.pilot.data.datastore.getCurrentChatModel
+import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.datastore.getQuickMessagesOfAssistant
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Assistant
@@ -264,7 +263,7 @@ fun ChatInput(
                             // Search
                             val enableSearchMsg = stringResource(R.string.web_search_enabled)
                             val disableSearchMsg = stringResource(R.string.web_search_disabled)
-                            val chatModel = settings.getCurrentChatModel()
+                            val chatModel = settings.getChatModel(assistant)
                             SearchPickerButton(
                                 enableSearch = enableSearch,
                                 settings = settings,
@@ -285,7 +284,7 @@ fun ChatInput(
                             )
 
                             // Reasoning
-                            val model = settings.getCurrentChatModel()
+                            val model = settings.getChatModel(assistant)
                             if (model?.abilities?.contains(ModelAbility.REASONING) == true) {
                                 ReasoningButton(
                                     reasoningLevel = assistant.reasoningLevel,
@@ -396,6 +395,7 @@ fun ChatInput(
                         ) {
                             TextInputRow(
                                 state = state,
+                                assistant = assistant,
                                 completionProviders = completionProviders,
                                 onSendMessage = { sendMessage() },
                                 modifier = Modifier.weight(1f),
@@ -406,6 +406,7 @@ fun ChatInput(
                     } else {
                         TextInputRow(
                             state = state,
+                            assistant = assistant,
                             completionProviders = completionProviders,
                             onSendMessage = { sendMessage() },
                         )
@@ -441,6 +442,7 @@ private fun ActionIconButton(
 @Composable
 private fun TextInputRow(
     state: ChatInputState,
+    assistant: Assistant,
     completionProviders: List<ChatCompletionProvider>,
     onSendMessage: () -> Unit,
     modifier: Modifier = Modifier,
@@ -448,7 +450,6 @@ private fun TextInputRow(
 ) {
     val settings = LocalSettings.current
     val filesManager: FilesManager = koinInject()
-    val assistant = settings.getCurrentAssistant()
     val quickMessages = remember(settings.quickMessages, assistant.quickMessageIds) {
         settings.getQuickMessagesOfAssistant(assistant)
     }

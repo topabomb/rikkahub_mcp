@@ -129,8 +129,8 @@ class AdaptiveLayoutPolicyTest {
                 isTabletop = false,
             )
         )
-        // Tabletop: single pane chat, so bottom sheets
-        assertFalse(
+        // Tabletop: chat stays single pane, but modal content must not expand through the hinge.
+        assertTrue(
             AdaptiveLayoutPolicy.useExpandedModal(
                 widthDp = 1000f,
                 heightDp = 800f,
@@ -239,6 +239,53 @@ class AdaptiveLayoutPolicyTest {
             ChatLayoutMode.ListDetail,
             layoutMode(widthDp = 600f, heightDp = 480f),
         )
+    }
+
+    @Test
+    fun `vertical hinge splits panes at its real window coordinates`() {
+        val split = AdaptiveLayoutPolicy.verticalPaneSplit(
+            windowWidthDp = 960f,
+            fallbackListPaneWidthDp = 300f,
+            hingeBounds = AdaptiveHingeBounds(
+                leftDp = 470f,
+                topDp = 0f,
+                rightDp = 490f,
+                bottomDp = 840f,
+            ),
+        )
+
+        assertEquals(470f, split.listPaneWidthDp)
+        assertEquals(20f, split.hingeSpacerWidthDp)
+        assertEquals(470f, split.detailPaneWidthDp)
+    }
+
+    @Test
+    fun `flat window keeps the configured fixed list pane width`() {
+        val split = AdaptiveLayoutPolicy.verticalPaneSplit(
+            windowWidthDp = 1200f,
+            fallbackListPaneWidthDp = 360f,
+            hingeBounds = null,
+        )
+
+        assertEquals(360f, split.listPaneWidthDp)
+        assertEquals(0f, split.hingeSpacerWidthDp)
+        assertEquals(840f, split.detailPaneWidthDp)
+    }
+
+    @Test
+    fun `primary hinge rejects invalid bounds and chooses the central separator`() {
+        val selected = AdaptiveLayoutPolicy.primaryHingeBounds(
+            windowWidthDp = 1000f,
+            windowHeightDp = 800f,
+            hingeBounds = listOf(
+                AdaptiveHingeBounds(-10f, 0f, 5f, 800f),
+                AdaptiveHingeBounds(200f, 0f, 210f, 800f),
+                AdaptiveHingeBounds(490f, 0f, 510f, 800f),
+            ),
+            vertical = true,
+        )
+
+        assertEquals(AdaptiveHingeBounds(490f, 0f, 510f, 800f), selected)
     }
 
     private fun layoutMode(

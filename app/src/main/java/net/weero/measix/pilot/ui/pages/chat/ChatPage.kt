@@ -12,9 +12,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.layout.width
@@ -77,9 +79,8 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findProvider
-import net.weero.measix.pilot.data.datastore.getAssistantById
-import net.weero.measix.pilot.data.datastore.getCurrentAssistant
-import net.weero.measix.pilot.data.datastore.getCurrentChatModel
+import net.weero.measix.pilot.data.datastore.getChatModel
+import net.weero.measix.pilot.data.datastore.getConversationAssistant
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
@@ -213,8 +214,9 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
         }
     }
 
-    when (adaptiveLayoutInfo.chatLayoutMode) {
-        ChatLayoutMode.ListDetail -> {
+    val pageLayout: @Composable () -> Unit = {
+        when (adaptiveLayoutInfo.chatLayoutMode) {
+            ChatLayoutMode.ListDetail -> {
             // 侧栏宽度在 0 与目标值之间平滑动画；折叠时连续收窄到 0，展开时连续展开到目标宽度，
             // 配合 clipToBounds 裁剪溢出内容，避免 AnimatedVisibility"先占位再消失"的突兀感。
             val sidebarTargetWidth = if (canCollapseSidebar && !sidebarExpanded) {
@@ -227,32 +229,77 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
                 animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy),
                 label = "chatSidebarWidth",
             )
-            Row(Modifier.fillMaxSize()) {
-                Surface(
-                    modifier = Modifier
-                        .width(sidebarWidth)
-                        .fillMaxHeight()
-                        .clipToBounds(),
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                ) {
-                    // 宽度为 0 时仍保留组合以维持状态（滚动位置等），内容被 clipToBounds 裁剪不可见。
-                    if (sidebarWidth > 0.dp) {
+                Row(Modifier.fillMaxSize()) {
+                    Surface(
+                        modifier = Modifier
+                            .width(sidebarWidth.coerceAtLeast(0.dp))
+                            .fillMaxHeight()
+                            .clipToBounds(),
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    ) {
+                        if (sidebarWidth > 0.dp) {
+                            ChatDrawerContent(
+                                navController = navController,
+                                current = conversation,
+                                vm = vm,
+                                settings = setting,
+                                permanent = true,
+                                onCollapse = if (canCollapseSidebar) {
+                                    { sidebarExpanded = false }
+                                } else {
+                                    null
+                                },
+                            )
+                        }
+                    }
+                    if (adaptiveLayoutInfo.verticalHingeSpacerWidth > 0.dp) {
+                        Spacer(Modifier.width(adaptiveLayoutInfo.verticalHingeSpacerWidth))
+                    }
+                    // 聊天详情区从真实铰链右边界开始；平面宽屏则占满固定侧栏后的剩余宽度。
+                    Box(Modifier.weight(1f).fillMaxHeight()) {
+                        ChatPageContent(
+                            inputState = inputState,
+                            loadingJob = loadingJob,
+                            processingStatus = processingStatus,
+                            setting = setting,
+                            conversation = conversation,
+                            drawerState = drawerState,
+                            navController = navController,
+                            vm = vm,
+                            chatListState = chatListState,
+                            enableWebSearch = enableWebSearch,
+                            navigationAction = if (canCollapseSidebar && !sidebarExpanded) {
+                                ChatNavigationAction.ExpandSidebar
+                            } else {
+                                ChatNavigationAction.None
+                            },
+                            onNavigationClick = { sidebarExpanded = true },
+                            errors = errors,
+                            onDismissError = { vm.dismissError(it) },
+                            onClearAllErrors = { vm.clearAllErrors() },
+                        )
+                    }
+                }
+            }
+
+            ChatLayoutMode.SinglePane -> {
+                ModalNavigationDrawer(
+                    drawerState = drawerState,
+                    drawerContent = {
                         ChatDrawerContent(
                             navController = navController,
                             current = conversation,
                             vm = vm,
                             settings = setting,
-                            permanent = true,
-                            onCollapse = if (canCollapseSidebar) {
-                                { sidebarExpanded = false }
-                            } else {
-                                null
+                            navigateFromDrawer = { navigate ->
+                                scope.launch {
+                                    drawerState.close()
+                                    navigate()
+                                }
                             },
                         )
                     }
-                }
-                // 聊天详情区：占满剩余宽度；侧栏折叠时显示展开按钮。
-                Box(Modifier.weight(1f).fillMaxHeight()) {
+                ) {
                     ChatPageContent(
                         inputState = inputState,
                         loadingJob = loadingJob,
@@ -264,12 +311,7 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
                         vm = vm,
                         chatListState = chatListState,
                         enableWebSearch = enableWebSearch,
-                        navigationAction = if (canCollapseSidebar && !sidebarExpanded) {
-                            ChatNavigationAction.ExpandSidebar
-                        } else {
-                            ChatNavigationAction.None
-                        },
-                        onNavigationClick = { sidebarExpanded = true },
+                        navigationAction = ChatNavigationAction.OpenDrawer,
                         errors = errors,
                         onDismissError = { vm.dismissError(it) },
                         onClearAllErrors = { vm.clearAllErrors() },
@@ -277,43 +319,22 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
                 }
             }
         }
+    }
 
-        ChatLayoutMode.SinglePane -> {
-            ModalNavigationDrawer(
-                drawerState = drawerState,
-                drawerContent = {
-                    ChatDrawerContent(
-                        navController = navController,
-                        current = conversation,
-                        vm = vm,
-                        settings = setting,
-                        navigateFromDrawer = { navigate ->
-                            scope.launch {
-                                drawerState.close()
-                                navigate()
-                            }
-                        },
-                    )
-                }
+    val tabletopContentHeight = adaptiveLayoutInfo.tabletopContentHeight
+    if (tabletopContentHeight != null) {
+        Box(Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(tabletopContentHeight)
+                    .clipToBounds(),
             ) {
-                ChatPageContent(
-                    inputState = inputState,
-                    loadingJob = loadingJob,
-                    processingStatus = processingStatus,
-                    setting = setting,
-                    conversation = conversation,
-                    drawerState = drawerState,
-                    navController = navController,
-                    vm = vm,
-                    chatListState = chatListState,
-                    enableWebSearch = enableWebSearch,
-                    navigationAction = ChatNavigationAction.OpenDrawer,
-                    errors = errors,
-                    onDismissError = { vm.dismissError(it) },
-                    onClearAllErrors = { vm.clearAllErrors() },
-                )
+                pageLayout()
             }
         }
+    } else {
+        pageLayout()
     }
 }
 
@@ -341,8 +362,7 @@ private fun ChatPageContent(
     val workspaces by workspaceRepository.listFlow().collectAsStateWithLifecycle(initialValue = emptyList())
     var previewMode by rememberSaveable { mutableStateOf(false) }
     val hazeState = rememberHazeState()
-    val assistant = setting.getAssistantById(conversation.assistantId)
-        ?: setting.getCurrentAssistant()
+    val assistant = setting.getConversationAssistant(conversation.assistantId)
     var showFilesSheet by remember { mutableStateOf(false) }
     var showWorkspaceSheet by remember { mutableStateOf(false) }
     var showAssistantPicker by remember { mutableStateOf(false) }
@@ -398,12 +418,13 @@ private fun ChatPageContent(
         color = MaterialTheme.colorScheme.background,
         modifier = Modifier.fillMaxSize()
     ) {
-        AssistantBackground(setting = setting, modifier = Modifier.hazeSource(hazeState))
+        AssistantBackground(assistant = assistant, modifier = Modifier.hazeSource(hazeState))
         Scaffold(
             contentWindowInsets = WindowInsets(0),
             topBar = {
                 TopBar(
                     settings = setting,
+                    assistant = assistant,
                     conversation = conversation,
                     navigationAction = navigationAction,
                     onNavigationClick = onNavigationClick ?: {
@@ -445,7 +466,7 @@ private fun ChatPageContent(
                         enableSearch = enableWebSearch,
                         onToggleSearch = {
                             vm.updateAssistantWebSearch(
-                                setting.getCurrentAssistant().id,
+                                assistant.id,
                                 !enableWebSearch,
                             )
                         },
@@ -887,6 +908,7 @@ private enum class ChatNavigationAction {
 @Composable
 private fun TopBar(
     settings: Settings,
+    assistant: Assistant,
     conversation: Conversation,
     navigationAction: ChatNavigationAction,
     onNavigationClick: () -> Unit,
@@ -937,7 +959,6 @@ private fun TopBar(
                 },
                 color = Color.Transparent,
             ) {
-                val assistant = settings.getCurrentAssistant()
                 val showAvatar = assistant.useAssistantAvatar &&
                     LocalAdaptiveLayoutInfo.current.chatLayoutMode == ChatLayoutMode.ListDetail
                 Row(
@@ -953,7 +974,7 @@ private fun TopBar(
                         )
                     }
                     Column {
-                        val model = settings.getCurrentChatModel()
+                        val model = settings.getChatModel(assistant)
                         val provider = model?.findProvider(providers = settings.providers, checkOverwrite = false)
                         Text(
                             text = conversation.title.ifBlank { stringResource(R.string.chat_page_new_chat) },

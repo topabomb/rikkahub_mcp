@@ -67,7 +67,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.getCurrentChatModel
+import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
 import net.weero.measix.pilot.data.model.Assistant
@@ -106,7 +106,7 @@ internal fun FilesPicker(
     onPickFile: () -> Unit,
 ) {
     val settings = LocalSettings.current
-    val provider = settings.getCurrentChatModel()?.findProvider(providers = settings.providers)
+    val provider = settings.getChatModel(assistant)?.findProvider(providers = settings.providers)
     val navController = LocalNavController.current
     val workspaceRepository: WorkspaceRepository = koinInject()
     val workspaces by workspaceRepository.listFlow().collectAsState(initial = emptyList())

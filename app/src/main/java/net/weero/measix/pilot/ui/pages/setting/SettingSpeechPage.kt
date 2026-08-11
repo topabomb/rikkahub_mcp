@@ -746,7 +746,7 @@ private fun TTSProviderItem(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // ״̬��ǩ
+                // 状态标签
                 if (isSelected) {
                     Tag(type = TagType.SUCCESS) {
                         Text(stringResource(R.string.setting_tts_page_selected))
@@ -755,7 +755,7 @@ private fun TTSProviderItem(
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // TTS���Բ��Ű�ť
+                // TTS测试播放按钮
                 if (isSelected && isAvailable) {
                     val testText = stringResource(R.string.setting_tts_page_test_text)
                     IconButton(

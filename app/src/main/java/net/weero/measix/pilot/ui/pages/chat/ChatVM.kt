@@ -15,7 +15,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import me.rerere.ai.provider.Model
@@ -25,7 +25,7 @@ import me.rerere.ai.ui.isEmptyInputMessage
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.getCurrentAssistant
+import net.weero.measix.pilot.data.datastore.getConversationAssistant
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
@@ -98,8 +98,8 @@ class ChatVM(
         settingsStore.settingsFlow.stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
     // 网络搜索(每个助手独立)
-    val enableWebSearch = settings.map {
-        it.getCurrentAssistant().enableWebSearch
+    val enableWebSearch = combine(settings, conversation) { currentSettings, currentConversation ->
+        currentSettings.getConversationAssistant(currentConversation.assistantId).enableWebSearch
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // 错误状态

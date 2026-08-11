@@ -275,7 +275,7 @@ private fun ImportProviderButton(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        // Ö÷Òª²Ù×÷£ºÉ¨Ãè¶şÎ¬Âë
+                        // ä¸»è¦æ“ä½œï¼šæ‰«æäºŒç»´ç 
                         Button(
                             onClick = {
                                 showImportDialog = false
@@ -304,7 +304,7 @@ private fun ImportProviderButton(
                             }
                         }
 
-                        // ´ÎÒª²Ù×÷£º´ÓÏà²áÑ¡Ôñ
+                        // æ¬¡è¦æ“ä½œï¼šä»ç›¸å†Œé€‰æ‹©
                         OutlinedButton(
                             onClick = {
                                 showImportDialog = false
@@ -337,7 +337,7 @@ private fun ImportProviderButton(
                             }
                         }
 
-                        // µÚÈı²Ù×÷£ºÕ³ÌùÅäÖÃ×Ö·û´®
+                        // ç¬¬ä¸‰æ“ä½œï¼šç²˜è´´é…ç½®å­—ç¬¦ä¸²
                         OutlinedButton(
                             onClick = {
                                 showImportDialog = false
@@ -458,7 +458,7 @@ private fun handleImageQRCode(
     context: android.content.Context
 ) {
     runCatching {
-        // Ê¹ÓÃImageUtils½âÎö¶şÎ¬Âë
+        // ä½¿ç”¨ImageUtilsè§£æäºŒç»´ç 
         val qrContent = ImageUtils.decodeQRCodeFromUri(context, uri)
 
         if (qrContent.isNullOrEmpty()) {

@@ -2,15 +2,19 @@ package net.weero.measix.pilot.ui.adaptive
 
 import androidx.compose.material3.adaptive.WindowAdaptiveInfo
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
+import androidx.compose.material3.adaptive.separatingHorizontalHingeBounds
 import androidx.compose.material3.adaptive.separatingVerticalHingeBounds
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import kotlin.math.abs
 
 /**
  * Window width tiers used by the app's own content policies.
@@ -32,6 +36,27 @@ enum class ChatLayoutMode {
     ListDetail,
 }
 
+/** Window-coordinate hinge bounds converted from pixels to density-independent pixels. */
+@Immutable
+data class AdaptiveHingeBounds(
+    val leftDp: Float,
+    val topDp: Float,
+    val rightDp: Float,
+    val bottomDp: Float,
+) {
+    val widthDp: Float get() = (rightDp - leftDp).coerceAtLeast(0f)
+    val heightDp: Float get() = (bottomDp - topDp).coerceAtLeast(0f)
+}
+
+/** Width allocation for the conversation pane, physical hinge gap, and chat detail pane. */
+@Immutable
+data class VerticalPaneSplit(
+    val listPaneWidthDp: Float,
+    val hingeSpacerWidthDp: Float,
+    val detailPaneWidthDp: Float,
+    val hingeBounds: AdaptiveHingeBounds?,
+)
+
 /**
  * App-level adaptive information. Calculated once at the root and shared by every screen so
  * pages cannot drift into different device-orientation heuristics.
@@ -40,19 +65,30 @@ enum class ChatLayoutMode {
 data class AdaptiveLayoutInfo(
     val windowSize: DpSize,
     val windowAdaptiveInfo: WindowAdaptiveInfo,
+    val separatingVerticalHingeBounds: List<AdaptiveHingeBounds>,
+    val separatingHorizontalHingeBounds: List<AdaptiveHingeBounds>,
 ) {
     val widthClass: AdaptiveWidthClass = AdaptiveLayoutPolicy.widthClass(windowSize.width.value)
 
     /**
      * True when the window reports a vertical separating hinge (a physical fold gap).
      *
-     * On devices/emulators without folding support, [WindowAdaptiveInfo.windowPosture] carries no
-     * hinges and this falls back to `false` — i.e. a regular flat window. Emulators never report a
-     * hinge, so hinge-driven behavior (e.g. keeping the dialog on the detail-side display area)
-     * cannot be exercised there; that is a platform capability gap, not a policy bug.
+     * When the active device or emulator profile reports no folding feature,
+     * [WindowAdaptiveInfo.windowPosture] carries no hinge and this falls back to a flat window.
      */
-    val hasSeparatingVerticalHinge: Boolean =
-        windowAdaptiveInfo.windowPosture.separatingVerticalHingeBounds.isNotEmpty()
+    val primaryVerticalHingeBounds: AdaptiveHingeBounds? = AdaptiveLayoutPolicy.primaryHingeBounds(
+        windowWidthDp = windowSize.width.value,
+        windowHeightDp = windowSize.height.value,
+        hingeBounds = separatingVerticalHingeBounds,
+        vertical = true,
+    )
+    val primaryHorizontalHingeBounds: AdaptiveHingeBounds? = AdaptiveLayoutPolicy.primaryHingeBounds(
+        windowWidthDp = windowSize.width.value,
+        windowHeightDp = windowSize.height.value,
+        hingeBounds = separatingHorizontalHingeBounds,
+        vertical = false,
+    )
+    val hasSeparatingVerticalHinge: Boolean = primaryVerticalHingeBounds != null
 
     /**
      * True when the device is half-opened into a book/tabletop posture with a horizontal hinge.
@@ -78,13 +114,26 @@ data class AdaptiveLayoutInfo(
         hasSeparatingVerticalHinge = hasSeparatingVerticalHinge,
         isTabletop = isTabletop,
     )
-    val useCompactChatInput: Boolean =
-        AdaptiveLayoutPolicy.useCompactChatInput(windowSize.height.value)
-    val listPaneWidth: Dp = when (widthClass) {
+    private val defaultListPaneWidth: Dp = when (widthClass) {
         AdaptiveWidthClass.Large, AdaptiveWidthClass.ExtraLarge ->
             AdaptiveLayoutDefaults.WideListPaneWidth
         else -> AdaptiveLayoutDefaults.ListPaneWidth
     }
+    val verticalPaneSplit: VerticalPaneSplit = AdaptiveLayoutPolicy.verticalPaneSplit(
+        windowWidthDp = windowSize.width.value,
+        fallbackListPaneWidthDp = defaultListPaneWidth.value,
+        hingeBounds = primaryVerticalHingeBounds,
+    )
+    val listPaneWidth: Dp = verticalPaneSplit.listPaneWidthDp.dp
+    val verticalHingeSpacerWidth: Dp = verticalPaneSplit.hingeSpacerWidthDp.dp
+    val tabletopContentHeight: Dp? = if (isTabletop) {
+        primaryHorizontalHingeBounds?.topDp?.dp
+    } else {
+        null
+    }
+    val useCompactChatInput: Boolean = AdaptiveLayoutPolicy.useCompactChatInput(
+        tabletopContentHeight?.value ?: windowSize.height.value,
+    )
 }
 
 /**
@@ -132,20 +181,74 @@ object AdaptiveLayoutPolicy {
     }
 
     /**
-     * Short-lived modal tools use a centered panel instead of a bottom sheet whenever the
-     * window is large enough for dual-pane chat (>= 600dp wide, >= 480dp tall, non-tabletop).
-     * This keeps popup behavior consistent with the chat layout: dual-pane chat = centered
-     * dialogs; single-pane chat = bottom sheets. Phone portrait and short landscape windows
-     * stay with ModalBottomSheet.
+     * Short-lived modal tools use a centered panel whenever the window is large enough for
+     * dual-pane chat. Tabletop posture also uses a bounded dialog so a bottom sheet cannot expand
+     * through the physical horizontal hinge. Phone portrait and short landscape windows stay with
+     * ModalBottomSheet.
      */
     fun useExpandedModal(
         widthDp: Float,
         heightDp: Float,
         isTabletop: Boolean,
     ): Boolean =
-        widthDp >= MediumWidthBreakpoint &&
-            heightDp >= MinimumDualPaneHeight &&
-            !isTabletop
+        isTabletop ||
+            (widthDp >= MediumWidthBreakpoint && heightDp >= MinimumDualPaneHeight)
+
+    /** Selects the valid separating hinge closest to the center of the current window. */
+    fun primaryHingeBounds(
+        windowWidthDp: Float,
+        windowHeightDp: Float,
+        hingeBounds: List<AdaptiveHingeBounds>,
+        vertical: Boolean,
+    ): AdaptiveHingeBounds? = hingeBounds
+        .asSequence()
+        .filter { bounds ->
+            bounds.leftDp >= 0f &&
+                bounds.topDp >= 0f &&
+                bounds.rightDp >= bounds.leftDp &&
+                bounds.bottomDp >= bounds.topDp &&
+                bounds.rightDp <= windowWidthDp &&
+                bounds.bottomDp <= windowHeightDp &&
+                if (vertical) {
+                    bounds.leftDp > 0f && bounds.rightDp < windowWidthDp
+                } else {
+                    bounds.topDp > 0f && bounds.bottomDp < windowHeightDp
+                }
+        }
+        .minByOrNull { bounds ->
+            if (vertical) {
+                abs((bounds.leftDp + bounds.rightDp) / 2f - windowWidthDp / 2f)
+            } else {
+                abs((bounds.topDp + bounds.bottomDp) / 2f - windowHeightDp / 2f)
+            }
+        }
+
+    /**
+     * Uses the real hinge position for foldables. Flat windows retain the normal fixed-width list
+     * pane, while a separating hinge allocates the full left display area to the list and starts
+     * chat detail strictly after the hinge's right edge.
+     */
+    fun verticalPaneSplit(
+        windowWidthDp: Float,
+        fallbackListPaneWidthDp: Float,
+        hingeBounds: AdaptiveHingeBounds?,
+    ): VerticalPaneSplit {
+        if (hingeBounds == null) {
+            val listWidth = fallbackListPaneWidthDp.coerceIn(0f, windowWidthDp)
+            return VerticalPaneSplit(
+                listPaneWidthDp = listWidth,
+                hingeSpacerWidthDp = 0f,
+                detailPaneWidthDp = (windowWidthDp - listWidth).coerceAtLeast(0f),
+                hingeBounds = null,
+            )
+        }
+        return VerticalPaneSplit(
+            listPaneWidthDp = hingeBounds.leftDp,
+            hingeSpacerWidthDp = hingeBounds.widthDp,
+            detailPaneWidthDp = (windowWidthDp - hingeBounds.rightDp).coerceAtLeast(0f),
+            hingeBounds = hingeBounds,
+        )
+    }
 
     /**
      * Keeps every input action available without letting the composer dominate short windows.
@@ -177,13 +280,27 @@ val LocalAdaptiveLayoutInfo = staticCompositionLocalOf<AdaptiveLayoutInfo> {
 fun rememberAdaptiveLayoutInfo(): AdaptiveLayoutInfo {
     val windowSize = LocalWindowInfo.current.containerDpSize
     val windowAdaptiveInfo = currentWindowAdaptiveInfoV2()
-    return remember(windowSize, windowAdaptiveInfo) {
+    val density = LocalDensity.current.density
+    return remember(windowSize, windowAdaptiveInfo, density) {
         AdaptiveLayoutInfo(
             windowSize = windowSize,
             windowAdaptiveInfo = windowAdaptiveInfo,
+            separatingVerticalHingeBounds = windowAdaptiveInfo.windowPosture
+                .separatingVerticalHingeBounds
+                .map { it.toAdaptiveHingeBounds(density) },
+            separatingHorizontalHingeBounds = windowAdaptiveInfo.windowPosture
+                .separatingHorizontalHingeBounds
+                .map { it.toAdaptiveHingeBounds(density) },
         )
     }
 }
+
+private fun Rect.toAdaptiveHingeBounds(density: Float): AdaptiveHingeBounds = AdaptiveHingeBounds(
+    leftDp = left / density,
+    topDp = top / density,
+    rightDp = right / density,
+    bottomDp = bottom / density,
+)
 
 object AdaptiveLayoutDefaults {
     /** Max width for readable content (chat messages, input). */
@@ -200,9 +317,6 @@ object AdaptiveLayoutDefaults {
 
     /** Conversation list pane width on Large/ExtraLarge windows. */
     val WideListPaneWidth = 360.dp
-
-    /** Minimum pane width when a hinge splits the dialog into two halves. */
-    val HingePaneMinWidth = 320.dp
 
     /** Padding around the centered dialog content. */
     val DialogPadding = 24.dp

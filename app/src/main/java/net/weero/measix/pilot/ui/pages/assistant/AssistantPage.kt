@@ -92,14 +92,14 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
     val navController = LocalNavController.current
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
-    // ËÑË÷¹Ø¼ü´Ê×´Ì¬
+    // æœç´¢å…³é”®è¯çŠ¶æ€
     var searchQuery by remember { mutableStateOf("") }
-    // ±êÇ©¹ıÂË×´Ì¬
+    // æ ‡ç­¾è¿‡æ»¤çŠ¶æ€
     var selectedTagIds by remember { mutableStateOf(emptySet<Uuid>()) }
-    // ²Ù×÷²Ëµ¥×´Ì¬
+    // æ“ä½œèœå•çŠ¶æ€
     var actionSheetAssistant by remember { mutableStateOf<Assistant?>(null) }
 
-    // ¸ù¾İËÑË÷¹Ø¼ü´ÊºÍÑ¡ÖĞµÄ±êÇ©¹ıÂËÖúÊÖ
+    // æ ¹æ®æœç´¢å…³é”®è¯å’Œé€‰ä¸­çš„æ ‡ç­¾è¿‡æ»¤åŠ©æ‰‹
     val filteredAssistants = remember(settings.assistants, selectedTagIds, searchQuery) {
         settings.assistants.filter { assistant ->
             val matchesSearch = searchQuery.isBlank() ||
@@ -154,7 +154,7 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
             }
             val haptic = LocalHapticFeedback.current
 
-            // ËÑË÷¿ò
+            // æœç´¢æ¡†
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
@@ -176,7 +176,7 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
                 shape = RoundedCornerShape(12.dp)
             )
 
-            // ±êÇ©¹ıÂËÆ÷
+            // æ ‡ç­¾è¿‡æ»¤å™¨
             AssistantTagsFilterRow(
                 settings = settings,
                 vm = vm,
@@ -239,7 +239,7 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
 
     AssistantCreationSheet(createState)
 
-    // ²Ù×÷²Ëµ¥ Bottom Sheet
+    // æ“ä½œèœå• Bottom Sheet
     actionSheetAssistant?.let { assistant ->
         AssistantActionSheet(
             assistant = assistant,
@@ -490,7 +490,7 @@ private fun AssistantActionSheet(
                 .fillMaxWidth()
                 .padding(bottom = 32.dp)
         ) {
-            // ÖúÊÖĞÅÏ¢Í·²¿
+            // åŠ©æ‰‹ä¿¡æ¯å¤´éƒ¨
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -511,7 +511,7 @@ private fun AssistantActionSheet(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            // ¿ËÂ¡Ñ¡Ïî
+            // å…‹éš†é€‰é¡¹
             ListItem(
                 leadingContent = {
                     Icon(
@@ -526,7 +526,7 @@ private fun AssistantActionSheet(
                 Text(stringResource(R.string.assistant_page_clone))
             }
 
-            // É¾³ıÑ¡Ïî£¨½ö·ÇÄ¬ÈÏÖúÊÖÏÔÊ¾£©
+            // åˆ é™¤é€‰é¡¹ï¼ˆä»…éé»˜è®¤åŠ©æ‰‹æ˜¾ç¤ºï¼‰
             if (assistant.id !in DEFAULT_ASSISTANTS_IDS) {
                 ListItem(
                     leadingContent = {

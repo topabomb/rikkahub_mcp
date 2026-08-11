@@ -6,6 +6,7 @@ import android.os.Environment
 import android.widget.Toast
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.net.toUri
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
@@ -33,12 +34,12 @@ class UpdateChecker(
     /**
      * App 生命周期内共享的更新检查 StateFlow。
      *
-     * 使用 [SharingStarted.WhileSubscribed]：仅当有订阅者（即 UpdateCard 组合、用户开启了
-     * `showUpdates`）时才发起网络请求；无订阅者时不发请求，避免关闭开关后仍偷偷请求。
-     * 5 秒的订阅超时让配置变更/短暂重组不重复请求。
+     * 使用 [SharingStarted.Lazily]：首次有订阅者（即 UpdateCard 组合、用户开启了
+     * `showUpdates`）时发起一次网络请求；启动后不因导航或短暂取消订阅而重启冷 Flow，
+     * 因此同一 App 生命周期内最多检查一次。
      */
     val updateState: StateFlow<UiState<UpdateInfo>> by lazy {
-        checkUpdate().stateIn(appScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
+        checkUpdate().stateInOnce(appScope, UiState.Loading)
     }
 
     /**
@@ -107,6 +108,9 @@ class UpdateChecker(
         }
     }
 }
+
+internal fun <T> Flow<T>.stateInOnce(scope: CoroutineScope, initialValue: T): StateFlow<T> =
+    stateIn(scope, SharingStarted.Lazily, initialValue)
 
 @Serializable
 data class UpdateDownload(

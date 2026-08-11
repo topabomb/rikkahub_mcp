@@ -71,7 +71,7 @@ fun SettingFilesPage(
     val toaster = LocalToaster.current
     val folders = remember { listOf(FileFolders.UPLOAD) }
 
-    // Ô¤ÏÈ»ñÈ¡×Ö·û´®×ÊÔ´
+    // é¢„å…ˆèŽ·å–å­—ç¬¦ä¸²èµ„æº
     val deletedToast = stringResource(R.string.setting_files_page_deleted_toast)
     val deleteFailedToast = stringResource(R.string.setting_files_page_delete_failed_toast)
     val cleanedToast = stringResource(R.string.setting_files_page_cleaned_toast)
@@ -198,7 +198,7 @@ fun SettingFilesPage(
                     verticalItemSpacing = 8.dp,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     state = gridState,
-                    columns = StaggeredGridCells.Adaptive(minSize = 180.dp)
+                    columns = StaggeredGridCells.Fixed(2)
                 ) {
                     items(files, key = { it.id }) { file ->
                         FileItem(
