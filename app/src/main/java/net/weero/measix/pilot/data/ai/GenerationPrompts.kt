@@ -11,8 +11,6 @@ internal fun buildMemoryPrompt(memories: List<AssistantMemory>) =
         appendLine()
         append("**Memories**")
         appendLine()
-        append("These are memories stored via the memory_tool that you can reference in future conversations.")
-        appendLine()
         val json = buildJsonArray {
             memories.forEach { memory ->
                 add(buildJsonObject {

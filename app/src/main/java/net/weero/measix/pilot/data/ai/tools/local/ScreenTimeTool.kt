@@ -28,13 +28,9 @@ import java.time.ZonedDateTime
 internal fun buildScreenTimeTool(context: Context, eventBus: AppEventBus): Tool = Tool(
     name = "get_screen_time",
     description = """
-        Get the user's app screen usage (screen time) over a time range.
-        Specify a custom interval with 'begin'/'end', or use the 'range' preset (today/week).
-        Returns the total foreground time and a per-app breakdown sorted by usage time (descending).
-        The device timezone is '${ZoneId.systemDefault()}' (UTC offset ${OffsetDateTime.now().offset});
-        times without an explicit offset are interpreted in this timezone.
-        Requires the 'Usage access' special permission; if it is not granted, the device's usage
-        access settings page is opened automatically and an error is returned.
+        Get app screen usage over a time range (`begin`/`end`, or `range`: today/week).
+        Device timezone: '${ZoneId.systemDefault()}' (UTC ${OffsetDateTime.now().offset}); naive times use this zone.
+        Requires Usage access; if missing, settings open and an error is returned.
     """.trimIndent().replace("\n", " "),
     parameters = {
         InputSchema.Obj(

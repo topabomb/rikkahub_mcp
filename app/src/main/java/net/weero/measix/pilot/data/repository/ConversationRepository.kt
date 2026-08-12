@@ -289,11 +289,11 @@ class ConversationRepository(
         val oldTreeFiles = (oldChildren + oldMaster).flatMap { it.files }.toSet()
         val retainedTreeFiles = (retainedChildren + master).flatMap { it.files }.toSet()
         val deletionCandidates = oldTreeFiles - retainedTreeFiles
-        val outsideTreeFiles = getAllConversationsSync()
-            .filter { it.id != master.id && it.parentConversationId != master.id }
-            .flatMap { it.files }
-            .toSet()
-        val safeFilesToDelete = deletionCandidates - outsideTreeFiles
+        val excludedIds = buildSet {
+            add(master.id)
+            addAll(oldChildIds)
+        }
+        val safeFilesToDelete = findUnsharedFileUris(deletionCandidates, excludedIds)
 
         database.withTransaction {
             conversationDAO.update(conversationToConversationEntity(master))
@@ -312,7 +312,7 @@ class ConversationRepository(
         messageFtsManager.indexConversation(master)
         deletedChildren.forEach { messageFtsManager.deleteConversation(it.id.toString()) }
         if (safeFilesToDelete.isNotEmpty()) {
-            filesManager.deleteChatFiles(safeFilesToDelete.toList())
+            filesManager.deleteChatFiles(safeFilesToDelete)
         }
     }
 
@@ -431,11 +431,26 @@ class ConversationRepository(
         if (conversationsToDelete.isEmpty()) return emptyList()
         val deletedIds = conversationsToDelete.mapTo(mutableSetOf()) { it.id }
         val candidates = conversationsToDelete.flatMap { it.files }.toSet()
-        val retainedReferences = getAllConversationsSync()
-            .filterNot { it.id in deletedIds }
-            .flatMap { it.files }
-            .toSet()
-        return (candidates - retainedReferences).toList()
+        return findUnsharedFileUris(candidates, deletedIds)
+    }
+
+    /**
+     * 对每个候选 file:// URI 用 LIKE 探测其他会话的 messages JSON，
+     * 命中后再反序列化该节点校验。禁止再走 getAllConversationsSync()。
+     */
+    private suspend fun findUnsharedFileUris(
+        candidates: Set<android.net.Uri>,
+        excludedConversationIds: Set<Uuid>,
+    ): List<android.net.Uri> {
+        if (candidates.isEmpty()) return emptyList()
+        val excludedIds = excludedConversationIds.map { it.toString() }
+        if (excludedIds.isEmpty()) return emptyList()
+        return candidates.filter { uri ->
+            val url = uri.toString()
+            val needle = ConversationFileReferences.likeNeedleForUrl(url)
+            val hits = messageNodeDAO.findMessagesJsonContaining(excludedIds, needle)
+            !ConversationFileReferences.isUrlRetained(url, hits, JsonInstant)
+        }
     }
 
     /**

@@ -6,8 +6,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -39,6 +41,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.first
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
+import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.model.Assistant
@@ -84,6 +87,9 @@ fun SubAssistantDetailPage(
                                 name = metadata.targetNameSnapshot,
                                 value = targetAssistant?.avatar ?: Avatar.Dummy,
                                 modifier = Modifier.size(36.dp),
+                                loading = metadata.state == SubAssistantCallState.STARTING ||
+                                    metadata.state == SubAssistantCallState.RUNNING,
+                                subAssistant = true,
                             )
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
@@ -144,8 +150,9 @@ private fun DetailContent(
     val isAtBottom by remember {
         derivedStateOf {
             val info = listState.layoutInfo
-            info.totalItemsCount == 0 ||
-                info.visibleItemsInfo.lastOrNull()?.index == info.totalItemsCount - 1
+            val last = info.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf true
+            last.index >= info.totalItemsCount - 1 &&
+                last.offset + last.size <= info.viewportEndOffset + 8
         }
     }
 
@@ -153,11 +160,26 @@ private fun DetailContent(
         if (isAtBottom) followLatest = true
         else if (listState.isScrollInProgress) followLatest = false
     }
-    LaunchedEffect(state.child.updateAt, state.timeline.hashCode(), followLatest) {
-        if (followLatest) {
-            val itemCount = snapshotFlow { listState.layoutInfo.totalItemsCount }
-                .first { it > 0 }
-            listState.animateScrollToItem(itemCount - 1)
+    // Child.updateAt 在流式 updateCurrentMessages 时不会变。
+    // 用时间线长度和最后一条可见文本长度作为跟随键，才能在最后一项长高时继续贴底。
+    val lastTimelineMessage = state.timeline.lastOrNull()?.let { node ->
+        node.messages.getOrNull(node.selectIndex)
+    }
+    val lastOutputChars = lastTimelineMessage?.parts.orEmpty().sumOf { part ->
+        when (part) {
+            is UIMessagePart.Text -> part.text.length
+            is UIMessagePart.Reasoning -> part.reasoning.length
+            else -> 0
+        }
+    }
+    LaunchedEffect(followLatest, state.timeline.size, lastTimelineMessage?.id, lastOutputChars) {
+        if (!followLatest) return@LaunchedEffect
+        val count = listState.layoutInfo.totalItemsCount
+        if (count > 0) {
+            listState.requestScrollToItem(count - 1)
+        } else {
+            snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 0 }
+            listState.requestScrollToItem(listState.layoutInfo.totalItemsCount - 1)
         }
     }
 
@@ -286,12 +308,18 @@ private fun DetailContent(
                     }
                 }
             }
+
+            item(key = TimelineBottomKey) {
+                Spacer(Modifier.height(8.dp))
+            }
         }
 
         if (!followLatest && state.timeline.isNotEmpty()) {
             TextButton(
                 onClick = {
                     followLatest = true
+                    val count = listState.layoutInfo.totalItemsCount
+                    if (count > 0) listState.requestScrollToItem(count - 1)
                 },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -302,6 +330,8 @@ private fun DetailContent(
         }
     }
 }
+
+private const val TimelineBottomKey = "timeline_bottom"
 
 @Composable
 private fun DetailLoading(modifier: Modifier = Modifier) {

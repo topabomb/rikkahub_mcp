@@ -41,12 +41,14 @@ class MemoryRepositoryOwnershipTest {
             return newId
         }
 
-        override suspend fun updateMemoryContent(id: Int, content: String, assistantId: String) {
+        override suspend fun updateMemoryContent(id: Int, content: String, assistantId: String): Int {
             updateMemoryContentCalled = Triple(id, content, assistantId)
             val idx = memories.indexOfFirst { it.id == id && it.assistantId == assistantId }
             if (idx >= 0) {
                 memories[idx] = memories[idx].copy(content = content)
+                return 1
             }
+            return 0
         }
 
         override suspend fun deleteMemory(id: Int, assistantId: String): Int {

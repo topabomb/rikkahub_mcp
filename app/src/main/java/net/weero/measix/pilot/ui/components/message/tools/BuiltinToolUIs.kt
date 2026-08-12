@@ -107,11 +107,11 @@ object MemoryToolUI : ToolUIRenderer {
 
     override fun hasSummary(context: ToolUIContext): Boolean =
         action(context) in listOf(ACTION_CREATE, ACTION_EDIT) &&
-            context.content.getStringContent("content") != null
+            context.arguments.getStringContent("content") != null
 
     @Composable
     override fun Summary(context: ToolUIContext) {
-        context.content.getStringContent("content")?.let { memoryContent ->
+        context.arguments.getStringContent("content")?.let { memoryContent ->
             Text(
                 text = memoryContent,
                 style = MaterialTheme.typography.labelSmall,

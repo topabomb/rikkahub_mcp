@@ -28,7 +28,7 @@ interface MemoryDAO {
     suspend fun insertMemory(memory: MemoryEntity): Long
 
     @Query("UPDATE memoryentity SET content = :content WHERE id = :id AND assistant_id = :assistantId")
-    suspend fun updateMemoryContent(id: Int, content: String, assistantId: String)
+    suspend fun updateMemoryContent(id: Int, content: String, assistantId: String): Int
 
     @Query("DELETE FROM memoryentity WHERE id = :id AND assistant_id = :assistantId")
     suspend fun deleteMemory(id: Int, assistantId: String): Int

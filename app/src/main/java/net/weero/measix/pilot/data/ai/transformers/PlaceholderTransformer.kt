@@ -97,6 +97,10 @@ object DefaultPlaceholderProvider : PlaceholderProvider {
             it.assistant.name.ifBlank { "assistant" }
         }
 
+        placeholder("description", { Text(stringResource(R.string.placeholder_description)) }) {
+            it.assistant.description
+        }
+
         placeholder("user", { Text(stringResource(R.string.placeholder_user)) }) {
             it.settingsStore.settingsFlow.value.displaySetting.userNickname.ifBlank { "user" }
         }

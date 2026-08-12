@@ -2,6 +2,9 @@ package net.weero.measix.pilot.data.ai
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
@@ -9,6 +12,7 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
+import net.weero.measix.pilot.data.ai.tools.local.buildAskUserTool
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -25,7 +29,7 @@ class GenerationHandlerLogicTest {
         val tool = UIMessagePart.Tool(
             toolCallId = "tc1",
             toolName = "ask_user",
-            input = """{"question":"?"}""",
+            input = validAskUserInput(),
             approvalState = ToolApprovalState.Auto
         )
         val updated = resolveToolApprovals(
@@ -332,7 +336,7 @@ class GenerationHandlerLogicTest {
         val question = UIMessagePart.Tool(
             toolCallId = "question",
             toolName = "ask_user",
-            input = "{}",
+            input = validAskUserInput(),
         )
 
         val resolution = resolveToolApprovals(
@@ -356,7 +360,7 @@ class GenerationHandlerLogicTest {
         val question = UIMessagePart.Tool(
             toolCallId = "question",
             toolName = "ask_user",
-            input = "{}",
+            input = validAskUserInput(),
         )
         val shell = UIMessagePart.Tool(
             toolCallId = "shell",
@@ -380,6 +384,140 @@ class GenerationHandlerLogicTest {
         assertTrue(resolution.tools[1].isExecuted)
         assertTrue((resolution.tools[1].output.single() as UIMessagePart.Text).text.contains("tool_not_permitted"))
     }
+
+    @Test
+    fun `invalid ask_user arguments fail at the approval gate`() {
+        val tool = UIMessagePart.Tool(
+            toolCallId = "tc1",
+            toolName = "ask_user",
+            input = """
+                {"questions":[{"id":"retry_ask","question":"看到输入框了吗？","selection_type":"single","options":[{"value":"yes","label":"看到了"}]}]}
+            """.trimIndent(),
+            approvalState = ToolApprovalState.Auto,
+        )
+
+        val resolution = resolveToolApprovals(
+            unexecutedTools = listOf(tool),
+            toolDefinitions = listOf(buildAskUserTool()),
+            nonInteractive = false,
+            interactiveToolNames = emptySet(),
+            json = json,
+        )
+
+        val resolved = resolution.tools.single()
+        assertFalse(resolution.hasPendingApproval)
+        assertEquals(ToolApprovalState.Auto, resolved.approvalState)
+        assertTrue(resolved.isExecuted)
+        val output = (resolved.output.single() as UIMessagePart.Text).text
+        assertTrue(output.contains("invalid_arguments"))
+        assertTrue(output.contains("questions[0].options[0]"))
+    }
+
+    @Test
+    fun `already pending invalid ask_user is converted to a contract error`() {
+        val tool = UIMessagePart.Tool(
+            toolCallId = "tc1",
+            toolName = "ask_user",
+            input = """{"questions":[{"id":"q1","question":"Pick","selection_type":"single","options":[{"value":"a"}]}]}""",
+            approvalState = ToolApprovalState.Pending,
+        )
+
+        val resolution = resolveToolApprovals(
+            unexecutedTools = listOf(tool),
+            toolDefinitions = listOf(buildAskUserTool()),
+            nonInteractive = false,
+            interactiveToolNames = setOf("ask_user"),
+            json = json,
+        )
+
+        val resolved = resolution.tools.single()
+        assertFalse(resolution.hasPendingApproval)
+        assertTrue(resolved.isExecuted)
+        assertTrue((resolved.output.single() as UIMessagePart.Text).text.contains("invalid_arguments"))
+    }
+
+    @Test
+    fun `invalid ask_user in a mixed batch fails without blocking the valid question`() {
+        val invalid = UIMessagePart.Tool(
+            toolCallId = "bad",
+            toolName = "ask_user",
+            input = """{"questions":[{"id":"q1","question":"Pick","selection_type":"single","options":[{"value":"a"}]}]}""",
+        )
+        val valid = UIMessagePart.Tool(
+            toolCallId = "ok",
+            toolName = "ask_user",
+            input = buildJsonObject {
+                put("questions", buildJsonArray {
+                    addJsonObject {
+                        put("id", "q2")
+                        put("question", "Did you see the input field?")
+                        put("selection_type", "single")
+                        put("options", buildJsonArray {
+                            add("Yes")
+                            add("No")
+                        })
+                    }
+                })
+            }.toString(),
+        )
+
+        val resolution = resolveToolApprovals(
+            unexecutedTools = listOf(invalid, valid),
+            toolDefinitions = listOf(buildAskUserTool()),
+            nonInteractive = false,
+            interactiveToolNames = emptySet(),
+            json = json,
+        )
+
+        assertTrue(resolution.hasPendingApproval)
+        assertTrue(resolution.tools[0].isExecuted)
+        assertTrue((resolution.tools[0].output.single() as UIMessagePart.Text).text.contains("invalid_arguments"))
+        assertEquals(ToolApprovalState.Pending, resolution.tools[1].approvalState)
+        assertFalse(resolution.tools[1].isExecuted)
+    }
+
+    @Test
+    fun `valid ask_user arguments still enter HITL pending`() {
+        val args = buildJsonObject {
+            put("questions", buildJsonArray {
+                addJsonObject {
+                    put("id", "retry_ask")
+                    put("question", "Did you see the input field?")
+                    put("selection_type", "single")
+                    put("options", buildJsonArray {
+                        add("看到了弹窗")
+                        add("没看到弹窗")
+                    })
+                }
+            })
+        }
+        val tool = UIMessagePart.Tool(
+            toolCallId = "tc1",
+            toolName = "ask_user",
+            input = args.toString(),
+            approvalState = ToolApprovalState.Auto,
+        )
+
+        val resolution = resolveToolApprovals(
+            unexecutedTools = listOf(tool),
+            toolDefinitions = listOf(buildAskUserTool()),
+            nonInteractive = false,
+            interactiveToolNames = emptySet(),
+            json = json,
+        )
+
+        assertTrue(resolution.hasPendingApproval)
+        assertEquals(ToolApprovalState.Pending, resolution.tools.single().approvalState)
+    }
+
+    private fun validAskUserInput(): String = buildJsonObject {
+        put("questions", buildJsonArray {
+            addJsonObject {
+                put("id", "q1")
+                put("question", "Which one?")
+            }
+        })
+    }.toString()
 
     private fun toolDefinition(name: String, needsApproval: Boolean) = Tool(
         name = name,

@@ -26,7 +26,7 @@ object SearXNGService : SearchService<SearchServiceOptions.SearXNGOptions> {
             properties = buildJsonObject {
                 put("query", buildJsonObject {
                     put("type", "string")
-                    put("description", "search keyword")
+                    put("description", "Search keywords")
                 })
             },
             required = listOf("query")

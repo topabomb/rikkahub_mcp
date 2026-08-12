@@ -16,12 +16,8 @@ import me.rerere.ai.ui.UIMessagePart
 internal fun buildJavascriptTool(): Tool = Tool(
     name = "eval_javascript",
     description = """
-        Execute JavaScript code using QuickJS engine (ES2020).
-        The result is the value of the last expression in the code.
-        For calculations with decimals, use toFixed() to control precision.
-        Console output (log/info/warn/error) is captured and returned in 'logs' field.
-        No DOM or Node.js APIs available.
-        Example: '1 + 2' returns 3; 'const x = 5; x * 2' returns 10.
+        Execute JavaScript (QuickJS, ES2020). Result is the last expression.
+        Use toFixed() for decimal precision. No DOM or Node.js APIs. Console output is in logs.
     """.trimIndent().replace("\n", " "),
     parameters = {
         InputSchema.Obj(

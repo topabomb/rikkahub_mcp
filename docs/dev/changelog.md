@@ -16,7 +16,7 @@
   - `SubAssistantAccessPolicy`：统一计算显式允许与全局可见的有效集合，供 UI、Catalog、Tool 执行和运行中撤权复用
   - 动态 Catalog 注入：启用工具时从 Settings 实时构建 `header + rows` 格式的紧凑 JSON Catalog，使用 `<sub_assistant_catalog>` 边界标签，对 `<`/`>`/`&` 做 Unicode escape
   - Child Conversation：通过 `parentConversationId` 标识子助手会话，按 Master 当前分支的调用 lineage 复用或克隆
-  - SubAssistantCallCard：主聊天中的独立调用卡片，滚动显示 Target 最新文本输出，支持 follow/pause 和终态展示
+  - SubAssistantCallCard：主聊天中的独立调用卡片，展示 Target 最新文本尾部与终态，整卡进入详情
   - 通用生成原语：`ToolExecutionContext`（含 `messageId`+`toolOrdinal` 精确定位器）、metadata patch、`GenerationChunk.Phase/Checkpoint/Finished`、`toolProvider` 和 NonInteractive approval policy
   - `FinishedReason`：区分 `completed`/`awaiting_approval`/`step_limit_reached`，Coordinator 不再把未完成运行误记为 completed
   - `SubAssistantRunStateReducer`：串行维护单次调用的完整 metadata 快照，校验状态单向转换，终态后忽略迟到的 phase/preview，`active_tool_name` 只在 `tool_executing` 时保留
@@ -53,6 +53,20 @@
 
 ### 修复
 
+- **ask_user 非法参数不再弹出空提问框**：个别模型会把 `options` 发成 `{value, label}` 对象。现按约定在审批门口校验，不兼容该格式，也不把它当成自动授权；校验失败直接写入 `invalid_arguments`（含 `field`/`expected`，options 错误时带 `hint`），由模型按字符串数组重试
+- **提示词与工具参考**：`docs/references/prompts-and-tools.md` 记录当前系统注入、工具 description、参数说明和结果形状
+- **助手描述占位符**：`PlaceholderTransformer` / 提示词变量列表新增 `{{description}}`，值为 `Assistant.description`；Pebble `messageTemplate` 同步提供 `description`
+- **工具与注入文案**：Catalog 前缀与各工具 description/参数按「一事一处」收紧；子助手委托/管理字段不再复读能力清单
+- **工具结果回显**：`memory_tool` create/edit 只回 id；`clipboard_tool` write 只回 success；`calendar_create` 只回 event_id 与规范化时间；记忆卡片摘要改读入参
+- **SubAssistantCallCard 状态与 preview**：顶部右侧合并 phase/原因/终态；preview 按屏高裁成 2/3 行尾部文本，去掉内嵌滚动
+- **子助手头像动效**：进行中贴圆边柔光扫尾（两端淡出，主题色为主），结束后不加装饰
+- **子助手头像标识**：调用卡片、详情顶栏、TTS 条统一右下角 8dp 叠圆（无字母），贴头像边缘；釉面径向+新月高光+发丝边
+- **子助手详情跟滚**：流式时改为滚到尾部哨兵，并用可视底部判断 follow，修复进行中滚不到底
+- **TTS 控制条头像**：仅子助手播放且开启“使用助手头像”时显示；主助手不显示头像
+- **SubAssistantCallCard 紧凑化**：对照 ChainOfThought 收紧 padding/头像，移除分隔线和底部“查看详情”行
+- **删除会话扫描全库**：`findUnsharedFilesForDeletion` 不再 `getAllConversationsSync()` 反序列化全部会话节点；改为按候选 file:// URI 对 `message_node.messages` 做 LIKE 探测后再精确校验
+- **子助手终态 content 丢失**：`extractFinalAnswer` 忽略 `text_to_speech` 等副作用工具，最后一步为空时回退更早 step 的可见文本，避免主助手拿到空 `content`
+- **preview 无变化不回写 Master**：`updatePreview`/`updatePhase` 在内容未变时返回同一快照，Coordinator 跳过 metadata patch，减少主聊天重组
 - **子助手 Flow 跨协程异常**：`GenerationHandler.generateText()` 从普通 `flow` 改为 `channelFlow`，Running Card 的 metadata 从可取消 Child Job 回写时不再触发 Flow invariant 与 exception-transparency 连锁异常；工具仍按原 ordinal 串行执行
 - **子助手不必要阻断**：路由 description 继续作为类别启用与 Catalog 质量要求，但不再阻断已知 ID 的显式调用；未绑定模型的 Target 不再误判为必须手工配置模型
 - **GenerationHandler phase emit**：`tool_executing` 改为每个 ToolCall 执行前发出并携带 registered tool name（此前仅在批量级别发出一次无名称事件）；新增 `model_waiting` phase
@@ -65,6 +79,10 @@
 - **SubAssistantCallCard 视觉优化**：重写卡片布局——左侧状态色侧条区分子代理调用；始终显示 Target 头像（已删除时回退默认头像）；头像右下角"S"角标区分主/子代理；request 一行预览 + 固定高度滚动 preview 窗口（运行中自动跟随底部，用户上滚暂停）；运行中显示 phase/active tool；终态显示状态色和本地化原因
 - **SubAssistantDetailPage 空界面修复**：`childTaskNodeId` 是 `UIMessage.id` 而非 `MessageNode.id`，VM 此前按 `MessageNode.id` 查找导致永远找不到、显示"会话缺失"；修正为在 `messageNodes` 分支中搜索 `UIMessage.id`
 - **TTS 顺序播放跨 step 失效修复**：`TtsToolPlaybackContext` 持有 `TtsToolPlaybackState`，跨 LLM step 复用同一 context 时 state 保持；此前 `SubAssistantCoordinator` 每步创建新 context，导致 sessionId 变化触发 `computeEffectiveFlush` 每步强制 flush，顺序播放完全失效；现 context 在 toolProvider 外创建一次并传入 `buildTools`
+- **TTS 顺序播放 turn-level 共享**：将 `TtsToolPlaybackContext` 提升为 turn-level：`ChatService` 每轮 Master Generation 创建一个 context（含 `sessionId` + `TtsToolPlaybackState`），通过 `AssistantToolFactory.buildTools()` → `SubAssistantCoordinator.executeCall()` → `runTargetGeneration()` 传递到所有 Target；Target 派生 context 复用同一 `sessionId` 和 `playbackState`，仅替换 `assistantId`/`assistantName`/`sourceType`；此前每个 Target 创建独立 context，sessionId 不同导致 `computeEffectiveFlush` 强制 flush，子代理 TTS 互相打断；现同一 turn 内首次 TTS 调用（Master 或任意 Target）flush 建立队列，后续所有调用按顺序追加（设计文档 §7.5）
+- **SubAssistantCallCard ask_user 点击穿透修复**：`ask_user` 交互区的 `Surface` 添加 `Modifier.clickable(indication = null, onClick = {})` 消费点击事件，防止 `OutlinedTextField` 未消费的 tap 冒泡到 Card 的 `navigateToDetail`；此前点击文本输入框会意外跳转到子助手详情页（`FilterChip` 因自身 `clickable` 不受影响）
+- **TTS chunk 间 Ended 误清 activeSource 修复**：`AudioPlayer`（ExoPlayer 封装）在每个 chunk 播完后发射 `PlaybackStatus.Ended`，`TtsController` 直接传播导致 `CustomTtsStateImpl` 在 chunk 之间清空 `_activeSource`，后续 TTS 调用看到 `currentSource=null` → `effectiveFlush=true` → flush → 队列中未播放 chunk 被丢弃；修复：`TtsController` 的 `audio.playbackState` collector 在 `queue.isNotEmpty()` 时将 `Ended` 转为 `Playing`，只有队列为空时才传播 `Ended`
+- **TTS 控制条头像修复**：将 `SubAssistantAvatarBadge`（圆形+首字符文字）替换为 `TtsSourceAvatar`，内联渲染真实头像（图片/Emoji/Procedural 渐变，不使用 `UIAvatar` 以避免 `FloatingWindow` 中缺少 `LocalToaster` 的崩溃）；始终显示当前 `activeSource` 归属助手头像（主助手或子助手），不再仅限 `SUB_ASSISTANT` 类型；播放结束后控制条自动隐藏（`isSpeaking=false` 时 `isVisible=false`）；受助手设置中"使用助手头像"开关（`useAssistantAvatar`）控制，开关关闭时不显示头像；头像尺寸与播放按钮一致（40dp）
 - **子助手访问范围对话框优化**：新增 `SubAssistantScopeItem` 组件——Checkbox + 32dp 头像 + 名称/描述 + 全局可用标签；整行可点击切换选中；描述为空时不占空间；全局可见使用 `tertiaryContainer` 小标签替代 `AssistChip`，视觉更紧凑
 - **AssistantBasicPage 身份 Card 优化**：移除名称/描述/标签/Workspace/子助手/全局可见/使用助手头像之间的 6 条 `HorizontalDivider`，依靠 `FormItem` padding 和视觉间距区分；描述为空提示内联到 `FormItem` 的 description 槽，不再额外占行；节省约 40dp 垂直空间
 - **SubAssistantCallCard 状态原因统一**：UNAVAILABLE/FAILED/STOPPED 三处重复 if 块合并为统一的 `reasonColor` + 单次 Text 渲染；详情入口箭头从独立 Text 合并为字符串拼接
@@ -83,6 +101,11 @@
 - **子助手 AskUser 桥接**：Target 的 `ask_user` 按 Child `messageId + toolOrdinal` 持久化并显示在主聊天独立问题区；回答、取消、撤权、删除与重启均按 run/interaction 精确收口，提交按钮防重复
 - **多 ToolCall 确定性**：同批存在 Pending 时不先执行自动工具，全部决策后按原 ordinal 串行执行；审批、结果合并和子助手 lineage 均不再依赖可重复的 Provider `toolCallId`
 - **Pending 折叠可见性**：折叠的思考卡始终固定展示全部待审批/待回答 Tool step，隐藏数量只统计真正折叠的普通步骤
+- **Catalog JSON 双重转义修复**：`buildCatalogPrompt` 移除多余的 `.replace("\\", "\\\\")`；kotlinx.serialization 已正确转义反斜杠，再次转义会破坏 JSON 中已有的 `\n`、`\"` 等转义序列
+- **extractFinalAnswer 精确化**：改为只取 final step 中最后一个已执行 Tool 之后的 Text part（设计文档 §6.6），不再混入 Tool 前的过渡文本；同步修复 `checkNonTextOutput` 只检查 final step 的非文本 part，不检查中间 step
+- **GenerationHandler 流式 phase 补全**：在流式收集循环中新增 `reasoning_streaming` 和 `answer_streaming` phase 发射，首次检测到对应类型的 chunk 时发出一次，使 SubAssistantCallCard 在模型生成期间显示更精确的进度状态
+- **测试补充**：新增 `SubAssistantFinalAnswerTest`（15 个用例覆盖 extractFinalAnswer 和 checkNonTextOutput 的各种场景）；`AssistantCatalogPromptTest` 新增反斜杠不双重转义和换行符 JSON 转义序列不被破坏的测试
+- **assistant_call reason code 修正**：coordinator 不可用时返回 `failed/runtime_error` 而非 `unavailable/runtime_error`，与设计文档 §6.6 稳定 reason code 表一致（`runtime_error` 属于 `failed` 状态）
 
 ### 文档
 

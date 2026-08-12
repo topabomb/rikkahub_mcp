@@ -424,7 +424,7 @@ internal fun ChainOfThoughtScope.AskUserToolStep(
                 }
 
                 // Submit button
-                if (isPending && onAnswer != null) {
+                if (isPending && onAnswer != null && questions.isNotEmpty()) {
                     FilledTonalButton(
                         onClick = {
                             submitted = true

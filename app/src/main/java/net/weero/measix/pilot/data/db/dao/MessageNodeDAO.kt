@@ -40,6 +40,20 @@ interface MessageNodeDAO {
     @Query("DELETE FROM message_node WHERE id = :nodeId")
     suspend fun deleteById(nodeId: String)
 
+    /**
+     * 在排除指定会话后，按 LIKE 探测仍包含 [needle] 的 messages JSON。
+     * 只返回 JSON 文本，不组装 Conversation / MessageNode。
+     */
+    @Query(
+        "SELECT messages FROM message_node " +
+            "WHERE conversation_id NOT IN (:excludedIds) " +
+            "AND messages LIKE '%' || :needle || '%' ESCAPE '\\'"
+    )
+    suspend fun findMessagesJsonContaining(
+        excludedIds: List<String>,
+        needle: String,
+    ): List<String>
+
     // 使用 @RawQuery 绕过 Room 编译期校验，以便使用 json_each() 虚拟表
     @RawQuery
     suspend fun getTokenStatsRaw(query: SupportSQLiteQuery): MessageTokenStats

@@ -85,4 +85,130 @@ class TtsToolPlaybackStateTest {
         // ctx1 second call does not flush
         assertFalse(ctx1.playbackState.prepare("a2", sequentialEnabled = true).flush)
     }
+
+    // ---- 设计文档 §7.5: turn-level 共享 sessionId + playbackState ----
+
+    @Test
+    fun `turn-level shared state master first then target appends`() {
+        // 模拟 ChatService 创建 turn-level context，Master 和 Target 共享
+        val turnContext = TtsToolPlaybackContext(
+            sessionId = "turn-1",
+            assistantId = null,
+            assistantName = "Master",
+            sourceType = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.SourceType.NORMAL,
+        )
+        // Master TTS 第一次调用：flush
+        assertTrue(turnContext.playbackState.prepare("master-1", sequentialEnabled = true).flush)
+
+        // Target 派生 context：复用 sessionId + playbackState
+        val targetContext = TtsToolPlaybackContext(
+            sessionId = turnContext.sessionId,
+            assistantId = null,
+            assistantName = "Target",
+            sourceType = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.SourceType.SUB_ASSISTANT,
+            playbackState = turnContext.playbackState,
+        )
+        // Target TTS 第一次调用：不 flush（因为 Master 已消费 hasSpoken）
+        assertFalse(targetContext.playbackState.prepare("target-1", sequentialEnabled = true).flush)
+        // Target TTS 第二次调用：不 flush
+        assertFalse(targetContext.playbackState.prepare("target-2", sequentialEnabled = true).flush)
+    }
+
+    @Test
+    fun `turn-level shared state target first then master appends`() {
+        val turnContext = TtsToolPlaybackContext(
+            sessionId = "turn-2",
+            assistantId = null,
+            assistantName = "Master",
+            sourceType = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.SourceType.NORMAL,
+        )
+        // Target 派生 context 先执行 TTS
+        val targetContext = TtsToolPlaybackContext(
+            sessionId = turnContext.sessionId,
+            assistantId = null,
+            assistantName = "Target",
+            sourceType = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.SourceType.SUB_ASSISTANT,
+            playbackState = turnContext.playbackState,
+        )
+        // Target TTS 第一次调用：flush
+        assertTrue(targetContext.playbackState.prepare("target-1", sequentialEnabled = true).flush)
+        // Master TTS 调用：不 flush
+        assertFalse(turnContext.playbackState.prepare("master-1", sequentialEnabled = true).flush)
+    }
+
+    @Test
+    fun `turn-level multiple targets all share same playback state`() {
+        val turnContext = TtsToolPlaybackContext(
+            sessionId = "turn-3",
+            assistantId = null,
+            assistantName = "Master",
+            sourceType = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.SourceType.NORMAL,
+        )
+        // Master flush
+        assertTrue(turnContext.playbackState.prepare("m1", sequentialEnabled = true).flush)
+
+        // Target A
+        val targetA = TtsToolPlaybackContext(
+            sessionId = turnContext.sessionId,
+            assistantId = null,
+            assistantName = "A",
+            sourceType = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.SourceType.SUB_ASSISTANT,
+            playbackState = turnContext.playbackState,
+        )
+        assertFalse(targetA.playbackState.prepare("a1", sequentialEnabled = true).flush)
+
+        // Target B（同一 turn 的另一个子助手）
+        val targetB = TtsToolPlaybackContext(
+            sessionId = turnContext.sessionId,
+            assistantId = null,
+            assistantName = "B",
+            sourceType = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.SourceType.SUB_ASSISTANT,
+            playbackState = turnContext.playbackState,
+        )
+        assertFalse(targetB.playbackState.prepare("b1", sequentialEnabled = true).flush)
+
+        // Master again
+        assertFalse(turnContext.playbackState.prepare("m2", sequentialEnabled = true).flush)
+    }
+
+    @Test
+    fun `turn-level sequential disabled still flushes every call`() {
+        val turnContext = TtsToolPlaybackContext(
+            sessionId = "turn-4",
+            assistantId = null,
+            assistantName = "Master",
+            sourceType = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.SourceType.NORMAL,
+        )
+        val targetContext = TtsToolPlaybackContext(
+            sessionId = turnContext.sessionId,
+            assistantId = null,
+            assistantName = "Target",
+            sourceType = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.SourceType.SUB_ASSISTANT,
+            playbackState = turnContext.playbackState,
+        )
+        // 顺序开关关闭时，每次都 flush
+        assertTrue(turnContext.playbackState.prepare("m1", sequentialEnabled = false).flush)
+        assertTrue(targetContext.playbackState.prepare("t1", sequentialEnabled = false).flush)
+        assertTrue(turnContext.playbackState.prepare("m2", sequentialEnabled = false).flush)
+    }
+
+    @Test
+    fun `different turns have independent playback states`() {
+        val turn1 = TtsToolPlaybackContext(
+            sessionId = "turn-a",
+            assistantId = null,
+            assistantName = "Master",
+            sourceType = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.SourceType.NORMAL,
+        )
+        val turn2 = TtsToolPlaybackContext(
+            sessionId = "turn-b",
+            assistantId = null,
+            assistantName = "Master",
+            sourceType = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.SourceType.NORMAL,
+        )
+        // turn 1 first call flushes
+        assertTrue(turn1.playbackState.prepare("a1", sequentialEnabled = true).flush)
+        // turn 2 first call also flushes (different turn = different state)
+        assertTrue(turn2.playbackState.prepare("b1", sequentialEnabled = true).flush)
+    }
 }

@@ -56,6 +56,7 @@ import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.ui.components.ai.useCropLauncher
 import net.weero.measix.pilot.ui.hooks.rememberAvatarShape
+import net.weero.measix.pilot.ui.hooks.subAssistantActivityRing
 import org.koin.compose.koinInject
 import java.io.File
 import java.security.MessageDigest
@@ -96,6 +97,7 @@ fun UIAvatar(
     value: Avatar,
     modifier: Modifier = Modifier,
     loading: Boolean = false,
+    subAssistant: Boolean = false,
     onUpdate: ((Avatar) -> Unit)? = null,
     onClick: (() -> Unit)? = null
 ) {
@@ -145,8 +147,19 @@ fun UIAvatar(
         }
     }
 
-    Box(modifier = modifier.then(Modifier.size(32.dp))) {
-        val avatarShape = rememberAvatarShape(loading)
+    val ringColor = MaterialTheme.colorScheme.primary
+    Box(
+        modifier = modifier
+            .then(Modifier.size(32.dp))
+            .then(
+                if (subAssistant && loading) {
+                    Modifier.subAssistantActivityRing(color = ringColor)
+                } else {
+                    Modifier
+                }
+            ),
+    ) {
+        val avatarShape = rememberAvatarShape(loading = loading && !subAssistant)
         val avatarContent: @Composable () -> Unit = {
             Box(
                 contentAlignment = Alignment.Center,
@@ -227,6 +240,8 @@ fun UIAvatar(
                     tint = MaterialTheme.colorScheme.onTertiaryContainer
                 )
             }
+        } else if (subAssistant) {
+            SubAssistantAvatarMark(modifier = Modifier.align(Alignment.BottomEnd))
         }
     }
 
@@ -358,7 +373,7 @@ fun UIAvatar(
 @Composable
 private fun ProceduralAvatar(name: String, modifier: Modifier = Modifier) {
     val (fromColor, toColor) = remember(name) {
-        vercelAvatarColors(name.ifBlank { "?" })
+        proceduralAvatarColors(name.ifBlank { "?" })
     }
     Canvas(modifier = modifier) {
         drawRect(
@@ -371,7 +386,7 @@ private fun ProceduralAvatar(name: String, modifier: Modifier = Modifier) {
     }
 }
 
-private fun vercelAvatarColors(name: String): Pair<Color, Color> {
+internal fun proceduralAvatarColors(name: String): Pair<Color, Color> {
     val bytes = MessageDigest.getInstance("SHA-1").digest(name.toByteArray(Charsets.UTF_8))
     val sum = bytes.fold(0) { acc, b -> acc + (b.toInt() and 0xFF) }
     val hue = (sum % 360).toFloat()

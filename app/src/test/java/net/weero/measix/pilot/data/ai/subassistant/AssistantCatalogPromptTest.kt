@@ -141,6 +141,7 @@ class AssistantCatalogPromptTest {
             val prompt = buildCatalogPrompt(caller, assistants, mode, json)
             assertTrue("Mode $mode should use sub_assistant_catalog tag", prompt.contains("<sub_assistant_catalog>"))
             assertTrue("Mode $mode should close tag", prompt.contains("</sub_assistant_catalog>"))
+            assertTrue("Mode $mode should use the shared prefix", prompt.contains("Sub-assistants (sub-agents)."))
         }
     }
 
@@ -154,7 +155,7 @@ class AssistantCatalogPromptTest {
 
         assertTrue(prompt.contains("header"))
         assertTrue(prompt.contains("rows"))
-        assertTrue(prompt.contains("untrusted data"))
+        assertTrue(prompt.contains("Sub-assistants (sub-agents)."))
     }
 
     @Test
@@ -180,6 +181,36 @@ class AssistantCatalogPromptTest {
         assertFalse("Should not contain raw <script>", prompt.contains("<script>"))
         assertTrue("Should contain escaped version", prompt.contains("\\u003c"))
         assertTrue("Should contain escaped version", prompt.contains("\\u003e"))
+    }
+
+    @Test
+    fun `backslash in name is not double-escaped`() {
+        val target = makeAssistant(name = "A\\B", description = "path\\to\\file", isGloballyVisible = true)
+        val caller = makeCaller()
+        val assistants = listOf(caller, target)
+
+        val prompt = buildCatalogPrompt(caller, assistants, CatalogMode.DELEGATION_ONLY, json)
+
+        // kotlinx.serialization escapes backslash as \\ in JSON.
+        // We must NOT double-escape it to \\\\ — that would corrupt the JSON.
+        // The JSON should contain exactly \\ (two chars: backslash + backslash) for each backslash in the value.
+        // After our < > & replacement, the JSON should still be valid.
+        assertFalse("Should not contain quadruple backslash (double-escaped)", prompt.contains("\\\\\\\\"))
+    }
+
+    @Test
+    fun `newline in description preserves json escape sequence`() {
+        val target = makeAssistant(name = "Helper", description = "line1\nline2", isGloballyVisible = true)
+        val caller = makeCaller()
+        val assistants = listOf(caller, target)
+
+        val prompt = buildCatalogPrompt(caller, assistants, CatalogMode.DELEGATION_ONLY, json)
+
+        // kotlinx.serialization encodes newline as \n in JSON.
+        // Our escaping must not corrupt this into \\n (literal backslash + n).
+        // The JSON should contain \n (the escape sequence), not \\n.
+        assertTrue("Should contain JSON newline escape \\n", prompt.contains("\\n"))
+        assertFalse("Should not contain double-escaped newline \\\\n", prompt.contains("\\\\n"))
     }
 
     // ---- resolveCatalogMode ----

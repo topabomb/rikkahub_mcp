@@ -5,6 +5,7 @@
 > [`chat-generation-pipeline.md`](https://github.com/rikkahub/rikkahub/blob/master/docs/references/chat-generation-pipeline.md)，
 > 但包名、工具集合、通知解耦、Workspace、MCP 生命周期和上下文策略均按本 Fork 的最终实现重写。
 > 上下文取舍与后续演进见 [`docs/dev/context-management.md`](../dev/context-management.md)。
+> 模型可见的提示词、注入与工具文案见 [`prompts-and-tools.md`](prompts-and-tools.md)。
 
 ## 核心职责
 

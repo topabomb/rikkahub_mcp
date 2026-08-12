@@ -702,11 +702,11 @@ ChatList (LazyColumn)
 
 ### 15.2 消息渲染
 
-**SubAssistantCallCard** 从通用 COT 分组中拆出（`groupMessageParts` 遇到 `assistant_call` 先 flush 普通 block）。布局：Target 头像/名称/状态→request 一行预览→最新输出滚动窗口→phase/active tool→详情入口。
+**SubAssistantCallCard** 从通用 COT 分组中拆出（`groupMessageParts` 遇到 `assistant_call` 先 flush 普通 block）。布局：28dp Target 头像（右下角叠圆；运行中圆边柔光扫尾）/名称/右侧合并状态→request 一行→2～3 行 preview 尾部。整卡即详情入口。
 
 - preview 从 Tool input JSON decoder 读取 request
-- preview reducer 常量：最大缓冲 2000、首部边界 200、主卡 4 行、节流 100ms
-- follow/pause 行为
+- preview reducer 常量：最大缓冲 2000、首部边界 200；卡片展示常规 3 行、矮屏 2 行
+- preview 未变不回写 Master metadata
 - 整卡单一详情点击目标
 - Terminal Card：completed/unavailable/failed/stopped 各自正确文案
 - 不显示进度百分比/预计时间
@@ -723,7 +723,7 @@ ChatList (LazyColumn)
 
 ### 15.4 TTSController
 
-- Target 播放时显示 Target 小头像，头像按 Assistant ID 实时解析 Settings 中的 Assistant，Target 已删除时回退默认头像
+- Target 播放时显示 Target 小头像（右下角叠圆 + 圆边柔光扫尾），头像按 Assistant ID 实时解析 Settings 中的 Assistant，Target 已删除时回退默认头像
 - normal 来源无头像
 - 来源切换强制 flush 时同步切换/移除头像
 - 队列自然播放完毕、Provider 切换、播放错误、dispose 时清空 `activeSource`

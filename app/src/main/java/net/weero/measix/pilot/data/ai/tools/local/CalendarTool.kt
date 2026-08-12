@@ -28,13 +28,9 @@ import java.time.ZonedDateTime
 internal fun buildCalendarQueryTool(context: Context): Tool = Tool(
     name = "calendar_query",
     description = """
-        Query calendar events on the user's device within a time range.
-        Specify a custom interval with 'begin'/'end', or use the 'range' preset (today/week/month).
-        Returns a list of events with title, description, location, start/end times, and calendar info.
-        The device timezone is '${ZoneId.systemDefault()}' (UTC offset ${OffsetDateTime.now().offset});
-        times without an explicit offset are interpreted in this timezone.
-        Requires the 'Calendar' permission; if it is not granted, an error is returned and the
-        permission request is triggered automatically.
+        Query device calendar events (`begin`/`end`, or `range`: today/week/month).
+        Device timezone: '${ZoneId.systemDefault()}' (UTC ${OffsetDateTime.now().offset}); naive times use this zone.
+        Requires Calendar permission; if missing, a request is triggered and an error is returned.
     """.trimIndent().replace("\n", " "),
     parameters = {
         InputSchema.Obj(
@@ -223,12 +219,9 @@ internal fun buildCalendarQueryTool(context: Context): Tool = Tool(
 internal fun buildCalendarCreateTool(context: Context): Tool = Tool(
     name = "calendar_create",
     description = """
-        Create a new calendar event on the user's device.
-        Requires title and start time at minimum. End time defaults to 1 hour after start.
-        The device timezone is '${ZoneId.systemDefault()}' (UTC offset ${OffsetDateTime.now().offset});
-        times without an explicit offset are interpreted in this timezone.
-        Requires the 'Calendar' permission; if it is not granted, an error is returned and the
-        permission request is triggered automatically.
+        Create a calendar event (title and start required). End defaults to 1 hour after start, or the next day if all-day.
+        Device timezone: '${ZoneId.systemDefault()}' (UTC ${OffsetDateTime.now().offset}).
+        Requires Calendar permission; if missing, a request is triggered and an error is returned.
     """.trimIndent().replace("\n", " "),
     needsApproval = { true },
     parameters = {
@@ -384,11 +377,8 @@ internal fun buildCalendarCreateTool(context: Context): Tool = Tool(
         val payload = buildJsonObject {
             put("success", true)
             put("event_id", eventId)
-            put("title", title)
             put("start", startTime.withNano(0).toString())
             put("end", endTime.withNano(0).toString())
-            put("all_day", allDay)
-            put("location", location)
         }
         listOf(UIMessagePart.Text(payload.toString()))
     }

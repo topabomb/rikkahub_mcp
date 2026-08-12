@@ -83,7 +83,7 @@ data class Assistant(
     val enableTimeReminder: Boolean = false,            // 时间间隔提醒注入
     val allowConversationSystemPrompt: Boolean = false, // 允许对话单独重写 system prompt
     val allowConversationPromptInjection: Boolean = false, // 允许对话单独绑定提示词注入
-    val description: String = "", // 路由描述：擅长什么、何时适合委托；不是 System Prompt
+    val description: String = "", // 路由描述；占位符 {{description}}；不是 System Prompt
     val allowAsSubAssistant: Boolean = false, // 允许其他助手把独立任务交给它
     val isSubAssistantGloballyVisible: Boolean = false, // 全局可见：所有启用子助手工具的助手都能发现/调用/管理
     val allowedSubAssistantIds: Set<Uuid> = emptySet(), // 显式允许的子助手 ID；管理与调用共用

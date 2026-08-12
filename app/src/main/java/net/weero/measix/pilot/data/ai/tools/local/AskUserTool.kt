@@ -1,24 +1,149 @@
 package net.weero.measix.pilot.data.ai.tools.local
 
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
+import me.rerere.ai.ui.UIMessagePart
+
+internal const val ASK_USER_TOOL_NAME = "ask_user"
+
+internal const val ASK_USER_OPTIONS_HINT =
+    "options must be an array of strings, e.g. [\"Yes\", \"No\"]. Do not send objects."
+
+internal data class AskUserArgumentError(
+    val field: String,
+    val expected: String,
+    val hint: String? = null,
+)
+
+internal fun validateAskUserArguments(args: JsonElement): AskUserArgumentError? {
+    val obj = args as? JsonObject
+        ?: return AskUserArgumentError("arguments", "object")
+
+    val questionsElement = obj["questions"]
+        ?: return AskUserArgumentError("questions", "non-empty array")
+    val questions = questionsElement as? JsonArray
+        ?: return AskUserArgumentError("questions", "array")
+    if (questions.isEmpty()) {
+        return AskUserArgumentError("questions", "non-empty array")
+    }
+
+    val seenIds = mutableSetOf<String>()
+    questions.forEachIndexed { index, item ->
+        val prefix = "questions[$index]"
+        val questionObj = item as? JsonObject
+            ?: return AskUserArgumentError(prefix, "object")
+
+        val id = (questionObj["id"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull?.trim()
+        if (id.isNullOrEmpty()) {
+            return AskUserArgumentError("$prefix.id", "non-empty string")
+        }
+        if (!seenIds.add(id)) {
+            return AskUserArgumentError("$prefix.id", "unique string")
+        }
+
+        val question = (questionObj["question"] as? JsonPrimitive)
+            ?.takeIf { it.isString }
+            ?.contentOrNull
+            ?.trim()
+        if (question.isNullOrEmpty()) {
+            return AskUserArgumentError("$prefix.question", "non-empty string")
+        }
+
+        val selectionRaw = questionObj["selection_type"]
+        val selectionType = when {
+            selectionRaw == null -> "text"
+            selectionRaw is JsonPrimitive && selectionRaw.isString -> selectionRaw.content
+            else -> return AskUserArgumentError(
+                "$prefix.selection_type",
+                """"text", "single", or "multi"""",
+            )
+        }
+        if (selectionType !in setOf("text", "single", "multi")) {
+            return AskUserArgumentError(
+                "$prefix.selection_type",
+                """"text", "single", or "multi"""",
+            )
+        }
+
+        val optionsError = validateAskUserOptions(
+            fieldPrefix = "$prefix.options",
+            optionsElement = questionObj["options"],
+            required = selectionType == "single" || selectionType == "multi",
+        )
+        if (optionsError != null) {
+            return optionsError
+        }
+    }
+    return null
+}
+
+private fun validateAskUserOptions(
+    fieldPrefix: String,
+    optionsElement: JsonElement?,
+    required: Boolean,
+): AskUserArgumentError? {
+    if (optionsElement == null) {
+        return if (required) {
+            AskUserArgumentError(fieldPrefix, "non-empty array of strings", ASK_USER_OPTIONS_HINT)
+        } else {
+            null
+        }
+    }
+    val options = optionsElement as? JsonArray
+        ?: return AskUserArgumentError(fieldPrefix, "array of strings", ASK_USER_OPTIONS_HINT)
+    if (required && options.isEmpty()) {
+        return AskUserArgumentError(fieldPrefix, "non-empty array of strings", ASK_USER_OPTIONS_HINT)
+    }
+    options.forEachIndexed { optionIndex, option ->
+        val primitive = option as? JsonPrimitive
+        val text = primitive?.takeIf { it.isString }?.contentOrNull?.trim()
+        if (text.isNullOrEmpty()) {
+            return AskUserArgumentError(
+                "$fieldPrefix[$optionIndex]",
+                "non-empty string",
+                ASK_USER_OPTIONS_HINT,
+            )
+        }
+    }
+    return null
+}
+
+internal fun AskUserArgumentError.toToolResult(): List<UIMessagePart> {
+    val payload = buildJsonObject {
+        put("error", "invalid_arguments")
+        put("field", field)
+        put("expected", expected)
+        hint?.let { put("hint", it) }
+    }
+    return listOf(UIMessagePart.Text(payload.toString()))
+}
+
+/** 参数不合法时在审批门口直接失败，不进入 HITL，也不走自动执行。 */
+internal fun askUserApprovalRejection(
+    toolName: String,
+    args: JsonElement,
+): List<UIMessagePart>? {
+    if (toolName != ASK_USER_TOOL_NAME) return null
+    return validateAskUserArguments(args)?.toToolResult()
+}
 
 internal fun buildAskUserTool(): Tool = Tool(
-    name = "ask_user",
-    description = """
-        Ask the user one or more questions when you need clarification, additional information, or confirmation.
-        Each question can optionally provide a list of suggested options for the user to choose from.
-        The user may select an option or provide their own free-text answer for each question.
-        The answers will be returned as a JSON object mapping question IDs to the user's responses.
-    """.trimIndent().replace("\n", " "),
+    name = ASK_USER_TOOL_NAME,
+    description = "Ask the user one or more questions when you need clarification or confirmation.",
     parameters = {
         InputSchema.Obj(
             properties = buildJsonObject {
                 put("questions", buildJsonObject {
                     put("type", "array")
+                    put("minItems", 1)
                     put("description", "List of questions to ask the user")
                     put("items", buildJsonObject {
                         put("type", "object")
@@ -33,10 +158,7 @@ internal fun buildAskUserTool(): Tool = Tool(
                             })
                             put("options", buildJsonObject {
                                 put("type", "array")
-                                put(
-                                    "description",
-                                    "Optional list of suggested options for the user to choose from"
-                                )
+                                put("description", "Suggested string choices, not objects.")
                                 put("items", buildJsonObject {
                                     put("type", "string")
                                 })
@@ -68,7 +190,8 @@ internal fun buildAskUserTool(): Tool = Tool(
         )
     },
     needsApproval = { true },
-    execute = {
-        error("ask_user tool should be handled by HITL flow")
+    execute = { args ->
+        validateAskUserArguments(args)?.toToolResult()
+            ?: error("ask_user tool should be handled by HITL flow")
     }
 )

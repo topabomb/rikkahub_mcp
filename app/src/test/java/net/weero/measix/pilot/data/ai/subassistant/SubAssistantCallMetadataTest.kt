@@ -32,6 +32,21 @@ class SubAssistantCallMetadataTest {
     }
 
     @Test
+    fun `starting can transition to failed`() {
+        assertTrue(SubAssistantCallState.STARTING.canTransitionTo(SubAssistantCallState.FAILED))
+    }
+
+    @Test
+    fun `starting can transition to stopped`() {
+        assertTrue(SubAssistantCallState.STARTING.canTransitionTo(SubAssistantCallState.STOPPED))
+    }
+
+    @Test
+    fun `starting cannot transition directly to completed`() {
+        assertFalse(SubAssistantCallState.STARTING.canTransitionTo(SubAssistantCallState.COMPLETED))
+    }
+
+    @Test
     fun `running can transition to completed`() {
         assertTrue(SubAssistantCallState.RUNNING.canTransitionTo(SubAssistantCallState.COMPLETED))
     }

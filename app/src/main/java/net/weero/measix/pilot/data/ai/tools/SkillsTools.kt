@@ -22,13 +22,11 @@ fun createSkillTools(
         Tool(
             name = "use_skill",
             description = """
-                Load and apply a skill to get specialized instructions or capabilities.
-                Call this tool when the user's request matches one of the available skills.
+                Load a skill's instructions when the user's request matches an available skill.
             """.trimIndent(),
             systemPrompt = { _, _ ->
                 buildString {
                     appendLine("**Skills**")
-                    appendLine("You have access to the following skills. Use the `use_skill` tool to load a skill's instructions when the user's request matches.")
                     appendLine("<available_skills>")
                     available.forEach { skill ->
                         appendLine("  <skill>")
@@ -45,7 +43,7 @@ fun createSkillTools(
                     properties = buildJsonObject {
                         put("name", buildJsonObject {
                             put("type", "string")
-                            put("description", "The name of the skill to use")
+                            put("description", "Skill name from the available list")
                         })
                         put("path", buildJsonObject {
                             put("type", "string")

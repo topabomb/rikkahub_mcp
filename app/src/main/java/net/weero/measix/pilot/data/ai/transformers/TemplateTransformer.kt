@@ -38,6 +38,7 @@ class TemplateTransformer(
                                     "role" to message.role.name.lowercase(),
                                     "time" to createdAt.toLocalTime(),
                                     "date" to createdAt.toLocalDate(),
+                                    "description" to ctx.assistant.description,
                                 )
                             )
                             part.copy(

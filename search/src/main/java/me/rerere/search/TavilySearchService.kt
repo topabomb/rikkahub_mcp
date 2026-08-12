@@ -28,11 +28,11 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
             properties = buildJsonObject {
                 put("query", buildJsonObject {
                     put("type", "string")
-                    put("description", "search keyword")
+                    put("description", "Search keywords")
                 })
                 put("topic", buildJsonObject {
                     put("type", "string")
-                    put("description", "search topic (one of `general`, `news`, `finance`)")
+                    put("description", "general, news, or finance")
                     put("enum", buildJsonArray {
                         add("general")
                         add("news")
@@ -48,7 +48,7 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
             properties = buildJsonObject {
                 put("url", buildJsonObject {
                     put("type", "string")
-                    put("description", "url to scrape")
+                    put("description", "Page URL")
                 })
             },
             required = listOf("url")

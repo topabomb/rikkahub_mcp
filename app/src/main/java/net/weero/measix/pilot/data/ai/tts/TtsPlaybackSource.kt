@@ -9,7 +9,7 @@ import kotlin.uuid.Uuid
  * 来源信息只服务播放仲裁和 UI，不持久化到 Conversation，也不进入模型 Tool Result。
  */
 data class TtsPlaybackSource(
-    /** 本轮生成的稳定 playback session ID（每轮 Master/Target Generation 创建一个） */
+    /** 本轮 turn 的稳定 playback session ID（每轮 Master Generation 创建一个，Target 派生复用） */
     val sessionId: String,
     /** 来源 Assistant ID */
     val assistantId: Uuid?,
@@ -33,8 +33,9 @@ data class TtsPlaybackSource(
          * - [currentSource] 为当前活跃来源（null 表示无音频或手动朗读）
          * - [incomingSource] 为本次 TTS 调用的来源
          *
-         * 来源切换（session 不同）或来源类型变化时强制 flush，
-         * 禁止不同 Assistant/Generation 共用队列。
+         * 同一 turn 内 Master 和 Target 共享 sessionId，来源类型切换不触发 flush。
+         * turn 切换（sessionId 不同）或来源有无状态变化时强制 flush，
+         * 禁止不同 turn 共用队列。
          */
         fun computeEffectiveFlush(
             flushCalled: Boolean,

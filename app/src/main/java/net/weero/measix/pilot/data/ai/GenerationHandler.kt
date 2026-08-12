@@ -44,6 +44,7 @@ import net.weero.measix.pilot.data.ai.transformers.onGenerationFinish
 import net.weero.measix.pilot.data.ai.transformers.transforms
 import net.weero.measix.pilot.data.ai.transformers.visualTransforms
 import net.weero.measix.pilot.data.ai.tools.buildMemoryTools
+import net.weero.measix.pilot.data.ai.tools.local.askUserApprovalRejection
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
@@ -75,14 +76,22 @@ internal fun resolveToolApprovals(
     var hasPendingApproval = false
     val updatedTools = unexecutedTools.map { tool ->
         val toolDefinition = toolDefinitions.find { it.name == tool.toolName }
+        val args = tool.inputAsJson()
+        val contractRejection = askUserApprovalRejection(tool.toolName, args)
         when {
+            contractRejection != null &&
+                tool.approvalState !is ToolApprovalState.Denied &&
+                tool.approvalState !is ToolApprovalState.Answered -> {
+                tool.copy(output = contractRejection)
+            }
+
             tool.approvalState is ToolApprovalState.Pending -> {
                 hasPendingApproval = true
                 tool
             }
 
             tool.approvalState is ToolApprovalState.Auto &&
-                toolDefinition?.needsApproval(tool.inputAsJson()) == true -> {
+                toolDefinition?.needsApproval(args) == true -> {
                 if (nonInteractive && tool.toolName !in interactiveToolNames) {
                     tool.copy(
                         output = listOf(
@@ -239,7 +248,6 @@ class GenerationHandler(
                         assistant.id.toString()
                     }
                     buildMemoryTools(
-                        json = json,
                         onCreation = { content ->
                             memoryRepo.addMemory(memoryAssistantId, content)
                         },
@@ -630,6 +638,8 @@ class GenerationHandler(
         // 请求构建完成，进入等待模型响应阶段
         onPhase?.invoke("model_waiting")
         if (stream) {
+            var reasoningPhaseSent = false
+            var answerPhaseSent = false
             providerImpl.streamText(
                 providerSetting = provider,
                 messages = internalMessages,
@@ -643,6 +653,25 @@ class GenerationHandler(
                         } else {
                             message
                         }
+                    }
+                }
+                // 精确 phase：首次收到 reasoning / text chunk 时通知 UI
+                if (!reasoningPhaseSent) {
+                    val hasReasoning = it.choices.any { choice ->
+                        choice.delta?.parts?.any { p -> p is UIMessagePart.Reasoning } == true
+                    }
+                    if (hasReasoning) {
+                        reasoningPhaseSent = true
+                        onPhase?.invoke("reasoning_streaming")
+                    }
+                }
+                if (!answerPhaseSent) {
+                    val hasText = it.choices.any { choice ->
+                        choice.delta?.parts?.any { p -> p is UIMessagePart.Text && p.text.isNotEmpty() } == true
+                    }
+                    if (hasText) {
+                        answerPhaseSent = true
+                        onPhase?.invoke("answer_streaming")
                     }
                 }
                 onUpdateMessages(messages)

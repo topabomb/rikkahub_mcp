@@ -119,7 +119,9 @@ class ConversationSessionRegistry(
 
     fun updateConversationState(conversationId: Uuid, conversation: Conversation) {
         if (conversation.id != conversationId) return
-        val session = getOrCreateSession(conversationId)
+        // 使用 getOrCreateSessionWithConversation 避免先创建空 Session 再覆盖，
+        // 符合设计文档 §7.1 "不得先创建空 Session 再遮蔽 Room 快照"的要求。
+        val session = getOrCreateSessionWithConversation(conversationId, conversation)
         session.state.value = conversation
     }
 

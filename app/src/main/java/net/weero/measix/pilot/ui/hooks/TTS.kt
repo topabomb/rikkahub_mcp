@@ -2,24 +2,17 @@ package net.weero.measix.pilot.ui.hooks
 
 import android.content.Context
 import android.util.Log
-import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.launch
 import me.rerere.tts.model.PlaybackState
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getSelectedTTSProvider
 import net.weero.measix.pilot.utils.stripMarkdown
-import me.rerere.tts.model.TTSResponse
 import me.rerere.tts.provider.TTSManager
 import me.rerere.tts.provider.TTSProviderSetting
 import me.rerere.tts.controller.TtsController
@@ -145,9 +138,6 @@ private class CustomTtsStateImpl(
     private val ttsManager by inject<TTSManager>()
     private val controller by lazy { me.rerere.tts.controller.TtsController(context, ttsManager) }
 
-    private val scope = CoroutineScope(Dispatchers.Main)
-    private var currentJob: Job? = null
-
     override val isAvailable: StateFlow<Boolean> get() = controller.isAvailable
     override val isSpeaking: StateFlow<Boolean> get() = controller.isSpeaking
     override val error: StateFlow<String?> get() = controller.error
@@ -155,32 +145,19 @@ private class CustomTtsStateImpl(
     override val totalChunks: StateFlow<Int> get() = controller.totalChunks
     override val playbackState: StateFlow<PlaybackState> get() = controller.playbackState
 
-    // 设计文档 §7.5 — 瞬态 activeSource
-    private val _activeSource = MutableStateFlow<net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource?>(null)
-    override val activeSource: StateFlow<net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource?> get() = _activeSource
+    // 设计文档 §7.5 — activeSource 直接使用 controller 的 source-aware 追踪
+    // controller 在播放跨越 source 边界时更新 activeSource，
+    // 确保头像始终反映"当前正在播放的音频来源"，而非"最近入队的来源"。
+    @Suppress("UNCHECKED_CAST")
+    override val activeSource: StateFlow<net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource?>
+        get() = controller.activeSource as StateFlow<net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource?>
 
-    init {
-        // 设计文档 §7.5：队列自然播放完毕、播放错误时清空 activeSource，
-        // 避免控制条在无音频时继续显示旧 Target。
-        scope.launch {
-            controller.playbackState.collect { state ->
-                if (state.status == me.rerere.tts.model.PlaybackStatus.Ended) {
-                    _activeSource.value = null
-                }
-            }
-        }
-        scope.launch {
-            controller.error.collect { err ->
-                if (err != null) {
-                    _activeSource.value = null
-                }
-            }
-        }
-    }
+    // No init block needed: controller manages activeSource internally,
+    // including clearing on Ended/stop and handling per-chunk errors gracefully.
 
     fun updateProvider(provider: TTSProviderSetting?) {
-        // 设计文档 §7.5：Provider 切换时清空 activeSource
-        _activeSource.value = null
+        // 设计文档 §7.5：Provider 切换时清空队列和 activeSource
+        controller.stop()
         controller.setProvider(provider)
     }
 
@@ -198,22 +175,19 @@ private class CustomTtsStateImpl(
 
         // 设计文档 §7.5 — 来源切换仲裁
         // 使用提取的纯函数计算最终 flush，避免 JVM 测试复制生产算法
-        val currentSource = _activeSource.value
+        val currentSource = controller.activeSource.value as? net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
         val effectiveFlush = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.computeEffectiveFlush(
             flushCalled = flushCalled,
             currentSource = currentSource,
             incomingSource = source,
         )
 
-        // 更新 activeSource
-        _activeSource.value = source
-
-        controller.speak(processed, effectiveFlush)
+        // source 传递给 controller，controller 在播放到该批 chunk 时才更新 activeSource
+        controller.speak(processed, effectiveFlush, source)
     }
 
     override fun stop() {
         controller.stop()
-        _activeSource.value = null
     }
 
     override fun pause() {
@@ -239,9 +213,6 @@ private class CustomTtsStateImpl(
     }
 
     override fun cleanup() {
-        // 设计文档 §7.5：dispose 时清空 activeSource
-        _activeSource.value = null
         controller.dispose()
-        currentJob = null
     }
 }

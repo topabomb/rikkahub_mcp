@@ -66,9 +66,7 @@ private fun createReadFileTool(
 ) = Tool(
     name = "workspace_read_file",
     description = """
-        Read a file using the assistant's bound workspace Rootfs. Paths must be absolute inside Rootfs.
-        Use /workspace for the workspace files area.
-        Supports UTF-8 text files and image files (png, jpg, jpeg, gif, webp, bmp, svg, heic, heif, avif, ico).
+        Read a UTF-8 text or image file from the bound workspace Rootfs.
     """.trimIndent().replace("\n", " "),
     parameters = {
         InputSchema.Obj(
@@ -104,8 +102,7 @@ private fun createWriteFileTool(
 ) = Tool(
     name = "workspace_write_file",
     description = """
-        Write a UTF-8 text file using the assistant's bound workspace Rootfs. Paths must be absolute inside Rootfs.
-        Use /workspace for the workspace files area.
+        Write a UTF-8 text file in the bound workspace Rootfs.
     """.trimIndent().replace("\n", " "),
     parameters = {
         InputSchema.Obj(
@@ -141,10 +138,8 @@ private fun createEditFileTool(
 ) = Tool(
     name = "workspace_edit_file",
     description = """
-        Edit a UTF-8 text file using the assistant's bound workspace Rootfs. Paths must be absolute inside Rootfs.
-        Use /workspace for the workspace files area.
-        Provide old_text and new_text. By default old_text must occur exactly once; set replace_all=true to replace every occurrence.
-        If no exact match is found, whitespace-tolerant line matching is attempted automatically.
+        Edit a UTF-8 text file in the bound workspace Rootfs.
+        old_text must occur once unless replace_all=true. If no exact match, whitespace-tolerant matching is tried.
     """.trimIndent().replace("\n", " "),
     parameters = {
         InputSchema.Obj(
@@ -208,12 +203,11 @@ private fun createShellTool(
 ) = Tool(
     name = "workspace_shell",
     description = buildString {
-        append("Run a shell command in the assistant's bound workspace Rootfs. The workspace files area is mounted at /workspace. ")
-        append("Use cwd for a path relative to the workspace files root. ")
+        append("Run a shell command in the bound workspace Rootfs. ")
+        append("cwd is relative to the workspace files root. ")
         if (!defaultCwd.isNullOrBlank()) {
-            append("Defaults to '$defaultCwd'. ")
+            append("Defaults to '$defaultCwd'.")
         }
-        append("Requires Rootfs to be installed and ready.")
     },
     parameters = {
         InputSchema.Obj(

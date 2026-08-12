@@ -341,7 +341,7 @@ ChatService.sendMessage()
   └─ GenerationHandler.generateText()
        │
        ├─ 模型返回 tool_call: workspace_shell
-       ├─ 检查 needsApproval（workspace_shell 默认 auto-approve）
+       ├─ 检查 needsApproval（workspace_shell 默认需要审批，可在工作区设置中覆盖）
        ├─ 执行 tool.execute()
        │    │
        │    ▼

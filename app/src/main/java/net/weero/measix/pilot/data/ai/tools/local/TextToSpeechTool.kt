@@ -19,13 +19,17 @@ import me.rerere.tts.provider.TTSManager
 /**
  * 设计文档 §7.5 — TTS 工具播放上下文
  *
- * 每轮 Master 或 Target Generation 创建一个 context，包含本轮稳定的 playback session ID、
- * Assistant ID、名称快照和来源类型。Target 的 toolProvider 在不同 LLM step 重建 Tool 时
- * 必须复用这个 context；它不能放入单例 LocalTools，也不能随每步 Tool 列表一起重建。
+ * 每轮 Master Generation（一个用户 turn）创建一个 turn-level context，包含本轮稳定的
+ * playback session ID、Assistant ID、名称快照和来源类型。该 context 在整轮 turn 内被
+ * Master 和所有 Target 共享：Target 派生 context 复用同一 sessionId 和同一
+ * TtsToolPlaybackState，仅替换 assistantId/assistantName/sourceType。
  *
- * 同时持有一个 [TtsToolPlaybackState]，用于跨 LLM step 维护顺序播放的 "已播放" 标记。
- * 如果 state 不跨 step 复用，顺序播放配置会失效——每个 step 的第一次 TTS 调用都会
- * flush 队列，打断上一段音频。
+ * Target 的 toolProvider 在不同 LLM step 重建 Tool 时复用这个派生 context；
+ * 它不能放入单例 LocalTools，也不能随每步 Tool 列表一起重建。
+ *
+ * [TtsToolPlaybackState] 用于跨 LLM step 和跨 Master/Target 维护顺序播放的 "已播放" 标记。
+ * 如果 state 不跨 step 和跨角色复用，顺序播放配置会失效——每个 step 或每个角色的
+ * 第一次 TTS 调用都会 flush 队列，打断上一段音频。
  */
 data class TtsToolPlaybackContext(
     val sessionId: String,
@@ -53,10 +57,9 @@ internal fun buildTextToSpeechTool(
     return Tool(
         name = "text_to_speech",
         description = """
-            Speak text aloud to the user using the device's text-to-speech engine.
-            Use this when the user asks you to read something aloud, or when audio output is appropriate.
-            The tool returns immediately; audio plays in the background on the device.
-            Provide natural, readable text without markdown formatting.
+            Speak text aloud when the user asks you to read something, or when audio is appropriate.
+            Returns immediately; playback continues in the background.
+            Provide natural speech text without markdown.
         """.trimIndent().replace("\n", " "),
         systemPrompt = { _, _ ->
             settingsStore.settingsFlow.value.getSelectedTTSProvider()
@@ -68,7 +71,7 @@ internal fun buildTextToSpeechTool(
                 properties = buildJsonObject {
                     put("text", buildJsonObject {
                         put("type", "string")
-                        put("description", "The text to speak aloud")
+                        put("description", "Plain text to speak")
                     })
                 },
                 required = listOf("text")

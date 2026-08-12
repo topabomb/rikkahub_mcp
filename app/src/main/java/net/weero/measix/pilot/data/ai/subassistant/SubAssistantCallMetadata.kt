@@ -31,7 +31,7 @@ enum class SubAssistantCallState {
     fun canTransitionTo(next: SubAssistantCallState): Boolean {
         if (this == next) return true
         return when (this) {
-            STARTING -> next == RUNNING || next == UNAVAILABLE
+            STARTING -> next == RUNNING || next == UNAVAILABLE || next == FAILED || next == STOPPED
             RUNNING -> next == COMPLETED || next == FAILED || next == STOPPED
             else -> false // 终态不可再变
         }

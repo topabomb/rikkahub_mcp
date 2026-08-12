@@ -106,6 +106,7 @@ fun Settings.getChatModel(assistant: Assistant): Model? =
 |------|------|--------|------|
 | `id` | `Uuid` | 随机生成 | 助手唯一标识符 |
 | `name` | `String` | `""` | 助手名称，用于 UI 显示和 `{{char}}` 占位符 |
+| `description` | `String` | `""` | 路由描述，用于 Catalog 和 `{{description}}` 占位符；不是 System Prompt |
 | `avatar` | `Avatar` | `Avatar.Dummy` | 头像类型（文字/图片/渐变/emoji） |
 | `useAssistantAvatar` | `Boolean` | `false` | 使用助手头像替代模型头像显示在聊天消息中 |
 | `background` | `String?` | `null` | 聊天页背景图地址（本地 URI 或网络 URL） |
@@ -129,7 +130,7 @@ fun Settings.getChatModel(assistant: Assistant): Model? =
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `systemPrompt` | `String` | `""` | 系统提示词，支持占位符 `{{char}}`、`{{model_name}}` 等 |
+| `systemPrompt` | `String` | `""` | 系统提示词，支持占位符 `{{char}}`、`{{description}}`、`{{model_name}}` 等 |
 | `messageTemplate` | `String` | `"{{ message }}"` | Pebble 模板，包裹每条消息文本 |
 | `presetMessages` | `List<UIMessage>` | `emptyList()` | 预设消息，新建对话时自动添加 |
 | `enableTimeReminder` | `Boolean` | `false` | 在跨时段消息前注入 `<time_reminder>` 标签 |
@@ -195,7 +196,7 @@ fun Settings.getChatModel(assistant: Assistant): Model? =
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `description` | `String` | `""` | 路由描述，简短说明角色或擅长领域；开启子助手类别时必须非空；规范化时折叠空白并限 240 code point |
+| `description` | `String` | `""` | 路由描述，简短说明角色或擅长领域；开启子助手类别时必须非空；规范化时折叠空白并限 240 code point；系统提示与消息模板可用 `{{description}}` |
 | `allowAsSubAssistant` | `Boolean` | `false` | 是否属于子助手类别且可被 `assistant_call` 调用；关闭时通过 `updateAtomic` 同一次原子更新中关闭全局可见并从所有 Assistant 的 `allowedSubAssistantIds` 移除其 ID，避免重新开启时静默恢复旧授权 |
 | `isSubAssistantGloballyVisible` | `Boolean` | `false` | 全局可见权限开关；开启后所有启用子助手工具的 Assistant 可发现、调用和管理该 Target，但修改和删除仍需确认，启用管理工具的助手也可查看其局部记忆 |
 | `allowedSubAssistantIds` | `Set<Uuid>` | `emptySet()` | 管理与调用共用的显式允许列表；`assistant_manage(CREATE)` 创建时原子加入 caller |
@@ -372,7 +373,7 @@ if (hasPendingApproval) {
 
 | 工具 | 触发条件 | 用户操作 |
 |------|----------|----------|
-| `ask_user` | `needsApproval = { true }`，**总是触发** | 用户回答问题后继续 |
+| `ask_user` | `needsApproval` 恒为 true。参数合法才 Pending；非法时在审批门口写入 `invalid_arguments`，不 HITL、不自动执行 | 用户回答问题后继续 |
 | MCP 工具 | `tool.needsApproval` 由 MCP 服务器定义 | 用户批准或拒绝 |
 | Workspace Shell | 部分配置可能需要审批 | 用户批准或拒绝 |
 
@@ -661,10 +662,10 @@ val system = buildString {
 |------|-------------|----------|----------|
 | 1 | `TimeReminderTransformer` | `assistant.enableTimeReminder == true` | 在跨时段（>1h）的用户消息前注入 `<time_reminder>` |
 | 2 | `PromptInjectionTransformer` | `modeInjectionIds` 非空或会话绑定了注入 | 按 5 种位置注入提示词到消息列表 |
-| 3 | `PlaceholderTransformer` | 始终执行 | 替换 `{{char}}`、`{{model_name}}`、`{{cur_date}}` 等占位符 |
+| 3 | `PlaceholderTransformer` | 始终执行 | 替换 `{{char}}`、`{{description}}`、`{{model_name}}`、`{{cur_date}}` 等占位符 |
 | 4 | `DocumentAsPromptTransformer` | 消息含 `UIMessagePart.Document` | 将文档内容解析为文本并注入 `<UploadFile>` 标签 |
 | 5 | `OcrTransformer` | 模型不支持图片输入 且 消息含本地图片 | 对图片执行 OCR 并替换为 `<image_file_ocr>` 文本 |
-| 6 | `TemplateTransformer` | 始终执行 | 用 Pebble 引擎渲染 `messageTemplate`，注入 `{{message}}`、`{{time}}`、`{{date}}` 等 |
+| 6 | `TemplateTransformer` | 始终执行 | 用 Pebble 引擎渲染 `messageTemplate`，注入 `{{message}}`、`{{time}}`、`{{date}}`、`description` 等 |
 | 7 | `WorkspaceReminderTransformer` | `workspaceId` 绑定且 Shell 状态为 READY | 向 System 追加 `<workspace>` 环境提示 |
 
 #### 6.1.3 上下文裁剪
@@ -928,6 +929,7 @@ if (assistant.streamOutput) {
 | 占位符 | 值 | 来源 |
 |--------|-----|------|
 | `{{char}}` | 助手名称（空时降级为 "assistant"） | `assistant.name` |
+| `{{description}}` | 助手路由描述（空则为空串） | `assistant.description` |
 | `{{user}}` / `{{nickname}}` | 用户昵称（空时降级为 "user"） | `settings.displaySetting.userNickname` |
 | `{{model_name}}` | 模型显示名 | `model.displayName` |
 | `{{model_id}}` | 模型 ID | `model.modelId` |
@@ -949,6 +951,7 @@ if (assistant.streamOutput) {
 | `role` | String | 消息角色（"user" / "assistant" / "system"） |
 | `time` | LocalTime | 消息创建时间（非当前时间，保证多次请求稳定） |
 | `date` | LocalDate | 消息创建日期 |
+| `description` | String | 助手路由描述（`assistant.description`） |
 
 默认模板 `"{{ message }}"` 直接输出原始消息文本。
 

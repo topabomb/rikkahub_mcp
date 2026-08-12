@@ -1,7 +1,5 @@
 ﻿package net.weero.measix.pilot.data.ai.tools
 
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -18,7 +16,6 @@ import net.weero.measix.pilot.utils.toLocalString
 import java.time.LocalDate
 
 fun buildMemoryTools(
-    json: Json,
     onCreation: suspend (String) -> AssistantMemory,
     onUpdate: suspend (Int, String) -> AssistantMemory,
     onDelete: suspend (Int) -> Unit
@@ -26,22 +23,11 @@ fun buildMemoryTools(
     Tool(
         name = "memory_tool",
         description = """
-            The memory tool stores long-term information across conversations.
-            Use `action` to control the operation: `create` (add), `edit` (update), `delete` (remove).
-            - No relevant record: `create` + `content`
-            - Existing relevant record: `edit` + `id` + `content`
-            - Outdated/irrelevant record: `delete` + `id`
-            Memories will automatically appear in the <memories> tag in later conversations.
-            Do not store sensitive information (e.g., ethnicity, religion, sexual orientation, political views, sex life, criminal records).
-            You may store: preferred name, preferences, plans, work-related notes, chat style preferences, first chat time, etc.
-            Do not show memory content directly in the conversation unless the user explicitly asks.
+            Store long-term notes across conversations (create/edit/delete).
+            Merge similar records; prefer edit over create.
+            Do not store sensitive personal attributes.
+            Do not show memory content unless the user asks.
             Today is ${LocalDate.now().toLocalString(true)}.
-            Similar memories should be merged; prefer updating existing records.
-
-            Examples:
-            {"action":"create","content":"User prefers brief replies and is more active on weekends."}
-            {"action":"edit","id":12,"content":"User’s preferred name updated to “A-Xing”, prefers Chinese replies."}
-            {"action":"delete","id":7}
         """.trimIndent(),
         parameters = {
             InputSchema.Obj(
@@ -56,15 +42,15 @@ fun buildMemoryTools(
                                 add("delete")
                             }
                         )
-                        put("description", "Operation to perform: create, edit, or delete")
+                        put("description", "create, edit, or delete")
                     })
                     put("id", buildJsonObject {
                         put("type", "integer")
-                        put("description", "The id of the memory record (required for edit/delete)")
+                        put("description", "Record id (required for edit/delete)")
                     })
                     put("content", buildJsonObject {
                         put("type", "string")
-                        put("description", "The content of the memory record (required for create/edit)")
+                        put("description", "Note text (required for create/edit)")
                     })
                 },
                 required = listOf("action")
@@ -76,13 +62,18 @@ fun buildMemoryTools(
             val payload = when (action) {
                 "create" -> {
                     val content = params["content"]?.jsonPrimitive?.contentOrNull ?: error("content is required")
-                    json.encodeToJsonElement(AssistantMemory.serializer(), onCreation(content))
+                    val created = onCreation(content)
+                    buildJsonObject { put("id", created.id) }
                 }
 
                 "edit" -> {
                     val id = params["id"]?.jsonPrimitive?.intOrNull ?: error("id is required")
                     val content = params["content"]?.jsonPrimitive?.contentOrNull ?: error("content is required")
-                    json.encodeToJsonElement(AssistantMemory.serializer(), onUpdate(id, content))
+                    val updated = onUpdate(id, content)
+                    buildJsonObject {
+                        put("success", true)
+                        put("id", updated.id)
+                    }
                 }
 
                 "delete" -> {

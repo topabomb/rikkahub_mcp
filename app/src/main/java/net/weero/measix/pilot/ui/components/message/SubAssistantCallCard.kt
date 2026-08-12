@@ -1,43 +1,35 @@
 package net.weero.measix.pilot.ui.components.message
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.unit.dp
+import net.weero.measix.pilot.ui.adaptive.AdaptiveWidthClass
+import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -60,18 +52,11 @@ import kotlin.uuid.Uuid
 /**
  * 渲染子助手调用卡片。
  *
- * 视觉设计（设计文档 §10.1）：
- * - 卡片左侧有一条彩色侧条，标识子代理调用（区别于主代理消息）
- * - 头像始终显示：Target 已删除或解析失败时使用默认头像
- * - 头像带角标标识（子代理标记），与主代理消息头像视觉区分
- * - request 摘要一行预览
- * - 滚动 preview 窗口（固定高度）
- * - 运行中显示 phase 或 active tool display name
- * - 终态显示对应状态和原因
- * - 整张 Card 是单一详情点击目标
- *
- * 从 Tool.metadata 解析 SubAssistantCallMetadata。
- * 如果 metadata 缺失，回退到通用 Tool renderer。
+ * 紧凑布局：
+ * - 左侧状态色侧条；运行中头像正圆+圆边扫光；右下角小叠圆标识子助手
+ * - 顶部右侧合并状态（phase/原因/终态），不再单独占底行
+ * - preview 按屏高显示 2 或 3 行尾部文本，不内嵌滚动
+ * - 整张 Card 是唯一详情点击目标
  */
 @Composable
 fun SubAssistantCallCard(
@@ -81,7 +66,7 @@ fun SubAssistantCallCard(
     onAnswer: ((runId: String, interactionId: String, answer: String) -> Unit)? = null,
 ) {
     val json = JsonInstant
-    val metadata = remember(tool) {
+    val metadata = remember(tool.metadata) {
         tool.getSubAssistantCallMetadata(json)
     }
 
@@ -92,7 +77,7 @@ fun SubAssistantCallCard(
 
     // 实时解析 Target 头像：失败或已删除时使用默认头像（文档 §10.1）
     val settings = LocalSettings.current
-    val targetAvatar = remember(metadata.targetAssistantId, settings) {
+    val targetAvatar = remember(metadata.targetAssistantId, settings.assistants) {
         runCatching {
             settings.assistants.find { it.id.toString() == metadata.targetAssistantId }?.avatar
         }.getOrNull() ?: Avatar.Dummy
@@ -147,87 +132,90 @@ fun SubAssistantCallCard(
         ),
         shape = RoundedCornerShape(16.dp),
         // 左侧侧条：标识子代理调用，颜色随状态变化
-        border = androidx.compose.foundation.BorderStroke(
+        border = BorderStroke(
             width = 1.dp,
             color = MaterialTheme.colorScheme.outlineVariant
         ),
     ) {
-        Row(
+        // 用 Box+drawBehind 替代 Row+IntrinsicSize.Min+fillMaxHeight 的侧条布局。
+        // IntrinsicSize.Min 会将高度约束到最小固有高度，当内容包含可变高度组件
+        //（OutlinedTextField maxLines=3、ChainOfThought animateContentSize）时，
+        // 实际渲染高度超过约束，底部内容（如 ask_user 提交按钮）被裁剪。
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(IntrinsicSize.Min)
+                .drawBehind {
+                    // 左侧彩色侧条：宽度 4dp，用状态色标识子代理
+                    drawRect(
+                        color = statusColor,
+                        topLeft = Offset.Zero,
+                        size = Size(width = 4.dp.toPx(), height = size.height),
+                    )
+                }
         ) {
-            // 左侧彩色侧条：宽度 4dp，用状态色标识子代理
-            Box(
-                modifier = Modifier
-                    .width(4.dp)
-                    .fillMaxHeight()
-                    .background(statusColor)
-            )
-
             Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                // 头像 + 子代理角标 + 名称 + 状态
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 头像容器：带子代理角标，与主代理消息头像视觉区分
-                    Box {
-                        UIAvatar(
-                            name = metadata.targetNameSnapshot,
-                            value = targetAvatar,
-                            modifier = Modifier.size(36.dp)
-                        )
-                        // 右下角子代理标识角标
-                        SubAssistantBadge()
-                    }
+                    UIAvatar(
+                        name = metadata.targetNameSnapshot,
+                        value = targetAvatar,
+                        modifier = Modifier.size(28.dp),
+                        loading = isRunning,
+                        subAssistant = true,
+                    )
 
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = metadata.targetNameSnapshot,
-                                style = MaterialTheme.typography.titleSmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false)
-                            )
-                            // 状态指示
-                            if (isRunning) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(12.dp),
-                                    strokeWidth = 2.dp,
-                                    color = statusColor
-                                )
-                            }
-                            Text(
-                                text = statusText,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = statusColor,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
+                    Text(
+                        text = metadata.targetNameSnapshot,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (isRunning) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(10.dp),
+                            strokeWidth = 1.5.dp,
+                            color = statusColor
+                        )
                     }
+                    val phaseText = if (isRunning) {
+                        metadata.activeToolName?.let { toolName ->
+                            stringResource(
+                                R.string.sub_assistant_card_using_tool,
+                                localizeActiveToolName(toolName),
+                            )
+                        } ?: metadata.phase?.let { localizePhase(it) }
+                    } else {
+                        null
+                    }
+                    val reasonText = if (!isRunning && metadata.reason != null) {
+                        localizeSubAssistantReason(metadata.reason)
+                    } else {
+                        null
+                    }
+                    Text(
+                        text = resolveCardStatusLabel(
+                            isRunning = isRunning,
+                            phaseText = phaseText,
+                            reasonText = reasonText,
+                            stateText = statusText,
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = statusColor,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
 
-                HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-                    thickness = 0.5.dp
-                )
-
-                // request 预览（一行）
                 val requestText = remember(tool.input) {
                     runCatching {
                         val inputJson = json.parseToJsonElement(tool.input).jsonObject
@@ -244,51 +232,40 @@ fun SubAssistantCallCard(
                     )
                 }
 
-                // 滚动 preview 窗口
                 val previewText = metadata.preview
                 if (!previewText.isNullOrBlank()) {
-                    PreviewWindow(
-                        text = previewText,
-                        isRunning = isRunning,
-                        modifier = Modifier.fillMaxWidth()
+                    val layout = LocalAdaptiveLayoutInfo.current
+                    val previewLines = subAssistantCardPreviewLines(
+                        compactHeight = layout.useCompactChatInput,
                     )
-                }
-
-                // 终态原因：统一处理 UNAVAILABLE/FAILED/STOPPED
-                val reasonColor = when (metadata.state) {
-                    SubAssistantCallState.UNAVAILABLE -> MaterialTheme.extendColors.orange8
-                    SubAssistantCallState.FAILED -> MaterialTheme.colorScheme.error
-                    SubAssistantCallState.STOPPED -> MaterialTheme.colorScheme.onSurfaceVariant
-                    else -> null
-                }
-                if (reasonColor != null && metadata.reason != null) {
                     Text(
-                        text = localizeSubAssistantReason(metadata.reason),
+                        text = clipPreviewForCard(
+                            text = previewText,
+                            maxLines = previewLines,
+                            maxChars = subAssistantCardPreviewMaxChars(
+                                compactHeight = layout.useCompactChatInput,
+                                compactWidth = layout.widthClass == AdaptiveWidthClass.Compact,
+                            ),
+                        ),
                         style = MaterialTheme.typography.bodySmall,
-                        color = reasonColor
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = previewLines,
+                        overflow = TextOverflow.Ellipsis,
                     )
-                }
-
-                // 运行中：phase 或 active tool
-                if (isRunning) {
-                    val phaseText = metadata.activeToolName?.let { toolName ->
-                        stringResource(
-                            R.string.sub_assistant_card_using_tool,
-                            localizeActiveToolName(toolName),
-                        )
-                    } ?: metadata.phase?.let { localizePhase(it) }
-                    if (phaseText != null) {
-                        Text(
-                            text = phaseText,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
                 }
 
                 val interaction = metadata.userInteraction
                 if (isRunning && interaction?.toolName == "ask_user") {
+                    // ask_user 交互区必须消费点击事件，防止冒泡到 Card 的 navigateToDetail。
+                    // OutlinedTextField 不像 FilterChip 那样通过 Modifier.clickable 消费事件，
+                    // 不加此消费层时点击文本输入框会触发详情导航（设计文档 §10.1 第 5 点）。
+                    val interactionSource = remember { MutableInteractionSource() }
                     Surface(
+                        modifier = Modifier.clickable(
+                            interactionSource = interactionSource,
+                            indication = null,
+                            onClick = {},
+                        ),
                         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
                         shape = RoundedCornerShape(12.dp),
                     ) {
@@ -322,118 +299,8 @@ fun SubAssistantCallCard(
                         }
                     }
                 }
-
-                // 详情入口提示（整张 Card 已是点击目标，这里只作为视觉提示）
-                if (canNavigate) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = stringResource(R.string.sub_assistant_card_view_detail) + " ›",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
             }
         }
-    }
-}
-
-/**
- * 子代理头像角标。
- * 在头像右下角显示一个小圆点，标识这是子代理而非主代理。
- * 颜色使用 tertiary，与主代理消息头像区分。
- */
-@Composable
-private fun androidx.compose.foundation.layout.BoxScope.SubAssistantBadge() {
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = MaterialTheme.colorScheme.tertiary,
-        modifier = Modifier
-            .align(Alignment.BottomEnd)
-            .size(12.dp)
-            .border(
-                width = 1.5.dp,
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shape = RoundedCornerShape(50)
-            ),
-    ) {
-        Box(
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "S",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontSize = MaterialTheme.typography.labelSmall.fontSize * 0.6f
-                ),
-                color = MaterialTheme.colorScheme.onTertiary,
-                fontWeight = FontWeight.Bold
-            )
-        }
-    }
-}
-
-/**
- * 固定高度的滚动 preview 窗口。
- * 运行中自动跟随底部；用户上滚后暂停自动跟随。
- */
-@Composable
-private fun PreviewWindow(
-    text: String,
-    isRunning: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    val scrollState = rememberScrollState()
-    var userScrolledAway by remember { mutableStateOf(false) }
-    var displayedText by remember { mutableStateOf(text) }
-
-    val isAtBottom by remember {
-        derivedStateOf {
-            scrollState.value >= scrollState.maxValue - 4
-        }
-    }
-
-    LaunchedEffect(scrollState.isScrollInProgress, isAtBottom) {
-        if (scrollState.isScrollInProgress && !isAtBottom) {
-            userScrolledAway = true
-        }
-        if (isAtBottom) {
-            userScrolledAway = false
-            displayedText = text
-        }
-    }
-
-    // 运行中且未手动上滚时，更新 snapshot 并自动跟随底部；上滚时冻结当前文本。
-    LaunchedEffect(text, isRunning) {
-        if (isRunning && !userScrolledAway) {
-            displayedText = text
-            scrollState.animateScrollTo(scrollState.maxValue)
-        } else if (!isRunning) {
-            displayedText = text
-        }
-    }
-
-    Column(modifier = modifier) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(96.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerLowest)
-        ) {
-            Text(
-                text = displayedText,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier
-                    .verticalScroll(scrollState)
-                    .padding(8.dp),
-                overflow = TextOverflow.Visible
-            )
-        }
-
     }
 }
 
@@ -466,7 +333,7 @@ private fun SubAssistantCallCardFallback(
                         text = (it as UIMessagePart.Text).text.take(200),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 4,
+                        maxLines = 3,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
@@ -478,6 +345,50 @@ private fun SubAssistantCallCardFallback(
             }
         }
     }
+}
+
+internal fun subAssistantCardPreviewLines(compactHeight: Boolean): Int =
+    if (compactHeight) 2 else 3
+
+/** 窄屏每行约 36 字，宽屏约 72 字，再乘行数，避免长段落整段进排版。 */
+internal fun subAssistantCardPreviewMaxChars(compactHeight: Boolean, compactWidth: Boolean): Int {
+    val lines = subAssistantCardPreviewLines(compactHeight)
+    val charsPerLine = if (compactWidth) 36 else 72
+    return lines * charsPerLine
+}
+
+/** 只保留尾部若干行和有界字符，避免为 2000 code point 的 preview 做完整排版。 */
+internal fun clipPreviewForCard(text: String, maxLines: Int, maxChars: Int = maxLines * 72): String {
+    val cleaned = text.replace("\r\n", "\n").replace('\r', '\n').trimEnd()
+    if (cleaned.isEmpty() || maxLines <= 0 || maxChars <= 0) return ""
+    val lines = cleaned.split('\n')
+    val lineClipped = if (lines.size <= maxLines) {
+        cleaned
+    } else {
+        val tail = lines.takeLast(maxLines).toMutableList()
+        tail[0] = "…" + tail[0].trimStart().removePrefix("…")
+        tail.joinToString("\n")
+    }
+    val cpCount = lineClipped.codePointCount(0, lineClipped.length)
+    if (cpCount <= maxChars) return lineClipped
+    var start = lineClipped.length
+    var kept = 0
+    while (start > 0 && kept < maxChars) {
+        start -= Character.charCount(lineClipped.codePointBefore(start))
+        kept++
+    }
+    return "…" + lineClipped.substring(start).trimStart().removePrefix("…")
+}
+
+internal fun resolveCardStatusLabel(
+    isRunning: Boolean,
+    phaseText: String?,
+    reasonText: String?,
+    stateText: String,
+): String = when {
+    isRunning -> phaseText?.takeIf { it.isNotBlank() } ?: stateText
+    !reasonText.isNullOrBlank() -> reasonText
+    else -> stateText
 }
 
 internal fun sanitizeToolNameForDisplay(name: String): String {

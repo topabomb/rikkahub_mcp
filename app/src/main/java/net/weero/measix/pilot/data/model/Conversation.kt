@@ -36,10 +36,7 @@ data class Conversation(
     val newConversation: Boolean = false
 ) {
     val files: List<Uri>
-        get() = messageNodes
-            .flatMap { node -> node.messages.flatMap { it.parts } }
-            .collectAllParts()
-            .mapNotNull { it.fileUri() }
+        get() = messageNodes.flatMap { it.messages }.collectFileUris().toList()
 
     /**
      *  当前选中的 message
@@ -144,12 +141,18 @@ private fun List<UIMessagePart>.collectAllParts(): List<UIMessagePart> =
     this + filterIsInstance<UIMessagePart.Tool>().flatMap { it.output.collectAllParts() }
 
 /**
- * 提取 part 中引用的本地文件 URI，新增文件类型时只需在此处添加。
+ * 提取 part 中引用的本地文件 URL。比较与探测用字符串，避免 JVM 单测依赖 Android Uri。
  */
-private fun UIMessagePart.fileUri(): Uri? = when (this) {
-    is UIMessagePart.Image -> url.takeIf { it.startsWith("file://") }?.toUri()
-    is UIMessagePart.Document -> url.takeIf { it.startsWith("file://") }?.toUri()
-    is UIMessagePart.Video -> url.takeIf { it.startsWith("file://") }?.toUri()
-    is UIMessagePart.Audio -> url.takeIf { it.startsWith("file://") }?.toUri()
+private fun UIMessagePart.fileUrlString(): String? = when (this) {
+    is UIMessagePart.Image -> url.takeIf { it.startsWith("file://") }
+    is UIMessagePart.Document -> url.takeIf { it.startsWith("file://") }
+    is UIMessagePart.Video -> url.takeIf { it.startsWith("file://") }
+    is UIMessagePart.Audio -> url.takeIf { it.startsWith("file://") }
     else -> null
 }
+
+internal fun List<UIMessage>.collectFileUrlStrings(): Set<String> =
+    flatMap { it.parts }.collectAllParts().mapNotNull { it.fileUrlString() }.toSet()
+
+internal fun List<UIMessage>.collectFileUris(): Set<Uri> =
+    collectFileUrlStrings().map { it.toUri() }.toSet()

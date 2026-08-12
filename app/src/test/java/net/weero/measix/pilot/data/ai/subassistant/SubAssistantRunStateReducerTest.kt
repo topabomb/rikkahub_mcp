@@ -91,8 +91,17 @@ class SubAssistantRunStateReducerTest {
         reducer.updatePreview("preview A") // 相同内容
 
         val snap2 = reducer.snapshot()
-        // revision 不增加（内容未变化）
         assertEquals(snap1.preview, snap2.preview)
+        assertTrue(snap1 === snap2)
+    }
+
+    @Test
+    fun `updatePhase same phase returns same snapshot`() = runTest {
+        val reducer = SubAssistantRunStateReducer(makeInitial())
+        reducer.updateRunningState()
+        val first = reducer.updatePhase(SubAssistantCallPhase.ANSWER_STREAMING)
+        val second = reducer.updatePhase(SubAssistantCallPhase.ANSWER_STREAMING)
+        assertTrue(first === second)
     }
 
     @Test

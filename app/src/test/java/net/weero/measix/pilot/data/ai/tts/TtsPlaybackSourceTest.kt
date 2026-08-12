@@ -157,6 +157,90 @@ class TtsPlaybackSourceTest {
         )
     }
 
+    // ---- computeEffectiveFlush: 同一 turn 内 Master/Target 共享 sessionId ----
+
+    @Test
+    fun `same sessionId master to target does not force flush`() {
+        // 设计文档 §7.5：同一 turn 内 Master 和 Target 共享 sessionId，
+        // 来源类型从 NORMAL 切换到 SUB_ASSISTANT 不触发 flush
+        val sharedSession = "turn-session-1"
+        val masterSource = source(
+            sessionId = sharedSession,
+            type = TtsPlaybackSource.SourceType.NORMAL,
+        )
+        val targetSource = source(
+            sessionId = sharedSession,
+            type = TtsPlaybackSource.SourceType.SUB_ASSISTANT,
+        )
+        assertFalse(
+            TtsPlaybackSource.computeEffectiveFlush(
+                flushCalled = false,
+                currentSource = masterSource,
+                incomingSource = targetSource,
+            )
+        )
+    }
+
+    @Test
+    fun `same sessionId target to master does not force flush`() {
+        val sharedSession = "turn-session-1"
+        val targetSource = source(
+            sessionId = sharedSession,
+            type = TtsPlaybackSource.SourceType.SUB_ASSISTANT,
+        )
+        val masterSource = source(
+            sessionId = sharedSession,
+            type = TtsPlaybackSource.SourceType.NORMAL,
+        )
+        assertFalse(
+            TtsPlaybackSource.computeEffectiveFlush(
+                flushCalled = false,
+                currentSource = targetSource,
+                incomingSource = masterSource,
+            )
+        )
+    }
+
+    @Test
+    fun `same sessionId target to target does not force flush`() {
+        val sharedSession = "turn-session-1"
+        val targetASource = source(
+            sessionId = sharedSession,
+            type = TtsPlaybackSource.SourceType.SUB_ASSISTANT,
+        )
+        val targetBSource = source(
+            sessionId = sharedSession,
+            type = TtsPlaybackSource.SourceType.SUB_ASSISTANT,
+        )
+        assertFalse(
+            TtsPlaybackSource.computeEffectiveFlush(
+                flushCalled = false,
+                currentSource = targetASource,
+                incomingSource = targetBSource,
+            )
+        )
+    }
+
+    @Test
+    fun `same sessionId flushCalled true still flushes`() {
+        val sharedSession = "turn-session-1"
+        val masterSource = source(
+            sessionId = sharedSession,
+            type = TtsPlaybackSource.SourceType.NORMAL,
+        )
+        val targetSource = source(
+            sessionId = sharedSession,
+            type = TtsPlaybackSource.SourceType.SUB_ASSISTANT,
+        )
+        assertTrue(
+            TtsPlaybackSource.computeEffectiveFlush(
+                flushCalled = true,
+                currentSource = masterSource,
+                incomingSource = targetSource,
+            )
+        )
+    }
+
     // ---- TtsPlaybackSource 属性与相等性 ----
 
     @Test

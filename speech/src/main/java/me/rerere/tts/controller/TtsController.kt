@@ -78,15 +78,35 @@ class TtsController(
     private val _playbackState = MutableStateFlow(PlaybackState())
     val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
 
+    // 设计文档 §7.5 — source-aware 播放来源追踪
+    // 每次 speak() 携带一个 source 标记，controller 在播放跨越 source 边界时发射新 source。
+    // 这样 UI 层的 activeSource 始终反映"当前正在播放的音频来源"，而非"最近入队的来源"。
+    private data class SourceSegment(val startChunkIndex: Int, val source: Any?)
+    private val sourceSegments = java.util.concurrent.CopyOnWriteArrayList<SourceSegment>()
+    private var currentSegmentIdx = 0
+
+    private val _activeSource = MutableStateFlow<Any?>(null)
+    val activeSource: StateFlow<Any?> = _activeSource.asStateFlow()
+
     init {
         // 同步底层播放器状态到统一状态，并补充分片信息
         scope.launch {
             audio.playbackState.collectLatest { audioState ->
+                // 关键修复：AudioPlayer 在每个 chunk 播完后发射 STATE_ENDED → PlaybackStatus.Ended。
+                // 如果直接传播，CustomTtsStateImpl 会清空 _activeSource，导致后续 TTS 调用
+                // 看到 currentSource=null → effectiveFlush=true → flush → 队列中未播放的 chunk 被丢弃。
+                // 修复策略：当队列中仍有待播放的 chunk 时，将 Ended 转为 Playing，
+                // 因为 worker 正在 chunk 间过渡，将继续播放下一个 chunk。
+                // 只有当队列为空时才传播 Ended（表示整个队列播放完毕）。
+                val effectiveStatus = when {
+                    audioState.status == PlaybackStatus.Ended && queue.isNotEmpty() -> PlaybackStatus.Playing
+                    else -> audioState.status
+                }
                 _playbackState.update {
                     audioState.copy(
                         currentChunkIndex = _currentChunk.value,
                         totalChunks = _totalChunks.value,
-                        status = if (!_isAvailable.value) PlaybackStatus.Idle else audioState.status
+                        status = if (!_isAvailable.value) PlaybackStatus.Idle else effectiveStatus
                     )
                 }
             }
@@ -104,8 +124,9 @@ class TtsController(
      * 朗读文本
      * - flush=true: 清空当前进度并重新开始
      * - flush=false: 继续队列，追加朗读
+     * - source: 本次朗读的来源标记（设计文档 §7.5），controller 在播放到该批 chunk 时发射 sourceChange
      */
-    fun speak(text: String, flush: Boolean = true) {
+    fun speak(text: String, flush: Boolean = true, source: Any? = null) {
         if (text.isBlank()) return
         val provider = currentProvider
         if (provider == null) {
@@ -118,12 +139,19 @@ class TtsController(
 
         if (flush) {
             internalReset()
+            // source 追踪：flush 开启新 session，重置 segments
+            sourceSegments.clear()
+            sourceSegments.add(SourceSegment(0, source))
+            currentSegmentIdx = 0
+            _activeSource.value = source
             allChunks.addAll(newChunks)
             queue.addAll(newChunks)
             _currentChunk.update { 0 }
         } else {
-            // 追加时，重映射 index 以保持全局顺序
+            // source 追踪：append 追加新 segment，边界为当前 allChunks 的下一个 index
             val startIndex = (allChunks.lastOrNull()?.index ?: -1) + 1
+            sourceSegments.add(SourceSegment(startIndex, source))
+            // 重映射 index 以保持全局顺序
             val remapped = newChunks.mapIndexed { i, c -> c.copy(index = startIndex + i) }
             allChunks.addAll(remapped)
             queue.addAll(remapped)
@@ -154,11 +182,14 @@ class TtsController(
         cache.values.forEach { it.cancel(CancellationException("Reset")) }
         cache.clear()
         lastPrefetchedIndex = -1
+        sourceSegments.clear()
+        currentSegmentIdx = 0
         _isSpeaking.update { false }
         _currentChunk.update { 0 }
         _totalChunks.update { 0 }
         _error.update { null }
         _playbackState.update { PlaybackState(status = PlaybackStatus.Idle) }
+        _activeSource.value = null
     }
 
     /** 暂停播放（保留进度） */
@@ -204,10 +235,13 @@ class TtsController(
         cache.values.forEach { it.cancel(CancellationException("Stopped")) }
         cache.clear()
         lastPrefetchedIndex = -1
+        sourceSegments.clear()
+        currentSegmentIdx = 0
         _isSpeaking.update { false }
         _currentChunk.update { 0 }
         _totalChunks.update { 0 }
         _playbackState.update { PlaybackState(status = PlaybackStatus.Idle) }
+        _activeSource.value = null
     }
 
     /** 释放资源 */
@@ -236,6 +270,15 @@ class TtsController(
                     }
 
                     val chunk = queue.poll() ?: break
+
+                    // 设计文档 §7.5：检查是否跨越 source segment 边界
+                    // chunk.index 是全局连续索引，segment.startChunkIndex 记录每段起始 index
+                    while (currentSegmentIdx + 1 < sourceSegments.size &&
+                        chunk.index >= sourceSegments[currentSegmentIdx + 1].startChunkIndex
+                    ) {
+                        currentSegmentIdx++
+                        _activeSource.value = sourceSegments[currentSegmentIdx].source
+                    }
 
                     // 更新状态（1-based）
                     _currentChunk.update { processedCount + 1 }
@@ -277,6 +320,7 @@ class TtsController(
                 _isSpeaking.update { false }
                 if (queue.isEmpty()) {
                     _playbackState.update { it.copy(status = PlaybackStatus.Ended) }
+                    _activeSource.value = null
                 }
             }
         }

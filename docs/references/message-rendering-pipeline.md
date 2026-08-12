@@ -146,12 +146,10 @@ Text part 在传入 `MarkdownBlock` 之前，先经过 `replaceRegexes()` 处理
 
 ```
 SubAssistantCallCard
-  ├─ Target 头像 / 名称 / 状态
+  ├─ 28dp Target 头像（右下角叠圆；运行中圆边柔光扫尾）/ 名称 / 右侧合并状态
   ├─ request 一行预览（从 Tool input JSON decoder 读取）
-  ├─ 最新输出滚动窗口（preview reducer 常量：最大缓冲 2000、首部边界 200、主卡 4 行、节流 100ms）
-  ├─ phase / active tool
-  ├─ Target ask_user 问题区（仅等待回答时；与主助手普通提问使用不同标签和容器）
-  └─ 详情入口（整卡单一详情点击目标 → SubAssistantDetail 路由）
+  ├─ preview 尾部 2～3 行（矮屏 2 行，常规 3 行；不内嵌滚动）
+  └─ Target ask_user 问题区（仅等待回答时；与主助手普通提问使用不同标签和容器）
 ```
 
 终态显示：

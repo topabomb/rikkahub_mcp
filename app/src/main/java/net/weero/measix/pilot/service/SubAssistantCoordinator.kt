@@ -148,6 +148,7 @@ class SubAssistantCoordinator(
         targetAssistantId: Uuid,
         task: String,
         execContext: ToolExecutionContext,
+        turnTtsContext: TtsToolPlaybackContext? = null,
     ): List<UIMessagePart> {
         val settings = settingsStore.settingsFlow.value
         val targetAssistant = settings.getAssistantById(targetAssistantId)
@@ -370,6 +371,7 @@ class SubAssistantCoordinator(
                     execContext = execContext,
                     runId = runId,
                     runState = runState,
+                    turnTtsContext = turnTtsContext,
                 )
             }
 
@@ -594,6 +596,7 @@ class SubAssistantCoordinator(
         execContext: ToolExecutionContext,
         runId: String,
         runState: SubAssistantRunStateReducer,
+        turnTtsContext: TtsToolPlaybackContext? = null,
     ): TargetGenerationResult {
         val settings = settingsStore.settingsFlow.value
         val session = sessionRegistry.getOrCreateSession(childConversationId)
@@ -621,15 +624,25 @@ class SubAssistantCoordinator(
             emptyList()
         }
 
-        // 设计文档 §7.5：每轮生成创建一个 TtsToolPlaybackContext，step 重建时复用
-        // 如果每步创建新 context，sessionId 变化会导致 computeEffectiveFlush 每步强制 flush，
-        // 顺序播放配置完全失效
-        val ttsPlaybackContext = TtsToolPlaybackContext(
-            sessionId = Uuid.random().toString(),
-            assistantId = target.id,
-            assistantName = target.name,
-            sourceType = TtsPlaybackSource.SourceType.SUB_ASSISTANT,
-        )
+        // 设计文档 §7.5：复用 turn-level TtsToolPlaybackContext 的 sessionId 和 playbackState，
+        // 使整轮 turn 内的 Master 和所有 Target 的 TTS 调用共享同一顺序播放队列。
+        // 无 turnTtsContext 时（测试或旧调用路径）回退到独立 context。
+        val ttsPlaybackContext = if (turnTtsContext != null) {
+            TtsToolPlaybackContext(
+                sessionId = turnTtsContext.sessionId,
+                assistantId = target.id,
+                assistantName = target.name,
+                sourceType = TtsPlaybackSource.SourceType.SUB_ASSISTANT,
+                playbackState = turnTtsContext.playbackState,
+            )
+        } else {
+            TtsToolPlaybackContext(
+                sessionId = Uuid.random().toString(),
+                assistantId = target.id,
+                assistantName = target.name,
+                sourceType = TtsPlaybackSource.SourceType.SUB_ASSISTANT,
+            )
+        }
 
         // Tool provider：每个 step 重新解析资源，但复用 ttsPlaybackContext
         val toolProvider: suspend () -> List<Tool> = {
@@ -675,22 +688,28 @@ class SubAssistantCoordinator(
                         val updatedConversation = session.state.value.updateCurrentMessages(chunk.messages)
                         sessionRegistry.updateConversationState(childConversationId, updatedConversation)
 
-                        // 节流回写 preview 到 Master
+                        // 节流回写 preview 到 Master；内容未变则不 patch，避免主聊天无意义重组。
                         val now = System.currentTimeMillis()
                         if (now - lastPreviewUpdate >= PREVIEW_THROTTLE_MS) {
                             lastPreviewUpdate = now
                             val preview = computeSubAssistantPreview(chunk.messages, childTaskNodeId)
+                            val before = runState.snapshot()
                             val meta = runState.updatePreview(preview.ifEmpty { null })
-                            reportMetadataPatch(execContext, meta, checkpoint = false)
+                            if (meta !== before) {
+                                reportMetadataPatch(execContext, meta, checkpoint = false)
+                            }
                         }
                     }
 
                     is GenerationChunk.Phase -> {
-                        // 立即更新 card 状态
+                        // 立即更新 card 状态；phase/tool 未变则不回写 Master。
                         val phase = mapPhase(chunk.phase)
                         if (phase != null) {
+                            val before = runState.snapshot()
                             val meta = runState.updatePhase(phase, chunk.toolName)
-                            reportMetadataPatch(execContext, meta, checkpoint = false)
+                            if (meta !== before) {
+                                reportMetadataPatch(execContext, meta, checkpoint = false)
+                            }
                         }
                     }
 
@@ -925,56 +944,12 @@ class SubAssistantCoordinator(
     private fun extractFinalAnswer(
         messages: List<UIMessage>,
         childTaskNodeId: Uuid,
-    ): String {
-        val startIndex = messages.indexOfFirst { it.id == childTaskNodeId }
-        if (startIndex == -1) return ""
-
-        // 范围终点：下一个 USER task 之前，或当前尾部
-        var endIndex = messages.size
-        for (i in (startIndex + 1) until messages.size) {
-            if (messages[i].role == MessageRole.USER) {
-                endIndex = i
-                break
-            }
-        }
-
-        // 从范围内逆序提取 ASSISTANT 消息的顶层 Text part
-        for (i in (endIndex - 1) downTo startIndex) {
-            val msg = messages[i]
-            if (msg.role != MessageRole.ASSISTANT) continue
-            val text = msg.parts.filterIsInstance<UIMessagePart.Text>()
-                .joinToString("\n") { it.text }
-                .trim()
-            if (text.isNotEmpty()) return text
-        }
-        return ""
-    }
+    ): String = extractFinalAnswerInternal(messages, childTaskNodeId)
 
     private fun checkNonTextOutput(
         messages: List<UIMessage>,
         childTaskNodeId: Uuid,
-    ): Boolean {
-        val startIndex = messages.indexOfFirst { it.id == childTaskNodeId }
-        if (startIndex == -1) return false
-
-        var endIndex = messages.size
-        for (i in (startIndex + 1) until messages.size) {
-            if (messages[i].role == MessageRole.USER) {
-                endIndex = i
-                break
-            }
-        }
-
-        for (i in startIndex until endIndex) {
-            val msg = messages[i]
-            if (msg.role != MessageRole.ASSISTANT) continue
-            val hasNonText = msg.parts.any {
-                it !is UIMessagePart.Text && it !is UIMessagePart.Tool && it !is UIMessagePart.Reasoning
-            }
-            if (hasNonText) return true
-        }
-        return false
-    }
+    ): Boolean = checkNonTextOutputInternal(messages, childTaskNodeId)
 
     private fun copyPartForChildClone(part: UIMessagePart): UIMessagePart {
         fun copyUrl(url: String): String {
@@ -1047,6 +1022,100 @@ internal fun normalizeSubAssistantCancellationReason(message: String?): String =
     "user_cancelled" -> message
     "assistant_removed" -> "target_removed"
     else -> "user_cancelled"
+}
+
+/**
+ * 从 Child 会话消息中提取 final answer。
+ *
+ * 设计文档 §6.6：优先取最后一个 Target ASSISTANT step 中、最后一个“工作工具”
+ * 之后的顶层可见 Text。`text_to_speech` 等副作用工具不挡住答案。
+ * 最后一步只有 Reasoning/空 Text 时，回退到更早 step 的 post-tool 文本；
+ * 仍为空时取最后一条有文本的 ASSISTANT 消息的末段 Text island，避免主助手拿到空 content。
+ */
+internal fun extractFinalAnswerInternal(
+    messages: List<UIMessage>,
+    childTaskNodeId: Uuid,
+): String {
+    val range = messagesInRunRange(messages, childTaskNodeId) ?: return ""
+    val assistants = range.filter { it.role == MessageRole.ASSISTANT }
+    if (assistants.isEmpty()) return ""
+
+    extractTextAfterLastWorkTool(assistants.last())
+        .takeIf { it.isNotBlank() }
+        ?.let { return it }
+
+    for (i in assistants.lastIndex - 1 downTo 0) {
+        extractTextAfterLastWorkTool(assistants[i])
+            .takeIf { it.isNotBlank() }
+            ?.let { return it }
+    }
+
+    for (msg in assistants.asReversed()) {
+        lastTextIsland(msg).takeIf { it.isNotBlank() }?.let { return it }
+    }
+    return ""
+}
+
+/**
+ * 检查最后一个 ASSISTANT step 是否有非文本输出（排除 Text、Tool、Reasoning）。
+ */
+internal fun checkNonTextOutputInternal(
+    messages: List<UIMessage>,
+    childTaskNodeId: Uuid,
+): Boolean {
+    val range = messagesInRunRange(messages, childTaskNodeId) ?: return false
+    val lastAssistant = range.lastOrNull { it.role == MessageRole.ASSISTANT } ?: return false
+    return lastAssistant.parts.any {
+        it !is UIMessagePart.Text && it !is UIMessagePart.Tool && it !is UIMessagePart.Reasoning
+    }
+}
+
+private fun messagesInRunRange(
+    messages: List<UIMessage>,
+    childTaskNodeId: Uuid,
+): List<UIMessage>? {
+    val startIndex = messages.indexOfFirst { it.id == childTaskNodeId }
+    if (startIndex == -1) return null
+    var endIndex = messages.size
+    for (i in (startIndex + 1) until messages.size) {
+        if (messages[i].role == MessageRole.USER) {
+            endIndex = i
+            break
+        }
+    }
+    return messages.subList(startIndex, endIndex)
+}
+
+private val SUB_ASSISTANT_SIDE_EFFECT_TOOLS = setOf("text_to_speech")
+
+private fun extractTextAfterLastWorkTool(message: UIMessage): String {
+    val parts = message.parts
+    var lastWorkToolEnd = 0
+    for ((idx, part) in parts.withIndex()) {
+        if (part is UIMessagePart.Tool &&
+            part.isExecuted &&
+            part.toolName !in SUB_ASSISTANT_SIDE_EFFECT_TOOLS
+        ) {
+            lastWorkToolEnd = idx + 1
+        }
+    }
+    return parts.drop(lastWorkToolEnd)
+        .filterIsInstance<UIMessagePart.Text>()
+        .joinToString("\n") { it.text }
+        .trim()
+}
+
+private fun lastTextIsland(message: UIMessage): String {
+    val parts = message.parts
+    var end = parts.lastIndex
+    while (end >= 0 && parts[end] !is UIMessagePart.Text) end--
+    if (end < 0) return ""
+    var start = end
+    while (start >= 0 && parts[start] is UIMessagePart.Text) start--
+    return parts.subList(start + 1, end + 1)
+        .filterIsInstance<UIMessagePart.Text>()
+        .joinToString("\n") { it.text }
+        .trim()
 }
 
 internal fun preprocessSubAssistantTask(

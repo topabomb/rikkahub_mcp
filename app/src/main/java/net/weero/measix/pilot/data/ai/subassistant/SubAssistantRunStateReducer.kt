@@ -39,6 +39,9 @@ class SubAssistantRunStateReducer(
         } else {
             null
         }
+        if (current.phase == phase && current.activeToolName == resolvedActiveToolName) {
+            return@withLock current
+        }
         current = current.copy(
             phase = phase,
             activeToolName = resolvedActiveToolName,

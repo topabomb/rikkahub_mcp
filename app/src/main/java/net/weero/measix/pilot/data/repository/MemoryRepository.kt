@@ -38,12 +38,11 @@ class MemoryRepository(private val memoryDAO: MemoryDAO) {
     }
 
     suspend fun updateContent(id: Int, content: String, assistantId: String): AssistantMemory {
-        val old = memoryDAO.getMemoryById(id)
-            ?: error("Memory record #$id not found")
-        if (old.assistantId != assistantId) {
-            error("Memory record #$id does not belong to assistant $assistantId")
+        val affected = memoryDAO.updateMemoryContent(id, content, assistantId)
+        if (affected == 0) {
+            // owner + id 约束不满足：记录不存在或不属于该助手
+            error("Memory record #$id does not belong to assistant $assistantId or does not exist")
         }
-        memoryDAO.updateMemoryContent(id, content, assistantId)
         return AssistantMemory(
             id = id,
             content = content,

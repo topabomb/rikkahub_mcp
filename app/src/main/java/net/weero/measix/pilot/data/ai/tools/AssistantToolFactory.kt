@@ -15,6 +15,7 @@ import net.weero.measix.pilot.data.ai.subassistant.CatalogMode
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantAccessPolicy
 import net.weero.measix.pilot.data.ai.subassistant.buildCatalogPrompt
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
+import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.model.Assistant
@@ -53,6 +54,7 @@ class AssistantToolFactory(
     fun buildTools(
         callerAssistant: Assistant,
         masterConversationId: Uuid,
+        ttsPlaybackContext: TtsToolPlaybackContext? = null,
     ): List<Tool> {
         val enableManagement = LocalToolOption.AssistantManagement in callerAssistant.localTools
         val enableDelegation = LocalToolOption.AssistantDelegation in callerAssistant.localTools
@@ -65,7 +67,7 @@ class AssistantToolFactory(
                 add(buildAssistantMemoryListTool(callerAssistant.id))
             }
             if (enableDelegation) {
-                add(buildAssistantCallTool(callerAssistant.id, masterConversationId, enableManagement))
+                add(buildAssistantCallTool(callerAssistant.id, masterConversationId, enableManagement, ttsPlaybackContext))
             }
         }
     }
@@ -77,7 +79,7 @@ class AssistantToolFactory(
         enableDelegation: Boolean,
     ): Tool = Tool(
         name = TOOL_ASSISTANT_MANAGE,
-        description = "Create a private sub-assistant (a character, specialist, or general helper), or update/delete one in the catalog. New sub-assistants are added to your allowed list. Only name, routing description, and instructions are managed.",
+        description = "Create, update, or delete a sub-assistant (sub-agent). New ones join your allowed list.",
         parameters = {
             InputSchema.Obj(
                 properties = buildJsonObject {
@@ -88,23 +90,23 @@ class AssistantToolFactory(
                             add(JsonPrimitive("UPDATE"))
                             add(JsonPrimitive("DELETE"))
                         }
-                        put("description", "Operation to perform.")
+                        put("description", "CREATE, UPDATE, or DELETE.")
                     })
                     put("assistant_id", buildJsonObject {
                         put("type", "string")
-                        put("description", "Target sub-assistant ID from the catalog; required for UPDATE and DELETE.")
+                        put("description", "Required for UPDATE and DELETE.")
                     })
                     put("name", buildJsonObject {
                         put("type", "string")
-                        put("description", "Display name for the sub-assistant.")
+                        put("description", "Display name.")
                     })
                     put("description", buildJsonObject {
                         put("type", "string")
-                        put("description", "Short routing description of its role or specialty and when to use it.")
+                        put("description", "Specialty and when to call it. Not a system prompt.")
                     })
                     put("instructions", buildJsonObject {
                         put("type", "string")
-                        put("description", "Role, behavior, and response instructions for the sub-assistant.")
+                        put("description", "System prompt for the sub-assistant: role, method, output style. Do not invent tools or skills.")
                     })
                 },
                 required = listOf("action"),
@@ -242,7 +244,7 @@ class AssistantToolFactory(
                 properties = buildJsonObject {
                     put("assistant_id", buildJsonObject {
                         put("type", "string")
-                        put("description", "Target sub-assistant ID from the catalog.")
+                        put("description", "Catalog id.")
                     })
                 },
                 required = listOf("assistant_id"),
@@ -324,19 +326,20 @@ class AssistantToolFactory(
         callerAssistantId: Uuid,
         masterConversationId: Uuid,
         enableManagement: Boolean,
+        ttsPlaybackContext: TtsToolPlaybackContext? = null,
     ): Tool = Tool(
         name = TOOL_ASSISTANT_CALL,
-        description = "Ask a sub-assistant (sub-agent) in the catalog to handle a self-contained request using its own role and capabilities. It cannot see this conversation unless context is included in `request`; its final response is returned.",
+        description = "Delegate a self-contained request to a catalog sub-assistant (sub-agent). Do not prescribe how it must work.",
         parameters = {
             InputSchema.Obj(
                 properties = buildJsonObject {
                     put("assistant_id", buildJsonObject {
                         put("type", "string")
-                        put("description", "Sub-assistant ID from the catalog.")
+                        put("description", "Catalog id.")
                     })
                     put("request", buildJsonObject {
                         put("type", "string")
-                        put("description", "Self-contained request for the sub-assistant; include all context it needs.")
+                        put("description", "It cannot see this chat. Include facts, constraints, and the expected deliverable.")
                     })
                 },
                 required = listOf("assistant_id", "request"),
@@ -358,7 +361,7 @@ class AssistantToolFactory(
         },
         needsApproval = { false },
         contextualExecute = { args ->
-            executeAssistantCall(callerAssistantId, masterConversationId, this, args)
+            executeAssistantCall(callerAssistantId, masterConversationId, this, args, ttsPlaybackContext)
         },
         execute = { _ ->
             // Fallback: 缺少真实 locator/reportMetadata 时不能启动 Child
@@ -378,10 +381,11 @@ class AssistantToolFactory(
         masterConversationId: Uuid,
         context: ToolExecutionContext,
         args: kotlinx.serialization.json.JsonElement,
+        ttsPlaybackContext: TtsToolPlaybackContext? = null,
     ): List<UIMessagePart> {
         val coordinator = subAssistantCoordinator
             ?: return listOf(UIMessagePart.Text(buildJsonObject {
-                put("status", "unavailable")
+                put("status", "failed")
                 put("reason", "runtime_error")
             }.toString()))
 
@@ -402,6 +406,7 @@ class AssistantToolFactory(
             targetAssistantId = targetId,
             task = task,
             execContext = context,
+            turnTtsContext = ttsPlaybackContext,
         )
     }
 
