@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.repository
+package net.weero.measix.pilot.data.repository
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -37,15 +37,16 @@ class MemoryRepository(private val memoryDAO: MemoryDAO) {
         memoryDAO.deleteMemoriesOfAssistant(assistantId)
     }
 
-    suspend fun updateContent(id: Int, content: String): AssistantMemory {
-        val old = memoryDAO.getMemoryById(id) ?: error("Memory record #$id not found")
-        val newMemory = old.copy(
-            content = content
-        )
-        memoryDAO.updateMemory(newMemory)
+    suspend fun updateContent(id: Int, content: String, assistantId: String): AssistantMemory {
+        val old = memoryDAO.getMemoryById(id)
+            ?: error("Memory record #$id not found")
+        if (old.assistantId != assistantId) {
+            error("Memory record #$id does not belong to assistant $assistantId")
+        }
+        memoryDAO.updateMemoryContent(id, content, assistantId)
         return AssistantMemory(
-            id = newMemory.id,
-            content = newMemory.content,
+            id = id,
+            content = content,
         )
     }
 
@@ -65,7 +66,20 @@ class MemoryRepository(private val memoryDAO: MemoryDAO) {
         return newMemory
     }
 
-    suspend fun deleteMemory(id: Int) {
-        memoryDAO.deleteMemory(id)
+    suspend fun deleteMemory(id: Int, assistantId: String) {
+        val affected = memoryDAO.deleteMemory(id, assistantId)
+        if (affected == 0) {
+            // owner + id 约束不满足：记录不存在或不属于该助手
+            error("Memory record #$id does not belong to assistant $assistantId or does not exist")
+        }
+    }
+
+    /**
+     * UI 专用：按 ID 删除记忆，先查询 owner 再走约束删除。
+     * LLM 工具必须使用 [deleteMemory] 携带 assistantId，不能使用此方法。
+     */
+    suspend fun deleteMemoryById(id: Int) {
+        val memory = memoryDAO.getMemoryById(id) ?: return
+        memoryDAO.deleteMemory(id, memory.assistantId)
     }
 }

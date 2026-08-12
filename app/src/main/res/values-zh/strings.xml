@@ -1227,4 +1227,94 @@
   <string name="chat_sidebar_expand">展开会话侧栏</string>
   <string name="chat_navigation_open_drawer">打开会话导航</string>
   <string name="chat_page_chat_options">聊天选项</string>
+
+  <!-- Sub-Assistant: Assistant configuration -->
+  <string name="assistant_page_description">能力描述</string>
+  <string name="assistant_page_description_placeholder">简要描述这个助手擅长什么、何时适合调用</string>
+  <string name="assistant_page_description_remaining">剩余 %d 个字符</string>
+  <string name="assistant_page_description_required">需要填写描述才能开启子助手</string>
+  <string name="assistant_page_allow_as_sub_assistant">可作为子助手</string>
+  <string name="assistant_page_allow_as_sub_assistant_desc">允许其他助手调用它处理请求，包括任务、问题或角色对话。它使用独立工作上下文，不会自动看到主对话。</string>
+  <string name="assistant_page_sub_assistant_tag">子助手</string>
+<string name="assistant_page_sub_assistant_no_model_warning">未配置有效聊天模型，调用时将无法启动</string>
+<string name="assistant_page_sub_assistant_global_memory_warning">作为子助手被调用时将使用共享全局记忆</string>
+<string name="assistant_page_sub_assistant_global_visible">全局可见</string>
+<string name="assistant_page_sub_assistant_global_visible_desc">允许所有启用子助手工具的助手发现、调用和管理它。修改和删除仍需确认；启用管理工具的助手也可查看其局部记忆。</string>
+<string name="assistant_page_sub_assistant_access_scope">子助手访问范围</string>
+<string name="assistant_page_sub_assistant_access_scope_desc">选择此助手可以发现、调用和管理的子助手</string>
+<string name="assistant_page_sub_assistant_access_scope_empty">未选择子助手</string>
+<string name="assistant_page_sub_assistant_access_scope_count">已选择 %1$d 个子助手</string>
+<string name="assistant_page_sub_assistant_globally_available">全局可用</string>
+<string name="sub_assistant_global_tag">全局</string>
+<string name="assistant_picker_show_sub_assistants">子助手</string>
+  <string name="assistant_page_no_chat_model_warning">未配置聊天模型，调用时将无法启动</string>
+  <string name="assistant_page_global_memory_warning">被调用时会使用共享全局记忆</string>
+
+  <!-- Sub-Assistant: Local Tools -->
+  <string name="assistant_page_local_tools_assistant_collaboration">助手协作</string>
+  <string name="assistant_page_local_tools_assistant_management_title">管理其他助手</string>
+  <string name="assistant_page_local_tools_assistant_management_desc">允许该助手创建、修改、删除其他助手，并查看其局部记忆。记忆只能由所属助手通过自己的工具维护。</string>
+  <string name="assistant_page_local_tools_assistant_delegation_title">调用子助手</string>
+  <string name="assistant_page_local_tools_assistant_delegation_desc">允许该助手向可调用的子助手发送请求。</string>
+
+  <!-- Sub-Assistant: Call Card -->
+  <string name="sub_assistant_card_starting">启动中</string>
+  <string name="sub_assistant_card_running">执行中</string>
+  <string name="sub_assistant_card_completed">已完成</string>
+  <string name="sub_assistant_card_failed">失败</string>
+  <string name="sub_assistant_card_stopped">已停止</string>
+  <string name="sub_assistant_card_unavailable">不可用</string>
+  <string name="sub_assistant_card_latest_output">最新输出</string>
+  <string name="sub_assistant_card_using_tool">正在使用：%1$s</string>
+  <string name="sub_assistant_card_view_detail">查看详情</string>
+  <string name="sub_assistant_card_scroll_to_latest">最新</string>
+
+  <!-- Sub-Assistant: Call Card reasons -->
+  <string name="sub_assistant_reason_assistant_not_found">未找到助手</string>
+  <string name="sub_assistant_reason_target_not_allowed">不允许作为子助手</string>
+  <string name="sub_assistant_reason_tool_not_permitted">未启用子助手工具</string>
+  <string name="sub_assistant_reason_context_required">需要执行上下文</string>
+  <string name="sub_assistant_reason_approval_blocked">非交互模式下审批被阻止</string>
+  <string name="sub_assistant_reason_target_description_missing">未设置描述</string>
+  <string name="sub_assistant_reason_target_model_unavailable">无可用聊天模型</string>
+  <string name="sub_assistant_reason_target_busy">助手忙</string>
+  <string name="sub_assistant_reason_provider_error">Provider 错误</string>
+  <string name="sub_assistant_reason_runtime_error">运行时错误</string>
+  <string name="sub_assistant_reason_step_limit_reached">已达到步数限制</string>
+  <string name="sub_assistant_reason_user_cancelled">用户已取消</string>
+  <string name="sub_assistant_reason_app_restarted">应用重启，任务未自动恢复</string>
+  <string name="sub_assistant_reason_target_removed">助手已删除</string>
+  <string name="sub_assistant_reason_target_disabled">子助手已关闭</string>
+  <string name="sub_assistant_reason_child_missing">会话缺失</string>
+
+  <!-- Sub-Assistant: Call Card phases -->
+  <string name="sub_assistant_phase_preparing">准备中</string>
+  <string name="sub_assistant_phase_model_waiting">等待模型</string>
+  <string name="sub_assistant_phase_reasoning_streaming">思考中</string>
+  <string name="sub_assistant_phase_answer_streaming">生成中</string>
+  <string name="sub_assistant_phase_tool_executing">执行工具</string>
+  <string name="sub_assistant_phase_between_steps">处理中</string>
+
+  <!-- Sub-Assistant: Detail page -->
+  <string name="sub_assistant_detail_title">子助手详情</string>
+  <string name="sub_assistant_detail_assistant_deleted">助手已删除</string>
+  <string name="sub_assistant_detail_assistant_settings">助手设置</string>
+  <string name="sub_assistant_detail_no_messages">未找到消息</string>
+  <string name="sub_assistant_detail_loading">正在加载子助手对话…</string>
+  <string name="tts_controller_stop">停止</string>
+  <string name="tts_controller_expand">更多控制</string>
+  <string name="tts_controller_fast_forward">快进 5 秒</string>
+  <string name="tts_controller_play">播放</string>
+  <string name="tts_controller_pause">暂停</string>
+  <string name="sub_assistant_phase_awaiting_user">等待你的回答</string>
+  <string name="sub_assistant_card_waiting_for_answer">子助手需要你的回答</string>
+  <string name="assistant_page_sub_assistant_uses_caller_model">未选择模型；调用时继承调用助手的模型和生成参数</string>
+  <string name="sub_assistant_reason_caller_model_unavailable">调用助手没有可继承的模型</string>
+  <string name="sub_assistant_detail_request">请求</string>
+  <string name="sub_assistant_detail_execution">执行过程</string>
+  <string name="sub_assistant_detail_unavailable">详情不可用</string>
+  <string name="sub_assistant_detail_unavailable_desc">找不到这次子助手调用，或其持久化链接无效。</string>
+  <string name="sub_assistant_detail_show_more">展开</string>
+  <string name="sub_assistant_detail_show_less">收起</string>
+  <string name="sub_assistant_detail_no_output">暂无执行输出</string>
 </resources>

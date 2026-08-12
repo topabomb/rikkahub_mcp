@@ -1,4 +1,4 @@
-﻿# Repository Guidelines
+# Repository Guidelines
 
 本文档面向 AI agent 和贡献者，提供仓库结构、开发流程和编码规范的快速索引。
 深度技术细节请查阅 `docs/references/` 和 `docs/dev/` 中的专题文档。
@@ -28,6 +28,7 @@ gradlew lint                       # 运行 Android Lint
 - Kotlin/Gradle 脚本：4 空格缩进，最大行长 120。
 - XML/JSON：2 空格缩进。
 - Markdown/YAML：2 空格缩进，允许尾随空格（用于对齐）。
+- 文本文件统一使用 UTF-8 without BOM 和 CRLF 换行符。禁止新增 UTF-8 BOM；修改已有带 BOM 的源码、配置或文档文件时，应移除 BOM。
 
 命名习惯：模块名为小写目录（如 `ai/`、`speech/`），Kotlin 类遵循 PascalCase，测试类以 `*Test` 结尾。
 
@@ -67,6 +68,7 @@ gradlew lint                       # 运行 Android Lint
 - **UI Architecture**：自适应布局策略、导航、主题体系。详见 [`ui-architecture.md`](docs/references/ui-architecture.md)。
 - **Message Rendering**：消息渲染管线（UIMessage.parts → 像素），含 Markdown 双路径、代码块三态、Mermaid/HTML WebView、LaTeX 原生渲染。详见 [`message-rendering-pipeline.md`](docs/references/message-rendering-pipeline.md)。
 - **Update Mechanism**：版本检查、SemVer 比较、CI 发布流程。详见 [`update-mechanism.md`](docs/references/update-mechanism.md)。
+- **Sub-Assistant**：子助手（Target）调用与 lineage 体系，由 `SubAssistantCoordinator` 协调 preflight/lease/checkpoint/cancel/recovery。详见 [`chat-generation-pipeline.md`](docs/references/chat-generation-pipeline.md) "子助手生成管线扩展"和 [`assistant-configuration.md`](docs/references/assistant-configuration.md) §2.10。
 
 Fork 前的完整架构说明见 [`docs/dev/original-architecture.md`](docs/dev/original-architecture.md)（冻结归档）。
 

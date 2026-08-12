@@ -1,6 +1,5 @@
-﻿package net.weero.measix.pilot.data.db
+package net.weero.measix.pilot.data.db
 
-import androidx.room.AutoMigration
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
@@ -35,10 +34,8 @@ import net.weero.measix.pilot.utils.JsonInstant
         WorkspaceEntity::class,
         FolderEntity::class,
     ],
-    version = 3,
-    autoMigrations = [
-        AutoMigration(from = 2, to = 3),
-    ]
+    version = 4,
+    autoMigrations = [],
 )
 @TypeConverters(TokenUsageConverter::class)
 abstract class AppDatabase : RoomDatabase() {

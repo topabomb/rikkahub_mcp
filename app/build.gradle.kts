@@ -43,8 +43,8 @@ android {
         applicationId = "net.weero.measix.pilot"
         minSdk = 26
         targetSdk = 37
-        versionCode = 14
-        versionName = "0.0.14"
+        versionCode = 15
+        versionName = "0.0.15"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -89,6 +89,12 @@ android {
                 keyAlias = keyAliasValue
                 keyPassword = keyPasswordValue
             }
+        }
+    }
+
+    testOptions {
+        unitTests {
+            isReturnDefaultValues = true
         }
     }
 
@@ -308,6 +314,13 @@ dependencies {
 
     // tests
     testImplementation(libs.junit)
+    testImplementation(libs.mockk)
+    testImplementation("io.mockk:mockk-agent-jvm:1.14.5")
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.kotlinx.serialization.json)
+    // SLF4J simple for JVM tests: MockK uses SLF4J, but slf4j-android provider
+    // cannot initialize in JVM test context. slf4j-simple provides a lightweight fallback.
+    testImplementation("org.slf4j:slf4j-simple:2.0.18")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

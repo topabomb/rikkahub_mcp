@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ui
+package net.weero.measix.pilot.ui.components.ui
 
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
@@ -74,10 +74,13 @@ fun <T> ChainOfThought(
     steps: List<T>,
     collapsedVisibleCount: Int = 2,
     collapsedAdaptiveWidth: Boolean = false,
+    keepVisibleWhenCollapsed: (T) -> Boolean = { false },
     content: @Composable ChainOfThoughtScope.(T) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val canCollapse = steps.size > collapsedVisibleCount
+    val collapsedSteps = selectCollapsedSteps(steps, collapsedVisibleCount, keepVisibleWhenCollapsed)
+    val hiddenStepCount = steps.size - collapsedSteps.size
+    val canCollapse = hiddenStepCount > 0
     val shouldFillCollapseControlWidth = expanded || !collapsedAdaptiveWidth
 
     CompositionLocalProvider(
@@ -98,7 +101,7 @@ fun <T> ChainOfThought(
                 val visibleSteps = if (expanded || !canCollapse) {
                     steps
                 } else {
-                    steps.takeLast(collapsedVisibleCount)
+                    collapsedSteps
                 }
 
                 // 显示展开/折叠按钮（统一在顶部）
@@ -138,7 +141,7 @@ fun <T> ChainOfThought(
                             } else {
                                 stringResource(
                                     R.string.chain_of_thought_show_more_steps,
-                                    steps.size - collapsedVisibleCount
+                                    hiddenStepCount
                                 )
                             },
                             style = MaterialTheme.typography.labelMedium,
@@ -170,6 +173,16 @@ fun <T> ChainOfThought(
             }
         }
     }
+}
+
+/** 折叠时保留尾部摘要，并把 Pending 审批等必须交互的步骤固定为可见。 */
+internal fun <T> selectCollapsedSteps(
+    steps: List<T>,
+    collapsedVisibleCount: Int,
+    keepVisible: (T) -> Boolean,
+): List<T> {
+    val tailStart = (steps.size - collapsedVisibleCount.coerceAtLeast(0)).coerceAtLeast(0)
+    return steps.filterIndexed { index, step -> index >= tailStart || keepVisible(step) }
 }
 
 /**

@@ -70,6 +70,11 @@ data class Assistant(
     val enableTimeReminder: Boolean = false,
     val allowConversationSystemPrompt: Boolean = false,
     val allowConversationPromptInjection: Boolean = false,
+    // 子助手配置
+    val description: String = "",
+    val allowAsSubAssistant: Boolean = false,
+    val isSubAssistantGloballyVisible: Boolean = false,
+    val allowedSubAssistantIds: Set<Uuid> = emptySet(),
 )
 ```
 
@@ -185,6 +190,19 @@ fun Settings.getChatModel(assistant: Assistant): Model? =
 |------|------|--------|------|
 | `quickMessageIds` | `Set<Uuid>` | `emptySet()` | 关联的快捷消息 ID 列表 |
 | `enabledSkills` | `Set<String>` | `emptySet()` | 启用的 Skill 名称列表 |
+
+### 2.10 子助手配置
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `description` | `String` | `""` | 路由描述，简短说明角色或擅长领域；开启子助手类别时必须非空；规范化时折叠空白并限 240 code point |
+| `allowAsSubAssistant` | `Boolean` | `false` | 是否属于子助手类别且可被 `assistant_call` 调用；关闭时通过 `updateAtomic` 同一次原子更新中关闭全局可见并从所有 Assistant 的 `allowedSubAssistantIds` 移除其 ID，避免重新开启时静默恢复旧授权 |
+| `isSubAssistantGloballyVisible` | `Boolean` | `false` | 全局可见权限开关；开启后所有启用子助手工具的 Assistant 可发现、调用和管理该 Target，但修改和删除仍需确认，启用管理工具的助手也可查看其局部记忆 |
+| `allowedSubAssistantIds` | `Set<Uuid>` | `emptySet()` | 管理与调用共用的显式允许列表；`assistant_manage(CREATE)` 创建时原子加入 caller |
+
+有效访问公式：`Target.allowAsSubAssistant && Target.id != Caller.id && (Target.id in Caller.allowedSubAssistantIds || Target.isSubAssistantGloballyVisible)`
+
+工具创建的子助手由 `buildToolCreatedAssistant` 显式构造，`chatModelId = null` 表示调用时继承 caller 的有效 Chat Model 与模型执行参数，不写回 Target。Target 明确绑定模型时严格使用自身模型和参数；绑定失效返回 `target_model_unavailable`，不会静默 fallback。Target 未绑定且 caller 也没有有效模型时返回 `caller_model_unavailable`。继承范围仅含 model、temperature/topP/maxTokens/reasoning、stream/context limit 和 Assistant 级 custom headers/bodies；Target 的身份、System Prompt、工具、记忆与权限保持独立。配置 UI 对未绑定模型显示继承说明，只对显式绑定但失效显示错误。其 Local Tools 与普通 Assistant 共用 `DEFAULT_ASSISTANT_LOCAL_TOOLS`，默认包含 `TimeInfo`、`Tts`、`AskUser`，Target Run 中实际注册为 `get_time_info`、`text_to_speech`、`ask_user`。`ask_user` 的 Pending 由 Coordinator 按 Child `messageId + toolOrdinal` 桥接到主聊天子助手卡片；其余需审批 Tool 在 Target 模式返回 `tool_not_permitted`。Assistant 管理与再次委托能力仍被过滤。Web Search、Recent Chats、MCP、Workspace、Skills 等扩展能力默认关闭。
 
 ---
 
@@ -732,7 +750,8 @@ tools = buildList {
 
 ```kotlin
 // 只保留 4 KiB 预览，完整内容保存到文件
-// 结果包含文件引用：/tool_outputs/{toolCallId}.txt
+// 结果包含文件引用：/tool_outputs/{executionId}.txt
+// executionId 由 messageId + toolOrdinal 构成，不使用 Provider toolCallId
 // 指引模型使用 shell 工具读取完整内容
 ```
 

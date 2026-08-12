@@ -1,10 +1,19 @@
 package net.weero.measix.pilot.data.event
 
 import me.rerere.ai.ui.UIMessage
+import net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
 import kotlin.uuid.Uuid
 
 sealed class AppEvent {
-    data class Speak(val text: String, val flush: Boolean = true) : AppEvent()
+    data class Speak(
+        val text: String,
+        val flush: Boolean = true,
+        /**
+         * 设计文档 §7.5 — TTS 播放来源。
+         * null 表示无 session 的手动朗读/自动播放，沿用现有 flush 行为并清除子助手头像。
+         */
+        val source: TtsPlaybackSource? = null,
+    ) : AppEvent()
     data object OpenUsageAccessSettings : AppEvent()
 
     /** MCP OAuth 授权完成后经 deep link 回传的结果。 */

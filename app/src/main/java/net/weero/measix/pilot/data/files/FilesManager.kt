@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.files
+package net.weero.measix.pilot.data.files
 
 import android.content.Context
 import android.graphics.BitmapFactory
@@ -201,13 +201,16 @@ class FilesManager(
             )
         }
 
-    fun deleteChatFiles(uris: List<Uri>) {
+    /** 只删除 App filesDir 内由 FilesManager 管理的 file URI。 */
+    fun deleteChatFiles(uris: List<Uri>): Boolean {
         val relativePaths = mutableSetOf<String>()
+        var allDeleted = true
         uris.filter { it.toString().startsWith("file:") }.forEach { uri ->
             val file = uri.toFile()
-            getRelativePathInFilesDir(file)?.let { relativePaths.add(it) }
-            if (file.exists()) {
-                file.delete()
+            val relativePath = getRelativePathInFilesDir(file) ?: return@forEach
+            relativePaths.add(relativePath)
+            if (file.exists() && !file.delete()) {
+                allDeleted = false
             }
         }
         if (relativePaths.isNotEmpty()) {
@@ -217,6 +220,7 @@ class FilesManager(
                 }
             }
         }
+        return allDeleted
     }
 
     suspend fun countChatFiles(): Pair<Int, Long> = withContext(Dispatchers.IO) {

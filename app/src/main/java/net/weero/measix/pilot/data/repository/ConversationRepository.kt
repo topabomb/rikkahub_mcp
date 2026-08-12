@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.repository
+package net.weero.measix.pilot.data.repository
 
 import android.database.sqlite.SQLiteBlobTooBigException
 import androidx.paging.Pager
@@ -16,6 +16,7 @@ import net.weero.measix.pilot.data.db.fts.MessageFtsManager
 import net.weero.measix.pilot.data.db.fts.MessageSearchSort
 import net.weero.measix.pilot.data.db.dao.ConversationDAO
 import net.weero.measix.pilot.data.db.dao.FavoriteDAO
+import net.weero.measix.pilot.data.db.dao.LightConversationEntity
 import net.weero.measix.pilot.data.db.dao.MessageNodeDAO
 import net.weero.measix.pilot.data.db.entity.ConversationEntity
 import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
@@ -235,16 +236,89 @@ class ConversationRepository(
 
     suspend fun insertConversation(conversation: Conversation) {
         database.withTransaction {
+            requireValidParent(conversation)
             conversationDAO.insert(
                 conversationToConversationEntity(conversation)
             )
             saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
         }
-        messageFtsManager.indexConversation(conversation)
+        // Child Conversation 不进入 FTS 索引
+        if (conversation.parentConversationId == null) {
+            messageFtsManager.indexConversation(conversation)
+        }
+    }
+
+    /** Inserts a forked top-level Master and all remapped Child lineages atomically in Room. */
+    suspend fun insertConversationTree(master: Conversation, children: List<Conversation>) {
+        require(master.parentConversationId == null) { "Fork root must be a top-level conversation" }
+        require(children.map { it.id }.distinct().size == children.size) { "Duplicate Child conversation ID" }
+        require(children.all { it.parentConversationId == master.id }) {
+            "Every forked Child must reference the new Master"
+        }
+        database.withTransaction {
+            conversationDAO.insert(conversationToConversationEntity(master))
+            saveMessageNodes(master.id.toString(), master.messageNodes)
+            children.forEach { child ->
+                conversationDAO.insert(conversationToConversationEntity(child))
+                saveMessageNodes(child.id.toString(), child.messageNodes)
+            }
+        }
+        messageFtsManager.indexConversation(master)
+    }
+
+    /** Updates one Master and prunes/truncates its Child tree in a single Room transaction. */
+    suspend fun updateConversationTree(
+        master: Conversation,
+        retainedChildren: List<Conversation>,
+        deletedChildren: List<Conversation>,
+    ) {
+        require(master.parentConversationId == null)
+        require(retainedChildren.all { it.parentConversationId == master.id })
+        val retainedIds = retainedChildren.mapTo(mutableSetOf()) { it.id }
+        require(deletedChildren.none { it.id in retainedIds })
+
+        val oldMaster = getConversationById(master.id)
+            ?: error("Master Conversation ${master.id} does not exist")
+        val oldChildren = getChildConversations(master.id)
+        val oldChildIds = oldChildren.mapTo(mutableSetOf()) { it.id }
+        require(retainedChildren.map { it.id }.distinct().size == retainedChildren.size)
+        require(deletedChildren.map { it.id }.distinct().size == deletedChildren.size)
+        require(retainedIds + deletedChildren.map { it.id } == oldChildIds) {
+            "Retained and deleted Child sets must cover the persisted Master tree exactly"
+        }
+        val oldTreeFiles = (oldChildren + oldMaster).flatMap { it.files }.toSet()
+        val retainedTreeFiles = (retainedChildren + master).flatMap { it.files }.toSet()
+        val deletionCandidates = oldTreeFiles - retainedTreeFiles
+        val outsideTreeFiles = getAllConversationsSync()
+            .filter { it.id != master.id && it.parentConversationId != master.id }
+            .flatMap { it.files }
+            .toSet()
+        val safeFilesToDelete = deletionCandidates - outsideTreeFiles
+
+        database.withTransaction {
+            conversationDAO.update(conversationToConversationEntity(master))
+            messageNodeDAO.deleteByConversation(master.id.toString())
+            saveMessageNodes(master.id.toString(), master.messageNodes)
+            retainedChildren.forEach { child ->
+                conversationDAO.update(conversationToConversationEntity(child))
+                messageNodeDAO.deleteByConversation(child.id.toString())
+                saveMessageNodes(child.id.toString(), child.messageNodes)
+            }
+            deletedChildren.forEach { child ->
+                favoriteDAO.deleteNodeFavoritesOfConversation(child.id.toString())
+                conversationDAO.deleteById(child.id.toString())
+            }
+        }
+        messageFtsManager.indexConversation(master)
+        deletedChildren.forEach { messageFtsManager.deleteConversation(it.id.toString()) }
+        if (safeFilesToDelete.isNotEmpty()) {
+            filesManager.deleteChatFiles(safeFilesToDelete.toList())
+        }
     }
 
     suspend fun updateConversation(conversation: Conversation) {
         database.withTransaction {
+            requireValidParent(conversation)
             conversationDAO.update(
                 conversationToConversationEntity(conversation)
             )
@@ -252,24 +326,41 @@ class ConversationRepository(
             messageNodeDAO.deleteByConversation(conversation.id.toString())
             saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
         }
-        messageFtsManager.indexConversation(conversation)
+        // Child Conversation 不进入 FTS 索引，只通过调用卡片详情页访问
+        if (conversation.parentConversationId == null) {
+            messageFtsManager.indexConversation(conversation)
+        }
     }
 
     suspend fun deleteConversation(conversation: Conversation) {
-        // 获取完整的 Conversation（包含 messageNodes）以正确清理文件
-        val fullConversation = if (conversation.messageNodes.isEmpty()) {
-            getConversationById(conversation.id) ?: conversation
+        val persisted = conversationDAO.getConversationById(conversation.id.toString()) ?: return
+        val fullConversation = getConversationById(conversation.id) ?: conversation
+        val childConversations = if (persisted.parentConversationId == null) {
+            conversationDAO.getChildConversations(conversation.id.toString()).mapNotNull { childEntity ->
+                runCatching { Uuid.parse(childEntity.id) }.getOrNull()?.let { getConversationById(it) }
+            }
         } else {
-            conversation
+            emptyList()
         }
-        messageFtsManager.deleteConversation(conversation.id.toString())
+        val conversationsToDelete = childConversations + fullConversation
+        val safeFilesToDelete = findUnsharedFilesForDeletion(conversationsToDelete)
+
+        // Master、Child、MessageNode 和 Favorite 必须在同一个 Room 事务中提交。
         database.withTransaction {
-            // message_node 会通过 CASCADE 自动删除
-            conversationDAO.delete(
-                conversationToConversationEntity(conversation)
-            )
+            conversationsToDelete.forEach { item ->
+                favoriteDAO.deleteNodeFavoritesOfConversation(item.id.toString())
+            }
+            if (persisted.parentConversationId == null) {
+                conversationDAO.deleteChildConversations(conversation.id.toString())
+            }
+            conversationDAO.deleteById(conversation.id.toString())
         }
-        filesManager.deleteChatFiles(fullConversation.files)
+
+        // 可重建的 FTS 与文件在数据库提交后清理，数据库失败时不会留下半棵树。
+        conversationsToDelete.forEach { item ->
+            messageFtsManager.deleteConversation(item.id.toString())
+        }
+        filesManager.deleteChatFiles(safeFilesToDelete)
     }
 
     suspend fun searchMessages(
@@ -296,6 +387,76 @@ class ConversationRepository(
         }
     }
 
+    /**
+     * 获取指定 Master 会话的所有 Child 会话
+     */
+    suspend fun getChildConversations(parentConversationId: Uuid): List<Conversation> {
+        return conversationDAO.getChildConversations(parentConversationId.toString()).map { entity ->
+            val nodes = loadMessageNodes(entity.id)
+            conversationEntityToConversation(entity, nodes)
+        }
+    }
+
+    /**
+     * 按 ID 获取单个会话（不加载 messageNodes），用于轻量级检查
+     */
+    suspend fun getConversationEntityById(uuid: Uuid): ConversationEntity? {
+        return conversationDAO.getConversationById(uuid.toString())
+    }
+
+    /**
+     * 删除指定 Master 会话的所有 Child 会话
+     */
+    suspend fun deleteChildConversations(parentConversationId: Uuid) {
+        val children = conversationDAO.getChildConversations(parentConversationId.toString()).mapNotNull { child ->
+            runCatching { Uuid.parse(child.id) }.getOrNull()?.let { getConversationById(it) }
+        }
+        val safeFilesToDelete = findUnsharedFilesForDeletion(children)
+        database.withTransaction {
+            children.forEach { child ->
+                favoriteDAO.deleteNodeFavoritesOfConversation(child.id.toString())
+            }
+            conversationDAO.deleteChildConversations(parentConversationId.toString())
+        }
+        children.forEach { child ->
+            messageFtsManager.deleteConversation(child.id.toString())
+        }
+        filesManager.deleteChatFiles(safeFilesToDelete)
+    }
+
+    /** Returns only local files no conversation outside [conversationsToDelete] still references. */
+    private suspend fun findUnsharedFilesForDeletion(
+        conversationsToDelete: Collection<Conversation>,
+    ): List<android.net.Uri> {
+        if (conversationsToDelete.isEmpty()) return emptyList()
+        val deletedIds = conversationsToDelete.mapTo(mutableSetOf()) { it.id }
+        val candidates = conversationsToDelete.flatMap { it.files }.toSet()
+        val retainedReferences = getAllConversationsSync()
+            .filterNot { it.id in deletedIds }
+            .flatMap { it.files }
+            .toSet()
+        return (candidates - retainedReferences).toList()
+    }
+
+    /**
+     * 获取所有 Child 会话 ID（用于 recovery 时识别 orphan）
+     */
+    suspend fun getAllChildConversationIds(): List<Uuid> {
+        return conversationDAO.getAllChildConversationIds().mapNotNull {
+            runCatching { Uuid.parse(it) }.getOrNull()
+        }
+    }
+
+    /**
+     * 获取所有会话（包括 Child），带完整 MessageNode，用于 recovery 扫描。
+     */
+    suspend fun getAllConversationsSync(): List<Conversation> {
+        return conversationDAO.getAllConversations().map { entity ->
+            val nodes = loadMessageNodes(entity.id)
+            conversationEntityToConversation(entity, nodes)
+        }
+    }
+
     fun conversationToConversationEntity(conversation: Conversation): ConversationEntity {
         require(conversation.messageNodes.none { it.messages.any { message -> message.hasBase64Part() } })
         return ConversationEntity(
@@ -311,6 +472,7 @@ class ConversationRepository(
             modeInjectionIds = JsonInstant.encodeToString(conversation.modeInjectionIds),
             workspaceCwd = conversation.workspaceCwd ?: "",
             folderId = conversation.folderId?.toString() ?: "",
+            parentConversationId = conversation.parentConversationId?.toString(),
         )
     }
 
@@ -331,6 +493,7 @@ class ConversationRepository(
             modeInjectionIds = JsonInstant.decodeFromString(conversationEntity.modeInjectionIds),
             workspaceCwd = conversationEntity.workspaceCwd.ifEmpty { null },
             folderId = conversationEntity.folderId.ifEmpty { null }?.let { Uuid.parse(it) },
+            parentConversationId = conversationEntity.parentConversationId?.let { Uuid.parse(it) },
         )
     }
 
@@ -427,20 +590,17 @@ class ConversationRepository(
         }
         messageNodeDAO.insertAll(entities)
     }
-}
 
-/**
- * 轻量级的会话查询结果，不包含 nodes 和 suggestions 字段
- */
-data class LightConversationEntity(
-    val id: String,
-    val assistantId: String,
-    val title: String,
-    val isPinned: Boolean,
-    val createAt: Long,
-    val updateAt: Long,
-    val folderId: String = "",
-)
+    private suspend fun requireValidParent(conversation: Conversation) {
+        val parentId = conversation.parentConversationId ?: return
+        require(parentId != conversation.id) { "Child Conversation cannot reference itself" }
+        val parent = conversationDAO.getConversationById(parentId.toString())
+            ?: error("Parent Conversation $parentId does not exist")
+        require(parent.parentConversationId == null) {
+            "Child Conversation must reference a top-level Master Conversation"
+        }
+    }
+}
 
 data class ConversationPageResult(
     val items: List<Conversation>,

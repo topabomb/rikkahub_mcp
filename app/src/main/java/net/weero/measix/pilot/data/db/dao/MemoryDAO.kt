@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.db.dao
+package net.weero.measix.pilot.data.db.dao
 
 import androidx.room.Dao
 import androidx.room.Insert
@@ -27,11 +27,11 @@ interface MemoryDAO {
     @Insert
     suspend fun insertMemory(memory: MemoryEntity): Long
 
-    @Update
-    suspend fun updateMemory(memory: MemoryEntity)
+    @Query("UPDATE memoryentity SET content = :content WHERE id = :id AND assistant_id = :assistantId")
+    suspend fun updateMemoryContent(id: Int, content: String, assistantId: String)
 
-    @Query("DELETE FROM memoryentity WHERE id = :id")
-    suspend fun deleteMemory(id: Int)
+    @Query("DELETE FROM memoryentity WHERE id = :id AND assistant_id = :assistantId")
+    suspend fun deleteMemory(id: Int, assistantId: String): Int
 
     @Query("DELETE FROM memoryentity WHERE assistant_id = :assistantId")
     suspend fun deleteMemoriesOfAssistant(assistantId: String)

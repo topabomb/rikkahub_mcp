@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.assistant.detail
+package net.weero.measix.pilot.ui.pages.assistant.detail
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -42,6 +42,7 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.DEFAULT_CONTEXT_MESSAGE_LIMIT
 import net.weero.measix.pilot.data.model.MAX_CONTEXT_MESSAGE_LIMIT
 import net.weero.measix.pilot.data.model.MIN_CONTEXT_MESSAGE_LIMIT
+import net.weero.measix.pilot.data.model.normalizeDescription
 import net.weero.measix.pilot.data.model.effectiveContextMessageLimit
 import net.weero.measix.pilot.ui.components.ai.ModelSelector
 import net.weero.measix.pilot.ui.components.ai.ReasoningButton
@@ -68,6 +69,7 @@ fun AssistantBasicPage(id: String) {
     )
     val assistant by vm.assistant.collectAsStateWithLifecycle()
     val providers by vm.providers.collectAsStateWithLifecycle()
+    val hasValidChatModel by vm.hasValidChatModel.collectAsStateWithLifecycle()
     val tags by vm.tags.collectAsStateWithLifecycle()
     val workspaces by vm.workspaces.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -92,6 +94,7 @@ fun AssistantBasicPage(id: String) {
             innerPadding = innerPadding,
             assistant = assistant,
             providers = providers,
+            hasValidChatModel = hasValidChatModel,
             tags = tags,
             workspaces = workspaces,
             onUpdate = { vm.update(it) },
@@ -105,6 +108,7 @@ internal fun AssistantBasicContent(
     innerPadding: PaddingValues,
     assistant: Assistant,
     providers: List<me.rerere.ai.provider.ProviderSetting>,
+    hasValidChatModel: Boolean,
     tags: List<DataTag>,
     workspaces: List<WorkspaceEntity>,
     onUpdate: (Assistant) -> Unit,
@@ -147,12 +151,13 @@ internal fun AssistantBasicContent(
         Card(
             colors = CustomColors.cardColorsOnSurfaceContainer
         ) {
+            // 身份信息区：名称 → 描述 → Tags → Workspace → 作为子助手 → 全局可见 → 使用助手头像
+            // 移除字段间的 HorizontalDivider，依靠 FormItem 自身的 padding 和视觉间距区分
             FormItem(
                 label = {
                     Text(stringResource(R.string.assistant_page_name))
                 },
                 modifier = Modifier.padding(8.dp),
-
             ) {
                 OutlinedTextField(
                     value = assistant.name,
@@ -167,7 +172,30 @@ internal fun AssistantBasicContent(
                 )
             }
 
-            HorizontalDivider()
+            FormItem(
+                label = {
+                    Text(stringResource(R.string.assistant_page_description))
+                },
+                modifier = Modifier.padding(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = assistant.description,
+                    onValueChange = {
+                        val normalized = normalizeDescription(it)
+                        onUpdate(assistant.copy(description = normalized))
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = {
+                        Text(stringResource(R.string.assistant_page_description_placeholder))
+                    },
+                    minLines = 2,
+                    maxLines = 4,
+                    supportingText = {
+                        val remaining = 240 - assistant.description.codePointCount(0, assistant.description.length)
+                        Text(stringResource(R.string.assistant_page_description_remaining, remaining))
+                    }
+                )
+            }
 
             FormItem(
                 label = {
@@ -183,8 +211,6 @@ internal fun AssistantBasicContent(
                     },
                 )
             }
-
-            HorizontalDivider()
 
             FormItem(
                 label = {
@@ -213,7 +239,81 @@ internal fun AssistantBasicContent(
                 )
             }
 
-            HorizontalDivider()
+            // 可作为子助手：描述为空时不能开启
+            // 描述为空时将提示内联到 FormItem 的 description 槽，不额外占行
+            FormItem(
+                modifier = Modifier.padding(8.dp),
+                label = {
+                    Text(stringResource(R.string.assistant_page_allow_as_sub_assistant))
+                },
+                description = {
+                    if (assistant.description.isBlank()) {
+                        // 描述为空时显示原因，替代原来的独立 Text 行
+                        Text(
+                            text = stringResource(R.string.assistant_page_description_required),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    if (assistant.allowAsSubAssistant && assistant.chatModelId == null) {
+                        Text(
+                            text = stringResource(R.string.assistant_page_sub_assistant_uses_caller_model),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else if (assistant.allowAsSubAssistant && !hasValidChatModel) {
+                        Text(
+                            text = stringResource(R.string.assistant_page_sub_assistant_no_model_warning),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    // Global Memory 警告
+                    if (assistant.allowAsSubAssistant && assistant.useGlobalMemory) {
+                        Text(
+                            text = stringResource(R.string.assistant_page_sub_assistant_global_memory_warning),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                tail = {
+                    Switch(
+                        checked = assistant.allowAsSubAssistant,
+                        enabled = assistant.description.isNotBlank(),
+                        onCheckedChange = { enabled ->
+                            onUpdate(
+                                assistant.copy(
+                                    allowAsSubAssistant = enabled,
+                                    isSubAssistantGloballyVisible =
+                                        assistant.isSubAssistantGloballyVisible && enabled,
+                                )
+                            )
+                        },
+                    )
+                }
+            )
+
+            // 全局可见：仅在 allowAsSubAssistant 为 true 时可用
+            if (assistant.allowAsSubAssistant) {
+                FormItem(
+                    modifier = Modifier.padding(8.dp),
+                    label = {
+                        Text(stringResource(R.string.assistant_page_sub_assistant_global_visible))
+                    },
+                    description = {
+                        Text(stringResource(R.string.assistant_page_sub_assistant_global_visible_desc))
+                    },
+                    tail = {
+                        Switch(
+                            checked = assistant.isSubAssistantGloballyVisible,
+                            onCheckedChange = { enabled ->
+                                onUpdate(assistant.copy(isSubAssistantGloballyVisible = enabled))
+                            },
+                        )
+                    }
+                )
+            }
 
             FormItem(
                 modifier = Modifier.padding(8.dp),

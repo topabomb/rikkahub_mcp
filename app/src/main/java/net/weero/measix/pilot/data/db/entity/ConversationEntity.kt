@@ -1,10 +1,14 @@
-﻿package net.weero.measix.pilot.data.db.entity
+package net.weero.measix.pilot.data.db.entity
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity
+@Entity(
+    tableName = "ConversationEntity",
+    indices = [Index("parent_conversation_id"), Index("assistant_id")]
+)
 data class ConversationEntity(
     @PrimaryKey
     val id: String,
@@ -32,4 +36,6 @@ data class ConversationEntity(
     val tags: String = "[]",
     @ColumnInfo("folder_id", defaultValue = "")
     val folderId: String = "",
+    @ColumnInfo("parent_conversation_id", defaultValue = "NULL")
+    val parentConversationId: String? = null,
 )

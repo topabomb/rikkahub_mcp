@@ -1227,5 +1227,95 @@
   <string name="chat_sidebar_expand">会話サイドバーを展開</string>
   <string name="chat_navigation_open_drawer">会話ナビゲーションを開く</string>
   <string name="chat_page_chat_options">チャットオプション</string>
+
+  <!-- Sub-Assistant: Assistant configuration -->
+  <string name="assistant_page_description">能力描述</string>
+  <string name="assistant_page_description_placeholder">このアシスタントが何を得意とし、いつ呼び出すべきかを簡潔に説明</string>
+  <string name="assistant_page_description_remaining">残り %d 文字</string>
+  <string name="assistant_page_description_required">サブアシスタントを有効にするには説明が必要です</string>
+  <string name="assistant_page_allow_as_sub_assistant">サブアシスタントとして許可</string>
+  <string name="assistant_page_allow_as_sub_assistant_desc">他のアシスタントがタスク、質問、ロールプレイなどのリクエストを呼び出せるようにします。独立したコンテキストを使用し、メイン会話は自動的に参照しません。</string>
+  <string name="assistant_page_sub_assistant_tag">サブアシスタント</string>
+<string name="assistant_page_sub_assistant_no_model_warning">有効なチャットモデルが未設定のため、呼び出しを開始できません</string>
+<string name="assistant_page_sub_assistant_global_memory_warning">サブアシスタントとして呼び出されるとき、共有グローバルメモリを使用します</string>
+<string name="assistant_page_sub_assistant_global_visible">グローバル表示</string>
+<string name="assistant_page_sub_assistant_global_visible_desc">サブアシスタントツールを持つすべてのアシスタントが発見、呼び出し、管理できます。変更と削除には確認が必要です。管理ツールを持つアシスタントはローカルメモリも表示できます。</string>
+<string name="assistant_page_sub_assistant_access_scope">サブアシスタントアクセス範囲</string>
+<string name="assistant_page_sub_assistant_access_scope_desc">このアシスタントが発見、呼び出し、管理できるサブアシスタントを選択</string>
+<string name="assistant_page_sub_assistant_access_scope_empty">サブアシスタントが選択されていません</string>
+<string name="assistant_page_sub_assistant_access_scope_count">%1$d 個のサブアシスタントが選択されています</string>
+<string name="assistant_page_sub_assistant_globally_available">グローバル利用可能</string>
+<string name="sub_assistant_global_tag">グローバル</string>
+<string name="assistant_picker_show_sub_assistants">サブアシスタント</string>
+  <string name="assistant_page_no_chat_model_warning">チャットモデル未設定、呼び出し時に開始できません</string>
+  <string name="assistant_page_global_memory_warning">呼び出し時に共有グローバルメモリを使用します</string>
+
+  <!-- Sub-Assistant: Local Tools -->
+  <string name="assistant_page_local_tools_assistant_collaboration">アシスタント連携</string>
+  <string name="assistant_page_local_tools_assistant_management_title">他のアシスタントを管理</string>
+  <string name="assistant_page_local_tools_assistant_management_desc">このアシスタントが他のアシスタントの作成、変更、削除、およびローカルメモリの参照を許可します。メモリは所有アシスタントのツールでのみ维护できます。</string>
+  <string name="assistant_page_local_tools_assistant_delegation_title">サブアシスタントを呼び出し</string>
+  <string name="assistant_page_local_tools_assistant_delegation_desc">このアシスタントが呼び出し可能なサブアシスタントにリクエストを送信することを許可します。</string>
+
+  <!-- Sub-Assistant: Call Card -->
+  <string name="sub_assistant_card_starting">開始中</string>
+  <string name="sub_assistant_card_running">実行中</string>
+  <string name="sub_assistant_card_completed">完了</string>
+  <string name="sub_assistant_card_failed">失敗</string>
+  <string name="sub_assistant_card_stopped">停止</string>
+  <string name="sub_assistant_card_unavailable">利用不可</string>
+  <string name="sub_assistant_card_latest_output">最新出力</string>
+  <string name="sub_assistant_card_using_tool">使用中：%1$s</string>
+  <string name="sub_assistant_card_view_detail">詳細を表示</string>
+  <string name="sub_assistant_card_scroll_to_latest">最新</string>
+
+  <!-- Sub-Assistant: Call Card reasons -->
+  <string name="sub_assistant_reason_assistant_not_found">アシスタントが見つかりません</string>
+  <string name="sub_assistant_reason_target_not_allowed">サブアシスタントとして許可されていません</string>
+  <string name="sub_assistant_reason_tool_not_permitted">サブアシスタントツールが有効ではありません</string>
+  <string name="sub_assistant_reason_context_required">実行コンテキストが必要です</string>
+  <string name="sub_assistant_reason_approval_blocked">非対話モードで承認がブロックされました</string>
+  <string name="sub_assistant_reason_target_description_missing">説明が設定されていません</string>
+  <string name="sub_assistant_reason_target_model_unavailable">チャットモデルが利用できません</string>
+  <string name="sub_assistant_reason_target_busy">アシスタントがビジーです</string>
+  <string name="sub_assistant_reason_provider_error">プロバイダーエラー</string>
+  <string name="sub_assistant_reason_runtime_error">ランタイムエラー</string>
+  <string name="sub_assistant_reason_step_limit_reached">ステップ制限に達しました</string>
+  <string name="sub_assistant_reason_user_cancelled">ユーザーがキャンセルしました</string>
+  <string name="sub_assistant_reason_app_restarted">アプリが再起動され、タスクは自動的に再開されませんでした</string>
+  <string name="sub_assistant_reason_target_removed">アシスタントが削除されました</string>
+  <string name="sub_assistant_reason_target_disabled">サブアシスタントが無効になりました</string>
+  <string name="sub_assistant_reason_child_missing">会話が見つかりません</string>
+
+  <!-- Sub-Assistant: Call Card phases -->
+  <string name="sub_assistant_phase_preparing">準備中</string>
+  <string name="sub_assistant_phase_model_waiting">モデル待機中</string>
+  <string name="sub_assistant_phase_reasoning_streaming">思考中</string>
+  <string name="sub_assistant_phase_answer_streaming">生成中</string>
+  <string name="sub_assistant_phase_tool_executing">ツール実行中</string>
+  <string name="sub_assistant_phase_between_steps">処理中</string>
+
+  <!-- Sub-Assistant: Detail page -->
+  <string name="sub_assistant_detail_title">サブアシスタント詳細</string>
+  <string name="sub_assistant_detail_assistant_deleted">アシスタントが削除されました</string>
+  <string name="sub_assistant_detail_assistant_settings">アシスタント設定</string>
+  <string name="sub_assistant_detail_no_messages">メッセージが見つかりません</string>
+  <string name="sub_assistant_detail_loading">サブアシスタントの会話を読み込み中…</string>
+  <string name="tts_controller_stop">停止</string>
+  <string name="tts_controller_expand">その他のコントロール</string>
+  <string name="tts_controller_fast_forward">5秒早送り</string>
+  <string name="tts_controller_play">再生</string>
+  <string name="tts_controller_pause">一時停止</string>
+  <string name="sub_assistant_phase_awaiting_user">回答を待っています</string>
+  <string name="sub_assistant_card_waiting_for_answer">サブアシスタントがあなたの回答を必要としています</string>
+  <string name="assistant_page_sub_assistant_uses_caller_model">モデル未選択です。呼び出し時に呼び出し元アシスタントのモデルと生成設定を継承します</string>
+  <string name="sub_assistant_reason_caller_model_unavailable">呼び出し元アシスタントに継承できるモデルがありません</string>
+  <string name="sub_assistant_detail_request">リクエスト</string>
+  <string name="sub_assistant_detail_execution">実行内容</string>
+  <string name="sub_assistant_detail_unavailable">詳細を表示できません</string>
+  <string name="sub_assistant_detail_unavailable_desc">このサブアシスタント呼び出しが見つからないか、保存されたリンクが無効です。</string>
+  <string name="sub_assistant_detail_show_more">さらに表示</string>
+  <string name="sub_assistant_detail_show_less">折りたたむ</string>
+  <string name="sub_assistant_detail_no_output">実行出力はまだありません</string>
 </resources>
 

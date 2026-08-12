@@ -131,8 +131,13 @@ Auto
                     └─ Answered ─► 写入用户答案
 ```
 
+同一 Assistant message 含多个 ToolCall 时，审批是整批屏障：只要任一调用仍为 Pending，本批自动工具不
+执行；全部 Approved/Denied/Answered 后，按 Tool part ordinal 串行处理。审批更新、执行结果合并和
+截断文件定位均使用 `messageId + toolOrdinal`，Provider `toolCallId` 只用于线协议。
+
 文本工具输出超过 32 KiB 且当前具备 Workspace Shell 时，只在消息中保留 4 KiB 预览，
-完整内容保存到 `/tool_outputs/{toolCallId}.txt`。没有 Shell 访问能力时不生成模型无法读取的
+完整内容保存到 `/tool_outputs/{executionId}.txt`，其中 `executionId` 由 `messageId + toolOrdinal`
+构成，不使用 Provider `toolCallId`。没有 Shell 访问能力时不生成模型无法读取的
 文件引用。
 
 MCP 连接、休眠与恢复不由生成链路持有；`McpManager` 负责连接状态和工具快照，
@@ -184,11 +189,73 @@ MCP 连接、休眠与恢复不由生成链路持有；`McpManager` 负责连接
 - 生成结束、失败或取消都通过 `AppEventBus` 发布事件；
 - `ChatNotificationManager` 独立消费事件，生成主链路不直接持有通知状态。
 
+## 子助手生成管线扩展
+
+子助手（Sub-Assistant）V1 在通用生成管线上增加了以下原语，普通聊天行为保持不变。
+
+### GenerationChunk 事件
+
+`GenerationHandler.generateText()` 使用 `channelFlow` 返回四种 `GenerationChunk` 事件。`assistant_call` 在可取消
+子 Job 中执行并通过 `reportMetadata` 回写，因此普通 `flow { emit(...) }` 会违反跨协程发射 invariant；
+`channelFlow.send` 保证事件安全，ToolCall 本身仍由 ordinal 循环串行执行：
+
+| 事件 | 用途 |
+|------|------|
+| `Messages` | 更新后的消息列表（原有行为） |
+| `Phase` | 生成阶段变化，phase 使用稳定英文枚举：`preparing`/`model_waiting`/`tool_executing`/`between_steps`；`tool_executing` 携带 registered tool name |
+| `Checkpoint` | 持久化检查点，`CheckpointKind` 区分 `STEP_COMPLETED`/`TOOL_STATE_CHANGED`/`TOOL_RESULT_COMPLETED` 等 |
+| `Finished` | 生成结束，`FinishedReason` 区分 `completed`/`awaiting_approval`/`step_limit_reached` |
+
+Master collector 消费 Checkpoint 保存会话状态；Target collector 额外用 Phase 更新运行卡片。
+
+### ToolExecutionContext
+
+`Tool.execute` 保留原有签名，新增可选的 `contextualExecute` 和 `executeWithContext()`：
+
+- `ToolExecutionContext` 含 `messageId` + `toolOrdinal`（精确 locator，不依赖 `toolCallId`）和 `reportMetadata` 回写回调
+- `GenerationHandler` 只通过 `executeWithContext()` 执行工具；普通 Tool 自动回退 `execute`
+- `assistant_call` 的普通 `execute` fallback 返回 `context_required` 错误，不在缺少 locator 时启动 Child
+
+### toolProvider 与 Target 交互边界
+
+- `generateText()` 接收 `toolProvider: (suspend () -> List<Tool>)`，每个 LLM step 重新调用以获取最新工具列表
+- `nonInteractive: Boolean` 参数默认拒绝需审批工具；`interactiveToolNames` 可显式放行宿主能够承接的工具
+- Target Run 只放行 `ask_user`：Coordinator 持久化 Child locator，把问题桥接到主聊天子助手卡片并等待回答；其余需审批工具返回 `tool_not_permitted`
+- 截断文件名使用 `messageId + toolOrdinal` 构成的 execution ID，不使用 Provider `toolCallId`
+
+### ConversationSessionRegistry
+
+从 `ChatService` 抽取的 Session/Job/StateFlow 生命周期管理器：
+
+- 同一 Conversation ID 只有一个 Session
+- Master 和 Child 共用同一 Registry
+- `getOrCreateSession` 创建型打开 Session；`getExisting` 只查询不创建
+- 加载持久化会话使用显式 `open(conversation)`，不创建空 Session 遮蔽 Room 快照
+
+### Target 执行流程
+
+`assistant_call` 通过 `SubAssistantCoordinator` 实现：
+
+1. Target preflight（caller 存在且 AssistantDelegation 启用、Target 存在、Target != caller、`allowAsSubAssistant == true`、访问公式、模型来源可解析）
+2. 构造内存 `SubAssistantRunSpec`：Target 显式模型优先；未绑定时继承 caller 的有效模型和模型执行参数；显式 Target 模型失效与 caller 无模型分别返回 `target_model_unavailable`、`caller_model_unavailable`
+3. 按当前 Master 分支只读解析 lineage，再获取 `Master Conversation ID + Target ID` lease；同一 Master/Target 串行，不同 Master 可并行
+4. 写入 request 前从最新 Settings 重验权限与 RunSpec 模型；通过后创建/克隆 Child Conversation 并追加 Target USER request（Child 创建失败时释放 lease）
+5. 回写 Master tool metadata 的 run/child link 并 checkpoint
+6. Target GenerationHandler 执行（Child Messages/Phase 实时更新，step/tool 边界 checkpoint）
+7. 提取 final answer，写 terminal metadata，返回 Tool Result
+8. 释放 lineage lease，Master 继续当前 Tool Loop
+
+Target Run policy 永久过滤 `AssistantManagement`/`AssistantDelegation`（LocalToolOption 级别），同时按工具名过滤 `assistant_manage`、`assistant_call`、`assistant_memory_list`。`ask_user` 保留并作为唯一可桥接的交互工具；等待回答时停止、撤权、删除或重启都会解除等待并按对应 stopped reason 收口，不自动重放。运行中撤权在安全边界 stopped。
+
+### TTS 来源切换
+
+Target Generation 中 `TtsToolPlaybackContext` 在每轮 Generation 创建一次，不在每个 LLM step 重建；不同 step 重建 Tool 时复用同一 context，不放入单例 LocalTools。`computeEffectiveFlush` 决定同一 Generation 内首次 TTS 调用 flush、后续 append（顺序开关开时）；playback session 变化时无论开关都 flush。队列自然播放完毕（`PlaybackStatus.Ended`）、Provider 切换、播放错误、dispose 时清空 `activeSource`，避免控制条在无音频时继续显示旧 Target。`assistant_call` 完成时不清除已提交给 TTS Controller 的音频（保持后台播放语义）；来源不持久化，不从历史消息恢复。
+
 ## 关键文件
 
 ```text
 ai/src/main/java/me/rerere/ai/
-├─ core/Tool.kt
+├─ core/Tool.kt                          # ToolExecutionContext、contextualExecute
 ├─ provider/
 └─ ui/Message.kt                         # UIMessage、工具状态、上下文边界与阶梯裁剪
 
@@ -196,10 +263,16 @@ app/src/main/java/net/weero/measix/pilot/
 ├─ service/
 │  ├─ ChatService.kt                     # 会话编排、工具装配、显式压缩
 │  ├─ ConversationSession.kt             # 单会话状态
+│  ├─ ConversationSessionRegistry.kt     # Master/Child 共用 Session 生命周期
+│  ├─ AssistantManagementService.kt      # Assistant CRUD、原子授权、删除编排
+│  ├─ SubAssistantCoordinator.kt         # Target 执行协调器
 │  └─ ChatNotificationManager.kt         # 通知事件消费者
 └─ data/ai/
-   ├─ GenerationHandler.kt               # Provider 请求与工具循环
+   ├─ GenerationHandler.kt               # Provider 请求与工具循环（含 Phase/Checkpoint/Finished）
    ├─ transformers/
+   ├─ subassistant/                      # 访问策略、lineage、reducer、metadata、preview、catalog
    └─ tools/
+      ├─ AssistantToolFactory.kt         # assistant_manage/memory_list/call 工具构建
+      ├─ GenerationToolSetFactory.kt     # 按 Assistant/资源/RunMode 装配工具集
       └─ local/
 ```

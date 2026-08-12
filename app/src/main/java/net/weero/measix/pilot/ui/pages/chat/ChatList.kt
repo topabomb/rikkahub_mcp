@@ -89,6 +89,7 @@ import dev.chrisbanes.haze.hazeSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
@@ -144,8 +145,9 @@ internal fun ChatList(
     onSwitchAssistant: () -> Unit,
     onManageAssistant: () -> Unit,
     onMemoryClick: () -> Unit,
-    onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
-    onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
+    onToolApproval: ((locator: ToolCallLocator, approved: Boolean, reason: String) -> Unit)? = null,
+    onToolAnswer: ((locator: ToolCallLocator, answer: String) -> Unit)? = null,
+    onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Unit)? = null,
     onToggleFavorite: ((MessageNode) -> Unit)? = null,
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
 ) {
@@ -197,6 +199,7 @@ internal fun ChatList(
                 animatedVisibilityScope = this@AnimatedContent,
                 onToolApproval = onToolApproval,
                 onToolAnswer = onToolAnswer,
+                onSubAssistantAnswer = onSubAssistantAnswer,
                 onToggleFavorite = onToggleFavorite,
                 onConversationSystemPromptChange = onConversationSystemPromptChange,
             )
@@ -233,8 +236,9 @@ private fun ChatListNormal(
     onManageAssistant: () -> Unit,
     onMemoryClick: () -> Unit,
     animatedVisibilityScope: AnimatedVisibilityScope,
-    onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
-    onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
+    onToolApproval: ((locator: ToolCallLocator, approved: Boolean, reason: String) -> Unit)? = null,
+    onToolAnswer: ((locator: ToolCallLocator, answer: String) -> Unit)? = null,
+    onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Unit)? = null,
     onToggleFavorite: ((MessageNode) -> Unit)? = null,
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
 ) {
@@ -414,6 +418,7 @@ private fun ChatListNormal(
                     ) {
                         ChatMessage(
                             node = node,
+                            masterConversationId = conversation.id,
                             model = node.currentMessage.modelId?.let(modelById::get),
                             assistant = messageAssistant,
                             loading = loading && index == lastMessageIndex,
@@ -444,6 +449,7 @@ private fun ChatListNormal(
                             },
                             onToolApproval = onToolApproval,
                             onToolAnswer = onToolAnswer,
+                            onSubAssistantAnswer = onSubAssistantAnswer,
                             lastMessage = index == lastMessageIndex,
                         )
                     }

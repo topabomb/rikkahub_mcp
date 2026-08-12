@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.model
+package net.weero.measix.pilot.data.model
 
 import android.net.Uri
 import androidx.core.net.toUri
@@ -30,6 +30,8 @@ data class Conversation(
     val workspaceCwd: String? = null,
     // 所属文件夹（助手内分组），null 表示未归入任何文件夹
     val folderId: Uuid? = null,
+    // null = 普通用户会话；非 null = 子助手 Child Conversation，值为 Master Conversation ID
+    val parentConversationId: Uuid? = null,
     @Transient
     val newConversation: Boolean = false
 ) {

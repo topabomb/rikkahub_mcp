@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.ai
+package net.weero.measix.pilot.data.ai
 
 import android.content.Context
 import android.util.Log
@@ -7,18 +7,21 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.core.merge
 import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.Model
@@ -57,11 +60,128 @@ private const val TAG = "GenerationHandler"
 private const val MAX_TOOL_OUTPUT_CHARS = 32 * 1024
 private const val TOOL_OUTPUT_PREVIEW_CHARS = 4 * 1024
 
+internal data class ToolApprovalResolution(
+    val tools: List<UIMessagePart.Tool>,
+    val hasPendingApproval: Boolean,
+)
+
+internal fun resolveToolApprovals(
+    unexecutedTools: List<UIMessagePart.Tool>,
+    toolDefinitions: List<Tool>,
+    nonInteractive: Boolean,
+    interactiveToolNames: Set<String>,
+    json: Json,
+): ToolApprovalResolution {
+    var hasPendingApproval = false
+    val updatedTools = unexecutedTools.map { tool ->
+        val toolDefinition = toolDefinitions.find { it.name == tool.toolName }
+        when {
+            tool.approvalState is ToolApprovalState.Pending -> {
+                hasPendingApproval = true
+                tool
+            }
+
+            tool.approvalState is ToolApprovalState.Auto &&
+                toolDefinition?.needsApproval(tool.inputAsJson()) == true -> {
+                if (nonInteractive && tool.toolName !in interactiveToolNames) {
+                    tool.copy(
+                        output = listOf(
+                            UIMessagePart.Text(
+                                json.encodeToString(
+                                    buildJsonObject {
+                                        put("error", JsonPrimitive("tool_not_permitted"))
+                                        put("reason", JsonPrimitive("approval_required"))
+                                    }
+                                )
+                            )
+                        )
+                    )
+                } else {
+                    hasPendingApproval = true
+                    tool.copy(approvalState = ToolApprovalState.Pending)
+                }
+            }
+
+            else -> tool
+        }
+    }
+    return ToolApprovalResolution(updatedTools, hasPendingApproval)
+}
+
+internal fun UIMessage.replaceToolsAtOrdinals(
+    replacements: Map<Int, UIMessagePart.Tool>,
+    preserveCurrentMetadata: Boolean = false,
+): UIMessage {
+    var ordinal = 0
+    return copy(
+        parts = parts.map { part ->
+            if (part !is UIMessagePart.Tool) {
+                part
+            } else {
+                val replacement = replacements[ordinal++]
+                when {
+                    replacement == null -> part
+                    preserveCurrentMetadata -> replacement.copy(metadata = part.metadata)
+                    else -> replacement
+                }
+            }
+        }
+    )
+}
+
 @Serializable
 sealed interface GenerationChunk {
     data class Messages(
         val messages: List<UIMessage>
     ) : GenerationChunk
+
+    /**
+     * 生成阶段变化事件。phase 使用稳定英文枚举，不使用本地化字符串。
+     */
+    data class Phase(
+        val phase: String,
+        val toolName: String? = null,
+    ) : GenerationChunk
+
+    /**
+     * 持久化检查点事件。Collector 在明确边界保存，不对每个 token 写库。
+     */
+    data class Checkpoint(
+        val kind: CheckpointKind,
+    ) : GenerationChunk
+
+    /**
+     * 生成结束事件。Collector 必须区分正常完成、待审批和 step 上限。
+     * 达到最大 step 时不能让 Flow 静默正常结束，否则 Coordinator 会把未完成运行误记为 completed。
+     */
+    data class Finished(
+        val reason: FinishedReason,
+    ) : GenerationChunk
+}
+
+@Serializable
+enum class FinishedReason {
+    @SerialName("completed") COMPLETED,
+    @SerialName("awaiting_approval") AWAITING_APPROVAL,
+    @SerialName("step_limit_reached") STEP_LIMIT_REACHED,
+}
+
+@Serializable
+enum class CheckpointKind {
+    @Serializable
+    USER_TASK_WRITTEN,
+
+    @Serializable
+    STEP_COMPLETED,
+
+    @Serializable
+    TOOL_STATE_CHANGED,
+
+    @Serializable
+    TOOL_RESULT_COMPLETED,
+
+    @Serializable
+    TERMINAL_STATE,
 }
 
 class GenerationHandler(
@@ -84,14 +204,31 @@ class GenerationHandler(
         conversationSystemPrompt: String? = null,
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
-    ): Flow<GenerationChunk> = flow {
+        /**
+         * 工具提供者：每个 LLM step 重新调用以获取最新工具列表。
+         * 默认返回固定 [tools]，普通 Master 保持不变；Target 每个 step 重新解析资源。
+         */
+        toolProvider: (suspend () -> List<Tool>) = { tools },
+        /**
+         * 非交互模式：需审批工具直接返回 tool_not_permitted 错误，不进入 Pending。
+         * [interactiveToolNames] 中显式允许传导到宿主界面的交互工具除外。
+         */
+        nonInteractive: Boolean = false,
+        interactiveToolNames: Set<String> = emptySet(),
+    ): Flow<GenerationChunk> = channelFlow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
 
         var messages: List<UIMessage> = messages
 
+        // 跟踪循环退出原因，默认 step_limit_reached
+        var finishReason = FinishedReason.STEP_LIMIT_REACHED
+
         for (stepIndex in 0 until maxSteps) {
             Log.i(TAG, "streamText: start step #$stepIndex (${model.id})")
+
+            // 每个 step 重新解析工具
+            val stepTools = toolProvider()
 
             val toolsInternal = buildList {
                 Log.i(TAG, "generateInternal: build tools($assistant)")
@@ -107,38 +244,34 @@ class GenerationHandler(
                             memoryRepo.addMemory(memoryAssistantId, content)
                         },
                         onUpdate = { id, content ->
-                            memoryRepo.updateContent(id, content)
+                            memoryRepo.updateContent(id, content, memoryAssistantId)
                         },
                         onDelete = { id ->
-                            memoryRepo.deleteMemory(id)
+                            memoryRepo.deleteMemory(id, memoryAssistantId)
                         }
                     ).let(this::addAll)
                 }
-                addAll(tools)
+                addAll(stepTools)
             }
 
-            // Check if we have tool calls ready to continue after user interaction.
-            val pendingTools = messages.lastOrNull()?.getTools()?.filter {
-                it.canResumeExecution
-            } ?: emptyList()
+            var unexecutedTools = messages.lastOrNull()?.getTools()?.filter { !it.isExecuted }.orEmpty()
 
-            val toolsToProcess: List<UIMessagePart.Tool>
-
-            // Skip generation if we have approved/denied tool calls to handle
-            if (pendingTools.isEmpty()) {
+            // 没有上一轮待处理 ToolCall 时才请求模型；审批恢复时绝不提前发起下一 step。
+            if (unexecutedTools.isEmpty()) {
+                send(GenerationChunk.Phase("preparing"))
                 generateInternal(
                     assistant = assistant,
                     settings = settings,
                     messages = messages,
-                    onUpdateMessages = {
-                        messages = it.transforms(
+                    onUpdateMessages = { updatedMessages ->
+                        messages = updatedMessages.transforms(
                             transformers = outputTransformers,
                             context = context,
                             model = model,
                             assistant = assistant,
                             settings = settings
                         )
-                        emit(
+                        send(
                             GenerationChunk.Messages(
                                 messages.visualTransforms(
                                     transformers = outputTransformers,
@@ -161,6 +294,7 @@ class GenerationHandler(
                     conversationSystemPrompt = conversationSystemPrompt,
                     conversationModeInjectionIds = conversationModeInjectionIds,
                     workspaceCwd = workspaceCwd,
+                    onPhase = { phase -> send(GenerationChunk.Phase(phase)) },
                 )
                 messages = messages.visualTransforms(
                     transformers = outputTransformers,
@@ -180,70 +314,61 @@ class GenerationHandler(
                     finishedAt = Clock.System.now()
                         .toLocalDateTime(TimeZone.currentSystemDefault())
                 )
-                emit(GenerationChunk.Messages(messages))
+                send(GenerationChunk.Messages(messages))
+                send(GenerationChunk.Checkpoint(CheckpointKind.STEP_COMPLETED))
 
-                val tools = messages.last().getTools().filter { !it.isExecuted }
-                if (tools.isEmpty()) {
-                    // no tool calls, break
+                unexecutedTools = messages.last().getTools().filter { !it.isExecuted }
+                if (unexecutedTools.isEmpty()) {
+                    // no tool calls, generation completed
+                    finishReason = FinishedReason.COMPLETED
                     break
                 }
+            }
 
-                // Check for tools that need approval
-                var hasPendingApproval = false
-                val updatedTools = tools.map { tool ->
-                    val toolDef = toolsInternal.find { it.name == tool.toolName }
-                    when {
-                        // Tool needs approval and state is Auto -> set to Pending
-                        toolDef?.needsApproval(tool.inputAsJson()) == true &&
-                            tool.approvalState is ToolApprovalState.Auto -> {
-                            hasPendingApproval = true
-                            tool.copy(approvalState = ToolApprovalState.Pending)
-                        }
-                        // State is Pending -> keep waiting
-                        tool.approvalState is ToolApprovalState.Pending -> {
-                            hasPendingApproval = true
-                            tool
-                        }
+            // 一批 ToolCall 先统一解析审批状态。只要还有 Pending，本批任何自动工具都不先执行；
+            // 全部决策完成后再严格按消息中的原顺序串行执行，保证时序清晰且协议结果完整。
+            val messageTools = messages.last().getTools()
+            val unexecutedOrdinals = messageTools.mapIndexedNotNull { ordinal, tool ->
+                ordinal.takeIf { !tool.isExecuted }
+            }
+            check(unexecutedOrdinals.size == unexecutedTools.size)
+            val approvalResolution = resolveToolApprovals(
+                unexecutedTools = unexecutedTools,
+                toolDefinitions = toolsInternal,
+                nonInteractive = nonInteractive,
+                interactiveToolNames = interactiveToolNames,
+                json = json,
+            )
+            val updatedTools = approvalResolution.tools
 
-                        else -> tool
-                    }
-                }
+            if (updatedTools != unexecutedTools) {
+                val replacements = unexecutedOrdinals.zip(updatedTools).toMap()
+                messages = messages.dropLast(1) + messages.last().replaceToolsAtOrdinals(replacements)
+                send(GenerationChunk.Messages(messages))
+            }
 
-                // If any tools were updated to Pending, update the message and break
-                if (updatedTools != tools) {
-                    val lastMessage = messages.last()
-                    val updatedParts = lastMessage.parts.map { part ->
-                        if (part is UIMessagePart.Tool) {
-                            updatedTools.find { it.toolCallId == part.toolCallId } ?: part
-                        } else {
-                            part
-                        }
-                    }
-                    messages = messages.dropLast(1) + lastMessage.copy(parts = updatedParts)
-                    emit(GenerationChunk.Messages(messages))
-                }
+            if (approvalResolution.hasPendingApproval) {
+                Log.i(TAG, "generateText: waiting for all tool approvals")
+                finishReason = FinishedReason.AWAITING_APPROVAL
+                break
+            }
 
-                // If there are pending approvals, break and wait for user
-                if (hasPendingApproval) {
-                    Log.i(TAG, "generateText: waiting for tool approval")
-                    break
-                }
-
-                toolsToProcess = updatedTools
-            } else {
-                // Resuming after user interaction - use the resumable tools directly.
-                Log.i(TAG, "generateText: resuming with ${pendingTools.size} resumable tools")
-                toolsToProcess = messages.last().getTools().filter { it.canResumeExecution }
+            val toolsToProcess = unexecutedOrdinals.zip(updatedTools)
+                .filter { (_, tool) -> !tool.isExecuted }
+            if (toolsToProcess.isEmpty()) {
+                send(GenerationChunk.Checkpoint(CheckpointKind.TOOL_RESULT_COMPLETED))
+                continue
             }
 
             // Handle tools (execute approved tools, handle denied tools)
-            val executedTools = arrayListOf<UIMessagePart.Tool>()
-            toolsToProcess.forEach { tool ->
+            // tool_executing phase with registered tool name is emitted per-tool below
+            val executedTools = linkedMapOf<Int, UIMessagePart.Tool>()
+            toolsToProcess.forEach { (toolOrdinalInMessage, tool) ->
                 when (tool.approvalState) {
                     is ToolApprovalState.Denied -> {
                         // Tool was denied by user
                         val reason = (tool.approvalState as ToolApprovalState.Denied).reason
-                        executedTools += tool.copy(
+                        executedTools[toolOrdinalInMessage] = tool.copy(
                             output = listOf(
                                 UIMessagePart.Text(
                                     json.encodeToString(
@@ -262,7 +387,7 @@ class GenerationHandler(
                     is ToolApprovalState.Answered -> {
                         // Tool was answered by user (e.g., ask_user tool)
                         val answer = (tool.approvalState as ToolApprovalState.Answered).answer
-                        executedTools += tool.copy(
+                        executedTools[toolOrdinalInMessage] = tool.copy(
                             output = listOf(
                                 UIMessagePart.Text(answer)
                             )
@@ -278,23 +403,85 @@ class GenerationHandler(
                         runCatching {
                             val toolDef = toolsInternal.find { toolDef -> toolDef.name == tool.toolName }
                                 ?: error("Tool ${tool.toolName} not found")
+                            // 执行每个具体 ToolCall 前必须发出 Phase(tool_executing, registeredToolName)
+                            send(GenerationChunk.Phase("tool_executing", toolDef.name))
                             val args = runCatching {
                                 json.parseToJsonElement(tool.input.ifBlank { "{}" })
                             }.getOrElse {
                                 error("Invalid tool arguments JSON for ${tool.toolName}: ${it.message}")
                             }
                             Log.i(TAG, "generateText: executing tool ${toolDef.name} with args: $args")
-                            val result = toolDef.execute(args)
+
+                            // 构建 ToolExecutionContext，提供 reportMetadata 回写能力
+                            // messageId + toolOrdinal 是精确 locator，不依赖 toolCallId
+                            val currentMessageId = messages.last().id
+                            val toolOrdinal = toolOrdinalInMessage
+                            val execContext = ToolExecutionContext(
+                                messageId = currentMessageId,
+                                toolOrdinal = toolOrdinal,
+                                toolCallId = tool.toolCallId,
+                                reportMetadata = { patch: JsonObject, checkpoint: Boolean ->
+                                    // 从最新 messages 中按 locator 重新取得 Tool，merge metadata patch
+                                    val allTools = messages.last().getTools()
+                                    val currentTool = allTools.getOrNull(toolOrdinal)
+                                        ?: return@ToolExecutionContext
+                                    val existingMeta = currentTool.metadata ?: JsonObject(emptyMap())
+                                    val newMeta = JsonObject(
+                                        existingMeta.toMutableMap().apply { putAll(patch) }
+                                    )
+                                    val updatedTool = currentTool.copy(metadata = newMeta)
+                                    val lastMsg = messages.last()
+                                    var toolCount = 0
+                                    val newParts = lastMsg.parts.map { p ->
+                                        if (p is UIMessagePart.Tool) {
+                                            if (toolCount == toolOrdinal) {
+                                                toolCount++
+                                                updatedTool
+                                            } else {
+                                                toolCount++
+                                                p
+                                            }
+                                        } else {
+                                            p
+                                        }
+                                    }
+                                    messages = messages.dropLast(1) + lastMsg.copy(parts = newParts)
+                                    send(
+                                        GenerationChunk.Messages(
+                                            messages.visualTransforms(
+                                                transformers = outputTransformers,
+                                                context = context,
+                                                model = model,
+                                                assistant = assistant,
+                                                settings = settings
+                                            )
+                                        )
+                                    )
+                                    if (checkpoint) {
+                                        send(GenerationChunk.Checkpoint(CheckpointKind.TOOL_STATE_CHANGED))
+                                    }
+                                }
+                            )
+
+                            val result = toolDef.executeWithContext(execContext, args)
+
+                            // 执行完成后，从最新 messages 按 locator 重新取得 Tool，copy terminal output
+                            val finalTool = messages.last().getTools().getOrNull(toolOrdinal)
+                                ?: tool
                             val hasShellAccess = toolsInternal.any { it.name == "workspace_shell" }
-                            executedTools += tool.copy(
-                                output = maybeTruncateToolOutput(tool.toolCallId, result, hasShellAccess)
+                            // 使用 locator 唯一确定的 execution ID，不使用 Provider toolCallId
+                            // 避免空值、跨 step 复用或路径字符造成覆盖与越界风险
+                            val executionId = "${currentMessageId}_${toolOrdinal}"
+                                .replace(Regex("[^A-Za-z0-9_-]"), "_")
+                            executedTools[toolOrdinalInMessage] = finalTool.copy(
+                                output = maybeTruncateToolOutput(executionId, result, hasShellAccess)
                             )
                         }.onFailure {
                             // 1. 工具超时: TimeoutCancellationException 是 CancellationException 子类
                             //    → 降级为错误 JSON 返回给 AI，不中断对话
                             if (it is TimeoutCancellationException) {
                                 Log.w(TAG, "Tool ${tool.toolName} timed out: ${it.message}")
-                                executedTools += tool.copy(
+                                executedTools[toolOrdinalInMessage] = tool.copy(
                                     output = listOf(
                                         UIMessagePart.Text(
                                             json.encodeToString(
@@ -312,7 +499,7 @@ class GenerationHandler(
                             if (it is CancellationException) throw it
                             // 3. 其他异常: 包装为结构化错误 JSON 返回给 AI
                             Log.w(TAG, "Tool ${tool.toolName} failed: ${it.message}", it)
-                            executedTools += tool.copy(
+                            executedTools[toolOrdinalInMessage] = tool.copy(
                                 output = listOf(
                                     UIMessagePart.Text(
                                         json.encodeToString(
@@ -336,18 +523,18 @@ class GenerationHandler(
 
             if (executedTools.isEmpty()) {
                 // No results to add (all tools were pending)
+                finishReason = FinishedReason.AWAITING_APPROVAL
                 break
             }
 
             // Update last message with executed tools (NOT create TOOL message)
-            val lastMessage = messages.last()
-            val updatedParts = lastMessage.parts.map { part ->
-                if (part is UIMessagePart.Tool) {
-                    executedTools.find { it.toolCallId == part.toolCallId } ?: part
-                } else part
-            }
-            messages = messages.dropLast(1) + lastMessage.copy(parts = updatedParts)
-            emit(
+            // 从最新 messages 重新取得 Tool，保留执行期间写入的 metadata
+            // 使用 ordinal-based 匹配，不依赖 toolCallId find（文档禁止首项匹配）
+            messages = messages.dropLast(1) + messages.last().replaceToolsAtOrdinals(
+                replacements = executedTools,
+                preserveCurrentMetadata = true,
+            )
+            send(
                 GenerationChunk.Messages(
                     messages.transforms(
                         transformers = outputTransformers,
@@ -358,7 +545,12 @@ class GenerationHandler(
                     )
                 )
             )
+            send(GenerationChunk.Checkpoint(CheckpointKind.TOOL_RESULT_COMPLETED))
+            send(GenerationChunk.Phase("between_steps"))
         }
+
+        // 生成结束事件：Collector 必须区分正常完成、待审批和 step 上限
+        send(GenerationChunk.Finished(finishReason))
 
     }.flowOn(Dispatchers.IO)
 
@@ -378,6 +570,7 @@ class GenerationHandler(
         conversationSystemPrompt: String? = null,
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
+        onPhase: (suspend (String) -> Unit)? = null,
     ) {
         val contextMessages = messages.limitContext(assistant.effectiveContextMessageLimit())
         val internalMessages = buildList {
@@ -434,6 +627,8 @@ class GenerationHandler(
                 addAll(model.customBodies)
             }
         )
+        // 请求构建完成，进入等待模型响应阶段
+        onPhase?.invoke("model_waiting")
         if (stream) {
             providerImpl.streamText(
                 providerSetting = provider,
@@ -475,7 +670,7 @@ class GenerationHandler(
     }
 
     private fun maybeTruncateToolOutput(
-        toolCallId: String,
+        executionId: String,
         output: List<UIMessagePart>,
         hasShellAccess: Boolean,
     ): List<UIMessagePart> {
@@ -485,12 +680,12 @@ class GenerationHandler(
 
         if (totalChars <= MAX_TOOL_OUTPUT_CHARS || !hasShellAccess) return output
 
-        Log.i(TAG, "maybeTruncateToolOutput: truncating tool $toolCallId output ($totalChars chars)")
+        Log.i(TAG, "maybeTruncateToolOutput: truncating tool $executionId output ($totalChars chars)")
 
         val fullText = textParts.joinToString("\n") { it.text }
         val preview = fullText.take(TOOL_OUTPUT_PREVIEW_CHARS)
 
-        val fileName = "${toolCallId}.txt"
+        val fileName = "${executionId}.txt"
         val outputDir = File(context.filesDir, FileFolders.TOOL_OUTPUTS).apply { mkdirs() }
         File(outputDir, fileName).writeText(fullText)
 

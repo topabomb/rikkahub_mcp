@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.assistant.detail
+package net.weero.measix.pilot.ui.pages.assistant.detail
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.BookOpen01
@@ -174,9 +174,9 @@ private fun AssistantHeader(
             overflow = TextOverflow.Ellipsis
         )
 
-        if (assistant.systemPrompt.isNotBlank()) {
+        if (assistant.description.isNotBlank()) {
             Text(
-                text = assistant.systemPrompt.take(100) + if (assistant.systemPrompt.length > 100) "..." else "",
+                text = assistant.description,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,

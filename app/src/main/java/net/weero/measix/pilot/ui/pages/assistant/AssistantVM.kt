@@ -1,6 +1,5 @@
-﻿package net.weero.measix.pilot.ui.pages.assistant
+package net.weero.measix.pilot.ui.pages.assistant
 
-import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.SharingStarted
@@ -9,77 +8,78 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
-import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
+import net.weero.measix.pilot.service.AssistantManagementService
+import kotlin.uuid.Uuid
 
 class AssistantVM(
     private val settingsStore: SettingsStore,
     private val memoryRepository: MemoryRepository,
-    private val conversationRepo: ConversationRepository,
-    private val filesManager: FilesManager,
+    private val assistantManagementService: AssistantManagementService,
 ) : ViewModel() {
     val settings: StateFlow<Settings> = settingsStore.settingsFlow
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
-    fun updateSettings(settings: Settings) {
+    fun reorderAssistants(orderedIds: List<Uuid>) {
         viewModelScope.launch {
-            settingsStore.update(settings)
+            settingsStore.updateAtomic { current ->
+                val requestedIds = orderedIds.toSet()
+                val assistantsById = current.assistants.associateBy { it.id }
+                current.copy(
+                    assistants = orderedIds.mapNotNull(assistantsById::get) +
+                        current.assistants.filter { it.id !in requestedIds },
+                )
+            }
+        }
+    }
+
+    fun reorderAssistantTags(orderedIds: List<Uuid>) {
+        viewModelScope.launch {
+            settingsStore.updateAtomic { current ->
+                val requestedIds = orderedIds.toSet()
+                val tagsById = current.assistantTags.associateBy { it.id }
+                current.copy(
+                    assistantTags = orderedIds.mapNotNull(tagsById::get) +
+                        current.assistantTags.filter { it.id !in requestedIds },
+                )
+            }
         }
     }
 
     fun addAssistant(assistant: Assistant) {
         viewModelScope.launch {
-            val settings = settings.value
-            settingsStore.update(
-                settings.copy(
-                    assistants = settings.assistants.plus(assistant)
+            settingsStore.updateAtomic { current ->
+                current.copy(
+                    assistants = current.assistants.plus(assistant),
                 )
-            )
+            }
         }
     }
 
     fun removeAssistant(assistant: Assistant) {
         viewModelScope.launch {
-            cleanupAssistantFiles(assistant)
-
-            val settings = settings.value
-            settingsStore.update(
-                settings.copy(
-                    assistants = settings.assistants.filter { it.id != assistant.id }
-                )
-            )
-            memoryRepository.deleteMemoriesOfAssistant(assistant.id.toString())
-            conversationRepo.deleteConversationOfAssistant(assistant.id)
-        }
-    }
-
-    private fun cleanupAssistantFiles(assistant: Assistant) {
-        val uris = buildList {
-            (assistant.avatar as? Avatar.Image)?.let { add(it.url.toUri()) }
-            assistant.background?.let { add(it.toUri()) }
-        }
-
-        if (uris.isNotEmpty()) {
-            filesManager.deleteChatFiles(uris)
+            // UI 删除复用 AssistantManagementService，避免两套清理逻辑
+            assistantManagementService.deleteAssistant(assistant.id)
         }
     }
 
     fun copyAssistant(assistant: Assistant) {
         viewModelScope.launch {
-            val settings = settings.value
             val copiedAssistant = assistant.copy(
-                id = kotlin.uuid.Uuid.random(),
+                id = Uuid.random(),
                 name = "${assistant.name} (Clone)",
                 avatar = if(assistant.avatar is Avatar.Image) Avatar.Dummy else assistant.avatar,
+                // Clone 重置子助手授权：不继承全局可见和允许列表
+                isSubAssistantGloballyVisible = false,
+                allowedSubAssistantIds = emptySet(),
             )
-            settingsStore.update(
-                settings.copy(
-                    assistants = settings.assistants.plus(copiedAssistant)
+            settingsStore.updateAtomic { current ->
+                current.copy(
+                    assistants = current.assistants.plus(copiedAssistant),
                 )
-            )
+            }
         }
     }
 

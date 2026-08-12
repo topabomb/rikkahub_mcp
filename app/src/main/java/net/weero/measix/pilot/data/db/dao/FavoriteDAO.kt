@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.db.dao
+package net.weero.measix.pilot.data.db.dao
 
 import androidx.room.Dao
 import androidx.room.Insert
@@ -32,6 +32,9 @@ interface FavoriteDAO {
 
     @Query("DELETE FROM favorites WHERE ref_key = :refKey")
     suspend fun deleteByRefKey(refKey: String): Int
+
+    @Query("DELETE FROM favorites WHERE ref_key LIKE 'node:' || :conversationId || ':%'")
+    suspend fun deleteNodeFavoritesOfConversation(conversationId: String): Int
 
     @Query("DELETE FROM favorites WHERE id = :id")
     suspend fun deleteById(id: String): Int

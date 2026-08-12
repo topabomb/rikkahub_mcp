@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.message
+package net.weero.measix.pilot.ui.components.message
 
 import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
@@ -64,6 +64,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageAnnotation
@@ -96,10 +97,12 @@ import net.weero.measix.pilot.utils.openUrl
 import net.weero.measix.pilot.utils.urlDecode
 
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.uuid.Uuid
 
 @Composable
 fun ChatMessage(
     node: MessageNode,
+    masterConversationId: Uuid? = null,
     modifier: Modifier = Modifier,
     loading: Boolean = false,
     model: Model? = null,
@@ -113,8 +116,10 @@ fun ChatMessage(
     onUpdate: (MessageNode) -> Unit,
     isFavorite: Boolean = false,
     onToggleFavorite: (() -> Unit)? = null,
-    onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
-    onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
+    onToolApproval: ((locator: ToolCallLocator, approved: Boolean, reason: String) -> Unit)? = null,
+    onToolAnswer: ((locator: ToolCallLocator, answer: String) -> Unit)? = null,
+    onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Unit)? = null,
+    readOnly: Boolean = false,
 ) {
     val message = node.messages[node.selectIndex]
     val settings = LocalSettings.current.displaySetting
@@ -158,19 +163,24 @@ fun ChatMessage(
         }
         ProvideTextStyle(textStyle) {
             MessagePartsBlock(
+                masterConversationId = masterConversationId,
                 assistant = assistant,
+                messageId = message.id,
                 role = message.role,
                 parts = message.parts,
                 annotations = message.annotations,
                 loading = loading,
                 model = model,
-                onToolApproval = onToolApproval,
-                onToolAnswer = onToolAnswer,
-                onUserMessageClick = if (message.role == MessageRole.USER) onEdit else null,
+                onToolApproval = if (readOnly) null else onToolApproval,
+                onToolAnswer = if (readOnly) null else onToolAnswer,
+                onSubAssistantAnswer = if (readOnly) null else onSubAssistantAnswer,
+                onUserMessageClick = if (!readOnly && message.role == MessageRole.USER) onEdit else null,
             )
         }
 
-        val showActions = if (lastMessage) {
+        val showActions = if (readOnly) {
+            false
+        } else if (lastMessage) {
             !loading
         } else {
             message.parts.isEmptyUIMessage().not()
@@ -253,14 +263,17 @@ fun ChatMessage(
 @OptIn(FlowPreview::class)
 @Composable
 private fun MessagePartsBlock(
+    masterConversationId: Uuid?,
     assistant: Assistant?,
+    messageId: kotlin.uuid.Uuid,
     role: MessageRole,
     model: Model?,
     parts: List<UIMessagePart>,
     annotations: List<UIMessageAnnotation>,
     loading: Boolean,
-    onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
-    onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
+    onToolApproval: ((locator: ToolCallLocator, approved: Boolean, reason: String) -> Unit)? = null,
+    onToolAnswer: ((locator: ToolCallLocator, answer: String) -> Unit)? = null,
+    onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Unit)? = null,
     onUserMessageClick: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
@@ -312,6 +325,9 @@ private fun MessagePartsBlock(
                         modifier = Modifier.animateContentSize(),
                         steps = block.steps,
                         collapsedAdaptiveWidth = isReasoningOnlyBlock,
+                        keepVisibleWhenCollapsed = { step ->
+                            step is ThinkingStep.ToolStep && step.tool.isPending
+                        },
                         cardColors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = settings.displaySetting.bubbleOpacity),
                         ),
@@ -329,9 +345,10 @@ private fun MessagePartsBlock(
                             }
 
                             is ThinkingStep.ToolStep -> {
-                                key(step.tool.toolCallId.ifBlank { step.hashCode().toString() }) {
+                                key(messageId, step.toolOrdinal) {
                                     ChatMessageToolStep(
                                         tool = step.tool,
+                                        locator = ToolCallLocator(messageId, step.toolOrdinal),
                                         loading = loading && !step.tool.isExecuted,
                                         onToolApproval = onToolApproval,
                                         onToolAnswer = onToolAnswer,
@@ -341,6 +358,15 @@ private fun MessagePartsBlock(
                         }
                     }
                 }
+            }
+
+            is MessagePartBlock.SubAssistantCallBlock -> key(messageId, block.toolOrdinal) {
+                SubAssistantCallCard(
+                    tool = block.tool,
+                    masterConversationId = masterConversationId,
+                    onAnswer = onSubAssistantAnswer,
+                    modifier = Modifier.animateContentSize(),
+                )
             }
 
             is MessagePartBlock.ContentBlock -> key(block.index) {

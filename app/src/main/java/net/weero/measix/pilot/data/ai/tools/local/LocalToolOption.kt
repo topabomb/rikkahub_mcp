@@ -32,4 +32,12 @@ sealed class LocalToolOption {
     @Serializable
     @SerialName("calendar")
     data object Calendar : LocalToolOption()
+
+    @Serializable
+    @SerialName("assistant_management")
+    data object AssistantManagement : LocalToolOption()
+
+    @Serializable
+    @SerialName("assistant_delegation")
+    data object AssistantDelegation : LocalToolOption()
 }

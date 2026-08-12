@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.hooks
+package net.weero.measix.pilot.ui.hooks
 
 import android.content.Context
 import android.util.Log
@@ -12,6 +12,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import me.rerere.tts.model.PlaybackState
@@ -90,10 +91,26 @@ interface CustomTtsState {
     val playbackState: StateFlow<PlaybackState>
 
     /**
+     * 设计文档 §7.5 — 当前活跃播放来源。
+     * null 表示无音频播放或无 session 的手动朗读。
+     */
+    val activeSource: StateFlow<net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource?>
+
+    /**
      * Speaks the given text using the selected TTS provider.
      * Long texts will be automatically chunked and queued.
      */
     fun speak(text: String, flushCalled: Boolean = true)
+
+    /**
+     * 设计文档 §7.5 — 带来源的 speak。
+     * 来源切换时（activeSession != incomingSession）强制 flush。
+     */
+    fun speakWithSource(
+        text: String,
+        flushCalled: Boolean,
+        source: net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource?,
+    )
 
     /** Stops the current speech and clears the queue. */
     fun stop()
@@ -138,17 +155,65 @@ private class CustomTtsStateImpl(
     override val totalChunks: StateFlow<Int> get() = controller.totalChunks
     override val playbackState: StateFlow<PlaybackState> get() = controller.playbackState
 
+    // 设计文档 §7.5 — 瞬态 activeSource
+    private val _activeSource = MutableStateFlow<net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource?>(null)
+    override val activeSource: StateFlow<net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource?> get() = _activeSource
+
+    init {
+        // 设计文档 §7.5：队列自然播放完毕、播放错误时清空 activeSource，
+        // 避免控制条在无音频时继续显示旧 Target。
+        scope.launch {
+            controller.playbackState.collect { state ->
+                if (state.status == me.rerere.tts.model.PlaybackStatus.Ended) {
+                    _activeSource.value = null
+                }
+            }
+        }
+        scope.launch {
+            controller.error.collect { err ->
+                if (err != null) {
+                    _activeSource.value = null
+                }
+            }
+        }
+    }
+
     fun updateProvider(provider: TTSProviderSetting?) {
+        // 设计文档 §7.5：Provider 切换时清空 activeSource
+        _activeSource.value = null
         controller.setProvider(provider)
     }
 
     override fun speak(text: String, flushCalled: Boolean) {
+        // 无 source 的调用，沿用现有行为并清除子助手头像
+        speakWithSource(text, flushCalled, null)
+    }
+
+    override fun speakWithSource(
+        text: String,
+        flushCalled: Boolean,
+        source: net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource?,
+    ) {
         val processed = text.stripMarkdown()
-        controller.speak(processed, flushCalled)
+
+        // 设计文档 §7.5 — 来源切换仲裁
+        // 使用提取的纯函数计算最终 flush，避免 JVM 测试复制生产算法
+        val currentSource = _activeSource.value
+        val effectiveFlush = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.computeEffectiveFlush(
+            flushCalled = flushCalled,
+            currentSource = currentSource,
+            incomingSource = source,
+        )
+
+        // 更新 activeSource
+        _activeSource.value = source
+
+        controller.speak(processed, effectiveFlush)
     }
 
     override fun stop() {
         controller.stop()
+        _activeSource.value = null
     }
 
     override fun pause() {
@@ -174,6 +239,8 @@ private class CustomTtsStateImpl(
     }
 
     override fun cleanup() {
+        // 设计文档 §7.5：dispose 时清空 activeSource
+        _activeSource.value = null
         controller.dispose()
         currentJob = null
     }

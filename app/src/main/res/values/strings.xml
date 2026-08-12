@@ -1227,5 +1227,89 @@
   <string name="chat_sidebar_expand">Expand conversation sidebar</string>
   <string name="chat_navigation_open_drawer">Open conversation navigation</string>
   <string name="chat_page_chat_options">Chat Options</string>
+  <!-- Sub-Assistant: Assistant configuration -->
+  <string name="assistant_page_description">Capability Description</string>
+  <string name="assistant_page_description_placeholder">Briefly describe what this assistant does and when to call it</string>
+  <string name="assistant_page_description_remaining">%d characters remaining</string>
+  <string name="assistant_page_description_required">Description is required to enable sub-assistant</string>
+  <string name="assistant_page_allow_as_sub_assistant">Allow as Sub-Assistant</string>
+  <string name="assistant_page_allow_as_sub_assistant_desc">Allows other assistants to call it for requests, including tasks, questions, or role-play. It uses its own independent context and cannot see the main conversation.</string>
+  <string name="assistant_page_sub_assistant_tag">Sub-Assistant</string>
+  <string name="assistant_page_sub_assistant_no_model_warning">No valid chat model configured; calls will fail to start</string>
+  <string name="assistant_page_sub_assistant_global_memory_warning">Uses shared global memory when called as a sub-assistant</string>
+  <string name="assistant_page_sub_assistant_global_visible">Global visibility</string>
+  <string name="assistant_page_sub_assistant_global_visible_desc">Allows all assistants with sub-assistant tools to discover, call, and manage it. Modifications and deletion still require confirmation; assistants with the management tool can also view its local memory.</string>
+  <string name="assistant_page_sub_assistant_access_scope">Sub-assistant access scope</string>
+  <string name="assistant_page_sub_assistant_access_scope_desc">Select which sub-assistants this assistant can discover, call, and manage</string>
+  <string name="assistant_page_sub_assistant_access_scope_empty">No sub-assistants selected</string>
+  <string name="assistant_page_sub_assistant_access_scope_count">%1$d sub-assistant(s) selected</string>
+  <string name="assistant_page_sub_assistant_globally_available">Globally available</string>
+  <string name="sub_assistant_global_tag">Global</string>
+  <string name="assistant_picker_show_sub_assistants">Sub-assistants</string>
+  <string name="assistant_page_no_chat_model_warning">No chat model configured; calls will not start</string>
+  <string name="assistant_page_global_memory_warning">Uses shared global memory when called</string>
+  <!-- Sub-Assistant: Local Tools -->
+  <string name="assistant_page_local_tools_assistant_collaboration">Assistant Collaboration</string>
+  <string name="assistant_page_local_tools_assistant_management_title">Manage Assistants</string>
+  <string name="assistant_page_local_tools_assistant_management_desc">Allow this assistant to create, modify, and delete other assistants, and view their local memories. Memories can only be maintained by the owning assistant through its own tools.</string>
+  <string name="assistant_page_local_tools_assistant_delegation_title">Call Sub-Assistants</string>
+  <string name="assistant_page_local_tools_assistant_delegation_desc">Allow this assistant to send requests to callable sub-assistants.</string>
+  <!-- Sub-Assistant: Call Card -->
+  <string name="sub_assistant_card_starting">Starting</string>
+  <string name="sub_assistant_card_running">Running</string>
+  <string name="sub_assistant_card_completed">Completed</string>
+  <string name="sub_assistant_card_failed">Failed</string>
+  <string name="sub_assistant_card_stopped">Stopped</string>
+  <string name="sub_assistant_card_unavailable">Unavailable</string>
+  <string name="sub_assistant_card_latest_output">Latest Output</string>
+  <string name="sub_assistant_card_using_tool">Using: %1$s</string>
+  <string name="sub_assistant_card_view_detail">View Details</string>
+  <string name="sub_assistant_card_scroll_to_latest">Latest</string>
+  <!-- Sub-Assistant: Call Card reasons -->
+  <string name="sub_assistant_reason_assistant_not_found">Assistant not found</string>
+  <string name="sub_assistant_reason_target_not_allowed">Not allowed as sub-assistant</string>
+  <string name="sub_assistant_reason_tool_not_permitted">Sub-assistant tools not enabled</string>
+  <string name="sub_assistant_reason_context_required">Execution context required</string>
+  <string name="sub_assistant_reason_approval_blocked">Approval blocked in non-interactive mode</string>
+  <string name="sub_assistant_reason_target_description_missing">No description set</string>
+  <string name="sub_assistant_reason_target_model_unavailable">No chat model available</string>
+  <string name="sub_assistant_reason_target_busy">Assistant is busy</string>
+  <string name="sub_assistant_reason_provider_error">Provider error</string>
+  <string name="sub_assistant_reason_runtime_error">Runtime error</string>
+  <string name="sub_assistant_reason_step_limit_reached">Step limit reached</string>
+  <string name="sub_assistant_reason_user_cancelled">Cancelled by user</string>
+  <string name="sub_assistant_reason_app_restarted">App restarted, task was not automatically resumed</string>
+  <string name="sub_assistant_reason_target_removed">Assistant removed</string>
+  <string name="sub_assistant_reason_target_disabled">Sub-assistant disabled</string>
+  <string name="sub_assistant_reason_child_missing">Conversation missing</string>
+  <!-- Sub-Assistant: Call Card phases -->
+  <string name="sub_assistant_phase_preparing">Preparing</string>
+  <string name="sub_assistant_phase_model_waiting">Waiting for model</string>
+  <string name="sub_assistant_phase_reasoning_streaming">Thinking</string>
+  <string name="sub_assistant_phase_answer_streaming">Generating</string>
+  <string name="sub_assistant_phase_tool_executing">Executing tool</string>
+  <string name="sub_assistant_phase_between_steps">Processing</string>
+  <!-- Sub-Assistant: Detail page -->
+  <string name="sub_assistant_detail_title">Sub-Assistant Details</string>
+  <string name="sub_assistant_detail_assistant_deleted">Assistant deleted</string>
+  <string name="sub_assistant_detail_assistant_settings">Assistant Settings</string>
+  <string name="sub_assistant_detail_no_messages">No messages found</string>
+  <string name="sub_assistant_detail_loading">Loading sub-assistant conversation…</string>
+  <string name="tts_controller_stop">Stop</string>
+  <string name="tts_controller_expand">More controls</string>
+  <string name="tts_controller_fast_forward">Fast forward 5 seconds</string>
+  <string name="tts_controller_play">Play</string>
+  <string name="tts_controller_pause">Pause</string>
+  <string name="sub_assistant_phase_awaiting_user">Waiting for your answer</string>
+  <string name="sub_assistant_card_waiting_for_answer">Sub-assistant needs your answer</string>
+  <string name="assistant_page_sub_assistant_uses_caller_model">No model selected; calls inherit the calling assistant\'s model and generation settings</string>
+  <string name="sub_assistant_reason_caller_model_unavailable">The calling assistant has no model to inherit</string>
+  <string name="sub_assistant_detail_request">Request</string>
+  <string name="sub_assistant_detail_execution">Execution</string>
+  <string name="sub_assistant_detail_unavailable">Details unavailable</string>
+  <string name="sub_assistant_detail_unavailable_desc">This sub-assistant run could not be found or its stored link is invalid.</string>
+  <string name="sub_assistant_detail_show_more">Show more</string>
+  <string name="sub_assistant_detail_show_less">Show less</string>
+  <string name="sub_assistant_detail_no_output">No execution output yet</string>
 </resources>
 

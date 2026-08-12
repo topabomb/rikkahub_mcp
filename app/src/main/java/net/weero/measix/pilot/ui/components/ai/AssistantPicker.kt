@@ -24,6 +24,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -39,12 +40,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowDown01
+import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Edit03
+import me.rerere.hugeicons.stroke.Search01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
+import net.weero.measix.pilot.ui.components.ui.Tag
+import net.weero.measix.pilot.ui.components.ui.TagType
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.hooks.rememberAssistantState
@@ -149,15 +154,26 @@ internal fun AssistantPickerSheet(
 
     // 标签过滤状态
     var selectedTagIds by remember { mutableStateOf(emptySet<Uuid>()) }
+    // 搜索关键词状态
+    var searchQuery by remember { mutableStateOf("") }
 
-    // 根据选中的标签过滤助手
-    val filteredAssistants = remember(settings.assistants, selectedTagIds) {
-        if (selectedTagIds.isEmpty()) {
-            settings.assistants
-        } else {
-            settings.assistants.filter { assistant ->
+    // "显示子助手"筛选状态
+    // 当前会话直接使用子助手时默认开启；不存在普通 Assistant 时自动显示全部
+    val hasNormalAssistants = settings.assistants.any { !it.allowAsSubAssistant }
+    var showSubAssistants by remember {
+        mutableStateOf(currentAssistant.allowAsSubAssistant || !hasNormalAssistants)
+    }
+
+    // 类型筛选先执行，再叠加 name/description 搜索和 Tag 筛选
+    val filteredAssistants = remember(settings.assistants, selectedTagIds, searchQuery, showSubAssistants) {
+        settings.assistants.filter { assistant ->
+            val matchesType = showSubAssistants || !assistant.allowAsSubAssistant
+            val matchesSearch = searchQuery.isBlank() ||
+                assistant.name.contains(searchQuery, ignoreCase = true) ||
+                assistant.description.contains(searchQuery, ignoreCase = true)
+            val matchesTags = selectedTagIds.isEmpty() ||
                 assistant.tags.any { tagId -> tagId in selectedTagIds }
-            }
+            matchesType && matchesSearch && matchesTags
         }
     }
 
@@ -175,6 +191,34 @@ internal fun AssistantPickerSheet(
                 text = stringResource(R.string.safe_mode_switch_assistant),
                 style = MaterialTheme.typography.titleLarge,
                 modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            // 搜索框
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text(stringResource(R.string.assistant_page_search_placeholder)) },
+                leadingIcon = {
+                    Icon(HugeIcons.Search01, contentDescription = null)
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotBlank()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(HugeIcons.Cancel01, contentDescription = null)
+                        }
+                    }
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp)
+            )
+
+            // "显示子助手" FilterChip — 类型筛选先于 Tag 筛选
+            FilterChip(
+                onClick = { showSubAssistants = !showSubAssistants },
+                label = { Text(stringResource(R.string.assistant_picker_show_sub_assistants)) },
+                selected = showSubAssistants,
+                shape = RoundedCornerShape(50),
             )
 
             // 标签过滤器
@@ -261,10 +305,28 @@ private fun AssistantItem(
         },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
     ) {
-        Text(
-            text = assistant.name.ifEmpty { defaultAssistantName },
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Column(
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = assistant.name.ifEmpty { defaultAssistantName },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (assistant.description.isNotBlank()) {
+                Text(
+                    text = assistant.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (assistant.allowAsSubAssistant) {
+                Tag(type = TagType.INFO) {
+                    Text(stringResource(R.string.assistant_page_sub_assistant_tag))
+                }
+            }
+        }
     }
 }

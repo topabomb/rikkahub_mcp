@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -222,18 +223,22 @@ class ChatVM(
     }
 
     fun handleToolApproval(
-        toolCallId: String,
+        locator: ToolCallLocator,
         approved: Boolean,
         reason: String = ""
     ) {
-        chatService.handleToolApproval(_conversationId, toolCallId, approved, reason)
+        chatService.handleToolApproval(_conversationId, locator, approved, reason)
     }
 
     fun handleToolAnswer(
-        toolCallId: String,
+        locator: ToolCallLocator,
         answer: String,
     ) {
-        chatService.handleToolApproval(_conversationId, toolCallId, approved = true, answer = answer)
+        chatService.handleToolApproval(_conversationId, locator, approved = true, answer = answer)
+    }
+
+    fun handleSubAssistantAnswer(runId: String, interactionId: String, answer: String) {
+        chatService.handleSubAssistantAnswer(runId, interactionId, answer)
     }
 
     fun stopGeneration() {

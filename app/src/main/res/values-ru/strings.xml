@@ -1227,5 +1227,95 @@
   <string name="chat_sidebar_expand">Развернуть боковую панель чатов</string>
   <string name="chat_navigation_open_drawer">Открыть навигацию по чатам</string>
   <string name="chat_page_chat_options">Параметры чата</string>
+
+  <!-- Sub-Assistant: Assistant configuration -->
+  <string name="assistant_page_description">Описание возможностей</string>
+  <string name="assistant_page_description_placeholder">Кратко опишите, что делает этот ассистент и когда его вызывать</string>
+  <string name="assistant_page_description_remaining">Осталось %d символов</string>
+  <string name="assistant_page_description_required">Для включения суб-ассистента требуется описание</string>
+  <string name="assistant_page_allow_as_sub_assistant">Разрешить как суб-ассистента</string>
+  <string name="assistant_page_allow_as_sub_assistant_desc">Позволяет другим ассистентам вызывать его для запросов, включая задачи, вопросы или ролевые диалоги. Использует независимый контекст и не видит основной разговор.</string>
+  <string name="assistant_page_sub_assistant_tag">Суб-ассистент</string>
+<string name="assistant_page_sub_assistant_no_model_warning">Не настроена действительная модель чата; вызовы не смогут начаться</string>
+<string name="assistant_page_sub_assistant_global_memory_warning">Использует общую глобальную память при вызове как суб-ассистент</string>
+<string name="assistant_page_sub_assistant_global_visible">Глобальная видимость</string>
+<string name="assistant_page_sub_assistant_global_visible_desc">Позволяет всем ассистентам с инструментами суб-ассистента обнаруживать, вызывать и управлять им. Изменения и удаление требуют подтверждения; ассистенты с инструментом управления могут также просматривать его локальную память.</string>
+<string name="assistant_page_sub_assistant_access_scope">Область доступа суб-ассистентов</string>
+<string name="assistant_page_sub_assistant_access_scope_desc">Выберите, каких суб-ассистентов этот ассистент может обнаруживать, вызывать и управлять</string>
+<string name="assistant_page_sub_assistant_access_scope_empty">Суб-ассистенты не выбраны</string>
+<string name="assistant_page_sub_assistant_access_scope_count">Выбрано суб-ассистентов: %1$d</string>
+<string name="assistant_page_sub_assistant_globally_available">Глобально доступен</string>
+<string name="sub_assistant_global_tag">Глобально</string>
+<string name="assistant_picker_show_sub_assistants">Суб-ассистенты</string>
+  <string name="assistant_page_no_chat_model_warning">Чат-модель не настроена; вызов не запустится</string>
+  <string name="assistant_page_global_memory_warning">Использует общую глобальную память при вызове</string>
+
+  <!-- Sub-Assistant: Local Tools -->
+  <string name="assistant_page_local_tools_assistant_collaboration">Сотрудничество ассистентов</string>
+  <string name="assistant_page_local_tools_assistant_management_title">Управление ассистентами</string>
+  <string name="assistant_page_local_tools_assistant_management_desc">Позволяет этому ассистенту создавать, изменять и удалять других ассистентов, а также просматривать их локальную память. Память может поддерживаться только ассистентом-владельцем через свои инструменты.</string>
+  <string name="assistant_page_local_tools_assistant_delegation_title">Вызов суб-ассистентов</string>
+  <string name="assistant_page_local_tools_assistant_delegation_desc">Позволяет этому ассистенту отправлять запросы вызываемым суб-ассистентам.</string>
+
+  <!-- Sub-Assistant: Call Card -->
+  <string name="sub_assistant_card_starting">Запуск</string>
+  <string name="sub_assistant_card_running">Выполнение</string>
+  <string name="sub_assistant_card_completed">Завершено</string>
+  <string name="sub_assistant_card_failed">Ошибка</string>
+  <string name="sub_assistant_card_stopped">Остановлено</string>
+  <string name="sub_assistant_card_unavailable">Недоступно</string>
+  <string name="sub_assistant_card_latest_output">Последний вывод</string>
+  <string name="sub_assistant_card_using_tool">Используется: %1$s</string>
+  <string name="sub_assistant_card_view_detail">Подробности</string>
+  <string name="sub_assistant_card_scroll_to_latest">Последнее</string>
+
+  <!-- Sub-Assistant: Call Card reasons -->
+  <string name="sub_assistant_reason_assistant_not_found">Ассистент не найден</string>
+  <string name="sub_assistant_reason_target_not_allowed">Не разрешён как суб-ассистент</string>
+  <string name="sub_assistant_reason_tool_not_permitted">Инструменты суб-ассистента не включены</string>
+  <string name="sub_assistant_reason_context_required">Требуется контекст выполнения</string>
+  <string name="sub_assistant_reason_approval_blocked">Утверждение заблокировано в неинтерактивном режиме</string>
+  <string name="sub_assistant_reason_target_description_missing">Описание не задано</string>
+  <string name="sub_assistant_reason_target_model_unavailable">Чат-модель недоступна</string>
+  <string name="sub_assistant_reason_target_busy">Ассистент занят</string>
+  <string name="sub_assistant_reason_provider_error">Ошибка провайдера</string>
+  <string name="sub_assistant_reason_runtime_error">Ошибка времени выполнения</string>
+  <string name="sub_assistant_reason_step_limit_reached">Достигнут лимит шагов</string>
+  <string name="sub_assistant_reason_user_cancelled">Отменено пользователем</string>
+  <string name="sub_assistant_reason_app_restarted">Приложение перезапущено, задача не возобновлена</string>
+  <string name="sub_assistant_reason_target_removed">Ассистент удалён</string>
+  <string name="sub_assistant_reason_target_disabled">Суб-ассистент отключён</string>
+  <string name="sub_assistant_reason_child_missing">Разговор отсутствует</string>
+
+  <!-- Sub-Assistant: Call Card phases -->
+  <string name="sub_assistant_phase_preparing">Подготовка</string>
+  <string name="sub_assistant_phase_model_waiting">Ожидание модели</string>
+  <string name="sub_assistant_phase_reasoning_streaming">Размышление</string>
+  <string name="sub_assistant_phase_answer_streaming">Генерация</string>
+  <string name="sub_assistant_phase_tool_executing">Выполнение инструмента</string>
+  <string name="sub_assistant_phase_between_steps">Обработка</string>
+
+  <!-- Sub-Assistant: Detail page -->
+  <string name="sub_assistant_detail_title">Детали суб-ассистента</string>
+  <string name="sub_assistant_detail_assistant_deleted">Ассистент удалён</string>
+  <string name="sub_assistant_detail_assistant_settings">Настройки ассистента</string>
+  <string name="sub_assistant_detail_no_messages">Сообщения не найдены</string>
+  <string name="sub_assistant_detail_loading">Загрузка диалога суб-ассистента…</string>
+  <string name="tts_controller_stop">Стоп</string>
+  <string name="tts_controller_expand">Дополнительные элементы управления</string>
+  <string name="tts_controller_fast_forward">Перемотать на 5 секунд вперёд</string>
+  <string name="tts_controller_play">Воспроизвести</string>
+  <string name="tts_controller_pause">Пауза</string>
+  <string name="sub_assistant_phase_awaiting_user">Ожидание вашего ответа</string>
+  <string name="sub_assistant_card_waiting_for_answer">Субассистенту нужен ваш ответ</string>
+  <string name="assistant_page_sub_assistant_uses_caller_model">Модель не выбрана; при вызове используются модель и параметры генерации вызывающего ассистента</string>
+  <string name="sub_assistant_reason_caller_model_unavailable">У вызывающего ассистента нет модели для наследования</string>
+  <string name="sub_assistant_detail_request">Запрос</string>
+  <string name="sub_assistant_detail_execution">Ход выполнения</string>
+  <string name="sub_assistant_detail_unavailable">Сведения недоступны</string>
+  <string name="sub_assistant_detail_unavailable_desc">Не удалось найти этот запуск субассистента или сохраненная ссылка недействительна.</string>
+  <string name="sub_assistant_detail_show_more">Показать больше</string>
+  <string name="sub_assistant_detail_show_less">Свернуть</string>
+  <string name="sub_assistant_detail_no_output">Результатов выполнения пока нет</string>
 </resources>
 

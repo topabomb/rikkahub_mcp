@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.message.tools
+package net.weero.measix.pilot.ui.components.message.tools
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -135,7 +135,7 @@ object MemoryToolUI : ToolUIRenderer {
                     IconButton(
                         onClick = {
                             scope.launch {
-                                memoryRepo.deleteMemory(memoryId)
+                                memoryRepo.deleteMemoryById(memoryId)
                                 onDismissRequest()
                             }
                         }

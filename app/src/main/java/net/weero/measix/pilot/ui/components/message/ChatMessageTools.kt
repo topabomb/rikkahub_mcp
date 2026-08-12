@@ -44,6 +44,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
@@ -64,13 +65,18 @@ private const val ASK_USER_TOOL_NAME = "ask_user"
 @Composable
 fun ChainOfThoughtScope.ChatMessageToolStep(
     tool: UIMessagePart.Tool,
+    locator: ToolCallLocator,
     loading: Boolean = false,
-    onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
-    onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
+    onToolApproval: ((locator: ToolCallLocator, approved: Boolean, reason: String) -> Unit)? = null,
+    onToolAnswer: ((locator: ToolCallLocator, answer: String) -> Unit)? = null,
 ) {
     // ask_user 是交互式问答流程, 不走注册式渲染框架
     if (tool.toolName == ASK_USER_TOOL_NAME) {
-        AskUserToolStep(tool = tool, loading = loading, onToolAnswer = onToolAnswer)
+        AskUserToolStep(
+            tool = tool,
+            loading = loading,
+            onAnswer = onToolAnswer?.let { callback -> { answer -> callback(locator, answer) } },
+        )
         return
     }
 
@@ -150,7 +156,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                         )
                     }
                     FilledTonalIconButton(
-                        onClick = { onToolApproval(tool.toolCallId, true, "") },
+                        onClick = { onToolApproval(locator, true, "") },
                         modifier = Modifier.size(32.dp),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(
                             containerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -214,7 +220,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             onDismiss = { showDenyDialog = false },
             onConfirm = { reason ->
                 showDenyDialog = false
-                onToolApproval(tool.toolCallId, false, reason)
+                onToolApproval(locator, false, reason)
             }
         )
     }
@@ -238,10 +244,10 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ChainOfThoughtScope.AskUserToolStep(
+internal fun ChainOfThoughtScope.AskUserToolStep(
     tool: UIMessagePart.Tool,
     loading: Boolean,
-    onToolAnswer: ((toolCallId: String, answer: String) -> Unit)?,
+    onAnswer: ((answer: String) -> Unit)?,
 ) {
     val isPending = tool.approvalState is ToolApprovalState.Pending
     val isAnswered = tool.approvalState is ToolApprovalState.Answered
@@ -263,9 +269,10 @@ private fun ChainOfThoughtScope.AskUserToolStep(
     }
 
     // Track answers for text/single questions
-    val answers = remember { mutableStateMapOf<String, String>() }
+    val answers = remember(tool.toolCallId, tool.input) { mutableStateMapOf<String, String>() }
     // Track selected options for multi questions
-    val multiAnswers = remember { mutableStateMapOf<String, Set<String>>() }
+    val multiAnswers = remember(tool.toolCallId, tool.input) { mutableStateMapOf<String, Set<String>>() }
+    var submitted by remember(tool.toolCallId, tool.input) { mutableStateOf(false) }
 
     val firstQuestion = questions.firstOrNull()?.question ?: "..."
 
@@ -312,7 +319,7 @@ private fun ChainOfThoughtScope.AskUserToolStep(
                             color = MaterialTheme.colorScheme.onSurface,
                         )
 
-                        if (isPending && onToolAnswer != null) {
+                        if (isPending && onAnswer != null) {
                             when (q.selectionType) {
                                 "single" -> {
                                     // Single select: chips only, no text input
@@ -417,9 +424,10 @@ private fun ChainOfThoughtScope.AskUserToolStep(
                 }
 
                 // Submit button
-                if (isPending && onToolAnswer != null) {
+                if (isPending && onAnswer != null) {
                     FilledTonalButton(
                         onClick = {
+                            submitted = true
                             val answerPayload = buildJsonObject {
                                 put("answers", buildJsonObject {
                                     questions.forEach { q ->
@@ -430,9 +438,9 @@ private fun ChainOfThoughtScope.AskUserToolStep(
                                     }
                                 })
                             }
-                            onToolAnswer(tool.toolCallId, answerPayload.toString())
+                            onAnswer(answerPayload.toString())
                         },
-                        enabled = questions.all { q ->
+                        enabled = !submitted && questions.all { q ->
                             when (q.selectionType) {
                                 "multi" -> !multiAnswers[q.id].isNullOrEmpty()
                                 else -> !answers[q.id].isNullOrBlank()

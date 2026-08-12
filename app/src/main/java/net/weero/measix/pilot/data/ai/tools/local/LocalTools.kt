@@ -26,7 +26,10 @@ class LocalTools(
 
     val calendarCreateTool by lazy { buildCalendarCreateTool(context) }
 
-    fun getTools(options: List<LocalToolOption>): List<Tool> {
+    fun getTools(
+        options: List<LocalToolOption>,
+        ttsPlaybackContext: TtsToolPlaybackContext? = null,
+    ): List<Tool> {
         val tools = mutableListOf<Tool>()
         if (options.contains(LocalToolOption.JavascriptEngine)) {
             tools.add(javascriptTool)
@@ -38,9 +41,9 @@ class LocalTools(
             tools.add(clipboardTool)
         }
         if (options.contains(LocalToolOption.Tts)) {
-            // getTools() is called once per generation run. A fresh tool keeps
-            // sequential-playback state isolated from concurrent conversations.
-            tools.add(buildTextToSpeechTool(eventBus, ttsManager, settingsStore))
+            // 设计文档 §7.5：每轮生成创建一个 TtsToolPlaybackContext，
+            // toolProvider 在不同 LLM step 重建 Tool 时复用这个 context。
+            tools.add(buildTextToSpeechTool(eventBus, ttsManager, settingsStore, ttsPlaybackContext))
         }
         if (options.contains(LocalToolOption.AskUser)) {
             tools.add(askUserTool)

@@ -35,6 +35,7 @@ import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
@@ -66,6 +67,7 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
 import net.weero.measix.pilot.data.model.DEFAULT_SYSTEM_PROMPT
 import net.weero.measix.pilot.ui.components.nav.BackButton
+import net.weero.measix.pilot.data.model.normalizeDescription
 import net.weero.measix.pilot.ui.components.ui.FormItem
 import net.weero.measix.pilot.ui.components.ui.Tag
 import net.weero.measix.pilot.ui.components.ui.TagType
@@ -83,6 +85,26 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 import kotlin.uuid.Uuid
 import androidx.compose.foundation.lazy.items as lazyItems
 
+internal fun reorderVisibleAssistants(
+    source: List<Assistant>,
+    visible: List<Assistant>,
+    fromIndex: Int,
+    toIndex: Int,
+): List<Assistant> {
+    if (fromIndex !in visible.indices || toIndex !in visible.indices || fromIndex == toIndex) {
+        return source
+    }
+
+    val reorderedVisible = visible.toMutableList().apply {
+        add(toIndex, removeAt(fromIndex))
+    }
+    val visibleIds = visible.mapTo(mutableSetOf()) { it.id }
+    val reorderedIterator = reorderedVisible.iterator()
+    return source.map { assistant ->
+        if (assistant.id in visibleIds) reorderedIterator.next() else assistant
+    }
+}
+
 @Composable
 fun AssistantPage(vm: AssistantVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
@@ -99,14 +121,37 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
     // 操作菜单状态
     var actionSheetAssistant by remember { mutableStateOf<Assistant?>(null) }
 
-    // 根据搜索关键词和选中的标签过滤助手
-    val filteredAssistants = remember(settings.assistants, selectedTagIds, searchQuery) {
+    // "显示子助手"筛选状态
+    // 不存在普通 Assistant 时自动显示全部
+    val hasNormalAssistants = settings.assistants.any { !it.allowAsSubAssistant }
+    var showSubAssistants by remember {
+        mutableStateOf(!hasNormalAssistants)
+    }
+
+    // 类型筛选先执行，再叠加 name/description 搜索和 Tag 筛选
+    val filteredAssistants = remember(settings.assistants, selectedTagIds, searchQuery, showSubAssistants) {
         settings.assistants.filter { assistant ->
+            val matchesType = showSubAssistants || !assistant.allowAsSubAssistant
             val matchesSearch = searchQuery.isBlank() ||
-                assistant.name.contains(searchQuery, ignoreCase = true)
+                assistant.name.contains(searchQuery, ignoreCase = true) ||
+                assistant.description.contains(searchQuery, ignoreCase = true)
             val matchesTags = selectedTagIds.isEmpty() ||
                 assistant.tags.any { tagId -> tagId in selectedTagIds }
-            matchesSearch && matchesTags
+            matchesType && matchesSearch && matchesTags
+        }
+    }
+    val hasHiddenSubAssistantMatch = remember(
+        settings.assistants,
+        selectedTagIds,
+        searchQuery,
+        showSubAssistants,
+    ) {
+        !showSubAssistants && settings.assistants.any { assistant ->
+            assistant.allowAsSubAssistant &&
+                (searchQuery.isBlank() ||
+                    assistant.name.contains(searchQuery, ignoreCase = true) ||
+                    assistant.description.contains(searchQuery, ignoreCase = true)) &&
+                (selectedTagIds.isEmpty() || assistant.tags.any { it in selectedTagIds })
         }
     }
 
@@ -146,10 +191,13 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
             val isFiltering = selectedTagIds.isNotEmpty() || searchQuery.isNotBlank()
             val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
                 if (!isFiltering) {
-                    val newAssistants = settings.assistants.toMutableList().apply {
-                        add(to.index, removeAt(from.index))
-                    }
-                    vm.updateSettings(settings.copy(assistants = newAssistants))
+                    val newAssistants = reorderVisibleAssistants(
+                        source = settings.assistants,
+                        visible = filteredAssistants,
+                        fromIndex = from.index,
+                        toIndex = to.index,
+                    )
+                    vm.reorderAssistants(newAssistants.map { it.id })
                 }
             }
             val haptic = LocalHapticFeedback.current
@@ -176,6 +224,14 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
                 shape = RoundedCornerShape(12.dp)
             )
 
+            // "显示子助手" FilterChip — 类型筛选先于 Tag 筛选
+            FilterChip(
+                onClick = { showSubAssistants = !showSubAssistants },
+                label = { Text(stringResource(R.string.assistant_picker_show_sub_assistants)) },
+                selected = showSubAssistants,
+                shape = RoundedCornerShape(50),
+            )
+
             // 标签过滤器
             AssistantTagsFilterRow(
                 settings = settings,
@@ -194,6 +250,27 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 state = lazyListState,
             ) {
+                if (filteredAssistants.isEmpty()) {
+                    item(key = "empty") {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.search_page_no_results),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (hasHiddenSubAssistantMatch) {
+                                TextButton(onClick = { showSubAssistants = true }) {
+                                    Text(stringResource(R.string.assistant_picker_show_sub_assistants))
+                                }
+                            }
+                        }
+                    }
+                }
                 lazyItems(filteredAssistants, key = { assistant -> assistant.id }) { assistant ->
                     ReorderableItem(
                         state = reorderableState,
@@ -270,7 +347,7 @@ private fun AssistantTagsFilterRow(
             val newTags = settings.assistantTags.toMutableList().apply {
                 add(to.index, removeAt(from.index))
             }
-            vm.updateSettings(settings.copy(assistantTags = newTags))
+            vm.reorderAssistantTags(newTags.map { it.id })
         }
 
         LazyRow(
@@ -359,6 +436,78 @@ private fun AssistantCreationSheet(
                         )
                     }
 
+                    FormItem(
+                        label = {
+                            Text(stringResource(R.string.assistant_page_description))
+                        },
+                    ) {
+                        OutlinedTextField(
+                            value = assistant.description,
+                            onValueChange = {
+                                update(assistant.copy(description = normalizeDescription(it)))
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = {
+                                Text(stringResource(R.string.assistant_page_description_placeholder))
+                            },
+                            minLines = 2,
+                            maxLines = 4,
+                            supportingText = {
+                                val remaining = 240 - assistant.description.codePointCount(0, assistant.description.length)
+                                Text(stringResource(R.string.assistant_page_description_remaining, remaining))
+                            }
+                        )
+                    }
+
+                    FormItem(
+                        label = {
+                            Text(stringResource(R.string.assistant_page_allow_as_sub_assistant))
+                        },
+                        description = {
+                            Text(stringResource(R.string.assistant_page_allow_as_sub_assistant_desc))
+                        },
+                        tail = {
+                            Switch(
+                                checked = assistant.allowAsSubAssistant,
+                                enabled = assistant.description.isNotBlank(),
+                                onCheckedChange = { enabled ->
+                                    update(
+                                        assistant.copy(
+                                            allowAsSubAssistant = enabled,
+                                            isSubAssistantGloballyVisible =
+                                                assistant.isSubAssistantGloballyVisible && enabled,
+                                        )
+                                    )
+                                },
+                            )
+                        }
+                    )
+                    if (assistant.allowAsSubAssistant) {
+                        FormItem(
+                            label = {
+                                Text(stringResource(R.string.assistant_page_sub_assistant_global_visible))
+                            },
+                            description = {
+                                Text(stringResource(R.string.assistant_page_sub_assistant_global_visible_desc))
+                            },
+                            tail = {
+                                Switch(
+                                    checked = assistant.isSubAssistantGloballyVisible,
+                                    onCheckedChange = { enabled ->
+                                        update(assistant.copy(isSubAssistantGloballyVisible = enabled))
+                                    },
+                                )
+                            }
+                        )
+                    }
+                    if (assistant.description.isBlank()) {
+                        Text(
+                            text = stringResource(R.string.assistant_page_description_required),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -425,10 +574,30 @@ private fun AssistantItem(
                     overflow = TextOverflow.Ellipsis
                 )
 
+                if (assistant.description.isNotBlank()) {
+                    Text(
+                        text = assistant.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (assistant.allowAsSubAssistant) {
+                        Tag(type = TagType.INFO) {
+                            Text(stringResource(R.string.assistant_page_sub_assistant_tag))
+                        }
+                    }
+                    if (assistant.isSubAssistantGloballyVisible) {
+                        Tag(type = TagType.WARNING) {
+                            Text(stringResource(R.string.sub_assistant_global_tag))
+                        }
+                    }
                     if (assistant.enableMemory) {
                         Tag(type = TagType.SUCCESS) {
                             Text(stringResource(R.string.assistant_page_memory_count, memories.size))

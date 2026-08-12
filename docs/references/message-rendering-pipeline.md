@@ -132,8 +132,39 @@ Text part 在传入 `MarkdownBlock` 之前，先经过 `replaceRegexes()` 处理
 - `ReasoningStep` → `ChatMessageReasoningStep`（推理文本）
 - `ToolStep` → `ChatMessageToolStep`（工具调用卡片，含输入/输出/审批）
 
+折叠只隐藏普通的早期步骤；所有 `ToolApprovalState.Pending` 的 Tool step 都被固定展示，且不计入隐藏
+数量。因此同批多个审批/提问不会因 COT 折叠而消失，用户处理完后才恢复普通尾部折叠规则。
+
 > 工具步骤中，工作空间文件编辑工具（`workspace_edit_file`）的输出通过 `DiffView`
 > （`DiffView.kt`）渲染统一 diff，支持折叠摘要与展开全量视图。
+
+### 2.4 SubAssistantCallCard 渲染
+
+`assistant_call` 工具调用从通用 COT 分组中拆出（`groupMessageParts` 遇到 `assistant_call` 先 flush 普通 block），由 `SubAssistantCallCard` 独立渲染。
+
+布局结构：
+
+```
+SubAssistantCallCard
+  ├─ Target 头像 / 名称 / 状态
+  ├─ request 一行预览（从 Tool input JSON decoder 读取）
+  ├─ 最新输出滚动窗口（preview reducer 常量：最大缓冲 2000、首部边界 200、主卡 4 行、节流 100ms）
+  ├─ phase / active tool
+  ├─ Target ask_user 问题区（仅等待回答时；与主助手普通提问使用不同标签和容器）
+  └─ 详情入口（整卡单一详情点击目标 → SubAssistantDetail 路由）
+```
+
+终态显示：
+
+| 状态 | 文案 |
+|------|------|
+| completed | 调用已完成 |
+| unavailable | 目标不可用 |
+| failed | 调用失败 |
+| stopped | 已停止 |
+
+- 不显示进度百分比/预计时间
+- follow/pause 行为支持实时跟踪 Target 输出
 
 ---
 

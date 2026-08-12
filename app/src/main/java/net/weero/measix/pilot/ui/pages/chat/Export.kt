@@ -571,6 +571,29 @@ private fun ExportedChatMessage(
                         }
                     }
 
+                    is MessagePartBlock.SubAssistantCallBlock -> {
+                        Card(
+                            shape = MaterialTheme.shapes.medium,
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(8.dp)
+                            ) {
+                                Text(
+                                    text = block.tool.toolName,
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                                if (block.tool.isExecuted) {
+                                    block.tool.output.firstOrNull { it is UIMessagePart.Text }?.let {
+                                        Text(
+                                            text = (it as UIMessagePart.Text).text.take(200),
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     is MessagePartBlock.ContentBlock -> {
                         when (val part = block.part) {
                             is UIMessagePart.Text -> {

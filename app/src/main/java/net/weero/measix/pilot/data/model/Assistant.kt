@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.model
+package net.weero.measix.pilot.data.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -15,6 +15,13 @@ import kotlin.uuid.Uuid
 internal const val MIN_CONTEXT_MESSAGE_LIMIT = 40
 internal const val DEFAULT_CONTEXT_MESSAGE_LIMIT = 80
 internal const val MAX_CONTEXT_MESSAGE_LIMIT = 512
+
+/** UI 新建普通 Assistant 与工具创建的子助手共用的默认 Local Tools。 */
+internal val DEFAULT_ASSISTANT_LOCAL_TOOLS = listOf(
+    LocalToolOption.TimeInfo,
+    LocalToolOption.Tts,
+    LocalToolOption.AskUser,
+)
 
 /**
  * 默认系统提示词模板，新建助手时作为 systemPrompt 初始值。
@@ -65,7 +72,7 @@ data class Assistant(
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBodies: List<CustomBody> = emptyList(),
     val mcpServers: Set<Uuid> = emptySet(),
-    val localTools: List<LocalToolOption> = listOf(LocalToolOption.TimeInfo, LocalToolOption.Tts, LocalToolOption.AskUser),
+    val localTools: List<LocalToolOption> = DEFAULT_ASSISTANT_LOCAL_TOOLS,
     val enableWebSearch: Boolean = false, // 网络搜索开关(每个助手独立)
     val workspaceId: Uuid? = null,
     val background: String? = null, // 聊天页背景图地址(本地文件 URI 或网络 URL), 为 null 时无背景
@@ -76,7 +83,29 @@ data class Assistant(
     val enableTimeReminder: Boolean = false,            // 时间间隔提醒注入
     val allowConversationSystemPrompt: Boolean = false, // 允许对话单独重写 system prompt
     val allowConversationPromptInjection: Boolean = false, // 允许对话单独绑定提示词注入
+    val description: String = "", // 路由描述：擅长什么、何时适合委托；不是 System Prompt
+    val allowAsSubAssistant: Boolean = false, // 允许其他助手把独立任务交给它
+    val isSubAssistantGloballyVisible: Boolean = false, // 全局可见：所有启用子助手工具的助手都能发现/调用/管理
+    val allowedSubAssistantIds: Set<Uuid> = emptySet(), // 显式允许的子助手 ID；管理与调用共用
 )
+
+/**
+ * 规范化路由描述：折叠空白、限长 240 Unicode code point（不截断 surrogate pair）。
+ */
+fun normalizeDescription(input: String): String {
+    val collapsed = input
+        .trim()
+        .replace(Regex("\\s+"), " ")
+    if (collapsed.isEmpty()) return ""
+    val codePoints = collapsed.codePoints().toArray()
+    if (codePoints.size <= 240) return collapsed
+    // 不截断 surrogate pair：code point 级别截取后重新组装
+    val sb = StringBuilder()
+    for (i in 0 until 240) {
+        sb.appendCodePoint(codePoints[i])
+    }
+    return sb.toString()
+}
 
 internal fun Assistant.effectiveContextMessageLimit(): Int {
     return if (contextMessageLimit > 0) {

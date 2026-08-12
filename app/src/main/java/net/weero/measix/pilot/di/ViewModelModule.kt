@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.di
+package net.weero.measix.pilot.di
 
 import net.weero.measix.pilot.ui.pages.assistant.AssistantVM
 import net.weero.measix.pilot.ui.pages.assistant.detail.AssistantDetailVM
@@ -15,6 +15,7 @@ import net.weero.measix.pilot.ui.pages.extensions.PromptVM
 import net.weero.measix.pilot.ui.pages.extensions.QuickMessagesVM
 import net.weero.measix.pilot.ui.pages.extensions.skills.SkillDetailVM
 import net.weero.measix.pilot.ui.pages.extensions.skills.SkillsVM
+import net.weero.measix.pilot.ui.pages.subassistant.SubAssistantDetailVM
 import net.weero.measix.pilot.ui.pages.extensions.workspace.WorkspaceDetailVM
 import net.weero.measix.pilot.ui.pages.extensions.workspace.WorkspaceVM
 import net.weero.measix.pilot.ui.pages.setting.SettingVM
@@ -73,4 +74,14 @@ val viewModelModule = module {
     viewModelOf(::FavoriteVM)
     viewModelOf(::SearchVM)
     viewModelOf(::StatsVM)
+viewModel<SubAssistantDetailVM> {
+SubAssistantDetailVM(
+    masterConversationId = it.get(),
+    runId = it.get(),
+    conversationRepository = get(),
+    settingsStore = get(),
+    sessionRegistry = get(),
+    json = get(),
+)
+}
 }

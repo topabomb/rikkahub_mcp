@@ -6,6 +6,93 @@
 
 ---
 
+## 0.0.15（versionCode 15）— 2026-08-11 ~ 2026-08-12
+
+### 新增
+
+- **子助手（Sub-Assistant）V1**：主助手可通过 `assistant_call` 工具同步委托任务给其他助手，子助手使用独立工作上下文，不自动读取主会话历史
+  - Assistant 新增 `description`（路由描述）、`allowAsSubAssistant`（可调用开关）、`isSubAssistantGloballyVisible`（全局可见）、`allowedSubAssistantIds`（显式允许列表）字段
+  - 新增 `assistant_manage`、`assistant_memory_list`、`assistant_call` 三个 Local Tool，对应 `AssistantManagement` 和 `AssistantDelegation` 两个独立权限项
+  - `SubAssistantAccessPolicy`：统一计算显式允许与全局可见的有效集合，供 UI、Catalog、Tool 执行和运行中撤权复用
+  - 动态 Catalog 注入：启用工具时从 Settings 实时构建 `header + rows` 格式的紧凑 JSON Catalog，使用 `<sub_assistant_catalog>` 边界标签，对 `<`/`>`/`&` 做 Unicode escape
+  - Child Conversation：通过 `parentConversationId` 标识子助手会话，按 Master 当前分支的调用 lineage 复用或克隆
+  - SubAssistantCallCard：主聊天中的独立调用卡片，滚动显示 Target 最新文本输出，支持 follow/pause 和终态展示
+  - 通用生成原语：`ToolExecutionContext`（含 `messageId`+`toolOrdinal` 精确定位器）、metadata patch、`GenerationChunk.Phase/Checkpoint/Finished`、`toolProvider` 和 NonInteractive approval policy
+  - `FinishedReason`：区分 `completed`/`awaiting_approval`/`step_limit_reached`，Coordinator 不再把未完成运行误记为 completed
+  - `SubAssistantRunStateReducer`：串行维护单次调用的完整 metadata 快照，校验状态单向转换，终态后忽略迟到的 phase/preview，`active_tool_name` 只在 `tool_executing` 时保留
+  - `ConversationSessionRegistry`：从 ChatService 抽取 Session/Job/StateFlow 生命周期，供 Master 和 Child 共用
+  - `GenerationToolSetFactory`：按 Assistant、资源和 Run Mode 统一装配工具集
+  - `SubAssistantCoordinator`：负责 Readiness（含访问公式验证）、Lineage 解析、Target 生成收集及故障恢复
+  - `AssistantManagementService`：CREATE 原子加入 caller 的 `allowedSubAssistantIds`；DELETE 写入 durable cleanup tombstone（`pendingAssistantDeletions`），移除所有反向授权，切换全局当前选择
+  - Memory DAO owner+id 约束：`updateMemoryContent`/`deleteMemory` 的 WHERE 条件同时包含 `id` 和 `assistant_id`，防止越权操作
+  - 只读详情页：点击卡片进入 Child Conversation 的只读视图，复用现有消息渲染管线
+  - 普通入口过滤：所有面向用户的会话查询显式过滤 `parentConversationId IS NULL`
+  - 配置 UI：AssistantBasicPage 新增"全局可见"开关；AssistantLocalToolPage 新增"子助手访问范围"多选 Sheet
+  - 五语言资源：English、Chinese、Japanese、Korean、Russian 全部新增子助手相关文案
+  - 测试：新增 `SubAssistantAccessPolicyTest`、`AssistantConfigCompatibilityTest`、`MemoryRepositoryOwnershipTest`、`SubAssistantRunStateReducerTest`、`ConversationDAOIntegrationTest`、`Migration_3_4_Test`（后两项为真实 Room/SQLite 仪器测试）
+  - `TtsPlaybackSource.computeEffectiveFlush` 纯函数：提取来源切换仲裁逻辑，供 JVM 测试验证
+  - `TtsPlaybackSourceTest`：覆盖同 session/不同 session/来源类型变化/Master-Target 切换/toPlaybackSource 转换等场景
+  - `TtsToolPlaybackStateTest` 扩展：新增 context-bound state 跨 step 持久化和独立 context 隔离测试
+  - `AssistantMemoryListToolTest`：覆盖 local/global/disabled memory scope、target_is_caller、target_not_allowed、tool_not_permitted、全局可见访问、invalid_arguments 等场景
+  - `MemoryRepositoryOwnershipTest` 扩展：新增 deleteMemory wrong owner 和 non-existent 记录的 error 测试
+  - 全 locale 新增 `sub_assistant_global_tag` 字符串（English/Chinese/Japanese/Korean/Russian）
+
+### 变更
+
+- `AssistantVM.copyAssistant` Clone 重置 `isSubAssistantGloballyVisible = false` 和 `allowedSubAssistantIds = emptySet()`
+- `Settings` 每次写入执行规范化：非子助手强制 `isSubAssistantGloballyVisible = false`
+- `Migration_3_4` 使用 `ALTER TABLE ADD COLUMN`（additive），不重建 Conversation 主表；索引名与 Room 导出 schema 完全一致（大小写敏感）
+- `buildSubAssistantCallResult` 只有 `completed` 状态返回 `assistant_name` 和 `content`，移除自然语言 `message` 字段
+- `AssistantVM.removeAssistant` 复用 `AssistantManagementService`，避免两套清理逻辑
+- `AssistantDetailPage` 头像下方改为显示 `description`，不再截取 `systemPrompt`
+- `groupMessageParts()` 将 `assistant_call` 从通用 COT 拆为独立 `SubAssistantCallBlock`
+- `ConversationEntity` 新增 `parentConversationId` 字段，`Migration_3_4` 处理数据库升级
+- `SettingsStore` 新增 `updateAtomic` 共享 Mutex 串行化原子更新
+- 工具创建的子助手 Local Tools 改为与普通 Assistant 默认配置一致（`TimeInfo`、`Tts`、`AskUser`）；Target Run 保留并桥接 `AskUser`，仍过滤 Assistant Tools
+- 子助手模型解析改为调用期 RunSpec：显式 Target 模型优先；Target 未绑定模型时继承 caller 的有效模型和模型执行参数，不回写配置；两侧均无有效模型时在创建 Child 前明确拒绝
+
+### 修复
+
+- **子助手 Flow 跨协程异常**：`GenerationHandler.generateText()` 从普通 `flow` 改为 `channelFlow`，Running Card 的 metadata 从可取消 Child Job 回写时不再触发 Flow invariant 与 exception-transparency 连锁异常；工具仍按原 ordinal 串行执行
+- **子助手不必要阻断**：路由 description 继续作为类别启用与 Catalog 质量要求，但不再阻断已知 ID 的显式调用；未绑定模型的 Target 不再误判为必须手工配置模型
+- **GenerationHandler phase emit**：`tool_executing` 改为每个 ToolCall 执行前发出并携带 registered tool name（此前仅在批量级别发出一次无名称事件）；新增 `model_waiting` phase
+- **GenerationHandler locator**：截断文件名改用 `messageId + toolOrdinal` 构成的 execution ID，不再使用 Provider `toolCallId`（避免空值/复用/路径字符风险）；执行结果合并改用 ordinal-based 匹配，不再使用 `find { it.toolCallId == ... }` 首项匹配
+- **MemoryRepository deleteMemory**：检查 DAO 受影响行数，owner + id 不匹配时抛出错误（此前静默忽略）
+- **AssistantToolFactory**：`assistant_memory_list` 读取失败 error code 从 `internal_error` 修正为文档规定的 `operation_failed`
+- **SubAssistantCallCard**：整张 Card 改为单一详情导航点击目标，底部"查看详情"降为纯视觉提示（不再建立第二个嵌套点击区域）
+- **AssistantPickerSheet / AssistantPage**：新增"显示子助手"FilterChip 和类型筛选逻辑；当前会话直接使用子助手或不存在普通 Assistant 时自动显示全部；AssistantPage 搜索同时匹配 description，全局可见子助手显示"全局"Tag
+- **schemas 目录**：恢复 v1-v3 导出 schema JSON（被误删），删除短名 `AppDatabase/` 副本，仅保留 canonical 完整类名目录
+- **SubAssistantCallCard 视觉优化**：重写卡片布局——左侧状态色侧条区分子代理调用；始终显示 Target 头像（已删除时回退默认头像）；头像右下角"S"角标区分主/子代理；request 一行预览 + 固定高度滚动 preview 窗口（运行中自动跟随底部，用户上滚暂停）；运行中显示 phase/active tool；终态显示状态色和本地化原因
+- **SubAssistantDetailPage 空界面修复**：`childTaskNodeId` 是 `UIMessage.id` 而非 `MessageNode.id`，VM 此前按 `MessageNode.id` 查找导致永远找不到、显示"会话缺失"；修正为在 `messageNodes` 分支中搜索 `UIMessage.id`
+- **TTS 顺序播放跨 step 失效修复**：`TtsToolPlaybackContext` 持有 `TtsToolPlaybackState`，跨 LLM step 复用同一 context 时 state 保持；此前 `SubAssistantCoordinator` 每步创建新 context，导致 sessionId 变化触发 `computeEffectiveFlush` 每步强制 flush，顺序播放完全失效；现 context 在 toolProvider 外创建一次并传入 `buildTools`
+- **子助手访问范围对话框优化**：新增 `SubAssistantScopeItem` 组件——Checkbox + 32dp 头像 + 名称/描述 + 全局可用标签；整行可点击切换选中；描述为空时不占空间；全局可见使用 `tertiaryContainer` 小标签替代 `AssistChip`，视觉更紧凑
+- **AssistantBasicPage 身份 Card 优化**：移除名称/描述/标签/Workspace/子助手/全局可见/使用助手头像之间的 6 条 `HorizontalDivider`，依靠 `FormItem` padding 和视觉间距区分；描述为空提示内联到 `FormItem` 的 description 槽，不再额外占行；节省约 40dp 垂直空间
+- **SubAssistantCallCard 状态原因统一**：UNAVAILABLE/FAILED/STOPPED 三处重复 if 块合并为统一的 `reasonColor` + 单次 Text 渲染；详情入口箭头从独立 Text 合并为字符串拼接
+- **SubAssistantDetailPage 加载状态**：裸 `CircularProgressIndicator` 改为 Column 含进度条 + "正在加载子助手对话…" 文本
+- **TTSController 可访问性**：所有图标（停止/展开/快进/播放/暂停）添加 `contentDescription`，此前全部为 null
+- **AssistantDetailVM 原子清理**：关闭"作为子助手"时改用 `updateAtomic`，同一次原子更新中关闭"全局可见"并从所有 Assistant 的 `allowedSubAssistantIds` 移除其 ID（此前用非原子的 `update`，存在重新开启时静默恢复旧授权的风险）
+- **AssistantBasicPage Model 提示**：Target 未绑定模型时说明将继承 caller 的模型执行配置；只有显式绑定但失效时显示阻断错误
+- **TTS activeSource 清空**：队列自然播放完毕（`PlaybackStatus.Ended`）、Provider 切换、播放错误、dispose 时清空 `activeSource`（此前控制条在无音频时继续显示旧 Target）
+- **TTSController Target 头像**：`SubAssistantAvatarBadge` 改为按 `assistantId` 实时解析 Settings 中的 Assistant，Target 已删除时回退默认头像（此前仅用 name snapshot 首字符）
+- **SubAssistantCoordinator lease 顺序**：lease 获取移到 Child 创建之前；新增写入前访问重验（从最新 Settings 重新获取 caller/Target 并用 `SubAssistantAccessPolicy.canAccess` 验证）；Child 创建失败时释放 lease（此前 lease 在 Child 创建之后获取，存在并发竞态窗口）
+- **strings.xml 全局可见描述**：5 个 locale 补齐"修改和删除仍需确认；启用管理工具的助手也可查看其局部记忆"
+- **数据库历史升级链**：补回并显式测试 `Migration_2_3`，保证数据库 v1/v2/v3 均可连续升级到 v4
+- **Settings 原子提交**：DataStore 写入成功后才发布 `settingsFlow`，启动早期原子操作等待真实快照；内部删除 tombstone 不进入备份导出的 Settings JSON
+- **删除恢复与事务边界**：启动自动消费 `pendingAssistantDeletions`；同 ID Assistant 已恢复时丢弃旧 tombstone；Master、Child、MessageNode 与节点收藏在同一 Room 事务中删除
+- **Assistant 编辑并发**：设置页只把相对页面快照的字段 delta 应用到最新 Assistant，文件副作用延后到 DataStore 提交成功之后，避免覆盖工具并发写入的允许列表
+- **子助手 AskUser 桥接**：Target 的 `ask_user` 按 Child `messageId + toolOrdinal` 持久化并显示在主聊天独立问题区；回答、取消、撤权、删除与重启均按 run/interaction 精确收口，提交按钮防重复
+- **多 ToolCall 确定性**：同批存在 Pending 时不先执行自动工具，全部决策后按原 ordinal 串行执行；审批、结果合并和子助手 lineage 均不再依赖可重复的 Provider `toolCallId`
+- **Pending 折叠可见性**：折叠的思考卡始终固定展示全部待审批/待回答 Tool step，隐藏数量只统计真正折叠的普通步骤
+
+### 文档
+
+- **chat-generation-pipeline.md**：修正 preflight 检查项遗漏（Target != caller、allowAsSubAssistant == true）；补充 lease 获取顺序和写入前访问重验描述；修正 `AssistantRunSpec` 标注为设计目标尚未实现；补充 Target Run policy 额外过滤的三个工具名；修正 `getOrCreateSession` 方法名截断；新增 TTS 来源切换章节
+- **assistant-configuration.md**：补充原子清理说明；补充无有效 Chat Model 警告条件；补充全局可见 supporting text 完整语义
+- **ui-architecture.md**：路由清单新增 `SubAssistantDetail`；页面目录标注子助手详情页；ViewModel 层新增 `SubAssistantDetailVM`；消息渲染管线新增 `SubAssistantCallCard`；新增第 15 章"子助手 UI"
+- **message-rendering-pipeline.md**：新增第 2.4 节 SubAssistantCallCard 渲染
+
+---
+
 ## 0.0.14（versionCode 14）— 2026-08-10 ~ 2026-08-11
 
 ### 新增

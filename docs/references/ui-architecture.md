@@ -71,7 +71,7 @@ class Navigator(private val backStack: MutableList<NavKey>) {
 | 聊天 | `Chat(id, text, files, nodeId)` |
 | 分享 | `ShareHandler(text, streamUri)` |
 | 历史/收藏 | `History`, `Favorite`, `Stats`, `MessageSearch` |
-| 助手 | `Assistant`, `AssistantDetail(id)`, `AssistantBasic`, `AssistantPrompt`, `AssistantMemory`, `AssistantRequest`, `AssistantMcp`, `AssistantLocalTool`, `AssistantInjections` |
+| 助手 | `Assistant`, `AssistantDetail(id)`, `AssistantBasic`, `AssistantPrompt`, `AssistantMemory`, `AssistantRequest`, `AssistantMcp`, `AssistantLocalTool`, `AssistantInjections`, `SubAssistantDetail(masterConversationId, runId)` |
 | 设置 | `Setting`, `SettingPreferences`, `SettingPreferencesTheme`, `SettingPreferencesNotification`, `SettingPreferencesGeneral`, `SettingPreferencesUI`, `SettingTheme`, `SettingProvider`, `SettingProviderDetail(providerId)`, `SettingModels`, `SettingSearch`, `SettingSearchDetail(serviceId)`, `SettingSpeech`, `SettingMcp`, `SettingFiles`, `SettingAbout` |
 | 扩展 | `Extensions`, `QuickMessages`, `Prompts`, `Skills`, `SkillDetail(skillName)`, `Workspaces`, `WorkspaceDetail(id)`, `WorkspaceTerminal(id)`, `WorkspaceFileEditor(id, area, path)` |
 | 其他 | `Backup`, `ImageGen`, `WebView(url, contentId)`, `Debug`, `Log` |
@@ -398,7 +398,7 @@ ui/components/
 ui/pages/
   ├─ chat/        — 聊天主界面 (ChatPage, ChatDrawer, ChatList, Export, ConversationList, ChatVM, ChatDrawerVM)
   ├─ setting/     — 设置入口及各设置子页面
-  ├─ assistant/   — 助手列表与 detail/ 配置页面
+  ├─ assistant/   — 助手列表与 detail/ 配置页面 (含 SubAssistantDetail 只读详情页)
   ├─ extensions/  — 扩展管理 (ExtensionsPage + skills/ + workspace/)
   ├─ history/     — 历史记录
   ├─ favorite/    — 收藏
@@ -438,7 +438,8 @@ ui/pages/
 | `ChatVM` | 单会话状态：消息列表、生成 Job、输入状态、错误处理 |
 | `ChatDrawerVM` | 侧栏状态：会话分页列表、文件夹、滚动位置 |
 | `SettingVM` | 设置读写 |
-| `AssistantDetailVM` | 助手配置 |
+| `AssistantDetailVM` | 助手配置（含子助手原子清理、`hasValidChatModel` 警告） |
+| `SubAssistantDetailVM` | 子助手只读详情（从 Master 消息解析 Tool metadata） |
 | `HistoryVM` / `FavoriteVM` / `StatsVM` | 对应页面数据 |
 | `SearchVM` | 消息搜索 |
 | `WorkspaceVM` / `WorkspaceDetailVM` | 工作区管理 |
@@ -587,7 +588,8 @@ ChatList (LazyColumn)
             │    └─ SimpleHtmlBlock (HTML)
             ├─ ChatMessageTools (工具调用/结果)
             │    ├─ ToolUI 注册表
-            │    └─ 授权按钮 (primaryContainer/errorContainer)
+            │    ├─ 授权按钮 (primaryContainer/errorContainer)
+            │    └─ SubAssistantCallCard (assistant_call 工具调用卡片)
             ├─ ChatMessageActions (复制/重生成/编辑)
             └─ ChatMessageNerdLine (技术信息行)
 ```
@@ -663,6 +665,68 @@ ChatList (LazyColumn)
 - `chat_sidebar_expanded` 是持久化的用户偏好；普通宽屏恢复时沿用上次状态，竖向分隔铰链场景则无条件显示两侧面板
 - Tabletop 需要有效横向铰链坐标才能裁切到上半屏；只有姿态而没有坐标时采用安全回退：单栏 + Dialog，但不执行位置猜测
 - Dialog 分支不组合 BottomSheet，调用方必须维护自己的可见状态；传入的 `sheetState` 只对 BottomSheet 分支有实际 UI 含义
+
+---
+
+## 15. 子助手 UI
+
+### 15.1 配置 UI
+
+**AssistantBasicPage**（助手基本配置页）身份 Card 按顺序展示：头像→助手名称→能力描述→Tags→Workspace→"作为子助手"开关→"全局可见"开关（仅子助手开启时显示）→"使用助手头像"开关。
+
+- "作为子助手" supporting text 说明开启后可被其他助手通过 `assistant_call` 调用
+- "全局可见" supporting text 明确是权限开关，修改和删除仍需确认，启用管理工具的助手也可查看其局部记忆
+- description 为空时阻止开启"作为子助手"
+- 关闭"作为子助手"时通过 `updateAtomic` 同一次原子更新关闭"全局可见"并从所有 Assistant 的 `allowedSubAssistantIds` 移除其 ID
+- 当 `getChatModel(assistant) == null` 时显示"调用时将无法启动"非阻断警告
+- Target 使用 Global Memory 时显示非阻断警告
+- AssistantDetailPage 头像下方显示 description 而非 systemPrompt
+
+**AssistantPickerSheet** 与 **AssistantPage**（助手选择器）：
+- 默认只显示 `allowAsSubAssistant == false` 的助手
+- "显示子助手" FilterChip 切换
+- 当前会话直接使用子助手时默认开启 FilterChip
+- 不存在普通 Assistant 时自动显示全部
+- 类型筛选先执行，再叠加 name/description 搜索和 Tag 筛选
+- 子助手显示"子助手" Tag，全局可见再显示"全局" Tag
+- 排序按 `Settings.assistants` 顺序
+
+**AssistantLocalToolPage**（助手本地工具配置页）：
+- 独立 CardGroup"助手协作"
+- "管理子助手"和"调用子助手"两个开关
+- 任一开启时显示"子助手访问范围"入口
+- 多选 Sheet：候选项是除当前 Assistant 外的全部子助手
+- 全局可见子助手显示"全局可用"状态
+- `assistant_manage(CREATE)` 后新 ID 自动显示为已选中
+- 关闭开关不清空允许列表
+
+### 15.2 消息渲染
+
+**SubAssistantCallCard** 从通用 COT 分组中拆出（`groupMessageParts` 遇到 `assistant_call` 先 flush 普通 block）。布局：Target 头像/名称/状态→request 一行预览→最新输出滚动窗口→phase/active tool→详情入口。
+
+- preview 从 Tool input JSON decoder 读取 request
+- preview reducer 常量：最大缓冲 2000、首部边界 200、主卡 4 行、节流 100ms
+- follow/pause 行为
+- 整卡单一详情点击目标
+- Terminal Card：completed/unavailable/failed/stopped 各自正确文案
+- 不显示进度百分比/预计时间
+
+### 15.3 只读详情页
+
+`SubAssistantDetail(masterConversationId, runId)` 是独立全屏只读路由。
+
+- ViewModel 从 Master 所有 message variants 解析 Tool metadata，验证 parent/Target/request 一致
+- run ID 唯一匹配，找不到/多个匹配/Tool 名不符显示"详情不可用"
+- 页面结构：顶部栏→请求摘要→执行时间线→终态说明
+- `ChatInteractionPolicy.ReadOnlyChild`：不显示输入/编辑/删除/重生成/分支/收藏/分享/审批
+- 不发普通会话通知/完成提示音/TTS 自动播放
+
+### 15.4 TTSController
+
+- Target 播放时显示 Target 小头像，头像按 Assistant ID 实时解析 Settings 中的 Assistant，Target 已删除时回退默认头像
+- normal 来源无头像
+- 来源切换强制 flush 时同步切换/移除头像
+- 队列自然播放完毕、Provider 切换、播放错误、dispose 时清空 `activeSource`
 
 ---
 

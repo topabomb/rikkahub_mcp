@@ -1,14 +1,11 @@
-﻿package net.weero.measix.pilot.data.ai
+package net.weero.measix.pilot.data.ai
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
-import me.rerere.ai.core.ReasoningLevel
-import me.rerere.ai.provider.CustomBody
-import me.rerere.ai.provider.CustomHeader
-import me.rerere.ai.provider.Model
+import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
@@ -31,11 +28,13 @@ class GenerationHandlerLogicTest {
             input = """{"question":"?"}""",
             approvalState = ToolApprovalState.Auto
         )
-        // Simulate the logic in GenerationHandler
-        val needsApproval = true
-        val updated = if (needsApproval && tool.approvalState is ToolApprovalState.Auto) {
-            tool.copy(approvalState = ToolApprovalState.Pending)
-        } else tool
+        val updated = resolveToolApprovals(
+            unexecutedTools = listOf(tool),
+            toolDefinitions = listOf(toolDefinition("ask_user", needsApproval = true)),
+            nonInteractive = false,
+            interactiveToolNames = emptySet(),
+            json = json,
+        ).tools.single()
 
         assertTrue(updated.isPending)
         assertEquals(ToolApprovalState.Pending, updated.approvalState)
@@ -49,10 +48,13 @@ class GenerationHandlerLogicTest {
             input = """{"query":"test"}""",
             approvalState = ToolApprovalState.Auto
         )
-        val needsApproval = false
-        val updated = if (needsApproval && tool.approvalState is ToolApprovalState.Auto) {
-            tool.copy(approvalState = ToolApprovalState.Pending)
-        } else tool
+        val updated = resolveToolApprovals(
+            unexecutedTools = listOf(tool),
+            toolDefinitions = listOf(toolDefinition("search_web", needsApproval = false)),
+            nonInteractive = false,
+            interactiveToolNames = emptySet(),
+            json = json,
+        ).tools.single()
 
         assertFalse(updated.isPending)
         assertEquals(ToolApprovalState.Auto, updated.approvalState)
@@ -286,13 +288,7 @@ class GenerationHandlerLogicTest {
             output = listOf(UIMessagePart.Text("search results"))
         )
 
-        val updatedParts = originalMessage.parts.map { part ->
-            if (part is UIMessagePart.Tool && part.toolCallId == executedTool.toolCallId) {
-                executedTool
-            } else part
-        }
-
-        val updatedMessage = originalMessage.copy(parts = updatedParts)
+        val updatedMessage = originalMessage.replaceToolsAtOrdinals(mapOf(0 to executedTool))
         val tools = updatedMessage.getTools()
         assertEquals(1, tools.size)
         assertTrue(tools[0].isExecuted)
@@ -300,39 +296,97 @@ class GenerationHandlerLogicTest {
     }
 
     @Test
-    fun `multiple tool execution in single step`() {
+    fun `multiple tool execution uses ordinal even when provider ids repeat`() {
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Tool(
-                    toolCallId = "tc1",
+                    toolCallId = "duplicate",
                     toolName = "search_web",
                     input = """{"query":"test1"}"""
                 ),
                 UIMessagePart.Tool(
-                    toolCallId = "tc2",
+                    toolCallId = "duplicate",
                     toolName = "search_web",
                     input = """{"query":"test2"}"""
                 )
             )
         )
 
-        val executedTools = listOf(
-            message.getTools()[0].copy(output = listOf(UIMessagePart.Text("result1"))),
-            message.getTools()[1].copy(output = listOf(UIMessagePart.Text("result2")))
+        val executedTools = message.getTools().mapIndexed { ordinal, tool ->
+            tool.copy(output = listOf(UIMessagePart.Text("result${ordinal + 1}")))
+        }
+
+        val updatedMessage = message.replaceToolsAtOrdinals(executedTools.withIndex().associate { it.index to it.value })
+        assertEquals("result1", (updatedMessage.getTools()[0].output.single() as UIMessagePart.Text).text)
+        assertEquals("result2", (updatedMessage.getTools()[1].output.single() as UIMessagePart.Text).text)
+    }
+
+    @Test
+    fun `pending approval is a batch barrier for automatic tools`() {
+        val automatic = UIMessagePart.Tool(
+            toolCallId = "auto",
+            toolName = "get_time_info",
+            input = "{}",
+        )
+        val question = UIMessagePart.Tool(
+            toolCallId = "question",
+            toolName = "ask_user",
+            input = "{}",
         )
 
-        val updatedParts = message.parts.map { part ->
-            if (part is UIMessagePart.Tool) {
-                executedTools.find { it.toolCallId == part.toolCallId } ?: part
-            } else part
-        }
+        val resolution = resolveToolApprovals(
+            unexecutedTools = listOf(automatic, question),
+            toolDefinitions = listOf(
+                toolDefinition("get_time_info", needsApproval = false),
+                toolDefinition("ask_user", needsApproval = true),
+            ),
+            nonInteractive = false,
+            interactiveToolNames = emptySet(),
+            json = json,
+        )
 
-        val updatedMessage = message.copy(parts = updatedParts)
-        updatedMessage.getTools().forEach { tool ->
-            assertTrue(tool.isExecuted)
-        }
+        assertTrue(resolution.hasPendingApproval)
+        assertFalse(resolution.tools[0].isExecuted)
+        assertEquals(ToolApprovalState.Pending, resolution.tools[1].approvalState)
     }
+
+    @Test
+    fun `target mode exposes ask user but rejects other approval tools`() {
+        val question = UIMessagePart.Tool(
+            toolCallId = "question",
+            toolName = "ask_user",
+            input = "{}",
+        )
+        val shell = UIMessagePart.Tool(
+            toolCallId = "shell",
+            toolName = "workspace_shell",
+            input = "{}",
+        )
+
+        val resolution = resolveToolApprovals(
+            unexecutedTools = listOf(question, shell),
+            toolDefinitions = listOf(
+                toolDefinition("ask_user", needsApproval = true),
+                toolDefinition("workspace_shell", needsApproval = true),
+            ),
+            nonInteractive = true,
+            interactiveToolNames = setOf("ask_user"),
+            json = json,
+        )
+
+        assertTrue(resolution.hasPendingApproval)
+        assertEquals(ToolApprovalState.Pending, resolution.tools[0].approvalState)
+        assertTrue(resolution.tools[1].isExecuted)
+        assertTrue((resolution.tools[1].output.single() as UIMessagePart.Text).text.contains("tool_not_permitted"))
+    }
+
+    private fun toolDefinition(name: String, needsApproval: Boolean) = Tool(
+        name = name,
+        description = name,
+        needsApproval = { needsApproval },
+        execute = { emptyList() },
+    )
 
     // endregion
 }

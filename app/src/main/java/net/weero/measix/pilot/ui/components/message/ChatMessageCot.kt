@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.message
+package net.weero.measix.pilot.ui.components.message
 
 import androidx.compose.ui.util.fastForEachIndexed
 import me.rerere.ai.ui.UIMessagePart
@@ -13,6 +13,7 @@ sealed interface ThinkingStep {
 
     data class ToolStep(
         val tool: UIMessagePart.Tool,
+        val toolOrdinal: Int,
     ) : ThinkingStep
 }
 
@@ -21,16 +22,21 @@ sealed interface ThinkingStep {
  */
 sealed interface MessagePartBlock {
     data class ThinkingBlock(val steps: List<ThinkingStep>) : MessagePartBlock
+    data class SubAssistantCallBlock(val tool: UIMessagePart.Tool, val toolOrdinal: Int) : MessagePartBlock
     data class ContentBlock(val part: UIMessagePart, val index: Int) : MessagePartBlock
 }
 
+private const val TOOL_ASSISTANT_CALL = "assistant_call"
+
 /**
- * 将 parts 分组成 ThinkingBlock 和 ContentBlock
- * 连续的 Reasoning 和 Tool 会被分组到一个 ThinkingBlock 中
+ * 将 parts 分组成 ThinkingBlock、SubAssistantCallBlock 和 ContentBlock
+ * 连续的 Reasoning 和 Tool（非 assistant_call）会被分组到一个 ThinkingBlock 中
+ * assistant_call 工具被拆为独立的 SubAssistantCallBlock，由 SubAssistantCallCard 渲染
  */
 fun List<UIMessagePart>.groupMessageParts(): List<MessagePartBlock> {
     val result = mutableListOf<MessagePartBlock>()
     var currentThinkingSteps = mutableListOf<ThinkingStep>()
+    var toolOrdinal = 0
 
     fun flushThinkingSteps() {
         if (currentThinkingSteps.isNotEmpty()) {
@@ -46,7 +52,14 @@ fun List<UIMessagePart>.groupMessageParts(): List<MessagePartBlock> {
             }
 
             is UIMessagePart.Tool -> {
-                currentThinkingSteps.add(ThinkingStep.ToolStep(part))
+                val currentToolOrdinal = toolOrdinal++
+                if (part.toolName == TOOL_ASSISTANT_CALL) {
+                    // assistant_call 从 COT 中拆出，独立渲染
+                    flushThinkingSteps()
+                    result.add(MessagePartBlock.SubAssistantCallBlock(part, currentToolOrdinal))
+                } else {
+                    currentThinkingSteps.add(ThinkingStep.ToolStep(part, currentToolOrdinal))
+                }
             }
 
             else -> {

@@ -59,11 +59,13 @@ data class MessageDayCount(val day: String, val count: Int)
 
 // SQLite json_each() 展开 messages JSON 数组，json_extract() 提取 Token 字段并聚合
 private val TOKEN_STATS_SQL = SimpleSQLiteQuery(
-    "SELECT COUNT(*) AS totalMessages, " +
+    "SELECT COUNT(CASE WHEN c.parent_conversation_id IS NULL THEN 1 END) AS totalMessages, " +
         "COALESCE(SUM(CAST(json_extract(j.value, '$.usage.promptTokens') AS INTEGER)), 0) AS promptTokens, " +
         "COALESCE(SUM(CAST(json_extract(j.value, '$.usage.completionTokens') AS INTEGER)), 0) AS completionTokens, " +
         "COALESCE(SUM(CAST(json_extract(j.value, '$.usage.cachedTokens') AS INTEGER)), 0) AS cachedTokens " +
-        "FROM message_node mn, json_each(mn.messages) j"
+        "FROM message_node mn " +
+        "JOIN conversationentity c ON c.id = mn.conversation_id, " +
+        "json_each(mn.messages) j"
 )
 
 suspend fun MessageNodeDAO.getTokenStats(): MessageTokenStats = getTokenStatsRaw(TOKEN_STATS_SQL)
@@ -74,8 +76,11 @@ suspend fun MessageNodeDAO.getMessageCountPerDay(startDate: String): List<Messag
         SimpleSQLiteQuery(
             "SELECT substr(json_extract(j.value, '$.createdAt'), 1, 10) AS day, " +
                 "COUNT(*) AS count " +
-                "FROM message_node mn, json_each(mn.messages) j " +
-                "WHERE json_extract(j.value, '$.role') = 'user' " +
+                "FROM message_node mn " +
+                "JOIN conversationentity c ON c.id = mn.conversation_id, " +
+                "json_each(mn.messages) j " +
+                "WHERE c.parent_conversation_id IS NULL " +
+                "AND json_extract(j.value, '$.role') = 'user' " +
                 "AND json_extract(j.value, '$.createdAt') >= ? " +
                 "GROUP BY day",
             arrayOf(startDate)

@@ -126,6 +126,7 @@ import net.weero.measix.pilot.ui.pages.setting.SettingSearchPage
 import net.weero.measix.pilot.ui.pages.setting.SettingSpeechPage
 import net.weero.measix.pilot.ui.pages.share.handler.ShareHandlerPage
 import net.weero.measix.pilot.ui.pages.stats.StatsPage
+import net.weero.measix.pilot.ui.pages.subassistant.SubAssistantDetailPage
 import net.weero.measix.pilot.ui.pages.webview.WebViewPage
 import net.weero.measix.pilot.ui.theme.LocalDarkMode
 import net.weero.measix.pilot.ui.theme.MeasixTheme
@@ -245,7 +246,7 @@ class RouteActivity : ComponentActivity() {
         LaunchedEffect(tts) {
             eventBus.events.collect { event ->
                 when (event) {
-                    is AppEvent.Speak -> tts.speak(event.text, event.flush)
+                    is AppEvent.Speak -> tts.speakWithSource(event.text, event.flush, event.source)
                     is AppEvent.OpenUsageAccessSettings -> this@RouteActivity.openUsageAccessSettings()
                     is AppEvent.McpOAuthCallback -> Unit // 由 McpManager 消费
                     is AppEvent.ChatGenerationUpdate -> Unit // 由 ChatNotificationManager 消费
@@ -516,6 +517,13 @@ class RouteActivity : ComponentActivity() {
                             entry<Screen.Stats> {
                                 StatsPage()
                             }
+
+                            entry<Screen.SubAssistantDetail> { key ->
+                                SubAssistantDetailPage(
+                                    masterConversationId = key.masterConversationId,
+                                    runId = key.runId,
+                                )
+                            }
                         }
                     )
                     if (BuildConfig.DEBUG) {
@@ -706,4 +714,10 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data object Stats : Screen
+
+    @Serializable
+    data class SubAssistantDetail(
+        val masterConversationId: String,
+        val runId: String,
+    ) : Screen
 }
