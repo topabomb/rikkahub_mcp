@@ -203,7 +203,7 @@ fun Settings.getChatModel(assistant: Assistant): Model? =
 
 有效访问公式：`Target.allowAsSubAssistant && Target.id != Caller.id && (Target.id in Caller.allowedSubAssistantIds || Target.isSubAssistantGloballyVisible)`
 
-工具创建的子助手由 `buildToolCreatedAssistant` 显式构造，`chatModelId = null` 表示调用时继承 caller 的有效 Chat Model 与模型执行参数，不写回 Target。Target 明确绑定模型时严格使用自身模型和参数；绑定失效返回 `target_model_unavailable`，不会静默 fallback。Target 未绑定且 caller 也没有有效模型时返回 `caller_model_unavailable`。继承范围仅含 model、temperature/topP/maxTokens/reasoning、stream/context limit 和 Assistant 级 custom headers/bodies；Target 的身份、System Prompt、工具、记忆与权限保持独立。配置 UI 对未绑定模型显示继承说明，只对显式绑定但失效显示错误。其 Local Tools 与普通 Assistant 共用 `DEFAULT_ASSISTANT_LOCAL_TOOLS`，默认包含 `TimeInfo`、`Tts`、`AskUser`，Target Run 中实际注册为 `get_time_info`、`text_to_speech`、`ask_user`。`ask_user` 的 Pending 由 Coordinator 按 Child `messageId + toolOrdinal` 桥接到主聊天子助手卡片；其余需审批 Tool 在 Target 模式返回 `tool_not_permitted`。Assistant 管理与再次委托能力仍被过滤。Web Search、Recent Chats、MCP、Workspace、Skills 等扩展能力默认关闭。
+工具创建的 Target 与普通 Assistant 共用默认 Local Tools，扩展能力保持关闭。Target 显式模型优先；未绑定模型时只在调用期继承 Caller 的有效模型执行参数，不写回配置。Target 的身份、提示词、工具、记忆和权限始终独立。完整访问公式、运行时工具边界与生命周期见 [sub-assistant-architecture.md](sub-assistant-architecture.md)。
 
 ---
 

@@ -11,7 +11,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 /**
- * 设计文档 §13.1 — MemoryRepositoryOwnershipTest
+ * Memory owner 隔离回归测试。
  *
  * 覆盖：edit/delete 同时校验 owner + id；
  * 越权操作拒绝；绝不读取或修改其他 namespace。

@@ -7,7 +7,7 @@ import kotlin.uuid.Uuid
  * 统一计算显式允许与全局可见的有效集合。
  * 供 UI、Catalog、Tool 执行和运行中撤权复用。
  *
- * 有效访问公式（设计文档 §4.1）：
+ * 有效访问公式：
  * ```
  * Target.allowAsSubAssistant
  * && Target.id != Caller.id

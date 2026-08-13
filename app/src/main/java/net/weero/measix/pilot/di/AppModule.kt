@@ -93,7 +93,6 @@ val appModule = module {
 
     single {
         SubAssistantCoordinator(
-            context = get(),
             generationHandler = get(),
             conversationRepo = get(),
             sessionRegistry = get(),
@@ -101,9 +100,9 @@ val appModule = module {
             settingsStore = get(),
             memoryRepository = get(),
             templateTransformer = get(),
+            workspaceRepository = get(),
             filesManager = get(),
             json = get(),
-            appScope = get(),
         )
     }
 

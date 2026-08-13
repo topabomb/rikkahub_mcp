@@ -140,29 +140,11 @@ Text part 在传入 `MarkdownBlock` 之前，先经过 `replaceRegexes()` 处理
 
 ### 2.4 SubAssistantCallCard 渲染
 
-`assistant_call` 工具调用从通用 COT 分组中拆出（`groupMessageParts` 遇到 `assistant_call` 先 flush 普通 block），由 `SubAssistantCallCard` 独立渲染。
+`assistant_call` 在 `groupMessageParts` 中从普通 COT block 拆出，由 `SubAssistantCallCard` 独立渲染 Target 身份、request、状态、当前文本预览与等待中的 `ask_user`。
 
-布局结构：
+卡片不显示百分比、ETA、推理文本或工具 JSON。预览来自本次 Child task 的顶层 Text 投影，按可用高度限制显示且不内嵌滚动；纯非文本完成态显示本地化提示。整卡仅在 Child link 有效时导航到只读详情页，交互问题区会消费点击，避免误触详情导航。
 
-```
-SubAssistantCallCard
-  ├─ 28dp Target 头像（右下角叠圆；运行中圆边柔光扫尾）/ 名称 / 右侧合并状态
-  ├─ request 一行预览（从 Tool input JSON decoder 读取）
-  ├─ preview 尾部 2～3 行（矮屏 2 行，常规 3 行；不内嵌滚动）
-  └─ Target ask_user 问题区（仅等待回答时；与主助手普通提问使用不同标签和容器）
-```
-
-终态显示：
-
-| 状态 | 文案 |
-|------|------|
-| completed | 调用已完成 |
-| unavailable | 目标不可用 |
-| failed | 调用失败 |
-| stopped | 已停止 |
-
-- 不显示进度百分比/预计时间
-- follow/pause 行为支持实时跟踪 Target 输出
+状态模型、preview reducer、Child link 校验和只读策略见 [sub-assistant-architecture.md](sub-assistant-architecture.md)。
 
 ---
 

@@ -39,6 +39,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallPhase
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
+import net.weero.measix.pilot.data.ai.subassistant.takeTailByCodePoints
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
@@ -232,7 +233,17 @@ fun SubAssistantCallCard(
                     )
                 }
 
-                val previewText = metadata.preview
+                val previewText = metadata.preview.takeUnless { it.isNullOrBlank() } ?: if (
+                    shouldShowNonTextOutputPlaceholder(
+                        state = metadata.state,
+                        preview = metadata.preview,
+                        hasNonTextOutput = metadata.hasNonTextOutput,
+                    )
+                ) {
+                    stringResource(R.string.sub_assistant_card_non_text_output)
+                } else {
+                    null
+                }
                 if (!previewText.isNullOrBlank()) {
                     val layout = LocalAdaptiveLayoutInfo.current
                     val previewLines = subAssistantCardPreviewLines(
@@ -258,7 +269,7 @@ fun SubAssistantCallCard(
                 if (isRunning && interaction?.toolName == "ask_user") {
                     // ask_user 交互区必须消费点击事件，防止冒泡到 Card 的 navigateToDetail。
                     // OutlinedTextField 不像 FilterChip 那样通过 Modifier.clickable 消费事件，
-                    // 不加此消费层时点击文本输入框会触发详情导航（设计文档 §10.1 第 5 点）。
+                    // 不加此消费层时点击文本输入框会触发详情导航。
                     val interactionSource = remember { MutableInteractionSource() }
                     Surface(
                         modifier = Modifier.clickable(
@@ -350,6 +361,12 @@ private fun SubAssistantCallCardFallback(
 internal fun subAssistantCardPreviewLines(compactHeight: Boolean): Int =
     if (compactHeight) 2 else 3
 
+internal fun shouldShowNonTextOutputPlaceholder(
+    state: SubAssistantCallState,
+    preview: String?,
+    hasNonTextOutput: Boolean,
+): Boolean = state == SubAssistantCallState.COMPLETED && preview.isNullOrBlank() && hasNonTextOutput
+
 /** 窄屏每行约 36 字，宽屏约 72 字，再乘行数，避免长段落整段进排版。 */
 internal fun subAssistantCardPreviewMaxChars(compactHeight: Boolean, compactWidth: Boolean): Int {
     val lines = subAssistantCardPreviewLines(compactHeight)
@@ -371,13 +388,7 @@ internal fun clipPreviewForCard(text: String, maxLines: Int, maxChars: Int = max
     }
     val cpCount = lineClipped.codePointCount(0, lineClipped.length)
     if (cpCount <= maxChars) return lineClipped
-    var start = lineClipped.length
-    var kept = 0
-    while (start > 0 && kept < maxChars) {
-        start -= Character.charCount(lineClipped.codePointBefore(start))
-        kept++
-    }
-    return "…" + lineClipped.substring(start).trimStart().removePrefix("…")
+    return "…" + takeTailByCodePoints(lineClipped, maxChars).trimStart().removePrefix("…")
 }
 
 internal fun resolveCardStatusLabel(

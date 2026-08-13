@@ -224,6 +224,8 @@ class GenerationHandler(
          */
         nonInteractive: Boolean = false,
         interactiveToolNames: Set<String> = emptySet(),
+        /** Revalidates the snapshotted Memory namespace immediately before each Memory ToolCall. */
+        memoryToolAllowed: suspend () -> Boolean = { true },
     ): Flow<GenerationChunk> = channelFlow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
@@ -256,7 +258,8 @@ class GenerationHandler(
                         },
                         onDelete = { id ->
                             memoryRepo.deleteMemory(id, memoryAssistantId)
-                        }
+                        },
+                        isStillAllowed = memoryToolAllowed,
                     ).let(this::addAll)
                 }
                 addAll(stepTools)

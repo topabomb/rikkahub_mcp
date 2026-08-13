@@ -47,6 +47,18 @@ class SubAssistantRecoveryTest {
     )
 
     @Test
+    fun `stop reason priority handles caller model and unknown reasons deterministically`() {
+        assertEquals(
+            "caller_model_unavailable",
+            chooseMoreSpecificStopReason("app_restarted", "caller_model_unavailable"),
+        )
+        assertEquals(
+            "target_access_revoked",
+            chooseMoreSpecificStopReason("target_access_revoked", "unknown_reason"),
+        )
+    }
+
+    @Test
     fun `valid stale run is stopped with rebuilt preview and retains child`() {
         val call = callTool("run-1")
         val result = recoverMasterSubAssistantCalls(
@@ -78,7 +90,7 @@ class SubAssistantRecoveryTest {
             valid.copy(assistants = listOf(caller, target.copy(allowAsSubAssistant = false))) to "target_disabled",
             valid.copy(assistants = listOf(caller.copy(allowedSubAssistantIds = emptySet()), target)) to
                 "target_access_revoked",
-            valid.copy(providers = emptyList()) to "target_model_unavailable",
+            valid.copy(providers = emptyList()) to "caller_model_unavailable",
         )
 
         cases.forEachIndexed { index, (settings, expectedReason) ->

@@ -1262,6 +1262,7 @@
   <string name="sub_assistant_card_starting">启动中</string>
   <string name="sub_assistant_card_running">执行中</string>
   <string name="sub_assistant_card_completed">已完成</string>
+  <string name="sub_assistant_card_non_text_output">包含非文本输出</string>
   <string name="sub_assistant_card_failed">失败</string>
   <string name="sub_assistant_card_stopped">已停止</string>
   <string name="sub_assistant_card_unavailable">不可用</string>

@@ -670,63 +670,13 @@ ChatList (LazyColumn)
 
 ## 15. 子助手 UI
 
-### 15.1 配置 UI
+Assistant 配置页提供 Target 类别、全局可见与 Caller 访问范围设置；关闭 Target 类别时会原子清理全局可见和反向授权。普通选择器默认隐藏 Target，可通过筛选显式显示；搜索同时匹配名称与路由描述。
 
-**AssistantBasicPage**（助手基本配置页）身份 Card 按顺序展示：头像→助手名称→能力描述→Tags→Workspace→"作为子助手"开关→"全局可见"开关（仅子助手开启时显示）→"使用助手头像"开关。
+主聊天把 `assistant_call` 渲染为独立 `SubAssistantCallCard`。卡片显示 Target、request、运行状态、有界文本预览和桥接的 `ask_user`，整卡进入 `SubAssistantDetail(masterConversationId, runId)`。详情页校验 run 与 Child 关系，并使用 `ChatInteractionPolicy.ReadOnlyChild` 禁止所有修改型交互。
 
-- "作为子助手" supporting text 说明开启后可被其他助手通过 `assistant_call` 调用
-- "全局可见" supporting text 明确是权限开关，修改和删除仍需确认，启用管理工具的助手也可查看其局部记忆
-- description 为空时阻止开启"作为子助手"
-- 关闭"作为子助手"时通过 `updateAtomic` 同一次原子更新关闭"全局可见"并从所有 Assistant 的 `allowedSubAssistantIds` 移除其 ID
-- 当 `getChatModel(assistant) == null` 时显示"调用时将无法启动"非阻断警告
-- Target 使用 Global Memory 时显示非阻断警告
-- AssistantDetailPage 头像下方显示 description 而非 systemPrompt
+TTS 控制条只在当前来源为 Target 且该 Assistant 开启 `useAssistantAvatar` 时显示 Target 头像。来源随实际播放队列更新，不从历史消息恢复。
 
-**AssistantPickerSheet** 与 **AssistantPage**（助手选择器）：
-- 默认只显示 `allowAsSubAssistant == false` 的助手
-- "显示子助手" FilterChip 切换
-- 当前会话直接使用子助手时默认开启 FilterChip
-- 不存在普通 Assistant 时自动显示全部
-- 类型筛选先执行，再叠加 name/description 搜索和 Tag 筛选
-- 子助手显示"子助手" Tag，全局可见再显示"全局" Tag
-- 排序按 `Settings.assistants` 顺序
-
-**AssistantLocalToolPage**（助手本地工具配置页）：
-- 独立 CardGroup"助手协作"
-- "管理子助手"和"调用子助手"两个开关
-- 任一开启时显示"子助手访问范围"入口
-- 多选 Sheet：候选项是除当前 Assistant 外的全部子助手
-- 全局可见子助手显示"全局可用"状态
-- `assistant_manage(CREATE)` 后新 ID 自动显示为已选中
-- 关闭开关不清空允许列表
-
-### 15.2 消息渲染
-
-**SubAssistantCallCard** 从通用 COT 分组中拆出（`groupMessageParts` 遇到 `assistant_call` 先 flush 普通 block）。布局：28dp Target 头像（右下角叠圆；运行中圆边柔光扫尾）/名称/右侧合并状态→request 一行→2～3 行 preview 尾部。整卡即详情入口。
-
-- preview 从 Tool input JSON decoder 读取 request
-- preview reducer 常量：最大缓冲 2000、首部边界 200；卡片展示常规 3 行、矮屏 2 行
-- preview 未变不回写 Master metadata
-- 整卡单一详情点击目标
-- Terminal Card：completed/unavailable/failed/stopped 各自正确文案
-- 不显示进度百分比/预计时间
-
-### 15.3 只读详情页
-
-`SubAssistantDetail(masterConversationId, runId)` 是独立全屏只读路由。
-
-- ViewModel 从 Master 所有 message variants 解析 Tool metadata，验证 parent/Target/request 一致
-- run ID 唯一匹配，找不到/多个匹配/Tool 名不符显示"详情不可用"
-- 页面结构：顶部栏→请求摘要→执行时间线→终态说明
-- `ChatInteractionPolicy.ReadOnlyChild`：不显示输入/编辑/删除/重生成/分支/收藏/分享/审批
-- 不发普通会话通知/完成提示音/TTS 自动播放
-
-### 15.4 TTSController
-
-- Target 播放时显示 Target 小头像（右下角叠圆 + 圆边柔光扫尾），头像按 Assistant ID 实时解析 Settings 中的 Assistant，Target 已删除时回退默认头像
-- normal 来源无头像
-- 来源切换强制 flush 时同步切换/移除头像
-- 队列自然播放完毕、Provider 切换、播放错误、dispose 时清空 `activeSource`
+完整配置、执行状态、详情解析和生命周期见 [sub-assistant-architecture.md](sub-assistant-architecture.md)。
 
 ---
 

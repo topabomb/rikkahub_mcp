@@ -41,7 +41,7 @@ class LocalTools(
             tools.add(clipboardTool)
         }
         if (options.contains(LocalToolOption.Tts)) {
-            // 设计文档 §7.5：每轮生成创建一个 TtsToolPlaybackContext，
+            // 每轮生成创建一个 TtsToolPlaybackContext，
             // toolProvider 在不同 LLM step 重建 Tool 时复用这个 context。
             tools.add(buildTextToSpeechTool(eventBus, ttsManager, settingsStore, ttsPlaybackContext))
         }

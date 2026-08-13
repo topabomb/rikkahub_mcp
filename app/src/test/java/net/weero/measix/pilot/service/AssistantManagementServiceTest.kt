@@ -4,6 +4,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import net.weero.measix.pilot.data.datastore.Settings
@@ -240,6 +241,43 @@ class AssistantManagementServiceTest {
         service.performPendingDeletionCleanup()
 
         assertTrue(settingsFlow.value.pendingAssistantDeletions.isEmpty())
+    }
+
+    @Test
+    fun `cleanup timeout keeps tombstone and does not delete data still used by a run`() = runTest {
+        val targetId = Uuid.random()
+        val settingsFlow = MutableStateFlow(
+            Settings(
+                assistants = listOf(Assistant(id = callerId), Assistant(id = targetId)),
+                assistantId = callerId,
+            )
+        )
+        val settingsStore = mockk<SettingsStore>()
+        every { settingsStore.settingsFlow } returns settingsFlow
+        coEvery { settingsStore.updateAtomic(any()) } answers {
+            settingsFlow.value = firstArg<(Settings) -> Settings>()(settingsFlow.value)
+        }
+        val coordinator = mockk<SubAssistantCoordinator>()
+        coEvery { coordinator.cancelRunsForAssistant(targetId) } coAnswers { awaitCancellation() }
+        val memoryRepo = mockk<MemoryRepository>(relaxed = true)
+        val conversationRepo = mockk<ConversationRepository>(relaxed = true)
+        val sessionRegistry = mockk<ConversationSessionRegistry>(relaxed = true)
+        val service = AssistantManagementService(
+            settingsStore = settingsStore,
+            memoryRepository = memoryRepo,
+            conversationRepo = conversationRepo,
+            filesManager = mockk(relaxed = true),
+            sessionRegistry = sessionRegistry,
+            subAssistantCoordinator = coordinator,
+        )
+
+        val deletion = service.deleteAssistant(targetId).getOrThrow()
+
+        assertTrue(deletion.cleanupPending)
+        assertEquals(listOf(targetId), settingsFlow.value.pendingAssistantDeletions.map { it.assistantId })
+        coVerify(exactly = 0) { memoryRepo.deleteMemoriesOfAssistant(any()) }
+        coVerify(exactly = 0) { conversationRepo.deleteConversationOfAssistant(any()) }
+        coVerify(exactly = 0) { sessionRegistry.cancelGenerationsForAssistant(any(), any()) }
     }
 
     @Test

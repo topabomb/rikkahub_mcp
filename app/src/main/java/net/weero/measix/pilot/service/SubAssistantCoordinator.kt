@@ -1,6 +1,5 @@
 package net.weero.measix.pilot.service
 
-import android.content.Context
 import android.util.Log
 import androidx.core.net.toUri
 import kotlinx.coroutines.CancellationException
@@ -29,7 +28,6 @@ import me.rerere.ai.ui.finishInterruptedTools
 import me.rerere.ai.ui.finishPendingTools
 import me.rerere.ai.ui.finishReasoning
 import me.rerere.ai.ui.ToolApprovalState
-import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.ai.GenerationChunk
 import net.weero.measix.pilot.data.ai.FinishedReason
 import net.weero.measix.pilot.data.ai.GenerationHandler
@@ -43,6 +41,7 @@ import net.weero.measix.pilot.data.ai.subassistant.buildInitialSubAssistantCallM
 import net.weero.measix.pilot.data.ai.subassistant.buildSubAssistantCallResult
 import net.weero.measix.pilot.data.ai.subassistant.computeSubAssistantPreview
 import net.weero.measix.pilot.data.ai.subassistant.computeTerminalPreview
+import net.weero.measix.pilot.data.ai.subassistant.intersectTargetToolCapabilities
 import net.weero.measix.pilot.data.ai.subassistant.cloneLineagePrefix
 import net.weero.measix.pilot.data.ai.subassistant.findPreviousCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
@@ -57,11 +56,17 @@ import net.weero.measix.pilot.data.ai.tools.ToolSetRunMode
 import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
 import net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
 import net.weero.measix.pilot.data.ai.transformers.Base64ImageToLocalFileTransformer
+import net.weero.measix.pilot.data.ai.transformers.DocumentAsPromptTransformer
+import net.weero.measix.pilot.data.ai.transformers.InputMessageTransformer
+import net.weero.measix.pilot.data.ai.transformers.OcrTransformer
 import net.weero.measix.pilot.data.ai.transformers.OutputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.PlaceholderTransformer
+import net.weero.measix.pilot.data.ai.transformers.PromptInjectionTransformer
 import net.weero.measix.pilot.data.ai.transformers.RegexOutputTransformer
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.data.ai.transformers.ThinkTagTransformer
+import net.weero.measix.pilot.data.ai.transformers.TimeReminderTransformer
+import net.weero.measix.pilot.data.ai.transformers.WorkspaceReminderTransformer
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.files.FilesManager
@@ -71,6 +76,7 @@ import net.weero.measix.pilot.data.model.replaceRegexes
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
+import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.Uuid
 
@@ -105,7 +111,6 @@ private data class TargetGenerationResult(
  * ```
  */
 class SubAssistantCoordinator(
-    private val context: Context,
     private val generationHandler: GenerationHandler,
     private val conversationRepo: ConversationRepository,
     private val sessionRegistry: ConversationSessionRegistry,
@@ -113,9 +118,9 @@ class SubAssistantCoordinator(
     private val settingsStore: SettingsStore,
     private val memoryRepository: MemoryRepository,
     private val templateTransformer: TemplateTransformer,
+    workspaceRepository: WorkspaceRepository,
     private val filesManager: FilesManager,
     private val json: Json,
-    private val appScope: AppScope,
 ) {
     private data class PendingUserInteraction(
         val interactionId: String,
@@ -124,6 +129,7 @@ class SubAssistantCoordinator(
 
     private val runLeases = SubAssistantRunLeaseRegistry()
     private val pendingUserInteractions = ConcurrentHashMap<String, PendingUserInteraction>()
+    private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
 
     /** 删除 Target 前取消并等待其所有正在执行的 Target Run 停止写回。 */
     suspend fun cancelRunsForAssistant(assistantId: Uuid) {
@@ -229,7 +235,7 @@ class SubAssistantCoordinator(
             }
         }
 
-        // 设计文档 §8.1：所有路径先得到最终 Child ID 并取得 lease，
+        // 所有路径先得到最终 Child ID 并取得 lease，
         // 再创建/克隆持久化数据或追加 request。
         // 对于 ReuseChild，lineage 已知 Child ID，先按该 ID 检查是否已有活跃 Job。
         // 对于 CreateNew/CreateNewDueToError/CloneChild，使用 lineage key 检查
@@ -252,7 +258,7 @@ class SubAssistantCoordinator(
             )
         }
 
-        // 设计文档 §8.1：写入 request 前再做一次访问校验，
+        // 写入 request 前再做一次访问校验，
         // 关闭 preflight 与持久化之间的竞态窗口。
         val latestSettingsCheck = settingsStore.settingsFlow.value
         val latestBlockReason = resolvePreWriteBlockReason(
@@ -343,7 +349,7 @@ class SubAssistantCoordinator(
             throw e
         }
 
-        // 设计文档 §7.4：运行中 Settings 撤权监听器
+        // 运行中 Settings 撤权监听器
         // 监听最新 Settings，重算 caller/Target 关系；变化时立即取消 Child Job
         val runScope = CoroutineScope(kotlin.coroutines.coroutineContext + runJob)
         val settingsWatcher = runScope.launch {
@@ -602,10 +608,16 @@ class SubAssistantCoordinator(
         val session = sessionRegistry.getOrCreateSession(childConversationId)
         val conversation = session.state.value
 
-        // Target transformers（不含 Master 特有的 TimeReminder、PromptInjection 等）
-        val targetInputTransformers = listOf(
+        // Target uses its own complete Assistant-level transformer pipeline. Conversation-level
+        // overrides remain disabled below; PromptInjection receives the Target's own mode IDs.
+        val targetInputTransformers = listOf<InputMessageTransformer>(
+            TimeReminderTransformer,
+            PromptInjectionTransformer,
             PlaceholderTransformer,
+            DocumentAsPromptTransformer,
+            OcrTransformer,
             templateTransformer,
+            workspaceReminderTransformer,
         )
         val targetOutputTransformers = listOf<OutputMessageTransformer>(
             ThinkTagTransformer,
@@ -624,7 +636,7 @@ class SubAssistantCoordinator(
             emptyList()
         }
 
-        // 设计文档 §7.5：复用 turn-level TtsToolPlaybackContext 的 sessionId 和 playbackState，
+        // 复用 turn-level TtsToolPlaybackContext 的 sessionId 和 playbackState，
         // 使整轮 turn 内的 Master 和所有 Target 的 TTS 调用共享同一顺序播放队列。
         // 无 turnTtsContext 时（测试或旧调用路径）回退到独立 context。
         val ttsPlaybackContext = if (turnTtsContext != null) {
@@ -644,16 +656,21 @@ class SubAssistantCoordinator(
             )
         }
 
-        // Tool provider：每个 step 重新解析资源，但复用 ttsPlaybackContext
+        // 每个 step 重新解析资源并应用“运行快照 ∩ 当前配置”，但复用 TTS 播放上下文。
         val toolProvider: suspend () -> List<Tool> = {
             val currentSettings = settingsStore.settingsFlow.value
-            toolSetFactory.buildTools(
-                assistant = target,
-                settings = currentSettings,
-                workspaceCwd = conversation.workspaceCwd,
-                runMode = ToolSetRunMode.TARGET,
-                ttsPlaybackContext = ttsPlaybackContext,
-            )
+            val latestTarget = currentSettings.getAssistantById(target.id)
+            if (latestTarget == null) {
+                emptyList()
+            } else {
+                toolSetFactory.buildTools(
+                    assistant = intersectTargetToolCapabilities(target, latestTarget),
+                    settings = currentSettings,
+                    workspaceCwd = conversation.workspaceCwd,
+                    runMode = ToolSetRunMode.TARGET,
+                    ttsPlaybackContext = ttsPlaybackContext,
+                )
+            }
         }
 
         var lastMessages = conversation.currentMessages
@@ -675,9 +692,16 @@ class SubAssistantCoordinator(
                 toolProvider = toolProvider,
                 nonInteractive = true,
                 interactiveToolNames = setOf("ask_user"),
+                memoryToolAllowed = {
+                    val latestTarget = settingsStore.settingsFlow.value.getAssistantById(target.id)
+                    latestTarget?.enableMemory == true &&
+                        latestTarget.useGlobalMemory == target.useGlobalMemory
+                },
                 processingStatus = session.processingStatus,
                 conversationSystemPrompt = null, // Child 不设置对话级 System Prompt
-                conversationModeInjectionIds = emptySet(), // Child 不继承 Master 的 mode injection
+                // Child does not inherit the Master's mode injection. Passing the Target IDs also
+                // keeps Target injections active when allowConversationPromptInjection is enabled.
+                conversationModeInjectionIds = target.modeInjectionIds,
                 workspaceCwd = conversation.workspaceCwd,
                 maxSteps = 256,
             ).collect { chunk ->
@@ -733,7 +757,6 @@ class SubAssistantCoordinator(
                 break
             }
             val resumedMessages = awaitPendingAskUser(
-                target = target,
                 childConversationId = childConversationId,
                 childTaskNodeId = childTaskNodeId,
                 runId = runId,
@@ -753,7 +776,6 @@ class SubAssistantCoordinator(
     }
 
     private suspend fun awaitPendingAskUser(
-        target: net.weero.measix.pilot.data.model.Assistant,
         childConversationId: Uuid,
         childTaskNodeId: Uuid,
         runId: String,
@@ -1027,7 +1049,7 @@ internal fun normalizeSubAssistantCancellationReason(message: String?): String =
 /**
  * 从 Child 会话消息中提取 final answer。
  *
- * 设计文档 §6.6：优先取最后一个 Target ASSISTANT step 中、最后一个“工作工具”
+ * 优先取最后一个 Target ASSISTANT step 中、最后一个“工作工具”
  * 之后的顶层可见 Text。`text_to_speech` 等副作用工具不挡住答案。
  * 最后一步只有 Reasoning/空 Text 时，回退到更早 step 的 post-tool 文本；
  * 仍为空时取最后一条有文本的 ASSISTANT 消息的末段 Text island，避免主助手拿到空 content。

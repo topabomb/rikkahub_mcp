@@ -2,6 +2,7 @@ package net.weero.measix.pilot.service
 
 import android.util.Log
 import androidx.core.net.toUri
+import kotlinx.coroutines.withTimeout
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantAccessPolicy
 import net.weero.measix.pilot.data.ai.subassistant.buildToolCreatedAssistant
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
@@ -17,6 +18,7 @@ import net.weero.measix.pilot.data.repository.MemoryRepository
 import kotlin.uuid.Uuid
 
 private const val TAG = "AssistantManagementService"
+private const val ASSISTANT_CLEANUP_STOP_TIMEOUT_MS = 5_000L
 
 /**
  * Assistant CRUD、校验、通过 Settings 原子更新、文件/Memory/普通会话清理。
@@ -308,13 +310,18 @@ class AssistantManagementService(
         }
 
         val result = runCatching {
-            subAssistantCoordinator.cancelRunsForAssistant(
-                assistantId = tombstone.assistantId,
-            )
-            sessionRegistry.cancelGenerationsForAssistant(
-                assistantId = tombstone.assistantId,
-                reason = "assistant_removed",
-            )
+            // A non-cooperative Provider or native tool must not leave deletion suspended forever.
+            // On timeout the tombstone remains durable and startup will retry without deleting data
+            // that an active run may still be using.
+            withTimeout(ASSISTANT_CLEANUP_STOP_TIMEOUT_MS) {
+                subAssistantCoordinator.cancelRunsForAssistant(
+                    assistantId = tombstone.assistantId,
+                )
+                sessionRegistry.cancelGenerationsForAssistant(
+                    assistantId = tombstone.assistantId,
+                    reason = "assistant_removed",
+                )
+            }
             memoryRepository.deleteMemoriesOfAssistant(tombstone.assistantId.toString())
             conversationRepo.deleteConversationOfAssistant(tombstone.assistantId)
             check(cleanupAssistantFilesIfNotReferenced(tombstone)) {

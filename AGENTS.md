@@ -68,7 +68,7 @@ gradlew lint                       # 运行 Android Lint
 - **UI Architecture**：自适应布局策略、导航、主题体系。详见 [`ui-architecture.md`](docs/references/ui-architecture.md)。
 - **Message Rendering**：消息渲染管线（UIMessage.parts → 像素），含 Markdown 双路径、代码块三态、Mermaid/HTML WebView、LaTeX 原生渲染。详见 [`message-rendering-pipeline.md`](docs/references/message-rendering-pipeline.md)。
 - **Update Mechanism**：版本检查、SemVer 比较、CI 发布流程。详见 [`update-mechanism.md`](docs/references/update-mechanism.md)。
-- **Sub-Assistant**：子助手（Target）调用与 lineage 体系，由 `SubAssistantCoordinator` 协调 preflight/lease/checkpoint/cancel/recovery。详见 [`chat-generation-pipeline.md`](docs/references/chat-generation-pipeline.md) "子助手生成管线扩展"和 [`assistant-configuration.md`](docs/references/assistant-configuration.md) §2.10。
+- **Sub-Assistant**：子助手（Target）的访问、同步调用、Child lineage、持久化、撤权与恢复体系。详见 [`sub-assistant-architecture.md`](docs/references/sub-assistant-architecture.md)。
 - **Prompts and Tools**：模型可见的系统注入、工具 description、参数说明与 Tool Result 形状。详见 [`prompts-and-tools.md`](docs/references/prompts-and-tools.md)。
 
 Fork 前的完整架构说明见 [`docs/dev/original-architecture.md`](docs/dev/original-architecture.md)（冻结归档）。

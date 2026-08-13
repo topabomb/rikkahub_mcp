@@ -78,7 +78,7 @@ class TtsController(
     private val _playbackState = MutableStateFlow(PlaybackState())
     val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
 
-    // 设计文档 §7.5 — source-aware 播放来源追踪
+    // source-aware 播放来源追踪
     // 每次 speak() 携带一个 source 标记，controller 在播放跨越 source 边界时发射新 source。
     // 这样 UI 层的 activeSource 始终反映"当前正在播放的音频来源"，而非"最近入队的来源"。
     private data class SourceSegment(val startChunkIndex: Int, val source: Any?)
@@ -124,7 +124,7 @@ class TtsController(
      * 朗读文本
      * - flush=true: 清空当前进度并重新开始
      * - flush=false: 继续队列，追加朗读
-     * - source: 本次朗读的来源标记（设计文档 §7.5），controller 在播放到该批 chunk 时发射 sourceChange
+     * - source: 本次朗读的来源标记，controller 在播放到该批 chunk 时发射 sourceChange
      */
     fun speak(text: String, flush: Boolean = true, source: Any? = null) {
         if (text.isBlank()) return
@@ -271,7 +271,7 @@ class TtsController(
 
                     val chunk = queue.poll() ?: break
 
-                    // 设计文档 §7.5：检查是否跨越 source segment 边界
+                    // 检查是否跨越 source segment 边界
                     // chunk.index 是全局连续索引，segment.startChunkIndex 记录每段起始 index
                     while (currentSegmentIdx + 1 < sourceSegments.size &&
                         chunk.index >= sourceSegments[currentSegmentIdx + 1].startChunkIndex

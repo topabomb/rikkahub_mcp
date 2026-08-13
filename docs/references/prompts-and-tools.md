@@ -79,7 +79,7 @@ System
 
 ### 3.1 记忆 `buildMemoryPrompt()`
 
-`assistant.enableMemory` 时追加。本轮 `generateText()` 开场读库一次，后续 step 不刷新。
+`assistant.enableMemory` 时追加。生成开始时读取的记忆用于本轮提示词，后续 step 不刷新；Memory Tool 执行仍按 owner 约束写库，Target 还会即时重验记忆开关与 namespace。
 
 ```text
 **Memories**
@@ -165,8 +165,8 @@ Settings 重算访问范围。
 ## 5. 工具描述与参数
 
 装配顺序见 `ChatService` / `GenerationToolSetFactory`：搜索、Local Tools、记忆、最近会话、
-Workspace、技能、Assistant Tools、MCP。Target Run 过滤 `assistant_manage`、
-`assistant_memory_list`、`assistant_call`，保留并桥接 `ask_user`。
+Workspace、技能、Assistant Tools、MCP。Target Run 永久过滤 `assistant_manage`、
+`assistant_memory_list`、`assistant_call`，保留并桥接 `ask_user`；其余工具按运行开始快照与当前配置的交集在 step 边界重建。
 
 下列 description 为源码中的英文原文（动态日期/时区用占位标明）。
 
@@ -415,9 +415,7 @@ unified diff 只进 part metadata，不进发给模型的文本。
 
 ## 6. 工具输出截断
 
-`GenerationHandler.maybeTruncateToolOutput()`：文本总长超过 `MAX_TOOL_OUTPUT_CHARS`（32,768）
-且助手有 Shell 时，全文写入 `/tool_outputs/<executionId>.txt`，回给模型
-`TOOL_OUTPUT_PREVIEW_CHARS`（4,096）预览加读取指引。无 Shell 时不截断。
+`GenerationHandler.maybeTruncateToolOutput()`：文本总长超过 `MAX_TOOL_OUTPUT_CHARS` 且助手有 Shell 时，全文写入 `/tool_outputs/<executionId>.txt`，只把 `TOOL_OUTPUT_PREVIEW_CHARS` 控制的预览与读取指引回给模型。无 Shell 时不截断。
 
 ---
 

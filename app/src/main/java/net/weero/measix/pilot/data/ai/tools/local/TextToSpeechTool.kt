@@ -17,7 +17,7 @@ import net.weero.measix.pilot.data.event.AppEventBus
 import me.rerere.tts.provider.TTSManager
 
 /**
- * 设计文档 §7.5 — TTS 工具播放上下文
+ * TTS 工具播放上下文。
  *
  * 每轮 Master Generation（一个用户 turn）创建一个 turn-level context，包含本轮稳定的
  * playback session ID、Assistant ID、名称快照和来源类型。该 context 在整轮 turn 内被

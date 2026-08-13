@@ -1262,6 +1262,7 @@
   <string name="sub_assistant_card_starting">開始中</string>
   <string name="sub_assistant_card_running">実行中</string>
   <string name="sub_assistant_card_completed">完了</string>
+  <string name="sub_assistant_card_non_text_output">テキスト以外の出力を含みます</string>
   <string name="sub_assistant_card_failed">失敗</string>
   <string name="sub_assistant_card_stopped">停止</string>
   <string name="sub_assistant_card_unavailable">利用不可</string>

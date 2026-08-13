@@ -9,7 +9,7 @@ sealed class AppEvent {
         val text: String,
         val flush: Boolean = true,
         /**
-         * 设计文档 §7.5 — TTS 播放来源。
+         * TTS 播放来源。
          * null 表示无 session 的手动朗读/自动播放，沿用现有 flush 行为并清除子助手头像。
          */
         val source: TtsPlaybackSource? = null,

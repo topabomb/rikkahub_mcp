@@ -171,22 +171,25 @@ internal fun resolveRecoveryStopReason(
     ) {
         return "target_access_revoked"
     }
-    if (resolveSubAssistantRunSpec(settings, caller, target) is SubAssistantRunSpecResolution.Blocked) {
-        return "target_model_unavailable"
+    val runSpec = resolveSubAssistantRunSpec(settings, caller, target)
+    if (runSpec is SubAssistantRunSpecResolution.Blocked) {
+        return runSpec.reason
     }
     if (validChild == null) return "child_missing"
     return "app_restarted"
 }
 
-private fun chooseMoreSpecificStopReason(existing: String?, incoming: String): String {
+internal fun chooseMoreSpecificStopReason(existing: String?, incoming: String): String {
     if (existing == null) return incoming
     val priority = listOf(
         "target_removed",
         "target_disabled",
         "target_access_revoked",
         "target_model_unavailable",
+        "caller_model_unavailable",
         "child_missing",
         "app_restarted",
     )
-    return if (priority.indexOf(incoming) < priority.indexOf(existing)) incoming else existing
+    fun rank(reason: String): Int = priority.indexOf(reason).takeIf { it >= 0 } ?: Int.MAX_VALUE
+    return if (rank(incoming) < rank(existing)) incoming else existing
 }

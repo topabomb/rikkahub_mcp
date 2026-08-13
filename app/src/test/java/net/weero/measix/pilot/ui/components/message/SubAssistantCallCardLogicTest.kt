@@ -1,6 +1,8 @@
 package net.weero.measix.pilot.ui.components.message
 
+import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -27,9 +29,41 @@ class SubAssistantCallCardLogicTest {
     }
 
     @Test
+    fun `clipPreviewForCard does not expose a detached combining mark`() {
+        val clipped = clipPreviewForCard("e\u0301" + "a".repeat(20), maxLines = 3, maxChars = 20)
+
+        assertTrue(clipped.startsWith("…a"))
+    }
+
+    @Test
     fun `preview char budget is smaller on compact width`() {
         assertEquals(72, subAssistantCardPreviewMaxChars(compactHeight = true, compactWidth = true))
         assertEquals(216, subAssistantCardPreviewMaxChars(compactHeight = false, compactWidth = false))
+    }
+
+    @Test
+    fun `non-text placeholder is limited to completed calls without visible preview`() {
+        assertTrue(
+            shouldShowNonTextOutputPlaceholder(
+                state = SubAssistantCallState.COMPLETED,
+                preview = " ",
+                hasNonTextOutput = true,
+            )
+        )
+        assertFalse(
+            shouldShowNonTextOutputPlaceholder(
+                state = SubAssistantCallState.COMPLETED,
+                preview = "visible text",
+                hasNonTextOutput = true,
+            )
+        )
+        assertFalse(
+            shouldShowNonTextOutputPlaceholder(
+                state = SubAssistantCallState.FAILED,
+                preview = null,
+                hasNonTextOutput = true,
+            )
+        )
     }
 
     @Test

@@ -1262,6 +1262,7 @@
   <string name="sub_assistant_card_starting">Запуск</string>
   <string name="sub_assistant_card_running">Выполнение</string>
   <string name="sub_assistant_card_completed">Завершено</string>
+  <string name="sub_assistant_card_non_text_output">Содержит нетекстовый результат</string>
   <string name="sub_assistant_card_failed">Ошибка</string>
   <string name="sub_assistant_card_stopped">Остановлено</string>
   <string name="sub_assistant_card_unavailable">Недоступно</string>

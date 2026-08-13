@@ -192,65 +192,23 @@ MCP 连接、休眠与恢复不由生成链路持有；`McpManager` 负责连接
 
 ## 子助手生成管线扩展
 
-子助手（Sub-Assistant）V1 在通用生成管线上增加了以下原语，普通聊天行为保持不变。
+子助手不是另一套生成引擎。它由 `SubAssistantCoordinator` 在通用 Generation Pipeline 外增加 preflight、lineage、lease、Child 持久化、运行状态和恢复编排；Target 内部仍使用同一 `GenerationHandler`、Transformer、Provider、工具循环和 checkpoint。
 
-### GenerationChunk 事件
+通用管线为此提供：
 
-`GenerationHandler.generateText()` 使用 `channelFlow` 返回四种 `GenerationChunk` 事件。`assistant_call` 在可取消
-子 Job 中执行并通过 `reportMetadata` 回写，因此普通 `flow { emit(...) }` 会违反跨协程发射 invariant；
-`channelFlow.send` 保证事件安全，ToolCall 本身仍由 ordinal 循环串行执行：
+- `ToolExecutionContext(messageId, toolOrdinal)`，精确定位本地 ToolCall，不依赖 Provider `toolCallId`
+- `GenerationChunk.Messages/Phase/Checkpoint/Finished`，区分消息更新、阶段、持久化边界和结束原因
+- 每个模型 step 重建工具的 `toolProvider`
+- Target 非交互审批策略，以及可由宿主承接的 `ask_user` 例外
+- Master/Child 共用的 `ConversationSessionRegistry`
 
-| 事件 | 用途 |
-|------|------|
-| `Messages` | 更新后的消息列表（原有行为） |
-| `Phase` | 生成阶段变化，phase 使用稳定英文枚举：`preparing`/`model_waiting`/`tool_executing`/`between_steps`；`tool_executing` 携带 registered tool name |
-| `Checkpoint` | 持久化检查点，`CheckpointKind` 区分 `STEP_COMPLETED`/`TOOL_STATE_CHANGED`/`TOOL_RESULT_COMPLETED` 等 |
-| `Finished` | 生成结束，`FinishedReason` 区分 `completed`/`awaiting_approval`/`step_limit_reached` |
+`assistant_call` 同步完成以下流程：校验 Caller、Target、访问与模型；解析当前 Master 分支的 lineage；获取 Master/Target lease；用最新 Settings 重验；新建、复用或克隆 Child；运行 Target；持续保存 Child 与 Master metadata；最后返回成功内容或稳定失败原因。
 
-Master collector 消费 Checkpoint 保存会话状态；Target collector 额外用 Phase 更新运行卡片。
+Target 永久过滤 Assistant 管理和再次委托。其他工具按运行开始快照与当前配置的交集在 step 边界装配；Memory Tool 在执行前独立重验。需审批工具默认拒绝，只有 `ask_user` 会按 Child locator 桥接到主聊天。
 
-### ToolExecutionContext
+Master 与同一 turn 内的 Target 共享 TTS session 和顺序播放状态。Target 来源仅在当前播放属于子助手且其配置允许使用助手头像时显示；队列结束、Provider 切换、播放错误或 dispose 会清空来源。
 
-`Tool.execute` 保留原有签名，新增可选的 `contextualExecute` 和 `executeWithContext()`：
-
-- `ToolExecutionContext` 含 `messageId` + `toolOrdinal`（精确 locator，不依赖 `toolCallId`）和 `reportMetadata` 回写回调
-- `GenerationHandler` 只通过 `executeWithContext()` 执行工具；普通 Tool 自动回退 `execute`
-- `assistant_call` 的普通 `execute` fallback 返回 `context_required` 错误，不在缺少 locator 时启动 Child
-
-### toolProvider 与 Target 交互边界
-
-- `generateText()` 接收 `toolProvider: (suspend () -> List<Tool>)`，每个 LLM step 重新调用以获取最新工具列表
-- `nonInteractive: Boolean` 参数默认拒绝需审批工具；`interactiveToolNames` 可显式放行宿主能够承接的工具
-- Target Run 只放行 `ask_user`：Coordinator 持久化 Child locator，把问题桥接到主聊天子助手卡片并等待回答；其余需审批工具返回 `tool_not_permitted`
-- 截断文件名使用 `messageId + toolOrdinal` 构成的 execution ID，不使用 Provider `toolCallId`
-
-### ConversationSessionRegistry
-
-从 `ChatService` 抽取的 Session/Job/StateFlow 生命周期管理器：
-
-- 同一 Conversation ID 只有一个 Session
-- Master 和 Child 共用同一 Registry
-- `getOrCreateSession` 创建型打开 Session；`getExisting` 只查询不创建
-- 加载持久化会话使用显式 `open(conversation)`，不创建空 Session 遮蔽 Room 快照
-
-### Target 执行流程
-
-`assistant_call` 通过 `SubAssistantCoordinator` 实现：
-
-1. Target preflight（caller 存在且 AssistantDelegation 启用、Target 存在、Target != caller、`allowAsSubAssistant == true`、访问公式、模型来源可解析）
-2. 构造内存 `SubAssistantRunSpec`：Target 显式模型优先；未绑定时继承 caller 的有效模型和模型执行参数；显式 Target 模型失效与 caller 无模型分别返回 `target_model_unavailable`、`caller_model_unavailable`
-3. 按当前 Master 分支只读解析 lineage，再获取 `Master Conversation ID + Target ID` lease；同一 Master/Target 串行，不同 Master 可并行
-4. 写入 request 前从最新 Settings 重验权限与 RunSpec 模型；通过后创建/克隆 Child Conversation 并追加 Target USER request（Child 创建失败时释放 lease）
-5. 回写 Master tool metadata 的 run/child link 并 checkpoint
-6. Target GenerationHandler 执行（Child Messages/Phase 实时更新，step/tool 边界 checkpoint）
-7. 提取 final answer，写 terminal metadata，返回 Tool Result
-8. 释放 lineage lease，Master 继续当前 Tool Loop
-
-Target Run policy 永久过滤 `AssistantManagement`/`AssistantDelegation`（LocalToolOption 级别），同时按工具名过滤 `assistant_manage`、`assistant_call`、`assistant_memory_list`。`ask_user` 保留并作为唯一可桥接的交互工具；等待回答时停止、撤权、删除或重启都会解除等待并按对应 stopped reason 收口，不自动重放。运行中撤权在安全边界 stopped。
-
-### TTS 来源切换
-
-Target Generation 中 `TtsToolPlaybackContext` 在每轮 Generation 创建一次，不在每个 LLM step 重建；不同 step 重建 Tool 时复用同一 context，不放入单例 LocalTools。`computeEffectiveFlush` 决定同一 Generation 内首次 TTS 调用 flush、后续 append（顺序开关开时）；playback session 变化时无论开关都 flush。队列自然播放完毕（`PlaybackStatus.Ended`）、Provider 切换、播放错误、dispose 时清空 `activeSource`，避免控制条在无音频时继续显示旧 Target。`assistant_call` 完成时不清除已提交给 TTS Controller 的音频（保持后台播放语义）；来源不持久化，不从历史消息恢复。
+完整的持久化结构、执行流程、撤权、恢复、分支与 UI 边界见 [sub-assistant-architecture.md](sub-assistant-architecture.md)。
 
 ## 关键文件
 

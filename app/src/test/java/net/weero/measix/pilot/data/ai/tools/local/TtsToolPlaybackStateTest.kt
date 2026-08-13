@@ -86,7 +86,7 @@ class TtsToolPlaybackStateTest {
         assertFalse(ctx1.playbackState.prepare("a2", sequentialEnabled = true).flush)
     }
 
-    // ---- 设计文档 §7.5: turn-level 共享 sessionId + playbackState ----
+    // ---- turn-level 共享 sessionId + playbackState ----
 
     @Test
     fun `turn-level shared state master first then target appends`() {

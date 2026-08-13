@@ -1312,5 +1312,6 @@
   <string name="sub_assistant_detail_show_more">Show more</string>
   <string name="sub_assistant_detail_show_less">Show less</string>
   <string name="sub_assistant_detail_no_output">No execution output yet</string>
+  <string name="sub_assistant_card_non_text_output">Includes non-text output</string>
 </resources>
 

@@ -14,7 +14,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 设计文档 §13.1 — AssistantConfigCompatibilityTest
+ * Assistant 配置兼容性回归测试。
  *
  * 覆盖：历史 JSON 缺字段时普通类别、非全局可见、允许列表为空；
  * 关闭类别清理授权；克隆保留类别但重置全局与允许列表。

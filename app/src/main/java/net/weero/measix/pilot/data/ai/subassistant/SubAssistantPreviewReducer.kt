@@ -3,6 +3,8 @@ package net.weero.measix.pilot.data.ai.subassistant
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import java.text.BreakIterator
+import java.util.Locale
 import kotlin.uuid.Uuid
 
 /**
@@ -33,7 +35,9 @@ fun extractTargetTextPartsInRange(
     for (i in (endIndex - 1) downTo startIndex) {
         val msg = messages[i]
         if (msg.role != MessageRole.ASSISTANT) continue
-        msg.parts.forEach { part ->
+        // The function contract is newest-first. Parts inside one message therefore also need
+        // reverse traversal; reducePreviewTexts() restores the original display order later.
+        msg.parts.asReversed().forEach { part ->
             if (part is UIMessagePart.Text) {
                 texts.add(part.text)
             }
@@ -43,6 +47,7 @@ fun extractTargetTextPartsInRange(
 }
 
 private const val MAX_BUFFER_CODEPOINTS = 2000
+private const val MAX_TERMINAL_PREVIEW_CODEPOINTS = 480
 private const val HEAD_SCAN_CODEPOINTS = 200
 
 /**
@@ -103,17 +108,34 @@ fun computeSubAssistantPreview(
 }
 
 /**
- * Terminal 预览：从 Target final 生成最多三行静态预览，在句末边界裁剪。
+ * Terminal 预览：保留 Target final 的开头摘要，限制行数和字符数。
  */
 fun computeTerminalPreview(finalText: String, maxLines: Int = 3): String {
     val cleaned = cleanPreviewText(finalText).trim()
     if (cleaned.isEmpty()) return ""
 
     val lines = cleaned.split('\n').filter { it.isNotBlank() }
-    if (lines.size <= maxLines) return cleaned
+    val lineLimited = lines.take(maxLines).joinToString("\n")
+    val codePointLimited = takeHeadByCodePoints(lineLimited, MAX_TERMINAL_PREVIEW_CODEPOINTS)
+    val truncated = lines.size > maxLines || codePointLimited.length < lineLimited.length
+    return if (truncated) "$codePointLimited…" else codePointLimited
+}
 
-    // 取最后 maxLines 行
-    return "…\n" + lines.takeLast(maxLines).joinToString("\n")
+internal fun takeHeadByCodePoints(text: String, maxCodePoints: Int): String {
+    if (maxCodePoints <= 0) return ""
+    if (text.codePointCount(0, text.length) <= maxCodePoints) return text
+
+    var endIndex = 0
+    var count = 0
+    while (endIndex < text.length && count < maxCodePoints) {
+        endIndex += Character.charCount(text.codePointAt(endIndex))
+        count++
+    }
+    val iterator = BreakIterator.getCharacterInstance(Locale.ROOT).apply { setText(text) }
+    while (endIndex > 0 && !isSafeGraphemeBoundary(text, endIndex, iterator)) {
+        endIndex -= Character.charCount(text.codePointBefore(endIndex))
+    }
+    return text.substring(0, endIndex).trimEnd()
 }
 
 // ---- 内部工具 ----
@@ -137,7 +159,7 @@ internal fun takeTailByCodePoints(text: String, maxCodePoints: Int): String {
         startIdx -= charCount
         count++
     }
-    return text.substring(startIdx)
+    return text.substring(advanceToGraphemeBoundary(text, startIdx))
 }
 
 internal fun addEllipsisAndTrim(text: String): String {
@@ -169,14 +191,14 @@ internal fun findBoundaryBefore(text: String, targetCodePoints: Int): Int {
     // 空行
     for (i in scanStart..scanEnd) {
         if (i + 1 < text.length && text[i] == '\n' && text[i + 1] == '\n') {
-            return i + 2
+            return advanceToGraphemeBoundary(text, i + 2)
         }
     }
 
     // 换行
     for (i in scanStart..scanEnd) {
         if (i < text.length && text[i] == '\n') {
-            return i + 1
+            return advanceToGraphemeBoundary(text, i + 1)
         }
     }
 
@@ -184,17 +206,82 @@ internal fun findBoundaryBefore(text: String, targetCodePoints: Int): Int {
     val sentenceEnd = setOf('.', '!', '?', '。', '！', '？', '…')
     for (i in scanStart..scanEnd) {
         if (i < text.length && text[i] in sentenceEnd) {
-            return i + 1
+            return advanceToGraphemeBoundary(text, i + 1)
         }
     }
 
     // 空格
     for (i in scanStart..scanEnd) {
         if (i < text.length && text[i] == ' ') {
-            return i + 1
+            return advanceToGraphemeBoundary(text, i + 1)
         }
     }
 
     // 硬切
-    return pos
+    return advanceToGraphemeBoundary(text, pos)
 }
+
+/**
+ * Move a code-point boundary forward to the next extended-character boundary.
+ *
+ * [BreakIterator] covers combining scripts and platform Unicode rules. Some JDK/Android versions
+ * still expose boundaries inside emoji ZWJ sequences or regional-indicator flags, so the explicit
+ * no-break rules below repair those cases before accepting the platform boundary.
+ */
+internal fun advanceToGraphemeBoundary(text: String, startIndex: Int): Int {
+    var index = startIndex.coerceIn(0, text.length)
+    if (index in 1 until text.length && Character.isLowSurrogate(text[index]) &&
+        Character.isHighSurrogate(text[index - 1])
+    ) {
+        index++
+    }
+    if (index == 0 || index == text.length) return index
+
+    val iterator = BreakIterator.getCharacterInstance(Locale.ROOT).apply { setText(text) }
+    while (index < text.length) {
+        if (isSafeGraphemeBoundary(text, index, iterator)) return index
+        index += Character.charCount(text.codePointAt(index))
+    }
+    return text.length
+}
+
+private fun isSafeGraphemeBoundary(
+    text: String,
+    index: Int,
+    iterator: BreakIterator,
+): Boolean {
+    if (index <= 0 || index >= text.length) return true
+    val previous = text.codePointBefore(index)
+    val next = text.codePointAt(index)
+
+    if (previous == '\r'.code && next == '\n'.code) return false
+    if (previous == ZERO_WIDTH_JOINER || next == ZERO_WIDTH_JOINER) return false
+    if (isGraphemeExtender(next)) return false
+    if (isRegionalIndicator(previous) && isRegionalIndicator(next)) {
+        var cursor = index
+        var precedingRegionalIndicators = 0
+        while (cursor > 0) {
+            val codePoint = text.codePointBefore(cursor)
+            if (!isRegionalIndicator(codePoint)) break
+            precedingRegionalIndicators++
+            cursor -= Character.charCount(codePoint)
+        }
+        if (precedingRegionalIndicators % 2 == 1) return false
+    }
+    return iterator.isBoundary(index)
+}
+
+private fun isGraphemeExtender(codePoint: Int): Boolean {
+    val type = Character.getType(codePoint)
+    return type == Character.NON_SPACING_MARK.toInt() ||
+        type == Character.COMBINING_SPACING_MARK.toInt() ||
+        type == Character.ENCLOSING_MARK.toInt() ||
+        codePoint in 0xFE00..0xFE0F ||
+        codePoint in 0xE0100..0xE01EF ||
+        codePoint in 0x1F3FB..0x1F3FF ||
+        codePoint in 0xE0020..0xE007F
+}
+
+private fun isRegionalIndicator(codePoint: Int): Boolean = codePoint in 0x1F1E6..0x1F1FF
+
+private const val ZERO_WIDTH_JOINER = 0x200D

@@ -3,7 +3,7 @@ package net.weero.measix.pilot.data.ai.tts
 import kotlin.uuid.Uuid
 
 /**
- * 设计文档 §7.5 — TTS 播放来源
+ * TTS 播放来源。
  *
  * 标识一次 TTS 调用来自哪个角色和哪轮生成。
  * 来源信息只服务播放仲裁和 UI，不持久化到 Conversation，也不进入模型 Tool Result。
@@ -27,7 +27,7 @@ data class TtsPlaybackSource(
 
     companion object {
         /**
-         * 计算最终 flush 策略（设计文档 §7.5 来源切换仲裁）。
+         * 计算来源切换时的最终 flush 策略。
          *
          * - [flushCalled] 为工具自身根据顺序开关决定的 flush
          * - [currentSource] 为当前活跃来源（null 表示无音频或手动朗读）

@@ -161,7 +161,7 @@ class TtsPlaybackSourceTest {
 
     @Test
     fun `same sessionId master to target does not force flush`() {
-        // 设计文档 §7.5：同一 turn 内 Master 和 Target 共享 sessionId，
+        // 同一 turn 内 Master 和 Target 共享 sessionId，
         // 来源类型从 NORMAL 切换到 SUB_ASSISTANT 不触发 flush
         val sharedSession = "turn-session-1"
         val masterSource = source(

@@ -15,7 +15,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * 设计文档 §13.2 — Migration_3_4_Test
+ * Conversation schema v4 迁移回归测试。
  *
  * 覆盖：
  * - v1/v2 均存在到 v4 的完整历史迁移链；

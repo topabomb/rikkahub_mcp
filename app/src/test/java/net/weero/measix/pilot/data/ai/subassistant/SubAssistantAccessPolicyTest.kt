@@ -9,7 +9,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 设计文档 §13.1 — SubAssistantAccessPolicyTest
+ * SubAssistantAccessPolicy 访问边界回归测试。
  *
  * 覆盖：默认空、显式允许、全局可见、两者并集、caller/普通 Assistant/失效 ID 排除、稳定 Settings 顺序。
  */

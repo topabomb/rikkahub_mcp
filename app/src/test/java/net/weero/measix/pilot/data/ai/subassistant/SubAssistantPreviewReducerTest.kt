@@ -19,6 +19,11 @@ class SubAssistantPreviewReducerTest {
     private fun assistantMessage(text: String, id: Uuid = Uuid.random()) =
         UIMessage(id = id, role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text(text)))
 
+    private fun assistantMessage(vararg texts: String) = UIMessage(
+        role = MessageRole.ASSISTANT,
+        parts = texts.map(UIMessagePart::Text),
+    )
+
     private fun assistantMessageWithReasoning(text: String, reasoning: String) =
         UIMessage(
             role = MessageRole.ASSISTANT,
@@ -115,6 +120,19 @@ class SubAssistantPreviewReducerTest {
         assertEquals("Part 1", texts[2])
     }
 
+    @Test
+    fun `multiple text parts preserve display order in computed preview`() {
+        val messages = listOf(
+            userMessage("Do something", taskNodeId),
+            assistantMessage("First part", "Second part", "Third part"),
+        )
+
+        assertEquals(
+            "First part\nSecond part\nThird part",
+            computeSubAssistantPreview(messages, taskNodeId),
+        )
+    }
+
     // ---- reducePreviewTexts ----
 
     @Test
@@ -164,6 +182,25 @@ class SubAssistantPreviewReducerTest {
     }
 
     @Test
+    fun `tail clipping does not start inside a combining character cluster`() {
+        assertEquals("ab", takeTailByCodePoints("e\u0301ab", 3))
+    }
+
+    @Test
+    fun `tail clipping does not start inside a ZWJ emoji sequence`() {
+        val family = "\uD83D\uDC68\u200D\uD83D\uDC69\u200D\uD83D\uDC67\u200D\uD83D\uDC66"
+
+        assertEquals("ab", takeTailByCodePoints(family + "ab", 3))
+    }
+
+    @Test
+    fun `tail clipping keeps regional indicator flags whole`() {
+        val flag = "\uD83C\uDDE8\uD83C\uDDF3"
+
+        assertEquals("ab", takeTailByCodePoints(flag + "ab", 3))
+    }
+
+    @Test
     fun `long text truncated with ellipsis`() {
         val longText = "A".repeat(3001)  // 超过 MAX_BUFFER_CODEPOINTS (2000)
         val result = reducePreviewTexts(listOf(longText))
@@ -181,12 +218,21 @@ class SubAssistantPreviewReducerTest {
     fun `terminal preview limits to max lines`() {
         val multiLine = "Line1\nLine2\nLine3\nLine4\nLine5"
         val result = computeTerminalPreview(multiLine, maxLines = 3)
-        assertTrue(result.startsWith("…\n"))
+        assertTrue(result.endsWith("…"))
+        assertTrue(result.contains("Line1"))
+        assertTrue(result.contains("Line2"))
         assertTrue(result.contains("Line3"))
-        assertTrue(result.contains("Line4"))
-        assertTrue(result.contains("Line5"))
-        assertFalse(result.contains("Line1"))
-        assertFalse(result.contains("Line2"))
+        assertFalse(result.contains("Line4"))
+        assertFalse(result.contains("Line5"))
+    }
+
+    @Test
+    fun `terminal preview is bounded and does not split grapheme clusters`() {
+        val family = "\uD83D\uDC68\u200D\uD83D\uDC69\u200D\uD83D\uDC67\u200D\uD83D\uDC66"
+        val result = computeTerminalPreview("A".repeat(479) + family + "tail")
+
+        assertTrue(result.endsWith("…"))
+        assertFalse(result.contains('\u200D'))
     }
 
     @Test

@@ -6,7 +6,7 @@ import kotlinx.coroutines.sync.withLock
 /**
  * 串行维护单次子助手调用的完整 metadata 快照。
  *
- * 设计文档 §7.2 / §9.1 要求：
+ * 状态维护约束：
  * - 同一 run 的 metadata 只能由 Reducer 按 copy 语义更新并输出完整快照；
  *   phase、preview 和终态不能各自重新构造对象，否则会丢失 previous_run_id、Child link 或已写入字段；
  * - active_tool_name 只在 phase == tool_executing 时保留；进入其他 phase 或任一终态时清空；

@@ -84,7 +84,7 @@ interface CustomTtsState {
     val playbackState: StateFlow<PlaybackState>
 
     /**
-     * 设计文档 §7.5 — 当前活跃播放来源。
+     * 当前活跃播放来源。
      * null 表示无音频播放或无 session 的手动朗读。
      */
     val activeSource: StateFlow<net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource?>
@@ -96,7 +96,7 @@ interface CustomTtsState {
     fun speak(text: String, flushCalled: Boolean = true)
 
     /**
-     * 设计文档 §7.5 — 带来源的 speak。
+     * 带来源的 speak。
      * 来源切换时（activeSession != incomingSession）强制 flush。
      */
     fun speakWithSource(
@@ -145,7 +145,7 @@ private class CustomTtsStateImpl(
     override val totalChunks: StateFlow<Int> get() = controller.totalChunks
     override val playbackState: StateFlow<PlaybackState> get() = controller.playbackState
 
-    // 设计文档 §7.5 — activeSource 直接使用 controller 的 source-aware 追踪
+    // activeSource 直接使用 controller 的 source-aware 追踪
     // controller 在播放跨越 source 边界时更新 activeSource，
     // 确保头像始终反映"当前正在播放的音频来源"，而非"最近入队的来源"。
     @Suppress("UNCHECKED_CAST")
@@ -156,7 +156,7 @@ private class CustomTtsStateImpl(
     // including clearing on Ended/stop and handling per-chunk errors gracefully.
 
     fun updateProvider(provider: TTSProviderSetting?) {
-        // 设计文档 §7.5：Provider 切换时清空队列和 activeSource
+        // Provider 切换时清空队列和 activeSource
         controller.stop()
         controller.setProvider(provider)
     }
@@ -173,7 +173,7 @@ private class CustomTtsStateImpl(
     ) {
         val processed = text.stripMarkdown()
 
-        // 设计文档 §7.5 — 来源切换仲裁
+        // 来源切换仲裁
         // 使用提取的纯函数计算最终 flush，避免 JVM 测试复制生产算法
         val currentSource = controller.activeSource.value as? net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
         val effectiveFlush = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.computeEffectiveFlush(

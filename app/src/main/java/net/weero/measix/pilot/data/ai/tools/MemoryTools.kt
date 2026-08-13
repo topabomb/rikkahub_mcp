@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.ai.tools
+package net.weero.measix.pilot.data.ai.tools
 
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -18,7 +18,8 @@ import java.time.LocalDate
 fun buildMemoryTools(
     onCreation: suspend (String) -> AssistantMemory,
     onUpdate: suspend (Int, String) -> AssistantMemory,
-    onDelete: suspend (Int) -> Unit
+    onDelete: suspend (Int) -> Unit,
+    isStillAllowed: suspend () -> Boolean = { true },
 ): List<Tool> = listOf(
     Tool(
         name = "memory_tool",
@@ -56,7 +57,14 @@ fun buildMemoryTools(
                 required = listOf("action")
             )
         },
-        execute = {
+        execute = execute@{
+            if (!isStillAllowed()) {
+                return@execute listOf(
+                    UIMessagePart.Text(
+                        buildJsonObject { put("error", "tool_not_permitted") }.toString()
+                    )
+                )
+            }
             val params = it.jsonObject
             val action = params["action"]?.jsonPrimitive?.contentOrNull ?: error("action is required")
             val payload = when (action) {

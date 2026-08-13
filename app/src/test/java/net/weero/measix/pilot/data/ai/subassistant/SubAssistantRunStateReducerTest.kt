@@ -9,7 +9,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 设计文档 §13.1 — SubAssistantRunStateReducerTest
+ * SubAssistantRunStateReducer 状态机回归测试。
  *
  * 覆盖：phase/preview 连续更新不丢字段、状态单向转换、
  * terminal 不被迟到进度覆盖、active_tool_name 清空逻辑。

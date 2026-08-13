@@ -177,7 +177,7 @@ class AssistantDetailVM(
     fun update(assistant: Assistant) {
         val pageSnapshot = this.assistant.value
         viewModelScope.launch {
-            // 设计文档 §4.1：关闭"作为子助手"时同一次原子更新中关闭"全局可见"并从所有
+            // 关闭"作为子助手"时同一次原子更新中关闭"全局可见"并从所有
             // Assistant 的允许列表移除其 ID，避免重新开启时静默恢复旧授权。
             // 使用 updateAtomic 保证读取最新值 → 修改 → 提交在同一 Mutex 串行块内完成。
             var committedChange: Pair<Assistant, Assistant>? = null

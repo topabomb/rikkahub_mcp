@@ -52,6 +52,20 @@ sealed class ReadinessResult {
     data class Blocked(val reason: String) : ReadinessResult()
 }
 
+/**
+ * Restrict a running Target to the tool capabilities that are present in both its start snapshot
+ * and the latest persisted configuration. New capabilities never enter an active run, while
+ * revocations take effect when the next model step rebuilds its tool set.
+ */
+fun intersectTargetToolCapabilities(snapshot: Assistant, latest: Assistant): Assistant = snapshot.copy(
+    enableWebSearch = snapshot.enableWebSearch && latest.enableWebSearch,
+    enableRecentChatsReference = snapshot.enableRecentChatsReference && latest.enableRecentChatsReference,
+    localTools = snapshot.localTools.filter { it in latest.localTools },
+    mcpServers = snapshot.mcpServers intersect latest.mcpServers,
+    workspaceId = snapshot.workspaceId.takeIf { it == latest.workspaceId },
+    enabledSkills = snapshot.enabledSkills intersect latest.enabledSkills,
+)
+
 enum class SubAssistantModelSource {
     TARGET_CONFIGURED,
     CALLER_FALLBACK,
@@ -177,7 +191,7 @@ fun resolveActiveRunStopReason(
 
 /**
  * 验证调用前置条件（preflight）。
- * 按设计文档 §8.1 顺序验证，阻断 reason 保持稳定且可操作。
+ * 按稳定顺序验证调用前置条件，阻断 reason 保持稳定且可操作。
  */
 fun validateReadiness(
     targetAssistant: Assistant?,

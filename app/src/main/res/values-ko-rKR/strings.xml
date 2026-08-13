@@ -1262,6 +1262,7 @@
   <string name="sub_assistant_card_starting">시작 중</string>
   <string name="sub_assistant_card_running">실행 중</string>
   <string name="sub_assistant_card_completed">완료</string>
+  <string name="sub_assistant_card_non_text_output">텍스트가 아닌 출력 포함</string>
   <string name="sub_assistant_card_failed">실패</string>
   <string name="sub_assistant_card_stopped">중지됨</string>
   <string name="sub_assistant_card_unavailable">사용 불가</string>

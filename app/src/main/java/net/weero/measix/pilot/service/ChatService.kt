@@ -574,7 +574,7 @@ class ChatService(
             // loop 声音反馈状态跟踪
             var previousFinishedAt: LocalDateTime? = null
             val previousPendingTools = mutableSetOf<ToolCallLocator>()
-            // 设计文档 §7.5：每轮 Master Generation 创建一个 turn-level TtsToolPlaybackContext，
+            // 每轮 Master Generation 创建一个 turn-level TtsToolPlaybackContext，
             // 在整轮 turn 内被 Master 和所有 Target 共享（同一 sessionId + 同一 playbackState）。
             // 顺序开关开启时，首次 TTS 调用 flush 建立队列，后续所有调用（Master/Target）追加。
             val turnTtsContext = TtsToolPlaybackContext(

@@ -57,7 +57,7 @@ class GenerationToolSetFactory(
             } else {
                 assistant.localTools
             }
-            // 设计文档 §7.5：每轮生成创建一个 TtsToolPlaybackContext，step 重建时复用
+            // 每轮生成创建一个 TtsToolPlaybackContext，step 重建时复用
             val ttsContext = ttsPlaybackContext ?: TtsToolPlaybackContext(
                 sessionId = Uuid.random().toString(),
                 assistantId = assistant.id,
