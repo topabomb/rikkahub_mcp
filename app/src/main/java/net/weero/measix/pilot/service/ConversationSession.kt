@@ -35,6 +35,7 @@ class ConversationSession(
     // 生成任务（内聚在 session 中）
     private val _generationJob = MutableStateFlow<Job?>(null)
     private val toolApprovalMutex = Mutex()
+    private var ttsQueueSessionId: String? = null
     val generationJob: StateFlow<Job?> = _generationJob.asStateFlow()
     val isGenerating: Boolean get() = _generationJob.value?.isActive == true
     val isInUse: Boolean get() = refCount.get() > 0 || isGenerating
@@ -86,6 +87,21 @@ class ConversationSession(
 
     fun getJob(): Job? = _generationJob.value
 
+    /**
+     * 返回主代理 turn 独占的 TTS 队列 ID。
+     * 新消息/重新生成创建新 ID；工具审批恢复复用原 ID，避免把同一 turn 拆成两条队列。
+     */
+    @Synchronized
+    fun getTtsQueueSessionId(resumeExistingTurn: Boolean): String {
+        if (!resumeExistingTurn || ttsQueueSessionId == null) {
+            ttsQueueSessionId = Uuid.random().toString()
+        }
+        return requireNotNull(ttsQueueSessionId)
+    }
+
+    @Synchronized
+    fun peekTtsQueueSessionId(): String? = ttsQueueSessionId
+
     suspend fun <T> withToolApprovalLock(block: suspend () -> T): T =
         toolApprovalMutex.withLock { block() }
 
@@ -107,6 +123,7 @@ class ConversationSession(
     fun cleanup() {
         _generationJob.value?.cancel()
         _generationJob.value = null
+        ttsQueueSessionId = null
         idleCheckJob?.cancel()
         idleCheckJob = null
     }

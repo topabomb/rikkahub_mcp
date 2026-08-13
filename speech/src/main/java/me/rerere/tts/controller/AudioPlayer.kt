@@ -34,6 +34,7 @@ import kotlin.coroutines.resumeWithException
 class AudioPlayer(context: Context) {
     private val player = ExoPlayer.Builder(context).build()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val playbackOwner = PlaybackOwner()
 
     private val _playbackState = MutableStateFlow(PlaybackState())
     val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
@@ -42,7 +43,11 @@ class AudioPlayer(context: Context) {
 
     fun pause() = player.pause()
     fun resume() = player.play()
-    fun stop() = player.stop()
+    fun stop() {
+        playbackOwner.invalidate()
+        player.stop()
+        stopPositionUpdates()
+    }
     fun clear() = player.clearMediaItems()
     fun release() = player.release()
     fun seekBy(ms: Long) = player.seekTo(player.currentPosition + ms)
@@ -53,6 +58,7 @@ class AudioPlayer(context: Context) {
 
     @OptIn(UnstableApi::class)
     suspend fun play(response: TTSResponse) = suspendCancellableCoroutine<Unit> { cont ->
+        val ownershipToken = playbackOwner.claim()
         val bytes = if (response.format == AudioFormat.PCM) {
             pcmToWav(response.audioData, response.sampleRate ?: 24000)
         } else response.audioData
@@ -75,6 +81,10 @@ class AudioPlayer(context: Context) {
 
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
+                if (!playbackOwner.owns(ownershipToken)) {
+                    player.removeListener(this)
+                    return
+                }
                 when (state) {
                     Player.STATE_BUFFERING -> {
                         _playbackState.update { it.copy(status = PlaybackStatus.Buffering) }
@@ -102,6 +112,7 @@ class AudioPlayer(context: Context) {
                             )
                         }
                         player.removeListener(this)
+                        playbackOwner.release(ownershipToken)
                         if (cont.isActive) cont.resume(Unit)
                     }
                     Player.STATE_IDLE -> {
@@ -112,23 +123,34 @@ class AudioPlayer(context: Context) {
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                if (!playbackOwner.owns(ownershipToken)) {
+                    player.removeListener(this)
+                    return
+                }
                 player.removeListener(this)
                 stopPositionUpdates()
                 _playbackState.update { it.copy(status = PlaybackStatus.Error, errorMessage = error.message) }
+                playbackOwner.release(ownershipToken)
                 if (cont.isActive) cont.resumeWithException(error)
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (!playbackOwner.owns(ownershipToken)) return
                 val status = if (isPlaying) PlaybackStatus.Playing else PlaybackStatus.Paused
                 _playbackState.update { it.copy(status = status) }
                 if (isPlaying) startPositionUpdates() else stopPositionUpdates()
             }
         }
+
         player.addListener(listener)
         cont.invokeOnCancellation {
             player.removeListener(listener)
-            player.stop()
-            stopPositionUpdates()
+            // flush 后新 play() 可能已经取得共享 ExoPlayer 的所有权；
+            // 旧 continuation 的迟到取消绝不能停止新音频。
+            if (playbackOwner.release(ownershipToken)) {
+                player.stop()
+                stopPositionUpdates()
+            }
         }
     }
 

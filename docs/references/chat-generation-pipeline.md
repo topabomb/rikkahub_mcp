@@ -52,7 +52,11 @@ ChatService.sendMessage()
 ChatService.collect()
   ├─ 更新 ConversationSession
   ├─ 通过 AppEventBus 发布生成进度、声音和通知事件
-  └─ Flow 完成后保存会话，异步生成标题和建议回复
+  └─ Flow 完成后保存会话，异步生成标题和建议回复。
+     自动标题只在标题仍空白时发起；同一会话进程内同时只跑一次，
+     被挡住的触发在当前请求结束后另起会话引用任务补一次。
+     实际 LLM 请求最多 MAX_AUTO_TITLE_GENERATION_ATTEMPTS 次。
+     缺模型不计入次数。空白结果不写回。抽屉里的手动重新生成不受该上限。
 ```
 
 工具结果在统一模型中内联于 `UIMessagePart.Tool.output`，不会作为持久化的
@@ -199,7 +203,7 @@ MCP 连接、休眠与恢复不由生成链路持有；`McpManager` 负责连接
 
 Target 永久过滤 Assistant 管理和再次委托。其他工具按运行开始快照与当前配置的交集在 step 边界装配；Memory Tool 在执行前独立重验。需审批工具默认拒绝，只有 `ask_user` 会按 Child locator 桥接到主聊天。
 
-Master 与同一 turn 内的 Target 共享 TTS session 和顺序播放状态。Target 来源仅在当前播放属于子助手且其配置允许使用助手头像时显示；队列结束、Provider 切换、播放错误或 dispose 会清空来源。
+每个 Master turn 创建唯一的 TTS queue session，Master 与该 turn 内的 Target 只向这条共享队列提交音频；工具审批暂停与恢复复用原 session，新消息和重新生成创建新 session。播放器是队列边界的唯一仲裁者：新 session 替换旧队列；同 session 在顺序开关开启时追加、关闭时替换。Tool 实例和 UI `activeSource` 均不保存或推断队列生命周期；每个 chunk 直接绑定来源，`activeSource` 只随实际播放更新。自动朗读忽略其他会话和待审批暂停事件，并按同一 session 的策略提交，不能旁路打断工具音频。旧 worker 和旧播放器回调通过所有权 token 隔离，不能清空或停止新队列。System TTS 并发预取使用系统创建的唯一临时文件，禁止以时间戳共享输出路径。
 
 完整的持久化结构、执行流程、撤权、恢复、分支与 UI 边界见 [sub-assistant-architecture.md](sub-assistant-architecture.md)。
 

@@ -44,6 +44,8 @@ UIMessage
 
 `UIMessagePart.Tool` 同时保存调用参数、审批状态和执行结果。Provider 序列化时再展开为各自的 tool call/result 结构，数据库不会插入独立的持久化 `MessageRole.TOOL`。
 
+生成图片在解析源头就必须是可渲染 URL。Chat Completions 保留完整 `data:` URI，Gemini 使用真实 mime 组装 `data:<mime>;base64,<payload>`。合并层只把无前缀的 base64 碎片追加到当前图片，不会给已经完整的 URL 再补 `image/png` 前缀，也不会把两张完整图片拼成一条。
+
 所有 Provider 使用 `groupPartsByToolBoundary()` 重建 assistant/tool 步骤。已执行 Tool 是边界；同一模型 step 的 Reasoning、Text 和并行 Tool 保持顺序，工具结果紧跟产生它们的 assistant step。
 
 ### Metadata 分层
@@ -53,6 +55,7 @@ UIMessage
 | `ClaudeReasoningMetadata` | Part | thinking `signature`、`redacted_thinking.data` |
 | `OpenAIReasoningMetadata` | Part | reasoning item ID、`encrypted_content`、来源 profile |
 | `GoogleThoughtMetadata` | Part | `thoughtSignature`、function call ID、thought 标记、草稿图原始数据 |
+| `OpenRouterReasoningMetadata` | Part | 仅 `openrouter.ai` 回传的有序 `reasoning_details`；旧会话无此字段时走可见 `reasoning_content` |
 | `OpenAIResponseMetadata` | Message | `store=false` 所需的完整有序 `response.output` 批次、wire format、来源 profile |
 | `DiffMetadata` | Part | 仅供 UI 展示的 unified diff，不发送给 Provider |
 
@@ -90,7 +93,7 @@ host
 
 项目级 `ReasoningLevel` 是统一 UI 枚举，不代表所有模型接受相同字符串。官方 OpenAI 变体由 `mapOfficialOpenAIReasoningEffort()` 映射，并以单元测试锁定各已支持系列；AUTO 省略参数，让 endpoint 使用默认值。
 
-DeepSeek 直连的 Chat Completions 还发送 `thinking.type`：OFF 为 `disabled`，其他级别为 `enabled`。effort 映射为：
+DeepSeek 直连的 Chat Completions 还发送 `thinking.type`：OFF 为 `disabled`，其他级别为 `enabled`。effort 以官方 Thinking Mode 文档为准：请求字段接受 `low` / `high` / `max`，兼容别名 `medium → high`、`xhigh → high`。
 
 | 项目级别 | Chat `reasoning_effort` |
 |----------|-------------------------|
@@ -98,7 +101,9 @@ DeepSeek 直连的 Chat Completions 还发送 `thinking.type`：OFF 为 `disable
 | LOW | `low` |
 | MEDIUM / HIGH / XHIGH | `high` |
 
-项目当前没有单独的 `MAX` 级别，因此不会把 XHIGH 冒充 DeepSeek 的 `max`。
+项目没有单独的 `MAX` 级别。官方表把 `xhigh` 映射为 `high`，因此 XHIGH 发送 `high`，不会发送 `max`。
+
+OpenRouter 直连 host（`openrouter.ai`）若返回结构化 `reasoning_details`，会保存在 Reasoning part 的 source-isolated metadata 中，并只在同一 host 的后续请求回传该数组。流式分片按到达顺序累积：相同 `id` 或相同 `index` 的条目合并 `text`/`summary`，新条目追加。其他 Chat Completions host 只回放可见 `reasoning_content`。
 
 ### DeepSeek reasoning 回放
 

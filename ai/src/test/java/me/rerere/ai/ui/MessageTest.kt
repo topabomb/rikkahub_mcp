@@ -1,5 +1,8 @@
 package me.rerere.ai.ui
 
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -279,6 +282,155 @@ class MessageTest {
         assertEquals(completedTool, tools[0])
         assertEquals("second", tools[1].toolName)
         assertEquals("[]", tools[1].input)
+    }
+
+    @Test
+    fun `complete image urls should not be prefixed or concatenated`() {
+        var messages = listOf(UIMessage.user("Draw two images"))
+
+        messages = messages.handleMessageChunk(
+            assistantChunk(UIMessagePart.Image(url = "data:image/jpeg;base64,AAA"))
+        )
+        messages = messages.handleMessageChunk(
+            assistantChunk(UIMessagePart.Image(url = "data:image/png;base64,BBB"))
+        )
+
+        val images = messages.last().parts.filterIsInstance<UIMessagePart.Image>()
+        assertEquals(2, images.size)
+        assertEquals("data:image/jpeg;base64,AAA", images[0].url)
+        assertEquals("data:image/png;base64,BBB", images[1].url)
+    }
+
+    @Test
+    fun `raw image fragments should append to the current data uri`() {
+        var messages = listOf(UIMessage.user("Stream an image"))
+
+        messages = messages.handleMessageChunk(assistantChunk(UIMessagePart.Image(url = "AAA")))
+        messages = messages.handleMessageChunk(assistantChunk(UIMessagePart.Image(url = "BBB")))
+
+        val images = messages.last().parts.filterIsInstance<UIMessagePart.Image>()
+        assertEquals(1, images.size)
+        assertEquals("data:image/png;base64,AAABBB", images[0].url)
+    }
+
+    @Test
+    fun `openrouter reasoning details merge same id and append new items`() {
+        val first = buildJsonArray {
+            add(buildJsonObject {
+                put("id", "rd-1")
+                put("type", "reasoning.text")
+                put("text", "hid")
+            })
+        }
+        val second = buildJsonArray {
+            add(buildJsonObject {
+                put("id", "rd-1")
+                put("type", "reasoning.text")
+                put("text", "den")
+            })
+            add(buildJsonObject {
+                put("id", "rd-2")
+                put("type", "reasoning.summary")
+                put("text", "sum")
+            })
+        }
+
+        assertEquals(first, mergeOpenRouterReasoningDetails(first, null))
+        assertEquals(
+            buildJsonArray {
+                add(buildJsonObject {
+                    put("id", "rd-1")
+                    put("type", "reasoning.text")
+                    put("text", "hidden")
+                })
+                add(buildJsonObject {
+                    put("id", "rd-2")
+                    put("type", "reasoning.summary")
+                    put("text", "sum")
+                })
+            },
+            mergeOpenRouterReasoningDetails(first, second),
+        )
+    }
+
+    @Test
+    fun `openrouter reasoning details should accumulate across streamed chunks`() {
+        var messages = listOf(UIMessage.user("Plan then call a tool"))
+
+        messages = messages.handleMessageChunk(
+            assistantChunk(
+                reasoningWithDetails(
+                    text = "hidden ",
+                    details = buildJsonArray {
+                        add(buildJsonObject {
+                            put("id", "rd-1")
+                            put("type", "reasoning.text")
+                            put("text", "hidden ")
+                            put("index", 0)
+                        })
+                    },
+                )
+            )
+        )
+        messages = messages.handleMessageChunk(
+            assistantChunk(
+                reasoningWithDetails(
+                    text = "plan",
+                    details = buildJsonArray {
+                        add(buildJsonObject {
+                            put("id", "rd-1")
+                            put("type", "reasoning.text")
+                            put("text", "plan")
+                            put("index", 0)
+                        })
+                        add(buildJsonObject {
+                            put("id", "rd-2")
+                            put("type", "reasoning.summary")
+                            put("text", "summary")
+                            put("index", 1)
+                        })
+                    },
+                )
+            )
+        )
+        messages = messages.handleMessageChunk(
+            assistantChunk(
+                UIMessagePart.Tool(
+                    toolCallId = "call-1",
+                    toolName = "lookup",
+                    input = "{}",
+                )
+            )
+        )
+
+        val reasoning = messages.last().parts.filterIsInstance<UIMessagePart.Reasoning>().single()
+        assertEquals("hidden plan", reasoning.reasoning)
+        assertEquals(
+            buildJsonArray {
+                add(buildJsonObject {
+                    put("id", "rd-1")
+                    put("type", "reasoning.text")
+                    put("text", "hidden plan")
+                    put("index", 0)
+                })
+                add(buildJsonObject {
+                    put("id", "rd-2")
+                    put("type", "reasoning.summary")
+                    put("text", "summary")
+                    put("index", 1)
+                })
+            },
+            reasoning.metadataAs<OpenRouterReasoningMetadata>()?.reasoningDetails,
+        )
+    }
+
+    private fun reasoningWithDetails(
+        text: String,
+        details: kotlinx.serialization.json.JsonArray,
+    ): UIMessagePart.Reasoning {
+        return UIMessagePart.Reasoning(reasoning = text).also { part ->
+            part.metadata = OpenRouterReasoningMetadata(reasoningDetails = details).toMetadata()
+        }
     }
 
     private fun assistantChunk(vararg parts: UIMessagePart) = MessageChunk(

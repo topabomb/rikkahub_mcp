@@ -47,6 +47,7 @@ import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
+import me.rerere.ai.ui.renderableImageUrl
 import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.configureReferHeaders
@@ -604,7 +605,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     )
                 }
                 UIMessagePart.Image(
-                    url = data,
+                    url = renderableImageUrl(data, mime),
                     metadata = thoughtSignature?.let {
                         GoogleThoughtMetadata(thoughtSignature = it).toMetadata()
                     },

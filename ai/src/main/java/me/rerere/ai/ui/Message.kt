@@ -95,11 +95,13 @@ data class UIMessage(
                         val stepStart = acc.currentStepStart()
                         val insertIndex = acc.firstPendingToolIndex(stepStart)
                         val lastPart = acc.getOrNull(insertIndex - 1)
+                        val incomingComplete = isCompleteImageUrl(deltaPart.url)
                         if (lastPart is UIMessagePart.Image &&
                             !lastPart.hasProviderPartBoundary() &&
-                            !deltaPart.hasProviderPartBoundary()
+                            !deltaPart.hasProviderPartBoundary() &&
+                            !incomingComplete
                         ) {
-                            // Append to the current step's last Image part (for streaming base64)
+                            // Raw fragments continue the current image. Complete URLs are new images.
                             acc.mapIndexed { index, part ->
                                 if (index == insertIndex - 1) {
                                     lastPart.copy(
@@ -114,7 +116,7 @@ data class UIMessage(
                             acc.insertAt(
                                 insertIndex,
                                 UIMessagePart.Image(
-                                    url = "data:image/png;base64,${deltaPart.url}",
+                                    url = renderableImageUrl(deltaPart.url),
                                     metadata = deltaPart.metadata,
                                 )
                             )
@@ -142,7 +144,10 @@ data class UIMessage(
                                             createdAt = existing.createdAt,
                                             finishedAt = null,
                                         ).also {
-                                            it.metadata = deltaPart.metadata ?: existing.metadata
+                                            it.metadata = mergeReasoningPartMetadata(
+                                                existing.metadata,
+                                                deltaPart.metadata,
+                                            )
                                         }
                                     } else {
                                         part
@@ -279,6 +284,20 @@ data class UIMessage(
             parts = listOf(UIMessagePart.Text(prompt))
         )
     }
+}
+
+internal fun isCompleteImageUrl(url: String): Boolean {
+    val value = url.trim()
+    return value.startsWith("data:", ignoreCase = true) ||
+        value.startsWith("http://", ignoreCase = true) ||
+        value.startsWith("https://", ignoreCase = true) ||
+        value.startsWith("file:", ignoreCase = true)
+}
+
+internal fun renderableImageUrl(url: String, mimeType: String = "image/png"): String {
+    val value = url.trim()
+    if (value.isEmpty() || isCompleteImageUrl(value)) return value
+    return "data:$mimeType;base64,$value"
 }
 
 /**

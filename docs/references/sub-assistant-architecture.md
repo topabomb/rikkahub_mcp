@@ -200,7 +200,7 @@ Fork 顶层会话时，`forkSubAssistantTree` 同时复制有效 Child，重建 
 
 停止 Master、删除 Target、撤销访问、模型失效、回答等待中断或应用恢复都会取消 Target Job。Coordinator 在 `NonCancellable` 收尾区分别尝试 Child 修复和 Master 终态回写，各自有独立超时；Child 修复失败不会跳过 Master 终态，也不会让超时异常取代稳定的 stopped/failed Tool Result。lease 与交互等待器在 `finally` 中释放。
 
-每个 Master turn 创建共享的 `TtsToolPlaybackContext`。Master 和该 turn 内的 Target 派生来源共享 session 与顺序播放状态，Target 只替换 Assistant 身份和 `SUB_ASSISTANT` 来源类型。控制条仅在当前来源是 Target 且该 Assistant 开启 `useAssistantAvatar` 时显示 Target 头像；播放结束、Provider 切换、错误或 dispose 会清空来源。`assistant_call` 结束不会中断已提交的音频。
+每个 Master turn 创建共享的 `TtsToolPlaybackContext`，其中稳定 `sessionId` 是播放队列的唯一边界。Master 和该 turn 内的 Target 复用此 ID，Target 只替换 Assistant 身份和 `SUB_ASSISTANT` 来源类型；工具审批暂停与恢复继续使用原 ID，新消息或重新生成才轮换。`TtsController` 同时只接受一个 session 独占队列：新 session 替换旧队列；同 session 在顺序开关开启时追加、关闭时替换。Tool 不维护“是否首调”状态，UI `activeSource` 也不参与队列仲裁；每个 chunk 在入队时直接绑定来源，避免跳过或追加导致来源索引错位。控制条仅在当前来源是 Target 且该 Assistant 开启 `useAssistantAvatar` 时显示 Target 头像；播放结束会清空显示来源，但保留该 session 的队列所有权，以便同 turn 的迟到调用继续追加；Provider 切换、stop 或 dispose 才释放所有权。旧 worker 与旧播放器回调不能覆盖或停止新队列。`assistant_call` 结束不会中断已提交的音频。
 
 ## 10. 维护约束
 

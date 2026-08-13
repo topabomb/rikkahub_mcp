@@ -39,10 +39,13 @@ import me.rerere.ai.provider.providers.PartGroup
 import me.rerere.ai.provider.providers.groupPartsByToolBoundary
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.MessageChunk
+import me.rerere.ai.ui.OpenRouterReasoningMetadata
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.metadataAs
+import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.util.HttpException
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.configureReferHeaders
@@ -301,6 +304,7 @@ class ChatCompletionsAPI(
                         host = host,
                         modelId = params.model.modelId,
                     ),
+                    includeOpenRouterReasoningDetails = endpointVendor == OpenAIEndpointVendor.OPENROUTER,
                     useDeveloperRoleForSystemMessages = isOfficialOpenAI &&
                             (ModelRegistry.OPENAI_O_MODELS.match(params.model.modelId) ||
                                     ModelRegistry.OPENAI_GPT_5_SERIES.match(params.model.modelId)),
@@ -505,6 +509,7 @@ class ChatCompletionsAPI(
         includeHistoryReasoning: Boolean = true,
         supportToolResultModalities: List<Modality> = listOf(Modality.TEXT, Modality.IMAGE),
         requiresToolReasoningReplay: Boolean = false,
+        includeOpenRouterReasoningDetails: Boolean = false,
         useDeveloperRoleForSystemMessages: Boolean = false,
     ) = buildJsonArray {
         val filteredMessages = messages.filter { it.isValidToUpload() }
@@ -516,6 +521,7 @@ class ChatCompletionsAPI(
                     includeHistoryReasoning = includeHistoryReasoning,
                     supportToolResultModalities = supportToolResultModalities,
                     requiresToolReasoningReplay = requiresToolReasoningReplay,
+                    includeOpenRouterReasoningDetails = includeOpenRouterReasoningDetails,
                 )
             } else {
                 addNonAssistantMessage(message, useDeveloperRoleForSystemMessages)
@@ -528,17 +534,16 @@ class ChatCompletionsAPI(
         includeHistoryReasoning: Boolean,
         supportToolResultModalities: List<Modality>,
         requiresToolReasoningReplay: Boolean,
+        includeOpenRouterReasoningDetails: Boolean,
     ) {
         val groups = groupPartsByToolBoundary(message.parts)
         val contentBuffer = mutableListOf<UIMessagePart>()
-        val reasoningBuffer = mutableListOf<String>()
+        val reasoningParts = mutableListOf<UIMessagePart.Reasoning>()
 
         for (group in groups) {
             when (group) {
                 is PartGroup.Content -> {
-                    group.parts
-                        .filterIsInstance<UIMessagePart.Reasoning>()
-                        .mapTo(reasoningBuffer) { it.reasoning }
+                    group.parts.filterIsInstance<UIMessagePart.Reasoning>().forEach { reasoningParts.add(it) }
                     group.parts
                         .filter { it is UIMessagePart.Text || it is UIMessagePart.Image }
                         .forEach { contentBuffer.add(it) }
@@ -548,18 +553,23 @@ class ChatCompletionsAPI(
                     // DeepSeek 将工具调用前的 reasoning_content 视为后续请求必须携带的协议状态。
                     // 因此这里只对“即将绑定 tool_calls 的 assistant 消息”强制回传；末尾普通回答仍由
                     // includeHistoryReasoning 控制，避免把协议要求误扩散到其他历史思考内容。
-                    // 输出 assistant 消息（包含累积的内容 + tool_calls）
+                    // OpenRouter 的 reasoning_details 同样是工具续轮必须回传的 host 限定信封。
+                    val replayReasoning = includeHistoryReasoning || requiresToolReasoningReplay
                     buildAssistantMessageJson(
                         contentParts = contentBuffer,
                         tools = group.tools,
-                        reasoningContent = reasoningBuffer
-                            .takeIf { includeHistoryReasoning || requiresToolReasoningReplay }
-                            ?.joinToString(separator = ""),
+                        reasoningContent = reasoningParts
+                            .takeIf { replayReasoning }
+                            ?.joinToString(separator = "") { it.reasoning },
+                        reasoningDetails = collectOpenRouterReasoningDetails(
+                            parts = reasoningParts,
+                            include = includeOpenRouterReasoningDetails,
+                        ),
                     )?.let { assistantMessage ->
                         add(assistantMessage)
                     }
                     contentBuffer.clear()
-                    reasoningBuffer.clear()
+                    reasoningParts.clear()
 
                     // 紧跟 tool 结果消息
                     group.tools.forEach { tool ->
@@ -575,23 +585,43 @@ class ChatCompletionsAPI(
         }
 
         // 输出剩余内容
-        if (contentBuffer.isNotEmpty() || (includeHistoryReasoning && reasoningBuffer.isNotEmpty())) {
+        val trailingDetails = collectOpenRouterReasoningDetails(
+            parts = reasoningParts,
+            include = includeOpenRouterReasoningDetails && includeHistoryReasoning,
+        )
+        if (contentBuffer.isNotEmpty() ||
+            (includeHistoryReasoning && reasoningParts.any { it.reasoning.isNotBlank() }) ||
+            trailingDetails != null
+        ) {
             buildAssistantMessageJson(
                 contentParts = contentBuffer,
                 tools = emptyList(),
-                reasoningContent = reasoningBuffer
+                reasoningContent = reasoningParts
                     .takeIf { includeHistoryReasoning }
-                    ?.joinToString(separator = ""),
+                    ?.joinToString(separator = "") { it.reasoning },
+                reasoningDetails = trailingDetails,
             )?.let { assistantMessage ->
                 add(assistantMessage)
             }
         }
     }
 
+    private fun collectOpenRouterReasoningDetails(
+        parts: List<UIMessagePart.Reasoning>,
+        include: Boolean,
+    ): JsonArray? {
+        if (!include) return null
+        val items = parts.flatMap { part ->
+            part.metadataAs<OpenRouterReasoningMetadata>()?.reasoningDetails.orEmpty()
+        }
+        return items.takeIf { it.isNotEmpty() }?.let(::JsonArray)
+    }
+
     private fun buildAssistantMessageJson(
         contentParts: List<UIMessagePart>,
         tools: List<UIMessagePart.Tool>,
         reasoningContent: String?,
+        reasoningDetails: JsonArray? = null,
     ): JsonObject? {
         val hasUsableContent = contentParts.any { part ->
             when (part) {
@@ -600,7 +630,8 @@ class ChatCompletionsAPI(
                 else -> false
             }
         }
-        val hasReasoning = !reasoningContent.isNullOrBlank()
+        val hasDetails = !reasoningDetails.isNullOrEmpty()
+        val hasReasoning = !reasoningContent.isNullOrBlank() || hasDetails
         if (!hasUsableContent && !hasReasoning && tools.isEmpty()) {
             return null
         }
@@ -608,8 +639,9 @@ class ChatCompletionsAPI(
         return buildJsonObject {
             put("role", "assistant")
 
-            // reasoning_content
-            if (hasReasoning) {
+            if (hasDetails) {
+                put("reasoning_details", reasoningDetails)
+            } else if (!reasoningContent.isNullOrBlank()) {
                 put("reasoning_content", reasoningContent)
             }
 
@@ -798,6 +830,10 @@ class ChatCompletionsAPI(
             }
         val toolCalls = jsonObject["tool_calls"] as? JsonArray ?: JsonArray(emptyList())
         val images = jsonObject["images"] as? JsonArray ?: JsonArray(emptyList())
+        val reasoningDetails = jsonObject["reasoning_details"]?.jsonArrayOrNull
+        val reasoningMetadata = reasoningDetails?.let {
+            OpenRouterReasoningMetadata(reasoningDetails = it).toMetadata()
+        }
 
         return UIMessage(
             role = role,
@@ -805,13 +841,15 @@ class ChatCompletionsAPI(
                 // Chat Completions 的 reasoning_content、content、tool_calls 属于同一个 assistant envelope。
                 // UIMessage 使用 Tool 作为历史重建边界，因此必须先保存 Reasoning/Content，再保存 Tool；
                 // 否则工具执行后 content 会被错误地移动到 tool result 之后，DeepSeek 无法原样校验该步骤。
-                if (!reasoning.isNullOrEmpty()) {
+                if (!reasoning.isNullOrEmpty() || reasoningMetadata != null) {
                     add(
                         UIMessagePart.Reasoning(
-                            reasoning = reasoning,
+                            reasoning = reasoning.orEmpty(),
                             createdAt = Clock.System.now(),
-                            finishedAt = null
-                        )
+                            finishedAt = null,
+                        ).also { part ->
+                            part.metadata = reasoningMetadata
+                        }
                     )
                 }
                 if (content.isNotEmpty()) add(UIMessagePart.Text(content))
@@ -824,7 +862,7 @@ class ChatCompletionsAPI(
                     if (type != "image_url") return@forEach
                     val url = imageObject["image_url"]?.jsonObjectOrNull?.get("url")?.jsonPrimitive?.contentOrNull ?: return@forEach
                     require(url.startsWith("data:image")) { "Only data uri is supported" }
-                    add(UIMessagePart.Image(url.substringAfter("data:image/png;base64,")))
+                    add(UIMessagePart.Image(url = url))
                 }
                 toolCalls.forEach { toolCall ->
                     val type = toolCall.jsonObject["type"]?.jsonPrimitive?.contentOrNull

@@ -7,10 +7,13 @@ import kotlin.uuid.Uuid
 sealed class AppEvent {
     data class Speak(
         val text: String,
-        val flush: Boolean = true,
+        /** 主代理 turn 的队列边界；null 表示不属于工具 turn 的手动/自动朗读。 */
+        val queueSessionId: String? = null,
+        /** 同一 queue session 内是否替换；queue session 变化时播放器始终替换旧队列。 */
+        val replaceWithinSession: Boolean = true,
         /**
-         * TTS 播放来源。
-         * null 表示无 session 的手动朗读/自动播放，沿用现有 flush 行为并清除子助手头像。
+         * 当前音频的 UI 播放来源。
+         * null 表示无 session 的手动朗读/自动播放。
          */
         val source: TtsPlaybackSource? = null,
     ) : AppEvent()

@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import me.rerere.ai.core.ToolCallLocator
+import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -37,6 +38,9 @@ import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.FavoriteRepository
 import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.service.ChatService
+import net.weero.measix.pilot.ui.components.ai.SearchMode
+import net.weero.measix.pilot.ui.components.ai.searchModeEnablesBuiltIn
+import net.weero.measix.pilot.ui.components.ai.searchModeEnablesLocal
 import net.weero.measix.pilot.ui.hooks.writeStringPreference
 import net.weero.measix.pilot.ui.hooks.ChatInputState
 import net.weero.measix.pilot.utils.UpdateChecker
@@ -113,6 +117,9 @@ class ChatVM(
     // 生成完成
     val generationDoneFlow: SharedFlow<Uuid> = chatService.generationDoneFlow
 
+    fun getTtsQueueSessionId(conversationId: Uuid): String? =
+        chatService.getTtsQueueSessionId(conversationId)
+
     // MCP管理器
     val mcpManager = chatService.mcpManager
 
@@ -126,9 +133,36 @@ class ChatVM(
         }
     }
 
-    fun updateAssistantWebSearch(assistantId: Uuid, enabled: Boolean) {
+    fun updateSearchMode(assistantId: Uuid, model: Model?, mode: SearchMode) {
         viewModelScope.launch {
-            settingsStore.updateAssistantWebSearch(assistantId, enabled)
+            val enableWebSearch = searchModeEnablesLocal(mode)
+            val enableBuiltIn = searchModeEnablesBuiltIn(mode)
+            settingsStore.update { settings ->
+                settings.copy(
+                    assistants = settings.assistants.map { assistant ->
+                        if (assistant.id == assistantId) {
+                            assistant.copy(enableWebSearch = enableWebSearch)
+                        } else {
+                            assistant
+                        }
+                    },
+                    providers = if (model == null) {
+                        settings.providers
+                    } else {
+                        settings.providers.map { provider ->
+                            provider.editModel(
+                                model.copy(
+                                    tools = if (enableBuiltIn) {
+                                        model.tools + BuiltInTools.Search
+                                    } else {
+                                        model.tools - BuiltInTools.Search
+                                    }
+                                )
+                            )
+                        }
+                    },
+                )
+            }
         }
     }
 
@@ -294,7 +328,7 @@ class ChatVM(
     fun generateTitle(conversation: Conversation, force: Boolean = false) {
         viewModelScope.launch {
             val conversationFull = conversationRepo.getConversationById(conversation.id) ?: return@launch
-            chatService.generateTitle(_conversationId, conversationFull, force)
+            chatService.generateTitle(conversationFull, force)
         }
     }
 

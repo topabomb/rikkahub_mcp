@@ -3,9 +3,13 @@ package me.rerere.ai.provider.providers.openai
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.provider.Modality
@@ -17,7 +21,9 @@ import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.OpenRouterReasoningMetadata
 import me.rerere.ai.ui.handleMessageChunk
+import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.util.KeyRoulette
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
@@ -47,12 +53,14 @@ class ChatCompletionsAPIMessageTest {
         includeHistoryReasoning: Boolean = true,
         modelId: String = "test-model",
         host: String = "proxy.example.com",
+        includeOpenRouterReasoningDetails: Boolean = false,
     ): JsonArray {
         return api.buildMessages(
             messages = messages,
             includeHistoryReasoning = includeHistoryReasoning,
             supportToolResultModalities = listOf(Modality.TEXT, Modality.IMAGE),
             requiresToolReasoningReplay = requiresDeepSeekToolReasoningReplay(host, modelId),
+            includeOpenRouterReasoningDetails = includeOpenRouterReasoningDetails,
         )
     }
 
@@ -823,6 +831,151 @@ class ChatCompletionsAPIMessageTest {
         assertEquals("assistant", result[1].jsonObject["role"]?.jsonPrimitive?.content)
         assertEquals("thinking", result[1].jsonObject["reasoning_content"]?.jsonPrimitive?.content)
         assertEquals("", result[1].jsonObject["content"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `openrouter reasoning details stay host scoped`() {
+        val details = buildJsonArray {
+            add(buildJsonObject {
+                put("type", "reasoning.text")
+                put("text", "hidden plan")
+            })
+        }
+        val parsed = api.parseMessage(
+            buildJsonObject {
+                put("role", "assistant")
+                put("content", "answer")
+                put("reasoning_content", "visible thought")
+                put("reasoning_details", details)
+            }
+        )
+        val reasoning = parsed.parts.filterIsInstance<UIMessagePart.Reasoning>().single()
+        assertEquals("visible thought", reasoning.reasoning)
+        assertEquals(
+            details,
+            reasoning.metadataAs<OpenRouterReasoningMetadata>()?.reasoningDetails,
+        )
+
+        val history = listOf(
+            UIMessage.user("plan"),
+            parsed.copy(
+                parts = parsed.parts + createExecutedTool("call_1", "lookup", "{}", "ok"),
+            ),
+        )
+        val openRouter = invokeBuildMessages(history, includeOpenRouterReasoningDetails = true)
+        val compatible = invokeBuildMessages(history, includeOpenRouterReasoningDetails = false)
+
+        val openRouterAssistant = openRouter.first { it.jsonObject["role"]?.jsonPrimitive?.content == "assistant" }
+        val compatibleAssistant = compatible.first { it.jsonObject["role"]?.jsonPrimitive?.content == "assistant" }
+        assertEquals(details, openRouterAssistant.jsonObject["reasoning_details"]?.jsonArray)
+        assertNull(openRouterAssistant.jsonObject["reasoning_content"])
+        assertNull(compatibleAssistant.jsonObject["reasoning_details"])
+        assertEquals("visible thought", compatibleAssistant.jsonObject["reasoning_content"]?.jsonPrimitive?.content)
+
+        val openRouterRequest = invokeBuildRequest(
+            messages = history,
+            params = TextGenerationParams(model = Model(modelId = "openrouter/auto")),
+            providerSetting = ProviderSetting.OpenAI(baseUrl = "https://openrouter.ai/api/v1"),
+        )
+        val compatibleRequest = invokeBuildRequest(
+            messages = history,
+            params = TextGenerationParams(model = Model(modelId = "openrouter/auto")),
+            providerSetting = ProviderSetting.OpenAI(baseUrl = "https://proxy.example.com/v1"),
+        )
+        val openRouterMessages = openRouterRequest["messages"]!!.jsonArray
+        val compatibleMessages = compatibleRequest["messages"]!!.jsonArray
+        assertEquals(
+            details,
+            openRouterMessages.first { it.jsonObject["role"]?.jsonPrimitive?.content == "assistant" }
+                .jsonObject["reasoning_details"]?.jsonArray,
+        )
+        assertNull(
+            compatibleMessages.first { it.jsonObject["role"]?.jsonPrimitive?.content == "assistant" }
+                .jsonObject["reasoning_details"],
+        )
+    }
+
+    @Test
+    fun `streamed openrouter reasoning details are concatenated before tool replay`() {
+        var messages = listOf(UIMessage.user("plan"))
+        listOf(
+            """
+            {
+              "role": "assistant",
+              "reasoning_content": "hidden ",
+              "reasoning_details": [
+                {"id":"rd-1","type":"reasoning.text","text":"hidden ","index":0}
+              ]
+            }
+            """,
+            """
+            {
+              "role": "assistant",
+              "reasoning_content": "plan",
+              "reasoning_details": [
+                {"id":"rd-1","type":"reasoning.text","text":"plan","index":0},
+                {"id":"rd-2","type":"reasoning.summary","text":"summary","index":1}
+              ]
+            }
+            """,
+            """
+            {
+              "role": "assistant",
+              "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"}
+              }]
+            }
+            """,
+        ).forEach { deltaJson ->
+            messages = messages.handleMessageChunk(
+                MessageChunk(
+                    id = "chunk",
+                    model = "openrouter/auto",
+                    choices = listOf(
+                        UIMessageChoice(
+                            index = 0,
+                            delta = api.parseMessage(
+                                Json.parseToJsonElement(deltaJson.trimIndent()).jsonObject
+                            ),
+                            message = null,
+                            finishReason = null,
+                        )
+                    ),
+                )
+            )
+        }
+        messages = messages.dropLast(1) + messages.last().copy(
+            parts = messages.last().parts.map { part ->
+                if (part is UIMessagePart.Tool && part.toolCallId == "call_1") {
+                    part.copy(output = listOf(UIMessagePart.Text("ok")))
+                } else {
+                    part
+                }
+            }
+        )
+
+        val rebuilt = invokeBuildMessages(messages, includeOpenRouterReasoningDetails = true)
+        val assistant = rebuilt.first { it.jsonObject["role"]?.jsonPrimitive?.content == "assistant" }
+        assertEquals(
+            buildJsonArray {
+                add(buildJsonObject {
+                    put("id", "rd-1")
+                    put("type", "reasoning.text")
+                    put("text", "hidden plan")
+                    put("index", 0)
+                })
+                add(buildJsonObject {
+                    put("id", "rd-2")
+                    put("type", "reasoning.summary")
+                    put("text", "summary")
+                    put("index", 1)
+                })
+            },
+            assistant.jsonObject["reasoning_details"]?.jsonArray,
+        )
+        assertNull(assistant.jsonObject["reasoning_content"])
     }
 
     // ==================== Helper Functions ====================

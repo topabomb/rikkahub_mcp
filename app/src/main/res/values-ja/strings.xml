@@ -551,6 +551,12 @@
   <string name="search_page_title">メッセージを検索</string>
   <string name="search_page_untitled">無題</string>
   <string name="search_picker_title">検索設定</string>
+  <string name="search_picker_local_title">ローカル検索</string>
+  <string name="search_picker_local_description">さまざまなサードパーティ検索プロバイダーに接続</string>
+  <string name="search_picker_model_title">モデル検索</string>
+  <string name="search_picker_model_description">モデル提供元のクラウド検索</string>
+  <string name="search_picker_select_provider">検索プロバイダーを選択</string>
+  <string name="search_picker_turn_off">検索をオフにする</string>
   <string name="select_and_copy">選択コピー</string>
   <string name="send">送信</string>
   <string name="setting_asr_configure_api_key">APIキー</string>

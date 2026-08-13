@@ -657,8 +657,8 @@ class SubAssistantCoordinator(
             emptyList()
         }
 
-        // 复用 turn-level TtsToolPlaybackContext 的 sessionId 和 playbackState，
-        // 使整轮 turn 内的 Master 和所有 Target 的 TTS 调用共享同一顺序播放队列。
+        // 复用 turn-level TtsToolPlaybackContext 的 sessionId，
+        // 使整轮 turn 内的 Master 和所有 Target 的 TTS 调用归属同一条播放队列。
         // 无 turnTtsContext 时（测试或旧调用路径）回退到独立 context。
         val ttsPlaybackContext = if (turnTtsContext != null) {
             TtsToolPlaybackContext(
@@ -666,7 +666,6 @@ class SubAssistantCoordinator(
                 assistantId = target.id,
                 assistantName = target.name,
                 sourceType = TtsPlaybackSource.SourceType.SUB_ASSISTANT,
-                playbackState = turnTtsContext.playbackState,
             )
         } else {
             TtsToolPlaybackContext(

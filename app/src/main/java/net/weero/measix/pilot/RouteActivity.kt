@@ -246,7 +246,12 @@ class RouteActivity : ComponentActivity() {
         LaunchedEffect(tts) {
             eventBus.events.collect { event ->
                 when (event) {
-                    is AppEvent.Speak -> tts.speakWithSource(event.text, event.flush, event.source)
+                    is AppEvent.Speak -> tts.speakWithSource(
+                        text = event.text,
+                        replaceWithinSession = event.replaceWithinSession,
+                        queueSessionId = event.queueSessionId,
+                        source = event.source,
+                    )
                     is AppEvent.OpenUsageAccessSettings -> this@RouteActivity.openUsageAccessSettings()
                     is AppEvent.McpOAuthCallback -> Unit // 由 McpManager 消费
                     is AppEvent.ChatGenerationUpdate -> Unit // 由 ChatNotificationManager 消费

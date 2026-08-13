@@ -2,11 +2,17 @@ package me.rerere.ai.ui
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.util.json
+import me.rerere.common.http.jsonObjectOrNull
+import me.rerere.common.http.jsonPrimitiveOrNull
 
 /**
  * [UIMessagePart.metadata] 的类型安全 schema
@@ -113,6 +119,19 @@ data class DiffMetadata(
 ) : PartMetadata
 
 /**
+ * OpenRouter Chat Completions 的结构化推理信封。
+ *
+ * 只在当前请求 host 为 `openrouter.ai` 时回传 [reasoningDetails]。它不是通用 UI 字段，
+ * 也不能在切换到其他 OpenAI-compatible host 后继续发送。
+ * 流式分片按到达顺序累积：相同 id/index 合并 text/summary，新条目追加。
+ */
+@Serializable
+data class OpenRouterReasoningMetadata(
+    @SerialName("reasoning_details")
+    val reasoningDetails: JsonArray? = null,
+) : PartMetadata
+
+/**
  * 将 metadata 解析为类型化的 [PartMetadata], 解析失败或 metadata 为 null 时返回 null
  *
  * 由于 json 配置了 ignoreUnknownKeys, 不同 provider 的 metadata 互不干扰
@@ -138,6 +157,92 @@ inline fun <reified T : Metadata> T.toMetadata(): JsonObject =
  * 流式 Responses 会在终态一次交付一组 output items，而同一个 UIMessage 可能包含多次
  * assistant -> tool 子步骤。相同线协议的元数据必须按生成顺序累积，不能覆盖前一工具步骤。
  */
+/**
+ * OpenRouter 把 reasoning_details 拆成增量 delta。合并层必须拼回完整有序序列，
+ * 否则工具续轮只会带回最后一片，既丢 details 也会挡住 reasoning_content 兜底。
+ */
+internal fun mergeReasoningPartMetadata(
+    existing: JsonObject?,
+    incoming: JsonObject?,
+): JsonObject? {
+    if (incoming == null) return existing
+    if (existing == null) return incoming
+    val existingDetails = existing.openRouterReasoningDetailsOrNull()
+    val incomingDetails = incoming.openRouterReasoningDetailsOrNull()
+    if (existingDetails.isNullOrEmpty() && incomingDetails.isNullOrEmpty()) return incoming
+    if (incomingDetails.isNullOrEmpty()) return existing
+    if (existingDetails.isNullOrEmpty()) return incoming
+    return OpenRouterReasoningMetadata(
+        reasoningDetails = mergeOpenRouterReasoningDetails(existingDetails, incomingDetails),
+    ).toMetadata()
+}
+
+internal fun mergeOpenRouterReasoningDetails(
+    existing: JsonArray?,
+    incoming: JsonArray?,
+): JsonArray? {
+    if (incoming.isNullOrEmpty()) return existing
+    if (existing.isNullOrEmpty()) return incoming
+    val merged = existing.toMutableList()
+    for (item in incoming) {
+        val incomingObject = item.jsonObjectOrNull
+        if (incomingObject == null) {
+            merged.add(item)
+            continue
+        }
+        val matchIndex = merged.indexOfFirst { candidate ->
+            val existingObject = candidate.jsonObjectOrNull ?: return@indexOfFirst false
+            isSameOpenRouterReasoningItem(existingObject, incomingObject)
+        }
+        if (matchIndex >= 0) {
+            val existingObject = merged[matchIndex].jsonObjectOrNull
+            merged[matchIndex] = if (existingObject != null) {
+                mergeOpenRouterReasoningItem(existingObject, incomingObject)
+            } else {
+                item
+            }
+        } else {
+            merged.add(item)
+        }
+    }
+    return JsonArray(merged)
+}
+
+private fun JsonObject.openRouterReasoningDetailsOrNull(): JsonArray? {
+    if (!containsKey("reasoning_details")) return null
+    return runCatching {
+        json.decodeFromJsonElement<OpenRouterReasoningMetadata>(this).reasoningDetails
+    }.getOrNull()
+}
+
+private fun isSameOpenRouterReasoningItem(existing: JsonObject, incoming: JsonObject): Boolean {
+    val existingId = existing["id"]?.jsonPrimitiveOrNull?.contentOrNull
+    val incomingId = incoming["id"]?.jsonPrimitiveOrNull?.contentOrNull
+    if (!existingId.isNullOrEmpty() && existingId == incomingId) return true
+    val existingIndex = existing["index"]
+    val incomingIndex = incoming["index"]
+    if (existingIndex == null || incomingIndex == null || existingIndex != incomingIndex) return false
+    val existingType = existing["type"]?.jsonPrimitiveOrNull?.contentOrNull
+    val incomingType = incoming["type"]?.jsonPrimitiveOrNull?.contentOrNull
+    return existingType == null || incomingType == null || existingType == incomingType
+}
+
+private fun mergeOpenRouterReasoningItem(existing: JsonObject, incoming: JsonObject): JsonObject {
+    return buildJsonObject {
+        existing.forEach { key, value -> put(key, value) }
+        incoming.forEach { key, value ->
+            when (key) {
+                "text", "summary" -> {
+                    val previous = existing[key]?.jsonPrimitiveOrNull?.contentOrNull.orEmpty()
+                    val next = value.jsonPrimitiveOrNull?.contentOrNull.orEmpty()
+                    put(key, JsonPrimitive(previous + next))
+                }
+                else -> put(key, value)
+            }
+        }
+    }
+}
+
 internal fun mergeMessageMetadata(current: JsonObject?, incoming: JsonObject?): JsonObject? {
     if (incoming == null) return current
     if (current == null) return incoming

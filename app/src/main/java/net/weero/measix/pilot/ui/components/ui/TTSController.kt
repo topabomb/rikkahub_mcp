@@ -251,14 +251,10 @@ private fun PlayPauseButton(
 ) {
     FilledTonalIconButton(
         onClick = {
-            when (playbackState.status) {
-                PlaybackStatus.Playing -> {
-                    ttsState.pause()
-                }
-
-                else -> {
-                    ttsState.resume()
-                }
+            if (playbackState.status.shouldPauseFromToolbar()) {
+                ttsState.pause()
+            } else {
+                ttsState.resume()
             }
         },
         colors = IconButtonDefaults.filledTonalIconButtonColors(
@@ -267,17 +263,13 @@ private fun PlayPauseButton(
         )
     ) {
         Icon(
-            imageVector = if (playbackState.status == PlaybackStatus.Playing) HugeIcons.Pause else HugeIcons.Play,
-            contentDescription = if (playbackState.status == PlaybackStatus.Playing) pauseDesc else playDesc,
+            imageVector = if (playbackState.status.shouldPauseFromToolbar()) HugeIcons.Pause else HugeIcons.Play,
+            contentDescription = if (playbackState.status.shouldPauseFromToolbar()) pauseDesc else playDesc,
         )
         if (playbackState.status == PlaybackStatus.Playing || playbackState.status == PlaybackStatus.Buffering || playbackState.status == PlaybackStatus.Paused) {
             CircularProgressIndicator(
                 progress = {
-                    if (playbackState.status == PlaybackStatus.Playing) {
-                        playbackState.positionMs.toFloat() / playbackState.durationMs
-                    } else {
-                        0f
-                    }
+                    playbackState.toolbarAudioProgress()
                 },
                 color = MaterialTheme.colorScheme.tertiary,
                 strokeWidth = 2.dp,
@@ -285,11 +277,7 @@ private fun PlayPauseButton(
             )
             CircularProgressIndicator(
                 progress = {
-                    if (playbackState.status == PlaybackStatus.Playing) {
-                        playbackState.currentChunkIndex.toFloat() / playbackState.totalChunks
-                    } else {
-                        0f
-                    }
+                    playbackState.toolbarChunkProgress()
                 },
                 color = MaterialTheme.colorScheme.tertiary,
                 modifier = Modifier.padding(2.dp),
@@ -299,6 +287,23 @@ private fun PlayPauseButton(
         }
     }
 }
+
+internal fun PlaybackStatus.shouldPauseFromToolbar(): Boolean =
+    this == PlaybackStatus.Playing || this == PlaybackStatus.Buffering
+
+internal fun PlaybackState.toolbarAudioProgress(): Float =
+    if ((status == PlaybackStatus.Playing || status == PlaybackStatus.Paused) && durationMs > 0L) {
+        (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+
+internal fun PlaybackState.toolbarChunkProgress(): Float =
+    if ((status == PlaybackStatus.Playing || status == PlaybackStatus.Paused) && totalChunks > 0) {
+        (currentChunkIndex.toFloat() / totalChunks).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
 
 @Composable
 private fun SpeedButton(

@@ -109,7 +109,13 @@ internal fun resolveResponseEndpointProfile(host: String): ResponseEndpointProfi
     }
 }
 
-/** Maps app reasoning levels to DeepSeek Chat Completions effort values. */
+/**
+ * Maps app reasoning levels to DeepSeek Chat Completions effort values.
+ *
+ * Official Thinking Mode documents the Chat request field as `low` / `high` / `max`, and maps
+ * compatibility aliases as `medium -> high` and `xhigh -> high`. The app has no separate MAX
+ * level, so XHIGH stays on the documented `high` alias and is never sent as `max`.
+ */
 internal fun mapDeepSeekChatReasoningEffort(level: ReasoningLevel): String? {
     return when (level) {
         ReasoningLevel.OFF, ReasoningLevel.AUTO -> null

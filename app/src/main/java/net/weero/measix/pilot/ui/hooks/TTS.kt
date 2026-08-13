@@ -44,9 +44,13 @@ fun rememberCustomTtsState(): CustomTtsState {
     DisposableEffect(
         settings.selectedTTSProviderId,
         settings.ttsProviders,
-        settings.defaultTTSPlaybackSpeed,
     ) {
         ttsState.updateProvider(settings.getSelectedTTSProvider())
+        onDispose { }
+    }
+
+    // 倍速变化只更新共享播放器参数，不能被误判为 Provider 切换并清空当前 turn 队列。
+    DisposableEffect(settings.defaultTTSPlaybackSpeed) {
         ttsState.setSpeed(settings.defaultTTSPlaybackSpeed)
         onDispose { }
     }
@@ -97,11 +101,12 @@ interface CustomTtsState {
 
     /**
      * 带来源的 speak。
-     * 来源切换时（activeSession != incomingSession）强制 flush。
+     * queueSessionId 是主代理 turn 的队列边界；来源身份只用于 UI 分段。
      */
     fun speakWithSource(
         text: String,
-        flushCalled: Boolean,
+        replaceWithinSession: Boolean,
+        queueSessionId: String?,
         source: net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource?,
     )
 
@@ -157,33 +162,35 @@ private class CustomTtsStateImpl(
 
     fun updateProvider(provider: TTSProviderSetting?) {
         // Provider 切换时清空队列和 activeSource
-        controller.stop()
+        stop()
         controller.setProvider(provider)
     }
 
     override fun speak(text: String, flushCalled: Boolean) {
         // 无 source 的调用，沿用现有行为并清除子助手头像
-        speakWithSource(text, flushCalled, null)
+        speakWithSource(
+            text = text,
+            replaceWithinSession = flushCalled,
+            queueSessionId = null,
+            source = null,
+        )
     }
 
     override fun speakWithSource(
         text: String,
-        flushCalled: Boolean,
+        replaceWithinSession: Boolean,
+        queueSessionId: String?,
         source: net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource?,
     ) {
         val processed = text.stripMarkdown()
 
-        // 来源切换仲裁
-        // 使用提取的纯函数计算最终 flush，避免 JVM 测试复制生产算法
-        val currentSource = controller.activeSource.value as? net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
-        val effectiveFlush = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.computeEffectiveFlush(
-            flushCalled = flushCalled,
-            currentSource = currentSource,
-            incomingSource = source,
+        // queueSessionId 是队列边界；source 只标记该批音频的 UI 来源。
+        controller.speak(
+            text = processed,
+            replaceWithinSession = replaceWithinSession,
+            source = source,
+            queueSessionId = queueSessionId,
         )
-
-        // source 传递给 controller，controller 在播放到该批 chunk 时才更新 activeSource
-        controller.speak(processed, effectiveFlush, source)
     }
 
     override fun stop() {

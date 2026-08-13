@@ -560,6 +560,25 @@ class GoogleProviderMessageTest {
         assertEquals("answer", parts[2]["text"]?.jsonPrimitive?.content)
     }
 
+    @Test
+    fun `final gemini image should keep mime type and replay only the payload`() {
+        val image = invokeParsePart(buildJsonObject {
+            put("inlineData", buildJsonObject {
+                put("mimeType", "image/jpeg")
+                put("data", "abc123")
+            })
+        }) as UIMessagePart.Image
+        assertEquals("data:image/jpeg;base64,abc123", image.url)
+
+        val contents = invokeBuildContents(
+            listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(image)))
+        )
+        val inlineData = contents.single().jsonObject["parts"]!!.jsonArray
+            .single().jsonObject["inlineData"]!!.jsonObject
+        assertEquals("image/jpeg", inlineData["mimeType"]?.jsonPrimitive?.content)
+        assertEquals("abc123", inlineData["data"]?.jsonPrimitive?.content)
+    }
+
     // ==================== Helper Functions ====================
 
     private fun createExecutedTool(

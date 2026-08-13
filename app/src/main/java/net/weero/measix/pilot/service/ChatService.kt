@@ -240,6 +240,8 @@ class ChatService(
     private val _errors = MutableStateFlow<List<ChatError>>(emptyList())
     val errors: StateFlow<List<ChatError>> = _errors.asStateFlow()
 
+    private val autoTitleGeneration = AutoTitleGenerationTracker()
+
     fun addError(
         error: Throwable,
         conversationId: Uuid? = null,
@@ -334,6 +336,9 @@ class ChatService(
     fun getProcessingStatusFlow(conversationId: Uuid): StateFlow<String?> {
         return sessionRegistry.getProcessingStatusFlow(conversationId)
     }
+
+    fun getTtsQueueSessionId(conversationId: Uuid): String? =
+        sessionRegistry.getSession(conversationId)?.peekTtsQueueSessionId()
 
     fun getConversationJobs(): Flow<Map<Uuid, Job?>> {
         return sessionRegistry.getConversationJobs()
@@ -510,7 +515,7 @@ class ChatService(
                         _generationDoneFlow.emit(conversationId)
                     } else {
                         val resumeJob = appScope.launch {
-                            handleMessageComplete(conversationId)
+                            handleMessageComplete(conversationId, resumeExistingTtsTurn = true)
                             _generationDoneFlow.emit(conversationId)
                         }
                         session.setJob(resumeJob)
@@ -532,7 +537,8 @@ class ChatService(
 
     private suspend fun handleMessageComplete(
         conversationId: Uuid,
-        messageRange: ClosedRange<Int>? = null
+        messageRange: ClosedRange<Int>? = null,
+        resumeExistingTtsTurn: Boolean = false,
     ) {
         val settings = settingsStore.settingsFlow.first()
         val initialConversation = getConversationFlow(conversationId).value
@@ -572,10 +578,10 @@ class ChatService(
             var previousFinishedAt: LocalDateTime? = null
             val previousPendingTools = mutableSetOf<ToolCallLocator>()
             // 每轮 Master Generation 创建一个 turn-level TtsToolPlaybackContext，
-            // 在整轮 turn 内被 Master 和所有 Target 共享（同一 sessionId + 同一 playbackState）。
-            // 顺序开关开启时，首次 TTS 调用 flush 建立队列，后续所有调用（Master/Target）追加。
+            // 在整轮 turn 内被 Master 和所有 Target 共享。播放器以 sessionId 独占队列：
+            // 新 turn 替换旧队列；同一 turn 是否追加由顺序播放开关决定。
             val turnTtsContext = TtsToolPlaybackContext(
-                sessionId = Uuid.random().toString(),
+                sessionId = session.getTtsQueueSessionId(resumeExistingTtsTurn),
                 assistantId = assistant.id,
                 assistantName = assistant.name,
                 sourceType = TtsPlaybackSource.SourceType.NORMAL,
@@ -718,7 +724,7 @@ class ChatService(
             saveConversation(conversationId, finalConversation)
 
             launchWithConversationReference(conversationId) {
-                generateTitle(conversationId, finalConversation)
+                generateTitle(finalConversation)
             }
             launchWithConversationReference(conversationId) {
                 generateSuggestion(conversationId, finalConversation)
@@ -822,51 +828,65 @@ class ChatService(
     // ---- 生成标题 ----
 
     suspend fun generateTitle(
-        conversationId: Uuid,
         conversation: Conversation,
-        force: Boolean = false
+        force: Boolean = false,
     ) {
-        val shouldGenerate = when {
-            force -> true
-            conversation.title.isBlank() -> true
-            else -> false
-        }
-        if (!shouldGenerate) return
+        val conversationId = conversation.id
+        val decision = autoTitleGeneration.begin(
+            conversationId = conversationId,
+            force = force,
+            titleBlank = conversation.title.isBlank(),
+        )
+        if (decision != AutoTitleGenerationDecision.Proceed) return
 
-        runCatching {
+        try {
             val settings = settingsStore.settingsFlow.first()
             val model = settings.findModelById(settings.titleModelId, fallback = settings.fastModelId) ?: return
             val provider = model.findProvider(settings.providers) ?: return
 
-            val providerHandler = providerManager.getProviderByType(provider)
-            val result = providerHandler.generateText(
-                providerSetting = provider,
-                messages = listOf(
-                    UIMessage.user(
-                        prompt = settings.titlePrompt.applyPlaceholders(
-                            "locale" to Locale.getDefault().displayName,
-                            "content" to conversation.currentMessages
-                                .takeLast(4).joinToString("\n\n") { it.summaryAsText(maxLength = 500) })
-                    ),
-                ),
-                params = backgroundTextGenerationParams(model),
-            )
+            if (!force) {
+                autoTitleGeneration.recordAttempt(conversationId)
+            }
 
-            // 生成完，conversation可能不是最新了，因此需要重新获取
-            conversationRepo.getConversationById(conversation.id)?.let {
-                saveConversation(
-                    conversationId,
-                    it.copy(title = result.choices[0].message?.toText()?.trim() ?: "")
+            runCatching {
+                val providerHandler = providerManager.getProviderByType(provider)
+                val result = providerHandler.generateText(
+                    providerSetting = provider,
+                    messages = listOf(
+                        UIMessage.user(
+                            prompt = settings.titlePrompt.applyPlaceholders(
+                                "locale" to Locale.getDefault().displayName,
+                                "content" to conversation.currentMessages
+                                    .takeLast(4).joinToString("\n\n") { it.summaryAsText(maxLength = 500) })
+                        ),
+                    ),
+                    params = backgroundTextGenerationParams(model),
+                )
+
+                val latest = conversationRepo.getConversationById(conversationId) ?: return@runCatching
+                val titleToWrite = resolveGeneratedTitleWrite(
+                    force = force,
+                    latestTitle = latest.title,
+                    generatedTitle = result.choices.getOrNull(0)?.message?.toText().orEmpty(),
+                ) ?: return@runCatching
+                saveConversation(conversationId, latest.copy(title = titleToWrite))
+            }.onFailure {
+                it.printStackTrace()
+                addError(
+                    error = it,
+                    conversationId = conversationId,
+                    title = context.getString(R.string.error_title_generate_title),
+                    solution = ChatErrorSolution.CheckTitleModelSettings,
                 )
             }
-        }.onFailure {
-            it.printStackTrace()
-            addError(
-                error = it,
-                conversationId = conversationId,
-                title = context.getString(R.string.error_title_generate_title),
-                solution = ChatErrorSolution.CheckTitleModelSettings,
-            )
+        } finally {
+            val retry = autoTitleGeneration.end(conversationId)
+            if (retry != null) {
+                launchWithConversationReference(conversationId) {
+                    val latest = conversationRepo.getConversationById(conversationId) ?: return@launchWithConversationReference
+                    generateTitle(latest, force = retry.force)
+                }
+            }
         }
     }
 
@@ -1117,7 +1137,11 @@ class ChatService(
         stopGeneration(conversation.id)
         val childIds = conversationRepo.getChildConversations(conversation.id).map { it.id }
         conversationRepo.deleteConversation(conversation)
-        childIds.forEach(sessionRegistry::evictSession)
+        childIds.forEach { childId ->
+            autoTitleGeneration.clear(childId)
+            sessionRegistry.evictSession(childId)
+        }
+        autoTitleGeneration.clear(conversation.id)
         sessionRegistry.evictSession(conversation.id)
     }
 

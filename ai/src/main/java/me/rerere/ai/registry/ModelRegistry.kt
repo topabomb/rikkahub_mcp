@@ -254,8 +254,29 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
+    private val CLAUDE_SONNET_5 = defineModel {
+        tokens("claude", "sonnet", "5")
+        notTokens("claude", "sonnet", "4")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val CLAUDE_OPUS_5 = defineModel {
+        tokens("claude", "opus", "5")
+        notTokens("claude", "opus", "4")
+        visionInput()
+        toolReasoningAbility()
+    }
+
     val CLAUDE_ADAPTIVE_THINKING = defineGroup {
-        add(CLAUDE_SONNET_4_6, CLAUDE_OPUS_4_6, CLAUDE_OPUS_4_7, CLAUDE_OPUS_4_8)
+        add(
+            CLAUDE_SONNET_4_6,
+            CLAUDE_OPUS_4_6,
+            CLAUDE_OPUS_4_7,
+            CLAUDE_OPUS_4_8,
+            CLAUDE_SONNET_5,
+            CLAUDE_OPUS_5,
+        )
     }
 
     val CLAUDE_XHIGH_EFFORT = defineGroup {
@@ -276,7 +297,9 @@ object ModelRegistry {
             CLAUDE_SONNET_4_6,
             CLAUDE_OPUS_4_6,
             CLAUDE_OPUS_4_7,
-            CLAUDE_OPUS_4_8
+            CLAUDE_OPUS_4_8,
+            CLAUDE_SONNET_5,
+            CLAUDE_OPUS_5,
         )
     }
 
@@ -367,6 +390,11 @@ object ModelRegistry {
 
     private val QWEN_3_7_MAX = defineModel {
         tokens("qwen", "3", "7", "max")
+        toolReasoningAbility()
+    }
+
+    private val QWEN_3_8_MAX = defineModel {
+        tokens("qwen", "3", "8", "max")
         toolReasoningAbility()
     }
 
@@ -520,6 +548,30 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
+    private val XIAOMI_MIMO_V3 = defineModel {
+        tokens("mimo", "v", "3")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val XIAOMI_MIMO_V3_PRO = defineModel {
+        tokens("mimo", "v", "3", "pro")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val MUSE_SPARK = defineModel {
+        tokens("muse", "spark")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val MUSE_GLIMMER = defineModel {
+        tokens("muse", "glimmer")
+        visionInput()
+        toolReasoningAbility()
+    }
+
     private val HY3 = defineModel {
         tokens("hy", "3")
         toolReasoningAbility()
@@ -562,10 +614,13 @@ object ModelRegistry {
         CLAUDE_SONNET_3_7,
         CLAUDE_4,
         CLAUDE_4_5,
+        CLAUDE_OPUS_4_5,
         CLAUDE_SONNET_4_6,
         CLAUDE_OPUS_4_6,
         CLAUDE_OPUS_4_7,
         CLAUDE_OPUS_4_8,
+        CLAUDE_SONNET_5,
+        CLAUDE_OPUS_5,
         DEEPSEEK_V3_MODEL,
         DEEPSEEK_CHAT,
         DEEPSEEK_R1_MODEL,
@@ -581,6 +636,7 @@ object ModelRegistry {
         QWEN_3_5_MAX,
         QWEN_3_6_MAX,
         QWEN_3_7_MAX,
+        QWEN_3_8_MAX,
         DOUBAO_1_6,
         DOUBAO_1_8,
         DOUBAO_2_0,
@@ -608,6 +664,10 @@ object ModelRegistry {
         XIAOMI_MIMO_V2_PRO,
         XIAOMI_MIMO_V2_5,
         XIAOMI_MIMO_V2_5_PRO,
+        XIAOMI_MIMO_V3,
+        XIAOMI_MIMO_V3_PRO,
+        MUSE_SPARK,
+        MUSE_GLIMMER,
         HY3,
         LONGCAT_2,
     )

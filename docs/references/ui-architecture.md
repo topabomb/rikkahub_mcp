@@ -608,7 +608,7 @@ Assistant 配置页提供 Target 类别、全局可见与 Caller 访问范围设
 
 主聊天把 `assistant_call` 渲染为独立 `SubAssistantCallCard`。卡片显示 Target、request、运行状态、有界文本预览和桥接的 `ask_user`，整卡进入 `SubAssistantDetail(masterConversationId, runId)`。详情页校验 run 与 Child 关系，并通过 `ChatMessage(readOnly = true)` 与不提供输入区来禁止修改型交互。
 
-TTS 控制条只在当前来源为 Target 且该 Assistant 开启 `useAssistantAvatar` 时显示 Target 头像。来源随实际播放队列更新，不从历史消息恢复。
+TTS 控制条由当前 worker 的 `isSpeaking` 决定可见性，暂停不隐藏。暂停优先于底层播放器状态。同 turn 新内容继续入队，新 turn 替换整条队列；`stop` 释放所有权。控制条只在当前播放来源为 Target 且该 Assistant 开启 `useAssistantAvatar` 时显示 Target 头像。
 
 完整配置、执行状态、详情解析和生命周期见 [sub-assistant-architecture.md](sub-assistant-architecture.md)。
 

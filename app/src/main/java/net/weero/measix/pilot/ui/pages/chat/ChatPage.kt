@@ -464,10 +464,11 @@ private fun ChatPageContent(
                             vm.stopGeneration()
                         },
                         enableSearch = enableWebSearch,
-                        onToggleSearch = {
-                            vm.updateAssistantWebSearch(
-                                assistant.id,
-                                !enableWebSearch,
+                        onUpdateSearchMode = { mode ->
+                            vm.updateSearchMode(
+                                assistantId = assistant.id,
+                                model = setting.getChatModel(assistant),
+                                mode = mode,
                             )
                         },
                         onSendClick = {

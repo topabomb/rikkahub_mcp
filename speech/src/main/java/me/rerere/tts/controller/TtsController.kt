@@ -30,6 +30,9 @@ private const val TAG = "TtsController"
  * TTS 控制器（重构版）
  * - 负责文本分片、预取合成、排队播放与状态上报
  * - 对外 API 与原版兼容
+ *
+ * 一个非空 sessionId 对应一轮 Master turn 独占的共享队列。
+ * 新 session 总是替换旧队列；同 session 是否替换只由调用方的队列策略决定。
  */
 class TtsController(
     context: Context,
@@ -46,11 +49,12 @@ class TtsController(
     // Provider & 作业
     private var currentProvider: TTSProviderSetting? = null
     private var workerJob: Job? = null
+    private val workerOwner = PlaybackOwner()
     private var isPaused = false
+    private var isPreparingChunk = false
 
     // 队列与缓存（基于稳定 ID）
-    private val queue: java.util.concurrent.ConcurrentLinkedQueue<TtsChunk> = java.util.concurrent.ConcurrentLinkedQueue()
-    private val allChunks: MutableList<TtsChunk> = mutableListOf()
+    private val playbackQueue = TurnPlaybackQueue()
     private val cache = java.util.concurrent.ConcurrentHashMap<UUID, kotlinx.coroutines.Deferred<TTSResponse>>()
     private var lastPrefetchedIndex: Int = -1
 
@@ -81,10 +85,6 @@ class TtsController(
     // source-aware 播放来源追踪
     // 每次 speak() 携带一个 source 标记，controller 在播放跨越 source 边界时发射新 source。
     // 这样 UI 层的 activeSource 始终反映"当前正在播放的音频来源"，而非"最近入队的来源"。
-    private data class SourceSegment(val startChunkIndex: Int, val source: Any?)
-    private val sourceSegments = java.util.concurrent.CopyOnWriteArrayList<SourceSegment>()
-    private var currentSegmentIdx = 0
-
     private val _activeSource = MutableStateFlow<Any?>(null)
     val activeSource: StateFlow<Any?> = _activeSource.asStateFlow()
 
@@ -92,14 +92,11 @@ class TtsController(
         // 同步底层播放器状态到统一状态，并补充分片信息
         scope.launch {
             audio.playbackState.collectLatest { audioState ->
-                // 关键修复：AudioPlayer 在每个 chunk 播完后发射 STATE_ENDED → PlaybackStatus.Ended。
-                // 如果直接传播，CustomTtsStateImpl 会清空 _activeSource，导致后续 TTS 调用
-                // 看到 currentSource=null → effectiveFlush=true → flush → 队列中未播放的 chunk 被丢弃。
-                // 修复策略：当队列中仍有待播放的 chunk 时，将 Ended 转为 Playing，
-                // 因为 worker 正在 chunk 间过渡，将继续播放下一个 chunk。
-                // 只有当队列为空时才传播 Ended（表示整个队列播放完毕）。
+                // 本 turn 还有待播 chunk 时不要把 chunk 间隙发布成 Ended。
                 val effectiveStatus = when {
-                    audioState.status == PlaybackStatus.Ended && queue.isNotEmpty() -> PlaybackStatus.Playing
+                    isPaused -> PlaybackStatus.Paused
+                    isPreparingChunk -> PlaybackStatus.Buffering
+                    audioState.status == PlaybackStatus.Ended && playbackQueue.hasPending() -> PlaybackStatus.Playing
                     else -> audioState.status
                 }
                 _playbackState.update {
@@ -122,11 +119,17 @@ class TtsController(
 
     /**
      * 朗读文本
-     * - flush=true: 清空当前进度并重新开始
-     * - flush=false: 继续队列，追加朗读
+     * - queueSessionId 变化：跨 Master turn，清空旧队列并由新 turn 独占
+     * - queueSessionId 相同且 replaceWithinSession=true：同 turn 内也替换（顺序播放关闭）
+     * - queueSessionId 相同且 replaceWithinSession=false：同 turn 内追加（顺序播放开启）
      * - source: 本次朗读的来源标记，controller 在播放到该批 chunk 时发射 sourceChange
      */
-    fun speak(text: String, flush: Boolean = true, source: Any? = null) {
+    fun speak(
+        text: String,
+        replaceWithinSession: Boolean = true,
+        source: Any? = null,
+        queueSessionId: String? = null,
+    ) {
         if (text.isBlank()) return
         val provider = currentProvider
         if (provider == null) {
@@ -137,54 +140,50 @@ class TtsController(
         val newChunks = chunker.split(text)
         if (newChunks.isEmpty()) return
 
-        if (flush) {
+        val replaceQueue = playbackQueue.requiresReplacement(
+            incomingSessionId = queueSessionId,
+            replaceWithinSession = replaceWithinSession,
+        )
+        if (replaceQueue) {
             internalReset()
-            // source 追踪：flush 开启新 session，重置 segments
-            sourceSegments.clear()
-            sourceSegments.add(SourceSegment(0, source))
-            currentSegmentIdx = 0
-            _activeSource.value = source
-            allChunks.addAll(newChunks)
-            queue.addAll(newChunks)
             _currentChunk.update { 0 }
-        } else {
-            // source 追踪：append 追加新 segment，边界为当前 allChunks 的下一个 index
-            val startIndex = (allChunks.lastOrNull()?.index ?: -1) + 1
-            sourceSegments.add(SourceSegment(startIndex, source))
-            // 重映射 index 以保持全局顺序
-            val remapped = newChunks.mapIndexed { i, c -> c.copy(index = startIndex + i) }
-            allChunks.addAll(remapped)
-            queue.addAll(remapped)
         }
-        _totalChunks.update { queue.size }
+        playbackQueue.append(newChunks, queueSessionId, source)
+        // 队列自然播放结束后仍保留 session 所有权；同一 turn 的迟到工具调用继续追加，
+        // 直到新 turn、手动播放、stop 或 Provider 切换显式替换。
+        _totalChunks.update { playbackQueue.totalChunkCount() }
         _error.update { null }
 
+        val hasActiveWorker = workerJob?.isActive == true
         _playbackState.update {
             it.copy(
                 currentChunkIndex = _currentChunk.value,
                 totalChunks = _totalChunks.value,
-                status = PlaybackStatus.Buffering
+                status = when {
+                    isPaused -> PlaybackStatus.Paused
+                    hasActiveWorker -> it.status
+                    else -> PlaybackStatus.Buffering
+                }
             )
         }
 
-        if (workerJob?.isActive != true) startWorker()
+        if (!hasActiveWorker) startWorker()
         prefetchFrom((_currentChunk.value).coerceAtLeast(0))
     }
 
     private fun internalReset() {
         // Reset current session while keeping provider availability
+        // 先撤销旧 worker 的终态写入权，避免它在新队列建立前隐藏工具栏或清空头像。
+        workerOwner.invalidate()
         workerJob?.cancel()
         audio.stop()
         audio.clear()
         isPaused = false
-        queue.clear()
-        allChunks.clear()
+        isPreparingChunk = false
+        playbackQueue.clear()
         cache.values.forEach { it.cancel(CancellationException("Reset")) }
         cache.clear()
         lastPrefetchedIndex = -1
-        sourceSegments.clear()
-        currentSegmentIdx = 0
-        _isSpeaking.update { false }
         _currentChunk.update { 0 }
         _totalChunks.update { 0 }
         _error.update { null }
@@ -203,7 +202,8 @@ class TtsController(
     fun resume() {
         isPaused = false
         audio.resume()
-        _playbackState.update { it.copy(status = PlaybackStatus.Playing) }
+        // AudioPlayer 会在真实恢复后发布 Playing；若暂停发生在合成阶段，这里应先回到 Buffering。
+        _playbackState.update { it.copy(status = PlaybackStatus.Buffering) }
     }
 
     /** 快进当前音频 */
@@ -218,25 +218,24 @@ class TtsController(
 
     /** 跳过下一段（不打断当前正在播放） */
     fun skipNext() {
-        if (queue.isNotEmpty()) {
-            queue.poll()
-            _totalChunks.update { queue.size }
+        if (playbackQueue.hasPending()) {
+            playbackQueue.poll()
         }
     }
 
     /** 停止并清空状态 */
     fun stop() {
+        // 先使当前 worker 失去终态写入权，再触发取消。
+        workerOwner.invalidate()
         workerJob?.cancel()
         audio.stop()
         audio.clear()
         isPaused = false
-        queue.clear()
-        allChunks.clear()
+        isPreparingChunk = false
+        playbackQueue.clear()
         cache.values.forEach { it.cancel(CancellationException("Stopped")) }
         cache.clear()
         lastPrefetchedIndex = -1
-        sourceSegments.clear()
-        currentSegmentIdx = 0
         _isSpeaking.update { false }
         _currentChunk.update { 0 }
         _totalChunks.update { 0 }
@@ -259,9 +258,9 @@ class TtsController(
             return
         }
 
+        val ownershipToken = workerOwner.claim()
         workerJob = scope.launch {
             _isSpeaking.update { true }
-            var processedCount = _currentChunk.value
             try {
                 while (isActive) {
                     if (isPaused) {
@@ -269,24 +268,21 @@ class TtsController(
                         continue
                     }
 
-                    val chunk = queue.poll() ?: break
-
-                    // 检查是否跨越 source segment 边界
-                    // chunk.index 是全局连续索引，segment.startChunkIndex 记录每段起始 index
-                    while (currentSegmentIdx + 1 < sourceSegments.size &&
-                        chunk.index >= sourceSegments[currentSegmentIdx + 1].startChunkIndex
-                    ) {
-                        currentSegmentIdx++
-                        _activeSource.value = sourceSegments[currentSegmentIdx].source
-                    }
+                    val queuedChunk = playbackQueue.poll() ?: break
+                    val chunk = queuedChunk.chunk
+                    _activeSource.value = queuedChunk.source
+                    isPreparingChunk = true
 
                     // 更新状态（1-based）
-                    _currentChunk.update { processedCount + 1 }
-                    _totalChunks.update { queue.size + 1 }
+                    _currentChunk.update { chunk.index + 1 }
+                    _totalChunks.update { playbackQueue.totalChunkCount() }
                     _playbackState.update {
                         it.copy(
                             currentChunkIndex = _currentChunk.value,
-                            totalChunks = _totalChunks.value
+                            totalChunks = _totalChunks.value,
+                            positionMs = 0L,
+                            durationMs = 0L,
+                            status = if (isPaused) PlaybackStatus.Paused else PlaybackStatus.Buffering,
                         )
                     }
 
@@ -298,12 +294,18 @@ class TtsController(
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e
                         Log.e(TAG, "Synthesis error", e)
+                        isPreparingChunk = false
                         _error.update { e.message ?: "TTS synthesis error" }
-                        processedCount++
                         continue
                     }
 
+                    // 用户可能在合成等待期间点击暂停；不得让刚完成合成的音频绕过工具栏开始播放。
+                    while (isPaused && isActive) {
+                        delay(80)
+                    }
+
                     // 播放
+                    isPreparingChunk = false
                     try {
                         audio.play(response)
                     } catch (e: Exception) {
@@ -312,15 +314,18 @@ class TtsController(
                         _error.update { e.message ?: "Audio playback error" }
                     }
 
-                    if (queue.isNotEmpty()) delay(chunkDelayMs)
-
-                    processedCount++
+                    if (playbackQueue.hasPending()) delay(chunkDelayMs)
                 }
             } finally {
-                _isSpeaking.update { false }
-                if (queue.isEmpty()) {
-                    _playbackState.update { it.copy(status = PlaybackStatus.Ended) }
-                    _activeSource.value = null
+                // flush 会取消旧 worker 并立即启动新 worker。旧 finally 可能迟到，
+                // 只有仍拥有当前队列的 worker 才能发布终态或清空来源。
+                if (workerOwner.owns(ownershipToken)) {
+                    isPreparingChunk = false
+                    _isSpeaking.update { false }
+                    if (!playbackQueue.hasPending()) {
+                        _playbackState.update { it.copy(status = PlaybackStatus.Ended) }
+                        _activeSource.value = null
+                    }
                 }
             }
         }
@@ -329,11 +334,11 @@ class TtsController(
     private fun prefetchFrom(startIndex: Int) {
         val provider = currentProvider ?: return
         val begin = startIndex.coerceAtLeast(lastPrefetchedIndex + 1)
-        val endExclusive = (begin + prefetchCount).coerceAtMost(allChunks.size)
+        val endExclusive = (begin + prefetchCount).coerceAtMost(playbackQueue.totalChunkCount())
         if (begin >= endExclusive) return
 
         for (i in begin until endExclusive) {
-            val chunk = allChunks.getOrNull(i) ?: continue
+            val chunk = playbackQueue.chunkAt(i) ?: continue
             cache.computeIfAbsent(chunk.id) {
                 scope.async(Dispatchers.IO) { synthesizer.synthesize(provider, chunk) }
             }

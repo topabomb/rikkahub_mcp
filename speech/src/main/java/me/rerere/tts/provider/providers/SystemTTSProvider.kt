@@ -26,93 +26,92 @@ class SystemTTSProvider : TTSProvider<TTSProviderSetting.SystemTTS> {
         providerSetting: TTSProviderSetting.SystemTTS,
         request: TTSRequest
     ): Flow<AudioChunk> = flow {
+        val tempDir = context.appTempFolder
+        val audioFile = File.createTempFile("tts_", ".wav", tempDir)
         val audioData = suspendCancellableCoroutine<ByteArray> { continuation ->
             var tts: TextToSpeech? = null
             val listener = TextToSpeech.OnInitListener { status ->
                 if (status == TextToSpeech.SUCCESS) {
                     val ttsInstance = tts ?: error("TextToSpeech instance is null")
 
-                // Set language
-                val locale = Locale.getDefault()
-                val langResult = ttsInstance.setLanguage(locale)
+                    // Set language
+                    val locale = Locale.getDefault()
+                    val langResult = ttsInstance.setLanguage(locale)
 
-                if (langResult == TextToSpeech.LANG_MISSING_DATA ||
-                    langResult == TextToSpeech.LANG_NOT_SUPPORTED
-                ) {
-                    Log.w(TAG, "generateSpeech: Language $locale not supported")
-                }
-
-                // Set speech parameters
-                ttsInstance.setSpeechRate(providerSetting.speechRate)
-                ttsInstance.setPitch(providerSetting.pitch)
-
-                // Create temporary file for audio output using temp directory like MeasixPilotApp
-                val tempDir = context.appTempFolder
-                val audioFile = File(tempDir, "tts_${System.currentTimeMillis()}.wav")
-
-                val utteranceId = UUID.randomUUID().toString()
-
-                ttsInstance.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(utteranceId: String?) {
-                        Log.i(TAG, "onStart: TTS engine started!")
+                    if (langResult == TextToSpeech.LANG_MISSING_DATA ||
+                        langResult == TextToSpeech.LANG_NOT_SUPPORTED
+                    ) {
+                        Log.w(TAG, "generateSpeech: Language $locale not supported")
                     }
 
-                    override fun onDone(utteranceId: String?) {
-                        try {
-                            if (audioFile.exists()) {
-                                val audioData = audioFile.readBytes()
-                                audioFile.delete()
+                    // Set speech parameters
+                    ttsInstance.setSpeechRate(providerSetting.speechRate)
+                    ttsInstance.setPitch(providerSetting.pitch)
 
-                                if (continuation.isActive) continuation.resume(audioData)
-                            } else {
-                                if (continuation.isActive) continuation.resumeWithException(
-                                    Exception("Failed to generate audio file")
-                                )
+                    val utteranceId = UUID.randomUUID().toString()
+
+                    ttsInstance.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                        override fun onStart(utteranceId: String?) {
+                            Log.i(TAG, "onStart: TTS engine started!")
+                        }
+
+                        override fun onDone(utteranceId: String?) {
+                            try {
+                                if (audioFile.exists() && audioFile.length() > 0L) {
+                                    val bytes = audioFile.readBytes()
+
+                                    if (continuation.isActive) continuation.resume(bytes)
+                                } else if (continuation.isActive) {
+                                    continuation.resumeWithException(Exception("Failed to generate audio file"))
+                                }
+                            } catch (e: Exception) {
+                                if (continuation.isActive) continuation.resumeWithException(e)
+                            } finally {
+                                audioFile.delete()
+                                ttsInstance.shutdown()
                             }
-                        } catch (e: Exception) {
-                            if (continuation.isActive) continuation.resumeWithException(e)
-                        } finally {
+                        }
+
+                        @Deprecated("Deprecated in Java")
+                        override fun onError(utteranceId: String?) {
+                            Log.e(TAG, "onError: TTS synthesis failed!")
+                            audioFile.delete()
+                            if (continuation.isActive) continuation.resumeWithException(
+                                Exception("TTS synthesis failed")
+                            )
                             ttsInstance.shutdown()
                         }
-                    }
+                    })
 
-                    @Deprecated("Deprecated in Java")
-                    override fun onError(utteranceId: String?) {
-                        Log.e(TAG, "onError: TTS synthesis failed!")
+                    val result = ttsInstance.synthesizeToFile(
+                        request.text,
+                        null,
+                        audioFile,
+                        utteranceId
+                    )
+
+                    if (result != TextToSpeech.SUCCESS) {
                         audioFile.delete()
                         if (continuation.isActive) continuation.resumeWithException(
-                            Exception("TTS synthesis failed")
+                            Exception("Failed to start TTS synthesis")
                         )
                         ttsInstance.shutdown()
                     }
-                })
-
-                val result = ttsInstance.synthesizeToFile(
-                    request.text,
-                    null,
-                    audioFile,
-                    utteranceId
-                )
-
-                if (result != TextToSpeech.SUCCESS) {
+                } else {
+                    audioFile.delete()
                     if (continuation.isActive) continuation.resumeWithException(
-                        Exception("Failed to start TTS synthesis")
+                        Exception("Failed to initialize TextToSpeech engine")
                     )
-                    ttsInstance.shutdown()
+                    tts?.shutdown()
                 }
+            }
+            tts = TextToSpeech(context, listener)
 
-            } else {
-                if (continuation.isActive) continuation.resumeWithException(
-                    Exception("Failed to initialize TextToSpeech engine")
-                )
+            continuation.invokeOnCancellation {
+                audioFile.delete()
+                tts.shutdown()
             }
         }
-        tts = TextToSpeech(context, listener)
-
-        continuation.invokeOnCancellation {
-            tts.shutdown()
-        }
-    }
 
         emit(
             AudioChunk(

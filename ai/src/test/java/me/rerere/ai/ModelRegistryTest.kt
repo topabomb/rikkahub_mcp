@@ -47,13 +47,43 @@ class ModelRegistryTest {
         assertTrue(ModelRegistry.CLAUDE_SERIES.match("claude-sonnet-4-20250929"))
         assertTrue(ModelRegistry.CLAUDE_SERIES.match("claude-4-sonnet"))
         assertTrue(ModelRegistry.CLAUDE_SERIES.match("claude-3.5-sonnet"))
+        assertTrue(ModelRegistry.CLAUDE_SERIES.match("claude-sonnet-5"))
+        assertTrue(ModelRegistry.CLAUDE_SERIES.match("claude-opus-5"))
         assertFalse(ModelRegistry.CLAUDE_ADAPTIVE_THINKING.match("claude-sonnet-4.5-20250929"))
         assertTrue(ModelRegistry.CLAUDE_ADAPTIVE_THINKING.match("claude-sonnet-4.6"))
         assertTrue(ModelRegistry.CLAUDE_ADAPTIVE_THINKING.match("claude-opus-4.8"))
+        assertTrue(ModelRegistry.CLAUDE_ADAPTIVE_THINKING.match("claude-sonnet-5"))
+        assertTrue(ModelRegistry.CLAUDE_ADAPTIVE_THINKING.match("claude-opus-5"))
+        assertFalse(ModelRegistry.CLAUDE_ADAPTIVE_THINKING.match("claude-3.5-sonnet"))
         assertEquals(
             listOf(ModelAbility.TOOL),
             ModelRegistry.MODEL_ABILITIES.getData("claude-3.5-sonnet")
         )
+        assertEquals(
+            listOf(Modality.TEXT, Modality.IMAGE),
+            ModelRegistry.MODEL_INPUT_MODALITIES.getData("claude-sonnet-5")
+        )
+        assertEquals(
+            listOf(ModelAbility.TOOL, ModelAbility.REASONING),
+            ModelRegistry.MODEL_ABILITIES.getData("claude-opus-5")
+        )
+    }
+
+    @Test
+    fun testQwen38MaxMimoV3AndMuse() {
+        val toolReasoning = listOf(ModelAbility.TOOL, ModelAbility.REASONING)
+        val visionInput = listOf(Modality.TEXT, Modality.IMAGE)
+        assertEquals(toolReasoning, ModelRegistry.MODEL_ABILITIES.getData("qwen-3.8-max"))
+        assertEquals(listOf(Modality.TEXT), ModelRegistry.MODEL_INPUT_MODALITIES.getData("qwen-3.8-max"))
+        assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("mimo-v3"))
+        assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("mimo-v3-pro"))
+        assertEquals(toolReasoning, ModelRegistry.MODEL_ABILITIES.getData("mimo-v3-pro"))
+        assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("muse-spark"))
+        assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("muse-spark-1.2"))
+        assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("muse-glimmer"))
+        assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("muse-glimmer-30b"))
+        assertEquals(toolReasoning, ModelRegistry.MODEL_ABILITIES.getData("muse-spark"))
+        assertEquals(toolReasoning, ModelRegistry.MODEL_ABILITIES.getData("muse-glimmer-30b"))
     }
 
     @Test
