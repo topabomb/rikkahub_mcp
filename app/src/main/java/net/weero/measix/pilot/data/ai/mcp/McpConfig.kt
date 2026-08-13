@@ -7,10 +7,10 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import me.rerere.ai.core.InputSchema
 import kotlin.uuid.Uuid
 
 @Serializable
@@ -62,7 +62,7 @@ data class McpTool(
     val enable: Boolean = true,
     val name: String = "",
     val description: String? = null,
-    val inputSchema: InputSchema? = null,
+    val inputSchema: JsonObject? = null,
     val needsApproval: Boolean = false
 )
 
@@ -145,9 +145,11 @@ fun mergeTools(
     return result
 }
 
-private fun io.modelcontextprotocol.kotlin.sdk.types.ToolSchema.toSchema(): InputSchema {
-    return InputSchema.Obj(properties = this.properties ?: JsonObject(emptyMap()), required = this.required)
-}
+private fun io.modelcontextprotocol.kotlin.sdk.types.ToolSchema.toSchema(): JsonObject =
+    Json.encodeToJsonElement(
+        io.modelcontextprotocol.kotlin.sdk.types.ToolSchema.serializer(),
+        this,
+    ).jsonObject
 
 /**
  * JSON 解析结果。

@@ -595,14 +595,14 @@ class ChatCompletionsAPIMessageTest {
     }
 
     @Test
-    fun `deepseek chat reasoning levels should map to documented high and max values`() {
+    fun `deepseek chat reasoning levels should map to documented effort values`() {
         val expected = mapOf(
             ReasoningLevel.OFF to null,
             ReasoningLevel.AUTO to null,
-            ReasoningLevel.LOW to "high",
+            ReasoningLevel.LOW to "low",
             ReasoningLevel.MEDIUM to "high",
             ReasoningLevel.HIGH to "high",
-            ReasoningLevel.XHIGH to "max",
+            ReasoningLevel.XHIGH to "high",
         )
 
         expected.forEach { (level, effort) ->

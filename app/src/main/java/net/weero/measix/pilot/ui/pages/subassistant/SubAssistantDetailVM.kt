@@ -34,6 +34,7 @@ data class SubAssistantDetailLink(
 
 internal sealed interface SubAssistantDetailLinkResult {
     data class Ready(val link: SubAssistantDetailLink) : SubAssistantDetailLinkResult
+    data object Pending : SubAssistantDetailLinkResult
     data object Unavailable : SubAssistantDetailLinkResult
 }
 
@@ -60,12 +61,18 @@ internal fun resolveSubAssistantDetailLink(
     if (matches.size != 1) return SubAssistantDetailLinkResult.Unavailable
 
     val (tool, metadata) = matches.single()
-    val childConversationId = metadata.childConversationId?.let {
-        runCatching { Uuid.parse(it) }.getOrNull()
-    } ?: return SubAssistantDetailLinkResult.Unavailable
-    val childTaskMessageId = metadata.childTaskNodeId?.let {
-        runCatching { Uuid.parse(it) }.getOrNull()
-    } ?: return SubAssistantDetailLinkResult.Unavailable
+    fun missingLink(): SubAssistantDetailLinkResult =
+        if (metadata.state.isTerminal()) {
+            SubAssistantDetailLinkResult.Unavailable
+        } else {
+            SubAssistantDetailLinkResult.Pending
+        }
+    val childConversationIdRaw = metadata.childConversationId ?: return missingLink()
+    val childConversationId = runCatching { Uuid.parse(childConversationIdRaw) }.getOrNull()
+        ?: return SubAssistantDetailLinkResult.Unavailable
+    val childTaskMessageIdRaw = metadata.childTaskNodeId ?: return missingLink()
+    val childTaskMessageId = runCatching { Uuid.parse(childTaskMessageIdRaw) }.getOrNull()
+        ?: return SubAssistantDetailLinkResult.Unavailable
     val targetAssistantId = runCatching { Uuid.parse(metadata.targetAssistantId) }.getOrNull()
         ?: return SubAssistantDetailLinkResult.Unavailable
     val request = runCatching {
@@ -138,18 +145,7 @@ class SubAssistantDetailVM(
     }
 
     /**
-     * 加载子助手调用详情。
-     *
-     * 关键设计：link（runId → childConversationId 映射）只解析一次，之后
-     * child 状态收集和 master metadata 更新在独立协程中并行运行，互不取消。
-     *
-     * 之前的实现使用 collectLatest 监听 master StateFlow，每次 master 状态变化
-     * 都会取消并重启 collectValidatedChild（包括 DB 读取）。当 master 正在流式
-     * 输出时，StateFlow 高频更新导致 collectLatest 在 Main 线程反复执行
-     * resolveSubAssistantDetailLink（遍历所有 messageNodes），占据绝大部分
-     * Main 线程时间，导致 ChatService 的 chunk collector 无法处理 channelFlow
-     * buffer 中的消息，buffer 填满后 send() 挂起，Master 生成管线暂停，
-     * 形成反馈循环使整个 UI 卡死。
+     * Link 只解析一次；Master 流式更新不能重启或取消 Child 状态收集。
      */
     private fun loadValidatedRun() {
         viewModelScope.launch {
@@ -222,6 +218,10 @@ class SubAssistantDetailVM(
         if (initialResult is SubAssistantDetailLinkResult.Ready) {
             return initialResult.link
         }
+        if (initialResult is SubAssistantDetailLinkResult.Unavailable) {
+            markUnavailable()
+            return null
+        }
 
         // 当前状态未找到。如果 master session 不活跃，说明数据已是最新但仍未找到。
         if (activeMaster == null) {
@@ -232,11 +232,12 @@ class SubAssistantDetailVM(
         // 监听 master StateFlow 直到 link 出现。
         // 此时 master 可能正在生成，tool metadata 尚未写入。
         // 使用 first：找到匹配值后自动取消收集并返回。
-        val masterWithLink = activeMaster.state.first { master ->
-            resolveSubAssistantDetailLink(master, runId, json) is SubAssistantDetailLinkResult.Ready
+        val resolvedMaster = activeMaster.state.first { master ->
+            resolveSubAssistantDetailLink(master, runId, json) !is SubAssistantDetailLinkResult.Pending
         }
-        return when (val result = resolveSubAssistantDetailLink(masterWithLink, runId, json)) {
+        return when (val result = resolveSubAssistantDetailLink(resolvedMaster, runId, json)) {
             is SubAssistantDetailLinkResult.Ready -> result.link
+            SubAssistantDetailLinkResult.Pending -> null
             SubAssistantDetailLinkResult.Unavailable -> {
                 markUnavailable()
                 null

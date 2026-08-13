@@ -299,7 +299,7 @@ class ResponseAPI(
                         put("summary", "auto")
                     }
                     if (endpointProfile == ResponseEndpointProfile.DEEPSEEK) {
-                        mapDeepSeekReasoningEffort(level)?.let { put("effort", it) }
+                        mapDeepSeekResponsesReasoningEffort(level)?.let { put("effort", it) }
                     } else if (level != ReasoningLevel.AUTO) {
                         val effort = if (isOfficialOpenAIHost(host)) {
                             mapOfficialOpenAIReasoningEffort(params.model.modelId, level)
@@ -332,12 +332,7 @@ class ResponseAPI(
                                 // Responses 省略 strict 会尝试严格模式；显式 false 保持项目原有
                                 // Chat Completions 的非严格工具语义，避免既有 JSON Schema 被隐式收紧。
                                 put("strict", false)
-                                put(
-                                    "parameters",
-                                    json.encodeToJsonElement(
-                                        tool.parameters()
-                                    )
-                                )
+                                tool.parameters()?.let { put("parameters", it) }
                             })
                         }
                     }

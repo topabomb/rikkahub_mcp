@@ -1319,5 +1319,11 @@
   <string name="sub_assistant_detail_show_more">더 보기</string>
   <string name="sub_assistant_detail_show_less">접기</string>
   <string name="sub_assistant_detail_no_output">아직 실행 출력이 없습니다</string>
+  <string name="update_download_notification_description">업데이트 패키지를 다운로드하는 중...</string>
+  <string name="update_download_failed">업데이트를 다운로드하지 못했습니다</string>
+  <string name="sub_assistant_call_title">하위 어시스턴트 호출</string>
+  <string name="sub_assistant_reason_interaction_limit_reached">확인 요청 횟수가 너무 많습니다</string>
+  <string name="sub_assistant_reason_unknown">하위 어시스턴트가 요청을 완료하지 못했습니다</string>
+  <string name="sub_assistant_tool_unknown">도구</string>
 </resources>
 

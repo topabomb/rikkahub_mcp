@@ -52,6 +52,56 @@ class SubAssistantDetailResolverTest {
     }
 
     @Test
+    fun `missing run is terminally unavailable instead of pending forever`() {
+        assertEquals(
+            SubAssistantDetailLinkResult.Unavailable,
+            resolveSubAssistantDetailLink(masterWithTools(emptyList()), "missing", json),
+        )
+    }
+
+    @Test
+    fun `active run without child link remains pending`() {
+        val metadata = buildInitialSubAssistantCallMetadata(
+            runId = "run-pending",
+            targetAssistantId = targetId,
+            targetNameSnapshot = "Reviewer",
+        ).copy(state = SubAssistantCallState.STARTING)
+        val tool = UIMessagePart.Tool(
+            toolCallId = "pending",
+            toolName = "assistant_call",
+            input = """{"assistant_id":"$targetId","request":"Review this"}""",
+        ).mergeSubAssistantCallMetadata(json, metadata)
+
+        assertEquals(
+            SubAssistantDetailLinkResult.Pending,
+            resolveSubAssistantDetailLink(masterWithTools(listOf(tool)), "run-pending", json),
+        )
+    }
+
+    @Test
+    fun `malformed child link is unavailable even while run is active`() {
+        val metadata = buildInitialSubAssistantCallMetadata(
+            runId = "run-malformed",
+            targetAssistantId = targetId,
+            targetNameSnapshot = "Reviewer",
+        ).copy(
+            childConversationId = "not-a-uuid",
+            childTaskNodeId = task.id.toString(),
+            state = SubAssistantCallState.RUNNING,
+        )
+        val tool = UIMessagePart.Tool(
+            toolCallId = "malformed",
+            toolName = "assistant_call",
+            input = "{}",
+        ).mergeSubAssistantCallMetadata(json, metadata)
+
+        assertEquals(
+            SubAssistantDetailLinkResult.Unavailable,
+            resolveSubAssistantDetailLink(masterWithTools(listOf(tool)), "run-malformed", json),
+        )
+    }
+
+    @Test
     fun `child from another master or target is rejected`() {
         val link = (resolveSubAssistantDetailLink(masterWithTools(listOf(callTool("run-1"))), "run-1", json)
             as SubAssistantDetailLinkResult.Ready).link

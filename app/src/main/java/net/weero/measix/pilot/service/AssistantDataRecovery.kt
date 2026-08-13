@@ -14,19 +14,24 @@ class AssistantDataRecovery(
     settingsStore: SettingsStore,
     assistantManagementService: AssistantManagementService,
     subAssistantCoordinator: SubAssistantCoordinator,
+    recoveryGate: AssistantDataRecoveryGate,
 ) {
     init {
         appScope.launch {
-            settingsStore.settingsFlow.first { !it.init }
-            runCatching {
-                subAssistantCoordinator.performRecovery()
-            }.onFailure { error ->
-                Log.e(TAG, "Unable to recover sub-assistant conversations", error)
-            }
-            runCatching {
-                assistantManagementService.performPendingDeletionCleanup()
-            }.onFailure { error ->
-                Log.e(TAG, "Unable to recover pending assistant deletions", error)
+            try {
+                settingsStore.settingsFlow.first { !it.init }
+                runCatching {
+                    subAssistantCoordinator.performRecovery()
+                }.onFailure { error ->
+                    Log.e(TAG, "Unable to recover sub-assistant conversations", error)
+                }
+                runCatching {
+                    assistantManagementService.performPendingDeletionCleanup()
+                }.onFailure { error ->
+                    Log.e(TAG, "Unable to recover pending assistant deletions", error)
+                }
+            } finally {
+                recoveryGate.complete()
             }
         }
     }

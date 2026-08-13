@@ -237,9 +237,8 @@ class ChatVM(
         chatService.handleToolApproval(_conversationId, locator, approved = true, answer = answer)
     }
 
-    fun handleSubAssistantAnswer(runId: String, interactionId: String, answer: String) {
+    fun handleSubAssistantAnswer(runId: String, interactionId: String, answer: String): Boolean =
         chatService.handleSubAssistantAnswer(runId, interactionId, answer)
-    }
 
     fun stopGeneration() {
         viewModelScope.launch {
@@ -262,12 +261,12 @@ class ChatVM(
 
     fun deleteConversation(conversation: Conversation): Job =
         viewModelScope.launch {
-            conversationRepo.deleteConversation(conversation)
+            chatService.deleteConversation(conversation)
         }
 
     fun updatePinnedStatus(conversation: Conversation) {
         viewModelScope.launch {
-            conversationRepo.togglePinStatus(conversation.id)
+            chatService.togglePinStatus(conversation.id)
         }
     }
 
@@ -287,7 +286,7 @@ class ChatVM(
                 chatService.saveConversation(_conversationId, updatedConversation)
                 settingsStore.updateAssistant(targetAssistantId)
             } else {
-                conversationRepo.updateConversation(updatedConversation)
+                chatService.updatePersistedConversation(updatedConversation)
             }
         }
     }

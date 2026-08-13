@@ -88,14 +88,19 @@ class SubAssistantCallCardLogicTest {
 
     @Test
     fun `tool fallback removes control characters and formats separators`() {
-        assertEquals("mcp server search", sanitizeToolNameForDisplay("mcp__server\u0000_search"))
+        assertEquals("mcp server search", sanitizeToolNameForDisplay("mcp__server\u0000_search", "工具"))
     }
 
     @Test
     fun `tool fallback clips by code point without splitting emoji`() {
-        val result = sanitizeToolNameForDisplay("😀".repeat(80))
+        val result = sanitizeToolNameForDisplay("😀".repeat(80), "工具")
 
         assertEquals(65, result.codePointCount(0, result.length))
         assertTrue(result.endsWith("…"))
+    }
+
+    @Test
+    fun `blank tool fallback is supplied by localized caller`() {
+        assertEquals("工具", sanitizeToolNameForDisplay("__\u0000__", "工具"))
     }
 }

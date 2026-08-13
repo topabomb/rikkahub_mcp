@@ -10,34 +10,28 @@
 
 ### 新增
 
-- **子助手同步委托**：主助手可通过 `assistant_call` 把完整任务交给可访问的 Target；Target 使用独立、持久化的 Child Conversation，不自动读取主会话历史，并可沿当前 Master 分支连续工作
-- **助手协作工具与授权**：新增 `assistant_manage`、`assistant_memory_list`、`assistant_call`，支持显式允许列表、全局可见 Target、动态 Catalog、原子创建授权和只读局部记忆查看
-- **持久化执行状态**：Room v4 增加 Child 关系，调用 metadata 保存 run/lineage/状态/预览/交互；支持启动恢复、分支保留、会话 Fork、孤儿清理和 durable 删除恢复
-- **子助手交互界面**：主聊天提供独立调用卡片和 Target `ask_user` 回答区；详情页只读展示 Child 执行过程，普通会话入口不暴露内部 Child
-- **通用生成原语**：Generation Pipeline 增加精确的 `messageId + toolOrdinal` locator、phase/checkpoint/finished 事件、动态工具提供器和非交互审批策略
+- **子助手同步委托**：新增 `assistant_manage`、`assistant_memory_list`、`assistant_call`；主助手可通过动态 Catalog 和显式/全局授权把完整任务交给 Target，Target 在独立持久化的 Child Conversation 中沿当前 Master 分支连续工作
+- **可恢复执行与交互**：Room v4 持久化 Child 关系和 run/lineage/checkpoint/交互状态，支持启动恢复、Fork/分支保留、孤儿清理和 durable 删除；主聊天提供调用卡片、Target `ask_user` 回答区与只读 Child 详情
+- **通用生成原语**：生成管线增加 `messageId + toolOrdinal` locator、phase/checkpoint/finished 事件、动态工具提供器和非交互审批策略
+
+### 修复
+
+- **ask_user 与调用卡片**：对象型 `options` 不再弹出空提问框；非法参数在审批门口拒绝；回答只在服务端真正收下后锁定按钮；交互轮次上限与 step 上限分开；Child 链接尚未写入时详情不再误判不可用；未知失败原因完成本地化
+- **启动恢复竞态**：恢复完成前禁止发送、删除、置顶和会话写入；历史/调试入口统一经 ChatService；中断收口时 Child 超时不再丢掉 Master 终态 metadata；恢复扫描只加载顶层会话和被引用的 Child
+- **协议与工具 Schema**：Claude 仅对支持的模型启用 adaptive thinking，旧模型使用合法 manual budget，3.5 Sonnet 去掉误标的 reasoning；DeepSeek Chat/Responses 分别映射当前端点接受的 effort；MCP 完整保留 `$defs/$ref/$schema`，非法工具名不再让整批 MCP 工具静默消失；结构化工具结果可按策略免截断
+- **搜索、lineage 与数据一致性**：`conversation_search` 按当前助手隔离且不含 Child；lineage 按当前选中分支判断后续 USER 任务；Settings 写入成功后才发布；Assistant 编辑使用最新快照；Memory 执行前重验 owner/namespace；删除超时保留 tombstone
+- **TTS、预览与定位**：Master/Target 共用同一 turn 的 TTS 顺序状态，修正跨 step 打断和来源残留；预览按 grapheme 裁剪；终态答案、非文本结果和 checkpoint 保持顺序；工具审批/合并不再依赖可能为空或重复的 Provider `toolCallId`
+- **更新与发行**：更新下载错误与通知说明完成本地化；正式 GitHub Release 强制要求签名 Secrets，并在上传前逐个执行 `apksigner verify`
 
 ### 变更
 
-- Target 显式模型优先；未绑定模型时仅在调用期继承 Caller 的有效模型执行配置，不修改 Target 持久化配置
-- Target 复用完整 Transformer、上下文裁剪、Provider 和工具循环；永久过滤 Assistant 管理与递归委托，其他工具按“运行快照 ∩ 当前配置”在 step 边界处理撤权
-- Target 的 `ask_user` 由主聊天承接，其他需审批工具拒绝执行；Memory Tool 在执行前重验开关和 namespace
-- Master 与同一 turn 内的 Target 共享 TTS 播放 session 和顺序状态，并跟踪当前 Target 来源
-- Settings 原子更新改为持久化成功后发布；Assistant 删除使用 tombstone 与 Room 事务完成可恢复清理
-
-### 修复与优化
-
-- 多 ToolCall 的审批、执行、结果合并和 lineage 不再依赖可能为空或重复的 Provider `toolCallId`，Pending 决策完成后按原 ordinal 串行执行
-- 修正终态答案提取、非文本输出标记、预览顺序与 Unicode 裁剪；无变化的 preview/phase 不再触发 Master metadata 重写
-- 修正 Child task locator、详情解析、会话分支/Fork 引用、数据库历史迁移链，以及 Target 删除后的反向授权和文件保留边界
-- 修正 Settings 写失败时的内存发布顺序、Assistant 编辑并发覆盖、Memory owner 越权和删除静默失败
-- 优化调用卡片、只读详情、配置筛选与多语言文案；修正 `ask_user` 点击穿透、详情跟滚和 Pending 折叠可见性
-- 修正 TTS 跨 step/Target 互相打断、chunk 间错误结束、来源残留和控制条头像条件
-- 会话文件删除改为候选 URI 探测与精确校验，避免反序列化全部历史会话
+- Target 显式模型优先；未绑定时只在调用期继承 Caller 的有效模型参数。Target 复用完整 Transformer、裁剪、Provider 和工具循环，同时禁止管理/递归委托，按“运行快照 ∩ 当前配置”处理撤权
+- 工具参数统一为完整 JSON Schema 文档，由各 Provider 适配；ChatService 统一经 `GenerationToolSetFactory` 装配工具
 
 ### 文档与测试
 
-- 新增 [子助手架构与执行流程参考](../references/sub-assistant-architecture.md) 和 [提示词、上下文注入与工具描述](../references/prompts-and-tools.md)，其余专题文档只保留所属领域的稳定接口与边界
-- 补充访问策略、RunSpec、lineage、状态机、预览、最终结果、AskUser、恢复、Fork、保留、删除、Memory/TTS、配置兼容和 Room migration/DAO 的回归测试
+- 移除实现阶段设计稿，新增 [子助手架构与执行流程参考](../references/sub-assistant-architecture.md) 和 [提示词、上下文注入与工具描述](../references/prompts-and-tools.md)，并按当前实现校准全部参考文档
+- 补充子助手访问、状态、恢复、数据清理、Memory/TTS、配置兼容、Room migration/DAO，以及 Provider reasoning 映射的回归测试
 
 ---
 
@@ -73,7 +67,7 @@
 - **Gemini 工具定义完整性**：自定义 Function 与内置工具合并到同一个 `tools` 数组，避免后写覆盖；保留官方支持的 JSON Schema `enum`
 - **Claude 不透明思考状态**：持久化并原样回传 `redacted_thinking.data`；切换到不同模型配置时剥离旧模型 thinking/redacted blocks，避免签名跨模型复用
 - **OpenAI/方舟 Responses 状态隔离**：除 `wireFormat` 外新增 endpoint `sourceProfile`，消息级 output items 与 Part 级 reasoning id/encrypted content 均按来源隔离，同时兼容没有新字段的旧会话
-- **模型代际与 reasoning effort**：GPT-5 系列共享 developer role/temperature 行为，但基础版、点版本、Pro、Codex 分别按官方支持范围映射 effort；DeepSeek 项目级 LOW/MEDIUM/HIGH/XHIGH 映射为官方 high/max，不再透传无效枚举值
+- **模型代际与 reasoning effort**：GPT-5 系列共享 developer role/temperature 行为，但基础版、点版本、Pro、Codex 分别按官方支持范围映射 effort；DeepSeek 按 Chat/Responses 端点接受的 `none`、`low`、`high` 转换项目级推理档位，不再透传无效枚举值
 - **Responses 无状态历史回放**：持久化每次响应完整且有批次边界的 `response.output`，按官方顺序先回放整批 output、再追加函数执行结果，避免内置工具、`phase/status`、未来 output item 和并行工具关系丢失；流式响应在终态写入同一协议状态，并将未见终态的连接关闭显式报错
 - **DeepSeek Responses 协议适配**：仅直连 `api.deepseek.com` 时使用 `content[].reasoning_text`；兼容 `reasoning_text.delta`、`reasoning_text.done` 与完整 output item 且避免重复追加，保留 reasoning 信封和明文思考；图片型工具结果按官方约束降级为字符串输出
 - **火山方舟加密思考回传**：保持方舟默认生成 thinking summary 的行为，同时按官方文档请求 `reasoning.encrypted_content`，确保 `store=false` 工具续轮可手动回传完整思考状态
@@ -81,7 +75,7 @@
 ### 变更
 
 - **LLM endpoint 职责收敛**：新增内部 `OpenAIEndpointProfile`，集中维护 host → vendor、Responses profile 和有限参数映射；不增加用户配置，不按 modelId 猜测代理线协议
-- **协议架构文档重整**：按 2026-08-09 的 OpenAI、DeepSeek、Anthropic、Gemini 与火山方舟官方文档完整修订 `protocol-reference.md`，集中披露职责边界、模型特例、持久化兼容、测试基线与已知风险
+- **协议架构文档重整**：`protocol-reference.md` 集中说明 Provider 选择、线格式、模型特例、不透明状态回放、持久化兼容与验证边界
 
 ---
 
@@ -130,7 +124,7 @@
 - **会话就绪回归测试**：覆盖未配置、未选择、Provider 全禁用、仅有非对话模型、MCP 未配置/全禁用/已选择和工作区绑定状态
 - **上下文管理双层策略**：Assistant 可显式开启请求级阶梯裁剪，默认关闭，开启后默认 80 条、范围 40～512；裁剪锚点按完整 USER 轮次分段移动，减少相邻请求的提示缓存前缀漂移且不改写会话。用户触发的语义压缩继续负责用摘要替换较早历史
 - **本地生成链路参考文档**：基于上游有价值的生成管线文档，按 Measix Pilot 的通知解耦、Workspace、MCP、工具集合及上下文策略重写，并新增上下文管理决策文档
-- **版本检查与自动更新参考文档**：调研本项目与上游 RikkaHub 的版本检查机制（架构、网络交互、SemVer 比较、UI 交互流程、Play Store 安装来源检测），输出 `docs/references/update-mechanism.md`
+- **版本检查与发行参考文档**：新增当前客户端检查生命周期、版本优先级、下载委托、Play Store 过滤和 Release 构建契约说明
 ### 修复
 
 - **消息模板时间破坏 prompt 缓存**：`TemplateTransformer` 改为取 `UIMessage.createdAt` 而非 `Instant.now()`，历史消息的 `time`/`date` 变量在每轮请求中保持稳定
@@ -186,7 +180,7 @@
 - 依赖升级：material3 1.5.0-alpha23 → 1.5.0-alpha24；kotlin 2.4.0 → 2.4.10；ksp 2.3.4 → 2.3.10；sonner 0.3.9 → 0.4.0
 - **配置卡片标题行与文案优化**：标题从纯文本"配置此会话"改为"为 [头像][高亮助手名] 配置此会话"左右布局，右侧设置按钮与抽屉风格一致；MCP/本地能力状态文案从"已启用n项"简化为"启用n项"；五语言适配前后缀拆分
 - **默认系统提示词抽离常量**：将默认助手系统提示词从 `PreferencesStore` 硬编码抽离为 `Assistant.kt` 中的 `DEFAULT_SYSTEM_PROMPT` 常量，新建助手时自动填入
-- **CI 自动化发行**：`release.yml` 从仅手动触发 + Artifact 下载改为 tag 驱动（`push: tags: v*.*.*`）自动发布 GitHub Releases；新增 `permissions: contents: write` 权限收敛、changelog 自动提取、签名文件清理；`.gitignore` 补全 `*.jks`/`*.keystore`/`*.key`/`app/app.key`/`app/google-services.json`；修复 submodule 未 checkout（`submodules: recursive`）和版本号 grep 匹配到 `RenameApkTask` 属性的问题；更新 `material-color-utilities` submodule 到上游最新可用 commit；`docs/references/update-mechanism.md` 新增 Submodule 注意事项、Secrets 配置和正式发版操作流程章节
+- **CI 自动化发行**：`release.yml` 从仅手动构建 Artifact 改为 tag 驱动发布 GitHub Releases，收敛写权限、自动提取 changelog、递归 checkout submodule 并清理临时签名文件；更新机制参考文档同步记录客户端与发行契约
 
 ### 上游同步
 

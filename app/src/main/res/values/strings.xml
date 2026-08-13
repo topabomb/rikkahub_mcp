@@ -1313,5 +1313,11 @@
   <string name="sub_assistant_detail_show_less">Show less</string>
   <string name="sub_assistant_detail_no_output">No execution output yet</string>
   <string name="sub_assistant_card_non_text_output">Includes non-text output</string>
+  <string name="update_download_notification_description">Downloading update package...</string>
+  <string name="update_download_failed">Failed to download update</string>
+  <string name="sub_assistant_call_title">Sub-assistant call</string>
+  <string name="sub_assistant_reason_interaction_limit_reached">Too many clarification rounds</string>
+  <string name="sub_assistant_reason_unknown">The sub-assistant could not complete the request</string>
+  <string name="sub_assistant_tool_unknown">Tool</string>
 </resources>
 

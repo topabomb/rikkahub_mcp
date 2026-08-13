@@ -109,18 +109,27 @@ internal fun resolveResponseEndpointProfile(host: String): ResponseEndpointProfi
     }
 }
 
-/**
- * Maps the app-wide reasoning levels to DeepSeek's current high/max protocol values.
- *
- * DeepSeek documents low/medium as compatibility aliases for high and xhigh as an alias for max.
- * OFF is expressed by Chat's thinking.type=disabled; Responses currently has no documented thinking
- * toggle, so OFF/AUTO omit effort instead of sending the unsupported "none"/"auto" values.
- */
-internal fun mapDeepSeekReasoningEffort(level: ReasoningLevel): String? {
+/** Maps app reasoning levels to DeepSeek Chat Completions effort values. */
+internal fun mapDeepSeekChatReasoningEffort(level: ReasoningLevel): String? {
     return when (level) {
         ReasoningLevel.OFF, ReasoningLevel.AUTO -> null
-        ReasoningLevel.XHIGH -> "max"
-        ReasoningLevel.LOW, ReasoningLevel.MEDIUM, ReasoningLevel.HIGH -> "high"
+        ReasoningLevel.LOW -> "low"
+        ReasoningLevel.MEDIUM, ReasoningLevel.HIGH, ReasoningLevel.XHIGH -> "high"
+    }
+}
+
+/**
+ * Maps app reasoning levels to DeepSeek Responses effort values.
+ *
+ * Responses uses `none` as its documented thinking-off value. AUTO omits the field so the endpoint
+ * can use its default; the app does not expose DeepSeek's separate `max` level.
+ */
+internal fun mapDeepSeekResponsesReasoningEffort(level: ReasoningLevel): String? {
+    return when (level) {
+        ReasoningLevel.OFF -> "none"
+        ReasoningLevel.AUTO -> null
+        ReasoningLevel.LOW -> "low"
+        ReasoningLevel.MEDIUM, ReasoningLevel.HIGH, ReasoningLevel.XHIGH -> "high"
     }
 }
 

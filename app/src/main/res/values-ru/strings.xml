@@ -1319,5 +1319,11 @@
   <string name="sub_assistant_detail_show_more">Показать больше</string>
   <string name="sub_assistant_detail_show_less">Свернуть</string>
   <string name="sub_assistant_detail_no_output">Результатов выполнения пока нет</string>
+  <string name="update_download_notification_description">Загрузка пакета обновления…</string>
+  <string name="update_download_failed">Не удалось скачать обновление</string>
+  <string name="sub_assistant_call_title">Вызов субассистента</string>
+  <string name="sub_assistant_reason_interaction_limit_reached">Слишком много раундов уточнения</string>
+  <string name="sub_assistant_reason_unknown">Субассистент не смог выполнить запрос</string>
+  <string name="sub_assistant_tool_unknown">Инструмент</string>
 </resources>
 

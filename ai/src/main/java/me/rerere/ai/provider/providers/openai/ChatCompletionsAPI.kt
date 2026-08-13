@@ -430,7 +430,7 @@ class ChatCompletionsAPI(
                         put("thinking", buildJsonObject {
                             put("type", if (!level.isEnabled) "disabled" else "enabled")
                         })
-                        mapDeepSeekReasoningEffort(level)?.let { put("reasoning_effort", it) }
+                        mapDeepSeekChatReasoningEffort(level)?.let { put("reasoning_effort", it) }
                     }
 
                     OpenAIEndpointVendor.NVIDIA -> {
@@ -480,12 +480,7 @@ class ChatCompletionsAPI(
                             put("function", buildJsonObject {
                                 put("name", tool.name)
                                 put("description", tool.description)
-                                put(
-                                    "parameters",
-                                    json.encodeToJsonElement(
-                                        tool.parameters()
-                                    )
-                                )
+                                tool.parameters()?.let { put("parameters", it) }
                             })
                         })
                     }

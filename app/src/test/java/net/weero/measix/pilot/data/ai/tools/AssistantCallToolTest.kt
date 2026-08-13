@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.ToolExecutionContext
+import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
@@ -63,6 +64,12 @@ class AssistantCallToolTest {
         toolCallId = "provider-call",
         reportMetadata = { _, _ -> },
     )
+
+    @Test
+    fun `assistant call preserves its structured JSON result`() {
+        val tool = createTool(mockk(relaxed = true))
+        assertEquals(ToolOutputPolicy.PRESERVE, tool.outputPolicy)
+    }
 
     @Test
     fun `blank request is rejected before coordinator starts a run`() = runTest {

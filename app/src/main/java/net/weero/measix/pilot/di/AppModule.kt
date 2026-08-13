@@ -9,6 +9,7 @@ import net.weero.measix.pilot.data.event.AppEventBus
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.service.AssistantManagementService
 import net.weero.measix.pilot.service.AssistantDataRecovery
+import net.weero.measix.pilot.service.AssistantDataRecoveryGate
 import net.weero.measix.pilot.service.ChatNotificationManager
 import net.weero.measix.pilot.service.ChatService
 import net.weero.measix.pilot.service.ConversationSessionRegistry
@@ -71,6 +72,7 @@ val appModule = module {
             filesManager = get(),
             sessionRegistry = get(),
             subAssistantCoordinator = get(),
+            recoveryGate = get(),
         )
     }
 
@@ -115,6 +117,8 @@ val appModule = module {
         )
     }
 
+    single { AssistantDataRecoveryGate() }
+
     // 启动即消费删除 tombstone，并修复进程中断的子助手运行。
     single(createdAtStart = true) {
         AssistantDataRecovery(
@@ -122,6 +126,7 @@ val appModule = module {
             settingsStore = get(),
             assistantManagementService = get(),
             subAssistantCoordinator = get(),
+            recoveryGate = get(),
         )
     }
 
@@ -136,16 +141,16 @@ val appModule = module {
             generationHandler = get(),
             templateTransformer = get(),
             providerManager = get(),
-            localTools = get(),
             mcpManager = get(),
             filesManager = get(),
-            skillManager = get(),
+            toolSetFactory = get(),
             workspaceRepository = get(),
             folderRepository = get(),
             soundEffectPlayer = get(),
             assistantToolFactory = get(),
             subAssistantCoordinator = get(),
             sessionRegistry = get(),
+            recoveryGate = get(),
             json = get(),
         )
     }

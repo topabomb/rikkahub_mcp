@@ -1,10 +1,7 @@
 # 消息生成链路
 
 > 本文档以 Measix Pilot 当前代码为准，说明从用户发送消息到模型回复落盘的完整数据流。
-> 文档结构参考上游 RikkaHub 的
-> [`chat-generation-pipeline.md`](https://github.com/rikkahub/rikkahub/blob/master/docs/references/chat-generation-pipeline.md)，
-> 但包名、工具集合、通知解耦、Workspace、MCP 生命周期和上下文策略均按本 Fork 的最终实现重写。
-> 上下文取舍与后续演进见 [`docs/dev/context-management.md`](../dev/context-management.md)。
+> 上下文裁剪与压缩的设计取舍见 [`docs/dev/context-management.md`](../dev/context-management.md)。
 > 模型可见的提示词、注入与工具文案见 [`prompts-and-tools.md`](prompts-and-tools.md)。
 
 ## 核心职责
@@ -118,8 +115,9 @@ Transformer 以 `fold` 顺序执行，后一个接收前一个的输出：
 3. Conversation Tools：允许引用近期对话时；
 4. Workspace Tools：绑定 Workspace 且 Shell 状态为 `READY` 时；
 5. Skill Tools：Assistant 启用了 Skill 时；
-6. MCP Tools：仅取 Assistant 选中且当前已连接、名称合法的服务；
-7. Memory Tools：在 `GenerationHandler` 内按 Assistant 的记忆模式加入。
+6. Assistant Tools：按 Caller 权限装配 `assistant_manage`、`assistant_memory_list`、`assistant_call`；
+7. MCP Tools：仅取 Assistant 选中且当前已连接、名称合法的服务；
+8. Memory Tools：不属于上述静态列表，由 `GenerationHandler` 在每个工具循环 step 按当前记忆状态加入。
 
 工具审批状态：
 
@@ -156,11 +154,6 @@ MCP 连接、休眠与恢复不由生成链路持有；`McpManager` 负责连接
 - 后续在同一台阶内只追加尾部消息，不移动历史起点；
 - 起点回退到最近的 USER 消息，确保保留完整对话轮次和其中的工具调用；
 - 只影响发给 Provider 的 `internalMessages`，完整历史仍保存在会话中。
-
-普通一轮通常增加 USER、ASSISTANT 两条 `UIMessage`。在 50% 保留比例下，阈值 40
-大约每 10 次普通请求移动一次起点，理想缓存命中率约 90%；阈值 80 大约每 20 次移动一次，
-约 95%。这只是“裁剪起点不变”带来的理论上限，System、Memory、Tools、模型或注入配置变化
-仍可能使 Provider 的提示缓存失效。
 
 消息条数不等于 token 数。单条长文档、图片、工具 schema、OCR 结果或 System prompt 都可能
 占用大量上下文，因此该阈值是可选的成本/历史长度控制，不是模型窗口溢出的可靠防线。

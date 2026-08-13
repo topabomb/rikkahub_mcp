@@ -1319,4 +1319,10 @@
   <string name="sub_assistant_detail_show_more">展开</string>
   <string name="sub_assistant_detail_show_less">收起</string>
   <string name="sub_assistant_detail_no_output">暂无执行输出</string>
+  <string name="update_download_notification_description">正在下载更新安装包…</string>
+  <string name="update_download_failed">更新下载失败</string>
+  <string name="sub_assistant_call_title">子助手调用</string>
+  <string name="sub_assistant_reason_interaction_limit_reached">澄清轮次过多</string>
+  <string name="sub_assistant_reason_unknown">子助手未能完成请求</string>
+  <string name="sub_assistant_tool_unknown">工具</string>
 </resources>

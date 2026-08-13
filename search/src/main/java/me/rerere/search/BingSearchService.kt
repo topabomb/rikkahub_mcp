@@ -13,7 +13,7 @@ import java.net.URLEncoder
 import java.util.Locale
 
 object BingSearchService : SearchService<SearchServiceOptions.BingLocalOptions> {
-    override fun parameters(options: SearchServiceOptions.BingLocalOptions): InputSchema? =
+    override fun parameters(options: SearchServiceOptions.BingLocalOptions): JsonObject? =
         InputSchema.Obj(
             properties = buildJsonObject {
                 put("query", buildJsonObject {
@@ -24,7 +24,7 @@ object BingSearchService : SearchService<SearchServiceOptions.BingLocalOptions> 
             required = listOf("query")
         )
 
-    override fun scrapingParameters(options: SearchServiceOptions.BingLocalOptions): InputSchema? = null
+    override fun scrapingParameters(options: SearchServiceOptions.BingLocalOptions): JsonObject? = null
 
     override suspend fun search(
         params: JsonObject,

@@ -1319,5 +1319,11 @@
   <string name="sub_assistant_detail_show_more">さらに表示</string>
   <string name="sub_assistant_detail_show_less">折りたたむ</string>
   <string name="sub_assistant_detail_no_output">実行出力はまだありません</string>
+  <string name="update_download_notification_description">更新パッケージをダウンロードしています…</string>
+  <string name="update_download_failed">更新のダウンロードに失敗しました</string>
+  <string name="sub_assistant_call_title">サブアシスタント呼び出し</string>
+  <string name="sub_assistant_reason_interaction_limit_reached">確認のやり取りが多すぎます</string>
+  <string name="sub_assistant_reason_unknown">サブアシスタントはリクエストを完了できませんでした</string>
+  <string name="sub_assistant_tool_unknown">ツール</string>
 </resources>
 

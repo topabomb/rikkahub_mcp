@@ -47,6 +47,13 @@ class ModelRegistryTest {
         assertTrue(ModelRegistry.CLAUDE_SERIES.match("claude-sonnet-4-20250929"))
         assertTrue(ModelRegistry.CLAUDE_SERIES.match("claude-4-sonnet"))
         assertTrue(ModelRegistry.CLAUDE_SERIES.match("claude-3.5-sonnet"))
+        assertFalse(ModelRegistry.CLAUDE_ADAPTIVE_THINKING.match("claude-sonnet-4.5-20250929"))
+        assertTrue(ModelRegistry.CLAUDE_ADAPTIVE_THINKING.match("claude-sonnet-4.6"))
+        assertTrue(ModelRegistry.CLAUDE_ADAPTIVE_THINKING.match("claude-opus-4.8"))
+        assertEquals(
+            listOf(ModelAbility.TOOL),
+            ModelRegistry.MODEL_ABILITIES.getData("claude-3.5-sonnet")
+        )
     }
 
     @Test

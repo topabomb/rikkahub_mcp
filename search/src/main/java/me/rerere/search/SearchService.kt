@@ -6,7 +6,6 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import me.rerere.ai.core.InputSchema
 import me.rerere.ai.util.KeyRoulette
 import okhttp3.Call
 import okhttp3.Callback
@@ -19,9 +18,9 @@ import kotlin.coroutines.resumeWithException
 import kotlin.uuid.Uuid
 
 interface SearchService<T : SearchServiceOptions> {
-    fun parameters(options: T): InputSchema?
+    fun parameters(options: T): JsonObject?
 
-    fun scrapingParameters(options: T): InputSchema?
+    fun scrapingParameters(options: T): JsonObject?
 
     suspend fun search(
         params: JsonObject,

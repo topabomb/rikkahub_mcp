@@ -1,4 +1,4 @@
-﻿# Measix Pilot
+# Measix Pilot
 
 > 小睿助手（Measix Pilot）— 基于 [RikkaHub](https://github.com/rikkahub/rikkahub)（原作者 [re-ovo](https://github.com/re-ovo)）fork 的原生 Android LLM 聊天客户端。
 >
@@ -85,11 +85,13 @@ common/       通用工具
 |------|------|
 | [界面架构参考](docs/references/ui-architecture.md) | UI 架构层次、导航体系、自适应布局策略、折叠屏适配方案 |
 | [消息渲染管线](docs/references/message-rendering-pipeline.md) | UIMessage.parts 到像素的完整渲染管线、Markdown 双路径、WebView 封装 |
-| [助手配置与对话交互](docs/references/assistant-configuration.md) | 助手完整配置项、阻断性条件、对话交互流程、LLM 干预与微调机制 |
+| [助手配置参考](docs/references/assistant-configuration.md) | Assistant 字段、默认模板、解析/持久化规则与配置消费边界 |
 | [消息生成链路](docs/references/chat-generation-pipeline.md) | 从用户发送到模型回复落盘的完整数据流 |
 | [AI 协议参考](docs/references/protocol-reference.md) | 四类基础协议规范、Provider 差异映射、模型级适配 |
-| [工作区架构](docs/references/workspace-architecture.md) | PRoot 技术原理、Android 14+ 兼容性、工具调用生命周期 |
-| [更新机制](docs/references/update-mechanism.md) | 版本检查、SemVer 比较、CI 构建与发行版托管 |
+| [工作区架构](docs/references/workspace-architecture.md) | Rootfs/挂载边界、PRoot 执行、文件工具、终端与安装生命周期 |
+| [更新与发行](docs/references/update-mechanism.md) | 更新检查、宽松版本排序、下载委托、签名与 CI 发行契约 |
+| [子助手架构](docs/references/sub-assistant-architecture.md) | Target 访问、同步调用、Child lineage、撤权、恢复与只读详情 |
+| [提示词与工具](docs/references/prompts-and-tools.md) | 模型可见的系统注入、实际工具名、参数和 Tool Result 形状 |
 
 ### 开发文档（`docs/dev/`）
 

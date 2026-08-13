@@ -14,6 +14,8 @@ gradlew connectedDebugAndroidTest  # 运行设备/模拟器上的仪器测试
 gradlew lint                       # 运行 Android Lint
 ```
 
+> 发行版默认用 gradlew assembleRelease。
+
 ## Build Configuration Notes
 
 - `gradle.properties` 中 `android.r8.strictFullModeForKeepRules=false`：AGP 9 默认启用 R8 strict full mode，部分依赖库（如 ML Kit barcode-scanning 17.3.0）的 consumer ProGuard rules 不兼容，导致 release 构建运行时崩溃。此项回退到 AGP 8 的 keep rules 处理行为。当所有依赖库更新兼容后可移除。
@@ -67,7 +69,7 @@ gradlew lint                       # 运行 Android Lint
 - **Workspace**：PRoot 沙箱架构与工具调用生命周期。详见 [`workspace-architecture.md`](docs/references/workspace-architecture.md)。
 - **UI Architecture**：自适应布局策略、导航、主题体系。详见 [`ui-architecture.md`](docs/references/ui-architecture.md)。
 - **Message Rendering**：消息渲染管线（UIMessage.parts → 像素），含 Markdown 双路径、代码块三态、Mermaid/HTML WebView、LaTeX 原生渲染。详见 [`message-rendering-pipeline.md`](docs/references/message-rendering-pipeline.md)。
-- **Update Mechanism**：版本检查、SemVer 比较、CI 发布流程。详见 [`update-mechanism.md`](docs/references/update-mechanism.md)。
+- **Update Mechanism**：版本检查、宽松版本优先级比较、下载委托与 CI 发布流程。详见 [`update-mechanism.md`](docs/references/update-mechanism.md)。
 - **Sub-Assistant**：子助手（Target）的访问、同步调用、Child lineage、持久化、撤权与恢复体系。详见 [`sub-assistant-architecture.md`](docs/references/sub-assistant-architecture.md)。
 - **Prompts and Tools**：模型可见的系统注入、工具 description、参数说明与 Tool Result 形状。详见 [`prompts-and-tools.md`](docs/references/prompts-and-tools.md)。
 
@@ -90,8 +92,8 @@ Fork 前的完整架构说明见 [`docs/dev/original-architecture.md`](docs/dev/
 
 **需主动维护的文档**：
 
-- `changelog.md`：功能迭代清单。新增重要功能或重大需求时，在顶部新增版本条目并递增 `app/build.gradle.kts` 的 `versionCode` / `versionName`。
-- `upstream-sync.md`：上游同步检查记录，每次同步时追加。
+- `changelog.md`：功能迭代清单。只有在新增重要功能或重大需求时，在顶部新增版本条目并递增 `app/build.gradle.kts` 的 `versionCode` / `versionName`。
+- `upstream-sync.md`：按批执行的上游同步的检查总账，避免漏检或重复劳动。每次同步 fetch、按上批冻结点续查，并在该文档追加摘要；方法与判定原则以文档正文为准。
 
 ## Reference Documentation
 

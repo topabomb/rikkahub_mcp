@@ -173,6 +173,7 @@ enum class FinishedReason {
     @SerialName("completed") COMPLETED,
     @SerialName("awaiting_approval") AWAITING_APPROVAL,
     @SerialName("step_limit_reached") STEP_LIMIT_REACHED,
+    @SerialName("interaction_limit_reached") INTERACTION_LIMIT_REACHED,
 }
 
 @Serializable
@@ -485,7 +486,12 @@ class GenerationHandler(
                             val executionId = "${currentMessageId}_${toolOrdinal}"
                                 .replace(Regex("[^A-Za-z0-9_-]"), "_")
                             executedTools[toolOrdinalInMessage] = finalTool.copy(
-                                output = maybeTruncateToolOutput(executionId, result, hasShellAccess)
+                                output = maybeTruncateToolOutput(
+                                    executionId = executionId,
+                                    output = result,
+                                    hasShellAccess = hasShellAccess,
+                                    outputPolicy = toolDef.outputPolicy,
+                                )
                             )
                         }.onFailure {
                             // 1. 工具超时: TimeoutCancellationException 是 CancellationException 子类
@@ -705,7 +711,9 @@ class GenerationHandler(
         executionId: String,
         output: List<UIMessagePart>,
         hasShellAccess: Boolean,
+        outputPolicy: me.rerere.ai.core.ToolOutputPolicy,
     ): List<UIMessagePart> {
+        if (outputPolicy == me.rerere.ai.core.ToolOutputPolicy.PRESERVE) return output
         val textParts = output.filterIsInstance<UIMessagePart.Text>()
         val nonTextParts = output.filter { it !is UIMessagePart.Text }
         val totalChars = textParts.sumOf { it.text.length }

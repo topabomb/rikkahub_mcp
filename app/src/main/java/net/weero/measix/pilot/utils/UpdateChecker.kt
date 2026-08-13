@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.utils
+package net.weero.measix.pilot.utils
 
 import android.app.DownloadManager
 import android.content.Context
@@ -20,6 +20,7 @@ import kotlinx.serialization.json.Json
 import me.rerere.common.http.await
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.BuildConfig
+import net.weero.measix.pilot.R
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -86,9 +87,8 @@ class UpdateChecker(
     fun downloadUpdate(context: Context, download: UpdateDownload) {
         runCatching {
             val request = DownloadManager.Request(download.url.toUri()).apply {
-                // 设置下载时通知栏的标题和描述
                 setTitle(download.name)
-                setDescription("正在下载更新包...")
+                setDescription(context.getString(R.string.update_download_notification_description))
                 // 下载完成后通知栏可见
                 setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 // 允许在移动网络和WiFi下下载
@@ -103,7 +103,7 @@ class UpdateChecker(
             dm.enqueue(request)
             // 你可以保存返回的downloadId到本地，以便后续查询下载进度或状态
         }.onFailure {
-            Toast.makeText(context, "Failed to update", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.update_download_failed), Toast.LENGTH_SHORT).show()
             context.openUrl(download.url) // 跳转到下载页面
         }
     }
@@ -130,7 +130,8 @@ data class UpdateInfo(
 /**
  * 版本号值类，封装版本号字符串并提供比较功能
  *
- * 支持完整的 SemVer 规范：MAJOR.MINOR.PATCH[-prerelease][+build]
+ * 使用兼容 SemVer 优先级的宽松比较：MAJOR.MINOR.PATCH[-prerelease][+build]。
+ * 解析器有意容忍缺失或非数字 core 段，因此不是 SemVer 格式校验器。
  * - 预发布版本优先级低于正式版：1.0.0-alpha < 1.0.0
  * - 预发布标识符按段逐个比较：数字按数值比较，字符串按字典序比较
  * - 预发布标识符优先级：alpha < beta < rc（通过字典序自然满足）

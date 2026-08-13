@@ -415,15 +415,15 @@ class ResponseAPIMessageTest {
     }
 
     @Test
-    fun `deepseek responses should never send app-only reasoning effort values`() {
+    fun `deepseek responses should map off and supported effort values`() {
         val provider = ProviderSetting.OpenAI(baseUrl = "https://api.deepseek.com")
         val expected = mapOf(
-            ReasoningLevel.OFF to null,
+            ReasoningLevel.OFF to "none",
             ReasoningLevel.AUTO to null,
-            ReasoningLevel.LOW to "high",
+            ReasoningLevel.LOW to "low",
             ReasoningLevel.MEDIUM to "high",
             ReasoningLevel.HIGH to "high",
-            ReasoningLevel.XHIGH to "max",
+            ReasoningLevel.XHIGH to "high",
         )
 
         expected.forEach { (level, effort) ->
@@ -1380,6 +1380,36 @@ class ResponseAPIMessageTest {
         assertEquals("function", tools!![0].jsonObject["type"]?.jsonPrimitive?.content)
         assertEquals("get_weather", tools[0].jsonObject["name"]?.jsonPrimitive?.content)
         assertFalse(tools[0].jsonObject["strict"]?.jsonPrimitive?.content?.toBoolean() ?: true)
+    }
+
+    @Test
+    fun `response function tool preserves JSON Schema definitions and references`() {
+        val schema = buildJsonObject {
+            put("\$schema", "https://json-schema.org/draft/2020-12/schema")
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("query", buildJsonObject { put("\$ref", "#/\$defs/query") })
+            })
+            put("\$defs", buildJsonObject {
+                put("query", buildJsonObject { put("type", "string") })
+            })
+        }
+        val tool = Tool(
+            name = "search",
+            description = "search",
+            parameters = { schema },
+            execute = { emptyList() },
+        )
+
+        val body = invokeBuildRequestBody(
+            providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
+            params = createToolParams(tools = listOf(tool)),
+        )
+        val sent = body["tools"]!!.jsonArray.single().jsonObject["parameters"]!!.jsonObject
+
+        assertEquals("#/\$defs/query", sent["properties"]!!.jsonObject["query"]!!.jsonObject["\$ref"]!!.jsonPrimitive.content)
+        assertEquals("string", sent["\$defs"]!!.jsonObject["query"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("https://json-schema.org/draft/2020-12/schema", sent["\$schema"]!!.jsonPrimitive.content)
     }
 
     @Test

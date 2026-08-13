@@ -9,6 +9,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.subassistant.CatalogMode
@@ -329,6 +330,7 @@ class AssistantToolFactory(
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
     ): Tool = Tool(
         name = TOOL_ASSISTANT_CALL,
+        outputPolicy = ToolOutputPolicy.PRESERVE,
         description = "Delegate a self-contained request to a catalog sub-assistant (sub-agent). Do not prescribe how it must work.",
         parameters = {
             InputSchema.Obj(

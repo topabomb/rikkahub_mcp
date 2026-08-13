@@ -64,17 +64,14 @@ class Navigator(private val backStack: MutableList<NavKey>) {
 - 路由以**全屏页面切换**为主，`fadeIn/fadeOut` 用于根级切换，`slideInHorizontally + scaleOut` 用于层级切换
 - `entryDecorators` 包含 `rememberSaveableStateHolderNavEntryDecorator()` 和 `rememberViewModelStoreNavEntryDecorator()`，保证页面状态保持与 ViewModel 生命周期正确
 
-### 2.3 路由清单
+### 2.3 路由边界
 
-| 分类 | Screen 路由 |
-|------|-----------|
-| 聊天 | `Chat(id, text, files, nodeId)` |
-| 分享 | `ShareHandler(text, streamUri)` |
-| 历史/收藏 | `History`, `Favorite`, `Stats`, `MessageSearch` |
-| 助手 | `Assistant`, `AssistantDetail(id)`, `AssistantBasic`, `AssistantPrompt`, `AssistantMemory`, `AssistantRequest`, `AssistantMcp`, `AssistantLocalTool`, `AssistantInjections`, `SubAssistantDetail(masterConversationId, runId)` |
-| 设置 | `Setting`, `SettingPreferences`, `SettingPreferencesTheme`, `SettingPreferencesNotification`, `SettingPreferencesGeneral`, `SettingPreferencesUI`, `SettingTheme`, `SettingProvider`, `SettingProviderDetail(providerId)`, `SettingModels`, `SettingSearch`, `SettingSearchDetail(serviceId)`, `SettingSpeech`, `SettingMcp`, `SettingFiles`, `SettingAbout` |
-| 扩展 | `Extensions`, `QuickMessages`, `Prompts`, `Skills`, `SkillDetail(skillName)`, `Workspaces`, `WorkspaceDetail(id)`, `WorkspaceTerminal(id)`, `WorkspaceFileEditor(id, area, path)` |
-| 其他 | `Backup`, `ImageGen`, `WebView(url, contentId)`, `Debug`, `Log` |
+`Screen` 的密封层次与 `RouteActivity` 的 `entry<Screen.*>` 注册是路由清单的唯一权威来源。
+路由按职责分为聊天/分享、历史与收藏、助手配置、设置、扩展与 Workspace，以及 WebView、备份、
+图片生成和调试页面。带业务身份的页面把 ID 放入可序列化路由参数；例如聊天使用会话 ID，
+子助手详情使用 `masterConversationId + runId`，工作区文件编辑使用 Workspace ID、区域和路径。
+
+新增路由必须同时补齐 `Screen` 定义、entry 注册、参数恢复和返回行为；不要在参考文档维护一份易漂移的逐项副本。
 
 ---
 
@@ -348,69 +345,16 @@ ChatPageContent
 
 ### 6.1 UI 组件目录
 
-```
-ui/components/
-  ├─ ai/          — 聊天输入与选择器
-  │    ├─ ChatInput.kt          (输入框, 紧凑/正常两种布局)
-  │    ├─ AssistantPicker.kt    (助手选择 AdaptiveModal)
-  │    ├─ ModelList.kt          (模型选择 AdaptiveModal)
-  │    ├─ FilesPicker.kt        (文件选择 AdaptiveModal)
-  │    ├─ McpPicker.kt          (MCP 选择 AdaptiveModal)
-  │    ├─ SearchPicker.kt       (搜索引擎选择 AdaptiveModal)
-  │    ├─ ReasoningPicker.kt    (推理等级选择 AdaptiveModal)
-  │    ├─ WorkspaceSelectSheet.kt / WorkspaceCwdPicker.kt
-  │    ├─ ExtensionContent.kt   (扩展面板 AdaptiveModal)
-  │    └─ completion/           (输入补全提供者)
-  ├─ message/     — 消息渲染
-  │    ├─ ChatMessage.kt        (单条消息容器)
-  │    ├─ ChatMessageTools.kt   (工具调用/结果渲染, 含授权按钮)
-  │    ├─ ChatMessageReasoning.kt (思考链折叠)
-  │    ├─ ChatMessageBranch.kt  (消息分支切换)
-  │    ├─ ChatMessageCopySheet.kt (复制面板)
-  │    └─ tools/                (工具 UI 注册)
-  ├─ richtext/    — 富文本渲染
-  │    ├─ MarkdownNew.kt        (Markdown 渲染入口)
-  │    ├─ HighlightCodeBlock.kt (代码高亮)
-  │    ├─ LatexText.kt / MathBlock.kt (LaTeX)
-  │    ├─ Mermaid.kt            (Mermaid 图表)
-  │    ├─ DiffView.kt           (Diff 对比)
-  │    └─ ZoomableAsyncImage.kt (可缩放图片)
-  ├─ ui/          — 通用 UI 组件
-  │    ├─ UIAvatar.kt           (头像, 支持文字/图片/渐变/emoji)
-  │    ├─ Form.kt / Input.kt / TextArea.kt / Select.kt / Switch.kt
-  │    ├─ CardGroup.kt / Tag.kt / TagList.kt
-  │    ├─ UpdateCard.kt         (应用更新检查卡片)
-  │    ├─ Greeting.kt           (问候语)
-  │    ├─ JsonTree.kt           (JSON 树形查看器)
-  │    └─ permission/           (权限管理)
-  ├─ table/       — 数据表格
-  │    └─ DataTable.kt
-  ├─ nav/         — 导航组件
-  │    └─ BackButton.kt
-  ├─ easteregg/   — 彩蛋
-  │    └─ EmojiBurst.kt
-  └─ webview/     — WebView 封装
-```
+`ui/components/` 按职责分层：`ai/` 负责聊天输入和能力选择器，`message/` 负责消息、分支、
+推理与工具卡片，`richtext/` 负责 Markdown、代码、LaTeX、Mermaid、HTML 和图片，`webview/`
+封装 WebView 生命周期，`ui/`、`table/`、`nav/` 提供通用组件。具体文件以目录和调用点为准，
+不在本文复制文件清单。
 
 ### 6.2 页面目录
 
-```
-ui/pages/
-  ├─ chat/        — 聊天主界面 (ChatPage, ChatDrawer, ChatList, Export, ConversationList, ChatVM, ChatDrawerVM)
-  ├─ setting/     — 设置入口及各设置子页面
-  ├─ assistant/   — 助手列表与 detail/ 配置页面 (含 SubAssistantDetail 只读详情页)
-  ├─ extensions/  — 扩展管理 (ExtensionsPage + skills/ + workspace/)
-  ├─ history/     — 历史记录
-  ├─ favorite/    — 收藏
-  ├─ stats/       — 统计
-  ├─ search/      — 消息搜索
-  ├─ backup/      — 备份 (ImportExport / S3 / WebDav / Reminder)
-  ├─ imggen/      — 图片生成
-  ├─ log/         — 日志
-  ├─ debug/       — 调试
-  ├─ share/       — 分享处理
-  └─ webview/     — WebView 页面
-```
+`ui/pages/` 按路由域组织。聊天自适应只在 `chat/` 内实现；`assistant/` 同时包含助手配置和只读
+子助手详情；`extensions/` 承载 Skill 与 Workspace；设置、历史、收藏、搜索、备份、分享等页面
+保持独立的全屏导航职责。页面目录不应反向依赖具体组件文件名。
 
 ### 6.3 全局上下文 (CompositionLocal)
 
@@ -569,33 +513,22 @@ stateInOnce(scope, initialValue) =
 
 ## 11. 消息渲染管线
 
-消息渲染涉及以下组件层次：
+消息渲染的稳定层次是：
 
 ```
 ChatList (LazyColumn)
   └─ items: messageNodes
-       └─ ChatMessage (单条消息容器, AnimatedVisibilityScope)
-            ├─ ChatMessageAvatar (头像)
-            ├─ ChatMessageBranch (分支切换, AnimatedContent)
-            ├─ ChatMessageReasoning (思考链, 折叠/展开)
-            ├─ ChatMessageCot (思维链文本)
-            ├─ MarkdownNew (Markdown 渲染)
-            │    ├─ HighlightCodeBlock (代码高亮, highlight 模块)
-            │    ├─ MathBlock / LatexText (LaTeX)
-            │    ├─ Mermaid (图表)
-            │    ├─ DiffView (Diff 对比)
-            │    ├─ ZoomableAsyncImage (图片)
-            │    └─ SimpleHtmlBlock (HTML)
-            ├─ ChatMessageTools (工具调用/结果)
-            │    ├─ ToolUI 注册表
-            │    ├─ 授权按钮 (primaryContainer/errorContainer)
-            │    └─ SubAssistantCallCard (assistant_call 工具调用卡片)
-            ├─ ChatMessageActions (复制/重生成/编辑)
-            └─ ChatMessageNerdLine (技术信息行)
+       └─ ChatMessage（单条消息与分支容器）
+            ├─ avatar / branch / actions / nerd line
+            └─ groupMessageParts（按原始 Part 顺序分组）
+                 ├─ ContentBlock → 文本、图片、音频、视频、文档等
+                 ├─ ThinkingBlock → reasoning 与普通工具 step
+                 └─ SubAssistantCallBlock → SubAssistantCallCard
 ```
 
-消息生成链路的完整描述见 [消息生成链路](chat-generation-pipeline.md)。
-渲染管线的完整描述见 [消息渲染管线](message-rendering-pipeline.md)。
+文本从 `MarkdownBlock` 进入；无 HTML 时走 Markdown AST，含 HTML 时转入 `MarkdownNew` 的 DOM
+路径。工具审批和 Target 卡片必须保留在 Part 的语义位置。节点级细节统一见
+[消息渲染管线](message-rendering-pipeline.md)，生成侧见 [消息生成链路](chat-generation-pipeline.md)。
 
 ---
 
@@ -623,7 +556,8 @@ ChatList (LazyColumn)
 | Base64ImageToLocalFileTransformer | 生成完成后将 Base64 图片转为本地文件引用 |
 | RegexOutputTransformer | 正则替换助手响应 |
 
-输出 Transformer 支持 `visualTransform()`（流式显示期间）和 `onGenerationFinish()`（生成结束后最终处理）。
+输出 Transformer 的 `transforms()` 处理进入生成循环的消息，`visualTransform()` 只形成流式 UI 投影，
+`onGenerationFinish()` 在单步完成时收口推理和文件引用。只有持久化路径的结果可以改变会话事实。
 
 ---
 
@@ -672,7 +606,7 @@ ChatList (LazyColumn)
 
 Assistant 配置页提供 Target 类别、全局可见与 Caller 访问范围设置；关闭 Target 类别时会原子清理全局可见和反向授权。普通选择器默认隐藏 Target，可通过筛选显式显示；搜索同时匹配名称与路由描述。
 
-主聊天把 `assistant_call` 渲染为独立 `SubAssistantCallCard`。卡片显示 Target、request、运行状态、有界文本预览和桥接的 `ask_user`，整卡进入 `SubAssistantDetail(masterConversationId, runId)`。详情页校验 run 与 Child 关系，并使用 `ChatInteractionPolicy.ReadOnlyChild` 禁止所有修改型交互。
+主聊天把 `assistant_call` 渲染为独立 `SubAssistantCallCard`。卡片显示 Target、request、运行状态、有界文本预览和桥接的 `ask_user`，整卡进入 `SubAssistantDetail(masterConversationId, runId)`。详情页校验 run 与 Child 关系，并通过 `ChatMessage(readOnly = true)` 与不提供输入区来禁止修改型交互。
 
 TTS 控制条只在当前来源为 Target 且该 Assistant 开启 `useAssistantAvatar` 时显示 Target 头像。来源随实际播放队列更新，不从历史消息恢复。
 

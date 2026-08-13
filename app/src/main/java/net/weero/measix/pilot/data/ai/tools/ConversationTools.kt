@@ -91,7 +91,7 @@ fun createConversationTools(
                 ?: error("query is required")
             val limit = (it.jsonObject["limit"]?.jsonPrimitive?.intOrNull ?: 15).coerceIn(1, 50)
             val results = conversationRepo
-                .searchMessages(query, MessageSearchSort.RELEVANCE)
+                .searchMessagesOfAssistant(assistantId, query, MessageSearchSort.RELEVANCE)
                 .take(limit)
             val payload = buildJsonArray {
                 results.forEach { result ->

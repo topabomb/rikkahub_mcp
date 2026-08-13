@@ -36,6 +36,7 @@ import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
@@ -67,6 +68,60 @@ import kotlin.uuid.Uuid
 
 private const val TAG = "ClaudeProvider"
 private const val ANTHROPIC_VERSION = "2023-06-01"
+private const val CLAUDE_MIN_MANUAL_THINKING_BUDGET = 1_024
+
+/**
+ * Builds the model-compatible Anthropic thinking fields.
+ *
+ * Claude 4.6+ uses adaptive thinking and `output_config.effort`. Older reasoning models use the
+ * manual `enabled + budget_tokens` form. AUTO omits thinking for those older models because they
+ * have no adaptive mode; inventing a fixed budget would not preserve AUTO semantics.
+ */
+internal fun buildClaudeThinkingFields(
+    modelId: String,
+    level: ReasoningLevel,
+    maxTokens: Int,
+): JsonObject = buildJsonObject {
+    if (level == ReasoningLevel.OFF) {
+        put("thinking", buildJsonObject { put("type", "disabled") })
+        return@buildJsonObject
+    }
+
+    if (ModelRegistry.CLAUDE_ADAPTIVE_THINKING.match(modelId)) {
+        put("thinking", buildJsonObject {
+            put("type", "adaptive")
+            put("display", "summarized")
+        })
+        if (level != ReasoningLevel.AUTO) {
+            val effort = when {
+                level == ReasoningLevel.XHIGH && !ModelRegistry.CLAUDE_XHIGH_EFFORT.match(modelId) -> "max"
+                else -> level.effort
+            }
+            put("output_config", buildJsonObject { put("effort", effort) })
+        }
+        return@buildJsonObject
+    }
+
+    if (level == ReasoningLevel.AUTO) return@buildJsonObject
+
+    require(maxTokens > CLAUDE_MIN_MANUAL_THINKING_BUDGET) {
+        "Claude manual thinking requires maxTokens greater than $CLAUDE_MIN_MANUAL_THINKING_BUDGET"
+    }
+    put("thinking", buildJsonObject {
+        put("type", "enabled")
+        put(
+            "budget_tokens",
+            level.budgetTokens
+                .coerceAtLeast(CLAUDE_MIN_MANUAL_THINKING_BUDGET)
+                .coerceAtMost(maxTokens - 1)
+        )
+        put("display", "summarized")
+    })
+    if (ModelRegistry.CLAUDE_MANUAL_THINKING_WITH_EFFORT.match(modelId)) {
+        val effort = if (level == ReasoningLevel.XHIGH) ReasoningLevel.HIGH.effort else level.effort
+        put("output_config", buildJsonObject { put("effort", effort) })
+    }
+}
 
 class ClaudeProvider(private val client: OkHttpClient, context: Context? = null) : Provider<ProviderSetting.Claude> {
     private val keyRoulette = if (context != null) KeyRoulette.lru(context) else KeyRoulette.default()
@@ -275,6 +330,18 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         params: TextGenerationParams,
         stream: Boolean = false
     ): JsonObject {
+        val maxTokens = params.maxTokens ?: 64_000
+        val thinkingFields = if (params.model.abilities.contains(ModelAbility.REASONING)) {
+            buildClaudeThinkingFields(params.model.modelId, params.reasoningLevel, maxTokens)
+        } else {
+            JsonObject(emptyMap())
+        }
+        val thinkingType = thinkingFields["thinking"]
+            ?.jsonObject
+            ?.get("type")
+            ?.jsonPrimitive
+            ?.content
+        val thinkingEnabled = thinkingType == "adaptive" || thinkingType == "enabled"
         return buildJsonObject {
             put("model", params.model.modelId)
             put(
@@ -285,14 +352,14 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     providerSetting.promptCacheTtl,
                 )
             )
-            put("max_tokens", params.maxTokens ?: 64_000)
+            put("max_tokens", maxTokens)
 
             // 顶层 cache_control: 让 Anthropic 自动管理缓存断点
             if (providerSetting.promptCaching) {
                 put("cache_control", cacheControlEphemeral(providerSetting.promptCacheTtl))
             }
 
-            if (params.temperature != null && !params.reasoningLevel.isEnabled) put(
+            if (params.temperature != null && !thinkingEnabled) put(
                 "temperature",
                 params.temperature
             )
@@ -317,33 +384,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 })
             }
 
-            // 处理 thinking
-            // Anthropic 新 API: adaptive 模式 + output_config.effort 控制强度
-            // 旧的 type=enabled + budget_tokens 在 Opus 4.7+ 上已不支持
-            if (params.model.abilities.contains(ModelAbility.REASONING)) {
-                when (params.reasoningLevel) {
-                    ReasoningLevel.OFF -> {
-                        put("thinking", buildJsonObject { put("type", "disabled") })
-                    }
-
-                    ReasoningLevel.AUTO -> {
-                        put("thinking", buildJsonObject {
-                            put("type", "adaptive")
-                            put("display", "summarized")
-                        })
-                    }
-
-                    else -> {
-                        put("thinking", buildJsonObject {
-                            put("type", "adaptive")
-                            put("display", "summarized")
-                        })
-                        put("output_config", buildJsonObject {
-                            put("effort", params.reasoningLevel.effort)
-                        })
-                    }
-                }
-            }
+            thinkingFields.forEach { (key, value) -> put(key, value) }
 
             // 处理工具
             if (params.model.abilities.contains(ModelAbility.TOOL) && params.tools.isNotEmpty()) {
@@ -352,7 +393,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                         add(buildJsonObject {
                             put("name", tool.name)
                             put("description", tool.description)
-                            put("input_schema", json.encodeToJsonElement(tool.parameters()))
+                            tool.parameters()?.let { put("input_schema", it) }
                             if (providerSetting.promptCaching && index == params.tools.lastIndex) {
                                 put("cache_control", cacheControlEphemeral(providerSetting.promptCacheTtl))
                             }

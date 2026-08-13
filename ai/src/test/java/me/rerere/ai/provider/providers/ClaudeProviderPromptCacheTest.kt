@@ -1,9 +1,11 @@
 package me.rerere.ai.provider.providers
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.ClaudePromptCacheTtl
@@ -52,6 +54,38 @@ class ClaudeProviderPromptCacheTest {
             parameters = { InputSchema.Obj(properties = JsonObject(emptyMap())) },
             execute = { emptyList() }
         )
+    }
+
+    @Test
+    fun `Claude tool preserves JSON Schema definitions and references`() {
+        val schema = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("value", buildJsonObject { put("\$ref", "#/\$defs/value") })
+            })
+            put("\$defs", buildJsonObject {
+                put("value", buildJsonObject { put("type", "integer") })
+            })
+        }
+        val request = buildRequest(
+            providerSetting = ProviderSetting.Claude(),
+            messages = listOf(UIMessage.user("hello")),
+            params = TextGenerationParams(
+                model = Model(modelId = "claude-test", abilities = listOf(ModelAbility.TOOL)),
+                tools = listOf(
+                    Tool(
+                        name = "lookup",
+                        description = "lookup",
+                        parameters = { schema },
+                        execute = { emptyList() },
+                    )
+                ),
+            ),
+        )
+        val sent = request["tools"]!!.jsonArray.single().jsonObject["input_schema"]!!.jsonObject
+
+        assertEquals("#/\$defs/value", sent["properties"]!!.jsonObject["value"]!!.jsonObject["\$ref"]!!.jsonPrimitive.content)
+        assertEquals("integer", sent["\$defs"]!!.jsonObject["value"]!!.jsonObject["type"]!!.jsonPrimitive.content)
     }
 
     @Test

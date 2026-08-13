@@ -433,19 +433,12 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                                 add(buildJsonObject {
                                     put("name", JsonPrimitive(tool.name))
                                     put("description", JsonPrimitive(tool.description))
-                                    put(
-                                        key = "parameters",
-                                        element = json.encodeToJsonElement(tool.parameters())
-                                            .removeElements(
-                                                listOf(
-                                                    "const",
-                                                    "exclusiveMaximum",
-                                                    "exclusiveMinimum",
-                                                    "format",
-                                                    "additionalProperties",
-                                                )
-                                            )
-                                    )
+                                    tool.parameters()?.let { schema ->
+                                        put(
+                                            key = "parametersJsonSchema",
+                                            element = schema.removeElements(listOf("\$schema")),
+                                        )
+                                    }
                                 })
                             }
                         })

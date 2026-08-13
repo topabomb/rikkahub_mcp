@@ -134,7 +134,10 @@ fun resolveLineage(
     // 检查该 task node 之后是否还有其他 USER task
     val hasSubsequentUserTasks = childConversation.messageNodes
         .subList(taskNodeIndex + 1, childConversation.messageNodes.size)
-        .any { it.role == me.rerere.ai.core.MessageRole.USER }
+        .any { node ->
+            node.selectIndex in node.messages.indices &&
+                node.currentMessage.role == me.rerere.ai.core.MessageRole.USER
+        }
 
     return if (hasSubsequentUserTasks) {
         // Child 在此前序 run 之后还有其他任务：需要 clone

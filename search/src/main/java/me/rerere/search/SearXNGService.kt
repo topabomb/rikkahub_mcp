@@ -21,7 +21,7 @@ import java.net.URLEncoder
 private const val TAG = "SearXNGService"
 
 object SearXNGService : SearchService<SearchServiceOptions.SearXNGOptions> {
-    override fun parameters(options: SearchServiceOptions.SearXNGOptions): InputSchema? =
+    override fun parameters(options: SearchServiceOptions.SearXNGOptions): JsonObject? =
         InputSchema.Obj(
             properties = buildJsonObject {
                 put("query", buildJsonObject {
@@ -32,7 +32,7 @@ object SearXNGService : SearchService<SearchServiceOptions.SearXNGOptions> {
             required = listOf("query")
         )
 
-    override fun scrapingParameters(options: SearchServiceOptions.SearXNGOptions): InputSchema? = null
+    override fun scrapingParameters(options: SearchServiceOptions.SearXNGOptions): JsonObject? = null
 
     override suspend fun search(
         params: JsonObject,

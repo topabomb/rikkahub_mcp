@@ -23,6 +23,7 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -450,21 +451,26 @@ class GoogleProviderMessageTest {
 
     @Test
     fun `function declarations and built in tools should coexist and preserve enum`() {
-        val modeSchema = buildJsonObject {
-            put("type", "string")
-            putJsonArray("enum") {
-                add(JsonPrimitive("fast"))
-                add(JsonPrimitive("accurate"))
-            }
-        }
+        val modeSchema = buildJsonObject { put("\$ref", "#/\$defs/mode") }
         val tool = Tool(
             name = "run_task",
             description = "Run a task",
             parameters = {
-                InputSchema.Obj(
-                    properties = buildJsonObject { put("mode", modeSchema) },
-                    required = listOf("mode"),
-                )
+                buildJsonObject {
+                    put("\$schema", "https://json-schema.org/draft/2020-12/schema")
+                    put("type", "object")
+                    put("properties", buildJsonObject { put("mode", modeSchema) })
+                    putJsonArray("required") { add(JsonPrimitive("mode")) }
+                    put("\$defs", buildJsonObject {
+                        put("mode", buildJsonObject {
+                            put("type", "string")
+                            putJsonArray("enum") {
+                                add(JsonPrimitive("fast"))
+                                add(JsonPrimitive("accurate"))
+                            }
+                        })
+                    })
+                }
             },
             execute = { emptyList() },
         )
@@ -484,8 +490,11 @@ class GoogleProviderMessageTest {
         val tools = body["tools"]!!.jsonArray
         assertEquals(2, tools.size)
         val declaration = tools.first().jsonObject["functionDeclarations"]!!.jsonArray.single().jsonObject
-        val mode = declaration["parameters"]!!.jsonObject["properties"]!!.jsonObject["mode"]!!.jsonObject
+        val schema = declaration["parametersJsonSchema"]!!.jsonObject
+        val mode = schema["\$defs"]!!.jsonObject["mode"]!!.jsonObject
         assertEquals(listOf("fast", "accurate"), mode["enum"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals("#/\$defs/mode", schema["properties"]!!.jsonObject["mode"]!!.jsonObject["\$ref"]!!.jsonPrimitive.content)
+        assertFalse(schema.containsKey("\$schema"))
         assertTrue(tools.any { it.jsonObject.containsKey("googleSearch") })
     }
 

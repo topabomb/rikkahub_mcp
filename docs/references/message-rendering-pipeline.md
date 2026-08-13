@@ -117,7 +117,9 @@ Text part 在传入 `MarkdownBlock` 之前，先经过 `replaceRegexes()` 处理
 
 - `scope = AssistantAffectScope.USER`：用户消息的替换规则
 - `scope = AssistantAffectScope.ASSISTANT`：助手消息的替换规则
-- `visual = true`：UI 显示时使用 visualTransform（区别于发送给 LLM 时的 onGenerationFinish）
+- `visual = true`：只应用 `visualOnly` 规则，供 UI 显示使用；发送给模型和持久化路径使用
+  `visual = false`。这与 Output Transformer 的 `visualTransform()` / `transforms()` /
+  `onGenerationFinish()` 生命周期是两套不同机制。
 
 #### 流式期间禁用文本选择
 

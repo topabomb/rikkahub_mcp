@@ -83,7 +83,26 @@ import kotlin.uuid.Uuid
 private const val TAG = "SubAssistantCoordinator"
 private const val PREVIEW_THROTTLE_MS = 100L
 private const val MAX_SUB_ASSISTANT_INTERACTIONS = 16
-private const val MAX_INTERACTION_INPUT_CHARS = 16 * 1024
+private const val FINALIZATION_TIMEOUT_MS = 5_000L
+
+internal data class InterruptedRunFinalizationFailures(
+    val child: Throwable?,
+    val metadata: Throwable?,
+)
+
+internal suspend fun finalizeInterruptedRunSafely(
+    timeoutMillis: Long,
+    finalizeChild: suspend () -> Unit,
+    finalizeMetadata: suspend () -> Unit,
+): InterruptedRunFinalizationFailures = withContext(NonCancellable) {
+    val childFailure = runCatching {
+        withTimeout(timeoutMillis) { finalizeChild() }
+    }.exceptionOrNull()
+    val metadataFailure = runCatching {
+        withTimeout(timeoutMillis) { finalizeMetadata() }
+    }.exceptionOrNull()
+    InterruptedRunFinalizationFailures(childFailure, metadataFailure)
+}
 
 /**
  * Target Generation 运行结果。
@@ -407,6 +426,21 @@ class SubAssistantCoordinator(
                     )
                     return listOf(UIMessagePart.Text(resultJson))
                 }
+                FinishedReason.INTERACTION_LIMIT_REACHED -> {
+                    val terminalMeta = runState.updateTerminalState(
+                        state = SubAssistantCallState.FAILED,
+                        reason = "interaction_limit_reached",
+                    )
+                    reportMetadataPatch(execContext, terminalMeta, checkpoint = false)
+                    val resultJson = buildSubAssistantCallResult(
+                        json = json,
+                        status = "failed",
+                        assistantName = target.name,
+                        content = "",
+                        reason = "interaction_limit_reached",
+                    )
+                    return listOf(UIMessagePart.Text(resultJson))
+                }
                 FinishedReason.AWAITING_APPROVAL -> {
                     // 只有无法桥接 Pending ask_user 或达到交互上限时才会返回到这里。
                     val terminalMeta = runState.updateTerminalState(
@@ -457,15 +491,7 @@ class SubAssistantCoordinator(
                 state = SubAssistantCallState.STOPPED,
                 reason = cancelReason,
             )
-            withContext(NonCancellable) {
-                runCatching {
-                    withTimeout(5_000L) {
-                        recoverInterruptedChild(childConversationId, cancelReason)
-                        // 主 channel 可能已经关闭；Master 的 stop finalizer 会按 locator 收口。
-                        reportMetadataPatch(execContext, terminalMeta, checkpoint = false)
-                    }
-                }
-            }
+            finalizeInterruptedRun(childConversationId, cancelReason, execContext, terminalMeta)
             if (masterCancelled) throw e
             val resultJson = buildSubAssistantCallResult(
                 json = json,
@@ -482,12 +508,7 @@ class SubAssistantCoordinator(
                 state = SubAssistantCallState.FAILED,
                 reason = "runtime_error",
             )
-            withContext(NonCancellable) {
-                withTimeout(5_000L) {
-                    recoverInterruptedChild(childConversationId, "runtime_error")
-                }
-            }
-            reportMetadataPatch(execContext, terminalMeta, checkpoint = false)
+            finalizeInterruptedRun(childConversationId, "runtime_error", execContext, terminalMeta)
 
             val resultJson = buildSubAssistantCallResult(
                 json = json,
@@ -753,7 +774,7 @@ class SubAssistantCoordinator(
 
             if (finishReason != FinishedReason.AWAITING_APPROVAL) break
             if (interactionCount++ >= MAX_SUB_ASSISTANT_INTERACTIONS) {
-                finishReason = FinishedReason.STEP_LIMIT_REACHED
+                finishReason = FinishedReason.INTERACTION_LIMIT_REACHED
                 break
             }
             val resumedMessages = awaitPendingAskUser(
@@ -806,7 +827,7 @@ class SubAssistantCoordinator(
             messageId = message.id.toString(),
             toolOrdinal = toolOrdinal,
             toolName = tool.toolName,
-            input = tool.input.take(MAX_INTERACTION_INPUT_CHARS),
+            input = tool.input,
         )
         val waitingMetadata = runState.awaitUserInteraction(
             interaction = interaction,
@@ -844,18 +865,29 @@ class SubAssistantCoordinator(
      * - 未被任何 Master run 引用的 Child：删除
      */
     suspend fun performRecovery() {
-        runLeases.reset("app_restarted")
+        withTimeout(FINALIZATION_TIMEOUT_MS) {
+            runLeases.cancelAll("app_restarted")
+        }
         pendingUserInteractions.values.forEach { it.answer.cancel() }
         pendingUserInteractions.clear()
         val settings = settingsStore.settingsFlow.value
-        val allConversations = conversationRepo.getAllConversationsSync()
-        val childrenById = allConversations
-            .filter { it.parentConversationId != null }
-            .associateBy { it.id }
+        val masters = conversationRepo.getAllTopLevelConversationsSync()
+        val allChildIds = conversationRepo.getAllChildConversationIds().toSet()
+        val linkedChildIds = masters.asSequence()
+            .flatMap { master -> master.messageNodes.asSequence() }
+            .flatMap { node -> node.messages.asSequence() }
+            .flatMap { message -> message.parts.filterIsInstance<UIMessagePart.Tool>().asSequence() }
+            .mapNotNull { tool -> tool.getSubAssistantCallMetadata(json)?.childConversationId }
+            .mapNotNull { id -> runCatching { Uuid.parse(id) }.getOrNull() }
+            .filter { it in allChildIds }
+            .toSet()
+        val childrenById = linkedChildIds.mapNotNull { childId ->
+            conversationRepo.getConversationById(childId)?.let { childId to it }
+        }.toMap()
         val referencedChildIds = mutableSetOf<Uuid>()
         val childStopReasons = mutableMapOf<Uuid, String>()
 
-        allConversations.filter { it.parentConversationId == null }.forEach { master ->
+        masters.forEach { master ->
             val result = recoverMasterSubAssistantCalls(master, settings, childrenById, json)
             referencedChildIds += result.referencedChildIds
             result.childStopReasons.forEach { (childId, reason) ->
@@ -891,11 +923,13 @@ class SubAssistantCoordinator(
         }
 
         // Only a unique, structurally valid Master link retains a Child.
-        val orphanChildIds = childrenById.keys - referencedChildIds
+        val orphanChildIds = allChildIds - referencedChildIds
         for (orphanId in orphanChildIds) {
             Log.i(TAG, "performRecovery: deleting orphan child $orphanId")
             runCatching {
-                conversationRepo.deleteConversation(childrenById.getValue(orphanId))
+                conversationRepo.getConversationById(orphanId)?.let {
+                    conversationRepo.deleteConversation(it)
+                }
                 sessionRegistry.evictSession(orphanId)
             }
         }
@@ -990,7 +1024,14 @@ class SubAssistantCoordinator(
     }
 
     private suspend fun recoverInterruptedChild(childConversationId: Uuid, reason: String) {
-        val session = sessionRegistry.getOrCreateSession(childConversationId)
+        val session = sessionRegistry.getSession(childConversationId) ?: run {
+            val persisted = conversationRepo.getConversationById(childConversationId)
+            if (persisted == null) {
+                Log.w(TAG, "recoverInterruptedChild: child $childConversationId no longer exists")
+                return
+            }
+            sessionRegistry.getOrCreateSessionWithConversation(childConversationId, persisted)
+        }
         val conversation = session.state.value
         val recoveredNodes = conversation.messageNodes.map { node ->
             node.copy(
@@ -1004,6 +1045,25 @@ class SubAssistantCoordinator(
         val recovered = conversation.copy(messageNodes = recoveredNodes)
         sessionRegistry.updateConversationState(childConversationId, recovered)
         conversationRepo.updateConversation(recovered)
+    }
+
+    private suspend fun finalizeInterruptedRun(
+        childConversationId: Uuid,
+        reason: String,
+        execContext: ToolExecutionContext,
+        terminalMeta: SubAssistantCallMetadata,
+    ) {
+        val failures = finalizeInterruptedRunSafely(
+            timeoutMillis = FINALIZATION_TIMEOUT_MS,
+            finalizeChild = { recoverInterruptedChild(childConversationId, reason) },
+            finalizeMetadata = { reportMetadataPatch(execContext, terminalMeta, checkpoint = false) },
+        )
+        failures.child?.let { error ->
+            Log.e(TAG, "Unable to finalize interrupted child $childConversationId", error)
+        }
+        failures.metadata?.let { error ->
+            Log.e(TAG, "Unable to persist terminal metadata for ${terminalMeta.runId}", error)
+        }
     }
 
     private suspend fun unavailableResult(

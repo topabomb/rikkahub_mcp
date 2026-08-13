@@ -118,7 +118,7 @@ fun ChatMessage(
     onToggleFavorite: (() -> Unit)? = null,
     onToolApproval: ((locator: ToolCallLocator, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((locator: ToolCallLocator, answer: String) -> Unit)? = null,
-    onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Unit)? = null,
+    onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
     readOnly: Boolean = false,
 ) {
     val message = node.messages[node.selectIndex]
@@ -273,7 +273,7 @@ private fun MessagePartsBlock(
     loading: Boolean,
     onToolApproval: ((locator: ToolCallLocator, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((locator: ToolCallLocator, answer: String) -> Unit)? = null,
-    onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Unit)? = null,
+    onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
     onUserMessageClick: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current

@@ -322,6 +322,50 @@ class SubAssistantLineageResolverTest {
     }
 
     @Test
+    fun `selected user variant after previous run requires clone`() {
+        val task = userMessage("task1")
+        val laterAssistant = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(UIMessagePart.Text("old")),
+        )
+        val laterUser = userMessage("task2")
+        val child = childForLineage(
+            task = task,
+            laterNode = laterAssistant.toMessageNode().copy(
+                messages = listOf(laterAssistant, laterUser),
+                selectIndex = 1,
+            ),
+        )
+
+        assertTrue(
+            resolveLineage(lineageMetadata(task, child.id), child, masterConvId, targetId) is
+                LineageDecision.CloneChild
+        )
+    }
+
+    @Test
+    fun `unselected user variant after previous run does not require clone`() {
+        val task = userMessage("task1")
+        val laterUser = userMessage("unselected")
+        val laterAssistant = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(UIMessagePart.Text("selected")),
+        )
+        val child = childForLineage(
+            task = task,
+            laterNode = laterUser.toMessageNode().copy(
+                messages = listOf(laterUser, laterAssistant),
+                selectIndex = 1,
+            ),
+        )
+
+        assertTrue(
+            resolveLineage(lineageMetadata(task, child.id), child, masterConvId, targetId) is
+                LineageDecision.ReuseChild
+        )
+    }
+
+    @Test
     fun `unselected task variant is not accepted as lineage endpoint`() {
         val childConvId = Uuid.random()
         val selectedTask = userMessage("selected")
@@ -351,6 +395,30 @@ class SubAssistantLineageResolverTest {
         )
         assertEquals(null, cloneLineagePrefix(child, unselectedTask.id))
     }
+
+    private fun childForLineage(task: UIMessage, laterNode: net.weero.measix.pilot.data.model.MessageNode) =
+        Conversation(
+            id = Uuid.random(),
+            assistantId = targetId,
+            messageNodes = listOf(
+                task.toMessageNode(),
+                UIMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(UIMessagePart.Text("answer")),
+                ).toMessageNode(),
+                laterNode,
+            ),
+            parentConversationId = masterConvId,
+        )
+
+    private fun lineageMetadata(task: UIMessage, childId: Uuid) = SubAssistantCallMetadata(
+        runId = "run-selected-variant",
+        targetAssistantId = targetId.toString(),
+        targetNameSnapshot = "Helper",
+        state = SubAssistantCallState.COMPLETED,
+        childConversationId = childId.toString(),
+        childTaskNodeId = task.id.toString(),
+    )
 
     @Test
     fun `task node not found in child creates new due to error`() {

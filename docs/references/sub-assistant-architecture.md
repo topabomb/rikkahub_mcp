@@ -130,7 +130,7 @@ Lineage 决策完成后先获取 `(masterConversationId, targetAssistantId)` lea
 
 - 没有有效前序调用时新建 Child。
 - 前序 Run 仍位于 Child 尾部时复用 Child，并追加新的 USER request。
-- Child 在前序 Run 后已有其他 USER task 时，只克隆截至前序 Run 的选中历史前缀，再追加 request。
+- Child 在前序 Run 后已有其他选中 USER task 时，只克隆截至前序 Run 的选中历史前缀，再追加 request；分支判断始终以 `MessageNode.currentMessage` 为准。
 - metadata、父子关系或 task locator 损坏时创建新 Child，不猜测错误 lineage。
 
 ### Target 生成
@@ -154,6 +154,8 @@ Target 每个模型 step 都重新构建工具集。有效工具能力是“调�
 - `AssistantManagement`、`AssistantDelegation` 以及注册名 `assistant_manage`、`assistant_memory_list`、`assistant_call` 永久从 Target Run 过滤。
 - 除 `ask_user` 外，所有需审批工具在非交互 Target 模式返回 `tool_not_permitted`。
 - `ask_user` 由 Coordinator 按 Child `messageId + toolOrdinal` 持久化到 Master 卡片；回答也用 `run_id + interaction_id` 精确匹配，防止重复或过期提交。
+- `ask_user` 只接受满足 Schema 数量和大小上限的完整 JSON 入参；无效或过大的入参会在进入等待态前失败，不会截断后持久化。交互轮次上限与模型 step 上限使用不同终态 reason。
+- `recent_chats` 与 `conversation_search` 都限定为 Target 自己的顶层会话，不允许借 Target Run 搜索其他 Assistant 或内部 Child。
 - Memory Tool 在每次执行前重验 Target 仍启用记忆且 local/global namespace 没有改变；撤销后返回 `tool_not_permitted`。
 - Settings watcher 持续检查 Target 删除/停用、Caller 访问撤销和 RunSpec 模型失效，并取消当前 Run。
 
@@ -165,7 +167,7 @@ Target 每个模型 step 都重新构建工具集。有效工具能力是“调�
 
 实时预览只投影本次 Child task 范围内 ASSISTANT 的顶层 Text，排除 Reasoning、Tool input/output、preset 和下一次 USER task。Reducer 保持消息与 part 的显示顺序，只保留有界尾部，并在 Unicode grapheme 边界裁剪。完成态改用 final answer 的有界开头摘要；纯非文本完成态显示本地化提示。
 
-`SubAssistantCallCard` 从通用 COT 分组中独立渲染 Target、request、状态、preview 和 `ask_user`。整卡在 Child link 有效时进入 `SubAssistantDetail`。详情解析会同时校验 Master、run 唯一性、Target、父子关系和 task `UIMessage.id`，并通过 `ChatInteractionPolicy.ReadOnlyChild` 禁止输入、编辑、删除、重生成、分支、收藏、分享与审批。
+`SubAssistantCallCard` 从通用 COT 分组中独立渲染 Target、request、状态、preview 和 `ask_user`。整卡在 Child link 有效时进入 `SubAssistantDetail`。详情解析会同时校验 Master、run 唯一性、Target、父子关系和 task `UIMessage.id`；仅非终态且尚未写入 Child link 的 run 可以保持 Loading，不存在、歧义或已经终止但缺少 link 的 run 立即显示不可用。详情页只渲染 `ChatMessage(readOnly = true)`，不提供输入、编辑、删除、重生成、分支、收藏、分享或审批入口。
 
 ## 8. 恢复、分支与删除
 
@@ -178,6 +180,8 @@ Target 每个模型 step 都重新构建工具集。有效工具能力是“调�
 - 缺失或歧义的 run/link 不被信任，也不能保留孤儿 Child。
 - `target_removed`、`target_disabled`、`target_access_revoked`、模型不可用、`child_missing` 和 `app_restarted` 按确定优先级选择。
 
+`AssistantDataRecoveryGate` 在恢复和 tombstone 清理结束前阻止所有用户触发的 Conversation/Assistant 持久化，包括聊天、历史删除与恢复、抽屉移动和调试数据写入。恢复先取消并等待仍在进程内的 run lease 完成，再读取 Room；它只完整加载顶层 Master 和 metadata 实际引用的 Child，孤儿 Child 逐个清理，避免把全部 Child 消息树同时反序列化到内存。
+
 ### Master 分支变化与复制
 
 Master 分支切换或历史裁剪后，`planSubAssistantRetention` 只保留仍被任一有效 metadata 引用的 Child，并把共享 Child 收缩到最长仍被引用的 lineage 前缀。
@@ -186,15 +190,15 @@ Fork 顶层会话时，`forkSubAssistantTree` 同时复制有效 Child，重建 
 
 ### 删除
 
-删除 Target 先通过原子 Settings 更新移除 Assistant、清理反向授权并写入 `pendingAssistantDeletions`。随后停止活跃 Run，并在 Room 事务中删除相关 Master/Child/MessageNode/收藏数据；成功后消费 tombstone。应用重启会继续未完成清理，同 ID Assistant 已恢复时丢弃旧 tombstone。
+删除 Target 先通过原子 Settings 更新移除 Assistant、清理反向授权并写入 `pendingAssistantDeletions`。随后停止活跃 Run，删除该 Assistant 自己的顶层会话和本地 Memory；被其他 Master 的历史 run 引用的 Child 保留，以维持已持久化卡片和只读详情的可追溯性。成功后消费 tombstone；应用重启会继续未完成清理，同 ID Assistant 已恢复时丢弃旧 tombstone。
 
 删除 Master 会级联处理 Child 与只被该会话树引用的本地文件。普通用户入口始终过滤 Child，避免内部工作会话泄漏到历史、搜索或最近会话工具。
 
 ## 9. Session、取消与 TTS
 
-`ConversationSessionRegistry` 保证一个 Conversation ID 对应一个 Session。加载持久化 Child 使用 `open(conversation)`，不会先创建空 Session 遮蔽 Room 快照。页面引用归零但 Job 活跃时 Session 继续保留；生成结束且空闲后再清理。
+`ConversationSessionRegistry` 保证一个 Conversation ID 对应一个 Session。加载持久化 Child 使用 `getOrCreateSessionWithConversation()`；中断收尾在 Session 不存在时先读取 Room，Child 已删除则停止修复，不会用默认空会话覆盖持久化快照。页面引用归零但 Job 活跃时 Session 继续保留；生成结束且空闲后再清理。
 
-停止 Master、删除 Target、撤销访问、模型失效、回答等待中断或应用恢复都会取消 Target Job，并由 Coordinator 在 `NonCancellable` 收尾区写入 Child checkpoint、Master 终态和 Tool Result。lease 与交互等待器在 `finally` 中释放。
+停止 Master、删除 Target、撤销访问、模型失效、回答等待中断或应用恢复都会取消 Target Job。Coordinator 在 `NonCancellable` 收尾区分别尝试 Child 修复和 Master 终态回写，各自有独立超时；Child 修复失败不会跳过 Master 终态，也不会让超时异常取代稳定的 stopped/failed Tool Result。lease 与交互等待器在 `finally` 中释放。
 
 每个 Master turn 创建共享的 `TtsToolPlaybackContext`。Master 和该 turn 内的 Target 派生来源共享 session 与顺序播放状态，Target 只替换 Assistant 身份和 `SUB_ASSISTANT` 来源类型。控制条仅在当前来源是 Target 且该 Assistant 开启 `useAssistantAvatar` 时显示 Target 头像；播放结束、Provider 切换、错误或 dispose 会清空来源。`assistant_call` 结束不会中断已提交的音频。
 

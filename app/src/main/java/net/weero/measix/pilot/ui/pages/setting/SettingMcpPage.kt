@@ -113,7 +113,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import me.rerere.ai.core.InputSchema
 import me.rerere.hugeicons.stroke.McpServer
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.ai.mcp.McpManager
@@ -1258,15 +1257,19 @@ private fun McpToolCard(
                     )
                 }
                 // 参数标签
-                tool.inputSchema?.let { it as? InputSchema.Obj }?.let { schema ->
-                    if (schema.properties.isNotEmpty()) {
+                tool.inputSchema?.let { schema ->
+                    val properties = schema["properties"] as? kotlinx.serialization.json.JsonObject
+                    val required = (schema["required"] as? kotlinx.serialization.json.JsonArray)
+                        ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+                        .orEmpty()
+                    if (!properties.isNullOrEmpty()) {
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            schema.properties.forEach { (key, _) ->
+                            properties.forEach { (key, _) ->
                                 Tag(
-                                    type = if (schema.required?.contains(key) == true) TagType.INFO else TagType.DEFAULT
+                                    type = if (key in required) TagType.INFO else TagType.DEFAULT
                                 ) {
                                     Text(
                                         text = key,

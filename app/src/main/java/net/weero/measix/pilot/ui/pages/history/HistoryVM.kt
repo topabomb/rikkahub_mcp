@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.history
+package net.weero.measix.pilot.ui.pages.history
 
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -14,6 +14,7 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getCurrentAssistant
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.repository.ConversationRepository
+import net.weero.measix.pilot.service.ChatService
 import kotlin.uuid.Uuid
 
 private const val TAG = "HistoryVM"
@@ -21,6 +22,7 @@ private const val TAG = "HistoryVM"
 class HistoryVM(
     private val conversationRepo: ConversationRepository,
     private val settingsStore: SettingsStore,
+    private val chatService: ChatService,
 ) : ViewModel() {
     val assistant = settingsStore.settingsFlow
         .map { it.getCurrentAssistant() }
@@ -34,20 +36,20 @@ class HistoryVM(
 
     fun deleteConversation(conversation: Conversation) {
         viewModelScope.launch {
-            conversationRepo.deleteConversation(conversation)
+            chatService.deleteConversation(conversation)
         }
     }
 
     fun deleteAllConversations() {
         val assistant = assistant.value ?: return
         viewModelScope.launch {
-            conversationRepo.deleteConversationOfAssistant(assistant.id)
+            chatService.deleteConversationsOfAssistant(assistant.id)
         }
     }
 
     fun togglePinStatus(conversationId: Uuid) {
         viewModelScope.launch {
-            conversationRepo.togglePinStatus(conversationId)
+            chatService.togglePinStatus(conversationId)
         }
     }
 
@@ -56,7 +58,7 @@ class HistoryVM(
 
     fun restoreConversation(conversation: Conversation) {
         viewModelScope.launch {
-            conversationRepo.insertConversation(conversation)
+            chatService.insertConversation(conversation)
         }
     }
 

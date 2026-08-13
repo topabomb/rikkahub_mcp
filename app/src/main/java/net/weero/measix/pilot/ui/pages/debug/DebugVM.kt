@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.debug
+package net.weero.measix.pilot.ui.pages.debug
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -17,6 +17,7 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
+import net.weero.measix.pilot.service.ChatService
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Clock
@@ -26,6 +27,7 @@ import kotlin.uuid.Uuid
 class DebugVM(
     private val settingsStore: SettingsStore,
     private val conversationRepository: ConversationRepository,
+    private val chatService: ChatService,
 ) : ViewModel() {
     val settings: StateFlow<Settings> = settingsStore.settingsFlow
         .stateIn(viewModelScope, SharingStarted.Lazily, Settings.dummy())
@@ -99,7 +101,7 @@ class DebugVM(
                 messageNodes = messageNodes,
             )
 
-            conversationRepository.insertConversation(conversation)
+            chatService.insertConversation(conversation)
         }
     }
 
@@ -125,7 +127,7 @@ class DebugVM(
                 messageNodes = messageNodes,
             )
 
-            conversationRepository.insertConversation(conversation)
+            chatService.insertConversation(conversation)
         }
     }
 

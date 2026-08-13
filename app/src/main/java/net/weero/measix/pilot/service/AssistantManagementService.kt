@@ -31,6 +31,7 @@ class AssistantManagementService(
     private val filesManager: FilesManager,
     private val sessionRegistry: ConversationSessionRegistry,
     private val subAssistantCoordinator: SubAssistantCoordinator,
+    private val recoveryGate: AssistantDataRecoveryGate = AssistantDataRecoveryGate.completed(),
 ) {
     /**
      * 创建 Assistant，默认 Local Tools 与普通 Assistant 一致，其他扩展能力保持关闭。
@@ -43,6 +44,7 @@ class AssistantManagementService(
         instructions: String,
         callerAssistantId: Uuid? = null,
     ): Result<Assistant> {
+        recoveryGate.awaitReady()
         val trimmedName = name.trim()
         val trimmedDescription = normalizeDescription(description)
         val trimmedInstructions = instructions.trim()
@@ -105,6 +107,7 @@ class AssistantManagementService(
         instructions: String? = null,
         callerAssistantId: Uuid? = null,
     ): Result<Assistant> {
+        recoveryGate.awaitReady()
         if (name == null && description == null && instructions == null) {
             return Result.failure(IllegalArgumentException("invalid_arguments"))
         }
@@ -173,6 +176,7 @@ class AssistantManagementService(
         assistantId: Uuid,
         callerAssistantId: Uuid? = null,
     ): Result<AssistantDeletionResult> {
+        recoveryGate.awaitReady()
         if (callerAssistantId != null && assistantId == callerAssistantId) {
             return Result.failure(IllegalArgumentException("target_is_caller"))
         }

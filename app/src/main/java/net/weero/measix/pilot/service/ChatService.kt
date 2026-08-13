@@ -27,7 +27,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
-import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
@@ -55,14 +54,9 @@ import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.data.ai.tools.AssistantToolFactory
-import net.weero.measix.pilot.data.ai.tools.local.LocalTools
 import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
 import net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
-import net.weero.measix.pilot.data.ai.tools.createConversationTools
-import net.weero.measix.pilot.data.ai.tools.createSearchTools
-import net.weero.measix.pilot.data.ai.tools.createSkillTools
-import net.weero.measix.pilot.data.ai.tools.createWorkspaceTools
-import net.weero.measix.pilot.data.files.SkillManager
+import net.weero.measix.pilot.data.ai.tools.GenerationToolSetFactory
 import net.weero.measix.pilot.data.ai.transformers.Base64ImageToLocalFileTransformer
 import net.weero.measix.pilot.data.ai.transformers.DocumentAsPromptTransformer
 import net.weero.measix.pilot.data.ai.transformers.OcrTransformer
@@ -92,7 +86,6 @@ import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import net.weero.measix.pilot.utils.applyPlaceholders
 import net.weero.measix.pilot.utils.SoundEffectPlayer
-import me.rerere.workspace.WorkspaceShellStatus
 import java.time.Instant
 import java.util.Locale
 import kotlinx.datetime.LocalDateTime
@@ -228,16 +221,16 @@ class ChatService(
     private val generationHandler: GenerationHandler,
     private val templateTransformer: TemplateTransformer,
     private val providerManager: ProviderManager,
-    private val localTools: LocalTools,
     val mcpManager: McpManager,
     private val filesManager: FilesManager,
-    private val skillManager: SkillManager,
+    private val toolSetFactory: GenerationToolSetFactory,
     private val workspaceRepository: WorkspaceRepository,
     private val folderRepository: FolderRepository,
     private val soundEffectPlayer: SoundEffectPlayer,
     private val assistantToolFactory: AssistantToolFactory,
     private val subAssistantCoordinator: SubAssistantCoordinator,
     private val sessionRegistry: ConversationSessionRegistry,
+    private val recoveryGate: AssistantDataRecoveryGate = AssistantDataRecoveryGate.completed(),
     private val json: Json,
 ) {
     // workspace 系统提示注入 (依赖 workspaceRepository, 故在类内构造)
@@ -349,6 +342,7 @@ class ChatService(
     // ---- 初始化对话 ----
 
     suspend fun initializeConversation(conversationId: Uuid) {
+        recoveryGate.awaitReady()
         getOrCreateSession(conversationId) // 确保 session 存在
         val conversation = conversationRepo.getConversationById(conversationId)
         if (conversation != null) {
@@ -378,6 +372,7 @@ class ChatService(
 
         val job = appScope.launch {
             try {
+                recoveryGate.awaitReady()
                 runCatching { previousJob?.join() }
                 finishInterruptedPendingTools(conversationId)
 
@@ -443,6 +438,7 @@ class ChatService(
 
         val job = appScope.launch {
             try {
+                recoveryGate.awaitReady()
                 runCatching { previousJob?.join() }
                 finishInterruptedPendingTools(conversationId)
                 val conversation = subAssistantCoordinator.recoverMasterForMutation(session.state.value)
@@ -489,6 +485,7 @@ class ChatService(
         val session = getOrCreateSession(conversationId)
         appScope.launch {
             try {
+                recoveryGate.awaitReady()
                 session.withToolApprovalLock {
                     // Pending is emitted just before the generation Flow ends. Wait for its
                     // final checkpoint/save instead of cancelling it. Rapid decisions for
@@ -609,60 +606,28 @@ class ChatService(
                     add(workspaceReminderTransformer)
                 },
                 outputTransformers = outputTransformers,
-                tools = buildList {
-                    if (assistant.enableWebSearch) {
-                        addAll(createSearchTools(settings))
-                    }
-                    addAll(localTools.getTools(assistant.localTools, turnTtsContext))
-                    if (assistant.enableRecentChatsReference) {
-                        addAll(createConversationTools(conversationRepo, assistant.id))
-                    }
-                    addAll(createWorkspaceToolsIfReady(assistant.workspaceId?.toString(), conversation.workspaceCwd))
-                    if (assistant.enabledSkills.isNotEmpty()) {
-                        addAll(
-                            createSkillTools(
-                                enabledSkills = assistant.enabledSkills,
-                                allSkills = skillManager.listSkills(),
-                            )
-                        )
-                    }
-                    // Assistant Tools (assistant_manage, assistant_memory_list, assistant_call)
-                    addAll(assistantToolFactory.buildTools(
+                tools = toolSetFactory.buildTools(
+                    assistant = assistant,
+                    settings = settings,
+                    workspaceCwd = conversation.workspaceCwd,
+                    ttsPlaybackContext = turnTtsContext,
+                    additionalToolsBeforeMcp = assistantToolFactory.buildTools(
                         callerAssistant = assistant,
                         masterConversationId = conversationId,
                         ttsPlaybackContext = turnTtsContext,
-                    ))
-                    mcpManager.getAllAvailableTools(assistant).also { allTools ->
-                        val invalidNames = allTools
-                            .map { it.second }
-                            .distinct()
-                            .filter { name -> name.isEmpty() || !name.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' || it == '_' } }
-                        if (invalidNames.isNotEmpty()) {
-                            addError(
-                                error = IllegalStateException(
-                                    context.getString(
-                                        R.string.error_mcp_invalid_server_name,
-                                        invalidNames.joinToString(", ")
-                                    )
-                                ),
-                                conversationId = conversationId,
-                            )
-                            return
-                        }
-                    }.forEach { (serverId, serverName, tool) ->
-                        add(
-                            Tool(
-                                name = "mcp__${serverName}__${tool.name}",
-                                description = tool.description ?: "",
-                                parameters = { tool.inputSchema },
-                                needsApproval = { tool.needsApproval },
-                                execute = {
-                                    mcpManager.callTool(serverId, tool.name, it.jsonObject)
-                                },
-                            )
+                    ),
+                    onInvalidMcpServerNames = { invalidNames ->
+                        addError(
+                            error = IllegalStateException(
+                                context.getString(
+                                    R.string.error_mcp_invalid_server_name,
+                                    invalidNames.joinToString(", ")
+                                )
+                            ),
+                            conversationId = conversationId,
                         )
-                    }
-                },
+                    },
+                ),
             ).onCompletion {
                 // 可能被取消了，或者意外结束，兜底更新
                 val updatedConversation = getConversationFlow(conversationId).value.copy(
@@ -759,19 +724,6 @@ class ChatService(
                 generateSuggestion(conversationId, finalConversation)
             }
         }
-    }
-
-    private suspend fun createWorkspaceToolsIfReady(workspaceId: String?, cwd: String? = null): List<Tool> {
-        if (workspaceId.isNullOrBlank()) return emptyList()
-        val workspace = workspaceRepository.getById(workspaceId) ?: return emptyList()
-        if (workspace.shellStatus != WorkspaceShellStatus.READY.name) {
-            Log.d(
-                TAG,
-                "createWorkspaceToolsIfReady: skip workspace tools, workspace=$workspaceId, status=${workspace.shellStatus}"
-            )
-            return emptyList()
-        }
-        return createWorkspaceTools(workspaceId, workspaceRepository, cwd)
     }
 
     // ---- 检查无效消息 ----
@@ -1081,6 +1033,7 @@ class ChatService(
      * 先改内存可确保这段窗口内的整对象保存也带上新 folderId。
      */
     suspend fun moveConversationToFolder(conversationId: Uuid, folderId: Uuid?) {
+        recoveryGate.awaitReady()
         if (sessionRegistry.getSession(conversationId) != null) {
             updateConversationState(conversationId) { it.copy(folderId = folderId) }
         }
@@ -1104,6 +1057,7 @@ class ChatService(
      * 后续整对象保存会写回一个已被删除的 folder_id，导致会话在列表中悬空。
      */
     suspend fun deleteFolder(folderId: Uuid) {
+        recoveryGate.awaitReady()
         sessionRegistry.getSessionsSnapshot()
             .filter { it.state.value.folderId == folderId }
             .forEach { updateConversationState(it.id) { c -> c.copy(folderId = null) } }
@@ -1123,6 +1077,7 @@ class ChatService(
     }
 
     suspend fun saveConversation(conversationId: Uuid, conversation: Conversation) {
+        recoveryGate.awaitReady()
         val exists = conversationRepo.existsConversationById(conversation.id)
         val updatedConversation = conversation.copy()
 
@@ -1140,6 +1095,47 @@ class ChatService(
         }
     }
 
+    /** Serializes user-initiated repository writes behind startup recovery. */
+    suspend fun insertConversation(conversation: Conversation) {
+        recoveryGate.awaitReady()
+        conversationRepo.insertConversation(conversation)
+        sessionRegistry.getSession(conversation.id)?.let {
+            sessionRegistry.updateConversationState(conversation.id, conversation)
+        }
+    }
+
+    suspend fun updatePersistedConversation(conversation: Conversation) {
+        recoveryGate.awaitReady()
+        conversationRepo.updateConversation(conversation)
+        sessionRegistry.getSession(conversation.id)?.let {
+            sessionRegistry.updateConversationState(conversation.id, conversation)
+        }
+    }
+
+    suspend fun deleteConversation(conversation: Conversation) {
+        recoveryGate.awaitReady()
+        stopGeneration(conversation.id)
+        val childIds = conversationRepo.getChildConversations(conversation.id).map { it.id }
+        conversationRepo.deleteConversation(conversation)
+        childIds.forEach(sessionRegistry::evictSession)
+        sessionRegistry.evictSession(conversation.id)
+    }
+
+    suspend fun deleteConversationsOfAssistant(assistantId: Uuid) {
+        recoveryGate.awaitReady()
+        conversationRepo.getConversationsOfAssistant(assistantId).first()
+            .forEach { deleteConversation(it) }
+    }
+
+    suspend fun togglePinStatus(conversationId: Uuid) {
+        recoveryGate.awaitReady()
+        conversationRepo.togglePinStatus(conversationId)
+        val persisted = conversationRepo.getConversationById(conversationId) ?: return
+        sessionRegistry.getSession(conversationId)?.let {
+            sessionRegistry.updateConversationState(conversationId, persisted)
+        }
+    }
+
     // ---- 消息操作 ----
 
     suspend fun editMessage(
@@ -1148,6 +1144,7 @@ class ChatService(
         parts: List<UIMessagePart>
     ) {
         if (parts.isEmptyInputMessage()) return
+        recoveryGate.awaitReady()
 
         val currentConversation = getConversationFlow(conversationId).value
         val settings = settingsStore.settingsFlow.first()
@@ -1164,7 +1161,7 @@ class ChatService(
 
             node.copy(
                 messages = node.messages + UIMessage(
-                    role = node.role,
+                    role = node.currentMessage.role,
                     parts = processedParts,
                 ),
                 selectIndex = node.messages.size
@@ -1246,6 +1243,7 @@ class ChatService(
         nodeId: Uuid,
         selectIndex: Int
     ) {
+        recoveryGate.awaitReady()
         val currentConversation = getConversationFlow(conversationId).value
         val targetNode = currentConversation.messageNodes.firstOrNull { it.id == nodeId }
             ?: throw NoSuchElementException("Message node not found")
@@ -1369,6 +1367,7 @@ class ChatService(
 
     // 停止当前会话生成任务（不清理会话缓存）
     suspend fun stopGeneration(conversationId: Uuid) {
+        recoveryGate.awaitReady()
         val job = sessionRegistry.getSession(conversationId)?.getJob() ?: return
         job.cancel()
         runCatching { job.join() }

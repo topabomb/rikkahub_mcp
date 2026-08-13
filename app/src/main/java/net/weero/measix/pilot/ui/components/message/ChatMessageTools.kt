@@ -75,7 +75,12 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
         AskUserToolStep(
             tool = tool,
             loading = loading,
-            onAnswer = onToolAnswer?.let { callback -> { answer -> callback(locator, answer) } },
+            onAnswer = onToolAnswer?.let { callback ->
+                { answer ->
+                    callback(locator, answer)
+                    true
+                }
+            },
         )
         return
     }
@@ -247,7 +252,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
 internal fun ChainOfThoughtScope.AskUserToolStep(
     tool: UIMessagePart.Tool,
     loading: Boolean,
-    onAnswer: ((answer: String) -> Unit)?,
+    onAnswer: ((answer: String) -> Boolean)?,
 ) {
     val isPending = tool.approvalState is ToolApprovalState.Pending
     val isAnswered = tool.approvalState is ToolApprovalState.Answered
@@ -427,7 +432,6 @@ internal fun ChainOfThoughtScope.AskUserToolStep(
                 if (isPending && onAnswer != null && questions.isNotEmpty()) {
                     FilledTonalButton(
                         onClick = {
-                            submitted = true
                             val answerPayload = buildJsonObject {
                                 put("answers", buildJsonObject {
                                     questions.forEach { q ->
@@ -438,7 +442,7 @@ internal fun ChainOfThoughtScope.AskUserToolStep(
                                     }
                                 })
                             }
-                            onAnswer(answerPayload.toString())
+                            submitted = onAnswer(answerPayload.toString())
                         },
                         enabled = !submitted && questions.all { q ->
                             when (q.selectionType) {

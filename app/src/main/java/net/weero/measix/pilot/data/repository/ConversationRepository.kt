@@ -368,6 +368,12 @@ class ConversationRepository(
         sort: MessageSearchSort = MessageSearchSort.RELEVANCE,
     ) = messageFtsManager.search(keyword, sort)
 
+    suspend fun searchMessagesOfAssistant(
+        assistantId: Uuid,
+        keyword: String,
+        sort: MessageSearchSort = MessageSearchSort.RELEVANCE,
+    ) = messageFtsManager.search(keyword, sort, assistantId.toString())
+
     suspend fun rebuildAllIndexes(onProgress: (current: Int, total: Int) -> Unit = { _, _ -> }) {
         messageFtsManager.deleteAll()
         val allIds = conversationDAO.getAllIds()
@@ -436,7 +442,7 @@ class ConversationRepository(
 
     /**
      * 对每个候选 file:// URI 用 LIKE 探测其他会话的 messages JSON，
-     * 命中后再反序列化该节点校验。禁止再走 getAllConversationsSync()。
+     * 命中后再反序列化该节点校验，避免为文件清理加载所有会话及消息。
      */
     private suspend fun findUnsharedFileUris(
         candidates: Set<android.net.Uri>,
@@ -462,13 +468,11 @@ class ConversationRepository(
         }
     }
 
-    /**
-     * 获取所有会话（包括 Child），带完整 MessageNode，用于 recovery 扫描。
-     */
-    suspend fun getAllConversationsSync(): List<Conversation> {
-        return conversationDAO.getAllConversations().map { entity ->
-            val nodes = loadMessageNodes(entity.id)
-            conversationEntityToConversation(entity, nodes)
+    /** Loads complete top-level conversations without deserializing every Child payload. */
+    suspend fun getAllTopLevelConversationsSync(): List<Conversation> {
+        return conversationDAO.getAllIds().mapNotNull { id ->
+            val entity = conversationDAO.getConversationById(id) ?: return@mapNotNull null
+            conversationEntityToConversation(entity, loadMessageNodes(id))
         }
     }
 

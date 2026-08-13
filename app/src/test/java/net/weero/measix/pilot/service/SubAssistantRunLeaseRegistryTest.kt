@@ -95,4 +95,23 @@ class SubAssistantRunLeaseRegistryTest {
         assertTrue(deleteWaiter.isCompleted)
         registry.release(unrelatedKey, unrelatedLease)
     }
+
+    @Test
+    fun `startup cancellation waits for lease owner cleanup`() = runTest {
+        val registry = SubAssistantRunLeaseRegistry()
+        val key = SubAssistantRunKey(Uuid.random(), Uuid.random())
+        val lease = registry.tryAcquire(key, "run", Uuid.random(), Job())!!
+
+        val recovery = launch { registry.cancelAll("app_restarted") }
+        runCurrent()
+
+        assertTrue(lease.job.isCancelled)
+        assertTrue(recovery.isActive)
+        assertTrue(registry.isBusy(key))
+
+        registry.release(key, lease)
+        runCurrent()
+        assertTrue(recovery.isCompleted)
+        assertFalse(registry.isBusy(key))
+    }
 }

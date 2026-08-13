@@ -65,12 +65,11 @@ internal class SubAssistantRunLeaseRegistry {
         matching.forEach { it.completion.await() }
     }
 
-    fun reset(reason: String) {
+    suspend fun cancelAll(reason: String) {
         val active = leases.values.distinct()
         active.forEach { lease ->
             lease.job.cancel(reason)
-            lease.completion.complete(Unit)
         }
-        leases.clear()
+        active.forEach { it.completion.await() }
     }
 }

@@ -46,6 +46,8 @@ class GenerationToolSetFactory(
         workspaceCwd: String? = null,
         runMode: ToolSetRunMode = ToolSetRunMode.NORMAL,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
+        additionalToolsBeforeMcp: List<Tool> = emptyList(),
+        onInvalidMcpServerNames: (List<String>) -> Unit = {},
     ): List<Tool> {
         return buildList {
             if (assistant.enableWebSearch) {
@@ -85,27 +87,34 @@ class GenerationToolSetFactory(
                 )
             }
 
-            mcpManager.getAllAvailableTools(assistant).also { allTools ->
-                val invalidNames = allTools
-                    .map { it.second }
-                    .distinct()
-                    .filter { name -> name.isEmpty() || !name.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' || it == '_' } }
-                if (invalidNames.isNotEmpty()) {
-                    Log.w(TAG, "Invalid MCP tool names: $invalidNames")
-                    return@also
+            addAll(additionalToolsBeforeMcp)
+
+            val allMcpTools = mcpManager.getAllAvailableTools(assistant)
+            val invalidNames = allMcpTools
+                .map { it.second }
+                .distinct()
+                .filter { name ->
+                    name.isEmpty() || !name.all {
+                        it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' || it == '_'
+                    }
                 }
-            }.forEach { (serverId, serverName, tool) ->
-                add(
-                    Tool(
-                        name = "mcp__${serverName}__${tool.name}",
-                        description = tool.description ?: "",
-                        parameters = { tool.inputSchema },
-                        needsApproval = { tool.needsApproval },
-                        execute = {
-                            mcpManager.callTool(serverId, tool.name, it.jsonObject)
-                        },
+            if (invalidNames.isNotEmpty()) {
+                Log.w(TAG, "Invalid MCP tool names: $invalidNames")
+                onInvalidMcpServerNames(invalidNames)
+            } else {
+                allMcpTools.forEach { (serverId, serverName, tool) ->
+                    add(
+                        Tool(
+                            name = "mcp__${serverName}__${tool.name}",
+                            description = tool.description ?: "",
+                            parameters = { tool.inputSchema },
+                            needsApproval = { tool.needsApproval },
+                            execute = {
+                                mcpManager.callTool(serverId, tool.name, it.jsonObject)
+                            },
+                        )
                     )
-                )
+                }
             }
         }.let { tools ->
             if (runMode == ToolSetRunMode.TARGET) {

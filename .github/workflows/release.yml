@@ -39,11 +39,20 @@ jobs:
           SIGNING_CONFIG: ${{ secrets.SIGNING_CONFIG }}
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
-          # 解码 base64 编码的 keystore 文件
-          echo "$KEY_BASE64" | base64 -d > app/app.key
+          if [[ "${{ github.ref_type }}" == "tag" || "${{ inputs.publish_release }}" == "true" ]]; then
+            if [ -z "$KEY_BASE64" ] || [ -z "$SIGNING_CONFIG" ]; then
+              echo "KEY_BASE64 and SIGNING_CONFIG are required when publishing a release" >&2
+              exit 1
+            fi
+          fi
 
-          # 写入签名配置到 local.properties
-          printf '%s\n' "$SIGNING_CONFIG" > local.properties
+          if [ -n "$KEY_BASE64" ]; then
+            printf '%s' "$KEY_BASE64" | base64 -d > app/app.key
+          fi
+
+          if [ -n "$SIGNING_CONFIG" ]; then
+            printf '%s\n' "$SIGNING_CONFIG" > local.properties
+          fi
 
           # 写入 Google Services 配置（如果配置了该 Secret）
           if [ -n "$GOOGLE_SERVICES_JSON" ]; then
@@ -54,6 +63,18 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease
+
+      - name: Verify release APK signatures
+        if: github.ref_type == 'tag' || inputs.publish_release == true
+        run: |
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "apksigner not found" >&2
+            exit 1
+          fi
+          for apk in app/build/outputs/apk/release/*.apk; do
+            "$APKSIGNER" verify --verbose --print-certs "$apk"
+          done
 
       - name: Extract version and changelog
         id: release_info

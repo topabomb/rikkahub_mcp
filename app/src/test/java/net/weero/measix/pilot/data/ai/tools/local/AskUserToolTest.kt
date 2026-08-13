@@ -223,6 +223,40 @@ class AskUserToolTest {
     }
 
     @Test
+    fun `more than four questions are rejected before HITL`() {
+        val args = buildJsonObject {
+            put("questions", buildJsonArray {
+                repeat(5) { index ->
+                    addJsonObject {
+                        put("id", "q$index")
+                        put("question", "Question $index?")
+                    }
+                }
+            })
+        }
+
+        val error = validateAskUserArguments(args)!!
+        assertEquals("questions", error.field)
+        assertEquals("at most 4 items", error.expected)
+    }
+
+    @Test
+    fun `oversized arguments are rejected instead of being truncated`() {
+        val args = buildJsonObject {
+            put("questions", buildJsonArray {
+                addJsonObject {
+                    put("id", "q1")
+                    put("question", "x".repeat(MAX_ASK_USER_INPUT_CHARS))
+                }
+            })
+        }
+
+        val error = validateAskUserArguments(args)!!
+        assertEquals("arguments", error.field)
+        assertEquals("at most $MAX_ASK_USER_INPUT_CHARS characters", error.expected)
+    }
+
+    @Test
     fun `valid arguments must not execute outside HITL`() = runTest {
         val result = runCatching { tool.execute(validTextQuestion()) }
         assertTrue(result.isFailure)

@@ -1,10 +1,14 @@
-﻿package net.weero.measix.pilot.data.ai.mcp
+package net.weero.measix.pilot.data.ai.mcp
 
 import io.modelcontextprotocol.kotlin.sdk.types.Tool
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -52,6 +56,55 @@ class McpConfigTest {
         assertEquals(false, result[0].enable)
         assertEquals(true, result[0].needsApproval)
         assertEquals("updated desc", result[0].description)
+    }
+
+    @Test
+    fun `mergeTools preserves complete MCP JSON Schema`() {
+        val defs = buildJsonObject {
+            put("query", buildJsonObject { put("type", "string") })
+        }
+        val properties = buildJsonObject {
+            put("query", buildJsonObject { put("\$ref", "#/\$defs/query") })
+        }
+        val serverTool = Tool(
+            name = "search",
+            inputSchema = ToolSchema(
+                schema = "https://json-schema.org/draft/2020-12/schema",
+                properties = properties,
+                required = listOf("query"),
+                defs = defs,
+            ),
+        )
+
+        val schema = mergeTools(listOf(serverTool), emptyList()).single().inputSchema!!
+
+        assertEquals("object", schema["type"]?.jsonPrimitive?.content)
+        assertEquals("#/\$defs/query", schema["properties"]!!.jsonObject["query"]!!.jsonObject["\$ref"]!!.jsonPrimitive.content)
+        assertEquals("string", schema["\$defs"]!!.jsonObject["query"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("query", schema["required"]!!.jsonArray.single().jsonPrimitive.content)
+        assertEquals(
+            "https://json-schema.org/draft/2020-12/schema",
+            schema["\$schema"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `legacy cached MCP object schema decodes as canonical JSON object`() {
+        val cached = """
+            {
+              "name": "legacy",
+              "inputSchema": {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"]
+              }
+            }
+        """.trimIndent()
+
+        val decoded = Json.decodeFromString<McpTool>(cached)
+
+        assertEquals("object", decoded.inputSchema!!["type"]!!.jsonPrimitive.content)
+        assertEquals("value", decoded.inputSchema["required"]!!.jsonArray.single().jsonPrimitive.content)
     }
 
     @Test

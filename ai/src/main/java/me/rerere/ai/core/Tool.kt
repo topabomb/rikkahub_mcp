@@ -1,10 +1,13 @@
 package me.rerere.ai.core
 
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -34,9 +37,10 @@ data class ToolExecutionContext(
 data class Tool(
     val name: String,
     val description: String,
-    val parameters: () -> InputSchema? = { null },
+    val parameters: () -> JsonObject? = { null },
     val systemPrompt: (model: Model, messages: List<UIMessage>) -> String = { _, _ -> "" },
     val needsApproval: (JsonElement) -> Boolean = { false },
+    val outputPolicy: ToolOutputPolicy = ToolOutputPolicy.TRUNCATABLE_TEXT,
     val execute: suspend (JsonElement) -> List<UIMessagePart>,
     /**
      * 带 receiver 的 contextual execute，可回写 metadata。
@@ -61,12 +65,29 @@ data class Tool(
     }
 }
 
+/**
+ * Convenience builders for tool input JSON Schema documents.
+ *
+ * [Tool.parameters] deliberately exposes [JsonObject] rather than a closed Kotlin model: JSON
+ * Schema is extensible and MCP tools may use keywords such as `$defs`, `$ref`, or future dialect
+ * additions that the client must preserve losslessly.
+ */
+object InputSchema {
+    @Suppress("FunctionName")
+    fun Obj(
+        properties: JsonObject,
+        required: List<String>? = null,
+    ): JsonObject = buildJsonObject {
+        put("type", "object")
+        put("properties", properties)
+        required?.let { names ->
+            put("required", JsonArray(names.map(::JsonPrimitive)))
+        }
+    }
+}
+
 @Serializable
-sealed class InputSchema {
-    @Serializable
-    @SerialName("object")
-    data class Obj(
-        val properties: JsonObject,
-        val required: List<String>? = null,
-    ) : InputSchema()
+enum class ToolOutputPolicy {
+    TRUNCATABLE_TEXT,
+    PRESERVE,
 }

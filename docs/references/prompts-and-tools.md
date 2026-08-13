@@ -164,8 +164,9 @@ Settings 重算访问范围。
 
 ## 5. 工具描述与参数
 
-装配顺序见 `ChatService` / `GenerationToolSetFactory`：搜索、Local Tools、记忆、最近会话、
-Workspace、技能、Assistant Tools、MCP。Target Run 永久过滤 `assistant_manage`、
+主会话的基础工具装配顺序见 `ChatService`：搜索、Local Tools、最近会话、Workspace、技能、
+Assistant Tools、MCP；记忆工具由 `GenerationHandler` 在每个 step 按当前记忆状态加入。
+Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过滤 `assistant_manage`、
 `assistant_memory_list`、`assistant_call`，保留并桥接 `ask_user`；其余工具按运行开始快照与当前配置的交集在 step 边界重建。
 
 下列 description 为源码中的英文原文（动态日期/时区用占位标明）。
@@ -317,7 +318,7 @@ create：`{"id":N}`。edit / delete：`{"success":true,"id":N}`。
 > Full-text search in past conversations. Use focused keywords; try several queries if needed.
 > Snippets wrap matches in [brackets].
 
-`query` 必填。`limit` 默认 15、最大 50。
+`query` 必填。`limit` 默认 15、最大 50。检索范围与 `recent_chats` 一致，只包含当前 Assistant 的顶层会话，不包含其他 Assistant 或 Child。
 
 ### `workspace_read_file`
 
@@ -408,14 +409,14 @@ unified diff 只进 part metadata，不进发给模型的文本。
 
 ### `mcp__<server>__<tool>`
 
-启用：MCP 服务器已连接。名称、description、参数来自 `tools/list`。
+启用：MCP 服务器已连接。名称、description、参数来自 `tools/list`。输入参数以完整 JSON Schema 文档保存，`$schema`、`$defs`、`$ref` 和未知扩展不会在缓存或通用工具层丢失。
 超时 120 秒。`TextContent` 进文本；`ImageContent` 先存上传文件再转 Image part。
 
 ---
 
 ## 6. 工具输出截断
 
-`GenerationHandler.maybeTruncateToolOutput()`：文本总长超过 `MAX_TOOL_OUTPUT_CHARS` 且助手有 Shell 时，全文写入 `/tool_outputs/<executionId>.txt`，只把 `TOOL_OUTPUT_PREVIEW_CHARS` 控制的预览与读取指引回给模型。无 Shell 时不截断。
+`GenerationHandler.maybeTruncateToolOutput()`：采用 `TRUNCATABLE_TEXT` 的工具在文本总长超过 `MAX_TOOL_OUTPUT_CHARS` 且助手有 Shell 时，全文写入 `/tool_outputs/<executionId>.txt`，只把 `TOOL_OUTPUT_PREVIEW_CHARS` 控制的预览与读取指引回给模型。无 Shell 时不截断。`assistant_call` 使用 `PRESERVE`，其带 `status`、`assistant_name`、`content` 和 `reason` 的结构化 JSON 不会被通用文本截断器破坏。
 
 ---
 

@@ -23,7 +23,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 private const val TAG = "TavilySearchService"
 
 object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
-    override fun parameters(options: SearchServiceOptions.TavilyOptions): InputSchema? =
+    override fun parameters(options: SearchServiceOptions.TavilyOptions): JsonObject? =
         InputSchema.Obj(
             properties = buildJsonObject {
                 put("query", buildJsonObject {
@@ -43,7 +43,7 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
             required = listOf("query")
         )
 
-    override fun scrapingParameters(options: SearchServiceOptions.TavilyOptions): InputSchema? =
+    override fun scrapingParameters(options: SearchServiceOptions.TavilyOptions): JsonObject? =
         InputSchema.Obj(
             properties = buildJsonObject {
                 put("url", buildJsonObject {

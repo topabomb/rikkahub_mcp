@@ -13,6 +13,8 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 
 internal const val ASK_USER_TOOL_NAME = "ask_user"
+internal const val MAX_ASK_USER_INPUT_CHARS = 16 * 1024
+private const val MAX_ASK_USER_QUESTIONS = 4
 
 internal const val ASK_USER_OPTIONS_HINT =
     "options must be an array of strings, e.g. [\"Yes\", \"No\"]. Do not send objects."
@@ -24,6 +26,9 @@ internal data class AskUserArgumentError(
 )
 
 internal fun validateAskUserArguments(args: JsonElement): AskUserArgumentError? {
+    if (args.toString().length > MAX_ASK_USER_INPUT_CHARS) {
+        return AskUserArgumentError("arguments", "at most $MAX_ASK_USER_INPUT_CHARS characters")
+    }
     val obj = args as? JsonObject
         ?: return AskUserArgumentError("arguments", "object")
 
@@ -33,6 +38,9 @@ internal fun validateAskUserArguments(args: JsonElement): AskUserArgumentError? 
         ?: return AskUserArgumentError("questions", "array")
     if (questions.isEmpty()) {
         return AskUserArgumentError("questions", "non-empty array")
+    }
+    if (questions.size > MAX_ASK_USER_QUESTIONS) {
+        return AskUserArgumentError("questions", "at most $MAX_ASK_USER_QUESTIONS items")
     }
 
     val seenIds = mutableSetOf<String>()
@@ -144,6 +152,7 @@ internal fun buildAskUserTool(): Tool = Tool(
                 put("questions", buildJsonObject {
                     put("type", "array")
                     put("minItems", 1)
+                    put("maxItems", MAX_ASK_USER_QUESTIONS)
                     put("description", "List of questions to ask the user")
                     put("items", buildJsonObject {
                         put("type", "object")

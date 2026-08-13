@@ -64,7 +64,7 @@ fun SubAssistantCallCard(
     tool: UIMessagePart.Tool,
     masterConversationId: Uuid?,
     modifier: Modifier = Modifier,
-    onAnswer: ((runId: String, interactionId: String, answer: String) -> Unit)? = null,
+    onAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
 ) {
     val json = JsonInstant
     val metadata = remember(tool.metadata) {
@@ -335,7 +335,7 @@ private fun SubAssistantCallCardFallback(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                text = "assistant_call",
+                text = stringResource(R.string.sub_assistant_call_title),
                 style = MaterialTheme.typography.titleSmall,
             )
             if (tool.isExecuted) {
@@ -402,13 +402,13 @@ internal fun resolveCardStatusLabel(
     else -> stateText
 }
 
-internal fun sanitizeToolNameForDisplay(name: String): String {
+internal fun sanitizeToolNameForDisplay(name: String, fallback: String): String {
     val cleaned = name
         .replace(Regex("[\\p{Cc}\\p{Cf}]+"), " ")
         .replace('_', ' ')
         .replace(Regex("\\s+"), " ")
         .trim()
-    if (cleaned.isBlank()) return "tool"
+    if (cleaned.isBlank()) return fallback
     val codePoints = cleaned.codePoints().limit(64).toArray()
     return buildString {
         codePoints.forEach(::appendCodePoint)
@@ -425,7 +425,10 @@ private fun localizeActiveToolName(name: String): String = when (name) {
     "clipboard_tool" -> stringResource(R.string.assistant_page_local_tools_clipboard_title)
     "calendar_query", "calendar_create" -> stringResource(R.string.assistant_page_local_tools_calendar_title)
     "eval_javascript" -> stringResource(R.string.assistant_page_local_tools_javascript_engine_title)
-    else -> sanitizeToolNameForDisplay(name)
+    else -> sanitizeToolNameForDisplay(
+        name = name,
+        fallback = stringResource(R.string.sub_assistant_tool_unknown),
+    )
 }
 
 // ---- 本地化辅助 ----
@@ -444,6 +447,9 @@ internal fun localizeSubAssistantReason(reason: String): String {
         "provider_error" -> stringResource(R.string.sub_assistant_reason_provider_error)
         "runtime_error" -> stringResource(R.string.sub_assistant_reason_runtime_error)
         "step_limit_reached" -> stringResource(R.string.sub_assistant_reason_step_limit_reached)
+        "interaction_limit_reached" -> stringResource(
+            R.string.sub_assistant_reason_interaction_limit_reached
+        )
         "approval_blocked" -> stringResource(R.string.sub_assistant_reason_approval_blocked)
         "user_cancelled" -> stringResource(R.string.sub_assistant_reason_user_cancelled)
         "app_restarted" -> stringResource(R.string.sub_assistant_reason_app_restarted)
@@ -451,7 +457,7 @@ internal fun localizeSubAssistantReason(reason: String): String {
         "target_disabled" -> stringResource(R.string.sub_assistant_reason_target_disabled)
         "target_access_revoked" -> stringResource(R.string.sub_assistant_reason_target_not_allowed)
         "child_missing" -> stringResource(R.string.sub_assistant_reason_child_missing)
-        else -> reason
+        else -> stringResource(R.string.sub_assistant_reason_unknown)
     }
 }
 
