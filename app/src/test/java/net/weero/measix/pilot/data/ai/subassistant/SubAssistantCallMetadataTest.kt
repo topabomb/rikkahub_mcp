@@ -3,6 +3,8 @@ package net.weero.measix.pilot.data.ai.subassistant
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.rerere.ai.ui.UIMessagePart
@@ -224,6 +226,127 @@ class SubAssistantCallMetadataTest {
             hasNonTextOutput = false,
         )
         assertFalse(result.contains("has_non_text_output"))
+    }
+
+    @Test
+    fun `result includes tool_calls table when counts exist`() {
+        val result = buildSubAssistantCallResult(
+            json = json,
+            status = "completed",
+            assistantName = "Helper",
+            content = "Answer.",
+            toolCalls = listOf("search_web" to 2, "text_to_speech" to 1),
+        )
+        assertTrue(result.contains("\"tool_calls\""))
+        assertTrue(result.contains("\"search_web\""))
+        assertTrue(result.contains("\"text_to_speech\""))
+    }
+
+    @Test
+    fun `result omits tool_calls and tts when empty`() {
+        val result = buildSubAssistantCallResult(
+            json = json,
+            status = "completed",
+            assistantName = "Helper",
+            content = "Answer.",
+        )
+        assertFalse(result.contains("tool_calls"))
+        assertFalse(result.contains("\"tts\""))
+    }
+
+    @Test
+    fun `result includes tts table when spoken texts exist`() {
+        val result = buildSubAssistantCallResult(
+            json = json,
+            status = "failed",
+            assistantName = "Helper",
+            content = "",
+            reason = "runtime_error",
+            ttsTexts = listOf("First spoken.", "Second."),
+        )
+        assertTrue(result.contains("\"tts\""))
+        assertTrue(result.contains("First spoken."))
+        assertTrue(result.contains("Second."))
+        assertFalse(result.contains("assistant_name"))
+    }
+
+    @Test
+    fun `result includes runtime_error detail`() {
+        val result = buildSubAssistantCallResult(
+            json = json,
+            status = "failed",
+            assistantName = "Helper",
+            content = "",
+            reason = "runtime_error",
+            detail = "HttpException: Failed to get response: 429",
+        )
+        assertTrue(result.contains("\"detail\""))
+        assertTrue(result.contains("Failed to get response: 429"))
+    }
+
+    @Test
+    fun `result omits detail unless reason is runtime_error`() {
+        val result = buildSubAssistantCallResult(
+            json = json,
+            status = "failed",
+            assistantName = "Helper",
+            content = "",
+            reason = "step_limit_reached",
+            detail = "should not appear",
+        )
+        assertFalse(result.contains("detail"))
+        assertFalse(result.contains("should not appear"))
+    }
+
+    @Test
+    fun `result includes tts_stats when calls exist`() {
+        val result = buildSubAssistantCallResult(
+            json = json,
+            status = "completed",
+            assistantName = "Helper",
+            content = "Done.",
+            ttsStats = SubAssistantTtsStats(calls = 2, chars = 40),
+        )
+        assertTrue(result.contains("\"tts_stats\""))
+        assertTrue(result.contains("\"calls\":2"))
+        assertTrue(result.contains("\"chars\":40"))
+    }
+
+    @Test
+    fun `result omits tts_stats when there were no calls`() {
+        val result = buildSubAssistantCallResult(
+            json = json,
+            status = "completed",
+            assistantName = "Helper",
+            content = "Done.",
+            ttsStats = SubAssistantTtsStats(calls = 0, chars = 0),
+        )
+        assertFalse(result.contains("tts_stats"))
+    }
+
+    @Test
+    fun `extras parser keeps known values and ignores unknown`() {
+        val raw = buildJsonArray {
+            add(JsonPrimitive("TTS"))
+            add(JsonPrimitive("tool_calls"))
+            add(JsonPrimitive("preview"))
+        }
+        assertEquals(
+            setOf(ASSISTANT_CALL_EXTRA_TTS, ASSISTANT_CALL_EXTRA_TOOL_CALLS),
+            parseAssistantCallExtras(raw),
+        )
+    }
+
+    @Test
+    fun `extras parser treats missing or invalid input as none`() {
+        assertTrue(parseAssistantCallExtras(null).isEmpty())
+        assertTrue(parseAssistantCallExtras(JsonPrimitive("tts")).isEmpty())
+        assertTrue(parseAssistantCallExtrasFromInput("not-json").isEmpty())
+        assertTrue(parseAssistantCallExtrasFromInput("""{"request":"hi"}""").isEmpty())
+        assertEquals(
+            setOf(ASSISTANT_CALL_EXTRA_TTS),
+            parseAssistantCallExtrasFromInput("""{"extras":["tts"]}"""),
+        )
     }
 
     // ---- buildInitialSubAssistantCallMetadata ----

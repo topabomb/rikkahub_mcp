@@ -37,6 +37,9 @@ import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantUserInteraction
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantRunStateReducer
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantRunSpecResolution
+import net.weero.measix.pilot.data.ai.subassistant.ASSISTANT_CALL_EXTRA_TOOL_CALLS
+import net.weero.measix.pilot.data.ai.subassistant.ASSISTANT_CALL_EXTRA_TTS
+import net.weero.measix.pilot.data.ai.subassistant.SubAssistantTtsStats
 import net.weero.measix.pilot.data.ai.subassistant.buildInitialSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.buildSubAssistantCallResult
 import net.weero.measix.pilot.data.ai.subassistant.computeSubAssistantPreview
@@ -44,6 +47,7 @@ import net.weero.measix.pilot.data.ai.subassistant.computeTerminalPreview
 import net.weero.measix.pilot.data.ai.subassistant.intersectTargetToolCapabilities
 import net.weero.measix.pilot.data.ai.subassistant.cloneLineagePrefix
 import net.weero.measix.pilot.data.ai.subassistant.findPreviousCallMetadata
+import net.weero.measix.pilot.data.ai.subassistant.formatRuntimeErrorDetail
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.resolveLineage
@@ -174,6 +178,7 @@ class SubAssistantCoordinator(
         task: String,
         execContext: ToolExecutionContext,
         turnTtsContext: TtsToolPlaybackContext? = null,
+        extras: Set<String> = emptySet(),
     ): List<UIMessagePart> {
         val settings = settingsStore.settingsFlow.value
         val targetAssistant = settings.getAssistantById(targetAssistantId)
@@ -417,14 +422,14 @@ class SubAssistantCoordinator(
                         reason = "step_limit_reached",
                     )
                     reportMetadataPatch(execContext, terminalMeta, checkpoint = false)
-                    val resultJson = buildSubAssistantCallResult(
-                        json = json,
+                    return buildCallResultParts(
                         status = "failed",
                         assistantName = target.name,
-                        content = "",
                         reason = "step_limit_reached",
+                        messages = genResult.messages,
+                        childTaskNodeId = childTaskNodeId,
+                        extras = extras,
                     )
-                    return listOf(UIMessagePart.Text(resultJson))
                 }
                 FinishedReason.INTERACTION_LIMIT_REACHED -> {
                     val terminalMeta = runState.updateTerminalState(
@@ -432,14 +437,14 @@ class SubAssistantCoordinator(
                         reason = "interaction_limit_reached",
                     )
                     reportMetadataPatch(execContext, terminalMeta, checkpoint = false)
-                    val resultJson = buildSubAssistantCallResult(
-                        json = json,
+                    return buildCallResultParts(
                         status = "failed",
                         assistantName = target.name,
-                        content = "",
                         reason = "interaction_limit_reached",
+                        messages = genResult.messages,
+                        childTaskNodeId = childTaskNodeId,
+                        extras = extras,
                     )
-                    return listOf(UIMessagePart.Text(resultJson))
                 }
                 FinishedReason.AWAITING_APPROVAL -> {
                     // 只有无法桥接 Pending ask_user 或达到交互上限时才会返回到这里。
@@ -448,14 +453,14 @@ class SubAssistantCoordinator(
                         reason = "approval_blocked",
                     )
                     reportMetadataPatch(execContext, terminalMeta, checkpoint = false)
-                    val resultJson = buildSubAssistantCallResult(
-                        json = json,
+                    return buildCallResultParts(
                         status = "failed",
                         assistantName = target.name,
-                        content = "",
                         reason = "approval_blocked",
+                        messages = genResult.messages,
+                        childTaskNodeId = childTaskNodeId,
+                        extras = extras,
                     )
-                    return listOf(UIMessagePart.Text(resultJson))
                 }
                 else -> {
                     // COMPLETED 或 null（兼容旧路径）
@@ -469,14 +474,15 @@ class SubAssistantCoordinator(
                     )
                     reportMetadataPatch(execContext, terminalMeta, checkpoint = false)
 
-                    val resultJson = buildSubAssistantCallResult(
-                        json = json,
+                    return buildCallResultParts(
                         status = "completed",
                         assistantName = target.name,
                         content = finalText,
                         hasNonTextOutput = hasNonTextOutput,
+                        messages = genResult.messages,
+                        childTaskNodeId = childTaskNodeId,
+                        extras = extras,
                     )
-                    return listOf(UIMessagePart.Text(resultJson))
                 }
             }
 
@@ -493,14 +499,14 @@ class SubAssistantCoordinator(
             )
             finalizeInterruptedRun(childConversationId, cancelReason, execContext, terminalMeta)
             if (masterCancelled) throw e
-            val resultJson = buildSubAssistantCallResult(
-                json = json,
+            return buildCallResultParts(
                 status = "stopped",
                 assistantName = target.name,
-                content = "",
                 reason = cancelReason,
+                messages = childRunMessages(childConversationId),
+                childTaskNodeId = childTaskNodeId,
+                extras = extras,
             )
-            return listOf(UIMessagePart.Text(resultJson))
 
         } catch (e: Exception) {
             Log.e(TAG, "Target generation failed", e)
@@ -510,14 +516,15 @@ class SubAssistantCoordinator(
             )
             finalizeInterruptedRun(childConversationId, "runtime_error", execContext, terminalMeta)
 
-            val resultJson = buildSubAssistantCallResult(
-                json = json,
+            return buildCallResultParts(
                 status = "failed",
                 assistantName = target.name,
-                content = "",
                 reason = "runtime_error",
+                detail = formatRuntimeErrorDetail(e),
+                messages = childRunMessages(childConversationId),
+                childTaskNodeId = childTaskNodeId,
+                extras = extras,
             )
-            return listOf(UIMessagePart.Text(resultJson))
 
         } finally {
             settingsWatcher.cancel()
@@ -1081,12 +1088,41 @@ class SubAssistantCoordinator(
             reason = reason,
         )
         reportMetadataPatch(execContext, metadata, checkpoint = false)
-        val resultJson = buildSubAssistantCallResult(
-            json = json,
+        return buildCallResultParts(
             status = "unavailable",
             assistantName = assistantName,
-            content = "",
             reason = reason,
+        )
+    }
+
+    private fun childRunMessages(childConversationId: Uuid): List<UIMessage> {
+        return sessionRegistry.getSession(childConversationId)?.state?.value?.currentMessages
+            ?: emptyList()
+    }
+
+    private fun buildCallResultParts(
+        status: String,
+        assistantName: String,
+        content: String = "",
+        reason: String? = null,
+        detail: String? = null,
+        hasNonTextOutput: Boolean = false,
+        messages: List<UIMessage> = emptyList(),
+        childTaskNodeId: Uuid? = null,
+        extras: Set<String> = emptySet(),
+    ): List<UIMessagePart> {
+        val outputs = collectSubAssistantCallOutputs(messages, childTaskNodeId, extras)
+        val resultJson = buildSubAssistantCallResult(
+            json = json,
+            status = status,
+            assistantName = assistantName,
+            content = content,
+            reason = reason,
+            detail = detail,
+            hasNonTextOutput = hasNonTextOutput,
+            toolCalls = outputs.toolCalls,
+            ttsTexts = outputs.ttsTexts,
+            ttsStats = outputs.ttsStats,
         )
         return listOf(UIMessagePart.Text(resultJson))
     }
@@ -1166,6 +1202,92 @@ private fun messagesInRunRange(
     }
     return messages.subList(startIndex, endIndex)
 }
+
+internal data class SubAssistantCallCollectedOutputs(
+    val toolCalls: List<Pair<String, Int>> = emptyList(),
+    val ttsTexts: List<String> = emptyList(),
+    val ttsStats: SubAssistantTtsStats? = null,
+)
+
+internal fun collectSubAssistantCallOutputs(
+    messages: List<UIMessage>,
+    childTaskNodeId: Uuid?,
+    extras: Set<String>,
+): SubAssistantCallCollectedOutputs {
+    if (childTaskNodeId == null) return SubAssistantCallCollectedOutputs()
+    val range = messagesInRunRange(messages, childTaskNodeId) ?: return SubAssistantCallCollectedOutputs()
+
+    val needToolCalls = ASSISTANT_CALL_EXTRA_TOOL_CALLS in extras
+    val needTtsTexts = ASSISTANT_CALL_EXTRA_TTS in extras
+    val toolCounts = if (needToolCalls) linkedMapOf<String, Int>() else null
+    val ttsTexts = if (needTtsTexts) mutableListOf<String>() else null
+    var ttsCalls = 0
+    var ttsChars = 0
+
+    for (message in range) {
+        for (part in message.parts) {
+            if (part !is UIMessagePart.Tool) continue
+            toolCounts?.let { counts ->
+                counts[part.toolName] = (counts[part.toolName] ?: 0) + 1
+            }
+            if (part.toolName != "text_to_speech") continue
+            // 次数按发出计；空白或无法解析的入参不计字符，也不进入 extras 文本表。
+            ttsCalls++
+            val text = parseTtsInputText(part.input)
+            if (text != null) {
+                ttsChars += text.length
+                ttsTexts?.add(text)
+            }
+        }
+    }
+
+    return SubAssistantCallCollectedOutputs(
+        toolCalls = toolCounts?.map { it.key to it.value }.orEmpty(),
+        ttsTexts = ttsTexts.orEmpty(),
+        ttsStats = if (ttsCalls > 0) SubAssistantTtsStats(calls = ttsCalls, chars = ttsChars) else null,
+    )
+}
+
+/**
+ * 本次 run 范围内每个工具名的发出次数，按首次出现顺序。
+ */
+internal fun collectRunToolCalls(
+    messages: List<UIMessage>,
+    childTaskNodeId: Uuid,
+): List<Pair<String, Int>> = collectSubAssistantCallOutputs(
+    messages = messages,
+    childTaskNodeId = childTaskNodeId,
+    extras = setOf(ASSISTANT_CALL_EXTRA_TOOL_CALLS),
+).toolCalls
+
+/**
+ * 本次 run 范围内 `text_to_speech` 入参 text，按调用顺序；空白或无法解析的跳过。
+ */
+internal fun collectRunTtsTexts(
+    messages: List<UIMessage>,
+    childTaskNodeId: Uuid,
+): List<String> = collectSubAssistantCallOutputs(
+    messages = messages,
+    childTaskNodeId = childTaskNodeId,
+    extras = setOf(ASSISTANT_CALL_EXTRA_TTS),
+).ttsTexts
+
+/**
+ * 本次 run 范围内 `text_to_speech` 的调用次数，以及可解析朗读文本的字符合计。
+ */
+internal fun collectRunTtsStats(
+    messages: List<UIMessage>,
+    childTaskNodeId: Uuid,
+): SubAssistantTtsStats? = collectSubAssistantCallOutputs(
+    messages = messages,
+    childTaskNodeId = childTaskNodeId,
+    extras = emptySet(),
+).ttsStats
+
+private fun parseTtsInputText(input: String): String? = runCatching {
+    val obj = kotlinx.serialization.json.Json.parseToJsonElement(input) as? JsonObject
+    obj?.get("text")?.let { it as? JsonPrimitive }?.content?.trim()
+}.getOrNull()?.takeIf { it.isNotEmpty() }
 
 private val SUB_ASSISTANT_SIDE_EFFECT_TOOLS = setOf("text_to_speech")
 

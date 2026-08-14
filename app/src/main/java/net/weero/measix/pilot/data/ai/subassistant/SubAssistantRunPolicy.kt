@@ -33,12 +33,14 @@ fun filterTargetLocalTools(tools: List<LocalToolOption>): List<LocalToolOption> 
 
 /**
  * 过滤 Target 的 Tool 列表：
- * - 移除 assistant_manage、assistant_call、assistant_memory_list 工具。
+ * - 移除 assistant_manage、assistant_call、assistant_inspect。
+ * - 同时过滤已更名的 assistant_memory_list，避免历史记录诱使模型再发出旧名。
  */
 fun filterTargetTools(tools: List<Tool>): List<Tool> {
     val forbiddenNames = setOf(
         "assistant_manage",
         "assistant_call",
+        "assistant_inspect",
         "assistant_memory_list",
     )
     return tools.filter { it.name !in forbiddenNames }
@@ -233,7 +235,8 @@ fun validateReadiness(
  * 构建工具创建的子助手模板。
  *
  * Local Tools 与 UI 新建的默认 Assistant 保持一致；Target Run 仍会在运行时过滤
- * assistant_manage、assistant_call 和 assistant_memory_list；ask_user 由 Coordinator 传导到主聊天。
+ * assistant_manage、assistant_call、assistant_inspect 和历史名 assistant_memory_list；
+ * ask_user 由 Coordinator 传导到主聊天。
  */
 fun buildToolCreatedAssistant(
     name: String,

@@ -10,28 +10,30 @@
 
 ### 新增
 
-- **子助手同步委托**：新增 `assistant_manage`、`assistant_memory_list`、`assistant_call`；主助手可通过动态 Catalog 和显式/全局授权把完整任务交给 Target，Target 在独立持久化的 Child Conversation 中沿当前 Master 分支连续工作
-- **可恢复执行与交互**：Room v4 持久化 Child 关系和 run/lineage/checkpoint/交互状态，支持启动恢复、Fork/分支保留、孤儿清理和 durable 删除；主聊天提供调用卡片、Target `ask_user` 回答区与只读 Child 详情
-- **通用生成原语**：生成管线增加 `messageId + toolOrdinal` locator、phase/checkpoint/finished 事件、动态工具提供器和非交互审批策略
+- **子助手同步委托**：`assistant_manage`、`assistant_inspect`、`assistant_call`。主助手按 Catalog 与授权把任务交给 Target，Target 在独立 Child 会话中工作。`assistant_inspect` 按需查看人设、工具名、技能和局部记忆；`assistant_call` 默认回传 `tts_stats`，完整 `tts` / `tool_calls` 由 `extras` 按需返回，`runtime_error` 另带回裁剪后的 `detail`。`assistant_manage` 的 CREATE 不审批，UPDATE/DELETE 必须审批；管理结果只回 `action` 与 `id`
+- **可恢复执行与交互**：Room v4 持久化 Child / run / 交互；支持启动恢复、Fork、孤儿清理和 durable 删除；主聊天有调用卡片、`ask_user` 与只读详情
+- **通用生成原语**：`messageId + toolOrdinal` locator、phase/checkpoint/finished、动态工具集、非交互审批
+- **模型与搜索**：注册 qwen-3.8-max、mimo v3、Claude 5、muse；搜索为关 / 本地 / 模型内置
 
 ### 修复
 
-- **ask_user 与调用卡片**：对象型 `options` 不再弹出空提问框；非法参数在审批门口拒绝；回答只在服务端真正收下后锁定按钮；交互轮次上限与 step 上限分开；Child 链接尚未写入时详情不再误判不可用；未知失败原因完成本地化
-- **启动恢复竞态**：恢复完成前禁止发送、删除、置顶和会话写入；历史/调试入口统一经 ChatService；中断收口时 Child 超时不再丢掉 Master 终态 metadata；恢复扫描只加载顶层会话和被引用的 Child
-- **协议与工具 Schema**：Claude 仅对支持的模型启用 adaptive thinking，旧模型使用合法 manual budget，3.5 Sonnet 去掉误标的 reasoning；DeepSeek Chat/Responses 分别映射当前端点接受的 effort；MCP 完整保留 `$defs/$ref/$schema`，非法工具名不再让整批 MCP 工具静默消失；结构化工具结果可按策略免截断
-- **搜索、lineage 与数据一致性**：`conversation_search` 按当前助手隔离且不含 Child；lineage 按当前选中分支判断后续 USER 任务；Settings 写入成功后才发布；Assistant 编辑使用最新快照；Memory 执行前重验 owner/namespace；删除超时保留 tombstone
-- **TTS、预览与定位**：Master/Target 共用同一 turn 的 TTS 顺序状态，修正跨 step 打断和来源残留；预览按 grapheme 裁剪；终态答案、非文本结果和 checkpoint 保持顺序；工具审批/合并不再依赖可能为空或重复的 Provider `toolCallId`
-- **更新与发行**：更新下载错误与通知说明完成本地化；正式 GitHub Release 强制要求签名 Secrets，并在上传前逐个执行 `apksigner verify`
+- **ask_user 与卡片**：非法参数在审批门口拒绝；回答只在服务端收下后锁定；交互与 step 上限分开；Child 未写入时详情不再误判不可用
+- **启动恢复**：恢复完成前禁止会话写入；中断收口时 Child 超时不丢掉 Master 终态；扫描只加载顶层会话和被引用的 Child
+- **协议与工具 Schema**：Claude / DeepSeek reasoning 按端点映射；MCP 保留 `$defs/$ref/$schema`；结构化工具结果可免截断
+- **隔离与一致性**：`conversation_search` 不含 Child；lineage 按当前选中分支；Settings 写入成功后才发布；Memory 执行前重验 owner
+- **TTS 与定位**：Master/Target 共用 turn 播放队列；工具审批不再依赖可能为空的 Provider `toolCallId`
+- **更新与发行**：下载错误完成本地化；正式 Release 强制签名校验
 
 ### 变更
 
-- Target 显式模型优先；未绑定时只在调用期继承 Caller 的有效模型参数。Target 复用完整 Transformer、裁剪、Provider 和工具循环，同时禁止管理/递归委托，按“运行快照 ∩ 当前配置”处理撤权
-- 工具参数统一为完整 JSON Schema 文档，由各 Provider 适配；ChatService 统一经 `GenerationToolSetFactory` 装配工具
+- Target 显式模型优先，未绑定则调用期继承 Caller；禁止再委托；撤权按快照 ∩ 当前配置
+- 工具参数为完整 JSON Schema；ChatService 经 `GenerationToolSetFactory` 装配
 
 ### 文档与测试
 
-- 移除实现阶段设计稿，新增 [子助手架构与执行流程参考](../references/sub-assistant-architecture.md) 和 [提示词、上下文注入与工具描述](../references/prompts-and-tools.md)，并按当前实现校准全部参考文档
-- 补充子助手访问、状态、恢复、数据清理、Memory/TTS、配置兼容、Room migration/DAO，以及 Provider reasoning 映射的回归测试
+- 新增 [子助手架构与执行流程参考](../references/sub-assistant-architecture.md) 和 [提示词、上下文注入与工具描述](../references/prompts-and-tools.md)
+- 补充子助手、恢复、Memory/TTS、Room 与 Provider reasoning 回归测试
+- 第 11 批上游同步记录见 [upstream-sync.md](upstream-sync.md)
 
 ---
 

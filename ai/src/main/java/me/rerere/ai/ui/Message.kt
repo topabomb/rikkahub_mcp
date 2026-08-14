@@ -286,12 +286,15 @@ data class UIMessage(
     }
 }
 
+/** True for a finished image URL; raw base64 fragments return false so they can be concatenated. */
 internal fun isCompleteImageUrl(url: String): Boolean {
     val value = url.trim()
     return value.startsWith("data:", ignoreCase = true) ||
         value.startsWith("http://", ignoreCase = true) ||
         value.startsWith("https://", ignoreCase = true) ||
-        value.startsWith("file:", ignoreCase = true)
+        value.startsWith("file:", ignoreCase = true) ||
+        value.startsWith("content:", ignoreCase = true) ||
+        value.startsWith("android.resource:", ignoreCase = true)
 }
 
 internal fun renderableImageUrl(url: String, mimeType: String = "image/png"): String {

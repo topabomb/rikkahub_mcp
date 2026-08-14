@@ -114,6 +114,7 @@ val appModule = module {
             assistantManagementService = get(),
             json = get(),
             subAssistantCoordinator = get(),
+            toolSetFactory = get(),
         )
     }
 

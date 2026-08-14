@@ -34,6 +34,19 @@ class AutoTitleGenerationTest {
     }
 
     @Test
+    fun `existing title wins over in-flight for non-force requests`() {
+        assertEquals(
+            AutoTitleGenerationDecision.SkipHasTitle,
+            decideAutoTitleGeneration(
+                force = false,
+                titleBlank = false,
+                inFlight = true,
+                attempts = 0,
+            ),
+        )
+    }
+
+    @Test
     fun `in-flight request wins over force and blank title`() {
         assertEquals(
             AutoTitleGenerationDecision.SkipInFlight,
@@ -121,6 +134,23 @@ class AutoTitleGenerationTest {
         )
 
         assertEquals(AutoTitleRetry(force = false), tracker.end(conversationId))
+        assertNull(tracker.end(conversationId))
+    }
+
+    @Test
+    fun `auto request against existing title does not queue retry while another request is in-flight`() {
+        val tracker = AutoTitleGenerationTracker()
+        val conversationId = Uuid.random()
+
+        assertEquals(
+            AutoTitleGenerationDecision.Proceed,
+            tracker.begin(conversationId, force = true, titleBlank = false),
+        )
+        assertEquals(
+            AutoTitleGenerationDecision.SkipHasTitle,
+            tracker.begin(conversationId, force = false, titleBlank = false),
+        )
+
         assertNull(tracker.end(conversationId))
     }
 

@@ -7,6 +7,9 @@ import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -21,6 +24,8 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.AssistantManagementService
 import net.weero.measix.pilot.service.SubAssistantCoordinator
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
 
@@ -40,7 +45,7 @@ class AssistantCallToolTest {
         description = "Target",
     )
 
-    private fun createTool(coordinator: SubAssistantCoordinator): me.rerere.ai.core.Tool {
+    private fun createTool(coordinator: SubAssistantCoordinator?): me.rerere.ai.core.Tool {
         val settingsFlow = MutableStateFlow(
             Settings(
                 assistants = listOf(caller, target),
@@ -69,6 +74,44 @@ class AssistantCallToolTest {
     fun `assistant call preserves its structured JSON result`() {
         val tool = createTool(mockk(relaxed = true))
         assertEquals(ToolOutputPolicy.PRESERVE, tool.outputPolicy)
+    }
+
+    @Test
+    fun `assistant call description keeps isolation guidance`() {
+        val tool = createTool(mockk(relaxed = true))
+        assertTrue(tool.description.contains("Do not prescribe how it must work"))
+        assertFalse(tool.description.contains("concise, high-value reply"))
+        val requestDescription = tool.parameters()!!["properties"]!!
+            .jsonObject["request"]!!
+            .jsonObject["description"]!!
+            .jsonPrimitive
+            .content
+        assertTrue(requestDescription.contains("It cannot see this chat"))
+        assertTrue(requestDescription.contains("concise, high-value reply is usually enough"))
+        val extrasDescription = tool.parameters()!!["properties"]!!
+            .jsonObject["extras"]!!
+            .jsonObject["description"]!!
+            .jsonPrimitive
+            .content
+        assertTrue(extrasDescription.contains("Extra result content"))
+        assertTrue(extrasDescription.contains("tts"))
+        assertTrue(extrasDescription.contains("tool_calls"))
+    }
+
+    @Test
+    fun `missing coordinator returns runtime_error with detail`() = runTest {
+        val tool = createTool(null)
+        val result = tool.executeWithContext(
+            executionContext(),
+            buildJsonObject {
+                put("assistant_id", targetId.toString())
+                put("request", "Do the work")
+            },
+        )
+        val payload = Json.parseToJsonElement((result.single() as UIMessagePart.Text).text).jsonObject
+        assertEquals("failed", payload["status"]?.jsonPrimitive?.content)
+        assertEquals("runtime_error", payload["reason"]?.jsonPrimitive?.content)
+        assertTrue(payload["detail"]?.jsonPrimitive?.content?.contains("coordinator") == true)
     }
 
     @Test
@@ -115,6 +158,48 @@ class AssistantCallToolTest {
         assertEquals(expected, result)
         coVerify(exactly = 1) {
             coordinator.executeCall(callerId, masterConversationId, targetId, "Do the work", any())
+        }
+    }
+
+    @Test
+    fun `extras are forwarded and unknown values dropped`() = runTest {
+        val coordinator = mockk<SubAssistantCoordinator>()
+        val tool = createTool(coordinator)
+        val expected = listOf(UIMessagePart.Text("done"))
+        coEvery {
+            coordinator.executeCall(
+                callerAssistantId = callerId,
+                masterConversationId = masterConversationId,
+                targetAssistantId = targetId,
+                task = "Speak",
+                execContext = any(),
+                extras = setOf("tts", "tool_calls"),
+            )
+        } returns expected
+
+        val result = tool.executeWithContext(
+            executionContext(),
+            buildJsonObject {
+                put("assistant_id", targetId.toString())
+                put("request", "Speak")
+                put("extras", buildJsonArray {
+                    add(JsonPrimitive("tts"))
+                    add(JsonPrimitive("tool_calls"))
+                    add(JsonPrimitive("preview"))
+                })
+            },
+        )
+
+        assertEquals(expected, result)
+        coVerify(exactly = 1) {
+            coordinator.executeCall(
+                callerAssistantId = callerId,
+                masterConversationId = masterConversationId,
+                targetAssistantId = targetId,
+                task = "Speak",
+                execContext = any(),
+                extras = setOf("tts", "tool_calls"),
+            )
         }
     }
 }

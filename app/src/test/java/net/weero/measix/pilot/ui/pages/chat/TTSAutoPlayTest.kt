@@ -45,6 +45,25 @@ class TTSAutoPlayTest {
     }
 
     @Test
+    fun `auto play skips when text_to_speech already executed`() {
+        val spoken = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Text("The answer is 42."),
+                UIMessagePart.Tool(
+                    toolCallId = "tts-1",
+                    toolName = "text_to_speech",
+                    input = """{"text":"The answer is 42."}""",
+                    output = listOf(UIMessagePart.Text("""{"success":true}""")),
+                ),
+            ),
+        )
+        val conversation = conversationWith(spoken)
+
+        assertFalse(shouldAutoPlayTts(conversation.id, conversation))
+    }
+
+    @Test
     fun `auto play appends to same turn only when sequential setting is enabled`() {
         assertFalse(autoPlayReplacesWithinTurn("turn-1", sequentialEnabled = true))
         assertTrue(autoPlayReplacesWithinTurn("turn-1", sequentialEnabled = false))

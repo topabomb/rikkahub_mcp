@@ -3,6 +3,9 @@ package net.weero.measix.pilot.service
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.data.ai.subassistant.ASSISTANT_CALL_EXTRA_TOOL_CALLS
+import net.weero.measix.pilot.data.ai.subassistant.ASSISTANT_CALL_EXTRA_TTS
+import net.weero.measix.pilot.data.ai.subassistant.SubAssistantTtsStats
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -241,6 +244,99 @@ class SubAssistantFinalAnswerTest {
 
         val result = extractFinalAnswerInternal(messages, childTaskNodeId)
         assertEquals("The complete answer is 42.", result)
+    }
+
+    // ---- collectRunToolCalls / collectRunTtsTexts ----
+
+    @Test
+    fun `tool calls count each issued name in first-seen order`() {
+        val messages = listOf(
+            taskMessage("do something"),
+            assistantMessage(
+                executedTool("search_web"),
+                executedTool("search_web"),
+                pendingTool("ask_user"),
+            ),
+            assistantMessage(executedTool("text_to_speech")),
+        )
+        assertEquals(
+            listOf("search_web" to 2, "ask_user" to 1, "text_to_speech" to 1),
+            collectRunToolCalls(messages, childTaskNodeId),
+        )
+    }
+
+    @Test
+    fun `tool calls ignore the next user task`() {
+        val messages = listOf(
+            taskMessage("first"),
+            assistantMessage(executedTool("search_web")),
+            userMessage("second"),
+            assistantMessage(executedTool("memory_tool")),
+        )
+        assertEquals(
+            listOf("search_web" to 1),
+            collectRunToolCalls(messages, childTaskNodeId),
+        )
+    }
+
+    @Test
+    fun `tts texts follow call order and skip blank input`() {
+        val spoken = UIMessagePart.Tool(
+            toolCallId = "tts-1",
+            toolName = "text_to_speech",
+            input = """{"text":"Hello there."}""",
+            output = listOf(UIMessagePart.Text("""{"success":true}""")),
+        )
+        val blank = UIMessagePart.Tool(
+            toolCallId = "tts-2",
+            toolName = "text_to_speech",
+            input = """{"text":"  "}""",
+        )
+        val second = UIMessagePart.Tool(
+            toolCallId = "tts-3",
+            toolName = "text_to_speech",
+            input = """{"text":"Second line."}""",
+        )
+        val messages = listOf(
+            taskMessage("speak"),
+            assistantMessage(spoken, blank, executedTool("search_web"), second),
+        )
+        assertEquals(
+            listOf("Hello there.", "Second line."),
+            collectRunTtsTexts(messages, childTaskNodeId),
+        )
+        assertEquals(
+            SubAssistantTtsStats(calls = 3, chars = "Hello there.".length + "Second line.".length),
+            collectRunTtsStats(messages, childTaskNodeId),
+        )
+    }
+
+    @Test
+    fun `optional extras omit bulky tables by default`() {
+        val messages = listOf(
+            taskMessage("speak"),
+            assistantMessage(
+                executedTool("search_web"),
+                UIMessagePart.Tool(
+                    toolCallId = "tts-1",
+                    toolName = "text_to_speech",
+                    input = """{"text":"Hello there."}""",
+                ),
+            ),
+        )
+        val none = collectSubAssistantCallOutputs(messages, childTaskNodeId, emptySet())
+        assertTrue(none.toolCalls.isEmpty())
+        assertTrue(none.ttsTexts.isEmpty())
+        assertEquals(SubAssistantTtsStats(calls = 1, chars = "Hello there.".length), none.ttsStats)
+
+        val requested = collectSubAssistantCallOutputs(
+            messages,
+            childTaskNodeId,
+            setOf(ASSISTANT_CALL_EXTRA_TTS, ASSISTANT_CALL_EXTRA_TOOL_CALLS),
+        )
+        assertEquals(listOf("search_web" to 1, "text_to_speech" to 1), requested.toolCalls)
+        assertEquals(listOf("Hello there."), requested.ttsTexts)
+        assertEquals(none.ttsStats, requested.ttsStats)
     }
 
     // ---- checkNonTextOutputInternal ----

@@ -27,9 +27,10 @@ internal fun decideAutoTitleGeneration(
     attempts: Int,
     maxAttempts: Int = MAX_AUTO_TITLE_GENERATION_ATTEMPTS,
 ): AutoTitleGenerationDecision {
+    // 非强制且已有标题时直接跳过，避免进行中的请求把自动重试记进 pending。
+    if (!force && !titleBlank) return AutoTitleGenerationDecision.SkipHasTitle
     if (inFlight) return AutoTitleGenerationDecision.SkipInFlight
     if (force) return AutoTitleGenerationDecision.Proceed
-    if (!titleBlank) return AutoTitleGenerationDecision.SkipHasTitle
     if (attempts >= maxAttempts) return AutoTitleGenerationDecision.SkipAttemptsExhausted
     return AutoTitleGenerationDecision.Proceed
 }

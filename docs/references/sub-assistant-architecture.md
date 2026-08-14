@@ -46,7 +46,7 @@ Target.allowAsSubAssistant
 
 `AssistantCatalogBuilder` 从当前 Settings 和 `SubAssistantAccessPolicy` 动态构建 Catalog。Catalog 使用带 `header` 与 `rows` 的紧凑 JSON，并置于 `<sub_assistant_catalog>` 边界中；执行期仍重新读取 Settings，不把提示词中的 Catalog 当作授权凭据。
 
-`AssistantManagement` 与 `AssistantDelegation` 是独立 Local Tool 权限。前者注册 `assistant_manage`、`assistant_memory_list`，后者注册 `assistant_call`。工具创建的新 Target 会原子加入 Caller 的 `allowedSubAssistantIds`。
+`AssistantManagement` 与 `AssistantDelegation` 是独立 Local Tool 权限。前者注册 `assistant_manage`、`assistant_inspect`，后者注册 `assistant_call`。工具创建的新 Target 会原子加入 Caller 的 `allowedSubAssistantIds`。
 
 ### 模型解析
 
@@ -143,7 +143,7 @@ Target 复用通用 `GenerationHandler`，不是独立的简化模型循环。�
 
 完成态优先取最终 ASSISTANT step 中最后一个工作工具之后的顶层 Text。`text_to_speech` 等副作用工具不切断答案；最终 step 没有可见文本时向更早 step 回退。最终 step 若含 Image、Document、Audio 或 Video，则设置 `has_non_text_output`。
 
-只有 `completed` 返回 `assistant_name` 和 `content`。其他终态只返回状态与稳定 reason，避免让 Caller 把半成品当作成功结果。
+只有 `completed` 返回 `assistant_name` 和 `content`。其他终态只返回状态与稳定 reason，避免让 Caller 把半成品当作成功结果。`runtime_error` 另带提炼后的 `detail`。调用过 `text_to_speech` 时默认带 `tts_stats`（次数与朗读字符合计）；完整 `tool_calls` 计数表和朗读文本表 `tts` 只在 Caller 通过 `extras` 点名后返回。
 
 ## 6. Target 工具与运行中撤权
 
@@ -151,7 +151,7 @@ Target 每个模型 step 都重新构建工具集。有效工具能力是“调�
 
 以下边界始终成立：
 
-- `AssistantManagement`、`AssistantDelegation` 以及注册名 `assistant_manage`、`assistant_memory_list`、`assistant_call` 永久从 Target Run 过滤。
+- `AssistantManagement`、`AssistantDelegation` 以及注册名 `assistant_manage`、`assistant_inspect`、`assistant_call` 永久从 Target Run 过滤；历史名 `assistant_memory_list` 一并过滤。
 - 除 `ask_user` 外，所有需审批工具在非交互 Target 模式返回 `tool_not_permitted`。
 - `ask_user` 由 Coordinator 按 Child `messageId + toolOrdinal` 持久化到 Master 卡片；回答也用 `run_id + interaction_id` 精确匹配，防止重复或过期提交。
 - `ask_user` 只接受满足 Schema 数量和大小上限的完整 JSON 入参；无效或过大的入参会在进入等待态前失败，不会截断后持久化。交互轮次上限与模型 step 上限使用不同终态 reason。

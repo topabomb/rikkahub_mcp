@@ -3,6 +3,7 @@ package net.weero.measix.pilot.data.ai.subassistant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -129,8 +130,42 @@ fun buildInitialSubAssistantCallMetadata(
     state = SubAssistantCallState.STARTING,
 )
 
+internal const val ASSISTANT_CALL_EXTRA_TTS = "tts"
+internal const val ASSISTANT_CALL_EXTRA_TOOL_CALLS = "tool_calls"
+
+private val ASSISTANT_CALL_EXTRAS = setOf(
+    ASSISTANT_CALL_EXTRA_TTS,
+    ASSISTANT_CALL_EXTRA_TOOL_CALLS,
+)
+
+/** 本次 run 的 TTS 调用次数与朗读字符合计；有调用才写入结果。 */
+data class SubAssistantTtsStats(
+    val calls: Int,
+    val chars: Int,
+)
+
+/**
+ * 解析 `extras`：只保留约定项，忽略未知值。
+ */
+internal fun parseAssistantCallExtras(raw: kotlinx.serialization.json.JsonElement?): Set<String> {
+    val array = raw as? JsonArray ?: return emptySet()
+    return array.mapNotNull { element ->
+        (element as? JsonPrimitive)?.contentOrNull?.trim()?.lowercase()
+    }.filter { it in ASSISTANT_CALL_EXTRAS }.toSet()
+}
+
+internal fun parseAssistantCallExtrasFromInput(input: String): Set<String> {
+    val obj = runCatching {
+        Json.parseToJsonElement(input) as? JsonObject
+    }.getOrNull() ?: return emptySet()
+    return parseAssistantCallExtras(obj["extras"])
+}
+
 /**
  * 构建终态 Tool Result JSON。
+ *
+ * [ttsStats] 有调用才写入。 [toolCalls] / [ttsTexts] 仅在 Caller 通过 `extras` 请求且非空时写入。
+ * [detail] 仅在 [reason] 为 `runtime_error` 且非空时写入，并按字符上限裁剪。
  */
 fun buildSubAssistantCallResult(
     json: Json,
@@ -138,7 +173,11 @@ fun buildSubAssistantCallResult(
     assistantName: String,
     content: String,
     reason: String? = null,
+    detail: String? = null,
     hasNonTextOutput: Boolean = false,
+    toolCalls: List<Pair<String, Int>> = emptyList(),
+    ttsTexts: List<String> = emptyList(),
+    ttsStats: SubAssistantTtsStats? = null,
 ): String {
     val obj = buildJsonObject {
         put("status", status)
@@ -148,7 +187,49 @@ fun buildSubAssistantCallResult(
             put("content", content)
         }
         if (reason != null) put("reason", reason)
+        if (reason == "runtime_error") {
+            val clipped = clipRuntimeErrorDetail(detail.orEmpty())
+            if (clipped.isNotEmpty()) put("detail", clipped)
+        }
         if (hasNonTextOutput) put("has_non_text_output", true)
+        if (ttsStats != null && ttsStats.calls > 0) {
+            put("tts_stats", buildJsonObject {
+                put("calls", ttsStats.calls)
+                put("chars", ttsStats.chars)
+            })
+        }
+        if (toolCalls.isNotEmpty()) {
+            put("tool_calls", buildJsonObject {
+                put(
+                    "header",
+                    JsonArray(listOf(JsonPrimitive("name"), JsonPrimitive("count"))),
+                )
+                put(
+                    "rows",
+                    JsonArray(
+                        toolCalls.map { (name, count) ->
+                            JsonArray(listOf(JsonPrimitive(name), JsonPrimitive(count)))
+                        },
+                    ),
+                )
+            })
+        }
+        if (ttsTexts.isNotEmpty()) {
+            put("tts", buildJsonObject {
+                put(
+                    "header",
+                    JsonArray(listOf(JsonPrimitive("n"), JsonPrimitive("text"))),
+                )
+                put(
+                    "rows",
+                    JsonArray(
+                        ttsTexts.mapIndexed { index, text ->
+                            JsonArray(listOf(JsonPrimitive(index + 1), JsonPrimitive(text)))
+                        },
+                    ),
+                )
+            })
+        }
     }
     return obj.toString()
 }

@@ -153,10 +153,11 @@ Settings 重算访问范围。
 |------|----------|
 | 有哪些子助手 | Catalog JSON |
 | 委托、不要指定做法 | `assistant_call` description |
-| 对方看不见本对话，简报要写全 | `assistant_call.request` |
+| 对方看不见本对话，简报与交付偏好 | `assistant_call.request` |
+| 额外结果段 | `assistant_call.extras` |
 | 路由短句不是系统提示 | `assistant_manage.description` 字段 |
 | 创建时不要编造工具 | `assistant_manage.instructions` 字段 |
-| 只读局部记忆 | `assistant_memory_list` description |
+| 子助手人设、工具名、技能、局部记忆 | `assistant_inspect`；Catalog 只保留路由三列 |
 | 工作区路径与挂载 | `<workspace>`；工具侧只在 `path` 参数重复绝对路径规则 |
 | 技能清单 | `<available_skills>` |
 
@@ -167,7 +168,7 @@ Settings 重算访问范围。
 主会话的基础工具装配顺序见 `ChatService`：搜索、Local Tools、最近会话、Workspace、技能、
 Assistant Tools、MCP；记忆工具由 `GenerationHandler` 在每个 step 按当前记忆状态加入。
 Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过滤 `assistant_manage`、
-`assistant_memory_list`、`assistant_call`，保留并桥接 `ask_user`；其余工具按运行开始快照与当前配置的交集在 step 边界重建。
+`assistant_inspect`、`assistant_call` 以及历史名 `assistant_memory_list`，保留并桥接 `ask_user`；其余工具按运行开始快照与当前配置的交集在 step 边界重建。
 
 下列 description 为源码中的英文原文（动态日期/时区用占位标明）。
 
@@ -365,7 +366,7 @@ unified diff 只进 part metadata，不进发给模型的文本。
 
 ### `assistant_manage`
 
-启用：`LocalToolOption.AssistantManagement`。`needsApproval` 恒为 true。
+启用：`LocalToolOption.AssistantManagement`。`CREATE` 不审批；`UPDATE` / `DELETE` 以及缺失或非法 `action` 必须审批。
 
 > Create, update, or delete a sub-assistant (sub-agent). New ones join your allowed list.
 
@@ -377,18 +378,28 @@ unified diff 只进 part metadata，不进发给模型的文本。
 | `description` | Specialty and when to call it. Not a system prompt. |
 | `instructions` | System prompt for the sub-assistant: role, method, output style. Do not invent tools or skills. |
 
-成功不回显 `instructions`，只回变更后的 id / name / description。DELETE 可带 `cleanup_pending`。
+成功只回 `action` 与 `id`，不回显 `name` / `description` / `instructions`。DELETE 可带 `cleanup_pending`。
 
-### `assistant_memory_list`
+### `assistant_inspect`
 
-启用：同上。只读。
+启用：同上。只读。历史工具名 `assistant_memory_list` 不再注册。
 
-> List the local memories of a sub-assistant in the catalog. This is read-only; only the target can change them through its own memory tools. Global memory is never returned.
+> Inspect a sub-assistant's configuration before updating or deleting it.
+> Returns profile by default; request additional sections if needed.
 
-`assistant_id`：Catalog id。
+| 参数 | description |
+|------|-------------|
+| `assistant_id` | Catalog id. |
+| `sections` | Optional: profile, tools, skills, memory. |
 
-结果：`assistant`、`active_memory`（`local` / `global` / `disabled`）、`header+rows`。
-仅 `local` 时 rows 有内容；caller 自身返回 `target_is_caller`。
+结果始终带顶层 `id`。点名的段才出现：
+
+- `profile`：当前 `name` / `description` / `instructions`
+- `tools`：Target Run 此刻可注册的工具名数组，无 description；`enableMemory` 时含 `memory_tool`
+- `skills`：已挂载技能名
+- `memory`：`active`（`local` / `global` / `disabled`）+ `header+rows`；仅 `local` 时 rows 有内容
+
+caller 自身返回 `target_is_caller`。
 
 ### `assistant_call`
 
@@ -399,10 +410,18 @@ unified diff 只进 part metadata，不进发给模型的文本。
 | 参数 | description |
 |------|-------------|
 | `assistant_id` | Catalog id. |
-| `request` | It cannot see this chat. Include facts, constraints, and the expected deliverable. |
+| `request` | It cannot see this chat. Give a clear goal, the facts it needs, and any constraints. Say what you need back; a concise, high-value reply is usually enough. |
+| `extras` | Extra result content. Default none. Values: tts, tool_calls. |
 
 完成：`{"status":"completed","assistant_name":"...","content":"..."}`，必要时
-`has_non_text_output`。其他终态带稳定 `reason`。
+`has_non_text_output`。其他终态带稳定 `reason`。`runtime_error` 另带提炼后的 `detail`（异常类型、消息、因果链和精简堆栈，按字符上限裁剪）。
+
+已跑过 Child 且调用过 `text_to_speech` 时，默认另带精简 `tts_stats`（`calls` 次数、`chars` 朗读字符合计）。体积较大的段只在 `extras` 点名后返回：
+
+- `tool_calls`：本次 run 范围内每个工具的发出次数（`header+rows`，首次出现序）
+- `tts`：按调用顺序的朗读文本表
+
+`unavailable` 不加这些段。
 
 `content` 取本次 run 范围内：优先最后一条 ASSISTANT 在最后一个工作工具之后的顶层 Text；
 `text_to_speech` 不算工作工具；最后一步为空则回退更早 step，再回退最后一段 Text island。
@@ -416,7 +435,7 @@ unified diff 只进 part metadata，不进发给模型的文本。
 
 ## 6. 工具输出截断
 
-`GenerationHandler.maybeTruncateToolOutput()`：采用 `TRUNCATABLE_TEXT` 的工具在文本总长超过 `MAX_TOOL_OUTPUT_CHARS` 且助手有 Shell 时，全文写入 `/tool_outputs/<executionId>.txt`，只把 `TOOL_OUTPUT_PREVIEW_CHARS` 控制的预览与读取指引回给模型。无 Shell 时不截断。`assistant_call` 使用 `PRESERVE`，其带 `status`、`assistant_name`、`content` 和 `reason` 的结构化 JSON 不会被通用文本截断器破坏。
+`GenerationHandler.maybeTruncateToolOutput()`：采用 `TRUNCATABLE_TEXT` 的工具在文本总长超过 `MAX_TOOL_OUTPUT_CHARS` 且助手有 Shell 时，全文写入 `/tool_outputs/<executionId>.txt`，只把 `TOOL_OUTPUT_PREVIEW_CHARS` 控制的预览与读取指引回给模型。无 Shell 时不截断。`assistant_call` 使用 `PRESERVE`，其带 `status`、`assistant_name`、`content`、`reason`、`detail`、`tts_stats`、`tool_calls` 和 `tts` 的结构化 JSON 不会被通用文本截断器破坏。
 
 ---
 
@@ -432,6 +451,6 @@ unified diff 只进 part metadata，不进发给模型的文本。
 | `calendar_create` | `event_id` + 规范化 `start` / `end` |
 | `text_to_speech` | `success` |
 | `workspace_write_file` / `workspace_edit_file` | 文件元数据，不含正文 |
-| `assistant_manage` | 不含 `instructions` |
+| `assistant_manage` | `action` + `id`（DELETE 可加 `cleanup_pending`） |
 
 `clipboard_tool` read 的 `text`、`assistant_call` 的 `content` 是新数据，不是回显。

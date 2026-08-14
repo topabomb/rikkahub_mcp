@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -50,7 +51,7 @@ class TtsController(
     private var currentProvider: TTSProviderSetting? = null
     private var workerJob: Job? = null
     private val workerOwner = PlaybackOwner()
-    private var isPaused = false
+    private val isPaused = MutableStateFlow(false)
     private var isPreparingChunk = false
 
     // 队列与缓存（基于稳定 ID）
@@ -94,7 +95,7 @@ class TtsController(
             audio.playbackState.collectLatest { audioState ->
                 // 本 turn 还有待播 chunk 时不要把 chunk 间隙发布成 Ended。
                 val effectiveStatus = when {
-                    isPaused -> PlaybackStatus.Paused
+                    isPaused.value -> PlaybackStatus.Paused
                     isPreparingChunk -> PlaybackStatus.Buffering
                     audioState.status == PlaybackStatus.Ended && playbackQueue.hasPending() -> PlaybackStatus.Playing
                     else -> audioState.status
@@ -160,7 +161,7 @@ class TtsController(
                 currentChunkIndex = _currentChunk.value,
                 totalChunks = _totalChunks.value,
                 status = when {
-                    isPaused -> PlaybackStatus.Paused
+                    isPaused.value -> PlaybackStatus.Paused
                     hasActiveWorker -> it.status
                     else -> PlaybackStatus.Buffering
                 }
@@ -178,7 +179,7 @@ class TtsController(
         workerJob?.cancel()
         audio.stop()
         audio.clear()
-        isPaused = false
+        isPaused.value = false
         isPreparingChunk = false
         playbackQueue.clear()
         cache.values.forEach { it.cancel(CancellationException("Reset")) }
@@ -193,14 +194,14 @@ class TtsController(
 
     /** 暂停播放（保留进度） */
     fun pause() {
-        isPaused = true
+        isPaused.value = true
         audio.pause()
         _playbackState.update { it.copy(status = PlaybackStatus.Paused) }
     }
 
     /** 恢复播放 */
     fun resume() {
-        isPaused = false
+        isPaused.value = false
         audio.resume()
         // AudioPlayer 会在真实恢复后发布 Playing；若暂停发生在合成阶段，这里应先回到 Buffering。
         _playbackState.update { it.copy(status = PlaybackStatus.Buffering) }
@@ -230,7 +231,7 @@ class TtsController(
         workerJob?.cancel()
         audio.stop()
         audio.clear()
-        isPaused = false
+        isPaused.value = false
         isPreparingChunk = false
         playbackQueue.clear()
         cache.values.forEach { it.cancel(CancellationException("Stopped")) }
@@ -250,6 +251,10 @@ class TtsController(
         audio.release()
     }
 
+    private suspend fun awaitResumeIfPaused() {
+        isPaused.first { !it }
+    }
+
     // region 内部：播放调度
     private fun startWorker() {
         val provider = currentProvider
@@ -263,10 +268,7 @@ class TtsController(
             _isSpeaking.update { true }
             try {
                 while (isActive) {
-                    if (isPaused) {
-                        delay(80)
-                        continue
-                    }
+                    awaitResumeIfPaused()
 
                     val queuedChunk = playbackQueue.poll() ?: break
                     val chunk = queuedChunk.chunk
@@ -282,7 +284,7 @@ class TtsController(
                             totalChunks = _totalChunks.value,
                             positionMs = 0L,
                             durationMs = 0L,
-                            status = if (isPaused) PlaybackStatus.Paused else PlaybackStatus.Buffering,
+                            status = if (isPaused.value) PlaybackStatus.Paused else PlaybackStatus.Buffering,
                         )
                     }
 
@@ -300,9 +302,7 @@ class TtsController(
                     }
 
                     // 用户可能在合成等待期间点击暂停；不得让刚完成合成的音频绕过工具栏开始播放。
-                    while (isPaused && isActive) {
-                        delay(80)
-                    }
+                    awaitResumeIfPaused()
 
                     // 播放
                     isPreparingChunk = false

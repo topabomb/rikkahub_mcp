@@ -119,7 +119,7 @@ Transformer 以 `fold` 顺序执行，后一个接收前一个的输出：
 3. Conversation Tools：允许引用近期对话时；
 4. Workspace Tools：绑定 Workspace 且 Shell 状态为 `READY` 时；
 5. Skill Tools：Assistant 启用了 Skill 时；
-6. Assistant Tools：按 Caller 权限装配 `assistant_manage`、`assistant_memory_list`、`assistant_call`；
+6. Assistant Tools：按 Caller 权限装配 `assistant_manage`、`assistant_inspect`、`assistant_call`；
 7. MCP Tools：仅取 Assistant 选中且当前已连接、名称合法的服务；
 8. Memory Tools：不属于上述静态列表，由 `GenerationHandler` 在每个工具循环 step 按当前记忆状态加入。
 
@@ -199,7 +199,7 @@ MCP 连接、休眠与恢复不由生成链路持有；`McpManager` 负责连接
 - Target 非交互审批策略，以及可由宿主承接的 `ask_user` 例外
 - Master/Child 共用的 `ConversationSessionRegistry`
 
-`assistant_call` 同步完成以下流程：校验 Caller、Target、访问与模型；解析当前 Master 分支的 lineage；获取 Master/Target lease；用最新 Settings 重验；新建、复用或克隆 Child；运行 Target；持续保存 Child 与 Master metadata；最后返回成功内容或稳定失败原因。
+`assistant_call` 同步完成以下流程：校验 Caller、Target、访问与模型；解析当前 Master 分支的 lineage；获取 Master/Target lease；用最新 Settings 重验；新建、复用或克隆 Child；运行 Target；持续保存 Child 与 Master metadata；最后返回成功内容或稳定失败原因。`runtime_error` 另带裁剪后的 `detail`；默认带 `tts_stats`，完整 `tts` / `tool_calls` 由 `extras` 按需返回。
 
 Target 永久过滤 Assistant 管理和再次委托。其他工具按运行开始快照与当前配置的交集在 step 边界装配；Memory Tool 在执行前独立重验。需审批工具默认拒绝，只有 `ask_user` 会按 Child locator 桥接到主聊天。
 
@@ -228,7 +228,7 @@ app/src/main/java/net/weero/measix/pilot/
    ├─ transformers/
    ├─ subassistant/                      # 访问策略、lineage、reducer、metadata、preview、catalog
    └─ tools/
-      ├─ AssistantToolFactory.kt         # assistant_manage/memory_list/call 工具构建
+      ├─ AssistantToolFactory.kt         # assistant_manage/inspect/call 工具构建
       ├─ GenerationToolSetFactory.kt     # 按 Assistant/资源/RunMode 装配工具集
       └─ local/
 ```

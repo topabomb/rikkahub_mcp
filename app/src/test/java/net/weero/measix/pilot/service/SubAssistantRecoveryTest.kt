@@ -142,6 +142,37 @@ class SubAssistantRecoveryTest {
     }
 
     @Test
+    fun `recovery includes tts_stats but not bulky extras by default`() {
+        val result = recoverMasterSubAssistantCalls(
+            master = masterWith(callTool("run-tts")),
+            settings = validSettings(),
+            childrenById = mapOf(child.id to childWithTts()),
+            json = json,
+        )
+        val text = (result.master.messageNodes.single().currentMessage.getTools().single()
+            .output.single() as UIMessagePart.Text).text
+        assertTrue(text.contains("\"tts_stats\""))
+        assertFalse(text.contains("\"tool_calls\""))
+        assertFalse(text.contains("Spoken answer."))
+    }
+
+    @Test
+    fun `recovery returns extras when requested`() {
+        val result = recoverMasterSubAssistantCalls(
+            master = masterWith(callTool("run-tts", input = """{"extras":["tts","tool_calls"]}""")),
+            settings = validSettings(),
+            childrenById = mapOf(child.id to childWithTts()),
+            json = json,
+        )
+        val text = (result.master.messageNodes.single().currentMessage.getTools().single()
+            .output.single() as UIMessagePart.Text).text
+        assertTrue(text.contains("\"tts_stats\""))
+        assertTrue(text.contains("\"tool_calls\""))
+        assertTrue(text.contains("search_web"))
+        assertTrue(text.contains("Spoken answer."))
+    }
+
+    @Test
     fun `terminal broken link is not rewritten but cannot retain orphan`() {
         val terminal = callTool("done", SubAssistantCallState.COMPLETED).copy(
             output = listOf(UIMessagePart.Text("done")),
@@ -174,9 +205,33 @@ class SubAssistantRecoveryTest {
         )
     }
 
+    private fun childWithTts(): Conversation = child.copy(
+        messageNodes = listOf(
+            task.toMessageNode(),
+            UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(
+                    UIMessagePart.Tool(
+                        toolCallId = "s1",
+                        toolName = "search_web",
+                        input = "{}",
+                        output = listOf(UIMessagePart.Text("ok")),
+                    ),
+                    UIMessagePart.Tool(
+                        toolCallId = "t1",
+                        toolName = "text_to_speech",
+                        input = """{"text":"Spoken answer."}""",
+                        output = listOf(UIMessagePart.Text("""{"success":true}""")),
+                    ),
+                ),
+            ).toMessageNode(),
+        ),
+    )
+
     private fun callTool(
         runId: String,
         state: SubAssistantCallState = SubAssistantCallState.RUNNING,
+        input: String = "{}",
     ): UIMessagePart.Tool {
         val metadata = buildInitialSubAssistantCallMetadata(
             runId = runId,
@@ -190,7 +245,7 @@ class SubAssistantRecoveryTest {
         return UIMessagePart.Tool(
             toolCallId = runId,
             toolName = "assistant_call",
-            input = "{}",
+            input = input,
         ).mergeSubAssistantCallMetadata(json, metadata)
     }
 

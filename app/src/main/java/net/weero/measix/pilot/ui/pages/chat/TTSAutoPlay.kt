@@ -60,7 +60,11 @@ internal fun shouldAutoPlayTts(conversationId: kotlin.uuid.Uuid, conversation: C
     if (conversation.id != conversationId) return false
     val lastMessage = conversation.currentMessages.lastOrNull() ?: return false
     if (lastMessage.role != MessageRole.ASSISTANT) return false
-    return lastMessage.parts.none { part ->
-        part is UIMessagePart.Tool && part.isPending
+    val hasPendingTools = lastMessage.parts.any { it is UIMessagePart.Tool && it.isPending }
+    if (hasPendingTools) return false
+    // 模型已通过 text_to_speech 入队播放时，不再把整条可见回复追加朗读一遍。
+    val alreadySpokenByTool = lastMessage.parts.any {
+        it is UIMessagePart.Tool && it.toolName == "text_to_speech" && it.isExecuted
     }
+    return !alreadySpokenByTool
 }

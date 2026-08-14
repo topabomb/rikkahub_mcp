@@ -11,6 +11,7 @@ import net.weero.measix.pilot.data.ai.subassistant.buildSubAssistantCallResult
 import net.weero.measix.pilot.data.ai.subassistant.computeSubAssistantPreview
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
+import net.weero.measix.pilot.data.ai.subassistant.parseAssistantCallExtrasFromInput
 import net.weero.measix.pilot.data.ai.subassistant.resolveSubAssistantRunSpec
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
@@ -79,8 +80,14 @@ internal fun recoverMasterSubAssistantCalls(
                 )
             }
             val taskId = metadata.childTaskNodeId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+            val childMessages = validChild?.currentMessages.orEmpty()
+            val outputs = collectSubAssistantCallOutputs(
+                messages = childMessages,
+                childTaskNodeId = taskId,
+                extras = parseAssistantCallExtrasFromInput(occurrence.tool.input),
+            )
             val preview = if (validChild != null && taskId != null) {
-                val rebuilt = computeSubAssistantPreview(validChild.currentMessages, taskId)
+                val rebuilt = computeSubAssistantPreview(childMessages, taskId)
                 rebuilt.ifBlank { metadata.preview.orEmpty() }.takeIf { it.isNotBlank() }
             } else {
                 metadata.preview
@@ -103,6 +110,9 @@ internal fun recoverMasterSubAssistantCalls(
                                 assistantName = metadata.targetNameSnapshot,
                                 content = "",
                                 reason = reason,
+                                toolCalls = outputs.toolCalls,
+                                ttsTexts = outputs.ttsTexts,
+                                ttsStats = outputs.ttsStats,
                             )
                         )
                     )

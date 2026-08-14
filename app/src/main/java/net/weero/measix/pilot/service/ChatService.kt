@@ -52,6 +52,7 @@ import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
 import net.weero.measix.pilot.data.ai.subassistant.buildSubAssistantCallResult
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
+import net.weero.measix.pilot.data.ai.subassistant.parseAssistantCallExtrasFromInput
 import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.data.ai.tools.AssistantToolFactory
 import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
@@ -158,6 +159,7 @@ internal fun updateCurrentToolApproval(
 internal fun finishInterruptedToolAfterGenerationStop(
     tool: UIMessagePart.Tool,
     json: Json,
+    childMessages: List<UIMessage> = emptyList(),
 ): UIMessagePart.Tool {
     if (tool.toolName == "assistant_call") {
         val metadata = tool.getSubAssistantCallMetadata(json)
@@ -169,6 +171,12 @@ internal fun finishInterruptedToolAfterGenerationStop(
                 reason = "user_cancelled",
                 userInteraction = null,
             )
+            val taskId = metadata.childTaskNodeId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+            val outputs = collectSubAssistantCallOutputs(
+                messages = childMessages,
+                childTaskNodeId = taskId,
+                extras = parseAssistantCallExtrasFromInput(tool.input),
+            )
             return tool.mergeSubAssistantCallMetadata(json, stoppedMetadata).copy(
                 output = listOf(
                     UIMessagePart.Text(
@@ -178,6 +186,9 @@ internal fun finishInterruptedToolAfterGenerationStop(
                             assistantName = metadata.targetNameSnapshot,
                             content = "",
                             reason = "user_cancelled",
+                            toolCalls = outputs.toolCalls,
+                            ttsTexts = outputs.ttsTexts,
+                            ttsStats = outputs.ttsStats,
                         )
                     )
                 )
@@ -807,8 +818,15 @@ class ChatService(
         var updatedMessage = lastMessage.finishPendingTools(::cancelToolByUser)
 
         // 2. 处理执行中断的工具（非 Pending 但 output 为空，如超时/异常中断）→ 标记为中断
+        val childMessagesByConversation = loadChildMessagesForInterruptedCalls(updatedMessage)
         updatedMessage = updatedMessage.finishInterruptedTools { tool ->
-            finishInterruptedToolAfterGenerationStop(tool, json)
+            val childId = tool.getSubAssistantCallMetadata(json)?.childConversationId
+                ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+            finishInterruptedToolAfterGenerationStop(
+                tool = tool,
+                json = json,
+                childMessages = childId?.let { childMessagesByConversation[it] }.orEmpty(),
+            )
         }
 
         if (updatedMessage == lastMessage) {
@@ -823,6 +841,21 @@ class ChatService(
             )
         )
         saveConversation(conversationId, updatedConversation)
+    }
+
+    private suspend fun loadChildMessagesForInterruptedCalls(
+        message: UIMessage,
+    ): Map<Uuid, List<UIMessage>> {
+        val childIds = message.getTools().mapNotNull { tool ->
+            if (tool.toolName != "assistant_call") return@mapNotNull null
+            tool.getSubAssistantCallMetadata(json)?.childConversationId
+                ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+        }.toSet()
+        return childIds.associateWith { childId ->
+            sessionRegistry.getSession(childId)?.state?.value?.currentMessages
+                ?: conversationRepo.getConversationById(childId)?.currentMessages
+                ?: emptyList()
+        }
     }
 
     // ---- 生成标题 ----

@@ -118,7 +118,78 @@ class ChatServiceToolApprovalTest {
         assertEquals(null, stoppedMetadata.userInteraction)
         assertEquals(1, stopped.output.size)
         assertEquals(true, (stopped.output.single() as UIMessagePart.Text).text.contains("user_cancelled"))
+        assertEquals(false, (stopped.output.single() as UIMessagePart.Text).text.contains("tool_calls"))
     }
+
+    @Test
+    fun `stopping master generation includes tts_stats but not bulky extras by default`() {
+        val stopped = finishInterruptedToolAfterGenerationStop(
+            runningAssistantCall(input = "{}"),
+            json,
+            childMessagesWithTts(),
+        )
+        val text = (stopped.output.single() as UIMessagePart.Text).text
+        assertEquals(true, text.contains("user_cancelled"))
+        assertEquals(true, text.contains("\"tts_stats\""))
+        assertEquals(false, text.contains("\"tool_calls\""))
+        assertEquals(false, text.contains("Spoken answer."))
+    }
+
+    @Test
+    fun `stopping master generation returns extras when requested`() {
+        val stopped = finishInterruptedToolAfterGenerationStop(
+            runningAssistantCall(input = """{"extras":["tts","tool_calls"]}"""),
+            json,
+            childMessagesWithTts(),
+        )
+        val text = (stopped.output.single() as UIMessagePart.Text).text
+        assertEquals(true, text.contains("user_cancelled"))
+        assertEquals(true, text.contains("\"tts_stats\""))
+        assertEquals(true, text.contains("\"tool_calls\""))
+        assertEquals(true, text.contains("search_web"))
+        assertEquals(true, text.contains("Spoken answer."))
+    }
+
+    private fun runningAssistantCall(input: String): UIMessagePart.Tool {
+        val metadata = buildInitialSubAssistantCallMetadata(
+            runId = "run-1",
+            targetAssistantId = Uuid.random(),
+            targetNameSnapshot = "Reviewer",
+        ).copy(
+            state = SubAssistantCallState.RUNNING,
+            childConversationId = Uuid.random().toString(),
+            childTaskNodeId = childTaskId.toString(),
+        )
+        return UIMessagePart.Tool(
+            toolCallId = "call-1",
+            toolName = "assistant_call",
+            input = input,
+            approvalState = ToolApprovalState.Auto,
+        ).mergeSubAssistantCallMetadata(json, metadata)
+    }
+
+    private val childTaskId = Uuid.random()
+
+    private fun childMessagesWithTts() = listOf(
+        UIMessage(id = childTaskId, role = MessageRole.USER, parts = listOf(UIMessagePart.Text("do it"))),
+        UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "s1",
+                    toolName = "search_web",
+                    input = "{}",
+                    output = listOf(UIMessagePart.Text("ok")),
+                ),
+                UIMessagePart.Tool(
+                    toolCallId = "t1",
+                    toolName = "text_to_speech",
+                    input = """{"text":"Spoken answer."}""",
+                    output = listOf(UIMessagePart.Text("""{"success":true}""")),
+                ),
+            ),
+        ),
+    )
 
     private fun pendingTool(id: String) = UIMessagePart.Tool(
         toolCallId = id,

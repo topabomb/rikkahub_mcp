@@ -302,6 +302,33 @@ class MessageTest {
     }
 
     @Test
+    fun `android content and resource image urls should not be prefixed or concatenated`() {
+        var messages = listOf(UIMessage.user("Show local images"))
+
+        messages = messages.handleMessageChunk(
+            assistantChunk(UIMessagePart.Image(url = "content://media/external/images/media/1"))
+        )
+        messages = messages.handleMessageChunk(
+            assistantChunk(UIMessagePart.Image(url = "android.resource://net.weero.measix.pilot/drawable/icon"))
+        )
+
+        val images = messages.last().parts.filterIsInstance<UIMessagePart.Image>()
+        assertEquals(2, images.size)
+        assertEquals("content://media/external/images/media/1", images[0].url)
+        assertEquals("android.resource://net.weero.measix.pilot/drawable/icon", images[1].url)
+        assertEquals(
+            "content://media/external/images/media/1",
+            renderableImageUrl("content://media/external/images/media/1"),
+        )
+        assertEquals(
+            "android.resource://net.weero.measix.pilot/drawable/icon",
+            renderableImageUrl("android.resource://net.weero.measix.pilot/drawable/icon"),
+        )
+        assertTrue(isCompleteImageUrl("content://media/external/images/media/1"))
+        assertTrue(isCompleteImageUrl("android.resource://net.weero.measix.pilot/drawable/icon"))
+    }
+
+    @Test
     fun `raw image fragments should append to the current data uri`() {
         var messages = listOf(UIMessage.user("Stream an image"))
 

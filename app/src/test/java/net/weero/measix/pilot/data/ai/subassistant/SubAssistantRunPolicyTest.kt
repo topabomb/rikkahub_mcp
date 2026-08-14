@@ -585,6 +585,16 @@ class SubAssistantRunPolicyTest {
     }
 
     @Test
+    fun `filter removes assistant_inspect tool`() {
+        val tools = listOf(
+            Tool(name = "assistant_inspect", description = "", execute = { emptyList() }),
+            Tool(name = "valid_tool", description = "", execute = { emptyList() }),
+        )
+        val filtered = filterTargetTools(tools)
+        assertEquals(listOf("valid_tool"), filtered.map { it.name })
+    }
+
+    @Test
     fun `active target tools use snapshot and latest capability intersection`() {
         val originalWorkspace = Uuid.random()
         val replacementWorkspace = Uuid.random()
