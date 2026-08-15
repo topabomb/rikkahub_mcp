@@ -80,6 +80,10 @@
   <string name="assistant_page_local_tools_time_info_title">Time Info</string>
   <string name="assistant_page_local_tools_tts_desc">Let the AI read text aloud to you using your selected TTS service</string>
   <string name="assistant_page_local_tools_tts_title">Text to Speech</string>
+  <string name="assistant_page_local_tools_text_to_image_title">Text to Image</string>
+  <string name="assistant_page_local_tools_text_to_image_desc">Allow this assistant to generate one image from a text prompt</string>
+  <string name="assistant_page_local_tools_text_to_image_unavailable">Enabled, but no valid image model is selected</string>
+  <string name="assistant_page_local_tools_text_to_image_configure_model">Choose model</string>
   <string name="assistant_page_manage_memory_title">Manage Memory</string>
   <string name="assistant_page_max_tokens">Max Tokens</string>
   <string name="assistant_page_max_tokens_desc">Maximum number of tokens to generate. Leave empty for no limit.</string>
@@ -235,6 +239,32 @@
   <string name="chat_message_tool_deny_dialog_title">Deny Tool Execution</string>
   <string name="chat_message_tool_edit_memory">Updated memory</string>
   <string name="chat_message_tool_get_time">Get time info</string>
+  <string name="chat_message_tool_generate_image_queued">Waiting to generate image</string>
+  <string name="chat_message_tool_generate_image_generating">Generating image</string>
+  <string name="chat_message_tool_generate_image_persisting">Saving image</string>
+  <string name="chat_message_tool_generate_image_setting_background">Setting background</string>
+  <string name="chat_message_tool_generate_image_completed">Image generated</string>
+  <string name="chat_message_tool_generate_image_failed">Image generation failed</string>
+  <string name="chat_message_tool_generate_image_failed_invalid_arguments">Invalid image generation arguments</string>
+  <string name="chat_message_tool_generate_image_failed_model_unavailable">Image model unavailable</string>
+  <string name="chat_message_tool_generate_image_failed_revoked">Image tool was disabled</string>
+  <string name="chat_message_tool_generate_image_failed_model_changed">Image model changed</string>
+  <string name="chat_message_tool_generate_image_failed_provider">Image provider error</string>
+  <string name="chat_message_tool_generate_image_failed_invalid_result">Image provider returned no final image</string>
+  <string name="chat_message_tool_generate_image_failed_persistence">Failed to save the generated image</string>
+  <string name="chat_message_tool_generate_image_failed_artifact_missing">Generated image file is no longer available</string>
+  <string name="chat_message_tool_generate_image_background_pending">Waiting to set as background</string>
+  <string name="chat_message_tool_generate_image_background_updated">Set as assistant background</string>
+  <string name="chat_message_tool_generate_image_background_assistant_missing">Background not updated: assistant not found</string>
+  <string name="chat_message_tool_generate_image_background_copy_failed">Background not updated: copy failed</string>
+  <string name="chat_message_tool_generate_image_background_settings_failed">Background not updated: settings write failed</string>
+  <string name="chat_message_tool_generate_image_failed_assistant_missing">Assistant no longer exists</string>
+  <string name="chat_message_tool_generate_image_model">Model: %1$s</string>
+  <string name="chat_message_tool_generate_image_provider">Provider: %1$s</string>
+  <string name="chat_message_tool_generate_image_file_path">File</string>
+  <string name="chat_message_tool_generate_image_copy_path">Copy path</string>
+  <string name="chat_message_tool_generate_image_technical_details">Technical details</string>
+  <string name="chat_message_tool_generate_image_prompt_label">Prompt</string>
   <string name="chat_message_tool_scrape_prefix">Scrape website: %1$s</string>
   <string name="chat_message_tool_scrape_web">Scrape web page</string>
   <string name="chat_message_tool_conversation_search">Search history: %1$s</string>
@@ -400,6 +430,9 @@
   <string name="imggen_page_save_failed">Save failed: %1$s</string>
   <string name="imggen_page_settings_title">Image Generation Settings</string>
   <string name="imggen_page_title">Image Generation</string>
+  <string name="imggen_page_error_no_model">No image model selected</string>
+  <string name="imggen_page_error_generic">Image generation failed</string>
+  <string name="imggen_page_error_delete">Failed to delete image</string>
   <string name="mcp_picker_syncing">Syncing MCP servers...</string>
   <string name="mcp_picker_title">MCP</string>
   <string name="menu">Menu</string>
@@ -671,7 +704,7 @@
   <string name="setting_display_page_volume_key_scroll_title">Volume Key Page Scroll</string>
   <string name="setting_files_page_cancel_action">Cancel</string>
   <string name="setting_files_page_clean_action">Clean</string>
-  <string name="setting_files_page_clean_confirmation">All files in this category will be permanently deleted. This action cannot be undone.</string>
+  <string name="setting_files_page_clean_confirmation">This permanently deletes uploaded files, including chat attachments, tool result copies, and assistant backgrounds. This cannot be undone.</string>
   <string name="setting_files_page_clean_content_description">Clean files</string>
   <string name="setting_files_page_clean_failed_toast">Some files could not be cleaned</string>
   <string name="setting_files_page_clean_title">Clean files?</string>
@@ -734,6 +767,8 @@
   <string name="setting_model_page_fast_model_desc">Model for fast or background tasks, also used as fallback for title and suggestion models when not set</string>
   <string name="setting_model_page_compress_model_desc">Model for compressing conversation history</string>
   <string name="setting_model_page_compress_prompt_vars">Variables: {content}, {target_tokens}, {additional_context}</string>
+  <string name="setting_model_page_image_generation_model">Image Generation Model</string>
+  <string name="setting_model_page_image_generation_model_desc">Default model used by the image page and the generate_image chat tool</string>
   <string name="setting_model_page_ocr_model">OCR Model</string>
   <string name="setting_model_page_ocr_model_desc">Model used for optical character recognition on images</string>
   <string name="setting_model_page_ocr_prompt_vars">Variables: Image data: {images}</string>
@@ -1205,6 +1240,7 @@
   <string name="chat_readiness_mcp_highlight_term">Measix Device Remote Control</string>
   <string name="chat_readiness_local_tools_title">Local capabilities</string>
   <string name="chat_readiness_local_tools_count">%1$d enabled</string>
+  <string name="chat_readiness_local_tools_unavailable">%1$d available / %2$d enabled</string>
   <string name="chat_readiness_local_tools_description">Enable on-device capabilities such as speech playback, clipboard access, and screen time.</string>
   <string name="chat_readiness_workspace_title">Local workspace</string>
   <string name="chat_readiness_workspace_not_configured">Unavailable</string>
@@ -1325,5 +1361,12 @@
   <string name="sub_assistant_reason_interaction_limit_reached">Too many clarification rounds</string>
   <string name="sub_assistant_reason_unknown">The sub-assistant could not complete the request</string>
   <string name="sub_assistant_tool_unknown">Tool</string>
+  <string name="sub_assistant_reason_content_blocked">Blocked by usage policy</string>
+  <string name="sub_assistant_error_content_blocked_body">The model refused this request because it violates the usage policy. Rephrase and try again.</string>
+  <string name="setting_files_page_folder_generated_images">Generated Images</string>
+  <string name="setting_files_page_generated_no_prompt">No prompt</string>
+  <string name="setting_files_page_generated_unknown_model">Unknown model</string>
+  <string name="setting_files_page_delete_generated_confirmation">This deletes the gallery original only. Chat and background copies are not removed.</string>
+  <string name="setting_files_page_clean_generated_confirmation">All generated images in the gallery will be permanently deleted. Chat and background copies are not removed. This action cannot be undone.</string>
 </resources>
 

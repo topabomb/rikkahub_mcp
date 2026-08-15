@@ -542,6 +542,17 @@ class SubAssistantRunPolicyTest {
         assertEquals(2, filtered.size)
     }
 
+    @Test
+    fun `filter removes TextToImage`() {
+        val tools = listOf(
+            LocalToolOption.TextToImage,
+            LocalToolOption.TimeInfo,
+        )
+        val filtered = filterTargetLocalTools(tools)
+        assertFalse(filtered.contains(LocalToolOption.TextToImage))
+        assertTrue(filtered.contains(LocalToolOption.TimeInfo))
+    }
+
     // ---- filterTargetTools ----
 
     @Test
@@ -572,6 +583,16 @@ class SubAssistantRunPolicyTest {
         )
         val filtered = filterTargetTools(tools)
         assertTrue(filtered.isEmpty())
+    }
+
+    @Test
+    fun `filter removes generate_image tool`() {
+        val tools = listOf(
+            Tool(name = "generate_image", description = "", execute = { emptyList() }),
+            Tool(name = "get_time_info", description = "", execute = { emptyList() }),
+        )
+        val filtered = filterTargetTools(tools)
+        assertEquals(listOf("get_time_info"), filtered.map { it.name })
     }
 
     @Test
@@ -647,6 +668,7 @@ class SubAssistantRunPolicyTest {
             listOf(LocalToolOption.TimeInfo, LocalToolOption.Tts, LocalToolOption.AskUser),
             assistant.localTools,
         )
+        assertFalse(LocalToolOption.TextToImage in assistant.localTools)
         assertFalse(assistant.enableWebSearch)
         assertFalse(assistant.enableRecentChatsReference)
         assertTrue(assistant.mcpServers.isEmpty())

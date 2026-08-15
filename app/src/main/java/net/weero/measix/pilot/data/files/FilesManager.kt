@@ -10,9 +10,12 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -35,26 +38,34 @@ class FilesManager(
         private const val TAG = "FilesManager"
     }
 
+    private val mutationMutex = Mutex()
+
     suspend fun saveManagedFromUri(
         folder: String,
         uri: Uri,
         displayName: String? = null,
         mimeType: String? = null,
-    ): ManagedFileEntity = withContext(Dispatchers.IO) {
-        val resolvedName = displayName ?: getFileNameFromUri(uri) ?: "file"
-        val resolvedMime = mimeType ?: getFileMimeType(uri) ?: "application/octet-stream"
-        val target = createTargetFile(folder, resolvedName, resolvedMime)
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            target.outputStream().use { output ->
-                input.copyTo(output)
+    ): ManagedFileEntity = mutationMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val resolvedName = displayName ?: getFileNameFromUri(uri) ?: "file"
+            val resolvedMime = mimeType ?: getFileMimeType(uri) ?: "application/octet-stream"
+            val target = createTargetFile(folder, resolvedName, resolvedMime)
+            commitManagedFile(target) {
+                val input = context.contentResolver.openInputStream(uri)
+                    ?: error("Failed to open input stream for $uri")
+                input.use { stream ->
+                    target.outputStream().use { output ->
+                        stream.copyTo(output)
+                    }
+                }
+                createManagedFileEntity(
+                    folder = folder,
+                    file = target,
+                    displayName = resolvedName,
+                    mimeType = resolvedMime,
+                )
             }
         }
-        createManagedFileEntity(
-            folder = folder,
-            file = target,
-            displayName = resolvedName,
-            mimeType = resolvedMime,
-        )
     }
 
     suspend fun saveManagedFromBytes(
@@ -62,15 +73,19 @@ class FilesManager(
         bytes: ByteArray,
         displayName: String,
         mimeType: String = "application/octet-stream",
-    ): ManagedFileEntity = withContext(Dispatchers.IO) {
-        val target = createTargetFile(folder, displayName, mimeType)
-        target.writeBytes(bytes)
-        createManagedFileEntity(
-            folder = folder,
-            file = target,
-            displayName = displayName,
-            mimeType = mimeType,
-        )
+    ): ManagedFileEntity = mutationMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val target = createTargetFile(folder, displayName, mimeType)
+            commitManagedFile(target) {
+                target.writeBytes(bytes)
+                createManagedFileEntity(
+                    folder = folder,
+                    file = target,
+                    displayName = displayName,
+                    mimeType = mimeType,
+                )
+            }
+        }
     }
 
     suspend fun saveManagedText(
@@ -78,15 +93,19 @@ class FilesManager(
         text: String,
         displayName: String = "pasted_text.txt",
         mimeType: String = "text/plain",
-    ): ManagedFileEntity = withContext(Dispatchers.IO) {
-        val target = createTargetFile(folder, displayName, mimeType)
-        target.writeText(text)
-        createManagedFileEntity(
-            folder = folder,
-            file = target,
-            displayName = displayName,
-            mimeType = mimeType,
-        )
+    ): ManagedFileEntity = mutationMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val target = createTargetFile(folder, displayName, mimeType)
+            commitManagedFile(target) {
+                target.writeText(text)
+                createManagedFileEntity(
+                    folder = folder,
+                    file = target,
+                    displayName = displayName,
+                    mimeType = mimeType,
+                )
+            }
+        }
     }
 
     fun observe(folder: String = FileFolders.UPLOAD): Flow<List<ManagedFileEntity>> =
@@ -373,39 +392,60 @@ class FilesManager(
         SyncResult(inserted = inserted, removed = removed)
     }
 
-    suspend fun delete(id: Long, deleteFromDisk: Boolean = true): Boolean = withContext(Dispatchers.IO) {
-        val entity = repository.getById(id) ?: return@withContext false
-        if (deleteFromDisk) {
-            runCatching { getFile(entity).delete() }
+    suspend fun delete(id: Long, deleteFromDisk: Boolean = true): Boolean = mutationMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val entity = repository.getById(id) ?: return@withContext false
+            if (deleteFromDisk) {
+                val file = getFile(entity)
+                if (file.exists() && !file.delete()) {
+                    return@withContext false
+                }
+            }
+            repository.deleteById(id) > 0
         }
-        repository.deleteById(id) > 0
     }
 
-    suspend fun deleteAll(folder: String = FileFolders.UPLOAD): Boolean = withContext(Dispatchers.IO) {
-        val dir = File(context.filesDir, folder)
-        val entries = dir.listFiles()
-        if (dir.exists() && entries == null) {
-            return@withContext false
-        }
-
-        var allDeletedFromDisk = true
-        entries.orEmpty().forEach { entry ->
-            if (!runCatching { entry.deleteRecursively() }.getOrDefault(false)) {
-                allDeletedFromDisk = false
+    suspend fun deleteAll(folder: String = FileFolders.UPLOAD): Boolean = mutationMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val dir = File(context.filesDir, folder)
+            val entries = dir.listFiles()
+            if (dir.exists() && entries == null) {
+                return@withContext false
             }
-        }
 
-        if (allDeletedFromDisk) {
-            repository.deleteByFolder(folder)
-            return@withContext true
-        }
-
-        repository.listByFolder(folder).first().forEach { entity ->
-            if (!getFile(entity).exists()) {
-                repository.deleteById(entity.id)
+            var allDeletedFromDisk = true
+            entries.orEmpty().forEach { entry ->
+                if (!runCatching { entry.deleteRecursively() }.getOrDefault(false)) {
+                    allDeletedFromDisk = false
+                }
             }
+
+            if (allDeletedFromDisk) {
+                repository.deleteByFolder(folder)
+                return@withContext true
+            }
+
+            repository.listByFolder(folder).first().forEach { entity ->
+                if (!getFile(entity).exists()) {
+                    repository.deleteById(entity.id)
+                }
+            }
+            false
         }
-        false
+    }
+
+    private suspend fun commitManagedFile(
+        target: File,
+        writeAndInsert: suspend () -> ManagedFileEntity,
+    ): ManagedFileEntity {
+        return try {
+            writeAndInsert()
+        } catch (error: Throwable) {
+            withContext(NonCancellable) {
+                runCatching { if (target.exists()) target.delete() }
+            }
+            throw error
+        }
     }
 
     private fun createTargetFile(folder: String, displayName: String, mimeType: String?): File {

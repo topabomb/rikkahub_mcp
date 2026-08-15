@@ -51,6 +51,8 @@ class OpenAIProvider(
     private val client: OkHttpClient,
     context: Context? = null
 ) : Provider<ProviderSetting.OpenAI> {
+    override val supportsImageGeneration: Boolean = true
+
     private val keyRoulette = if (context != null) KeyRoulette.lru(context) else KeyRoulette.default()
 
     private val chatCompletionsAPI = ChatCompletionsAPI(client = client, keyRoulette = keyRoulette)

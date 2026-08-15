@@ -95,6 +95,7 @@ Transformer 以 `fold` 顺序执行，后一个接收前一个的输出：
 | 5 | `OcrTransformer` | 对图片执行 OCR 并附加识别文本 |
 | 6 | `TemplateTransformer` | 按消息自己的 `createdAt` 渲染模板，避免历史文本每轮变化 |
 | 7 | `WorkspaceReminderTransformer` | Workspace Shell 就绪时向 System 追加环境和路径约束 |
+| 8 | `ToolArtifactReplayTransformer` | 按 artifact metadata 重写历史 Tool Result 的 `/upload/<file>` 与 Image URL |
 
 `PromptInjectionTransformer` 支持 `BEFORE_SYSTEM_PROMPT`、`AFTER_SYSTEM_PROMPT`、
 `TOP_OF_CHAT`、`BOTTOM_OF_CHAT` 和 `AT_DEPTH`。插入点会避开用户消息与其工具回复之间的边界。
@@ -115,7 +116,7 @@ Transformer 以 `fold` 顺序执行，后一个接收前一个的输出：
 `ChatService.handleMessageComplete()` 按以下顺序装配工具：
 
 1. Search Tools：`assistant.enableWebSearch` 开启时；
-2. Local Tools：JavaScript、时间、剪贴板、语音播报、向用户提问、屏幕使用时间、日历等；
+2. Local Tools：JavaScript、时间、剪贴板、语音播报、向用户提问、屏幕使用时间、日历、条件注册的 `generate_image` 等；
 3. Conversation Tools：允许引用近期对话时；
 4. Workspace Tools：绑定 Workspace 且 Shell 状态为 `READY` 时；
 5. Skill Tools：Assistant 启用了 Skill 时；
@@ -146,6 +147,12 @@ Auto
 MCP 连接、休眠与恢复不由生成链路持有；`McpManager` 负责连接状态和工具快照，
 `ChatService` 只在每次请求装配当前可用工具。生命周期细节见
 [`docs/dev/mcp-lifecycle-analysis.md`](../dev/mcp-lifecycle-analysis.md)。
+
+独立文生图页面与 `generate_image` 共用 `ImageGenerationSelectionResolver`、
+`ImageGenerationCoordinator` 和 `GeneratedMediaStore`。队列是进程内 FIFO 单工，不持久化、
+不在重启后重放。Gallery 原图、聊天 Tool Result 与 Assistant 背景必须是不同所有权的文件。
+下一轮请求会通过 `ToolArtifactReplayTransformer` 按 artifact metadata 重写历史 Tool Result
+的 `/upload/<file>` 与 Image URL；找不到文件时不得伪造可读路径。
 
 ## 上下文、缓存与压缩
 
@@ -199,9 +206,9 @@ MCP 连接、休眠与恢复不由生成链路持有；`McpManager` 负责连接
 - Target 非交互审批策略，以及可由宿主承接的 `ask_user` 例外
 - Master/Child 共用的 `ConversationSessionRegistry`
 
-`assistant_call` 同步完成以下流程：校验 Caller、Target、访问与模型；解析当前 Master 分支的 lineage；获取 Master/Target lease；用最新 Settings 重验；新建、复用或克隆 Child；运行 Target；持续保存 Child 与 Master metadata；最后返回成功内容或稳定失败原因。`runtime_error` 另带裁剪后的 `detail`；默认带 `tts_stats`，完整 `tts` / `tool_calls` 由 `extras` 按需返回。
+`assistant_call` 同步完成以下流程：校验 Caller、Target、访问与模型；解析当前 Master 分支的 lineage；获取 Master/Target lease；用最新 Settings 重验；新建、复用或克隆 Child；运行 Target；持续保存 Child 与 Master metadata；最后返回成功内容或稳定失败原因。内容政策拒绝、Provider HTTP 失败和未分类异常分别记为 `content_blocked`、`provider_error` 与 `runtime_error`，并带回裁剪后的 `detail`；默认带 `tts_stats`，完整 `tts` / `tool_calls` 由 `extras` 按需返回。普通工具 Pending 与子助手桥接的 `ask_user` 共用前台审批音效 `loop_approval`。
 
-Target 永久过滤 Assistant 管理和再次委托。其他工具按运行开始快照与当前配置的交集在 step 边界装配；Memory Tool 在执行前独立重验。需审批工具默认拒绝，只有 `ask_user` 会按 Child locator 桥接到主聊天。
+Target 永久过滤 Assistant 管理、再次委托和 `generate_image`。其他工具按运行开始快照与当前配置的交集在 step 边界装配；Memory Tool 在执行前独立重验。需审批工具默认拒绝，只有 `ask_user` 会按 Child locator 桥接到主聊天。
 
 每个 Master turn 创建唯一的 TTS queue session，Master 与该 turn 内的 Target 只向这条共享队列提交音频；工具审批暂停与恢复复用原 session，新消息和重新生成创建新 session。播放器是队列边界的唯一仲裁者：新 session 替换旧队列；同 session 在顺序开关开启时追加、关闭时替换。Tool 实例和 UI `activeSource` 均不保存或推断队列生命周期；每个 chunk 直接绑定来源，`activeSource` 只随实际播放更新。自动朗读忽略其他会话和待审批暂停事件，并按同一 session 的策略提交，不能旁路打断工具音频。旧 worker 和旧播放器回调通过所有权 token 隔离，不能清空或停止新队列。System TTS 并发预取使用系统创建的唯一临时文件，禁止以时间戳共享输出路径。
 

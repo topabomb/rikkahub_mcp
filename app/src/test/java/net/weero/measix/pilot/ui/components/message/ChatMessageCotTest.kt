@@ -1,0 +1,80 @@
+package net.weero.measix.pilot.ui.components.message
+
+import me.rerere.ai.ui.ToolApprovalState
+import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.data.ai.tools.local.GENERATE_IMAGE_TOOL_NAME
+import net.weero.measix.pilot.ui.components.ui.selectCollapsedSteps
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ChatMessageCotTest {
+    private fun tool(
+        name: String,
+        id: String = name,
+        pending: Boolean = false,
+    ) = UIMessagePart.Tool(
+        toolCallId = id,
+        toolName = name,
+        input = "{}",
+        approvalState = if (pending) ToolApprovalState.Pending else ToolApprovalState.Auto,
+    )
+
+    @Test
+    fun `generate_image stays in the thinking timeline instead of a child-run card`() {
+        val blocks = listOf(
+            UIMessagePart.Reasoning("plan"),
+            tool("search_web"),
+            tool(GENERATE_IMAGE_TOOL_NAME),
+            tool("read_file"),
+        ).groupMessageParts()
+
+        assertEquals(1, blocks.size)
+        val steps = (blocks.single() as MessagePartBlock.ThinkingBlock).steps
+        assertEquals(4, steps.size)
+        assertTrue(steps[2] is ThinkingStep.ToolStep)
+        assertEquals(GENERATE_IMAGE_TOOL_NAME, (steps[2] as ThinkingStep.ToolStep).tool.toolName)
+        assertTrue(blocks.none { it is MessagePartBlock.SubAssistantCallBlock })
+    }
+
+    @Test
+    fun `collapsed timeline keeps interleaved generate_image and pending tools`() {
+        val steps = listOf(
+            ThinkingStep.ToolStep(tool("search_web", "s1"), 0),
+            ThinkingStep.ToolStep(tool(GENERATE_IMAGE_TOOL_NAME, "img"), 1),
+            ThinkingStep.ToolStep(tool("read_file", "r1"), 2),
+            ThinkingStep.ToolStep(tool("search_web", "s2", pending = true), 3),
+            ThinkingStep.ToolStep(tool("write_file", "w1"), 4),
+            ThinkingStep.ToolStep(tool("shell", "sh"), 5),
+        )
+
+        val visible = selectCollapsedSteps(
+            steps = steps,
+            collapsedVisibleCount = 2,
+            keepVisible = { it.shouldStayVisibleWhenCollapsed() },
+        )
+
+        assertEquals(
+            listOf("generate_image", "search_web", "write_file", "shell"),
+            visible.filterIsInstance<ThinkingStep.ToolStep>().map { it.tool.toolName },
+        )
+        assertEquals(
+            listOf("img", "s2", "w1", "sh"),
+            visible.filterIsInstance<ThinkingStep.ToolStep>().map { it.tool.toolCallId },
+        )
+    }
+
+    @Test
+    fun `ordinary completed tools are not pinned`() {
+        val search = ThinkingStep.ToolStep(tool("search_web"), 0)
+        val image = ThinkingStep.ToolStep(tool(GENERATE_IMAGE_TOOL_NAME), 1)
+        val pending = ThinkingStep.ToolStep(tool("read_file", pending = true), 2)
+        val reasoning = ThinkingStep.ReasoningStep(UIMessagePart.Reasoning("think"))
+
+        assertFalse(search.shouldStayVisibleWhenCollapsed())
+        assertTrue(image.shouldStayVisibleWhenCollapsed())
+        assertTrue(pending.shouldStayVisibleWhenCollapsed())
+        assertFalse(reasoning.shouldStayVisibleWhenCollapsed())
+    }
+}

@@ -22,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,6 +42,7 @@ import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.hugeicons.stroke.Cancel01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.ui.components.ai.ModelListSheet
 import net.weero.measix.pilot.ui.components.ai.rememberModelListState
 import net.weero.measix.pilot.ui.components.nav.BackButton
@@ -48,6 +50,7 @@ import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.utils.plus
 import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.koinInject
 import kotlin.uuid.Uuid
 
 @Composable
@@ -138,6 +141,20 @@ private fun ModelSettingsPage(settings: Settings, vm: SettingVM, contentPadding:
             SuggestionModelSettingItem(
                 settings = settings,
                 vm = vm,
+            )
+        }
+        item {
+            val resolver = koinInject<ImageGenerationSelectionResolver>()
+            val imageProviders = remember(settings.providers, resolver) {
+                settings.providers.filter { resolver.supportsImageGeneration(it) }
+            }
+            ModelSettingItem(
+                title = stringResource(R.string.setting_model_page_image_generation_model),
+                description = stringResource(R.string.setting_model_page_image_generation_model_desc),
+                modelId = settings.imageGenerationModelId,
+                providers = imageProviders,
+                onSelect = { vm.updateSettings(settings.copy(imageGenerationModelId = it.id)) },
+                type = ModelType.IMAGE,
             )
         }
         item {
@@ -241,11 +258,12 @@ private fun ModelSettingItem(
     providers: List<ProviderSetting>,
     onSelect: (Model) -> Unit,
     onClear: (() -> Unit)? = null,
+    type: ModelType = ModelType.CHAT,
 ) {
     val state = rememberModelListState(
         modelId = modelId,
         providers = providers,
-        type = ModelType.CHAT,
+        type = type,
     )
 
     Column {

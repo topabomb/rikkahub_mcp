@@ -165,7 +165,8 @@ internal fun parseAssistantCallExtrasFromInput(input: String): Set<String> {
  * 构建终态 Tool Result JSON。
  *
  * [ttsStats] 有调用才写入。 [toolCalls] / [ttsTexts] 仅在 Caller 通过 `extras` 请求且非空时写入。
- * [detail] 仅在 [reason] 为 `runtime_error` 且非空时写入，并按字符上限裁剪。
+ * [detail] 仅在失败 reason 属于 `content_blocked` / `provider_error` / `runtime_error`
+ * 且非空时写入，并按字符上限裁剪。
  */
 fun buildSubAssistantCallResult(
     json: Json,
@@ -187,7 +188,7 @@ fun buildSubAssistantCallResult(
             put("content", content)
         }
         if (reason != null) put("reason", reason)
-        if (reason == "runtime_error") {
+        if (shouldAttachFailureDetail(reason)) {
             val clipped = clipRuntimeErrorDetail(detail.orEmpty())
             if (clipped.isNotEmpty()) put("detail", clipped)
         }

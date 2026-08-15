@@ -6,6 +6,7 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.data.ai.subassistant.filterTargetLocalTools
 import net.weero.measix.pilot.data.ai.subassistant.filterTargetTools
+import net.weero.measix.pilot.data.ai.tools.local.AssistantToolBuildContext
 import net.weero.measix.pilot.data.ai.tools.local.LocalTools
 import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
 import net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
@@ -70,7 +71,16 @@ class GenerationToolSetFactory(
                     TtsPlaybackSource.SourceType.NORMAL
                 },
             )
-            addAll(localTools.getTools(localToolOptions, ttsContext))
+            addAll(
+                localTools.getTools(
+                    options = localToolOptions,
+                    ttsPlaybackContext = ttsContext,
+                    buildContext = AssistantToolBuildContext(
+                        ownerAssistantId = assistant.id,
+                        settings = settings,
+                    ),
+                )
+            )
 
             if (assistant.enableRecentChatsReference) {
                 addAll(createConversationTools(conversationRepo, assistant.id))

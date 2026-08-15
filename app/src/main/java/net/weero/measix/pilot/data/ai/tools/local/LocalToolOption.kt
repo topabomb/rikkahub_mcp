@@ -40,4 +40,8 @@ sealed class LocalToolOption {
     @Serializable
     @SerialName("assistant_delegation")
     data object AssistantDelegation : LocalToolOption()
+
+    @Serializable
+    @SerialName("text_to_image")
+    data object TextToImage : LocalToolOption()
 }

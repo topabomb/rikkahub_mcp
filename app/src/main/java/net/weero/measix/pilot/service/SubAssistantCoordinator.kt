@@ -47,9 +47,9 @@ import net.weero.measix.pilot.data.ai.subassistant.computeTerminalPreview
 import net.weero.measix.pilot.data.ai.subassistant.intersectTargetToolCapabilities
 import net.weero.measix.pilot.data.ai.subassistant.cloneLineagePrefix
 import net.weero.measix.pilot.data.ai.subassistant.findPreviousCallMetadata
-import net.weero.measix.pilot.data.ai.subassistant.formatRuntimeErrorDetail
+import net.weero.measix.pilot.data.ai.subassistant.classifySubAssistantFailure
+import net.weero.measix.pilot.data.ai.subassistant.modelVisibleFailureDetail
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
-import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.resolveLineage
 import net.weero.measix.pilot.data.ai.subassistant.resolveActiveRunStopReason
 import net.weero.measix.pilot.data.ai.subassistant.resolvePreWriteBlockReason
@@ -334,9 +334,16 @@ class SubAssistantCoordinator(
                 }
             }
         } catch (e: Exception) {
-            // Child 创建失败时释放 lease
             runLeases.release(activeRunKey, activeTargetRun)
-            throw e
+            if (e is CancellationException) throw e
+            return classifiedFailureResult(
+                error = e,
+                execContext = execContext,
+                targetAssistantId = targetAssistantId,
+                assistantName = target.name,
+                extras = extras,
+                runId = runId,
+            )
         }
 
         // Child 与 Master 使用同一 Registry。该 Job 也是 run lease 中的结构化子 Job，
@@ -366,11 +373,16 @@ class SubAssistantCoordinator(
         try {
             reportMetadataPatch(execContext, initialMeta, checkpoint = true)
         } catch (e: Exception) {
-            // The lease is already visible to deletion/cancellation callers. If the
-            // initial Master checkpoint fails, release and signal it just like the
-            // Child creation failure path so callers cannot wait forever.
             runLeases.release(activeRunKey, activeTargetRun)
-            throw e
+            if (e is CancellationException) throw e
+            return classifiedFailureResult(
+                error = e,
+                execContext = execContext,
+                targetAssistantId = targetAssistantId,
+                assistantName = target.name,
+                extras = extras,
+                runId = runId,
+            )
         }
 
         // 运行中 Settings 撤权监听器
@@ -510,17 +522,18 @@ class SubAssistantCoordinator(
 
         } catch (e: Exception) {
             Log.e(TAG, "Target generation failed", e)
+            val failureReason = classifySubAssistantFailure(e)
             val terminalMeta = runState.updateTerminalState(
                 state = SubAssistantCallState.FAILED,
-                reason = "runtime_error",
+                reason = failureReason,
             )
-            finalizeInterruptedRun(childConversationId, "runtime_error", execContext, terminalMeta)
+            finalizeInterruptedRun(childConversationId, failureReason, execContext, terminalMeta)
 
             return buildCallResultParts(
                 status = "failed",
                 assistantName = target.name,
-                reason = "runtime_error",
-                detail = formatRuntimeErrorDetail(e),
+                reason = failureReason,
+                detail = modelVisibleFailureDetail(failureReason, e),
                 messages = childRunMessages(childConversationId),
                 childTaskNodeId = childTaskNodeId,
                 extras = extras,
@@ -1070,6 +1083,34 @@ class SubAssistantCoordinator(
         failures.metadata?.let { error ->
             Log.e(TAG, "Unable to persist terminal metadata for ${terminalMeta.runId}", error)
         }
+    }
+
+    private suspend fun classifiedFailureResult(
+        error: Exception,
+        execContext: ToolExecutionContext,
+        targetAssistantId: Uuid,
+        assistantName: String,
+        extras: Set<String>,
+        runId: String,
+    ): List<UIMessagePart> {
+        val failureReason = classifySubAssistantFailure(error)
+        Log.e(TAG, "Sub-assistant setup failed", error)
+        val metadata = buildInitialSubAssistantCallMetadata(
+            runId = runId,
+            targetAssistantId = targetAssistantId,
+            targetNameSnapshot = assistantName,
+        ).copy(
+            state = SubAssistantCallState.FAILED,
+            reason = failureReason,
+        )
+        runCatching { reportMetadataPatch(execContext, metadata, checkpoint = false) }
+        return buildCallResultParts(
+            status = "failed",
+            assistantName = assistantName,
+            reason = failureReason,
+            detail = modelVisibleFailureDetail(failureReason, error),
+            extras = extras,
+        )
     }
 
     private suspend fun unavailableResult(

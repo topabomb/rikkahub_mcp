@@ -5,6 +5,7 @@ import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.data.ai.mcp.McpCommonOptions
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
+import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
 import org.junit.Assert.assertEquals
@@ -184,5 +185,20 @@ class ConversationReadinessTest {
 
         assertEquals(MemoryReadiness.READY, readiness.memoryState)
         assertEquals(5, readiness.memoryCount)
+    }
+
+    @Test
+    fun `enabled but unavailable text to image is not counted as effective`() {
+        val assistant = Assistant(
+            localTools = listOf(LocalToolOption.TimeInfo, LocalToolOption.TextToImage),
+        )
+        val readiness = Settings(assistants = listOf(assistant)).buildConversationReadiness(
+            assistant = assistant,
+            workspaceNamesById = emptyMap(),
+            memoryCount = 0,
+            imageGenerationAvailable = false,
+        )
+        assertEquals(1, readiness.localToolCount)
+        assertEquals(2, readiness.persistedLocalToolCount)
     }
 }

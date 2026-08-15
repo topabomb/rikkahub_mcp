@@ -285,7 +285,21 @@ class SubAssistantCallMetadataTest {
     }
 
     @Test
-    fun `result omits detail unless reason is runtime_error`() {
+    fun `result includes provider_error detail`() {
+        val result = buildSubAssistantCallResult(
+            json = json,
+            status = "failed",
+            assistantName = "Helper",
+            content = "",
+            reason = "provider_error",
+            detail = "HttpException: Failed to get response: 429",
+        )
+        assertTrue(result.contains("\"detail\""))
+        assertTrue(result.contains("Failed to get response: 429"))
+    }
+
+    @Test
+    fun `result omits detail unless reason is a classified failure`() {
         val result = buildSubAssistantCallResult(
             json = json,
             status = "failed",

@@ -38,6 +38,7 @@ import me.rerere.hugeicons.stroke.McpServer
 import me.rerere.hugeicons.stroke.Settings03
 import me.rerere.hugeicons.stroke.Wrench01
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.model.Assistant
@@ -78,6 +79,7 @@ internal data class ConversationReadiness(
     val selectedMcpCount: Int,
     val enabledMcpCount: Int,
     val localToolCount: Int,
+    val persistedLocalToolCount: Int = localToolCount,
     val memoryState: MemoryReadiness,
     val memoryCount: Int,
     val workspaceState: WorkspaceReadiness,
@@ -90,10 +92,18 @@ internal data class ConversationReadiness(
         get() = modelState == ModelReadiness.NOT_CONFIGURED
 }
 
+internal fun Settings.effectiveLocalToolCount(
+    assistant: Assistant,
+    imageGenerationAvailable: Boolean,
+): Int = assistant.localTools.distinct().count { option ->
+    option != LocalToolOption.TextToImage || imageGenerationAvailable
+}
+
 internal fun Settings.buildConversationReadiness(
     assistant: Assistant,
     workspaceNamesById: Map<Uuid, String>,
     memoryCount: Int,
+    imageGenerationAvailable: Boolean = false,
 ): ConversationReadiness {
     val hasAvailableChatModel = providers.any { provider ->
         provider.enabled && provider.models.any { it.type == ModelType.CHAT }
@@ -129,7 +139,8 @@ internal fun Settings.buildConversationReadiness(
         mcpState = mcpState,
         selectedMcpCount = selectedMcpCount,
         enabledMcpCount = enabledMcpServers.size,
-        localToolCount = assistant.localTools.distinct().size,
+        localToolCount = effectiveLocalToolCount(assistant, imageGenerationAvailable),
+        persistedLocalToolCount = assistant.localTools.distinct().size,
         memoryState = memoryState,
         memoryCount = memoryCount,
         workspaceState = workspaceState,
@@ -237,10 +248,18 @@ internal fun ConversationReadinessCard(
                 ReadinessRow(
                     icon = HugeIcons.Wrench01,
                     label = stringResource(R.string.chat_readiness_local_tools_title),
-                    status = stringResource(
-                        R.string.chat_readiness_local_tools_count,
-                        readiness.localToolCount,
-                    ),
+                    status = if (readiness.localToolCount < readiness.persistedLocalToolCount) {
+                        stringResource(
+                            R.string.chat_readiness_local_tools_unavailable,
+                            readiness.localToolCount,
+                            readiness.persistedLocalToolCount,
+                        )
+                    } else {
+                        stringResource(
+                            R.string.chat_readiness_local_tools_count,
+                            readiness.localToolCount,
+                        )
+                    },
                     description = stringResource(R.string.chat_readiness_local_tools_description),
                     onClick = onLocalToolsClick,
                     scale = scale,

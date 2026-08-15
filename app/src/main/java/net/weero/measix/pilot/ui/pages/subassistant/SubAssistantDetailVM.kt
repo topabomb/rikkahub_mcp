@@ -17,6 +17,7 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
+import net.weero.measix.pilot.data.ai.subassistant.parseRuntimeErrorDetailFromToolOutput
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
@@ -30,6 +31,15 @@ data class SubAssistantDetailLink(
     val childConversationId: Uuid,
     val childTaskMessageId: Uuid,
     val targetAssistantId: Uuid,
+    val failureDetail: String? = null,
+)
+
+internal fun mergeLiveSubAssistantDetailLink(
+    previous: SubAssistantDetailLink,
+    incoming: SubAssistantDetailLink,
+): SubAssistantDetailLink = previous.copy(
+    metadata = incoming.metadata,
+    failureDetail = incoming.failureDetail ?: previous.failureDetail,
 )
 
 internal sealed interface SubAssistantDetailLinkResult {
@@ -87,6 +97,7 @@ internal fun resolveSubAssistantDetailLink(
             childConversationId = childConversationId,
             childTaskMessageId = childTaskMessageId,
             targetAssistantId = targetAssistantId,
+            failureDetail = parseRuntimeErrorDetailFromToolOutput(tool, json),
         )
     )
 }
@@ -191,7 +202,12 @@ class SubAssistantDetailVM(
                         if (result is SubAssistantDetailLinkResult.Ready) {
                             _uiState.update { state ->
                                 if (state is SubAssistantDetailUiState.Ready) {
-                                    state.copy(link = state.link.copy(metadata = result.link.metadata))
+                                    state.copy(
+                                        link = mergeLiveSubAssistantDetailLink(
+                                            previous = state.link,
+                                            incoming = result.link,
+                                        )
+                                    )
                                 } else {
                                     state
                                 }
@@ -251,13 +267,14 @@ class SubAssistantDetailVM(
         // 使用 update 而非直接赋值，避免覆盖 metadata collector 在
         // Dispatchers.Default 上并行写入的最新 metadata。
         _uiState.update { current ->
-            val effectiveMetadata = if (current is SubAssistantDetailUiState.Ready) {
-                current.link.metadata
-            } else {
-                link.metadata
-            }
+            val ready = current as? SubAssistantDetailUiState.Ready
+            val effectiveMetadata = ready?.link?.metadata ?: link.metadata
+            val effectiveFailureDetail = ready?.link?.failureDetail ?: link.failureDetail
             SubAssistantDetailUiState.Ready(
-                link = link.copy(metadata = effectiveMetadata),
+                link = link.copy(
+                    metadata = effectiveMetadata,
+                    failureDetail = effectiveFailureDetail,
+                ),
                 child = child,
                 timeline = timeline,
             )

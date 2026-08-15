@@ -52,6 +52,7 @@ import me.rerere.hugeicons.stroke.BubbleChatQuestion
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Tick01
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.ui.components.message.tools.ToolUIContext
 import net.weero.measix.pilot.ui.components.message.tools.ToolUIRegistry
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
@@ -59,6 +60,7 @@ import net.weero.measix.pilot.ui.components.ui.ChainOfThoughtScope
 import net.weero.measix.pilot.ui.components.ui.DotLoading
 import net.weero.measix.pilot.ui.modifier.shimmer
 import net.weero.measix.pilot.utils.JsonInstant
+import org.koin.compose.koinInject
 
 private const val ASK_USER_TOOL_NAME = "ask_user"
 
@@ -86,14 +88,18 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     }
 
     val renderer = remember(tool.toolName) { ToolUIRegistry.resolve(tool.toolName) }
-    val context = remember(tool, loading) {
+    val rewriter = koinInject<ToolArtifactRewriter>()
+    val displayTool = remember(tool, rewriter) {
+        tool.copy(output = rewriter.materializeToolOutput(tool.output, tool.metadata))
+    }
+    val context = remember(displayTool, loading) {
         ToolUIContext(
-            tool = tool,
-            arguments = tool.inputAsJson(),
-            content = if (tool.isExecuted) {
+            tool = displayTool,
+            arguments = displayTool.inputAsJson(),
+            content = if (displayTool.isExecuted) {
                 runCatching {
                     JsonInstant.parseToJsonElement(
-                        tool.output.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text }
+                        displayTool.output.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text }
                     )
                 }.getOrElse { JsonObject(emptyMap()) }
             } else {
@@ -106,9 +112,9 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     var showResult by remember { mutableStateOf(false) }
     var showDenyDialog by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(true) }
-    val isPending = tool.approvalState is ToolApprovalState.Pending
-    val isDenied = tool.approvalState is ToolApprovalState.Denied
-    val images = tool.output.filterIsInstance<UIMessagePart.Image>()
+    val isPending = displayTool.approvalState is ToolApprovalState.Pending
+    val isDenied = displayTool.approvalState is ToolApprovalState.Denied
+    val images = displayTool.output.filterIsInstance<UIMessagePart.Image>()
 
     // 摘要由注册的渲染器决定; 图片输出与拒绝原因为所有工具通用
     val hasExtraContent = renderer.hasSummary(context) || isDenied || images.isNotEmpty()
@@ -205,7 +211,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                         }
                     }
                     if (isDenied) {
-                        val reason = (tool.approvalState as ToolApprovalState.Denied).reason
+                        val reason = (displayTool.approvalState as ToolApprovalState.Denied).reason
                         Text(
                             text = stringResource(R.string.chat_message_tool_denied) +
                                 if (reason.isNotBlank()) ": $reason" else "",

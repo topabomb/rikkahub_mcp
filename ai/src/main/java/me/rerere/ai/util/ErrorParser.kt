@@ -12,6 +12,28 @@ class HttpException(
     message: String
 ) : RuntimeException(message)
 
+fun formatProviderHttpError(code: Int, body: String?): HttpException {
+    val parsed = body?.let(::parseStructuredHttpError)
+    return if (parsed.isNullOrBlank()) {
+        HttpException("Failed to get response: $code")
+    } else {
+        HttpException("Failed to get response: $code $parsed")
+    }
+}
+
+fun parseStructuredHttpError(body: String): String? {
+    val trimmed = body.trim()
+    if (trimmed.isEmpty()) return null
+    if (trimmed.startsWith("<")) return null
+    return runCatching {
+        Json.parseToJsonElement(trimmed).parseErrorDetail().message
+    }.getOrNull()
+        ?.replace(Regex("[\\t\\r\\n]+"), " ")
+        ?.replace(Regex(" {2,}"), " ")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+}
+
 fun JsonElement.parseErrorDetail(): HttpException {
     return when (this) {
         is JsonObject -> {

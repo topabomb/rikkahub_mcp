@@ -43,10 +43,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dokar.sonner.ToastType
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
+import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.ui.components.nav.BackButton
+import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionInfo
@@ -109,8 +112,12 @@ private fun AssistantLocalToolContent(
 ) {
     val context = LocalContext.current
     val toaster = LocalToaster.current
+    val navController = LocalNavController.current
     val settingsStore: net.weero.measix.pilot.data.datastore.SettingsStore = koinInject()
     val settings by settingsStore.settingsFlow.collectAsStateWithLifecycle()
+    val imageSelectionResolver: ImageGenerationSelectionResolver = koinInject()
+    val imageGenerationAvailable = remember(settings) { imageSelectionResolver.isAvailable(settings) }
+    val textToImageEnabled = assistant.localTools.contains(LocalToolOption.TextToImage)
     var showAccessScopeDialog by remember { mutableStateOf(false) }
     val eligibleTargetIds = remember(settings.assistants, assistant.id) {
         eligibleSubAssistantIds(settings, assistant.id)
@@ -318,6 +325,41 @@ private fun AssistantLocalToolContent(
                         checked = assistant.localTools.contains(LocalToolOption.Calendar),
                         onCheckedChange = { toggleLocalTool(LocalToolOption.Calendar, it) }
                     )
+                }
+            )
+            item(
+                headlineContent = {
+                    Text(stringResource(R.string.assistant_page_local_tools_text_to_image_title))
+                },
+                supportingContent = {
+                    Text(
+                        if (!imageGenerationAvailable && textToImageEnabled) {
+                            stringResource(R.string.assistant_page_local_tools_text_to_image_unavailable)
+                        } else {
+                            stringResource(R.string.assistant_page_local_tools_text_to_image_desc)
+                        }
+                    )
+                },
+                trailingContent = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (!imageGenerationAvailable) {
+                            AssistChip(
+                                onClick = { navController.navigate(Screen.SettingModels) },
+                                label = {
+                                    Text(stringResource(R.string.assistant_page_local_tools_text_to_image_configure_model))
+                                },
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        Switch(
+                            checked = textToImageEnabled,
+                            enabled = imageGenerationAvailable || textToImageEnabled,
+                            onCheckedChange = { enabled ->
+                                if (enabled && !imageGenerationAvailable) return@Switch
+                                toggleLocalTool(LocalToolOption.TextToImage, enabled)
+                            },
+                        )
+                    }
                 }
             )
         }

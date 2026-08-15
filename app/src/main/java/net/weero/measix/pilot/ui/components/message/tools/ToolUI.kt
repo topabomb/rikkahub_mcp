@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.message.tools
+package net.weero.measix.pilot.ui.components.message.tools
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -106,6 +106,7 @@ object ToolUIRegistry {
         ReadFileToolUI,
         WriteFileToolUI,
         ShellToolUI,
+        ImageGenerationToolUI,
     ).associateBy { it.toolName }
 
     /** 查找工具对应的渲染器, 未注册时返回默认渲染器 */

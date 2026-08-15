@@ -174,4 +174,29 @@ class AssistantConfigCompatibilityTest {
         assertEquals("After", merged.name)
         assertEquals(setOf(concurrentTargetId), merged.allowedSubAssistantIds)
     }
+
+    @Test
+    fun `legacy assistant json keeps text to image closed`() {
+        val legacyJson = """{"id":"00000000-0000-0000-0000-000000000001","name":"Old","localTools":[{"type":"time_info"}]}"""
+        val assistant = json.decodeFromString<Assistant>(legacyJson)
+        assertFalse(LocalToolOption.TextToImage in assistant.localTools)
+    }
+
+    @Test
+    fun `text to image option round trips`() {
+        val assistant = Assistant(localTools = listOf(LocalToolOption.TextToImage))
+        val encoded = json.encodeToString(assistant)
+        assertTrue(encoded.contains("text_to_image"))
+        val decoded = json.decodeFromString<Assistant>(encoded)
+        assertTrue(LocalToolOption.TextToImage in decoded.localTools)
+    }
+
+    @Test
+    fun `settings with text to image assistant round trips`() {
+        val settings = Settings(
+            assistants = listOf(Assistant(localTools = listOf(LocalToolOption.TextToImage))),
+        )
+        val decoded = json.decodeFromString<Settings>(json.encodeToString(settings))
+        assertTrue(LocalToolOption.TextToImage in decoded.assistants.single().localTools)
+    }
 }

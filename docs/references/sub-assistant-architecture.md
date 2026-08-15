@@ -143,7 +143,7 @@ Target 复用通用 `GenerationHandler`，不是独立的简化模型循环。�
 
 完成态优先取最终 ASSISTANT step 中最后一个工作工具之后的顶层 Text。`text_to_speech` 等副作用工具不切断答案；最终 step 没有可见文本时向更早 step 回退。最终 step 若含 Image、Document、Audio 或 Video，则设置 `has_non_text_output`。
 
-只有 `completed` 返回 `assistant_name` 和 `content`。其他终态只返回状态与稳定 reason，避免让 Caller 把半成品当作成功结果。`runtime_error` 另带提炼后的 `detail`。调用过 `text_to_speech` 时默认带 `tts_stats`（次数与朗读字符合计）；完整 `tool_calls` 计数表和朗读文本表 `tts` 只在 Caller 通过 `extras` 点名后返回。
+只有 `completed` 返回 `assistant_name` 和 `content`。其他终态只返回状态与稳定 reason，避免让 Caller 把半成品当作成功结果。未分类异常、Provider HTTP 失败和内容政策拒绝分别使用 `runtime_error`、`provider_error` 与 `content_blocked`，并带回提炼后的 `detail`。前两者是单行的类型与消息（按字符上限裁剪，不含因果链和堆栈）；`content_blocked` 使用稳定英文说明，不回传检查类型或原始政策字符串。用户卡片和详情用本地化原因加同一条消息摘要，不再另附因果链。分类先匹配政策标记（含 OpenAI `content_filter` / `content_policy` 与 Gemini prompt feedback），再把 `HttpException` 和其他 HTTP 层失败记为 `provider_error`。调用过 `text_to_speech` 时默认带 `tts_stats`（次数与朗读字符合计）；完整 `tool_calls` 计数表和朗读文本表 `tts` 只在 Caller 通过 `extras` 点名后返回。
 
 ## 6. Target 工具与运行中撤权
 
@@ -167,7 +167,7 @@ Target 每个模型 step 都重新构建工具集。有效工具能力是“调�
 
 实时预览只投影本次 Child task 范围内 ASSISTANT 的顶层 Text，排除 Reasoning、Tool input/output、preset 和下一次 USER task。Reducer 保持消息与 part 的显示顺序，只保留有界尾部，并在 Unicode grapheme 边界裁剪。完成态改用 final answer 的有界开头摘要；纯非文本完成态显示本地化提示。
 
-`SubAssistantCallCard` 从通用 COT 分组中独立渲染 Target、request、状态、preview 和 `ask_user`。整卡在 Child link 有效时进入 `SubAssistantDetail`。详情解析会同时校验 Master、run 唯一性、Target、父子关系和 task `UIMessage.id`；仅非终态且尚未写入 Child link 的 run 可以保持 Loading，不存在、歧义或已经终止但缺少 link 的 run 立即显示不可用。详情页只渲染 `ChatMessage(readOnly = true)`，不提供输入、编辑、删除、重生成、分支、收藏、分享或审批入口。
+`SubAssistantCallCard` 从通用 COT 分组中独立渲染 Target、request、状态、preview 和 `ask_user`。失败或不可用时额外显示本地化 reason 和用户可见摘要：政策拒绝使用固定文案，不回显检查类型；其他失败从 Tool Result `detail` 取第一行并去掉异常类型前缀。整卡在 Child link 有效时进入 `SubAssistantDetail`。详情解析会同时校验 Master、run 唯一性、Target、父子关系和 task `UIMessage.id`；仅非终态且尚未写入 Child link 的 run 可以保持 Loading，不存在、歧义或已经终止但缺少 link 的 run 立即显示不可用。详情页只渲染 `ChatMessage(readOnly = true)`，不提供输入、编辑、删除、重生成、分支、收藏、分享或审批入口；终态条同样展示 reason 与用户摘要。子助手失败不会抬成 Master 整轮 `ErrorCard`。
 
 ## 8. 恢复、分支与删除
 

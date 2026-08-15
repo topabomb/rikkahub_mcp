@@ -11,6 +11,7 @@ class LocalTools(
     private val eventBus: AppEventBus,
     private val ttsManager: TTSManager,
     private val settingsStore: SettingsStore,
+    private val imageGenerationToolFactory: ImageGenerationToolFactory,
 ) {
     val javascriptTool by lazy { buildJavascriptTool() }
 
@@ -29,6 +30,7 @@ class LocalTools(
     fun getTools(
         options: List<LocalToolOption>,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
+        buildContext: AssistantToolBuildContext? = null,
     ): List<Tool> {
         val tools = mutableListOf<Tool>()
         if (options.contains(LocalToolOption.JavascriptEngine)) {
@@ -54,6 +56,9 @@ class LocalTools(
         if (options.contains(LocalToolOption.Calendar)) {
             tools.add(calendarQueryTool)
             tools.add(calendarCreateTool)
+        }
+        if (options.contains(LocalToolOption.TextToImage) && buildContext != null) {
+            imageGenerationToolFactory.create(buildContext)?.let(tools::add)
         }
         return tools
     }

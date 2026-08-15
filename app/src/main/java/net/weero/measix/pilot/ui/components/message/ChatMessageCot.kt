@@ -2,6 +2,7 @@ package net.weero.measix.pilot.ui.components.message
 
 import androidx.compose.ui.util.fastForEachIndexed
 import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.data.ai.tools.local.GENERATE_IMAGE_TOOL_NAME
 
 /**
  * 思考步骤类型，用于分组 Reasoning 和 Tool
@@ -70,4 +71,10 @@ fun List<UIMessagePart>.groupMessageParts(): List<MessagePartBlock> {
     }
     flushThinkingSteps()
     return result
+}
+
+/** Pending tools stay interactive; [GENERATE_IMAGE_TOOL_NAME] stays on the collapsed timeline. */
+fun ThinkingStep.shouldStayVisibleWhenCollapsed(): Boolean {
+    val tool = (this as? ThinkingStep.ToolStep)?.tool ?: return false
+    return tool.isPending || tool.toolName == GENERATE_IMAGE_TOOL_NAME
 }

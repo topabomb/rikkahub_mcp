@@ -326,7 +326,7 @@ private fun MessagePartsBlock(
                         steps = block.steps,
                         collapsedAdaptiveWidth = isReasoningOnlyBlock,
                         keepVisibleWhenCollapsed = { step ->
-                            step is ThinkingStep.ToolStep && step.tool.isPending
+                            step.shouldStayVisibleWhenCollapsed()
                         },
                         cardColors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = settings.displaySetting.bubbleOpacity),

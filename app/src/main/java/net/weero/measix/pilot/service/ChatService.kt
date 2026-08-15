@@ -67,6 +67,7 @@ import net.weero.measix.pilot.data.ai.transformers.RegexOutputTransformer
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.data.ai.transformers.ThinkTagTransformer
 import net.weero.measix.pilot.data.ai.transformers.TimeReminderTransformer
+import net.weero.measix.pilot.data.ai.transformers.ToolArtifactReplayTransformer
 import net.weero.measix.pilot.data.ai.transformers.WorkspaceReminderTransformer
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.findModelById
@@ -76,6 +77,7 @@ import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.datastore.getCurrentAssistant
 import net.weero.measix.pilot.data.datastore.getCurrentChatModel
 import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantAffectScope
@@ -204,6 +206,39 @@ internal fun finishInterruptedToolAfterGenerationStop(
     )
 }
 
+/**
+ * 需要用户立刻处理的注意力键：普通工具 Pending，以及子助手桥接的 ask_user。
+ * 用于前台审批音效去重，避免同一交互重复播放。
+ */
+internal fun collectUserAttentionKeys(
+    messages: List<UIMessage>,
+    json: Json,
+): Set<String> {
+    val keys = linkedSetOf<String>()
+    messages.forEach { message ->
+        message.getTools().forEachIndexed { ordinal, tool ->
+            if (tool.isPending) {
+                keys += "tool:${message.id}:$ordinal"
+            }
+            if (tool.toolName == "assistant_call") {
+                val metadata = tool.getSubAssistantCallMetadata(json)
+                val interaction = metadata?.userInteraction
+                if (
+                    metadata != null &&
+                    !metadata.state.isTerminal() &&
+                    interaction?.toolName == "ask_user"
+                ) {
+                    val interactionId = interaction.interactionId.takeIf { it.isNotBlank() }
+                    if (interactionId != null) {
+                        keys += "ask:$interactionId"
+                    }
+                }
+            }
+        }
+    }
+    return keys
+}
+
 private val inputTransformers by lazy {
     listOf(
         TimeReminderTransformer,
@@ -243,9 +278,11 @@ class ChatService(
     private val sessionRegistry: ConversationSessionRegistry,
     private val recoveryGate: AssistantDataRecoveryGate = AssistantDataRecoveryGate.completed(),
     private val json: Json,
+    private val toolArtifactRewriter: ToolArtifactRewriter? = null,
 ) {
     // workspace 系统提示注入 (依赖 workspaceRepository, 故在类内构造)
     private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
+    private val toolArtifactReplayTransformer = toolArtifactRewriter?.let(::ToolArtifactReplayTransformer)
 
     // 错误状态
     private val _errors = MutableStateFlow<List<ChatError>>(emptyList())
@@ -587,7 +624,7 @@ class ChatService(
             val session = getOrCreateSession(conversationId)
             // loop 声音反馈状态跟踪
             var previousFinishedAt: LocalDateTime? = null
-            val previousPendingTools = mutableSetOf<ToolCallLocator>()
+            val previousAttentionKeys = mutableSetOf<String>()
             // 每轮 Master Generation 创建一个 turn-level TtsToolPlaybackContext，
             // 在整轮 turn 内被 Master 和所有 Target 共享。播放器以 sessionId 独占队列：
             // 新 turn 替换旧队列；同一 turn 是否追加由顺序播放开关决定。
@@ -621,6 +658,7 @@ class ChatService(
                     addAll(inputTransformers)
                     add(templateTransformer)
                     add(workspaceReminderTransformer)
+                    toolArtifactReplayTransformer?.let(::add)
                 },
                 outputTransformers = outputTransformers,
                 tools = toolSetFactory.buildTools(
@@ -689,14 +727,10 @@ class ChatService(
                             }
                             previousFinishedAt = lastMsg?.finishedAt
 
-                            // 工具待审批: Tool isPending 从 false 变 true
-                            chunk.messages.forEach { message ->
-                                message.getTools().forEachIndexed { ordinal, tool ->
-                                    val locator = ToolCallLocator(message.id, ordinal)
-                                    if (tool.isPending && previousPendingTools.add(locator)) {
-                                    soundEffectPlayer.play(R.raw.loop_approval)
-                                    }
-                                }
+                            // 普通工具 Pending，以及子助手桥接的 ask_user
+                            val attentionKeys = collectUserAttentionKeys(chunk.messages, json)
+                            if (attentionKeys.any { previousAttentionKeys.add(it) }) {
+                                soundEffectPlayer.play(R.raw.loop_approval)
                             }
                         }
                     }
@@ -1251,11 +1285,7 @@ class ChatService(
                 node.copy(
                     id = Uuid.random(),
                     messages = node.messages.map { message ->
-                        message.copy(
-                            parts = message.parts.map { part ->
-                                part.copyWithForkedFilesRecursively()
-                            }
-                        )
+                        message.copy(parts = message.parts.copyWithForkedFilesRecursively())
                     }
                 )
             }
@@ -1282,9 +1312,7 @@ class ChatService(
                 messageNodes = child.messageNodes.map { node ->
                     node.copy(
                         messages = node.messages.map { message ->
-                            message.copy(
-                                parts = message.parts.map { it.copyWithForkedFilesRecursively() }
-                            )
+                            message.copy(parts = message.parts.copyWithForkedFilesRecursively())
                         }
                     )
                 }
@@ -1403,7 +1431,14 @@ class ChatService(
         plan.deletedChildren.forEach { child -> sessionRegistry.evictSession(child.id) }
     }
 
-    private fun UIMessagePart.copyWithForkedFilesRecursively(): UIMessagePart {
+    private suspend fun List<UIMessagePart>.copyWithForkedFilesRecursively(): List<UIMessagePart> =
+        buildList {
+            for (part in this@copyWithForkedFilesRecursively) {
+                add(part.copyForkedPart())
+            }
+        }
+
+    private suspend fun UIMessagePart.copyForkedPart(): UIMessagePart {
         fun copyLocalFileIfNeeded(url: String): String {
             if (!url.startsWith("file:")) return url
             val copied = filesManager.createChatFilesByContents(listOf(url.toUri())).firstOrNull()
@@ -1415,7 +1450,16 @@ class ChatService(
             is UIMessagePart.Document -> copy(url = copyLocalFileIfNeeded(url))
             is UIMessagePart.Video -> copy(url = copyLocalFileIfNeeded(url))
             is UIMessagePart.Audio -> copy(url = copyLocalFileIfNeeded(url))
-            is UIMessagePart.Tool -> copy(output = output.map { it.copyWithForkedFilesRecursively() })
+            is UIMessagePart.Tool -> {
+                val rewriter = toolArtifactRewriter
+                val sourceRef = metadata?.let { rewriter?.decodeArtifactRef(it) }
+                if (rewriter != null && sourceRef != null) {
+                    val (newOutput, newMetadata) = rewriter.rewriteToolOutput(output, metadata)
+                    copy(output = newOutput, metadata = newMetadata)
+                } else {
+                    copy(output = output.copyWithForkedFilesRecursively())
+                }
+            }
             else -> this
         }
     }

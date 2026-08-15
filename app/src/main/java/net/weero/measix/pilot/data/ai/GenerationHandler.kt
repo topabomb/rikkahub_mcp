@@ -45,6 +45,7 @@ import net.weero.measix.pilot.data.ai.transformers.transforms
 import net.weero.measix.pilot.data.ai.transformers.visualTransforms
 import net.weero.measix.pilot.data.ai.tools.buildMemoryTools
 import net.weero.measix.pilot.data.ai.tools.local.askUserApprovalRejection
+import net.weero.measix.pilot.data.ai.tools.local.generateImageApprovalRejection
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
@@ -78,6 +79,7 @@ internal fun resolveToolApprovals(
         val toolDefinition = toolDefinitions.find { it.name == tool.toolName }
         val args = tool.inputAsJson()
         val contractRejection = askUserApprovalRejection(tool.toolName, args)
+            ?: generateImageApprovalRejection(tool.toolName, args)
         when {
             contractRejection != null &&
                 tool.approvalState !is ToolApprovalState.Denied &&

@@ -20,21 +20,19 @@ object SubAssistantRunPolicy {
     val FORBIDDEN_LOCAL_TOOLS = setOf(
         LocalToolOption.AssistantManagement,
         LocalToolOption.AssistantDelegation,
+        LocalToolOption.TextToImage,
     )
 
 }
 
-/**
- * 过滤 Target 的 LocalTools：移除 AssistantManagement、AssistantDelegation。
- */
+/** Filter Target LocalTools using [SubAssistantRunPolicy.FORBIDDEN_LOCAL_TOOLS]. */
 fun filterTargetLocalTools(tools: List<LocalToolOption>): List<LocalToolOption> {
     return tools.filter { it !in SubAssistantRunPolicy.FORBIDDEN_LOCAL_TOOLS }
 }
 
 /**
- * 过滤 Target 的 Tool 列表：
- * - 移除 assistant_manage、assistant_call、assistant_inspect。
- * - 同时过滤已更名的 assistant_memory_list，避免历史记录诱使模型再发出旧名。
+ * Filter Target tools by registered name, including historical
+ * `assistant_memory_list` so replay cannot re-emit the old name.
  */
 fun filterTargetTools(tools: List<Tool>): List<Tool> {
     val forbiddenNames = setOf(
@@ -42,6 +40,7 @@ fun filterTargetTools(tools: List<Tool>): List<Tool> {
         "assistant_call",
         "assistant_inspect",
         "assistant_memory_list",
+        "generate_image",
     )
     return tools.filter { it.name !in forbiddenNames }
 }

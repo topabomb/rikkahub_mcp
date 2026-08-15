@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.imggen
+package net.weero.measix.pilot.ui.pages.imggen
 
 import android.app.Application
 import android.util.Log
@@ -13,22 +13,25 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
-import me.rerere.ai.provider.ImageEditParams
-import me.rerere.ai.provider.ImageGenerationParams
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.ui.ImageGenSize
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.common.android.appTempFolder
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.findModelById
-import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.db.entity.GenMediaEntity
 import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.data.imggen.GeneratedMediaConsumerPlan
+import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
+import net.weero.measix.pilot.data.imggen.ImageGenerationCoordinator
+import net.weero.measix.pilot.data.imggen.ImageGenerationOutcome
+import net.weero.measix.pilot.data.imggen.ImageGenerationRequest
+import net.weero.measix.pilot.data.imggen.ImageGenerationSelection
+import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
+import net.weero.measix.pilot.data.imggen.ImageGenerationSource
 import net.weero.measix.pilot.data.repository.GenMediaRepository
 import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
@@ -61,6 +64,9 @@ class ImgGenVM(
     val providerManager: ProviderManager,
     val genMediaRepository: GenMediaRepository,
     private val filesManager: FilesManager,
+    private val selectionResolver: ImageGenerationSelectionResolver,
+    private val coordinator: ImageGenerationCoordinator,
+    private val generatedMediaStore: GeneratedMediaStore,
 ) : AndroidViewModel(context) {
     private val _prompt = MutableStateFlow("")
     val prompt: StateFlow<String> = _prompt
@@ -74,6 +80,8 @@ class ImgGenVM(
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating
     private var cancelJob: Job? = null
+    private val pageSessionId = "imggen-page"
+    private var activeRequestId: String? = null
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
@@ -93,6 +101,12 @@ class ImgGenVM(
             pagingData.map { entity -> entity.toGeneratedImage(filesManager) }
         }
         .cachedIn(viewModelScope)
+
+    init {
+        viewModelScope.launch {
+            runCatching { coordinator.reconcileMedia() }
+        }
+    }
 
     fun updatePrompt(prompt: String) {
         _prompt.value = prompt
@@ -125,56 +139,86 @@ class ImgGenVM(
     }
 
     fun startNewSession() {
-        cancelJob?.cancel()
+        cancelGeneration()
         clearReferenceImages()
         _prompt.value = ""
         _currentGeneratedImages.value = emptyList()
         _error.value = null
-        _isGenerating.value = false
     }
 
     fun generateImage() {
         if(prompt.value.isBlank()) return
         cancelJob?.cancel()
         cancelJob = viewModelScope.launch {
+            var previewFile: File? = null
             try {
                 _isGenerating.value = true
                 _error.value = null
                 _currentGeneratedImages.value = emptyList()
+                coordinator.cancelPageSession(pageSessionId)
 
                 val settings = settingsStore.settingsFlow.first()
-                val model = settings.findModelById(settings.imageGenerationModelId)
-                    ?: throw IllegalStateException("No model selected")
-
-                val provider = model.findProvider(settings.providers)
-                    ?: throw IllegalStateException("Provider not found")
-
-                val providerSetting = settings.providers.find { it.id == provider.id }
-                    ?: throw IllegalStateException("Provider setting not found")
-
+                val selection = selectionResolver.resolve(settings)
+                if (selection !is ImageGenerationSelection.Available) {
+                    _error.value = "image_model_unavailable"
+                    return@launch
+                }
                 val requestPrompt = _prompt.value
-                val params = ImageGenerationParams(
-                    model = model,
+                val request = ImageGenerationRequest(
+                    source = ImageGenerationSource.Page(pageSessionId),
+                    selection = selection,
                     prompt = requestPrompt,
                     numOfImages = _numberOfImages.value,
                     size = _size.value,
-                    customHeaders = model.customHeaders,
-                    customBody = model.customBodies
+                    partialImages = 2,
+                    consumerPlan = GeneratedMediaConsumerPlan.NONE,
+                    onPartial = { item ->
+                        previewFile?.delete()
+                        val preview = saveImagePreview(
+                            item = item,
+                            modelName = selection.model.displayName,
+                            index = item.partialImageIndex ?: 0,
+                        )
+                        previewFile = preview
+                        _currentGeneratedImages.value = listOf(
+                            GeneratedImage(
+                                id = 0,
+                                prompt = requestPrompt,
+                                filePath = preview.absolutePath,
+                                timestamp = System.currentTimeMillis(),
+                                model = selection.model.displayName,
+                            )
+                        )
+                    },
                 )
-
-                val images = providerManager.getProviderByType(provider)
-                    .generateImage(providerSetting, params)
-
-                collectImageGeneration(
-                    images = images,
-                    prompt = requestPrompt,
-                    modelName = model.displayName,
-                )
+                activeRequestId = request.id
+                when (val outcome = coordinator.enqueue(request)) {
+                    is ImageGenerationOutcome.Failure -> {
+                        previewFile?.delete()
+                        previewFile = null
+                        _error.value = outcome.reason
+                    }
+                    is ImageGenerationOutcome.Success -> {
+                        previewFile?.delete()
+                        previewFile = null
+                        _currentGeneratedImages.value = outcome.media.map { media ->
+                            GeneratedImage(
+                                id = media.mediaId.toInt(),
+                                prompt = requestPrompt,
+                                filePath = media.canonicalFile.absolutePath,
+                                timestamp = System.currentTimeMillis(),
+                                model = selection.model.displayName,
+                            )
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 if(e is CancellationException) return@launch
                 Log.e(TAG, "Failed to generate image", e)
-                _error.value = e.message ?: "Unknown error occurred"
+                _error.value = "unknown"
             } finally {
+                previewFile?.delete()
+                activeRequestId = null
                 _isGenerating.value = false
             }
         }
@@ -184,48 +228,79 @@ class ImgGenVM(
         if (prompt.value.isBlank() || referenceImages.value.isEmpty()) return
         cancelJob?.cancel()
         cancelJob = viewModelScope.launch {
+            var previewFile: File? = null
             try {
                 _isGenerating.value = true
                 _error.value = null
                 _currentGeneratedImages.value = emptyList()
+                coordinator.cancelPageSession(pageSessionId)
 
                 val settings = settingsStore.settingsFlow.first()
-                val model = settings.findModelById(settings.imageGenerationModelId)
-                    ?: throw IllegalStateException("No model selected")
-
-                val provider = model.findProvider(settings.providers)
-                    ?: throw IllegalStateException("Provider not found")
-
-                val providerSetting = settings.providers.find { it.id == provider.id }
-                    ?: throw IllegalStateException("Provider setting not found")
+                val selection = selectionResolver.resolve(settings)
+                if (selection !is ImageGenerationSelection.Available) {
+                    _error.value = "image_model_unavailable"
+                    return@launch
+                }
 
                 val requestPrompt = _prompt.value
                 val sourceImages = _referenceImages.value
-                val params = ImageEditParams(
-                    model = model,
+                val request = ImageGenerationRequest(
+                    source = ImageGenerationSource.Page(pageSessionId),
+                    selection = selection,
                     prompt = requestPrompt,
-                    images = sourceImages,
                     numOfImages = _numberOfImages.value,
                     size = _size.value,
-                    customHeaders = model.customHeaders,
-                    customBody = model.customBodies
-                )
-
-                val images = providerManager.getProviderByType(provider)
-                    .editImage(providerSetting, params)
-
-                collectImageGeneration(
-                    images = images,
-                    prompt = requestPrompt,
-                    modelName = model.displayName,
-                    type = GenMediaEntity.TYPE_IMAGE_EDIT,
+                    partialImages = 2,
+                    mediaType = GenMediaEntity.TYPE_IMAGE_EDIT,
                     sourcePaths = sourceImages.joinToString("\n"),
+                    editImages = sourceImages,
+                    onPartial = { item ->
+                        previewFile?.delete()
+                        val preview = saveImagePreview(
+                            item = item,
+                            modelName = selection.model.displayName,
+                            index = item.partialImageIndex ?: 0,
+                        )
+                        previewFile = preview
+                        _currentGeneratedImages.value = listOf(
+                            GeneratedImage(
+                                id = 0,
+                                prompt = requestPrompt,
+                                filePath = preview.absolutePath,
+                                timestamp = System.currentTimeMillis(),
+                                model = selection.model.displayName,
+                            )
+                        )
+                    },
                 )
+                activeRequestId = request.id
+                when (val outcome = coordinator.enqueue(request)) {
+                    is ImageGenerationOutcome.Failure -> {
+                        previewFile?.delete()
+                        previewFile = null
+                        _error.value = outcome.reason
+                    }
+                    is ImageGenerationOutcome.Success -> {
+                        previewFile?.delete()
+                        previewFile = null
+                        _currentGeneratedImages.value = outcome.media.map { media ->
+                            GeneratedImage(
+                                id = media.mediaId.toInt(),
+                                prompt = requestPrompt,
+                                filePath = media.canonicalFile.absolutePath,
+                                timestamp = System.currentTimeMillis(),
+                                model = selection.model.displayName,
+                            )
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 if (e is CancellationException) return@launch
                 Log.e(TAG, "Failed to edit image", e)
-                _error.value = e.message ?: "Unknown error occurred"
+                _error.value = "unknown"
             } finally {
+                previewFile?.delete()
+                activeRequestId = null
                 _isGenerating.value = false
             }
         }
@@ -233,58 +308,10 @@ class ImgGenVM(
 
     fun cancelGeneration() {
         cancelJob?.cancel()
-    }
-
-    private suspend fun collectImageGeneration(
-        images: Flow<ImageGenerationItem>,
-        prompt: String,
-        modelName: String,
-        type: String = GenMediaEntity.TYPE_IMAGE_GENERATION,
-        sourcePaths: String? = null,
-    ) {
-        val finalImages = mutableListOf<GeneratedImage>()
-        var previewFile: File? = null
-        var finalIndex = 0
-
-        images.collect { item ->
-            if (item.partial) {
-                previewFile?.delete()
-                val imageFile = saveImagePreview(
-                    item = item,
-                    modelName = modelName,
-                    index = item.partialImageIndex ?: finalIndex,
-                )
-                previewFile = imageFile
-                _currentGeneratedImages.value = finalImages + GeneratedImage(
-                    id = 0,
-                    prompt = prompt,
-                    filePath = imageFile.absolutePath,
-                    timestamp = System.currentTimeMillis(),
-                    model = modelName
-                )
-            } else {
-                previewFile?.delete()
-                previewFile = null
-                val imageFile = saveImageToStorage(
-                    item = item,
-                    prompt = prompt,
-                    modelName = modelName,
-                    index = finalIndex,
-                    type = type,
-                    sourcePaths = sourcePaths,
-                )
-                finalImages.add(
-                    GeneratedImage(
-                        id = 0, // Will be updated after database insertion
-                        prompt = prompt,
-                        filePath = imageFile.absolutePath,
-                        timestamp = System.currentTimeMillis(),
-                        model = modelName
-                    )
-                )
-                finalIndex++
-                _currentGeneratedImages.value = finalImages.toList()
-            }
+        val requestId = activeRequestId
+        viewModelScope.launch {
+            if (requestId != null) coordinator.cancel(requestId)
+            coordinator.cancelPageSession(pageSessionId)
         }
     }
 
@@ -298,51 +325,15 @@ class ImgGenVM(
         return filesManager.createImageFileFromBase64(item.data, imageFile.absolutePath)
     }
 
-    private suspend fun saveImageToStorage(
-        item: ImageGenerationItem,
-        prompt: String,
-        modelName: String,
-        index: Int,
-        type: String = GenMediaEntity.TYPE_IMAGE_GENERATION,
-        sourcePaths: String? = null,
-    ): File {
-        val imagesDir = filesManager.getImagesDir()
-
-        val timestamp = System.currentTimeMillis()
-        val filename = "${timestamp}_${modelName}_$index.png"
-        val imageFile = File(imagesDir, filename)
-
-        val createdFile = filesManager.createImageFileFromBase64(item.data, imageFile.absolutePath)
-
-        // Save to database with relative path
-        val relativePath = "images/${imageFile.name}"
-        val entity = GenMediaEntity(
-            path = relativePath,
-            modelId = modelName,
-            prompt = prompt,
-            createAt = timestamp,
-            type = type,
-            sourcePaths = sourcePaths,
-        )
-        genMediaRepository.insertMedia(entity)
-
-        return createdFile
-    }
-
     fun deleteImage(image: GeneratedImage) {
         viewModelScope.launch {
             try {
-                // Delete from database first
-                genMediaRepository.deleteMedia(image.id)
-
-                // Then delete the file
-                val file = File(image.filePath)
-                if (file.exists()) {
-                    file.delete()
+                if (!generatedMediaStore.delete(image.id)) {
+                    _error.value = "delete_failed"
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to delete image", e)
-                _error.value = "Failed to delete image"
+                _error.value = "delete_failed"
             }
         }
     }

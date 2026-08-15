@@ -39,6 +39,10 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallPhase
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
+import net.weero.measix.pilot.data.ai.subassistant.fallbackSubAssistantOutputText
+import net.weero.measix.pilot.data.ai.subassistant.parseRuntimeErrorDetailFromToolOutput
+import net.weero.measix.pilot.data.ai.subassistant.parseSubAssistantToolResultFields
+import net.weero.measix.pilot.data.ai.subassistant.resolveSubAssistantErrorBody
 import net.weero.measix.pilot.data.ai.subassistant.takeTailByCodePoints
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.model.Avatar
@@ -244,6 +248,29 @@ fun SubAssistantCallCard(
                 } else {
                     null
                 }
+                val errorBody = if (
+                    metadata.state == SubAssistantCallState.FAILED ||
+                    metadata.state == SubAssistantCallState.UNAVAILABLE
+                ) {
+                    resolveSubAssistantErrorBody(
+                        reason = metadata.reason,
+                        detail = parseRuntimeErrorDetailFromToolOutput(tool, json),
+                        localizedContentBlocked = stringResource(
+                            R.string.sub_assistant_error_content_blocked_body,
+                        ),
+                    )
+                } else {
+                    null
+                }
+                if (!errorBody.isNullOrBlank()) {
+                    Text(
+                        text = errorBody,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 if (!previewText.isNullOrBlank()) {
                     val layout = LocalAdaptiveLayoutInfo.current
                     val previewLines = subAssistantCardPreviewLines(
@@ -339,15 +366,25 @@ private fun SubAssistantCallCardFallback(
                 style = MaterialTheme.typography.titleSmall,
             )
             if (tool.isExecuted) {
-                tool.output.firstOrNull { it is UIMessagePart.Text }?.let {
-                    Text(
-                        text = (it as UIMessagePart.Text).text.take(200),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+                val fields = parseSubAssistantToolResultFields(tool, JsonInstant)
+                val rawOutput = tool.output.filterIsInstance<UIMessagePart.Text>()
+                    .joinToString("\n") { it.text }
+                val fallbackText = fallbackSubAssistantOutputText(
+                    fields = fields,
+                    localizedReason = fields.reason?.let { localizeSubAssistantReason(it) },
+                    localizedContentBlocked = stringResource(
+                        R.string.sub_assistant_error_content_blocked_body,
+                    ),
+                    rawOutput = rawOutput,
+                )
+                Text(
+                    text = fallbackText
+                        ?: stringResource(R.string.sub_assistant_reason_unknown),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
             } else {
                 CircularProgressIndicator(
                     modifier = Modifier.size(16.dp),
@@ -445,6 +482,7 @@ internal fun localizeSubAssistantReason(reason: String): String {
         "caller_model_unavailable" -> stringResource(R.string.sub_assistant_reason_caller_model_unavailable)
         "target_busy" -> stringResource(R.string.sub_assistant_reason_target_busy)
         "provider_error" -> stringResource(R.string.sub_assistant_reason_provider_error)
+        "content_blocked" -> stringResource(R.string.sub_assistant_reason_content_blocked)
         "runtime_error" -> stringResource(R.string.sub_assistant_reason_runtime_error)
         "step_limit_reached" -> stringResource(R.string.sub_assistant_reason_step_limit_reached)
         "interaction_limit_reached" -> stringResource(

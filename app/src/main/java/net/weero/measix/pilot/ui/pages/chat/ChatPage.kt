@@ -78,6 +78,7 @@ import me.rerere.hugeicons.stroke.PanelLeftOpen
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.datastore.getConversationAssistant
@@ -386,11 +387,14 @@ private fun ChatPageContent(
         }
     }
     val memoryCount by memoryCountFlow.collectAsStateWithLifecycle(initialValue = 0)
-    val readiness = remember(setting, assistant, workspaceNamesById, memoryCount) {
+    val imageSelectionResolver: ImageGenerationSelectionResolver = koinInject()
+    val imageGenerationAvailable = remember(setting) { imageSelectionResolver.isAvailable(setting) }
+    val readiness = remember(setting, assistant, workspaceNamesById, memoryCount, imageGenerationAvailable) {
         setting.buildConversationReadiness(
             assistant = assistant,
             workspaceNamesById = workspaceNamesById,
             memoryCount = memoryCount,
+            imageGenerationAvailable = imageGenerationAvailable,
         )
     }
     val modelListState = rememberModelListState(

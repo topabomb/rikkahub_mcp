@@ -43,6 +43,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
+import net.weero.measix.pilot.data.ai.subassistant.resolveSubAssistantErrorBody
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.ui.components.message.ChatMessage
@@ -277,9 +278,17 @@ private fun DetailContent(
 
             val metadata = state.link.metadata
             if (metadata.state == SubAssistantCallState.FAILED ||
-                metadata.state == SubAssistantCallState.STOPPED
+                metadata.state == SubAssistantCallState.STOPPED ||
+                metadata.state == SubAssistantCallState.UNAVAILABLE
             ) {
                 item(key = "terminal") {
+                    val errorBody = resolveSubAssistantErrorBody(
+                        reason = metadata.reason,
+                        detail = state.link.failureDetail,
+                        localizedContentBlocked = stringResource(
+                            R.string.sub_assistant_error_content_blocked_body,
+                        ),
+                    )
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -302,6 +311,13 @@ private fun DetailContent(
                                     text = localizeSubAssistantReason(reason),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (!errorBody.isNullOrBlank()) {
+                                Text(
+                                    text = errorBody,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
                                 )
                             }
                         }

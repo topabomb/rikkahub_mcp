@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.setting
+package net.weero.measix.pilot.ui.pages.setting
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
@@ -26,7 +26,10 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.AiMagic
 import me.rerere.hugeicons.stroke.Book01
@@ -51,6 +54,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.isNotConfigured
 import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.ui.components.ui.ProviderConfigWarningCard
@@ -70,6 +74,7 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
     val navController = LocalNavController.current
     val settings by vm.settings.collectAsStateWithLifecycle()
     val filesManager: FilesManager = koinInject()
+    val generatedMediaStore: GeneratedMediaStore = koinInject()
 
     Scaffold(
         topBar = {
@@ -199,8 +204,13 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
             }
 
             item("dataSettings") {
-                val storageState by produceState(-1 to 0L) {
-                    value = filesManager.countChatFiles()
+                val lifecycleOwner = LocalLifecycleOwner.current
+                val storageState by produceState(-1 to 0L, lifecycleOwner) {
+                    lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                        val (uploadCount, uploadSize) = filesManager.countChatFiles()
+                        val generated = generatedMediaStore.countCommitted()
+                        value = (uploadCount + generated.count) to (uploadSize + generated.sizeBytes)
+                    }
                 }
                 CardGroup(
                     modifier = Modifier.padding(horizontal = 8.dp),

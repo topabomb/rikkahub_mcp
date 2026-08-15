@@ -79,7 +79,7 @@
 
 | 字段 | 默认值 | 语义 |
 |------|--------|------|
-| `localTools` | `DEFAULT_ASSISTANT_LOCAL_TOOLS` | 内置本地工具选项；当前默认是 `TimeInfo`、`Tts`、`AskUser` |
+| `localTools` | `DEFAULT_ASSISTANT_LOCAL_TOOLS` | 内置本地工具选项；当前默认是 `TimeInfo`、`Tts`、`AskUser`。`TextToImage` 不在默认集中 |
 | `enableWebSearch` | `false` | 装配搜索工具 |
 | `mcpServers` | 空集合 | 允许该助手使用的 MCP Server ID |
 | `workspaceId` | `null` | 绑定工作区；仅工作区 shell ready 时装配工具并注入提醒 |
@@ -87,7 +87,8 @@
 | `quickMessageIds` | 空集合 | UI 快捷消息引用 |
 
 主会话的工具装配顺序是：搜索、本地工具、历史引用、Workspace、Skill、Assistant Tools、MCP。
-`GenerationHandler` 在每个工具循环 step 再按当前记忆状态加入记忆工具。Target Run 会进一步过滤子助手管理/委托工具，并在 step 边界重验权限。
+`GenerationHandler` 在每个工具循环 step 再按当前记忆状态加入记忆工具。Target Run 会进一步过滤子助手管理/委托工具和 `generate_image`，并在 step 边界重验权限。
+`generate_image` 只在 `ToolSetRunMode.NORMAL`、Assistant 已开启 `TextToImage`、且默认文生图模型当前有效时注册。
 
 ### 文本变换与请求覆盖
 
@@ -136,8 +137,9 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 | `Clipboard` | `clipboard_tool` |
 | `ScreenTime` | `get_screen_time` |
 | `Calendar` | `calendar_query`、`calendar_create` |
+| `TextToImage` | `generate_image`（仅 NORMAL，且默认图片模型有效） |
 
-工具是否需要审批由具体 `Tool.needsApproval` 决定，而不是由枚举统一决定。
+工具是否需要审批由具体 `Tool.needsApproval` 决定，而不是由枚举统一决定。`generate_image` 仅在 `set_as_background=true` 时审批。Target 永久过滤 `TextToImage`。
 
 ### `PromptInjection`
 

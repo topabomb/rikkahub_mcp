@@ -80,6 +80,10 @@
   <string name="assistant_page_local_tools_time_info_title">時刻情報</string>
   <string name="assistant_page_local_tools_tts_desc">AIが選択したTTSサービスを使ってテキストを読み上げます</string>
   <string name="assistant_page_local_tools_tts_title">テキスト読み上げ</string>
+  <string name="assistant_page_local_tools_text_to_image_title">Text to Image</string>
+  <string name="assistant_page_local_tools_text_to_image_desc">Allow this assistant to generate one image from a text prompt</string>
+  <string name="assistant_page_local_tools_text_to_image_unavailable">Enabled, but no valid image model is selected</string>
+  <string name="assistant_page_local_tools_text_to_image_configure_model">Choose model</string>
   <string name="assistant_page_manage_memory_title">記憶を管理</string>
   <string name="assistant_page_max_tokens">最大トークン数</string>
   <string name="assistant_page_max_tokens_desc">生成する最大トークン数。空白にすると制限なし。</string>
@@ -233,6 +237,32 @@
   <string name="chat_message_tool_deny_dialog_title">ツール実行を拒否</string>
   <string name="chat_message_tool_edit_memory">記憶を更新しました</string>
   <string name="chat_message_tool_get_time">時刻情報を取得</string>
+  <string name="chat_message_tool_generate_image_queued">Waiting to generate image</string>
+  <string name="chat_message_tool_generate_image_generating">Generating image</string>
+  <string name="chat_message_tool_generate_image_persisting">Saving image</string>
+  <string name="chat_message_tool_generate_image_setting_background">Setting background</string>
+  <string name="chat_message_tool_generate_image_completed">Image generated</string>
+  <string name="chat_message_tool_generate_image_failed">Image generation failed</string>
+  <string name="chat_message_tool_generate_image_failed_invalid_arguments">Invalid image generation arguments</string>
+  <string name="chat_message_tool_generate_image_failed_model_unavailable">Image model unavailable</string>
+  <string name="chat_message_tool_generate_image_failed_revoked">Image tool was disabled</string>
+  <string name="chat_message_tool_generate_image_failed_model_changed">Image model changed</string>
+  <string name="chat_message_tool_generate_image_failed_provider">Image provider error</string>
+  <string name="chat_message_tool_generate_image_failed_invalid_result">Image provider returned no final image</string>
+  <string name="chat_message_tool_generate_image_failed_persistence">Failed to save the generated image</string>
+  <string name="chat_message_tool_generate_image_failed_artifact_missing">生成した画像ファイルは利用できません</string>
+  <string name="chat_message_tool_generate_image_background_pending">Waiting to set as background</string>
+  <string name="chat_message_tool_generate_image_background_updated">Set as assistant background</string>
+  <string name="chat_message_tool_generate_image_background_assistant_missing">Background not updated: assistant not found</string>
+  <string name="chat_message_tool_generate_image_background_copy_failed">Background not updated: copy failed</string>
+  <string name="chat_message_tool_generate_image_background_settings_failed">Background not updated: settings write failed</string>
+  <string name="chat_message_tool_generate_image_failed_assistant_missing">アシスタントが存在しません</string>
+  <string name="chat_message_tool_generate_image_model">モデル: %1$s</string>
+  <string name="chat_message_tool_generate_image_provider">プロバイダー: %1$s</string>
+  <string name="chat_message_tool_generate_image_file_path">ファイル</string>
+  <string name="chat_message_tool_generate_image_copy_path">パスをコピー</string>
+  <string name="chat_message_tool_generate_image_technical_details">技術詳細</string>
+  <string name="chat_message_tool_generate_image_prompt_label">プロンプト</string>
   <string name="chat_message_tool_scrape_prefix">ウェブサイトをスクレイピング: %1$s</string>
   <string name="chat_message_tool_scrape_web">ウェブページを取得</string>
   <string name="chat_message_tool_conversation_search">検索履歴: %1$s</string>
@@ -397,6 +427,9 @@
   <string name="imggen_page_save_failed">保存に失敗しました: %1$s</string>
   <string name="imggen_page_settings_title">画像生成設定</string>
   <string name="imggen_page_title">画像生成</string>
+  <string name="imggen_page_error_no_model">画像モデルが選択されていません</string>
+  <string name="imggen_page_error_generic">画像の生成に失敗しました</string>
+  <string name="imggen_page_error_delete">画像の削除に失敗しました</string>
   <string name="mcp_picker_syncing">MCPサーバーを同期中...</string>
   <string name="mcp_picker_title">MCP</string>
   <string name="menu">メニュー</string>
@@ -661,7 +694,7 @@
   <string name="setting_display_page_volume_key_scroll_title">音量キーでページスクロール</string>
   <string name="setting_files_page_cancel_action">キャンセル</string>
   <string name="setting_files_page_clean_action">クリーンアップ</string>
-  <string name="setting_files_page_clean_confirmation">このカテゴリのすべてのファイルを完全に削除します。この操作は元に戻せません。</string>
+  <string name="setting_files_page_clean_confirmation">アップロード済みファイル（チャット添付、ツール結果のコピー、アシスタント背景を含む）を完全に削除します。この操作は元に戻せません。</string>
   <string name="setting_files_page_clean_content_description">ファイルをクリーンアップ</string>
   <string name="setting_files_page_clean_failed_toast">一部のファイルを削除できませんでした</string>
   <string name="setting_files_page_clean_title">ファイルをクリーンアップしますか？</string>
@@ -722,6 +755,8 @@
   <string name="setting_model_page_compress_model">モデルを圧縮</string>
   <string name="setting_model_page_compress_model_desc">会話履歴を圧縮するモデル</string>
   <string name="setting_model_page_compress_prompt_vars">変数: {content}, {target_tokens}, {additional_context}</string>
+  <string name="setting_model_page_image_generation_model">Image Generation Model</string>
+  <string name="setting_model_page_image_generation_model_desc">Default model used by the image page and the generate_image chat tool</string>
   <string name="setting_model_page_ocr_model">OCRモデル</string>
   <string name="setting_model_page_ocr_model_desc">画像の光学文字認識に使用されるモデル</string>
   <string name="setting_model_page_ocr_prompt_vars">変数: 画像データ: {images}</string>
@@ -1205,6 +1240,7 @@
   <string name="chat_readiness_mcp_highlight_term">Measix Device Remote Control</string>
   <string name="chat_readiness_local_tools_title">ローカル機能</string>
   <string name="chat_readiness_local_tools_count">%1$d 件有効</string>
+  <string name="chat_readiness_local_tools_unavailable">%1$d available / %2$d enabled</string>
   <string name="chat_readiness_local_tools_description">音声読み上げ、クリップボード、スクリーンタイムなど端末上の機能を有効にします。</string>
   <string name="chat_readiness_workspace_title">ローカルワークスペース</string>
   <string name="chat_readiness_workspace_not_configured">利用不可</string>
@@ -1234,7 +1270,6 @@
   <string name="chat_sidebar_expand">会話サイドバーを展開</string>
   <string name="chat_navigation_open_drawer">会話ナビゲーションを開く</string>
   <string name="chat_page_chat_options">チャットオプション</string>
-
   <!-- Sub-Assistant: Assistant configuration -->
   <string name="assistant_page_description">能力描述</string>
   <string name="assistant_page_description_placeholder">このアシスタントが何を得意とし、いつ呼び出すべきかを簡潔に説明</string>
@@ -1243,27 +1278,25 @@
   <string name="assistant_page_allow_as_sub_assistant">サブアシスタントとして許可</string>
   <string name="assistant_page_allow_as_sub_assistant_desc">他のアシスタントがタスク、質問、ロールプレイなどのリクエストを呼び出せるようにします。独立したコンテキストを使用し、メイン会話は自動的に参照しません。</string>
   <string name="assistant_page_sub_assistant_tag">サブアシスタント</string>
-<string name="assistant_page_sub_assistant_no_model_warning">有効なチャットモデルが未設定のため、呼び出しを開始できません</string>
-<string name="assistant_page_sub_assistant_global_memory_warning">サブアシスタントとして呼び出されるとき、共有グローバルメモリを使用します</string>
-<string name="assistant_page_sub_assistant_global_visible">グローバル表示</string>
-<string name="assistant_page_sub_assistant_global_visible_desc">サブアシスタントツールを持つすべてのアシスタントが発見、呼び出し、管理できます。変更と削除には確認が必要です。管理ツールを持つアシスタントはローカルメモリも表示できます。</string>
-<string name="assistant_page_sub_assistant_access_scope">サブアシスタントアクセス範囲</string>
-<string name="assistant_page_sub_assistant_access_scope_desc">このアシスタントが発見、呼び出し、管理できるサブアシスタントを選択</string>
-<string name="assistant_page_sub_assistant_access_scope_empty">サブアシスタントが選択されていません</string>
-<string name="assistant_page_sub_assistant_access_scope_count">%1$d 個のサブアシスタントが選択されています</string>
-<string name="assistant_page_sub_assistant_globally_available">グローバル利用可能</string>
-<string name="sub_assistant_global_tag">グローバル</string>
-<string name="assistant_picker_show_sub_assistants">サブアシスタント</string>
+  <string name="assistant_page_sub_assistant_no_model_warning">有効なチャットモデルが未設定のため、呼び出しを開始できません</string>
+  <string name="assistant_page_sub_assistant_global_memory_warning">サブアシスタントとして呼び出されるとき、共有グローバルメモリを使用します</string>
+  <string name="assistant_page_sub_assistant_global_visible">グローバル表示</string>
+  <string name="assistant_page_sub_assistant_global_visible_desc">サブアシスタントツールを持つすべてのアシスタントが発見、呼び出し、管理できます。変更と削除には確認が必要です。管理ツールを持つアシスタントはローカルメモリも表示できます。</string>
+  <string name="assistant_page_sub_assistant_access_scope">サブアシスタントアクセス範囲</string>
+  <string name="assistant_page_sub_assistant_access_scope_desc">このアシスタントが発見、呼び出し、管理できるサブアシスタントを選択</string>
+  <string name="assistant_page_sub_assistant_access_scope_empty">サブアシスタントが選択されていません</string>
+  <string name="assistant_page_sub_assistant_access_scope_count">%1$d 個のサブアシスタントが選択されています</string>
+  <string name="assistant_page_sub_assistant_globally_available">グローバル利用可能</string>
+  <string name="sub_assistant_global_tag">グローバル</string>
+  <string name="assistant_picker_show_sub_assistants">サブアシスタント</string>
   <string name="assistant_page_no_chat_model_warning">チャットモデル未設定、呼び出し時に開始できません</string>
   <string name="assistant_page_global_memory_warning">呼び出し時に共有グローバルメモリを使用します</string>
-
   <!-- Sub-Assistant: Local Tools -->
   <string name="assistant_page_local_tools_assistant_collaboration">アシスタント連携</string>
   <string name="assistant_page_local_tools_assistant_management_title">他のアシスタントを管理</string>
   <string name="assistant_page_local_tools_assistant_management_desc">このアシスタントが他のアシスタントの作成、変更、削除、およびローカルメモリの参照を許可します。メモリは所有アシスタントのツールでのみ维护できます。</string>
   <string name="assistant_page_local_tools_assistant_delegation_title">サブアシスタントを呼び出し</string>
   <string name="assistant_page_local_tools_assistant_delegation_desc">このアシスタントが呼び出し可能なサブアシスタントにリクエストを送信することを許可します。</string>
-
   <!-- Sub-Assistant: Call Card -->
   <string name="sub_assistant_card_starting">開始中</string>
   <string name="sub_assistant_card_running">実行中</string>
@@ -1276,7 +1309,6 @@
   <string name="sub_assistant_card_using_tool">使用中：%1$s</string>
   <string name="sub_assistant_card_view_detail">詳細を表示</string>
   <string name="sub_assistant_card_scroll_to_latest">最新</string>
-
   <!-- Sub-Assistant: Call Card reasons -->
   <string name="sub_assistant_reason_assistant_not_found">アシスタントが見つかりません</string>
   <string name="sub_assistant_reason_target_not_allowed">サブアシスタントとして許可されていません</string>
@@ -1294,7 +1326,6 @@
   <string name="sub_assistant_reason_target_removed">アシスタントが削除されました</string>
   <string name="sub_assistant_reason_target_disabled">サブアシスタントが無効になりました</string>
   <string name="sub_assistant_reason_child_missing">会話が見つかりません</string>
-
   <!-- Sub-Assistant: Call Card phases -->
   <string name="sub_assistant_phase_preparing">準備中</string>
   <string name="sub_assistant_phase_model_waiting">モデル待機中</string>
@@ -1302,7 +1333,6 @@
   <string name="sub_assistant_phase_answer_streaming">生成中</string>
   <string name="sub_assistant_phase_tool_executing">ツール実行中</string>
   <string name="sub_assistant_phase_between_steps">処理中</string>
-
   <!-- Sub-Assistant: Detail page -->
   <string name="sub_assistant_detail_title">サブアシスタント詳細</string>
   <string name="sub_assistant_detail_assistant_deleted">アシスタントが削除されました</string>
@@ -1331,5 +1361,12 @@
   <string name="sub_assistant_reason_interaction_limit_reached">確認のやり取りが多すぎます</string>
   <string name="sub_assistant_reason_unknown">サブアシスタントはリクエストを完了できませんでした</string>
   <string name="sub_assistant_tool_unknown">ツール</string>
+  <string name="sub_assistant_reason_content_blocked">利用ポリシーにより拒否されました</string>
+  <string name="sub_assistant_error_content_blocked_body">利用ポリシーに違反したため、モデルはこのリクエストを拒否しました。表現を変えてもう一度お試しください。</string>
+  <string name="setting_files_page_folder_generated_images">生成画像</string>
+  <string name="setting_files_page_generated_no_prompt">プロンプトなし</string>
+  <string name="setting_files_page_generated_unknown_model">不明なモデル</string>
+  <string name="setting_files_page_delete_generated_confirmation">ギャラリーの原本のみ削除されます。チャットと背景のコピーは削除されません。</string>
+  <string name="setting_files_page_clean_generated_confirmation">ギャラリー内の生成画像をすべて完全に削除します。チャットと背景のコピーは削除されません。この操作は元に戻せません。</string>
 </resources>
 

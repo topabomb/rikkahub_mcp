@@ -134,8 +134,10 @@ Text part 在传入 `MarkdownBlock` 之前，先经过 `replaceRegexes()` 处理
 - `ReasoningStep` → `ChatMessageReasoningStep`（推理文本）
 - `ToolStep` → `ChatMessageToolStep`（工具调用卡片，含输入/输出/审批）
 
-折叠只隐藏普通的早期步骤；所有 `ToolApprovalState.Pending` 的 Tool step 都被固定展示，且不计入隐藏
-数量。因此同批多个审批/提问不会因 COT 折叠而消失，用户处理完后才恢复普通尾部折叠规则。
+折叠只隐藏普通的早期步骤。`ToolApprovalState.Pending` 的 Tool step 与 `generate_image` 都被固定
+展示，且不计入隐藏数量。前者保证 HITL 审批不会被「再显示 N 步」收走；后者保证穿插在搜索/读写/
+shell 中间的文生图结果仍留在时间线原位。`generate_image` 不拆成 `SubAssistantCallBlock`：它没有
+Child 会话身份和导航，只是普通 Tool step。
 
 > 工具步骤中，工作空间文件编辑工具（`workspace_edit_file`）的输出通过 `DiffView`
 > （`DiffView.kt`）渲染统一 diff，支持折叠摘要与展开全量视图。

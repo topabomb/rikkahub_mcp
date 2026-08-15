@@ -522,7 +522,7 @@ ChatList (LazyColumn)
             ├─ avatar / branch / actions / nerd line
             └─ groupMessageParts（按原始 Part 顺序分组）
                  ├─ ContentBlock → 文本、图片、音频、视频、文档等
-                 ├─ ThinkingBlock → reasoning 与普通工具 step
+                 ├─ ThinkingBlock → reasoning 与普通工具 step（折叠时钉住 Pending 与 generate_image）
                  └─ SubAssistantCallBlock → SubAssistantCallCard
 ```
 
@@ -547,6 +547,7 @@ ChatList (LazyColumn)
 | OcrTransformer | 图片 OCR 文字提取 |
 | TemplateTransformer | 应用 Pebble 模板 |
 | WorkspaceReminderTransformer | 注入 Workspace 上下文提醒 |
+| ToolArtifactReplayTransformer | 按 artifact metadata 重写历史 Tool Result 路径与 Image URL |
 
 ### 输出管道（OutputMessageTransformer）
 

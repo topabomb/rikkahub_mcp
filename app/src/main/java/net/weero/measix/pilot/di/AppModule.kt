@@ -1,11 +1,19 @@
 package net.weero.measix.pilot.di
 
+import android.content.Context
 import kotlinx.serialization.json.Json
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.ai.tools.AssistantToolFactory
 import net.weero.measix.pilot.data.ai.tools.GenerationToolSetFactory
+import net.weero.measix.pilot.data.ai.tools.local.ImageGenerationToolFactory
 import net.weero.measix.pilot.data.ai.tools.local.LocalTools
 import net.weero.measix.pilot.data.event.AppEventBus
+import net.weero.measix.pilot.data.files.ManagedLocalArtifactStore
+import net.weero.measix.pilot.data.files.ToolArtifactRewriter
+import net.weero.measix.pilot.data.imggen.AssistantBackgroundService
+import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
+import net.weero.measix.pilot.data.imggen.ImageGenerationCoordinator
+import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.service.AssistantManagementService
 import net.weero.measix.pilot.service.AssistantDataRecovery
@@ -30,7 +38,62 @@ val appModule = module {
     }
 
     single {
-        LocalTools(get(), get(), get(), get())
+        ImageGenerationSelectionResolver(get())
+    }
+
+    single {
+        ManagedLocalArtifactStore(get(), get())
+    }
+
+    single {
+        val context: Context = get()
+        GeneratedMediaStore(
+            filesDir = context.filesDir,
+            genMediaRepository = get(),
+            artifactStore = get(),
+        )
+    }
+
+    single(createdAtStart = true) {
+        ImageGenerationCoordinator(
+            scope = get<AppScope>(),
+            mediaStore = get(),
+        ).apply { startBackgroundMaintenance() }
+    }
+
+    single {
+        AssistantBackgroundService(
+            context = get(),
+            settingsStore = get(),
+            artifactStore = get(),
+            conversationRepository = get(),
+            genMediaRepository = get(),
+        )
+    }
+
+    single {
+        val context: Context = get()
+        ToolArtifactRewriter(
+            filesDir = context.filesDir,
+            artifactStore = get(),
+        )
+    }
+
+    single {
+        val context: Context = get()
+        ImageGenerationToolFactory(
+            filesDir = context.filesDir,
+            settingsStore = get(),
+            resolver = get(),
+            coordinator = get(),
+            backgroundService = get(),
+            artifactStore = get(),
+            rewriter = get(),
+        )
+    }
+
+    single {
+        LocalTools(get(), get(), get(), get(), get())
     }
 
     single {
@@ -153,6 +216,7 @@ val appModule = module {
             sessionRegistry = get(),
             recoveryGate = get(),
             json = get(),
+            toolArtifactRewriter = get(),
         )
     }
 }

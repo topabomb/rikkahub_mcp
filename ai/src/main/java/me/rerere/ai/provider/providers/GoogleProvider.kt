@@ -49,6 +49,8 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.renderableImageUrl
 import me.rerere.ai.ui.toMetadata
+import me.rerere.ai.util.HttpException
+import me.rerere.ai.util.formatProviderHttpError
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeBase64
@@ -186,7 +188,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
-            throw Exception("Failed to get response: ${response.code} ${response.body?.string()}")
+            throw formatProviderHttpError(response.code, response.body?.string())
         }
 
         val bodyStr = response.body?.string() ?: ""
@@ -318,13 +320,13 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                             val bodyElement = json.parseToJsonElement(bodyStr)
                             println(bodyElement)
                             if (bodyElement is JsonObject) {
-                                exception = Exception(
+                                exception = HttpException(
                                     bodyElement["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content
-                                        ?: "unknown"
+                                        ?: "Unknown error: ${response.code}"
                                 )
                             }
                         } else {
-                            exception = Exception("Unknown error: ${response.code}")
+                            exception = HttpException("Unknown error: ${response.code}")
                         }
                     }
                 } catch (e: Throwable) {

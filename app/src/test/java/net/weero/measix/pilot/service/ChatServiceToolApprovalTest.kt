@@ -47,6 +47,47 @@ class ChatServiceToolApprovalTest {
     }
 
     @Test
+    fun `attention keys include pending tools and bridged ask_user`() {
+        val pending = pendingTool("ask")
+        val assistantCall = runningCallWithAskUser("ask-42")
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(pending, assistantCall),
+        )
+
+        val keys = collectUserAttentionKeys(listOf(message), json)
+
+        assertEquals(
+            setOf("tool:${message.id}:0", "ask:ask-42"),
+            keys,
+        )
+        assertEquals(
+            setOf("tool:${message.id}:0", "ask:ask-42"),
+            collectUserAttentionKeys(listOf(message), json),
+        )
+    }
+
+    @Test
+    fun `attention keys ignore leftover ask_user on a terminal call`() {
+        val leftover = runningCallWithAskUser("ask-stale").let { tool ->
+            val metadata = tool.getSubAssistantCallMetadata(json)!!.copy(
+                state = SubAssistantCallState.COMPLETED,
+            )
+            tool.mergeSubAssistantCallMetadata(json, metadata)
+        }
+        val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(leftover))
+        assertEquals(emptySet<String>(), collectUserAttentionKeys(listOf(message), json))
+    }
+
+    @Test
+    fun `a new ask_user interaction id is a new attention key`() {
+        val first = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(runningCallWithAskUser("ask-1")))
+        val second = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(runningCallWithAskUser("ask-2")))
+        assertEquals(setOf("ask:ask-1"), collectUserAttentionKeys(listOf(first), json))
+        assertEquals(setOf("ask:ask-2"), collectUserAttentionKeys(listOf(second), json))
+    }
+
+    @Test
     fun `stale message locator cannot mutate current branch`() {
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
@@ -148,6 +189,29 @@ class ChatServiceToolApprovalTest {
         assertEquals(true, text.contains("\"tool_calls\""))
         assertEquals(true, text.contains("search_web"))
         assertEquals(true, text.contains("Spoken answer."))
+    }
+
+    private fun runningCallWithAskUser(interactionId: String): UIMessagePart.Tool {
+        val metadata = buildInitialSubAssistantCallMetadata(
+            runId = "run-ask",
+            targetAssistantId = Uuid.random(),
+            targetNameSnapshot = "Reviewer",
+        ).copy(
+            state = SubAssistantCallState.RUNNING,
+            userInteraction = net.weero.measix.pilot.data.ai.subassistant.SubAssistantUserInteraction(
+                interactionId = interactionId,
+                messageId = Uuid.random().toString(),
+                toolOrdinal = 0,
+                toolName = "ask_user",
+                input = "{}",
+            ),
+        )
+        return UIMessagePart.Tool(
+            toolCallId = "call-ask",
+            toolName = "assistant_call",
+            input = "{}",
+            approvalState = ToolApprovalState.Auto,
+        ).mergeSubAssistantCallMetadata(json, metadata)
     }
 
     private fun runningAssistantCall(input: String): UIMessagePart.Tool {

@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.imggen
+package net.weero.measix.pilot.ui.pages.imggen
 
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -101,6 +101,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.files.FileUtils
 import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.ui.components.ai.ModelSelector
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.FormItem
@@ -252,9 +253,10 @@ private fun ImageGenScreen(
         initialValue = SheetValue.Hidden,
         enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)
     )
+    val errorMessage = imageGenerationErrorMessage(error)
 
     LaunchedEffect(error) {
-        error?.let { errorMessage ->
+        error?.let {
             toaster.show(message = errorMessage, type = ToastType.Error)
             vm.clearError()
         }
@@ -390,9 +392,13 @@ private fun InputBar(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val resolver = koinInject<ImageGenerationSelectionResolver>()
+            val imageProviders = remember(settings.providers, resolver) {
+                settings.providers.filter { resolver.supportsImageGeneration(it) }
+            }
             ModelSelector(
                 modelId = settings.imageGenerationModelId,
-                providers = settings.providers,
+                providers = imageProviders,
                 type = ModelType.IMAGE,
                 onlyIcon = true,
                 onSelect = { model ->
@@ -751,4 +757,15 @@ private fun SettingsBottomSheet(
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
+}
+
+@Composable
+private fun imageGenerationErrorMessage(error: String?): String = when (error) {
+    null -> ""
+    "image_model_unavailable" -> stringResource(R.string.imggen_page_error_no_model)
+    "provider_error" -> stringResource(R.string.chat_message_tool_generate_image_failed_provider)
+    "persistence_error" -> stringResource(R.string.chat_message_tool_generate_image_failed_persistence)
+    "invalid_result" -> stringResource(R.string.chat_message_tool_generate_image_failed_invalid_result)
+    "delete_failed" -> stringResource(R.string.imggen_page_error_delete)
+    else -> stringResource(R.string.imggen_page_error_generic)
 }

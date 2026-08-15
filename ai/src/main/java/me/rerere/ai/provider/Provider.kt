@@ -13,6 +13,13 @@ import me.rerere.ai.ui.UIMessage
 // 提供商实现
 // 采用无状态设计，使用时除了需要传入需要的参数外，还需要传入provider setting作为参数
 interface Provider<T : ProviderSetting> {
+    /**
+     * Whether this client implements [generateImage]. A true value does not prove that an
+     * arbitrary compatible host exposes the endpoint; remote HTTP rejection is still a runtime error.
+     */
+    val supportsImageGeneration: Boolean
+        get() = false
+
     suspend fun listModels(providerSetting: T): List<Model>
 
     suspend fun getBalance(providerSetting: T): String {

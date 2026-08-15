@@ -80,6 +80,10 @@
   <string name="assistant_page_local_tools_time_info_title">시간 정보</string>
   <string name="assistant_page_local_tools_tts_desc">AI가 선택한 TTS 서비스를 사용해 텍스트를 음성으로 읽어줍니다</string>
   <string name="assistant_page_local_tools_tts_title">텍스트 음성 변환</string>
+  <string name="assistant_page_local_tools_text_to_image_title">Text to Image</string>
+  <string name="assistant_page_local_tools_text_to_image_desc">Allow this assistant to generate one image from a text prompt</string>
+  <string name="assistant_page_local_tools_text_to_image_unavailable">Enabled, but no valid image model is selected</string>
+  <string name="assistant_page_local_tools_text_to_image_configure_model">Choose model</string>
   <string name="assistant_page_manage_memory_title">기억 관리</string>
   <string name="assistant_page_max_tokens">최대 토큰</string>
   <string name="assistant_page_max_tokens_desc">생성할 최대 토큰 수. 제한 없음은 비워두세요.</string>
@@ -233,6 +237,32 @@
   <string name="chat_message_tool_deny_dialog_title">도구 실행 거부</string>
   <string name="chat_message_tool_edit_memory">기억 업데이트됨</string>
   <string name="chat_message_tool_get_time">시간 정보 가져오기</string>
+  <string name="chat_message_tool_generate_image_queued">Waiting to generate image</string>
+  <string name="chat_message_tool_generate_image_generating">Generating image</string>
+  <string name="chat_message_tool_generate_image_persisting">Saving image</string>
+  <string name="chat_message_tool_generate_image_setting_background">Setting background</string>
+  <string name="chat_message_tool_generate_image_completed">Image generated</string>
+  <string name="chat_message_tool_generate_image_failed">Image generation failed</string>
+  <string name="chat_message_tool_generate_image_failed_invalid_arguments">Invalid image generation arguments</string>
+  <string name="chat_message_tool_generate_image_failed_model_unavailable">Image model unavailable</string>
+  <string name="chat_message_tool_generate_image_failed_revoked">Image tool was disabled</string>
+  <string name="chat_message_tool_generate_image_failed_model_changed">Image model changed</string>
+  <string name="chat_message_tool_generate_image_failed_provider">Image provider error</string>
+  <string name="chat_message_tool_generate_image_failed_invalid_result">Image provider returned no final image</string>
+  <string name="chat_message_tool_generate_image_failed_persistence">Failed to save the generated image</string>
+  <string name="chat_message_tool_generate_image_failed_artifact_missing">생성된 이미지 파일을 더 이상 사용할 수 없습니다</string>
+  <string name="chat_message_tool_generate_image_background_pending">Waiting to set as background</string>
+  <string name="chat_message_tool_generate_image_background_updated">Set as assistant background</string>
+  <string name="chat_message_tool_generate_image_background_assistant_missing">Background not updated: assistant not found</string>
+  <string name="chat_message_tool_generate_image_background_copy_failed">Background not updated: copy failed</string>
+  <string name="chat_message_tool_generate_image_background_settings_failed">Background not updated: settings write failed</string>
+  <string name="chat_message_tool_generate_image_failed_assistant_missing">어시스턴트가 더 이상 존재하지 않습니다</string>
+  <string name="chat_message_tool_generate_image_model">모델: %1$s</string>
+  <string name="chat_message_tool_generate_image_provider">프로바이더: %1$s</string>
+  <string name="chat_message_tool_generate_image_file_path">파일</string>
+  <string name="chat_message_tool_generate_image_copy_path">경로 복사</string>
+  <string name="chat_message_tool_generate_image_technical_details">기술 세부정보</string>
+  <string name="chat_message_tool_generate_image_prompt_label">프롬프트</string>
   <string name="chat_message_tool_scrape_prefix">웹사이트 긁어오기: %1$s</string>
   <string name="chat_message_tool_scrape_web">웹 페이지 긁어오기</string>
   <string name="chat_message_tool_conversation_search">검색 기록: %1$s</string>
@@ -397,6 +427,9 @@
   <string name="imggen_page_save_failed">저장 실패: %1$s</string>
   <string name="imggen_page_settings_title">이미지 생성 설정</string>
   <string name="imggen_page_title">이미지 생성</string>
+  <string name="imggen_page_error_no_model">이미지 모델이 선택되지 않았습니다</string>
+  <string name="imggen_page_error_generic">이미지 생성에 실패했습니다</string>
+  <string name="imggen_page_error_delete">이미지 삭제에 실패했습니다</string>
   <string name="mcp_picker_syncing">MCP 서버 동기화 중...</string>
   <string name="mcp_picker_title">MCP</string>
   <string name="menu">메뉴</string>
@@ -661,7 +694,7 @@
   <string name="setting_display_page_volume_key_scroll_title">볼륨 키 페이지 스크롤</string>
   <string name="setting_files_page_cancel_action">취소</string>
   <string name="setting_files_page_clean_action">정리</string>
-  <string name="setting_files_page_clean_confirmation">이 카테고리의 모든 파일이 영구적으로 삭제됩니다. 이 작업은 실행 취소할 수 없습니다.</string>
+  <string name="setting_files_page_clean_confirmation">채팅 첨부 파일, 도구 결과 사본, 어시스턴트 배경을 포함해 이 카테고리의 모든 업로드 파일이 영구적으로 삭제됩니다. 이 작업은 실행 취소할 수 없습니다.</string>
   <string name="setting_files_page_clean_content_description">파일 정리</string>
   <string name="setting_files_page_clean_failed_toast">일부 파일을 정리하지 못했습니다</string>
   <string name="setting_files_page_clean_title">파일을 정리할까요?</string>
@@ -722,6 +755,8 @@
   <string name="setting_model_page_compress_model">모델 압축</string>
   <string name="setting_model_page_compress_model_desc">대화 기록 압축용 모델</string>
   <string name="setting_model_page_compress_prompt_vars">변수: {content}, {target_tokens}, {additional_context}</string>
+  <string name="setting_model_page_image_generation_model">Image Generation Model</string>
+  <string name="setting_model_page_image_generation_model_desc">Default model used by the image page and the generate_image chat tool</string>
   <string name="setting_model_page_ocr_model">OCR 모델</string>
   <string name="setting_model_page_ocr_model_desc">이미지에서 광학 문자 인식에 사용되는 모델</string>
   <string name="setting_model_page_ocr_prompt_vars">변수: 이미지 데이터: {images}</string>
@@ -1205,6 +1240,7 @@
   <string name="chat_readiness_mcp_highlight_term">Measix Device Remote Control</string>
   <string name="chat_readiness_local_tools_title">로컬 기능</string>
   <string name="chat_readiness_local_tools_count">%1$d개 사용</string>
+  <string name="chat_readiness_local_tools_unavailable">%1$d available / %2$d enabled</string>
   <string name="chat_readiness_local_tools_description">음성 재생, 클립보드, 스크린 타임 등 기기 내 기능을 활성화합니다.</string>
   <string name="chat_readiness_workspace_title">로컬 작업 공간</string>
   <string name="chat_readiness_workspace_not_configured">이용 불가</string>
@@ -1234,7 +1270,6 @@
   <string name="chat_sidebar_expand">대화 사이드바 펼치기</string>
   <string name="chat_navigation_open_drawer">대화 탐색 열기</string>
   <string name="chat_page_chat_options">채팅 옵션</string>
-
   <!-- Sub-Assistant: Assistant configuration -->
   <string name="assistant_page_description">능력 설명</string>
   <string name="assistant_page_description_placeholder">이 어시스턴트가 무엇을 잘하고 언제 호출해야 하는지 간략히 설명</string>
@@ -1243,27 +1278,25 @@
   <string name="assistant_page_allow_as_sub_assistant">서브 어시스턴트로 허용</string>
   <string name="assistant_page_allow_as_sub_assistant_desc">다른 어시스턴트가 작업, 질문 또는 롤플레이 요청을 호출할 수 있도록 허용합니다. 독립적인 컨텍스트를 사용하며 메인 대화를 자동으로 볼 수 없습니다.</string>
   <string name="assistant_page_sub_assistant_tag">서브 어시스턴트</string>
-<string name="assistant_page_sub_assistant_no_model_warning">유효한 채팅 모델이 설정되지 않아 호출을 시작할 수 없습니다</string>
-<string name="assistant_page_sub_assistant_global_memory_warning">서브 어시스턴트로 호출될 때 공유 전역 메모리를 사용합니다</string>
-<string name="assistant_page_sub_assistant_global_visible">전역 표시</string>
-<string name="assistant_page_sub_assistant_global_visible_desc">서브 어시스턴트 도구가 있는 모든 어시스턴트가 발견, 호출 및 관리할 수 있습니다. 수정 및 삭제 시 확인이 필요하며, 관리 도구가 있는 어시스턴트는 로컬 메모리도 볼 수 있습니다.</string>
-<string name="assistant_page_sub_assistant_access_scope">서브 어시스턴트 접근 범위</string>
-<string name="assistant_page_sub_assistant_access_scope_desc">이 어시스턴트가 발견, 호출 및 관리할 수 있는 서브 어시스턴트 선택</string>
-<string name="assistant_page_sub_assistant_access_scope_empty">선택된 서브 어시스턴트 없음</string>
-<string name="assistant_page_sub_assistant_access_scope_count">%1$d개 서브 어시스턴트 선택됨</string>
-<string name="assistant_page_sub_assistant_globally_available">전역 사용 가능</string>
-<string name="sub_assistant_global_tag">전역</string>
-<string name="assistant_picker_show_sub_assistants">서브 어시스턴트</string>
+  <string name="assistant_page_sub_assistant_no_model_warning">유효한 채팅 모델이 설정되지 않아 호출을 시작할 수 없습니다</string>
+  <string name="assistant_page_sub_assistant_global_memory_warning">서브 어시스턴트로 호출될 때 공유 전역 메모리를 사용합니다</string>
+  <string name="assistant_page_sub_assistant_global_visible">전역 표시</string>
+  <string name="assistant_page_sub_assistant_global_visible_desc">서브 어시스턴트 도구가 있는 모든 어시스턴트가 발견, 호출 및 관리할 수 있습니다. 수정 및 삭제 시 확인이 필요하며, 관리 도구가 있는 어시스턴트는 로컬 메모리도 볼 수 있습니다.</string>
+  <string name="assistant_page_sub_assistant_access_scope">서브 어시스턴트 접근 범위</string>
+  <string name="assistant_page_sub_assistant_access_scope_desc">이 어시스턴트가 발견, 호출 및 관리할 수 있는 서브 어시스턴트 선택</string>
+  <string name="assistant_page_sub_assistant_access_scope_empty">선택된 서브 어시스턴트 없음</string>
+  <string name="assistant_page_sub_assistant_access_scope_count">%1$d개 서브 어시스턴트 선택됨</string>
+  <string name="assistant_page_sub_assistant_globally_available">전역 사용 가능</string>
+  <string name="sub_assistant_global_tag">전역</string>
+  <string name="assistant_picker_show_sub_assistants">서브 어시스턴트</string>
   <string name="assistant_page_no_chat_model_warning">채팅 모델이 설정되지 않음, 호출 시 시작할 수 없습니다</string>
   <string name="assistant_page_global_memory_warning">호출 시 공유 글로벌 메모리를 사용합니다</string>
-
   <!-- Sub-Assistant: Local Tools -->
   <string name="assistant_page_local_tools_assistant_collaboration">어시스턴트 협업</string>
   <string name="assistant_page_local_tools_assistant_management_title">다른 어시스턴트 관리</string>
   <string name="assistant_page_local_tools_assistant_management_desc">이 어시스턴트가 다른 어시스턴트를 생성, 수정, 삭제하고 로컬 메모리를 조회할 수 있도록 허용합니다. 메모리는 소유 어시스턴트의 도구로만 유지 관리할 수 있습니다.</string>
   <string name="assistant_page_local_tools_assistant_delegation_title">서브 어시스턴트 호출</string>
   <string name="assistant_page_local_tools_assistant_delegation_desc">이 어시스턴트가 호출 가능한 서브 어시스턴트에게 요청을 보낼 수 있도록 허용합니다.</string>
-
   <!-- Sub-Assistant: Call Card -->
   <string name="sub_assistant_card_starting">시작 중</string>
   <string name="sub_assistant_card_running">실행 중</string>
@@ -1276,7 +1309,6 @@
   <string name="sub_assistant_card_using_tool">사용 중: %1$s</string>
   <string name="sub_assistant_card_view_detail">상세 보기</string>
   <string name="sub_assistant_card_scroll_to_latest">최신</string>
-
   <!-- Sub-Assistant: Call Card reasons -->
   <string name="sub_assistant_reason_assistant_not_found">어시스턴트를 찾을 수 없음</string>
   <string name="sub_assistant_reason_target_not_allowed">서브 어시스턴트로 허용되지 않음</string>
@@ -1294,7 +1326,6 @@
   <string name="sub_assistant_reason_target_removed">어시스턴트가 삭제됨</string>
   <string name="sub_assistant_reason_target_disabled">서브 어시스턴트가 비활성화됨</string>
   <string name="sub_assistant_reason_child_missing">대화를 찾을 수 없음</string>
-
   <!-- Sub-Assistant: Call Card phases -->
   <string name="sub_assistant_phase_preparing">준비 중</string>
   <string name="sub_assistant_phase_model_waiting">모델 대기 중</string>
@@ -1302,7 +1333,6 @@
   <string name="sub_assistant_phase_answer_streaming">생성 중</string>
   <string name="sub_assistant_phase_tool_executing">도구 실행 중</string>
   <string name="sub_assistant_phase_between_steps">처리 중</string>
-
   <!-- Sub-Assistant: Detail page -->
   <string name="sub_assistant_detail_title">서브 어시스턴트 상세</string>
   <string name="sub_assistant_detail_assistant_deleted">어시스턴트가 삭제됨</string>
@@ -1331,5 +1361,12 @@
   <string name="sub_assistant_reason_interaction_limit_reached">확인 요청 횟수가 너무 많습니다</string>
   <string name="sub_assistant_reason_unknown">하위 어시스턴트가 요청을 완료하지 못했습니다</string>
   <string name="sub_assistant_tool_unknown">도구</string>
+  <string name="sub_assistant_reason_content_blocked">사용 정책에 의해 차단됨</string>
+  <string name="sub_assistant_error_content_blocked_body">사용 정책을 위반하여 모델이 이 요청을 거부했습니다. 표현을 바꿔 다시 시도하세요.</string>
+  <string name="setting_files_page_folder_generated_images">생성 이미지</string>
+  <string name="setting_files_page_generated_no_prompt">프롬프트 없음</string>
+  <string name="setting_files_page_generated_unknown_model">알 수 없는 모델</string>
+  <string name="setting_files_page_delete_generated_confirmation">갤러리 원본만 삭제됩니다. 채팅과 배경 사본은 삭제되지 않습니다.</string>
+  <string name="setting_files_page_clean_generated_confirmation">갤러리의 모든 생성 이미지가 영구적으로 삭제됩니다. 채팅과 배경 사본은 삭제되지 않습니다. 이 작업은 취소할 수 없습니다.</string>
 </resources>
 

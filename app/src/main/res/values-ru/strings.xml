@@ -80,6 +80,10 @@
   <string name="assistant_page_local_tools_time_info_title">Информация о времени</string>
   <string name="assistant_page_local_tools_tts_desc">Позвольте ИИ озвучить текст с помощью выбранного вами сервиса TTS</string>
   <string name="assistant_page_local_tools_tts_title">Преобразование текста в речь</string>
+  <string name="assistant_page_local_tools_text_to_image_title">Text to Image</string>
+  <string name="assistant_page_local_tools_text_to_image_desc">Allow this assistant to generate one image from a text prompt</string>
+  <string name="assistant_page_local_tools_text_to_image_unavailable">Enabled, but no valid image model is selected</string>
+  <string name="assistant_page_local_tools_text_to_image_configure_model">Choose model</string>
   <string name="assistant_page_manage_memory_title">Управление памятью</string>
   <string name="assistant_page_max_tokens">Макс. токенов</string>
   <string name="assistant_page_max_tokens_desc">Максимальное количество токенов для генерации. Оставьте пустым, чтобы не ограничивать.</string>
@@ -233,6 +237,32 @@
   <string name="chat_message_tool_deny_dialog_title">Отклонить выполнение инструмента</string>
   <string name="chat_message_tool_edit_memory">Обновлена память</string>
   <string name="chat_message_tool_get_time">Получить информацию о времени</string>
+  <string name="chat_message_tool_generate_image_queued">Waiting to generate image</string>
+  <string name="chat_message_tool_generate_image_generating">Generating image</string>
+  <string name="chat_message_tool_generate_image_persisting">Saving image</string>
+  <string name="chat_message_tool_generate_image_setting_background">Setting background</string>
+  <string name="chat_message_tool_generate_image_completed">Image generated</string>
+  <string name="chat_message_tool_generate_image_failed">Image generation failed</string>
+  <string name="chat_message_tool_generate_image_failed_invalid_arguments">Invalid image generation arguments</string>
+  <string name="chat_message_tool_generate_image_failed_model_unavailable">Image model unavailable</string>
+  <string name="chat_message_tool_generate_image_failed_revoked">Image tool was disabled</string>
+  <string name="chat_message_tool_generate_image_failed_model_changed">Image model changed</string>
+  <string name="chat_message_tool_generate_image_failed_provider">Image provider error</string>
+  <string name="chat_message_tool_generate_image_failed_invalid_result">Image provider returned no final image</string>
+  <string name="chat_message_tool_generate_image_failed_persistence">Failed to save the generated image</string>
+  <string name="chat_message_tool_generate_image_failed_artifact_missing">Файл сгенерированного изображения больше недоступен</string>
+  <string name="chat_message_tool_generate_image_background_pending">Waiting to set as background</string>
+  <string name="chat_message_tool_generate_image_background_updated">Set as assistant background</string>
+  <string name="chat_message_tool_generate_image_background_assistant_missing">Background not updated: assistant not found</string>
+  <string name="chat_message_tool_generate_image_background_copy_failed">Background not updated: copy failed</string>
+  <string name="chat_message_tool_generate_image_background_settings_failed">Background not updated: settings write failed</string>
+  <string name="chat_message_tool_generate_image_failed_assistant_missing">Ассистент больше не существует</string>
+  <string name="chat_message_tool_generate_image_model">Модель: %1$s</string>
+  <string name="chat_message_tool_generate_image_provider">Провайдер: %1$s</string>
+  <string name="chat_message_tool_generate_image_file_path">Файл</string>
+  <string name="chat_message_tool_generate_image_copy_path">Копировать путь</string>
+  <string name="chat_message_tool_generate_image_technical_details">Технические сведения</string>
+  <string name="chat_message_tool_generate_image_prompt_label">Промпт</string>
   <string name="chat_message_tool_scrape_prefix">Собрать данные с сайта: %1$s</string>
   <string name="chat_message_tool_scrape_web">Собрать данные со страницы</string>
   <string name="chat_message_tool_conversation_search">История поиска: %1$s</string>
@@ -397,6 +427,9 @@
   <string name="imggen_page_save_failed">Не удалось сохранить: %1$s</string>
   <string name="imggen_page_settings_title">Настройки генерации изображений</string>
   <string name="imggen_page_title">Генерация изображений</string>
+  <string name="imggen_page_error_no_model">Модель изображения не выбрана</string>
+  <string name="imggen_page_error_generic">Не удалось сгенерировать изображение</string>
+  <string name="imggen_page_error_delete">Не удалось удалить изображение</string>
   <string name="mcp_picker_syncing">Синхронизация MCP-серверов…</string>
   <string name="mcp_picker_title">MCP</string>
   <string name="menu">Меню</string>
@@ -661,7 +694,7 @@
   <string name="setting_display_page_volume_key_scroll_title">Прокрутка страниц клавишами громкости</string>
   <string name="setting_files_page_cancel_action">Отмена</string>
   <string name="setting_files_page_clean_action">Очистить</string>
-  <string name="setting_files_page_clean_confirmation">Все файлы в этой категории будут удалены без возможности восстановления.</string>
+  <string name="setting_files_page_clean_confirmation">Все загруженные файлы в этой категории будут удалены безвозвратно, включая вложения чата, копии результатов инструментов и фоны ассистентов. Это действие нельзя отменить.</string>
   <string name="setting_files_page_clean_content_description">Очистить файлы</string>
   <string name="setting_files_page_clean_failed_toast">Не удалось удалить некоторые файлы</string>
   <string name="setting_files_page_clean_title">Очистить файлы?</string>
@@ -722,6 +755,8 @@
   <string name="setting_model_page_compress_model">Сжать модель</string>
   <string name="setting_model_page_compress_model_desc">Модель для сжатия истории разговоров</string>
   <string name="setting_model_page_compress_prompt_vars">Переменные: {content}, {target_tokens}, {additional_context}</string>
+  <string name="setting_model_page_image_generation_model">Image Generation Model</string>
+  <string name="setting_model_page_image_generation_model_desc">Default model used by the image page and the generate_image chat tool</string>
   <string name="setting_model_page_ocr_model">Модель OCR</string>
   <string name="setting_model_page_ocr_model_desc">Модель, используемая для оптического распознавания текста на изображениях</string>
   <string name="setting_model_page_ocr_prompt_vars">Переменные: Данные изображения: {images}</string>
@@ -1205,6 +1240,7 @@
   <string name="chat_readiness_mcp_highlight_term">Measix Device Remote Control</string>
   <string name="chat_readiness_local_tools_title">Локальные возможности</string>
   <string name="chat_readiness_local_tools_count">Включено: %1$d</string>
+  <string name="chat_readiness_local_tools_unavailable">%1$d available / %2$d enabled</string>
   <string name="chat_readiness_local_tools_description">Включите локальные функции устройства, например озвучивание, буфер обмена и экранное время.</string>
   <string name="chat_readiness_workspace_title">Локальное рабочее пространство</string>
   <string name="chat_readiness_workspace_not_configured">Недоступно</string>
@@ -1234,7 +1270,6 @@
   <string name="chat_sidebar_expand">Развернуть боковую панель чатов</string>
   <string name="chat_navigation_open_drawer">Открыть навигацию по чатам</string>
   <string name="chat_page_chat_options">Параметры чата</string>
-
   <!-- Sub-Assistant: Assistant configuration -->
   <string name="assistant_page_description">Описание возможностей</string>
   <string name="assistant_page_description_placeholder">Кратко опишите, что делает этот ассистент и когда его вызывать</string>
@@ -1243,27 +1278,25 @@
   <string name="assistant_page_allow_as_sub_assistant">Разрешить как суб-ассистента</string>
   <string name="assistant_page_allow_as_sub_assistant_desc">Позволяет другим ассистентам вызывать его для запросов, включая задачи, вопросы или ролевые диалоги. Использует независимый контекст и не видит основной разговор.</string>
   <string name="assistant_page_sub_assistant_tag">Суб-ассистент</string>
-<string name="assistant_page_sub_assistant_no_model_warning">Не настроена действительная модель чата; вызовы не смогут начаться</string>
-<string name="assistant_page_sub_assistant_global_memory_warning">Использует общую глобальную память при вызове как суб-ассистент</string>
-<string name="assistant_page_sub_assistant_global_visible">Глобальная видимость</string>
-<string name="assistant_page_sub_assistant_global_visible_desc">Позволяет всем ассистентам с инструментами суб-ассистента обнаруживать, вызывать и управлять им. Изменения и удаление требуют подтверждения; ассистенты с инструментом управления могут также просматривать его локальную память.</string>
-<string name="assistant_page_sub_assistant_access_scope">Область доступа суб-ассистентов</string>
-<string name="assistant_page_sub_assistant_access_scope_desc">Выберите, каких суб-ассистентов этот ассистент может обнаруживать, вызывать и управлять</string>
-<string name="assistant_page_sub_assistant_access_scope_empty">Суб-ассистенты не выбраны</string>
-<string name="assistant_page_sub_assistant_access_scope_count">Выбрано суб-ассистентов: %1$d</string>
-<string name="assistant_page_sub_assistant_globally_available">Глобально доступен</string>
-<string name="sub_assistant_global_tag">Глобально</string>
-<string name="assistant_picker_show_sub_assistants">Суб-ассистенты</string>
+  <string name="assistant_page_sub_assistant_no_model_warning">Не настроена действительная модель чата; вызовы не смогут начаться</string>
+  <string name="assistant_page_sub_assistant_global_memory_warning">Использует общую глобальную память при вызове как суб-ассистент</string>
+  <string name="assistant_page_sub_assistant_global_visible">Глобальная видимость</string>
+  <string name="assistant_page_sub_assistant_global_visible_desc">Позволяет всем ассистентам с инструментами суб-ассистента обнаруживать, вызывать и управлять им. Изменения и удаление требуют подтверждения; ассистенты с инструментом управления могут также просматривать его локальную память.</string>
+  <string name="assistant_page_sub_assistant_access_scope">Область доступа суб-ассистентов</string>
+  <string name="assistant_page_sub_assistant_access_scope_desc">Выберите, каких суб-ассистентов этот ассистент может обнаруживать, вызывать и управлять</string>
+  <string name="assistant_page_sub_assistant_access_scope_empty">Суб-ассистенты не выбраны</string>
+  <string name="assistant_page_sub_assistant_access_scope_count">Выбрано суб-ассистентов: %1$d</string>
+  <string name="assistant_page_sub_assistant_globally_available">Глобально доступен</string>
+  <string name="sub_assistant_global_tag">Глобально</string>
+  <string name="assistant_picker_show_sub_assistants">Суб-ассистенты</string>
   <string name="assistant_page_no_chat_model_warning">Чат-модель не настроена; вызов не запустится</string>
   <string name="assistant_page_global_memory_warning">Использует общую глобальную память при вызове</string>
-
   <!-- Sub-Assistant: Local Tools -->
   <string name="assistant_page_local_tools_assistant_collaboration">Сотрудничество ассистентов</string>
   <string name="assistant_page_local_tools_assistant_management_title">Управление ассистентами</string>
   <string name="assistant_page_local_tools_assistant_management_desc">Позволяет этому ассистенту создавать, изменять и удалять других ассистентов, а также просматривать их локальную память. Память может поддерживаться только ассистентом-владельцем через свои инструменты.</string>
   <string name="assistant_page_local_tools_assistant_delegation_title">Вызов суб-ассистентов</string>
   <string name="assistant_page_local_tools_assistant_delegation_desc">Позволяет этому ассистенту отправлять запросы вызываемым суб-ассистентам.</string>
-
   <!-- Sub-Assistant: Call Card -->
   <string name="sub_assistant_card_starting">Запуск</string>
   <string name="sub_assistant_card_running">Выполнение</string>
@@ -1276,7 +1309,6 @@
   <string name="sub_assistant_card_using_tool">Используется: %1$s</string>
   <string name="sub_assistant_card_view_detail">Подробности</string>
   <string name="sub_assistant_card_scroll_to_latest">Последнее</string>
-
   <!-- Sub-Assistant: Call Card reasons -->
   <string name="sub_assistant_reason_assistant_not_found">Ассистент не найден</string>
   <string name="sub_assistant_reason_target_not_allowed">Не разрешён как суб-ассистент</string>
@@ -1294,7 +1326,6 @@
   <string name="sub_assistant_reason_target_removed">Ассистент удалён</string>
   <string name="sub_assistant_reason_target_disabled">Суб-ассистент отключён</string>
   <string name="sub_assistant_reason_child_missing">Разговор отсутствует</string>
-
   <!-- Sub-Assistant: Call Card phases -->
   <string name="sub_assistant_phase_preparing">Подготовка</string>
   <string name="sub_assistant_phase_model_waiting">Ожидание модели</string>
@@ -1302,7 +1333,6 @@
   <string name="sub_assistant_phase_answer_streaming">Генерация</string>
   <string name="sub_assistant_phase_tool_executing">Выполнение инструмента</string>
   <string name="sub_assistant_phase_between_steps">Обработка</string>
-
   <!-- Sub-Assistant: Detail page -->
   <string name="sub_assistant_detail_title">Детали суб-ассистента</string>
   <string name="sub_assistant_detail_assistant_deleted">Ассистент удалён</string>
@@ -1331,5 +1361,12 @@
   <string name="sub_assistant_reason_interaction_limit_reached">Слишком много раундов уточнения</string>
   <string name="sub_assistant_reason_unknown">Субассистент не смог выполнить запрос</string>
   <string name="sub_assistant_tool_unknown">Инструмент</string>
+  <string name="sub_assistant_reason_content_blocked">Отклонено политикой использования</string>
+  <string name="sub_assistant_error_content_blocked_body">Модель отклонила этот запрос из‑за политики использования. Переформулируйте запрос и попробуйте снова.</string>
+  <string name="setting_files_page_folder_generated_images">Сгенерированные изображения</string>
+  <string name="setting_files_page_generated_no_prompt">Нет подсказки</string>
+  <string name="setting_files_page_generated_unknown_model">Неизвестная модель</string>
+  <string name="setting_files_page_delete_generated_confirmation">Будет удалён только оригинал в галерее. Копии в чате и фоне останутся.</string>
+  <string name="setting_files_page_clean_generated_confirmation">Все сгенерированные изображения в галерее будут удалены безвозвратно. Копии в чате и фоне не удаляются. Это действие нельзя отменить.</string>
 </resources>
 

@@ -6,7 +6,8 @@
 
 相关实现：`GenerationHandler.generateInternal()`、`PlaceholderTransformer`、
 `TemplateTransformer`、`AssistantCatalogBuilder`、`AssistantToolFactory`、
-`WorkspaceReminderTransformer`、`TimeReminderTransformer`、`buildMemoryPrompt()`。
+`WorkspaceReminderTransformer`、`ToolArtifactReplayTransformer`、
+`TimeReminderTransformer`、`buildMemoryPrompt()`。
 
 ---
 
@@ -29,6 +30,7 @@ System
   OcrTransformer
   TemplateTransformer         ← 渲染 messageTemplate
   WorkspaceReminderTransformer
+  ToolArtifactReplayTransformer ← 按 artifact metadata 重写历史 Tool Result 路径与 Image URL
 ```
 
 工具 schema（name、description、parameters）随 `TextGenerationParams.tools` 另发，与 System 同屏。
@@ -168,7 +170,8 @@ Settings 重算访问范围。
 主会话的基础工具装配顺序见 `ChatService`：搜索、Local Tools、最近会话、Workspace、技能、
 Assistant Tools、MCP；记忆工具由 `GenerationHandler` 在每个 step 按当前记忆状态加入。
 Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过滤 `assistant_manage`、
-`assistant_inspect`、`assistant_call` 以及历史名 `assistant_memory_list`，保留并桥接 `ask_user`；其余工具按运行开始快照与当前配置的交集在 step 边界重建。
+`assistant_inspect`、`assistant_call`、`generate_image` 以及历史名 `assistant_memory_list`，
+保留并桥接 `ask_user`；其余工具按运行开始快照与当前配置的交集在 step 边界重建。
 
 下列 description 为源码中的英文原文（动态日期/时区用占位标明）。
 
@@ -194,6 +197,52 @@ Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过�
 > Do not use it for common questions unless asked.
 
 参数：`url`（Page URL）。
+
+### `generate_image`
+
+启用：`ToolSetRunMode.NORMAL` 且 `LocalToolOption.TextToImage` 已开，并且
+`Settings.imageGenerationModelId` 能解析到启用 Provider 上、客户端声明支持文生图的
+`ModelType.IMAGE` 模型。默认不加入 `DEFAULT_ASSISTANT_LOCAL_TOOLS`。Target Run、
+`filterTargetLocalTools()`、`filterTargetTools()` 和 `assistant_inspect` 都不暴露该工具。
+
+> Generate one image from a text prompt, show it to the user, and return a local path that follow-up tools can use.
+
+`Tool.systemPrompt()` 只在实际注册时注入当前非敏感配置，字段由
+`ImageGenerationModelDescriptor` 统一生成：`provider_type`、`provider_name`、`model_id`、
+`model_name`。不含 API key、base URL、custom headers/body，也不声明 Chat 模型是否具有视觉能力。
+图片是否回传给下一 step 由协议适配层按 model modality 与 endpoint profile 决定。
+
+| 参数 | description |
+|------|-------------|
+| `prompt` | A complete, model-ready prompt for the image. Preserve the user's intent and relevant context, and refine it using effective prompting techniques suited to the target image model. |
+| `set_as_background` | Whether to use the generated image as the current assistant's chat background. Set to true when the user asks to apply the image as the background. |
+
+`set_as_background` 默认 false，纯生成不审批；`set_as_background=true` 必须审批。参数不是
+合法 object、prompt 为空或 boolean 类型不合法时，在审批门口直接返回 `{"status":"failed","reason":"invalid_arguments"}`。
+
+成功结果是 bounded JSON + `UIMessagePart.Image`，使用 `ToolOutputPolicy.PRESERVE`，不回显 prompt：
+
+```json
+{
+  "status": "completed",
+  "media_id": 42,
+  "file": { "path": "/upload/9a3f-image.png", "mime_type": "image/png" },
+  "background": { "requested": false, "updated": false }
+}
+```
+
+`file.path` 是唯一模型可见路径，语义为本地工具可消费的 `/upload/<safe-file-name>`，对应
+managed chat copy。Android host path、file URI 和内部 relative path 不进入 Tool Result。
+会话 fork / 恢复按 metadata 中的 `LocalArtifactRef.relativePath` 重写该字段；文件缺失时不得
+伪造 completed + readable path。
+
+失败结果只有 Text part，reason 为 `invalid_arguments`、`image_model_unavailable`、
+`tool_revoked`、`image_model_changed`、`provider_error`、`invalid_result`、
+`persistence_error` 或 `assistant_not_found`（执行前发现会话所属 Assistant 已删除）。
+历史重放或 UI rematerialize 时，若 managed chat copy 已不存在，Text 改为
+`artifact_missing` 并去掉 Image part，不保留看似可读的 `/upload/...` 路径。
+背景失败不回滚已进入 Gallery 的图片；此时图片仍为 completed，`background.updated=false`
+并带 `assistant_not_found` / `background_copy_failed` / `settings_write_failed`。
 
 ### `get_time_info`
 
@@ -414,7 +463,7 @@ caller 自身返回 `target_is_caller`。
 | `extras` | Extra result content. Default none. Values: tts, tool_calls. |
 
 完成：`{"status":"completed","assistant_name":"...","content":"..."}`，必要时
-`has_non_text_output`。其他终态带稳定 `reason`。`runtime_error` 另带提炼后的 `detail`（异常类型、消息、因果链和精简堆栈，按字符上限裁剪）。
+`has_non_text_output`。其他终态带稳定 `reason`。`content_blocked`、`provider_error` 与 `runtime_error` 另带提炼后的 `detail`。`provider_error` / `runtime_error` 含单行异常类型与消息（按字符上限裁剪，不含因果链和堆栈）；`content_blocked` 使用稳定政策说明，不回传检查类型（含 OpenAI `content_filter`）。
 
 已跑过 Child 且调用过 `text_to_speech` 时，默认另带精简 `tts_stats`（`calls` 次数、`chars` 朗读字符合计）。体积较大的段只在 `extras` 点名后返回：
 
@@ -435,7 +484,7 @@ caller 自身返回 `target_is_caller`。
 
 ## 6. 工具输出截断
 
-`GenerationHandler.maybeTruncateToolOutput()`：采用 `TRUNCATABLE_TEXT` 的工具在文本总长超过 `MAX_TOOL_OUTPUT_CHARS` 且助手有 Shell 时，全文写入 `/tool_outputs/<executionId>.txt`，只把 `TOOL_OUTPUT_PREVIEW_CHARS` 控制的预览与读取指引回给模型。无 Shell 时不截断。`assistant_call` 使用 `PRESERVE`，其带 `status`、`assistant_name`、`content`、`reason`、`detail`、`tts_stats`、`tool_calls` 和 `tts` 的结构化 JSON 不会被通用文本截断器破坏。
+`GenerationHandler.maybeTruncateToolOutput()`：采用 `TRUNCATABLE_TEXT` 的工具在文本总长超过 `MAX_TOOL_OUTPUT_CHARS` 且助手有 Shell 时，全文写入 `/tool_outputs/<executionId>.txt`，只把 `TOOL_OUTPUT_PREVIEW_CHARS` 控制的预览与读取指引回给模型。无 Shell 时不截断。`assistant_call` 与 `generate_image` 使用 `PRESERVE`。前者带 `status`、`assistant_name`、`content`、`reason`、`detail`、`tts_stats`、`tool_calls` 和 `tts` 的结构化 JSON 不会被通用文本截断器破坏；后者保留 bounded JSON 与 Image part。
 
 ---
 
@@ -452,5 +501,6 @@ caller 自身返回 `target_is_caller`。
 | `text_to_speech` | `success` |
 | `workspace_write_file` / `workspace_edit_file` | 文件元数据，不含正文 |
 | `assistant_manage` | `action` + `id`（DELETE 可加 `cleanup_pending`） |
+| `generate_image` | bounded JSON + Image part；成功不回显 prompt |
 
 `clipboard_tool` read 的 `text`、`assistant_call` 的 `content` 是新数据，不是回显。

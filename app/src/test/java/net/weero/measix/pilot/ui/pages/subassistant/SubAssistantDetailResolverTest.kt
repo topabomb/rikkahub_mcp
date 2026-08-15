@@ -38,7 +38,55 @@ class SubAssistantDetailResolverTest {
         val timeline = resolveSubAssistantTimeline(masterId, link, child)!!
 
         assertEquals("Review this", link.request)
+        assertNull(link.failureDetail)
         assertEquals(listOf(answer.id), timeline.map { it.currentMessage.id })
+    }
+
+    @Test
+    fun `failed run exposes tool result detail for the detail page`() {
+        val metadata = buildInitialSubAssistantCallMetadata(
+            runId = "run-fail",
+            targetAssistantId = targetId,
+            targetNameSnapshot = "Reviewer",
+        ).copy(
+            childConversationId = childId.toString(),
+            childTaskNodeId = task.id.toString(),
+            state = SubAssistantCallState.FAILED,
+            reason = "runtime_error",
+        )
+        val tool = UIMessagePart.Tool(
+            toolCallId = "fail",
+            toolName = "assistant_call",
+            input = """{"assistant_id":"$targetId","request":"Review this"}""",
+            output = listOf(
+                UIMessagePart.Text(
+                    """{"status":"failed","reason":"runtime_error","detail":"HttpException: Failed to get response: 429"}""",
+                ),
+            ),
+        ).mergeSubAssistantCallMetadata(json, metadata)
+
+        val link = (resolveSubAssistantDetailLink(masterWithTools(listOf(tool)), "run-fail", json)
+            as SubAssistantDetailLinkResult.Ready).link
+
+        assertEquals("HttpException: Failed to get response: 429", link.failureDetail)
+    }
+
+    @Test
+    fun `live metadata update keeps later failure detail`() {
+        val running = (resolveSubAssistantDetailLink(masterWithTools(listOf(callTool("run-1"))), "run-1", json)
+            as SubAssistantDetailLinkResult.Ready).link
+        val failedTool = failedCall("run-1")
+        val failed = (resolveSubAssistantDetailLink(masterWithTools(listOf(failedTool)), "run-1", json)
+            as SubAssistantDetailLinkResult.Ready).link
+        val merged = mergeLiveSubAssistantDetailLink(previous = running, incoming = failed)
+        val laterMetadataWithoutDetail = mergeLiveSubAssistantDetailLink(
+            previous = merged,
+            incoming = failed.copy(failureDetail = null),
+        )
+
+        assertEquals(SubAssistantCallState.FAILED, merged.metadata.state)
+        assertEquals("HttpException: Failed to get response: 429", merged.failureDetail)
+        assertEquals("HttpException: Failed to get response: 429", laterMetadataWithoutDetail.failureDetail)
     }
 
     @Test
@@ -134,6 +182,29 @@ class SubAssistantDetailResolverTest {
         val child = childWithNodes().copy(messageNodes = listOf(branchedNode))
 
         assertNull(resolveSubAssistantTimeline(masterId, link, child))
+    }
+
+    private fun failedCall(runId: String): UIMessagePart.Tool {
+        val metadata = buildInitialSubAssistantCallMetadata(
+            runId = runId,
+            targetAssistantId = targetId,
+            targetNameSnapshot = "Reviewer",
+        ).copy(
+            childConversationId = childId.toString(),
+            childTaskNodeId = task.id.toString(),
+            state = SubAssistantCallState.FAILED,
+            reason = "runtime_error",
+        )
+        return UIMessagePart.Tool(
+            toolCallId = runId,
+            toolName = "assistant_call",
+            input = """{"assistant_id":"$targetId","request":"Review this"}""",
+            output = listOf(
+                UIMessagePart.Text(
+                    """{"status":"failed","reason":"runtime_error","detail":"HttpException: Failed to get response: 429"}""",
+                ),
+            ),
+        ).mergeSubAssistantCallMetadata(json, metadata)
     }
 
     private fun callTool(runId: String): UIMessagePart.Tool {
