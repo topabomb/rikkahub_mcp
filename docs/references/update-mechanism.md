@@ -12,7 +12,7 @@
 | `PlayStoreUtil` / `rememberIsPlayStoreVersion` | 判断安装来源，避免 Play Store 安装包重复显示应用内更新 |
 | `Settings.displaySetting.showUpdates` | 用户是否启用更新提示 |
 | `Settings.ignoredUpdateVersion` | 持久化用户已关闭的远程版本 |
-| `.github/workflows/release.yml` | 构建、验签、发布 GitHub Release 或上传构建 Artifact |
+| `.github/workflows/release.yml` | 构建、验签、发布 GitHub Release，并通过 `repository_dispatch` 触发网站同步 `version.json` |
 
 `UpdateChecker` 由 Koin 注册为单例并持有 AppScope 级 `updateState`。所有 `ChatVM` 共享同一 `StateFlow`，不会因切换会话或重建页面重复请求。
 
@@ -23,7 +23,7 @@ ChatDrawer 组合
   -> showUpdates 开启且安装来源不是 Play Store
   -> UpdateCard 订阅 UpdateChecker.updateState
   -> SharingStarted.Lazily 首次启动 checkUpdate()
-  -> GET https://measix.weero.net/mobile/
+  -> GET https://measix-pilot.weero.net/version.json
   -> 解析 UpdateInfo
   -> Version(remote) > Version(current)
   -> 展示更新卡片或保持隐藏
@@ -129,7 +129,7 @@ checkout（含 submodule）
 
 正式发布包括 tag 触发和手动 `publish_release=true`。这两种情况必须提供 `KEY_BASE64` 与 `SIGNING_CONFIG`，并且所有 APK 必须通过 `apksigner verify` 后才能上传。手动的非发布 Artifact 构建允许不提供签名，产物不得当作正式版本分发。
 
-Release notes 从 `docs/dev/changelog.md` 中提取与版本号匹配的 `## <version>` 段落。GitHub Release 只负责托管 APK；`https://measix.weero.net/mobile/` 的版本信息和下载地址仍由更新后端维护，两者必须在发布后保持一致。
+Release notes 从 `docs/dev/changelog.md` 中提取与版本号匹配的 `## <version>` 段落。GitHub Release 发布后，`release.yml` 自动通过 `repository_dispatch` 触发网站仓库（`measix-pilot-website`）的 `sync-from-release` 工作流，将版本信息、changelog 和下载列表写入静态 `version.json`。App 通过请求该静态文件检查更新，无需动态后端。
 
 ### 签名配置形状
 
@@ -153,7 +153,7 @@ keyPassword=<password>
 - 更新卡片的持久化关闭、错误关闭和 Play Store 过滤；
 - `lint` 与 `assembleDebug`。
 
-正式发版还必须验证 Release 构建、所有 APK 签名、版本号、ABI 产物、changelog 提取结果以及更新 API 的下载 URL。GitHub Actions 成功不替代真实安装与升级验证。
+正式发版还必须验证 Release 构建、所有 APK 签名、版本号、ABI 产物、changelog 提取结果、`repository_dispatch` 触发成功以及线上 `version.json` 内容正确。GitHub Actions 成功不替代真实安装与升级验证。
 
 ## 9. 关键文件
 
@@ -168,4 +168,9 @@ app/src/main/java/net/weero/measix/pilot/
 app/build.gradle.kts
 .github/workflows/release.yml
 docs/dev/changelog.md
+
+measix-pilot-website 仓库：
+.github/workflows/sync-from-release.yml
+docs/.vuepress/public/version.json
+docs/changelog/index.md
 ```
