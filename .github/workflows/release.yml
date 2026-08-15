@@ -86,6 +86,10 @@ jobs:
           fi
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
+          # versionCode
+          VERSION_CODE=$(grep -E '^\s*versionCode\s*=' app/build.gradle.kts | head -1 | sed 's/[^0-9]//g')
+          echo "versionCode=${VERSION_CODE}" >> $GITHUB_OUTPUT
+
           # 从 docs/dev/changelog.md 提取对应版本段落作为 Release notes
           CHANGELOG=$(awk -v ver="$VERSION" '/^## / {flag = ($0 ~ "^## " ver)} flag' docs/dev/changelog.md)
           if [ -z "$CHANGELOG" ]; then
@@ -98,7 +102,12 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
+          # 发布时间（ISO 8601），用于 version.json 的 publishedAt 字段
+          PUBLISHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "publishedAt=${PUBLISHED_AT}" >> $GITHUB_OUTPUT
+
       - name: Publish GitHub Release
+        id: publish_release
         if: github.ref_type == 'tag' || inputs.publish_release == true
         uses: softprops/action-gh-release@v3
         with:
@@ -110,6 +119,63 @@ jobs:
           generate_release_notes: false
           make_latest: true
           fail_on_unmatched_files: true
+
+      - name: Build downloads JSON and notify website
+        if: github.ref_type == 'tag' || inputs.publish_release == true
+        env:
+          GH_TOKEN: ${{ secrets.WEBSITE_SYNC_TOKEN }}
+          VERSION: ${{ steps.release_info.outputs.version }}
+          VERSION_CODE: ${{ steps.release_info.outputs.versionCode }}
+          PUBLISHED_AT: ${{ steps.release_info.outputs.publishedAt }}
+          CHANGELOG: ${{ steps.release_info.outputs.changelog }}
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.release_info.outputs.version) }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "WEBSITE_SYNC_TOKEN secret is not configured — skipping website notification" >&2
+            exit 1
+          fi
+
+          # 用 jq 从 APK 文件列表构建 downloads JSON 数组
+          # 每项包含 name、url、size（人类可读）
+          REPO_URL="https://github.com/topabomb/rikkahub_mcp"
+          DOWNLOADS_JSON=$(jq -n '[]')
+          for apk in app/build/outputs/apk/release/*.apk; do
+            FILENAME=$(basename "$apk")
+            BYTES=$(stat -c%s "$apk")
+            SIZE_HR=$(numfmt --to=iec --suffix=B "$BYTES")
+            URL="${REPO_URL}/releases/download/${TAG}/${FILENAME}"
+            DOWNLOADS_JSON=$(echo "$DOWNLOADS_JSON" | jq \
+              --arg name "$FILENAME" \
+              --arg url "$URL" \
+              --arg size "$SIZE_HR" \
+              '. + [{name: $name, url: $url, size: $size}]')
+          done
+
+          echo "Downloads JSON: $DOWNLOADS_JSON"
+
+          # 通过 repository_dispatch 触发网站项目同步工作流
+          # 使用 jq 安全构建完整 JSON payload（处理多行 changelog 转义）
+          PAYLOAD=$(jq -n \
+            --arg event_type "app-release" \
+            --arg version "$VERSION" \
+            --arg versionCode "$VERSION_CODE" \
+            --arg publishedAt "$PUBLISHED_AT" \
+            --arg changelog "$CHANGELOG" \
+            --argjson downloads "$DOWNLOADS_JSON" \
+            '{
+              event_type: $event_type,
+              client_payload: {
+                version: $version,
+                versionCode: $versionCode,
+                publishedAt: $publishedAt,
+                changelog: $changelog,
+                downloads: $downloads
+              }
+            }')
+
+          echo "Sending repository_dispatch to measix-pilot-website..."
+          echo "$PAYLOAD" | gh api repos/topabomb/measix-pilot-website/dispatches --input -
+          echo "Website notification sent successfully."
 
       - name: Upload artifacts (non-release)
         if: github.ref_type != 'tag' && inputs.publish_release != true

@@ -24,7 +24,7 @@ import net.weero.measix.pilot.R
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
-private const val API_URL = "https://measix.weero.net/mobile/"
+private const val API_URL = "https://measix-pilot.weero.net/version.json"
 
 class UpdateChecker(
     private val client: OkHttpClient,
