@@ -96,10 +96,26 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
     var searchQuery by remember { mutableStateOf("") }
     val lazyListState = rememberLazyListState()
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        val newProviders = settings.providers.toMutableList().apply {
-            add(to.index, removeAt(from.index))
+        val visibleProviders = if (searchQuery.isBlank()) {
+            settings.providers
+        } else {
+            settings.providers.filter { it.name.contains(searchQuery, ignoreCase = true) }
         }
-        vm.updateSettings(settings.copy(providers = newProviders))
+        val fromId = visibleProviders.getOrNull(from.index)?.id ?: return@rememberReorderableLazyListState
+        val toId = visibleProviders.getOrNull(to.index)?.id ?: return@rememberReorderableLazyListState
+        vm.updateSettings { current ->
+            val fromIndex = current.providers.indexOfFirst { it.id == fromId }
+            val toIndex = current.providers.indexOfFirst { it.id == toId }
+            if (fromIndex < 0 || toIndex < 0) {
+                current
+            } else {
+                current.copy(
+                    providers = current.providers.toMutableList().apply {
+                        add(toIndex, removeAt(fromIndex))
+                    }
+                )
+            }
+        }
     }
 
     val filteredProviders = remember(settings.providers, searchQuery) {
@@ -123,18 +139,16 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
                 },
                 actions = {
                     ImportProviderButton {
-                        vm.updateSettings(
-                            settings.copy(
-                                providers = listOf(it.copyProvider(Uuid.random())) + settings.providers
-                            )
-                        )
+                        val imported = it.copyProvider(Uuid.random())
+                        vm.updateSettings { current ->
+                            current.copy(providers = listOf(imported) + current.providers)
+                        }
                     }
                     AddButton {
-                        vm.updateSettings(
-                            settings.copy(
-                                providers = listOf(it) + settings.providers
-                            )
-                        )
+                        val added = it
+                        vm.updateSettings { current ->
+                            current.copy(providers = listOf(added) + current.providers)
+                        }
                     }
                 },
                 scrollBehavior = scrollBehavior,

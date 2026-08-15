@@ -75,7 +75,6 @@ import me.rerere.hugeicons.stroke.Text
 import me.rerere.hugeicons.stroke.Tools
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
-import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
@@ -85,6 +84,7 @@ import net.weero.measix.pilot.ui.components.ui.TagType
 import net.weero.measix.pilot.ui.components.ui.icons.HeartIcon
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.theme.extendColors
+import net.weero.measix.pilot.service.FavoriteModelService
 import net.weero.measix.pilot.utils.toDp
 import org.koin.compose.koinInject
 import sh.calvin.reorderable.ReorderableItem
@@ -294,11 +294,11 @@ private fun ColumnScope.ModelList(
     onDismiss: () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
-    val settingsStore = koinInject<SettingsStore>()
-    val settings = settingsStore.settingsFlow
-        .collectAsStateWithLifecycle()
+    val favoriteModelService = koinInject<FavoriteModelService>()
+    val favoriteModelIds by favoriteModelService.favoriteModelIds
+        .collectAsStateWithLifecycle(initialValue = emptyList())
 
-    val favoriteModels = settings.value.favoriteModels.mapNotNull { modelId ->
+    val favoriteModels = favoriteModelIds.mapNotNull { modelId ->
         val model = providers.findModelById(modelId) ?: return@mapNotNull null
         if (model.type != modelType) return@mapNotNull null
         val provider = model.findProvider(providers = providers, checkOverwrite = false)
@@ -384,13 +384,10 @@ private fun ColumnScope.ModelList(
         if (fromIndex >= 0 && toIndex >= 0 &&
             fromIndex < favoriteModels.size && toIndex < favoriteModels.size
         ) {
-            val newFavoriteModels = settings.value.favoriteModels.toMutableList().apply {
-                add(toIndex, removeAt(fromIndex))
-            }
+            val fromModelId = favoriteModels[fromIndex].first.id
+            val toModelId = favoriteModels[toIndex].first.id
             coroutineScope.launch {
-                settingsStore.update { oldSettings ->
-                    oldSettings.copy(favoriteModels = newFavoriteModels)
-                }
+                favoriteModelService.move(fromModelId, toModelId)
             }
         }
     }
@@ -496,11 +493,7 @@ private fun ColumnScope.ModelList(
                             IconButton(
                                 onClick = {
                                     coroutineScope.launch {
-                                        settingsStore.update { settings ->
-                                            settings.copy(
-                                                favoriteModels = settings.favoriteModels.filter { it != model.id }
-                                            )
-                                        }
+                                        favoriteModelService.setFavorite(model.id, favorite = false)
                                     }
                                 }
                             ) {
@@ -559,7 +552,7 @@ private fun ColumnScope.ModelList(
                 items = searchFilteredModelsByProvider[providerSetting.id].orEmpty(),
                 key = { it.id }
             ) { model ->
-                val favorite = settings.value.favoriteModels.contains(model.id)
+                val favorite = model.id in favoriteModelIds
                 ModelItem(
                     model = model,
                     onSelect = onSelect,
@@ -573,18 +566,7 @@ private fun ColumnScope.ModelList(
                         IconButton(
                             onClick = {
                                 coroutineScope.launch {
-                                    settingsStore.update { settings ->
-                                        if (favorite) {
-                                            settings.copy(
-                                                favoriteModels = settings.favoriteModels.filter { it != model.id }
-                                            )
-
-                                        } else {
-                                            settings.copy(
-                                                favoriteModels = settings.favoriteModels + model.id
-                                            )
-                                        }
-                                    }
+                                    favoriteModelService.setFavorite(model.id, favorite = !favorite)
                                 }
                             }
                         ) {

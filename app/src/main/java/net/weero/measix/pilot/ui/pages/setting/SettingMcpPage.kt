@@ -144,24 +144,23 @@ import org.koin.compose.koinInject
 fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val mcpConfigs = settings.mcpServers
-    val creationState = useEditState<McpServerConfig> {
-        vm.updateSettings(
-            settings.copy(
-                mcpServers = mcpConfigs + it
-            )
-        )
+    val creationState = useEditState<McpServerConfig> { newConfig ->
+        vm.updateSettings { current ->
+            current.copy(mcpServers = current.mcpServers + newConfig)
+        }
     }
     val editState = useEditState<McpServerConfig> { newConfig ->
-        vm.updateSettings(
-            settings.copy(
-                mcpServers = mcpConfigs.map {
-                    if (it.id == newConfig.id) {
-                        newConfig
+        vm.updateSettings { current ->
+            current.copy(
+                mcpServers = current.mcpServers.map { latest ->
+                    if (latest.id == newConfig.id) {
+                        applyMcpEditorSave(latest, newConfig)
                     } else {
-                        it
+                        latest
                     }
                 }
-            ))
+            )
+        }
     }
     var showImportDialog by remember { mutableStateOf(false) }
     var showImportMethodDialog by remember { mutableStateOf(false) }
@@ -274,11 +273,11 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
                             editState.open(mcpConfig)
                         },
                         onDelete = {
-                            vm.updateSettings(
-                                settings.copy(
-                                    mcpServers = mcpConfigs.filter { it.id != mcpConfig.id }
+                            vm.updateSettings { current ->
+                                current.copy(
+                                    mcpServers = current.mcpServers.filter { it.id != mcpConfig.id }
                                 )
-                            )
+                            }
                         },
                         onShare = {
                             shareConfig = mcpConfig

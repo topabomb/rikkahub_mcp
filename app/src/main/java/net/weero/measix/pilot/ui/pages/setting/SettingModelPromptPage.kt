@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.setting
+package net.weero.measix.pilot.ui.pages.setting
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -48,8 +48,8 @@ internal fun PromptSettingsPage(settings: Settings, vm: SettingVM, contentPaddin
                 title = stringResource(R.string.setting_model_page_prompt_title),
                 promptDescription = stringResource(R.string.setting_model_page_suggestion_prompt_vars),
                 promptValue = settings.titlePrompt,
-                onPromptChange = { vm.updateSettings(settings.copy(titlePrompt = it)) },
-                onResetPrompt = { vm.updateSettings(settings.copy(titlePrompt = DEFAULT_TITLE_PROMPT)) },
+                onPromptChange = { prompt -> vm.updateSettings { it.copy(titlePrompt = prompt) } },
+                onResetPrompt = { vm.updateSettings { it.copy(titlePrompt = DEFAULT_TITLE_PROMPT) } },
             )
         }
         item {
@@ -57,8 +57,8 @@ internal fun PromptSettingsPage(settings: Settings, vm: SettingVM, contentPaddin
                 title = stringResource(R.string.setting_model_page_prompt_suggestion),
                 promptDescription = stringResource(R.string.setting_model_page_suggestion_prompt_vars),
                 promptValue = settings.suggestionPrompt,
-                onPromptChange = { vm.updateSettings(settings.copy(suggestionPrompt = it)) },
-                onResetPrompt = { vm.updateSettings(settings.copy(suggestionPrompt = DEFAULT_SUGGESTION_PROMPT)) },
+                onPromptChange = { prompt -> vm.updateSettings { it.copy(suggestionPrompt = prompt) } },
+                onResetPrompt = { vm.updateSettings { it.copy(suggestionPrompt = DEFAULT_SUGGESTION_PROMPT) } },
             )
         }
         item {
@@ -66,8 +66,8 @@ internal fun PromptSettingsPage(settings: Settings, vm: SettingVM, contentPaddin
                 title = stringResource(R.string.setting_model_page_prompt_ocr),
                 promptDescription = stringResource(R.string.setting_model_page_ocr_prompt_vars),
                 promptValue = settings.ocrPrompt,
-                onPromptChange = { vm.updateSettings(settings.copy(ocrPrompt = it)) },
-                onResetPrompt = { vm.updateSettings(settings.copy(ocrPrompt = DEFAULT_OCR_PROMPT)) },
+                onPromptChange = { prompt -> vm.updateSettings { it.copy(ocrPrompt = prompt) } },
+                onResetPrompt = { vm.updateSettings { it.copy(ocrPrompt = DEFAULT_OCR_PROMPT) } },
             )
         }
         item {
@@ -75,8 +75,8 @@ internal fun PromptSettingsPage(settings: Settings, vm: SettingVM, contentPaddin
                 title = stringResource(R.string.setting_model_page_prompt_compress),
                 promptDescription = stringResource(R.string.setting_model_page_compress_prompt_vars),
                 promptValue = settings.compressPrompt,
-                onPromptChange = { vm.updateSettings(settings.copy(compressPrompt = it)) },
-                onResetPrompt = { vm.updateSettings(settings.copy(compressPrompt = DEFAULT_COMPRESS_PROMPT)) },
+                onPromptChange = { prompt -> vm.updateSettings { it.copy(compressPrompt = prompt) } },
+                onResetPrompt = { vm.updateSettings { it.copy(compressPrompt = DEFAULT_COMPRESS_PROMPT) } },
             )
         }
     }

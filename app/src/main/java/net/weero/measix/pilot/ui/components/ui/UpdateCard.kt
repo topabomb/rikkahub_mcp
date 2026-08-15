@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ui
+package net.weero.measix.pilot.ui.components.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -126,9 +126,7 @@ fun UpdateCard(vm: ChatVM) {
                     )
                     IconButton(
                         onClick = {
-                            vm.updateSettings(
-                                settings.copy(ignoredUpdateVersion = info.version)
-                            )
+                            vm.updateSettings { it.copy(ignoredUpdateVersion = info.version) }
                         },
                     ) {
                         Icon(

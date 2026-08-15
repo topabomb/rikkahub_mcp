@@ -18,6 +18,7 @@ import net.weero.measix.pilot.data.ai.RequestLoggingInterceptor
 import net.weero.measix.pilot.data.ai.transformers.AssistantTemplateLoader
 import net.weero.measix.pilot.data.ai.GenerationHandler
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
+import net.weero.measix.pilot.data.ai.transformers.AssistantTemplateCacheInvalidator
 
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.AppDatabase
@@ -106,6 +107,14 @@ val dataSourceModule = module {
             .defaultLocale(Locale.getDefault())
             .autoEscaping(false)
             .build()
+    }
+
+    single(createdAtStart = true) {
+        AssistantTemplateCacheInvalidator(
+            appScope = get(),
+            settingsStore = get(),
+            engine = get(),
+        )
     }
 
     single { TemplateTransformer(engine = get(), settingsStore = get()) }

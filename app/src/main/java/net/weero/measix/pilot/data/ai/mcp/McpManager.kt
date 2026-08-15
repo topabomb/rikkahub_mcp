@@ -625,21 +625,23 @@ class McpManager(
         val client = clients[configId] ?: return 0
         val serverTools = client.listTools().tools
 
-        val existingConfig = settingsStore.settingsFlow.value.mcpServers
-            .find { it.id == configId } ?: return 0
-
-        val merged = mergeTools(serverTools, existingConfig.commonOptions.tools)
-        val newConfig = existingConfig.clone(
-            commonOptions = existingConfig.commonOptions.copy(tools = merged)
-        )
+        var mergedSize = 0
         settingsStore.update { old ->
             old.copy(
-                mcpServers = old.mcpServers.map {
-                    if (it.id == configId) newConfig else it
+                mcpServers = old.mcpServers.map { currentConfig ->
+                    if (currentConfig.id != configId) {
+                        currentConfig
+                    } else {
+                        val merged = mergeTools(serverTools, currentConfig.commonOptions.tools)
+                        mergedSize = merged.size
+                        currentConfig.clone(
+                            commonOptions = currentConfig.commonOptions.copy(tools = merged)
+                        )
+                    }
                 }
             )
         }
-        return merged.size
+        return mergedSize
     }
 
     private fun setupNotificationHandlers(client: Client, config: McpServerConfig) {

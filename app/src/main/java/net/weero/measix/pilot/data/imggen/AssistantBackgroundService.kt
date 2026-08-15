@@ -54,12 +54,12 @@ class AssistantBackgroundService(
         }
         val newUri = copy.fileUri(context.filesDir)
         var previousBackground: String? = null
-        val found = try {
-            var updated = false
-            settingsStore.updateAtomic { settings ->
+        var assistantFound = false
+        val committed = try {
+            settingsStore.updateAtomicAndGet { settings ->
                 val index = settings.assistants.indexOfFirst { it.id == assistantId }
-                if (index < 0) return@updateAtomic settings
-                updated = true
+                if (index < 0) return@updateAtomicAndGet settings
+                assistantFound = true
                 val current = settings.assistants[index]
                 previousBackground = current.background
                 settings.copy(
@@ -71,7 +71,6 @@ class AssistantBackgroundService(
                     },
                 )
             }
-            updated
         } catch (cancelled: CancellationException) {
             withContext(NonCancellable) {
                 discardUncommittedBackgroundCopy(copy, newUri)
@@ -88,12 +87,15 @@ class AssistantBackgroundService(
                 reason = "settings_write_failed",
             )
         }
-        if (!found) {
+        val backgroundCommitted = committed.assistants
+            .find { it.id == assistantId }
+            ?.background == newUri
+        if (!assistantFound || !backgroundCommitted) {
             runCatching { artifactStore.delete(copy) }
             return BackgroundUpdateResult(
                 requested = true,
                 updated = false,
-                reason = "assistant_not_found",
+                reason = if (assistantFound) "settings_write_rejected" else "assistant_not_found",
             )
         }
         val cleanupPending = try {

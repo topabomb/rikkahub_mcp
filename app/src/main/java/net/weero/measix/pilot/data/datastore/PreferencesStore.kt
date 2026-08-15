@@ -11,12 +11,10 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import io.pebbletemplates.pebble.PebbleEngine
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerialName
@@ -52,8 +50,6 @@ import net.weero.measix.pilot.utils.toMutableStateFlow
 import me.rerere.search.SearchCommonOptions
 import me.rerere.search.SearchServiceOptions
 import me.rerere.tts.provider.TTSProviderSetting
-import org.koin.core.component.KoinComponent
-import org.koin.core.component.get
 import kotlin.uuid.Uuid
 
 private const val TAG = "PreferencesStore"
@@ -65,7 +61,8 @@ private val Context.settingsStore by preferencesDataStore(
 class SettingsStore(
     context: Context,
     scope: AppScope,
-) : KoinComponent {
+    private val writePolicy: SettingsWritePolicy = SettingsWritePolicy.AllowAll,
+) {
     companion object {
         // 版本号
         val VERSION = intPreferencesKey("data_version")
@@ -235,110 +232,26 @@ class SettingsStore(
                 } ?: emptyList(),
             )
         }
-        .map {
-            var providers = it.providers.ifEmpty { DEFAULT_PROVIDERS }.toMutableList()
-            DEFAULT_PROVIDERS.forEach { defaultProvider ->
-                if (providers.none { it.id == defaultProvider.id }) {
-                    providers.add(defaultProvider.copyProvider())
-                }
-            }
-            providers = providers.map { provider ->
-                val defaultProvider = DEFAULT_PROVIDERS.find { it.id == provider.id }
-                if (defaultProvider != null) {
-                    provider.copyProvider(
-                        builtIn = defaultProvider.builtIn,
-                        description = defaultProvider.description,
-                        shortDescription = defaultProvider.shortDescription,
-                    )
-                } else provider
-            }.toMutableList()
-            val assistants = it.assistants.ifEmpty { DEFAULT_ASSISTANTS }.toMutableList()
-            DEFAULT_ASSISTANTS.forEach { defaultAssistant ->
-                if (assistants.none { it.id == defaultAssistant.id }) {
-                    assistants.add(defaultAssistant.copy())
-                }
-            }
-            val ttsProviders = it.ttsProviders.ifEmpty { DEFAULT_TTS_PROVIDERS }.toMutableList()
-            DEFAULT_TTS_PROVIDERS.forEach { defaultTTSProvider ->
-                if (ttsProviders.none { provider -> provider.id == defaultTTSProvider.id }) {
-                    ttsProviders.add(defaultTTSProvider.copyProvider())
-                }
-            }
-            it.copy(
-                providers = providers,
-                assistants = assistants,
-                ttsProviders = ttsProviders,
-            )
-        }
-        .map { settings ->
-            // 去重并清理无效引用
-            val validMcpServerIds = settings.mcpServers.map { it.id }.toSet()
-            val validModeInjectionIds = settings.modeInjections.map { it.id }.toSet()
-            val validQuickMessageIds = settings.quickMessages.map { it.id }.toSet()
-            val asrProviders = settings.asrProviders.distinctBy { it.id }
-            settings.copy(
-                providers = settings.providers.distinctBy { it.id }.map { provider ->
-                    when (provider) {
-                        is ProviderSetting.OpenAI -> provider.copy(
-                            models = provider.models.distinctBy { model -> model.id }
-                        )
-
-                        is ProviderSetting.Google -> provider.copy(
-                            models = provider.models.distinctBy { model -> model.id }
-                        )
-
-                        is ProviderSetting.Claude -> provider.copy(
-                            models = provider.models.distinctBy { model -> model.id }
-                        )
-                    }
-                },
-                assistants = settings.assistants.distinctBy { it.id }.map { assistant ->
-                    assistant.copy(
-                        // 过滤掉不存在的 MCP 服务器 ID
-                        mcpServers = assistant.mcpServers.filter { serverId ->
-                            serverId in validMcpServerIds
-                        }.toSet(),
-                        // 过滤掉不存在的模式注入 ID
-                        modeInjectionIds = assistant.modeInjectionIds.filter { id ->
-                            id in validModeInjectionIds
-                        }.toSet(),
-                        // 过滤掉不存在的快捷消息 ID
-                        quickMessageIds = assistant.quickMessageIds.filter { id ->
-                            id in validQuickMessageIds
-                        }.toSet()
-                    )
-                },
-                ttsProviders = settings.ttsProviders.distinctBy { it.id },
-                asrProviders = asrProviders,
-                selectedASRProviderId = settings.selectedASRProviderId
-                    ?.takeIf { id -> asrProviders.any { provider -> provider.id == id } }
-                    ?: asrProviders.firstOrNull()?.id,
-                favoriteModels = settings.favoriteModels.filter { uuid ->
-                    settings.providers.flatMap { it.models }.any { it.id == uuid }
-                },
-                modeInjections = settings.modeInjections.distinctBy { it.id },
-                quickMessages = settings.quickMessages.distinctBy { it.id },
-            )
-        }
-        .onEach {
-            get<PebbleEngine>().templateCache.invalidateAll()
-        }
+        .map { it.materializeForRead() }
 
     val settingsFlow = settingsFlowRaw
         .distinctUntilChanged()
         .toMutableStateFlow(scope, Settings.dummy())
 
-    suspend fun update(settings: Settings) {
+    /** 备份恢复是完整外部快照，但不得清空未完成的内部删除 tombstone。 */
+    suspend fun restoreFromBackup(settings: Settings) {
         updateMutex.withLock {
             val current = settingsFlow.first { !it.init }
-            // pendingAssistantDeletions 是内部恢复状态，不属于 UI/备份 Settings 快照。
-            // 普通整份更新不得因反序列化时的 @Transient 默认值而意外清空 tombstone。
-            updateInternal(settings.withInternalStateFrom(current))
+            updateInternal(
+                current = current,
+                proposed = settings.withInternalStateFrom(current),
+                source = SettingsWriteSource.BACKUP_RESTORE,
+            )
         }
     }
 
     suspend fun update(fn: (Settings) -> Settings) {
-        updateAtomic(fn)
+        updateAtomic(fn = fn)
     }
 
     /**
@@ -346,71 +259,93 @@ class SettingsStore(
      * AssistantManagementService、Assistant 编辑页和 UI 删除均使用该入口。
      */
     suspend fun updateAtomic(fn: (Settings) -> Settings) {
-        updateMutex.withLock {
-            // StateFlow 的初始值是不可持久化的 dummy；启动早期的原子操作必须等待真实 DataStore 快照。
-            val current = settingsFlow.first { !it.init }
-            val updated = fn(current)
-            updateInternal(updated)
-        }
+        updateAtomicAndGet(source = SettingsWriteSource.LOCAL, fn = fn)
     }
 
-    private suspend fun updateInternal(settings: Settings) {
-        if (settings.init) {
+    /** 仅供需要在提交成功后执行文件补偿的领域服务取得策略处理后的实际提交值。 */
+    internal suspend fun updateAtomicAndGet(fn: (Settings) -> Settings): Settings =
+        updateAtomicAndGet(source = SettingsWriteSource.LOCAL, fn = fn)
+
+    private suspend fun updateAtomicAndGet(
+        source: SettingsWriteSource,
+        fn: (Settings) -> Settings,
+    ): Settings = updateMutex.withLock {
+        // StateFlow 的初始值是不可持久化的 dummy；启动早期的原子操作必须等待真实 DataStore 快照。
+        val current = settingsFlow.first { !it.init }
+        val updated = fn(current)
+        updateInternal(current = current, proposed = updated, source = source)
+    }
+
+    private suspend fun updateInternal(
+        current: Settings,
+        proposed: Settings,
+        source: SettingsWriteSource,
+    ): Settings {
+        if (proposed.init) {
             Log.w(TAG, "Cannot update dummy settings")
-            return
+            return current
         }
-        val normalizedSettings = settings.normalizeForPersistence()
-        dataStore.edit { preferences ->
-            preferences[DYNAMIC_COLOR] = normalizedSettings.dynamicColor
-            preferences[THEME_ID] = normalizedSettings.themeId
-            preferences[CUSTOM_THEMES] = JsonInstant.encodeToString(normalizedSettings.customThemes)
-            preferences[DEVELOPER_MODE] = normalizedSettings.developerMode
-            preferences[DISPLAY_SETTING] = JsonInstant.encodeToString(normalizedSettings.displaySetting)
-            preferences[FAVORITE_MODELS] = JsonInstant.encodeToString(normalizedSettings.favoriteModels)
-            preferences[SELECT_MODEL] = normalizedSettings.chatModelId.toString()
-            preferences[FAST_MODEL] = normalizedSettings.fastModelId.toString()
-            normalizedSettings.titleModelId?.let {
-                preferences[TITLE_MODEL] = it.toString()
-            } ?: preferences.remove(TITLE_MODEL)
-            preferences[ENABLE_SUGGESTION] = normalizedSettings.enableSuggestion
-            normalizedSettings.suggestionModelId?.let {
-                preferences[SUGGESTION_MODEL] = it.toString()
-            } ?: preferences.remove(SUGGESTION_MODEL)
-            preferences[IMAGE_GENERATION_MODEL] = normalizedSettings.imageGenerationModelId.toString()
-            preferences[TITLE_PROMPT] = normalizedSettings.titlePrompt
-            preferences[SUGGESTION_PROMPT] = normalizedSettings.suggestionPrompt
-            preferences[OCR_MODEL] = normalizedSettings.ocrModelId.toString()
-            preferences[OCR_PROMPT] = normalizedSettings.ocrPrompt
-            preferences[COMPRESS_MODEL] = normalizedSettings.compressModelId.toString()
-            preferences[COMPRESS_PROMPT] = normalizedSettings.compressPrompt
-            preferences[PROVIDERS] = JsonInstant.encodeToString(normalizedSettings.providers)
-            preferences[ASSISTANTS] = JsonInstant.encodeToString(normalizedSettings.assistants)
-            preferences[SELECT_ASSISTANT] = normalizedSettings.assistantId.toString()
-            preferences[ASSISTANT_TAGS] = JsonInstant.encodeToString(normalizedSettings.assistantTags)
-            preferences[SEARCH_SERVICES] = JsonInstant.encodeToString(normalizedSettings.searchServices)
-            preferences[SEARCH_COMMON] = JsonInstant.encodeToString(normalizedSettings.searchCommonOptions)
-            preferences[SEARCH_SELECTED] = normalizedSettings.searchServiceSelected.coerceIn(0, normalizedSettings.searchServices.size - 1)
-            preferences[MCP_SERVERS] = JsonInstant.encodeToString(normalizedSettings.mcpServers)
-            preferences[WEBDAV_CONFIG] = JsonInstant.encodeToString(normalizedSettings.webDavConfig)
-            preferences[S3_CONFIG] = JsonInstant.encodeToString(normalizedSettings.s3Config)
-            preferences[TTS_PROVIDERS] = JsonInstant.encodeToString(normalizedSettings.ttsProviders)
-            normalizedSettings.selectedTTSProviderId.let {
-                preferences[SELECTED_TTS_PROVIDER] = it.toString()
-            }
-            preferences[DEFAULT_TTS_PLAYBACK_SPEED] = normalizedSettings.defaultTTSPlaybackSpeed.coerceIn(0.5f, 2.0f)
-            preferences[ASR_PROVIDERS] = JsonInstant.encodeToString(normalizedSettings.asrProviders)
-            normalizedSettings.selectedASRProviderId?.let {
-                preferences[SELECTED_ASR_PROVIDER] = it.toString()
-            } ?: preferences.remove(SELECTED_ASR_PROVIDER)
-            preferences[MODE_INJECTIONS] = JsonInstant.encodeToString(normalizedSettings.modeInjections)
-            preferences[QUICK_MESSAGES] = JsonInstant.encodeToString(normalizedSettings.quickMessages)
-            preferences[BACKUP_REMINDER_CONFIG] = JsonInstant.encodeToString(normalizedSettings.backupReminderConfig)
-            preferences[LAUNCH_COUNT] = normalizedSettings.launchCount
-            preferences[IGNORED_UPDATE_VERSION] = normalizedSettings.ignoredUpdateVersion
-            preferences[PENDING_ASSISTANT_DELETIONS] = JsonInstant.encodeToString(normalizedSettings.pendingAssistantDeletions)
-        }
-        // DataStore 提交成功后才发布，避免写盘失败时内存状态领先于持久化状态。
-        settingsFlow.value = normalizedSettings
+        return commitSettings(
+            current = current,
+            proposed = proposed,
+            source = source,
+            policy = writePolicy,
+            persist = { normalizedSettings ->
+                dataStore.edit { preferences ->
+                    preferences[DYNAMIC_COLOR] = normalizedSettings.dynamicColor
+                    preferences[THEME_ID] = normalizedSettings.themeId
+                    preferences[CUSTOM_THEMES] = JsonInstant.encodeToString(normalizedSettings.customThemes)
+                    preferences[DEVELOPER_MODE] = normalizedSettings.developerMode
+                    preferences[DISPLAY_SETTING] = JsonInstant.encodeToString(normalizedSettings.displaySetting)
+                    preferences[FAVORITE_MODELS] = JsonInstant.encodeToString(normalizedSettings.favoriteModels)
+                    preferences[SELECT_MODEL] = normalizedSettings.chatModelId.toString()
+                    preferences[FAST_MODEL] = normalizedSettings.fastModelId.toString()
+                    normalizedSettings.titleModelId?.let {
+                        preferences[TITLE_MODEL] = it.toString()
+                    } ?: preferences.remove(TITLE_MODEL)
+                    preferences[ENABLE_SUGGESTION] = normalizedSettings.enableSuggestion
+                    normalizedSettings.suggestionModelId?.let {
+                        preferences[SUGGESTION_MODEL] = it.toString()
+                    } ?: preferences.remove(SUGGESTION_MODEL)
+                    preferences[IMAGE_GENERATION_MODEL] = normalizedSettings.imageGenerationModelId.toString()
+                    preferences[TITLE_PROMPT] = normalizedSettings.titlePrompt
+                    preferences[SUGGESTION_PROMPT] = normalizedSettings.suggestionPrompt
+                    preferences[OCR_MODEL] = normalizedSettings.ocrModelId.toString()
+                    preferences[OCR_PROMPT] = normalizedSettings.ocrPrompt
+                    preferences[COMPRESS_MODEL] = normalizedSettings.compressModelId.toString()
+                    preferences[COMPRESS_PROMPT] = normalizedSettings.compressPrompt
+                    preferences[PROVIDERS] = JsonInstant.encodeToString(normalizedSettings.providers)
+                    preferences[ASSISTANTS] = JsonInstant.encodeToString(normalizedSettings.assistants)
+                    preferences[SELECT_ASSISTANT] = normalizedSettings.assistantId.toString()
+                    preferences[ASSISTANT_TAGS] = JsonInstant.encodeToString(normalizedSettings.assistantTags)
+                    preferences[SEARCH_SERVICES] = JsonInstant.encodeToString(normalizedSettings.searchServices)
+                    preferences[SEARCH_COMMON] = JsonInstant.encodeToString(normalizedSettings.searchCommonOptions)
+                    preferences[SEARCH_SELECTED] = normalizedSettings.searchServiceSelected
+                    preferences[MCP_SERVERS] = JsonInstant.encodeToString(normalizedSettings.mcpServers)
+                    preferences[WEBDAV_CONFIG] = JsonInstant.encodeToString(normalizedSettings.webDavConfig)
+                    preferences[S3_CONFIG] = JsonInstant.encodeToString(normalizedSettings.s3Config)
+                    preferences[TTS_PROVIDERS] = JsonInstant.encodeToString(normalizedSettings.ttsProviders)
+                    normalizedSettings.selectedTTSProviderId.let {
+                        preferences[SELECTED_TTS_PROVIDER] = it.toString()
+                    }
+                    preferences[DEFAULT_TTS_PLAYBACK_SPEED] = normalizedSettings.defaultTTSPlaybackSpeed
+                    preferences[ASR_PROVIDERS] = JsonInstant.encodeToString(normalizedSettings.asrProviders)
+                    normalizedSettings.selectedASRProviderId?.let {
+                        preferences[SELECTED_ASR_PROVIDER] = it.toString()
+                    } ?: preferences.remove(SELECTED_ASR_PROVIDER)
+                    preferences[MODE_INJECTIONS] = JsonInstant.encodeToString(normalizedSettings.modeInjections)
+                    preferences[QUICK_MESSAGES] = JsonInstant.encodeToString(normalizedSettings.quickMessages)
+                    preferences[BACKUP_REMINDER_CONFIG] =
+                        JsonInstant.encodeToString(normalizedSettings.backupReminderConfig)
+                    preferences[LAUNCH_COUNT] = normalizedSettings.launchCount
+                    preferences[IGNORED_UPDATE_VERSION] = normalizedSettings.ignoredUpdateVersion
+                    preferences[PENDING_ASSISTANT_DELETIONS] =
+                        JsonInstant.encodeToString(normalizedSettings.pendingAssistantDeletions)
+                }
+            },
+            // persist 正常返回后才发布，避免写盘失败时内存状态领先于持久化状态。
+            publish = { settingsFlow.value = it },
+        )
     }
 
     suspend fun updateAssistant(assistantId: Uuid) {
@@ -748,7 +683,7 @@ internal val DEFAULT_ASSISTANTS = listOf(
 )
 
 val DEFAULT_SYSTEM_TTS_ID = Uuid.parse("026a01a2-c3a0-4fd5-8075-80e03bdef200")
-private val DEFAULT_TTS_PROVIDERS = listOf(
+internal val DEFAULT_TTS_PROVIDERS = listOf(
     TTSProviderSetting.SystemTTS(
         id = DEFAULT_SYSTEM_TTS_ID,
         name = "",

@@ -19,7 +19,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import me.rerere.ai.core.ToolCallLocator
-import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -124,12 +123,18 @@ class ChatVM(
     val mcpManager = chatService.mcpManager
 
     // 更新设置
-    fun updateSettings(newSettings: Settings): Job {
+    fun updateSettings(transform: (Settings) -> Settings): Job {
         return viewModelScope.launch {
-            val oldSettings = settings.value
-            // 检查用户头像是否有变化，如果有则删除旧头像
-            checkUserAvatarDelete(oldSettings, newSettings)
-            settingsStore.update(newSettings)
+            var previousAvatar: Avatar? = null
+            val committed = settingsStore.updateAtomicAndGet { current ->
+                val updated = transform(current)
+                previousAvatar = current.displaySetting.userAvatar
+                updated
+            }
+            // 文件副作用只能发生在 DataStore 提交成功之后。
+            previousAvatar?.let { oldAvatar ->
+                checkUserAvatarDelete(oldAvatar, committed.displaySetting.userAvatar)
+            }
         }
     }
 
@@ -138,39 +143,19 @@ class ChatVM(
             val enableWebSearch = searchModeEnablesLocal(mode)
             val enableBuiltIn = searchModeEnablesBuiltIn(mode)
             settingsStore.update { settings ->
-                settings.copy(
-                    assistants = settings.assistants.map { assistant ->
-                        if (assistant.id == assistantId) {
-                            assistant.copy(enableWebSearch = enableWebSearch)
-                        } else {
-                            assistant
-                        }
-                    },
-                    providers = if (model == null) {
-                        settings.providers
-                    } else {
-                        settings.providers.map { provider ->
-                            provider.editModel(
-                                model.copy(
-                                    tools = if (enableBuiltIn) {
-                                        model.tools + BuiltInTools.Search
-                                    } else {
-                                        model.tools - BuiltInTools.Search
-                                    }
-                                )
-                            )
-                        }
-                    },
+                applySearchMode(
+                    settings = settings,
+                    assistantId = assistantId,
+                    modelId = model?.id,
+                    enableWebSearch = enableWebSearch,
+                    enableBuiltIn = enableBuiltIn,
                 )
             }
         }
     }
 
     // 检查用户头像删除
-    private fun checkUserAvatarDelete(oldSettings: Settings, newSettings: Settings) {
-        val oldAvatar = oldSettings.displaySetting.userAvatar
-        val newAvatar = newSettings.displaySetting.userAvatar
-
+    private fun checkUserAvatarDelete(oldAvatar: Avatar, newAvatar: Avatar) {
         if (oldAvatar is Avatar.Image && oldAvatar != newAvatar) {
             filesManager.deleteChatFiles(listOf(oldAvatar.url.toUri()))
         }

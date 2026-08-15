@@ -35,6 +35,7 @@ import net.weero.measix.pilot.data.imggen.ImageGenerationSource
 import net.weero.measix.pilot.data.repository.GenMediaRepository
 import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.uuid.Uuid
 
 @Serializable
 data class GeneratedImage(
@@ -60,7 +61,7 @@ private fun GenMediaEntity.toGeneratedImage(filesManager: FilesManager): Generat
 
 class ImgGenVM(
     context: Application,
-    val settingsStore: SettingsStore,
+    private val settingsStore: SettingsStore,
     val providerManager: ProviderManager,
     val genMediaRepository: GenMediaRepository,
     private val filesManager: FilesManager,
@@ -68,6 +69,14 @@ class ImgGenVM(
     private val coordinator: ImageGenerationCoordinator,
     private val generatedMediaStore: GeneratedMediaStore,
 ) : AndroidViewModel(context) {
+    val settings = settingsStore.settingsFlow
+
+    fun selectImageGenerationModel(modelId: Uuid) {
+        viewModelScope.launch {
+            settingsStore.update { it.copy(imageGenerationModelId = modelId) }
+        }
+    }
+
     private val _prompt = MutableStateFlow("")
     val prompt: StateFlow<String> = _prompt
 

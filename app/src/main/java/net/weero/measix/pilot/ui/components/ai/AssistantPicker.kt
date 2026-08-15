@@ -58,11 +58,11 @@ import kotlin.uuid.Uuid
 @Composable
 fun AssistantPicker(
     settings: Settings,
-    onUpdateSettings: (Settings) -> Unit,
+    onSelectAssistant: (Uuid) -> Unit,
     modifier: Modifier = Modifier,
     onManageAssistant: () -> Unit,
 ) {
-    val state = rememberAssistantState(settings, onUpdateSettings)
+    val state = rememberAssistantState(settings, onSelectAssistant)
     val defaultAssistantName = stringResource(R.string.assistant_page_default_assistant)
     var showPicker by remember { mutableStateOf(false) }
 

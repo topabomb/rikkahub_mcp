@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.setting
+package net.weero.measix.pilot.ui.pages.setting
 
 import android.content.ClipData
 import androidx.compose.foundation.Canvas
@@ -159,8 +159,8 @@ fun SettingThemePage(vm: SettingVM = koinViewModel()) {
                             PresetThemeButtonGroup(
                                 themeId = settings.themeId,
                                 modifier = Modifier.fillMaxWidth(),
-                                onChangeTheme = {
-                                    vm.updateSettings(settings.copy(themeId = it))
+                                onChangeTheme = { themeId ->
+                                    vm.updateSettings { it.copy(themeId = themeId) }
                                 }
                             )
                         }
@@ -223,9 +223,7 @@ fun SettingThemePage(vm: SettingVM = koinViewModel()) {
                     CustomThemeItem(
                         theme = theme,
                         isSelected = settings.themeId == theme.id,
-                        onSelect = {
-                            vm.updateSettings(settings.copy(themeId = theme.id))
-                        },
+                        onSelect = { vm.updateSettings { it.copy(themeId = theme.id) } },
                         onExport = {
                             val json = themeJson.encodeToString(theme)
                             scope.launch {
@@ -253,17 +251,15 @@ fun SettingThemePage(vm: SettingVM = koinViewModel()) {
             theme = editingTheme,
             onDismiss = { showEditSheet = false },
             onSave = { theme ->
-                val newThemes = if (editingTheme != null) {
-                    settings.customThemes.map { if (it.id == theme.id) theme else it }
-                } else {
-                    settings.customThemes + theme
+                val editingThemeId = editingTheme?.id
+                vm.updateSettings { current ->
+                    val newThemes = if (editingThemeId != null) {
+                        current.customThemes.map { if (it.id == editingThemeId) theme else it }
+                    } else {
+                        current.customThemes + theme
+                    }
+                    current.copy(customThemes = newThemes, themeId = theme.id)
                 }
-                vm.updateSettings(
-                    settings.copy(
-                        customThemes = newThemes,
-                        themeId = theme.id
-                    )
-                )
                 showEditSheet = false
             }
         )
@@ -274,12 +270,12 @@ fun SettingThemePage(vm: SettingVM = koinViewModel()) {
             onDismiss = { showImportDialog = false },
             onImport = { theme ->
                 val importedTheme = theme.copy(id = Uuid.random().toString())
-                vm.updateSettings(
-                    settings.copy(
-                        customThemes = settings.customThemes + importedTheme,
-                        themeId = importedTheme.id
+                vm.updateSettings { current ->
+                    current.copy(
+                        customThemes = current.customThemes + importedTheme,
+                        themeId = importedTheme.id,
                     )
-                )
+                }
                 showImportDialog = false
                 toaster.show(importSuccessMsg, type = ToastType.Success)
             }
@@ -293,9 +289,13 @@ fun SettingThemePage(vm: SettingVM = koinViewModel()) {
         dismissText = stringResource(android.R.string.cancel),
         onConfirm = {
             deletingTheme?.let { theme ->
-                val newThemes = settings.customThemes.filter { it.id != theme.id }
-                val newThemeId = if (settings.themeId == theme.id) "sakura" else settings.themeId
-                vm.updateSettings(settings.copy(customThemes = newThemes, themeId = newThemeId))
+                vm.updateSettings { current ->
+                    val newThemeId = if (current.themeId == theme.id) "sakura" else current.themeId
+                    current.copy(
+                        customThemes = current.customThemes.filter { it.id != theme.id },
+                        themeId = newThemeId,
+                    )
+                }
             }
             deletingTheme = null
         },

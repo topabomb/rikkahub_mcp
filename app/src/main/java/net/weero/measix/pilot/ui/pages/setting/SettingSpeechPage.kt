@@ -101,21 +101,19 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
                 },
                 actions = {
                     if (selectedPage == 0) {
-                        AddTTSProviderButton {
-                            vm.updateSettings(
-                                settings.copy(
-                                    ttsProviders = listOf(it) + settings.ttsProviders
-                                )
-                            )
+                        AddTTSProviderButton { provider ->
+                            vm.updateSettings { current ->
+                                current.copy(ttsProviders = listOf(provider) + current.ttsProviders)
+                            }
                         }
                     } else {
-                        AddASRProviderButton {
-                            vm.updateSettings(
-                                settings.copy(
-                                    asrProviders = listOf(it) + settings.asrProviders,
-                                    selectedASRProviderId = settings.selectedASRProviderId ?: it.id
+                        AddASRProviderButton { provider ->
+                            vm.updateSettings { current ->
+                                current.copy(
+                                    asrProviders = listOf(provider) + current.asrProviders,
+                                    selectedASRProviderId = current.selectedASRProviderId ?: provider.id,
                                 )
-                            )
+                            }
                         }
                     }
                 },
@@ -148,8 +146,8 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
             0 -> Column(modifier = Modifier.padding(innerPadding)) {
                 TTSPlaybackSpeedSetting(
                     speed = settings.defaultTTSPlaybackSpeed,
-                    onSpeedChange = {
-                        vm.updateSettings(settings.copy(defaultTTSPlaybackSpeed = it))
+                    onSpeedChange = { speed ->
+                        vm.updateSettings { it.copy(defaultTTSPlaybackSpeed = speed) }
                     },
                     modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 8.dp),
                 )
@@ -219,10 +217,13 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
 
                     TextButton(
                         onClick = {
-                            val newProviders = settings.ttsProviders.map {
-                                if (it.id == provider.id) currentProvider else it
+                            vm.updateSettings { current ->
+                                current.copy(
+                                    ttsProviders = current.ttsProviders.map {
+                                        if (it.id == provider.id) currentProvider else it
+                                    }
+                                )
                             }
-                            vm.updateSettings(settings.copy(ttsProviders = newProviders))
                             editingTTSProvider = null
                         },
                         modifier = Modifier.weight(1f)
@@ -282,10 +283,13 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
 
                     TextButton(
                         onClick = {
-                            val newProviders = settings.asrProviders.map {
-                                if (it.id == provider.id) currentProvider else it
+                            vm.updateSettings { current ->
+                                current.copy(
+                                    asrProviders = current.asrProviders.map {
+                                        if (it.id == provider.id) currentProvider else it
+                                    }
+                                )
                             }
-                            vm.updateSettings(settings.copy(asrProviders = newProviders))
                             editingASRProvider = null
                         },
                         modifier = Modifier.weight(1f)
@@ -301,16 +305,23 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
 @Composable
 private fun TTSProviderList(
     settings: Settings,
-    onUpdateSettings: (Settings) -> Unit,
+    onUpdateSettings: ((Settings) -> Settings) -> Unit,
     onEdit: (TTSProviderSetting) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val lazyListState = rememberLazyListState()
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        val newProviders = settings.ttsProviders.toMutableList().apply {
-            add(to.index, removeAt(from.index))
+        val fromId = settings.ttsProviders.getOrNull(from.index)?.id ?: return@rememberReorderableLazyListState
+        val toId = settings.ttsProviders.getOrNull(to.index)?.id ?: return@rememberReorderableLazyListState
+        onUpdateSettings { current ->
+            val latestFrom = current.ttsProviders.indexOfFirst { it.id == fromId }
+            val latestTo = current.ttsProviders.indexOfFirst { it.id == toId }
+            if (latestFrom < 0 || latestTo < 0) current else current.copy(
+                ttsProviders = current.ttsProviders.toMutableList().apply {
+                    add(latestTo, removeAt(latestFrom))
+                }
+            )
         }
-        onUpdateSettings(settings.copy(ttsProviders = newProviders))
     }
 
     LazyColumn(
@@ -353,21 +364,24 @@ private fun TTSProviderList(
                     },
                     isSelected = settings.selectedTTSProviderId == provider.id,
                     onSelect = {
-                        onUpdateSettings(settings.copy(selectedTTSProviderId = provider.id))
+                        onUpdateSettings { it.copy(selectedTTSProviderId = provider.id) }
                     },
                     onEdit = {
                         onEdit(provider)
                     },
                     onDelete = {
-                        val newProviders = settings.ttsProviders - provider
-                        val newSelectedId =
-                            if (settings.selectedTTSProviderId == provider.id) DEFAULT_SYSTEM_TTS_ID else settings.selectedTTSProviderId
-                        onUpdateSettings(
-                            settings.copy(
+                        onUpdateSettings { current ->
+                            val newProviders = current.ttsProviders.filterNot { it.id == provider.id }
+                            val newSelectedId = if (current.selectedTTSProviderId == provider.id) {
+                                DEFAULT_SYSTEM_TTS_ID
+                            } else {
+                                current.selectedTTSProviderId
+                            }
+                            current.copy(
                                 ttsProviders = newProviders,
-                                selectedTTSProviderId = newSelectedId
+                                selectedTTSProviderId = newSelectedId,
                             )
-                        )
+                        }
                     }
                 )
             }
@@ -425,16 +439,23 @@ private fun TTSPlaybackSpeedSetting(
 @Composable
 private fun ASRProviderList(
     settings: Settings,
-    onUpdateSettings: (Settings) -> Unit,
+    onUpdateSettings: ((Settings) -> Settings) -> Unit,
     onEdit: (ASRProviderSetting) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val lazyListState = rememberLazyListState()
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        val newProviders = settings.asrProviders.toMutableList().apply {
-            add(to.index, removeAt(from.index))
+        val fromId = settings.asrProviders.getOrNull(from.index)?.id ?: return@rememberReorderableLazyListState
+        val toId = settings.asrProviders.getOrNull(to.index)?.id ?: return@rememberReorderableLazyListState
+        onUpdateSettings { current ->
+            val latestFrom = current.asrProviders.indexOfFirst { it.id == fromId }
+            val latestTo = current.asrProviders.indexOfFirst { it.id == toId }
+            if (latestFrom < 0 || latestTo < 0) current else current.copy(
+                asrProviders = current.asrProviders.toMutableList().apply {
+                    add(latestTo, removeAt(latestFrom))
+                }
+            )
         }
-        onUpdateSettings(settings.copy(asrProviders = newProviders))
     }
 
     LazyColumn(
@@ -477,25 +498,24 @@ private fun ASRProviderList(
                     },
                     isSelected = settings.selectedASRProviderId == provider.id,
                     onSelect = {
-                        onUpdateSettings(settings.copy(selectedASRProviderId = provider.id))
+                        onUpdateSettings { it.copy(selectedASRProviderId = provider.id) }
                     },
                     onEdit = {
                         onEdit(provider)
                     },
                     onDelete = {
-                        val newProviders = settings.asrProviders - provider
-                        val newSelectedId =
-                            if (settings.selectedASRProviderId == provider.id) {
+                        onUpdateSettings { current ->
+                            val newProviders = current.asrProviders.filterNot { it.id == provider.id }
+                            val newSelectedId = if (current.selectedASRProviderId == provider.id) {
                                 newProviders.firstOrNull()?.id
                             } else {
-                                settings.selectedASRProviderId
+                                current.selectedASRProviderId
                             }
-                        onUpdateSettings(
-                            settings.copy(
+                            current.copy(
                                 asrProviders = newProviders,
-                                selectedASRProviderId = newSelectedId
+                                selectedASRProviderId = newSelectedId,
                             )
-                        )
+                        }
                     }
                 )
             }

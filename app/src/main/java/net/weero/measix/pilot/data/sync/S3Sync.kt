@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.sync
+package net.weero.measix.pilot.data.sync
 
 import android.content.Context
 import android.util.Log
@@ -204,7 +204,7 @@ class S3Sync(
                             Log.i(TAG, "restoreFromBackupFile: Restoring settings")
                             try {
                                 val settings = json.decodeFromString<Settings>(settingsJson)
-                                settingsStore.update(settings)
+                                settingsStore.restoreFromBackup(settings)
                                 Log.i(TAG, "restoreFromBackupFile: Settings restored successfully")
                             } catch (e: Exception) {
                                 Log.e(TAG, "restoreFromBackupFile: Failed to restore settings", e)
@@ -250,15 +250,17 @@ class S3Sync(
                             if (config.items.contains(S3Config.BackupItem.FILES) &&
                                 zipEntry.name.startsWith("${FileFolders.UPLOAD}/")
                             ) {
-                                val fileName = zipEntry.name.substringAfter("${FileFolders.UPLOAD}/")
-                                if (fileName.isNotEmpty()) {
+                                val relativePath = zipEntry.name.substringAfter("${FileFolders.UPLOAD}/")
+                                if (relativePath.isNotEmpty()) {
                                     val uploadFolder = File(context.filesDir, FileFolders.UPLOAD)
                                     if (!uploadFolder.exists()) {
                                         uploadFolder.mkdirs()
                                         Log.i(TAG, "restoreFromBackupFile: Created upload directory")
                                     }
 
-                                    val targetFile = File(uploadFolder, fileName)
+                                    val targetFile = resolveBackupEntry(uploadFolder, relativePath)
+                                        ?: throw Exception("Invalid upload file path: ${zipEntry.name}")
+                                    targetFile.parentFile?.mkdirs()
                                     Log.i(
                                         TAG,
                                         "restoreFromBackupFile: Restoring file ${zipEntry.name} to ${targetFile.absolutePath}"

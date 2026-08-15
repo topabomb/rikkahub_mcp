@@ -245,7 +245,7 @@ private fun ImageGenScreen(
     val currentGeneratedImages by vm.currentGeneratedImages.collectAsStateWithLifecycle()
     val referenceImages by vm.referenceImages.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
-    val settings by vm.settingsStore.settingsFlow.collectAsStateWithLifecycle()
+    val settings by vm.settings.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
     var showSettingsSheet by remember { mutableStateOf(false) }
@@ -402,11 +402,7 @@ private fun InputBar(
                 type = ModelType.IMAGE,
                 onlyIcon = true,
                 onSelect = { model ->
-                    scope.launch {
-                        vm.settingsStore.update { oldSettings ->
-                            oldSettings.copy(imageGenerationModelId = model.id)
-                        }
-                    }
+                    vm.selectImageGenerationModel(model.id)
                 }
             )
 

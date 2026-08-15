@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.setting
+package net.weero.measix.pilot.ui.pages.setting
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Package01
@@ -145,23 +145,22 @@ fun SettingProviderDetailPage(id: Uuid, vm: SettingVM = koinViewModel()) {
     val toaster = LocalToaster.current
     val context = LocalContext.current
 
-    val onEdit = { newProvider: ProviderSetting ->
-        val newSettings = settings.copy(
-            providers = settings.providers.map {
-                if (newProvider.id == it.id) {
-                    newProvider
-                } else {
-                    it
+    val updateProvider = { transform: (ProviderSetting) -> ProviderSetting ->
+        vm.updateSettings { current ->
+            current.copy(
+                providers = current.providers.map { latest ->
+                    if (latest.id == id) transform(latest) else latest
                 }
-            }
-        )
-        vm.updateSettings(newSettings)
+            )
+        }
+    }
+    val onEdit = { newProvider: ProviderSetting ->
+        updateProvider { latest -> applyProviderEditorSave(latest, newProvider) }
     }
     val onDelete = {
-        val newSettings = settings.copy(
-            providers = settings.providers - provider
-        )
-        vm.updateSettings(newSettings)
+        vm.updateSettings { current ->
+            current.copy(providers = current.providers.filterNot { it.id == provider.id })
+        }
         navController.popBackStack()
     }
 
@@ -249,7 +248,7 @@ fun SettingProviderDetailPage(id: Uuid, vm: SettingVM = koinViewModel()) {
                 1 -> {
                     SettingProviderModelPage(
                         provider = provider,
-                        onEdit = onEdit
+                        onUpdateProvider = updateProvider,
                     )
                 }
             }
@@ -263,7 +262,7 @@ private fun SettingProviderConfigPage(
     onEdit: (ProviderSetting) -> Unit,
     onDelete: () -> Unit
 ) {
-    var internalProvider by remember(provider) { mutableStateOf(provider) }
+    var internalProvider by remember(provider.id) { mutableStateOf(provider) }
     var showDeleteDialog by remember { mutableStateOf(false) }
 
     Column(
@@ -374,18 +373,18 @@ private fun SettingProviderConfigPage(
 @Composable
 private fun SettingProviderModelPage(
     provider: ProviderSetting,
-    onEdit: (ProviderSetting) -> Unit
+    onUpdateProvider: ((ProviderSetting) -> ProviderSetting) -> Unit
 ) {
     ModelList(
         providerSetting = provider,
-        onUpdateProvider = onEdit
+        onUpdateProvider = onUpdateProvider,
     )
 }
 
 @Composable
 private fun ModelList(
     providerSetting: ProviderSetting,
-    onUpdateProvider: (ProviderSetting) -> Unit
+    onUpdateProvider: ((ProviderSetting) -> ProviderSetting) -> Unit
 ) {
     val providerManager = koinInject<ProviderManager>()
     val modelList by produceState(emptyList(), providerSetting) {
@@ -402,7 +401,11 @@ private fun ModelList(
     var expanded by rememberSaveable { mutableStateOf(true) }
     val lazyListState = rememberLazyListState()
     val reorderableLazyListState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        onUpdateProvider(providerSetting.moveMove(from.index, to.index))
+        val fromId = providerSetting.models.getOrNull(from.index)?.id
+            ?: return@rememberReorderableLazyListState
+        val toId = providerSetting.models.getOrNull(to.index)?.id
+            ?: return@rememberReorderableLazyListState
+        onUpdateProvider { latest -> moveProviderModelsById(latest, fromId, toId) }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -450,10 +453,10 @@ private fun ModelList(
                         ModelCard(
                             model = item,
                             onDelete = {
-                                onUpdateProvider(providerSetting.delModel(item))
+                                onUpdateProvider { latest -> latest.delModel(item) }
                             },
                             onEdit = { editedModel ->
-                                onUpdateProvider(providerSetting.editModel(editedModel))
+                                onUpdateProvider { latest -> latest.editModel(editedModel) }
                             },
                             parentProvider = providerSetting,
                             modifier = Modifier
@@ -481,15 +484,15 @@ private fun ModelList(
             AddModelButton(
                 models = modelList,
                 selectedModels = providerSetting.models,
-                onAddModel = {
-                    onUpdateProvider(providerSetting.addModel(it))
+                onAddModel = { model ->
+                    onUpdateProvider { latest -> latest.addModel(model) }
                 },
-                onRemoveModel = {
-                    onUpdateProvider(providerSetting.delModel(it))
+                onRemoveModel = { model ->
+                    onUpdateProvider { latest -> latest.delModel(model) }
                 },
                 expanded = expanded,
                 parentProvider = providerSetting,
-                onUpdateProvider = onUpdateProvider
+                onUpdateProvider = onUpdateProvider,
             )
         }
     }
@@ -686,7 +689,7 @@ private fun AddModelButton(
     onAddModel: (Model) -> Unit,
     onRemoveModel: (Model) -> Unit,
     parentProvider: ProviderSetting,
-    onUpdateProvider: (ProviderSetting) -> Unit
+    onUpdateProvider: ((ProviderSetting) -> ProviderSetting) -> Unit
 ) {
     val dialogState = useEditState<Model> { onAddModel(it) }
     val scope = rememberCoroutineScope()
@@ -713,29 +716,28 @@ private fun AddModelButton(
             onModelDeselected = { model ->
                 onRemoveModel(model)
             },
-            onAllModelSelected = {
-                onUpdateProvider(
-                    parentProvider.copyProvider(
-                        models = parentProvider.models + it.filter { model ->
-                            parentProvider.models.none { existing -> existing.modelId == model.modelId }
-                        }.map { model ->
-                            model.copy(
-                                inputModalities = ModelRegistry.MODEL_INPUT_MODALITIES.getData(model.modelId),
-                                outputModalities = ModelRegistry.MODEL_OUTPUT_MODALITIES.getData(model.modelId),
-                                abilities = ModelRegistry.MODEL_ABILITIES.getData(model.modelId)
-                            )
-                        }
-                    )
-                )
+            onAllModelSelected = { selected ->
+                onUpdateProvider { latest ->
+                    val additions = selected.filter { model ->
+                        latest.models.none { existing -> existing.modelId == model.modelId }
+                    }.map { model ->
+                        model.copy(
+                            inputModalities = ModelRegistry.MODEL_INPUT_MODALITIES.getData(model.modelId),
+                            outputModalities = ModelRegistry.MODEL_OUTPUT_MODALITIES.getData(model.modelId),
+                            abilities = ModelRegistry.MODEL_ABILITIES.getData(model.modelId),
+                        )
+                    }
+                    latest.copyProvider(models = latest.models + additions)
+                }
             },
             onAllModelDeselected = { filteredModels ->
-                onUpdateProvider(
-                    parentProvider.copyProvider(
-                        models = parentProvider.models.filter { model ->
+                onUpdateProvider { latest ->
+                    latest.copyProvider(
+                        models = latest.models.filter { model ->
                             filteredModels.none { filtered -> filtered.modelId == model.modelId }
                         }
                     )
-                )
+                }
             }
         )
 

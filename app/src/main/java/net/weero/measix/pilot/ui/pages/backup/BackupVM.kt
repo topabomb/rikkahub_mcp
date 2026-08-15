@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.backup
+package net.weero.measix.pilot.ui.pages.backup
 
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -40,9 +40,9 @@ class BackupVM(
         loadS3BackupFileItems()
     }
 
-    fun updateSettings(settings: Settings) {
+    fun updateSettings(transform: (Settings) -> Settings) {
         viewModelScope.launch {
-            settingsStore.update(settings)
+            settingsStore.updateAtomic(fn = transform)
         }
     }
 

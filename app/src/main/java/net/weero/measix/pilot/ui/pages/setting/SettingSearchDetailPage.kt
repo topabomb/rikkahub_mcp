@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.setting
+package net.weero.measix.pilot.ui.pages.setting
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Play
@@ -68,14 +68,17 @@ fun SettingSearchDetailPage(
     val nav = LocalNavController.current
 
     val service = settings.searchServices.find { it.id == serviceId } ?: return
-    val serviceIndex = settings.searchServices.indexOf(service)
     var options by remember(service) { mutableStateOf(service) }
 
     fun save(updated: SearchServiceOptions) {
         options = updated
-        val newServices = settings.searchServices.toMutableList()
-        newServices[serviceIndex] = updated
-        vm.updateSettings(settings.copy(searchServices = newServices))
+        vm.updateSettings { current ->
+            current.copy(
+                searchServices = current.searchServices.map {
+                    if (it.id == updated.id) updated else it
+                }
+            )
+        }
     }
 
     Scaffold(
@@ -91,9 +94,11 @@ fun SettingSearchDetailPage(
                     if (settings.searchServices.size > 1) {
                         IconButton(
                             onClick = {
-                                val newServices = settings.searchServices.toMutableList()
-                                newServices.removeAt(serviceIndex)
-                                vm.updateSettings(settings.copy(searchServices = newServices))
+                                vm.updateSettings { current ->
+                                    if (current.searchServices.size <= 1) current else current.copy(
+                                        searchServices = current.searchServices.filterNot { it.id == service.id }
+                                    )
+                                }
                                 nav.popBackStack()
                             }
                         ) {

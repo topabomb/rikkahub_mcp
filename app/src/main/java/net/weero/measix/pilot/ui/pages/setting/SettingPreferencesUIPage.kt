@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.setting
+package net.weero.measix.pilot.ui.pages.setting
 
 import android.content.Context
 import android.graphics.Typeface
@@ -69,8 +69,11 @@ fun SettingPreferencesUIPage(vm: SettingVM = koinViewModel()) {
     val chatFontFamily = rememberChatFontFamily(displaySetting)
 
     fun updateDisplaySetting(setting: DisplaySetting) {
+        val baseline = displaySetting
         displaySetting = setting
-        vm.updateSettings(settings.copy(displaySetting = setting))
+        vm.updateSettings { current ->
+            current.copy(displaySetting = mergeDisplaySettingDelta(baseline, setting, current.displaySetting))
+        }
     }
 
     val importSuccessMsg = stringResource(R.string.setting_display_page_custom_font_import_success)

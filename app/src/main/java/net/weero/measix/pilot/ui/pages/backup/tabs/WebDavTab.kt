@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.backup.tabs
+package net.weero.measix.pilot.ui.pages.backup.tabs
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.View
@@ -91,8 +91,10 @@ fun WebDavTab(
     val restoreSuccess = stringResource(R.string.backup_page_restore_success)
     val restoreFailedFmt = stringResource(R.string.backup_page_restore_failed)
 
-    fun updateWebDavConfig(newConfig: WebDavConfig) {
-        vm.updateSettings(settings.copy(webDavConfig = newConfig))
+    fun updateWebDavConfig(transform: (WebDavConfig) -> WebDavConfig) {
+        vm.updateSettings { current ->
+            current.copy(webDavConfig = transform(current.webDavConfig))
+        }
     }
 
     val lastBackupText = if (settings.backupReminderConfig.lastBackupTime == 0L) {
@@ -135,7 +137,7 @@ fun WebDavTab(
                         OutlinedTextField(
                             modifier = Modifier.fillMaxWidth(),
                             value = webDavConfig.url,
-                            onValueChange = { updateWebDavConfig(webDavConfig.copy(url = it.trim())) },
+                            onValueChange = { value -> updateWebDavConfig { it.copy(url = value.trim()) } },
                             placeholder = { Text("https://example.com/dav") },
                             singleLine = true
                         )
@@ -148,11 +150,7 @@ fun WebDavTab(
                             modifier = Modifier.fillMaxWidth(),
                             value = webDavConfig.username,
                             onValueChange = {
-                                updateWebDavConfig(
-                                    webDavConfig.copy(
-                                        username = it.trim()
-                                    )
-                                )
+                                updateWebDavConfig { current -> current.copy(username = it.trim()) }
                             },
                             singleLine = true
                         )
@@ -165,7 +163,7 @@ fun WebDavTab(
                         OutlinedTextField(
                             modifier = Modifier.fillMaxWidth(),
                             value = webDavConfig.password,
-                            onValueChange = { updateWebDavConfig(webDavConfig.copy(password = it.trim())) },
+                            onValueChange = { value -> updateWebDavConfig { it.copy(password = value.trim()) } },
                             visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                             trailingIcon = {
                                 val image = if (passwordVisible) {
@@ -187,7 +185,7 @@ fun WebDavTab(
                         OutlinedTextField(
                             modifier = Modifier.fillMaxWidth(),
                             value = webDavConfig.path,
-                            onValueChange = { updateWebDavConfig(webDavConfig.copy(path = it.trim())) },
+                            onValueChange = { value -> updateWebDavConfig { it.copy(path = value.trim()) } },
                             singleLine = true
                         )
                     },
@@ -208,12 +206,14 @@ fun WebDavTab(
                                     count = WebDavConfig.BackupItem.entries.size
                                 ),
                                 onCheckedChange = { checked ->
-                                    val newItems = if (checked) {
-                                        webDavConfig.items + item
-                                    } else {
-                                        webDavConfig.items - item
+                                    updateWebDavConfig { current ->
+                                        val newItems = if (checked) {
+                                            current.items + item
+                                        } else {
+                                            current.items - item
+                                        }
+                                        current.copy(items = newItems)
                                     }
-                                    updateWebDavConfig(webDavConfig.copy(items = newItems))
                                 },
                                 checked = item in webDavConfig.items
                             ) {

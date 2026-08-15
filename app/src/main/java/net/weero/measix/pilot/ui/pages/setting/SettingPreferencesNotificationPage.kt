@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.setting
+package net.weero.measix.pilot.ui.pages.setting
 
 import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
@@ -38,8 +38,11 @@ fun SettingPreferencesNotificationPage(vm: SettingVM = koinViewModel()) {
     var displaySetting by remember(settings) { mutableStateOf(settings.displaySetting) }
 
     fun updateDisplaySetting(setting: DisplaySetting) {
+        val baseline = displaySetting
         displaySetting = setting
-        vm.updateSettings(settings.copy(displaySetting = setting))
+        vm.updateSettings { current ->
+            current.copy(displaySetting = mergeDisplaySettingDelta(baseline, setting, current.displaySetting))
+        }
     }
 
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()

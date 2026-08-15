@@ -121,8 +121,9 @@ target.allowAsSubAssistant
 ```
 
 `description` 在开启 `allowAsSubAssistant` 时必须非空。持久化归一化会折叠空白并按 Unicode
-code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersistence()` 同时关闭全局可见，
-并从所有 Caller 的 `allowedSubAssistantIds` 移除该 ID，避免重新开启后恢复旧授权。
+code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersistence()` 只强制关闭全局可见；
+从所有 Caller 的 `allowedSubAssistantIds` 移除该 ID 是编辑/管理服务在同一次 `updateAtomic` transform
+中显式完成的跨记录操作，不能误认为归一化会自动清理授权。
 
 ## 3. 关联类型
 
@@ -176,14 +177,15 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 
 ## 5. 更新与持久化边界
 
-`PreferencesStore.updateAtomic()` 在互斥区内读取最新非 dummy Settings、执行 transform、写入
-DataStore，写入成功后才发布 `settingsFlow`。跨助手的权限清理、选择项修正和删除 tombstone 必须在
-同一个 transform 中完成，不能先发布内存状态再补写磁盘。
+`SettingsStore.updateAtomic()` 在互斥区内读取最新非 dummy Settings、执行 transform、写策略、
+持久化归一化与 DataStore 标量规范化，再写入 DataStore；写入成功后经 `materializeForRead()` 发布
+`settingsFlow`。跨助手的权限清理、选择项修正和删除 tombstone 必须在同一个 transform 中完成，
+不能先发布内存状态再补写磁盘。
 
-`Settings.normalizeForPersistence()` 在每次写入前运行，只做三件事：规范化
+`Settings.normalizeForPersistence()` 在每次写入前运行，只负责规范化
 `Assistant.description`、在未开启子助手类别时强制关闭全局可见、按 `assistantId` 去重
-`pendingAssistantDeletions`。失效的 MCP / 注入 / 快捷消息引用、重复 id、内置 Provider 补齐发生在
-**加载后的 `settingsFlow` map**，不在 `normalizeForPersistence` 里。
+`pendingAssistantDeletions`。失效的 MCP / 注入 / 快捷消息引用、重复 id、内置 Provider 补齐由
+`materializeForRead()` 负责，不在 `normalizeForPersistence` 里。
 
 跨助手的权限清理和删除 tombstone 仍必须放在同一次 `updateAtomic` transform 中，不能先发布内存状态再补写磁盘。市场导入若只调用 `normalizeForPersistence`，不会自动丢掉失效引用。
 
@@ -195,7 +197,8 @@ DataStore，写入成功后才发布 `settingsFlow`。跨助手的权限清理�
 | 责任 | 主要实现 |
 |------|----------|
 | 数据模型、正则、上下文阈值、默认提示 | `data/model/Assistant.kt` |
-| Settings 持久化、解析与归一化 | `data/datastore/PreferencesStore.kt` |
+| Settings 持久化与解析 | `data/datastore/PreferencesStore.kt` |
+| 读取物化、写策略与提交顺序 | `SettingsNormalization.kt`、`SettingsWritePolicy.kt`、`SettingsCommitCoordinator.kt` |
 | UI 新建与编辑 | `ui/pages/assistant/` |
 | 会话助手归属与迁移 | `ChatVM`、`ChatPage`、`Conversation.withAssistant()` |
 | 模型 readiness 与主生成工具装配 | `ChatService` |

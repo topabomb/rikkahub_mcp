@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.setting
+package net.weero.measix.pilot.ui.pages.setting
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -19,9 +19,9 @@ class SettingVM(
     val settings: StateFlow<Settings> = settingsStore.settingsFlow
         .stateIn(viewModelScope, SharingStarted.Lazily, Settings(init = true, providers = emptyList()))
 
-    fun updateSettings(settings: Settings) {
+    fun updateSettings(transform: (Settings) -> Settings) {
         viewModelScope.launch {
-            settingsStore.update(settings)
+            settingsStore.updateAtomic(fn = transform)
         }
     }
 
@@ -48,7 +48,12 @@ class SettingVM(
         }
 
         if (toAdd.isNotEmpty()) {
-            updateSettings(current.copy(mcpServers = current.mcpServers + toAdd))
+            updateSettings { latest ->
+                val existingNames = latest.mcpServers.mapTo(HashSet()) { it.commonOptions.name }
+                latest.copy(
+                    mcpServers = latest.mcpServers + toAdd.filter { it.commonOptions.name !in existingNames }
+                )
+            }
         }
 
         return McpImportResult(added = toAdd, conflicts = conflicts)
@@ -59,16 +64,17 @@ class SettingVM(
      * id 不变但连接参数可能变化，McpManager 会通过 hasSameConnectionParameters 自动检测并重建连接。
      */
     fun confirmOverwriteMcpServers(toOverwrite: List<McpServerConfig>) {
-        val current = settings.value
-        val updated = current.mcpServers.map { existing ->
-            val overwrite = toOverwrite.find { it.commonOptions.name == existing.commonOptions.name }
-            if (overwrite != null) {
-                overwrite.clone(id = existing.id)
-            } else {
-                existing
+        updateSettings { latest ->
+            val updated = latest.mcpServers.map { existing ->
+                val overwrite = toOverwrite.find { it.commonOptions.name == existing.commonOptions.name }
+                if (overwrite != null) {
+                    overwrite.clone(id = existing.id)
+                } else {
+                    existing
+                }
             }
+            latest.copy(mcpServers = updated)
         }
-        updateSettings(current.copy(mcpServers = updated))
     }
 }
 

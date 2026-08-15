@@ -47,9 +47,11 @@ class AssistantBackgroundServiceTest {
         every { context.filesDir } returns filesDir
         val store = mockk<SettingsStore>()
         every { store.settingsFlow } returns settings
-        coEvery { store.updateAtomic(any()) } coAnswers {
+        coEvery { store.updateAtomicAndGet(any()) } coAnswers {
             val fn = invocation.args[0] as (Settings) -> Settings
-            settings.value = update(fn(settings.value))
+            update(fn(settings.value)).also { committed ->
+                settings.value = committed
+            }
         }
         return AssistantBackgroundService(context, store, artifactStore, conversations, media)
     }
@@ -105,7 +107,7 @@ class AssistantBackgroundServiceTest {
         every { context.filesDir } returns filesDir
         val store = mockk<SettingsStore>()
         every { store.settingsFlow } returns settings
-        coEvery { store.updateAtomic(any()) } coAnswers {
+        coEvery { store.updateAtomicAndGet(any()) } coAnswers {
             val fn = invocation.args[0] as (Settings) -> Settings
             settings.value = fn(settings.value)
             throw CancellationException("cancelled after commit")
@@ -136,6 +138,35 @@ class AssistantBackgroundServiceTest {
         assertFalse(result.updated)
         assertEquals("assistant_not_found", result.reason)
         coVerify { artifactStore.delete(copy) }
+        filesDir.deleteRecursively()
+    }
+
+    @Test
+    fun `rejected settings change deletes only the unused new copy`() = runTest {
+        val filesDir = tempDir("bg-rejected")
+        val source = File(filesDir, "source.png").apply { writeBytes(TINY_PNG) }
+        val oldFile = File(filesDir, "upload/old-bg.png").apply {
+            parentFile?.mkdirs()
+            writeBytes(TINY_PNG)
+        }
+        val oldRef = LocalArtifactRef(relativePath = "upload/old-bg.png", mimeType = "image/png")
+        val copy = LocalArtifactRef(relativePath = "upload/new-bg.png", mimeType = "image/png")
+        val artifactStore = mockk<ManagedLocalArtifactStore>()
+        coEvery { artifactStore.copyFile(any(), any(), any(), any()) } returns copy
+        coEvery { artifactStore.delete(copy) } returns Unit
+        val initial = Settings(
+            assistants = listOf(Assistant(id = assistantId, background = oldRef.fileUri(filesDir))),
+        )
+        val settings = MutableStateFlow(initial)
+        val service = service(filesDir, settings, artifactStore, update = { initial })
+
+        val result = service.replaceBackground(assistantId, source, "image/png")
+
+        assertFalse(result.updated)
+        assertEquals("settings_write_rejected", result.reason)
+        assertTrue(oldFile.exists())
+        coVerify { artifactStore.delete(copy) }
+        coVerify(exactly = 0) { artifactStore.delete(oldRef) }
         filesDir.deleteRecursively()
     }
 

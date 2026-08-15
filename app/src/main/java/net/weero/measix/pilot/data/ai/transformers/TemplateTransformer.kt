@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.ai.transformers
+package net.weero.measix.pilot.data.ai.transformers
 
 import io.pebbletemplates.pebble.PebbleEngine
 import io.pebbletemplates.pebble.loader.Loader
@@ -54,12 +54,16 @@ class TemplateTransformer(
     }
 }
 
-class AssistantTemplateLoader(private val settingsStore: SettingsStore) : Loader<String> {
-    override fun getReader(cacheKey: String?): Reader? {
-        val content = settingsStore.settingsFlow.value.assistants
-            .find { it.id.toString() == cacheKey }?.messageTemplate
-            ?: return null
-        return StringReader(content)
+internal data class AssistantTemplateCacheKey(
+    val assistantId: String,
+    val template: String,
+)
+
+internal class AssistantTemplateLoader(
+    private val settingsStore: SettingsStore,
+) : Loader<AssistantTemplateCacheKey> {
+    override fun getReader(cacheKey: AssistantTemplateCacheKey?): Reader? {
+        return cacheKey?.template?.let(::StringReader)
     }
 
     override fun setCharset(charset: String?) {}
@@ -75,8 +79,14 @@ class AssistantTemplateLoader(private val settingsStore: SettingsStore) : Loader
         return relativePath
     }
 
-    override fun createCacheKey(templateName: String?): String? {
-        return templateName
+    override fun createCacheKey(templateName: String?): AssistantTemplateCacheKey? {
+        val assistant = settingsStore.settingsFlow.value.assistants
+            .find { it.id.toString() == templateName }
+            ?: return null
+        return AssistantTemplateCacheKey(
+            assistantId = assistant.id.toString(),
+            template = assistant.messageTemplate,
+        )
     }
 
     override fun resourceExists(templateName: String?): Boolean {

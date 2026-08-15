@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.extensions
+package net.weero.measix.pilot.ui.pages.extensions
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowDown01
@@ -55,7 +55,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -108,7 +107,11 @@ fun PromptPage(vm: PromptVM = koinViewModel()) {
     ) { innerPadding ->
         ModeInjectionTab(
             modeInjections = settings.modeInjections,
-            onUpdate = { vm.updateSettings(settings.copy(modeInjections = it)) },
+            onUpdate = { transform ->
+                vm.updateSettings { current ->
+                    current.copy(modeInjections = transform(current.modeInjections))
+                }
+            },
             modifier = Modifier.padding(innerPadding)
         )
     }
@@ -117,32 +120,39 @@ fun PromptPage(vm: PromptVM = koinViewModel()) {
 @Composable
 private fun ModeInjectionTab(
     modeInjections: List<PromptInjection.ModeInjection>,
-    onUpdate: (List<PromptInjection.ModeInjection>) -> Unit,
+    onUpdate: ((List<PromptInjection.ModeInjection>) -> List<PromptInjection.ModeInjection>) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var expanded by rememberSaveable { mutableStateOf(true) }
     val lazyListState = rememberLazyListState()
     val toaster = LocalToaster.current
-    val currentModeInjections by rememberUpdatedState(modeInjections)
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        val newList = modeInjections.toMutableList()
-        val item = newList.removeAt(from.index)
-        newList.add(to.index, item)
-        onUpdate(newList)
+        val fromId = modeInjections.getOrNull(from.index)?.id ?: return@rememberReorderableLazyListState
+        val toId = modeInjections.getOrNull(to.index)?.id ?: return@rememberReorderableLazyListState
+        onUpdate { current ->
+            val fromIndex = current.indexOfFirst { it.id == fromId }
+            val toIndex = current.indexOfFirst { it.id == toId }
+            if (fromIndex < 0 || toIndex < 0) current else current.toMutableList().apply {
+                add(toIndex, removeAt(fromIndex))
+            }
+        }
     }
     val editState = useEditState<PromptInjection.ModeInjection> { edited ->
-        val index = modeInjections.indexOfFirst { it.id == edited.id }
-        if (index >= 0) {
-            onUpdate(modeInjections.toMutableList().apply { set(index, edited) })
-        } else {
-            onUpdate(modeInjections + edited)
+        onUpdate { current ->
+            if (current.any { it.id == edited.id }) {
+                current.map { if (it.id == edited.id) edited else it }
+            } else {
+                current + edited
+            }
         }
     }
     val importSuccessMsg = stringResource(R.string.export_import_success)
     val importFailedMsg = stringResource(R.string.export_import_failed)
     val importer = rememberImporter(ModeInjectionSerializer) { result ->
         result.onSuccess { imported ->
-            onUpdate(currentModeInjections + imported)
+            onUpdate { current ->
+                if (current.any { it.id == imported.id }) current else current + imported
+            }
             toaster.show(importSuccessMsg)
         }.onFailure { error ->
             toaster.show(importFailedMsg.format(error.message))
@@ -200,7 +210,7 @@ private fun ModeInjectionTab(
                                     }
                                 },
                             onEdit = { editState.open(injection) },
-                            onDelete = { onUpdate(modeInjections - injection) }
+                            onDelete = { onUpdate { current -> current.filterNot { it.id == injection.id } } }
                         )
                     }
                 }

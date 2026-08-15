@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.setting
+package net.weero.measix.pilot.ui.pages.setting
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -75,7 +75,9 @@ fun SettingPreferencesThemePage(vm: SettingVM = koinViewModel()) {
                         trailingContent = {
                             Switch(
                                 checked = settings.dynamicColor,
-                                onCheckedChange = { vm.updateSettings(settings.copy(dynamicColor = it)) },
+                                onCheckedChange = { value ->
+                                    vm.updateSettings { it.copy(dynamicColor = value) }
+                                },
                             )
                         },
                     )

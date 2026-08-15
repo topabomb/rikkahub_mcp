@@ -110,6 +110,7 @@ import net.weero.measix.pilot.ui.hooks.ChatInputState
 import net.weero.measix.pilot.ui.hooks.EditStateContent
 import net.weero.measix.pilot.ui.hooks.rememberSharedPreferenceBoolean
 import net.weero.measix.pilot.ui.hooks.useEditState
+import net.weero.measix.pilot.ui.pages.assistant.detail.mergeAssistantDelta
 import net.weero.measix.pilot.utils.ImageUtils
 import net.weero.measix.pilot.utils.base64Decode
 import net.weero.measix.pilot.utils.isAllowedFileType
@@ -514,25 +515,21 @@ private fun ChatPageContent(
                         onUpdateChatModel = {
                             vm.setChatModel(assistant = assistant, model = it)
                         },
-                        onUpdateAssistant = {
-                            vm.updateSettings(
-                                setting.copy(
-                                    assistants = setting.assistants.map { assistant ->
-                                        if (assistant.id == it.id) {
-                                            it
+                        onUpdateAssistant = { updatedAssistant ->
+                            vm.updateSettings { current ->
+                                current.copy(
+                                    assistants = current.assistants.map { latestAssistant ->
+                                        if (latestAssistant.id == updatedAssistant.id) {
+                                            mergeAssistantDelta(assistant, updatedAssistant, latestAssistant)
                                         } else {
-                                            assistant
+                                            latestAssistant
                                         }
                                     }
                                 )
-                            )
+                            }
                         },
                         onUpdateSearchService = { index ->
-                            vm.updateSettings(
-                                setting.copy(
-                                    searchServiceSelected = index
-                                )
-                            )
+                            vm.updateSettings { it.copy(searchServiceSelected = index) }
                         },
                         onMoreClick = {
                             showFilesSheet = true
@@ -677,14 +674,13 @@ private fun ChatPageContent(
                 onSelect = { workspaceId ->
                     val selectedWorkspaceId = workspaceId?.let { Uuid.parse(it) }
                     if (selectedWorkspaceId != assistant.workspaceId) {
-                        val updatedAssistant = assistant.copy(workspaceId = selectedWorkspaceId)
-                        vm.updateSettings(
-                            setting.copy(
-                                assistants = setting.assistants.map {
-                                    if (it.id == updatedAssistant.id) updatedAssistant else it
-                                },
-                            ),
-                        )
+                        vm.updateSettings { current ->
+                            current.copy(
+                                assistants = current.assistants.map {
+                                    if (it.id == assistant.id) it.copy(workspaceId = selectedWorkspaceId) else it
+                                }
+                            )
+                        }
                         if (conversation.workspaceCwd != null) {
                             vm.updateConversation(conversation.copy(workspaceCwd = null))
                             vm.saveConversationAsync()
@@ -876,18 +872,18 @@ private fun ChatFilesPickerSheet(
             onCompressContext = { additionalPrompt, targetTokens, keepRecentMessages ->
                 vm.handleCompressContext(additionalPrompt, targetTokens, keepRecentMessages)
             },
-            onUpdateAssistant = {
-                vm.updateSettings(
-                    setting.copy(
-                        assistants = setting.assistants.map { assistant ->
-                            if (assistant.id == it.id) {
-                                it
+            onUpdateAssistant = { updatedAssistant ->
+                vm.updateSettings { current ->
+                    current.copy(
+                        assistants = current.assistants.map { latestAssistant ->
+                            if (latestAssistant.id == updatedAssistant.id) {
+                                mergeAssistantDelta(assistant, updatedAssistant, latestAssistant)
                             } else {
-                                assistant
+                                latestAssistant
                             }
                         }
                     )
-                )
+                }
             },
             onUpdateConversation = {
                 vm.updateConversation(it)

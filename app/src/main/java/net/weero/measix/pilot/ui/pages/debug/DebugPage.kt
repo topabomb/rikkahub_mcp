@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.debug
+package net.weero.measix.pilot.ui.pages.debug
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -193,11 +193,7 @@ private fun MainPage(vm: DebugVM) {
         }
         Button(
             onClick = {
-                vm.updateSettings(
-                    settings.copy(
-                        chatModelId = Uuid.random()
-                    )
-                )
+                vm.updateSettings { it.copy(chatModelId = Uuid.random()) }
             }
         ) {
             Text("重置Chat模型")
@@ -262,7 +258,7 @@ private fun MainPage(vm: DebugVM) {
             )
             Button(onClick = {
                 launchCountInput.toIntOrNull()?.let {
-                    vm.updateSettings(settings.copy(launchCount = it))
+                    vm.updateSettings { current -> current.copy(launchCount = it) }
                 }
             }) {
                 Text("Set")

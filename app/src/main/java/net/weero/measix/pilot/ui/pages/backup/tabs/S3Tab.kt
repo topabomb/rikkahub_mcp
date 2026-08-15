@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.backup.tabs
+package net.weero.measix.pilot.ui.pages.backup.tabs
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.View
@@ -92,8 +92,10 @@ fun S3Tab(
     val restoreSuccess = stringResource(R.string.backup_page_restore_success)
     val restoreFailedFmt = stringResource(R.string.backup_page_restore_failed)
 
-    fun updateS3Config(newConfig: S3Config) {
-        vm.updateSettings(settings.copy(s3Config = newConfig))
+    fun updateS3Config(transform: (S3Config) -> S3Config) {
+        vm.updateSettings { current ->
+            current.copy(s3Config = transform(current.s3Config))
+        }
     }
 
     val lastBackupText = if (settings.backupReminderConfig.lastBackupTime == 0L) {
@@ -136,7 +138,7 @@ fun S3Tab(
                         OutlinedTextField(
                             modifier = Modifier.fillMaxWidth(),
                             value = s3Config.endpoint,
-                            onValueChange = { updateS3Config(s3Config.copy(endpoint = it.trim())) },
+                            onValueChange = { value -> updateS3Config { it.copy(endpoint = value.trim()) } },
                             placeholder = { Text("https://s3.amazonaws.com") },
                             singleLine = true
                         )
@@ -148,7 +150,7 @@ fun S3Tab(
                         OutlinedTextField(
                             modifier = Modifier.fillMaxWidth(),
                             value = s3Config.accessKeyId,
-                            onValueChange = { updateS3Config(s3Config.copy(accessKeyId = it.trim())) },
+                            onValueChange = { value -> updateS3Config { it.copy(accessKeyId = value.trim()) } },
                             singleLine = true
                         )
                     },
@@ -160,7 +162,7 @@ fun S3Tab(
                         OutlinedTextField(
                             modifier = Modifier.fillMaxWidth(),
                             value = s3Config.secretAccessKey,
-                            onValueChange = { updateS3Config(s3Config.copy(secretAccessKey = it.trim())) },
+                            onValueChange = { value -> updateS3Config { it.copy(secretAccessKey = value.trim()) } },
                             visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                             trailingIcon = {
                                 val image = if (passwordVisible) {
@@ -182,7 +184,7 @@ fun S3Tab(
                         OutlinedTextField(
                             modifier = Modifier.fillMaxWidth(),
                             value = s3Config.bucket,
-                            onValueChange = { updateS3Config(s3Config.copy(bucket = it.trim())) },
+                            onValueChange = { value -> updateS3Config { it.copy(bucket = value.trim()) } },
                             placeholder = { Text("my-bucket") },
                             singleLine = true
                         )
@@ -194,7 +196,7 @@ fun S3Tab(
                     trailingContent = {
                         Switch(
                             checked = s3Config.pathStyle,
-                            onCheckedChange = { updateS3Config(s3Config.copy(pathStyle = it)) },
+                            onCheckedChange = { pathStyle -> updateS3Config { it.copy(pathStyle = pathStyle) } },
                         )
                     },
                 )
@@ -204,7 +206,7 @@ fun S3Tab(
                         OutlinedTextField(
                             modifier = Modifier.fillMaxWidth(),
                             value = s3Config.region,
-                            onValueChange = { updateS3Config(s3Config.copy(region = it.trim())) },
+                            onValueChange = { value -> updateS3Config { it.copy(region = value.trim()) } },
                             placeholder = { Text("auto") },
                             singleLine = true
                         )
@@ -226,12 +228,14 @@ fun S3Tab(
                                         count = S3Config.BackupItem.entries.size
                                     ),
                                     onCheckedChange = { checked ->
-                                        val newItems = if (checked) {
-                                            s3Config.items + item
-                                        } else {
-                                            s3Config.items - item
+                                        updateS3Config { current ->
+                                            val newItems = if (checked) {
+                                                current.items + item
+                                            } else {
+                                                current.items - item
+                                            }
+                                            current.copy(items = newItems)
                                         }
-                                        updateS3Config(s3Config.copy(items = newItems))
                                     },
                                     checked = item in s3Config.items
                                 ) {

@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.backup.tabs
+package net.weero.measix.pilot.ui.pages.backup.tabs
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -31,8 +31,10 @@ fun ReminderTab(vm: BackupVM) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val config = settings.backupReminderConfig
 
-    fun updateConfig(update: BackupReminderConfig) {
-        vm.updateSettings(settings.copy(backupReminderConfig = update))
+    fun updateConfig(transform: (BackupReminderConfig) -> BackupReminderConfig) {
+        vm.updateSettings { current ->
+            current.copy(backupReminderConfig = transform(current.backupReminderConfig))
+        }
     }
 
     Column(
@@ -50,7 +52,7 @@ fun ReminderTab(vm: BackupVM) {
                 trailingContent = {
                     Switch(
                         checked = config.enabled,
-                        onCheckedChange = { updateConfig(config.copy(enabled = it)) },
+                        onCheckedChange = { enabled -> updateConfig { it.copy(enabled = enabled) } },
                     )
                 },
                 headlineContent = { Text(stringResource(R.string.backup_page_reminder_enable)) },
@@ -70,7 +72,7 @@ fun ReminderTab(vm: BackupVM) {
                                         index = index,
                                         count = intervals.size,
                                     ),
-                                    onClick = { updateConfig(config.copy(intervalDays = days)) },
+                                    onClick = { updateConfig { it.copy(intervalDays = days) } },
                                     selected = config.intervalDays == days,
                                 ) {
                                     Text(stringResource(R.string.backup_page_reminder_interval_days, days))

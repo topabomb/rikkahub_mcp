@@ -21,6 +21,7 @@ import net.weero.measix.pilot.service.AssistantDataRecoveryGate
 import net.weero.measix.pilot.service.ChatNotificationManager
 import net.weero.measix.pilot.service.ChatService
 import net.weero.measix.pilot.service.ConversationSessionRegistry
+import net.weero.measix.pilot.service.FavoriteModelService
 import net.weero.measix.pilot.service.SubAssistantCoordinator
 import net.weero.measix.pilot.utils.EmojiData
 import net.weero.measix.pilot.utils.EmojiUtils
@@ -98,6 +99,10 @@ val appModule = module {
 
     single {
         UpdateChecker(get(), get())
+    }
+
+    single {
+        FavoriteModelService(get())
     }
 
     single {
