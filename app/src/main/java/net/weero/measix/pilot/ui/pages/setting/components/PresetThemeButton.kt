@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.setting.components
+package net.weero.measix.pilot.ui.pages.setting.components
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Tick01
@@ -19,7 +19,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProvideTextStyle
-import androidx.compose.material3.contentColorFor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -103,7 +102,7 @@ fun PresetThemeButton(
                 Icon(
                     HugeIcons.Tick01,
                     contentDescription = null,
-                    tint = scheme.contentColorFor(scheme.onPrimary)
+                    tint = scheme.onPrimary
                 )
             }
         }

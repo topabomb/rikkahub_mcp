@@ -620,6 +620,7 @@
   <string name="setting_asr_page_default_name">ASR</string>
   <string name="setting_asr_page_edit_provider">Изменить поставщика ASR</string>
   <string name="setting_display_page_amoled_dark_mode_desc">Использовать чёрный фон в тёмной теме, подходит для AMOLED-экранов</string>
+  <string name="setting_display_page_amoled_dark_mode_inactive_desc">Применяется только в тёмной теме</string>
   <string name="setting_display_page_amoled_dark_mode_title">AMOLED-тёмная тема</string>
   <string name="setting_display_page_auto_collapse_thinking_desc">Автоматически сворачивать блок мышления после его завершения</string>
   <string name="setting_display_page_auto_collapse_thinking_title">Автоматически сворачивать мысли</string>
@@ -801,6 +802,7 @@
   <string name="setting_page_documentation_desc">Просмотрите инструкции по использованию приложения и справочную документацию</string>
   <string name="setting_page_dynamic_color">Динамический цвет</string>
   <string name="setting_page_dynamic_color_desc">Динамически создавать цвета темы приложения на основе обоев</string>
+  <string name="setting_page_dynamic_color_unavailable_desc">Динамический цвет требует Android 12 или новее</string>
   <string name="setting_page_extensions">Расширения</string>
   <string name="setting_page_extensions_desc">Управление внедрением подсказок, навыками и другими возможностями</string>
   <string name="setting_page_general_settings">Общие настройки</string>
@@ -845,9 +847,10 @@
   <string name="setting_page_search_title">Служба поиска</string>
   <string name="setting_page_share">Поделиться</string>
   <string name="setting_page_share_desc">Поделиться этим приложением с друзьями</string>
-  <string name="setting_page_share_text">Measix Pilot — Android AI-ассистент\n\nСайт: https://measix.weero.net/</string>
+  <string name="setting_page_share_text">Measix Pilot — Android AI-ассистент\n\nСайт: https://measix-pilot.weero.net/</string>
   <string name="setting_page_theme_setting">Тема</string>
   <string name="setting_page_theme_setting_desc">Настроить цветовую схему приложения</string>
+  <string name="setting_page_theme_setting_dynamic_override_desc">Цвета обоев перекрывают выбранную тему</string>
   <string name="setting_theme_page_preset_themes">Предустановленные темы</string>
   <string name="setting_theme_page_custom_themes">Пользовательские темы</string>
   <string name="setting_theme_page_add_theme">Создать</string>
@@ -860,7 +863,7 @@
   <string name="setting_theme_page_tertiary_color">Третичный цвет</string>
   <string name="setting_theme_page_preview">Предпросмотр</string>
   <string name="setting_theme_page_save">Сохранить</string>
-  <string name="setting_theme_page_dynamic_color_hint">Динамические цвета включены. Отключите их в разделе Настройки &gt; Тема, чтобы использовать пользовательские темы.</string>
+  <string name="setting_theme_page_dynamic_color_active_hint">Используются цвета обоев. Выбранная тема применяется, когда динамический цвет выключен.</string>
   <string name="setting_page_tts_service">Служба преобразования текста в речь</string>
   <string name="setting_page_tts_service_desc">Настроить поставщиков службы преобразования текста в речь</string>
   <string name="setting_page_tts_settings">Настройки TTS</string>

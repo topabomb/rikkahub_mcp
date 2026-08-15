@@ -88,6 +88,7 @@ import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import net.weero.measix.pilot.service.ChatError
+import net.weero.measix.pilot.ui.theme.ProvideChatSurfacePolicy
 import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.adaptive.ChatLayoutMode
@@ -419,6 +420,10 @@ private fun ChatPageContent(
 
     TTSAutoPlay(vm = vm, setting = setting, conversation = conversation)
 
+    ProvideChatSurfacePolicy(
+        assistant = assistant,
+        displaySetting = setting.displaySetting,
+    ) {
     Surface(
         color = MaterialTheme.colorScheme.background,
         modifier = Modifier.fillMaxSize()
@@ -697,6 +702,7 @@ private fun ChatPageContent(
                 },
             )
         }
+    }
     }
 }
 

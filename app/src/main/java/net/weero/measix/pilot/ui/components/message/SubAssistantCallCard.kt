@@ -50,6 +50,7 @@ import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.components.ui.ChainOfThought
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalSettings
+import net.weero.measix.pilot.ui.theme.asChatChrome
 import net.weero.measix.pilot.ui.theme.extendColors
 import net.weero.measix.pilot.utils.JsonInstant
 import kotlin.uuid.Uuid
@@ -133,7 +134,7 @@ fun SubAssistantCallCard(
             .fillMaxWidth()
             .then(if (canNavigate) Modifier.clickable(onClick = navigateToDetail) else Modifier),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.asChatChrome()
         ),
         shape = RoundedCornerShape(16.dp),
         // 左侧侧条：标识子代理调用，颜色随状态变化
@@ -353,7 +354,7 @@ private fun SubAssistantCallCardFallback(
     Card(
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.asChatChrome()
         ),
         shape = RoundedCornerShape(16.dp),
     ) {

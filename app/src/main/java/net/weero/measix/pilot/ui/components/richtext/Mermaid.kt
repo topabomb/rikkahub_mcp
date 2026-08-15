@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.richtext
+package net.weero.measix.pilot.ui.components.richtext
 
 import android.graphics.BitmapFactory
 import android.util.Base64
@@ -285,7 +285,7 @@ private fun buildMermaidHtml(
 
                         ctx.font = '14px Arial';
                         ctx.fillStyle = '${onBackground}';
-                        ctx.fillText('measix.weero.net', 20, canvas.height - 10);
+                        ctx.fillText('measix-pilot.weero.net', 20, canvas.height - 10);
 
                         const pngBase64 = canvas.toDataURL('image/png').split(',')[1];
                         AndroidInterface.exportImage(pngBase64);

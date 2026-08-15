@@ -481,7 +481,7 @@ private fun ExportedChatImage(
                                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                             )
                             Text(
-                                text = "${LocalDateTime.now().toLocalString()}  measix.weero.net",
+                                text = "${LocalDateTime.now().toLocalString()}  measix-pilot.weero.net",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

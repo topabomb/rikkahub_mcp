@@ -46,6 +46,7 @@ import net.weero.measix.pilot.ui.adaptive.ChatLayoutMode
 import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.theme.LocalChatFontSizeRatio
+import net.weero.measix.pilot.ui.theme.asChatChrome
 import kotlin.uuid.Uuid
 
 internal enum class ModelReadiness {
@@ -167,7 +168,7 @@ internal fun ConversationReadinessCard(
     Card(
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            containerColor = MaterialTheme.colorScheme.surfaceContainer.asChatChrome(),
             contentColor = MaterialTheme.colorScheme.onSurface,
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),

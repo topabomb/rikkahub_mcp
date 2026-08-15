@@ -54,7 +54,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -100,6 +99,7 @@ import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import net.weero.measix.pilot.ui.components.message.ChatMessage
+import net.weero.measix.pilot.ui.theme.asChatChrome
 import net.weero.measix.pilot.ui.components.ui.ErrorCardsDisplay
 import net.weero.measix.pilot.ui.components.ui.ListSelectableItem
 import net.weero.measix.pilot.ui.components.ui.ProviderConfigWarningCard
@@ -645,7 +645,8 @@ private fun extractMatchingSnippet(
 private fun buildHighlightedText(
     text: String,
     query: String,
-    highlightColor: Color
+    highlightColor: Color,
+    highlightContentColor: Color,
 ): AnnotatedString {
     if (query.isBlank()) {
         return AnnotatedString(text)
@@ -663,7 +664,7 @@ private fun buildHighlightedText(
             withStyle(
                 style = SpanStyle(
                     background = highlightColor,
-                    color = Color.Black
+                    color = highlightContentColor
                 )
             ) {
                 append(text.substring(index, index + query.length))
@@ -764,7 +765,11 @@ private fun ChatListPreview(
                 ) {
                     Surface(
                         shape = MaterialTheme.shapes.medium,
-                        color = if (isUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
+                        color = if (isUser) {
+                            MaterialTheme.colorScheme.primaryContainer.asChatChrome()
+                        } else {
+                            MaterialTheme.colorScheme.secondaryContainer.asChatChrome()
+                        },
                     ) {
                         Row(
                             modifier = Modifier
@@ -776,7 +781,8 @@ private fun ChatListPreview(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             val highlightColor = MaterialTheme.colorScheme.tertiaryContainer
-                            val highlightedText = remember(searchQuery, message) {
+                            val highlightContentColor = MaterialTheme.colorScheme.onTertiaryContainer
+                            val highlightedText = remember(searchQuery, message, highlightColor, highlightContentColor) {
                                 val fullText = message.toText().trim().ifBlank { "[...]" }
                                 val messageText = extractMatchingSnippet(
                                     text = fullText,
@@ -785,7 +791,8 @@ private fun ChatListPreview(
                                 buildHighlightedText(
                                     text = messageText,
                                     query = searchQuery,
-                                    highlightColor = highlightColor
+                                    highlightColor = highlightColor,
+                                    highlightContentColor = highlightContentColor,
                                 )
                             }
                             Text(
@@ -822,7 +829,7 @@ private fun ChatSuggestionsRow(
                     .clickable {
                         onClickSuggestion(suggestion)
                     }
-                    .background(MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest.asChatChrome())
                     .padding(vertical = 4.dp, horizontal = 8.dp),
             ) {
                 Text(
@@ -862,10 +869,8 @@ private fun BoxScope.MessageJumper(
                     }
                 },
                 shape = CircleShape,
-                tonalElevation = 4.dp,
-                color = MaterialTheme.colorScheme.surfaceColorAtElevation(
-                    4.dp
-                ).copy(alpha = 0.65f)
+                tonalElevation = 0.dp,
+                color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.65f)
             ) {
                 Icon(
                     imageVector = HugeIcons.ArrowUpDouble,
@@ -885,10 +890,8 @@ private fun BoxScope.MessageJumper(
                     }
                 },
                 shape = CircleShape,
-                tonalElevation = 4.dp,
-                color = MaterialTheme.colorScheme.surfaceColorAtElevation(
-                    4.dp
-                ).copy(alpha = 0.65f)
+                tonalElevation = 0.dp,
+                color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.65f)
             ) {
                 Icon(
                     imageVector = HugeIcons.ArrowUp01,
@@ -904,9 +907,7 @@ private fun BoxScope.MessageJumper(
                     }
                 },
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceColorAtElevation(
-                    4.dp
-                ).copy(alpha = 0.65f)
+                color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.65f)
             ) {
                 Icon(
                     imageVector = HugeIcons.ArrowDown01,
@@ -922,9 +923,7 @@ private fun BoxScope.MessageJumper(
                     }
                 },
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceColorAtElevation(
-                    4.dp
-                ).copy(alpha = 0.65f),
+                color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.65f),
             ) {
                 Icon(
                     imageVector = HugeIcons.ArrowDownDouble,

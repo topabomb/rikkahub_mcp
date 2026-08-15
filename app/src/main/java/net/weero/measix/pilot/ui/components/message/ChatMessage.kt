@@ -88,6 +88,7 @@ import net.weero.measix.pilot.ui.components.ui.ChainOfThought
 import net.weero.measix.pilot.ui.components.ui.Favicon
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.modifier.shimmer
+import net.weero.measix.pilot.ui.theme.asChatChrome
 import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.theme.LocalChatFontFamily
 import net.weero.measix.pilot.ui.theme.rememberChatFontFamily
@@ -329,7 +330,9 @@ private fun MessagePartsBlock(
                             step.shouldStayVisibleWhenCollapsed()
                         },
                         cardColors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = settings.displaySetting.bubbleOpacity),
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.asChatChrome(
+                                settings.displaySetting.bubbleOpacity,
+                            ),
                         ),
                     ) { step ->
                         when (step) {
@@ -377,7 +380,9 @@ private fun MessagePartsBlock(
                                 Surface(
                                     modifier = Modifier.animateContentSize(),
                                     shape = RoundedCornerShape(16.dp),
-                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = settings.displaySetting.bubbleOpacity),
+                                    color = MaterialTheme.colorScheme.primaryContainer.asChatChrome(
+                                        settings.displaySetting.bubbleOpacity,
+                                    ),
                                     onClick = { onUserMessageClick?.invoke() },
                                 ) {
                                     Column(modifier = Modifier.padding(8.dp)) {
@@ -396,7 +401,9 @@ private fun MessagePartsBlock(
                                     Surface(
                                         modifier = Modifier.animateContentSize(),
                                         shape = RoundedCornerShape(16.dp),
-                                        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = settings.displaySetting.bubbleOpacity),
+                                        color = MaterialTheme.colorScheme.surfaceContainerHigh.asChatChrome(
+                                            settings.displaySetting.bubbleOpacity,
+                                        ),
                                     ) {
                                         Column(modifier = Modifier.padding(8.dp)) {
                                             MarkdownBlock(

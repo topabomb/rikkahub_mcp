@@ -16,6 +16,7 @@
 
 ### 变更
 
+- 开启背景图或渐变后，聊天页 chrome 卡片（思考过程、气泡、子助手卡等）按 `ChatSurfacePolicy` 略微透明，让背景透出；代码、表格、公式和媒体产物保持不透明
 - Target 看不到该工具；没有有效默认图片模型时也不注册
 - 模型只看到 `/upload/<file>`；chat copy 缺失时标为 `artifact_missing`
 - 子助手失败分为政策拒绝、Provider 错误和运行时错误，不回显政策检查类型

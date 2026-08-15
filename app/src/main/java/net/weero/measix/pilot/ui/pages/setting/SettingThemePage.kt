@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.ui.pages.setting
 
 import android.content.ClipData
+import android.os.Build
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -76,6 +77,7 @@ import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.pages.setting.components.PresetThemeButtonGroup
+import net.weero.measix.pilot.ui.theme.AppearancePolicy
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.ui.theme.CustomTheme
 import net.weero.measix.pilot.ui.theme.LocalDarkMode
@@ -122,16 +124,20 @@ fun SettingThemePage(vm: SettingVM = koinViewModel()) {
             contentPadding = innerPadding + PaddingValues(8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            if (settings.dynamicColor) {
+            if (AppearancePolicy.isDynamicColorEffective(
+                    dynamicColor = settings.dynamicColor,
+                    sdkInt = Build.VERSION.SDK_INT,
+                )
+            ) {
                 item("dynamicColorHint") {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(32.dp),
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = stringResource(R.string.setting_theme_page_dynamic_color_hint),
+                            text = stringResource(R.string.setting_theme_page_dynamic_color_active_hint),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -139,8 +145,7 @@ fun SettingThemePage(vm: SettingVM = koinViewModel()) {
                 }
             }
 
-            if (!settings.dynamicColor) {
-                item("presetThemes") {
+            item("presetThemes") {
                     Column(
                         modifier = Modifier.padding(horizontal = 8.dp),
                     ) {
@@ -242,7 +247,6 @@ fun SettingThemePage(vm: SettingVM = koinViewModel()) {
                         }
                     )
                 }
-            }
         }
     }
 
@@ -352,7 +356,7 @@ private fun CustomThemeItem(
                     Icon(
                         HugeIcons.Tick01,
                         contentDescription = null,
-                        tint = Color.White,
+                        tint = scheme.onPrimary,
                         modifier = Modifier.size(16.dp)
                     )
                 }

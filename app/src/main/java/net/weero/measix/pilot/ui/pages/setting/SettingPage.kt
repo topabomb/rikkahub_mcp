@@ -125,11 +125,6 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                                 selectedOption = colorMode,
                                 onOptionSelected = {
                                     colorMode = it
-                                    navController.navigate(Screen.Setting) {
-                                        popUpTo(Screen.Setting) {
-                                            inclusive = true
-                                        }
-                                    }
                                 },
                                 optionToString = {
                                     when (it) {
@@ -260,7 +255,7 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                     )
                     item(
                         onClick = {
-                            context.openUrl("https://measix.weero.net/mobile/docs")
+                            context.openUrl("https://measix-pilot.weero.net/guide/")
                         },
                         leadingContent = { Icon(HugeIcons.Book01, null) },
                         supportingContent = { Text(stringResource(R.string.setting_page_documentation_desc)) },

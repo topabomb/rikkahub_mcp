@@ -1,4 +1,4 @@
-﻿@file:Suppress("unused")
+@file:Suppress("unused")
 
 package net.weero.measix.pilot.ui.components.table
 
@@ -60,6 +60,7 @@ fun DataTable(
     BoxWithConstraints(
         modifier = modifier
             .clip(shape)
+            .background(surfaceContainer)
             .then(
                 if (outerBorder != null) Modifier.border(outerBorder, shape) else Modifier
             )

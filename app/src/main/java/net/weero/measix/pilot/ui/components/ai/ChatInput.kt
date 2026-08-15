@@ -109,6 +109,9 @@ import net.weero.measix.pilot.ui.components.ui.permission.PermissionRecordAudio
 import net.weero.measix.pilot.ui.components.ui.permission.rememberPermissionState
 import net.weero.measix.pilot.ui.context.LocalASRState
 import net.weero.measix.pilot.ui.context.LocalSettings
+import net.weero.measix.pilot.ui.theme.ChatSurfacePolicy
+import net.weero.measix.pilot.ui.theme.hasVisibleChatBackground
+import net.weero.measix.pilot.ui.theme.withOverlayAlpha
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.hooks.ChatInputState
 import net.weero.measix.pilot.utils.SoundEffectPlayer
@@ -225,7 +228,13 @@ fun ChatInput(
                 shape = containerShape,
                 tonalElevation = 0.dp,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-                color = if (settings.displaySetting.enableBlurEffect) Color.Transparent else hazeTintColor,
+                color = if (settings.displaySetting.enableBlurEffect) {
+                    Color.Transparent
+                } else {
+                    hazeTintColor.withOverlayAlpha(
+                        ChatSurfacePolicy.pageChromeAlpha(assistant.hasVisibleChatBackground())
+                    )
+                },
             ) {
                 Column(
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),

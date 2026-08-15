@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.chat
+package net.weero.measix.pilot.ui.pages.chat
 
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -56,23 +57,24 @@ fun MeshGradientBackground(
     val p4 by phase(6_200, loops = 10, "p4") // 1.1  对应 10 圈 (总长 62秒)
 
     val dark = LocalDarkMode.current
+    val canvasBackground = MaterialTheme.colorScheme.background
     val baseGradient = if (dark) {
-        // 暗色:顶部深蓝,向下渐隐到接近纯黑
+        // 暗色:顶部深蓝,向下渐隐到当前主题 background（AMOLED 时为纯黑）
         arrayOf(
             0.0f to Color(0xFF1B2A45),
             0.22f to Color(0xFF15223A),
             0.45f to Color(0xFF0D1626),
             0.65f to Color(0xFF0A0F18),
-            1.0f to Color(0xFF080B12),
+            1.0f to canvasBackground,
         )
     } else {
-        // 亮色:顶部偏蓝,向下渐隐到白
+        // 亮色:顶部偏蓝,向下渐隐到当前主题 background
         arrayOf(
             0.0f to Color(0xFFAFD0F2),
             0.22f to Color(0xFFCBE0F6),
             0.45f to Color(0xFFF1F7FD),
-            0.65f to Color(0xFFFFFFFF),
-            1.0f to Color(0xFFFFFFFF),
+            0.65f to canvasBackground,
+            1.0f to canvasBackground,
         )
     }
 

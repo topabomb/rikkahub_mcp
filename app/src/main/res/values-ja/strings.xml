@@ -620,6 +620,7 @@
   <string name="setting_asr_page_default_name">ASR</string>
   <string name="setting_asr_page_edit_provider">ASRプロバイダーを編集</string>
   <string name="setting_display_page_amoled_dark_mode_desc">ダークテーマで純粋な黒色背景を使用、AMOLED画面に適しています</string>
+  <string name="setting_display_page_amoled_dark_mode_inactive_desc">ダークテーマでのみ適用されます</string>
   <string name="setting_display_page_amoled_dark_mode_title">AMOLED ダークモード</string>
   <string name="setting_display_page_auto_collapse_thinking_desc">思考が完了したら思考内容を自動的に折りたたむ</string>
   <string name="setting_display_page_auto_collapse_thinking_title">思考を自動折りたたむ</string>
@@ -801,6 +802,7 @@
   <string name="setting_page_documentation_desc">アプリの使用方法とヘルプドキュメントを表示</string>
   <string name="setting_page_dynamic_color">ダイナミックカラー</string>
   <string name="setting_page_dynamic_color_desc">壁紙に基づいてアプリのテーマ配色を動的に生成するかどうか</string>
+  <string name="setting_page_dynamic_color_unavailable_desc">ダイナミックカラーには Android 12 以降が必要です</string>
   <string name="setting_page_extensions">拡張機能</string>
   <string name="setting_page_extensions_desc">プロンプトインジェクション、スキルなどを管理</string>
   <string name="setting_page_general_settings">一般設定</string>
@@ -845,9 +847,10 @@
   <string name="setting_page_search_title">検索サービス</string>
   <string name="setting_page_share">共有</string>
   <string name="setting_page_share_desc">このアプリを友達と共有</string>
-  <string name="setting_page_share_text">Measix Pilot - Android AI アシスタント\n\nウェブサイト: https://measix.weero.net/</string>
+  <string name="setting_page_share_text">Measix Pilot - Android AI アシスタント\n\nウェブサイト: https://measix-pilot.weero.net/</string>
   <string name="setting_page_theme_setting">テーマ</string>
   <string name="setting_page_theme_setting_desc">アプリの配色をカスタマイズ</string>
+  <string name="setting_page_theme_setting_dynamic_override_desc">壁紙の色が選択したテーマより優先されます</string>
   <string name="setting_theme_page_preset_themes">プリセットテーマ</string>
   <string name="setting_theme_page_custom_themes">カスタムテーマ</string>
   <string name="setting_theme_page_add_theme">新規</string>
@@ -860,7 +863,7 @@
   <string name="setting_theme_page_tertiary_color">ターシャリカラー</string>
   <string name="setting_theme_page_preview">プレビュー</string>
   <string name="setting_theme_page_save">保存</string>
-  <string name="setting_theme_page_dynamic_color_hint">ダイナミックカラーが有効です。カスタムテーマを使用するには、設定 &gt; テーマで無効にしてください。</string>
+  <string name="setting_theme_page_dynamic_color_active_hint">壁紙の色が使用されています。ダイナミックカラーをオフにすると、選択したテーマが適用されます。</string>
   <string name="setting_page_tts_service">音声サービス</string>
   <string name="setting_page_tts_service_desc">音声合成と音声認識のプロバイダーを設定</string>
   <string name="setting_page_tts_settings">TTS設定</string>

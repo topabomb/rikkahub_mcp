@@ -622,6 +622,7 @@
   <string name="setting_asr_page_default_name">ASR</string>
   <string name="setting_asr_page_edit_provider">编辑ASR提供商</string>
   <string name="setting_display_page_amoled_dark_mode_desc">在暗色主题中使用纯黑背景，适合 AMOLED 屏幕</string>
+  <string name="setting_display_page_amoled_dark_mode_inactive_desc">仅在深色主题下生效</string>
   <string name="setting_display_page_amoled_dark_mode_title">AMOLED 暗色模式</string>
   <string name="setting_display_page_auto_collapse_thinking_desc">思考完成自动折叠思考内容</string>
   <string name="setting_display_page_auto_collapse_thinking_title">自动折叠思考</string>
@@ -810,6 +811,7 @@
   <string name="setting_page_documentation_desc">查看应用使用说明和帮助文档</string>
   <string name="setting_page_dynamic_color">动态颜色</string>
   <string name="setting_page_dynamic_color_desc">是否基于壁纸动态生成 app 主题配色</string>
+  <string name="setting_page_dynamic_color_unavailable_desc">动态颜色需要 Android 12 或更高版本</string>
   <string name="setting_page_extensions">扩展管理</string>
   <string name="setting_page_extensions_desc">管理提示词注入、技能等扩展</string>
   <string name="setting_page_general_settings">通用设置</string>
@@ -854,9 +856,10 @@
   <string name="setting_page_search_title">搜索服务</string>
   <string name="setting_page_share">分享</string>
   <string name="setting_page_share_desc">分享本APP给朋友</string>
-  <string name="setting_page_share_text">Measix Pilot - Android AI 助手\n\n官网: https://measix.weero.net/</string>
+  <string name="setting_page_share_text">Measix Pilot - Android AI 助手\n\n官网: https://measix-pilot.weero.net/</string>
   <string name="setting_page_theme_setting">主题</string>
   <string name="setting_page_theme_setting_desc">自定义应用配色方案</string>
+  <string name="setting_page_theme_setting_dynamic_override_desc">壁纸配色会覆盖所选主题</string>
   <string name="setting_theme_page_preset_themes">预设主题</string>
   <string name="setting_theme_page_custom_themes">自定义主题</string>
   <string name="setting_theme_page_add_theme">新建</string>
@@ -869,7 +872,7 @@
   <string name="setting_theme_page_tertiary_color">第三色</string>
   <string name="setting_theme_page_preview">预览</string>
   <string name="setting_theme_page_save">保存</string>
-  <string name="setting_theme_page_dynamic_color_hint">动态颜色已开启，请在偏好设置 &gt; 主题中关闭以使用自定义主题。</string>
+  <string name="setting_theme_page_dynamic_color_active_hint">当前正在使用壁纸配色。关闭动态颜色后将应用所选主题。</string>
   <string name="setting_page_tts_service">语音服务</string>
   <string name="setting_page_tts_service_desc">配置语音合成与语音识别服务提供商</string>
   <string name="setting_page_tts_settings">TTS设置</string>

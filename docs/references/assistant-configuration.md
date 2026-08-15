@@ -35,6 +35,8 @@
 | `backgroundOpacity` | `1.0f` | 背景不透明度 |
 | `useGradientBackground` | `false` | 是否使用动态渐变背景 |
 
+开启背景图或渐变后，聊天页 chrome 卡片（思考过程、气泡、子助手卡等）会按 `ChatSurfacePolicy` 略微透明，让背景透出；代码、表格、公式和媒体产物保持不透明。细节见 [界面架构](ui-architecture.md)。
+
 ### 模型与生成参数
 
 | 字段 | 默认值 | 语义 |

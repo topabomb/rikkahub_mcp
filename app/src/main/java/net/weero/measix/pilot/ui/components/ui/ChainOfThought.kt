@@ -341,7 +341,7 @@ private class ChainOfThoughtScopeImpl : ChainOfThoughtScope {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Icon（不透明背景遮住背后的连线）
+                // Icon（用不透明同色遮罩挡住时间线；卡片本身可以半透明）
                 Box(
                     modifier = Modifier.width(24.dp),
                     contentAlignment = Alignment.Center,
@@ -349,7 +349,7 @@ private class ChainOfThoughtScopeImpl : ChainOfThoughtScope {
                     Box(
                         modifier = Modifier
                             .size(20.dp)
-                            .background(LocalCardColor.current),
+                            .background(LocalCardColor.current.copy(alpha = 1f)),
                         contentAlignment = Alignment.Center,
                     ) {
                         if (icon != null) {

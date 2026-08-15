@@ -1,5 +1,6 @@
-﻿package net.weero.measix.pilot.ui.components.richtext
+package net.weero.measix.pilot.ui.components.richtext
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
@@ -10,6 +11,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.takeOrElse
@@ -37,7 +39,10 @@ fun MathBlock(
 ) {
     val proceededLatex = latex
     Box(
-        modifier = modifier.padding(8.dp)
+        modifier = modifier
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(8.dp)
     ) {
         LatexText(
             latex = proceededLatex,

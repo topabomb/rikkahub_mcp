@@ -157,21 +157,21 @@ fun SettingAboutPage() {
                         modifier = Modifier.padding(horizontal = 8.dp),
                     ) {
                         item(
-                            onClick = { context.openUrl("https://measix.weero.net/") },
+                            onClick = { context.openUrl("https://measix-pilot.weero.net/") },
                             leadingContent = { Icon(HugeIcons.Earth, null) },
-                            supportingContent = { Text("https://measix.weero.net") },
+                            supportingContent = { Text("https://measix-pilot.weero.net") },
                             headlineContent = { Text(stringResource(R.string.about_page_website)) },
                         )
                         item(
-                            onClick = { context.openUrl("https://measix.weero.net/mobile/docs") },
+                            onClick = { context.openUrl("https://measix-pilot.weero.net/guide/") },
                             leadingContent = { Icon(HugeIcons.Book01, null) },
-                            supportingContent = { Text("https://measix.weero.net/mobile/docs") },
+                            supportingContent = { Text("https://measix-pilot.weero.net/guide/") },
                             headlineContent = { Text(stringResource(R.string.about_page_documentation)) },
                         )
                         item(
-                            onClick = { context.openUrl("https://measix.weero.net/mobile/license") },
+                            onClick = { context.openUrl("https://measix-pilot.weero.net/about/") },
                             leadingContent = { Icon(HugeIcons.File02, null) },
-                            supportingContent = { Text("https://measix.weero.net/mobile/license") },
+                            supportingContent = { Text("https://measix-pilot.weero.net/about/") },
                             headlineContent = { Text(stringResource(R.string.about_page_license)) },
                         )
                     }

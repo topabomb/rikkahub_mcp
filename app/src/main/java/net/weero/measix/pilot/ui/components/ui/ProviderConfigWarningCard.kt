@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ui
+package net.weero.measix.pilot.ui.components.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,6 +22,7 @@ import me.rerere.hugeicons.stroke.Alert01
 import me.rerere.hugeicons.stroke.ArrowRight01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.theme.LocalChatFontSizeRatio
+import net.weero.measix.pilot.ui.theme.asChatChrome
 
 @Composable
 fun ProviderConfigWarningCard(
@@ -34,7 +35,7 @@ fun ProviderConfigWarningCard(
         onClick = onClick,
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer,
+            containerColor = MaterialTheme.colorScheme.errorContainer.asChatChrome(),
             contentColor = MaterialTheme.colorScheme.onErrorContainer,
         ),
     ) {

@@ -623,6 +623,7 @@
   <string name="setting_asr_page_default_name">ASR</string>
   <string name="setting_asr_page_edit_provider">Edit ASR Provider</string>
   <string name="setting_display_page_amoled_dark_mode_desc">Use pure black background in dark theme, suitable for AMOLED screens</string>
+  <string name="setting_display_page_amoled_dark_mode_inactive_desc">Applies only in dark theme</string>
   <string name="setting_display_page_amoled_dark_mode_title">AMOLED Dark Mode</string>
   <string name="setting_display_page_auto_collapse_thinking_desc">Automatically collapse thinking content after thinking is complete</string>
   <string name="setting_display_page_auto_collapse_thinking_title">Auto Collapse Thinking</string>
@@ -824,6 +825,7 @@
   <string name="setting_page_documentation_desc">View app usage instructions and help documentation</string>
   <string name="setting_page_dynamic_color">Dynamic Color</string>
   <string name="setting_page_dynamic_color_desc">Generate the app theme colors dynamically from your wallpaper</string>
+  <string name="setting_page_dynamic_color_unavailable_desc">Dynamic color requires Android 12 or later</string>
   <string name="setting_page_extensions">Extensions</string>
   <string name="setting_page_extensions_desc">Manage prompt injections, skills and more</string>
   <string name="setting_page_general_settings">General Settings</string>
@@ -868,9 +870,10 @@
   <string name="setting_page_search_title">Search Service</string>
   <string name="setting_page_share">Share</string>
   <string name="setting_page_share_desc">Share this app with friends</string>
-  <string name="setting_page_share_text">Measix Pilot - Android AI Assistant\n\nWebsite: https://measix.weero.net/</string>
+  <string name="setting_page_share_text">Measix Pilot - Android AI Assistant\n\nWebsite: https://measix-pilot.weero.net/</string>
   <string name="setting_page_theme_setting">Theme</string>
   <string name="setting_page_theme_setting_desc">Customize app color scheme</string>
+  <string name="setting_page_theme_setting_dynamic_override_desc">Wallpaper colors override the selected theme</string>
   <string name="setting_theme_page_preset_themes">Preset Themes</string>
   <string name="setting_theme_page_custom_themes">Custom Themes</string>
   <string name="setting_theme_page_add_theme">New</string>
@@ -886,7 +889,7 @@
   <string name="setting_theme_page_import_theme">Import</string>
   <string name="setting_theme_page_export_success">Theme JSON copied to clipboard</string>
   <string name="setting_theme_page_import_success">Theme imported successfully</string>
-  <string name="setting_theme_page_dynamic_color_hint">Dynamic color is enabled. Disable it in Preferences &gt; Theme to use custom themes.</string>
+  <string name="setting_theme_page_dynamic_color_active_hint">Wallpaper colors are in use. The selected theme applies when dynamic color is off.</string>
   <string name="setting_page_tts_service">Speech Services</string>
   <string name="setting_page_tts_service_desc">Configure text-to-speech and speech recognition providers</string>
   <string name="setting_page_tts_settings">TTS Settings</string>

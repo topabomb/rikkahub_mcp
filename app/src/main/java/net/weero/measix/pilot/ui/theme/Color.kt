@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.theme
+package net.weero.measix.pilot.ui.theme
 
 import androidx.compose.material3.CardColors
 import androidx.compose.material3.CardDefaults
@@ -170,8 +170,6 @@ fun darkExtendColors(): ExtendColors = ExtendColors(
 )
 
 object CustomColors {
-    var black = false
-
     val topBarColors: TopAppBarColors
         @Composable get() {
             return if (!LocalDarkMode.current) TopAppBarDefaults.topAppBarColors(

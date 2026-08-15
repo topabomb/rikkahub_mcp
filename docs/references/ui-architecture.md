@@ -79,13 +79,17 @@ class Navigator(private val backStack: MutableList<NavKey>) {
 
 ### 3.1 MeasixTheme
 
+外观判定集中在 `AppearancePolicy`，`MeasixTheme` 只负责取色并提供 CompositionLocal：
+
 ```
 MeasixTheme(colorMode)
-  ├─ 读取 Settings (dynamicColor, themeId, customThemes, amoledDarkMode)
+  ├─ ColorMode（SharedPreferences `colorMode`）→ AppearancePolicy.resolveDarkTheme
+  ├─ 读取 Settings (dynamicColor, themeId, customThemes)
+  ├─ 读取 AMOLED（SharedPreferences `amoledDark`）
   ├─ 颜色方案选择：
-  │    ├─ 动态色 (S+): dynamicLight/DarkColorScheme(context)
-  │    └─ 预设/自定义: findThemeById → getColorScheme(dark)
-  ├─ AMOLED 暗色: background + surface → #000000 (仅 dark + amoled 时)
+  │    ├─ 动态色仅在 Android 12+ 且开关开启时生效
+  │    └─ 否则 findThemeById → getColorScheme(dark)；未知 id 回退 Sakura
+  ├─ AMOLED 暗色: AppearancePolicy.applyAmoledDark（仅 dark + amoled）
   ├─ 系统栏图标: isAppearanceLightStatusBars / isAppearanceLightNavigationBars = !darkTheme
   └─ MaterialExpressiveTheme(colorScheme, typography, motionScheme.expressive())
 ```
@@ -96,11 +100,22 @@ MeasixTheme(colorMode)
 enum class ColorMode { SYSTEM, LIGHT, DARK }
 ```
 
-- `SYSTEM` 跟随系统暗色模式
-- AMOLED 暗色模式在普通暗色基础上将 `background` 和 `surface` 设为纯黑，其他 tonal 色（`surfaceContainerHighest` 等）不受影响
-- **注意**：AMOLED 下 `surfaceColorAtElevation(8.dp)` 会变纯黑导致选中项不可辨；应使用 `surfaceContainerHighest` 等 tonal 色替代
+- `SYSTEM` 跟随系统暗色模式；`LIGHT` / `DARK` 强制浅色或深色
+- 动态色、预设/自定义主题、AMOLED 与颜色模式在「偏好 → 主题」页集中展示；设置首页保留颜色模式快捷入口
+- Android 12 以下动态色开关不可用，主题选择器始终可选
+- AMOLED 暗色模式在普通暗色基础上将 `background` 和 `surface` 设为纯黑，其他 tonal 色（`surfaceContainerHighest` 等）不受影响。强制浅色时开关禁用；跟随系统时偏好会保留，只在实际暗色时生效
+- **注意**：AMOLED 下 `surfaceColorAtElevation` 会贴近纯黑导致选中项不可辨；对比表面使用 `surfaceContainer` / `High` / `Highest`
 
-### 3.3 预设主题
+### 3.3 助手背景上的卡片透明度
+
+助手开启背景图或渐变后，聊天页通过 `ProvideChatSurfacePolicy` 写入 `LocalChatChromeAlpha`：
+
+- **消息层 Chrome**（思考过程 `ChainOfThought`、用户/助手气泡、子助手卡、空态 readiness、建议胶囊）：使用 `ChatSurfacePolicy.chromeAlpha`。有背景时封顶为 `BACKGROUND_CHROME_MAX_ALPHA`，用户仍可通过气泡不透明度滑条再调低
+- **输入条实心底**：只用 `pageChromeAlpha`（有背景 `0.82`，无背景 `1.0`），不跟随气泡滑条，避免输入区随消息透明度一起变淡
+- **产物与正文**（代码块、Mermaid/HTML 预览、表格、块级公式、图片/音视频/文档芯片、工具输出正文）：保持完全不透明，不套 chrome alpha
+- 没有助手背景时，消息层 chrome 继续只跟随 `DisplaySetting.bubbleOpacity`（默认 1.0）
+
+### 3.4 预设主题
 
 | 主题 | 文件 |
 |------|------|
@@ -114,9 +129,9 @@ enum class ColorMode { SYSTEM, LIGHT, DARK }
 
 自定义主题通过 `CustomTheme.kt` 支持，存储在 Settings 的 `customThemes` 列表中。
 
-### 3.4 扩展颜色
+### 3.5 扩展颜色
 
-`LocalExtendColors` 提供主题无关的扩展色板（如代码高亮色、Markdown 元素色），定义在 `Color.kt`。
+`LocalExtendColors` 提供随明暗切换的语义状态色（成功/警告/信息等），定义在 `Color.kt`。代码高亮使用 `AtomOneDarkPalette` / `AtomOneLightPalette`，不走扩展色板。
 
 ---
 
@@ -580,7 +595,7 @@ ChatList (LazyColumn)
 - 真实竖向铰链坐标的 list / gap / detail 分配
 - 无效铰链过滤与多铰链中心选择
 
-`ConversationAssistantSwitchTest` 覆盖会话助手切换、重复切换幂等，以及已删除助手的回退规则。`UpdateCheckerTest` 覆盖首次订阅启动、订阅离开后不重启，以及同一共享流只执行一次上游请求。
+`ConversationAssistantSwitchTest` 覆盖会话助手切换、重复切换幂等，以及已删除助手的回退规则。`UpdateCheckerTest` 覆盖首次订阅启动、订阅离开后不重启，以及同一共享流只执行一次上游请求。`AppearancePolicyTest` 覆盖颜色模式、动态色 API 门槛、AMOLED 仅改写 `background`/`surface`，以及未知主题回退 Sakura。`ChatSurfacePolicyTest` 覆盖助手背景下 chrome 封顶、无背景时跟随气泡不透明度，以及产物保持不透明。
 
 ### 设备仪器测试
 

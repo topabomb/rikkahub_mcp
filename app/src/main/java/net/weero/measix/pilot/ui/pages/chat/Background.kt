@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.chat
+package net.weero.measix.pilot.ui.pages.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box

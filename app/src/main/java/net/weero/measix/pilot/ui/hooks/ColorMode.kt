@@ -1,9 +1,10 @@
-﻿package net.weero.measix.pilot.ui.hooks
+package net.weero.measix.pilot.ui.hooks
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import net.weero.measix.pilot.ui.theme.AppearancePolicy
 import net.weero.measix.pilot.ui.theme.ColorMode
 
 private const val COLOR_MODE_KEY = "colorMode"
@@ -37,6 +38,4 @@ fun rememberAmoledDarkMode(): MutableState<Boolean> {
     return rememberSharedPreferenceBoolean("amoledDark", false)
 }
 
-private fun String?.toColorMode(): ColorMode {
-    return ColorMode.entries.firstOrNull { it.name == this } ?: ColorMode.SYSTEM
-}
+private fun String?.toColorMode(): ColorMode = AppearancePolicy.parseColorMode(this)

@@ -16,7 +16,6 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
@@ -30,8 +29,6 @@ private val ExtendDarkColors = darkExtendColors()
 val LocalExtendColors = compositionLocalOf { ExtendLightColors }
 
 val LocalDarkMode = compositionLocalOf { false }
-
-private val AMOLED_DARK_BACKGROUND = Color(0xFF000000)
 
 @Serializable
 enum class ColorMode {
@@ -47,15 +44,19 @@ fun MeasixTheme(
 ) {
     val settings by rememberUserSettingsState()
 
-    val darkTheme = when (colorMode) {
-        ColorMode.SYSTEM -> isSystemInDarkTheme()
-        ColorMode.LIGHT -> false
-        ColorMode.DARK -> true
-    }
+    val darkTheme = AppearancePolicy.resolveDarkTheme(
+        colorMode = colorMode,
+        systemInDarkTheme = isSystemInDarkTheme(),
+    )
     val amoledDarkMode by rememberAmoledDarkMode()
+    val sdkInt = Build.VERSION.SDK_INT
+    val useDynamicColor = AppearancePolicy.isDynamicColorEffective(
+        dynamicColor = settings.dynamicColor,
+        sdkInt = sdkInt,
+    )
 
     val colorScheme = when {
-        settings.dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+        useDynamicColor -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
@@ -66,11 +67,8 @@ fun MeasixTheme(
         }
     }
     val colorSchemeConverted = remember(darkTheme, amoledDarkMode, colorScheme) {
-        if (darkTheme && amoledDarkMode) {
-            colorScheme.copy(
-                background = AMOLED_DARK_BACKGROUND,
-                surface = AMOLED_DARK_BACKGROUND,
-            )
+        if (AppearancePolicy.shouldApplyAmoled(darkTheme, amoledDarkMode)) {
+            AppearancePolicy.applyAmoledDark(colorScheme)
         } else {
             colorScheme
         }
