@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.richtext
+package net.weero.measix.pilot.ui.components.richtext
 
 import androidx.compose.foundation.clickable
 import androidx.compose.runtime.Composable
@@ -30,6 +30,7 @@ fun ZoomableAsyncImage(
     alignment: Alignment = Alignment.Center,
     contentScale: ContentScale = ContentScale.Fit,
     alpha: Float = DefaultAlpha,
+    albumProvider: (() -> List<String>)? = null,
 ) {
     var showImageViewer by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -64,8 +65,14 @@ fun ZoomableAsyncImage(
         },
     )
     if (showImageViewer) {
-        ImagePreviewDialog(images = listOf(model ?: "")) {
-            showImageViewer = false
-        }
+        // 点击期求值会话相册; 相册为空(宿主未提供或会话无图)回退单图
+        val album = albumProvider?.invoke().orEmpty()
+        val viewerImages = album.ifEmpty { listOf(model ?: "") }
+        val startIndex = album.indexOf(model).takeIf { it >= 0 } ?: 0
+        ImagePreviewDialog(
+            images = viewerImages,
+            onDismissRequest = { showImageViewer = false },
+            initialIndex = startIndex,
+        )
     }
 }

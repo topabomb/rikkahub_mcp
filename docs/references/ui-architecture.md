@@ -246,6 +246,11 @@ verticalPaneSplit(windowWidthDp, fallbackListWidthDp, hingeBounds):
 
 聊天链路中的助手、模型、文件、MCP、搜索、推理、Workspace、扩展与导出等临时内容均复用该容器；设置等页面也可以复用 `AdaptiveModal`，但这不会改变其页面导航结构。
 
+> **例外**：全屏图片查看器（`ImagePreviewDialog`）是刻意不经过 `AdaptiveModal` 的全屏 `Dialog`
+> （`usePlatformDefaultWidth = false`、纯黑背景、自有点按/竖直拖拽关闭手势与多图翻页）。
+> 相册式浏览需要完整的屏幕空间与手势域，不适配半屏 Sheet / 有界卡片的弹层约定。
+> 决策依据见 [`docs/dev/image-viewer-upgrade-plan.md`](../dev/image-viewer-upgrade-plan.md)。
+
 ### 4.8 AdaptiveDialogContainer
 
 全屏 Dialog 容器，解决 Compose 平台 outside-click 无法检测自定义全屏 Dialog 外部点击的问题。采用**显式 scrim 双层方案**：

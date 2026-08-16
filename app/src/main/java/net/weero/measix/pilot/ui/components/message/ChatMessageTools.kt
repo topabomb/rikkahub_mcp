@@ -195,6 +195,8 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     renderer.Summary(context)
                     if (images.isNotEmpty()) {
+                        // 会话级时序相册: 稳定 provider, 点击期由 ZoomableAsyncImage 求值
+                        val conversationAlbum = LocalConversationImages.current
                         LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                             modifier = Modifier.wrapContentWidth(),
@@ -206,6 +208,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                                     modifier = Modifier
                                         .height(64.dp)
                                         .wrapContentWidth(),
+                                    albumProvider = conversationAlbum,
                                 )
                             }
                         }

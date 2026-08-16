@@ -1,4 +1,4 @@
-<?xml version='1.0' encoding='UTF-8'?>
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
   <string name="about_page_license">라이선스</string>
   <string name="about_page_documentation">문서</string>
@@ -425,6 +425,30 @@
   <string name="imggen_page_prompt_placeholder">생성하고 싶은 이미지를 설명하세요...</string>
   <string name="imggen_page_save">저장</string>
   <string name="imggen_page_save_failed">저장 실패: %1$s</string>
+  <string name="imggen_page_delete_image_title">이미지 삭제</string>
+  <string name="imggen_page_delete_image_confirmation">%2$s(이)가 생성한 이미지 %1$s의 갤러리 원본을 영구 삭제합니다. 채팅 사본은 영향을 받지 않습니다. 이 작업은 되돌릴 수 없습니다.</string>
+  <string name="imggen_page_no_prompt">프롬프트 없음</string>
+  <string name="image_viewer_saving">저장 중…</string>
+  <string name="image_viewer_saved">이미지가 저장되었습니다</string>
+  <string name="image_viewer_save_failed">저장 실패: %1$s</string>
+  <string name="image_viewer_save_content_description">이미지 저장</string>
+  <string name="setting_files_page_delete_upload_confirmation">%1$s을(를) 영구 삭제합니다. 채팅 첨부나 어시스턴트 배경이 이 파일을 참조하면 해당 위치에 더 이상 표시되지 않습니다. 이 작업은 되돌릴 수 없습니다.</string>
+  <string name="image_viewer_info_content_description">이미지 정보 보기</string>
+  <string name="image_viewer_info_title">이미지 정보</string>
+  <string name="image_viewer_info_close_content_description">이미지 정보 닫기</string>
+  <string name="image_viewer_info_source">출처</string>
+  <string name="image_viewer_info_source_generated">생성 이미지</string>
+  <string name="image_viewer_info_source_upload">업로드 파일</string>
+  <string name="image_viewer_info_source_network">네트워크 이미지</string>
+  <string name="image_viewer_info_source_inline">인라인 이미지</string>
+  <string name="image_viewer_info_source_local">로컬 파일</string>
+  <string name="image_viewer_info_filename">파일 이름</string>
+  <string name="image_viewer_info_dimensions">해상도</string>
+  <string name="image_viewer_info_size">크기</string>
+  <string name="image_viewer_info_format">형식</string>
+  <string name="image_viewer_info_modified">수정한 날짜</string>
+  <string name="imggen_page_prompt_copied">프롬프트가 복사되었습니다</string>
+  <string name="imggen_page_copy_prompt">프롬프트 복사</string>
   <string name="imggen_page_settings_title">이미지 생성 설정</string>
   <string name="imggen_page_title">이미지 생성</string>
   <string name="imggen_page_error_no_model">이미지 모델이 선택되지 않았습니다</string>
@@ -695,7 +719,7 @@
   <string name="setting_display_page_volume_key_scroll_title">볼륨 키 페이지 스크롤</string>
   <string name="setting_files_page_cancel_action">취소</string>
   <string name="setting_files_page_clean_action">정리</string>
-  <string name="setting_files_page_clean_confirmation">채팅 첨부 파일, 도구 결과 사본, 어시스턴트 배경을 포함해 이 카테고리의 모든 업로드 파일이 영구적으로 삭제됩니다. 이 작업은 실행 취소할 수 없습니다.</string>
+  <string name="setting_files_page_clean_confirmation">이 분류의 모든 업로드 파일(%1$d개)을 영구 삭제합니다. 채팅 첨부, 도구 결과 사본, 어시스턴트 배경도 포함됩니다. 이 작업은 되돌릴 수 없습니다.</string>
   <string name="setting_files_page_clean_content_description">파일 정리</string>
   <string name="setting_files_page_clean_failed_toast">일부 파일을 정리하지 못했습니다</string>
   <string name="setting_files_page_clean_title">파일을 정리할까요?</string>
@@ -1369,7 +1393,7 @@
   <string name="setting_files_page_folder_generated_images">생성 이미지</string>
   <string name="setting_files_page_generated_no_prompt">프롬프트 없음</string>
   <string name="setting_files_page_generated_unknown_model">알 수 없는 모델</string>
-  <string name="setting_files_page_delete_generated_confirmation">갤러리 원본만 삭제됩니다. 채팅과 배경 사본은 삭제되지 않습니다.</string>
-  <string name="setting_files_page_clean_generated_confirmation">갤러리의 모든 생성 이미지가 영구적으로 삭제됩니다. 채팅과 배경 사본은 삭제되지 않습니다. 이 작업은 취소할 수 없습니다.</string>
+  <string name="setting_files_page_delete_generated_confirmation">%2$s(이)가 생성한 이미지 %1$s의 갤러리 원본을 영구 삭제합니다. 채팅과 배경 사본은 영향을 받지 않습니다. 이 작업은 되돌릴 수 없습니다.</string>
+  <string name="setting_files_page_clean_generated_confirmation">갤러리의 생성 이미지 %1$d장을 모두 영구 삭제합니다. 채팅과 배경 사본은 영향을 받지 않습니다. 이 작업은 되돌릴 수 없습니다.</string>
 </resources>
 

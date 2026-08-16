@@ -4,6 +4,7 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Clean
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.Image02
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -60,6 +61,7 @@ import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.data.repository.GenMediaRepository
 import net.weero.measix.pilot.ui.components.nav.BackButton
+import net.weero.measix.pilot.ui.components.ui.ImagePreviewDialog
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.utils.fileSizeToString
@@ -94,6 +96,8 @@ fun SettingFilesPage(
     var pendingUploadDelete by remember { mutableStateOf<ManagedFileEntity?>(null) }
     var pendingGeneratedDelete by remember { mutableStateOf<GenMediaEntity?>(null) }
     var showCleanDialog by remember { mutableStateOf(false) }
+    var previewImages by remember { mutableStateOf<List<String>>(emptyList()) }
+    var previewIndex by remember { mutableStateOf(-1) }
     val uploadFiles by filesManager.observe(FileFolders.UPLOAD).collectAsState(initial = emptyList())
     val generatedImages by genMediaRepository.observeAllMedia().collectAsState(initial = emptyList())
     val isUpload = selectedCategory == FileCategory.UPLOAD
@@ -104,7 +108,14 @@ fun SettingFilesPage(
         AlertDialog(
             onDismissRequest = { pendingUploadDelete = null },
             title = { Text(stringResource(R.string.setting_files_page_delete_file_title)) },
-            text = { Text(target.displayName) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.setting_files_page_delete_upload_confirmation,
+                        target.displayName,
+                    )
+                )
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -128,10 +139,24 @@ fun SettingFilesPage(
 
     if (pendingGeneratedDelete != null) {
         val target = pendingGeneratedDelete!!
+        val promptLabel = target.prompt.trim().ifBlank {
+            stringResource(R.string.setting_files_page_generated_no_prompt)
+        }
+        val modelLabel = target.modelId.ifBlank {
+            stringResource(R.string.setting_files_page_generated_unknown_model)
+        }
         AlertDialog(
             onDismissRequest = { pendingGeneratedDelete = null },
             title = { Text(stringResource(R.string.setting_files_page_delete_file_title)) },
-            text = { Text(stringResource(R.string.setting_files_page_delete_generated_confirmation)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.setting_files_page_delete_generated_confirmation,
+                        promptLabel,
+                        modelLabel,
+                    )
+                )
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -164,7 +189,8 @@ fun SettingFilesPage(
                             R.string.setting_files_page_clean_confirmation
                         } else {
                             R.string.setting_files_page_clean_generated_confirmation
-                        }
+                        },
+                        if (isUpload) uploadFiles.size else generatedImages.size,
                     )
                 )
             },
@@ -236,15 +262,36 @@ fun SettingFilesPage(
                     if (uploadFiles.isEmpty()) {
                         EmptyFiles()
                     } else {
+                        // 当前 Tab 的图片文件组成一本相册(统一 file:// 前缀与 Coil 缓存键),
+                        // 点击缩略图进入查看器; 不做磁盘存在性检查(缺失文件由加载错误态兜底)
+                        val imagePaths = remember(uploadFiles) {
+                            uploadFiles.mapNotNull { file ->
+                                file.takeIf { it.mimeType.startsWith("image/") }
+                                    ?.let { filesManager.getFile(it) }
+                                    ?.let { "file://${it.absolutePath}" }
+                            }
+                        }
+                        val imagePathIndex = remember(imagePaths) {
+                            imagePaths.withIndex().associate { (index, path) -> path to index }
+                        }
                         FileGrid(
                             innerPadding = innerPadding,
                             gridState = uploadGridState,
                         ) {
                             items(uploadFiles, key = { it.id }) { file ->
+                                val fileOnDisk = filesManager.getFile(file)
                                 FileItem(
                                     file = file,
-                                    fileOnDisk = filesManager.getFile(file),
+                                    fileOnDisk = fileOnDisk,
                                     onDelete = { pendingUploadDelete = file },
+                                    onImageClick = fileOnDisk.absolutePath.let { path ->
+                                        imagePathIndex["file://$path"]?.let { index ->
+                                            {
+                                                previewImages = imagePaths
+                                                previewIndex = index
+                                            }
+                                        }
+                                    },
                                 )
                             }
                         }
@@ -254,15 +301,32 @@ fun SettingFilesPage(
                     if (generatedImages.isEmpty()) {
                         EmptyFiles()
                     } else {
+                        val imagePaths = remember(generatedImages) {
+                            generatedImages.map { entity ->
+                                "file://${generatedMediaStore.resolveCanonicalFile(entity).absolutePath}"
+                            }
+                        }
+                        val imagePathIndex = remember(imagePaths) {
+                            imagePaths.withIndex().associate { (index, path) -> path to index }
+                        }
                         FileGrid(
                             innerPadding = innerPadding,
                             gridState = generatedGridState,
                         ) {
                             items(generatedImages, key = { it.id }) { entity ->
+                                val fileOnDisk = generatedMediaStore.resolveCanonicalFile(entity)
                                 GeneratedImageItem(
                                     entity = entity,
-                                    fileOnDisk = generatedMediaStore.resolveCanonicalFile(entity),
+                                    fileOnDisk = fileOnDisk,
                                     onDelete = { pendingGeneratedDelete = entity },
+                                    onImageClick = fileOnDisk.absolutePath.let { path ->
+                                        imagePathIndex["file://$path"]?.let { index ->
+                                            {
+                                                previewImages = imagePaths
+                                                previewIndex = index
+                                            }
+                                        }
+                                    },
                                 )
                             }
                         }
@@ -270,6 +334,14 @@ fun SettingFilesPage(
                 }
             }
         }
+    }
+
+    if (previewIndex >= 0 && previewImages.isNotEmpty()) {
+        ImagePreviewDialog(
+            images = previewImages,
+            onDismissRequest = { previewIndex = -1 },
+            initialIndex = previewIndex.coerceIn(0, previewImages.lastIndex),
+        )
     }
 }
 
@@ -338,6 +410,7 @@ private fun FileItem(
     file: ManagedFileEntity,
     fileOnDisk: File,
     onDelete: () -> Unit,
+    onImageClick: (() -> Unit)? = null,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -348,6 +421,7 @@ private fun FileItem(
                 model = fileOnDisk.takeIf { file.mimeType.startsWith("image/") },
                 contentDescription = file.displayName,
                 onDelete = onDelete,
+                onClick = onImageClick,
             )
             Column(
                 modifier = Modifier
@@ -380,6 +454,7 @@ private fun GeneratedImageItem(
     entity: GenMediaEntity,
     fileOnDisk: File,
     onDelete: () -> Unit,
+    onImageClick: (() -> Unit)? = null,
 ) {
     val prompt = entity.prompt.trim().ifBlank {
         stringResource(R.string.setting_files_page_generated_no_prompt)
@@ -390,9 +465,10 @@ private fun GeneratedImageItem(
     ) {
         Column {
             MediaThumb(
-                model = fileOnDisk.takeIf { it.exists() },
+                model = fileOnDisk,
                 contentDescription = prompt,
                 onDelete = onDelete,
+                onClick = onImageClick,
             )
             Column(
                 modifier = Modifier
@@ -427,6 +503,7 @@ private fun MediaThumb(
     model: Any?,
     contentDescription: String,
     onDelete: () -> Unit,
+    onClick: (() -> Unit)? = null,
 ) {
     Box(modifier = Modifier.fillMaxWidth()) {
         if (model != null) {
@@ -435,7 +512,8 @@ private fun MediaThumb(
                 contentDescription = contentDescription,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(4f / 3f),
+                    .aspectRatio(4f / 3f)
+                    .let { if (onClick != null) it.clickable(onClick = onClick) else it },
                 contentScale = ContentScale.Crop
             )
         } else {

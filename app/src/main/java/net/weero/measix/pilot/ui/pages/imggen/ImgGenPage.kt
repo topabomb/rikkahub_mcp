@@ -122,6 +122,18 @@ fun ImageGenPage(
     val pagerState = rememberPagerState { 2 }
     val scope = rememberCoroutineScope()
 
+    // error Toast 收集器放在 Page 顶层: 停在 Gallery 页(第 1 页)时生成页不组合,
+    // 收集器若留在 ImageGenScreen 会漏掉删除失败等错误提示
+    val error by vm.error.collectAsStateWithLifecycle()
+    val errorMessage = imageGenerationErrorMessage(error)
+    val pageToaster = LocalToaster.current
+    LaunchedEffect(error) {
+        error?.let {
+            pageToaster.show(message = errorMessage, type = ToastType.Error)
+            vm.clearError()
+        }
+    }
+
     val isGenerating by vm.isGenerating.collectAsStateWithLifecycle()
     var showCancelDialog by remember { mutableStateOf(false) }
     BackHandler(isGenerating) {
@@ -244,23 +256,14 @@ private fun ImageGenScreen(
     val isGenerating by vm.isGenerating.collectAsStateWithLifecycle()
     val currentGeneratedImages by vm.currentGeneratedImages.collectAsStateWithLifecycle()
     val referenceImages by vm.referenceImages.collectAsStateWithLifecycle()
-    val error by vm.error.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    val toaster = LocalToaster.current
     var showSettingsSheet by remember { mutableStateOf(false) }
+    var previewIndex by remember { mutableStateOf(-1) }
     val sheetState = rememberBottomSheetState(
         initialValue = SheetValue.Hidden,
         enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)
     )
-    val errorMessage = imageGenerationErrorMessage(error)
-
-    LaunchedEffect(error) {
-        error?.let {
-            toaster.show(message = errorMessage, type = ToastType.Error)
-            vm.clearError()
-        }
-    }
 
     Column(
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -275,28 +278,24 @@ private fun ImageGenScreen(
                 .weight(1f)
                 .verticalScroll(rememberScrollState()),
         ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                (0 until minOf(2, currentGeneratedImages.size)).forEach { index ->
-                    val image = currentGeneratedImages[index]
-                    var showPreview by remember { mutableStateOf(false) }
-                    AsyncImage(
-                        model = File(image.filePath),
-                        contentDescription = null,
-                        modifier = Modifier
-                            .weight(1f)
-                            .aspectRatio(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { showPreview = true },
-                        contentScale = ContentScale.Crop
-                    )
-
-                    if (showPreview) {
-                        ImagePreviewDialog(
-                            images = listOf(image.filePath),
-                            onDismissRequest = { showPreview = false },
-                        )
+            // 当次生成结果全量展示(1–4 张), 两两一行
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                currentGeneratedImages.mapIndexed { index, image ->
+                    index to image
+                }.chunked(2).forEach { rowImages ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        rowImages.forEach { (index, image) ->
+                            AsyncImage(
+                                model = File(image.filePath),
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .aspectRatio(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { previewIndex = index },
+                                contentScale = ContentScale.Crop
+                            )
+                        }
                     }
                 }
             }
@@ -314,6 +313,15 @@ private fun ImageGenScreen(
             settings = settings,
             onShowSettings = { showSettingsSheet = true },
             modifier = Modifier
+        )
+    }
+
+    if (previewIndex >= 0) {
+        // 统一 file:// 前缀, 与网格的 File model 共享 Coil 缓存键
+        ImagePreviewDialog(
+            images = currentGeneratedImages.map { "file://${it.filePath}" },
+            onDismissRequest = { previewIndex = -1 },
+            initialIndex = previewIndex,
         )
     }
 
@@ -527,6 +535,8 @@ private fun ImageGalleryScreen(
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
     val pullToRefreshState = rememberPullToRefreshState()
+    var previewIndex by remember { mutableStateOf(-1) }
+    var pendingDelete by remember { mutableStateOf<GeneratedImage?>(null) }
 
     PullToRefreshBox(
         isRefreshing = false,
@@ -571,8 +581,7 @@ private fun ImageGalleryScreen(
                 ) { index ->
                     val image = generatedImages[index]
                     image?.let {
-                        var showPreview by remember { mutableStateOf(false) }
-
+                        val promptCopiedToast = stringResource(R.string.imggen_page_prompt_copied)
                         Card(
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -583,7 +592,7 @@ private fun ImageGalleryScreen(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .aspectRatio(1f)
-                                        .clickable { showPreview = true },
+                                        .clickable { previewIndex = index },
                                     contentScale = ContentScale.Crop
                                 )
 
@@ -612,7 +621,7 @@ private fun ImageGalleryScreen(
                                             onClick = {
                                                 clipboardManager.setText(AnnotatedString(it.prompt))
                                                 toaster.show(
-                                                    message = "Prompt copied to clipboard",
+                                                    message = promptCopiedToast,
                                                     type = ToastType.Success
                                                 )
                                             },
@@ -620,7 +629,9 @@ private fun ImageGalleryScreen(
                                         ) {
                                             Icon(
                                                 imageVector = HugeIcons.Copy01,
-                                                contentDescription = "Copy prompt",
+                                                contentDescription = stringResource(
+                                                    R.string.imggen_page_copy_prompt
+                                                ),
                                                 modifier = Modifier.size(16.dp)
                                             )
                                         }
@@ -654,7 +665,7 @@ private fun ImageGalleryScreen(
                                         }
 
                                         IconButton(
-                                            onClick = { vm.deleteImage(it) },
+                                            onClick = { pendingDelete = it },
                                             modifier = Modifier.size(32.dp)
                                         ) {
                                             Icon(
@@ -668,17 +679,66 @@ private fun ImageGalleryScreen(
                                 }
                             }
                         }
-
-                        if (showPreview) {
-                            ImagePreviewDialog(
-                                images = listOf(it.filePath),
-                                onDismissRequest = { showPreview = false }
-                            )
-                        }
                     }
                 }
             }
         }
+    }
+
+    if (previewIndex >= 0) {
+        // 当前已加载项的快照组成一本相册, 从点击位进入; 用 id 定位以兼容占位 null 导致的下标偏移
+        val snapshotItems = generatedImages.itemSnapshotList.items.filterNotNull()
+        val urls = snapshotItems.map { "file://${it.filePath}" }
+        val clicked = previewIndex.takeIf { it < generatedImages.itemCount }
+            ?.let { generatedImages[it] }
+        val startIndex = clicked
+            ?.let { c -> snapshotItems.indexOfFirst { it.id == c.id } }
+            ?.takeIf { it >= 0 }
+            ?: 0
+        if (urls.isNotEmpty()) {
+            ImagePreviewDialog(
+                images = urls,
+                onDismissRequest = { previewIndex = -1 },
+                initialIndex = startIndex,
+            )
+        }
+    }
+
+    pendingDelete?.let { target ->
+        val promptLabel = target.prompt.trim().ifBlank {
+            stringResource(R.string.imggen_page_no_prompt)
+        }
+        val modelLabel = target.model.ifBlank {
+            stringResource(R.string.setting_files_page_generated_unknown_model)
+        }
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text(stringResource(R.string.imggen_page_delete_image_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.imggen_page_delete_image_confirmation,
+                        promptLabel,
+                        modelLabel,
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingDelete = null
+                        vm.deleteImage(target)
+                    }
+                ) {
+                    Text(stringResource(R.string.imggen_page_delete))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) {
+                    Text(stringResource(R.string.imggen_page_cancel))
+                }
+            }
+        )
     }
 }
 

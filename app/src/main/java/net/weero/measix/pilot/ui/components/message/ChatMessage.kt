@@ -317,6 +317,8 @@ private fun MessagePartsBlock(
 
     // Render parts in original order (group thinking/tool as chain-of-thought)
     val groupedParts = remember(parts) { parts.groupMessageParts() }
+    // 会话级时序相册: 稳定 provider, 点击期由 ZoomableAsyncImage 求值
+    val conversationAlbum = LocalConversationImages.current
     groupedParts.fastForEach { block ->
         when (block) {
             is MessagePartBlock.ThinkingBlock -> {
@@ -502,9 +504,7 @@ private fun MessagePartsBlock(
                     }
 
                     is UIMessagePart.Image -> {
-                        val isImageLoading =
-                            part.url.isBlank() || part.url.matches(Regex("^data:image/[^;]*;base64,\\s*$"))
-                        if (isImageLoading) {
+                        if (isImagePartLoading(part.url)) {
                             Box(
                                 modifier = Modifier
                                     .size(72.dp)
@@ -518,7 +518,8 @@ private fun MessagePartsBlock(
                                 contentDescription = null,
                                 modifier = Modifier
                                     .clip(MaterialTheme.shapes.medium)
-                                    .height(72.dp)
+                                    .height(72.dp),
+                                albumProvider = conversationAlbum,
                             )
                         }
                     }

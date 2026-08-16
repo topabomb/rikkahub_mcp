@@ -425,6 +425,30 @@
   <string name="imggen_page_prompt_placeholder">Опишите изображение, которое хотите сгенерировать…</string>
   <string name="imggen_page_save">Сохранить</string>
   <string name="imggen_page_save_failed">Не удалось сохранить: %1$s</string>
+  <string name="imggen_page_delete_image_title">Удалить изображение</string>
+  <string name="imggen_page_delete_image_confirmation">Оригинал изображения «%1$s» (создано %2$s) будет безвозвратно удалён из галереи. Копии в чатах не затрагиваются. Действие нельзя отменить.</string>
+  <string name="imggen_page_no_prompt">Без промпта</string>
+  <string name="image_viewer_saving">Сохранение…</string>
+  <string name="image_viewer_saved">Изображение сохранено</string>
+  <string name="image_viewer_save_failed">Не удалось сохранить: %1$s</string>
+  <string name="image_viewer_save_content_description">Сохранить изображение</string>
+  <string name="setting_files_page_delete_upload_confirmation">Файл «%1$s» будет безвозвратно удалён. Если на него ссылаются вложения чатов или фоны ассистентов, в этих местах он больше не отобразится. Действие нельзя отменить.</string>
+  <string name="image_viewer_info_content_description">Показать информацию об изображении</string>
+  <string name="image_viewer_info_title">Информация об изображении</string>
+  <string name="image_viewer_info_close_content_description">Закрыть информацию об изображении</string>
+  <string name="image_viewer_info_source">Источник</string>
+  <string name="image_viewer_info_source_generated">Сгенерированное изображение</string>
+  <string name="image_viewer_info_source_upload">Загруженный файл</string>
+  <string name="image_viewer_info_source_network">Изображение из сети</string>
+  <string name="image_viewer_info_source_inline">Встроенное изображение</string>
+  <string name="image_viewer_info_source_local">Локальный файл</string>
+  <string name="image_viewer_info_filename">Имя файла</string>
+  <string name="image_viewer_info_dimensions">Разрешение</string>
+  <string name="image_viewer_info_size">Размер</string>
+  <string name="image_viewer_info_format">Формат</string>
+  <string name="image_viewer_info_modified">Изменено</string>
+  <string name="imggen_page_prompt_copied">Промпт скопирован в буфер обмена</string>
+  <string name="imggen_page_copy_prompt">Копировать промпт</string>
   <string name="imggen_page_settings_title">Настройки генерации изображений</string>
   <string name="imggen_page_title">Генерация изображений</string>
   <string name="imggen_page_error_no_model">Модель изображения не выбрана</string>
@@ -695,7 +719,7 @@
   <string name="setting_display_page_volume_key_scroll_title">Прокрутка страниц клавишами громкости</string>
   <string name="setting_files_page_cancel_action">Отмена</string>
   <string name="setting_files_page_clean_action">Очистить</string>
-  <string name="setting_files_page_clean_confirmation">Все загруженные файлы в этой категории будут удалены безвозвратно, включая вложения чата, копии результатов инструментов и фоны ассистентов. Это действие нельзя отменить.</string>
+  <string name="setting_files_page_clean_confirmation">Все загруженные файлы этой категории (%1$d) будут безвозвратно удалены, включая вложения чатов, копии результатов инструментов и фоны ассистентов. Действие нельзя отменить.</string>
   <string name="setting_files_page_clean_content_description">Очистить файлы</string>
   <string name="setting_files_page_clean_failed_toast">Не удалось удалить некоторые файлы</string>
   <string name="setting_files_page_clean_title">Очистить файлы?</string>
@@ -1369,7 +1393,7 @@
   <string name="setting_files_page_folder_generated_images">Сгенерированные изображения</string>
   <string name="setting_files_page_generated_no_prompt">Нет подсказки</string>
   <string name="setting_files_page_generated_unknown_model">Неизвестная модель</string>
-  <string name="setting_files_page_delete_generated_confirmation">Будет удалён только оригинал в галерее. Копии в чате и фоне останутся.</string>
-  <string name="setting_files_page_clean_generated_confirmation">Все сгенерированные изображения в галерее будут удалены безвозвратно. Копии в чате и фоне не удаляются. Это действие нельзя отменить.</string>
+  <string name="setting_files_page_delete_generated_confirmation">Оригинал изображения «%1$s» (создано %2$s) будет безвозвратно удалён из галереи. Копии в чатах и фонах не затрагиваются. Действие нельзя отменить.</string>
+  <string name="setting_files_page_clean_generated_confirmation">Все %1$d сгенерированных изображений в галерее будут безвозвратно удалены. Копии в чатах и фонах не затрагиваются. Действие нельзя отменить.</string>
 </resources>
 

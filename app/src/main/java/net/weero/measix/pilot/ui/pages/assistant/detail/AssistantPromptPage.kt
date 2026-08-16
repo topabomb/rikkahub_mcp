@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.assistant.detail
+package net.weero.measix.pilot.ui.pages.assistant.detail
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowDown01
@@ -41,11 +41,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -79,6 +81,8 @@ import net.weero.measix.pilot.data.model.AssistantRegex
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.ui.components.message.ChatMessage
+import net.weero.measix.pilot.ui.components.message.LocalConversationImages
+import net.weero.measix.pilot.ui.components.message.collectMessageImageUrls
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.FormItem
 import net.weero.measix.pilot.ui.components.ui.Select
@@ -377,19 +381,30 @@ private fun AssistantPromptContent(
                         color = MaterialTheme.colorScheme.error
                     )
                 }
-                preview.onSuccess {
+                preview.onSuccess { messages ->
+                    // 会话级时序相册: 稳定的点击期求值 lambda
+                    val messagesState = rememberUpdatedState(messages)
+                    val previewAlbum = remember {
+                        {
+                            messagesState.value.flatMap { message ->
+                                collectMessageImageUrls(message.parts)
+                            }
+                        }
+                    }
                     ChatFontProvider(displaySetting = settings.displaySetting) {
-                        it.fastForEach { message ->
-                            ChatMessage(
-                                node = message.toMessageNode(),
-                                onFork = {},
-                                onRegenerate = {},
-                                onEdit = {},
-                                onShare = {},
-                                onDelete = {},
-                                onUpdate = {},
-                                lastMessage = false,
-                            )
+                        CompositionLocalProvider(LocalConversationImages provides previewAlbum) {
+                            messages.fastForEach { message ->
+                                ChatMessage(
+                                    node = message.toMessageNode(),
+                                    onFork = {},
+                                    onRegenerate = {},
+                                    onEdit = {},
+                                    onShare = {},
+                                    onDelete = {},
+                                    onUpdate = {},
+                                    lastMessage = false,
+                                )
+                            }
                         }
                     }
                 }

@@ -37,6 +37,7 @@ import me.rerere.hugeicons.stroke.Copy01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.ai.tools.local.GENERATE_IMAGE_TOOL_NAME
 import net.weero.measix.pilot.data.ai.tools.local.ImageGenerationToolMetadata
+import net.weero.measix.pilot.ui.components.message.LocalConversationImages
 import net.weero.measix.pilot.ui.components.richtext.HighlightCodeBlock
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.ui.components.ui.FormItem
@@ -163,6 +164,8 @@ object ImageGenerationToolUI : ToolUIRenderer {
             ?.contentOrNull
         val prompt = context.arguments.getStringContent("prompt").orEmpty()
         var showTechnical by remember { mutableStateOf(false) }
+        // 会话级时序相册: 稳定 provider, 点击期由 ZoomableAsyncImage 求值
+        val conversationAlbum = LocalConversationImages.current
         Column(
             modifier = Modifier
                 .fillMaxHeight(0.8f)
@@ -175,6 +178,7 @@ object ImageGenerationToolUI : ToolUIRenderer {
                     model = image.url,
                     contentDescription = null,
                     modifier = Modifier.fillMaxWidth(),
+                    albumProvider = conversationAlbum,
                 )
             }
             metadata.providerName?.takeIf { it.isNotBlank() }?.let { providerName ->

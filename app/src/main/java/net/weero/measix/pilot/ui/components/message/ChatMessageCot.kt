@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.message
 
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.util.fastForEachIndexed
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tools.local.GENERATE_IMAGE_TOOL_NAME
@@ -77,4 +78,44 @@ fun List<UIMessagePart>.groupMessageParts(): List<MessagePartBlock> {
 fun ThinkingStep.shouldStayVisibleWhenCollapsed(): Boolean {
     val tool = (this as? ThinkingStep.ToolStep)?.tool ?: return false
     return tool.isPending || tool.toolName == GENERATE_IMAGE_TOOL_NAME
+}
+
+/**
+ * 流式生成中的图片占位 url: base64 头后面没有任何数据
+ */
+private val LOADING_IMAGE_URL_REGEX = Regex("^data:image/[^;]*;base64,\\s*$")
+
+internal fun isImagePartLoading(url: String): Boolean =
+    url.isBlank() || url.matches(LOADING_IMAGE_URL_REGEX)
+
+/**
+ * 收集一条消息内的全部「明确图片」：顶层 Image part 与 Tool.output 中的 Image，
+ * 按 part 位置顺序（过滤流式 loading 占位）。会话级时序相册按消息顺序展平本函数结果
+ */
+internal fun collectMessageImageUrls(parts: List<UIMessagePart>): List<String> = buildList {
+    parts.fastForEachIndexed { _, part ->
+        when (part) {
+            is UIMessagePart.Image -> if (!isImagePartLoading(part.url)) add(part.url)
+
+            is UIMessagePart.Tool -> part.output.forEach { output ->
+                if (output is UIMessagePart.Image && !isImagePartLoading(output.url)) {
+                    add(output.url)
+                }
+            }
+
+            else -> {}
+        }
+    }
+}
+
+/**
+ * 会话级时序相册：会话宿主（ChatList 等）提供的点击期求值函数，返回按消息顺序展平的
+ * 明确图片 url 列表。宿主侧持有稳定 lambda 实例（组合期零重算、读者零失效），
+ * 点击图片时才求值展开。默认空相册（共享单例，保证无宿主场景的参数稳定性），
+ * 消费点回退单图模式
+ */
+private val EmptyConversationAlbum: () -> List<String> = { emptyList() }
+
+val LocalConversationImages = compositionLocalOf<() -> List<String>> {
+    EmptyConversationAlbum
 }

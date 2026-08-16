@@ -425,6 +425,30 @@
   <string name="imggen_page_prompt_placeholder">生成したい画像を説明してください...</string>
   <string name="imggen_page_save">保存</string>
   <string name="imggen_page_save_failed">保存に失敗しました: %1$s</string>
+  <string name="imggen_page_delete_image_title">画像を削除</string>
+  <string name="imggen_page_delete_image_confirmation">「%2$s」で生成された画像「%1$s」のギャラリー原本を完全に削除します。チャットのコピーは影響を受けません。この操作は元に戻せません。</string>
+  <string name="imggen_page_no_prompt">プロンプトなし</string>
+  <string name="image_viewer_saving">保存中…</string>
+  <string name="image_viewer_saved">画像を保存しました</string>
+  <string name="image_viewer_save_failed">保存に失敗しました: %1$s</string>
+  <string name="image_viewer_save_content_description">画像を保存</string>
+  <string name="setting_files_page_delete_upload_confirmation">「%1$s」を完全に削除します。チャット添付やアシスタント背景がこのファイルを参照している場合、それらの位置に表示されなくなります。この操作は元に戻せません。</string>
+  <string name="image_viewer_info_content_description">画像情報を表示</string>
+  <string name="image_viewer_info_title">画像情報</string>
+  <string name="image_viewer_info_close_content_description">画像情報を閉じる</string>
+  <string name="image_viewer_info_source">出典</string>
+  <string name="image_viewer_info_source_generated">生成画像</string>
+  <string name="image_viewer_info_source_upload">アップロードファイル</string>
+  <string name="image_viewer_info_source_network">ネットワーク画像</string>
+  <string name="image_viewer_info_source_inline">インライン画像</string>
+  <string name="image_viewer_info_source_local">ローカルファイル</string>
+  <string name="image_viewer_info_filename">ファイル名</string>
+  <string name="image_viewer_info_dimensions">解像度</string>
+  <string name="image_viewer_info_size">サイズ</string>
+  <string name="image_viewer_info_format">形式</string>
+  <string name="image_viewer_info_modified">更新日時</string>
+  <string name="imggen_page_prompt_copied">プロンプトをコピーしました</string>
+  <string name="imggen_page_copy_prompt">プロンプトをコピー</string>
   <string name="imggen_page_settings_title">画像生成設定</string>
   <string name="imggen_page_title">画像生成</string>
   <string name="imggen_page_error_no_model">画像モデルが選択されていません</string>
@@ -695,7 +719,7 @@
   <string name="setting_display_page_volume_key_scroll_title">音量キーでページスクロール</string>
   <string name="setting_files_page_cancel_action">キャンセル</string>
   <string name="setting_files_page_clean_action">クリーンアップ</string>
-  <string name="setting_files_page_clean_confirmation">アップロード済みファイル（チャット添付、ツール結果のコピー、アシスタント背景を含む）を完全に削除します。この操作は元に戻せません。</string>
+  <string name="setting_files_page_clean_confirmation">このカテゴリのアップロードファイル（%1$d 件）をすべて完全に削除します。チャット添付、ツール結果のコピー、アシスタント背景も含まれます。この操作は元に戻せません。</string>
   <string name="setting_files_page_clean_content_description">ファイルをクリーンアップ</string>
   <string name="setting_files_page_clean_failed_toast">一部のファイルを削除できませんでした</string>
   <string name="setting_files_page_clean_title">ファイルをクリーンアップしますか？</string>
@@ -1369,7 +1393,7 @@
   <string name="setting_files_page_folder_generated_images">生成画像</string>
   <string name="setting_files_page_generated_no_prompt">プロンプトなし</string>
   <string name="setting_files_page_generated_unknown_model">不明なモデル</string>
-  <string name="setting_files_page_delete_generated_confirmation">ギャラリーの原本のみ削除されます。チャットと背景のコピーは削除されません。</string>
-  <string name="setting_files_page_clean_generated_confirmation">ギャラリー内の生成画像をすべて完全に削除します。チャットと背景のコピーは削除されません。この操作は元に戻せません。</string>
+  <string name="setting_files_page_delete_generated_confirmation">「%2$s」で生成された画像「%1$s」のギャラリー原本を完全に削除します。チャットと背景のコピーは影響を受けません。この操作は元に戻せません。</string>
+  <string name="setting_files_page_clean_generated_confirmation">ギャラリー内の生成画像 %1$d 枚をすべて完全に削除します。チャットと背景のコピーは影響を受けません。この操作は元に戻せません。</string>
 </resources>
 

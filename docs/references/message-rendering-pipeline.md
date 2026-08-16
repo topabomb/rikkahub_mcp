@@ -108,6 +108,16 @@ UIMessage.parts[]
 | `Audio` | Surface + Icon，点击 Intent 打开 | 原生 |
 | `Document` | Surface + Icon + 文件名，点击 Intent 打开 | 原生 |
 
+> **会话级时序相册**：聊天内的明确图片（用户附件、工具产物）由会话宿主
+> （`ChatList` / `SubAssistantDetailPage` / `AssistantPromptPage`）按消息顺序经
+> `collectMessageImageUrls`（`ChatMessageCot.kt`，含顶层 Image part 与 Tool.output
+> 的 Image）展平成 `LocalConversationImages` 下发；消息区、工具缩略行与工具详情
+> Preview 点击任意图进入全屏 `ImagePreviewDialog`，从该张开始左右翻页浏览整个
+> 会话的图片时间流；未提供相册或相册为空时回退单图模式。
+> 流式 loading 占位（空白 url 或 base64 空壳，由 `isImagePartLoading` 判定）被过滤并
+> 渲染为 shimmer 方块、不参与点击。Markdown/HTML 正文图不在 part 层，仍单张打开。
+> 查看器交互规范见 [`docs/dev/image-viewer-upgrade-plan.md`](../dev/image-viewer-upgrade-plan.md)。
+
 > 用户消息（`MessageRole.USER`）的 Text 额外包一层 `Surface`（primaryContainer 气泡）；
 > 助手消息可选气泡（`showAssistantBubble` 设置项）。
 
@@ -400,7 +410,7 @@ WebViewState
 | LaTeX 块级公式 | 原生 Canvas | `MathBlock` → `LatexText` | JLatexMathDrawable |
 | Mermaid 图表 | WebView | `Mermaid` | 本地 mermaid.min.js + JS Bridge |
 | HTML/SVG 代码 | WebView | `CodeBlockPreview` | loadDataWithBaseURL |
-| 图片 | 原生 | `ZoomableAsyncImage` | Coil3 |
+| 图片 | 原生 | `ZoomableAsyncImage`（点击进入全屏多图查看器） | Coil3 |
 | 表格 | 原生 | `DataTable` | Compose 自定义布局 |
 | HTML 块 | 原生 | `SimpleHtmlBlock` / `MarkdownNew` | Jsoup → Compose |
 | 全屏预览 | WebView | `WebViewPage` | 独立页面 |

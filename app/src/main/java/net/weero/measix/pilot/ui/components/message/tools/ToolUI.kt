@@ -27,6 +27,7 @@ import me.rerere.common.http.jsonObjectOrNull
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Tools
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.ui.components.message.LocalConversationImages
 import net.weero.measix.pilot.ui.components.richtext.HighlightCodeBlock
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.ui.components.ui.FormItem
@@ -157,6 +158,8 @@ fun DefaultToolPreview(
             )
         }
         if (context.tool.output.isNotEmpty()) {
+            // 会话级时序相册: 稳定 provider, 点击期由 ZoomableAsyncImage 求值
+            val conversationAlbum = LocalConversationImages.current
             FormItem(
                 label = {
                     Text(stringResource(R.string.chat_message_tool_call_result))
@@ -179,6 +182,7 @@ fun DefaultToolPreview(
                                 model = part.url,
                                 contentDescription = null,
                                 modifier = Modifier.fillMaxWidth(),
+                                albumProvider = conversationAlbum,
                             )
 
                             else -> {}

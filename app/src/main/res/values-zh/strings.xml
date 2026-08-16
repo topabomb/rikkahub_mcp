@@ -427,6 +427,30 @@
   <string name="imggen_page_prompt_placeholder">描述您想要生成的图片...</string>
   <string name="imggen_page_save">保存</string>
   <string name="imggen_page_save_failed">保存失败: %1$s</string>
+  <string name="imggen_page_delete_image_title">删除图片</string>
+  <string name="imggen_page_delete_image_confirmation">将永久删除「%2$s」生成的图片「%1$s」的图库原图。聊天中的副本不受影响。此操作无法撤销。</string>
+  <string name="imggen_page_no_prompt">无提示词</string>
+  <string name="image_viewer_saving">正在保存</string>
+  <string name="image_viewer_saved">已保存图片</string>
+  <string name="image_viewer_save_failed">保存失败: %1$s</string>
+  <string name="image_viewer_save_content_description">保存图片</string>
+  <string name="setting_files_page_delete_upload_confirmation">将永久删除「%1$s」。若聊天附件或助手背景引用了该文件，相关位置将无法再显示。此操作无法撤销。</string>
+  <string name="image_viewer_info_content_description">查看图片信息</string>
+  <string name="image_viewer_info_title">图片信息</string>
+  <string name="image_viewer_info_close_content_description">关闭图片信息</string>
+  <string name="image_viewer_info_source">来源</string>
+  <string name="image_viewer_info_source_generated">生成图片</string>
+  <string name="image_viewer_info_source_upload">上传文件</string>
+  <string name="image_viewer_info_source_network">网络图片</string>
+  <string name="image_viewer_info_source_inline">内联图片</string>
+  <string name="image_viewer_info_source_local">本地文件</string>
+  <string name="image_viewer_info_filename">文件名</string>
+  <string name="image_viewer_info_dimensions">分辨率</string>
+  <string name="image_viewer_info_size">大小</string>
+  <string name="image_viewer_info_format">格式</string>
+  <string name="image_viewer_info_modified">修改时间</string>
+  <string name="imggen_page_prompt_copied">Prompt 已复制到剪贴板</string>
+  <string name="imggen_page_copy_prompt">复制 Prompt</string>
   <string name="imggen_page_settings_title">图片生成设置</string>
   <string name="imggen_page_title">图片生成</string>
   <string name="imggen_page_error_no_model">未选择图片模型</string>
@@ -704,7 +728,7 @@
   <string name="setting_display_page_volume_key_scroll_title">音量键翻页</string>
   <string name="setting_files_page_cancel_action">取消</string>
   <string name="setting_files_page_clean_action">清理</string>
-  <string name="setting_files_page_clean_confirmation">将永久删除此分类中的全部上传文件，包括聊天附件、工具结果副本和助手背景。此操作无法撤销。</string>
+  <string name="setting_files_page_clean_confirmation">将永久删除此分类中的全部上传文件（共 %1$d 个），包括聊天附件、工具结果副本和助手背景。此操作无法撤销。</string>
   <string name="setting_files_page_clean_content_description">清理文件</string>
   <string name="setting_files_page_clean_failed_toast">部分文件清理失败</string>
   <string name="setting_files_page_clean_title">清理文件？</string>
@@ -1369,7 +1393,7 @@
   <string name="setting_files_page_folder_generated_images">文生图</string>
   <string name="setting_files_page_generated_no_prompt">无提示词</string>
   <string name="setting_files_page_generated_unknown_model">未知模型</string>
-  <string name="setting_files_page_delete_generated_confirmation">只会删除图库原图，不会删除聊天和背景中的副本。</string>
-  <string name="setting_files_page_clean_generated_confirmation">将永久删除图库中的全部生成图片。聊天和背景中的副本不会被删除。此操作无法撤销。</string>
+  <string name="setting_files_page_delete_generated_confirmation">将永久删除「%2$s」生成的图片「%1$s」的图库原图。聊天与背景中的副本不受影响。此操作无法撤销。</string>
+  <string name="setting_files_page_clean_generated_confirmation">将永久删除图库中的全部 %1$d 张生成图片。聊天与背景中的副本不受影响。此操作无法撤销。</string>
 </resources>
 

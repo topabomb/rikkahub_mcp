@@ -55,6 +55,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -99,6 +100,8 @@ import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import net.weero.measix.pilot.ui.components.message.ChatMessage
+import net.weero.measix.pilot.ui.components.message.LocalConversationImages
+import net.weero.measix.pilot.ui.components.message.collectMessageImageUrls
 import net.weero.measix.pilot.ui.theme.asChatChrome
 import net.weero.measix.pilot.ui.components.ui.ErrorCardsDisplay
 import net.weero.measix.pilot.ui.components.ui.ListSelectableItem
@@ -338,164 +341,179 @@ private fun ChatListNormal(
             }
         }
 
-        ChatFontProvider(displaySetting = settings.displaySetting) {
-            LazyColumn(
-                state = state,
-                contentPadding = PaddingValues(
+        // 会话级时序相册: 稳定的点击期求值 lambda——读取 rememberUpdatedState 的最新会话,
+        // 组合期零扫描(流式期间不随每帧重算), 点击图片时才按消息顺序展平
+        val conversationAlbum = remember {
+            {
+                conversationUpdated.messageNodes.flatMap { node ->
+                    collectMessageImageUrls(node.currentMessage.parts)
+                }
+            }
+        }
+
+        CompositionLocalProvider(LocalConversationImages provides conversationAlbum) {
+            ChatFontProvider(displaySetting = settings.displaySetting) {
+                LazyColumn(
+                    state = state,
+                    contentPadding = PaddingValues(
                     start = 16.dp,
                     top = if (showsConfigurationPrompt) 8.dp else 0.dp,
                     end = 16.dp,
                     bottom = 24.dp + innerPadding.calculateBottomPadding(),
-                ),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier
+                    ),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier
                     .widthIn(max = AdaptiveLayoutDefaults.ReadableContentMaxWidth)
                     .fillMaxWidth()
                     .fillMaxHeight()
                     .hazeSource(state = hazeState)
                     .padding(top = innerPadding.calculateTopPadding()),
-            ) {
-            if (isEmptyConversation) {
-                item(key = "ConversationSetup") {
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        if (readiness.requiresProviderConfiguration) {
+                ) {
+                    if (isEmptyConversation) {
+                        item(key = "ConversationSetup") {
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                if (readiness.requiresProviderConfiguration) {
+                                    ProviderConfigWarningCard(onClick = onProviderConfigClick)
+                                }
+                                ConversationReadinessCard(
+                                    readiness = readiness,
+                                    assistant = assistant,
+                                    compact = false,
+                                    onModelClick = onReadinessModelClick,
+                                    onMcpClick = onReadinessMcpClick,
+                                    onLocalToolsClick = onReadinessLocalToolsClick,
+                                    onWorkspaceClick = onReadinessWorkspaceClick,
+                                    onSwitchAssistant = onSwitchAssistant,
+                                    onManageAssistant = onManageAssistant,
+                                    onMemoryClick = onMemoryClick,
+                                )
+                            }
+                        }
+                    } else if (readiness.requiresProviderConfiguration) {
+                        item(key = "ProviderConfigWarning") {
                             ProviderConfigWarningCard(onClick = onProviderConfigClick)
                         }
-                        ConversationReadinessCard(
-                            readiness = readiness,
-                            assistant = assistant,
-                            compact = false,
-                            onModelClick = onReadinessModelClick,
-                            onMcpClick = onReadinessMcpClick,
-                            onLocalToolsClick = onReadinessLocalToolsClick,
-                            onWorkspaceClick = onReadinessWorkspaceClick,
-                            onSwitchAssistant = onSwitchAssistant,
-                            onManageAssistant = onManageAssistant,
-                            onMemoryClick = onMemoryClick,
-                        )
-                    }
-                }
-            } else if (readiness.requiresProviderConfiguration) {
-                item(key = "ProviderConfigWarning") {
-                    ProviderConfigWarningCard(onClick = onProviderConfigClick)
-                }
-            } else if (!readiness.canSend) {
-                item(key = "ConversationModelReadiness") {
-                    ConversationReadinessCard(
-                        readiness = readiness,
-                        assistant = assistant,
-                        compact = true,
-                        onModelClick = onReadinessModelClick,
-                        onMcpClick = onReadinessMcpClick,
-                        onLocalToolsClick = onReadinessLocalToolsClick,
-                        onWorkspaceClick = onReadinessWorkspaceClick,
-                        onSwitchAssistant = onSwitchAssistant,
-                        onManageAssistant = onManageAssistant,
-                        onMemoryClick = onMemoryClick,
-                    )
-                }
-            }
-
-            itemsIndexed(
-                items = conversation.messageNodes,
-                key = { index, item -> item.id },
-            ) { index, node ->
-                Column {
-                    ListSelectableItem(
-                        key = node.id,
-                        onSelectChange = {
-                            if (!selectedItems.contains(node.id)) {
-                                selectedItems.add(node.id)
-                            } else {
-                                selectedItems.remove(node.id)
-                            }
-                        },
-                        selectedKeys = selectedItems,
-                        enabled = selecting,
-                    ) {
-                        ChatMessage(
-                            node = node,
-                            masterConversationId = conversation.id,
-                            model = node.currentMessage.modelId?.let(modelById::get),
-                            assistant = messageAssistant,
-                            loading = loading && index == lastMessageIndex,
-                            onRegenerate = {
-                                onRegenerate(node.currentMessage)
-                            },
-                            onEdit = {
-                                onEdit(node.currentMessage)
-                            },
-                            onFork = {
-                                onForkMessage(node.currentMessage)
-                            },
-                            onDelete = {
-                                onDelete(node.currentMessage)
-                            },
-                            onShare = {
-                                selecting = true  // 使用 CoroutineScope 延迟状态更新
-                                selectedItems.clear()
-                                selectedItems.addAll(conversation.messageNodes.map { it.id }
-                                    .subList(0, conversation.messageNodes.indexOf(node) + 1))
-                            },
-                            onUpdate = {
-                                onUpdateMessage(it)
-                            },
-                            isFavorite = node.isFavorite,
-                            onToggleFavorite = {
-                                onToggleFavorite?.invoke(node)
-                            },
-                            onToolApproval = onToolApproval,
-                            onToolAnswer = onToolAnswer,
-                            onSubAssistantAnswer = onSubAssistantAnswer,
-                            lastMessage = index == lastMessageIndex,
-                        )
-                    }
-                }
-            }
-
-            if (!loading && messageAssistant?.allowConversationSystemPrompt == true && onConversationSystemPromptChange != null) {
-                item(key = "ConversationSystemPrompt") {
-                    ConversationSystemPromptButton(
-                        customSystemPrompt = conversation.customSystemPrompt,
-                        onSystemPromptChange = onConversationSystemPromptChange,
-                    )
-                }
-            }
-
-            if (loading) {
-                item(LoadingIndicatorKey) {
-                    Row(
-                        modifier = Modifier.padding(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        RabbitLoadingIndicator(
-                            modifier = Modifier.size(28.dp)
-                        )
-                        AnimatedVisibility(
-                            visible = processingStatus != null,
-                        ) {
-                            Text(
-                                text = processingStatus ?: "",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    } else if (!readiness.canSend) {
+                        item(key = "ConversationModelReadiness") {
+                            ConversationReadinessCard(
+                                readiness = readiness,
+                                assistant = assistant,
+                                compact = true,
+                                onModelClick = onReadinessModelClick,
+                                onMcpClick = onReadinessMcpClick,
+                                onLocalToolsClick = onReadinessLocalToolsClick,
+                                onWorkspaceClick = onReadinessWorkspaceClick,
+                                onSwitchAssistant = onSwitchAssistant,
+                                onManageAssistant = onManageAssistant,
+                                onMemoryClick = onMemoryClick,
                             )
                         }
                     }
-                }
-            }
 
-            // 为了能正确滚动到这
-            item(ScrollBottomKey) {
-                Spacer(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(5.dp)
-                )
-            }
+                    itemsIndexed(
+                        items = conversation.messageNodes,
+                        key = { index, item -> item.id },
+                    ) { index, node ->
+                        Column {
+                            ListSelectableItem(
+                                key = node.id,
+                                onSelectChange = {
+                                    if (!selectedItems.contains(node.id)) {
+                                        selectedItems.add(node.id)
+                                    } else {
+                                        selectedItems.remove(node.id)
+                                    }
+                                },
+                                selectedKeys = selectedItems,
+                                enabled = selecting,
+                            ) {
+                                ChatMessage(
+                                    node = node,
+                                    masterConversationId = conversation.id,
+                                    model = node.currentMessage.modelId?.let(modelById::get),
+                                    assistant = messageAssistant,
+                                    loading = loading && index == lastMessageIndex,
+                                    onRegenerate = {
+                                        onRegenerate(node.currentMessage)
+                                    },
+                                    onEdit = {
+                                        onEdit(node.currentMessage)
+                                    },
+                                    onFork = {
+                                        onForkMessage(node.currentMessage)
+                                    },
+                                    onDelete = {
+                                        onDelete(node.currentMessage)
+                                    },
+                                    onShare = {
+                                        selecting = true  // 使用 CoroutineScope 延迟状态更新
+                                        selectedItems.clear()
+                                        selectedItems.addAll(conversation.messageNodes.map { it.id }
+                                            .subList(0, conversation.messageNodes.indexOf(node) + 1))
+                                    },
+                                    onUpdate = {
+                                        onUpdateMessage(it)
+                                    },
+                                    isFavorite = node.isFavorite,
+                                    onToggleFavorite = {
+                                        onToggleFavorite?.invoke(node)
+                                    },
+                                    onToolApproval = onToolApproval,
+                                    onToolAnswer = onToolAnswer,
+                                    onSubAssistantAnswer = onSubAssistantAnswer,
+                                    lastMessage = index == lastMessageIndex,
+                                )
+                            }
+                        }
+                    }
+
+                    val showsSystemPromptItem = !loading &&
+                        messageAssistant?.allowConversationSystemPrompt == true &&
+                        onConversationSystemPromptChange != null
+                    if (showsSystemPromptItem) {
+                        item(key = "ConversationSystemPrompt") {
+                            ConversationSystemPromptButton(
+                                customSystemPrompt = conversation.customSystemPrompt,
+                                onSystemPromptChange = onConversationSystemPromptChange,
+                            )
+                        }
+                    }
+
+                    if (loading) {
+                        item(LoadingIndicatorKey) {
+                            Row(
+                                modifier = Modifier.padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                RabbitLoadingIndicator(
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                AnimatedVisibility(
+                                    visible = processingStatus != null,
+                                ) {
+                                    Text(
+                                        text = processingStatus ?: "",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // 为了能正确滚动到这
+                    item(ScrollBottomKey) {
+                        Spacer(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(5.dp)
+                        )
+                    }
+                }
             }
         }
 

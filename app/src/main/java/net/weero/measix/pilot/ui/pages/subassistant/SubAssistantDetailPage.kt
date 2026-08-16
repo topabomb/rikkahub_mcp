@@ -23,11 +23,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -47,6 +49,8 @@ import net.weero.measix.pilot.data.ai.subassistant.resolveSubAssistantErrorBody
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.ui.components.message.ChatMessage
+import net.weero.measix.pilot.ui.components.message.LocalConversationImages
+import net.weero.measix.pilot.ui.components.message.collectMessageImageUrls
 import net.weero.measix.pilot.ui.components.message.localizeSubAssistantReason
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
@@ -163,6 +167,15 @@ private fun DetailContent(
     }
     // Child.updateAt 在流式 updateCurrentMessages 时不会变。
     // 用时间线长度和最后一条可见文本长度作为跟随键，才能在最后一项长高时继续贴底。
+    // 会话级时序相册: 稳定的点击期求值 lambda, 组合期零扫描
+    val timelineState = rememberUpdatedState(state.timeline)
+    val timelineAlbum = remember {
+        {
+            timelineState.value.flatMap { node ->
+                collectMessageImageUrls(node.currentMessage.parts)
+            }
+        }
+    }
     val lastTimelineMessage = state.timeline.lastOrNull()?.let { node ->
         node.messages.getOrNull(node.selectIndex)
     }
@@ -185,6 +198,8 @@ private fun DetailContent(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
+        // 相册 Provider 提升到列表外: 全部 item 共享同一稳定 lambda, 避免逐项 provider 节点
+        CompositionLocalProvider(LocalConversationImages provides timelineAlbum) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             state = listState,
@@ -328,6 +343,7 @@ private fun DetailContent(
             item(key = TimelineBottomKey) {
                 Spacer(Modifier.height(8.dp))
             }
+        }
         }
 
         if (!followLatest && state.timeline.isNotEmpty()) {
