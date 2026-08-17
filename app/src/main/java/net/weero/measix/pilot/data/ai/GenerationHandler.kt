@@ -101,7 +101,13 @@ internal fun resolveToolApprovals(
                                 json.encodeToString(
                                     buildJsonObject {
                                         put("error", JsonPrimitive("tool_not_permitted"))
-                                        put("reason", JsonPrimitive("approval_required"))
+                                        put("reason", JsonPrimitive("approval_unavailable"))
+                                        put(
+                                            "message",
+                                            JsonPrimitive(
+                                                "Approval is required but unavailable in this run. Do not retry unchanged."
+                                            )
+                                        )
                                     }
                                 )
                             )

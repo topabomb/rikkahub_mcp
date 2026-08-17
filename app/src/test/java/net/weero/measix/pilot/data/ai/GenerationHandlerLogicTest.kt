@@ -6,6 +6,8 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.Tool
@@ -15,6 +17,7 @@ import me.rerere.ai.ui.ToolApprovalState
 import net.weero.measix.pilot.data.ai.tools.local.buildAskUserTool
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -381,8 +384,71 @@ class GenerationHandlerLogicTest {
 
         assertTrue(resolution.hasPendingApproval)
         assertEquals(ToolApprovalState.Pending, resolution.tools[0].approvalState)
-        assertTrue(resolution.tools[1].isExecuted)
-        assertTrue((resolution.tools[1].output.single() as UIMessagePart.Text).text.contains("tool_not_permitted"))
+        val rejected = resolution.tools[1]
+        assertTrue(rejected.isExecuted)
+        assertNotEquals(ToolApprovalState.Pending, rejected.approvalState)
+        val payload = json.parseToJsonElement(
+            (rejected.output.single() as UIMessagePart.Text).text
+        ).jsonObject
+        assertEquals("tool_not_permitted", payload["error"]!!.jsonPrimitive.content)
+        assertEquals("approval_unavailable", payload["reason"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `non interactive approval rejection returns approval_unavailable structure`() {
+        val shell = UIMessagePart.Tool(
+            toolCallId = "shell",
+            toolName = "workspace_shell",
+            input = "{}",
+        )
+
+        val resolution = resolveToolApprovals(
+            unexecutedTools = listOf(shell),
+            toolDefinitions = listOf(
+                toolDefinition("workspace_shell", needsApproval = true),
+            ),
+            nonInteractive = true,
+            interactiveToolNames = emptySet(),
+            json = json,
+        )
+
+        assertFalse(resolution.hasPendingApproval)
+        val rejected = resolution.tools.single()
+        assertTrue(rejected.isExecuted)
+        assertNotEquals(ToolApprovalState.Pending, rejected.approvalState)
+        val payload = json.parseToJsonElement(
+            (rejected.output.single() as UIMessagePart.Text).text
+        ).jsonObject
+        assertEquals("tool_not_permitted", payload["error"]!!.jsonPrimitive.content)
+        assertEquals("approval_unavailable", payload["reason"]!!.jsonPrimitive.content)
+        assertEquals(
+            "Approval is required but unavailable in this run. Do not retry unchanged.",
+            payload["message"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `non interactive mode does not reject tools that do not need approval`() {
+        val automatic = UIMessagePart.Tool(
+            toolCallId = "auto",
+            toolName = "get_time_info",
+            input = "{}",
+        )
+
+        val resolution = resolveToolApprovals(
+            unexecutedTools = listOf(automatic),
+            toolDefinitions = listOf(
+                toolDefinition("get_time_info", needsApproval = false),
+            ),
+            nonInteractive = true,
+            interactiveToolNames = emptySet(),
+            json = json,
+        )
+
+        assertFalse(resolution.hasPendingApproval)
+        val tool = resolution.tools.single()
+        assertFalse(tool.isExecuted)
+        assertEquals(ToolApprovalState.Auto, tool.approvalState)
     }
 
     @Test
