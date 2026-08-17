@@ -102,11 +102,14 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.files.FileUtils
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
+import net.weero.measix.pilot.data.imggen.imageGenerationFailureStringRes
 import net.weero.measix.pilot.ui.components.ai.ModelSelector
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.FormItem
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDialog
 import net.weero.measix.pilot.ui.components.ui.OutlinedNumberInput
+import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
+import net.weero.measix.pilot.ui.components.ui.shortGeneratedLabel
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.utils.ImageUtils
 import org.koin.androidx.compose.koinViewModel
@@ -260,6 +263,7 @@ private fun ImageGenScreen(
     val scope = rememberCoroutineScope()
     var showSettingsSheet by remember { mutableStateOf(false) }
     var previewIndex by remember { mutableStateOf(-1) }
+    val backgroundHost = rememberImageBackgroundHost(settings)
     val sheetState = rememberBottomSheetState(
         initialValue = SheetValue.Hidden,
         enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)
@@ -316,12 +320,17 @@ private fun ImageGenScreen(
         )
     }
 
-    if (previewIndex >= 0) {
+    LaunchedEffect(previewIndex, currentGeneratedImages.isEmpty()) {
+        if (previewIndex >= 0 && currentGeneratedImages.isEmpty()) previewIndex = -1
+    }
+    if (previewIndex >= 0 && currentGeneratedImages.isNotEmpty()) {
         // 统一 file:// 前缀, 与网格的 File model 共享 Coil 缓存键
         ImagePreviewDialog(
             images = currentGeneratedImages.map { "file://${it.filePath}" },
             onDismissRequest = { previewIndex = -1 },
             initialIndex = previewIndex,
+            extraActions = listOf(backgroundHost.action),
+            overlay = backgroundHost.overlay,
         )
     }
 
@@ -537,6 +546,8 @@ private fun ImageGalleryScreen(
     val pullToRefreshState = rememberPullToRefreshState()
     var previewIndex by remember { mutableStateOf(-1) }
     var pendingDelete by remember { mutableStateOf<GeneratedImage?>(null) }
+    val settings by vm.settings.collectAsStateWithLifecycle()
+    val backgroundHost = rememberImageBackgroundHost(settings)
 
     PullToRefreshBox(
         isRefreshing = false,
@@ -694,23 +705,25 @@ private fun ImageGalleryScreen(
         val startIndex = clicked
             ?.let { c -> snapshotItems.indexOfFirst { it.id == c.id } }
             ?.takeIf { it >= 0 }
-            ?: 0
-        if (urls.isNotEmpty()) {
+        LaunchedEffect(previewIndex, urls.isEmpty(), startIndex) {
+            if (urls.isEmpty() || startIndex == null) previewIndex = -1
+        }
+        if (urls.isNotEmpty() && startIndex != null) {
             ImagePreviewDialog(
                 images = urls,
                 onDismissRequest = { previewIndex = -1 },
                 initialIndex = startIndex,
+                extraActions = listOf(backgroundHost.action),
+                overlay = backgroundHost.overlay,
             )
         }
     }
 
     pendingDelete?.let { target ->
-        val promptLabel = target.prompt.trim().ifBlank {
-            stringResource(R.string.imggen_page_no_prompt)
-        }
-        val modelLabel = target.model.ifBlank {
-            stringResource(R.string.setting_files_page_generated_unknown_model)
-        }
+        val promptLabel = shortGeneratedLabel(
+            target.prompt,
+            stringResource(R.string.imggen_page_no_prompt),
+        )
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
             title = { Text(stringResource(R.string.imggen_page_delete_image_title)) },
@@ -719,7 +732,6 @@ private fun ImageGalleryScreen(
                     stringResource(
                         R.string.imggen_page_delete_image_confirmation,
                         promptLabel,
-                        modelLabel,
                     )
                 )
             },
@@ -819,9 +831,7 @@ private fun SettingsBottomSheet(
 private fun imageGenerationErrorMessage(error: String?): String = when (error) {
     null -> ""
     "image_model_unavailable" -> stringResource(R.string.imggen_page_error_no_model)
-    "provider_error" -> stringResource(R.string.chat_message_tool_generate_image_failed_provider)
-    "persistence_error" -> stringResource(R.string.chat_message_tool_generate_image_failed_persistence)
-    "invalid_result" -> stringResource(R.string.chat_message_tool_generate_image_failed_invalid_result)
     "delete_failed" -> stringResource(R.string.imggen_page_error_delete)
-    else -> stringResource(R.string.imggen_page_error_generic)
+    "unknown" -> stringResource(R.string.imggen_page_error_generic)
+    else -> stringResource(imageGenerationFailureStringRes(error))
 }

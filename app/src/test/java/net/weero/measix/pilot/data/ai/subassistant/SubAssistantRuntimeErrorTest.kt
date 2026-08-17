@@ -135,6 +135,10 @@ class SubAssistantRuntimeErrorTest {
             SUB_ASSISTANT_REASON_RUNTIME_ERROR,
             classifySubAssistantFailure(IllegalStateException("There are 429 items in the queue")),
         )
+        assertEquals(
+            SUB_ASSISTANT_REASON_RUNTIME_ERROR,
+            classifySubAssistantFailure(IllegalStateException("Master Conversation abc does not exist")),
+        )
     }
 
     @Test

@@ -83,6 +83,9 @@ import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.ui.components.message.ChatMessage
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
 import net.weero.measix.pilot.ui.components.message.collectMessageImageUrls
+import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewActions
+import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewOverlay
+import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.FormItem
 import net.weero.measix.pilot.ui.components.ui.Select
@@ -93,8 +96,6 @@ import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.ui.theme.JetbrainsMono
 import net.weero.measix.pilot.utils.UiState
 import net.weero.measix.pilot.utils.insertAtCursor
-import net.weero.measix.pilot.utils.onError
-import net.weero.measix.pilot.utils.onSuccess
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import org.koin.core.parameter.parametersOf
@@ -374,26 +375,31 @@ private fun AssistantPromptContent(
                         UiState.Error(it)
                     }
                 }
-                preview.onError {
-                    Text(
-                        // Runtime class names are obfuscated in Release and are not meaningful UI text.
-                        text = it.message ?: stringResource(R.string.error_title_operation),
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-                preview.onSuccess { messages ->
-                    // 会话级时序相册: 稳定的点击期求值 lambda
-                    val messagesState = rememberUpdatedState(messages)
-                    val previewAlbum = remember {
-                        {
-                            messagesState.value.flatMap { message ->
-                                collectMessageImageUrls(message.parts)
-                            }
+                val previewMessages = (preview as? UiState.Success)?.data
+                val previewError = (preview as? UiState.Error)?.error
+                val messagesState = rememberUpdatedState(previewMessages.orEmpty())
+                val previewAlbum = remember {
+                    {
+                        messagesState.value.flatMap { message ->
+                            collectMessageImageUrls(message.parts)
                         }
                     }
-                    ChatFontProvider(displaySetting = settings.displaySetting) {
-                        CompositionLocalProvider(LocalConversationImages provides previewAlbum) {
-                            messages.fastForEach { message ->
+                }
+                val backgroundHost = rememberImageBackgroundHost(settings, assistant.id)
+                val previewActions = remember(backgroundHost.action) { listOf(backgroundHost.action) }
+                when {
+                    previewError != null -> Text(
+                        // Runtime class names are obfuscated in Release and are not meaningful UI text.
+                        text = previewError.message ?: stringResource(R.string.error_title_operation),
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    previewMessages != null -> ChatFontProvider(displaySetting = settings.displaySetting) {
+                        CompositionLocalProvider(
+                            LocalConversationImages provides previewAlbum,
+                            LocalImagePreviewActions provides previewActions,
+                            LocalImagePreviewOverlay provides backgroundHost.overlay,
+                        ) {
+                            previewMessages.fastForEach { message ->
                                 ChatMessage(
                                     node = message.toMessageNode(),
                                     onFork = {},

@@ -51,10 +51,14 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.ui.components.message.ChatMessage
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
 import net.weero.measix.pilot.ui.components.message.collectMessageImageUrls
+import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewActions
+import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewOverlay
+import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
 import net.weero.measix.pilot.ui.components.message.localizeSubAssistantReason
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.context.LocalNavController
+import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.theme.CustomColors
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
@@ -176,6 +180,10 @@ private fun DetailContent(
             }
         }
     }
+    val backgroundHost = rememberImageBackgroundHost(LocalSettings.current, targetAssistant?.id)
+    val previewActions = remember(backgroundHost.action, targetAssistant?.id) {
+        if (targetAssistant?.id == null) emptyList() else listOf(backgroundHost.action)
+    }
     val lastTimelineMessage = state.timeline.lastOrNull()?.let { node ->
         node.messages.getOrNull(node.selectIndex)
     }
@@ -199,7 +207,11 @@ private fun DetailContent(
 
     Box(modifier = modifier.fillMaxSize()) {
         // 相册 Provider 提升到列表外: 全部 item 共享同一稳定 lambda, 避免逐项 provider 节点
-        CompositionLocalProvider(LocalConversationImages provides timelineAlbum) {
+        CompositionLocalProvider(
+            LocalConversationImages provides timelineAlbum,
+            LocalImagePreviewActions provides previewActions,
+            LocalImagePreviewOverlay provides if (targetAssistant?.id == null) null else backgroundHost.overlay,
+        ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             state = listState,

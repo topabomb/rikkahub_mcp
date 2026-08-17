@@ -36,6 +36,7 @@ import net.weero.measix.pilot.ui.components.webview.rememberWebViewState
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.LocalDarkMode
+import net.weero.measix.pilot.utils.ImageExportResult
 import net.weero.measix.pilot.utils.escapeHtml
 import net.weero.measix.pilot.utils.exportImage
 import net.weero.measix.pilot.utils.toCssHex
@@ -57,31 +58,41 @@ fun Mermaid(
     val jsInterface = remember {
         MermaidInterface(
             onExportImage = { base64Image ->
-                runCatching {
-                    activity?.let {
-                        try {
-                            val imageBytes = Base64.decode(base64Image, Base64.DEFAULT)
-                            val bitmap =
-                                BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+                val host = activity
+                if (host == null) {
+                    toaster.show(exportFailedText, type = ToastType.Error)
+                } else {
+                    runCatching {
+                        val imageBytes = Base64.decode(base64Image, Base64.DEFAULT)
+                        val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+                            ?: error("Failed to decode mermaid image")
+                        when (
                             context.exportImage(
-                                it,
+                                host,
                                 bitmap,
                                 "mermaid_${System.currentTimeMillis()}.png"
                             )
-                        } catch (e: Exception) {
-                            e.printStackTrace()
+                        ) {
+                            ImageExportResult.Success -> toaster.show(
+                                exportSuccessText,
+                                type = ToastType.Success
+                            )
+                            ImageExportResult.PermissionRequired -> toaster.show(
+                                context.getString(R.string.image_viewer_save_need_permission),
+                                type = ToastType.Error
+                            )
+                            ImageExportResult.Failed -> toaster.show(
+                                exportFailedText,
+                                type = ToastType.Error
+                            )
                         }
+                    }.onFailure {
+                        it.printStackTrace()
+                        toaster.show(
+                            exportFailedText,
+                            type = ToastType.Error
+                        )
                     }
-                    toaster.show(
-                        exportSuccessText,
-                        type = ToastType.Success
-                    )
-                }.onFailure {
-                    it.printStackTrace()
-                    toaster.show(
-                        exportFailedText,
-                        type = ToastType.Error
-                    )
                 }
             }
         )

@@ -62,6 +62,9 @@ import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.data.repository.GenMediaRepository
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDialog
+import net.weero.measix.pilot.ui.components.ui.generatedDeleteLabel
+import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
+import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.utils.fileSizeToString
@@ -98,6 +101,8 @@ fun SettingFilesPage(
     var showCleanDialog by remember { mutableStateOf(false) }
     var previewImages by remember { mutableStateOf<List<String>>(emptyList()) }
     var previewIndex by remember { mutableStateOf(-1) }
+    val settings = LocalSettings.current
+    val backgroundHost = rememberImageBackgroundHost(settings)
     val uploadFiles by filesManager.observe(FileFolders.UPLOAD).collectAsState(initial = emptyList())
     val generatedImages by genMediaRepository.observeAllMedia().collectAsState(initial = emptyList())
     val isUpload = selectedCategory == FileCategory.UPLOAD
@@ -139,12 +144,10 @@ fun SettingFilesPage(
 
     if (pendingGeneratedDelete != null) {
         val target = pendingGeneratedDelete!!
-        val promptLabel = target.prompt.trim().ifBlank {
-            stringResource(R.string.setting_files_page_generated_no_prompt)
-        }
-        val modelLabel = target.modelId.ifBlank {
-            stringResource(R.string.setting_files_page_generated_unknown_model)
-        }
+        val fileLabel = generatedDeleteLabel(
+            target.prompt,
+            stringResource(R.string.setting_files_page_generated_no_prompt),
+        )
         AlertDialog(
             onDismissRequest = { pendingGeneratedDelete = null },
             title = { Text(stringResource(R.string.setting_files_page_delete_file_title)) },
@@ -152,8 +155,7 @@ fun SettingFilesPage(
                 Text(
                     stringResource(
                         R.string.setting_files_page_delete_generated_confirmation,
-                        promptLabel,
-                        modelLabel,
+                        fileLabel,
                     )
                 )
             },
@@ -341,6 +343,8 @@ fun SettingFilesPage(
             images = previewImages,
             onDismissRequest = { previewIndex = -1 },
             initialIndex = previewIndex.coerceIn(0, previewImages.lastIndex),
+            extraActions = listOf(backgroundHost.action),
+            overlay = backgroundHost.overlay,
         )
     }
 }

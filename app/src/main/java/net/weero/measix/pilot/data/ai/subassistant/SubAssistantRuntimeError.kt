@@ -6,6 +6,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.HttpException
+import me.rerere.ai.util.ProviderFailureKind
+import me.rerere.ai.util.classifyProviderFailure
+import me.rerere.ai.util.looksLikeContentPolicy
 
 /** `assistant_call` 的 `detail` 字符上限，避免撑满 Caller 上下文。 */
 internal const val RUNTIME_ERROR_DETAIL_MAX_CHARS = 8 * 1024
@@ -16,46 +19,10 @@ internal const val SUB_ASSISTANT_REASON_RUNTIME_ERROR = "runtime_error"
 
 internal const val USER_FACING_ERROR_SUMMARY_MAX_CHARS = 240
 internal const val CONTENT_BLOCKED_MODEL_DETAIL =
-    "The image or text request was blocked by the model usage policy. Rephrase without prohibited content."
+    me.rerere.ai.util.CONTENT_BLOCKED_MODEL_DETAIL
 
 private const val MAX_CAUSE_DEPTH = 6
 private const val MAX_MESSAGE_CHARS = 2 * 1024
-
-private val CONTENT_POLICY_MARKERS = arrayOf(
-    "usage guidelines",
-    "safety_check",
-    "safety check",
-    "content violates",
-    "violates usage",
-    "csam",
-    "child sexual",
-    "prohibited content",
-    "content policy",
-    "content_policy",
-    "content_filter",
-    "content filter",
-    "safety system",
-    "blocked by our safety",
-    "blocked by the safety",
-    "failed check: safety",
-    "prompt feedback",
-    "blockreason",
-    "block reason",
-    "finishreason: safety",
-    "finish reason: safety",
-    "blockedreason",
-)
-
-private val HTTP_FAILURE_MARKERS = arrayOf(
-    "httpexception",
-    "failed to get response",
-    "unknown error:",
-    "rate limit",
-    "too many requests",
-    "service unavailable",
-    "bad gateway",
-    "gateway timeout",
-)
 
 private val OBFUSCATED_TYPE_PREFIX = Regex("^[A-Za-z][A-Za-z0-9\$_]{0,3}:\\s+")
 private val JAVA_TYPE_PREFIX = Regex("^(?:[A-Za-z_][\\w.$]*\\.)?[A-Za-z_][\\w$]*Exception:\\s+")
@@ -92,13 +59,11 @@ internal fun clipRuntimeErrorDetail(
 }
 
 internal fun classifySubAssistantFailure(error: Throwable): String {
-    val texts = collectFailureTexts(error)
-    if (texts.any(::looksLikeContentPolicy)) return SUB_ASSISTANT_REASON_CONTENT_BLOCKED
-    if (generateSequence(error) { it.cause }.any { it is HttpException }) {
-        return SUB_ASSISTANT_REASON_PROVIDER_ERROR
+    return when (classifyProviderFailure(error).kind) {
+        ProviderFailureKind.CONTENT_BLOCKED -> SUB_ASSISTANT_REASON_CONTENT_BLOCKED
+        ProviderFailureKind.RUNTIME_ERROR -> SUB_ASSISTANT_REASON_RUNTIME_ERROR
+        else -> SUB_ASSISTANT_REASON_PROVIDER_ERROR
     }
-    if (texts.any(::looksLikeHttpFailure)) return SUB_ASSISTANT_REASON_PROVIDER_ERROR
-    return SUB_ASSISTANT_REASON_RUNTIME_ERROR
 }
 
 internal fun modelVisibleFailureDetail(
@@ -185,11 +150,6 @@ internal fun userFacingRuntimeErrorSummary(
     return takeHeadByCodePoints(stripped, maxChars).trim().takeIf { it.isNotEmpty() }
 }
 
-internal fun looksLikeContentPolicy(text: String): Boolean {
-    val normalized = text.lowercase()
-    return CONTENT_POLICY_MARKERS.any { it in normalized }
-}
-
 internal fun resolveSubAssistantErrorBody(
     reason: String?,
     detail: String?,
@@ -199,26 +159,6 @@ internal fun resolveSubAssistantErrorBody(
         return localizedContentBlocked
     }
     return userFacingRuntimeErrorSummary(detail)
-}
-
-private fun collectFailureTexts(error: Throwable): List<String> {
-    val seen = HashSet<Throwable>()
-    val texts = ArrayList<String>()
-    var current: Throwable? = error
-    var depth = 0
-    while (current != null && seen.add(current) && depth < MAX_CAUSE_DEPTH) {
-        current.message?.trim()?.takeIf { it.isNotEmpty() }?.let(texts::add)
-        texts += current::class.java.simpleName
-        texts += current::class.java.name
-        current = current.cause
-        depth++
-    }
-    return texts
-}
-
-private fun looksLikeHttpFailure(text: String): Boolean {
-    val normalized = text.lowercase()
-    return HTTP_FAILURE_MARKERS.any { it in normalized }
 }
 
 private fun firstUsefulDetailLine(detail: String?): String? {

@@ -52,7 +52,7 @@
   把正文插图并入会话相册；正文图仍单张打开。
 - 助手背景、聊天背景、附件 chips 是装饰 / 输入态，不接入查看器。
 - 查看器是全屏 Dialog，**不**套用 `AdaptiveModal`（半屏 Sheet / 有界卡片与看图冲突）。
-- 删除、复制 prompt 等管理动作留在网格卡片，查看器只做浏览 + 保存。
+- 删除、复制 prompt 等**管理**动作仍留在网格卡片；查看器只做浏览、保存，以及由调用方注入的轻量动作（如设为背景）。查看器本身不理解助手 / Gallery / 文件管理差异。
 
 ---
 
@@ -77,7 +77,8 @@
 - 长按菜单、分享按钮（后续迭代）。
 - 宽屏键鼠交互（方向键翻页、Ctrl+滚轮缩放、Esc 关闭，后续迭代）。
 - 统一各处缩略图的 placeholder / 错误图。
-- Viewer 内删除 / 复制 / caption 叠加层。
+- Viewer 内删除 / 复制 prompt / caption 叠加层（复制 prompt 留在文生图详情与 Gallery 卡片）。
+- 共享元素转场、键鼠交互（仍属后续）。
 
 ### 已知限制（记录在案，后续迭代处理）
 
@@ -132,8 +133,12 @@
 
 - 页码指示：`TopCenter`，白色 70% 透明度 `labelMedium` 小字 `n / m`，仅 `images.size > 1` 时显示；
   拖拽关闭过程中随进度淡出。
-- 底部按钮组：信息按钮（左）与保存按钮（右）水平居中排布（`BottomCenter` + 16dp 间距），
+- 底部按钮组：信息 → 保存 → 调用方注入的额外按钮，整组 `BottomCenter` + 16dp 间距；
   拖拽时随进度淡出，正常态白色。
+- 反馈：保存 / 设背景等 Toast 必须画在 **Dialog 窗口内**。应用根上的 `Toaster` 在全屏
+  Dialog 下层，会被查看器挡住；查看器自建一层 `Toaster` 并临时覆盖 `LocalToaster`。
+  进行中与结果共用同一个 toast `id`，结果到达时替换进行中文案，避免两条叠在一起。
+  保存成功写明相册文件名；设背景成功写明助手名。
 - 背景：纯黑，透明度由拖拽进度驱动；关闭动画结束时 Dialog 出栈。
 
 ---
@@ -145,11 +150,19 @@
 签名：
 
 ```kotlin
+data class ImagePreviewAction(
+    val icon: ImageVector,
+    val contentDescription: String,
+    val onClick: (url: String, toaster: ToasterState) -> Unit,
+)
+
 @Composable
 fun ImagePreviewDialog(
     images: List<String>,
     onDismissRequest: () -> Unit,
     initialIndex: Int = 0,
+    extraActions: List<ImagePreviewAction> = emptyList(),
+    overlay: (@Composable () -> Unit)? = null,
 )
 ```
 
@@ -165,6 +178,11 @@ fun ImagePreviewDialog(
   itemStateMap / open-close 生命周期，替换现有 Dialog 结构改动大、收益不在本次目标内。
 - 页码指示读取 `state.currentPage`（组合内快照读取，翻页自动重组）。
 - 保存逻辑沿用 `FilesManager.saveMessageImage`，Toast 与按钮描述改用 `stringResource`。
+- `extraActions` 是按钮扩展点：画在保存右侧，点击时把**当前页 url** 与 Dialog 内
+  Toaster 交给调用方。`overlay` 是确认框 / 选择器扩展点。查看器不解析助手、不写 Settings。
+- Dialog 内自建 `rememberToasterState()` + `Toaster(alignment = TopCenter)`，并用
+  `CompositionLocalProvider(LocalToaster provides dialogToaster)` 覆盖保存按钮与
+  extra action 的反馈通道。进行中与结果共用同一 toast id。
 
 ### 4.2 `ZoomableAsyncImage` 多图参数
 
@@ -178,12 +196,19 @@ fun ZoomableAsyncImage(
     contentScale: ContentScale = ContentScale.Fit,
     alpha: Float = DefaultAlpha,
     albumProvider: (() -> List<String>)? = null,
+    extraActions: List<ImagePreviewAction>? = null,
+    overlay: (@Composable () -> Unit)? = null,
 )
 ```
 
 `albumProvider == null` 时行为与现状完全一致（单张）；Dialog 的弹出仍由本组件持有，
-打开时求值相册并按 `indexOf(model)` 定位点击位，空相册回退单图。
-Markdown / HTML 路径零改动。
+打开时求值相册，命中则从该张浏览整本相册，未命中或相册为空则单图打开。
+未显式传入 `extraActions` / `overlay` 时分别读取 `LocalImagePreviewActions` 与
+`LocalImagePreviewOverlay`。Markdown / HTML 路径零改动。
+
+聊天 / 子助手详情 / 助手 Prompt 预览通过这两个 Local 下发会话级动作与确认层
+（当前会话助手的「设为背景」+ 确认框）。`ZoomableAsyncImage` 透传给查看器，
+因此消息图、工具缩略行、工具详情 Preview 无需逐点改签名。
 
 ### 4.3 聊天会话级时序相册
 
@@ -212,8 +237,8 @@ val LocalConversationImages = compositionLocalOf<() -> List<String>> { { emptyLi
   依赖靠 lambda 捕获的 updated state 在**点击时**读取最新值展平，组合期不做任何
   扫描（流式期间不随每帧重算，读者零失效）。
 - `ZoomableAsyncImage` 用 `albumProvider: (() -> List<String>)?` 参数替换逐 site 的
-  `images/initialIndex`：打开查看器时求值相册，`indexOf(model)` 定位点击位；相册为
-  空（宿主未提供或会话无图）回退单图模式。查看器打开期间相册扩展（流式新图落地）
+  `images/initialIndex`：打开查看器时求值相册，命中则从该张浏览整本相册，未命中
+  或相册为空则单图打开。查看器打开期间相册扩展（流式新图落地）
   经 dialog 分支的状态读自动生效。
 - 消费点：`MessagePartsBlock` 的 Image 分支（用户附件）、`ChatMessageTools` 的缩略
   `LazyRow`、`ImageGenerationToolUI.Preview`、`DefaultToolPreview`，统一传
@@ -221,6 +246,9 @@ val LocalConversationImages = compositionLocalOf<() -> List<String>> { { emptyLi
   （AdaptiveModal）在同一组合树内，CompositionLocal 可达。`ChatMessage.kt` 原有的
   内联 loading 正则改用 `isImagePartLoading` 消除重复。Markdown/HTML 正文图不读取
   该 Local，仍单张打开。
+- 同一批宿主再提供 `LocalImagePreviewActions` 与 `LocalImagePreviewOverlay`：
+  当前会话助手（`conversation.assistantId` / 子助手 Target / Prompt 页正在编辑的助手）
+  设为背景，不弹选择器，但助手确定后仍要确认一次。
 
 时序语义：相册顺序 = 消息列表顺序 × 消息内 part 顺序，即用户在时间线上看到图片的
 先后顺序；重复 url 时 `indexOf` 定位首个（可接受的边界）。
@@ -232,6 +260,8 @@ val LocalConversationImages = compositionLocalOf<() -> List<String>> { { emptyLi
   传入当次结果全量列表（`file://` 前缀，与网格的 File model 共享 Coil 缓存键）与点击位。
 - **Gallery**：预览状态同样提升；列表取 `itemSnapshotList` 当前快照的
   `filePath`，点击位为网格位置。卡片上的复制 prompt / 保存 / 删除按钮维持不变。
+- 当次结果与 Gallery 查看器注入「设为背景」：点按钮后弹出 `AssistantPickerSheet`，
+  选中哪个助手就把当前图设为那个助手的背景（与聊天「当前助手一键设置」不同）。
 
 ### 4.5 文件管理（`SettingFilesPage.kt`）
 
@@ -239,7 +269,9 @@ val LocalConversationImages = compositionLocalOf<() -> List<String>> { { emptyLi
 - Upload Tab：`image/*` 的文件组成预览列表（`file://` 前缀），`MediaThumb` 的图片区域
   变为可点击（`onImageClick` 参数），非图片仍无点击。
 - 文生图 Tab：全部产物组成预览列表（`file://` 前缀），同样可点击打开。
-- 删除确认等管理流程不变。
+- 删除确认等管理流程不变。文生图 Tab 单删确认改为与 Upload 同结构的短文案
+  （截断 prompt + 后果），不再把完整 prompt 或 UUID 文件名塞进对话框。
+- 两个 Tab 的查看器均注入「设为背景」+ 助手选择器 + 确认框（与文生图橱窗一致）。
 
 ### 4.6 工具输出的图片分组
 
@@ -250,36 +282,65 @@ val LocalConversationImages = compositionLocalOf<() -> List<String>> { { emptyLi
 - `ChatMessageTools` 工具步骤摘要的 `LazyRow` 缩略行（64dp）。
 - `DefaultToolPreview`（无专属渲染器的工具详情）。
 
-### 4.7 删除确认与图片信息（补充需求）
+### 4.7 删除确认与图片信息
 
-**删除确认**：所有删除单张/清空入口统一带上下文确认（文件名/标识、来源、后果）：
+**删除确认**：所有删除单张/清空入口统一带上下文确认（短标识 + 后果）：
 
-- `SettingFilesPage` Upload 单删：文件名 + 「聊天附件或助手背景引用将无法显示」后果。
-- `SettingFilesPage` 文生图单删：prompt（兜底「无提示词」）+ 模型 + 「聊天与背景副本不受影响」。
-- `SettingFilesPage` 清空（两 Tab）：分类项数 + 各自后果（上传含聊天/工具/背景；生成图不影响副本）。
-- `ImgGenPage` Gallery 删除（此前无确认）：同文生图单删文案；确认后执行 `vm.deleteImage`。
-- 附带修复：error Toast 收集器从 `ImageGenScreen` 上移到 `ImageGenPage`——原先停在 Gallery 页
-  时第 0 页不组合，删除失败的错误提示不会弹出。
+- `SettingFilesPage` Upload 单删：文件名 + 「聊天附件或助手背景引用将无法显示」。
+- `SettingFilesPage` 文生图单删：与 Upload 同结构——用卡片上能认出来的短标识
+  （截断 prompt，兜底「无提示词」）+ 「聊天与背景副本不受影响」。**不**把完整 prompt
+  或 UUID 文件名塞进对话框；prompt 仍在卡片上两行截断。
+- `SettingFilesPage` 清空（两 Tab）：分类项数 + 各自后果。
+- `ImgGenPage` Gallery 删除：短标识（截断 prompt 或「无提示词」）+ 后果；确认后 `vm.deleteImage`。
+- error Toast 收集器在 `ImageGenPage` 顶层，Gallery 页删除失败也能弹出。
 
 **查看器图片信息**：
 
-- 底部按钮组：`InformationCircle` 信息按钮在下载按钮左侧，整组 `BottomCenter` 水平居中。
+- 底部按钮组：信息 → 保存 → extraActions，整组 `BottomCenter` 水平居中。
 - 信息获取（`resolveImageInfo`，IO 线程，只读头不解码像素）：来源由 `classifyImageSource`
-  按 url 前缀与应用目录推断（`filesDir/images`=生成图片、`filesDir/upload`=上传文件、
-  http=网络、data:=内联、其余=本地文件）；本地文件经 `BitmapFactory` bounds 取分辨率与
-  MIME，`File.length()/lastModified()` 取大小与时间；内联图解码 base64 后同样只读头；
-  网络图不发请求，仅从 URL 猜文件名/格式。翻页时按当前页 url 自动重查。
-- 面板：Dialog 内自绘底部面板（避免 ModalBottomSheet 嵌套 Dialog 的窗口层级问题）——
-  暗色半透明圆角面板、行式 label/value（来源/文件名/分辨率/大小/格式/修改时间，缺失
-  显示 `—`）、右上关闭按钮；点面板外 scrim 关闭；`BackHandler` 返回键先关面板。
-- 手势门控：面板打开时拖拽关闭手势在 `awaitFirstDown` 后早退（`infoBlocked` 经
-  `rememberUpdatedState` 传入，不进 `pointerInput` key，避免手势中途重启）；翻页/缩放不受影响。
+  按 url 前缀与应用目录推断；本地文件经 `BitmapFactory` bounds 取分辨率与 MIME；
+  内联图解码 base64 后同样只读头；网络图不发请求。翻页时按当前页 url 自动重查。
+- 面板：Dialog 内自绘底部面板；点面板外 scrim / 关闭按钮 / 返回键关闭。
+- 手势门控：面板打开时拖拽关闭早退；翻页/缩放不受影响。
 
-### 4.8 i18n / 版本
+### 4.8 设为背景（调用方注入）
 
-- 新增字符串键（各 locale 同步）：`image_viewer_saving`、`image_viewer_saved`、
-  `image_viewer_save_failed`（含 `%1$s`）、`image_viewer_save_content_description`；
-  顺带本地化 Gallery 卡片遗留硬编码的 `imggen_page_prompt_copied`、`imggen_page_copy_prompt`。
+查看器只渲染按钮。业务在调用方（`rememberImageBackgroundHost`）：
+
+1. 把当前页 url 物化为本地文件（`file:` / 绝对路径直接用；`data:` / `http` 先流式落到
+   cache 临时文件）。`AssistantBackgroundService.replaceBackground` 会再拷一份独立背景副本。
+2. **聊天相关入口**（`ChatList` / `SubAssistantDetailPage` / `AssistantPromptPage`）：
+   助手已知，不弹选择器。
+3. **文生图橱窗与文件管理**：先弹 `AssistantPickerSheet`（`forceDialog`、隐藏编辑入口），
+   作为查看器 `overlay`，保证盖在全屏查看器之上。
+4. 助手一旦确定（已知或刚选完），一律再弹一次确认，写明助手名与「将替换当前背景 / 渐变」。
+   点确认才写入；点取消不改设置。
+5. 成功 / 失败 Toast 走查看器 Dialog 内的 `LocalToaster`，进行中与结果共用同一 toast id。
+   成功文案带助手名。
+6. Workspace 图片查看器不注入该动作（工作区文件不是助手素材入口）。
+
+实现落在共享 helper（`rememberImageBackgroundHost`），避免各页面复制 IO / Toast / 失败码映射。
+选择器只回答「哪个助手」，确认框才回答「是否覆盖该助手背景」。
+
+### 4.9 文生图工具详情统一
+
+`ImageGenerationToolUI.Preview` 原先自绘「技术详情」折叠段，与 `DefaultToolPreview`
+的「工具调用」详情不一致。改为：
+
+- 上半段保留用户可读信息：图、供应商、模型、**完整提示词 + 复制按钮**、背景结果、文件路径。
+- 「技术详情」文案改为「调用详情」，展开后复用与 `DefaultToolPreview` 相同的
+  入参 JSON + 输出 JSON 高亮块（同一套 `HighlightCodeBlock` / 字号 / FormItem 标签）。
+- 不再单独发明一套折叠样式。
+
+### 4.10 i18n / 版本
+
+- 既有查看器 / Gallery 本地化键保留。
+- 本轮新增 / 调整：`image_viewer_set_as_background`、带助手名的
+  `image_viewer_background_set`、`image_viewer_background_failed`、
+  `image_viewer_select_assistant_title`、确认框三键、带文件名的
+  `image_viewer_saved`、`chat_message_tool_generate_image_copy_prompt`、
+  `chat_message_tool_generate_image_call_details`（替换 technical_details 的用户可见文案）、
+  文生图删除确认短文案。
 - 本迭代不递增版本号：`versionCode = 16`、`versionName = "0.0.16"` 保持不变；
   变更记录并入 `changelog.md` 的 `0.0.16` 条目。
 
@@ -289,23 +350,16 @@ val LocalConversationImages = compositionLocalOf<() -> List<String>> { { emptyLi
 
 | 文件 | 变更 |
 |------|------|
-| `app/.../ui/components/ui/ImagePreviewDialog.kt` | initialIndex、onTap 关闭、竖直拖拽关闭、页码指示、Toast/描述本地化 |
-| `app/.../ui/components/richtext/ZoomableAsyncImage.kt` | 新增 `images` / `initialIndex` 可选参数 |
-| `app/.../ui/components/message/ChatMessageCot.kt` | `isImagePartLoading` / `collectMessageImageUrls` / `LocalConversationImages` |
-| `app/.../ui/components/message/ChatMessage.kt` | MessagePartsBlock 接入会话相册 provider；复用 loading 正则 |
-| `app/.../ui/pages/chat/ChatList.kt`、`app/.../ui/pages/subassistant/SubAssistantDetailPage.kt`、`app/.../ui/pages/assistant/detail/AssistantPromptPage.kt` | 会话级时序相册计算并经 CompositionLocal 下发 |
-| `app/.../ui/components/message/ChatMessageTools.kt` | 工具步骤摘要缩略行接入会话相册 provider |
-| `app/.../ui/components/message/tools/ToolUI.kt` | `DefaultToolPreview` 输出图片整组接入查看器 |
-| `app/.../ui/pages/imggen/ImgGenPage.kt` | 结果区全量展示 + 两两一行；两个 Tab 预览状态提升传列表 |
-| `app/.../ui/pages/setting/SettingFilesPage.kt` | 图片点击打开查看器（Upload 仅 image/*） |
-| `app/.../ui/components/message/tools/ImageGenerationToolUI.kt` | output 图片列表传入查看器 |
-| `app/src/main/res/values*/strings.xml`（各 locale） | 新增 image_viewer/imggen/删除确认相关本地化键；3 个确认文案键增加上下文参数 |
-| `app/src/test/.../ui/ClassifyImageSourceTest.kt` | 来源分类单元测试 |
-| `docs/dev/changelog.md` | 变更并入 0.0.16 条目 |
-| `docs/references/message-rendering-pipeline.md` | Image part 分组浏览行为说明 |
-| `docs/references/ui-architecture.md` | 查看器作为 AdaptiveModal 例外记录 |
-| `app/src/test/.../message/CollectMessageImageUrlsTest.kt` | 聚合函数单元测试 |
-| `app/src/test/.../ui/ImagePreviewDialogProgressTest.kt` | 拖拽进度/透明度换算单元测试 |
+| `app/.../ui/components/ui/ImagePreviewDialog.kt` | extraActions 槽、Dialog 内 Toaster、同一 id 替换进度 Toast、安全区 |
+| `app/.../ui/components/ui/ImagePreviewActions.kt` | `ImagePreviewAction`、Local、统一 `rememberImageBackgroundHost` |
+| `app/.../ui/components/richtext/ZoomableAsyncImage.kt` | 透传 extraActions / overlay / Local |
+| `app/.../ui/pages/chat/ChatList.kt` 等会话宿主 | 下发当前助手「设为背景」 |
+| `app/.../ui/pages/imggen/ImgGenPage.kt` | 查看器设背景 + 助手选择器 |
+| `app/.../ui/pages/setting/SettingFilesPage.kt` | 同上；文生图删除确认改为短文案 |
+| `app/.../ui/components/message/tools/ImageGenerationToolUI.kt` | 复制提示词；调用详情与 DefaultToolPreview 对齐 |
+| `app/src/main/res/values*/strings.xml` | 设背景 / 复制提示词 / 调用详情 / 短删除确认 |
+| `app/src/test/...` | 物化路径、失败码映射、删除文案参数 |
+| `docs/dev/changelog.md`、`docs/references/*` | 同步本轮行为 |
 
 ---
 
@@ -332,12 +386,14 @@ val LocalConversationImages = compositionLocalOf<() -> List<String>> { { emptyLi
 6. 查看器：单击关闭；未放大时下滑/上滑拖拽有跟手位移缩放 + 背景渐隐，超阈值关闭、
    未超回弹；放大后竖直拖动只平移不关闭；双指捏合、双击、翻页不受拖拽层影响；
    拖拽跟手（不出现隔帧半速移动）。
-7. 保存按钮：拖拽时淡出，正常可用，Toast 为本地化文案。
+7. 保存 / 设背景 Toast 出现在查看器内顶部，不被全屏 Dialog 挡住；成功后进行中文案消失，
+   成功提示分别带相册文件名 / 助手名。
 8. `generate_image` 流式生成中（loading 占位）：点击占位图不进入 0 页查看器、不崩溃。
-9. 所有删除入口（文件管理单删/清空、Gallery 删除）均弹确认，文案含标识/来源/后果。
-10. 查看器信息按钮在下载按钮左侧、整组水平居中；面板展示来源/文件名/分辨率/大小/格式/
-    修改时间，可经 scrim/关闭按钮/返回键关闭；面板打开时拖拽关闭被禁用、翻页正常；
-    翻页后面板内容随当前页刷新。
+9. 文件管理文生图删除确认短，不含完整 prompt；Upload 与清空确认保持短标识 + 后果。
+10. 查看器按钮顺序：信息、保存、设为背景（有注入时）；面板/手势行为不变。
+11. 聊天点「设为背景」先确认当前会话助手再写入；文生图橱窗 / 文件管理先弹助手选择器，
+    选完后再确认一次，确认后才写入。
+12. 文生图工具详情可复制完整提示词；「调用详情」展开后与其他工具卡的入参/结果 JSON 一致。
 
 ---
 

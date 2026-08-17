@@ -248,6 +248,14 @@
   <string name="chat_message_tool_generate_image_failed_revoked">Image tool was disabled</string>
   <string name="chat_message_tool_generate_image_failed_model_changed">Image model changed</string>
   <string name="chat_message_tool_generate_image_failed_provider">Image provider error</string>
+  <string name="chat_message_tool_generate_image_failed_content_blocked">モデルの利用ポリシーにより画像がブロックされました</string>
+  <string name="chat_message_tool_generate_image_failed_rate_limited">画像サービスのレート制限に達しました</string>
+  <string name="chat_message_tool_generate_image_failed_quota_exhausted">画像サービスのクォータまたはクレジットが不足しています</string>
+  <string name="chat_message_tool_generate_image_failed_auth">画像サービスが API キーを拒否しました</string>
+  <string name="chat_message_tool_generate_image_failed_permission">画像サービスがアクセスを拒否しました</string>
+  <string name="chat_message_tool_generate_image_failed_invalid_request">画像サービスがリクエストを拒否しました</string>
+  <string name="chat_message_tool_generate_image_failed_unavailable">画像サービスは一時的に利用できません</string>
+  <string name="chat_message_tool_generate_image_failed_runtime">画像生成が予期せず失敗しました</string>
   <string name="chat_message_tool_generate_image_failed_invalid_result">Image provider returned no final image</string>
   <string name="chat_message_tool_generate_image_failed_persistence">Failed to save the generated image</string>
   <string name="chat_message_tool_generate_image_failed_artifact_missing">生成した画像ファイルは利用できません</string>
@@ -261,7 +269,6 @@
   <string name="chat_message_tool_generate_image_provider">プロバイダー: %1$s</string>
   <string name="chat_message_tool_generate_image_file_path">ファイル</string>
   <string name="chat_message_tool_generate_image_copy_path">パスをコピー</string>
-  <string name="chat_message_tool_generate_image_technical_details">技術詳細</string>
   <string name="chat_message_tool_generate_image_prompt_label">プロンプト</string>
   <string name="chat_message_tool_scrape_prefix">ウェブサイトをスクレイピング: %1$s</string>
   <string name="chat_message_tool_scrape_web">ウェブページを取得</string>
@@ -426,10 +433,10 @@
   <string name="imggen_page_save">保存</string>
   <string name="imggen_page_save_failed">保存に失敗しました: %1$s</string>
   <string name="imggen_page_delete_image_title">画像を削除</string>
-  <string name="imggen_page_delete_image_confirmation">「%2$s」で生成された画像「%1$s」のギャラリー原本を完全に削除します。チャットのコピーは影響を受けません。この操作は元に戻せません。</string>
+  <string name="imggen_page_delete_image_confirmation">「%1$s」のギャラリー原本を完全に削除します。チャットのコピーは影響を受けません。この操作は元に戻せません。</string>
   <string name="imggen_page_no_prompt">プロンプトなし</string>
   <string name="image_viewer_saving">保存中…</string>
-  <string name="image_viewer_saved">画像を保存しました</string>
+  <string name="image_viewer_saved">ギャラリーに「%1$s」として保存しました</string>
   <string name="image_viewer_save_failed">保存に失敗しました: %1$s</string>
   <string name="image_viewer_save_content_description">画像を保存</string>
   <string name="setting_files_page_delete_upload_confirmation">「%1$s」を完全に削除します。チャット添付やアシスタント背景がこのファイルを参照している場合、それらの位置に表示されなくなります。この操作は元に戻せません。</string>
@@ -1393,7 +1400,21 @@
   <string name="setting_files_page_folder_generated_images">生成画像</string>
   <string name="setting_files_page_generated_no_prompt">プロンプトなし</string>
   <string name="setting_files_page_generated_unknown_model">不明なモデル</string>
-  <string name="setting_files_page_delete_generated_confirmation">「%2$s」で生成された画像「%1$s」のギャラリー原本を完全に削除します。チャットと背景のコピーは影響を受けません。この操作は元に戻せません。</string>
+  <string name="setting_files_page_delete_generated_confirmation">「%1$s」のギャラリー原本を完全に削除します。チャットと背景のコピーは影響を受けません。この操作は元に戻せません。</string>
   <string name="setting_files_page_clean_generated_confirmation">ギャラリー内の生成画像 %1$d 枚をすべて完全に削除します。チャットと背景のコピーは影響を受けません。この操作は元に戻せません。</string>
+  <string name="image_viewer_set_as_background">背景に設定</string>
+  <string name="image_viewer_background_setting">背景を設定しています…</string>
+  <string name="image_viewer_background_set">「%1$s」の背景に設定しました</string>
+  <string name="image_viewer_background_failed">背景を設定できませんでした: %1$s</string>
+  <string name="image_viewer_select_assistant_title">アシスタントを選択</string>
+  <string name="image_viewer_background_confirm_title">背景に設定しますか？</string>
+  <string name="image_viewer_background_confirm_message">この画像を「%1$s」の背景にしますか？現在の背景またはグラデーションは置き換えられます。</string>
+  <string name="image_viewer_background_confirm_action">背景に設定</string>
+  <string name="image_viewer_info_empty">—</string>
+  <string name="chat_message_tool_generate_image_copy_prompt">プロンプトをコピー</string>
+  <string name="chat_message_tool_generate_image_call_details">呼び出し詳細</string>
+  <string name="chat_message_tool_generate_image_prompt_copied">プロンプトをコピーしました</string>
+  <string name="chat_message_tool_generate_image_path_copied">パスをコピーしました</string>
+  <string name="image_viewer_save_need_permission">ストレージ権限を許可してから、もう一度保存してください</string>
 </resources>
 

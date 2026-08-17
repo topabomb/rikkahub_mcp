@@ -1,9 +1,14 @@
 package net.weero.measix.pilot.ui.components.message.tools
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -11,7 +16,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -19,30 +23,34 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.fastForEach
+import com.dokar.sonner.ToastType
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.AiImage
+import me.rerere.hugeicons.stroke.ArrowDown01
+import me.rerere.hugeicons.stroke.ArrowUp01
 import me.rerere.hugeicons.stroke.Copy01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.ai.tools.local.GENERATE_IMAGE_TOOL_NAME
 import net.weero.measix.pilot.data.ai.tools.local.ImageGenerationToolMetadata
+import net.weero.measix.pilot.data.imggen.imageGenerationFailureStringRes
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
-import net.weero.measix.pilot.ui.components.richtext.HighlightCodeBlock
+import net.weero.measix.pilot.ui.components.message.isImagePartLoading
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.ui.components.ui.FormItem
+import net.weero.measix.pilot.ui.context.LocalToaster
+import net.weero.measix.pilot.ui.modifier.shimmer
 import net.weero.measix.pilot.utils.JsonInstant
-import net.weero.measix.pilot.utils.JsonInstantPretty
 import net.weero.measix.pilot.utils.jsonPrimitiveOrNull
 
 internal fun ToolUIContext.imageGenerationMetadata(): ImageGenerationToolMetadata? {
@@ -157,13 +165,16 @@ object ImageGenerationToolUI : ToolUIRenderer {
             return
         }
         val clipboard = LocalClipboardManager.current
+        val toaster = LocalToaster.current
         val images = context.tool.output.filterIsInstance<UIMessagePart.Image>()
         val filePath = ((context.content as? JsonObject)?.get("file") as? JsonObject)
             ?.get("path")
             ?.jsonPrimitiveOrNull
             ?.contentOrNull
         val prompt = context.arguments.getStringContent("prompt").orEmpty()
-        var showTechnical by remember { mutableStateOf(false) }
+        var showCallDetails by remember { mutableStateOf(false) }
+        val promptCopiedToast = stringResource(R.string.chat_message_tool_generate_image_prompt_copied)
+        val pathCopiedToast = stringResource(R.string.chat_message_tool_generate_image_path_copied)
         // 会话级时序相册: 稳定 provider, 点击期由 ZoomableAsyncImage 求值
         val conversationAlbum = LocalConversationImages.current
         Column(
@@ -174,12 +185,23 @@ object ImageGenerationToolUI : ToolUIRenderer {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             images.fastForEach { image ->
-                ZoomableAsyncImage(
-                    model = image.url,
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxWidth(),
-                    albumProvider = conversationAlbum,
-                )
+                if (isImagePartLoading(image.url)) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(160.dp)
+                            .clip(MaterialTheme.shapes.medium)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .shimmer(isLoading = true)
+                    )
+                } else {
+                    ZoomableAsyncImage(
+                        model = image.url,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxWidth(),
+                        albumProvider = conversationAlbum,
+                    )
+                }
             }
             metadata.providerName?.takeIf { it.isNotBlank() }?.let { providerName ->
                 Text(
@@ -194,22 +216,60 @@ object ImageGenerationToolUI : ToolUIRenderer {
                 )
             }
             if (prompt.isNotEmpty()) {
-                FormItem(label = { Text(stringResource(R.string.chat_message_tool_generate_image_prompt_label)) }) {
+                FormItem(
+                    label = {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.chat_message_tool_generate_image_prompt_label),
+                                modifier = Modifier.weight(1f),
+                            )
+                            IconButton(
+                                onClick = {
+                                    clipboard.setText(AnnotatedString(prompt))
+                                    toaster.show(message = promptCopiedToast, type = ToastType.Success)
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = HugeIcons.Copy01,
+                                    contentDescription = stringResource(
+                                        R.string.chat_message_tool_generate_image_copy_prompt
+                                    ),
+                                )
+                            }
+                        }
+                    },
+                ) {
                     Text(text = prompt, style = MaterialTheme.typography.bodyMedium)
                 }
             }
             BackgroundSummary(context)
             if (!filePath.isNullOrBlank()) {
                 FormItem(
-                    label = { Text(stringResource(R.string.chat_message_tool_generate_image_file_path)) },
-                    tail = {
-                        IconButton(onClick = { clipboard.setText(AnnotatedString(filePath)) }) {
-                            Icon(
-                                imageVector = HugeIcons.Copy01,
-                                contentDescription = stringResource(
-                                    R.string.chat_message_tool_generate_image_copy_path
-                                ),
+                    label = {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.chat_message_tool_generate_image_file_path),
+                                modifier = Modifier.weight(1f),
                             )
+                            IconButton(
+                                onClick = {
+                                    clipboard.setText(AnnotatedString(filePath))
+                                    toaster.show(message = pathCopiedToast, type = ToastType.Success)
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = HugeIcons.Copy01,
+                                    contentDescription = stringResource(
+                                        R.string.chat_message_tool_generate_image_copy_path
+                                    ),
+                                )
+                            }
                         }
                     },
                 ) {
@@ -220,54 +280,36 @@ object ImageGenerationToolUI : ToolUIRenderer {
                     )
                 }
             }
-            TextButton(
-                onClick = { showTechnical = !showTechnical },
-                modifier = Modifier.align(Alignment.Start),
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showCallDetails = !showCallDetails }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(stringResource(R.string.chat_message_tool_generate_image_technical_details))
+                Text(
+                    text = stringResource(R.string.chat_message_tool_generate_image_call_details),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    imageVector = if (showCallDetails) HugeIcons.ArrowUp01 else HugeIcons.ArrowDown01,
+                    contentDescription = null,
+                )
             }
-            if (showTechnical) {
-                FormItem(
-                    label = {
-                        Text(stringResource(R.string.chat_message_tool_call_label, context.tool.toolName))
-                    }
-                ) {
-                    HighlightCodeBlock(
-                        code = JsonInstantPretty.encodeToString(context.arguments),
-                        language = "json",
-                        style = TextStyle(fontSize = 10.sp, lineHeight = 12.sp),
-                    )
-                }
-                context.tool.output.filterIsInstance<UIMessagePart.Text>().fastForEach { part ->
-                    HighlightCodeBlock(
-                        code = runCatching {
-                            JsonInstantPretty.encodeToString(JsonInstant.parseToJsonElement(part.text))
-                        }.getOrElse { part.text },
-                        language = "json",
-                        style = TextStyle(fontSize = 10.sp, lineHeight = 12.sp),
-                    )
-                }
+            if (showCallDetails) {
+                ToolCallJsonDetails(context = context, includeImages = false)
             }
         }
     }
 }
 
-private fun reasonString(reason: String?): Int = when (reason) {
-    "invalid_arguments" -> R.string.chat_message_tool_generate_image_failed_invalid_arguments
-    "image_model_unavailable" -> R.string.chat_message_tool_generate_image_failed_model_unavailable
-    "tool_revoked" -> R.string.chat_message_tool_generate_image_failed_revoked
-    "image_model_changed" -> R.string.chat_message_tool_generate_image_failed_model_changed
-    "provider_error" -> R.string.chat_message_tool_generate_image_failed_provider
-    "invalid_result" -> R.string.chat_message_tool_generate_image_failed_invalid_result
-    "persistence_error" -> R.string.chat_message_tool_generate_image_failed_persistence
-    "assistant_not_found" -> R.string.chat_message_tool_generate_image_failed_assistant_missing
-    "artifact_missing" -> R.string.chat_message_tool_generate_image_failed_artifact_missing
-    else -> R.string.chat_message_tool_generate_image_failed
-}
+private fun reasonString(reason: String?): Int = imageGenerationFailureStringRes(reason)
 
 private fun backgroundReasonString(reason: String?): Int = when (reason) {
     "assistant_not_found" -> R.string.chat_message_tool_generate_image_background_assistant_missing
     "background_copy_failed" -> R.string.chat_message_tool_generate_image_background_copy_failed
-    "settings_write_failed" -> R.string.chat_message_tool_generate_image_background_settings_failed
+    "settings_write_failed", "settings_write_rejected" ->
+        R.string.chat_message_tool_generate_image_background_settings_failed
     else -> R.string.chat_message_tool_generate_image_failed
 }

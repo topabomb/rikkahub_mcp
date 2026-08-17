@@ -206,6 +206,7 @@ Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过�
 `filterTargetLocalTools()`、`filterTargetTools()` 和 `assistant_inspect` 都不暴露该工具。
 
 > Generate one image from a text prompt, show it to the user, and return a local path that follow-up tools can use.
+> Failures return a stable reason and a short detail when available.
 
 `Tool.systemPrompt()` 只在实际注册时注入当前非敏感配置，字段由
 `ImageGenerationModelDescriptor` 统一生成：`provider_type`、`provider_name`、`model_id`、
@@ -236,9 +237,27 @@ managed chat copy。Android host path、file URI 和内部 relative path 不进�
 会话 fork / 恢复按 metadata 中的 `LocalArtifactRef.relativePath` 重写该字段；文件缺失时不得
 伪造 completed + readable path。
 
-失败结果只有 Text part，reason 为 `invalid_arguments`、`image_model_unavailable`、
-`tool_revoked`、`image_model_changed`、`provider_error`、`invalid_result`、
-`persistence_error` 或 `assistant_not_found`（执行前发现会话所属 Assistant 已删除）。
+失败结果只有 Text part，带稳定 `reason`。本地前置失败没有 `detail`：
+`invalid_arguments`、`image_model_unavailable`、`tool_revoked`、`image_model_changed`、
+`assistant_not_found`（执行前发现会话所属 Assistant 已删除）。
+生图调用失败由 `classifyProviderFailure()` 分类，并带回裁剪后的 `detail`
+（默认字符上限，脱敏 API key / Bearer / 内联 base64，不含堆栈）：
+
+| reason | 模型应如何处理 |
+|--------|----------------|
+| `content_blocked` | 提示词或结果触发政策。改写提示词，去掉违禁内容。`detail` 是稳定政策说明，不回传检查类型（含 OpenAI `moderation_blocked` / `content_policy_violation` 与 xAI `respect_moderation=false`） |
+| `rate_limited` | 稍后再试，不要改写提示词 |
+| `quota_exhausted` | 额度、余额或 spend limit 用尽。请用户检查账单，重试无效 |
+| `auth_failed` | API key 无效。请用户检查 Provider 设置 |
+| `permission_denied` | 账号或模型无权限 |
+| `invalid_request` | 服务拒绝参数（尺寸、过长提示词等）。可按 `detail` 调整后重试 |
+| `provider_unavailable` | 超时、过载或 5xx。稍后重试 |
+| `provider_error` | 已识别为 HTTP 失败但无法再细分。阅读 `detail` |
+| `runtime_error` | 本地未分类异常。阅读 `detail` |
+| `invalid_result` | HTTP 成功但没有最终图片 |
+| `persistence_error` | 图片已生成但本地保存失败 |
+
+无法解析的响应体只提取 `error.message` / `error.code` / `error.type` 等短字段；HTML 或乱码不进入 `detail`。
 历史重放或 UI rematerialize 时，若 managed chat copy 已不存在，Text 改为
 `artifact_missing` 并去掉 Image part，不保留看似可读的 `/upload/...` 路径。
 背景失败不回滚已进入 Gallery 的图片；此时图片仍为 completed，`background.updated=false`

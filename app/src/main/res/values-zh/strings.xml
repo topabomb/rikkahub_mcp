@@ -250,6 +250,14 @@
   <string name="chat_message_tool_generate_image_failed_revoked">文生图工具已关闭</string>
   <string name="chat_message_tool_generate_image_failed_model_changed">图片模型已更改</string>
   <string name="chat_message_tool_generate_image_failed_provider">图片服务出错</string>
+  <string name="chat_message_tool_generate_image_failed_content_blocked">图片因模型使用政策被拦截</string>
+  <string name="chat_message_tool_generate_image_failed_rate_limited">图片服务达到速率限制</string>
+  <string name="chat_message_tool_generate_image_failed_quota_exhausted">图片服务额度或余额不足</string>
+  <string name="chat_message_tool_generate_image_failed_auth">图片服务拒绝了 API 密钥</string>
+  <string name="chat_message_tool_generate_image_failed_permission">图片服务拒绝访问</string>
+  <string name="chat_message_tool_generate_image_failed_invalid_request">图片服务拒绝了该请求</string>
+  <string name="chat_message_tool_generate_image_failed_unavailable">图片服务暂时不可用</string>
+  <string name="chat_message_tool_generate_image_failed_runtime">图片生成意外失败</string>
   <string name="chat_message_tool_generate_image_failed_invalid_result">图片服务未返回最终图片</string>
   <string name="chat_message_tool_generate_image_failed_persistence">保存生成图片失败</string>
   <string name="chat_message_tool_generate_image_failed_artifact_missing">生成的图片文件已不可用</string>
@@ -263,7 +271,6 @@
   <string name="chat_message_tool_generate_image_provider">服务商：%1$s</string>
   <string name="chat_message_tool_generate_image_file_path">文件</string>
   <string name="chat_message_tool_generate_image_copy_path">复制路径</string>
-  <string name="chat_message_tool_generate_image_technical_details">技术详情</string>
   <string name="chat_message_tool_generate_image_prompt_label">提示词</string>
   <string name="chat_message_tool_scrape_prefix">抓取网站：%1$s</string>
   <string name="chat_message_tool_scrape_web">抓取网页</string>
@@ -428,10 +435,10 @@
   <string name="imggen_page_save">保存</string>
   <string name="imggen_page_save_failed">保存失败: %1$s</string>
   <string name="imggen_page_delete_image_title">删除图片</string>
-  <string name="imggen_page_delete_image_confirmation">将永久删除「%2$s」生成的图片「%1$s」的图库原图。聊天中的副本不受影响。此操作无法撤销。</string>
+  <string name="imggen_page_delete_image_confirmation">将永久删除「%1$s」的图库原图。聊天中的副本不受影响。此操作无法撤销。</string>
   <string name="imggen_page_no_prompt">无提示词</string>
-  <string name="image_viewer_saving">正在保存</string>
-  <string name="image_viewer_saved">已保存图片</string>
+  <string name="image_viewer_saving">正在保存…</string>
+  <string name="image_viewer_saved">已保存到相册（%1$s）</string>
   <string name="image_viewer_save_failed">保存失败: %1$s</string>
   <string name="image_viewer_save_content_description">保存图片</string>
   <string name="setting_files_page_delete_upload_confirmation">将永久删除「%1$s」。若聊天附件或助手背景引用了该文件，相关位置将无法再显示。此操作无法撤销。</string>
@@ -1393,7 +1400,21 @@
   <string name="setting_files_page_folder_generated_images">文生图</string>
   <string name="setting_files_page_generated_no_prompt">无提示词</string>
   <string name="setting_files_page_generated_unknown_model">未知模型</string>
-  <string name="setting_files_page_delete_generated_confirmation">将永久删除「%2$s」生成的图片「%1$s」的图库原图。聊天与背景中的副本不受影响。此操作无法撤销。</string>
+  <string name="setting_files_page_delete_generated_confirmation">将永久删除「%1$s」的图库原图。聊天与背景中的副本不受影响。此操作无法撤销。</string>
   <string name="setting_files_page_clean_generated_confirmation">将永久删除图库中的全部 %1$d 张生成图片。聊天与背景中的副本不受影响。此操作无法撤销。</string>
+  <string name="image_viewer_set_as_background">设为背景</string>
+  <string name="image_viewer_background_setting">正在设置为背景…</string>
+  <string name="image_viewer_background_set">已设为「%1$s」的背景</string>
+  <string name="image_viewer_background_failed">无法设为背景：%1$s</string>
+  <string name="image_viewer_select_assistant_title">选择助手</string>
+  <string name="image_viewer_background_confirm_title">设为背景？</string>
+  <string name="image_viewer_background_confirm_message">将这张图片设为「%1$s」的背景？当前背景或渐变会被替换。</string>
+  <string name="image_viewer_background_confirm_action">设为背景</string>
+  <string name="image_viewer_info_empty">—</string>
+  <string name="chat_message_tool_generate_image_copy_prompt">复制提示词</string>
+  <string name="chat_message_tool_generate_image_call_details">调用详情</string>
+  <string name="chat_message_tool_generate_image_prompt_copied">提示词已复制</string>
+  <string name="chat_message_tool_generate_image_path_copied">路径已复制</string>
+  <string name="image_viewer_save_need_permission">请授予存储权限后再保存</string>
 </resources>
 

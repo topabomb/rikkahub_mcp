@@ -16,15 +16,19 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.MutableState
@@ -49,17 +53,20 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.lifecycleScope
 import coil3.compose.rememberAsyncImagePainter
 import com.dokar.sonner.ToastType
+import com.dokar.sonner.Toaster
+import com.dokar.sonner.rememberToasterState
 import com.jvziyaoyao.scale.image.pager.ImagePager
 import com.jvziyaoyao.scale.zoomable.pager.PagerGestureScope
 import com.jvziyaoyao.scale.zoomable.pager.rememberZoomablePagerState
 import com.jvziyaoyao.scale.zoomable.zoomable.ZoomableViewState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -73,6 +80,7 @@ import me.rerere.hugeicons.stroke.InformationCircle
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.data.files.IMAGE_SAVE_PERMISSION_REQUIRED
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.utils.fileSizeToString
@@ -81,6 +89,7 @@ import org.koin.compose.koinInject
 import java.io.File
 import java.time.Instant
 import kotlin.math.abs
+import kotlin.time.Duration
 
 // 拖拽关闭: 容器最大缩小比例
 private const val DRAG_DISMISS_SCALE_FACTOR = 0.35f
@@ -99,32 +108,32 @@ fun ImagePreviewDialog(
     images: List<String>,
     onDismissRequest: () -> Unit,
     initialIndex: Int = 0,
+    extraActions: List<ImagePreviewAction> = emptyList(),
+    overlay: (@Composable () -> Unit)? = null,
 ) {
+    if (images.isEmpty()) return
     val context = LocalContext.current
     val filesManager: FilesManager = koinInject()
-    // 空列表直接不组合, 防止 0 页查看器与保存按钮越界
-    if (images.isEmpty()) return
-    val pageCount = images.size
-    val startIndex = initialIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
-    val state = rememberZoomablePagerState(initialPage = startIndex) { pageCount }
-    val toaster = LocalToaster.current
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val dialogToaster = rememberToasterState()
     val scope = rememberCoroutineScope()
+    val dismissState = rememberUpdatedState(onDismissRequest)
+    val extraActionsState = rememberUpdatedState(extraActions)
+    val overlayState = rememberUpdatedState(overlay)
     val savingToast = stringResource(R.string.image_viewer_saving)
     val savedToast = stringResource(R.string.image_viewer_saved)
     val saveFailedFormat = stringResource(R.string.image_viewer_save_failed)
+    val savePermissionText = stringResource(R.string.image_viewer_save_need_permission)
     val saveActionDescription = stringResource(R.string.image_viewer_save_content_description)
-
-    // 拖拽关闭的容器位移(px); 拖拽中直写状态, 收尾动画由 animate() 驱动
+    var saving by remember { mutableStateOf(false) }
+    val pagerGestureScope = remember {
+        PagerGestureScope(onTap = { dismissState.value() })
+    }
+    val pageCount = images.size
+    val startIndex = initialIndex.coerceIn(0, pageCount - 1)
+    val state = rememberZoomablePagerState(initialPage = startIndex) { pageCount }
     val dragOffsetY = remember { mutableFloatStateOf(0f) }
     val dragOffsetX = remember { mutableFloatStateOf(0f) }
     val settleJobState = remember { mutableStateOf<Job?>(null) }
-    // remember 避免 PagerGestureScope 参数不稳定导致翻页时浅重组
-    val pagerGestureScope = remember(onDismissRequest) {
-        PagerGestureScope(onTap = onDismissRequest)
-    }
-
-    // 图片信息面板: 翻页自动随当前页重查; IO 解析只读头不解码像素
     var infoVisible by remember { mutableStateOf(false) }
     val currentUrl = images.getOrNull(state.currentPage)
     var imageInfo by remember(currentUrl) { mutableStateOf<ImageInfo?>(null) }
@@ -141,129 +150,187 @@ fun ImagePreviewDialog(
             usePlatformDefaultWidth = false
         )
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            // 背景随拖拽进度渐隐
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        alpha = scrimAlpha(dragOffsetY.floatValue, size.height)
-                    }
-                    .background(Color.Black)
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    // pointerInput 必须在 graphicsLayer 之外: 若在位移/缩放图层内侧,
-                    // 指针坐标会被图层逆变换, 拖拽反馈反向且隔帧抖动
-                    .pointerInput(state, onDismissRequest) {
-                        detectDragDismissGesture(
-                            scope = scope,
-                            zoomableViewState = state.zoomableViewState,
-                            dragOffsetX = dragOffsetX,
-                            dragOffsetY = dragOffsetY,
-                            settleJobState = settleJobState,
-                            infoBlocked = infoBlocked,
-                            onDismissRequest = onDismissRequest,
-                        )
-                    }
-                    .graphicsLayer {
-                        val progress = dragProgress(dragOffsetY.floatValue, size.height)
-                        translationX = dragOffsetX.floatValue
-                        translationY = dragOffsetY.floatValue
-                        val scale = 1f - progress * DRAG_DISMISS_SCALE_FACTOR
-                        scaleX = scale
-                        scaleY = scale
-                    }
-            ) {
-                ImagePager(
-                    modifier = Modifier.fillMaxSize(),
-                    pagerState = state,
-                    detectGesture = pagerGestureScope,
-                    imageLoader = { index ->
-                        val painter = rememberAsyncImagePainter(images[index])
-                        return@ImagePager Pair(painter, painter.intrinsicSize)
-                    },
-                )
-            }
-
-            // 叠加层统一放在全屏 Box 中, 以容器高度(而非 Text/Row 自身高度)换算淡出进度
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        alpha = overlayAlpha(dragOffsetY.floatValue, size.height)
-                    }
-            ) {
-                if (pageCount > 1) {
-                    Text(
-                        text = "${state.currentPage + 1} / $pageCount",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Color.White.copy(alpha = 0.7f),
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(top = 32.dp),
-                    )
-                }
-
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    IconButton(
-                        onClick = { infoVisible = true }
-                    ) {
-                        Icon(
-                            HugeIcons.InformationCircle,
-                            stringResource(R.string.image_viewer_info_content_description),
-                            tint = Color.White
-                        )
-                    }
-                    IconButton(
-                        onClick = {
-                            lifecycleOwner.lifecycleScope.launch {
-                                runCatching {
-                                    toaster.show(savingToast)
-                                    val imgUrl = images[state.currentPage]
-                                    filesManager.saveMessageImage(context, imgUrl)
-                                    toaster.show(message = savedToast, type = ToastType.Success)
-                                }.onFailure {
-                                    it.printStackTrace()
-                                    toaster.show(
-                                        message = saveFailedFormat.format(it.message),
-                                        type = ToastType.Error
-                                    )
-                                }
-                            }
-                        }
-                    ) {
-                        Icon(
-                            HugeIcons.Download01,
-                            saveActionDescription,
-                            tint = Color.White
-                        )
-                    }
-                }
-            }
-
-            // 图片信息面板: 点面板外 scrim 关闭; 面板自身消费点击防止误关
-            if (infoVisible) {
-                BackHandler { infoVisible = false }
+        CompositionLocalProvider(LocalToaster provides dialogToaster) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                // 背景随拖拽进度渐隐
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                        ) { infoVisible = false }
+                        .graphicsLayer {
+                            alpha = scrimAlpha(dragOffsetY.floatValue, size.height)
+                        }
+                        .background(Color.Black)
                 )
-                ImageInfoPanel(
-                    info = imageInfo,
-                    onClose = { infoVisible = false },
-                    modifier = Modifier.align(Alignment.BottomCenter),
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        // pointerInput 必须在 graphicsLayer 之外: 若在位移/缩放图层内侧,
+                        // 指针坐标会被图层逆变换, 拖拽反馈反向且隔帧抖动
+                        .pointerInput(state) {
+                            detectDragDismissGesture(
+                                scope = scope,
+                                zoomableViewState = state.zoomableViewState,
+                                dragOffsetX = dragOffsetX,
+                                dragOffsetY = dragOffsetY,
+                                settleJobState = settleJobState,
+                                infoBlocked = infoBlocked,
+                                onDismissRequest = { dismissState.value() },
+                            )
+                        }
+                        .graphicsLayer {
+                            val progress = dragProgress(dragOffsetY.floatValue, size.height)
+                            translationX = dragOffsetX.floatValue
+                            translationY = dragOffsetY.floatValue
+                            val scale = 1f - progress * DRAG_DISMISS_SCALE_FACTOR
+                            scaleX = scale
+                            scaleY = scale
+                        }
+                ) {
+                    ImagePager(
+                        modifier = Modifier.fillMaxSize(),
+                        pagerState = state,
+                        detectGesture = pagerGestureScope,
+                        imageLoader = { index ->
+                            val painter = rememberAsyncImagePainter(images.getOrNull(index).orEmpty())
+                            return@ImagePager Pair(painter, painter.intrinsicSize)
+                        },
+                    )
+                }
+
+                // 叠加层统一放在全屏 Box 中, 以容器高度(而非 Text/Row 自身高度)换算淡出进度
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.safeDrawing)
+                        .graphicsLayer {
+                            alpha = overlayAlpha(dragOffsetY.floatValue, size.height)
+                        }
+                ) {
+                    if (pageCount > 1) {
+                        Text(
+                            text = "${state.currentPage + 1} / $pageCount",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 12.dp),
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        IconButton(
+                            enabled = !saving,
+                            onClick = { infoVisible = true }
+                        ) {
+                            Icon(
+                                HugeIcons.InformationCircle,
+                                stringResource(R.string.image_viewer_info_content_description),
+                                tint = Color.White
+                            )
+                        }
+                        IconButton(
+                            enabled = !saving,
+                            onClick = {
+                                val imageUrl = images.getOrNull(state.currentPage) ?: return@IconButton
+                                if (saving) return@IconButton
+                                saving = true
+                                scope.launch {
+                                    val toastId = IMAGE_VIEWER_SAVE_TOAST_ID
+                                    try {
+                                        dialogToaster.show(
+                                            message = savingToast,
+                                            id = toastId,
+                                            duration = Duration.INFINITE,
+                                        )
+                                        val fileName = filesManager.saveMessageImage(context, imageUrl)
+                                        dialogToaster.show(
+                                            message = savedToast.format(fileName),
+                                            type = ToastType.Success,
+                                            id = toastId,
+                                        )
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (error: Throwable) {
+                                        error.printStackTrace()
+                                        dialogToaster.show(
+                                            message = imageSaveErrorMessage(
+                                                message = error.message,
+                                                permissionText = savePermissionText,
+                                                failedFormat = saveFailedFormat,
+                                            ),
+                                            type = ToastType.Error,
+                                            id = toastId,
+                                        )
+                                    } finally {
+                                        saving = false
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                HugeIcons.Download01,
+                                saveActionDescription,
+                                tint = Color.White
+                            )
+                        }
+                        extraActionsState.value.forEach { action ->
+                            IconButton(
+                                enabled = !saving,
+                                onClick = {
+                                    val imgUrl = images.getOrNull(state.currentPage) ?: return@IconButton
+                                    action.onClick(imgUrl, dialogToaster)
+                                }
+                            ) {
+                                Icon(
+                                    action.icon,
+                                    action.contentDescription,
+                                    tint = Color.White,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 图片信息面板: 点面板外 scrim 关闭; 面板自身消费点击防止误关
+                if (infoVisible) {
+                    BackHandler { infoVisible = false }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) { infoVisible = false }
+                    )
+                    ImageInfoPanel(
+                        info = imageInfo,
+                        onClose = { infoVisible = false },
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .windowInsetsPadding(WindowInsets.safeDrawing),
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.safeDrawing)
+                        .padding(top = 48.dp),
+                ) {
+                    Toaster(
+                        state = dialogToaster,
+                        darkTheme = true,
+                        richColors = true,
+                        alignment = Alignment.TopCenter,
+                        showCloseButton = true,
+                    )
+                }
+                overlayState.value?.invoke()
             }
         }
     }
@@ -280,6 +347,15 @@ internal fun scrimAlpha(offsetY: Float, containerHeight: Float): Float =
 
 internal fun overlayAlpha(offsetY: Float, containerHeight: Float): Float =
     (1f - dragProgress(offsetY, containerHeight) * 2f).coerceIn(0f, 1f)
+
+internal fun imageSaveErrorMessage(
+    message: String?,
+    permissionText: String,
+    failedFormat: String,
+): String = when (message) {
+    IMAGE_SAVE_PERMISSION_REQUIRED -> permissionText
+    else -> failedFormat.format(message.orEmpty().ifBlank { "unknown" })
+}
 
 /**
  * 未放大时竖直拖拽关闭手势。
@@ -549,7 +625,7 @@ private fun ImageInfoPanel(
         ) {
             Text(
                 text = stringResource(R.string.image_viewer_info_title),
-                style = MaterialTheme.typography.labelLarge,
+                style = MaterialTheme.typography.titleMedium,
                 color = Color.White,
                 modifier = Modifier.weight(1f),
             )
@@ -592,9 +668,15 @@ private fun ImageInfoRow(label: String, value: @Composable () -> String?) {
             color = Color.White.copy(alpha = 0.6f),
         )
         Text(
-            text = value() ?: "—",
+            text = value() ?: stringResource(R.string.image_viewer_info_empty),
             style = MaterialTheme.typography.bodySmall,
             color = Color.White,
+            textAlign = TextAlign.End,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 16.dp),
         )
     }
 }

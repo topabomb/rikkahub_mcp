@@ -25,11 +25,15 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.openai.ChatCompletionsAPI
 import me.rerere.ai.provider.providers.openai.ResponseAPI
+import me.rerere.ai.provider.images.ParsedImageGenerationItem
+import me.rerere.ai.provider.images.moderationBlockedImageException
+import me.rerere.ai.provider.images.parseImageGenerationResponseBody
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.configureReferHeaders
+import me.rerere.ai.util.formatProviderHttpError
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.toHeaders
@@ -243,7 +247,7 @@ class OpenAIProvider(
         val items = withContext(Dispatchers.IO) {
             val response = client.newCall(request).await()
             if (!response.isSuccessful) {
-                error("Failed to generate image: ${response.code} ${response.body?.string()}")
+                throw formatProviderHttpError(response.code, response.body?.string())
             }
             parseImageResponse(response.body.string())
         }
@@ -307,7 +311,7 @@ class OpenAIProvider(
         val items = withContext(Dispatchers.IO) {
             val response = client.newCall(request).await()
             if (!response.isSuccessful) {
-                error("Failed to edit image: ${response.code} ${response.body?.string()}")
+                throw formatProviderHttpError(response.code, response.body?.string())
             }
             parseImageResponse(response.body.string())
         }
@@ -316,22 +320,17 @@ class OpenAIProvider(
     }
 
     private suspend fun parseImageResponse(bodyStr: String): List<ImageGenerationItem> {
-        val body = json.parseToJsonElement(bodyStr).jsonObject
-        val defaultFormat = body["output_format"]?.jsonPrimitive?.contentOrNull ?: "png"
-        val data = body["data"]?.jsonArray ?: error("No data in image response")
-        return data.map { element ->
-            val obj = element.jsonObject
-            val b64Json = obj["b64_json"]?.jsonPrimitive?.contentOrNull
-            if (b64Json != null) {
-                val outputFormat = obj["output_format"]?.jsonPrimitive?.contentOrNull ?: defaultFormat
-                ImageGenerationItem(
-                    data = b64Json,
-                    mimeType = outputFormat.toImageMimeType(),
+        val parsed = parseImageGenerationResponseBody(bodyStr)
+        if (parsed.allBlockedByModeration && parsed.items.isEmpty()) {
+            throw moderationBlockedImageException()
+        }
+        return parsed.items.map { item ->
+            when (item) {
+                is ParsedImageGenerationItem.Base64Json -> ImageGenerationItem(
+                    data = item.data,
+                    mimeType = item.mimeType,
                 )
-            } else {
-                val url = obj["url"]?.jsonPrimitive?.contentOrNull
-                    ?: error("No b64_json or url in image response")
-                downloadImageAsBase64(url)
+                is ParsedImageGenerationItem.RemoteUrl -> downloadImageAsBase64(item.url)
             }
         }
     }
@@ -345,7 +344,7 @@ class OpenAIProvider(
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
-            error("Failed to download generated image: ${response.code} ${response.body.string()}")
+            throw formatProviderHttpError(response.code, response.body.string())
         }
 
         val body = response.body
@@ -359,12 +358,6 @@ class OpenAIProvider(
     }
 
     private fun File.imageMediaType(): String = when (extension.lowercase()) {
-        "jpg", "jpeg" -> "image/jpeg"
-        "webp" -> "image/webp"
-        else -> "image/png"
-    }
-
-    private fun String.toImageMimeType(): String = when (lowercase()) {
         "jpg", "jpeg" -> "image/jpeg"
         "webp" -> "image/webp"
         else -> "image/png"

@@ -102,6 +102,9 @@ import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import net.weero.measix.pilot.ui.components.message.ChatMessage
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
 import net.weero.measix.pilot.ui.components.message.collectMessageImageUrls
+import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewActions
+import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewOverlay
+import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
 import net.weero.measix.pilot.ui.theme.asChatChrome
 import net.weero.measix.pilot.ui.components.ui.ErrorCardsDisplay
 import net.weero.measix.pilot.ui.components.ui.ListSelectableItem
@@ -350,8 +353,14 @@ private fun ChatListNormal(
                 }
             }
         }
+        val backgroundHost = rememberImageBackgroundHost(settings, assistant.id)
+        val previewActions = remember(backgroundHost.action) { listOf(backgroundHost.action) }
 
-        CompositionLocalProvider(LocalConversationImages provides conversationAlbum) {
+        CompositionLocalProvider(
+            LocalConversationImages provides conversationAlbum,
+            LocalImagePreviewActions provides previewActions,
+            LocalImagePreviewOverlay provides backgroundHost.overlay,
+        ) {
             ChatFontProvider(displaySetting = settings.displaySetting) {
                 LazyColumn(
                     state = state,

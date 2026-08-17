@@ -45,11 +45,12 @@ fun AdaptiveModal(
     sheetState: SheetState? = null,
     sheetGesturesEnabled: Boolean = true,
     dragHandle: @Composable (() -> Unit)? = { BottomSheetDefaults.DragHandle() },
+    forceDialog: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val adaptiveInfo = LocalAdaptiveLayoutInfo.current
 
-    if (adaptiveInfo.useExpandedModal) {
+    if (forceDialog || adaptiveInfo.useExpandedModal) {
         val safeDrawingPadding = WindowInsets.safeDrawing.asPaddingValues()
         val layoutDirection = LocalLayoutDirection.current
         val verticalHinge = adaptiveInfo.primaryVerticalHingeBounds

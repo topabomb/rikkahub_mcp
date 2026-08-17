@@ -17,8 +17,11 @@ import coil3.request.allowHardware
 import coil3.request.crossfade
 import coil3.request.placeholder
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.ui.components.ui.ImagePreviewAction
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDialog
 import net.weero.measix.pilot.ui.components.ui.LocalExportContext
+import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewActions
+import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewOverlay
 import net.weero.measix.pilot.ui.modifier.shimmer
 import net.weero.measix.pilot.ui.theme.LocalDarkMode
 
@@ -31,6 +34,8 @@ fun ZoomableAsyncImage(
     contentScale: ContentScale = ContentScale.Fit,
     alpha: Float = DefaultAlpha,
     albumProvider: (() -> List<String>)? = null,
+    extraActions: List<ImagePreviewAction>? = null,
+    overlay: (@Composable () -> Unit)? = null,
 ) {
     var showImageViewer by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -49,7 +54,10 @@ fun ZoomableAsyncImage(
         modifier = modifier
             .shimmer(isLoading = loading)
             .clickable {
-                showImageViewer = true
+                val album = albumProvider?.invoke().orEmpty()
+                if (resolveViewerImages(album, model).first.isNotEmpty()) {
+                    showImageViewer = true
+                }
             },
         contentScale = contentScale,
         alpha = alpha,
@@ -65,14 +73,24 @@ fun ZoomableAsyncImage(
         },
     )
     if (showImageViewer) {
-        // 点击期求值会话相册; 相册为空(宿主未提供或会话无图)回退单图
+        // 点击期求值会话相册; 命中从该张浏览整本, 未命中或相册为空则单图
         val album = albumProvider?.invoke().orEmpty()
-        val viewerImages = album.ifEmpty { listOf(model ?: "") }
-        val startIndex = album.indexOf(model).takeIf { it >= 0 } ?: 0
-        ImagePreviewDialog(
-            images = viewerImages,
-            onDismissRequest = { showImageViewer = false },
-            initialIndex = startIndex,
-        )
+        val (viewerImages, startIndex) = resolveViewerImages(album, model)
+        if (viewerImages.isNotEmpty()) {
+            ImagePreviewDialog(
+                images = viewerImages,
+                onDismissRequest = { showImageViewer = false },
+                initialIndex = startIndex,
+                extraActions = extraActions ?: LocalImagePreviewActions.current,
+                overlay = overlay ?: LocalImagePreviewOverlay.current,
+            )
+        }
     }
+}
+
+internal fun resolveViewerImages(album: List<String>, model: String?): Pair<List<String>, Int> {
+    val url = model?.trim().orEmpty()
+    if (url.isEmpty()) return emptyList<String>() to 0
+    val index = album.indexOf(url)
+    return if (index >= 0) album to index else listOf(url) to 0
 }

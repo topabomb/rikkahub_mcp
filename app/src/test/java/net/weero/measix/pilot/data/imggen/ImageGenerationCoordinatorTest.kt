@@ -22,6 +22,8 @@ import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.ui.ImageGenerationItem
+import me.rerere.ai.util.HttpException
+import me.rerere.ai.util.CONTENT_BLOCKED_MODEL_DETAIL
 import net.weero.measix.pilot.data.repository.GenMediaRepository
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -49,6 +51,9 @@ class ImageGenerationCoordinatorTest {
     )
 
     private fun tempDir(prefix: String): File = createTempDirectory(prefix).toFile()
+
+    private fun completedImageFiles(filesDir: File): List<File> =
+        File(filesDir, "images").listFiles().orEmpty().filter { it.isFile && !it.name.endsWith(".pending") }
 
     @Test
     fun `queue is fifo and skips partials`() = runTest {
@@ -136,8 +141,58 @@ class ImageGenerationCoordinatorTest {
                 size = "auto",
             )
         )
-        assertEquals("provider_error", (failed as ImageGenerationOutcome.Failure).reason)
+        val failure = failed as ImageGenerationOutcome.Failure
+        assertEquals("runtime_error", failure.reason)
+        assertEquals("boom", failure.detail)
         assertTrue(ok is ImageGenerationOutcome.Success)
+        filesDir.deleteRecursively()
+    }
+
+    @Test
+    fun `provider HTTP policy and rate limit become distinct reasons`() = runTest {
+        val policy = mockk<Provider<ProviderSetting>>()
+        val limited = mockk<Provider<ProviderSetting>>()
+        coEvery { policy.generateImage(any(), any()) } returns flow {
+            throw HttpException(
+                message = "Failed to get response: 400 moderation_blocked Your request was rejected as a result of our safety system.",
+                statusCode = 400,
+                errorCode = "moderation_blocked",
+                errorType = "image_generation_user_error",
+            )
+        }
+        coEvery { limited.generateImage(any(), any()) } returns flow {
+            throw HttpException(
+                message = "Failed to get response: 429 rate_limit_exceeded Please retry after 1 second.",
+                statusCode = 429,
+                errorCode = "rate_limit_exceeded",
+            )
+        }
+        val filesDir = tempDir("img-classify")
+        val repository = mockk<GenMediaRepository>()
+        val coordinator = ImageGenerationCoordinator(
+            this,
+            GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
+        )
+        val blocked = coordinator.enqueue(
+            ImageGenerationRequest(
+                source = ImageGenerationSource.Page("a"),
+                selection = available(policy),
+                prompt = "bad",
+                size = "auto",
+            )
+        ) as ImageGenerationOutcome.Failure
+        val rate = coordinator.enqueue(
+            ImageGenerationRequest(
+                source = ImageGenerationSource.Page("b"),
+                selection = available(limited),
+                prompt = "later",
+                size = "auto",
+            )
+        ) as ImageGenerationOutcome.Failure
+        assertEquals("content_blocked", blocked.reason)
+        assertEquals(CONTENT_BLOCKED_MODEL_DETAIL, blocked.detail)
+        assertEquals("rate_limited", rate.reason)
+        assertTrue(rate.detail.orEmpty().contains("1 second"))
         filesDir.deleteRecursively()
     }
 
@@ -481,10 +536,18 @@ class ImageGenerationCoordinatorTest {
         result.cancel()
         result.join()
         advanceUntilIdle()
-        withContext(Dispatchers.IO) { }
         assertTrue(result.getCompletionExceptionOrNull() is kotlinx.coroutines.CancellationException)
-        val leftovers = File(filesDir, "images").listFiles().orEmpty().filter { it.isFile }
-        assertTrue(leftovers.none { !it.name.endsWith(".pending") })
+        val leftovers = withContext(Dispatchers.IO) {
+            var remaining = completedImageFiles(filesDir)
+            var spins = 0
+            while (remaining.isNotEmpty() && spins < 20) {
+                Thread.sleep(10)
+                remaining = completedImageFiles(filesDir)
+                spins++
+            }
+            remaining
+        }
+        assertTrue(leftovers.isEmpty())
         filesDir.deleteRecursively()
     }
 

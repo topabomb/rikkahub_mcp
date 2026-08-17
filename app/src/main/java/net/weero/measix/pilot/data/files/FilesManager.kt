@@ -23,11 +23,14 @@ import me.rerere.common.android.Logging
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.db.entity.ManagedFileEntity
 import net.weero.measix.pilot.data.repository.FilesRepository
+import net.weero.measix.pilot.utils.ImageExportResult
 import net.weero.measix.pilot.utils.exportImage
 import net.weero.measix.pilot.utils.exportImageFile
 import net.weero.measix.pilot.utils.getActivity
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
+
+internal const val IMAGE_SAVE_PERMISSION_REQUIRED = "permission_required"
 
 class FilesManager(
     private val context: Context,
@@ -306,43 +309,55 @@ class FilesManager(
     }
 
     @OptIn(ExperimentalEncodingApi::class)
-    suspend fun saveMessageImage(activityContext: Context, image: String) = withContext(Dispatchers.IO) {
+    suspend fun saveMessageImage(activityContext: Context, image: String): String = withContext(Dispatchers.IO) {
         val activity = requireNotNull(activityContext.getActivity()) { "Activity not found" }
+        val fileName = "MeasixPilot_${System.currentTimeMillis()}.png"
         when {
             image.startsWith("data:image") -> {
                 val byteArray = Base64.decode(image.substringAfter("base64,").toByteArray())
                 val bitmap = BitmapFactory.decodeByteArray(byteArray, 0, byteArray.size)
-                activityContext.exportImage(activity, bitmap)
+                    ?: error("Failed to decode image")
+                requireExportSuccess(activityContext.exportImage(activity, bitmap, fileName))
             }
 
             image.startsWith("file:") -> {
                 val file = image.toUri().toFile()
-                activityContext.exportImageFile(activity, file)
+                requireExportSuccess(activityContext.exportImageFile(activity, file, fileName))
             }
 
             image.startsWith("/") -> {
-                activityContext.exportImageFile(activity, File(image))
+                requireExportSuccess(activityContext.exportImageFile(activity, File(image), fileName))
             }
 
             image.startsWith("http") -> {
-                runCatching {
-                    val url = URL(image)
-                    val connection = url.openConnection() as HttpURLConnection
+                val url = URL(image)
+                val connection = url.openConnection() as HttpURLConnection
+                try {
+                    connection.connectTimeout = 15_000
+                    connection.readTimeout = 15_000
+                    connection.instanceFollowRedirects = true
                     connection.connect()
-
-                    if (connection.responseCode == HttpURLConnection.HTTP_OK) {
-                        val bitmap = BitmapFactory.decodeStream(connection.inputStream)
-                        activityContext.exportImage(activity, bitmap)
-                    } else {
-                        Log.e(
-                            TAG,
-                            "saveMessageImage: Failed to download image from $image, response code: ${connection.responseCode}"
-                        )
+                    check(connection.responseCode == HttpURLConnection.HTTP_OK) {
+                        "HTTP ${connection.responseCode}"
                     }
-                }.getOrNull()
+                    val bitmap = BitmapFactory.decodeStream(connection.inputStream)
+                        ?: error("Failed to decode image")
+                    requireExportSuccess(activityContext.exportImage(activity, bitmap, fileName))
+                } finally {
+                    connection.disconnect()
+                }
             }
 
             else -> error("Invalid image format")
+        }
+        fileName
+    }
+
+    private fun requireExportSuccess(result: ImageExportResult) {
+        when (result) {
+            ImageExportResult.Success -> Unit
+            ImageExportResult.PermissionRequired -> error(IMAGE_SAVE_PERMISSION_REQUIRED)
+            ImageExportResult.Failed -> error("Failed to save image")
         }
     }
 

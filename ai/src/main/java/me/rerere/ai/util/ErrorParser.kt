@@ -6,19 +6,51 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
+private const val FORMATTED_HTTP_MESSAGE_MAX_CHARS = 2 * 1024
+private const val ENVELOPE_WALK_DEPTH = 6
+
 class HttpException(
-    message: String
+    message: String,
+    val statusCode: Int? = null,
+    val errorCode: String? = null,
+    val errorType: String? = null,
 ) : RuntimeException(message)
 
+data class ProviderErrorEnvelope(
+    val message: String? = null,
+    val code: String? = null,
+    val type: String? = null,
+) {
+    val hasSignal: Boolean
+        get() = !message.isNullOrBlank() || !code.isNullOrBlank() || !type.isNullOrBlank()
+}
+
 fun formatProviderHttpError(code: Int, body: String?): HttpException {
-    val parsed = body?.let(::parseStructuredHttpError)
-    return if (parsed.isNullOrBlank()) {
-        HttpException("Failed to get response: $code")
+    val envelope = body?.let(::parseProviderErrorEnvelope)
+    val extracted = envelope?.message
+        ?.let(::redactProviderSecrets)
+        ?.let(::collapseProviderErrorText)
+        ?.takeIf { it.isNotEmpty() }
+        ?: body?.let(::parseStructuredHttpError)?.let(::redactProviderSecrets)
+    val clipped = extracted?.let { clipProviderDetail(it, FORMATTED_HTTP_MESSAGE_MAX_CHARS) }
+    val suffix = buildString {
+        envelope?.code?.trim()?.takeIf { it.isNotEmpty() }?.let { append(it).append(' ') }
+        if (!clipped.isNullOrBlank() && clipped != envelope?.code) append(clipped)
+    }.trim()
+    val message = if (suffix.isEmpty()) {
+        "Failed to get response: $code"
     } else {
-        HttpException("Failed to get response: $code $parsed")
+        "Failed to get response: $code $suffix"
     }
+    return HttpException(
+        message = message,
+        statusCode = code,
+        errorCode = envelope?.code?.trim()?.takeIf { it.isNotEmpty() },
+        errorType = envelope?.type?.trim()?.takeIf { it.isNotEmpty() },
+    )
 }
 
 fun parseStructuredHttpError(body: String): String? {
@@ -28,10 +60,45 @@ fun parseStructuredHttpError(body: String): String? {
     return runCatching {
         Json.parseToJsonElement(trimmed).parseErrorDetail().message
     }.getOrNull()
-        ?.replace(Regex("[\\t\\r\\n]+"), " ")
-        ?.replace(Regex(" {2,}"), " ")
-        ?.trim()
+        ?.let(::collapseProviderErrorText)
         ?.takeIf { it.isNotEmpty() }
+}
+
+fun parseProviderErrorEnvelope(body: String): ProviderErrorEnvelope? {
+    val trimmed = body.trim()
+    if (trimmed.isEmpty() || trimmed.startsWith("<")) return null
+    return runCatching {
+        extractProviderErrorEnvelope(Json.parseToJsonElement(trimmed))
+    }.getOrNull()?.takeIf { it.hasSignal }
+}
+
+fun extractProviderErrorEnvelope(element: JsonElement, depth: Int = 0): ProviderErrorEnvelope {
+    if (depth > ENVELOPE_WALK_DEPTH) return ProviderErrorEnvelope()
+    return when (element) {
+        is JsonObject -> {
+            val nestedElement = element["error"] ?: element["detail"]
+            val nested = when (nestedElement) {
+                null -> ProviderErrorEnvelope()
+                is JsonObject, is JsonArray -> extractProviderErrorEnvelope(nestedElement, depth + 1)
+                is JsonPrimitive -> ProviderErrorEnvelope(message = nestedElement.contentOrNull?.trim())
+                else -> ProviderErrorEnvelope()
+            }
+            ProviderErrorEnvelope(
+                message = firstNonBlank(nested.message, stringField(element, "message"), stringField(element, "description")),
+                code = firstNonBlank(nested.code, stringField(element, "code")),
+                type = firstNonBlank(nested.type, stringField(element, "type")),
+            )
+        }
+
+        is JsonArray -> {
+            if (element.isEmpty()) ProviderErrorEnvelope()
+            else extractProviderErrorEnvelope(element.first(), depth + 1)
+        }
+
+        is JsonPrimitive -> ProviderErrorEnvelope(message = element.contentOrNull?.trim())
+
+        else -> ProviderErrorEnvelope()
+    }
 }
 
 fun JsonElement.parseErrorDetail(): HttpException {
@@ -72,3 +139,14 @@ fun JsonElement.parseErrorDetail(): HttpException {
         }
     }
 }
+
+private fun stringField(obj: JsonObject, key: String): String? {
+    val value = obj[key] ?: return null
+    return when (value) {
+        is JsonPrimitive -> value.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+        else -> null
+    }
+}
+
+private fun firstNonBlank(vararg values: String?): String? =
+    values.firstOrNull { !it.isNullOrBlank() }

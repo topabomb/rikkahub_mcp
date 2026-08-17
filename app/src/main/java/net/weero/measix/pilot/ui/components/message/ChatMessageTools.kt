@@ -1,6 +1,8 @@
 package net.weero.measix.pilot.ui.components.message
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -27,12 +29,16 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import com.dokar.sonner.Toaster
+import com.dokar.sonner.rememberToasterState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -58,7 +64,9 @@ import net.weero.measix.pilot.ui.components.message.tools.ToolUIRegistry
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.ui.components.ui.ChainOfThoughtScope
 import net.weero.measix.pilot.ui.components.ui.DotLoading
+import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.modifier.shimmer
+import net.weero.measix.pilot.ui.theme.LocalDarkMode
 import net.weero.measix.pilot.utils.JsonInstant
 import org.koin.compose.koinInject
 
@@ -202,14 +210,24 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                             modifier = Modifier.wrapContentWidth(),
                         ) {
                             items(images) { image ->
-                                ZoomableAsyncImage(
-                                    model = image.url,
-                                    contentDescription = null,
-                                    modifier = Modifier
-                                        .height(64.dp)
-                                        .wrapContentWidth(),
-                                    albumProvider = conversationAlbum,
-                                )
+                                if (isImagePartLoading(image.url)) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(64.dp)
+                                            .clip(MaterialTheme.shapes.medium)
+                                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                                            .shimmer(isLoading = true)
+                                    )
+                                } else {
+                                    ZoomableAsyncImage(
+                                        model = image.url,
+                                        contentDescription = null,
+                                        modifier = Modifier
+                                            .height(64.dp)
+                                            .wrapContentWidth(),
+                                        albumProvider = conversationAlbum,
+                                    )
+                                }
                             }
                         }
                     }
@@ -240,6 +258,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     }
 
     if (showResult) {
+        val modalToaster = rememberToasterState()
         AdaptiveModal(
             sheetState = rememberBottomSheetState(
                 initialValue = SheetValue.Hidden,
@@ -247,10 +266,21 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             ),
             onDismissRequest = { showResult = false },
             content = {
-                renderer.Preview(
-                    context = context,
-                    onDismissRequest = { showResult = false },
-                )
+                CompositionLocalProvider(LocalToaster provides modalToaster) {
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        renderer.Preview(
+                            context = context,
+                            onDismissRequest = { showResult = false },
+                        )
+                        Toaster(
+                            state = modalToaster,
+                            darkTheme = LocalDarkMode.current,
+                            richColors = true,
+                            alignment = Alignment.TopCenter,
+                            showCloseButton = true,
+                        )
+                    }
+                }
             },
         )
     }

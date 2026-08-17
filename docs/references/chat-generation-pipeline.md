@@ -154,6 +154,16 @@ MCP 连接、休眠与恢复不由生成链路持有；`McpManager` 负责连接
 下一轮请求会通过 `ToolArtifactReplayTransformer` 按 artifact metadata 重写历史 Tool Result
 的 `/upload/<file>` 与 Image URL；找不到文件时不得伪造可读路径。
 
+`OpenAIProvider.generateImage` / `editImage` 走 `/images/generations` 与 `/images/edits`，
+失败时抛带 HTTP 状态和 `error.code` / `error.type` 的 `HttpException`，不再把原始响应体塞进
+`error()`。`ImageGenerationCoordinator` 用 `classifyProviderFailure()` 把异常分成政策拒绝、
+限流、额度、鉴权、权限、非法请求、服务不可用、其余 Provider 错误和运行时错误。
+OpenAI Images 的 `moderation_blocked` / `content_policy_violation`，以及 xAI Imagine 的
+`respect_moderation=false`，都记为 `content_blocked`。HTTP 成功但带 `error` 信封且没有图片时，
+按信封分类（政策拒绝仍是 `content_blocked`，限流、额度等保持对应 kind）。
+`data` 为空或 200 没有图片、也没有审核标记时记为 `invalid_result`。
+工具只把稳定 `reason` 和裁剪后的 `detail` 回给模型；政策类 `detail` 不回传检查类型。
+
 ## 上下文、缓存与压缩
 
 ### 请求级阶梯裁剪

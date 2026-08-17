@@ -34,4 +34,24 @@ class ImagePreviewDialogProgressTest {
         assertEquals(0f, overlayAlpha(height * 0.5f, height))
         assertEquals(0f, overlayAlpha(height, height))
     }
+
+    @Test
+    fun `save error maps permission separately from generic failures`() {
+        assertEquals(
+            "grant",
+            imageSaveErrorMessage(
+                message = net.weero.measix.pilot.data.files.IMAGE_SAVE_PERMISSION_REQUIRED,
+                permissionText = "grant",
+                failedFormat = "failed: %s",
+            ),
+        )
+        assertEquals(
+            "failed: HTTP 404",
+            imageSaveErrorMessage(
+                message = "HTTP 404",
+                permissionText = "grant",
+                failedFormat = "failed: %s",
+            ),
+        )
+    }
 }

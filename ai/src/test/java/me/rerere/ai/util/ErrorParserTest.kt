@@ -36,5 +36,29 @@ class ErrorParserTest {
         val error = formatProviderHttpError(429, """{"error":{"message":"$huge"}}""")
         assertTrue(error.message.orEmpty().startsWith("Failed to get response: 429 "))
         assertFalse(error.message.orEmpty().contains("{"))
+        assertTrue(error.message.orEmpty().length <= 3_000)
+    }
+
+    @Test
+    fun `envelope keeps code type and status`() {
+        val error = formatProviderHttpError(
+            400,
+            """{"error":{"message":"Your request was rejected as a result of our safety system.","type":"image_generation_user_error","code":"moderation_blocked"}}""",
+        )
+        assertEquals(400, error.statusCode)
+        assertEquals("moderation_blocked", error.errorCode)
+        assertEquals("image_generation_user_error", error.errorType)
+        assertTrue(error.message.orEmpty().contains("moderation_blocked"))
+        assertTrue(error.message.orEmpty().contains("safety system"))
+    }
+
+    @Test
+    fun `xAI style top level message and code are extracted`() {
+        val error = formatProviderHttpError(
+            401,
+            """{"code":"unauthorized","message":"No authorization header or an invalid authorization token was provided."}""",
+        )
+        assertEquals("unauthorized", error.errorCode)
+        assertTrue(error.message.orEmpty().contains("authorization"))
     }
 }

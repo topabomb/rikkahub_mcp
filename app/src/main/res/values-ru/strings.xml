@@ -248,6 +248,14 @@
   <string name="chat_message_tool_generate_image_failed_revoked">Image tool was disabled</string>
   <string name="chat_message_tool_generate_image_failed_model_changed">Image model changed</string>
   <string name="chat_message_tool_generate_image_failed_provider">Image provider error</string>
+  <string name="chat_message_tool_generate_image_failed_content_blocked">Изображение заблокировано политикой использования модели</string>
+  <string name="chat_message_tool_generate_image_failed_rate_limited">Достигнут лимит частоты запросов сервиса изображений</string>
+  <string name="chat_message_tool_generate_image_failed_quota_exhausted">Исчерпана квота или кредиты сервиса изображений</string>
+  <string name="chat_message_tool_generate_image_failed_auth">Сервис изображений отклонил ключ API</string>
+  <string name="chat_message_tool_generate_image_failed_permission">Сервис изображений отказал в доступе</string>
+  <string name="chat_message_tool_generate_image_failed_invalid_request">Сервис изображений отклонил запрос</string>
+  <string name="chat_message_tool_generate_image_failed_unavailable">Сервис изображений временно недоступен</string>
+  <string name="chat_message_tool_generate_image_failed_runtime">Неожиданная ошибка генерации изображения</string>
   <string name="chat_message_tool_generate_image_failed_invalid_result">Image provider returned no final image</string>
   <string name="chat_message_tool_generate_image_failed_persistence">Failed to save the generated image</string>
   <string name="chat_message_tool_generate_image_failed_artifact_missing">Файл сгенерированного изображения больше недоступен</string>
@@ -261,7 +269,6 @@
   <string name="chat_message_tool_generate_image_provider">Провайдер: %1$s</string>
   <string name="chat_message_tool_generate_image_file_path">Файл</string>
   <string name="chat_message_tool_generate_image_copy_path">Копировать путь</string>
-  <string name="chat_message_tool_generate_image_technical_details">Технические сведения</string>
   <string name="chat_message_tool_generate_image_prompt_label">Промпт</string>
   <string name="chat_message_tool_scrape_prefix">Собрать данные с сайта: %1$s</string>
   <string name="chat_message_tool_scrape_web">Собрать данные со страницы</string>
@@ -426,10 +433,10 @@
   <string name="imggen_page_save">Сохранить</string>
   <string name="imggen_page_save_failed">Не удалось сохранить: %1$s</string>
   <string name="imggen_page_delete_image_title">Удалить изображение</string>
-  <string name="imggen_page_delete_image_confirmation">Оригинал изображения «%1$s» (создано %2$s) будет безвозвратно удалён из галереи. Копии в чатах не затрагиваются. Действие нельзя отменить.</string>
+  <string name="imggen_page_delete_image_confirmation">Оригинал изображения «%1$s» будет безвозвратно удалён из галереи. Копии в чатах не затрагиваются. Действие нельзя отменить.</string>
   <string name="imggen_page_no_prompt">Без промпта</string>
   <string name="image_viewer_saving">Сохранение…</string>
-  <string name="image_viewer_saved">Изображение сохранено</string>
+  <string name="image_viewer_saved">Сохранено в галерею как %1$s</string>
   <string name="image_viewer_save_failed">Не удалось сохранить: %1$s</string>
   <string name="image_viewer_save_content_description">Сохранить изображение</string>
   <string name="setting_files_page_delete_upload_confirmation">Файл «%1$s» будет безвозвратно удалён. Если на него ссылаются вложения чатов или фоны ассистентов, в этих местах он больше не отобразится. Действие нельзя отменить.</string>
@@ -1393,7 +1400,21 @@
   <string name="setting_files_page_folder_generated_images">Сгенерированные изображения</string>
   <string name="setting_files_page_generated_no_prompt">Нет подсказки</string>
   <string name="setting_files_page_generated_unknown_model">Неизвестная модель</string>
-  <string name="setting_files_page_delete_generated_confirmation">Оригинал изображения «%1$s» (создано %2$s) будет безвозвратно удалён из галереи. Копии в чатах и фонах не затрагиваются. Действие нельзя отменить.</string>
+  <string name="setting_files_page_delete_generated_confirmation">Оригинал изображения «%1$s» будет безвозвратно удалён из галереи. Копии в чатах и фонах не затрагиваются. Действие нельзя отменить.</string>
   <string name="setting_files_page_clean_generated_confirmation">Все %1$d сгенерированных изображений в галерее будут безвозвратно удалены. Копии в чатах и фонах не затрагиваются. Действие нельзя отменить.</string>
+  <string name="image_viewer_set_as_background">Сделать фоном</string>
+  <string name="image_viewer_background_setting">Установка фона…</string>
+  <string name="image_viewer_background_set">Установлено как фон «%1$s»</string>
+  <string name="image_viewer_background_failed">Не удалось установить фон: %1$s</string>
+  <string name="image_viewer_select_assistant_title">Выберите ассистента</string>
+  <string name="image_viewer_background_confirm_title">Сделать фоном?</string>
+  <string name="image_viewer_background_confirm_message">Сделать это изображение фоном для «%1$s»? Текущий фон или градиент будет заменён.</string>
+  <string name="image_viewer_background_confirm_action">Сделать фоном</string>
+  <string name="image_viewer_info_empty">—</string>
+  <string name="chat_message_tool_generate_image_copy_prompt">Копировать подсказку</string>
+  <string name="chat_message_tool_generate_image_call_details">Сведения о вызове</string>
+  <string name="chat_message_tool_generate_image_prompt_copied">Подсказка скопирована</string>
+  <string name="chat_message_tool_generate_image_path_copied">Путь скопирован</string>
+  <string name="image_viewer_save_need_permission">Разрешите доступ к хранилищу и сохраните снова</string>
 </resources>
 

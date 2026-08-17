@@ -1,10 +1,13 @@
 package net.weero.measix.pilot.ui.components.message.tools
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -13,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
@@ -28,9 +32,11 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Tools
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
+import net.weero.measix.pilot.ui.components.message.isImagePartLoading
 import net.weero.measix.pilot.ui.components.richtext.HighlightCodeBlock
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.ui.components.ui.FormItem
+import net.weero.measix.pilot.ui.modifier.shimmer
 import net.weero.measix.pilot.utils.JsonInstant
 import net.weero.measix.pilot.utils.JsonInstantPretty
 import net.weero.measix.pilot.utils.jsonPrimitiveOrNull
@@ -146,47 +152,73 @@ fun DefaultToolPreview(
             )
             headerActions?.invoke()
         }
+        ToolCallJsonDetails(context = context, includeImages = true)
+    }
+}
+
+/**
+ * 工具调用的入参 / 结果 JSON, 与默认详情及文生图「调用详情」共用同一套样式。
+ */
+@Composable
+fun ToolCallJsonDetails(
+    context: ToolUIContext,
+    includeImages: Boolean = true,
+) {
+    FormItem(
+        label = {
+            Text(stringResource(R.string.chat_message_tool_call_label, context.tool.toolName))
+        }
+    ) {
+        HighlightCodeBlock(
+            code = JsonInstantPretty.encodeToString(context.arguments),
+            language = "json",
+            style = TextStyle(fontSize = 10.sp, lineHeight = 12.sp)
+        )
+    }
+    val resultParts = context.tool.output.filter { part ->
+        part is UIMessagePart.Text || (includeImages && part is UIMessagePart.Image)
+    }
+    if (resultParts.isNotEmpty()) {
+        val conversationAlbum = LocalConversationImages.current
         FormItem(
             label = {
-                Text(stringResource(R.string.chat_message_tool_call_label, context.tool.toolName))
+                Text(stringResource(R.string.chat_message_tool_call_result))
             }
         ) {
-            HighlightCodeBlock(
-                code = JsonInstantPretty.encodeToString(context.arguments),
-                language = "json",
-                style = TextStyle(fontSize = 10.sp, lineHeight = 12.sp)
-            )
-        }
-        if (context.tool.output.isNotEmpty()) {
-            // 会话级时序相册: 稳定 provider, 点击期由 ZoomableAsyncImage 求值
-            val conversationAlbum = LocalConversationImages.current
-            FormItem(
-                label = {
-                    Text(stringResource(R.string.chat_message_tool_call_result))
-                }
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    context.tool.output.fastForEach { part ->
-                        when (part) {
-                            is UIMessagePart.Text -> HighlightCodeBlock(
-                                code = runCatching {
-                                    JsonInstantPretty.encodeToString(
-                                        JsonInstant.parseToJsonElement(part.text)
-                                    )
-                                }.getOrElse { part.text },
-                                language = "json",
-                                style = TextStyle(fontSize = 10.sp, lineHeight = 12.sp)
-                            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                resultParts.fastForEach { part ->
+                    when (part) {
+                        is UIMessagePart.Text -> HighlightCodeBlock(
+                            code = runCatching {
+                                JsonInstantPretty.encodeToString(
+                                    JsonInstant.parseToJsonElement(part.text)
+                                )
+                            }.getOrElse { part.text },
+                            language = "json",
+                            style = TextStyle(fontSize = 10.sp, lineHeight = 12.sp)
+                        )
 
-                            is UIMessagePart.Image -> ZoomableAsyncImage(
-                                model = part.url,
-                                contentDescription = null,
-                                modifier = Modifier.fillMaxWidth(),
-                                albumProvider = conversationAlbum,
-                            )
-
-                            else -> {}
+                        is UIMessagePart.Image -> {
+                            if (isImagePartLoading(part.url)) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(160.dp)
+                                        .clip(MaterialTheme.shapes.medium)
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                        .shimmer(isLoading = true)
+                                )
+                            } else {
+                                ZoomableAsyncImage(
+                                    model = part.url,
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    albumProvider = conversationAlbum,
+                                )
+                            }
                         }
+
+                        else -> {}
                     }
                 }
             }

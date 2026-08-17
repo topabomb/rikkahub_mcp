@@ -75,6 +75,11 @@ host
 
 这些枚举是内部协议状态，不是用户设置。不得新增持久化的“方言”开关来修复单个 host，也不得用 modelId 猜测未知网关背后的 endpoint。
 
+独立文生图走同一 OpenAI-compatible host 的 `/images/generations` 与 `/images/edits`。HTTP 失败通过 `formatProviderHttpError()` 变成带 `statusCode` / `errorCode` / `errorType` 的 `HttpException`。
+OpenAI Images 使用 `error.code`（如 `moderation_blocked`、`content_policy_violation`、`rate_limit_exceeded`、`credit_balance_exhausted`、`invalid_api_key`）；
+xAI Imagine 使用相同信封或顶层 `code`/`message`，并可能在 200 响应里用 `respect_moderation=false` 标记审核未通过。
+分类与工具回传见 [`chat-generation-pipeline.md`](chat-generation-pipeline.md) 与 [`prompts-and-tools.md`](prompts-and-tools.md)。
+
 ## 4. Chat Completions
 
 `ChatCompletionsAPI` 负责：
@@ -246,9 +251,13 @@ ai/src/main/java/me/rerere/ai/
 │  ├─ openai/OpenAIEndpointProfile.kt
 │  ├─ openai/ChatCompletionsAPI.kt
 │  ├─ openai/ResponseAPI.kt
+│  ├─ OpenAIProvider.kt
 │  ├─ ClaudeProvider.kt
 │  ├─ GoogleProvider.kt
 │  └─ ProviderMessageUtils.kt
+├─ provider/images/ImageGenerationResponseParser.kt
+├─ util/ErrorParser.kt
+├─ util/ProviderFailure.kt
 ├─ registry/ModelRegistry.kt
 └─ ui/
    ├─ Message.kt
@@ -259,6 +268,9 @@ ai/src/main/java/me/rerere/ai/
 
 - [OpenAI Chat Completions API](https://platform.openai.com/docs/api-reference/chat)
 - [OpenAI Responses API](https://platform.openai.com/docs/api-reference/responses)
+- [OpenAI Error codes](https://developers.openai.com/api/docs/guides/error-codes)
+- [xAI Imagine Image Generation](https://docs.x.ai/developers/model-capabilities/images/generation)
+- [xAI Debugging Errors](https://docs.x.ai/developers/debugging)
 - [Anthropic Messages API](https://platform.claude.com/docs/en/api/messages)
 - [Anthropic thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
 - [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)

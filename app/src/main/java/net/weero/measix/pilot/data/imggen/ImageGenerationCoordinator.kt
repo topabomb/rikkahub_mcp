@@ -18,6 +18,7 @@ import kotlinx.coroutines.withContext
 import me.rerere.ai.provider.ImageEditParams
 import me.rerere.ai.provider.ImageGenerationParams
 import me.rerere.ai.ui.ImageGenerationItem
+import me.rerere.ai.util.classifyProviderFailure
 import net.weero.measix.pilot.data.db.entity.GenMediaEntity
 
 sealed class ImageGenerationSource {
@@ -52,7 +53,7 @@ data class ImageGenerationRequest(
 
 sealed class ImageGenerationOutcome {
     data class Success(val media: List<CommittedGeneratedMedia>) : ImageGenerationOutcome()
-    data class Failure(val reason: String) : ImageGenerationOutcome()
+    data class Failure(val reason: String, val detail: String? = null) : ImageGenerationOutcome()
 }
 
 data class ImageGenerationFailure(val reason: String)
@@ -166,7 +167,13 @@ class ImageGenerationCoordinator(
             if (!queued.result.isCompleted) queued.result.cancel(cancelled)
         } catch (error: Throwable) {
             Log.e(TAG, "image generation failed", error)
-            queued.result.complete(ImageGenerationOutcome.Failure("provider_error"))
+            val classified = classifyProviderFailure(error)
+            queued.result.complete(
+                ImageGenerationOutcome.Failure(
+                    reason = classified.kind.reason,
+                    detail = classified.detail,
+                )
+            )
         } finally {
             queued.control.complete()
         }

@@ -95,6 +95,15 @@ class ImageGenerationToolContractTest {
     }
 
     @Test
+    fun `failed result includes clipped detail when provided`() {
+        val parts = failedResult("rate_limited", "Please retry after 2 seconds.")
+        val json = Json.parseToJsonElement((parts.single() as UIMessagePart.Text).text).jsonObject
+        assertEquals("failed", json["status"]?.jsonPrimitive?.content)
+        assertEquals("rate_limited", json["reason"]?.jsonPrimitive?.content)
+        assertEquals("Please retry after 2 seconds.", json["detail"]?.jsonPrimitive?.content)
+    }
+
+    @Test
     fun `metadata unknown version is ignored by ui helper contract`() {
         val metadata = ImageGenerationToolMetadata(version = 99, phase = "queued")
         assertTrue(metadata.version != ImageGenerationToolMetadata.CURRENT_VERSION)

@@ -249,6 +249,9 @@ verticalPaneSplit(windowWidthDp, fallbackListWidthDp, hingeBounds):
 > **例外**：全屏图片查看器（`ImagePreviewDialog`）是刻意不经过 `AdaptiveModal` 的全屏 `Dialog`
 > （`usePlatformDefaultWidth = false`、纯黑背景、自有点按/竖直拖拽关闭手势与多图翻页）。
 > 相册式浏览需要完整的屏幕空间与手势域，不适配半屏 Sheet / 有界卡片的弹层约定。
+> 场景差异通过 `extraActions` / `overlay` 与 `LocalImagePreviewActions` /
+> `LocalImagePreviewOverlay` 注入（如设为背景、确认框、助手选择器），查看器不理解助手或页面。
+> Toast 画在 Dialog 窗口内，进行中与结果共用同一 toast id，避免被全屏层挡住应用根 `Toaster`。
 > 决策依据见 [`docs/dev/image-viewer-upgrade-plan.md`](../dev/image-viewer-upgrade-plan.md)。
 
 ### 4.8 AdaptiveDialogContainer

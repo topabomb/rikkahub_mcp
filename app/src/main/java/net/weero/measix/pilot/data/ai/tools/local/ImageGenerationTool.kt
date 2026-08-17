@@ -95,11 +95,12 @@ internal fun imageGenerationSystemPrompt(descriptor: ImageGenerationModelDescrip
         "when writing the prompt.\n$json"
 }
 
-internal fun failedResult(reason: String): List<UIMessagePart> = listOf(
+internal fun failedResult(reason: String, detail: String? = null): List<UIMessagePart> = listOf(
     UIMessagePart.Text(
         buildJsonObject {
             put("status", "failed")
             put("reason", reason)
+            detail?.trim()?.takeIf { it.isNotEmpty() }?.let { put("detail", it) }
         }.toString()
     )
 )
@@ -127,7 +128,7 @@ class ImageGenerationToolFactory(
         return Tool(
             name = GENERATE_IMAGE_TOOL_NAME,
             description = "Generate one image from a text prompt, show it to the user, and return a local path " +
-                "that follow-up tools can use.",
+                "that follow-up tools can use. Failures return a stable reason and a short detail when available.",
             parameters = {
                 InputSchema.Obj(
                     properties = buildJsonObject {
@@ -262,7 +263,7 @@ private suspend fun executeGenerateImage(
                     reason = outcome.reason,
                 ),
             )
-            failedResult(outcome.reason)
+            failedResult(outcome.reason, outcome.detail)
         }
 
         is ImageGenerationOutcome.Success -> {

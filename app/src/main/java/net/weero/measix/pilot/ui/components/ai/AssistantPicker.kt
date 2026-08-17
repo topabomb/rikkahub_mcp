@@ -144,13 +144,17 @@ fun AssistantPicker(
 }
 
 @Composable
-internal fun AssistantPickerSheet(
+fun AssistantPickerSheet(
     settings: Settings,
     currentAssistant: Assistant,
     onAssistantSelected: (Assistant) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    title: String? = null,
+    forceDialog: Boolean = false,
+    allowManage: Boolean = true,
 ) {
     val defaultAssistantName = stringResource(R.string.assistant_page_default_assistant)
+    val sheetTitle = title ?: stringResource(R.string.safe_mode_switch_assistant)
 
     // 标签过滤状态
     var selectedTagIds by remember { mutableStateOf(emptySet<Uuid>()) }
@@ -179,6 +183,7 @@ internal fun AssistantPickerSheet(
 
     AdaptiveModal(
         onDismissRequest = onDismiss,
+        forceDialog = forceDialog,
     ) {
         Column(
             modifier = Modifier
@@ -188,7 +193,7 @@ internal fun AssistantPickerSheet(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                text = stringResource(R.string.safe_mode_switch_assistant),
+                text = sheetTitle,
                 style = MaterialTheme.typography.titleLarge,
                 modifier = Modifier.padding(bottom = 8.dp)
             )
@@ -265,10 +270,14 @@ internal fun AssistantPickerSheet(
                         AssistantItem(
                             assistant = assistant,
                             defaultAssistantName = defaultAssistantName,
-                            onEdit = {
-                                onDismiss()
-                                navController.navigate(Screen.AssistantDetail(assistant.id.toString()))
-                            }
+                            onEdit = if (allowManage) {
+                                {
+                                    onDismiss()
+                                    navController.navigate(Screen.AssistantDetail(assistant.id.toString()))
+                                }
+                            } else {
+                                null
+                            },
                         )
                     }
                 }
@@ -281,7 +290,7 @@ internal fun AssistantPickerSheet(
 private fun AssistantItem(
     assistant: Assistant,
     defaultAssistantName: String,
-    onEdit: () -> Unit
+    onEdit: (() -> Unit)? = null,
 ) {
     ListItem(
         leadingContent = {
@@ -291,16 +300,14 @@ private fun AssistantItem(
                 modifier = Modifier.size(32.dp)
             )
         },
-        trailingContent = {
-            IconButton(
-                onClick = {
-                    onEdit()
+        trailingContent = onEdit?.let { edit ->
+            {
+                IconButton(onClick = edit) {
+                    Icon(
+                        imageVector = HugeIcons.Edit03,
+                        contentDescription = null
+                    )
                 }
-            ) {
-                Icon(
-                    imageVector = HugeIcons.Edit03,
-                    contentDescription = null
-                )
             }
         },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
