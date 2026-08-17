@@ -109,7 +109,7 @@ DeepSeek 直连的 Chat Completions 还发送 `thinking.type`：OFF 为 `disable
 
 XHIGH 保持文档别名 `high`，只有独立的 MAX 级别才发送 `max`。官方 OpenAI 不接受 `max`，因此 `mapOfficialOpenAIReasoningEffort()` 把 MAX 落到该模型支持的最高档（`high` 或 `xhigh`）。
 
-兼容网关可能把 `choices`、`delta`、`message` 或 `tool_calls` 显式写成 JSON `null`。Chat Completions 流式解析必须用 `jsonArrayOrNull` / `jsonObjectOrNull`，不能对 `JsonNull` 强制取数组或对象，否则会中断整轮生成。
+兼容网关可能把 `choices`、`delta`、`message` 或 `tool_calls` 显式写成 JSON `null`。Chat Completions 流式解析必须用 `jsonArrayOrNull` / `jsonObjectOrNull`，不能对 `JsonNull` 强制取数组或对象，否则会中断整轮生成。`tool_calls` 数组里的空槽、`function: null`，以及 Mistral thinking 的非对象首元素，同样按空值跳过，不能强制 `jsonObject`。
 
 OpenRouter 直连 host（`openrouter.ai`）若返回结构化 `reasoning_details`，会保存在 Reasoning part 的 source-isolated metadata 中，并只在同一 host 的后续请求回传该数组。流式分片按到达顺序累积：相同 `id` 或相同 `index` 的条目合并 `text`/`summary`，新条目追加。其他 Chat Completions host 只回放可见 `reasoning_content`。
 

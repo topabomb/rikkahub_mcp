@@ -73,6 +73,7 @@ class DashScopeASRController(
         this.onTranscriptChange = onTranscriptChange
         completedTranscripts.clear()
         partialTranscripts.clear()
+        abandonSession()
         _state.update {
             ASRState(
                 status = ASRStatus.Connecting,
@@ -332,12 +333,23 @@ class DashScopeASRController(
     }
 
     private fun setError(message: String) {
+        abandonSession()
         _state.update {
             it.copy(
                 status = ASRStatus.Error,
                 errorMessage = message
             )
         }
+    }
+
+    private fun abandonSession() {
+        finishTimeoutJob?.cancel()
+        finishTimeoutJob = null
+        recorderJob?.cancel()
+        val socket = webSocket
+        webSocket = null
+        releaseRecorder()
+        socket?.cancel()
     }
 
     private fun releaseRecorder() {

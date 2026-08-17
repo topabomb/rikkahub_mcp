@@ -411,6 +411,70 @@ class ChatCompletionsAPIMessageTest {
     }
 
     @Test
+    fun `parseMessage skips null tool call elements and null function objects`() {
+        val skippedNullElement = api.parseMessage(
+            buildJsonObject {
+                put("role", "assistant")
+                put("content", "hello")
+                put("tool_calls", buildJsonArray { add(JsonNull) })
+            }
+        )
+        assertEquals("hello", skippedNullElement.parts.filterIsInstance<UIMessagePart.Text>().single().text)
+        assertTrue(skippedNullElement.parts.none { it is UIMessagePart.Tool })
+
+        val nullFunction = api.parseMessage(
+            buildJsonObject {
+                put("role", "assistant")
+                put("content", "hello")
+                put("tool_calls", buildJsonArray {
+                    add(buildJsonObject {
+                        put("id", "call-1")
+                        put("type", "function")
+                        put("function", JsonNull)
+                    })
+                })
+            }
+        )
+        val tool = nullFunction.parts.filterIsInstance<UIMessagePart.Tool>().single()
+        assertEquals("call-1", tool.toolCallId)
+        assertEquals("", tool.toolName)
+        assertEquals("", tool.input)
+    }
+
+    @Test
+    fun `parseMessage ignores non-object first content element when extracting mistral thinking`() {
+        val parsed = api.parseMessage(
+            buildJsonObject {
+                put("role", "assistant")
+                put("content", buildJsonArray { add(JsonNull) })
+            }
+        )
+        assertTrue(parsed.parts.none { it is UIMessagePart.Reasoning })
+        assertTrue(parsed.parts.none { it is UIMessagePart.Text })
+    }
+
+    @Test
+    fun `parseStreamPayload ignores null tool call elements`() {
+        val chunk = api.parseStreamPayload(
+            buildJsonObject {
+                put("id", "chunk-4")
+                put("model", "compatible")
+                put("choices", buildJsonArray {
+                    add(buildJsonObject {
+                        put("delta", buildJsonObject {
+                            put("content", "partial")
+                            put("tool_calls", buildJsonArray { add(JsonNull) })
+                        })
+                    })
+                })
+            }
+        )
+        val delta = chunk.choices.single().delta
+        assertEquals("partial", delta?.parts?.filterIsInstance<UIMessagePart.Text>()?.single()?.text)
+        assertTrue(delta?.parts?.none { it is UIMessagePart.Tool } == true)
+    }
+
+    @Test
     fun `deepseek replay should survive tool delta arriving before reasoning and content`() {
         var messages = listOf(UIMessage.user("Use a tool"))
         listOf(

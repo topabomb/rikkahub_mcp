@@ -829,7 +829,7 @@ class ChatCompletionsAPI(
             ?: jsonObject["content"]?.takeIf { it is JsonArray }?.let { arr ->
                 // Mistral接口
                 // {"id":"","object":"chat.completion.chunk","created":1772351733,"model":"magistral-medium-2509","choices":[{"index":0,"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"好的"}]}]},"finish_reason":null}]}
-                arr.jsonArrayOrNull?.getOrNull(0)?.jsonObject?.get("thinking")?.jsonArrayOrNull?.getOrNull(0)?.jsonObjectOrNull?.get(
+                arr.jsonArrayOrNull?.getOrNull(0)?.jsonObjectOrNull?.get("thinking")?.jsonArrayOrNull?.getOrNull(0)?.jsonObjectOrNull?.get(
                     "text"
                 )?.jsonPrimitiveOrNull?.contentOrNull
             }
@@ -870,18 +870,18 @@ class ChatCompletionsAPI(
                     add(UIMessagePart.Image(url = url))
                 }
                 toolCalls.forEach { toolCall ->
-                    val type = toolCall.jsonObject["type"]?.jsonPrimitive?.contentOrNull
+                    val toolCallObject = toolCall.jsonObjectOrNull ?: return@forEach
+                    val type = toolCallObject["type"]?.jsonPrimitive?.contentOrNull
                     if (!type.isNullOrEmpty() && type != "function") error("tool call type not supported: $type")
-                    val toolCallIndex = toolCall.jsonObject["index"]?.jsonPrimitive?.intOrNull
-                    val announcedToolCallId = toolCall.jsonObject["id"]?.jsonPrimitive?.contentOrNull
+                    val toolCallIndex = toolCallObject["index"]?.jsonPrimitive?.intOrNull
+                    val announcedToolCallId = toolCallObject["id"]?.jsonPrimitive?.contentOrNull
                     // Official Chat chunks may omit id after the first delta. Resolve it through index so
                     // interleaved parallel calls never append their argument fragments to another call.
                     val toolCallId = streamState?.resolveToolCallId(toolCallIndex, announcedToolCallId)
                         ?: announcedToolCallId
-                    val toolName =
-                        toolCall.jsonObject["function"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull
-                    val arguments =
-                        toolCall.jsonObject["function"]?.jsonObject?.get("arguments")?.jsonPrimitive?.contentOrNull
+                    val function = toolCallObject["function"]?.jsonObjectOrNull
+                    val toolName = function?.get("name")?.jsonPrimitive?.contentOrNull
+                    val arguments = function?.get("arguments")?.jsonPrimitive?.contentOrNull
                     add(
                         UIMessagePart.Tool(
                             toolCallId = toolCallId ?: "",
