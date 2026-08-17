@@ -315,7 +315,9 @@ private suspend fun executeGenerateImage(
                 outputCommitted = true
                 listOf(
                     UIMessagePart.Text(text),
-                    UIMessagePart.Image(url = artifact.fileUri(filesDir)),
+                    net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.ensureAttachmentRef(
+                        UIMessagePart.Image(url = artifact.fileUri(filesDir)),
+                    ),
                 )
             } catch (error: Throwable) {
                 if (!outputCommitted) {

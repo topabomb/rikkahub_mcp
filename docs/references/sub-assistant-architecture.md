@@ -14,7 +14,7 @@
 - **Child Conversation**：Target 的持久化工作会话，`parentConversationId` 指向 Master。
 - **Run**：一次 `assistant_call` 执行，由全局唯一 `run_id` 标识。
 
-Caller 调用 Target 后，当前 Tool Loop 会等待 Target 返回终态。Target 不读取 Master 历史，只收到 `request`；因此 Caller 必须在请求中提供完成任务所需的事实、约束和交付要求。Target 可以连续使用自身 Child 历史，但不能再次调用或管理其他 Assistant。
+Caller 调用 Target 后，当前 Tool Loop 会等待 Target 返回终态。Target 不读取 Master 历史，只收到 `request` 以及可选的 `attachments`；因此 Caller 必须在请求中提供完成任务所需的事实、约束、相关附件和交付要求。Target 可以连续使用自身 Child 历史，但不能再次调用或管理其他 Assistant。附件由 Runtime 解析成本地 Image part 写入 Child USER；是否以原图或 visual observation 发给 Target，由本次 RunSpec 模型决定。Target 产出的 Image 交付物由卡片用引用展示，Caller 默认只拿轻量 `artifacts[]`，点名 `extras=["artifacts"]` 后才按 Caller 能力投影内容。多模态协议、设计判定与扩展方向见 [sub-assistant-multimodal.md](sub-assistant-multimodal.md)。
 
 当前实现不包含异步 mailbox、后台结果回投、多层递归委托或并行 fan-out。这些能力不能通过提示词假装存在。
 
@@ -96,7 +96,8 @@ Child 的 `assistantId` 固定为 Target，`parentConversationId` 固定为 Mast
 | `state` / `phase` / `active_tool_name` | 状态机与当前阶段 |
 | `preview` | 主卡片的有界文本投影 |
 | `reason` | 失败、停止或不可用的稳定原因码 |
-| `has_non_text_output` | 最终结果含可见非文本 part |
+| `has_non_text_output` | 本次 run 有用户可见非文本交付物（`generate_image` 成功图或最终 ASSISTANT 顶层媒体） |
+| `artifacts` / `artifact_omitted` | 轻量交付物引用（最多 4 条）与超出上限的省略数；只存引用，不存像素 |
 | `user_interaction` | 正在等待宿主回答的 `ask_user` locator 与入参 |
 
 `SubAssistantRunStateReducer` 保证终态不可回到运行态，迟到的 phase/preview 不覆盖终态，所有 patch 都从完整快照派生。
@@ -110,7 +111,8 @@ Master ToolCall
   -> 解析当前分支 lineage
   -> 获取 Master + Target lease
   -> 用最新 Settings 做写入前重验
-  -> 新建 / 复用 / 克隆 Child，并追加 USER request
+  -> 解析 attachments 并做 Image 能力 preflight；无法消费则不写 Child
+  -> 新建 / 复用 / 克隆 Child，并追加 USER（Text(request) + 原始 Image parts）
   -> 回写 Child link 与 checkpoint
   -> Target GenerationHandler 循环
   -> 持久化 Child、更新 phase/preview、桥接 ask_user
@@ -122,15 +124,15 @@ Master ToolCall
 
 调用开始依次验证 Caller 的委托权限、Target 存在且不是 Caller、Target 可作为子助手、访问公式成立、模型来源可解析、同一 lineage 没有活跃 Run。失败在创建 Child 前返回稳定 reason。
 
-Lineage 决策完成后先获取 `(masterConversationId, targetAssistantId)` lease，再从最新 Settings 重验身份、访问与模型可用性。这样同一 Master/Target 串行执行，而不同 Master 可以独立运行；并发竞态不会创建重复 Child。
+Lineage 决策完成后先获取 `(masterConversationId, targetAssistantId)` lease，再从最新 Settings 重验身份、访问与模型可用性。写入 Child 之前再解析 `attachments` 并做 Image 能力 preflight：无法 NATIVE 且无法 DERIVED 时返回 `attachment_input_unavailable`，不创建或追加 USER。这样同一 Master/Target 串行执行，而不同 Master 可以独立运行；并发竞态不会创建重复 Child，也不会留下只有 USER、没有 Run 的脏 Child。
 
 ### Lineage
 
 `findPreviousCallMetadata` 只查看 Master 当前选中分支，并从当前 `messageId + toolOrdinal` 向前寻找同一 Target 最近的终态调用：
 
 - 没有有效前序调用时新建 Child。
-- 前序 Run 仍位于 Child 尾部时复用 Child，并追加新的 USER request。
-- Child 在前序 Run 后已有其他选中 USER task 时，只克隆截至前序 Run 的选中历史前缀，再追加 request；分支判断始终以 `MessageNode.currentMessage` 为准。
+- 前序 Run 仍位于 Child 尾部时复用 Child，并追加新的 USER（Text + 本次 Image parts）。
+- Child 在前序 Run 后已有其他选中 USER task 时，只克隆截至前序 Run 的选中历史前缀，再追加同一形状的 USER；分支判断始终以 `MessageNode.currentMessage` 为准。
 - metadata、父子关系或 task locator 损坏时创建新 Child，不猜测错误 lineage。
 
 ### Target 生成
@@ -141,9 +143,9 @@ Target 复用通用 `GenerationHandler`，不是独立的简化模型循环。�
 
 ### 结果提取
 
-完成态优先取最终 ASSISTANT step 中最后一个工作工具之后的顶层 Text。`text_to_speech` 等副作用工具不切断答案；最终 step 没有可见文本时向更早 step 回退。最终 step 若含 Image、Document、Audio 或 Video，则设置 `has_non_text_output`。
+完成态优先取最终 ASSISTANT step 中最后一个工作工具之后的顶层 Text。`text_to_speech` 等副作用工具不切断答案；最终 step 没有可见文本时向更早 step 回退。`extractDeliverableArtifacts()` 收集本次 run 的明确交付物：成功的 `generate_image` Tool.output Image，以及最终 ASSISTANT 顶层媒体。`has_non_text_output` 由该清单派生。completed 且存在可持久化交付物时，JSON 始终带轻量 `artifacts[]`；`extras=["artifacts"]` 才按 Caller 的 `ImageInputAdapter` 能力把原图或 observation 追加进 Tool.output。
 
-只有 `completed` 返回 `assistant_name` 和 `content`。其他终态只返回状态与稳定 reason，避免让 Caller 把半成品当作成功结果。未分类异常、Provider HTTP 失败和内容政策拒绝分别使用 `runtime_error`、`provider_error` 与 `content_blocked`，并带回提炼后的 `detail`。前两者是单行的类型与消息（按字符上限裁剪，不含因果链和堆栈）；`content_blocked` 使用稳定英文说明，不回传检查类型或原始政策字符串。用户卡片和详情用本地化原因加同一条消息摘要，不再另附因果链。分类先匹配政策标记（含 OpenAI `content_filter` / `content_policy` 与 Gemini prompt feedback），再把 `HttpException` 和其他 HTTP 层失败记为 `provider_error`。调用过 `text_to_speech` 时默认带 `tts_stats`（次数与朗读字符合计）；完整 `tool_calls` 计数表和朗读文本表 `tts` 只在 Caller 通过 `extras` 点名后返回。
+只有 `completed` 返回 `assistant_name` 和 `content`。其他终态只返回状态与稳定 reason，避免让 Caller 把半成品当作成功结果。未分类异常、Provider HTTP 失败和内容政策拒绝分别使用 `runtime_error`、`provider_error` 与 `content_blocked`，并带回提炼后的 `detail`。前两者是单行的类型与消息（按字符上限裁剪，不含因果链和堆栈）；`content_blocked` 使用稳定英文说明，不回传检查类型或原始政策字符串。用户卡片和详情用本地化原因加同一条消息摘要，不再另附因果链。分类先匹配政策标记（含 OpenAI `content_filter` / `content_policy` 与 Gemini prompt feedback），再把 `HttpException` 和其他 HTTP 层失败记为 `provider_error`。调用过 `text_to_speech` 时默认带 `tts_stats`（次数与朗读字符合计）；完整 `tool_calls` 计数表、朗读文本表 `tts` 以及交付物内容只在 Caller 通过 `extras` 点名后返回。Recovery 与 Master 停止只重建文本 extras，不加媒体。
 
 ## 6. Target 工具与运行中撤权
 
@@ -165,9 +167,9 @@ Target 每个模型 step 都重新构建工具集。有效工具能力是“调�
 
 调用状态为 `starting`、`running`、`completed`、`failed`、`stopped` 或 `unavailable`。运行阶段用稳定枚举表示准备、等待模型、推理流、回答流、工具执行、step 间隙和等待用户，不持久化百分比、ETA、推理文本或工具 JSON 作为“进度”。
 
-实时预览只投影本次 Child task 范围内 ASSISTANT 的顶层 Text，排除 Reasoning、Tool input/output、preset 和下一次 USER task。Reducer 保持消息与 part 的显示顺序，只保留有界尾部，并在 Unicode grapheme 边界裁剪。完成态改用 final answer 的有界开头摘要；纯非文本完成态显示本地化提示。
+实时预览只投影本次 Child task 范围内 ASSISTANT 的顶层 Text，排除 Reasoning、Tool input/output、preset 和下一次 USER task。Reducer 保持消息与 part 的显示顺序，只保留有界尾部，并在 Unicode grapheme 边界裁剪。完成态改用 final answer 的有界开头摘要；纯非文本完成态在没有缩略图时显示本地化提示。
 
-`SubAssistantCallCard` 从通用 COT 分组中独立渲染 Target、request、状态、preview 和 `ask_user`。失败或不可用时额外显示本地化 reason 和用户可见摘要：政策拒绝使用固定文案，不回显检查类型；其他失败从 Tool Result `detail` 取第一行并去掉异常类型前缀。整卡在 Child link 有效时进入 `SubAssistantDetail`。详情解析会同时校验 Master、run 唯一性、Target、父子关系和 task `UIMessage.id`；仅非终态且尚未写入 Child link 的 run 可以保持 Loading，不存在、歧义或已经终止但缺少 link 的 run 立即显示不可用。详情页只渲染 `ChatMessage(readOnly = true)`，不提供输入、编辑、删除、重生成、分支、收藏、分享或审批入口；终态条同样展示 reason 与用户摘要。子助手失败不会抬成 Master 整轮 `ErrorCard`。
+`SubAssistantCallCard` 从通用 COT 分组中独立渲染 Target、request、状态、preview、交付物缩略图和 `ask_user`。缩略图只读 metadata 引用，不加载 Child；点击分区与 `ask_user` 一样不抢走整卡进详情。主卡片把图设为背景改当前 Master Assistant；详情里设为背景仍改 Target。失败或不可用时额外显示本地化 reason 和用户可见摘要：政策拒绝使用固定文案，不回显检查类型；其他失败从 Tool Result `detail` 取第一行并去掉异常类型前缀。整卡在 Child link 有效时进入 `SubAssistantDetail`。详情解析会同时校验 Master、run 唯一性、Target、父子关系和 task `UIMessage.id`；仅非终态且尚未写入 Child link 的 run 可以保持 Loading，不存在、歧义或已经终止但缺少 link 的 run 立即显示不可用。详情页只渲染 `ChatMessage(readOnly = true)`，不提供输入、编辑、删除、重生成、分支、收藏、分享或审批入口；终态条同样展示 reason 与用户摘要。子助手失败不会抬成 Master 整轮 `ErrorCard`。
 
 ## 8. 恢复、分支与删除
 

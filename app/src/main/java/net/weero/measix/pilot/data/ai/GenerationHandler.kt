@@ -229,6 +229,9 @@ class GenerationHandler(
         interactiveToolNames: Set<String> = emptySet(),
         /** Revalidates the snapshotted Memory namespace immediately before each Memory ToolCall. */
         memoryToolAllowed: suspend () -> Boolean = { true },
+        imageAdaptMode: net.weero.measix.pilot.data.ai.transformers.ImageAdaptMode =
+            net.weero.measix.pilot.data.ai.transformers.ImageAdaptMode.CHAT_COMPAT,
+        currentTaskMessageId: Uuid? = null,
     ): Flow<GenerationChunk> = channelFlow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
@@ -308,6 +311,8 @@ class GenerationHandler(
                     conversationSystemPrompt = conversationSystemPrompt,
                     conversationModeInjectionIds = conversationModeInjectionIds,
                     workspaceCwd = workspaceCwd,
+                    imageAdaptMode = imageAdaptMode,
+                    currentTaskMessageId = currentTaskMessageId,
                     onPhase = { phase -> send(GenerationChunk.Phase(phase)) },
                 )
                 messages = messages.visualTransforms(
@@ -589,6 +594,9 @@ class GenerationHandler(
         conversationSystemPrompt: String? = null,
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
+        imageAdaptMode: net.weero.measix.pilot.data.ai.transformers.ImageAdaptMode =
+            net.weero.measix.pilot.data.ai.transformers.ImageAdaptMode.CHAT_COMPAT,
+        currentTaskMessageId: Uuid? = null,
         onPhase: (suspend (String) -> Unit)? = null,
     ) {
         val contextMessages = messages.limitContext(assistant.effectiveContextMessageLimit())
@@ -627,6 +635,8 @@ class GenerationHandler(
             conversationModeInjectionIds = conversationModeInjectionIds,
             processingStatus = processingStatus,
             workspaceCwd = workspaceCwd,
+            imageAdaptMode = imageAdaptMode,
+            currentTaskMessageId = currentTaskMessageId,
         )
 
         var messages: List<UIMessage> = messages

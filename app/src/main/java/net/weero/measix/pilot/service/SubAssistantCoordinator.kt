@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service
 
+import android.content.Context
 import android.util.Log
 import androidx.core.net.toUri
 import kotlinx.coroutines.CancellationException
@@ -37,11 +38,19 @@ import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantUserInteraction
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantRunStateReducer
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantRunSpecResolution
+import net.weero.measix.pilot.data.ai.subassistant.ARTIFACT_DELIVERY_UNAVAILABLE
+import net.weero.measix.pilot.data.ai.subassistant.ASSISTANT_CALL_EXTRA_ARTIFACTS
 import net.weero.measix.pilot.data.ai.subassistant.ASSISTANT_CALL_EXTRA_TOOL_CALLS
 import net.weero.measix.pilot.data.ai.subassistant.ASSISTANT_CALL_EXTRA_TTS
+import net.weero.measix.pilot.data.ai.subassistant.CallerArtifactProjection
+import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallArtifact
+import net.weero.measix.pilot.data.ai.subassistant.SubAssistantDeliverableArtifact
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantTtsStats
 import net.weero.measix.pilot.data.ai.subassistant.buildInitialSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.buildSubAssistantCallResult
+import net.weero.measix.pilot.data.ai.subassistant.extractDeliverableArtifacts
+import net.weero.measix.pilot.data.ai.subassistant.messagesInRunRange
+import net.weero.measix.pilot.data.ai.subassistant.projectArtifactsForCaller
 import net.weero.measix.pilot.data.ai.subassistant.computeSubAssistantPreview
 import net.weero.measix.pilot.data.ai.subassistant.computeTerminalPreview
 import net.weero.measix.pilot.data.ai.subassistant.intersectTargetToolCapabilities
@@ -59,11 +68,19 @@ import net.weero.measix.pilot.data.ai.tools.GenerationToolSetFactory
 import net.weero.measix.pilot.data.ai.tools.ToolSetRunMode
 import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
 import net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
+import net.weero.measix.pilot.data.ai.attachments.AttachmentFailureReasons
+import net.weero.measix.pilot.data.ai.attachments.AttachmentResolveResult
+import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
+import net.weero.measix.pilot.data.ai.transformers.AttachmentInputTransformer
+import net.weero.measix.pilot.data.ai.transformers.AttachmentRefHintTransformer
 import net.weero.measix.pilot.data.ai.transformers.Base64ImageToLocalFileTransformer
 import net.weero.measix.pilot.data.ai.transformers.DocumentAsPromptTransformer
+import net.weero.measix.pilot.data.ai.transformers.ImageAdaptCapability
+import net.weero.measix.pilot.data.ai.transformers.ImageAdaptMode
+import net.weero.measix.pilot.data.ai.transformers.ImageInputAdapter
 import net.weero.measix.pilot.data.ai.transformers.InputMessageTransformer
-import net.weero.measix.pilot.data.ai.transformers.OcrTransformer
 import net.weero.measix.pilot.data.ai.transformers.OutputMessageTransformer
+import net.weero.measix.pilot.data.ai.transformers.TransformerContext
 import net.weero.measix.pilot.data.ai.transformers.PlaceholderTransformer
 import net.weero.measix.pilot.data.ai.transformers.PromptInjectionTransformer
 import net.weero.measix.pilot.data.ai.transformers.RegexOutputTransformer
@@ -71,8 +88,10 @@ import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.data.ai.transformers.ThinkTagTransformer
 import net.weero.measix.pilot.data.ai.transformers.TimeReminderTransformer
 import net.weero.measix.pilot.data.ai.transformers.WorkspaceReminderTransformer
+import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getAssistantById
+import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.AssistantAffectScope
@@ -144,6 +163,8 @@ class SubAssistantCoordinator(
     workspaceRepository: WorkspaceRepository,
     private val filesManager: FilesManager,
     private val json: Json,
+    private val attachmentResolver: AttachmentResolver,
+    private val context: Context,
 ) {
     private data class PendingUserInteraction(
         val interactionId: String,
@@ -179,6 +200,9 @@ class SubAssistantCoordinator(
         execContext: ToolExecutionContext,
         turnTtsContext: TtsToolPlaybackContext? = null,
         extras: Set<String> = emptySet(),
+        attachments: List<String> = emptyList(),
+        /** 本轮 Master 生成的 Caller Settings 快照；Artifact 投影用它判定能力，null 回退 latest。 */
+        callerSettingsSnapshot: Settings? = null,
     ): List<UIMessagePart> {
         val settings = settingsStore.settingsFlow.value
         val targetAssistant = settings.getAssistantById(targetAssistantId)
@@ -303,20 +327,61 @@ class SubAssistantCoordinator(
         }
         val runJob = activeTargetRun.job
 
+        if (attachments.isNotEmpty()) {
+            val capability = ImageInputAdapter.preflight(model, latestSettingsCheck)
+            if (capability == ImageAdaptCapability.UNAVAILABLE) {
+                runLeases.release(activeRunKey, activeTargetRun)
+                return unavailableResult(
+                    execContext = execContext,
+                    targetAssistantId = targetAssistantId,
+                    assistantName = target.name,
+                    reason = AttachmentFailureReasons.ATTACHMENT_INPUT_UNAVAILABLE,
+                    runId = runId,
+                )
+            }
+        }
+
         val childConversationId: Uuid
         val childTaskNodeId: Uuid
+        // 本批解析新落地的远程文件；Child 写入失败时要回滚，避免留下孤儿文件。
+        var createdManagedFileIds: List<Long> = emptyList()
 
         try {
+            val latestMasterMessages = sessionRegistry.getSession(masterConversationId)
+                ?.state?.value?.currentMessages
+                ?: masterMessages
+            val resolvedImages = if (attachments.isEmpty()) {
+                emptyList()
+            } else {
+                when (val resolved = attachmentResolver.resolve(latestMasterMessages, attachments)) {
+                    is AttachmentResolveResult.Failure -> {
+                        runLeases.release(activeRunKey, activeTargetRun)
+                        return unavailableResult(
+                            execContext = execContext,
+                            targetAssistantId = targetAssistantId,
+                            assistantName = target.name,
+                            reason = resolved.reason,
+                            runId = runId,
+                        )
+                    }
+                    is AttachmentResolveResult.Success -> {
+                        createdManagedFileIds = resolved.createdManagedFileIds
+                        resolved.parts
+                    }
+                }
+            }
+            val userParts = buildChildUserParts(processedTask, resolvedImages)
+
             when (lineageDecision) {
                 is net.weero.measix.pilot.data.ai.subassistant.LineageDecision.CreateNew,
                 is net.weero.measix.pilot.data.ai.subassistant.LineageDecision.CreateNewDueToError -> {
-                    val result = createNewChild(target, masterConversationId, processedTask)
+                    val result = createNewChild(target, masterConversationId, userParts)
                     childConversationId = result.first
                     childTaskNodeId = result.second
                 }
 
                 is net.weero.measix.pilot.data.ai.subassistant.LineageDecision.ReuseChild -> {
-                    val result = reuseChild(target, lineageDecision.childConversationId, processedTask)
+                    val result = reuseChild(target, lineageDecision.childConversationId, userParts)
                     childConversationId = lineageDecision.childConversationId
                     childTaskNodeId = result
                 }
@@ -327,7 +392,7 @@ class SubAssistantCoordinator(
                         masterConversationId = masterConversationId,
                         sourceChildId = lineageDecision.sourceChildConversationId,
                         throughTaskMessageId = lineageDecision.throughTaskMessageId,
-                        task = processedTask,
+                        userParts = userParts,
                     )
                     childConversationId = result.first
                     childTaskNodeId = result.second
@@ -335,6 +400,10 @@ class SubAssistantCoordinator(
             }
         } catch (e: Exception) {
             runLeases.release(activeRunKey, activeTargetRun)
+            // Child 写入/持久化失败：删除本批刚落地的远程附件，避免孤儿文件。
+            createdManagedFileIds.forEach { id ->
+                runCatching { filesManager.delete(id, deleteFromDisk = true) }
+            }
             if (e is CancellationException) throw e
             return classifiedFailureResult(
                 error = e,
@@ -477,12 +546,26 @@ class SubAssistantCoordinator(
                 else -> {
                     // COMPLETED 或 null（兼容旧路径）
                     val finalText = extractFinalAnswer(genResult.messages, childTaskNodeId)
-                    val hasNonTextOutput = checkNonTextOutput(genResult.messages, childTaskNodeId)
+                    val extracted = extractDeliverableArtifacts(
+                        messages = genResult.messages,
+                        childTaskNodeId = childTaskNodeId,
+                        filesDir = context.filesDir,
+                    )
+                    val artifacts = extracted.artifacts.map { it.toMetadata() }
+                    val hasNonTextOutput = extracted.hasNonTextOutput
+                    val callerProjection = projectCompletedArtifacts(
+                        extras = extras,
+                        extracted = extracted.artifacts,
+                        callerAssistantId = callerAssistantId,
+                        callerSettingsSnapshot = callerSettingsSnapshot,
+                    )
 
                     val terminalMeta = runState.updateTerminalState(
                         state = SubAssistantCallState.COMPLETED,
                         preview = computeTerminalPreview(finalText).ifEmpty { null },
                         hasNonTextOutput = hasNonTextOutput,
+                        artifacts = artifacts,
+                        artifactOmitted = extracted.omitted,
                     )
                     reportMetadataPatch(execContext, terminalMeta, checkpoint = false)
 
@@ -494,6 +577,10 @@ class SubAssistantCoordinator(
                         messages = genResult.messages,
                         childTaskNodeId = childTaskNodeId,
                         extras = extras,
+                        artifacts = artifacts,
+                        artifactsOmitted = extracted.omitted,
+                        extraParts = callerProjection.extraParts,
+                        artifactDelivery = callerProjection.artifactDelivery,
                     )
                 }
             }
@@ -551,12 +638,12 @@ class SubAssistantCoordinator(
     private suspend fun createNewChild(
         target: net.weero.measix.pilot.data.model.Assistant,
         masterConversationId: Uuid,
-        task: String,
+        userParts: List<UIMessagePart>,
     ): Pair<Uuid, Uuid> {
         val childId = Uuid.random()
         // 首次创建时只写入 Target 的 preset messages
         val presetMessages = target.presetMessages
-        val taskMessage = UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text(task)))
+        val taskMessage = UIMessage(role = MessageRole.USER, parts = userParts)
         val conversation = Conversation(
             id = childId,
             assistantId = target.id,
@@ -567,9 +654,8 @@ class SubAssistantCoordinator(
         conversationRepo.insertConversation(conversation)
         sessionRegistry.getOrCreateSessionWithConversation(childId, conversation)
 
-        // 使用 UIMessage.id（而非 MessageNode.id），因为 extractFinalAnswer /
-        // checkNonTextOutput / computeSubAssistantPreview 均在 List<UIMessage> 中按
-        // UIMessage.id 搜索。Lineage Resolver 也已适配为按 UIMessage.id 搜索。
+        // child_task_node_id 是本次 USER 的 UIMessage.id，供 extractFinalAnswer /
+        // extractDeliverableArtifacts / computeSubAssistantPreview 按 messagesInRunRange 定位。
         val taskNodeId = taskMessage.id
         Log.i(TAG, "createNewChild: child=$childId, taskMsg=$taskNodeId")
         return childId to taskNodeId
@@ -578,12 +664,12 @@ class SubAssistantCoordinator(
     private suspend fun reuseChild(
         target: net.weero.measix.pilot.data.model.Assistant,
         childConversationId: Uuid,
-        task: String,
+        userParts: List<UIMessagePart>,
     ): Uuid {
         val conversation = conversationRepo.getConversationById(childConversationId)
             ?: throw IllegalStateException("Child conversation not found: $childConversationId")
 
-        val taskMessage = UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text(task)))
+        val taskMessage = UIMessage(role = MessageRole.USER, parts = userParts)
         val updatedConversation = conversation.copy(
             messageNodes = conversation.messageNodes + taskMessage.toMessageNode()
         )
@@ -600,7 +686,7 @@ class SubAssistantCoordinator(
         masterConversationId: Uuid,
         sourceChildId: Uuid,
         throughTaskMessageId: Uuid,
-        task: String,
+        userParts: List<UIMessagePart>,
     ): Pair<Uuid, Uuid> {
         val sourceConversation = conversationRepo.getConversationById(sourceChildId)
             ?: throw IllegalStateException("Source child conversation not found: $sourceChildId")
@@ -613,11 +699,11 @@ class SubAssistantCoordinator(
             node.copy(
                 id = Uuid.random(),
                 messages = node.messages.map { message ->
-                    message.copy(parts = message.parts.map(::copyPartForChildClone))
+                    message.copy(parts = message.parts.map { copyPartForChildClone(it, filesManager) })
                 },
             )
         }
-        val taskMessage = UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text(task)))
+        val taskMessage = UIMessage(role = MessageRole.USER, parts = userParts)
         val conversation = Conversation(
             id = newChildId,
             assistantId = target.id,
@@ -656,7 +742,8 @@ class SubAssistantCoordinator(
             PromptInjectionTransformer,
             PlaceholderTransformer,
             DocumentAsPromptTransformer,
-            OcrTransformer,
+            AttachmentRefHintTransformer,
+            AttachmentInputTransformer,
             templateTransformer,
             workspaceReminderTransformer,
         )
@@ -743,6 +830,8 @@ class SubAssistantCoordinator(
                 // keeps Target injections active when allowConversationPromptInjection is enabled.
                 conversationModeInjectionIds = target.modeInjectionIds,
                 workspaceCwd = conversation.workspaceCwd,
+                imageAdaptMode = ImageAdaptMode.SUB_ASSISTANT,
+                currentTaskMessageId = childTaskNodeId,
                 maxSteps = 256,
             ).collect { chunk ->
                 when (chunk) {
@@ -1021,26 +1110,39 @@ class SubAssistantCoordinator(
         childTaskNodeId: Uuid,
     ): String = extractFinalAnswerInternal(messages, childTaskNodeId)
 
-    private fun checkNonTextOutput(
-        messages: List<UIMessage>,
-        childTaskNodeId: Uuid,
-    ): Boolean = checkNonTextOutputInternal(messages, childTaskNodeId)
-
-    private fun copyPartForChildClone(part: UIMessagePart): UIMessagePart {
-        fun copyUrl(url: String): String {
-            if (!url.startsWith("file:")) return url
-            return filesManager.createChatFilesByContents(listOf(url.toUri()))
-                .firstOrNull()?.toString() ?: url
+    private suspend fun projectCompletedArtifacts(
+        extras: Set<String>,
+        extracted: List<SubAssistantDeliverableArtifact>,
+        callerAssistantId: Uuid,
+        callerSettingsSnapshot: Settings? = null,
+    ): CallerArtifactProjection {
+        if (ASSISTANT_CALL_EXTRA_ARTIFACTS !in extras) {
+            return CallerArtifactProjection()
         }
-        return when (part) {
-            is UIMessagePart.Image -> part.copy(url = copyUrl(part.url))
-            is UIMessagePart.Document -> part.copy(url = copyUrl(part.url))
-            is UIMessagePart.Video -> part.copy(url = copyUrl(part.url))
-            is UIMessagePart.Audio -> part.copy(url = copyUrl(part.url))
-            is UIMessagePart.Tool -> part.copy(output = part.output.map(::copyPartForChildClone))
-            else -> part
+        // 能力判定用本轮 Master Tool Loop 的 Caller 快照；用户在 Target Run 期间切换模型
+        // 不应改变投影方式（结果仍交给仍在运行的旧模型消费）。快照缺失时回退 latest。
+        val settings = callerSettingsSnapshot ?: settingsStore.settingsFlow.value
+        val caller = settings.getAssistantById(callerAssistantId)
+        val callerModel = caller?.let { settings.getChatModel(it) }
+        if (caller == null || callerModel == null) {
+            return CallerArtifactProjection(artifactDelivery = ARTIFACT_DELIVERY_UNAVAILABLE)
         }
+        val capability = ImageInputAdapter.resolveCapability(callerModel, settings)
+        val observeContext = TransformerContext(
+            context = context,
+            model = callerModel,
+            assistant = caller,
+            settings = settings,
+        )
+        return projectArtifactsForCaller(
+            artifacts = extracted,
+            extras = extras,
+            capability = capability,
+            observe = { image -> ImageInputAdapter.observe(observeContext, image) },
+        )
     }
+
+
 
     private suspend fun recoverInterruptedChild(childConversationId: Uuid, reason: String) {
         val session = sessionRegistry.getSession(childConversationId) ?: run {
@@ -1151,6 +1253,10 @@ class SubAssistantCoordinator(
         messages: List<UIMessage> = emptyList(),
         childTaskNodeId: Uuid? = null,
         extras: Set<String> = emptySet(),
+        artifacts: List<SubAssistantCallArtifact> = emptyList(),
+        artifactsOmitted: Int = 0,
+        extraParts: List<UIMessagePart> = emptyList(),
+        artifactDelivery: String? = null,
     ): List<UIMessagePart> {
         val outputs = collectSubAssistantCallOutputs(messages, childTaskNodeId, extras)
         val resultJson = buildSubAssistantCallResult(
@@ -1164,8 +1270,11 @@ class SubAssistantCoordinator(
             toolCalls = outputs.toolCalls,
             ttsTexts = outputs.ttsTexts,
             ttsStats = outputs.ttsStats,
+            artifacts = artifacts,
+            artifactsOmitted = artifactsOmitted,
+            artifactDelivery = artifactDelivery,
         )
-        return listOf(UIMessagePart.Text(resultJson))
+        return listOf(UIMessagePart.Text(resultJson)) + extraParts
     }
 }
 
@@ -1215,34 +1324,13 @@ internal fun extractFinalAnswerInternal(
 }
 
 /**
- * 检查最后一个 ASSISTANT step 是否有非文本输出（排除 Text、Tool、Reasoning）。
+ * 本次 run 是否有用户可见的非文本交付物（generate_image 成功图或最终 ASSISTANT 顶层媒体）。
  */
 internal fun checkNonTextOutputInternal(
     messages: List<UIMessage>,
     childTaskNodeId: Uuid,
-): Boolean {
-    val range = messagesInRunRange(messages, childTaskNodeId) ?: return false
-    val lastAssistant = range.lastOrNull { it.role == MessageRole.ASSISTANT } ?: return false
-    return lastAssistant.parts.any {
-        it !is UIMessagePart.Text && it !is UIMessagePart.Tool && it !is UIMessagePart.Reasoning
-    }
-}
-
-private fun messagesInRunRange(
-    messages: List<UIMessage>,
-    childTaskNodeId: Uuid,
-): List<UIMessage>? {
-    val startIndex = messages.indexOfFirst { it.id == childTaskNodeId }
-    if (startIndex == -1) return null
-    var endIndex = messages.size
-    for (i in (startIndex + 1) until messages.size) {
-        if (messages[i].role == MessageRole.USER) {
-            endIndex = i
-            break
-        }
-    }
-    return messages.subList(startIndex, endIndex)
-}
+    filesDir: java.io.File? = null,
+): Boolean = extractDeliverableArtifacts(messages, childTaskNodeId, filesDir).hasNonTextOutput
 
 internal data class SubAssistantCallCollectedOutputs(
     val toolCalls: List<Pair<String, Int>> = emptyList(),
@@ -1360,6 +1448,30 @@ private fun lastTextIsland(message: UIMessage): String {
         .filterIsInstance<UIMessagePart.Text>()
         .joinToString("\n") { it.text }
         .trim()
+}
+
+internal fun buildChildUserParts(
+    processedTask: String,
+    images: List<UIMessagePart.Image>,
+): List<UIMessagePart> = buildList {
+    add(UIMessagePart.Text(processedTask))
+    addAll(images)
+}
+
+internal fun copyPartForChildClone(part: UIMessagePart, filesManager: FilesManager): UIMessagePart {
+    fun copyUrl(url: String): String {
+        if (!url.startsWith("file:")) return url
+        return filesManager.createChatFilesByContents(listOf(url.toUri()))
+            .firstOrNull()?.toString() ?: url
+    }
+    return when (part) {
+        is UIMessagePart.Image -> part.copy(url = copyUrl(part.url))
+        is UIMessagePart.Document -> part.copy(url = copyUrl(part.url))
+        is UIMessagePart.Video -> part.copy(url = copyUrl(part.url))
+        is UIMessagePart.Audio -> part.copy(url = copyUrl(part.url))
+        is UIMessagePart.Tool -> part.copy(output = part.output.map { copyPartForChildClone(it, filesManager) })
+        else -> part
+    }
 }
 
 internal fun preprocessSubAssistantTask(

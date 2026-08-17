@@ -321,7 +321,9 @@ class McpManager(
             mimeType = image.mimeType,
         )
         val uri = filesManager.getFile(entity).toUri()
-        return UIMessagePart.Image(url = uri.toString())
+        return net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.ensureAttachmentRef(
+            UIMessagePart.Image(url = uri.toString()),
+        ) as UIMessagePart.Image
     }
 
     private fun getTransport(config: McpServerConfig): AbstractTransport {

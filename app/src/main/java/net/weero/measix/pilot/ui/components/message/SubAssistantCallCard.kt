@@ -8,9 +8,15 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -37,8 +43,11 @@ import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
+import net.weero.measix.pilot.data.ai.subassistant.ARTIFACT_TYPE_IMAGE
+import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallArtifact
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallPhase
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
+import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.data.ai.subassistant.fallbackSubAssistantOutputText
 import net.weero.measix.pilot.data.ai.subassistant.parseRuntimeErrorDetailFromToolOutput
 import net.weero.measix.pilot.data.ai.subassistant.parseSubAssistantToolResultFields
@@ -62,7 +71,7 @@ import kotlin.uuid.Uuid
  * - 左侧状态色侧条；运行中头像正圆+圆边扫光；右下角小叠圆标识子助手
  * - 顶部右侧合并状态（phase/原因/终态），不再单独占底行
  * - preview 按屏高显示 2 或 3 行尾部文本，不内嵌滚动
- * - 整张 Card 是唯一详情点击目标
+ * - 整张 Card 进入详情；缩略图条和 ask_user 区单独消费点击
  */
 @Composable
 fun SubAssistantCallCard(
@@ -238,11 +247,84 @@ fun SubAssistantCallCard(
                     )
                 }
 
+                val filesDir = LocalContext.current.filesDir
+                val imagePreviews = remember(metadata.artifacts, filesDir) {
+                    resolveSubAssistantCardImagePreviews(metadata.artifacts, filesDir)
+                }
+                if (imagePreviews.isNotEmpty() || metadata.artifactOmitted > 0) {
+                    val interactionSource = remember { MutableInteractionSource() }
+                    // 会话级时序相册：与 generate_image 工具卡/普通图片消息一致，
+                    // 点击后可在查看器中左右滑动导航到会话内其他图片。
+                    val conversationAlbum = LocalConversationImages.current
+                    Surface(
+                        modifier = Modifier.clickable(
+                            interactionSource = interactionSource,
+                            indication = null,
+                            onClick = {},
+                        ),
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.35f),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        LazyRow(
+                            modifier = Modifier.padding(6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            items(imagePreviews, key = { it.ref }) { preview ->
+                                if (preview.url != null) {
+                                    ZoomableAsyncImage(
+                                        model = preview.url,
+                                        contentDescription = null,
+                                        modifier = Modifier
+                                            .height(64.dp)
+                                            .wrapContentWidth()
+                                            .clip(MaterialTheme.shapes.medium),
+                                        albumProvider = conversationAlbum,
+                                    )
+                                } else {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(64.dp)
+                                            .clip(MaterialTheme.shapes.medium)
+                                            .padding(4.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.sub_assistant_card_artifact_missing),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                            }
+                            if (metadata.artifactOmitted > 0) {
+                                item(key = "omitted") {
+                                    Box(
+                                        modifier = Modifier.size(64.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text(
+                                            text = stringResource(
+                                                R.string.sub_assistant_card_more_artifacts,
+                                                metadata.artifactOmitted,
+                                            ),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 val previewText = metadata.preview.takeUnless { it.isNullOrBlank() } ?: if (
                     shouldShowNonTextOutputPlaceholder(
                         state = metadata.state,
                         preview = metadata.preview,
                         hasNonTextOutput = metadata.hasNonTextOutput,
+                        hasImagePreview = imagePreviews.any { it.url != null },
                     )
                 ) {
                     stringResource(R.string.sub_assistant_card_non_text_output)
@@ -403,7 +485,31 @@ internal fun shouldShowNonTextOutputPlaceholder(
     state: SubAssistantCallState,
     preview: String?,
     hasNonTextOutput: Boolean,
-): Boolean = state == SubAssistantCallState.COMPLETED && preview.isNullOrBlank() && hasNonTextOutput
+    hasImagePreview: Boolean = false,
+): Boolean = state == SubAssistantCallState.COMPLETED &&
+    preview.isNullOrBlank() &&
+    hasNonTextOutput &&
+    !hasImagePreview
+
+internal data class SubAssistantCardImagePreview(
+    val ref: String,
+    val url: String?,
+)
+
+internal fun resolveSubAssistantCardImagePreviews(
+    artifacts: List<SubAssistantCallArtifact>,
+    filesDir: java.io.File,
+): List<SubAssistantCardImagePreview> {
+    return artifacts.filter { it.type == ARTIFACT_TYPE_IMAGE }.map { item ->
+        val file = item.artifact?.file(filesDir)
+        val url = if (file != null && file.isFile) {
+            item.artifact.fileUri(filesDir)
+        } else {
+            null
+        }
+        SubAssistantCardImagePreview(ref = item.ref, url = url)
+    }
+}
 
 /** 窄屏每行约 36 字，宽屏约 72 字，再乘行数，避免长段落整段进排版。 */
 internal fun subAssistantCardPreviewMaxChars(compactHeight: Boolean, compactWidth: Boolean): Int {

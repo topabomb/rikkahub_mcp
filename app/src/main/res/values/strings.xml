@@ -1266,6 +1266,7 @@
   <string name="workspace_file_editor_read_failed">Failed to read file</string>
   <string name="workspace_file_editor_too_large">File too large to preview (%d bytes)</string>
   <string name="image_crop_failed">Failed to crop image</string>
+  <string name="image_observation_processing">Reading image...</string>
   <string name="chat_readiness_title_prefix">Configure for</string>
   <string name="chat_readiness_title_suffix"/>
   <string name="chat_readiness_model_required_toast">Select a conversation model before sending.</string>
@@ -1424,5 +1425,7 @@
   <string name="chat_message_tool_generate_image_prompt_copied">Prompt copied</string>
   <string name="chat_message_tool_generate_image_path_copied">Path copied</string>
   <string name="image_viewer_save_need_permission">Grant storage permission, then save again</string>
+  <string name="sub_assistant_card_artifact_missing">Image unavailable</string>
+  <string name="sub_assistant_card_more_artifacts">+%1$d</string>
 </resources>
 

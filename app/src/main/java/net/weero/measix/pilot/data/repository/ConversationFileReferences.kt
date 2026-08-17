@@ -2,6 +2,7 @@ package net.weero.measix.pilot.data.repository
 
 import kotlinx.serialization.json.Json
 import me.rerere.ai.ui.UIMessage
+import net.weero.measix.pilot.data.model.collectFileReferenceTokens
 import net.weero.measix.pilot.data.model.collectFileUrlStrings
 
 /**
@@ -25,7 +26,10 @@ internal object ConversationFileReferences {
      * messages 列是 JSON 字符串。LIKE 必须按写入时的转义去匹配，
      * 否则路径里的 `\` 会漏检并误删仍被引用的文件。
      */
-    fun likeNeedleForUrl(url: String): String = escapeLikeNeedle(jsonEscapeForString(url))
+    fun likeNeedleForUrl(url: String): String = likeNeedleForToken(url)
+
+    /** 任意引用 token（file:// URL 或 metadata 里的相对路径）的 LIKE 探测串。 */
+    fun likeNeedleForToken(token: String): String = escapeLikeNeedle(jsonEscapeForString(token))
 
     fun jsonEscapeForString(raw: String): String = buildString(raw.length) {
         raw.forEach { ch ->
@@ -47,12 +51,27 @@ internal object ConversationFileReferences {
     fun decodeFileUrls(messagesJson: String, json: Json): Set<String> =
         decodeFileUrlsOrNull(messagesJson, json).orEmpty()
 
+    /** 反序列化出会话的全部引用 token（file:// URL + Tool.metadata 相对路径）。 */
+    fun decodeFileReferenceTokens(messagesJson: String, json: Json): Set<String>? = runCatching {
+        json.decodeFromString<List<UIMessage>>(messagesJson).collectFileReferenceTokens()
+    }.getOrNull()
+
     fun isUrlRetained(
         url: String,
         matchingMessagesJson: List<String>,
         json: Json,
+    ): Boolean = isFileRetained(setOf(url), matchingMessagesJson, json)
+
+    /**
+     * 候选文件的任一 token（URL 或相对路径）被某条消息集合引用即视为保留；
+     * 反序列化失败按保留处理，宁可漏删不可误删。
+     */
+    fun isFileRetained(
+        tokens: Set<String>,
+        matchingMessagesJson: List<String>,
+        json: Json,
     ): Boolean = matchingMessagesJson.any { blob ->
-        val urls = decodeFileUrlsOrNull(blob, json)
-        urls == null || url in urls
+        val blobTokens = decodeFileReferenceTokens(blob, json)
+        blobTokens == null || tokens.any { it in blobTokens }
     }
 }

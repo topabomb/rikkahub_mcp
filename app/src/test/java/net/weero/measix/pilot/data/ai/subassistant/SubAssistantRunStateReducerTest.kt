@@ -108,7 +108,20 @@ class SubAssistantRunStateReducerTest {
     fun `terminal state ignored after terminal`() = runTest {
         val reducer = SubAssistantRunStateReducer(makeInitial())
         reducer.updateRunningState()
-        reducer.updateTerminalState(SubAssistantCallState.COMPLETED, reason = null, preview = "final")
+        reducer.updateTerminalState(
+            SubAssistantCallState.COMPLETED,
+            reason = null,
+            preview = "final",
+            hasNonTextOutput = true,
+            artifacts = listOf(
+                SubAssistantCallArtifact(
+                    ref = "attachment:11111111-1111-1111-1111-111111111111",
+                    type = ARTIFACT_TYPE_IMAGE,
+                    mime = "image/png",
+                ),
+            ),
+            artifactOmitted = 1,
+        )
 
         // 迟到的 phase
         reducer.updatePhase(SubAssistantCallPhase.ANSWER_STREAMING)
@@ -119,6 +132,9 @@ class SubAssistantRunStateReducerTest {
         assertEquals(SubAssistantCallState.COMPLETED, snap.state)
         assertEquals("final", snap.preview) // 不被迟到进度覆盖
         assertNull(snap.phase) // phase 被清空
+        assertTrue(snap.hasNonTextOutput)
+        assertEquals(1, snap.artifacts.size)
+        assertEquals(1, snap.artifactOmitted)
     }
 
     @Test

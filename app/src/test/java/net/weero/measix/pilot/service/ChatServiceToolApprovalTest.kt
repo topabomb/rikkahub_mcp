@@ -191,6 +191,21 @@ class ChatServiceToolApprovalTest {
         assertEquals(true, text.contains("Spoken answer."))
     }
 
+    @Test
+    fun `stopping master generation does not project artifacts even when extras request them`() {
+        val stopped = finishInterruptedToolAfterGenerationStop(
+            runningAssistantCall(input = """{"extras":["artifacts","tts","tool_calls"]}"""),
+            json,
+            childMessagesWithTts(),
+        )
+        assertEquals(1, stopped.output.size)
+        val text = (stopped.output.single() as UIMessagePart.Text).text
+        assertEquals(true, text.contains("user_cancelled"))
+        assertEquals(false, text.contains("\"artifacts\""))
+        assertEquals(false, text.contains("artifact_delivery"))
+        assertEquals(true, stopped.output.none { it is UIMessagePart.Image })
+    }
+
     private fun runningCallWithAskUser(interactionId: String): UIMessagePart.Tool {
         val metadata = buildInitialSubAssistantCallMetadata(
             runId = "run-ask",

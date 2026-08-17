@@ -1266,6 +1266,7 @@
   <string name="workspace_file_editor_read_failed">读取文件失败</string>
   <string name="workspace_file_editor_too_large">文件过大，无法预览（%d 字节）</string>
   <string name="image_crop_failed">图片裁剪失败</string>
+  <string name="image_observation_processing">正在识别图片...</string>
   <string name="chat_readiness_title_prefix">为</string>
   <string name="chat_readiness_title_suffix">配置本次会话</string>
   <string name="chat_readiness_model_required_toast">发送前请选择对话模型。</string>
@@ -1344,6 +1345,8 @@
   <string name="sub_assistant_card_running">执行中</string>
   <string name="sub_assistant_card_completed">已完成</string>
   <string name="sub_assistant_card_non_text_output">包含非文本输出</string>
+  <string name="sub_assistant_card_artifact_missing">图片不可用</string>
+  <string name="sub_assistant_card_more_artifacts">+%1$d</string>
   <string name="sub_assistant_card_failed">失败</string>
   <string name="sub_assistant_card_stopped">已停止</string>
   <string name="sub_assistant_card_unavailable">不可用</string>

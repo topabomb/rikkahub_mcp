@@ -12,7 +12,16 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.data.files.LocalArtifactRef
 import kotlin.uuid.Uuid
+
+@Serializable
+data class SubAssistantCallArtifact(
+    val ref: String,
+    val type: String,
+    val mime: String,
+    val artifact: LocalArtifactRef? = null,
+)
 
 /**
  * 子助手调用的稳定状态枚举。
@@ -81,6 +90,8 @@ data class SubAssistantCallMetadata(
     @SerialName("preview") val preview: String? = null,
     @SerialName("reason") val reason: String? = null,
     @SerialName("has_non_text_output") val hasNonTextOutput: Boolean = false,
+    val artifacts: List<SubAssistantCallArtifact> = emptyList(),
+    @SerialName("artifact_omitted") val artifactOmitted: Int = 0,
     @SerialName("user_interaction") val userInteraction: SubAssistantUserInteraction? = null,
 )
 
@@ -132,10 +143,12 @@ fun buildInitialSubAssistantCallMetadata(
 
 internal const val ASSISTANT_CALL_EXTRA_TTS = "tts"
 internal const val ASSISTANT_CALL_EXTRA_TOOL_CALLS = "tool_calls"
+internal const val ASSISTANT_CALL_EXTRA_ARTIFACTS = "artifacts"
 
 private val ASSISTANT_CALL_EXTRAS = setOf(
     ASSISTANT_CALL_EXTRA_TTS,
     ASSISTANT_CALL_EXTRA_TOOL_CALLS,
+    ASSISTANT_CALL_EXTRA_ARTIFACTS,
 )
 
 /** 本次 run 的 TTS 调用次数与朗读字符合计；有调用才写入结果。 */
@@ -154,6 +167,34 @@ internal fun parseAssistantCallExtras(raw: kotlinx.serialization.json.JsonElemen
     }.filter { it in ASSISTANT_CALL_EXTRAS }.toSet()
 }
 
+internal const val MAX_ASSISTANT_CALL_ATTACHMENTS = net.weero.measix.pilot.data.ai.attachments.MAX_ASSISTANT_CALL_ATTACHMENTS
+
+sealed class AttachmentParseResult {
+    data class Ok(val refs: List<String>) : AttachmentParseResult()
+    data object Invalid : AttachmentParseResult()
+}
+
+/**
+ * Parse `attachments`: missing / empty means none. Duplicate normalized strings
+ * are dropped before the max-4 cap.
+ */
+internal fun parseAssistantCallAttachments(raw: kotlinx.serialization.json.JsonElement?): AttachmentParseResult {
+    if (raw == null || raw is kotlinx.serialization.json.JsonNull) {
+        return AttachmentParseResult.Ok(emptyList())
+    }
+    val array = raw as? JsonArray ?: return AttachmentParseResult.Invalid
+    if (array.isEmpty()) return AttachmentParseResult.Ok(emptyList())
+    val normalized = LinkedHashSet<String>()
+    for (element in array) {
+        val value = (element as? JsonPrimitive)?.contentOrNull?.trim()
+            ?: return AttachmentParseResult.Invalid
+        if (value.isEmpty()) return AttachmentParseResult.Invalid
+        normalized.add(value)
+    }
+    if (normalized.size > MAX_ASSISTANT_CALL_ATTACHMENTS) return AttachmentParseResult.Invalid
+    return AttachmentParseResult.Ok(normalized.toList())
+}
+
 internal fun parseAssistantCallExtrasFromInput(input: String): Set<String> {
     val obj = runCatching {
         Json.parseToJsonElement(input) as? JsonObject
@@ -165,6 +206,8 @@ internal fun parseAssistantCallExtrasFromInput(input: String): Set<String> {
  * 构建终态 Tool Result JSON。
  *
  * [ttsStats] 有调用才写入。 [toolCalls] / [ttsTexts] 仅在 Caller 通过 `extras` 请求且非空时写入。
+ * [artifacts] 仅在 completed 且存在交付物时写入轻量引用；[artifactDelivery] 仅在
+ * extras 点名 artifacts 且结果为 derived / unavailable 时写入。
  * [detail] 仅在失败 reason 属于 `content_blocked` / `provider_error` / `runtime_error`
  * 且非空时写入，并按字符上限裁剪。
  */
@@ -179,6 +222,9 @@ fun buildSubAssistantCallResult(
     toolCalls: List<Pair<String, Int>> = emptyList(),
     ttsTexts: List<String> = emptyList(),
     ttsStats: SubAssistantTtsStats? = null,
+    artifacts: List<SubAssistantCallArtifact> = emptyList(),
+    artifactsOmitted: Int = 0,
+    artifactDelivery: String? = null,
 ): String {
     val obj = buildJsonObject {
         put("status", status)
@@ -192,7 +238,24 @@ fun buildSubAssistantCallResult(
             val clipped = clipRuntimeErrorDetail(detail.orEmpty())
             if (clipped.isNotEmpty()) put("detail", clipped)
         }
-        if (hasNonTextOutput) put("has_non_text_output", true)
+        if (status == "completed" && hasNonTextOutput) put("has_non_text_output", true)
+        if (status == "completed" && artifacts.isNotEmpty()) {
+            put(
+                "artifacts",
+                JsonArray(
+                    artifacts.map { item ->
+                        buildJsonObject {
+                            put("ref", item.ref)
+                            put("type", item.type)
+                            put("mime", item.mime)
+                            item.artifact?.toolPath()?.let { put("path", it) }
+                        }
+                    },
+                ),
+            )
+            if (artifactsOmitted > 0) put("artifacts_omitted", artifactsOmitted)
+        }
+        if (artifactDelivery != null) put("artifact_delivery", artifactDelivery)
         if (ttsStats != null && ttsStats.calls > 0) {
             put("tts_stats", buildJsonObject {
                 put("calls", ttsStats.calls)

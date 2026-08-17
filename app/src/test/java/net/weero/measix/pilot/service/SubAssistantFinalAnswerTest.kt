@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service
 
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -408,6 +410,38 @@ class SubAssistantFinalAnswerTest {
 
         // Non-text output in intermediate step should not count
         assertFalse(checkNonTextOutputInternal(messages, childTaskNodeId))
+    }
+
+    @Test
+    fun `generate_image tool output counts as non-text deliverable`() {
+        val image = UIMessagePart.Image(url = "file:///upload/out.png")
+        val messages = listOf(
+            taskMessage("draw something"),
+            assistantMessage(
+                UIMessagePart.Text("Working"),
+                UIMessagePart.Tool(
+                    toolCallId = "g1",
+                    toolName = "generate_image",
+                    input = "{}",
+                    output = listOf(
+                        UIMessagePart.Text("""{"status":"completed"}"""),
+                        image,
+                    ),
+                    metadata = kotlinx.serialization.json.buildJsonObject {
+                        put(
+                            "artifact",
+                            kotlinx.serialization.json.buildJsonObject {
+                                put("version", 1)
+                                put("relativePath", "upload/out.png")
+                                put("mimeType", "image/png")
+                            },
+                        )
+                    },
+                ),
+                UIMessagePart.Text("Here you go."),
+            ),
+        )
+        assertTrue(checkNonTextOutputInternal(messages, childTaskNodeId))
     }
 
     @Test

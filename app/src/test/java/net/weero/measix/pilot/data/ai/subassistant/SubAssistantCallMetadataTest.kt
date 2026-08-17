@@ -7,6 +7,7 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.JsonNull
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
@@ -178,6 +179,34 @@ class SubAssistantCallMetadataTest {
         assertNull(tool.getSubAssistantCallMetadata(json))
     }
 
+    @Test
+    fun `attachments parse empty and missing as none`() {
+        assertEquals(emptyList<String>(), (parseAssistantCallAttachments(null) as AttachmentParseResult.Ok).refs)
+        assertEquals(emptyList<String>(), (parseAssistantCallAttachments(JsonNull) as AttachmentParseResult.Ok).refs)
+        assertEquals(emptyList<String>(), (parseAssistantCallAttachments(buildJsonArray {}) as AttachmentParseResult.Ok).refs)
+    }
+
+    @Test
+    fun `attachments dedup then enforce max four`() {
+        val ok = parseAssistantCallAttachments(
+            buildJsonArray {
+                add(JsonPrimitive("a"))
+                add(JsonPrimitive(" a "))
+                add(JsonPrimitive("b"))
+            },
+        ) as AttachmentParseResult.Ok
+        assertEquals(listOf("a", "b"), ok.refs)
+        assertTrue(parseAssistantCallAttachments(
+            buildJsonArray {
+                add(JsonPrimitive("1"))
+                add(JsonPrimitive("2"))
+                add(JsonPrimitive("3"))
+                add(JsonPrimitive("4"))
+                add(JsonPrimitive("5"))
+            },
+        ) is AttachmentParseResult.Invalid)
+    }
+
     // ---- buildSubAssistantCallResult ----
 
     @Test
@@ -226,6 +255,68 @@ class SubAssistantCallMetadataTest {
             hasNonTextOutput = false,
         )
         assertFalse(result.contains("has_non_text_output"))
+    }
+
+    @Test
+    fun `completed result includes lightweight artifacts and omitted count`() {
+        val result = buildSubAssistantCallResult(
+            json = json,
+            status = "completed",
+            assistantName = "Helper",
+            content = "Done.",
+            hasNonTextOutput = true,
+            artifacts = listOf(
+                SubAssistantCallArtifact(
+                    ref = "attachment:11111111-1111-1111-1111-111111111111",
+                    type = ARTIFACT_TYPE_IMAGE,
+                    mime = "image/png",
+                    artifact = net.weero.measix.pilot.data.files.LocalArtifactRef(
+                        relativePath = "upload/a.png",
+                        mimeType = "image/png",
+                    ),
+                ),
+            ),
+            artifactsOmitted = 2,
+        )
+        assertTrue(result.contains("\"artifacts\""))
+        assertTrue(result.contains("attachment:11111111-1111-1111-1111-111111111111"))
+        assertTrue(result.contains("\"path\":\"/upload/a.png\""))
+        assertTrue(result.contains("\"artifacts_omitted\":2"))
+        assertFalse(result.contains("file:"))
+        assertFalse(result.contains("artifact_delivery"))
+    }
+
+    @Test
+    fun `failed result omits artifacts even when provided`() {
+        val result = buildSubAssistantCallResult(
+            json = json,
+            status = "failed",
+            assistantName = "Helper",
+            content = "",
+            reason = "runtime_error",
+            hasNonTextOutput = true,
+            artifacts = listOf(
+                SubAssistantCallArtifact(
+                    ref = "attachment:11111111-1111-1111-1111-111111111111",
+                    type = ARTIFACT_TYPE_IMAGE,
+                    mime = "image/png",
+                ),
+            ),
+        )
+        assertFalse(result.contains("artifacts"))
+        assertFalse(result.contains("has_non_text_output"))
+    }
+
+    @Test
+    fun `result includes artifact_delivery only when provided`() {
+        val result = buildSubAssistantCallResult(
+            json = json,
+            status = "completed",
+            assistantName = "Helper",
+            content = "Done.",
+            artifactDelivery = ARTIFACT_DELIVERY_UNAVAILABLE,
+        )
+        assertTrue(result.contains("\"artifact_delivery\":\"unavailable\""))
     }
 
     @Test
@@ -343,10 +434,11 @@ class SubAssistantCallMetadataTest {
         val raw = buildJsonArray {
             add(JsonPrimitive("TTS"))
             add(JsonPrimitive("tool_calls"))
+            add(JsonPrimitive("artifacts"))
             add(JsonPrimitive("preview"))
         }
         assertEquals(
-            setOf(ASSISTANT_CALL_EXTRA_TTS, ASSISTANT_CALL_EXTRA_TOOL_CALLS),
+            setOf(ASSISTANT_CALL_EXTRA_TTS, ASSISTANT_CALL_EXTRA_TOOL_CALLS, ASSISTANT_CALL_EXTRA_ARTIFACTS),
             parseAssistantCallExtras(raw),
         )
     }

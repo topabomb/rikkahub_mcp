@@ -61,7 +61,9 @@ import net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
 import net.weero.measix.pilot.data.ai.tools.GenerationToolSetFactory
 import net.weero.measix.pilot.data.ai.transformers.Base64ImageToLocalFileTransformer
 import net.weero.measix.pilot.data.ai.transformers.DocumentAsPromptTransformer
-import net.weero.measix.pilot.data.ai.transformers.OcrTransformer
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
+import net.weero.measix.pilot.data.ai.transformers.AttachmentInputTransformer
+import net.weero.measix.pilot.data.ai.transformers.AttachmentRefHintTransformer
 import net.weero.measix.pilot.data.ai.transformers.PlaceholderTransformer
 import net.weero.measix.pilot.data.ai.transformers.PromptInjectionTransformer
 import net.weero.measix.pilot.data.ai.transformers.RegexOutputTransformer
@@ -246,7 +248,8 @@ private val inputTransformers by lazy {
         PromptInjectionTransformer,
         PlaceholderTransformer,
         DocumentAsPromptTransformer,
-        OcrTransformer,
+        AttachmentRefHintTransformer,
+        AttachmentInputTransformer,
     )
 }
 
@@ -474,7 +477,7 @@ class ChatService(
                     )
                 }
 
-                else -> part
+                else -> AttachmentRefs.ensureAttachmentRef(part)
             }
         }
     }
@@ -619,6 +622,11 @@ class ChatService(
 
             // check invalid messages
             checkInvalidMessages(conversationId)
+            val loadedConversation = getConversationFlow(conversationId).value
+            val backfilled = AttachmentRefs.backfillConversation(loadedConversation)
+            if (backfilled != loadedConversation) {
+                updateConversation(conversationId, backfilled)
+            }
             val conversation = getConversationFlow(conversationId).value
 
             // start generating
@@ -671,6 +679,8 @@ class ChatService(
                         callerAssistant = assistant,
                         masterConversationId = conversationId,
                         ttsPlaybackContext = turnTtsContext,
+                        // 本轮 Caller 快照：Target Run 期间用户切换模型不应改变 Artifact 投影的能力判定
+                        callerSettings = settings,
                     ),
                     onInvalidMcpServerNames = { invalidNames ->
                         addError(

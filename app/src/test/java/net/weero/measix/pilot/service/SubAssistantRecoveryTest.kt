@@ -79,6 +79,24 @@ class SubAssistantRecoveryTest {
     }
 
     @Test
+    fun `recovery does not project artifacts even when extras request them`() {
+        val call = callTool("run-artifacts", input = """{"extras":["artifacts"]}""")
+        val result = recoverMasterSubAssistantCalls(
+            master = masterWith(call),
+            settings = validSettings(),
+            childrenById = mapOf(child.id to child),
+            json = json,
+        )
+        val recovered = result.master.messageNodes.single().currentMessage.getTools().single()
+        assertEquals(1, recovered.output.size)
+        val text = (recovered.output.single() as UIMessagePart.Text).text
+        assertTrue(text.contains("\"status\":\"stopped\""))
+        assertFalse(text.contains("\"artifacts\""))
+        assertFalse(text.contains("artifact_delivery"))
+        assertTrue(recovered.output.none { it is UIMessagePart.Image })
+    }
+
+    @Test
     fun `recovery reason follows deterministic configuration priority`() {
         val valid = validSettings()
         val caller = valid.assistants.first { it.id == callerId }

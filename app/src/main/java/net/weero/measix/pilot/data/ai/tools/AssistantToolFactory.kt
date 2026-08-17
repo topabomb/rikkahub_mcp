@@ -17,8 +17,12 @@ import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.subassistant.CatalogMode
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantAccessPolicy
+import net.weero.measix.pilot.data.ai.attachments.AttachmentFailureReasons
+import net.weero.measix.pilot.data.ai.attachments.MAX_ASSISTANT_CALL_ATTACHMENTS
+import net.weero.measix.pilot.data.ai.subassistant.AttachmentParseResult
 import net.weero.measix.pilot.data.ai.subassistant.buildCatalogPrompt
 import net.weero.measix.pilot.data.ai.subassistant.buildSubAssistantCallResult
+import net.weero.measix.pilot.data.ai.subassistant.parseAssistantCallAttachments
 import net.weero.measix.pilot.data.ai.subassistant.parseAssistantCallExtras
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
@@ -70,11 +74,16 @@ class AssistantToolFactory(
 ) {
     /**
      * 按 caller Assistant 的 LocalTool 配置构建工具。
+     *
+     * @param callerSettings 本轮 Master 生成的 Settings 快照；Artifact 投影的能力判定
+     *   使用它而不是完成时的 latest 设置，避免 Target Run 期间用户切换模型造成
+     *   "按新模型投影、旧模型消费"的错配。null 时回退 latest。
      */
     fun buildTools(
         callerAssistant: Assistant,
         masterConversationId: Uuid,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
+        callerSettings: Settings? = null,
     ): List<Tool> {
         val enableManagement = LocalToolOption.AssistantManagement in callerAssistant.localTools
         val enableDelegation = LocalToolOption.AssistantDelegation in callerAssistant.localTools
@@ -87,7 +96,13 @@ class AssistantToolFactory(
                 add(buildAssistantInspectTool(callerAssistant.id))
             }
             if (enableDelegation) {
-                add(buildAssistantCallTool(callerAssistant.id, masterConversationId, enableManagement, ttsPlaybackContext))
+                add(buildAssistantCallTool(
+                    callerAssistantId = callerAssistant.id,
+                    masterConversationId = masterConversationId,
+                    enableManagement = enableManagement,
+                    ttsPlaybackContext = ttsPlaybackContext,
+                    callerSettings = callerSettings,
+                ))
             }
         }
     }
@@ -412,6 +427,7 @@ class AssistantToolFactory(
         masterConversationId: Uuid,
         enableManagement: Boolean,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
+        callerSettings: Settings? = null,
     ): Tool = Tool(
         name = TOOL_ASSISTANT_CALL,
         outputPolicy = ToolOutputPolicy.PRESERVE,
@@ -436,14 +452,32 @@ class AssistantToolFactory(
                         put("type", "array")
                         put(
                             "description",
-                            "Extra result content. Default none. Values: tts, tool_calls.",
+                            "Extra result content for the caller model. Default none. " +
+                                "Values: artifacts, tts, tool_calls. Request artifacts when you need to inspect, " +
+                                "reason about, or reuse the file contents produced by the sub-assistant. " +
+                                "The user can already see those files in the call card. " +
+                                "A short artifact list is always included when files were produced.",
                         )
                         put("items", buildJsonObject {
                             put("type", "string")
                             putJsonArray("enum") {
+                                add(JsonPrimitive("artifacts"))
                                 add(JsonPrimitive("tts"))
                                 add(JsonPrimitive("tool_calls"))
                             }
+                        })
+                    })
+                    put("attachments", buildJsonObject {
+                        put("type", "array")
+                        put("maxItems", MAX_ASSISTANT_CALL_ATTACHMENTS)
+                        put(
+                            "description",
+                            "Up to 4 task-related attachments. Prefer attachment:<uuid>; " +
+                                "generated images may use /upload/<file>. The target cannot see this chat—" +
+                                "do not assume it can see a just-uploaded image.",
+                        )
+                        put("items", buildJsonObject {
+                            put("type", "string")
                         })
                     })
                 },
@@ -466,7 +500,7 @@ class AssistantToolFactory(
         },
         needsApproval = { false },
         contextualExecute = { args ->
-            executeAssistantCall(callerAssistantId, masterConversationId, this, args, ttsPlaybackContext)
+            executeAssistantCall(callerAssistantId, masterConversationId, this, args, ttsPlaybackContext, callerSettings)
         },
         execute = { _ ->
             // Fallback: 缺少真实 locator/reportMetadata 时不能启动 Child
@@ -487,6 +521,7 @@ class AssistantToolFactory(
         context: ToolExecutionContext,
         args: kotlinx.serialization.json.JsonElement,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
+        callerSettings: Settings? = null,
     ): List<UIMessagePart> {
         val coordinator = subAssistantCoordinator
             ?: return listOf(UIMessagePart.Text(buildSubAssistantCallResult(
@@ -499,15 +534,20 @@ class AssistantToolFactory(
             )))
 
         val obj = args as? JsonObject
-            ?: return errorResult("invalid_arguments")
+            ?: return callUnavailable("invalid_arguments")
         val targetIdStr = obj["assistant_id"]?.let { (it as? JsonPrimitive)?.content }
-            ?: return errorResult("assistant_id_required")
+            ?: return callUnavailable("assistant_id_required")
         val targetId = runCatching { Uuid.parse(targetIdStr) }.getOrNull()
-            ?: return errorResult("invalid_assistant_id")
+            ?: return callUnavailable("invalid_assistant_id")
         val task = obj["request"]?.let { (it as? JsonPrimitive)?.content }
             ?: obj["task"]?.let { (it as? JsonPrimitive)?.content } // backward compat
-            ?: return errorResult("request_required")
-        if (task.isBlank()) return errorResult("request_required")
+            ?: return callUnavailable("request_required")
+        if (task.isBlank()) return callUnavailable("request_required")
+        val attachments = when (val parsed = parseAssistantCallAttachments(obj["attachments"])) {
+            is AttachmentParseResult.Invalid ->
+                return callUnavailable(AttachmentFailureReasons.INVALID_ATTACHMENTS)
+            is AttachmentParseResult.Ok -> parsed.refs
+        }
 
         return coordinator.executeCall(
             callerAssistantId = callerAssistantId,
@@ -517,6 +557,22 @@ class AssistantToolFactory(
             execContext = context,
             turnTtsContext = ttsPlaybackContext,
             extras = parseAssistantCallExtras(obj["extras"]),
+            attachments = attachments,
+            callerSettingsSnapshot = callerSettings,
+        )
+    }
+
+    private fun callUnavailable(reason: String): List<UIMessagePart> {
+        return listOf(
+            UIMessagePart.Text(
+                buildSubAssistantCallResult(
+                    json = json,
+                    status = "unavailable",
+                    assistantName = "",
+                    content = "",
+                    reason = reason,
+                ),
+            ),
         )
     }
 

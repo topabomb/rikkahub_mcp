@@ -22,6 +22,8 @@ import net.weero.measix.pilot.service.ChatNotificationManager
 import net.weero.measix.pilot.service.ChatService
 import net.weero.measix.pilot.service.ConversationSessionRegistry
 import net.weero.measix.pilot.service.FavoriteModelService
+import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
+import net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher
 import net.weero.measix.pilot.service.SubAssistantCoordinator
 import net.weero.measix.pilot.utils.EmojiData
 import net.weero.measix.pilot.utils.EmojiUtils
@@ -162,6 +164,20 @@ val appModule = module {
     }
 
     single {
+        SafeRemoteMediaFetcher()
+    }
+
+    single {
+        AttachmentResolver(
+            context = get(),
+            filesManager = get(),
+            artifactStore = get(),
+            fetcher = get(),
+            artifactRewriter = get(),
+        )
+    }
+
+    single {
         SubAssistantCoordinator(
             generationHandler = get(),
             conversationRepo = get(),
@@ -173,6 +189,8 @@ val appModule = module {
             workspaceRepository = get(),
             filesManager = get(),
             json = get(),
+            attachmentResolver = get(),
+            context = get(),
         )
     }
 

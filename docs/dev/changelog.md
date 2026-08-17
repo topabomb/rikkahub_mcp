@@ -6,6 +6,21 @@
 
 ---
 
+## 0.0.17（versionCode 17）— 2026-08-17
+
+### 新增
+
+- `assistant_call` 可附带最多 4 个任务相关附件；第一阶段支持图片。主助手只决定传哪些，Runtime 按 Target 本次模型选择原图或 visual observation
+- 会话图片会盖上稳定 `attachment:<uuid>` 句柄，模型可在工具参数里引用；外部 HTTPS 图先落地再注入 Child
+- 子助手可按配置调用 `generate_image`；主卡片用轻量引用显示交付物，Caller 默认只拿文本和 `artifacts[]`，点名 `extras=["artifacts"]` 后才按 Caller 能力拿到原图或 visual observation
+
+### 变更
+
+- `assistant_call` 进入 Coordinator 前的参数错误改为与终态一致的 `status` + `reason` 信封
+- Target 不再永久过滤 `generate_image`；未开启 `TextToImage` 或没有有效默认图片模型时仍不注册
+
+---
+
 ## 0.0.16（versionCode 16）— 2026-08-13 ~ 2026-08-17
 
 ### 新增

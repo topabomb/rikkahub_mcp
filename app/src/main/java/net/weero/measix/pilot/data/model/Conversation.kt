@@ -151,8 +151,51 @@ private fun UIMessagePart.fileUrlString(): String? = when (this) {
     else -> null
 }
 
+// 与 ToolArtifactRewriter.ARTIFACT_KEY / SubAssistantCallMetadata 的 metadata 键保持一致。
+// 这里用字面量是为了让 data.model 不依赖 data.files / data.ai.subassistant。
+private const val TOOL_METADATA_ARTIFACT_KEY = "artifact"
+private const val TOOL_METADATA_SUB_ASSISTANT_CALL_KEY = "sub_assistant_call"
+private const val TOOL_METADATA_ARTIFACTS_KEY = "artifacts"
+private const val LOCAL_ARTIFACT_RELATIVE_PATH_KEY = "relativePath"
+
+private fun artifactRelativePathOf(element: kotlinx.serialization.json.JsonElement): String? {
+    val primitive = (element as? kotlinx.serialization.json.JsonObject)
+        ?.get(LOCAL_ARTIFACT_RELATIVE_PATH_KEY) as? kotlinx.serialization.json.JsonPrimitive
+        ?: return null
+    return primitive.content.takeIf { it.isNotBlank() }
+}
+
+/**
+ * Tool.metadata 中的 LocalArtifactRef 相对路径（generate_image 的 "artifact" 键、
+ * sub_assistant_call.artifacts[].artifact）。Master 卡片把这些当正式交付物引用，
+ * 文件清理时必须视为仍被引用。
+ */
+private fun UIMessagePart.toolMetadataReferenceTokens(): List<String> {
+    if (this !is UIMessagePart.Tool) return emptyList()
+    val metadata = this.metadata ?: return emptyList()
+    val tokens = mutableListOf<String>()
+    metadata[TOOL_METADATA_ARTIFACT_KEY]?.let { element ->
+        artifactRelativePathOf(element)?.let(tokens::add)
+    }
+    val artifacts = (metadata[TOOL_METADATA_SUB_ASSISTANT_CALL_KEY] as? kotlinx.serialization.json.JsonObject)
+        ?.get(TOOL_METADATA_ARTIFACTS_KEY) as? kotlinx.serialization.json.JsonArray
+    artifacts?.forEach { item ->
+        artifactRelativePathOf(item)?.let(tokens::add)
+    }
+    return tokens
+}
+
 internal fun List<UIMessage>.collectFileUrlStrings(): Set<String> =
     flatMap { it.parts }.collectAllParts().mapNotNull { it.fileUrlString() }.toSet()
+
+/**
+ * 会话引用的全部文件标识 token：parts 里的 file:// URL + Tool.metadata 里 LocalArtifactRef
+ * 的相对路径。文件清理的保留判定用这个集合。
+ */
+internal fun List<UIMessage>.collectFileReferenceTokens(): Set<String> =
+    flatMap { it.parts }.collectAllParts().flatMap { part ->
+        listOfNotNull(part.fileUrlString()) + part.toolMetadataReferenceTokens()
+    }.toSet()
 
 internal fun List<UIMessage>.collectFileUris(): Set<Uri> =
     collectFileUrlStrings().map { it.toUri() }.toSet()

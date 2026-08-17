@@ -543,14 +543,13 @@ class SubAssistantRunPolicyTest {
     }
 
     @Test
-    fun `filter removes TextToImage`() {
+    fun `filter preserves TextToImage`() {
         val tools = listOf(
             LocalToolOption.TextToImage,
             LocalToolOption.TimeInfo,
         )
         val filtered = filterTargetLocalTools(tools)
-        assertFalse(filtered.contains(LocalToolOption.TextToImage))
-        assertTrue(filtered.contains(LocalToolOption.TimeInfo))
+        assertEquals(listOf(LocalToolOption.TextToImage, LocalToolOption.TimeInfo), filtered)
     }
 
     // ---- filterTargetTools ----
@@ -586,13 +585,13 @@ class SubAssistantRunPolicyTest {
     }
 
     @Test
-    fun `filter removes generate_image tool`() {
+    fun `filter preserves generate_image tool`() {
         val tools = listOf(
             Tool(name = "generate_image", description = "", execute = { emptyList() }),
             Tool(name = "get_time_info", description = "", execute = { emptyList() }),
         )
         val filtered = filterTargetTools(tools)
-        assertEquals(listOf("get_time_info"), filtered.map { it.name })
+        assertEquals(listOf("generate_image", "get_time_info"), filtered.map { it.name })
     }
 
     @Test

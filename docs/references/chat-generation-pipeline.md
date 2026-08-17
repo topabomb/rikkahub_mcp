@@ -92,10 +92,11 @@ Transformer 以 `fold` 顺序执行，后一个接收前一个的输出：
 | 2 | `PromptInjectionTransformer` | 注入 Assistant 或会话绑定的 Mode Injection |
 | 3 | `PlaceholderTransformer` | 替换内置占位符 |
 | 4 | `DocumentAsPromptTransformer` | 将文档附件内容注入提示 |
-| 5 | `OcrTransformer` | 对图片执行 OCR 并附加识别文本 |
-| 6 | `TemplateTransformer` | 按消息自己的 `createdAt` 渲染模板，避免历史文本每轮变化 |
-| 7 | `WorkspaceReminderTransformer` | Workspace Shell 就绪时向 System 追加环境和路径约束 |
-| 8 | `ToolArtifactReplayTransformer` | 按 artifact metadata 重写历史 Tool Result 的 `/upload/<file>` 与 Image URL |
+| 5 | `AttachmentRefHintTransformer` | 在带 `attachment_ref` 的多媒体 part 前插入模型可见句柄 |
+| 6 | `AttachmentInputTransformer` | 按本次模型选择 NATIVE 保留图片、DERIVED 换成 observation，或聊天兼容占位 |
+| 7 | `TemplateTransformer` | 按消息自己的 `createdAt` 渲染模板，避免历史文本每轮变化 |
+| 8 | `WorkspaceReminderTransformer` | Workspace Shell 就绪时向 System 追加环境和路径约束 |
+| 9 | `ToolArtifactReplayTransformer` | 按 artifact metadata 重写历史 Tool Result 的 `/upload/<file>` 与 Image URL |
 
 `PromptInjectionTransformer` 支持 `BEFORE_SYSTEM_PROMPT`、`AFTER_SYSTEM_PROMPT`、
 `TOP_OF_CHAT`、`BOTTOM_OF_CHAT` 和 `AT_DEPTH`。插入点会避开用户消息与其工具回复之间的边界。
@@ -216,9 +217,9 @@ OpenAI Images 的 `moderation_blocked` / `content_policy_violation`，以及 xAI
 - Target 非交互审批策略，以及可由宿主承接的 `ask_user` 例外
 - Master/Child 共用的 `ConversationSessionRegistry`
 
-`assistant_call` 同步完成以下流程：校验 Caller、Target、访问与模型；解析当前 Master 分支的 lineage；获取 Master/Target lease；用最新 Settings 重验；新建、复用或克隆 Child；运行 Target；持续保存 Child 与 Master metadata；最后返回成功内容或稳定失败原因。内容政策拒绝、Provider HTTP 失败和未分类异常分别记为 `content_blocked`、`provider_error` 与 `runtime_error`，并带回裁剪后的 `detail`；默认带 `tts_stats`，完整 `tts` / `tool_calls` 由 `extras` 按需返回。普通工具 Pending 与子助手桥接的 `ask_user` 共用前台审批音效 `loop_approval`。
+`assistant_call` 同步完成以下流程：校验 Caller、Target、访问与模型；解析当前 Master 分支的 lineage；获取 Master/Target lease；用最新 Settings 重验；新建、复用或克隆 Child；运行 Target；持续保存 Child 与 Master metadata；最后返回成功内容或稳定失败原因。内容政策拒绝、Provider HTTP 失败和未分类异常分别记为 `content_blocked`、`provider_error` 与 `runtime_error`，并带回裁剪后的 `detail`；默认带 `tts_stats` 与轻量 `artifacts[]`，完整 `tts` / `tool_calls` / 交付物内容由 `extras` 按需返回。普通工具 Pending 与子助手桥接的 `ask_user` 共用前台审批音效 `loop_approval`。
 
-Target 永久过滤 Assistant 管理、再次委托和 `generate_image`。其他工具按运行开始快照与当前配置的交集在 step 边界装配；Memory Tool 在执行前独立重验。需审批工具默认拒绝，只有 `ask_user` 会按 Child locator 桥接到主聊天。
+Target 永久过滤 Assistant 管理与再次委托。`generate_image` 按 Target 快照 ∩ 当前配置允许，不再永久过滤。其他工具按运行开始快照与当前配置的交集在 step 边界装配；Memory Tool 在执行前独立重验。需审批工具默认拒绝，只有 `ask_user` 会按 Child locator 桥接到主聊天。
 
 每个 Master turn 创建唯一的 TTS queue session，Master 与该 turn 内的 Target 只向这条共享队列提交音频；工具审批暂停与恢复复用原 session，新消息和重新生成创建新 session。播放器是队列边界的唯一仲裁者：新 session 替换旧队列；同 session 在顺序开关开启时追加、关闭时替换。Tool 实例和 UI `activeSource` 均不保存或推断队列生命周期；每个 chunk 直接绑定来源，`activeSource` 只随实际播放更新。自动朗读忽略其他会话和待审批暂停事件，并按同一 session 的策略提交，不能旁路打断工具音频。旧 worker 和旧播放器回调通过所有权 token 隔离，不能清空或停止新队列。System TTS 并发预取使用系统创建的唯一临时文件，禁止以时间戳共享输出路径。
 

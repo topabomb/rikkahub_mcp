@@ -1266,6 +1266,7 @@
   <string name="workspace_file_editor_read_failed">Ошибка чтения файла</string>
   <string name="workspace_file_editor_too_large">Файл слишком велик для предпросмотра (%d байт)</string>
   <string name="image_crop_failed">Не удалось обрезать изображение</string>
+  <string name="image_observation_processing">Чтение изображения...</string>
   <string name="chat_readiness_title_prefix">Настроить для</string>
   <string name="chat_readiness_title_suffix"/>
   <string name="chat_readiness_model_required_toast">Перед отправкой выберите модель диалога.</string>
@@ -1344,6 +1345,8 @@
   <string name="sub_assistant_card_running">Выполнение</string>
   <string name="sub_assistant_card_completed">Завершено</string>
   <string name="sub_assistant_card_non_text_output">Содержит нетекстовый результат</string>
+  <string name="sub_assistant_card_artifact_missing">Изображение недоступно</string>
+  <string name="sub_assistant_card_more_artifacts">+%1$d</string>
   <string name="sub_assistant_card_failed">Ошибка</string>
   <string name="sub_assistant_card_stopped">Остановлено</string>
   <string name="sub_assistant_card_unavailable">Недоступно</string>

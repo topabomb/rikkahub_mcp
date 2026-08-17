@@ -20,7 +20,6 @@ object SubAssistantRunPolicy {
     val FORBIDDEN_LOCAL_TOOLS = setOf(
         LocalToolOption.AssistantManagement,
         LocalToolOption.AssistantDelegation,
-        LocalToolOption.TextToImage,
     )
 
 }
@@ -40,7 +39,6 @@ fun filterTargetTools(tools: List<Tool>): List<Tool> {
         "assistant_call",
         "assistant_inspect",
         "assistant_memory_list",
-        "generate_image",
     )
     return tools.filter { it.name !in forbiddenNames }
 }
@@ -234,7 +232,8 @@ fun validateReadiness(
  * 构建工具创建的子助手模板。
  *
  * Local Tools 与 UI 新建的默认 Assistant 保持一致；Target Run 仍会在运行时过滤
- * assistant_manage、assistant_call、assistant_inspect 和历史名 assistant_memory_list；
+ * assistant_manage、assistant_call、assistant_inspect 和历史名 assistant_memory_list。
+ * generate_image 按 Target 快照 ∩ 当前配置决定，不再永久过滤。
  * ask_user 由 Coordinator 传导到主聊天。
  */
 fun buildToolCreatedAssistant(

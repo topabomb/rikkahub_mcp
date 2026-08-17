@@ -1266,6 +1266,7 @@
   <string name="workspace_file_editor_read_failed">ファイルの読み取りに失敗しました</string>
   <string name="workspace_file_editor_too_large">ファイルが大きすぎてプレビューできません（%d バイト）</string>
   <string name="image_crop_failed">画像の切り抜きに失敗しました</string>
+  <string name="image_observation_processing">画像を読み取っています...</string>
   <string name="chat_readiness_title_prefix"/>
   <string name="chat_readiness_title_suffix">の会話を設定</string>
   <string name="chat_readiness_model_required_toast">送信する前に会話モデルを選択してください。</string>
@@ -1344,6 +1345,8 @@
   <string name="sub_assistant_card_running">実行中</string>
   <string name="sub_assistant_card_completed">完了</string>
   <string name="sub_assistant_card_non_text_output">テキスト以外の出力を含みます</string>
+  <string name="sub_assistant_card_artifact_missing">画像を表示できません</string>
+  <string name="sub_assistant_card_more_artifacts">+%1$d</string>
   <string name="sub_assistant_card_failed">失敗</string>
   <string name="sub_assistant_card_stopped">停止</string>
   <string name="sub_assistant_card_unavailable">利用不可</string>

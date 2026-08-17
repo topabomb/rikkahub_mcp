@@ -21,6 +21,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.common.android.Logging
 import net.weero.measix.pilot.AppScope
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.db.entity.ManagedFileEntity
 import net.weero.measix.pilot.data.repository.FilesRepository
 import net.weero.measix.pilot.utils.ImageExportResult
@@ -209,9 +210,13 @@ class FilesManager(
                                     TAG,
                                     "convertBase64ImagePartToLocalFile: convert base64 img to ${urls.joinToString(", ")}"
                                 )
-                                part.copy(
+                                val converted = part.copy(
                                     url = urls.first().toString(),
                                 )
+                                // 落盘即盖章稳定 ref：Child 侧没有每轮 backfill，不在这里盖章的话
+                                // 出站提取每次都会生成新的随机 ref，Master metadata 与 Child 失去关联。
+                                // ensureAttachmentRef 对已有合法 ref 的 part 是恒等变换。
+                                AttachmentRefs.ensureAttachmentRef(converted)
                             } else {
                                 part
                             }
@@ -529,6 +534,13 @@ class FilesManager(
 
     private fun getRelativePathInFilesDir(file: File): String? =
         FileUtils.getRelativePathInFilesDir(context.filesDir, file)
+
+    /** file URI 相对 filesDir 的规范化相对路径（如 upload/a.png，正斜杠）；不在 filesDir 内返回 null。 */
+    fun getRelativePathForUri(uri: Uri): String? {
+        if (!uri.toString().startsWith("file:", ignoreCase = true)) return null
+        val file = runCatching { uri.toFile() }.getOrNull() ?: return null
+        return getRelativePathInFilesDir(file)
+    }
 
     fun getFileNameFromUri(uri: Uri): String? =
         FileUtils.getFileNameFromUri(context, uri)

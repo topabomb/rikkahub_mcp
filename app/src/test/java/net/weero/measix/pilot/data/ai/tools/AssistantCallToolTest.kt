@@ -93,7 +93,8 @@ class AssistantCallToolTest {
             .jsonObject["description"]!!
             .jsonPrimitive
             .content
-        assertTrue(extrasDescription.contains("Extra result content"))
+        assertTrue(extrasDescription.contains("Extra result content for the caller model"))
+        assertTrue(extrasDescription.contains("artifacts"))
         assertTrue(extrasDescription.contains("tts"))
         assertTrue(extrasDescription.contains("tool_calls"))
     }
@@ -128,8 +129,81 @@ class AssistantCallToolTest {
         )
 
         val payload = Json.parseToJsonElement((result.single() as UIMessagePart.Text).text).jsonObject
-        assertEquals("request_required", payload["error"]?.jsonPrimitive?.content)
+        assertEquals("unavailable", payload["status"]?.jsonPrimitive?.content)
+        assertEquals("request_required", payload["reason"]?.jsonPrimitive?.content)
         coVerify(exactly = 0) { coordinator.executeCall(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `more than four attachments is rejected before coordinator starts a run`() = runTest {
+        val coordinator = mockk<SubAssistantCoordinator>(relaxed = true)
+        val tool = createTool(coordinator)
+        val result = tool.executeWithContext(
+            executionContext(),
+            buildJsonObject {
+                put("assistant_id", targetId.toString())
+                put("request", "Look at these")
+                put("attachments", buildJsonArray {
+                    add(JsonPrimitive("attachment:1"))
+                    add(JsonPrimitive("attachment:2"))
+                    add(JsonPrimitive("attachment:3"))
+                    add(JsonPrimitive("attachment:4"))
+                    add(JsonPrimitive("attachment:5"))
+                })
+            },
+        )
+        val payload = Json.parseToJsonElement((result.single() as UIMessagePart.Text).text).jsonObject
+        assertEquals("unavailable", payload["status"]?.jsonPrimitive?.content)
+        assertEquals("invalid_attachments", payload["reason"]?.jsonPrimitive?.content)
+        coVerify(exactly = 0) { coordinator.executeCall(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `attachments are forwarded after dedup`() = runTest {
+        val coordinator = mockk<SubAssistantCoordinator>()
+        val tool = createTool(coordinator)
+        val expected = listOf(UIMessagePart.Text("done"))
+        val ref = "attachment:11111111-1111-1111-1111-111111111111"
+        coEvery {
+            coordinator.executeCall(
+                callerAssistantId = callerId,
+                masterConversationId = masterConversationId,
+                targetAssistantId = targetId,
+                task = "Look",
+                execContext = any(),
+                extras = emptySet(),
+                attachments = listOf(ref, "/upload/a.png"),
+            )
+        } returns expected
+
+        val result = tool.executeWithContext(
+            executionContext(),
+            buildJsonObject {
+                put("assistant_id", targetId.toString())
+                put("request", "Look")
+                put("attachments", buildJsonArray {
+                    add(JsonPrimitive(ref))
+                    add(JsonPrimitive(" $ref "))
+                    add(JsonPrimitive("/upload/a.png"))
+                })
+            },
+        )
+        assertEquals(expected, result)
+    }
+
+    @Test
+    fun `description mentions attachments without vision capability claims`() {
+        val tool = createTool(mockk(relaxed = true))
+        val attachmentsDescription = tool.parameters()!!["properties"]!!
+            .jsonObject["attachments"]!!
+            .jsonObject["description"]!!
+            .jsonPrimitive
+            .content
+        assertTrue(attachmentsDescription.contains("Up to 4"))
+        assertTrue(attachmentsDescription.contains("attachment:<uuid>"))
+        assertTrue(attachmentsDescription.contains("cannot see this chat"))
+        assertFalse(attachmentsDescription.contains("vision", ignoreCase = true))
+        assertFalse(attachmentsDescription.contains("ocr", ignoreCase = true))
     }
 
     @Test
@@ -173,7 +247,7 @@ class AssistantCallToolTest {
                 targetAssistantId = targetId,
                 task = "Speak",
                 execContext = any(),
-                extras = setOf("tts", "tool_calls"),
+                extras = setOf("artifacts", "tts", "tool_calls"),
             )
         } returns expected
 
@@ -183,6 +257,7 @@ class AssistantCallToolTest {
                 put("assistant_id", targetId.toString())
                 put("request", "Speak")
                 put("extras", buildJsonArray {
+                    add(JsonPrimitive("artifacts"))
                     add(JsonPrimitive("tts"))
                     add(JsonPrimitive("tool_calls"))
                     add(JsonPrimitive("preview"))
@@ -198,7 +273,7 @@ class AssistantCallToolTest {
                 targetAssistantId = targetId,
                 task = "Speak",
                 execContext = any(),
-                extras = setOf("tts", "tool_calls"),
+                extras = setOf("artifacts", "tts", "tool_calls"),
             )
         }
     }

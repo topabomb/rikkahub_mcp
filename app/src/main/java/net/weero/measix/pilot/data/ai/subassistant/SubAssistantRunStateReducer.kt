@@ -118,6 +118,8 @@ class SubAssistantRunStateReducer(
         reason: String? = null,
         preview: String? = null,
         hasNonTextOutput: Boolean = false,
+        artifacts: List<SubAssistantCallArtifact> = emptyList(),
+        artifactOmitted: Int = 0,
     ): SubAssistantCallMetadata = mutex.withLock {
         if (current.state.isTerminal()) {
             // 幂等：已经终态，不覆盖更早的结果
@@ -131,6 +133,8 @@ class SubAssistantRunStateReducer(
                 activeToolName = null,
                 preview = preview ?: current.preview,
                 hasNonTextOutput = hasNonTextOutput,
+                artifacts = artifacts,
+                artifactOmitted = artifactOmitted,
                 userInteraction = null,
             )
         }

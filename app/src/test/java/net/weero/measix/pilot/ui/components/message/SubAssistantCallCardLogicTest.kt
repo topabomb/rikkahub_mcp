@@ -42,6 +42,43 @@ class SubAssistantCallCardLogicTest {
     }
 
     @Test
+    fun `non-text placeholder is hidden when the card already shows an image`() {
+        assertFalse(
+            shouldShowNonTextOutputPlaceholder(
+                state = SubAssistantCallState.COMPLETED,
+                preview = null,
+                hasNonTextOutput = true,
+                hasImagePreview = true,
+            )
+        )
+    }
+
+    @Test
+    fun `missing artifact file is reported as a preview without a url`() {
+        val dir = kotlin.io.path.createTempDirectory("card-artifacts").toFile()
+        try {
+            val previews = resolveSubAssistantCardImagePreviews(
+                artifacts = listOf(
+                    net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallArtifact(
+                        ref = "attachment:11111111-1111-1111-1111-111111111111",
+                        type = "image",
+                        mime = "image/png",
+                        artifact = net.weero.measix.pilot.data.files.LocalArtifactRef(
+                            relativePath = "upload/missing.png",
+                            mimeType = "image/png",
+                        ),
+                    ),
+                ),
+                filesDir = dir,
+            )
+            assertEquals(1, previews.size)
+            assertEquals(null, previews.single().url)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `non-text placeholder is limited to completed calls without visible preview`() {
         assertTrue(
             shouldShowNonTextOutputPlaceholder(

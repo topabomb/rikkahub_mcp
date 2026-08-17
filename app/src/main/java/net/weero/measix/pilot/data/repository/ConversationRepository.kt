@@ -23,6 +23,7 @@ import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
+import net.weero.measix.pilot.data.model.collectFileReferenceTokens
 import net.weero.measix.pilot.utils.JsonInstant
 import java.time.Instant
 import kotlin.uuid.Uuid
@@ -288,7 +289,14 @@ class ConversationRepository(
         }
         val oldTreeFiles = (oldChildren + oldMaster).flatMap { it.files }.toSet()
         val retainedTreeFiles = (retainedChildren + master).flatMap { it.files }.toSet()
-        val deletionCandidates = oldTreeFiles - retainedTreeFiles
+        // 保留树的 metadata 引用（sub_assistant_call.artifacts 等）不在 Conversation.files 里，
+        // 但它们是 Master 卡片的正式交付物引用，同样要阻止删除对应文件。
+        val retainedReferenceTokens = (retainedChildren + master)
+            .flatMap { it.messageNodes.flatMap { node -> node.messages } }
+            .let { messages -> messages.collectFileReferenceTokens() }
+        val deletionCandidates = (oldTreeFiles - retainedTreeFiles).filter { uri ->
+            fileReferenceTokensFor(uri).none { it in retainedReferenceTokens }
+        }.toSet()
         val excludedIds = buildSet {
             add(master.id)
             addAll(oldChildIds)
@@ -443,6 +451,10 @@ class ConversationRepository(
     /**
      * 对每个候选 file:// URI 用 LIKE 探测其他会话的 messages JSON，
      * 命中后再反序列化该节点校验，避免为文件清理加载所有会话及消息。
+     *
+     * 除 file:// URL 外，也探测 filesDir 相对路径 token：Master 卡片通过
+     * sub_assistant_call.artifacts[].artifact / generate_image 的 "artifact" metadata
+     * 引用文件（不出现 file:// URL），这些引用同样阻止删除。
      */
     private suspend fun findUnsharedFileUris(
         candidates: Set<android.net.Uri>,
@@ -452,11 +464,20 @@ class ConversationRepository(
         val excludedIds = excludedConversationIds.map { it.toString() }
         if (excludedIds.isEmpty()) return emptyList()
         return candidates.filter { uri ->
-            val url = uri.toString()
-            val needle = ConversationFileReferences.likeNeedleForUrl(url)
-            val hits = messageNodeDAO.findMessagesJsonContaining(excludedIds, needle)
-            !ConversationFileReferences.isUrlRetained(url, hits, JsonInstant)
+            val tokens = fileReferenceTokensFor(uri)
+            val hits = tokens.flatMap { token ->
+                val needle = ConversationFileReferences.likeNeedleForToken(token)
+                messageNodeDAO.findMessagesJsonContaining(excludedIds, needle)
+            }.distinct()
+            !ConversationFileReferences.isFileRetained(tokens, hits, JsonInstant)
         }
+    }
+
+    /** 候选 URI 的引用 token 集合：完整 URL + filesDir 相对路径（与 metadata 存储形态一致）。 */
+    private fun fileReferenceTokensFor(uri: android.net.Uri): Set<String> {
+        val url = uri.toString()
+        val relative = runCatching { filesManager.getRelativePathForUri(uri) }.getOrNull()
+        return if (relative != null && relative != url) setOf(url, relative) else setOf(url)
     }
 
     /**

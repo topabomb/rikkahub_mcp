@@ -16,6 +16,8 @@ class TransformerContext(
     val conversationModeInjectionIds: Set<Uuid> = emptySet(),
     val processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
     val workspaceCwd: String? = null,
+    val imageAdaptMode: ImageAdaptMode = ImageAdaptMode.CHAT_COMPAT,
+    val currentTaskMessageId: Uuid? = null,
 )
 
 interface MessageTransformer {
@@ -69,6 +71,8 @@ suspend fun List<UIMessage>.transforms(
     conversationModeInjectionIds: Set<Uuid> = emptySet(),
     processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
     workspaceCwd: String? = null,
+    imageAdaptMode: ImageAdaptMode = ImageAdaptMode.CHAT_COMPAT,
+    currentTaskMessageId: Uuid? = null,
 ): List<UIMessage> {
     val ctx = TransformerContext(
         context = context,
@@ -78,6 +82,8 @@ suspend fun List<UIMessage>.transforms(
         conversationModeInjectionIds = conversationModeInjectionIds,
         processingStatus = processingStatus,
         workspaceCwd = workspaceCwd,
+        imageAdaptMode = imageAdaptMode,
+        currentTaskMessageId = currentTaskMessageId,
     )
     return transformers.fold(this) { acc, transformer ->
         transformer.transform(ctx, acc)
