@@ -26,6 +26,13 @@ class ClaudeProviderThinkingTest {
         assertEquals("summarized", opus48["thinking"]!!.jsonObject["display"]!!.jsonPrimitive.content)
         assertEquals("xhigh", opus48["output_config"]!!.jsonObject["effort"]!!.jsonPrimitive.content)
         assertEquals("max", sonnet46["output_config"]!!.jsonObject["effort"]!!.jsonPrimitive.content)
+
+        val sonnetMax = buildClaudeThinkingFields(
+            modelId = "claude-sonnet-4-6",
+            level = ReasoningLevel.MAX,
+            maxTokens = 64_000,
+        )
+        assertEquals("max", sonnetMax["output_config"]!!.jsonObject["effort"]!!.jsonPrimitive.content)
     }
 
     @Test

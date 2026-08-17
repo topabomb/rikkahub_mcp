@@ -200,37 +200,7 @@ class ChatCompletionsAPI(
                                 close(it["error"]!!.parseErrorDetail())
                                 return
                             }
-                            val id = it["id"]?.jsonPrimitive?.contentOrNull ?: ""
-                            val model = it["model"]?.jsonPrimitive?.contentOrNull ?: ""
-
-                            val choices = it["choices"]?.jsonArray ?: JsonArray(emptyList())
-                            val choiceList = buildList {
-                                if (choices.isNotEmpty()) {
-                                    val choice = choices[0].jsonObject
-                                    val message =
-                                        choice["delta"]?.jsonObject ?: choice["message"]?.jsonObject
-                                        ?: throw Exception("delta/message is null")
-                                    val finishReason =
-                                        choice["finish_reason"]?.jsonPrimitive?.contentOrNull
-                                            ?: "unknown"
-                                    add(
-                                        UIMessageChoice(
-                                            index = 0,
-                                            delta = parseMessage(message, streamState),
-                                            message = null,
-                                            finishReason = finishReason,
-                                        )
-                                    )
-                                }
-                            }
-                            val usage = parseTokenUsage(it["usage"] as? JsonObject)
-
-                            val messageChunk = MessageChunk(
-                                id = id,
-                                model = model,
-                                choices = choiceList,
-                                usage = usage
-                            )
+                            val messageChunk = parseStreamPayload(it, streamState)
                             trySend(messageChunk).onFailure { e ->
                                 Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
                             }
@@ -441,7 +411,7 @@ class ChatCompletionsAPI(
                         if ("deepseek-v4" in params.model.modelId.lowercase()) {
                             if (level != ReasoningLevel.AUTO) {
                                 val effort = when (level) {
-                                    ReasoningLevel.XHIGH -> "max"
+                                    ReasoningLevel.XHIGH, ReasoningLevel.MAX -> "max"
                                     ReasoningLevel.OFF -> "none"
                                     else -> "high"
                                 }
@@ -797,6 +767,41 @@ class ChatCompletionsAPI(
         }
     }
 
+    /**
+     * Compatible gateways may serialize `choices`, `delta`, `message` or `tool_calls` as JSON null.
+     * Forced `jsonArray`/`jsonObject` access would abort the whole generation turn.
+     */
+    internal fun parseStreamPayload(
+        payload: JsonObject,
+        streamState: ChatCompletionsStreamState? = null,
+    ): MessageChunk {
+        val id = payload["id"]?.jsonPrimitiveOrNull?.contentOrNull.orEmpty()
+        val model = payload["model"]?.jsonPrimitiveOrNull?.contentOrNull.orEmpty()
+        val choices = payload["choices"]?.jsonArrayOrNull ?: JsonArray(emptyList())
+        val choiceList = buildList {
+            val choice = choices.firstOrNull()?.jsonObjectOrNull ?: return@buildList
+            val message = choice["delta"]?.jsonObjectOrNull
+                ?: choice["message"]?.jsonObjectOrNull
+                ?: return@buildList
+            val finishReason = choice["finish_reason"]?.jsonPrimitiveOrNull?.contentOrNull
+                ?: "unknown"
+            add(
+                UIMessageChoice(
+                    index = 0,
+                    delta = parseMessage(message, streamState),
+                    message = null,
+                    finishReason = finishReason,
+                )
+            )
+        }
+        return MessageChunk(
+            id = id,
+            model = model,
+            choices = choiceList,
+            usage = parseTokenUsage(payload["usage"] as? JsonObject),
+        )
+    }
+
     internal fun parseMessage(
         jsonObject: JsonObject,
         streamState: ChatCompletionsStreamState? = null,
@@ -828,8 +833,8 @@ class ChatCompletionsAPI(
                     "text"
                 )?.jsonPrimitiveOrNull?.contentOrNull
             }
-        val toolCalls = jsonObject["tool_calls"] as? JsonArray ?: JsonArray(emptyList())
-        val images = jsonObject["images"] as? JsonArray ?: JsonArray(emptyList())
+        val toolCalls = jsonObject["tool_calls"]?.jsonArrayOrNull ?: JsonArray(emptyList())
+        val images = jsonObject["images"]?.jsonArrayOrNull ?: JsonArray(emptyList())
         val reasoningDetails = jsonObject["reasoning_details"]?.jsonArrayOrNull
         val reasoningMetadata = reasoningDetails?.let {
             OpenRouterReasoningMetadata(reasoningDetails = it).toMetadata()

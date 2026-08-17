@@ -35,4 +35,16 @@ class DisplaySettingMutationTest {
 
         assertEquals(current, mergeDisplaySettingDelta(baseline, baseline, current))
     }
+
+    @Test
+    fun `update pause timestamp is merged independently of showUpdates`() {
+        val baseline = DisplaySetting()
+        val edited = baseline.copy(updateCheckDisabledUntilEpochMillis = 9_000L)
+        val current = baseline.copy(showUpdates = false)
+
+        val merged = mergeDisplaySettingDelta(baseline, edited, current)
+
+        assertEquals(9_000L, merged.updateCheckDisabledUntilEpochMillis)
+        assertEquals(false, merged.showUpdates)
+    }
 }

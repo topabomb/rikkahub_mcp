@@ -446,7 +446,7 @@ stateInOnce(scope, initialValue) =
     stateIn(scope, SharingStarted.Lazily, initialValue)
 ```
 
-所有 `ChatVM` 共享 Koin 单例 `UpdateChecker` 的同一 `StateFlow`。首次组合 `UpdateCard` 并订阅时才启动检查；启动后即使订阅暂时消失也不会重建冷 Flow，因此同一 App 进程内最多请求一次。成功版本的关闭状态写入 `Settings.ignoredUpdateVersion`，只有版本变化后才再次提示；失败卡片的关闭状态保存在 `UpdateChecker.errorDismissed`，下次进程启动可重试。
+所有 `ChatVM` 共享 Koin 单例 `UpdateChecker` 的同一 `StateFlow`。`ChatDrawer` 仅在 `DisplaySetting.areUpdateChecksEnabled()` 为真且非 Play Store 安装时组合 `UpdateCard`。首次订阅时才启动检查；启动后即使订阅暂时消失也不会重建冷 Flow，因此同一 App 进程内最多请求一次。成功版本的关闭状态写入 `Settings.ignoredUpdateVersion`，只有版本变化后才再次提示；失败卡片的关闭状态保存在 `UpdateChecker.errorDismissed`，下次进程启动可重试。
 
 ---
 

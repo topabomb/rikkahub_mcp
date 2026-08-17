@@ -71,14 +71,16 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.dokar.sonner.ToastType
+import dev.chrisbanes.haze.HazeInput
 import dev.chrisbanes.haze.HazeState
-import dev.chrisbanes.haze.blur.blurEffect
-import dev.chrisbanes.haze.hazeEffect
-import dev.chrisbanes.haze.blur.materials.HazeMaterials
+import dev.chrisbanes.haze.blur.HazeBlurStyle
+import dev.chrisbanes.haze.blur.hazeBlur
+import dev.chrisbanes.haze.blur.material3.Material3
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collectLatest
 import me.rerere.ai.provider.Model
@@ -141,7 +143,9 @@ fun ChatInput(
     val toaster = LocalToaster.current
     val useCompactHeightLayout = LocalAdaptiveLayoutInfo.current.useCompactChatInput
     val hazeTintColor = MaterialTheme.colorScheme.surfaceContainerLow
-    val inputHazeStyle = HazeMaterials.thin(containerColor = hazeTintColor)
+    val inputHazeStyle = HazeBlurStyle.Material3(containerColor = hazeTintColor) {
+        blurRadius(12.dp)
+    }
 
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -216,13 +220,10 @@ fun ChatInput(
                     .fillMaxWidth()
                     .clip(containerShape)
                     .then(
-                        if (settings.displaySetting.enableBlurEffect) Modifier.hazeEffect(
-                            state = hazeState
-                        ) {
-                            blurEffect {
-                                style = inputHazeStyle
-                            }
-                        }
+                        if (settings.displaySetting.enableBlurEffect) Modifier.hazeBlur(
+                            input = HazeInput.Sources(hazeState),
+                            style = inputHazeStyle,
+                        )
                         else Modifier
                     ),
                 shape = containerShape,
@@ -594,6 +595,7 @@ private fun TextInputRow(
             },
             lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = maxHeightInLines),
             keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.Sentences,
                 imeAction = if (settings.displaySetting.sendOnEnter) ImeAction.Send else ImeAction.Default
             ),
             onKeyboardAction = {
@@ -809,6 +811,9 @@ private fun FullScreenEditor(
                         placeholder = {
                             Text(stringResource(R.string.chat_input_placeholder))
                         },
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Sentences,
+                        ),
                         colors = TextFieldDefaults.colors().copy(
                             unfocusedIndicatorColor = Color.Transparent,
                             focusedIndicatorColor = Color.Transparent,

@@ -115,7 +115,7 @@ Transformer 以 `fold` 顺序执行，后一个接收前一个的输出：
 
 `ChatService.handleMessageComplete()` 按以下顺序装配工具：
 
-1. Search Tools：`assistant.enableWebSearch` 开启时；
+1. Search Tools：`shouldUseExternalWebSearch(assistant, model)` 为真时（助手开启外挂搜索，且模型未带 `BuiltInTools.Search`）；
 2. Local Tools：JavaScript、时间、剪贴板、语音播报、向用户提问、屏幕使用时间、日历、条件注册的 `generate_image` 等；
 3. Conversation Tools：允许引用近期对话时；
 4. Workspace Tools：绑定 Workspace 且 Shell 状态为 `READY` 时；

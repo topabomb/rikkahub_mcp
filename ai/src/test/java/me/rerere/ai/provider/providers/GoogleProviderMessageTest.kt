@@ -12,6 +12,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
@@ -496,6 +497,30 @@ class GoogleProviderMessageTest {
         assertEquals("#/\$defs/mode", schema["properties"]!!.jsonObject["mode"]!!.jsonObject["\$ref"]!!.jsonPrimitive.content)
         assertFalse(schema.containsKey("\$schema"))
         assertTrue(tools.any { it.jsonObject.containsKey("googleSearch") })
+    }
+
+    @Test
+    fun `gemini 25 flash max reasoning budget is clamped to flash limit`() {
+        val body = invokeBuildRequest(
+            messages = listOf(UIMessage.user("hello")),
+            params = TextGenerationParams(
+                model = Model(
+                    modelId = "gemini-2.5-flash",
+                    displayName = "gemini-2.5-flash",
+                    abilities = listOf(ModelAbility.REASONING),
+                ),
+                reasoningLevel = ReasoningLevel.MAX,
+            ),
+        )
+        val budget = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
+            .get("thinkingBudget")!!.jsonPrimitive.content.toInt()
+        assertEquals(24_576, budget)
+    }
+
+    @Test
+    fun `gemini 25 pro max reasoning budget stays under pro limit`() {
+        assertEquals(32_000, gemini25ThinkingBudget("gemini-2.5-pro", ReasoningLevel.MAX))
+        assertEquals(16_000, gemini25ThinkingBudget("gemini-2.5-flash", ReasoningLevel.XHIGH))
     }
 
     @Test

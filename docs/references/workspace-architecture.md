@@ -32,6 +32,8 @@ Assistant.workspaceId 有效
 
 `workspace` Gradle 模块不依赖应用 UI；`app` 模块负责 Room、Compose、文件上传、工具注册和 DI。
 
+`WorkspaceDocumentsProvider.queryDocument` 在解析到具体文件后必须先确认 `File.exists()`，已删除路径不能再写入 SAF 游标。
+
 ## 3. 文件系统与挂载
 
 每个 Workspace 使用独立 root 名称，名称只允许字母、数字、点、下划线和连字符：

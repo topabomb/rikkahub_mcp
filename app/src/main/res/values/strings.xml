@@ -108,6 +108,7 @@
   <string name="assistant_page_regex_desc">Define regex patterns to transform messages before sending/receiving</string>
   <string name="assistant_page_regex_find_regex">Find Regex</string>
   <string name="assistant_page_regex_name">Name</string>
+  <string name="assistant_page_regex_reorder">Reorder regular expressions</string>
   <string name="assistant_page_regex_replace_string">Replace String</string>
   <string name="assistant_page_regex_title">Message Regexes</string>
   <string name="assistant_page_regex_visual_only">Visual Only (affects display only, not actual message)</string>
@@ -581,6 +582,7 @@
   <string name="reasoning_picker_hint">Not all models support depth adjustment. Refer to the model and provider documentation.</string>
   <string name="reasoning_picker_title">Adjust Model Thinking Depth</string>
   <string name="reasoning_xhigh">XHigh</string>
+  <string name="reasoning_max">Max</string>
   <string name="regenerate">Regenerate</string>
   <string name="regenerate_confirm_message">Are you sure you want to regenerate this message?</string>
   <string name="render_with_webview">Render with WebView</string>
@@ -628,7 +630,7 @@
   <string name="send">Send</string>
   <string name="setting_asr_configure_api_key">API Key</string>
   <string name="setting_asr_configure_dashscope_api_key_desc">DashScope API key</string>
-  <string name="setting_asr_configure_dashscope_vad_desc">Server VAD sensitivity, set 0 to disable VAD</string>
+  <string name="setting_asr_configure_dashscope_vad_desc">Server VAD detection threshold. Recommended: 0.0; range: -1 to 1.</string>
   <string name="setting_asr_configure_dashscope_websocket_desc">DashScope realtime websocket endpoint</string>
   <string name="setting_asr_configure_language">Language</string>
   <string name="setting_asr_configure_language_code_desc">Optional language code, e.g. zh-CN, en-US, ja-JP</string>
@@ -720,6 +722,12 @@
   <string name="setting_display_page_show_token_usage_title">Show Token &amp; Context Stats</string>
   <string name="setting_display_page_show_updates_desc">Whether to display app update notifications</string>
   <string name="setting_display_page_show_updates_title">Show Updates</string>
+  <string name="setting_update_reminder_enabled">Update reminders are enabled</string>
+  <string name="setting_update_reminder_paused_until">Paused until %1$s</string>
+  <string name="setting_update_reminder_pause_title">Pause update reminders</string>
+  <string name="setting_update_reminder_pause_description">Choose how long to pause update reminders. They will resume automatically.</string>
+  <string name="setting_update_reminder_pause_days">%1$d days</string>
+  <string name="setting_update_reminder_resume_now">Resume now</string>
   <string name="setting_display_page_show_user_avatar_desc">Whether to display user avatar in chat messages</string>
   <string name="setting_display_page_show_user_avatar_title">Show User Avatar</string>
   <string name="setting_display_page_skip_crop_image_desc">Skip crop interface after importing images or taking photos</string>

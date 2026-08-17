@@ -44,6 +44,11 @@ internal fun mergeDisplaySettingDelta(
         current.autoCloseThinking,
     ),
     showUpdates = selectChanged(baseline.showUpdates, edited.showUpdates, current.showUpdates),
+    updateCheckDisabledUntilEpochMillis = selectChanged(
+        baseline.updateCheckDisabledUntilEpochMillis,
+        edited.updateCheckDisabledUntilEpochMillis,
+        current.updateCheckDisabledUntilEpochMillis,
+    ),
     showMessageJumper = selectChanged(
         baseline.showMessageJumper,
         edited.showMessageJumper,

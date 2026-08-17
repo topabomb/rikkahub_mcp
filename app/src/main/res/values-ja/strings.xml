@@ -108,6 +108,7 @@
   <string name="assistant_page_regex_desc">メッセージの送受信前に変換する正規表現パターンを定義</string>
   <string name="assistant_page_regex_find_regex">正規表現を検索</string>
   <string name="assistant_page_regex_name">名前</string>
+  <string name="assistant_page_regex_reorder">正規表現の順序を変更</string>
   <string name="assistant_page_regex_replace_string">文字列を置換</string>
   <string name="assistant_page_regex_title">メッセージ正規表現</string>
   <string name="assistant_page_regex_visual_only">表示のみ（実際のメッセージには影響しません）</string>
@@ -578,6 +579,7 @@
   <string name="reasoning_picker_hint">すべてのモデルが深さ調整に対応しているわけではありません。モデルおよびプロバイダーのドキュメントを参照してください。</string>
   <string name="reasoning_picker_title">モデルの思考深度を調整</string>
   <string name="reasoning_xhigh">XHigh</string>
+  <string name="reasoning_max">最大</string>
   <string name="regenerate">再生成</string>
   <string name="regenerate_confirm_message">このメッセージを再生成してもよろしいですか？</string>
   <string name="render_with_webview">WebViewで表示</string>
@@ -625,7 +627,7 @@
   <string name="send">送信</string>
   <string name="setting_asr_configure_api_key">APIキー</string>
   <string name="setting_asr_configure_dashscope_api_key_desc">DashScope APIキー</string>
-  <string name="setting_asr_configure_dashscope_vad_desc">サーバーVAD感度、0でVAD無効</string>
+  <string name="setting_asr_configure_dashscope_vad_desc">サーバーVAD検出しきい値。推奨値：0.0、範囲：-1〜1。</string>
   <string name="setting_asr_configure_dashscope_websocket_desc">DashScopeリアルタイムWebSocketエンドポイント</string>
   <string name="setting_asr_configure_language">言語</string>
   <string name="setting_asr_configure_language_code_desc">オプションの言語コード、例: zh-CN、en-US、ja-JP</string>
@@ -710,6 +712,12 @@
   <string name="setting_display_page_show_token_usage_title">トークンとコンテキスト統計を表示</string>
   <string name="setting_display_page_show_updates_desc">アプリのアップデート通知を表示するかどうか</string>
   <string name="setting_display_page_show_updates_title">アップデートを表示</string>
+  <string name="setting_update_reminder_enabled">アップデート通知が有効になっています</string>
+  <string name="setting_update_reminder_paused_until">%1$sまで一時停止</string>
+  <string name="setting_update_reminder_pause_title">更新リマインダーを一時停止</string>
+  <string name="setting_update_reminder_pause_description">更新リマインダーを一時停止する期間を選択してください。自動的に再開されます。</string>
+  <string name="setting_update_reminder_pause_days">%1$d日間</string>
+  <string name="setting_update_reminder_resume_now">今すぐ再開</string>
   <string name="setting_display_page_show_user_avatar_desc">チャットメッセージにユーザーアバターを表示するかどうか</string>
   <string name="setting_display_page_show_user_avatar_title">ユーザーアバターを表示</string>
   <string name="setting_display_page_skip_crop_image_desc">画像をインポートするか写真を撮影した後、クロップ画面をスキップ</string>

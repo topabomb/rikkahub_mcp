@@ -45,7 +45,7 @@
 | `temperature` | `null` | 为空时不覆盖 Provider 默认值；部分推理模式会主动省略 |
 | `topP` | `null` | 为空时不覆盖 Provider 默认值 |
 | `maxTokens` | `null` | 输出 token 上限，不是输入上下文窗口 |
-| `reasoningLevel` | `AUTO` | `OFF`、`AUTO`、`LOW`、`MEDIUM`、`HIGH`、`XHIGH`；实际线协议映射由 Provider 决定 |
+| `reasoningLevel` | `AUTO` | `OFF`、`AUTO`、`LOW`、`MEDIUM`、`HIGH`、`XHIGH`、`MAX`；实际线协议映射由 Provider 决定 |
 | `streamOutput` | `true` | 选择流式或一次性生成入口 |
 | `contextMessageLimit` | `0` | 消息数阶梯裁剪阈值；`0` 禁用，正值归一化到 `MIN_CONTEXT_MESSAGE_LIMIT..MAX_CONTEXT_MESSAGE_LIMIT` |
 
@@ -82,7 +82,7 @@
 | 字段 | 默认值 | 语义 |
 |------|--------|------|
 | `localTools` | `DEFAULT_ASSISTANT_LOCAL_TOOLS` | 内置本地工具选项；当前默认是 `TimeInfo`、`Tts`、`AskUser`。`TextToImage` 不在默认集中 |
-| `enableWebSearch` | `false` | 装配搜索工具 |
+| `enableWebSearch` | `false` | 装配外挂搜索工具；若当前模型已带 `BuiltInTools.Search` 则不再装配 |
 | `mcpServers` | 空集合 | 允许该助手使用的 MCP Server ID |
 | `workspaceId` | `null` | 绑定工作区；仅工作区 shell ready 时装配工具并注入提醒 |
 | `enabledSkills` | 空集合 | 允许 `use_skill` 访问的技能名 |
@@ -96,7 +96,7 @@
 
 | 字段 | 默认值 | 语义 |
 |------|--------|------|
-| `regexes` | 空列表 | 用户/助手文本正则替换规则 |
+| `regexes` | 空列表 | 用户/助手文本正则替换规则，按列表顺序应用，可在提示词页拖动排序 |
 | `customHeaders` | 空列表 | 合并到 Provider HTTP 请求头 |
 | `customBodies` | 空列表 | 合并到 Provider 请求体 |
 

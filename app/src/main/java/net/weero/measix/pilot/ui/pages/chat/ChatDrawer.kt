@@ -55,6 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.paging.compose.collectAsLazyPagingItems
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -255,7 +256,23 @@ fun ChatDrawerContent(
                 }
             }
 
-            if (settings.displaySetting.showUpdates && !isPlayStore) {
+            val updateCheckDisabledUntil = settings.displaySetting.updateCheckDisabledUntilEpochMillis
+            var updateChecksEnabled by remember(settings.displaySetting.showUpdates, updateCheckDisabledUntil) {
+                mutableStateOf(settings.displaySetting.areUpdateChecksEnabled())
+            }
+            LaunchedEffect(settings.displaySetting.showUpdates, updateCheckDisabledUntil) {
+                while (true) {
+                    updateChecksEnabled = settings.displaySetting.areUpdateChecksEnabled()
+                    if (!settings.displaySetting.showUpdates || updateChecksEnabled) break
+                    val remaining = updateCheckDisabledUntil - System.currentTimeMillis()
+                    if (remaining <= 0) {
+                        updateChecksEnabled = true
+                        break
+                    }
+                    delay(minOf(remaining, 60 * 60 * 1_000L))
+                }
+            }
+            if (updateChecksEnabled && !isPlayStore) {
                 UpdateCard(vm)
             }
 

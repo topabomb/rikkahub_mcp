@@ -407,10 +407,10 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                                 when (params.reasoningLevel) {
                                     ReasoningLevel.LOW -> put("thinkingLevel", "low")
                                     ReasoningLevel.MEDIUM -> put("thinkingLevel", "medium")
-                                    else -> put("thinkingLevel", "high") // HIGH, XHIGH
+                                    else -> put("thinkingLevel", "high") // HIGH, XHIGH, MAX
                                 }
                             } else {
-                                put("thinkingBudget", params.reasoningLevel.budgetTokens)
+                                put("thinkingBudget", gemini25ThinkingBudget(params.model.modelId, params.reasoningLevel))
                             }
                         }
                     }
@@ -841,4 +841,11 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             cachedTokens = cachedTokens
         )
     }
+}
+
+/** Gemini 2.5 Flash/Flash-Lite reject thinkingBudget above 24576; Pro allows 32768. */
+internal fun gemini25ThinkingBudget(modelId: String, level: ReasoningLevel): Int {
+    val isGeminiPro = modelId.contains(Regex("2\\.5.*pro", RegexOption.IGNORE_CASE))
+    val cap = if (isGeminiPro) 32_768 else 24_576
+    return level.budgetTokens.coerceAtMost(cap)
 }

@@ -105,8 +105,11 @@ DeepSeek 直连的 Chat Completions 还发送 `thinking.type`：OFF 为 `disable
 | OFF / AUTO | 省略 |
 | LOW | `low` |
 | MEDIUM / HIGH / XHIGH | `high` |
+| MAX | `max` |
 
-项目没有单独的 `MAX` 级别。官方表把 `xhigh` 映射为 `high`，因此 XHIGH 发送 `high`，不会发送 `max`。
+XHIGH 保持文档别名 `high`，只有独立的 MAX 级别才发送 `max`。官方 OpenAI 不接受 `max`，因此 `mapOfficialOpenAIReasoningEffort()` 把 MAX 落到该模型支持的最高档（`high` 或 `xhigh`）。
+
+兼容网关可能把 `choices`、`delta`、`message` 或 `tool_calls` 显式写成 JSON `null`。Chat Completions 流式解析必须用 `jsonArrayOrNull` / `jsonObjectOrNull`，不能对 `JsonNull` 强制取数组或对象，否则会中断整轮生成。
 
 OpenRouter 直连 host（`openrouter.ai`）若返回结构化 `reasoning_details`，会保存在 Reasoning part 的 source-isolated metadata 中，并只在同一 host 的后续请求回传该数组。流式分片按到达顺序累积：相同 `id` 或相同 `index` 的条目合并 `text`/`summary`，新条目追加。其他 Chat Completions host 只回放可见 `reasoning_content`。
 
@@ -158,8 +161,11 @@ DeepSeek thinking + tools 要求后续请求保留工具步骤的 `reasoning_con
 | AUTO | 省略 |
 | LOW | `low` |
 | MEDIUM / HIGH / XHIGH | `high` |
+| MAX | `max` |
 
 DeepSeek profile 不请求 OpenAI summary 或 encrypted content，并使用 `reasoning_text` 流事件与 item 内容。
+
+OpenAI / 兼容 / Ark 路径重建 reasoning item 时：若 part 带有同源 `encrypted_content`，只回传 `id` 和加密状态，不附带可见 `summary` 明文。DeepSeek 的 `reasoning_text` 路径不受影响。
 
 ## 6. Anthropic Messages
 
@@ -199,8 +205,8 @@ TOOL 能力，不发送 thinking。
 
 ### Thinking 与签名
 
-- Gemini 2.5 使用 `thinkingBudget`；Pro 型号不能保证完全关闭时不会强行发送 `0`。
-- `ModelRegistry.GEMINI_3_SERIES` 使用 `thinkingLevel`，项目 XHIGH 收敛为 HIGH。
+- Gemini 2.5 使用 `thinkingBudget`；Pro 型号不能保证完全关闭时不会强行发送 `0`。MAX 的 32000 预算在 Flash/Flash-Lite 上钳到 24576，Pro 钳到 32768。
+- `ModelRegistry.GEMINI_3_SERIES` 使用 `thinkingLevel`，项目 XHIGH / MAX 收敛为 HIGH。
 - `GoogleThoughtMetadata` 在 Text、Reasoning、Image 和 FunctionCall 等 Part 上保留 `thoughtSignature`。
 - 带签名 Part 不能与相邻 Part 合并；空文本 Part 上的签名也必须保留。
 - function call 的 API ID 保存并回填到对应 `functionResponse.id`。

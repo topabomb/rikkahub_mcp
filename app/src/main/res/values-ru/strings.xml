@@ -108,6 +108,7 @@
   <string name="assistant_page_regex_desc">Задайте шаблоны регулярных выражений для преобразования сообщений перед отправкой/получением</string>
   <string name="assistant_page_regex_find_regex">Найти регулярное выражение</string>
   <string name="assistant_page_regex_name">Имя</string>
+  <string name="assistant_page_regex_reorder">Изменить порядок регулярных выражений</string>
   <string name="assistant_page_regex_replace_string">Заменить строку</string>
   <string name="assistant_page_regex_title">Регулярные выражения для сообщений</string>
   <string name="assistant_page_regex_visual_only">Только визуально (влияет только на отображение, не на само сообщение)</string>
@@ -578,6 +579,7 @@
   <string name="reasoning_picker_hint">Не все модели поддерживают настройку глубины. См. документацию модели и провайдера.</string>
   <string name="reasoning_picker_title">Настроить глубину мышления модели</string>
   <string name="reasoning_xhigh">Очень высокий</string>
+  <string name="reasoning_max">Максимум</string>
   <string name="regenerate">Сгенерировать заново</string>
   <string name="regenerate_confirm_message">Вы уверены, что хотите перегенерировать это сообщение?</string>
   <string name="render_with_webview">Отображать в WebView</string>
@@ -625,7 +627,7 @@
   <string name="send">Отправить</string>
   <string name="setting_asr_configure_api_key">Ключ API</string>
   <string name="setting_asr_configure_dashscope_api_key_desc">Ключ API DashScope</string>
-  <string name="setting_asr_configure_dashscope_vad_desc">Чувствительность VAD на сервере, установите 0 для отключения VAD</string>
+  <string name="setting_asr_configure_dashscope_vad_desc">Порог серверного VAD. Рекомендуется: 0.0; диапазон: от -1 до 1.</string>
   <string name="setting_asr_configure_dashscope_websocket_desc">Конечная точка веб-сокета DashScope в реальном времени</string>
   <string name="setting_asr_configure_language">Язык</string>
   <string name="setting_asr_configure_language_code_desc">Необязательный код языка, например zh-CN, en-US, ja-JP</string>
@@ -710,6 +712,12 @@
   <string name="setting_display_page_show_token_usage_title">Показывать статистику токенов и контекста</string>
   <string name="setting_display_page_show_updates_desc">Отображать ли уведомления об обновлениях приложения</string>
   <string name="setting_display_page_show_updates_title">Показывать обновления</string>
+  <string name="setting_update_reminder_enabled">Напоминания об обновлениях включены</string>
+  <string name="setting_update_reminder_paused_until">Приостановлено до %1$s</string>
+  <string name="setting_update_reminder_pause_title">Приостановить напоминания об обновлениях</string>
+  <string name="setting_update_reminder_pause_description">Выберите, как долго приостановить напоминания об обновлениях. Они возобновятся автоматически.</string>
+  <string name="setting_update_reminder_pause_days">%1$d дн.</string>
+  <string name="setting_update_reminder_resume_now">Возобновить сейчас</string>
   <string name="setting_display_page_show_user_avatar_desc">Отображать аватар пользователя в сообщениях чата</string>
   <string name="setting_display_page_show_user_avatar_title">Показывать аватар пользователя</string>
   <string name="setting_display_page_skip_crop_image_desc">Пропустить обрезку после импорта изображений или съёмки</string>

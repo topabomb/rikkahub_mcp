@@ -113,14 +113,15 @@ internal fun resolveResponseEndpointProfile(host: String): ResponseEndpointProfi
  * Maps app reasoning levels to DeepSeek Chat Completions effort values.
  *
  * Official Thinking Mode documents the Chat request field as `low` / `high` / `max`, and maps
- * compatibility aliases as `medium -> high` and `xhigh -> high`. The app has no separate MAX
- * level, so XHIGH stays on the documented `high` alias and is never sent as `max`.
+ * compatibility aliases as `medium -> high` and `xhigh -> high`. XHIGH therefore stays on the
+ * documented `high` alias. The separate MAX level is the only UI value that sends `max`.
  */
 internal fun mapDeepSeekChatReasoningEffort(level: ReasoningLevel): String? {
     return when (level) {
         ReasoningLevel.OFF, ReasoningLevel.AUTO -> null
         ReasoningLevel.LOW -> "low"
         ReasoningLevel.MEDIUM, ReasoningLevel.HIGH, ReasoningLevel.XHIGH -> "high"
+        ReasoningLevel.MAX -> "max"
     }
 }
 
@@ -128,7 +129,7 @@ internal fun mapDeepSeekChatReasoningEffort(level: ReasoningLevel): String? {
  * Maps app reasoning levels to DeepSeek Responses effort values.
  *
  * Responses uses `none` as its documented thinking-off value. AUTO omits the field so the endpoint
- * can use its default; the app does not expose DeepSeek's separate `max` level.
+ * can use its default. MAX is the only UI value that sends DeepSeek's separate `max` effort.
  */
 internal fun mapDeepSeekResponsesReasoningEffort(level: ReasoningLevel): String? {
     return when (level) {
@@ -136,6 +137,7 @@ internal fun mapDeepSeekResponsesReasoningEffort(level: ReasoningLevel): String?
         ReasoningLevel.AUTO -> null
         ReasoningLevel.LOW -> "low"
         ReasoningLevel.MEDIUM, ReasoningLevel.HIGH, ReasoningLevel.XHIGH -> "high"
+        ReasoningLevel.MAX -> "max"
     }
 }
 
@@ -163,38 +165,43 @@ internal fun mapOfficialOpenAIReasoningEffort(
         isPointPro -> when (level) {
             ReasoningLevel.OFF, ReasoningLevel.LOW, ReasoningLevel.MEDIUM -> "medium"
             ReasoningLevel.HIGH -> "high"
-            ReasoningLevel.XHIGH -> "xhigh"
+            ReasoningLevel.XHIGH, ReasoningLevel.MAX -> "xhigh"
             ReasoningLevel.AUTO -> null
         }
 
         "-codex" in normalizedModelId -> when {
             level == ReasoningLevel.OFF -> "low"
             level == ReasoningLevel.XHIGH && !isXHighCodex -> "high"
+            level == ReasoningLevel.MAX && !isXHighCodex -> "high"
+            level == ReasoningLevel.MAX && isXHighCodex -> "xhigh"
             else -> level.effort
         }
 
         ModelRegistry.GPT_5.match(modelId) -> when (level) {
             ReasoningLevel.OFF -> "minimal"
-            ReasoningLevel.XHIGH -> "high"
+            ReasoningLevel.XHIGH, ReasoningLevel.MAX -> "high"
             else -> level.effort
         }
 
         OPENAI_GPT_5_1_STANDARD_PATTERN.matches(normalizedModelId) -> when (level) {
-            ReasoningLevel.XHIGH -> "high"
+            ReasoningLevel.XHIGH, ReasoningLevel.MAX -> "high"
             else -> level.effort
         }
 
-        OPENAI_GPT_5_XHIGH_STANDARD_PATTERN.matches(normalizedModelId) -> level.effort
+        OPENAI_GPT_5_XHIGH_STANDARD_PATTERN.matches(normalizedModelId) -> when (level) {
+            ReasoningLevel.MAX -> "xhigh"
+            else -> level.effort
+        }
 
         ModelRegistry.OPENAI_O_MODELS.match(modelId) -> when (level) {
             ReasoningLevel.OFF -> "low"
-            ReasoningLevel.XHIGH -> "high"
+            ReasoningLevel.XHIGH, ReasoningLevel.MAX -> "high"
             else -> level.effort
         }
 
         else -> when (level) {
             ReasoningLevel.OFF -> "low"
-            ReasoningLevel.XHIGH -> "high"
+            ReasoningLevel.XHIGH, ReasoningLevel.MAX -> "high"
             else -> level.effort
         }
     }

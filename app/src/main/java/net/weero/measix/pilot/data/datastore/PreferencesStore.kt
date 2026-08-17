@@ -541,6 +541,7 @@ data class DisplaySetting(
     val showThinkingContent: Boolean = true,
     val autoCloseThinking: Boolean = true,
     val showUpdates: Boolean = true,
+    val updateCheckDisabledUntilEpochMillis: Long = 0L,
     val showMessageJumper: Boolean = true,
     val messageJumperOnLeft: Boolean = false,
     val fontSizeRatio: Float = 1.0f,
@@ -567,7 +568,11 @@ data class DisplaySetting(
     val chatCustomFontName: String = "",
     val enableVolumeKeyScroll: Boolean = false,
     val volumeKeyScrollRatio: Float = 1.0f,
-)
+) {
+    fun areUpdateChecksEnabled(nowEpochMillis: Long = System.currentTimeMillis()): Boolean {
+        return showUpdates && nowEpochMillis >= updateCheckDisabledUntilEpochMillis
+    }
+}
 
 @Serializable
 data class WebDavConfig(

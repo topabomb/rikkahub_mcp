@@ -2,6 +2,8 @@ package net.weero.measix.pilot.data.ai.tools
 
 import android.util.Log
 import me.rerere.ai.core.Tool
+import me.rerere.ai.provider.BuiltInTools
+import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.data.ai.subassistant.filterTargetLocalTools
@@ -51,7 +53,7 @@ class GenerationToolSetFactory(
         onInvalidMcpServerNames: (List<String>) -> Unit = {},
     ): List<Tool> {
         return buildList {
-            if (assistant.enableWebSearch) {
+            if (shouldUseExternalWebSearch(assistant, settings.getChatModel(assistant))) {
                 addAll(createSearchTools(settings))
             }
 
@@ -147,6 +149,14 @@ class GenerationToolSetFactory(
         }
         return createWorkspaceTools(workspaceId, workspaceRepository, cwd)
     }
+}
+
+/**
+ * Local search tools stay off when the selected model already has provider built-in search.
+ * SearchMode UI is exclusive, but older settings or Target snapshots can still have both flags.
+ */
+fun shouldUseExternalWebSearch(assistant: Assistant, model: Model?): Boolean {
+    return assistant.enableWebSearch && model?.tools?.contains(BuiltInTools.Search) != true
 }
 
 enum class ToolSetRunMode {

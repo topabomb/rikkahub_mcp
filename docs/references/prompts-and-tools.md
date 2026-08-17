@@ -177,7 +177,7 @@ Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过�
 
 ### `search_web`
 
-启用：`enableWebSearch`。
+启用：`shouldUseExternalWebSearch(assistant, model)`。助手打开外挂搜索，且当前模型未带 `BuiltInTools.Search`。
 
 > Search the web for current or specific facts. Use focused keywords; run multiple searches if needed.
 > Today is \<local date\>.

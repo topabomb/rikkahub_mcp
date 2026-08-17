@@ -2,14 +2,22 @@ package net.weero.measix.pilot.ui.pages.setting
 
 import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -21,6 +29,8 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.ArrowRight01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.DisplaySetting
 import net.weero.measix.pilot.ui.components.nav.BackButton
@@ -30,7 +40,12 @@ import net.weero.measix.pilot.ui.components.ui.permission.PermissionNotification
 import net.weero.measix.pilot.ui.components.ui.permission.rememberPermissionState
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.utils.plus
+import net.weero.measix.pilot.utils.toLocalDateTime
 import org.koin.androidx.compose.koinViewModel
+import java.time.Instant
+
+private val UPDATE_PAUSE_DAY_OPTIONS = listOf(7, 14, 21)
+private const val MILLIS_PER_DAY = 24 * 60 * 60 * 1_000L
 
 @Composable
 fun SettingPreferencesNotificationPage(vm: SettingVM = koinViewModel()) {
@@ -44,6 +59,10 @@ fun SettingPreferencesNotificationPage(vm: SettingVM = koinViewModel()) {
             current.copy(displaySetting = mergeDisplaySettingDelta(baseline, setting, current.displaySetting))
         }
     }
+
+    var showUpdatePauseDialog by remember { mutableStateOf(false) }
+    var selectedUpdatePauseDays by remember { mutableStateOf(UPDATE_PAUSE_DAY_OPTIONS.first()) }
+    val updateChecksEnabled = displaySetting.areUpdateChecksEnabled()
 
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
@@ -80,15 +99,26 @@ fun SettingPreferencesNotificationPage(vm: SettingVM = koinViewModel()) {
                     modifier = Modifier.padding(horizontal = 8.dp),
                 ) {
                     item(
+                        onClick = {
+                            selectedUpdatePauseDays = UPDATE_PAUSE_DAY_OPTIONS.first()
+                            showUpdatePauseDialog = true
+                        },
                         headlineContent = { Text(stringResource(R.string.setting_display_page_show_updates_title)) },
-                        supportingContent = { Text(stringResource(R.string.setting_display_page_show_updates_desc)) },
-                        trailingContent = {
-                            Switch(
-                                checked = displaySetting.showUpdates,
-                                onCheckedChange = {
-                                    updateDisplaySetting(displaySetting.copy(showUpdates = it))
+                        supportingContent = {
+                            Text(
+                                when {
+                                    updateChecksEnabled -> stringResource(R.string.setting_update_reminder_enabled)
+                                    !displaySetting.showUpdates -> stringResource(R.string.setting_display_page_show_updates_desc)
+                                    else -> stringResource(
+                                        R.string.setting_update_reminder_paused_until,
+                                        Instant.ofEpochMilli(displaySetting.updateCheckDisabledUntilEpochMillis)
+                                            .toLocalDateTime(),
+                                    )
                                 }
                             )
+                        },
+                        trailingContent = {
+                            Icon(HugeIcons.ArrowRight01, contentDescription = null)
                         },
                     )
                     item(
@@ -123,5 +153,70 @@ fun SettingPreferencesNotificationPage(vm: SettingVM = koinViewModel()) {
                 }
             }
         }
+    }
+
+    if (showUpdatePauseDialog) {
+        AlertDialog(
+            onDismissRequest = { showUpdatePauseDialog = false },
+            title = { Text(stringResource(R.string.setting_update_reminder_pause_title)) },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text(stringResource(R.string.setting_update_reminder_pause_description))
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        UPDATE_PAUSE_DAY_OPTIONS.forEachIndexed { index, days ->
+                            SegmentedButton(
+                                selected = selectedUpdatePauseDays == days,
+                                onClick = { selectedUpdatePauseDays = days },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = UPDATE_PAUSE_DAY_OPTIONS.size,
+                                ),
+                            ) {
+                                Text(stringResource(R.string.setting_update_reminder_pause_days, days))
+                            }
+                        }
+                    }
+                    if (!updateChecksEnabled) {
+                        TextButton(
+                            onClick = {
+                                updateDisplaySetting(
+                                    displaySetting.copy(
+                                        showUpdates = true,
+                                        updateCheckDisabledUntilEpochMillis = 0L,
+                                    )
+                                )
+                                showUpdatePauseDialog = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(stringResource(R.string.setting_update_reminder_resume_now))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        updateDisplaySetting(
+                            displaySetting.copy(
+                                showUpdates = true,
+                                updateCheckDisabledUntilEpochMillis =
+                                    System.currentTimeMillis() + selectedUpdatePauseDays * MILLIS_PER_DAY,
+                            )
+                        )
+                        showUpdatePauseDialog = false
+                    }
+                ) {
+                    Text(stringResource(R.string.confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUpdatePauseDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
     }
 }

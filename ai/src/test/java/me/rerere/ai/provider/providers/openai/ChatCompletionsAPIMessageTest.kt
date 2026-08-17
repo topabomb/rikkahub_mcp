@@ -2,6 +2,7 @@ package me.rerere.ai.provider.providers.openai
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -352,6 +353,64 @@ class ChatCompletionsAPIMessageTest {
     }
 
     @Test
+    fun `parseMessage accepts explicit null tool_calls`() {
+        val parsed = api.parseMessage(
+            buildJsonObject {
+                put("role", "assistant")
+                put("content", "hello")
+                put("tool_calls", JsonNull)
+            }
+        )
+
+        assertEquals("hello", parsed.parts.filterIsInstance<UIMessagePart.Text>().single().text)
+        assertTrue(parsed.parts.none { it is UIMessagePart.Tool })
+    }
+
+    @Test
+    fun `parseStreamPayload ignores null choices delta and tool_calls`() {
+        val emptyChoices = api.parseStreamPayload(
+            buildJsonObject {
+                put("id", "chunk-1")
+                put("model", "compatible")
+                put("choices", JsonNull)
+            }
+        )
+        assertTrue(emptyChoices.choices.isEmpty())
+
+        val emptyDelta = api.parseStreamPayload(
+            buildJsonObject {
+                put("id", "chunk-2")
+                put("model", "compatible")
+                put("choices", buildJsonArray {
+                    add(buildJsonObject {
+                        put("delta", JsonNull)
+                        put("message", JsonNull)
+                    })
+                })
+            }
+        )
+        assertTrue(emptyDelta.choices.isEmpty())
+
+        val nullTools = api.parseStreamPayload(
+            buildJsonObject {
+                put("id", "chunk-3")
+                put("model", "compatible")
+                put("choices", buildJsonArray {
+                    add(buildJsonObject {
+                        put("delta", buildJsonObject {
+                            put("content", "partial")
+                            put("tool_calls", JsonNull)
+                        })
+                        put("finish_reason", JsonNull)
+                    })
+                })
+            }
+        )
+        assertEquals("partial", nullTools.choices.single().delta?.parts
+            ?.filterIsInstance<UIMessagePart.Text>()?.single()?.text)
+    }
+
+    @Test
     fun `deepseek replay should survive tool delta arriving before reasoning and content`() {
         var messages = listOf(UIMessage.user("Use a tool"))
         listOf(
@@ -598,6 +657,11 @@ class ChatCompletionsAPIMessageTest {
         assertEquals("high", mapOfficialOpenAIReasoningEffort("gpt-5-pro", ReasoningLevel.LOW))
         assertEquals("medium", mapOfficialOpenAIReasoningEffort("gpt-5.4-pro", ReasoningLevel.OFF))
         assertEquals("xhigh", mapOfficialOpenAIReasoningEffort("gpt-5.4-pro", ReasoningLevel.XHIGH))
+        assertEquals("high", mapOfficialOpenAIReasoningEffort("gpt-5", ReasoningLevel.MAX))
+        assertEquals("high", mapOfficialOpenAIReasoningEffort("gpt-5.1", ReasoningLevel.MAX))
+        assertEquals("xhigh", mapOfficialOpenAIReasoningEffort("gpt-5.3-codex", ReasoningLevel.MAX))
+        assertEquals("xhigh", mapOfficialOpenAIReasoningEffort("gpt-5.4-pro", ReasoningLevel.MAX))
+        assertEquals("xhigh", mapOfficialOpenAIReasoningEffort("gpt-5.4", ReasoningLevel.MAX))
         assertNull(mapOfficialOpenAIReasoningEffort("gpt-5.3-chat-latest", ReasoningLevel.HIGH))
         assertEquals("low", mapOfficialOpenAIReasoningEffort("gpt-5.10", ReasoningLevel.OFF))
     }
@@ -611,6 +675,7 @@ class ChatCompletionsAPIMessageTest {
             ReasoningLevel.MEDIUM to "high",
             ReasoningLevel.HIGH to "high",
             ReasoningLevel.XHIGH to "high",
+            ReasoningLevel.MAX to "max",
         )
 
         expected.forEach { (level, effort) ->

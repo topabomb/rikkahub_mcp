@@ -428,15 +428,18 @@ class ResponseAPI(
                                             })
                                         }
                                     } else {
-                                        put("summary", buildJsonArray {
-                                            if (part.reasoning.isNotEmpty()) {
-                                                add(buildJsonObject {
-                                                    put("type", "summary_text")
-                                                    put("text", part.reasoning)
-                                                })
-                                            }
-                                        })
-                                        reasoningMetadata?.encryptedContent?.let {
+                                        val encryptedContent = reasoningMetadata?.encryptedContent
+                                        if (encryptedContent == null) {
+                                            put("summary", buildJsonArray {
+                                                if (part.reasoning.isNotEmpty()) {
+                                                    add(buildJsonObject {
+                                                        put("type", "summary_text")
+                                                        put("text", part.reasoning)
+                                                    })
+                                                }
+                                            })
+                                        }
+                                        encryptedContent?.let {
                                             put("encrypted_content", it)
                                         }
                                     }

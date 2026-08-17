@@ -10,7 +10,9 @@
 | `Version` | 对远程版本和当前 `BuildConfig.VERSION_NAME` 做宽松的 SemVer 优先级比较 |
 | `UpdateCard` | 展示检查失败或新版本入口，并通过 `AdaptiveModal` 展示详情与下载项 |
 | `PlayStoreUtil` / `rememberIsPlayStoreVersion` | 判断安装来源，避免 Play Store 安装包重复显示应用内更新 |
-| `Settings.displaySetting.showUpdates` | 用户是否启用更新提示 |
+| `Settings.displaySetting.showUpdates` | 用户是否启用更新提示；`false` 表示永久关闭（旧配置兼容） |
+| `Settings.displaySetting.updateCheckDisabledUntilEpochMillis` | 更新提醒暂停到该时刻；`0` 表示未按时间暂停 |
+| `DisplaySetting.areUpdateChecksEnabled()` | `showUpdates && now >= pauseUntil` |
 | `Settings.ignoredUpdateVersion` | 持久化用户已关闭的远程版本 |
 | `.github/workflows/release.yml` | 构建、验签、发布 GitHub Release，并通过 `repository_dispatch` 触发网站同步 `version.json` |
 
@@ -20,7 +22,7 @@
 
 ```text
 ChatDrawer 组合
-  -> showUpdates 开启且安装来源不是 Play Store
+  -> areUpdateChecksEnabled() 且安装来源不是 Play Store
   -> UpdateCard 订阅 UpdateChecker.updateState
   -> SharingStarted.Lazily 首次启动 checkUpdate()
   -> GET https://measix-pilot.weero.net/version.json
@@ -28,6 +30,8 @@ ChatDrawer 组合
   -> Version(remote) > Version(current)
   -> 展示更新卡片或保持隐藏
 ```
+
+设置页把开关改成 7/14/21 天暂停对话框。暂停到期后抽屉会重新组合 `UpdateCard`。旧的 `showUpdates=false` 仍视为关闭，点“立即恢复”会写回 `showUpdates=true` 并清空暂停时间。检查流仍由单例 `UpdateChecker` 负责，不按会话重建。
 
 请求使用全局 `OkHttpClient`，在 `Dispatchers.IO` 上执行。User-Agent 形状为：
 
@@ -79,7 +83,7 @@ data class UpdateDownload(
 更新入口位于聊天抽屉，必须同时满足：
 
 ```text
-Settings.displaySetting.showUpdates
+DisplaySetting.areUpdateChecksEnabled()
 && !PlayStoreUtil.isInstalledFromPlayStore(context)
 ```
 

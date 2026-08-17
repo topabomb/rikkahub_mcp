@@ -48,6 +48,7 @@ import net.weero.measix.pilot.data.event.AppEvent
 import net.weero.measix.pilot.data.event.AppEventBus
 import net.weero.measix.pilot.data.ai.GenerationChunk
 import net.weero.measix.pilot.data.ai.GenerationHandler
+import net.weero.measix.pilot.data.ai.tools.shouldUseExternalWebSearch
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
 import net.weero.measix.pilot.data.ai.subassistant.buildSubAssistantCallResult
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
@@ -607,7 +608,7 @@ class ChatService(
 
             // memory tool
             if (!model.abilities.contains(ModelAbility.TOOL)) {
-                if (assistant.enableWebSearch || mcpManager.getAllAvailableTools(assistant).isNotEmpty()) {
+                if (shouldUseExternalWebSearch(assistant, model) || mcpManager.getAllAvailableTools(assistant).isNotEmpty()) {
                     addError(
                         IllegalStateException(context.getString(R.string.tools_warning)),
                         conversationId,

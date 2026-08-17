@@ -94,6 +94,7 @@ internal fun buildClaudeThinkingFields(
         })
         if (level != ReasoningLevel.AUTO) {
             val effort = when {
+                level == ReasoningLevel.MAX -> "max"
                 level == ReasoningLevel.XHIGH && !ModelRegistry.CLAUDE_XHIGH_EFFORT.match(modelId) -> "max"
                 else -> level.effort
             }
@@ -118,7 +119,11 @@ internal fun buildClaudeThinkingFields(
         put("display", "summarized")
     })
     if (ModelRegistry.CLAUDE_MANUAL_THINKING_WITH_EFFORT.match(modelId)) {
-        val effort = if (level == ReasoningLevel.XHIGH) ReasoningLevel.HIGH.effort else level.effort
+        val effort = if (level == ReasoningLevel.XHIGH || level == ReasoningLevel.MAX) {
+            ReasoningLevel.HIGH.effort
+        } else {
+            level.effort
+        }
         put("output_config", buildJsonObject { put("effort", effort) })
     }
 }

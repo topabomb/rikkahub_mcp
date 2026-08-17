@@ -424,6 +424,7 @@ class ResponseAPIMessageTest {
             ReasoningLevel.MEDIUM to "high",
             ReasoningLevel.HIGH to "high",
             ReasoningLevel.XHIGH to "high",
+            ReasoningLevel.MAX to "max",
         )
 
         expected.forEach { (level, effort) ->
@@ -964,8 +965,58 @@ class ResponseAPIMessageTest {
         val replay = invokeBuildMessages(
             listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(reasoning)))
         ).single().jsonObject
-        assertEquals(0, replay["summary"]?.jsonArray?.size)
+        assertFalse(replay.containsKey("summary"))
         assertEquals("encrypted-only-state", replay["encrypted_content"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `encrypted reasoning should not replay plaintext summary`() {
+        val reasoningItem = invokeBuildMessages(
+            listOf(
+                UIMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(
+                        UIMessagePart.Reasoning(
+                            reasoning = "plaintext reasoning",
+                            metadata = OpenAIReasoningMetadata(
+                                reasoningId = "rs_1",
+                                encryptedContent = "encrypted",
+                            ).toMetadata(),
+                        )
+                    ),
+                ),
+            )
+        ).single().jsonObject
+
+        assertEquals("reasoning", reasoningItem["type"]?.jsonPrimitive?.content)
+        assertEquals("rs_1", reasoningItem["id"]?.jsonPrimitive?.content)
+        assertEquals("encrypted", reasoningItem["encrypted_content"]?.jsonPrimitive?.content)
+        assertFalse(reasoningItem.containsKey("summary"))
+    }
+
+    @Test
+    fun `unencrypted reasoning should replay plaintext summary`() {
+        val reasoningItem = invokeBuildMessages(
+            listOf(
+                UIMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(
+                        UIMessagePart.Reasoning(
+                            reasoning = "plaintext reasoning",
+                            metadata = OpenAIReasoningMetadata(reasoningId = "rs_1").toMetadata(),
+                        )
+                    ),
+                ),
+            )
+        ).single().jsonObject
+
+        val summary = reasoningItem["summary"]?.jsonArray
+        assertEquals(1, summary?.size)
+        assertEquals(
+            "plaintext reasoning",
+            summary?.single()?.jsonObject?.get("text")?.jsonPrimitive?.content,
+        )
+        assertFalse(reasoningItem.containsKey("encrypted_content"))
     }
 
     @Test
