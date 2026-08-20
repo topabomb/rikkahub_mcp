@@ -84,33 +84,63 @@ internal fun truncatePromptSummary(prompt: String, maxCodePoints: Int = 160): St
     return if (codePoints.size <= maxCodePoints) prompt else String(codePoints, 0, maxCodePoints) + "…"
 }
 
+/**
+ * `generate_image` 的最终 Presentation State。
+ *
+ * Execution 与 Artifact availability 是两个独立维度：
+ * - `CompletedArtifactUnavailable` 表示「当时生成成功，现在本地文件不可读取」；
+ * - `Failed` 只表示执行失败，reason 只取执行层 reason，不被文件层 reason 遮蔽。
+ */
+internal sealed interface ImageGenerationUiState {
+    data object Queued : ImageGenerationUiState
+    data object Generating : ImageGenerationUiState
+    data object Persisting : ImageGenerationUiState
+    data object SettingBackground : ImageGenerationUiState
+    data object Completed : ImageGenerationUiState
+    data class CompletedArtifactUnavailable(val reason: String?) : ImageGenerationUiState
+    data class Failed(val reason: String?) : ImageGenerationUiState
+}
+
+internal fun resolveImageGenerationUiState(context: ToolUIContext): ImageGenerationUiState {
+    val metadata = context.imageGenerationMetadata()
+    val status = context.resultStatus()
+    return when {
+        status == "failed" || metadata?.status == "failed" ->
+            ImageGenerationUiState.Failed(context.resultReason() ?: metadata?.reason)
+        context.fileIsUnavailable() ->
+            ImageGenerationUiState.CompletedArtifactUnavailable(context.fileUnavailableReason())
+        status == "completed" || metadata?.phase == "completed" ->
+            ImageGenerationUiState.Completed
+        metadata?.phase == "setting_background" -> ImageGenerationUiState.SettingBackground
+        metadata?.phase == "persisting" -> ImageGenerationUiState.Persisting
+        metadata?.phase == "generating" -> ImageGenerationUiState.Generating
+        else -> ImageGenerationUiState.Queued
+    }
+}
+
 object ImageGenerationToolUI : ToolUIRenderer {
     override val toolName: String = GENERATE_IMAGE_TOOL_NAME
 
     override fun icon(context: ToolUIContext): ImageVector = HugeIcons.AiImage
 
     @Composable
-    override fun title(context: ToolUIContext): String {
-        val metadata = context.imageGenerationMetadata()
-        val status = context.resultStatus()
-        val reason = context.resultReason()
-        return when {
-            context.fileIsUnavailable() || status == "failed" || metadata?.status == "failed" -> stringResource(
-                reasonString(context.fileUnavailableReason() ?: reason ?: metadata?.reason)
+    override fun title(context: ToolUIContext): String =
+        when (val state = resolveImageGenerationUiState(context)) {
+            is ImageGenerationUiState.Failed -> stringResource(reasonString(state.reason))
+            is ImageGenerationUiState.CompletedArtifactUnavailable -> stringResource(
+                R.string.chat_message_tool_generate_image_completed_artifact_unavailable
             )
-            status == "completed" || metadata?.phase == "completed" ->
+            ImageGenerationUiState.Completed ->
                 stringResource(R.string.chat_message_tool_generate_image_completed)
-            metadata?.phase == "setting_background" ->
+            ImageGenerationUiState.SettingBackground ->
                 stringResource(R.string.chat_message_tool_generate_image_setting_background)
-            metadata?.phase == "persisting" ->
+            ImageGenerationUiState.Persisting ->
                 stringResource(R.string.chat_message_tool_generate_image_persisting)
-            metadata?.phase == "generating" ->
+            ImageGenerationUiState.Generating ->
                 stringResource(R.string.chat_message_tool_generate_image_generating)
-            metadata?.phase == "queued" || context.loading ->
+            ImageGenerationUiState.Queued ->
                 stringResource(R.string.chat_message_tool_generate_image_queued)
-            else -> stringResource(R.string.chat_message_tool_generate_image_queued)
         }
-    }
 
     override fun hasSummary(context: ToolUIContext): Boolean =
         context.arguments.getStringContent("prompt") != null ||
@@ -184,7 +214,7 @@ object ImageGenerationToolUI : ToolUIRenderer {
             ?.get("path")
             ?.jsonPrimitiveOrNull
             ?.contentOrNull
-        val fileUnavailable = context.fileIsUnavailable()
+        val uiState = resolveImageGenerationUiState(context)
         val prompt = context.arguments.getStringContent("prompt").orEmpty()
         var showCallDetails by remember { mutableStateOf(false) }
         val promptCopiedToast = stringResource(R.string.chat_message_tool_generate_image_prompt_copied)
@@ -198,9 +228,9 @@ object ImageGenerationToolUI : ToolUIRenderer {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (fileUnavailable && images.isEmpty()) {
+            if (uiState is ImageGenerationUiState.CompletedArtifactUnavailable && images.isEmpty()) {
                 Text(
-                    text = stringResource(reasonString(context.fileUnavailableReason())),
+                    text = stringResource(R.string.chat_message_tool_generate_image_artifact_unavailable),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

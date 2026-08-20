@@ -329,7 +329,7 @@ class AttachmentResolver(
 
     private suspend fun deleteCreated(ids: List<Long>) {
         ids.forEach { id ->
-            runCatching { filesManager.delete(id, deleteFromDisk = true) }
+            runCatching { filesManager.deleteManagedFilePermanently(id, deleteFromDisk = true) }
         }
     }
 

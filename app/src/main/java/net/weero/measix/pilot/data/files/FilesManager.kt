@@ -412,47 +412,61 @@ class FilesManager(
         SyncResult(inserted = inserted, removed = removed)
     }
 
-    suspend fun delete(id: Long, deleteFromDisk: Boolean = true): Boolean = mutationMutex.withLock {
-        withContext(Dispatchers.IO) {
-            val entity = repository.getById(id) ?: return@withContext false
-            if (deleteFromDisk) {
-                val file = getFile(entity)
-                if (file.exists() && !file.delete()) {
+    /**
+     * 永久删除单个托管文件（unchecked destructive delete）。
+     *
+     * 不做任何引用检查：调用方必须自行确认删除语义——
+     * - 自动清理路径必须走 reference-aware 检查（见 ConversationRepository.deleteUnreferencedChatFiles）
+     * - 用户显式删除路径必须先解除可变当前引用（见 ManagedFileDeletionService）
+     */
+    suspend fun deleteManagedFilePermanently(id: Long, deleteFromDisk: Boolean = true): Boolean =
+        mutationMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val entity = repository.getById(id) ?: return@withContext false
+                if (deleteFromDisk) {
+                    val file = getFile(entity)
+                    if (file.exists() && !file.delete()) {
+                        return@withContext false
+                    }
+                }
+                repository.deleteById(id) > 0
+            }
+        }
+
+    /**
+     * 永久清空整个托管目录（unchecked destructive delete）。
+     *
+     * 与 [deleteManagedFilePermanently] 相同的约束：调用方负责引用语义。
+     */
+    suspend fun deleteManagedFolderPermanently(folder: String = FileFolders.UPLOAD): Boolean =
+        mutationMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val dir = File(context.filesDir, folder)
+                val entries = dir.listFiles()
+                if (dir.exists() && entries == null) {
                     return@withContext false
                 }
-            }
-            repository.deleteById(id) > 0
-        }
-    }
 
-    suspend fun deleteAll(folder: String = FileFolders.UPLOAD): Boolean = mutationMutex.withLock {
-        withContext(Dispatchers.IO) {
-            val dir = File(context.filesDir, folder)
-            val entries = dir.listFiles()
-            if (dir.exists() && entries == null) {
-                return@withContext false
-            }
-
-            var allDeletedFromDisk = true
-            entries.orEmpty().forEach { entry ->
-                if (!runCatching { entry.deleteRecursively() }.getOrDefault(false)) {
-                    allDeletedFromDisk = false
+                var allDeletedFromDisk = true
+                entries.orEmpty().forEach { entry ->
+                    if (!runCatching { entry.deleteRecursively() }.getOrDefault(false)) {
+                        allDeletedFromDisk = false
+                    }
                 }
-            }
 
-            if (allDeletedFromDisk) {
-                repository.deleteByFolder(folder)
-                return@withContext true
-            }
-
-            repository.listByFolder(folder).first().forEach { entity ->
-                if (!getFile(entity).exists()) {
-                    repository.deleteById(entity.id)
+                if (allDeletedFromDisk) {
+                    repository.deleteByFolder(folder)
+                    return@withContext true
                 }
+
+                repository.listByFolder(folder).first().forEach { entity ->
+                    if (!getFile(entity).exists()) {
+                        repository.deleteById(entity.id)
+                    }
+                }
+                false
             }
-            false
         }
-    }
 
     private suspend fun commitManagedFile(
         target: File,

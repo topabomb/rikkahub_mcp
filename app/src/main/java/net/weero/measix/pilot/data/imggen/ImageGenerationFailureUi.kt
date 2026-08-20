@@ -2,6 +2,12 @@ package net.weero.measix.pilot.data.imggen
 
 import net.weero.measix.pilot.R
 
+/**
+ * 执行失败 reason → 文案的映射。
+ *
+ * 只覆盖 execution failure；`artifact_missing` 属于 artifact availability 维度
+ * （执行可能已 completed），不在这里映射，由 UI 层专用资源表达。
+ */
 fun imageGenerationFailureStringRes(reason: String?): Int = when (reason) {
     "invalid_arguments" -> R.string.chat_message_tool_generate_image_failed_invalid_arguments
     "image_model_unavailable" -> R.string.chat_message_tool_generate_image_failed_model_unavailable
@@ -19,6 +25,5 @@ fun imageGenerationFailureStringRes(reason: String?): Int = when (reason) {
     "invalid_result" -> R.string.chat_message_tool_generate_image_failed_invalid_result
     "persistence_error" -> R.string.chat_message_tool_generate_image_failed_persistence
     "assistant_not_found" -> R.string.chat_message_tool_generate_image_failed_assistant_missing
-    "artifact_missing" -> R.string.chat_message_tool_generate_image_failed_artifact_missing
     else -> R.string.chat_message_tool_generate_image_failed
 }

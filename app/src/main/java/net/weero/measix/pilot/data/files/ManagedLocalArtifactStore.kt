@@ -56,7 +56,7 @@ class ManagedLocalArtifactStore(
         withContext(Dispatchers.IO) {
             val entity = filesManager.getByRelativePath(ref.relativePath)
             if (entity != null) {
-                filesManager.delete(entity.id, deleteFromDisk = true)
+                filesManager.deleteManagedFilePermanently(entity.id, deleteFromDisk = true)
             } else {
                 runCatching { ref.file(context.filesDir).delete() }
             }

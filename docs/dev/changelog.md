@@ -19,6 +19,8 @@
 - `assistant_call` 进入 Coordinator 前的参数错误改为与终态一致的 `status` + `reason` 信封
 - Target 不再永久过滤 `generate_image`；未开启 `TextToImage` 或没有有效默认图片模型时仍不注册
 - Target 非交互下需审批工具自动拒绝的返回统一为 `tool_not_permitted` + `approval_unavailable` + `message`：语义为「需要审批但当前运行环境无法提供审批，不要原样重试」；只拒绝当前 ToolCall，不终止整个 Run。`ask_user` 仍走交互桥接，与审批错误协议无关
+- 文件管理删除收口两套语义：新增 `ManagedFileDeletionService`，显式删除前先解除助手背景/头像等可变引用；`FilesManager` 物理删除 API 更名为 destructive 语义；「清理」改为「清空」，确认框显示实际影响
+- `generate_image` 消息卡把执行结果与文件可用性分开：生成成功但文件缺失显示「图片已生成 · 文件不可用」，`artifact_missing` 移出失败文案
 
 ### 修复
 
@@ -26,6 +28,7 @@
 - 标题、建议、置顶改为列级更新并 merge 当前 Session，避免旧 Conversation 整对象覆盖正在生成的消息树
 - Conversation 普通状态更新不再按瞬时文件差做物理 GC；压缩等生命周期操作走统一的引用检查
 - 历史 Tool artifact 缺失时保持执行 `status=completed`，只把文件标为不可用
+- 文件管理删除正被助手背景/头像引用的文件后，不再留下悬空引用（背景透明却无背景图）
 
 ---
 

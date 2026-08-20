@@ -158,11 +158,24 @@ MCP 连接、休眠与恢复不由生成链路持有；`McpManager` 负责连接
 下一轮请求会通过 `ToolArtifactReplayTransformer` 按 artifact metadata 重写历史 Tool Result
 的 `/upload/<file>` 与 Image URL；找不到文件时不得伪造可读路径，也不得把历史执行
 `status=completed` 改写成 `failed`。可用性写在 `file.available=false` 与 `file.reason=artifact_missing`。
+UI 层用 `resolveImageGenerationUiState()` 把执行结果与 artifact 可用性投影为独立维度：
+`completed + 文件缺失` 解析为 `CompletedArtifactUnavailable`，显示「图片已生成 · 文件不可用」，
+不进入失败分支；`artifact_missing` 不在 `imageGenerationFailureStringRes()` 的 failure 映射内。
 
-Conversation 状态更新不等于文件 GC。物理删除只发生在明确的生命周期操作
-（删除消息/会话/分支、压缩历史、用户删除托管文件）之后，并由
-`ConversationRepository.deleteUnreferencedChatFiles()` 按 `collectFileReferenceTokens()`
-做全局引用检查；反序列化失败时保留文件。
+Conversation 状态更新不等于文件 GC。物理删除分两套语义：
+
+- 自动清理（删除消息/会话/分支、压缩历史、孤儿回收）必须经过
+  `ConversationRepository.deleteUnreferencedChatFiles()` 按 `collectFileReferenceTokens()`
+  做全局引用检查，有引用绝不删除；反序列化失败时保留文件。
+- 用户在文件管理页明确确认的永久删除属于 destructive operation，由
+  `ManagedFileDeletionService` 协调：先原子解除 Assistant background/avatar 等
+  可变当前引用（Settings 写入成功才继续，失败则保留文件），再执行物理删除；
+  历史 Conversation 引用保持不动，Replay 投影为不可用。
+  显式删除造成的 `artifact_missing` 是正常状态，不得从 Gallery canonical 图
+  自动复制回来「复活」文件，否则违反用户删除意图。
+
+`FilesManager.deleteManagedFilePermanently()` / `deleteManagedFolderPermanently()` 是
+unchecked destructive 原语，禁止当作自动 GC 使用。
 
 `OpenAIProvider.generateImage` / `editImage` 走 `/images/generations` 与 `/images/edits`，
 失败时抛带 HTTP 状态和 `error.code` / `error.type` 的 `HttpException`，不再把原始响应体塞进

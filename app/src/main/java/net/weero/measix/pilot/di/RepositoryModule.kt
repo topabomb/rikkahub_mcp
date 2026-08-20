@@ -3,6 +3,7 @@
 import android.content.Context
 import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.data.files.ManagedFileDeletionService
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.FavoriteRepository
@@ -77,6 +78,10 @@ val repositoryModule = module {
 
     single {
         FilesManager(get(), get(), get())
+    }
+
+    single {
+        ManagedFileDeletionService(get(), get(), get())
     }
 
     single {

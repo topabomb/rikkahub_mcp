@@ -37,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,6 +59,7 @@ import net.weero.measix.pilot.data.db.entity.ManagedFileEntity
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.data.files.ManagedFileDeletionService
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.data.repository.GenMediaRepository
 import net.weero.measix.pilot.ui.components.nav.BackButton
@@ -83,6 +85,7 @@ fun SettingFilesPage(
     filesManager: FilesManager = koinInject(),
     genMediaRepository: GenMediaRepository = koinInject(),
     generatedMediaStore: GeneratedMediaStore = koinInject(),
+    managedFileDeletionService: ManagedFileDeletionService = koinInject(),
 ) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val uploadGridState = rememberLazyStaggeredGridState()
@@ -97,6 +100,9 @@ fun SettingFilesPage(
 
     var selectedCategory by remember { mutableStateOf(FileCategory.UPLOAD) }
     var pendingUploadDelete by remember { mutableStateOf<ManagedFileEntity?>(null) }
+    var pendingUploadDeleteImpact by remember {
+        mutableStateOf<ManagedFileDeletionService.ManagedFileDeleteImpact?>(null)
+    }
     var pendingGeneratedDelete by remember { mutableStateOf<GenMediaEntity?>(null) }
     var showCleanDialog by remember { mutableStateOf(false) }
     var previewImages by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -110,24 +116,56 @@ fun SettingFilesPage(
 
     if (pendingUploadDelete != null) {
         val target = pendingUploadDelete!!
+        LaunchedEffect(target.id) {
+            pendingUploadDeleteImpact = runCatching {
+                managedFileDeletionService.inspect(target)
+            }.getOrNull()
+        }
         AlertDialog(
-            onDismissRequest = { pendingUploadDelete = null },
+            onDismissRequest = {
+                pendingUploadDelete = null
+                pendingUploadDeleteImpact = null
+            },
             title = { Text(stringResource(R.string.setting_files_page_delete_file_title)) },
             text = {
-                Text(
-                    stringResource(
-                        R.string.setting_files_page_delete_upload_confirmation,
-                        target.displayName,
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        stringResource(
+                            R.string.setting_files_page_delete_upload_confirmation,
+                            target.displayName,
+                        )
                     )
-                )
+                    pendingUploadDeleteImpact?.let { impact ->
+                        if (impact.referencedByHistory) {
+                            ImpactText(stringResource(R.string.setting_files_page_delete_impact_history))
+                        }
+                        if (impact.assistantBackgroundCount > 0) {
+                            ImpactText(
+                                stringResource(
+                                    R.string.setting_files_page_delete_impact_backgrounds,
+                                    impact.assistantBackgroundCount,
+                                )
+                            )
+                        }
+                        if (impact.assistantAvatarCount > 0) {
+                            ImpactText(
+                                stringResource(
+                                    R.string.setting_files_page_delete_impact_avatars,
+                                    impact.assistantAvatarCount,
+                                )
+                            )
+                        }
+                    }
+                }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         scope.launch {
-                            val ok = filesManager.delete(target.id, deleteFromDisk = true)
+                            val ok = managedFileDeletionService.deletePermanently(target)
                             toaster.show(if (ok) deletedToast else deleteFailedToast)
                             pendingUploadDelete = null
+                            pendingUploadDeleteImpact = null
                         }
                     }
                 ) {
@@ -135,7 +173,10 @@ fun SettingFilesPage(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingUploadDelete = null }) {
+                TextButton(onClick = {
+                    pendingUploadDelete = null
+                    pendingUploadDeleteImpact = null
+                }) {
                     Text(stringResource(R.string.setting_files_page_cancel_action))
                 }
             }
@@ -202,7 +243,7 @@ fun SettingFilesPage(
                         showCleanDialog = false
                         scope.launch {
                             val ok = if (isUpload) {
-                                filesManager.deleteAll(FileFolders.UPLOAD)
+                                managedFileDeletionService.deleteFolderPermanently(FileFolders.UPLOAD)
                             } else {
                                 generatedMediaStore.deleteAll()
                             }
@@ -347,6 +388,15 @@ fun SettingFilesPage(
             overlay = backgroundHost.overlay,
         )
     }
+}
+
+@Composable
+private fun ImpactText(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable

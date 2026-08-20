@@ -257,7 +257,7 @@ class SubAssistantAttachmentCoordinatorTest {
 
         // Child 写入失败：返回失败结果，同时本批新落地的远程文件被清理
         assertTrue(result.isNotEmpty())
-        coVerify(exactly = 1) { harness.filesManager.delete(42L, deleteFromDisk = true) }
+        coVerify(exactly = 1) { harness.filesManager.deleteManagedFilePermanently(42L, deleteFromDisk = true) }
     }
 
     private fun execContext() = ToolExecutionContext(

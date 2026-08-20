@@ -402,7 +402,7 @@ class SubAssistantCoordinator(
             runLeases.release(activeRunKey, activeTargetRun)
             // Child 写入/持久化失败：删除本批刚落地的远程附件，避免孤儿文件。
             createdManagedFileIds.forEach { id ->
-                runCatching { filesManager.delete(id, deleteFromDisk = true) }
+                runCatching { filesManager.deleteManagedFilePermanently(id, deleteFromDisk = true) }
             }
             if (e is CancellationException) throw e
             return classifiedFailureResult(

@@ -204,7 +204,7 @@ class AttachmentResolverTest {
             updatedAt = 1,
         )
         io.mockk.every { env.filesManager.getFile(any()) } returns persisted
-        io.mockk.coEvery { env.filesManager.delete(42, true) } returns true
+        io.mockk.coEvery { env.filesManager.deleteManagedFilePermanently(42, true) } returns true
         val result = env.resolver.resolve(
             emptyList(),
             listOf("https://cdn.example/a.png", AttachmentRefs.format(Uuid.random())),
@@ -213,7 +213,7 @@ class AttachmentResolverTest {
             AttachmentFailureReasons.ATTACHMENT_NOT_FOUND,
             (result as AttachmentResolveResult.Failure).reason,
         )
-        io.mockk.coVerify { env.filesManager.delete(42, true) }
+        io.mockk.coVerify { env.filesManager.deleteManagedFilePermanently(42, true) }
         env.cleanup()
     }
 

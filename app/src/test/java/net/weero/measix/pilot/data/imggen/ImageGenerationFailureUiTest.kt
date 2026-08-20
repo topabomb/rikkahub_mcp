@@ -27,4 +27,14 @@ class ImageGenerationFailureUiTest {
             assertNotEquals(generic, id)
         }
     }
+
+    @Test
+    fun `artifact_missing is an availability state not a failure reason`() {
+        // artifact availability 与 execution failure 是两个维度：
+        // artifact_missing 不再拥有 failure 专属文案，回落到通用失败文案。
+        assertEquals(
+            R.string.chat_message_tool_generate_image_failed,
+            imageGenerationFailureStringRes("artifact_missing"),
+        )
+    }
 }

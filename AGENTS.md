@@ -92,7 +92,7 @@ Fork 前的完整架构说明见 [`docs/dev/original-architecture.md`](docs/dev/
 
 **需主动维护的文档**：
 
-- `changelog.md`：功能迭代清单。只有在新增重要功能或重大需求时，在顶部新增版本条目并递增 `app/build.gradle.kts` 的 `versionCode` / `versionName`。
+- `changelog.md`：功能迭代清单。只有在新增重要功能或重大需求时才需要明确用户是否递增版本号，只有在用户明确要求的情况下，才在顶部新增版本条目并递增 `app/build.gradle.kts` 的 `versionCode` / `versionName`，如无用户明确要求，默认维持在当前版本。
 - `upstream-sync.md`：按批执行的上游同步的检查总账，避免漏检或重复劳动。每次同步 fetch、按上批冻结点续查，并在该文档追加摘要；方法与判定原则以文档正文为准。
 
 ## Reference Documentation

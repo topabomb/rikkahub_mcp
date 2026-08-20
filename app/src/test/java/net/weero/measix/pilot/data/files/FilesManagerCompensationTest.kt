@@ -122,7 +122,7 @@ class FilesManagerCompensationTest {
         val repository = mockk<FilesRepository>()
         coEvery { repository.getById(7) } returns entity
         val manager = manager(filesDir, repository)
-        assertFalse(manager.delete(7))
+        assertFalse(manager.deleteManagedFilePermanently(7))
         io.mockk.coVerify(exactly = 0) { repository.deleteById(any()) }
         filesDir.deleteRecursively()
     }
@@ -146,7 +146,7 @@ class FilesManagerCompensationTest {
         coEvery { repository.getById(8) } returns entity
         coEvery { repository.deleteById(8) } throws IllegalStateException("dao")
         val manager = manager(filesDir, repository)
-        val result = runCatching { manager.delete(8) }
+        val result = runCatching { manager.deleteManagedFilePermanently(8) }
         assertTrue(result.isFailure)
         assertFalse(file.exists())
         filesDir.deleteRecursively()
