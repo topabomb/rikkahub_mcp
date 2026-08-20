@@ -1,7 +1,6 @@
 package net.weero.measix.pilot.service
 
 import android.app.Application
-import android.util.Log
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -46,6 +45,7 @@ import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.event.AppEvent
 import net.weero.measix.pilot.data.event.AppEventBus
+import net.weero.measix.pilot.data.ai.FinishedReason
 import net.weero.measix.pilot.data.ai.GenerationChunk
 import net.weero.measix.pilot.data.ai.GenerationHandler
 import net.weero.measix.pilot.data.ai.tools.shouldUseExternalWebSearch
@@ -242,6 +242,10 @@ internal fun collectUserAttentionKeys(
     return keys
 }
 
+internal fun shouldLaunchCompletionSideEffects(reason: FinishedReason?): Boolean {
+    return reason != FinishedReason.AWAITING_APPROVAL
+}
+
 private val inputTransformers by lazy {
     listOf(
         TimeReminderTransformer,
@@ -400,10 +404,23 @@ class ChatService(
 
     suspend fun initializeConversation(conversationId: Uuid) {
         recoveryGate.awaitReady()
-        getOrCreateSession(conversationId) // 确保 session 存在
+        val session = getOrCreateSession(conversationId)
         val conversation = conversationRepo.getConversationById(conversationId)
         if (conversation != null) {
-            updateConversation(conversationId, conversation)
+            val live = session.state.value
+            val keepLiveTree = session.isGenerating ||
+                (live.messageNodes.isNotEmpty() && !live.updateAt.isBefore(conversation.updateAt))
+            if (keepLiveTree) {
+                mergeSessionConversation(conversationId) { current ->
+                    current.copy(
+                        title = current.title.ifBlank { conversation.title },
+                        isPinned = conversation.isPinned,
+                        folderId = conversation.folderId,
+                    )
+                }
+            } else {
+                updateConversation(conversationId, conversation)
+            }
             settingsStore.updateAssistant(conversation.assistantId)
         } else {
             // 新建对话, 并添加预设消息
@@ -604,10 +621,11 @@ class ChatService(
             model.displayName
         }
 
+        var finishedReason: FinishedReason? = null
         runCatching {
 
             // reset suggestions
-            updateConversation(conversationId, initialConversation.copy(chatSuggestions = emptyList()))
+            updateConversationState(conversationId) { it.copy(chatSuggestions = emptyList()) }
 
             // memory tool
             if (!model.abilities.contains(ModelAbility.TOOL)) {
@@ -749,7 +767,9 @@ class ChatService(
                     // Phase 和 Checkpoint 事件由普通聊天忽略；子助手 collector 消费这些事件
                     is GenerationChunk.Phase -> { }
                     is GenerationChunk.Checkpoint -> { }
-                    is GenerationChunk.Finished -> { }
+                    is GenerationChunk.Finished -> {
+                        finishedReason = chunk.reason
+                    }
                 }
             }
         }.onFailure {
@@ -769,21 +789,27 @@ class ChatService(
                 soundEffectPlayer.play(R.raw.loop_failed)
             }
         }.onSuccess {
-            // loop 正常完成: 排除待审批暂停场景 (flow 因 break 正常结束, 但实际是等待用户操作)
-            val hasPendingApproval = getConversationFlow(conversationId).value
-                .currentMessages.lastOrNull()?.getTools()?.any { it.isPending } == true
-            if (!hasPendingApproval && isForeground.value && settings.displaySetting.enableMessageGenerationSoundEffect) {
-                soundEffectPlayer.play(R.raw.loop_complete)
-            }
-
             val finalConversation = getConversationFlow(conversationId).value
             saveConversation(conversationId, finalConversation)
 
+            if (!shouldLaunchCompletionSideEffects(finishedReason)) {
+                return@onSuccess
+            }
+            val hasPendingApproval = getConversationFlow(conversationId).value
+                .currentMessages.lastOrNull()?.getTools()?.any { it.isPending } == true
+            if (hasPendingApproval) {
+                return@onSuccess
+            }
+
+            if (isForeground.value && settings.displaySetting.enableMessageGenerationSoundEffect) {
+                soundEffectPlayer.play(R.raw.loop_complete)
+            }
+
             launchWithConversationReference(conversationId) {
-                generateTitle(finalConversation)
+                generateTitle(getConversationFlow(conversationId).value)
             }
             launchWithConversationReference(conversationId) {
-                generateSuggestion(conversationId, finalConversation)
+                generateSuggestion(conversationId, getConversationFlow(conversationId).value)
             }
         }
     }
@@ -941,13 +967,16 @@ class ChatService(
                     params = backgroundTextGenerationParams(model),
                 )
 
-                val latest = conversationRepo.getConversationById(conversationId) ?: return@runCatching
+                val generatedTitle = result.choices.getOrNull(0)?.message?.toText().orEmpty()
+                val latestTitle = sessionRegistry.getSession(conversationId)?.state?.value?.title
+                    ?: conversation.title
                 val titleToWrite = resolveGeneratedTitleWrite(
                     force = force,
-                    latestTitle = latest.title,
-                    generatedTitle = result.choices.getOrNull(0)?.message?.toText().orEmpty(),
+                    latestTitle = latestTitle,
+                    generatedTitle = generatedTitle,
                 ) ?: return@runCatching
-                saveConversation(conversationId, latest.copy(title = titleToWrite))
+                mergeSessionConversation(conversationId) { it.copy(title = titleToWrite) }
+                conversationRepo.updateConversationTitle(conversationId, titleToWrite)
             }.onFailure {
                 it.printStackTrace()
                 addError(
@@ -977,12 +1006,7 @@ class ChatService(
             val model = settings.findModelById(settings.suggestionModelId, fallback = settings.fastModelId) ?: return
             val provider = model.findProvider(settings.providers) ?: return
 
-            sessionRegistry.getSession(conversationId)?.let { session ->
-                updateConversation(
-                    conversationId,
-                    session.state.value.copy(chatSuggestions = emptyList())
-                )
-            }
+            mergeSessionConversation(conversationId) { it.copy(chatSuggestions = emptyList()) }
 
             val providerHandler = providerManager.getProviderByType(provider)
             val result = providerHandler.generateText(
@@ -999,19 +1023,14 @@ class ChatService(
             )
             val suggestions =
                 result.choices[0].message?.toText()?.split("\n")?.map { it.trim() }
-                    ?.filter { it.isNotBlank() } ?: emptyList()
+                    ?.filter { it.isNotBlank() }
+                    ?.take(10)
+                    ?: emptyList()
 
-            val latestConversation = conversationRepo.getConversationById(conversationId)
-                ?: sessionRegistry.getSession(conversationId)?.state?.value
-                ?: conversation
-            saveConversation(
-                conversationId,
-                latestConversation.copy(
-                    chatSuggestions = suggestions.take(
-                        10
-                    )
-                )
-            )
+            mergeSessionConversation(conversationId) { it.copy(chatSuggestions = suggestions) }
+            if (conversationRepo.existsConversationById(conversationId)) {
+                conversationRepo.updateConversationSuggestions(conversationId, suggestions)
+            }
         }.onFailure {
             it.printStackTrace()
         }
@@ -1104,8 +1123,14 @@ class ChatService(
             messageNodes = newMessageNodes,
             chatSuggestions = emptyList(),
         )
+        val previousFiles = conversation.files.toSet()
 
         saveConversation(conversationId, newConversation)
+        conversationRepo.deleteUnreferencedChatFiles(
+            previousFiles = previousFiles,
+            retainedConversations = listOf(newConversation),
+            excludedConversationIds = setOf(conversationId),
+        )
     }
 
     // ---- 对话状态更新 ----
@@ -1113,13 +1138,32 @@ class ChatService(
     private fun updateConversation(conversationId: Uuid, conversation: Conversation) {
         if (conversation.id != conversationId) return
         val session = getOrCreateSession(conversationId)
-        checkFilesDelete(conversation, session.state.value)
         session.state.value = conversation
     }
 
     fun updateConversationState(conversationId: Uuid, update: (Conversation) -> Conversation) {
-        val current = getConversationFlow(conversationId).value
-        updateConversation(conversationId, update(current))
+        val session = getOrCreateSession(conversationId)
+        session.state.update { current ->
+            val next = update(current)
+            if (next.id != conversationId) current else next
+        }
+    }
+
+    private fun mergeSessionConversation(
+        conversationId: Uuid,
+        update: (Conversation) -> Conversation,
+    ) {
+        val session = sessionRegistry.getSession(conversationId) ?: return
+        session.state.update { current ->
+            val next = update(current)
+            if (next.id != conversationId) current else next
+        }
+    }
+
+    suspend fun updateConversationTitle(conversationId: Uuid, title: String) {
+        recoveryGate.awaitReady()
+        mergeSessionConversation(conversationId) { it.copy(title = title) }
+        conversationRepo.updateConversationTitle(conversationId, title)
     }
 
     /**
@@ -1160,18 +1204,6 @@ class ChatService(
             .filter { it.state.value.folderId == folderId }
             .forEach { updateConversationState(it.id) { c -> c.copy(folderId = null) } }
         folderRepository.deleteFolder(folderId)
-    }
-
-    private fun checkFilesDelete(newConversation: Conversation, oldConversation: Conversation) {
-        val newFiles = newConversation.files
-        val oldFiles = oldConversation.files
-        val deletedFiles = oldFiles.filter { file ->
-            newFiles.none { it == file }
-        }
-        if (deletedFiles.isNotEmpty()) {
-            filesManager.deleteChatFiles(deletedFiles)
-            Log.w(TAG, "checkFilesDelete: $deletedFiles")
-        }
     }
 
     suspend fun saveConversation(conversationId: Uuid, conversation: Conversation) {
@@ -1232,10 +1264,8 @@ class ChatService(
     suspend fun togglePinStatus(conversationId: Uuid) {
         recoveryGate.awaitReady()
         conversationRepo.togglePinStatus(conversationId)
-        val persisted = conversationRepo.getConversationById(conversationId) ?: return
-        sessionRegistry.getSession(conversationId)?.let {
-            sessionRegistry.updateConversationState(conversationId, persisted)
-        }
+        val pinned = conversationRepo.getConversationEntityById(conversationId)?.isPinned ?: return
+        mergeSessionConversation(conversationId) { it.copy(isPinned = pinned) }
     }
 
     // ---- 消息操作 ----

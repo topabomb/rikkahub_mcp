@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastForEach
 import com.dokar.sonner.ToastType
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
@@ -66,6 +67,18 @@ internal fun ToolUIContext.resultStatus(): String? =
 internal fun ToolUIContext.resultReason(): String? =
     content?.let { (it as? JsonObject)?.get("reason")?.jsonPrimitiveOrNull?.contentOrNull }
 
+internal fun ToolUIContext.resultFileObject(): JsonObject? =
+    (content as? JsonObject)?.get("file") as? JsonObject
+
+internal fun ToolUIContext.fileIsUnavailable(): Boolean {
+    val file = resultFileObject() ?: return false
+    if (file["available"]?.jsonPrimitiveOrNull?.booleanOrNull == false) return true
+    return file["reason"]?.jsonPrimitiveOrNull?.contentOrNull == "artifact_missing"
+}
+
+internal fun ToolUIContext.fileUnavailableReason(): String? =
+    resultFileObject()?.get("reason")?.jsonPrimitiveOrNull?.contentOrNull
+
 internal fun truncatePromptSummary(prompt: String, maxCodePoints: Int = 160): String {
     val codePoints = prompt.codePoints().toArray()
     return if (codePoints.size <= maxCodePoints) prompt else String(codePoints, 0, maxCodePoints) + "…"
@@ -82,8 +95,8 @@ object ImageGenerationToolUI : ToolUIRenderer {
         val status = context.resultStatus()
         val reason = context.resultReason()
         return when {
-            status == "failed" || metadata?.status == "failed" -> stringResource(
-                reasonString(reason ?: metadata?.reason)
+            context.fileIsUnavailable() || status == "failed" || metadata?.status == "failed" -> stringResource(
+                reasonString(context.fileUnavailableReason() ?: reason ?: metadata?.reason)
             )
             status == "completed" || metadata?.phase == "completed" ->
                 stringResource(R.string.chat_message_tool_generate_image_completed)
@@ -167,10 +180,11 @@ object ImageGenerationToolUI : ToolUIRenderer {
         val clipboard = LocalClipboardManager.current
         val toaster = LocalToaster.current
         val images = context.tool.output.filterIsInstance<UIMessagePart.Image>()
-        val filePath = ((context.content as? JsonObject)?.get("file") as? JsonObject)
+        val filePath = context.resultFileObject()
             ?.get("path")
             ?.jsonPrimitiveOrNull
             ?.contentOrNull
+        val fileUnavailable = context.fileIsUnavailable()
         val prompt = context.arguments.getStringContent("prompt").orEmpty()
         var showCallDetails by remember { mutableStateOf(false) }
         val promptCopiedToast = stringResource(R.string.chat_message_tool_generate_image_prompt_copied)
@@ -184,6 +198,13 @@ object ImageGenerationToolUI : ToolUIRenderer {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            if (fileUnavailable && images.isEmpty()) {
+                Text(
+                    text = stringResource(reasonString(context.fileUnavailableReason())),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             images.fastForEach { image ->
                 if (isImagePartLoading(image.url)) {
                     Box(

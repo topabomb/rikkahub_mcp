@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.service
+package net.weero.measix.pilot.service
 
 import kotlinx.serialization.json.JsonPrimitive
 import me.rerere.ai.core.MessageRole
@@ -8,7 +8,9 @@ import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.data.ai.FinishedReason
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -63,6 +65,23 @@ class ChatServiceTest {
         val model = Model(modelId = "gpt-4o-mini")
         val params = backgroundTextGenerationParams(model)
         assertEquals("gpt-4o-mini", params.model.modelId)
+    }
+
+    // endregion
+
+    // region generation lifecycle
+
+    @Test
+    fun `awaiting approval does not launch completion side effects`() {
+        assertFalse(shouldLaunchCompletionSideEffects(FinishedReason.AWAITING_APPROVAL))
+    }
+
+    @Test
+    fun `completed and step limit launch completion side effects`() {
+        assertTrue(shouldLaunchCompletionSideEffects(FinishedReason.COMPLETED))
+        assertTrue(shouldLaunchCompletionSideEffects(FinishedReason.STEP_LIMIT_REACHED))
+        assertTrue(shouldLaunchCompletionSideEffects(FinishedReason.INTERACTION_LIMIT_REACHED))
+        assertTrue(shouldLaunchCompletionSideEffects(null))
     }
 
     // endregion

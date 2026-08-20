@@ -80,6 +80,12 @@ interface ConversationDAO {
     @Query("UPDATE conversationentity SET is_pinned = :isPinned WHERE id = :id")
     suspend fun updatePinStatus(id: String, isPinned: Boolean)
 
+    @Query("UPDATE conversationentity SET title = :title WHERE id = :id")
+    suspend fun updateTitle(id: String, title: String)
+
+    @Query("UPDATE conversationentity SET suggestions = :chatSuggestions WHERE id = :id")
+    suspend fun updateChatSuggestions(id: String, chatSuggestions: String)
+
     @Query("UPDATE conversationentity SET folder_id = :folderId WHERE id = :id")
     suspend fun updateFolderId(id: String, folderId: String)
 

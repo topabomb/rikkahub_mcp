@@ -58,6 +58,18 @@ class MessageFtsManager(private val database: AppDatabase) {
         db.execSQL("DELETE FROM message_fts WHERE conversation_id = ?", arrayOf(conversationId))
     }
 
+    /** Updates the denormalized conversation title without rewriting message rows. */
+    suspend fun updateConversationTitle(conversationId: String, title: String) = withContext(Dispatchers.IO) {
+        runCatching {
+            db.execSQL(
+                "UPDATE message_fts SET title = ? WHERE conversation_id = ?",
+                arrayOf(title, conversationId),
+            )
+        }.onFailure { error ->
+            Log.w(TAG, "updateConversationTitle failed for $conversationId", error)
+        }
+    }
+
     suspend fun deleteAll() = withContext(Dispatchers.IO) {
         db.execSQL("DELETE FROM message_fts")
     }

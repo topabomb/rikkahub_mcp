@@ -50,13 +50,16 @@ ChatService.sendMessage()
                  │
                  ▼
 ChatService.collect()
-  ├─ 更新 ConversationSession
+  ├─ 更新 ConversationSession（不根据瞬时 Conversation 差异删除本地文件）
   ├─ 通过 AppEventBus 发布生成进度、声音和通知事件
-  └─ Flow 完成后保存会话，异步生成标题和建议回复。
+  └─ 消费 GenerationChunk.Finished：
+     - COMPLETED / STEP_LIMIT_REACHED：保存会话，再异步生成标题和建议回复
+     - AWAITING_APPROVAL：只保存挂起检查点，不启动完成副作用
      自动标题只在标题仍空白时发起；同一会话进程内同时只跑一次，
      被挡住的触发在当前请求结束后另起会话引用任务补一次。
      实际 LLM 请求最多 MAX_AUTO_TITLE_GENERATION_ATTEMPTS 次。
      缺模型不计入次数。空白结果不写回。抽屉里的手动重新生成不受该上限。
+     标题和建议只 patch 对应列并 merge 当前 Session，禁止用旧 Conversation 整对象覆盖消息树。
 ```
 
 工具结果在统一模型中内联于 `UIMessagePart.Tool.output`，不会作为持久化的
@@ -153,7 +156,13 @@ MCP 连接、休眠与恢复不由生成链路持有；`McpManager` 负责连接
 `ImageGenerationCoordinator` 和 `GeneratedMediaStore`。队列是进程内 FIFO 单工，不持久化、
 不在重启后重放。Gallery 原图、聊天 Tool Result 与 Assistant 背景必须是不同所有权的文件。
 下一轮请求会通过 `ToolArtifactReplayTransformer` 按 artifact metadata 重写历史 Tool Result
-的 `/upload/<file>` 与 Image URL；找不到文件时不得伪造可读路径。
+的 `/upload/<file>` 与 Image URL；找不到文件时不得伪造可读路径，也不得把历史执行
+`status=completed` 改写成 `failed`。可用性写在 `file.available=false` 与 `file.reason=artifact_missing`。
+
+Conversation 状态更新不等于文件 GC。物理删除只发生在明确的生命周期操作
+（删除消息/会话/分支、压缩历史、用户删除托管文件）之后，并由
+`ConversationRepository.deleteUnreferencedChatFiles()` 按 `collectFileReferenceTokens()`
+做全局引用检查；反序列化失败时保留文件。
 
 `OpenAIProvider.generateImage` / `editImage` 走 `/images/generations` 与 `/images/edits`，
 失败时抛带 HTTP 状态和 `error.code` / `error.type` 的 `HttpException`，不再把原始响应体塞进

@@ -261,8 +261,9 @@ managed chat copy。Android host path、file URI 和内部 relative path 不进�
 | `persistence_error` | 图片已生成但本地保存失败 |
 
 无法解析的响应体只提取 `error.message` / `error.code` / `error.type` 等短字段；HTML 或乱码不进入 `detail`。
-历史重放或 UI rematerialize 时，若 managed chat copy 已不存在，Text 改为
-`artifact_missing` 并去掉 Image part，不保留看似可读的 `/upload/...` 路径。
+历史重放或 UI rematerialize 时，若 managed chat copy 已不存在，去掉 Image part，
+并在 `file` 上标记 `available=false`、`reason=artifact_missing`，不保留看似可读的
+`/upload/...` 路径。历史执行 `status` 保持原值，Replay 不重新判定工具是否成功。
 背景失败不回滚已进入 Gallery 的图片；此时图片仍为 completed，`background.updated=false`
 并带 `assistant_not_found` / `background_copy_failed` / `settings_write_failed`。
 

@@ -4,10 +4,14 @@ import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.db.entity.ManagedFileEntity
+import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -130,7 +134,7 @@ class LocalArtifactStoreTest {
         val (rewritten, _) = rewriter.rewriteToolOutput(output, metadata)
         val text = rewritten.filterIsInstance<UIMessagePart.Text>().single().text
         assertTrue(rewritten.none { it is UIMessagePart.Image })
-        assertTrue(text.contains("artifact_missing"))
+        assertCompletedArtifactUnavailable(text)
         assertFalse(text.contains("\"path\":\"/upload/gone.png\""))
         io.mockk.coVerify(exactly = 0) { store.copyFile(any(), any(), any(), any()) }
         filesDir.deleteRecursively()
@@ -156,7 +160,7 @@ class LocalArtifactStoreTest {
         val (rewritten, _) = rewriter.rewriteToolOutput(output, metadata)
         val text = rewritten.filterIsInstance<UIMessagePart.Text>().single().text
         assertTrue(rewritten.none { it is UIMessagePart.Image })
-        assertTrue(text.contains("artifact_missing"))
+        assertCompletedArtifactUnavailable(text)
         assertFalse(text.contains("\"path\":\"/upload/secret.db\""))
         filesDir.deleteRecursively()
     }
@@ -209,9 +213,18 @@ class LocalArtifactStoreTest {
         val materialized = rewriter.materializeToolOutput(output, metadata)
         val text = materialized.filterIsInstance<UIMessagePart.Text>().single().text
         assertTrue(materialized.none { it is UIMessagePart.Image })
-        assertTrue(text.contains("artifact_missing"))
+        assertCompletedArtifactUnavailable(text)
         assertFalse(text.contains("\"path\":\"/upload/missing.png\""))
         filesDir.deleteRecursively()
+    }
+
+    private fun assertCompletedArtifactUnavailable(text: String) {
+        val obj = JsonInstant.parseToJsonElement(text).jsonObject
+        assertEquals("completed", obj["status"]?.jsonPrimitive?.content)
+        val file = obj["file"]?.jsonObject
+        assertEquals(false, file?.get("available")?.jsonPrimitive?.boolean)
+        assertEquals("artifact_missing", file?.get("reason")?.jsonPrimitive?.content)
+        assertNull(file?.get("path"))
     }
 
     private fun unusedStore(filesDir: File): ManagedLocalArtifactStore {

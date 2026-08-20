@@ -8,6 +8,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -33,7 +35,7 @@ class ConversationRepositoryTreeIntegrationTest {
     private lateinit var database: AppDatabase
     private lateinit var appScope: AppScope
     private lateinit var repository: ConversationRepository
-    private var testFile: File? = null
+    private val testFiles = mutableListOf<File>()
 
     @Before
     fun setUp() {
@@ -71,7 +73,7 @@ class ConversationRepositoryTreeIntegrationTest {
 
     @After
     fun tearDown() {
-        testFile?.delete()
+        testFiles.forEach { it.delete() }
         if (::appScope.isInitialized) appScope.cancel()
         if (::database.isInitialized) database.close()
     }
@@ -133,6 +135,134 @@ class ConversationRepositoryTreeIntegrationTest {
         assertNull(repository.getConversationById(deleted.id))
     }
 
+    @Test
+    fun deleteUnreferencedChatFilesRemovesOnlyUnsharedCompressedFiles() = runBlocking {
+        val assistantId = Uuid.random()
+        val unshared = createTestFile("unshared")
+        val shared = createTestFile("shared")
+        val conversation = conversation(
+            id = Uuid.random(),
+            assistantId = assistantId,
+            parentId = null,
+            part = UIMessagePart.Document(
+                url = unshared.toUri().toString(),
+                fileName = unshared.name,
+                mime = "text/plain",
+            ),
+        ).let { current ->
+            current.copy(
+                messageNodes = current.messageNodes + UIMessage(
+                    role = MessageRole.USER,
+                    parts = listOf(
+                        UIMessagePart.Document(
+                            url = shared.toUri().toString(),
+                            fileName = shared.name,
+                            mime = "text/plain",
+                        ),
+                    ),
+                ).toMessageNode(),
+            )
+        }
+        val other = conversation(
+            id = Uuid.random(),
+            assistantId = assistantId,
+            parentId = null,
+            part = UIMessagePart.Document(
+                url = shared.toUri().toString(),
+                fileName = shared.name,
+                mime = "text/plain",
+            ),
+        )
+        repository.insertConversation(conversation)
+        repository.insertConversation(other)
+
+        val reduced = conversation.copy(
+            messageNodes = listOf(
+                UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text("summary"))).toMessageNode(),
+            ),
+        )
+        repository.updateConversation(reduced)
+        repository.deleteUnreferencedChatFiles(
+            previousFiles = conversation.files.toSet(),
+            retainedConversations = listOf(reduced),
+            excludedConversationIds = setOf(conversation.id),
+        )
+
+        assertFalse(unshared.exists())
+        assertTrue(shared.exists())
+    }
+
+    @Test
+    fun deleteUnreferencedChatFilesKeepsMetadataArtifactReferences() = runBlocking {
+        val assistantId = Uuid.random()
+        val artifact = createTestFile("artifact")
+        val url = artifact.toUri().toString()
+        val relativePath = "upload/${artifact.name}"
+        val withImage = Conversation(
+            id = Uuid.random(),
+            assistantId = assistantId,
+            title = "Master",
+            messageNodes = listOf(
+                UIMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(
+                        UIMessagePart.Tool(
+                            toolCallId = "call-1",
+                            toolName = "generate_image",
+                            input = "{}",
+                            output = listOf(UIMessagePart.Image(url = url)),
+                            metadata = kotlinx.serialization.json.buildJsonObject {
+                                put(
+                                    "artifact",
+                                    kotlinx.serialization.json.buildJsonObject {
+                                        put("version", 1)
+                                        put("relativePath", relativePath)
+                                        put("mimeType", "image/jpeg")
+                                    },
+                                )
+                            },
+                        ),
+                    ),
+                ).toMessageNode(),
+            ),
+        )
+        repository.insertConversation(withImage)
+
+        val metadataOnly = withImage.copy(
+            messageNodes = listOf(
+                UIMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(
+                        UIMessagePart.Tool(
+                            toolCallId = "call-1",
+                            toolName = "generate_image",
+                            input = "{}",
+                            output = listOf(UIMessagePart.Text("""{"status":"completed"}""")),
+                            metadata = kotlinx.serialization.json.buildJsonObject {
+                                put(
+                                    "artifact",
+                                    kotlinx.serialization.json.buildJsonObject {
+                                        put("version", 1)
+                                        put("relativePath", relativePath)
+                                        put("mimeType", "image/jpeg")
+                                    },
+                                )
+                            },
+                        ),
+                    ),
+                ).toMessageNode(),
+            ),
+        )
+        repository.updateConversation(metadataOnly)
+        repository.deleteUnreferencedChatFiles(
+            previousFiles = withImage.files.toSet(),
+            retainedConversations = listOf(metadataOnly),
+            excludedConversationIds = setOf(withImage.id),
+        )
+
+        assertTrue(artifact.exists())
+    }
+
     private fun conversation(
         id: Uuid,
         assistantId: Uuid,
@@ -148,11 +278,11 @@ class ConversationRepositoryTreeIntegrationTest {
         ),
     )
 
-    private fun createTestFile(): File {
+    private fun createTestFile(prefix: String = "subassistant-repository-"): File {
         val uploadDir = File(context.filesDir, "upload").apply { mkdirs() }
-        return File.createTempFile("subassistant-repository-", ".txt", uploadDir).also {
+        return File.createTempFile(prefix, ".txt", uploadDir).also {
             it.writeText("shared")
-            testFile = it
+            testFiles += it
         }
     }
 }

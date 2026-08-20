@@ -104,13 +104,11 @@ class ToolArtifactRewriter(
         val element = runCatching { json.parseToJsonElement(text) }.getOrNull() ?: return text
         val obj = element as? JsonObject ?: return text
         val rewritten = obj.toMutableMap()
-        rewritten["status"] = JsonPrimitive("failed")
-        rewritten["reason"] = JsonPrimitive("artifact_missing")
-        val fileObj = (obj["file"] as? JsonObject)?.toMutableMap()
-        if (fileObj != null) {
-            fileObj.remove("path")
-            rewritten["file"] = JsonObject(fileObj)
-        }
+        val fileObj = (obj["file"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
+        fileObj.remove("path")
+        fileObj["available"] = JsonPrimitive(false)
+        fileObj["reason"] = JsonPrimitive("artifact_missing")
+        rewritten["file"] = JsonObject(fileObj)
         return JsonObject(rewritten).toString()
     }
 

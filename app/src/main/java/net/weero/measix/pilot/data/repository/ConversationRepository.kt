@@ -288,20 +288,10 @@ class ConversationRepository(
             "Retained and deleted Child sets must cover the persisted Master tree exactly"
         }
         val oldTreeFiles = (oldChildren + oldMaster).flatMap { it.files }.toSet()
-        val retainedTreeFiles = (retainedChildren + master).flatMap { it.files }.toSet()
-        // 保留树的 metadata 引用（sub_assistant_call.artifacts 等）不在 Conversation.files 里，
-        // 但它们是 Master 卡片的正式交付物引用，同样要阻止删除对应文件。
-        val retainedReferenceTokens = (retainedChildren + master)
-            .flatMap { it.messageNodes.flatMap { node -> node.messages } }
-            .let { messages -> messages.collectFileReferenceTokens() }
-        val deletionCandidates = (oldTreeFiles - retainedTreeFiles).filter { uri ->
-            fileReferenceTokensFor(uri).none { it in retainedReferenceTokens }
-        }.toSet()
         val excludedIds = buildSet {
             add(master.id)
             addAll(oldChildIds)
         }
-        val safeFilesToDelete = findUnsharedFileUris(deletionCandidates, excludedIds)
 
         database.withTransaction {
             conversationDAO.update(conversationToConversationEntity(master))
@@ -319,9 +309,11 @@ class ConversationRepository(
         }
         messageFtsManager.indexConversation(master)
         deletedChildren.forEach { messageFtsManager.deleteConversation(it.id.toString()) }
-        if (safeFilesToDelete.isNotEmpty()) {
-            filesManager.deleteChatFiles(safeFilesToDelete)
-        }
+        deleteUnreferencedChatFiles(
+            previousFiles = oldTreeFiles,
+            retainedConversations = retainedChildren + master,
+            excludedConversationIds = excludedIds,
+        )
     }
 
     suspend fun updateConversation(conversation: Conversation) {
@@ -562,6 +554,44 @@ class ConversationRepository(
             id = conversationId.toString(),
             folderId = folderId?.toString() ?: ""
         )
+    }
+
+    /** Column-only title write. Does not replace message nodes. */
+    suspend fun updateConversationTitle(conversationId: Uuid, title: String) {
+        conversationDAO.updateTitle(conversationId.toString(), title)
+        messageFtsManager.updateConversationTitle(conversationId.toString(), title)
+    }
+
+    /** Column-only suggestion write. Does not replace message nodes. */
+    suspend fun updateConversationSuggestions(conversationId: Uuid, suggestions: List<String>) {
+        conversationDAO.updateChatSuggestions(
+            id = conversationId.toString(),
+            chatSuggestions = JsonInstant.encodeToString(suggestions),
+        )
+    }
+
+    /**
+     * Deletes local files that [previousFiles] contained and no retained conversation still
+     * references, including Tool metadata artifact tokens. Prefer keeping a file when retain
+     * checks cannot decode a hit.
+     */
+    suspend fun deleteUnreferencedChatFiles(
+        previousFiles: Set<android.net.Uri>,
+        retainedConversations: Collection<Conversation>,
+        excludedConversationIds: Set<Uuid>,
+    ) {
+        if (previousFiles.isEmpty()) return
+        val retainedFiles = retainedConversations.flatMap { it.files }.toSet()
+        val retainedReferenceTokens = retainedConversations
+            .flatMap { conversation -> conversation.messageNodes.flatMap { node -> node.messages } }
+            .let { messages -> messages.collectFileReferenceTokens() }
+        val deletionCandidates = (previousFiles - retainedFiles).filter { uri ->
+            fileReferenceTokensFor(uri).none { it in retainedReferenceTokens }
+        }.toSet()
+        val safeFilesToDelete = findUnsharedFileUris(deletionCandidates, excludedConversationIds)
+        if (safeFilesToDelete.isNotEmpty()) {
+            filesManager.deleteChatFiles(safeFilesToDelete)
+        }
     }
 
     private fun conversationSummaryToConversation(entity: LightConversationEntity): Conversation {
