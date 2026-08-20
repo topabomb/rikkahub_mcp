@@ -154,7 +154,9 @@ Target 每个模型 step 都重新构建工具集。有效工具能力是“调�
 以下边界始终成立：
 
 - `AssistantManagement`、`AssistantDelegation` 以及注册名 `assistant_manage`、`assistant_inspect`、`assistant_call` 永久从 Target Run 过滤；历史名 `assistant_memory_list` 一并过滤。
-- 除 `ask_user` 外，所有需审批工具在非交互 Target 模式返回 `tool_not_permitted`。
+- 除 `ask_user` 外，所有需审批工具在非交互 Target 模式自动拒绝，返回
+  `tool_not_permitted` + `approval_unavailable`。`approval_unavailable` 表示“需要审批但当前
+  运行环境无法提供审批，不要原样重试”，是 ToolCall 级可恢复错误，不会终止整个 Run。
 - `ask_user` 由 Coordinator 按 Child `messageId + toolOrdinal` 持久化到 Master 卡片；回答也用 `run_id + interaction_id` 精确匹配，防止重复或过期提交。
 - `ask_user` 只接受满足 Schema 数量和大小上限的完整 JSON 入参；无效或过大的入参会在进入等待态前失败，不会截断后持久化。交互轮次上限与模型 step 上限使用不同终态 reason。
 - `recent_chats` 与 `conversation_search` 都限定为 Target 自己的顶层会话，不允许借 Target Run 搜索其他 Assistant 或内部 Child。

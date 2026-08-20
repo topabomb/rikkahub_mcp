@@ -6,18 +6,7 @@
 
 ---
 
-## 0.0.18（versionCode 18）— 2026-08-20
-
-### 修复
-
-- 等待工具审批不再当成一轮生成完成：不启动标题/建议等完成副作用
-- 标题、建议、置顶改为列级更新并 merge 当前 Session，避免旧 Conversation 整对象覆盖正在生成的消息树
-- Conversation 普通状态更新不再按瞬时文件差做物理 GC；压缩等生命周期操作走统一的引用检查
-- 历史 Tool artifact 缺失时保持执行 `status=completed`，只把文件标为不可用
-
----
-
-## 0.0.17（versionCode 17）— 2026-08-17
+## 0.0.17（versionCode 17）— 2026-08-17 ~ 2026-08-20
 
 ### 新增
 
@@ -29,6 +18,14 @@
 
 - `assistant_call` 进入 Coordinator 前的参数错误改为与终态一致的 `status` + `reason` 信封
 - Target 不再永久过滤 `generate_image`；未开启 `TextToImage` 或没有有效默认图片模型时仍不注册
+- Target 非交互下需审批工具自动拒绝的返回统一为 `tool_not_permitted` + `approval_unavailable` + `message`：语义为「需要审批但当前运行环境无法提供审批，不要原样重试」；只拒绝当前 ToolCall，不终止整个 Run。`ask_user` 仍走交互桥接，与审批错误协议无关
+
+### 修复
+
+- 等待工具审批不再当成一轮生成完成：不启动标题/建议等完成副作用
+- 标题、建议、置顶改为列级更新并 merge 当前 Session，避免旧 Conversation 整对象覆盖正在生成的消息树
+- Conversation 普通状态更新不再按瞬时文件差做物理 GC；压缩等生命周期操作走统一的引用检查
+- 历史 Tool artifact 缺失时保持执行 `status=completed`，只把文件标为不可用
 
 ---
 

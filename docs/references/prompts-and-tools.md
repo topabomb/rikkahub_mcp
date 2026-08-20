@@ -206,7 +206,9 @@ Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过�
 `Settings.imageGenerationModelId` 能解析到启用 Provider 上、客户端声明支持文生图的
 `ModelType.IMAGE` 模型。默认不加入 `DEFAULT_ASSISTANT_LOCAL_TOOLS`。Master 与 Target Run
 （含 `assistant_inspect` 的 `ToolSetRunMode.TARGET`）在配置满足时都会注册。
-`set_as_background=true` 仍须审批；Target 非交互下继续 `tool_not_permitted`。
+`set_as_background=true` 仍须审批；Target 非交互下自动拒绝，返回
+`tool_not_permitted` + `approval_unavailable`，语义为“需要审批但当前运行环境无法
+提供审批，不要原样重试”。该错误只拒绝当前 ToolCall，Target 可调整参数后继续运行。
 
 > Generate one image from a text prompt, show it to the user, and return a local path that follow-up tools can use.
 > Failures return a stable reason and a short detail when available.
