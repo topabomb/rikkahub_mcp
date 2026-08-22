@@ -1,301 +1,389 @@
-# 多模态附件上下文与按需分析架构设计
+# 多模态附件投影与按需识别架构
 
-> 状态：设计定稿，待按本文实施
+> 状态：设计定稿，作为本轮实现的权威方案
 >
 > 日期：2026-08-22
 >
-> 适用范围：Master 普通聊天、用户上传图片、`generate_image` 与其他工具图片产物、`assistant_call` 入站附件与 Child 交付物、模型动态切换
+> 适用范围：Master、用户上传图片、`generate_image` 与其他图片 Tool artifact、`assistant_call` 入站附件与 Child 交付物、模型动态切换
 >
-> 本轮实现范围：图片附件；附件分析能力按通用附件架构设计，document / audio / video 暂不接入分析工具
+> 本轮实现范围：Image。Document / Audio / Video 保留附件身份，但不接入本轮识别工具。
 >
 > 关联基线：[`multimodal-context-and-turn-durability-design.md`](multimodal-context-and-turn-durability-design.md)
 
-本文是现有《多模态上下文与 Turn 持久化设计》的多模态访问补充与修订。原文关于资产事实、稳定 `attachment_ref`、Turn durability、artifact replay、Provider 协议完整性和失败可见性的原则继续有效；以下内容取代原文中与 **自动 OCR / visual observation、`DERIVED` 投影、能力不匹配即 fail-fast、子助手自动 observation** 相关的设计。
+本文重新收敛多模态附件方案。目标不是把旧 OCR 子系统换一个名字，而是**删除旧的自动派生链**，只保留真正需要的三件事：
 
-本轮完成后，系统中不再存在 OCR 这一领域语义。原 `ocrModel` 实际承担的是通用视觉观察模型，后续统一改为 **Attachment Analysis Model（附件分析模型）**；视觉内容不再在上下文转换阶段被后台自动读取，而由模型在确有需要时显式调用附件分析工具。
+```text
+稳定附件事实
++ 当前请求的原生/引用投影
++ 必要时显式调用的附件识别工具
+```
+
+原设计中的资产事实、stable `attachment_ref`、Tool artifact replay、Turn / Tool execution 持久化和 Provider 协议完整性继续有效；以下内容取代自动 OCR / visual observation、`DERIVED`、能力不匹配 fail-fast、自动 observation cache 与子助手自动 observation 等设计。
+
+**本轮完成后，OCR 不再是产品、领域、配置或运行时概念。** 旧 OCR 只允许出现在一次性迁移代码、迁移测试和历史说明中。
 
 ---
 
-## 1. 决策摘要
-
-最终采用以下模型：
+## 1. 最终架构：只保留三个职责
 
 ```text
                     Durable Conversation
                            │
                     Attachment Fact
-          attachment_ref / type / mime / name / asset
+              ref / type / mime / name / asset
                            │
-                           │  不随模型和设置变化
                            ▼
-                   Request Projection
+                  Request Projection
+                    │             │
+                  native       reference
+                    │             │
+                    └──────┬──────┘
                            │
-                 ┌─────────┴─────────┐
-                 │                   │
-              NATIVE          REFERENCE_ONLY
-                 │                   │
-                 │             ┌─────┴─────┐
-                 │             │           │
-                 A             B           C
-             原生读图片   inspect_attachments   无图片读取能力
+                  Runtime Tool Set
+                           │
+             inspect_attachments（按需）
 ```
 
-核心决策：
+### 1.1 Attachment Fact：只保存事实
 
-1. **取消图片自动 OCR / visual observation。** 图片出现在上下文中本身不得触发任何额外模型调用。
-2. **取消 `NATIVE / DERIVED / UNAVAILABLE` 作为单一附件能力三态。** 附件投递方式与附件分析能力是两个正交概念。
-3. **A/B/C 只影响当前 request 的投影和工具集，不修改 Conversation。**
-4. **B 和 C 的附件上下文完全一致。** 两者唯一差别是 B 当前拥有 `inspect_attachments`，C 没有。
-5. **模型不能看图不等于附件不可用。** `UNAVAILABLE` / failure 只用于附件本身不存在、损坏、不安全、无法物化等真实资产失败。
-6. **`attachment:<uuid>` 是稳定 identity，`/upload/...` 等 path 只是当前可用 locator。** 工具参数优先使用 `attachment_ref`。
-7. **`generate_image`、用户上传图片、历史图片、嵌套 `Tool.output` 图片、子助手入站和出站图片进入同一附件链。** 不再按来源实现不同 fallback。
-8. **附件分析工具是 Runtime 根据本次实际模型能力自动提供的 capability tool，不是 Assistant 手工勾选的普通 LocalTool。**
-9. **本轮彻底移除 OCR 命名。** 设置、领域模型、Prompt、Transformer、缓存和 UI 均改为 Attachment Analysis / multimodal 语义；旧 DataStore key 只允许存在于一次性迁移代码中。
+Conversation / Tool artifact 中保留原始附件及稳定引用：
+
+```text
+attachment_ref = attachment:<uuid>
+type           = image
+mime           = image/png
+display_name   = screenshot.png
+asset          = 当前已有的 managed file / LocalArtifactRef / Image part
+```
+
+它不保存：
+
+- 当前模型能不能看图；
+- 当前是否配置识别模型；
+- A/B/C 状态；
+- 自动生成的图片描述；
+- 当前 Provider 的临时 file id / URL；
+- 一次请求中的 `/upload/...` locator；
+- “这张图当前不可读”之类能力状态。
+
+`attachment:<uuid>` 是身份，path 只是 locator。模型切换、文件重新 materialize 或 Provider 变化都不能改变附件身份。
+
+### 1.2 Request Projection：只决定本次怎么给模型
+
+投影层只回答一个问题：
+
+> **当前 resolved chat model / Provider 能否在本次请求中原生接收这个 Image？**
+
+答案只有：
+
+```text
+NATIVE
+REFERENCE_ONLY
+```
+
+这里没有 `DERIVED`。投影阶段禁止调用其他模型。
+
+### 1.3 Attachment Inspection：需要内容时才显式读取
+
+当前聊天模型不能原生看图、但系统配置了有效的附件识别模型时，Runtime 自动提供：
+
+```text
+inspect_attachments
+```
+
+主模型根据任务需要决定是否调用。图片仅仅存在于历史中，不会触发识别模型。
 
 ---
 
-## 2. 为什么取消自动 OCR
+## 2. 做减法后的明确删除项
 
-当前 `ImageInputAdapter` 的所谓 OCR 并不是文字 OCR：默认 Prompt 要求描述文字、图标、形状、物体、位置和空间关系，本质是通用 visual observation。当前实现会在聊天模型不支持 IMAGE、但配置了视觉模型时，于上下文转换阶段自动调用该模型，再把图片替换成 `<attachment_observation>` 文本。
+本轮不是“OCR → Attachment Analysis”逐项改名。以下旧结构直接删除：
 
-这在 Agent 架构下有三个根本问题。
+- 自动 OCR / visual observation；
+- `OcrTransformer`；
+- `OcrPrompt.kt` / `DEFAULT_OCR_PROMPT`；
+- `ImageInputAdapter.observe()`；
+- `ImageAdaptCapability.DERIVED`；
+- `<attachment_observation>`；
+- observation cache / `image_observation_cache.json`；
+- `CurrentImageInputUnavailableException` 这类“聊天模型不能看图 => turn 失败”的路径；
+- Child artifact 自动 observation；
+- 用户可配置的 OCR / attachment-analysis Prompt；
+- 为识别结果新增 `AttachmentDerivative` / analysis cache / analysis entity；
+- 为 A/B/C 新增持久化状态或 delivery receipt；
+- 为“是否启用识别”再增加一个布尔开关。
 
-### 2.1 在任务意图明确前提前解释图片
-
-同一张截图可能被问：
-
-- “错误信息是什么？”
-- “右上角第二个按钮是什么？”
-- “比较左右两块代码的差异。”
-
-固定的通用 observation 无法同时为这些任务提供最合适的证据，而且会为根本不需要读取图片的 turn 产生额外模型调用和 token。
-
-### 2.2 把附件事实和派生理解混为一体
-
-图片是稳定事实；“某视觉模型在某个 Prompt 下对此图片的描述”只是一次派生结果。把派生描述作为 request 前置转换，会导致相同 Conversation 在 A/B/C 下呈现不同历史，并把模型能力变化错误地写进附件语义。
-
-### 2.3 错误地把消费能力不足定义为资产失败
-
-C 场景中，文件、`attachment_ref`、MIME、managed artifact 都可能完全正常，只是本次模型没有读取视觉内容的方法。这不应该变成 `ATTACHMENT_INPUT_UNAVAILABLE` 或整个 turn 失败。
-
-因此新的原则是：
-
-> **上下文转换只表达附件事实并完成当前 Provider 的原生投影；派生视觉理解只能来自显式的 `inspect_attachments` 工具调用。**
+本轮也**不新增**一套平行的 `AttachmentAsset` 数据库，只为了支持识别工具。现有 Conversation Image、stable `attachment_ref`、managed artifact 和 Tool execution 已经足够支撑当前目标。如果未来文件同步/生命周期治理确实需要规范化 Asset 表，应作为独立问题设计，不能作为本轮多模态 fallback 的附带复杂度。
 
 ---
 
-## 3. 领域边界与不变量
+## 3. A / B / C：只用于解释场景，不做领域模型
 
-### 3.1 四个职责
+A/B/C 是设计文档中的行为简称，不需要在代码里持久化，也不要求建立 `AttachmentMode` 三态对象。
+
+运行时只需要两个事实：
 
 ```text
-Attachment Fact
-  └─ 这个附件是什么、稳定身份是什么
-
-Attachment Resolver
-  └─ attachment_ref / 受控 path 当前能否解析为真实受管资产
-
-Attachment Projection
-  └─ 当前模型和 Provider 是否投递原生媒体，或只投递引用事实
-
-Attachment Analysis Capability
-  └─ 当前 run 是否提供 inspect_attachments 来按需读取内容
+nativeImageSupported: Boolean
+inspectionModelAvailable: Boolean
 ```
 
-不得再由一个 `ImageInputAdapter` 同时承担“判断能力 + 自动分析 + 替换上下文 + fail-fast”。
+由此自然得到：
 
-### 3.2 必须保持的不变量
+| 场景 | 当前聊天模型原生 Image | 有效附件识别模型 | Model View | Tool Set |
+|---|---:|---:|---|---|
+| A | 是 | 任意 | attachment ref + native Image | 不注入 fallback tool |
+| B | 否 | 是 | attachment ref only | 注入 `inspect_attachments` |
+| C | 否 | 否 | attachment ref only | 无识别工具 |
 
-1. Conversation 中的原始附件和工具产物是历史事实，不因当前模型变化而重写。
-2. `attachment_ref` 一经产生，在该资产生命周期内保持稳定。
-3. path 不是 identity；path 可以因 materialize、workspace、同步或 Provider 投影变化而改变。
-4. A/B/C 每次 request / run 都基于实际 resolved model 和当前设置重新计算。
-5. 任何附件仅仅进入上下文，都不得隐式调用附件分析模型。
-6. 当前模型不支持 IMAGE 不得单独造成 turn 或 `assistant_call` 失败。
-7. 只有真实附件解析、完整性、安全或类型失败才属于 attachment failure。
-8. derived visual text 只能是显式工具调用的可见 Tool Result，因此自然进入正常 Agent 历史和 Turn durability。
-9. 用户图片、`generate_image`、其他 Tool artifact、Child artifact 使用同一个 attachment graph 和同一套投影规则。
+关键规则：
+
+1. B/C 的附件事实与引用上下文完全相同。
+2. A/B/C 不写入 Conversation。
+3. A/B/C 不进入数据库。
+4. 当前模型不能看图不是 attachment failure。
+5. 真正的 attachment failure 只包括：ref 不存在、资产丢失、损坏、不安全、类型不支持或无法读取。
+6. 每个新 run 根据实际 resolved model 和 settings snapshot 重新计算能力。
+
+模型动态切换因此不需要迁移历史：
+
+```text
+A -> B/C   去掉本次 native media；历史不变
+B/C -> A   重新从原始 Image 投影 native media；历史不变
+B <-> C    只改变本次 tool set；历史不变
+```
 
 ---
 
-## 4. 稳定附件事实与 Model View
+## 4. 持久化：只持久化事实和真实 Tool Result
 
-### 4.1 Durable Attachment Fact
+这是本轮架构收敛的核心。
 
-持久事实至少应能表达：
+### 4.1 Conversation
 
-```text
-attachment_ref   attachment:<uuid>
-type             image
-mime             image/png
-display_name     screenshot.png
-asset identity   managed file / tool artifact / sub-assistant artifact
-source           user / tool / sub-assistant（如现有领域已有，保留即可）
-```
+继续持久化原始 `UIMessagePart.Image`、附件 metadata 和 stable `attachment_ref`。请求投影产生的提示、媒体 relocation、能力说明都不回写 Conversation。
 
-这里不记录：
+### 4.2 Tool artifact
 
-- 当前模型能否看图；
-- 当前是否配置附件分析模型；
-- “当前图片不可读”之类能力提示；
-- 自动 observation；
-- 临时 Provider file id / URL；
-- 把 path 当作永久身份。
-
-### 4.2 Request-scoped Attachment Manifest
-
-每次构建 model view 时，在附件附近生成短、结构稳定、不可持久化的 manifest。例如：
+`generate_image` 和其他工具产生图片时，继续使用现有：
 
 ```text
-[Attachment ref=attachment:8f2... type=image mime=image/png name="screenshot.png" path="/upload/screenshot.png"]
+Tool execution
++ LocalArtifactRef / managed file
++ UIMessagePart.Image
++ stable attachment_ref
 ```
+
+图片生成成功与 Caller 是否能看图无关。
+
+### 4.3 `inspect_attachments` 结果
+
+识别工具是普通显式 ToolCall：
+
+```text
+Assistant ToolCall
+-> inspect_attachments
+-> Text Tool Result
+```
+
+其调用参数和结果自然进入现有 Turn / Tool execution 持久化。**不再建立任何独立“视觉派生结果”存储。**
+
+这意味着过去确实调用识别工具得到的文字证据会像其他工具结果一样存在于历史中；它是“某次工具调用的结果”，不是附件本体，也不会在模型切换后被系统偷偷重新解释。
+
+### 4.4 不持久化 request capability
+
+以下全部是 request/run-time 派生值，不持久化：
+
+```text
+nativeImageSupported
+inspectionModelAvailable
+是否注入 inspect_attachments
+本次 Image placement
+本次 capability hint
+```
+
+### 4.5 不新增 Delivery Receipt
+
+本轮不为 NATIVE / REFERENCE_ONLY 新增 `AttachmentDeliveryReceipt`。
+
+Provider wire 是否正确通过协议测试验证；真正需要持久化的是附件和工具执行事实，而不是“某次请求模型当时能否看到像素”。如果未来 Provider file handle 需要复用，可做 Provider-local cache，但它不是 Conversation 语义。
+
+---
+
+## 5. 配置：只保留一个可选模型
+
+### 5.1 唯一新配置
+
+Settings 只保留：
+
+```kotlin
+val attachmentInspectionModelId: Uuid? = null
+```
+
+DataStore：
+
+```text
+attachment_inspection_model
+```
+
+`null` 就是“未配置”。不要再用随机 UUID 代表空值。
+
+### 5.2 不再存在 Prompt 配置
+
+不新增：
+
+```text
+attachmentInspectionPrompt
+attachmentAnalysisPrompt
+DEFAULT_ATTACHMENT_ANALYSIS_PROMPT
+```
+
+原因：`inspect_attachments` 的系统指令属于工具实现契约，而不是用户配置。它应该短、稳定、版本随代码管理；真正的任务意图已经由 Tool 参数 `request` 提供。
+
+因此旧 `ocrPrompt` **不迁移到新字段**，而是直接淘汰。
+
+### 5.3 UI
+
+建议放在现有模型/多模态设置中，只提供一个选择器：
+
+```text
+附件识别模型
+[ 未配置 / Model ... ]
+```
+
+说明保持简洁：
+
+> 当前聊天模型不能直接读取图片时，可按需使用该模型识别附件内容。
 
 规则：
 
-- `ref` 必须存在；
-- `type`、`mime`、`name` 尽量来自稳定元数据；
-- `path` 仅在当前 request 中确实存在可供本地工具访问的受控路径时提供，否则省略；
-- 不暴露宿主机绝对路径、过期 URL 或其他内部实现路径；
-- manifest 递归覆盖顶层附件和 `Tool.output` 内附件；
-- manifest 只属于 model view，不写回 Conversation。
+- 不增加 Enable 开关；选择 `未配置` 即关闭能力。
+- 选择器只展示声明支持 IMAGE input 的模型。
+- Runtime 仍需重新验证 model/provider 当前是否存在且可用。
+- 已选择模型被删除/Provider 被移除时，不自动选择另一个模型；本次自然退化为 C。
+- 当前聊天模型本身支持 Image 时，配置仍可保留，但不注入 fallback `inspect_attachments`。
 
-现有 `AttachmentRefHintTransformer` 已经承担“model-view only + 递归 Tool.output”的基础职责，本轮应把它提升为稳定附件上下文生成器，而不是另起一条并行提示链。
+### 5.4 Run snapshot
 
-### 4.3 `attachment_ref` 与 path 的使用规则
-
-- LLM 引用已有附件时优先使用 `attachment:<uuid>`。
-- `/upload/...` 可作为当前 workspace 可访问 locator，并允许附件分析工具在受控范围内接受。
-- Runtime 内部始终通过 `AttachmentResolver` 验证和解析，不信任模型直接提供的任意文件路径。
-- 如果同一个附件经过 materialize 后 path 改变，`attachment_ref` 不变。
-
----
-
-## 5. A / B / C 的确定逻辑
-
-A/B/C 是 **本次 run 的能力结果**，不是 Conversation、Assistant 或附件的永久属性。
-
-### 5.1 A：当前模型可原生读取图片
-
-条件：
+每个 Master / Target run 开始时固定：
 
 ```text
 resolved chat model
-+ current provider / endpoint profile
-+ image MIME / limits
-+ placement constraints
-=> 可以在本次请求中原生投递该图片
+settings snapshot
+resolved attachmentInspectionModel
+final tool set
 ```
 
-行为：
-
-```text
-stable attachment manifest
-+ native image block
-+ 不自动注册 fallback inspect_attachments
-```
-
-说明：
-
-- 不能永远只依据 `model.inputModalities.contains(IMAGE)`；最终能力解析应同时考虑 Provider、endpoint、MIME、placement 和文件状态。
-- 如果某 Provider 不允许媒体直接位于 tool result 内，应在 Provider projection 层做协议安全的 media relocation，同时保留原 Tool call/result 关系，不改变附件身份。
-- 默认不给 A 注册 `inspect_attachments`，避免重复视觉路径、额外工具 schema 和结果冲突。未来若出现“专业 OCR / 超高分辨率局部分析”等独立能力，应作为新的明确能力设计，而不是本 fallback 的理由。
-
-### 5.2 B：当前模型不能原生读图片，但配置了有效附件分析模型
-
-条件：
-
-```text
-native image delivery = false
-AND attachmentAnalysisModel 已配置
-AND model/provider 当前可用
-AND analysis model 支持 IMAGE
-=> B
-```
-
-行为：
-
-```text
-stable attachment manifest
-+ 不投递原生 image block
-+ 自动注册 inspect_attachments
-+ 不自动分析任何图片
-```
-
-B 与 C 的 attachment manifest 完全相同。
-
-可增加一条非常短的 request-scoped capability hint，帮助模型正确使用工具，例如：
-
-```text
-Image attachment content is available through inspect_attachments when visual details are needed.
-```
-
-该提示不持久化，也不针对每个图片重复注入。
-
-### 5.3 C：当前模型不能原生读图片，也没有有效附件分析模型
-
-条件：
-
-```text
-native image delivery = false
-AND no valid attachment analysis capability
-=> C
-```
-
-行为：
-
-```text
-stable attachment manifest
-+ 不投递原生 image block
-+ 不注册 inspect_attachments
-+ 允许正常生成
-```
-
-可增加一条短的 request-scoped capability hint：
-
-```text
-Image attachments are reference-only in this run. Their visual content is not available; do not infer image details.
-```
-
-因此以下请求不再被 Runtime 错误拦截：
-
-```text
-[图片] 顺便帮我写一个 Kotlin 排序函数
-```
-
-而当用户问“图片里是什么？”时，模型能看到附件事实，却没有 native media 和分析工具，因此应直接说明本次无法读取图片内容，而不是猜测。
-
-### 5.4 真正的附件失败
-
-以下才属于 attachment failure：
-
-- `attachment_ref` 找不到；
-- managed asset 已丢失；
-- 文件损坏或无法读取；
-- MIME / 内容校验不通过；
-- 大小、安全或路径策略不允许；
-- remote materialization 失败；
-- 请求了当前明确不支持的附件类型。
-
-不要再用 `UNAVAILABLE` 表示“模型看不了图片”。
-
-### 5.5 模型动态切换
-
-| 切换 | 当前 request 变化 | Durable history |
-|---|---|---|
-| A → B | native image 消失，`inspect_attachments` 出现 | 不变 |
-| A → C | native image 消失 | 不变 |
-| B → A | `inspect_attachments` 消失，native image 出现 | 不变 |
-| B → C | `inspect_attachments` 消失 | 不变 |
-| C → B | `inspect_attachments` 出现 | 不变 |
-| C → A | native image 出现 | 不变 |
-
-过去的 delivery / tool execution 事实不改写；下一 request 只从原始附件事实重新投影。
+run 中途修改设置不改变已经暴露给 Provider 的 tool schema；下一 run 生效。
 
 ---
 
-## 6. `inspect_attachments` 工具设计
+## 6. 从旧 OCR 到新配置的一次性迁移
 
-### 6.1 定位
+迁移必须明确是 **cutover**，不是长期兼容层。
+
+旧值：
+
+```text
+ocr_model
+ocr_prompt
+```
+
+新值：
+
+```text
+attachment_inspection_model
+```
+
+迁移规则：
+
+1. 如果新 key 已存在，以新值为准。
+2. 如果只有旧 `ocr_model`，且 ID 能解析到当前存在、支持 IMAGE 的模型，则写入 `attachment_inspection_model`。
+3. 旧模型不存在、Provider 不存在或模型不支持 IMAGE，则新值为 null，不猜测替代模型。
+4. `ocr_prompt` 不迁移。无论旧值是默认还是用户自定义，都不进入新运行时模型。
+5. 完成迁移后删除 `ocr_model` 与 `ocr_prompt`。
+6. best-effort 删除旧 observation cache 文件；删除失败只记录日志，不阻塞启动。
+7. 旧备份恢复如果包含 `ocrModelId`，导入边界允许一次性映射到 `attachmentInspectionModelId`；`ocrPrompt` 忽略。
+8. Runtime `Settings`、UI state、工具实现都不能为了兼容继续保留 `ocrModelId` / `ocrPrompt` alias。
+
+如果现有 Settings/backup 有版本迁移入口，应在版本迁移中完成；不要让普通 settings read path 永久携带“新 key 不存在就读取旧 OCR key”的分支。
+
+---
+
+## 7. Request Projection：合并旧 Transformer，而不是再加层
+
+上一版方案提出 `AttachmentContextTransformer + AttachmentProjectionTransformer` 两层。当前目标是进一步做减法：**用一个 request-only Transformer 完成附件提示和 Image 保留/去除。**
+
+目标：
+
+```text
+ToolArtifactReplayTransformer
+  -> AttachmentProjectionTransformer
+  -> Provider encoding
+```
+
+`AttachmentProjectionTransformer` 只做三件事：
+
+1. 递归遍历顶层消息与 `Tool.output` 中的 Image。
+2. 在 model view 中加入短稳定引用，例如：
+
+```text
+[Attachment ref=attachment:8f2... type=image mime=image/png name="screenshot.png"]
+```
+
+3. 当前请求支持 native image 时保留 Image；否则仅保留引用文本。
+
+禁止它做：
+
+- 调用附件识别模型；
+- 读写分析缓存；
+- 写回 Conversation；
+- 因聊天模型不能看图而抛 turn-level failure；
+- 决定 Assistant 是否应该分析图片。
+
+这样可直接收敛当前：
+
+```text
+AttachmentRefHintTransformer
++ AttachmentInputTransformer
++ ImageInputAdapter
+```
+
+而不是把三者全部换一组新名字继续存在。
+
+### 7.1 Capability hint
+
+只在当前 model view 确实包含 reference-only Image 时增加一次短提示，不对每张图重复：
+
+B：
+
+```text
+Image contents are not directly visible in this run. Use inspect_attachments when visual details are needed.
+```
+
+C：
+
+```text
+Image contents are not available in this run. Do not infer visual details from attachment references.
+```
+
+提示是 request-scoped，不持久化。
+
+### 7.2 Native capability
+
+实现上不需要建立复杂 `A/B/C` registry。保留一个小的纯能力判断即可：
+
+```text
+canDeliverNativeImage(resolvedModel, provider/profile) -> Boolean
+```
+
+它应使用项目已有的 Model / Provider 能力信息，并由 Provider wire tests 校验真实协议支持。若 Provider 对 Tool Result 中媒体 placement 有额外限制，仍由 Provider projection/encoder 放到协议允许的位置；不要因此重新引入自动识别 fallback。
+
+---
+
+## 8. `inspect_attachments`：唯一新增的运行时能力
+
+### 8.1 定位
 
 工具名确定为：
 
@@ -303,694 +391,505 @@ Image attachments are reference-only in this run. Their visual content is not av
 inspect_attachments
 ```
 
-不用 `inspect_image`，因为工具属于附件访问能力；MVP 只实现 image resolver，但上层工具名、参数与结果协议从一开始保持 attachment 语义，未来增加 document / audio / video 时无需更换上层契约。
+它表示“按需读取附件内容”，不是 OCR，也不是用户手工启用的 LocalTool。
 
-它是：
+属性：
 
-- Runtime 自动能力工具；
+- Runtime capability tool；
 - read-only；
 - 不需要审批；
-- 不属于 Assistant 的 `LocalToolOption` 手工开关；
-- 仅在 B 场景注册；
-- A 默认不注册；
-- C 不注册。
+- Master / Target 共用；
+- 只在 B 中注入；
+- 当前只支持 Image；
+- 不因当前历史是否已经有图片而改变注册状态。
 
-### 6.2 为什么工具应在 B 中始终存在
+即使 run 开始时没有图片，B 仍注册它，因为后续 `generate_image` / Tool / Child 可能产生图片。这样同一个 run 的 tool schema 稳定。
 
-注册条件只依赖本次 run 的能力，不依赖“当前历史里是否已经有图片”。即便初始上下文没有图片，B 仍注册该工具，因为本轮后续可能：
-
-- `generate_image` 新生成图片；
-- 其他工具产生图片 artifact；
-- workspace / 下载类工具产生可解析图片；
-- 子助手返回图片。
-
-这样工具 schema 在一次 run 内稳定，也使刚生成的图片能够在下一 Agent step 立刻被分析。
-
-### 6.3 Tool description
-
-建议保持简洁、确定、引导式：
+### 8.2 Tool description
 
 ```text
-Inspect the content of one or more attachments when visual details are needed. Currently supports images. Ask for the specific evidence, transcription, description, or comparison needed for the task.
+Inspect one or more attachments when their content is needed for the task. Currently supports images. Specify the evidence, text, details, or comparison you need.
 ```
 
-不要求“看到图片必须调用”，也不要求“大而全描述”；是否调用、问什么由主模型根据任务决定。
+它是引导式描述，不要求“有图必须调用”，也不让工具自己猜整项用户任务。
 
-### 6.4 参数
+### 8.3 参数
 
-MVP 只保留两个参数：
+只保留两个参数：
 
 ```json
 {
   "attachments": ["attachment:...", "attachment:..."],
-  "request": "Compare the two screenshots and identify the visible error differences."
+  "request": "Compare the visible error messages in these screenshots."
 }
 ```
 
 契约：
 
 ```text
-attachments : string[]，required，1..4
-              优先 attachment:<uuid>
-              可兼容受控 /upload/... path
-              输入顺序就是分析标签顺序
+attachments : string[]  required, 1..4
+              只接受 stable attachment:<uuid>
+              输入顺序即分析顺序
 
-request     : string，required
-              说明当前任务需要从附件获取的具体视觉证据或比较目标
+request     : string    required
+              明确本次需要的可见证据、文字、细节或比较目标
 ```
 
-暂不增加 `mode`、`detail`、`ocr`、`quality`、`language` 等参数。模型能力和 Provider 参数属于 Runtime 配置，不应该污染通用工具协议。
+**不接受任意文件 path 作为公开工具契约。** `/upload/...` 仍可存在于其他文件工具或 model view，但 `inspect_attachments` 统一使用 stable ref，避免同时维护两套身份语义。
 
-### 6.5 多附件语义
-
-必须原生支持多个附件，而不是让 LLM 循环单图调用：
-
-- 最多 4 个，与现有 `assistant_call` 图片上限保持一致；
-- Runtime 先解析和校验所有输入；
-- 全部成功后，在 **一次附件分析模型调用** 中按输入顺序提供所有图片；
-- 每个附件附带稳定 label，例如 `Attachment 1 / attachment:... / name`；
-- 这样视觉模型能直接完成真正的跨图比较；
-- 任一输入无法解析或类型不支持时，本次调用整体失败，不静默跳过，避免比较任务得到不完整结论。
-
-### 6.6 Runtime system guidance
-
-固定的系统约束应短而稳定，例如：
+不增加：
 
 ```text
-You analyze attachments for another agent. Answer the requested analysis using only the provided attachment contents. Be precise, distinguish attachments by label, transcribe visible text when relevant, and state uncertainty. Do not perform unrelated tasks.
+mode
+ocr
+language
+quality
+detail
+model
+provider
 ```
 
-用户/Caller 的 `request` 作为独立任务输入，不拼进系统 Prompt。这样缓存前缀稳定，职责也清晰。
+模型/provider/质量策略由 Runtime 决定，任务意图由 `request` 表达。
 
-原 `ocrPrompt` 不再承担“把所有图片提前描述一遍”的职责；若保留用户可配置分析 Prompt，它只作为上述固定 contract 之外的附加分析指导，不改变工具输入输出语义。
+### 8.4 多附件
 
-### 6.7 成功返回
+- 一次 1..4 个 Image。
+- 先通过现有 `AttachmentResolver` 解析全部 refs。
+- 任一 ref 无法解析、资产不可读或类型不支持，本次调用整体失败，不静默跳过。
+- 所有图片在**一次附件识别模型调用**中按输入顺序提供。
+- 内部标签带 ref/name，保证多图比较无歧义。
 
-工具只返回 Text Tool Result，不把图片再次作为 Tool output 返回，避免递归投影和无意义媒体回环。
+这比 LLM 连续调用单图工具更省调用、也更适合真正的跨图任务。
 
-建议协议：
+### 8.5 内部识别指令
 
-```json
-{
-  "status": "completed",
-  "attachments": [
-    {
-      "ref": "attachment:8f2...",
-      "name": "before.png",
-      "mime_type": "image/png"
-    },
-    {
-      "ref": "attachment:91a...",
-      "name": "after.png",
-      "mime_type": "image/png"
-    }
-  ],
-  "content": "..."
-}
+系统指令是工具实现常量，不是 Settings：
+
+```text
+Analyze only the provided attachments for the caller's request. Use the attachment labels, report relevant visible evidence, transcribe text when useful, compare attachments when requested, and state uncertainty. Do not perform unrelated tasks.
 ```
 
-`content` 是附件分析模型针对本次 `request` 的结果。它作为显式 Tool Result 正常进入 Conversation/Turn durability，因此之后的模型切换仍能看到“此前明确调用工具得到的证据”，但系统不会把它误认为附件本身。
+`request` 作为独立用户任务输入。不要把用户 Prompt 模板、旧 OCR Prompt 或历史上下文拼进固定 system instruction。
 
-### 6.8 失败返回
+### 8.6 返回值
 
-建议 reason 集合保持小而确定：
+成功只返回一个普通 Text Tool Result：附件识别模型针对 `request` 的结果。
 
-```json
-{
-  "status": "failed",
-  "reason": "attachment_not_found",
-  "attachment": "attachment:8f2..."
-}
+不额外包装：
+
+```text
+status=completed
+artifact_delivery
+analysis_model
+cache_hit
 ```
 
-MVP reason：
+这些都不是主模型完成任务所需的语义，ToolCall 参数已经记录了输入附件。
+
+失败沿用项目现有 Tool failure 机制，不再发明第二套状态信封。建议保留少量机器可判别 reason：
 
 ```text
 attachment_not_found
 unsupported_attachment_type
-analysis_model_unavailable
-analysis_failed
+inspection_model_unavailable
+inspection_failed
 ```
 
-能归因到单个输入时带 `attachment`；模型或 Provider 级失败无需伪造某个 attachment。
+### 8.7 不缓存
 
-### 6.9 解析与安全
+本轮不实现附件识别结果 cache。
 
-`inspect_attachments` 不直接 `File(path)`：
+原因：结果由 `attachments + request + model` 共同决定；新 cache 会重新引入旧 observation subsystem 的生命周期、失效和持久化问题。显式 Tool Result 已经是正确的历史记录。如果以后真实性能数据证明重复调用值得缓存，再独立设计。
 
-```text
-Tool input
-  -> AttachmentResolver
-  -> stable ref / controlled tool path validation
-  -> managed local asset
-  -> MIME / size / safety validation
-  -> attachment analysis provider
-```
+### 8.8 未来类型
 
-优先复用现有 `AttachmentResolver`。需要扩展其调用接口时，应扩展为 attachment-generic resolver，而不是在工具中复制一套路径和远程下载逻辑。
+工具名和 `attachments[]` 从第一天使用通用 Attachment 语义，因此未来可扩展 Document / Audio / Video。
 
-### 6.10 未来附件类型
-
-工具协议从现在就允许未来扩展：
-
-```text
-inspect_attachments
-  ├─ image resolver       ← 本轮实现
-  ├─ document resolver    ← future
-  ├─ audio resolver       ← future
-  └─ video resolver       ← future
-```
-
-本轮遇到 document / audio / video 必须返回 `unsupported_attachment_type`，不要为了“架构完整”提前实现四套 analyzer。
-
-现有 `DocumentAsPromptTransformer` 保持不变；文档内容抽取是否未来收敛进统一附件分析能力，另行设计，不在本轮扩大范围。
+但本轮**不创建** document/audio/video analyzer interface、registry 或空实现。遇到非 Image 直接 `unsupported_attachment_type`。等真实需求出现时再扩展 resolver 和模型选择规则。
 
 ---
 
-## 7. `generate_image` 的统一上下文行为
+## 9. Tool Set：运行时注入，不进入 Assistant 配置
 
-`generate_image` 必须被视为“产生一个新的稳定图片附件”，而不是一个特殊的视觉 fallback 场景。
-
-### 7.1 生成完成时
-
-成功的 `generate_image` 应继续：
+注册规则：
 
 ```text
-生成图片
-  -> managed/generated media 持久化
-  -> Tool artifact metadata
-  -> UIMessagePart.Image
-  -> ensure stable attachment_ref
-  -> Tool Result 持久化
+if (canDeliverNativeImage(resolvedModel)) {
+    // A: 不注入 fallback tool
+} else if (valid attachmentInspectionModel exists) {
+    // B
+    add(inspect_attachments)
+} else {
+    // C: 无 tool
+}
 ```
 
-工具成功与 Caller 是否能看图无关。C 模型不能看图，不代表 `generate_image` 失败。
+不要把 `inspect_attachments` 放进：
 
-### 7.2 下一 Agent step 的统一流程
+- Assistant `LocalToolOption`；
+- Target tool allowlist 的用户配置；
+- MCP；
+- 独立“enable attachment inspection”开关。
 
-每个工具执行后的下一 Provider step 都重新构建 request-specific model view：
+`GenerationToolSetFactory.buildTools()` 应显式接收当前真实 `resolvedModel`。尤其 Target 可以在运行时继承 Caller model，不能继续通过 `settings.getChatModel(target)` 猜测。
+
+建议只新增一个紧凑的 `AttachmentInspectionToolFactory`（或同职责函数）负责创建工具和调用识别模型；不要再拆出 capability registry、prompt repository、analysis service、cache repository 等层级，除非后续出现第二个真实调用方。
+
+---
+
+## 10. `generate_image`：普通图片 Artifact，不设计特殊回灌
+
+`generate_image` 成功后必须保证：
 
 ```text
-ToolArtifactReplayTransformer
-  -> attachment materialization / ref stamping
-  -> attachment manifest
-  -> current A/B/C projection
+managed/generated file
++ Tool artifact
++ UIMessagePart.Image
++ stable attachment_ref
+```
+
+stable ref 应在 Tool Result 进入历史前确定，不能等未来 Transformer 临时生成。
+
+后续 Agent step 与用户上传图完全相同：
+
+### A
+
+```text
+attachment ref + native Image
+```
+
+当前聊天模型直接读取生成结果。不需要 `inspect_attachments`。
+
+### B
+
+```text
+attachment ref
++ inspect_attachments available
+```
+
+不会自动检查生成图。只有任务需要，例如“生成并确认文字是否正确”，主模型才显式调用识别工具。
+
+### C
+
+```text
+attachment ref only
+```
+
+模型知道图片成功生成，但不知道具体视觉内容，不能声称已经验证画面。
+
+这条规则同样覆盖历史 `generate_image` 和其他 Tool output Image。`ToolArtifactReplayTransformer` 继续在附件投影前恢复 artifact；不新增任何“生成图自动 OCR/自动验证”路径。
+
+---
+
+## 11. 子助手：不再有第二套多模态机制
+
+Target 只是另一个拥有自己 resolved model 和 settings snapshot 的 run。
+
+### 11.1 Main -> Target
+
+`assistant_call attachments[]`：
+
+```text
+attachment refs
+-> AttachmentResolver
+-> 验证资产真实存在/安全
+-> 原始 Image + stable ref 写入 Child task
+-> Target 使用统一 AttachmentProjectionTransformer
+-> Target 使用统一 runtime tool set
+```
+
+删除：
+
+```text
+Target 不支持 IMAGE + 无 OCR => 拒绝 assistant_call
+```
+
+能力不足不是附件失败。Target C 也可以继续完成不依赖视觉内容的部分；若任务必须读取图片，它会因为没有视觉内容/工具而正常说明限制，而不是 Coordinator 在任务开始前把整个委托拒绝。
+
+### 11.2 Target resolved model
+
+Target 工具集必须使用实际 `runSpec.model`。Master/Target 共享同一个 `GenerationToolSetFactory` 入口，不维护 Target 专用图片 fallback。
+
+### 11.3 Target 内 `generate_image`
+
+Child 生成图片后先按 **Target 自己的 A/B/C** 进入下一 Agent step。最终交付给 Caller 时，再根据 Caller 当前能力独立投影。两次判断互不继承。
+
+### 11.4 Child -> Caller
+
+Child artifact 的稳定引用始终是交付事实。现有 `extras=artifacts` 可以继续控制是否把 artifact **内容**投影给 Caller，但不改变 artifact 是否存在。
+
+目标行为：
+
+```text
+Caller A + extras=artifacts  -> ref + native Image
+Caller B + extras=artifacts  -> ref；需要时 inspect_attachments
+Caller C + extras=artifacts  -> ref only
+extras 不含 artifacts        -> 轻量 artifact refs，按现有 contract
+```
+
+删除 Child -> Caller 自动 observation。
+
+### 11.5 `artifact_delivery` 做减法
+
+新的能力模型下，`derived / unavailable / native / reference` delivery 状态不再承担必要信息：
+
+- artifact 是否存在由 artifact/ref 表达；
+- 当前是否收到 native media 由实际 message parts 表达；
+- B 是否能识别由 tool set 表达；
+- C 的限制由 request capability hint 表达；
+- artifact 真丢失由现有 artifact availability/failure 表达。
+
+因此**目标领域模型不保留 `artifact_delivery` 状态**。如果该字段已经成为必须兼容的外部 Tool Result 契约，可在输出 adapter 暂时保留兼容值，但不得继续驱动内部逻辑，并应在兼容窗口结束后删除。
+
+---
+
+## 12. 目标请求管线
+
+Master 与 Target 使用同一条链：
+
+```text
+Durable messages
+  -> replay-safe / ordinary context transforms
+  -> ToolArtifactReplayTransformer
+  -> AttachmentProjectionTransformer
+       - emit stable ref hint
+       - keep native Image OR reference only
+       - add one request-scoped capability hint when needed
   -> Provider encoding
 ```
 
-因此刚生成的图片无需任何特殊“回灌 OCR”逻辑。
-
-### 7.3 A
+Tool set：
 
 ```text
-generate_image Tool Result
-+ stable attachment manifest
-+ native image media
-```
-
-主模型在下一 step 直接看到图片。
-
-如果当前 Provider 不允许 Image 直接位于 Tool result 中，由 Provider projection 层把媒体移动到协议允许的位置；Tool success/result 仍保持完整，附件 `ref` 不变。
-
-### 7.4 B
-
-```text
-generate_image Tool Result
-+ stable attachment manifest/reference
-+ inspect_attachments 已经在本 run 工具集中
-```
-
-不会自动分析生成图片。只有主模型确实需要确认视觉结果时才调用：
-
-```text
-inspect_attachments(
-  attachments=["attachment:..."],
-  request="Check whether the generated image contains ..."
-)
-```
-
-这解决了“文生图结果需要继续参与 Agent 推理，但不应每次强制二次视觉模型调用”的问题。
-
-### 7.5 C
-
-```text
-generate_image Tool Result
-+ stable attachment manifest/reference
-```
-
-模型知道图片已经生成、知道其 `attachment_ref` / 可用 path，但没有看到视觉内容，也没有分析工具。它不得声称具体画面符合某些视觉细节。
-
-### 7.6 历史 Tool image
-
-历史 `generate_image` 图片和其他 Tool image 规则完全相同：每次 request 先通过 artifact replay 恢复真实资产，再按当前 A/B/C 重新投影。不得保存一次性的 `[Image]`、自动 observation 或“历史不可读”文本来代替原图片事实。
-
----
-
-## 8. 子助手统一规则
-
-Master 和 Target 不拥有两套多模态语义。Target 只是另一个拥有自己 resolved model / settings snapshot / tool set 的 run。
-
-### 8.1 `assistant_call` 入站附件
-
-当前流程中，Target 不支持 IMAGE 且没有 OCR 时会在写入 Child 前 preflight 并拒绝委托。该行为必须删除。
-
-新的流程：
-
-```text
-assistant_call attachments
-  -> AttachmentResolver
-  -> 检查真实资产 / 类型 / 安全
-  -> 将原始 Image + stable attachment_ref 写入 Child task
-  -> Target 构建自己的 request model view
-  -> 按 Target 本次 A/B/C 处理
-```
-
-只要附件资产真实有效：
-
-- Target A：native image；
-- Target B：reference + `inspect_attachments`；
-- Target C：reference only，仍允许 Target 执行任务。
-
-只有附件本身解析失败才阻止委托。
-
-### 8.2 Target 的实际模型必须成为工具能力输入
-
-Target 可在调用期继承 Caller 模型，因此不能在 `GenerationToolSetFactory` 内重新用静态 Assistant 设置猜模型。
-
-`SubAssistantCoordinator` 已经解析出真正的 `runSpec.model`。工具集构建必须显式使用这个 resolved model：
-
-```text
-GenerationToolSetFactory.buildTools(
-  assistant = ...,
-  settings = runSettingsSnapshot,
-  resolvedModel = runSpec.model,
-  runMode = TARGET,
-)
-```
-
-Master 也传入本次实际 resolved model。所有 capability-dependent tools 都以这个参数为准。
-
-### 8.3 Tool set 在一个 run 内冻结
-
-run 开始时解析：
-
-```text
-resolved model
-settings snapshot
-attachment analysis capability
-tool set
-```
-
-本轮运行期间即使用户修改设置，也不在中途改变工具 schema；新设置从下一 run / turn 生效。这对 Provider prompt/tool cache 和 ToolCall 协议稳定性都更合理。
-
-### 8.4 Child → Caller 图片交付
-
-当前 `projectArtifactsForCaller()` 的 `DERIVED` 分支会自动 `observe()` Child 图片，应删除。
-
-Child 交付物保持稳定 artifact/ref 事实。若当前 contract 使用 `extras=artifacts` 控制媒体投影，则继续保留该开关，但投影改为：
-
-```text
-Caller A  -> artifact metadata/reference + native image
-Caller B  -> artifact metadata/reference；需要时 inspect_attachments
-Caller C  -> artifact metadata/reference only
-```
-
-不再有：
-
-```text
-Caller B -> 自动 observation
-```
-
-`artifactDelivery` 语义建议从旧：
-
-```text
-derived / partial / unavailable
-```
-
-调整为：
-
-```text
-native / reference / partial / missing
-```
-
-其中 `missing` 只表示实际 artifact 不存在或无法物化；不能用 `unavailable` 表示 Caller 看不了图。
-
-### 8.5 Child 自己 `generate_image`
-
-Child 内部生成图片后，先按 **Target 自己的 A/B/C** 继续其 Agent loop；最终作为 Child artifact 返回 Master 时，再按 **Caller 当前 A/B/C** 独立投影。
-
-这两个能力判断互不继承、互不写入历史。
-
----
-
-## 9. OCR 语义彻底移除与设置迁移
-
-本轮实施后代码、设置和 UI 不再出现 OCR 作为当前产品概念。
-
-### 9.1 新命名
-
-领域字段：
-
-```text
-ocrModelId       -> attachmentAnalysisModelId: Uuid?
-ocrPrompt        -> attachmentAnalysisPrompt
-```
-
-Prompt：
-
-```text
-DEFAULT_OCR_PROMPT
--> DEFAULT_ATTACHMENT_ANALYSIS_PROMPT
-```
-
-UI：
-
-```text
-OCR Model
--> Attachment Analysis Model / 附件分析模型
-```
-
-分析模型选择器：
-
-- 有明确 `None / 未配置`；
-- 只显示支持 IMAGE input 且 Provider 可配置的模型；
-- 不再用随机 UUID 表示“未配置”。
-
-### 9.2 DataStore key
-
-新 key：
-
-```text
-attachment_analysis_model
-attachment_analysis_prompt
-```
-
-旧 key：
-
-```text
-ocr_model
-ocr_prompt
-```
-
-只允许保留在一次性兼容迁移代码中，不能继续作为运行时领域命名。
-
-迁移规则：
-
-1. 若新 key 已存在，以新 key 为准。
-2. 若只有旧 `ocr_model`：
-   - 能解析到现有模型；
-   - Provider 存在；
-   - 模型支持 IMAGE；
-   才迁移为 `attachment_analysis_model`，否则迁移为未配置。
-3. 旧 Prompt 若为旧默认值，迁移为新的默认 Attachment Analysis Prompt。
-4. 用户自定义旧 Prompt 可迁移为 `attachmentAnalysisPrompt`，避免静默丢失用户设置；运行时仍在固定工具 contract 外使用它，不能覆盖 Tool 输入输出约束。
-5. 新值成功写入后清除旧 key。
-6. 备份恢复和兼容反序列化必须覆盖旧字段迁移测试。
-
-### 9.3 删除旧实现
-
-实施完成后删除或替换：
-
-- `OcrTransformer`；
-- `OcrPrompt.kt` / `DEFAULT_OCR_PROMPT`；
-- `ImageInputAdapter.observe()`；
-- `ImageAdaptCapability.DERIVED`；
-- `CurrentImageInputUnavailableException` 这类“能力不足即 turn failure”路径；
-- `<attachment_observation>` 自动包装；
-- `image_observation_cache.json` 和相关 cache key/version；
-- `ocrModelId` / `ocrPrompt` 的运行时和 UI 命名；
-- Child artifact 自动 observe 分支。
-
-本轮不要为新工具增加隐藏 observation cache。若未来证明附件分析结果值得缓存，cache key 至少必须包括：
-
-```text
-ordered attachment content hashes
-+ attachment analysis model
-+ analysis prompt/version
-+ normalized request
-```
-
-否则不同任务的问题会错误复用同一通用描述。
-
----
-
-## 10. 目标请求管线
-
-### 10.1 Master
-
-目标顺序：
-
-```text
-Conversation history
-  -> replay-safe history / ordinary context transformers
-  -> ToolArtifactReplayTransformer
-  -> AttachmentContextTransformer
-       - materialize/resolve request locators
-       - emit stable manifest recursively
-  -> AttachmentProjectionTransformer
-       - NATIVE or REFERENCE_ONLY
-       - Provider placement decision
-  -> provider wire encoding
-```
-
-Tool set 在 Provider 调用前基于本次 resolved model 生成：
-
-```text
-base tools
-+ assistant-selected tools
+assistant-selected tools
 + workspace / skills / MCP
 + runtime capability tools
-    └─ inspect_attachments only for B
+    └─ inspect_attachments only when B
 ```
 
-### 10.2 Target
-
-使用与 Master 完全相同的：
+附件识别模型只有一条入口：
 
 ```text
-AttachmentContextTransformer
-AttachmentProjectionTransformer
-GenerationToolSetFactory
+explicit inspect_attachments ToolCall
 ```
 
-仅 run mode 和 resolved model/settings snapshot 不同，不维护 Target 专用多模态 fallback。
-
-### 10.3 Provider projection
-
-Provider 层只负责：
-
-- typed text/image/file 编码；
-- native media placement；
-- Provider file handle / URL / base64 等协议差异；
-- 保持 Tool call/result 完整性；
-- 对失败返回明确 typed failure。
-
-Provider 层不得自行决定调用附件分析模型。
+不得从 Transformer、Provider encoder、SubAssistantCoordinator、artifact replay 或 UI 自动触发。
 
 ---
 
-## 11. 文件级实施方案
+## 13. 文件级实施方案
 
-以下按当前代码职责给出确定改动，实施时允许因现有文件布局做小范围重命名，但不要重新引入第二套附件链。
+### 13.1 Settings / migration
 
-### 11.1 Settings / Prompt
+**`PreferencesStore.kt` / `Settings`**
 
-**`data/datastore/Settings` / `SettingsStore` 相关文件**
-
-- `ocrModelId` → nullable `attachmentAnalysisModelId`；
-- `ocrPrompt` → `attachmentAnalysisPrompt`；
-- 新增新 DataStore key；
-- 增加旧 key 一次性迁移；
-- 删除随机 UUID “未配置”兼容方式；
-- 写入时 null 删除 model key。
-
-**`data/ai/prompts/OcrPrompt.kt`**
-
-- 删除 OCR 文件/命名；
-- 新建 `AttachmentAnalysisPrompt.kt`；
-- 使用短、稳定的分析助手默认 Prompt。
+- 删除 `ocrModelId`、`ocrPrompt`。
+- 新增 `attachmentInspectionModelId: Uuid? = null`。
+- 新增 `ATTACHMENT_INSPECTION_MODEL = stringPreferencesKey("attachment_inspection_model")`。
+- null 时删除 key。
+- 增加一次性旧 `ocr_model` 迁移并清除旧 key。
+- `ocr_prompt` 只删除，不迁移。
+- backup restore legacy adapter 只迁移旧 model ID。
 
 **设置 UI**
 
-- 所有 OCR 文案和变量改为 Attachment Analysis；
-- 明确 `None`；
-- 过滤到 IMAGE-capable models；
-- 不再解释成“上传图片自动 OCR”。
+- 删除 OCR model / prompt UI。
+- 新增一个“附件识别模型”选择器。
+- 明确“未配置”。
+- 只列 IMAGE-capable model。
 
-### 11.2 Attachment context / projection
+### 13.2 删除旧输入适配链
 
-**`AttachmentRefHintTransformer.kt`**
-
-- 建议重命名/提升为 `AttachmentContextTransformer`；
-- 从 `[Attachment ref, name]` 扩展为固定 manifest：ref/type/mime/name/request path；
-- 保持 model-view only；
-- 保持递归 `Tool.output`；
-- 不写任何当前 capability 文本到 Conversation。
-
-**`AttachmentInputTransformer.kt`**
-
-- 移除自动 observation；
-- 重构为 `AttachmentProjectionTransformer`；
-- 只负责 NATIVE / REFERENCE_ONLY；
-- 保留本地图片和嵌套 Tool image 的投影；
-- capability mismatch 不抛异常。
-
-**`ImageInputAdapter.kt`**
-
-- 删除 `observe()`、DERIVED、自动错误占位和 observation cache；
-- 如仍需图片原生能力解析，重命名为更准确的 `AttachmentProjectionResolver` / `NativeMediaCapabilityResolver`，职责仅限当前 Provider 是否能投递原图。
-
-**`OcrTransformer.kt`**
-
-- 删除，不保留 compatibility alias。
-
-### 11.3 `inspect_attachments`
-
-新增建议：
+删除：
 
 ```text
-data/ai/tools/runtime/AttachmentAnalysisTool.kt
+OcrTransformer.kt
+OcrPrompt.kt
+ImageInputAdapter.kt
 ```
 
-或放入当前 runtime capability tools 的统一目录；不要加入 `LocalToolOption`。
+删除对应 observation cache、capability enum 和 fail-fast exception。
+
+将：
+
+```text
+AttachmentRefHintTransformer.kt
+AttachmentInputTransformer.kt
+```
+
+收敛为：
+
+```text
+AttachmentProjectionTransformer.kt
+```
+
+一个递归 pass 同时生成稳定附件 hint 和 native/reference projection。
+
+如果实施中发现某个通用 Transformer 还承担非图片职责，保留该职责即可；不要为了满足文件名强行合并无关逻辑。但最终不能继续存在“自动识别 adapter”这一层。
+
+### 13.3 `AttachmentResolver.kt`
+
+继续作为 stable ref -> managed asset 的权威入口。
+
+为 `inspect_attachments` 增加最小批量入口即可，例如：
+
+```text
+resolveImages(refs: List<String>): List<ResolvedImage>
+```
+
+规则：
+
+- 只接受 `attachment:<uuid>`；
+- 1..4；
+- all-or-nothing；
+- 复用现有安全/存在性校验；
+- 不复制 path/remote fetch 逻辑到 Tool。
+
+不要新增通用 analyzer registry。
+
+### 13.4 新增 `AttachmentInspectionTool`
+
+建议一个文件即可：
+
+```text
+data/ai/tools/AttachmentInspectionTool.kt
+```
 
 职责：
 
-- schema / description；
-- 1..4 attachments 校验；
+- Tool schema / description；
+- refs 校验；
 - 调用 `AttachmentResolver`；
-- 检查当前 `attachmentAnalysisModelId`；
-- 单次多图片分析模型调用；
-- 结构化成功/失败 Text result；
-- 不返回 Image part。
+- 获取 run snapshot 中的 inspection model；
+- 一次多图模型调用；
+- 返回 Text 或现有 Tool failure。
 
-如果项目暂时没有 runtime tools 目录，可由 `GenerationToolSetFactory` 调用一个独立 `createAttachmentAnalysisTool(...)` factory，避免让 Factory 自己持有 Provider 调用细节。
+固定 system instruction 可作为同文件 private constant，不再新建 Prompt 配置文件。
 
-### 11.4 `GenerationToolSetFactory.kt`
+### 13.5 `GenerationToolSetFactory.kt`
 
-- `buildTools()` 显式增加本次 `resolvedModel` 参数；
-- 使用统一函数计算 A/B/C；
-- B 自动增加 `inspect_attachments`；
-- A/C 不增加；
-- 不根据当前 messages 是否含图片改变工具集；
-- Master/Target 共用。
+- `buildTools()` 增加 `resolvedModel: Model?`。
+- Web search 等已有 capability 判断也优先使用该真实模型，避免 Target 运行时模型与静态 Assistant 设置不一致。
+- 当非 native + inspection model valid 时添加 `inspect_attachments`。
+- 不根据当前 message 是否包含 Image 决定 tool schema。
 
-### 11.5 `ChatService.kt`
+### 13.6 `ChatService.kt`
 
-- 生成/重新生成/审批恢复路径都传入本次 resolved model；
-- input transformer 链替换旧 `AttachmentRefHintTransformer + AttachmentInputTransformer` 为新的 context + projection 语义；
-- 保证每个 Tool step 后下一 Provider step 重新执行 artifact replay 和 attachment projection；
-- 不捕获/生成 `CurrentImageInputUnavailableException` 类型的能力失败。
+- 所有 Master 生成入口向 tool factory 传本次 resolved model/settings snapshot。
+- transformer 链替换为新的单一附件投影。
+- 删除 capability mismatch fail-fast catch。
+- 每个 Tool step 后下一 Provider request 继续从 durable/tool artifact 事实重新投影。
 
-### 11.6 `AttachmentResolver.kt`
+### 13.7 `generate_image` / artifact replay
 
-- 继续作为稳定 ref / 受控 path → managed asset 的权威入口；
-- 为 `inspect_attachments` 提供可复用的批量解析接口；
-- 批量解析采用 all-or-nothing；
-- 目前只把 image 交给 Attachment Analysis Tool；
-- 不在 Tool 内复制安全路径与 remote fetch 规则。
+- 确保成功 Image 在持久化 Tool Result 前已经有 stable `attachment_ref`。
+- 保持 `ToolArtifactReplayTransformer` 在附件投影前。
+- 不新增自动 inspection。
 
-### 11.7 `ImageGenerationTool.kt` / artifact replay
+### 13.8 `SubAssistantCoordinator.kt`
 
-- `generate_image` 继续产生持久 artifact + Image；
-- 确保所有成功 Image 都有 stable `attachment_ref`；
-- `ToolArtifactReplayTransformer` 保持在 attachment context/projection 之前；
-- 不增加任何自动分析逻辑；
-- Tool result 中的 path/ref 能在下一个 step 被 Resolver 使用。
+- 删除视觉能力 preflight rejection。
+- 入站只验证 attachment ref/asset。
+- Target `buildTools()` 传 `runSpec.model`。
+- 删除自动 observation 调用。
 
-### 11.8 `SubAssistantCoordinator.kt`
+### 13.9 `SubAssistantResultProjection.kt`
 
-- 删除“attachments 非空 + Target capability UNAVAILABLE => 拒绝” preflight；
-- attachment 入站只做真实 resolve / materialize / validation；
-- Child task 始终保存原始 attachment fact；
-- Target tools 构建传 `runSpec.model`；
-- 删除 Caller artifact projection 中对 `ImageInputAdapter.observe()` 的依赖。
+- 删除 `DERIVED` 分支。
+- 不调用识别模型。
+- 输出 stable artifact refs；Caller native projection 交给统一附件投影。
+- 内部删除 `artifact_delivery` 驱动逻辑；如需外部兼容只留 adapter。
 
-### 11.9 `SubAssistantResultProjection.kt`
+### 13.10 不新增的文件/层
 
-- 删除 `DERIVED` 分支；
-- A 输出 native image projection；
-- B/C 输出稳定 reference/manifest；
-- delivery 命名迁移到 `native/reference/partial/missing`；
-- Child tool artifact 和最终 assistant media 继续走同一 extract/dedup 机制。
+本轮明确不要为了“架构完整”创建：
 
-### 11.10 文档同步
+```text
+AttachmentAnalysisRepository
+AttachmentDerivativeStore
+AttachmentInspectionCache
+AttachmentCapabilityRegistry
+AttachmentDeliveryReceiptRepository
+AttachmentInspectionPromptSettings
+ImageAnalyzer / DocumentAnalyzer / AudioAnalyzer / VideoAnalyzer 空接口族
+```
 
-实施代码时同步：
-
-- `docs/dev/multimodal-context-and-turn-durability-design.md`：将已被本文取代的 OCR/DERIVED/fail-fast 部分标记为 superseded 或直接同步成新语义；
-- `docs/references/sub-assistant-multimodal.md`：删除 Target 自动 observation / unavailable preflight 描述；
-- `docs/dev/changelog.md`：记录 OCR → Attachment Analysis、自动视觉观察取消、`inspect_attachments` 和统一 A/B/C。
-
-本文是实施时的权威设计；若旧文档与本文在上述多模态访问语义上冲突，以本文为准。
+只有真实第二个调用方出现后再抽象。
 
 ---
 
-## 12. 实施顺序
+## 14. 实施顺序：一次切换，不长期双轨
 
-按以下顺序实施，保持每一步可测试、避免同时存在两套视觉 fallback：
+### Phase 1 — 先写 RED 测试
 
-### Phase 1 — Domain / Settings rename
+锁定新行为：
 
-1. 建立 Attachment Analysis 新字段、Prompt、新 DataStore key 和迁移。
-2. 设置 UI 改名、`None`、IMAGE 模型过滤。
-3. 保持旧运行逻辑临时可编译，但运行时代码开始只依赖新字段。
+- 图片存在不会自动触发第二模型。
+- C 不因图片存在而 fail-fast。
+- Tool Result / generated image 都有 stable ref。
+- B 才拥有 `inspect_attachments`。
+- Target 使用 `runSpec.model`。
 
-### Phase 2 — Stable context + remove auto observation
+### Phase 2 — Settings cutover
 
-1. `AttachmentContextTransformer` 稳定 manifest。
-2. `AttachmentProjectionTransformer` 只做 NATIVE / REFERENCE_ONLY。
-3. 删除自动 observation、cache 和 capability mismatch fail-fast。
-4. 删除 OCR compatibility classes。
+1. 新增 `attachmentInspectionModelId?`。
+2. 一次性迁移旧 model ID。
+3. 删除 prompt 配置和 UI。
+4. 删除旧 cache。
+5. backup legacy import 覆盖测试。
 
-### Phase 3 — `inspect_attachments`
+这一步结束后 Runtime 不再读取 OCR 字段。
 
-1. 实现批量 resolver。
-2. 实现 tool schema / provider call / structured result。
-3. `GenerationToolSetFactory` 使用 resolved model 动态注册。
-4. 验证工具即使初始无图片也在 B run 中稳定存在。
+### Phase 3 — 删除自动识别链
 
-### Phase 4 — `generate_image` / Tool artifact
+1. 合并附件 hint/projection。
+2. 删除 `ImageInputAdapter.observe()` / DERIVED / exception。
+3. 删除 `OcrTransformer` / prompt / cache。
+4. 让 B/C 都变成 reference-only projection。
 
-1. 确认生成图片稳定 ref。
-2. 验证 A/B/C 的下一 step 投影。
-3. 验证历史 tool image 与当前 tool image 相同。
+### Phase 4 — 新增 `inspect_attachments`
 
-### Phase 5 — Sub-assistant convergence
+1. 批量 stable ref resolver。
+2. 1..4 image 单次识别调用。
+3. runtime tool injection。
+4. 固定 system instruction + task `request`。
+5. 无 cache。
 
-1. 删除 Target modality preflight rejection。
-2. Target 使用同一 A/B/C 和动态 capability tool。
-3. Child → Caller 删除 DERIVED observation。
-4. 调整 artifact delivery 命名与测试。
+### Phase 5 — `generate_image` + Sub-assistant 统一
 
-### Phase 6 — Cleanup / docs / regression
+1. 验证 generated image stable ref。
+2. A/B/C 下一 step。
+3. 删除 Target modality rejection。
+4. 删除 Child -> Caller automatic observation。
+5. 收敛/删除 `artifact_delivery` 内部状态。
 
-1. 全仓确认无运行时 OCR 语义残留。
-2. 删除死代码和旧缓存。
-3. 更新原设计、sub-assistant reference 和 changelog。
-4. 跑完整单测、集成测试和 Android 构建。
+### Phase 6 — 清理
+
+- 全仓删除旧运行时 OCR 语义。
+- 更新旧多模态/子助手文档到新语义。
+- 单测、集成测试、Provider wire tests、Android build 全绿。
+
+实施过程中不要保留“旧自动 OCR 和新 inspect tool 同时工作”的长期兼容模式。迁移完成后直接切到新链。
 
 ---
 
-## 13. 测试矩阵与验收
+## 15. 验收矩阵
 
-### 13.1 A/B/C 基础
+### 15.1 来源 × A/B/C
 
-至少覆盖：
-
-| 来源 | A | B | C |
+| 图片来源 | A | B | C |
 |---|---|---|---|
-| 当前用户图片 | manifest + native | manifest + inspect tool | manifest only |
-| 历史用户图片 | manifest + native replay | manifest + inspect tool | manifest only |
-| 当前 `generate_image` | native on next step | ref + callable inspect | ref only |
-| 历史 `generate_image` | native replay | ref + callable inspect | ref only |
-| 其他 nested `Tool.output` image | native | ref + inspect | ref only |
-| `assistant_call` Target inbound | Target native | Target ref + inspect | Target ref only |
-| Child → Caller artifact | Caller native | Caller ref + inspect | Caller ref only |
+| 当前用户上传 | ref + native | ref + inspect tool | ref only |
+| 历史用户图片 | ref + native | ref + inspect tool | ref only |
+| 当前 `generate_image` | 下一 step native | 下一 step 可 inspect | ref only |
+| 历史 `generate_image` | native replay | ref + inspect | ref only |
+| nested Tool output Image | native/协议合法 placement | ref + inspect | ref only |
+| Target inbound | Target native | Target inspect | Target ref only |
+| Child -> Caller | Caller native when requested | Caller ref + inspect | Caller ref only |
 
-### 13.2 六种模型切换
+### 15.2 动态切换
 
-必须覆盖：
+覆盖：
 
 ```text
 A -> B
@@ -1001,148 +900,127 @@ C -> A
 C -> B
 ```
 
-验收：
+断言：
 
-- persisted Conversation / attachment ref 不改变；
-- 只改变 request media blocks、capability hint 和 tool set；
-- 切回 A 能再次从原始资产得到 native media；
-- 不依赖过去自动 OCR 文本恢复视觉能力。
+- Conversation 不变化；
+- attachment ref 不变化；
+- 不写入 capability state；
+- 只变化 native media / runtime tool；
+- 切回 A 能重新读取原始 Image。
 
-### 13.3 `inspect_attachments`
+### 15.3 `inspect_attachments`
 
-必须覆盖：
+覆盖：
 
-- 1 张、2 张、4 张图片；
-- 顺序和 label 稳定；
-- 多图只产生一次 analysis provider call；
-- `attachment_ref` 正常解析；
-- 受控 `/upload` path 正常解析；
-- 任一 attachment invalid 时整体失败；
-- document/audio/video 当前返回 `unsupported_attachment_type`；
-- analysis model 未配置/删除/provider 不可用；
-- analysis provider failure；
-- success 只返回 Text Tool Result；
-- 显式 Tool Result 正常持久化并可在后续历史重放。
+- 1 / 2 / 4 张图；
+- 输入顺序稳定；
+- 多图只调用识别模型一次；
+- 只接受 `attachment:<uuid>`；
+- missing / corrupt / unsupported；
+- inspection model 被删除/Provider 不可用；
+- provider failure；
+- 成功只产生 Text Tool Result；
+- ToolCall / Tool Result 正常进入现有持久化；
+- 未显式 ToolCall 时识别模型调用次数严格为 0。
 
-### 13.4 工具集
+### 15.4 Settings / migration
 
-- A：无 fallback `inspect_attachments`；
-- B：有 `inspect_attachments`，即使历史里当前没有图片；
-- C：无 `inspect_attachments`；
-- Target 继承 Caller model 时按 `runSpec.model` 判定，不按静态 Target 设置误判；
-- 同一 run 内修改设置不改变已经冻结的 tool schema；下一 run 生效。
+覆盖：
 
-### 13.5 `generate_image`
+- `attachmentInspectionModelId=null` 正确持久化为无 key；
+- 旧有效 `ocr_model` -> 新 model；
+- 旧无效 model -> null；
+- `ocr_prompt` 不迁移；
+- 旧 key 被清除；
+- 旧 cache 被 best-effort 清理；
+- 旧 backup 可导入 model ID；
+- 新 Settings 序列化不再含 OCR 字段。
 
-- 工具成功与 A/B/C 无关；
-- 生成图片获得 stable attachment ref；
-- B 在同一 Agent loop 的下一 step 可调用 `inspect_attachments` 分析刚生成图片；
-- C 能看到 artifact/reference 但没有视觉细节；
-- A 能收到 native media；
-- Tool result 嵌套图片在 Provider 不支持 tool-result media 时 relocation 不破坏 Tool call/result 关系。
+### 15.5 Sub-assistant
 
-### 13.6 子助手
+覆盖：
 
-- C Target 不再因附件存在而拒绝 `assistant_call`；
-- 真正 attachment missing/unsafe 仍拒绝；
-- Target B 可以按需调用 `inspect_attachments`；
-- Child B 生成图片后可以自行 inspect；
-- Caller B 收到 Child image ref 后可以 inspect；
-- 无任何 Child artifact 自动 observation 调用。
+- Target C 不因有附件而拒绝委托；
+- 真正 missing/unsafe attachment 仍拒绝；
+- Target B 有识别工具；
+- Target 的工具能力依据 `runSpec.model`；
+- Child generated image 在 Child 内按 Target 能力处理；
+- Caller 侧不再自动识别 Child artifact；
+- 无 `artifact_delivery` 也能完整表达正常结果；若暂时保留兼容字段，内部逻辑不依赖它。
 
-### 13.7 OCR 清理验收
+### 15.6 Provider wire
 
-运行时代码、设置 UI 和新文档中不再存在当前语义的：
+至少覆盖 OpenAI Chat/Responses、Anthropic、Gemini 当前项目支持路径：
+
+- A 的普通 user Image 不被静默删除；
+- A 的 Tool output/generated Image 在协议不允许原位置时被合法投影；
+- B/C wire 不携带图片二进制；
+- Tool call/result 配对不因 media relocation 破坏。
+
+---
+
+## 16. 最终清理标准
+
+实现完成后，运行时代码、Settings、UI 中不得再存在：
 
 ```text
 ocrModelId
 ocrPrompt
+OCR_MODEL
+OCR_PROMPT
 OcrTransformer
 DEFAULT_OCR_PROMPT
 ImageAdaptCapability.DERIVED
 <attachment_observation>
 image_observation_cache
-CurrentImageInputUnavailableException（能力不匹配用途）
+自动 visual observation
 ```
 
-旧 `ocr_model` / `ocr_prompt` 字符串只允许出现在兼容迁移测试或迁移代码中。
+旧 `ocr_model` / `ocr_prompt` 字符串只允许在：
 
-### 13.8 最关键的行为断言
+```text
+一次性 migration
+migration tests
+历史 changelog / design migration note
+```
 
-必须有测试证明：
+同时不应出现“新 OCR 换皮”：
 
-> **仅仅把图片加入 Conversation，在 B/C 中不会触发任何额外模型调用。**
-
-只有显式 ToolCall `inspect_attachments` 才允许调用 Attachment Analysis Model。
+```text
+attachmentAnalysisPrompt setting
+hidden analysis cache
+background attachment analysis
+DERIVED renamed to another enum
+persistent A/B/C capability
+```
 
 ---
 
-## 14. 与成熟 API / Agent 模式的对应关系
-
-本设计不是依赖某一家 Provider 的特殊机制，而是对当前主流模式取共同部分：
-
-- OpenAI Responses / multimodal input 使用 typed content block，并可通过 file/image reference 传入媒体；资源身份和本次输入投影是分离的。
-- Anthropic Files API 强调上传一次、通过 `file_id` 多次引用，并在 Message 中以 typed image/document block 使用。
-- Gemini Files API 使用可复用 file URI，再由当前请求决定怎样把 media 纳入内容。
-- MCP Resources 使用稳定 URI 标识资源，Host 决定资源何时、以何种方式进入模型上下文。
-
-这些做法的共同点不是“对不支持图片的模型自动 OCR”，而是：
+## 17. 最终不变量
 
 ```text
-stable resource identity
-+ typed attachment/media
-+ request-specific projection
-+ explicit tool/resource resolution when needed
+附件存在 != 当前模型能读取附件
+attachment_ref != path
+附件事实 != 附件识别结果
+模型能力 != Conversation 历史
+识别工具可用 != 必须调用
 ```
 
-参考：
-
-- OpenAI Images and vision: https://platform.openai.com/docs/guides/images-vision
-- Anthropic Files API: https://docs.anthropic.com/en/docs/build-with-claude/files
-- Anthropic Vision: https://docs.anthropic.com/en/docs/build-with-claude/vision
-- Gemini Files API: https://ai.google.dev/gemini-api/docs/files
-- Model Context Protocol Resources: https://modelcontextprotocol.io/docs/concepts/resources
-
----
-
-## 15. 最终架构判定
-
-本轮之后，多模态图片处理不再是：
+系统最终只保留：
 
 ```text
-图片
- -> 当前模型不会看
- -> 后台自动 OCR/visual observation
- -> 文本替换图片
+Conversation / Tool artifact
+        │
+        └── stable attachment_ref
+                │
+                ▼
+       request-time projection
+          ├─ native Image
+          └─ reference only
+                │
+                └─ optional inspect_attachments
+                       │
+                       └─ normal persisted Tool Result
 ```
 
-而是：
-
-```text
-任意图片来源
- -> stable attachment fact
- -> current request projection
-      ├─ A: native image
-      ├─ B: reference + inspect_attachments
-      └─ C: reference only
-```
-
-`inspect_attachments` 的一次显式调用才形成：
-
-```text
-attachment ref(s)
- -> validated managed assets
- -> Attachment Analysis Model
- -> task-specific visual evidence
- -> persisted Tool Result
-```
-
-由此得到统一且长期稳定的边界：
-
-- **Conversation 保存事实；**
-- **Resolver 找到资产；**
-- **Projection 适配当前 Provider；**
-- **Tool 在需要时读取附件内容；**
-- **模型切换只改变当前能力，不改变过去事实。**
-
-这套规则同时覆盖用户上传图片、`generate_image`、未来图片工具产物和子助手，且为 document/audio/video 留出了相同的附件识别扩展点，而不要求本轮提前实现它们。
+这比旧方案少了自动 OCR、派生缓存、三态 Adapter、Prompt 配置、额外持久化和子助手特殊 fallback，同时完整覆盖用户图片、`generate_image`、Tool artifact、子助手与动态模型切换。
