@@ -812,10 +812,9 @@
   <string name="setting_model_page_compress_model_desc">Model for compressing conversation history</string>
   <string name="setting_model_page_compress_prompt_vars">Variables: {content}, {target_tokens}, {additional_context}</string>
   <string name="setting_model_page_image_generation_model">Image Generation Model</string>
-  <string name="setting_model_page_image_generation_model_desc">Default model used by the image page and the generate_image chat tool</string>
-  <string name="setting_model_page_ocr_model">OCR Model</string>
-  <string name="setting_model_page_ocr_model_desc">Model used for optical character recognition on images</string>
-  <string name="setting_model_page_ocr_prompt_vars">Variables: Image data: {images}</string>
+  <string name="setting_model_page_image_generation_model_desc">Default model for image generation, shared by the image page and in-chat image generation</string>
+  <string name="setting_model_page_attachment_inspection_model">Attachment Inspection Model</string>
+  <string name="setting_model_page_attachment_inspection_model_desc">Multimodal model used to inspect attachment content when the chat model cannot process images</string>
   <string name="setting_model_page_prompt">Prompt</string>
   <string name="setting_model_page_reset_to_default">Reset to default</string>
   <string name="setting_model_page_enable_suggestion">Enable Chat Suggestions</string>
@@ -1158,7 +1157,6 @@
   <string name="setting_model_page_tab_prompt">Prompts</string>
   <string name="setting_model_page_prompt_title">Title Generation</string>
   <string name="setting_model_page_prompt_suggestion">Chat Reply Suggestions</string>
-  <string name="setting_model_page_prompt_ocr">OCR Recognition</string>
   <string name="setting_model_page_prompt_compress">Context Compression</string>
   <string name="setting_display_page_bubble_opacity_title">Bubble Opacity</string>
   <string name="setting_provider_page_include_history_reasoning">Include History Reasoning</string>
@@ -1270,7 +1268,8 @@
   <string name="workspace_file_editor_read_failed">Failed to read file</string>
   <string name="workspace_file_editor_too_large">File too large to preview (%d bytes)</string>
   <string name="image_crop_failed">Failed to crop image</string>
-  <string name="image_observation_processing">Reading image...</string>
+  <string name="chat_message_tool_inspect_attachments_title">Inspect Attachments</string>
+  <string name="chat_message_tool_inspect_attachments_count">%1$d attachment(s)</string>
   <string name="chat_readiness_title_prefix">Configure for</string>
   <string name="chat_readiness_title_suffix"/>
   <string name="chat_readiness_model_required_toast">Select a conversation model before sending.</string>

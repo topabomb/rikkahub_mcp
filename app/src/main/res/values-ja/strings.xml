@@ -800,10 +800,9 @@
   <string name="setting_model_page_compress_model_desc">会話履歴を圧縮するモデル</string>
   <string name="setting_model_page_compress_prompt_vars">変数: {content}, {target_tokens}, {additional_context}</string>
   <string name="setting_model_page_image_generation_model">Image Generation Model</string>
-  <string name="setting_model_page_image_generation_model_desc">Default model used by the image page and the generate_image chat tool</string>
-  <string name="setting_model_page_ocr_model">OCRモデル</string>
-  <string name="setting_model_page_ocr_model_desc">画像の光学文字認識に使用されるモデル</string>
-  <string name="setting_model_page_ocr_prompt_vars">変数: 画像データ: {images}</string>
+  <string name="setting_model_page_image_generation_model_desc">画像生成のデフォルトモデル。画像ページとチャット内の画像生成で共用されます</string>
+  <string name="setting_model_page_attachment_inspection_model">添付ファイル識別モデル</string>
+  <string name="setting_model_page_attachment_inspection_model_desc">チャットモデルが画像を処理できないときに添付ファイルの内容を確認するマルチモーダルモデル</string>
   <string name="setting_model_page_prompt">プロンプト</string>
   <string name="setting_model_page_reset_to_default">デフォルトにリセット</string>
   <string name="setting_model_page_suggestion_model">チャット提案モデル</string>
@@ -1152,7 +1151,6 @@
   <string name="setting_model_page_tab_prompt">プロンプト</string>
   <string name="setting_model_page_prompt_title">タイトル生成</string>
   <string name="setting_model_page_prompt_suggestion">チャット返信の提案</string>
-  <string name="setting_model_page_prompt_ocr">OCR認識</string>
   <string name="setting_model_page_prompt_compress">コンテキスト圧縮</string>
   <string name="setting_display_page_bubble_opacity_title">吹き出しの不透明度</string>
   <string name="setting_provider_page_include_history_reasoning">履歴の思考過程を送信</string>
@@ -1270,7 +1268,8 @@
   <string name="workspace_file_editor_read_failed">ファイルの読み取りに失敗しました</string>
   <string name="workspace_file_editor_too_large">ファイルが大きすぎてプレビューできません（%d バイト）</string>
   <string name="image_crop_failed">画像の切り抜きに失敗しました</string>
-  <string name="image_observation_processing">画像を読み取っています...</string>
+  <string name="chat_message_tool_inspect_attachments_title">添付ファイルを確認</string>
+  <string name="chat_message_tool_inspect_attachments_count">添付ファイル %1$d 件</string>
   <string name="chat_readiness_title_prefix"/>
   <string name="chat_readiness_title_suffix">の会話を設定</string>
   <string name="chat_readiness_model_required_toast">送信する前に会話モデルを選択してください。</string>

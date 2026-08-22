@@ -3,7 +3,9 @@ package net.weero.measix.pilot.data.ai.tools
 import android.util.Log
 import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.BuiltInTools
+import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.data.ai.subassistant.filterTargetLocalTools
@@ -13,6 +15,8 @@ import net.weero.measix.pilot.data.ai.tools.local.LocalTools
 import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
 import net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.findModelById
+import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.model.Assistant
@@ -34,27 +38,37 @@ class GenerationToolSetFactory(
     private val skillManager: SkillManager,
     private val workspaceRepository: WorkspaceRepository,
     private val mcpManager: McpManager,
+    private val providerManager: ProviderManager,
 ) {
     /**
      * 构建指定 Assistant 的工具集（不含 Memory Tools，那些由 GenerationHandler 内部添加）。
      *
      * @param assistant 目标助手
-     * @param settings 当前设置
+     * @param settings 当前设置（本 run 的 snapshot）
+     * @param resolvedModel 本次 run 实际使用的 resolved chat model；Master/Target 都必须传真实模型，
+     *   不能回退到 `settings.getChatModel(assistant)` 猜测（Target 可在运行时继承 Caller model）。
      * @param workspaceCwd 工作目录（可覆盖会话级别）
      * @param runMode Target Run 时过滤 Assistant Tools；ask_user 保留给 Coordinator 桥接
      */
     suspend fun buildTools(
         assistant: Assistant,
         settings: Settings,
+        resolvedModel: Model? = null,
         workspaceCwd: String? = null,
         runMode: ToolSetRunMode = ToolSetRunMode.NORMAL,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
         additionalToolsBeforeMcp: List<Tool> = emptyList(),
         onInvalidMcpServerNames: (List<String>) -> Unit = {},
     ): List<Tool> {
+        // 能力判断优先使用本次 run 的真实模型；缺省时回退静态 Assistant 设置（仅测试/旧调用）。
+        val effectiveModel = resolvedModel ?: settings.getChatModel(assistant)
         return buildList {
-            if (shouldUseExternalWebSearch(assistant, settings.getChatModel(assistant))) {
+            if (shouldUseExternalWebSearch(assistant, effectiveModel)) {
                 addAll(createSearchTools(settings))
+            }
+
+            if (shouldInjectAttachmentInspection(effectiveModel, settings)) {
+                add(createAttachmentInspectionTool(settings, providerManager))
             }
 
             val localToolOptions = if (runMode == ToolSetRunMode.TARGET) {
@@ -157,6 +171,19 @@ class GenerationToolSetFactory(
  */
 fun shouldUseExternalWebSearch(assistant: Assistant, model: Model?): Boolean {
     return assistant.enableWebSearch && model?.tools?.contains(BuiltInTools.Search) != true
+}
+
+/**
+ * B 场景注入 `inspect_attachments`（设计文档 §9）：当前模型不原生接收 IMAGE，
+ * 且配置了存在、Provider 可用且自身支持 IMAGE 输入的附件识别模型。
+ * 不根据当前消息是否包含 Image 决定 tool schema。
+ */
+fun shouldInjectAttachmentInspection(resolvedModel: Model?, settings: Settings): Boolean {
+    if (resolvedModel == null) return false
+    if (resolvedModel.inputModalities.contains(Modality.IMAGE)) return false
+    val inspectionModel = settings.findModelById(settings.attachmentInspectionModelId) ?: return false
+    if (inspectionModel.findProvider(settings.providers) == null) return false
+    return inspectionModel.inputModalities.contains(Modality.IMAGE)
 }
 
 enum class ToolSetRunMode {

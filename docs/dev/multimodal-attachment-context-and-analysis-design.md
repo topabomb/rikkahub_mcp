@@ -505,6 +505,33 @@ provider
 
 这比 LLM 连续调用单图工具更省调用、也更适合真正的跨图任务。
 
+#### 工具层的附件解析接口
+
+工具需要的是执行时的资源访问能力，不是 Agent 的完整会话状态。`ToolExecutionContext` 不暴露消息快照，只提供最小只读能力：
+
+```text
+ToolExecutionContext
+-> resolveAttachments(refs: List<String>) -> ToolAttachmentResolution
+   parts: List<UIMessagePart>   解析成功的只读 parts
+   failureReason: String?       Runtime 定义的失败原因，工具原样透传
+```
+
+链路：
+
+```text
+attachment:<uuid>
+-> ToolExecutionContext.resolveAttachments()
+-> 统一 AttachmentResolver（Runtime 内部使用执行时刻的 durable 消息快照，含本 run 内已完成的 Tool Result）
+-> asset
+-> inspection model
+```
+
+原则：
+
+- 底层 Resolver 可以使用当前 run 的消息快照，但这是 Runtime 实现细节，不暴露给工具；
+- 不同工具不得各自扫描会话消息解析附件，stable ref 解析规则保持在单一 Resolver；
+- 未注入 resolver 的执行环境统一返回 `attachment_resolution_unavailable`，不静默成功。
+
 ### 8.5 内部识别指令与调用隔离
 
 系统指令是工具实现常量，不是 Settings。最终固定为：
@@ -684,6 +711,17 @@ attachment ref only
 模型知道图片成功生成，但不知道具体视觉内容，不能声称已经验证画面。
 
 这条规则同样覆盖历史 `generate_image` 和其他 Tool output Image。`ToolArtifactReplayTransformer` 继续在附件投影前恢复 artifact；不新增任何“生成图自动 OCR/自动验证”路径。
+
+**资源身份统一原则**（模型可见标识只此两种，全工具链一致）：
+
+- `attachment:<uuid>` 是**引用身份**：把附件作为输入传给工具（`inspect_attachments`、
+  `assistant_call.attachments`）。由 `AttachmentRefs.ensureAttachmentRef` 在持久化时锚定，
+  投影管线以 `[Attachment ref=...]` 引用行交付给模型。
+- `/upload/<file>` 与 `/workspace/...` 是**文件身份**：读写字节（workspace 工具族）。
+  `/upload` 挂载会话共享的只读文件（用户上传与生成的媒体）。
+- 工具产出新媒体时两种身份同时获得：文件身份写入 Tool Result（如 `file.path`），
+  引用身份走投影管线，不在 Tool Result 里做第二套 ref 呈现（本节"不设计特殊回灌"）。
+- `media_id` 等内部数据库 id 不进入模型可见 JSON（Tool Result 中已移除，无任何消费方）。
 
 ---
 
@@ -865,7 +903,7 @@ data/ai/tools/AttachmentInspectionTool.kt
 
 - Tool schema / description；
 - refs 校验；
-- 调用 `AttachmentResolver`；
+- 通过 `ToolExecutionContext.resolveAttachments` 解析附件（工具不持有 `AttachmentResolver`，不接触消息快照；见 §8.4）；
 - 获取 run snapshot 中的 inspection model；
 - 一次多图模型调用；
 - 返回 Text 或现有 Tool failure。

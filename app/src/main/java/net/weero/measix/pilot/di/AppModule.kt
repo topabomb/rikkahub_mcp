@@ -160,6 +160,7 @@ val appModule = module {
             skillManager = get(),
             workspaceRepository = get(),
             mcpManager = get(),
+            providerManager = get(),
         )
     }
 

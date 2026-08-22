@@ -79,8 +79,7 @@ import net.weero.measix.pilot.data.ai.tools.GenerationToolSetFactory
 import net.weero.measix.pilot.data.ai.transformers.Base64ImageToLocalFileTransformer
 import net.weero.measix.pilot.data.ai.transformers.DocumentAsPromptTransformer
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
-import net.weero.measix.pilot.data.ai.transformers.AttachmentInputTransformer
-import net.weero.measix.pilot.data.ai.transformers.AttachmentRefHintTransformer
+import net.weero.measix.pilot.data.ai.transformers.AttachmentProjectionTransformer
 import net.weero.measix.pilot.data.ai.transformers.PlaceholderTransformer
 import net.weero.measix.pilot.data.ai.transformers.PromptInjectionTransformer
 import net.weero.measix.pilot.data.ai.transformers.RegexOutputTransformer
@@ -850,7 +849,6 @@ class ChatService(
                 processingStatus = session.processingStatus,
                 messages = generationMessages,
                 assistantMessageId = assistantSlot.id,
-                currentTaskMessageId = generationMessages.lastOrNull { it.role == MessageRole.USER }?.id,
                 assistant = assistant,
                 conversationSystemPrompt = conversation.customSystemPrompt,
                 conversationModeInjectionIds = conversation.modeInjectionIds,
@@ -865,21 +863,19 @@ class ChatService(
                     add(templateTransformer)
                     add(workspaceReminderTransformer)
                     toolArtifactReplayTransformer?.let(::add)
-                    add(AttachmentRefHintTransformer)
-                    add(AttachmentInputTransformer)
+                    add(AttachmentProjectionTransformer)
                 },
                 outputTransformers = outputTransformers,
                 tools = toolSetFactory.buildTools(
                     assistant = assistant,
                     settings = settings,
+                    resolvedModel = model,
                     workspaceCwd = conversation.workspaceCwd,
                     ttsPlaybackContext = turnTtsContext,
                     additionalToolsBeforeMcp = assistantToolFactory.buildTools(
                         callerAssistant = assistant,
                         masterConversationId = conversationId,
                         ttsPlaybackContext = turnTtsContext,
-                        // 本轮 Caller 快照：Target Run 期间用户切换模型不应改变 Artifact 投影的能力判定
-                        callerSettings = settings,
                     ),
                     onInvalidMcpServerNames = { invalidNames ->
                         addError(

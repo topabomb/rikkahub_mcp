@@ -357,15 +357,13 @@ class ChatServiceTurnPersistenceTest {
                 nonInteractive = any(),
                 interactiveToolNames = any(),
                 memoryToolAllowed = any(),
-                imageAdaptMode = any(),
-                currentTaskMessageId = any(),
                 assistantMessageId = any(),
                 onCheckpoint = any(),
             )
         } answers {
             val input = args[2] as List<UIMessage>
             @Suppress("UNCHECKED_CAST")
-            val onCheckpoint = args[20] as suspend (GenerationCheckpoint) -> Unit
+            val onCheckpoint = args[18] as suspend (GenerationCheckpoint) -> Unit
             streamingFlow(input, mode, onCheckpoint)
         }
         val provider = mockk<Provider<ProviderSetting>>(relaxed = true)

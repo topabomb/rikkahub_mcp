@@ -11,6 +11,7 @@ import net.weero.measix.pilot.data.files.SkillPaths
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.WebDavConfig
+import net.weero.measix.pilot.data.datastore.migrateLegacySettingsJson
 import net.weero.measix.pilot.data.sync.resolveBackupEntry
 import net.weero.measix.pilot.utils.fileSizeToString
 import java.io.File
@@ -227,7 +228,7 @@ class WebDavSync(
                             val settingsJson = zipIn.readBytes().toString(Charsets.UTF_8)
                             Log.i(TAG, "restoreFromBackupFile: Restoring settings")
                             try {
-                                val settings = json.decodeFromString<Settings>(settingsJson)
+                                val settings = json.decodeFromString<Settings>(migrateLegacySettingsJson(settingsJson))
                                 settingsStore.restoreFromBackup(settings)
                                 Log.i(TAG, "restoreFromBackupFile: Settings restored successfully")
                             } catch (e: Exception) {

@@ -74,16 +74,11 @@ class AssistantToolFactory(
 ) {
     /**
      * 按 caller Assistant 的 LocalTool 配置构建工具。
-     *
-     * @param callerSettings 本轮 Master 生成的 Settings 快照；Artifact 投影的能力判定
-     *   使用它而不是完成时的 latest 设置，避免 Target Run 期间用户切换模型造成
-     *   "按新模型投影、旧模型消费"的错配。null 时回退 latest。
      */
     fun buildTools(
         callerAssistant: Assistant,
         masterConversationId: Uuid,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
-        callerSettings: Settings? = null,
     ): List<Tool> {
         val enableManagement = LocalToolOption.AssistantManagement in callerAssistant.localTools
         val enableDelegation = LocalToolOption.AssistantDelegation in callerAssistant.localTools
@@ -101,7 +96,6 @@ class AssistantToolFactory(
                     masterConversationId = masterConversationId,
                     enableManagement = enableManagement,
                     ttsPlaybackContext = ttsPlaybackContext,
-                    callerSettings = callerSettings,
                 ))
             }
         }
@@ -427,7 +421,6 @@ class AssistantToolFactory(
         masterConversationId: Uuid,
         enableManagement: Boolean,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
-        callerSettings: Settings? = null,
     ): Tool = Tool(
         name = TOOL_ASSISTANT_CALL,
         outputPolicy = ToolOutputPolicy.PRESERVE,
@@ -500,7 +493,7 @@ class AssistantToolFactory(
         },
         needsApproval = { false },
         contextualExecute = { args ->
-            executeAssistantCall(callerAssistantId, masterConversationId, this, args, ttsPlaybackContext, callerSettings)
+            executeAssistantCall(callerAssistantId, masterConversationId, this, args, ttsPlaybackContext)
         },
         execute = { _ ->
             // Fallback: 缺少真实 locator/reportMetadata 时不能启动 Child
@@ -521,7 +514,6 @@ class AssistantToolFactory(
         context: ToolExecutionContext,
         args: kotlinx.serialization.json.JsonElement,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
-        callerSettings: Settings? = null,
     ): List<UIMessagePart> {
         val coordinator = subAssistantCoordinator
             ?: return listOf(UIMessagePart.Text(buildSubAssistantCallResult(
@@ -558,7 +550,6 @@ class AssistantToolFactory(
             turnTtsContext = ttsPlaybackContext,
             extras = parseAssistantCallExtras(obj["extras"]),
             attachments = attachments,
-            callerSettingsSnapshot = callerSettings,
         )
     }
 

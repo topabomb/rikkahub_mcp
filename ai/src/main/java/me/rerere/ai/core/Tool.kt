@@ -20,17 +20,39 @@ data class ToolCallLocator(
 )
 
 /**
+ * 工具按 stable attachment refs 请求 Runtime 解析附件的统一结果。
+ *
+ * [parts] 是解析成功的只读 parts（如 Image）；[failureReason] 非空表示解析失败，
+ * 原因字符串由 Runtime 定义，工具应原样透传给模型，不做本地解释。
+ */
+data class ToolAttachmentResolution(
+    val parts: List<UIMessagePart> = emptyList(),
+    val failureReason: String? = null,
+)
+
+/**
  * 通用工具执行上下文，提供 metadata 回写能力。
  * 不引入 App 的 Conversation 类型，保持 ai 模块的平台无关性。
  *
  * [messageId] + [toolOrdinal] 是本次执行在当前 ASSISTANT message 中的内部精确 locator；
  * [toolCallId] 保留给 Provider 协议，不能作为内存更新的唯一键。
+ *
+ * 工具获得的是执行时的资源访问能力，不是 Agent 的完整会话状态：
+ * [resolveAttachments] 按 stable ref 批量解析附件，底层可以使用执行时刻的 durable
+ * 消息快照（含本 run 内已完成的 Tool 结果），但这是 Runtime 的实现细节，不暴露给工具。
  */
 data class ToolExecutionContext(
     val messageId: Uuid,
     val toolOrdinal: Int,
     val toolCallId: String,
     val reportMetadata: suspend (patch: JsonObject, checkpoint: Boolean) -> Unit,
+    /**
+     * 按 stable attachment refs 批量解析附件 parts。
+     * 未注入时统一返回失败 reason `attachment_resolution_unavailable`。
+     */
+    val resolveAttachments: suspend (refs: List<String>) -> ToolAttachmentResolution = {
+        ToolAttachmentResolution(failureReason = "attachment_resolution_unavailable")
+    },
 )
 
 @Serializable

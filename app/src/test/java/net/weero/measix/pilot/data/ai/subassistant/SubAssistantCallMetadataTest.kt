@@ -308,15 +308,14 @@ class SubAssistantCallMetadataTest {
     }
 
     @Test
-    fun `result includes artifact_delivery only when provided`() {
+    fun `result never includes artifact_delivery`() {
         val result = buildSubAssistantCallResult(
             json = json,
             status = "completed",
             assistantName = "Helper",
             content = "Done.",
-            artifactDelivery = ARTIFACT_DELIVERY_UNAVAILABLE,
         )
-        assertTrue(result.contains("\"artifact_delivery\":\"unavailable\""))
+        assertFalse(result.contains("artifact_delivery"))
     }
 
     @Test

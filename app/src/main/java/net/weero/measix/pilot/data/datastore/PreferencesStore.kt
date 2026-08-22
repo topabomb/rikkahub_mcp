@@ -3,7 +3,6 @@ package net.weero.measix.pilot.data.datastore
 import android.content.Context
 import android.util.Log
 import androidx.datastore.core.IOException
-import androidx.datastore.preferences.SharedPreferencesMigration
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
@@ -28,7 +27,6 @@ import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_COMPRESS_PROMPT
-import net.weero.measix.pilot.data.ai.prompts.DEFAULT_OCR_PROMPT
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_SUGGESTION_PROMPT
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_TITLE_PROMPT
 import net.weero.measix.pilot.data.ai.prompts.LEARNING_MODE_PROMPT
@@ -55,7 +53,8 @@ import kotlin.uuid.Uuid
 private const val TAG = "PreferencesStore"
 
 private val Context.settingsStore by preferencesDataStore(
-    name = "settings"
+    name = "settings",
+    produceMigrations = { context -> listOf(OcrSettingsMigration(context)) },
 )
 
 class SettingsStore(
@@ -84,8 +83,7 @@ class SettingsStore(
         val IMAGE_GENERATION_MODEL = stringPreferencesKey("image_generation_model")
         val TITLE_PROMPT = stringPreferencesKey("title_prompt")
         val SUGGESTION_PROMPT = stringPreferencesKey("suggestion_prompt")
-        val OCR_MODEL = stringPreferencesKey("ocr_model")
-        val OCR_PROMPT = stringPreferencesKey("ocr_prompt")
+        val ATTACHMENT_INSPECTION_MODEL = stringPreferencesKey("attachment_inspection_model")
         val COMPRESS_MODEL = stringPreferencesKey("compress_model")
         val COMPRESS_PROMPT = stringPreferencesKey("compress_prompt")
 
@@ -167,8 +165,7 @@ class SettingsStore(
                 imageGenerationModelId = preferences[IMAGE_GENERATION_MODEL]?.let { Uuid.parse(it) } ?: Uuid.random(),
                 titlePrompt = preferences[TITLE_PROMPT] ?: DEFAULT_TITLE_PROMPT,
                 suggestionPrompt = preferences[SUGGESTION_PROMPT] ?: DEFAULT_SUGGESTION_PROMPT,
-                ocrModelId = preferences[OCR_MODEL]?.let { Uuid.parse(it) } ?: Uuid.random(),
-                ocrPrompt = preferences[OCR_PROMPT] ?: DEFAULT_OCR_PROMPT,
+                attachmentInspectionModelId = preferences[ATTACHMENT_INSPECTION_MODEL]?.let { Uuid.parse(it) },
                 compressModelId = preferences[COMPRESS_MODEL]?.let { Uuid.parse(it) } ?: DEFAULT_AUTO_MODEL_ID,
                 compressPrompt = preferences[COMPRESS_PROMPT] ?: DEFAULT_COMPRESS_PROMPT,
                 assistantId = preferences[SELECT_ASSISTANT]?.let { Uuid.parse(it) }
@@ -310,8 +307,9 @@ class SettingsStore(
                     preferences[IMAGE_GENERATION_MODEL] = normalizedSettings.imageGenerationModelId.toString()
                     preferences[TITLE_PROMPT] = normalizedSettings.titlePrompt
                     preferences[SUGGESTION_PROMPT] = normalizedSettings.suggestionPrompt
-                    preferences[OCR_MODEL] = normalizedSettings.ocrModelId.toString()
-                    preferences[OCR_PROMPT] = normalizedSettings.ocrPrompt
+                    normalizedSettings.attachmentInspectionModelId?.let {
+                        preferences[ATTACHMENT_INSPECTION_MODEL] = it.toString()
+                    } ?: preferences.remove(ATTACHMENT_INSPECTION_MODEL)
                     preferences[COMPRESS_MODEL] = normalizedSettings.compressModelId.toString()
                     preferences[COMPRESS_PROMPT] = normalizedSettings.compressPrompt
                     preferences[PROVIDERS] = JsonInstant.encodeToString(normalizedSettings.providers)
@@ -462,8 +460,7 @@ data class Settings(
     val enableSuggestion: Boolean = true,
     val suggestionModelId: Uuid? = null,
     val suggestionPrompt: String = DEFAULT_SUGGESTION_PROMPT,
-    val ocrModelId: Uuid = Uuid.random(),
-    val ocrPrompt: String = DEFAULT_OCR_PROMPT,
+    val attachmentInspectionModelId: Uuid? = null,
     val compressModelId: Uuid = Uuid.random(),
     val compressPrompt: String = DEFAULT_COMPRESS_PROMPT,
     val assistantId: Uuid = DEFAULT_ASSISTANT_ID,

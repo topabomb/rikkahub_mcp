@@ -27,6 +27,7 @@ import me.rerere.ai.ui.MessageTerminalStatus
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.repository.MemoryRepository
@@ -117,6 +118,7 @@ class GenerationHandlerFlowTest {
             providerManager = providerManager,
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
+            attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
         )
         val assistant = Assistant(enableMemory = false)
         val message = UIMessage(
@@ -197,6 +199,7 @@ class GenerationHandlerFlowTest {
             providerManager = providerManager,
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
+            attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
         )
         val assistant = Assistant(enableMemory = false)
         var executed = false
@@ -251,6 +254,7 @@ class GenerationHandlerFlowTest {
             providerManager = providerManager,
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
+            attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
         )
         val assistant = Assistant(enableMemory = false)
         val executionOrder = mutableListOf<String>()
@@ -353,6 +357,7 @@ class GenerationHandlerFlowTest {
                 providerManager = providerManager,
                 json = Json,
                 memoryRepo = mockk<MemoryRepository>(relaxed = true),
+                attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
             ),
             settings = Settings(
                 providers = listOf(providerSetting),

@@ -11,8 +11,6 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.ai.attachments.MAX_ASSISTANT_CALL_ATTACHMENTS
 import net.weero.measix.pilot.data.ai.tools.local.GENERATE_IMAGE_TOOL_NAME
-import net.weero.measix.pilot.data.ai.transformers.ImageAdaptCapability
-import net.weero.measix.pilot.data.ai.transformers.ImageInputAdapter
 import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.files.FileUtils
 import net.weero.measix.pilot.data.files.LocalArtifactRef
@@ -24,10 +22,6 @@ const val ARTIFACT_TYPE_IMAGE = "image"
 const val ARTIFACT_TYPE_DOCUMENT = "document"
 const val ARTIFACT_TYPE_AUDIO = "audio"
 const val ARTIFACT_TYPE_VIDEO = "video"
-
-const val ARTIFACT_DELIVERY_DERIVED = "derived"
-const val ARTIFACT_DELIVERY_PARTIAL = "partial"
-const val ARTIFACT_DELIVERY_UNAVAILABLE = "unavailable"
 
 /**
  * A deliverable extracted from a Child run. [fileUrl] is a local `file://` used for
@@ -56,7 +50,6 @@ data class SubAssistantExtractedArtifacts(
 
 data class CallerArtifactProjection(
     val extraParts: List<UIMessagePart> = emptyList(),
-    val artifactDelivery: String? = null,
 )
 
 internal fun messagesInRunRange(
@@ -129,55 +122,21 @@ fun extractDeliverableArtifacts(
 /**
  * Project extracted artifacts into Caller Tool.output parts.
  *
- * [observe] is only invoked when extras requested artifacts and capability is DERIVED.
- * It must not receive the caller request or user task.
+ * Caller native/reference 投影统一交给 AttachmentProjectionTransformer 按本次请求的
+ * resolved model 决定（设计文档 §11.4）：这里只投影带 stable ref 的 native Image parts，
+ * 不判断 Caller 能力、不调用识别模型。
  */
 suspend fun projectArtifactsForCaller(
     artifacts: List<SubAssistantDeliverableArtifact>,
     extras: Set<String>,
-    capability: ImageAdaptCapability,
-    observe: suspend (UIMessagePart.Image) -> String,
 ): CallerArtifactProjection {
     if (ASSISTANT_CALL_EXTRA_ARTIFACTS !in extras) {
         return CallerArtifactProjection()
     }
     val images = artifacts.filter { it.type == ARTIFACT_TYPE_IMAGE && !it.fileUrl.isNullOrBlank() }
-    val hasUnsupported = artifacts.any { it.type != ARTIFACT_TYPE_IMAGE }
-    if (images.isEmpty()) {
-        return if (hasUnsupported || artifacts.isNotEmpty()) {
-            CallerArtifactProjection(artifactDelivery = ARTIFACT_DELIVERY_UNAVAILABLE)
-        } else {
-            CallerArtifactProjection()
-        }
-    }
-    return when (capability) {
-        ImageAdaptCapability.NATIVE -> CallerArtifactProjection(
-            extraParts = images.map { it.toNativeImagePart() },
-            // 全部内容已按原图交付时省略字段；存在当前不支持类型的交付物时提示 partial
-            artifactDelivery = if (hasUnsupported) ARTIFACT_DELIVERY_PARTIAL else null,
-        )
-        ImageAdaptCapability.DERIVED -> {
-            var successCount = 0
-            val extraParts = images.map { artifact ->
-                val observed = runCatching { observe(artifact.toNativeImagePart()) }
-                if (observed.isSuccess) successCount++
-                val body = observed.getOrDefault(ImageInputAdapter.OBSERVATION_FAILED)
-                UIMessagePart.Text(ImageInputAdapter.wrapObservation(artifact.ref, body))
-            }
-            val delivery = when {
-                successCount == images.size && !hasUnsupported -> ARTIFACT_DELIVERY_DERIVED
-                successCount == 0 -> ARTIFACT_DELIVERY_UNAVAILABLE
-                else -> ARTIFACT_DELIVERY_PARTIAL
-            }
-            CallerArtifactProjection(
-                extraParts = extraParts,
-                artifactDelivery = delivery,
-            )
-        }
-        ImageAdaptCapability.UNAVAILABLE -> CallerArtifactProjection(
-            artifactDelivery = ARTIFACT_DELIVERY_UNAVAILABLE,
-        )
-    }
+    return CallerArtifactProjection(
+        extraParts = images.map { it.toNativeImagePart() },
+    )
 }
 
 internal fun isSuccessfulGenerateImage(tool: UIMessagePart.Tool): Boolean {

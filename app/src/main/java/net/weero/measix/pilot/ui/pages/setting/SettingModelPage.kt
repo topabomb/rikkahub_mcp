@@ -32,6 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
+import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderSetting
@@ -158,12 +159,22 @@ private fun ModelSettingsPage(settings: Settings, vm: SettingVM, contentPadding:
             )
         }
         item {
+            // 选择器只展示声明支持 IMAGE input 的 Chat 模型；null 表示未配置（即关闭能力）。
+            val inspectionProviders = remember(settings.providers) {
+                settings.providers.mapNotNull { provider ->
+                    val visionModels = provider.models.filter {
+                        it.type == ModelType.CHAT && it.inputModalities.contains(Modality.IMAGE)
+                    }
+                    if (visionModels.isEmpty()) null else provider.copyProvider(models = visionModels)
+                }
+            }
             ModelSettingItem(
-                title = stringResource(R.string.setting_model_page_ocr_model),
-                description = stringResource(R.string.setting_model_page_ocr_model_desc),
-                modelId = settings.ocrModelId,
-                providers = settings.providers,
-                onSelect = { model -> vm.updateSettings { it.copy(ocrModelId = model.id) } },
+                title = stringResource(R.string.setting_model_page_attachment_inspection_model),
+                description = stringResource(R.string.setting_model_page_attachment_inspection_model_desc),
+                modelId = settings.attachmentInspectionModelId,
+                providers = inspectionProviders,
+                onSelect = { model -> vm.updateSettings { it.copy(attachmentInspectionModelId = model.id) } },
+                onClear = { vm.updateSettings { it.copy(attachmentInspectionModelId = null) } },
             )
         }
         item {

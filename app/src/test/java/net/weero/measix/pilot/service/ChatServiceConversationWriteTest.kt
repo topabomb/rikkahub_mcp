@@ -269,7 +269,7 @@ class ChatServiceConversationWriteTest {
             input = """{"prompt":"cat","set_as_background":true}""",
             output = listOf(
                 UIMessagePart.Text(
-                    """{"status":"completed","media_id":76,"file":{"path":"/upload/x.jpg","mime_type":"image/jpeg"},"background":{"requested":true,"updated":true}}""",
+                    """{"status":"completed","file":{"path":"/upload/x.jpg","mime_type":"image/jpeg"},"background":{"requested":true,"updated":true}}""",
                 ),
                 UIMessagePart.Image(url = artifactUrl),
             ),
@@ -346,8 +346,6 @@ class ChatServiceConversationWriteTest {
                     nonInteractive = any(),
                     interactiveToolNames = any(),
                     memoryToolAllowed = any(),
-                    imageAdaptMode = any(),
-                    currentTaskMessageId = any(),
                     assistantMessageId = any(),
                     onCheckpoint = any(),
                 )

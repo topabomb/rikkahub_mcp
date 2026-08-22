@@ -87,13 +87,18 @@ class SubAssistantAttachmentCoordinatorTest {
     }
 
     @Test
-    fun `text target without ocr does not create a child`() = runTest {
+    fun `text target still creates child with durable image parts`() = runTest {
+        // 能力不足不是附件失败（设计文档 §11.1）：Target 模型不接收 IMAGE 时 Child 照常创建，
+        // durable 消息保留 Image parts，视觉投影交给 Target run 的 AttachmentProjectionTransformer。
         val image = UIMessagePart.Image(url = "file:///tmp/a.png")
         val harness = harness(
             modelModalities = listOf(Modality.TEXT),
             resolveResult = AttachmentResolveResult.Success(listOf(image)),
         )
-        val result = harness.coordinator.executeCall(
+        val inserted = slot<Conversation>()
+        coEvery { harness.conversationRepo.insertConversation(capture(inserted)) } returns Unit
+
+        harness.coordinator.executeCall(
             callerAssistantId = callerId,
             masterConversationId = masterId,
             targetAssistantId = targetId,
@@ -101,14 +106,10 @@ class SubAssistantAttachmentCoordinatorTest {
             execContext = execContext(),
             attachments = listOf("attachment:11111111-1111-1111-1111-111111111111"),
         )
-        val payload = JsonInstant.parseToJsonElement((result.single() as UIMessagePart.Text).text)
-            .let { it as kotlinx.serialization.json.JsonObject }
-        assertEquals("unavailable", payload["status"]?.let { (it as kotlinx.serialization.json.JsonPrimitive).content })
-        assertEquals(
-            AttachmentFailureReasons.ATTACHMENT_INPUT_UNAVAILABLE,
-            payload["reason"]?.let { (it as kotlinx.serialization.json.JsonPrimitive).content },
-        )
-        coVerify(exactly = 0) { harness.conversationRepo.insertConversation(any()) }
+
+        val child = inserted.captured
+        val user = child.currentMessages.single { it.role == MessageRole.USER }
+        assertTrue(user.parts.any { it is UIMessagePart.Image && it.url == image.url })
     }
 
     @Test

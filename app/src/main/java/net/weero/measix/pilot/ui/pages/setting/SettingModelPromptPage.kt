@@ -28,7 +28,6 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowRight01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_COMPRESS_PROMPT
-import net.weero.measix.pilot.data.ai.prompts.DEFAULT_OCR_PROMPT
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_SUGGESTION_PROMPT
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_TITLE_PROMPT
 import net.weero.measix.pilot.data.datastore.Settings
@@ -59,15 +58,6 @@ internal fun PromptSettingsPage(settings: Settings, vm: SettingVM, contentPaddin
                 promptValue = settings.suggestionPrompt,
                 onPromptChange = { prompt -> vm.updateSettings { it.copy(suggestionPrompt = prompt) } },
                 onResetPrompt = { vm.updateSettings { it.copy(suggestionPrompt = DEFAULT_SUGGESTION_PROMPT) } },
-            )
-        }
-        item {
-            PromptSettingItem(
-                title = stringResource(R.string.setting_model_page_prompt_ocr),
-                promptDescription = stringResource(R.string.setting_model_page_ocr_prompt_vars),
-                promptValue = settings.ocrPrompt,
-                onPromptChange = { prompt -> vm.updateSettings { it.copy(ocrPrompt = prompt) } },
-                onResetPrompt = { vm.updateSettings { it.copy(ocrPrompt = DEFAULT_OCR_PROMPT) } },
             )
         }
         item {

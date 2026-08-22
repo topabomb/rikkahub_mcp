@@ -69,6 +69,24 @@ class AttachmentResolver(
         }
     }
 
+    /**
+     * `inspect_attachments` 的收紧批量入口：只接受 stable `attachment:<uuid>`，1..4 个，
+     * all-or-nothing。安全/存在性校验复用 [resolve]，不在工具层复制路径逻辑。
+     */
+    suspend fun resolveImages(
+        masterMessages: List<UIMessage>,
+        refs: List<String>,
+    ): AttachmentResolveResult {
+        if (refs.isEmpty() || refs.size > MAX_INSPECTION_ATTACHMENTS) {
+            return AttachmentResolveResult.Failure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
+        }
+        val normalized = refs.map { it.trim() }
+        if (normalized.any { AttachmentRefs.parse(it) == null }) {
+            return AttachmentResolveResult.Failure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
+        }
+        return resolve(masterMessages, normalized)
+    }
+
     private suspend fun resolveOne(
         masterMessages: List<UIMessage>,
         rawRef: String,

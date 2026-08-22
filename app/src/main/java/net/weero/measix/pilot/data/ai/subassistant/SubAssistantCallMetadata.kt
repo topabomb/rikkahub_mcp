@@ -206,8 +206,7 @@ internal fun parseAssistantCallExtrasFromInput(input: String): Set<String> {
  * 构建终态 Tool Result JSON。
  *
  * [ttsStats] 有调用才写入。 [toolCalls] / [ttsTexts] 仅在 Caller 通过 `extras` 请求且非空时写入。
- * [artifacts] 仅在 completed 且存在交付物时写入轻量引用；[artifactDelivery] 仅在
- * extras 点名 artifacts 且结果为 derived / unavailable 时写入。
+ * [artifacts] 仅在 completed 且存在交付物时写入轻量引用。
  * [detail] 仅在失败 reason 属于 `content_blocked` / `provider_error` / `runtime_error`
  * 且非空时写入，并按字符上限裁剪。
  */
@@ -224,7 +223,6 @@ fun buildSubAssistantCallResult(
     ttsStats: SubAssistantTtsStats? = null,
     artifacts: List<SubAssistantCallArtifact> = emptyList(),
     artifactsOmitted: Int = 0,
-    artifactDelivery: String? = null,
 ): String {
     val obj = buildJsonObject {
         put("status", status)
@@ -255,7 +253,6 @@ fun buildSubAssistantCallResult(
             )
             if (artifactsOmitted > 0) put("artifacts_omitted", artifactsOmitted)
         }
-        if (artifactDelivery != null) put("artifact_delivery", artifactDelivery)
         if (ttsStats != null && ttsStats.calls > 0) {
             put("tts_stats", buildJsonObject {
                 put("calls", ttsStats.calls)

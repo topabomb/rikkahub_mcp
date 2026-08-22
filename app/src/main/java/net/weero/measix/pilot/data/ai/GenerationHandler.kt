@@ -21,8 +21,11 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.core.merge
+import net.weero.measix.pilot.data.ai.attachments.AttachmentResolveResult
+import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
@@ -240,6 +243,7 @@ class GenerationHandler(
     private val providerManager: ProviderManager,
     private val json: Json,
     private val memoryRepo: MemoryRepository,
+    private val attachmentResolver: AttachmentResolver,
 ) {
     fun generateText(
         settings: Settings,
@@ -268,9 +272,6 @@ class GenerationHandler(
         interactiveToolNames: Set<String> = emptySet(),
         /** Revalidates the snapshotted Memory namespace immediately before each Memory ToolCall. */
         memoryToolAllowed: suspend () -> Boolean = { true },
-        imageAdaptMode: net.weero.measix.pilot.data.ai.transformers.ImageAdaptMode =
-            net.weero.measix.pilot.data.ai.transformers.ImageAdaptMode.CHAT_COMPAT,
-        currentTaskMessageId: Uuid? = null,
         assistantMessageId: Uuid? = null,
         onCheckpoint: suspend (GenerationCheckpoint) -> Unit = {},
     ): Flow<GenerationChunk> = channelFlow {
@@ -366,8 +367,6 @@ class GenerationHandler(
                     conversationSystemPrompt = conversationSystemPrompt,
                     conversationModeInjectionIds = conversationModeInjectionIds,
                     workspaceCwd = workspaceCwd,
-                    imageAdaptMode = imageAdaptMode,
-                    currentTaskMessageId = currentTaskMessageId,
                     assistantMessageId = assistantMessageId,
                     onPhase = { phase -> send(GenerationChunk.Phase(phase)) },
                 )
@@ -511,6 +510,16 @@ class GenerationHandler(
                                 messageId = currentMessageId,
                                 toolOrdinal = toolOrdinal,
                                 toolCallId = tool.toolCallId,
+                                // 最小只读附件能力：refs → 统一 AttachmentResolver。
+                                // 消息快照（含本 run 内已完成的 Tool 结果）是 Runtime 实现细节，不暴露给工具。
+                                resolveAttachments = { refs ->
+                                    when (val resolved = attachmentResolver.resolveImages(messages, refs)) {
+                                        is AttachmentResolveResult.Success -> ToolAttachmentResolution(resolved.parts)
+                                        is AttachmentResolveResult.Failure -> ToolAttachmentResolution(
+                                            failureReason = resolved.reason,
+                                        )
+                                    }
+                                },
                                 reportMetadata = { patch: JsonObject, checkpoint: Boolean ->
                                     // 从最新 messages 中按 locator 重新取得 Tool，merge metadata patch
                                     val allTools = messages.last().getTools()
@@ -671,9 +680,6 @@ class GenerationHandler(
         conversationSystemPrompt: String? = null,
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
-        imageAdaptMode: net.weero.measix.pilot.data.ai.transformers.ImageAdaptMode =
-            net.weero.measix.pilot.data.ai.transformers.ImageAdaptMode.CHAT_COMPAT,
-        currentTaskMessageId: Uuid? = null,
         assistantMessageId: Uuid? = null,
         onPhase: (suspend (String) -> Unit)? = null,
     ) {
@@ -720,8 +726,6 @@ class GenerationHandler(
             conversationModeInjectionIds = conversationModeInjectionIds,
             processingStatus = processingStatus,
             workspaceCwd = workspaceCwd,
-            imageAdaptMode = imageAdaptMode,
-            currentTaskMessageId = currentTaskMessageId,
         )
 
         var messages: List<UIMessage> = messages

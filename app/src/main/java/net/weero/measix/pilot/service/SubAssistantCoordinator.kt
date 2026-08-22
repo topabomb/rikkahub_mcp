@@ -38,7 +38,6 @@ import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantUserInteraction
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantRunStateReducer
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantRunSpecResolution
-import net.weero.measix.pilot.data.ai.subassistant.ARTIFACT_DELIVERY_UNAVAILABLE
 import net.weero.measix.pilot.data.ai.subassistant.ASSISTANT_CALL_EXTRA_ARTIFACTS
 import net.weero.measix.pilot.data.ai.subassistant.ASSISTANT_CALL_EXTRA_TOOL_CALLS
 import net.weero.measix.pilot.data.ai.subassistant.ASSISTANT_CALL_EXTRA_TTS
@@ -71,13 +70,9 @@ import net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
 import net.weero.measix.pilot.data.ai.attachments.AttachmentFailureReasons
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolveResult
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
-import net.weero.measix.pilot.data.ai.transformers.AttachmentInputTransformer
-import net.weero.measix.pilot.data.ai.transformers.AttachmentRefHintTransformer
+import net.weero.measix.pilot.data.ai.transformers.AttachmentProjectionTransformer
 import net.weero.measix.pilot.data.ai.transformers.Base64ImageToLocalFileTransformer
 import net.weero.measix.pilot.data.ai.transformers.DocumentAsPromptTransformer
-import net.weero.measix.pilot.data.ai.transformers.ImageAdaptCapability
-import net.weero.measix.pilot.data.ai.transformers.ImageAdaptMode
-import net.weero.measix.pilot.data.ai.transformers.ImageInputAdapter
 import net.weero.measix.pilot.data.ai.transformers.InputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.OutputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.TransformerContext
@@ -201,8 +196,6 @@ class SubAssistantCoordinator(
         turnTtsContext: TtsToolPlaybackContext? = null,
         extras: Set<String> = emptySet(),
         attachments: List<String> = emptyList(),
-        /** 本轮 Master 生成的 Caller Settings 快照；Artifact 投影用它判定能力，null 回退 latest。 */
-        callerSettingsSnapshot: Settings? = null,
     ): List<UIMessagePart> {
         val settings = settingsStore.settingsFlow.value
         val targetAssistant = settings.getAssistantById(targetAssistantId)
@@ -327,19 +320,8 @@ class SubAssistantCoordinator(
         }
         val runJob = activeTargetRun.job
 
-        if (attachments.isNotEmpty()) {
-            val capability = ImageInputAdapter.preflight(model, latestSettingsCheck)
-            if (capability == ImageAdaptCapability.UNAVAILABLE) {
-                runLeases.release(activeRunKey, activeTargetRun)
-                return unavailableResult(
-                    execContext = execContext,
-                    targetAssistantId = targetAssistantId,
-                    assistantName = target.name,
-                    reason = AttachmentFailureReasons.ATTACHMENT_INPUT_UNAVAILABLE,
-                    runId = runId,
-                )
-            }
-        }
+        // 能力不足不是附件失败（设计文档 §11.1）：入站只验证 attachment ref/资产，
+        // 视觉能力由 Target run 自己的 AttachmentProjectionTransformer 与 tool set 表达。
 
         val childConversationId: Uuid
         val childTaskNodeId: Uuid
@@ -556,8 +538,6 @@ class SubAssistantCoordinator(
                     val callerProjection = projectCompletedArtifacts(
                         extras = extras,
                         extracted = extracted.artifacts,
-                        callerAssistantId = callerAssistantId,
-                        callerSettingsSnapshot = callerSettingsSnapshot,
                     )
 
                     val terminalMeta = runState.updateTerminalState(
@@ -580,7 +560,6 @@ class SubAssistantCoordinator(
                         artifacts = artifacts,
                         artifactsOmitted = extracted.omitted,
                         extraParts = callerProjection.extraParts,
-                        artifactDelivery = callerProjection.artifactDelivery,
                     )
                 }
             }
@@ -742,8 +721,7 @@ class SubAssistantCoordinator(
             PromptInjectionTransformer,
             PlaceholderTransformer,
             DocumentAsPromptTransformer,
-            AttachmentRefHintTransformer,
-            AttachmentInputTransformer,
+            AttachmentProjectionTransformer,
             templateTransformer,
             workspaceReminderTransformer,
         )
@@ -784,6 +762,7 @@ class SubAssistantCoordinator(
         }
 
         // 每个 step 重新解析资源并应用“运行快照 ∩ 当前配置”，但复用 TTS 播放上下文。
+        // 工具能力依据本次 run 的 resolved model（设计文档 §11.2）。
         val toolProvider: suspend () -> List<Tool> = {
             val currentSettings = settingsStore.settingsFlow.value
             val latestTarget = currentSettings.getAssistantById(target.id)
@@ -793,6 +772,7 @@ class SubAssistantCoordinator(
                 toolSetFactory.buildTools(
                     assistant = intersectTargetToolCapabilities(target, latestTarget),
                     settings = currentSettings,
+                    resolvedModel = model,
                     workspaceCwd = conversation.workspaceCwd,
                     runMode = ToolSetRunMode.TARGET,
                     ttsPlaybackContext = ttsPlaybackContext,
@@ -830,8 +810,6 @@ class SubAssistantCoordinator(
                 // keeps Target injections active when allowConversationPromptInjection is enabled.
                 conversationModeInjectionIds = target.modeInjectionIds,
                 workspaceCwd = conversation.workspaceCwd,
-                imageAdaptMode = ImageAdaptMode.SUB_ASSISTANT,
-                currentTaskMessageId = childTaskNodeId,
                 maxSteps = 256,
                 onCheckpoint = { checkpoint ->
                     lastMessages = checkpoint.messages
@@ -1116,32 +1094,13 @@ class SubAssistantCoordinator(
     private suspend fun projectCompletedArtifacts(
         extras: Set<String>,
         extracted: List<SubAssistantDeliverableArtifact>,
-        callerAssistantId: Uuid,
-        callerSettingsSnapshot: Settings? = null,
     ): CallerArtifactProjection {
-        if (ASSISTANT_CALL_EXTRA_ARTIFACTS !in extras) {
-            return CallerArtifactProjection()
-        }
-        // 能力判定用本轮 Master Tool Loop 的 Caller 快照；用户在 Target Run 期间切换模型
-        // 不应改变投影方式（结果仍交给仍在运行的旧模型消费）。快照缺失时回退 latest。
-        val settings = callerSettingsSnapshot ?: settingsStore.settingsFlow.value
-        val caller = settings.getAssistantById(callerAssistantId)
-        val callerModel = caller?.let { settings.getChatModel(it) }
-        if (caller == null || callerModel == null) {
-            return CallerArtifactProjection(artifactDelivery = ARTIFACT_DELIVERY_UNAVAILABLE)
-        }
-        val capability = ImageInputAdapter.resolveCapability(callerModel, settings)
-        val observeContext = TransformerContext(
-            context = context,
-            model = callerModel,
-            assistant = caller,
-            settings = settings,
-        )
+        // Child artifact 的稳定引用始终是交付事实；Caller native/reference 投影统一交给
+        // AttachmentProjectionTransformer 按本次请求的 resolved model 决定（设计文档 §11.4），
+        // 这里不再判断 Caller 能力，也不自动识别。
         return projectArtifactsForCaller(
             artifacts = extracted,
             extras = extras,
-            capability = capability,
-            observe = { image -> ImageInputAdapter.observe(observeContext, image) },
         )
     }
 
@@ -1259,7 +1218,6 @@ class SubAssistantCoordinator(
         artifacts: List<SubAssistantCallArtifact> = emptyList(),
         artifactsOmitted: Int = 0,
         extraParts: List<UIMessagePart> = emptyList(),
-        artifactDelivery: String? = null,
     ): List<UIMessagePart> {
         val outputs = collectSubAssistantCallOutputs(messages, childTaskNodeId, extras)
         val resultJson = buildSubAssistantCallResult(
@@ -1275,7 +1233,6 @@ class SubAssistantCoordinator(
             ttsStats = outputs.ttsStats,
             artifacts = artifacts,
             artifactsOmitted = artifactsOmitted,
-            artifactDelivery = artifactDelivery,
         )
         return listOf(UIMessagePart.Text(resultJson)) + extraParts
     }

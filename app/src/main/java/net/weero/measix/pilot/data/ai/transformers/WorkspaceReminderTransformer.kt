@@ -52,7 +52,7 @@ private fun buildWorkspacePrompt(workspace: WorkspaceEntity): String = buildStri
     appendLine("  - `workspace_shell`: run shell commands (the files area is mounted at /workspace).")
     appendLine("- Prefer `workspace_shell` for tasks that standard Unix tools handle well, and prefer `workspace_edit_file` for targeted edits over rewriting whole files.")
     appendLine("- The skills directory is mounted at `/skills`. Each skill is a subdirectory `/skills/<skill-name>/` containing a `SKILL.md` (with `name` and `description` frontmatter) plus any supporting files. Read a skill's `SKILL.md` before using it, and follow its instructions.")
-    appendLine("- Files the user uploaded are mounted at `/upload`. Treat `/upload` as READ-ONLY: read uploaded files from `/upload/<file-name>`, but never modify, overwrite, or delete anything there. If you need to change an uploaded file, copy it into `/workspace` first and edit the copy.")
+    appendLine("- Files shared in this conversation — uploads and generated media — are mounted at `/upload`. Treat `/upload` as READ-ONLY: read files from `/upload/<file-name>`, but never modify, overwrite, or delete anything there. If you need to change a file, copy it into `/workspace` first and edit the copy.")
     append("</workspace>")
 }
 

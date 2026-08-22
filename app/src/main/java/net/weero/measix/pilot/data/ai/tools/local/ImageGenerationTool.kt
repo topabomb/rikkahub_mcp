@@ -288,7 +288,6 @@ private suspend fun executeGenerateImage(
                 }
                 val text = buildJsonObject {
                     put("status", "completed")
-                    put("media_id", media.mediaId)
                     put("file", buildJsonObject {
                         put("path", toolPath)
                         put("mime_type", media.mimeType)

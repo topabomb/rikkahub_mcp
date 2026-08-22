@@ -7,7 +7,8 @@
 相关实现：`GenerationHandler.generateInternal()`、`PlaceholderTransformer`、
 `TemplateTransformer`、`AssistantCatalogBuilder`、`AssistantToolFactory`、
 `WorkspaceReminderTransformer`、`ToolArtifactReplayTransformer`、
-`TimeReminderTransformer`、`buildMemoryPrompt()`。
+`TimeReminderTransformer`、`AttachmentProjectionTransformer`、
+`AttachmentInspectionTool`、`buildMemoryPrompt()`。
 
 ---
 
@@ -27,8 +28,8 @@ System
   PromptInjectionTransformer
   PlaceholderTransformer      ← 替换 {{char}} / {{description}} 等
   DocumentAsPromptTransformer
-  AttachmentRefHintTransformer
-  AttachmentInputTransformer  ← 按本次模型 NATIVE 保留图片 / DERIVED 换成 observation
+  AttachmentProjectionTransformer ← 按本次模型能力投影附件：模型可读 IMAGE 时保留图片 part
+                              并前插引用行；不可读时替换为引用行 + 末尾一次 capability hint
   TemplateTransformer         ← 渲染 messageTemplate
   WorkspaceReminderTransformer
   ToolArtifactReplayTransformer ← 按 artifact metadata 重写历史 Tool Result 路径与 Image URL
@@ -231,14 +232,16 @@ Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过�
 ```json
 {
   "status": "completed",
-  "media_id": 42,
   "file": { "path": "/upload/9a3f-image.png", "mime_type": "image/png" },
   "background": { "requested": false, "updated": false }
 }
 ```
 
-`file.path` 是唯一模型可见路径，语义为本地工具可消费的 `/upload/<safe-file-name>`，对应
-managed chat copy。Android host path、file URI 和内部 relative path 不进入 Tool Result。
+`file.path` 是 Tool Result 内唯一模型可见标识，语义为本地工具可消费的
+`/upload/<safe-file-name>`（文件身份，供 workspace 工具读写）。引用身份
+`attachment:<uuid>` 不写入 Tool Result，由 `AttachmentProjectionTransformer` 在下一
+step 投影成 `[Attachment ref=...]` 引用行统一交付（见 `inspect_attachments` 小节）。
+Android host path、file URI 和内部 relative path 不进入 Tool Result。
 会话 fork / 恢复按 metadata 中的 `LocalArtifactRef.relativePath` 重写该字段；文件缺失时不得
 伪造 completed + readable path。
 
@@ -268,6 +271,47 @@ managed chat copy。Android host path、file URI 和内部 relative path 不进�
 `/upload/...` 路径。历史执行 `status` 保持原值，Replay 不重新判定工具是否成功。
 背景失败不回滚已进入 Gallery 的图片；此时图片仍为 completed，`background.updated=false`
 并带 `assistant_not_found` / `background_copy_failed` / `settings_write_failed`。
+
+### `inspect_attachments`
+
+启用条件（工具不注入时模型看不到它）：当前对话模型不接收 IMAGE，且设置中配置了
+Provider 可用、自身声明 IMAGE 输入的附件识别模型（`attachmentInspectionModelId`）。
+
+> Inspect attachment content on demand when the task depends on it — for example,
+> text or other visual details in an image. Returns the findings for the request.
+
+参数：
+
+- `attachments`（array，1–4 项，required）：`Attachment refs to inspect, copied exactly
+  from the [Attachment ref=...] lines in the conversation. Currently image attachments
+  only. Up to 4; order is preserved.` items：`An attachment ref as it appears in the
+  conversation (attachment:<uuid>)`
+- `request`（string，required）：`The specific information to look for in the attachments.
+  Keep it focused on the current task.`
+
+成功结果为普通 Text part（识别模型输出），不携带附件数据。失败结果为带稳定 `reason` 的
+JSON：
+
+| reason | 含义 |
+|--------|------|
+| `invalid_attachments` | refs 为空 / 超过 4 个 / 非 `attachment:` 格式 / 解析结果无图片 |
+| `attachment_not_found` / `unsupported_attachment_type` / `unsafe_attachment_url` / `attachment_fetch_failed` | 统一 Resolver 解析失败，reason 原样透传 |
+| `attachment_resolution_unavailable` | 执行环境未提供附件解析能力 |
+| `inspection_model_unavailable` | 识别模型未配置 / Provider 不可用 / 模型不接收 IMAGE |
+| `inspection_failed` | 识别调用失败或输出为空 |
+
+媒体资源的两种身份（全工具链统一语义）：
+
+```text
+attachment:<uuid>   引用身份——把附件作为输入传给工具（inspect_attachments、
+                    assistant_call.attachments）；在投影出的 [Attachment ref=...] 引用行交付
+/upload/<file>      文件身份——读写字节（workspace_read_file / workspace_shell 等）；
+/workspace/...      工作产物区。会话共享的只读文件（上传与生成的媒体）挂载在 /upload
+```
+
+工具产出新媒体（如 `generate_image`）时两种身份同时获得：文件身份写入 Tool Result
+`file.path`，引用身份由 `AttachmentRefs.ensureAttachmentRef` 锚定在 Image part metadata
+上、经投影管线以引用行交付。除这两者外不向模型暴露其他标识。
 
 ### `get_time_info`
 
