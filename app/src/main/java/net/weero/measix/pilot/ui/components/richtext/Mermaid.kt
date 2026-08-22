@@ -55,7 +55,15 @@ fun Mermaid(
 
     val exportSuccessText = stringResource(R.string.mermaid_export_success)
     val exportFailedText = stringResource(R.string.mermaid_export_failed)
-    val jsInterface = remember {
+    val permissionRequiredText = stringResource(R.string.image_viewer_save_need_permission)
+    val jsInterface = remember(
+        activity,
+        context,
+        toaster,
+        exportSuccessText,
+        exportFailedText,
+        permissionRequiredText,
+    ) {
         MermaidInterface(
             onExportImage = { base64Image ->
                 val host = activity
@@ -78,7 +86,7 @@ fun Mermaid(
                                 type = ToastType.Success
                             )
                             ImageExportResult.PermissionRequired -> toaster.show(
-                                context.getString(R.string.image_viewer_save_need_permission),
+                                permissionRequiredText,
                                 type = ToastType.Error
                             )
                             ImageExportResult.Failed -> toaster.show(

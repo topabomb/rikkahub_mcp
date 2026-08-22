@@ -239,11 +239,14 @@ fun rememberImageBackgroundHost(
     val defaultAssistantName = stringResource(R.string.assistant_page_default_assistant)
     val description = stringResource(R.string.image_viewer_set_as_background)
     val pickerTitle = stringResource(R.string.image_viewer_select_assistant_title)
+    val missingAssistantText = stringResource(
+        R.string.chat_message_tool_generate_image_background_assistant_missing
+    )
     val applying = remember { AtomicBoolean(false) }
     var pendingPick by remember { mutableStateOf<PendingAssistantPick?>(null) }
     var pendingConfirm by remember { mutableStateOf<PendingBackgroundChoice?>(null) }
 
-    val action = remember(description, defaultAssistantName) {
+    val action = remember(description, defaultAssistantName, missingAssistantText) {
         ImagePreviewAction(
             icon = HugeIcons.ImageComposition,
             contentDescription = description,
@@ -257,9 +260,7 @@ fun rememberImageBackgroundHost(
                 val assistant = settingsState.value.getAssistantById(knownId)
                 if (assistant == null) {
                     toaster.show(
-                        message = context.getString(
-                            R.string.chat_message_tool_generate_image_background_assistant_missing,
-                        ),
+                        message = missingAssistantText,
                         type = ToastType.Error,
                         id = IMAGE_VIEWER_BACKGROUND_TOAST_ID,
                     )
