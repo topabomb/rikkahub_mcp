@@ -24,6 +24,32 @@
 
 ---
 
+## 0. 文档完整性与实现减法原则
+
+本文档需要保持**完整、正确、可直接实施和可验收**。这里所说的“做减法”只针对项目实现，不针对设计文档本身。
+
+因此本文档不能为了“简洁”省略以下内容：
+
+- 最终领域语义和不变量；
+- 旧机制的明确删除范围；
+- Settings / 数据迁移与兼容边界；
+- Master / Target / `generate_image` / Tool artifact 的统一行为；
+- Provider wire 约束；
+- failure semantics；
+- 文件级实施计划；
+- TDD、回归和验收矩阵。
+
+实现上的“减法”遵循四条原则：
+
+1. **减少机制，不减少职责清晰度。** 能由同一职责自然完成的逻辑合并，身份、请求投影、工具能力、Provider 编码等不同职责仍保持边界。
+2. **删除旧实现，不用 alias 和长期兼容层伪装迁移完成。** 除一次性迁移边界外，旧 OCR、自动 observation、DERIVED、cache 和 capability fail-fast 应从运行时彻底消失。
+3. **不为未来假设提前抽象。** 没有第二个真实调用方时，不引入 registry / repository / analyzer hierarchy / derivative entity 等层级；但当前真实边界必须有清晰 API 和测试。
+4. **减法不能制造技术债。** 不以牺牲性能、用户体验、错误可诊断性、Provider 正确性、可测试性或长期维护性换取文件数量更少。若合并会造成职责耦合，应保留最小必要边界。
+
+最终评审关注的是：**机制是否更少、数据是否更稳定、调用链是否更短、职责是否更明确、旧债是否真正删除**，而不是单纯统计类、文件或代码行数。
+
+---
+
 ## 1. 最终架构：只保留三个职责
 
 ```text
@@ -95,7 +121,7 @@ inspect_attachments
 
 ---
 
-## 2. 做减法后的明确删除项
+## 2. 实现做减法：明确删除旧机制
 
 本轮不是“OCR → Attachment Analysis”逐项改名。以下旧结构直接删除：
 
@@ -112,6 +138,8 @@ inspect_attachments
 - 为识别结果新增 `AttachmentDerivative` / analysis cache / analysis entity；
 - 为 A/B/C 新增持久化状态或 delivery receipt；
 - 为“是否启用识别”再增加一个布尔开关。
+
+这些删除项的目标状态是**不存在运行时依赖和隐藏兼容路径**，而不是 deprecated 后继续保留、通过 alias 转发、留 dead branch 或新旧双轨共存。迁移代码完成一次性 cutover 后，不应继续参与正常运行路径。
 
 本轮也**不新增**一套平行的 `AttachmentAsset` 数据库，只为了支持识别工具。现有 Conversation Image、stable `attachment_ref`、managed artifact 和 Tool execution 已经足够支撑当前目标。如果未来文件同步/生命周期治理确实需要规范化 Asset 表，应作为独立问题设计，不能作为本轮多模态 fallback 的附带复杂度。
 
@@ -866,6 +894,7 @@ ImageAnalyzer / DocumentAnalyzer / AudioAnalyzer / VideoAnalyzer 空接口族
 ### Phase 6 — 清理
 
 - 全仓删除旧运行时 OCR 语义。
+- 删除仅为旧链服务的 alias、dead code、无调用测试 helper 和兼容分支。
 - 更新旧多模态/子助手文档到新语义。
 - 单测、集成测试、Provider wire tests、Android build 全绿。
 
@@ -993,6 +1022,16 @@ background attachment analysis
 DERIVED renamed to another enum
 persistent A/B/C capability
 ```
+
+此外，以下情况也视为未完成减法：
+
+- 旧类只改名/deprecate 后仍位于正常调用链；
+- 新实现通过 compatibility alias 继续依赖旧 OCR 类型；
+- 新旧 Transformer 同时处理同一 Image projection；
+- 为未来类型预建空接口/registry，却没有本轮真实调用方；
+- 为减少文件数量而把 Provider encoding、attachment identity 或 tool execution 混入同一高耦合对象。
+
+清理验收应包含全仓符号搜索、调用链检查和测试，而不只看编译是否通过。
 
 ---
 
