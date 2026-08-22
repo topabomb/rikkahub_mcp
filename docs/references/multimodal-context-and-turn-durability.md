@@ -1,312 +1,221 @@
-# 多模态附件上下文与 Turn 持久化
+# 多模态上下文与 Turn 持久化
 
-> 本文是当前实现参考，说明附件事实、请求级投影、按需附件识别，以及 Master Turn / Tool 执行的持久化不变量。
+> 定位：会话中的多媒体附件如何成为持久事实（stable attachment ref + managed file）、如何在每次生成请求中按模型能力投影（`AttachmentProjectionTransformer` / `inspect_attachments`）、以及一轮生成（Turn）如何以执行事实落库并在崩溃后恢复。
 >
-> 当前完整识别范围是 **Image**。Document / Audio / Video 保留稳定附件身份；Document 的文本消费仍由现有文档转换链负责。
+> 分工：`inspect_attachments` 的模型可见描述与失败 reason 表见 [prompts-and-tools.md](prompts-and-tools.md)；Resolver 的 SSRF / 魔数 / 去重细节与子助手附件链路见 [sub-assistant-multimodal.md](sub-assistant-multimodal.md)；生成主链路与 Transformer 顺序见 [chat-generation-pipeline.md](chat-generation-pipeline.md)；数据层结构见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and-sync.md)。
 
-## 1. 文档职责
-
-这份文档只记录跨模块必须共同遵守的契约，不重复其他参考文档已经负责的细节：
-
-| 主题 | 参考文档 |
-|---|---|
-| 完整生成流程、Transformer 与工具循环顺序 | [chat-generation-pipeline.md](chat-generation-pipeline.md) |
-| 模型实际看到的提示词、工具 description / schema / Tool Result | [prompts-and-tools.md](prompts-and-tools.md) |
-| 子助手附件入站、交付物出站、metadata 与卡片 | [sub-assistant-multimodal.md](sub-assistant-multimodal.md) |
-| 子助手生命周期、lineage、lease、撤权与恢复 | [sub-assistant-architecture.md](sub-assistant-architecture.md) |
-| Provider 协议编码与兼容边界 | [protocol-reference.md](protocol-reference.md) |
-| 消息与工具卡片渲染 | [message-rendering-pipeline.md](message-rendering-pipeline.md) |
-| 持久化介质、文件、备份与同步 | [../dev/persistent-records-and-sync.md](../dev/persistent-records-and-sync.md) |
-| 上下文裁剪与显式压缩 | [../dev/context-management.md](../dev/context-management.md) |
-
-本文关注的是以下四层不要互相污染：
+## 1. 行为总览
 
 ```text
-Durable Conversation / Artifact Fact
-                │
-                ▼
-       Request-time Model View
-                │
-                ▼
-          Provider Request
-
-Turn / Tool Execution Facts  ── 与上述附件事实一起在明确 checkpoint 持久化
+用户上传 / 工具产出媒体
+    │  AttachmentRefs.ensureAttachmentRef() 盖章（持久事实，一次性）
+    ▼
+durable Conversation
+    Image part（url + metadata.attachment_ref）+ managed file
+    │  每次生成请求
+    ▼
+AttachmentProjectionTransformer（按本次 resolved model 的 inputModalities）
+    ├── 可读图（IMAGE in inputModalities）→ 引用行 + 原图
+    └── 不可读图 → 引用行 + capability hint（最后一条消息尾部，一次）
+           │  模型需要细节时显式调用
+           ▼
+    inspect_attachments(refs, request)
+        → ToolExecutionContext.resolveAttachments → 识别模型（单次多图调用）→ Text
+    ▼
+Turn / Tool 执行事实（ConversationRepository.checkpointTurn / finalizeTurn，Room 事务）
+    ▼
+崩溃恢复（INTERRUPTED / UNKNOWN）与 replay-safe 回放
 ```
 
-核心原则：**Conversation 保存事实；请求投影表达当前能力；Tool Result 保存真实执行结果；Provider 适配只负责线协议。**
+关键性质：投影是**请求级、无状态、非破坏**——durable Conversation 永远保存原图与 ref，Model View 每次按当次模型重算；模型切换（视觉 ↔ 文本）不需要迁移消息，下一次请求自然回放对应形态。
 
-## 2. 附件事实与稳定身份
+## 2. 附件事实
 
-### 2.1 `attachment:<uuid>` 是引用身份
+### 2.1 stable attachment ref
 
-用户上传、工具产物和模型落盘媒体都通过 `UIMessagePart` 保存原始附件，并在 metadata 中使用稳定引用：
+- 格式：`attachment:<uuid>`（`AttachmentRefs` 前缀常量）。
+- 存储：多媒体 part 的 `metadata` 中的 `attachment_ref` 键，merge 语义（保留其他 metadata 键）。
+- 唯一性：一个 ref 指向一个逻辑附件；不同 part 可指向同一文件（保持各自 ref）。
+- 幂等：`ensureAttachmentRef` 对已带**合法可解析** ref 的 part 恒等返回；仅对非多媒体 part 恒等。导入 / 旧数据 / 异常 Provider metadata 中的非法 ref 会被重建为合法 UUID，避免模型拿到永远无法解析的 handle。
+
+### 2.2 盖章位置
+
+媒体进入持久消息的入口都调用 `ensureAttachmentRef`：
+
+| 入口 | 说明 |
+|------|------|
+| 用户上传 / 编辑消息 | `ChatService` 发送前 |
+| `generate_image` 产出 | 工具成功时对 Image part 盖章 |
+| MCP 图片内容 | `McpManager` 转本地文件时 |
+| 外部 HTTPS 图 | 入站时落地（`wrapLocalImage`），Child 只存 `file://` |
+| base64 图片 | `FilesManager.convertBase64ImagePartToLocalFile` 落盘即盖章 |
+| `assistant_call` 注入 Child | 复制源 ref（跨会话引用同一 managed file） |
+| 历史消息补章 | 会话加载 / 生成前的 backfill |
+
+### 2.3 资源的两种身份
+
+每个进入会话的媒体同时拥有两个标识，模型可见标识只此两种：
+
+| 身份 | 标识 | 用途 | 交付方式 |
+|------|------|------|----------|
+| 引用身份 | `attachment:<uuid>` | 把附件作为输入传给工具（`inspect_attachments`、`assistant_call.attachments`） | 投影出的 `[Attachment ref=...]` 引用行 |
+| 文件身份 | `/upload/<file>`、`/workspace/...` | 读写字节（workspace 工具族） | `<UploadFile path=...>`（文档展开）、Tool Result `file.path` |
+
+`/upload` 挂载会话共享的只读文件（用户上传与生成媒体）。内部数据库 id（如已移除的 `media_id`）不进入模型可见 JSON。
+
+### 2.4 文件可用性
+
+- 文件被清理后，历史消息仍保留 Image part 与 ref；投影引用行照常回放，`inspect_attachments` 解析该 ref 时按 `attachment_not_found` 失败，不伪造内容。
+- 模型读到 `[Attachment ref=...]` 只代表引用存在，不代表文件可用——需要内容时显式调用工具验证。
+
+## 3. 请求级投影（`AttachmentProjectionTransformer`）
+
+### 3.1 两态
+
+判定输入：本次请求 resolved model 的 `inputModalities` 是否包含 `Modality.IMAGE`。无 Provider 维度矩阵——声明错误的兼容端点由 Provider / 网关报错收口（`provider_error` / `content_blocked`）。
+
+| 模式 | 行为 |
+|------|------|
+| 可读图 | Image part 保留，前方插入引用行 |
+| 不可读图 | Image 替换为引用行；最后一条消息尾部追加一次 capability hint |
+
+### 3.2 投影规则
+
+引用行格式（A/B/C 三态均保留）：
 
 ```text
-attachment_ref = attachment:<uuid>
+[Attachment ref=attachment:<uuid> type=image name="screenshot.png"]
 ```
 
-`AttachmentRefs` 负责解析、规范化、metadata merge、补齐以及 file URL 辅助。已有合法 ref 必须保留；写 metadata 时必须 merge，不能覆盖 Provider metadata 或 Tool metadata。
+| 对象 | 可读图模式 | 不可读图模式 |
+|------|-----------|-------------|
+| Image（带 ref） | 引用行 + 原图 | 替换为引用行 |
+| Image（无 ref，legacy） | 原图，不加引用行 | 替换为 `[Image]` 占位 |
+| Document / Audio / Video | 引用行 + 原 part（始终保留，不分叉） | 同左 |
+| `Tool.output` 内媒体 | 递归同上（否则模型看不到生图结果上的 ref） | 递归同上 |
 
-`attachment:<uuid>` 表示“这一个会话附件事实”。它不是 Android 文件路径，也不是 Provider file id。
+- capability hint 固定文本：「附件图片本次运行不可直接可见，不要仅凭引用推断视觉细节」。模型可见，不进入持久化，也不在 UI 显示；不写 `use inspect_attachments`（何时调用由工具 description 表达）。
+- 引用行含 ref / type / name；不含 mime、host path。显示名优先 `ManagedFileEntity.displayName`，否则磁盘文件名。
 
-### 2.2 `/upload/...` 是文件访问身份
+### 3.3 不变量
 
-模型可使用的文件路径与附件引用是两个不同平面：
+| 不变量 | 含义 |
+|--------|------|
+| 非破坏 | 投影只产生请求副本，durable Conversation 原对象不变（含 `Tool.output`） |
+| 无状态 | 无跨请求缓存；同一消息按不同模型投影出不同请求，互不影响 |
+| 单次 hint | capability hint 只在最后一条消息出现一次 |
+| 事实先行 | ref 在持久化时锚定；引用行只是 ref 的模型可见呈现 |
+
+## 4. `inspect_attachments`（按需识别）
+
+### 4.1 注入条件
+
+工具注入判定 `shouldInjectAttachmentInspection()`（`GenerationToolSetFactory`），全部满足才注入：
+
+1. 本次 resolved model 不接收 IMAGE；
+2. `Settings.attachmentInspectionModelId` 能解析到模型；
+3. 该模型 Provider 可用；
+4. 该模型自身 `inputModalities` 含 IMAGE。
+
+不根据当前消息是否包含图片决定 schema。注入时机遵循「配置变更在下一次构建时生效」：主链路 = 下一轮 turn；Target = 下一次 `assistant_call`；run 内 tool schema 稳定（Target 删除 / 撤权等安全信号除外，仍每 step 走 latest）。
+
+### 4.2 附件解析接口（`ToolExecutionContext.resolveAttachments`）
+
+工具获得的不是会话状态，而是最小只读资源访问能力：
 
 ```text
-attachment:<uuid>   用于引用附件、传给 inspect_attachments / assistant_call.attachments
-/upload/<file>      用于 Workspace / Tool 读取文件字节
+attachment:<uuid>（1..4 个）
+→ ToolExecutionContext.resolveAttachments(refs)
+→ 统一 AttachmentResolver（Runtime 内部使用执行时刻的 durable 消息快照，含本 run 内已完成的 Tool Result）
+→ Image parts
+→ 识别模型（单次多图调用，[Image N ref=...] 内部标签 + request + 固定 system instruction）
+→ Text Tool Result
 ```
 
-内部 `file://`、`filesDir` relative path、Provider 临时资源 id 不应成为模型层的稳定身份。
+- refs 与产出 1:1、顺序稳定（`resolveImages()` 禁用去重）；同一远程 url 在单次批量解析内只 fetch / 落盘一次。
+- 未注入 resolver 的执行环境统一返回 `attachment_resolution_unavailable`，不静默成功。
+- 识别无缓存；结果作为显式 Tool Result 已是正确的历史记录。
+- 失败 reason 原样透传（表见 [prompts-and-tools.md](prompts-and-tools.md)）。
 
-### 2.3 ref 在持久化边界生成，不由投影器制造
+### 4.3 设置与迁移
 
-当前主要盖章位置：
+- `Settings.attachmentInspectionModelId: Uuid? = null`；DataStore key `attachment_inspection_model`；未配置即关闭工具。设置页选择器只列出声明 IMAGE 输入的 Chat 模型。
+- 旧 `ocr_model` / `ocr_prompt` 只存在于一次性迁移边界（`SettingsOcrMigration`）：新 key 优先；有效旧视觉模型（Provider 存在且声明 IMAGE 输入）映射到新字段；旧 Prompt 丢弃；旧 key 清除；旧 observation cache best-effort 清理。备份恢复（S3 / WebDav）在导入 settings.json 前同样应用 `migrateLegacySettingsJson()` 旧键映射，见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and-sync.md)。
 
-- 用户发送 / 编辑后的附件进入 Conversation 前；
-- `generate_image` 成功构造 `Tool.output` Image 时；
-- MCP 图片内容落地时；
-- Base64 模型图片落成本地文件时；
-- Master 附件注入 Child 时复制原 ref；
-- 旧历史缺 ref 时由 Master 写路径做一次 backfill。
+## 5. 投影时序（三条链路）
 
-因此 `AttachmentProjectionTransformer` 只读取附件事实，不负责把临时 ref 写回 Conversation。
+| 链路 | Transformer 顺序要点 |
+|------|---------------------|
+| Master 聊天 | `DocumentAsPromptTransformer` → `AttachmentProjectionTransformer` → Template / Workspace / `ToolArtifactReplayTransformer`（先按 artifact metadata 恢复历史 Tool Result 路径，再投影） |
+| `generate_image` 产出 | 成功时 Image part 落入本次 Tool.output 并盖章；下一个 step 的请求由投影管线回放（原图或引用行）。识别这张图 = 把它的 ref 传给 `inspect_attachments` |
+| Target（`assistant_call`） | Child 拥有完整 Assistant 级 transformer 链 + 自己的 resolved model；入站只校验 ref / 资产，视觉能力由 Target run 自己的投影与工具集表达 |
 
-### 2.4 文件可用性不改写历史执行事实
+## 6. Turn / Tool 执行事实
 
-Tool artifact 的 `LocalArtifactRef` / managed file 用于重新物化历史 Image 和 `/upload/...` 路径。文件后来被显式删除或丢失时，当前请求与 UI 应体现“资源不可用”，但不能把历史 `completed` Tool 执行改写成 `failed`。
+### 6.1 实体与状态
 
-当前实现没有为了附件识别新增 `AttachmentAsset`、`AttachmentDerivative`、Delivery Receipt 或识别结果数据库。识别结果若真实发生，就是普通 Tool Result。
+| 实体 | 状态枚举 | 说明 |
+|------|----------|------|
+| `TurnExecutionEntity` | `CREATED` / `RUNNING` / `AWAITING_APPROVAL` / `COMPLETED` / `CANCELLED` / `FAILED` / `INCOMPLETE` / `INTERRUPTED` | 一轮用户输入到最终 Assistant 消息 |
+| `ToolExecutionEntity` | `STARTED` / `COMPLETED` / `FAILED` / `CANCELLED` / `UNKNOWN` | Turn 内单次工具调用 |
 
-## 3. 请求级附件投影
+Schema 见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and-sync.md)（DB v5 起）。
 
-附件投影是无状态的 Model View 变换，不修改 durable Conversation。
+### 6.2 checkpoint 与 finalize
 
-### 3.1 Image 只有两种当前投影
+- `ConversationRepository.checkpointTurn()`：工具循环内以 Room 事务提交当前会话消息与执行状态（消息快照 + 状态 upsert，FTS 可选重索引）。
+- `finalizeTurn()`：run 终止后一次性提交终态（reindexFts = true）。
+- 工具执行期间崩溃：从最近 checkpoint 恢复，丢失窗口 = 当前工具 step。
 
-当前实现以本次 resolved `Model.inputModalities` 是否包含 `IMAGE` 为判断：
+### 6.3 定位与副作用顺序
 
-| 当前模型 | Model View |
-|---|---|
-| 接收 Image | `[Attachment ref=... type=image name="..."]` + 原始 Image part |
-| 不接收 Image | 只保留 `[Attachment ref=... type=image name="..."]`，并在本次请求末尾追加一次不可见提示 |
+- `ToolExecutionContext` 以 `messageId + toolOrdinal` 作为工具执行在 Assistant 消息内的唯一 locator（`toolCallId` 只供 Provider 协议使用，重试后会变）。
+- 工具产生副作用（文件、数据库、外部调用）前必须先落 `STARTED`——副作用可观测时 DB 中必有记录。
+- 同一 Assistant 消息的多个 ToolCall 在审批屏障结束后按 Tool ordinal 串行处理。
 
-没有 `DERIVED` 第三态。投影阶段不会调用其他模型，也不会因为聊天模型不能看图而让整个 Turn fail-fast。
+### 6.4 终态收口
 
-`AttachmentProjectionTransformer` 递归处理顶层媒体和 `Tool.output`，因此用户图片、`generate_image`、MCP 图片和 Child 回传 Image 使用同一语义。
+- 终态只由 `finalizeTurn()` 一次写入；工具循环内只写非终态（`RUNNING` / `AWAITING_APPROVAL`）。
+- 恢复、停止、取消走统一终态路径，最终状态由 `TurnExecutionStatus` 决定；等待工具审批的 turn 不触发标题 / 建议等完成副作用。
 
-Document / Audio / Video 当前保留原 part，并在有 stable ref 时增加引用行；它们没有接入本轮 `inspect_attachments` 的内容识别。Document 文本读取继续由 `DocumentAsPromptTransformer` 负责，不在附件投影中再实现一套解析器。
+## 7. 崩溃恢复与回放
 
-### 3.2 UI 可见不等于模型收到像素
+### 7.1 重启恢复（`recoverInterruptedExecutions`）
 
-UI 可以从 durable attachment / artifact 显示缩略图，即使当前聊天模型只收到引用行。因此必须始终区分：
+| 重启时状态 | 恢复动作 | 默认失败原因 |
+|-----------|----------|--------------|
+| Turn 为 `CREATED` / `RUNNING` / `AWAITING_APPROVAL` | 置 `INTERRUPTED`，工具占位按中断渲染 | `process_restarted` |
+| Tool 为 `STARTED` | 置 `UNKNOWN`（副作用可能已发生，结果不可判定，禁止标记为成功或失败） | — |
 
-```text
-附件存在 != 当前模型能读取附件
-UI 可显示附件 != 当前模型收到附件像素
-attachment_ref != path
-模型能力 != Conversation 历史
-```
+### 7.2 回放安全
 
-模型切换只重新计算下一次请求的 Model View，不迁移、不重写历史附件。
+- 非成功 Assistant 历史在再次发给 Provider 前经过 `replaySafeProjection()`（`me.rerere.ai.ui` 扩展）：保留有效 Text / Image / 已执行且安全封套的 Tool；剔除 media-failure 文本、`data:` 图（Tool.output 内降级为失败 JSON 文本）、终态下未完成的 Reasoning 与未执行 / 无安全封套的 Tool；对非成功终态追加 `[Previous assistant response did not complete.]` 标记并清空 `terminalStatus`。不修改持久化会话。
+- 模型切换后的历史回放由统一投影负责（§3），无迁移逻辑。
+- `ToolArtifactReplayTransformer` 按 metadata 恢复历史 Tool Result 的路径与 Image URL（会话 fork / 恢复 / 文件迁移后仍指向有效文件）。
 
-### 3.3 当前能力边界
+## 8. 组件与职责
 
-当前 native Image 判定仍以 `Model.inputModalities` 为主，没有独立的“Model × Provider × endpoint profile”能力矩阵。若用户把实际不支持视觉输入的兼容端点配置成 IMAGE 模型，请求仍可能在 Provider / 网关层失败。
+| 符号（全局搜索定位） | 职责 |
+|----------------------|------|
+| `AttachmentRefs` | ref 前缀、metadata 键、merge / ensure / backfill、file URL |
+| `AttachmentResolver` | 引用 → 本地 Image 统一解析（安全细节见 sub-assistant-multimodal.md） |
+| `AttachmentProjectionTransformer` | 请求级投影（本文件 §3） |
+| `AttachmentInspectionTool` / `shouldInjectAttachmentInspection` | `inspect_attachments` 工具与注入判定 |
+| `ToolExecutionContext` / `ToolAttachmentResolution` | ai 模块最小只读附件能力接口 |
+| `GenerationHandler` | 工具循环、checkpoint、`resolveAttachments` 注入 |
+| `ChatService` / `SubAssistantCoordinator` | 盖章时机、Target run 工具集 |
+| `ConversationRepository.checkpointTurn` / `finalizeTurn` | Turn 持久化事务 |
+| `TurnExecutionStatus` / `ToolExecutionStatus` | 执行事实状态枚举 |
+| `SettingsOcrMigration` / `migrateLegacySettingsJson` | 旧 OCR 设置迁移边界 |
 
-这是当前协议能力边界，不应通过恢复自动 OCR、后台识别或持久化 A/B/C 状态来掩盖。Provider placement 与具体 wire 行为由协议层负责。
+## 9. 易错点
 
-## 4. 按需附件识别
-
-当聊天模型不接收 Image，而设置中存在有效的附件识别模型时，Runtime 在该 run 的工具集中提供 `inspect_attachments`。精确 description、参数文案和失败 JSON 以 [prompts-and-tools.md](prompts-and-tools.md) 为准。
-
-当前契约只有几个关键点：
-
-- 识别是**显式 ToolCall**，附件存在本身不会触发第二次模型调用；
-- 当前只接受 1–4 个稳定 `attachment:<uuid>` Image refs；
-- `AttachmentResolver.resolveImages()` all-or-nothing，并保持输入和解析结果 **1:1、有序**；重复 ref 或多个 ref 指向同一文件也不改变顺序；
-- 同一远程 URL 在一次批量解析中只 fetch / 落盘一次；
-- 多图在一次 inspection model 调用中按序提供，便于比较；
-- 成功只返回普通 Text Tool Result；不建立识别 cache / derivative store；
-- inspection model 只接收固定安全指令、点名的图片和当前 `request`，不继承主会话完整历史或主工具集。
-
-### 4.1 Tool 只获得最小资源能力
-
-`ToolExecutionContext` 不把完整 Conversation / `List<UIMessage>` 暴露给工具，而提供窄的：
-
-```text
-stable refs -> resolveAttachments(...) -> resolved parts / failure reason
-```
-
-Runtime 内部可以用执行时刻的 durable 消息状态定位本 run 已完成的 Tool 结果，但工具本身不扫描 Conversation，也不复制 AttachmentResolver 规则。
-
-这保证了：**Tool 需要的是资源访问能力，不是读取 Agent 全部会话状态的权限。**
-
-### 4.2 设置与旧 OCR cutover
-
-当前设置只保留：
-
-```text
-attachmentInspectionModelId: Uuid? = null
-DataStore key: attachment_inspection_model
-```
-
-`null` 即未配置，不再用随机 UUID 表示空状态，也没有单独 Enable 开关或用户可配置识别 Prompt。
-
-旧 `ocr_model` / `ocr_prompt` 只存在于一次性迁移边界：新 key 优先；有效旧视觉模型可映射到新字段；旧 Prompt 丢弃；旧 key 清除；旧 observation cache best-effort 清理。运行时不再保留 OCR、自动 visual observation、`DERIVED` 或 observation cache 语义。
-
-## 5. Master、Target 与媒体 Tool 共用同一事实模型
-
-### 5.1 Master
-
-Master Conversation 保存原始附件事实；每次 Provider 请求重新投影。`ToolArtifactReplayTransformer` 先恢复历史 Tool artifact 的当前路径 / Image URL，再由附件投影决定当前模型拿到原图还是引用。
-
-### 5.2 `generate_image`
-
-`generate_image` 成功的判定与 Caller 是否能读取图片无关。成功路径先形成可持久化 artifact，再返回：
-
-```text
-Tool metadata artifact
-+ bounded Text Tool Result
-+ UIMessagePart.Image
-+ stable attachment_ref
-```
-
-下一模型 step 或未来 Turn 只是重新投影这份事实，不自动执行识别。
-
-### 5.3 Target / Child
-
-Target 是独立 run，使用自己的 resolved model；入站附件只验证 ref、资产和安全性，不做“Target 是否能看图”的 preflight。Child Conversation 保存原始 Image，Target 请求再使用统一附件投影。
-
-Target run 内附件识别模型选择按 run 开始时的设置冻结，避免 `inspect_attachments` 在一个工具循环中因用户修改设置而无意义地出现 / 消失；Target 删除、工具撤权等运行安全条件仍按现有子助手策略在 step 边界重验。
-
-Child 交付物的 stable ref 表达“产物存在”。Caller 是否点名产物内容、当前是否原生接收 Image、是否需要显式 inspection 是三个独立问题。Caller 看不懂图不会推翻已经完成的 Child run，也不存在内部 `artifact_delivery` 三态。
-
-具体 `assistant_call` 入站 / 出站协议、extras、artifact metadata 与 UI 见 [sub-assistant-multimodal.md](sub-assistant-multimodal.md)。
-
-## 6. Turn 与 Tool 执行持久化
-
-附件事实必须建立在可靠的 Turn 执行事实之上；否则中止、崩溃或工具副作用发生后，会话历史会出现“UI 看见但数据库没有”或“工具是否执行过无法判断”的状态。
-
-### 6.1 两类执行记录
-
-`TurnExecutionEntity` 当前状态：
-
-```text
-CREATED
-RUNNING
-AWAITING_APPROVAL
-COMPLETED
-CANCELLED
-FAILED
-INCOMPLETE
-INTERRUPTED
-```
-
-`ToolExecutionEntity` 当前状态：
-
-```text
-STARTED
-COMPLETED
-FAILED
-CANCELLED
-UNKNOWN
-```
-
-它们是运行事实，不替代 `UIMessage` / `UIMessagePart.Tool` 的用户可见历史。
-
-### 6.2 checkpoint 是 awaited durability boundary
-
-`GenerationHandler` 发出带当前消息快照的 checkpoint；生产调用方必须等持久化成功后再越过关键边界。
-
-`ConversationRepository.checkpointTurn()` / `finalizeTurn()` 在同一个 Room transaction 中提交：
-
-```text
-当前 MessageNode 快照
-+ TurnExecution
-+ 对应 ToolExecution（如有）
-```
-
-生成 checkpoint 对 Conversation header 使用窄更新，避免生成过程中持有的旧快照覆盖 title、folder、pin、suggestions 等其他职责拥有的字段。
-
-### 6.3 Tool STARTED 必须先于实际副作用落盘
-
-工具真正执行前先持久化 `STARTED`。同一 Assistant message 的多个 ToolCall 在审批屏障结束后按 Tool ordinal 串行处理；前一个 Tool Result 完成并 checkpoint 后才执行下一个。
-
-内部精确定位使用：
-
-```text
-messageId + toolOrdinal
-```
-
-Provider `toolCallId` 只服务线协议，不能作为本地更新的唯一主键。
-
-这也保证 `inspect_attachments` 等后续工具通过 Runtime resolver 能看到本 run 已经完成并持久化到当前消息状态中的 Tool artifact，而不需要获得完整会话 API。
-
-### 6.4 所有退出路径都要有明确终态
-
-Master Turn 的正常完成、待审批、用户停止、被新 Turn 替换、Provider failure / incomplete、运行时异常和 step / interaction limit 都进入统一终态收口。失败或取消时已经生成的可见文本可以保留，但不能把未完成协议片段伪装成成功历史。
-
-`AWAITING_APPROVAL` 是明确可恢复状态；不是普通成功，也不能启动正常 completed 副作用。
-
-## 7. 重启恢复与 replay-safe 历史
-
-### 7.1 进程重启不自动重放未知副作用
-
-应用启动恢复遗留执行记录时：
-
-```text
-Turn CREATED / RUNNING -> INTERRUPTED
-其下仍为 STARTED 的 Tool -> UNKNOWN
-```
-
-原因记录为恢复原因（当前默认 `process_restarted`）。`UNKNOWN` 的含义是副作用是否已经发生无法可靠证明，因此禁止把它当成“肯定没执行”后自动重试。
-
-### 7.2 下一次 Provider 请求只使用协议安全投影
-
-非成功 Assistant 历史在再次发给 Provider 前经过 `replaySafeProjection()`：移除或修复未完成 reasoning、开放 / 不配对 Tool 状态、Provider opaque metadata、残缺媒体等不能安全回放的部分，同时 UI 仍保留原来的部分输出和终态信息。
-
-附件投影发生在新的请求副本上，因此同一 durable Image 可以在模型切换后自然得到：
-
-```text
-视觉模型     -> ref + Image
-文本模型     -> ref only + capability hint
-未来再切回视觉 -> ref + 原始 Image
-```
-
-历史事实没有因为模型能力变化而被重写。
-
-## 8. 维护不变量
-
-修改附件、Tool loop 或 Turn 持久化时，至少保持以下不变量：
-
-1. **图片存在不会自动触发第二模型调用。** 只有显式 `inspect_attachments` ToolCall 才识别。
-2. **请求投影不写回 Conversation。** capability hint、引用行和 Provider placement 都是 request-time view。
-3. **stable ref 不随模型切换变化。** `attachment:<uuid>` 与 `/upload/...` 职责分离。
-4. **模型能力不足不是附件损坏。** 真正的附件失败只来自 ref / 文件 / 安全 / MIME / IO 等事实问题。
-5. **生成工具成功与 Caller 可读性分离。** `generate_image` / Child 已成功不能因 Caller 不看图而改成失败。
-6. **Tool 不扫描整个会话。** 附件访问经 `ToolExecutionContext.resolveAttachments` 与统一 Resolver。
-7. **Tool 外部副作用前先持久化 STARTED。** 不确定副作用在恢复后标为 UNKNOWN，不自动重放。
-8. **一个 Tool 结果持久化后才允许同批下一个 Tool 执行。** 执行时序与 resolver 可见事实一致。
-9. **文件缺失不改写历史 Tool 成败。** 当前可用性与历史执行事实分开表达。
-10. **旧 OCR 只允许存在于迁移、迁移测试或历史记录中。** 运行时不得重新引入自动 observation、DERIVED、识别 cache 或 `artifact_delivery` 变体。
-
-当前关键实现集中在：
-
-```text
-ai/core/Tool.kt
-app/data/ai/GenerationHandler.kt
-app/data/ai/attachments/AttachmentRefs.kt
-app/data/ai/attachments/AttachmentResolver.kt
-app/data/ai/transformers/AttachmentProjectionTransformer.kt
-app/data/ai/tools/AttachmentInspectionTool.kt
-app/data/ai/tools/GenerationToolSetFactory.kt
-app/service/ChatService.kt
-app/service/SubAssistantCoordinator.kt
-app/data/repository/ConversationRepository.kt
-app/data/db/entity/TurnExecutionEntity.kt
-app/data/db/entity/ToolExecutionEntity.kt
-```
-
-实现细节发生变化时，应更新对应职责文档，而不是重新建立平行的附件或 Turn 设计文档。
+| 易错 | 正确做法 |
+|------|----------|
+| 在投影或工具里改写 / 删除 durable 消息 | 投影只产生请求副本；ref 在持久化时锚定，工具结果显式写入 |
+| 期望 `inspect_attachments` 有缓存或自动触发 | 识别只有模型显式调用一条路径；无缓存 |
+| 能力不足当成附件失败 | 入站只校验 ref / 资产；`attachment_not_found` 是解析失败，能力不足由投影与工具集表达 |
+| 向 Tool 暴露会话消息或内部 id | 工具只拿 `resolveAttachments` 最小能力；模型可见标识只有 ref 与 `/upload`、`/workspace` 路径 |
+| 工具副作用前未写 `STARTED` | 副作用可观测时 DB 必须已有记录，否则恢复后无法判定 |
+| 把 `toolCallId` 当持久 locator | 重试后 id 会变；用 `messageId + toolOrdinal` |
+| Target run 内期望设置变更立即生效 | 配置变更在下一次构建生效；run 内 schema 冻结，安全信号除外 |
