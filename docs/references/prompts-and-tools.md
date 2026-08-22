@@ -3,6 +3,8 @@
 > 本文档以当前代码为准，记录模型在一次生成请求里实际看到的系统提示、动态注入、工具
 > `description`、参数说明和 Tool Result 形状。文案以英文源串为准。
 > 工具名使用 `Tool(name = "...")` 的注册名。
+> 附件身份、请求投影与 Turn/Tool 持久化不变量见
+> [`multimodal-context-and-turn-durability.md`](multimodal-context-and-turn-durability.md)。
 
 相关实现：`GenerationHandler.generateInternal()`、`PlaceholderTransformer`、
 `TemplateTransformer`、`AssistantCatalogBuilder`、`AssistantToolFactory`、
@@ -14,7 +16,7 @@
 
 ## 1. 一次请求里的上下文顺序
 
-`generateInternal()` 先拼 System，再跑 Input Transformer：
+`generateInternal()` 先拼 System，再跑 Input Transformer。Master 当前装配顺序为：
 
 ```text
 System
@@ -23,17 +25,21 @@ System
   2. **Memories** + JSON     ← assistant.enableMemory
   3. 各 Tool.systemPrompt()  ← 按当前 step 的工具列表，空串不产生有效段落
 
-随后 Input Transformer（固定顺序）：
+随后 Input Transformer：
   TimeReminderTransformer
   PromptInjectionTransformer
   PlaceholderTransformer      ← 替换 {{char}} / {{description}} 等
   DocumentAsPromptTransformer
-  AttachmentProjectionTransformer ← 按本次模型能力投影附件：模型可读 IMAGE 时保留图片 part
-                              并前插引用行；不可读时替换为引用行 + 末尾一次 capability hint
   TemplateTransformer         ← 渲染 messageTemplate
   WorkspaceReminderTransformer
-  ToolArtifactReplayTransformer ← 按 artifact metadata 重写历史 Tool Result 路径与 Image URL
+  ToolArtifactReplayTransformer ← 先按 artifact metadata 重写历史 Tool Result 路径与 Image URL
+  AttachmentProjectionTransformer ← 再按本次模型能力投影附件：可读 IMAGE 时保留图片并前插引用行；
+                                  不可读时只保留引用行 + 末尾一次 capability hint
 ```
+
+Target 复用相同模型可见语义，但 Transformer 装配由 `SubAssistantCoordinator` 独立负责；完整顺序见
+[`chat-generation-pipeline.md`](chat-generation-pipeline.md) 与
+[`sub-assistant-multimodal.md`](sub-assistant-multimodal.md)。
 
 工具 schema（name、description、parameters）随 `TextGenerationParams.tools` 另发，与 System 同屏。
 同一事实只应出现在一个落点：正在做那个动作的工具句或字段上，不在 Catalog 与工具句之间复读。
@@ -69,7 +75,7 @@ System
 ### 2.2 `TemplateTransformer`（Pebble `messageTemplate`）
 
 | 变量 | 含义 |
-|------|------|
+|--------|-----|
 | `message` | 当前文本 part |
 | `role` | `user` / `assistant` / `system` |
 | `time` / `date` | 该条消息的创建时间/日期，不是“现在” |
@@ -171,10 +177,10 @@ Settings 重算访问范围。
 ## 5. 工具描述与参数
 
 主会话的基础工具装配顺序见 `ChatService`：搜索、Local Tools、最近会话、Workspace、技能、
-Assistant Tools、MCP；记忆工具由 `GenerationHandler` 在每个 step 按当前记忆状态加入。
+Assistant Tools、MCP；运行时 `inspect_attachments` 由 `GenerationToolSetFactory` 按 resolved model 与设置条件加入；记忆工具由 `GenerationHandler` 在每个 step 按当前记忆状态加入。
 Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过滤 `assistant_manage`、
 `assistant_inspect`、`assistant_call` 以及历史名 `assistant_memory_list`，
-保留并桥接 `ask_user`。`generate_image` 不再永久过滤：Target 已开启 `TextToImage` 且默认文生图模型可解析时才会注册。其余工具按运行开始快照与当前配置的交集在 step 边界重建。
+保留并桥接 `ask_user`。`generate_image` 不再永久过滤：Target 已开启 `TextToImage` 且默认文生图模型可解析时才会注册。附件识别模型选择在 Target run 开始时冻结，其他动态权限按子助手运行策略重验。
 
 下列 description 为源码中的英文原文（动态日期/时区用占位标明）。
 
@@ -217,7 +223,7 @@ Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过�
 `Tool.systemPrompt()` 只在实际注册时注入当前非敏感配置，字段由
 `ImageGenerationModelDescriptor` 统一生成：`provider_type`、`provider_name`、`model_id`、
 `model_name`。不含 API key、base URL、custom headers/body，也不声明 Chat 模型是否具有视觉能力。
-图片是否回传给下一 step 由协议适配层按 model modality 与 endpoint profile 决定。
+图片是否回传给下一 step 由请求级附件投影和 Provider 适配共同决定。
 
 | 参数 | description |
 |------|-------------|
@@ -237,10 +243,9 @@ Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过�
 }
 ```
 
-`file.path` 是 Tool Result 内唯一模型可见标识，语义为本地工具可消费的
-`/upload/<safe-file-name>`（文件身份，供 workspace 工具读写）。引用身份
-`attachment:<uuid>` 不写入 Tool Result，由 `AttachmentProjectionTransformer` 在下一
-step 投影成 `[Attachment ref=...]` 引用行统一交付（见 `inspect_attachments` 小节）。
+`file.path` 是 Tool Result 内唯一模型可见的文件访问标识，语义为本地工具可消费的
+`/upload/<safe-file-name>`。引用身份 `attachment:<uuid>` 锚定在 Image part metadata 上，
+由 `AttachmentProjectionTransformer` 在请求 Model View 中投影成 `[Attachment ref=...]` 引用行。
 Android host path、file URI 和内部 relative path 不进入 Tool Result。
 会话 fork / 恢复按 metadata 中的 `LocalArtifactRef.relativePath` 重写该字段；文件缺失时不得
 伪造 completed + readable path。
@@ -538,13 +543,13 @@ caller 自身返回 `target_is_caller`。
 `artifacts[]`（`ref` / `type` / `mime`，以及 managed `path`）；超出上限时另带
 `artifacts_omitted`。其他终态带稳定 `reason`。`content_blocked`、`provider_error` 与 `runtime_error` 另带提炼后的 `detail`。`provider_error` / `runtime_error` 含单行异常类型与消息（按字符上限裁剪，不含因果链和堆栈）；`content_blocked` 使用稳定政策说明，不回传检查类型（含 OpenAI `content_filter`）。
 
-已跑过 Child 且调用过 `text_to_speech` 时，默认另带精简 `tts_stats`（`calls` 次数、`chars` 朗读字符合计）。体积较大或需按 Caller 能力适配的段只在 `extras` 点名后返回：
+已跑过 Child 且调用过 `text_to_speech` 时，默认另带精简 `tts_stats`（`calls` 次数、`chars` 朗读字符合计）。体积较大或需 Caller 主动取回的段只在 `extras` 点名后返回：
 
-- `artifacts`：把交付物内容写入本次 Tool.output（NATIVE 追加 Image；DERIVED 追加 observation 文本；UNAVAILABLE 仍 completed 并写 `artifact_delivery`）。`artifact_delivery` 三态：`derived` = 全部转写成功；`partial` = 部分失败或存在当前不支持类型（NATIVE 全交付时省略，含不支持类型时也写 `partial`）；`unavailable` = 全部无法消费。
+- `artifacts`：把本次可持久化 Image 交付物追加为带 stable `attachment_ref` 的 Image parts。它不在这里做能力判断或视觉识别；Caller 下一次请求统一由 `AttachmentProjectionTransformer` 按当次 resolved model 投影为原图 + 引用行，或仅引用行 + capability hint。需要视觉细节时由模型显式调用 `inspect_attachments`。没有 `DERIVED`、自动 observation 或 `artifact_delivery` 字段。
 - `tool_calls`：本次 run 范围内每个工具的发出次数（`header+rows`，首次出现序）
 - `tts`：按调用顺序的朗读文本表
 
-`unavailable` 不加这些段。进入 Coordinator 前的参数错误也使用同一信封（`status=unavailable` + `reason`），不再使用 `{"error":...}`。附件相关 reason：`invalid_attachments`、`attachment_not_found`、`unsupported_attachment_type`、`unsafe_attachment_url`、`attachment_fetch_failed`、`attachment_input_unavailable`。
+`unavailable` 不加这些段。进入 Coordinator 前的参数错误也使用同一信封（`status=unavailable` + `reason`），不再使用 `{"error":...}`。附件相关 reason：`invalid_attachments`、`attachment_not_found`、`unsupported_attachment_type`、`unsafe_attachment_url`、`attachment_fetch_failed`。聊天模型 / Target 不接收 IMAGE 本身不是 attachment failure。
 
 `content` 取本次 run 范围内：优先最后一条 ASSISTANT 在最后一个工作工具之后的顶层 Text；
 `text_to_speech` 不算工作工具；最后一步为空则回退更早 step，再回退最后一段 Text island。
@@ -558,7 +563,7 @@ caller 自身返回 `target_is_caller`。
 
 ## 6. 工具输出截断
 
-`GenerationHandler.maybeTruncateToolOutput()`：采用 `TRUNCATABLE_TEXT` 的工具在文本总长超过 `MAX_TOOL_OUTPUT_CHARS` 且助手有 Shell 时，全文写入 `/tool_outputs/<executionId>.txt`，只把 `TOOL_OUTPUT_PREVIEW_CHARS` 控制的预览与读取指引回给模型。无 Shell 时不截断。`assistant_call` 与 `generate_image` 使用 `PRESERVE`。前者带 `status`、`assistant_name`、`content`、`reason`、`detail`、`tts_stats`、`artifacts`、`artifact_delivery`、`tool_calls` 和 `tts` 的结构化 JSON 不会被通用文本截断器破坏；后者保留 bounded JSON 与 Image part。点名 extras 后追加的 Image / observation 也不被截断。
+`GenerationHandler.maybeTruncateToolOutput()`：采用 `TRUNCATABLE_TEXT` 的工具在文本总长超过 `MAX_TOOL_OUTPUT_CHARS` 且助手有 Shell 时，全文写入 `/tool_outputs/<executionId>.txt`，只把 `TOOL_OUTPUT_PREVIEW_CHARS` 控制的预览与读取指引回给模型。无 Shell 时不截断。`assistant_call` 与 `generate_image` 使用 `PRESERVE`。前者的结构化 JSON（如 `status`、`assistant_name`、`content`、`reason`、`detail`、`tts_stats`、`artifacts`、`tool_calls`、`tts`）及点名 extras 后追加的 Image parts 不被通用文本截断器破坏；后者保留 bounded JSON 与 Image part。
 
 ---
 

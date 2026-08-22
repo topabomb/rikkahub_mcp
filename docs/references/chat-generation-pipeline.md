@@ -1,6 +1,7 @@
 # 消息生成链路
 
 > 本文档以 Measix Pilot 当前代码为准，说明从用户发送消息到模型回复落盘的完整数据流。
+> 附件事实、请求投影与 Turn/Tool 持久化不变量见 [`multimodal-context-and-turn-durability.md`](multimodal-context-and-turn-durability.md)。
 > 上下文裁剪与压缩的设计取舍见 [`docs/dev/context-management.md`](../dev/context-management.md)。
 > 模型可见的提示词、注入与工具文案见 [`prompts-and-tools.md`](prompts-and-tools.md)。
 
@@ -93,7 +94,7 @@ ChatService.collect()
 
 ## Input Transformer 管道
 
-Transformer 以 `fold` 顺序执行，后一个接收前一个的输出：
+Master 路径按 `ChatService` 当前装配顺序执行，后一个接收前一个的输出：
 
 | 顺序 | Transformer | 作用 |
 |------|-------------|------|
@@ -103,9 +104,10 @@ Transformer 以 `fold` 顺序执行，后一个接收前一个的输出：
 | 4 | `DocumentAsPromptTransformer` | 将文档附件内容注入提示 |
 | 5 | `TemplateTransformer` | 按消息自己的 `createdAt` 渲染模板，避免历史文本每轮变化 |
 | 6 | `WorkspaceReminderTransformer` | Workspace Shell 就绪时向 System 追加环境和路径约束 |
-| 7 | `ToolArtifactReplayTransformer` | 先按 artifact metadata 物化历史 Tool Result 的路径和 Image URL |
-| 8 | `AttachmentRefHintTransformer` | 在带 `attachment_ref` 的多媒体 part 前插入模型可见句柄 |
-| 9 | `AttachmentInputTransformer` | 递归顶层与 `Tool.output`，按 NATIVE / DERIVED / UNAVAILABLE 投影图片 |
+| 7 | `ToolArtifactReplayTransformer` | 按 artifact metadata 物化历史 Tool Result 的路径和 Image URL |
+| 8 | `AttachmentProjectionTransformer` | 递归顶层与 `Tool.output`：当前模型接收 IMAGE 时保留原图并附稳定引用行，否则只保留引用行并追加一次 capability hint |
+
+Target 复用相同附件投影语义，但由 `SubAssistantCoordinator` 组装自己的 Transformer 列表；它不是 Master 顺序的机械复制。子助手差异见 [`sub-assistant-multimodal.md`](sub-assistant-multimodal.md)。
 
 `PromptInjectionTransformer` 支持 `BEFORE_SYSTEM_PROMPT`、`AFTER_SYSTEM_PROMPT`、
 `TOP_OF_CHAT`、`BOTTOM_OF_CHAT` 和 `AT_DEPTH`。插入点会避开用户消息与其工具回复之间的边界。
@@ -133,6 +135,8 @@ Transformer 以 `fold` 顺序执行，后一个接收前一个的输出：
 6. Assistant Tools：按 Caller 权限装配 `assistant_manage`、`assistant_inspect`、`assistant_call`；
 7. MCP Tools：仅取 Assistant 选中且当前已连接、名称合法的服务；
 8. Memory Tools：不属于上述静态列表，由 `GenerationHandler` 在每个工具循环 step 按当前记忆状态加入。
+
+运行时附件识别工具由 `GenerationToolSetFactory` 根据本次 resolved model 与附件识别模型配置加入；它不依赖当前消息是否含图片，因此同一 run 的 schema 不随消息内容改变。
 
 工具审批状态：
 
@@ -205,7 +209,7 @@ OpenAI Images 的 `moderation_blocked` / `content_policy_violation`，以及 xAI
 - 起点回退到最近的 USER 消息，确保保留完整对话轮次和其中的工具调用；
 - 只影响发给 Provider 的 `internalMessages`，完整历史仍保存在会话中。
 
-消息条数不等于 token 数。单条长文档、图片、工具 schema、OCR 结果或 System prompt 都可能
+消息条数不等于 token 数。单条长文档、图片、工具 schema、Tool Result 或 System prompt 都可能
 占用大量上下文，因此该阈值是可选的成本/历史长度控制，不是模型窗口溢出的可靠防线。
 
 ### 显式语义压缩
@@ -241,11 +245,11 @@ OpenAI Images 的 `moderation_blocked` / `content_policy_violation`，以及 xAI
 
 ## 子助手生成管线扩展
 
-子助手不是另一套生成引擎。它由 `SubAssistantCoordinator` 在通用 Generation Pipeline 外增加 preflight、lineage、lease、Child 持久化、运行状态和恢复编排；Target 内部仍使用同一 `GenerationHandler`、Transformer、Provider、工具循环和 checkpoint。
+子助手不是另一套生成引擎。它由 `SubAssistantCoordinator` 在通用 Generation Pipeline 外增加 preflight、lineage、lease、Child 持久化、运行状态和恢复编排；Target 内部仍使用同一 `GenerationHandler`、附件投影、Provider、工具循环和 checkpoint。
 
 通用管线为此提供：
 
-- `ToolExecutionContext(messageId, toolOrdinal)`，精确定位本地 ToolCall，不依赖 Provider `toolCallId`
+- `ToolExecutionContext(messageId, toolOrdinal, resolveAttachments)`，精确定位本地 ToolCall，并只暴露最小附件解析能力，不依赖 Provider `toolCallId` 或完整 Conversation
 - `GenerationChunk.Messages/Phase/Checkpoint/Finished`，区分消息更新、阶段、持久化边界和结束原因
 - 每个模型 step 重建工具的 `toolProvider`
 - Target 非交互审批策略，以及可由宿主承接的 `ask_user` 例外
@@ -253,7 +257,7 @@ OpenAI Images 的 `moderation_blocked` / `content_policy_violation`，以及 xAI
 
 `assistant_call` 同步完成以下流程：校验 Caller、Target、访问与模型；解析当前 Master 分支的 lineage；获取 Master/Target lease；用最新 Settings 重验；新建、复用或克隆 Child；运行 Target；持续保存 Child 与 Master metadata；最后返回成功内容或稳定失败原因。内容政策拒绝、Provider HTTP 失败和未分类异常分别记为 `content_blocked`、`provider_error` 与 `runtime_error`，并带回裁剪后的 `detail`；默认带 `tts_stats` 与轻量 `artifacts[]`，完整 `tts` / `tool_calls` / 交付物内容由 `extras` 按需返回。普通工具 Pending 与子助手桥接的 `ask_user` 共用前台审批音效 `loop_approval`。
 
-Target 永久过滤 Assistant 管理与再次委托。`generate_image` 按 Target 快照 ∩ 当前配置允许，不再永久过滤。其他工具按运行开始快照与当前配置的交集在 step 边界装配；Memory Tool 在执行前独立重验。需审批工具默认拒绝，只有 `ask_user` 会按 Child locator 桥接到主聊天。
+Target 永久过滤 Assistant 管理与再次委托。`generate_image` 按 Target 快照 ∩ 当前配置允许，不再永久过滤。附件识别模型选择在 Target run 开始时冻结，Target 删除、撤权等运行安全条件仍在 step 边界重验。其他工具继续按子助手运行策略动态装配；Memory Tool 在执行前独立重验。需审批工具默认拒绝，只有 `ask_user` 会按 Child locator 桥接到主聊天。
 
 每个 Master turn 创建唯一的 TTS queue session，Master 与该 turn 内的 Target 只向这条共享队列提交音频；工具审批暂停与恢复复用原 session，新消息和重新生成创建新 session。播放器是队列边界的唯一仲裁者：新 session 替换旧队列；同 session 在顺序开关开启时追加、关闭时替换。Tool 实例和 UI `activeSource` 均不保存或推断队列生命周期；每个 chunk 直接绑定来源，`activeSource` 只随实际播放更新。自动朗读忽略其他会话和待审批暂停事件，并按同一 session 的策略提交，不能旁路打断工具音频。旧 worker 和旧播放器回调通过所有权 token 隔离，不能清空或停止新队列。System TTS 并发预取使用系统创建的唯一临时文件，禁止以时间戳共享输出路径。
 
@@ -277,10 +281,12 @@ app/src/main/java/net/weero/measix/pilot/
 │  └─ ChatNotificationManager.kt         # 通知事件消费者
 └─ data/ai/
    ├─ GenerationHandler.kt               # Provider 请求与工具循环（含 Phase/Checkpoint/Finished）
-   ├─ transformers/
+   ├─ attachments/                       # stable ref、Resolver、安全取图
+   ├─ transformers/                      # request/output projection
    ├─ subassistant/                      # 访问策略、lineage、reducer、metadata、preview、catalog
    └─ tools/
       ├─ AssistantToolFactory.kt         # assistant_manage/inspect/call 工具构建
+      ├─ AttachmentInspectionTool.kt      # 按需附件识别
       ├─ GenerationToolSetFactory.kt     # 按 Assistant/资源/RunMode 装配工具集
       └─ local/
 ```
