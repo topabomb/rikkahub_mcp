@@ -100,8 +100,10 @@ import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import net.weero.measix.pilot.ui.components.message.ChatMessage
+import net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
 import net.weero.measix.pilot.ui.components.message.collectMessageImageUrls
+import net.weero.measix.pilot.ui.components.message.resolveAttachmentPreviewUrl
 import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewActions
 import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewOverlay
 import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
@@ -353,11 +355,18 @@ private fun ChatListNormal(
                 }
             }
         }
+        // 附件缩略图只读解析: stable ref → 本地 file url, 求值时读最新会话
+        val attachmentPreview = remember {
+            { ref: String ->
+                resolveAttachmentPreviewUrl(conversationUpdated.messageNodes.map { it.currentMessage }, ref)
+            }
+        }
         val backgroundHost = rememberImageBackgroundHost(settings, assistant.id)
         val previewActions = remember(backgroundHost.action) { listOf(backgroundHost.action) }
 
         CompositionLocalProvider(
             LocalConversationImages provides conversationAlbum,
+            LocalAttachmentPreview provides attachmentPreview,
             LocalImagePreviewActions provides previewActions,
             LocalImagePreviewOverlay provides backgroundHost.overlay,
         ) {

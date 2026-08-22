@@ -23,7 +23,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import me.rerere.ai.core.ReasoningLevel
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowRight01
 import net.weero.measix.pilot.R
@@ -31,7 +30,6 @@ import net.weero.measix.pilot.data.ai.prompts.DEFAULT_COMPRESS_PROMPT
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_SUGGESTION_PROMPT
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_TITLE_PROMPT
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.ui.components.ai.ReasoningButton
 import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.utils.plus
 
@@ -45,7 +43,7 @@ internal fun PromptSettingsPage(settings: Settings, vm: SettingVM, contentPaddin
         item {
             PromptSettingItem(
                 title = stringResource(R.string.setting_model_page_prompt_title),
-                promptDescription = stringResource(R.string.setting_model_page_suggestion_prompt_vars),
+                promptDescription = stringResource(R.string.setting_model_page_title_prompt_vars),
                 promptValue = settings.titlePrompt,
                 onPromptChange = { prompt -> vm.updateSettings { it.copy(titlePrompt = prompt) } },
                 onResetPrompt = { vm.updateSettings { it.copy(titlePrompt = DEFAULT_TITLE_PROMPT) } },
@@ -79,8 +77,6 @@ private fun PromptSettingItem(
     promptValue: String,
     onPromptChange: (String) -> Unit,
     onResetPrompt: () -> Unit,
-    reasoningLevel: ReasoningLevel? = null,
-    onUpdateReasoningLevel: ((ReasoningLevel) -> Unit)? = null,
 ) {
     var showEditor by remember { mutableStateOf(false) }
 
@@ -96,17 +92,6 @@ private fun PromptSettingItem(
                 )
             },
         )
-        if (reasoningLevel != null && onUpdateReasoningLevel != null) {
-            item(
-                headlineContent = { Text(stringResource(R.string.assistant_page_thinking_budget)) },
-                trailingContent = {
-                    ReasoningButton(
-                        reasoningLevel = reasoningLevel,
-                        onUpdateReasoningLevel = onUpdateReasoningLevel,
-                    )
-                },
-            )
-        }
     }
 
     if (showEditor) {

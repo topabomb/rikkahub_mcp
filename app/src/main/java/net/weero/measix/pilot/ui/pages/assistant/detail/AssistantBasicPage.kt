@@ -354,6 +354,14 @@ internal fun AssistantBasicContent(
                         modelId = assistant.chatModelId,
                         providers = providers,
                         type = ModelType.CHAT,
+                        onClear = {
+                            onUpdate(
+                                assistant.copy(
+                                    chatModelId = null
+                                )
+                            )
+                        },
+                        placeholder = stringResource(R.string.assistant_page_follow_default_model),
                         onSelect = {
                             onUpdate(
                                 assistant.copy(

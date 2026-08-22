@@ -49,8 +49,10 @@ import net.weero.measix.pilot.data.ai.subassistant.resolveSubAssistantErrorBody
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.ui.components.message.ChatMessage
+import net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
 import net.weero.measix.pilot.ui.components.message.collectMessageImageUrls
+import net.weero.measix.pilot.ui.components.message.resolveAttachmentPreviewUrl
 import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewActions
 import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewOverlay
 import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
@@ -180,6 +182,12 @@ private fun DetailContent(
             }
         }
     }
+    // 附件缩略图只读解析: stable ref → 本地 file url, 求值时读最新时间线
+    val attachmentPreview = remember {
+        { ref: String ->
+            resolveAttachmentPreviewUrl(timelineState.value.map { it.currentMessage }, ref)
+        }
+    }
     val backgroundHost = rememberImageBackgroundHost(LocalSettings.current, targetAssistant?.id)
     val previewActions = remember(backgroundHost.action, targetAssistant?.id) {
         if (targetAssistant?.id == null) emptyList() else listOf(backgroundHost.action)
@@ -209,6 +217,7 @@ private fun DetailContent(
         // 相册 Provider 提升到列表外: 全部 item 共享同一稳定 lambda, 避免逐项 provider 节点
         CompositionLocalProvider(
             LocalConversationImages provides timelineAlbum,
+            LocalAttachmentPreview provides attachmentPreview,
             LocalImagePreviewActions provides previewActions,
             LocalImagePreviewOverlay provides if (targetAssistant?.id == null) null else backgroundHost.overlay,
         ) {

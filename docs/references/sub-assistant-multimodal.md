@@ -52,10 +52,10 @@ Caller 模型需要读取交付物内容
 1. **User visibility ≠ Model visibility。** 用户看见缩略图，不等于 Caller 上下文里有像素。
 2. **Agent owns relevance，Runtime owns representation。** 不增加并列开关。Caller 只点名「传哪些附件」「要不要交付物内容」；怎么传、怎么投影由 Runtime 按**当次模型**决定。
 3. 用现有 `extras` 增加 `artifacts`，与 `tts` / `tool_calls` 同一语义：**内容**默认不给。轻量引用不是像素，completed 有交付物时 JSON **始终**带 `artifacts[]`。
-4. Child 是完整事实源；不新增 Artifact 消息协议，不新建 Store。复用 `LocalArtifactRef`、`managed_files`、`attachment_ref`、`ImageInputAdapter`。
+4. Child 是完整事实源；不新增 Artifact 消息协议，不新建 Store。复用 `LocalArtifactRef`、`managed_files`、`attachment_ref`。
 5. 不把 Web Search / MCP 边角 / 中间文件 / 入站附件当成出站交付物。
 6. `ask_user` 不是 Artifact；`set_as_background=true` 仍是审批副作用。
-7. `SubAssistantCallState.UNAVAILABLE` 是运行态（撤权、模型不可用）。出站看不懂图仍是 `completed` + `artifact_delivery`。
+7. `SubAssistantCallState.UNAVAILABLE` 是运行态（撤权、模型不可用）。出站 Caller 看不懂图不影响 `completed`：native/引用行投影由统一 `AttachmentProjectionTransformer` 按当次 Caller 模型逐请求决定。
 
 四条平面不要混：
 
@@ -69,7 +69,7 @@ Permission Plane     approval / deny
 ### 2.2 入站强契约，出站弱契约
 
 ```text
-Main → Target     attachments[]     强契约；写 Child 前 preflight
+Main → Target     attachments[]     强契约；写 Child 前校验 ref/资产
 Target → Main     extras=artifacts  弱契约；看不懂也不推翻 completed
 ```
 
@@ -77,11 +77,11 @@ Target → Main     extras=artifacts  弱契约；看不懂也不推翻 complete
 |--|------|------|
 | 谁决定相关性 | Caller 点名 `attachments[]` | Target 是否产出由任务和 Target 工具配置决定 |
 | 用户是否看见 | Child 详情里有原图 | Master 卡片读 metadata 引用；不靠未点名的 Tool.output 媒体 |
-| 模型是否看见内容 | 写 Child 前必须 NATIVE 或 DERIVED | 默认只要文本 + 轻量引用；`extras=["artifacts"]` 才投影内容 |
-| 能力看谁的模型 | Target 本次 `RunSpec.model` | `settings.getChatModel(caller)`，不是 Target 的 `TransformerContext.model` |
-| 失败 | 不写 Child，`reason=attachment_input_unavailable` 等 | 仍 `completed`，只降级投影 |
+| 模型是否看见内容 | 写 Child 前只校验 ref/资产；视觉由 Target run 的统一投影按其 resolved model 决定 | 默认只要文本 + 轻量引用；`extras=["artifacts"]` 才投影 native Image parts |
+| 能力看谁的模型 | Target 本次 `RunSpec.model` | Caller 当次请求的 resolved model（`AttachmentProjectionTransformer` 逐请求判定） |
+| 失败 | 不写 Child，`reason=attachment_not_found` 等（解析/安全失败） | 仍 `completed`，无投影失败态 |
 
-典型组合正是：Target 绑定视觉/绘图模型，Caller 是文本模型。用错模型会把本该 Derived / Unavailable 的图当成 Native 塞进 Main。
+典型组合正是：Target 绑定视觉/绘图模型，Caller 是文本模型。Caller 得到的是引用行 + capability hint；需要内容时点名 `extras=["artifacts"]` 拿 native parts，或显式调用 `inspect_attachments`。
 
 ### 2.3 实现时纠正过的易错点
 
@@ -92,12 +92,12 @@ Target → Main     extras=artifacts  弱契约；看不懂也不推翻 complete
 | 默认 JSON 禁止出现 `artifacts[]` | 轻量 manifest 不是像素。completed 且有可持久化交付物时始终带引用，便于再委托。`extras=["artifacts"]` 只控制**内容**。 |
 | 默认给引用但 Resolver 以后再改 | 同一套实现必须能解析。否则 Caller 抄 `attachment:` 会得到 `attachment_not_found`。 |
 | 永远不要把 Image 放进 Master `Tool.output` | 当前 Tool Loop 只看见已经写入的 tool result。点名且 NATIVE 时必须把 Image 写进本次 `Tool.output`。点名后的投影会进入 Master 历史并在后续 turn 回放——这是 opt-in 的代价。 |
-| 把图塞进 output 等 Transformer 转译 | `AttachmentInputTransformer` 不递归 Tool.output。Chat Completions / Claude / Gemini 会单独编码 `Tool.output` 里的图，绕过顶层 Adapter。模型未声明 IMAGE 时，`toToolResultContent()` 改成文本占位 `[Image output omitted: ...]`，**不是**视觉转译；Gemini 上还可能静默丢块。DERIVED 必须在写 output **之前** `observe()`，output 里只放 observation 文本。 |
+| 把图塞进 output 等 Transformer 转译 | 投影统一由 `AttachmentProjectionTransformer` 递归处理（含 `Tool.output`）：模型可读图时保留 Image + 前插引用行；不可读时替换为引用行。点名的 native Image 写进本次 `Tool.output` 后，后续 turn 由投影管线按当次模型回放（原图或引用行）。 |
 | `decodeArtifactRef()` 以后能读到 `sub_assistant_call` | 它只读 Tool.metadata 顶层 `"artifact"`。只把引用写在 `artifacts[]`、又不把 Image 写入 `assistant_call` output 时，必须同期扩展 Resolver，否则 Caller 抄 `attachment:` 会 `attachment_not_found`。 |
-| UNAVAILABLE 当成 `SubAssistantCallState.UNAVAILABLE` | 那是运行态。出站看不懂图仍是 `completed` + `artifact_delivery`。 |
-| 为卡片描述未点名也跑 OCR | 禁止。 |
+| 把「Caller 看不懂图」当成失败 | 那既不是运行态也不是错误。出站仍 `completed`；投影方式（native Image / 引用行）由 Caller 当次模型决定。 |
+| 为卡片描述未点名也跑识别 | 禁止。识别只有模型显式调用 `inspect_attachments` 这一条路径。 |
 
-当前能力三态只看 Caller/Target 当次模型的 `inputModalities` 与 `Settings.ocrModelId`。完整「模型 ∩ Provider ∩ 协议」矩阵不存在；用户把不支持视觉的兼容端点标成 IMAGE 时，NATIVE 仍会把图发出去，由 Provider/网关报错，现有 `provider_error` / `content_blocked` 收口。
+当前能力判定只看当次模型的 `inputModalities`（native / reference-only 两态；按需识别看 `attachmentInspectionModelId` 是否解析出可用视觉模型、`inspect_attachments` 是否注入）。完整「模型 ∩ Provider ∩ 协议」矩阵不存在；用户把不支持视觉的兼容端点标成 IMAGE 时，native 投影仍会把图发出去，由 Provider/网关报错，现有 `provider_error` / `content_blocked` 收口。
 
 ---
 
@@ -110,28 +110,27 @@ Main Agent
 AssistantToolFactory                 形状校验；统一 unavailable 信封
     ▼
 SubAssistantCoordinator
-    │  有 attachments：Target RunSpec 能力 preflight
-    │  AttachmentResolver → Child USER = Text + 原始 Image
-    │  Target GenerationHandler
-    │      AttachmentRefHintTransformer
-    │      AttachmentInputTransformer / ImageInputAdapter
+    │  AttachmentResolver → Child USER = Text + 原始 Image（只校验 ref/资产，不判视觉能力）
+    │  Target GenerationHandler（用自己的 resolved model）
+    │      AttachmentProjectionTransformer   ← 统一投影：可读图保留原图+引用行；不可读替换为引用行+hint
+    │      inspect_attachments?              ← Target 模型不可读图且配置了识别模型时注入
     ▼
 extractDeliverableArtifacts          只提取，不做能力判断
     ├─ metadata + SubAssistantCallCard     用户可见引用
     └─ completed JSON                      轻量 artifacts[]
            extras 含 artifacts?
                 │           │
-               no          yes → getChatModel(caller) + ImageInputAdapter
-                                 Native Image / Derived 文本 / Unavailable
+               no          yes → 追加 native Image parts（带 stable ref）
+                          Caller 后续请求由 AttachmentProjectionTransformer
+                          按当次 Caller 模型统一投影（原图 / 引用行）
 ```
 
 | Target 产生图片 | extras=artifacts | Caller 模型 | Master 卡片 | Caller 模型上下文 |
 |-----------------|------------------|-------------|-------------|-------------------|
 | 否 | 任意 | 任意 | 无缩略图 | 仅文本 |
-| 是 | 否 | 任意 | 显示图 | 文本 + 轻量 artifacts[]；无 OCR |
-| 是 | 是 | NATIVE | 显示图 | JSON + Image parts |
-| 是 | 是 | DERIVED | 显示原图 | JSON + observation 文本 |
-| 是 | 是 | UNAVAILABLE | 显示原图 | JSON + `artifact_delivery=unavailable` |
+| 是 | 否 | 任意 | 显示图 | 文本 + 轻量 artifacts[] |
+| 是 | 是 | 可读图（IMAGE in inputModalities） | 显示图 | JSON + Image parts（引用行由投影管线附加） |
+| 是 | 是 | 不可读图 | 显示图 | JSON + 引用行 + capability hint；可显式调 `inspect_attachments` |
 
 ```text
 用户：让绘图助手画一张图给我。
@@ -140,7 +139,8 @@ Main：assistant_call(...)                         extras 省略
 
 用户：让绘图助手生成一张图，然后你评价哪里还要改。
 Main：assistant_call(..., extras=["artifacts"])
-→ 卡片显示原图；Caller 按能力拿到原图或 observation
+→ 卡片显示原图；Caller 可读图时拿到 native Image parts，
+  不可读时得到引用行，需要细节则显式调用 inspect_attachments
 ```
 
 ---
@@ -194,9 +194,8 @@ http://...            // 同样先落地；SSRF 规则与 https 相同
 | `unsupported_attachment_type` | 解析后不是当前接受的图片（含 PDF / 音频 / 视频，以及下载成功但无法当作位图消费） |
 | `unsafe_attachment_url` | scheme / 重定向 / 私网 / 体积等安全检查失败 |
 | `attachment_fetch_failed` | 远程下载或 IO 失败 |
-| `attachment_input_unavailable` | 本次附件无法 NATIVE 且无法 DERIVED |
 
-`SubAssistantCallState.UNAVAILABLE` 与这些 reason 不是同一套枚举。附件三态的对外出口是 Tool Result 的 `reason`。
+`SubAssistantCallState.UNAVAILABLE` 与这些 reason 不是同一套枚举。入站失败发生在写 Child 之前；Target 的视觉能力不是入站失败条件（能力不足由 Target run 自己的投影与工具集表达）。
 
 ---
 
@@ -221,73 +220,47 @@ metadata.attachment_ref = "attachment:<uuid>"
 - Target 模型原生出图（`data:image`）：`FilesManager.convertBase64ImagePartToLocalFile()` 落盘时即 `ensureAttachmentRef()`。Child 没有每轮 backfill，不在这里盖章的话出站提取每次都会生成新的随机 ref。
 - 从 Master 注入 Child 的 part：**复制源 `attachment_ref`**。
 
-`AttachmentInputTransformer` 只扫描消息顶层 `parts`，不进入 `Tool.output`。因此 Master 上的 `generate_image` 结果**不会**被改成 observation；Caller 要把生图交给 Target，应引用该 Image 的 `attachment_ref` 或 JSON 里的 `/upload/<file>`。注入 Child 后这些图变成 USER 顶层 Image，Adapter 才能处理。
+`AttachmentProjectionTransformer` 递归处理消息 parts（含 `Tool.output`）。Master 上的 `generate_image` 结果由统一投影按当次 Caller 模型呈现：可读图时保留原图 + 前插引用行，不可读时替换为引用行；Caller 要把生图交给 Target，应引用该 Image 的 `attachment_ref` 或 JSON 里的 `/upload/<file>`。
 
 历史消息没有 ref：`ChatService.handleMessageComplete()` 在 Master 生成前调用 `AttachmentRefs.backfillConversation()`，并随现有 `updateConversation()` 写回。不要在 Input Transformer 里只做一次性临时 id。
 
 Child clone / Master fork 已保留 metadata（`copyPartForChildClone()` / `copyForkedPart()`）。Resolver 以「当前消息树里带该 ref 的 part.url」为准，不把 ref 理解成全局文件主键。
 
-### 5.2 `ImageInputAdapter`
+### 5.2 统一投影：`AttachmentProjectionTransformer`
 
-`OcrTransformer` 是薄委托。真实逻辑：
+普通聊天、Master 与 Target 共用同一个请求级无状态投影器。按**本次请求的 resolved model** 的 `inputModalities` 判定：
 
-```text
-AttachmentInputTransformer
-    └── ImageInputAdapter
-```
+| 模式 | 条件 | 行为 |
+|------|------|------|
+| native | 模型 `inputModalities` 含 `Modality.IMAGE` | Image part 保留，前方插入引用行 `[Attachment ref=... type=image name="..."]` |
+| reference-only | 不含 IMAGE | Image 替换为引用行；消息尾部追加一次 capability hint |
 
-`ImageInputAdapter.resolveCapability()`：
+关键性质：
 
-| 状态 | 条件 |
+- **无状态**：无跨请求缓存、无 per-turn 改写。同一 durable 消息按不同模型投影出不同请求副本，Conversation 原对象不变。
+- **递归**：`Tool.output` 内的 Image 同样处理（否则模型看不到生图结果上的 ref）。
+- **Document / Audio / Video**：始终保留 part + 前插引用行，不做 native/reference 分叉。
+- 引用行含 ref/type/name，不含 mime/path；显示名优先 `ManagedFileEntity.displayName`，否则磁盘文件名。无 ref 的 legacy Image 在 reference-only 下退化为 `[Image]` 占位。
+- capability hint 只在最后一条消息出现一次，内容固定为「附件图片本次运行不可直接可见，不要仅凭引用推断视觉细节」；不写 `use inspect_attachments`（何时调用由工具 description 表达）。
+
+按需识别（替代旧 per-turn OCR）：
+
+| 项 | 说明 |
 |------|------|
-| `NATIVE` | 该模型 `inputModalities` 含 `Modality.IMAGE` |
-| `DERIVED` | 不含 IMAGE，但 `Settings.ocrModelId` 能解析到模型、其 Provider 可用，**且 OCR 模型自身 `inputModalities` 含 IMAGE** |
-| `UNAVAILABLE` | 三者任一不满足 |
-
-OCR fallback 模型自身必须是视觉模型：text-only 模型配置成 OCR 时在 preflight 阶段即判 UNAVAILABLE，不会等到 `observe()` 才必然失败。
-
-`preflight()` 与 `resolveCapability()` 当前等价（`parts` 未使用）。
-
-普通聊天与子助手共用 Adapter，策略由 `TransformerContext` 区分：
-
-| 字段 | 含义 |
-|------|------|
-| `imageAdaptMode` | `CHAT_COMPAT`（默认）或 `SUB_ASSISTANT` |
-| `currentTaskMessageId` | 仅 Target；等于本次 Child USER 的 `UIMessage.id` |
-
-`GenerationHandler.generateText()` 把这两项传进 Input Transformer。Target 的 `runTargetGeneration()` 传入 `SUB_ASSISTANT` 与 `childTaskNodeId`。
-
-Adapter 只处理 `url` 以 `file:` 开头的**顶层** Image，不递归 `Tool.output`。HTTP / data: 图不会被转译，所以入站 Resolver 必须先落地。
-
-DERIVED 不把 `assistant_call.request` 或用户任务送进视觉模型。调用是 `provider.generateText()`：system 为 `settings.ocrPrompt`（用户自定义有效；默认文案在 `DEFAULT_OCR_PROMPT`），user 只有 Image part。不经过 `GenerationHandler`。
-
-包装：
-
-```text
-<attachment_observation ref="attachment:<uuid>">
-...
-</attachment_observation>
-```
-
-缓存只存视觉模型原文，标签由 `ImageInputAdapter.wrapObservation()` 在读出后加上。缓存文件是 `image_observation_cache.json`（不再读旧的 `ocr_cache.json`）。键是 `sha256(file bytes) + RENDITION_VERSION + ocrModelId + sha256(ocrPrompt)`。`RENDITION_VERSION` 绑定输出模板。容量与 3 天过期沿用原 LruCache。clone/fork 换路径后按内容哈希命中。处理中状态走 `R.string.image_observation_processing`。
-
-| 对象 | 无法 NATIVE / DERIVED 时 |
-|------|--------------------------|
-| 本次 `attachments[]` | 写 Child 前 preflight 失败，`attachment_input_unavailable` |
-| 普通聊天里的用户图 | `[Image]`；DERIVED 调用失败则 `[ERROR, OCR failed: ...]`，生成继续 |
-| Child 历史图 | `[Historical attachment unavailable to the current model]`，有 ref 时追加 `: attachment:<uuid>`。Child 可继续跑 |
-| 出站点名且 DERIVED | 写 output 前 `observe()`；单张失败写 `OBSERVATION_FAILED`，整次 call 仍 completed |
+| `inspect_attachments` 工具 | 当前模型不可读图、且 `attachmentInspectionModelId` 解析出 Provider 可用的视觉模型时注入；模型显式调用才识别 |
+| 注入判定 | `shouldInjectAttachmentInspection()`（`GenerationToolSetFactory`）；不根据当前消息是否含图决定 schema |
+| 附件解析 | `ToolExecutionContext.resolveAttachments`（Runtime 注入，走统一 `AttachmentResolver`，工具不接触会话状态） |
+| 识别调用 | 单次多图调用（`[Image N ref=...]` 内部标签 + request + 固定 system instruction），结果为普通 Text Tool Result |
+| 无缓存 | 结果由 attachments + request + model 共同决定；显式 Tool Result 已是正确的历史记录 |
 
 挂载顺序：
 
 | 管线 | 相对顺序 |
 |------|----------|
-| Master `ChatService` | `DocumentAsPromptTransformer` 之后：`AttachmentRefHintTransformer`，再 `AttachmentInputTransformer`，再 Template / Workspace / `ToolArtifactReplayTransformer` |
-| Target `runTargetGeneration()` | 同样替换原 `OcrTransformer`，并加上 Hint；不强制补 `ToolArtifactReplayTransformer` |
+| Master `ChatService` | `DocumentAsPromptTransformer` 之后：`AttachmentProjectionTransformer`，再 Template / Workspace / `ToolArtifactReplayTransformer` |
+| Target `runTargetGeneration()` | 同一 transformer 链，用自己的 resolved model |
 
-`AttachmentRefHintTransformer`（`insertAttachmentRefHintsInMessages()` / `insertAttachmentRefHintsInParts()`）只在本次请求中、每个带 `attachment_ref` 的多媒体 part **前方**插入很短的 Text，例如 `[Attachment attachment:<uuid>, screenshot.png]`。必须递归 `Tool.output`，否则主模型看不到生图结果上的 ref。不改用户原文本，也不回写 Conversation。显示名优先 `ManagedFileEntity.displayName`，否则磁盘文件名；`Document` 优先 `fileName`。DERIVED 替换 Image 时，observation 文本再次带上同一个 ref。用户气泡、导出、复制原文都不使用这些提示句。
-
-不要写 `SubAssistantOcrTransformer`，也不要给 `AttachmentInputTransformer` 加 `assistant_call` 特例。
+不要写 `SubAssistantOcrTransformer`，也不要给投影器加 `assistant_call` 特例。
 
 ### 5.3 Target `generate_image`
 
@@ -332,7 +305,7 @@ Child 不需要 `ToolArtifactReplayTransformer` 才能在本 run 里看见刚生
 | `file:` | 规范化路径落在 `filesDir/upload` 或 `filesDir/images`，文件存在，且被当前分支引用 |
 | HTTP(S) | `SafeRemoteMediaFetcher.fetch()` → `FilesManager.saveManagedFromBytes()` 落地 → 新 Image + 新 ref |
 
-同一规范化文件只注入一次（按 canonical path 去重）。同一 Master 文件注入 Child 时 **共享** `file://`，不先复制。命中 Master 已有 Image 时复制源 `attachment_ref`。若源 url 仍是 HTTP(S)，会先落地再注入，Child 只存 `file://`。Master 删除会级联 Child。批次中途失败或抛错时，`deleteCreated()` 删除本批新登记的远程落地文件；resolve 成功返回后由 `AttachmentResolveResult.Success.createdManagedFileIds` 交给 Coordinator，Child 写入 / 持久化失败时同样回滚，不留下孤儿文件。删除仍按 URL 引用计数，不要在注入时 `delete` 源文件。
+同一规范化文件只注入一次（`resolve()` 默认按 canonical path 去重；`inspect_attachments` 走 `resolveImages()` 禁用去重，保证 refs 与产出 1:1、顺序稳定）。同一远程 url 在单次批量解析内只 fetch/落盘一次。同一 Master 文件注入 Child 时 **共享** `file://`，不先复制。命中 Master 已有 Image 时复制源 `attachment_ref`。若源 url 仍是 HTTP(S)，会先落地再注入，Child 只存 `file://`。Master 删除会级联 Child。批次中途失败或抛错时，`deleteCreated()` 删除本批新登记的远程落地文件；resolve 成功返回后由 `AttachmentResolveResult.Success.createdManagedFileIds` 交给 Coordinator，Child 写入 / 持久化失败时同样回滚，不留下孤儿文件。删除仍按 URL 引用计数，不要在注入时 `delete` 源文件。
 
 本地附件（`/upload/<file>` 与 `file:`）在读取前同样受 `GeneratedMediaStore.MAX_IMAGE_BYTES` 体积上限，超限映射 `unsafe_attachment_url`，与远程路径一致，避免大文件整读进内存。
 
@@ -342,7 +315,7 @@ Child 不需要 `ToolArtifactReplayTransformer` 才能在本 run 里看见刚生
 
 `ImageMime` 当前通过才注入：魔数 JPEG / PNG / GIF / WEBP（`GeneratedMediaStore.detectImageMimeBySignature()`）；HEIC/HEIF 按 ISO-BMFF `ftyp` 品牌识别，若 `encodeBase64()` 能转 JPEG 则接受；声明为 `image/*` 但魔数不明时再尝试 `GeneratedMediaStore.detectImageMime()`。PDF、音频、视频、未知二进制 → `unsupported_attachment_type`。
 
-### 6.2 Child 注入与 preflight
+### 6.2 Child 注入与校验
 
 `createNewChild()` / `reuseChild()` / `cloneChild()` 的 USER 由 `buildChildUserParts()` 构造：
 
@@ -358,15 +331,14 @@ USER
 lease 已持有之后的顺序：
 
 1. `resolvePreWriteBlockReason()` 用最新 Settings 重验身份、访问与模型。
-2. 若 `attachments` 非空，先 `ImageInputAdapter.preflight(runSpec.model, settings)`。`UNAVAILABLE` 则释放 lease，返回 `attachment_input_unavailable`，**不下载、不写 Child**。
-3. 再 `AttachmentResolver.resolve()`。
-4. 解析失败释放 lease，不写 Child。
-5. 写入 `Text + Images`。
-6. 写入或 resolve 抛错走现有 `runtime_error` 分类。lease 在该 `try` 的 `catch` 中释放。
+2. `AttachmentResolver.resolve()`（attachments 非空时）。
+3. 解析失败释放 lease，不写 Child。
+4. 写入 `Text + Images`。
+5. 写入或 resolve 抛错走现有 `runtime_error` 分类。lease 在该 `try` 的 `catch` 中释放。
 
-`InputMessageTransformer` 不能让整次 `assistant_call` 失败。强契约只在写 Child 前用 RunSpec 做能力预检。预检不跑视觉模型；DERIVED 的真实转换仍在 Transformer 里，命中缓存即可。运行中 OCR 失败写成明确的 `<attachment_observation>` 错误句，不中途杀掉已经开始的 Target 循环。只要 `assistant_call` 返回 `completed` 且本次传了附件，Child 里一定有原图，且本次请求要么以原图、要么以 observation（或明确错误 observation）进入 Target。
+入站只验证 ref/资产；Target 的视觉能力不再是入站失败条件——能力不足由 Target run 自己的 `AttachmentProjectionTransformer`（引用行投影）与工具集（`inspect_attachments` 可用性）表达。只要 `assistant_call` 返回 `completed` 且本次传了附件，Child 里一定有原图，本次请求按 Target 模型能力以原图或引用行进入 Target。
 
-http / data: 图不会被 Adapter 转译。Child 只存 `file://`，否则文本 Target 会把裸 URL 送给 Provider，或在 Gemini 上被静默丢掉。
+http / data: 图不会被投影器改写为像素。Child 只存 `file://`，否则文本 Target 会把裸 URL 送给 Provider，或在 Gemini 上被静默丢掉。
 
 ---
 
@@ -381,7 +353,7 @@ http / data: 图不会被 Adapter 转译。Child 只存 `file://`，否则文本
 | 来源 | 条件 |
 |------|------|
 | `generate_image` 的 `Tool.output` | 工具已执行、结果为成功完成态、含 `UIMessagePart.Image`，且能解析到有效 `LocalArtifactRef` 或本地 `file://` |
-| 最终一条 ASSISTANT 的顶层媒体 | Image 做内容投影；Document / Audio / Video 只进引用清单，点名 extras 时走 `artifact_delivery=unavailable` |
+| 最终一条 ASSISTANT 的顶层媒体 | Image 做内容投影；Document / Audio / Video 只进引用清单，点名 extras 时也仅 Image 追加 native parts |
 
 **不是交付物**：本次 Child USER 上的入站附件、Web Search / MCP 中间图、失败 / 未执行的 Tool、历史 run、未落地的 http / data: 图。
 
@@ -411,7 +383,7 @@ artifacts: [
 artifact_omitted: Int = 0
 ```
 
-只存引用，不存像素，不存 host `file://`，不存 observation。`mergeSubAssistantCallMetadata` 仍只替换 `sub_assistant_call` 键。`updateTerminalState()` 的 `copy(...)` 必须带上新字段。
+只存引用，不存像素，不存 host `file://`，不存识别结果。`mergeSubAssistantCallMetadata` 仍只替换 `sub_assistant_call` 键。`updateTerminalState()` 的 `copy(...)` 必须带上新字段。
 
 `SubAssistantCallCard`：
 
@@ -442,22 +414,17 @@ artifact_omitted: Int = 0
 未点名 extras=artifacts
     → Tool.output 只有 Text JSON
     → 可含 has_non_text_output 与轻量 artifacts[]
-    → 禁止调用 observe()
+    → 不追加媒体 part
 
 点名 extras=artifacts
-    → capability = ImageInputAdapter.resolveCapability(getChatModel(caller), settings)
-    → capability 判定用本轮 Master Tool Loop 的 Caller Settings 快照
-      （ChatService → buildTools(callerSettings=...) → executeCall(callerSettingsSnapshot)）；
-      Target Run 期间用户切换 Main 模型不影响投影方式，权限类检查仍读 latest
-    → 对可持久化 Image 交付物做 Adaptation
+    → 对可持久化 Image 交付物追加 native Image parts（共享 Child 的 file://，
+      复制 stable attachment_ref）
     → 投影 part 追加在 Text JSON 之后
+    → Caller 后续请求由 AttachmentProjectionTransformer 按当次 Caller 模型
+      统一投影：可读图保留原图 + 引用行；不可读替换为引用行 + hint
 ```
 
-**NATIVE**：`Tool.output = [ Text(JSON), Image, ... ]`。共享 Child 的 `file://`，复制 `attachment_ref`。全部内容已按原图交付时省略 `artifact_delivery`；存在当前不支持类型（Document / Audio / Video）时写 `"artifact_delivery": "partial"`。
-
-**DERIVED**：写 output 前 `observe()`。output 里只放 observation 文本。单张失败写 `OBSERVATION_FAILED`，其它项继续，整次 call 仍 `completed`。全部成功且无不支持类型写 `"artifact_delivery": "derived"`；部分失败或含不支持类型写 `"artifact_delivery": "partial"`；全部失败写 `"artifact_delivery": "unavailable"`。
-
-**UNAVAILABLE**：output 仍只有 Text JSON。`status` 保持 `completed`。写 `"artifact_delivery": "unavailable"`。点名后只有 Document / Audio / Video 时同样走这个字段。
+投影不再区分 NATIVE / DERIVED / UNAVAILABLE 三态，也不写 `artifact_delivery` 字段——Child artifact 的 stable ref 始终是交付事实；Caller 侧 native/引用行投影统一交给投影器逐请求决定。Caller 需要细节时显式调用 `inspect_attachments`。
 
 `unavailable` / failed / stopped 不加 artifacts 段，也不追加媒体 part。`SubAssistantRecovery` 与 `finishInterruptedToolAfterGenerationStop()` 只重建文本 extras（tts / tool_calls）。
 
@@ -483,7 +450,7 @@ Resolver 顺序：
 2. 当前分支 `sub_assistant_call.artifacts[]`
 3. `/upload` + 「必须被当前 Master 引用」——metadata 里的 `artifacts[]` 算作引用
 
-点名后的 Image / observation 会留在 Master 历史中，后续 turn 会再次发给 Caller。当前接受这一点。
+点名后的 native Image 会留在 Master 历史中，后续 turn 由投影管线按当次 Caller 模型回放（原图或引用行）。当前接受这一点。
 
 未点名时只有 manifest。Caller 若还要把图交给另一个 Target，应把 `artifacts[].ref`（或 `path`）填进另一次 `assistant_call.attachments`。
 
@@ -497,15 +464,13 @@ Resolver 顺序：
 | `AttachmentFailureReasons` / `MAX_ASSISTANT_CALL_ATTACHMENTS` | 稳定 reason 与上限 |
 | `parseAssistantCallAttachments()` / `parseAssistantCallExtras()` | 工具层形状校验；extras 白名单 |
 | `AttachmentResolver` / `SafeRemoteMediaFetcher` / `ImageMime` | 引用 → 本地 Image；SSRF；魔数门禁 |
-| `AttachmentRefHintTransformer` | Model View 句柄提示 |
-| `AttachmentInputTransformer` / `ImageInputAdapter` | NATIVE / DERIVED / 占位 |
-| `ImageAdaptMode` / `ImageAdaptCapability` | 策略与三态 |
-| `OcrTransformer` | 兼容委托 |
+| `AttachmentProjectionTransformer` | 请求级无状态统一投影（native / reference-only） |
+| `AttachmentInspectionTool` / `shouldInjectAttachmentInspection` | `inspect_attachments` 工具与注入判定 |
 | `AssistantToolFactory` | schema、校验、统一 unavailable 信封 |
-| `SubAssistantCoordinator` | 入站 preflight / resolve / 注入；出站提取 / 投影 |
-| `extractDeliverableArtifacts` / `projectArtifactsForCaller` | 纯提取与 Caller 投影 |
+| `SubAssistantCoordinator` | 入站 resolve / 注入；出站提取 / 投影 |
+| `extractDeliverableArtifacts` / `projectArtifactsForCaller` | 纯提取与 Caller native parts 投影 |
 | `SubAssistantCallMetadata` / `SubAssistantRunStateReducer` | `artifacts[]` / `artifact_omitted`；终态快照 |
-| `buildSubAssistantCallResult` | 轻量 `artifacts[]`、可选 `artifacts_omitted`、可选 `artifact_delivery` |
+| `buildSubAssistantCallResult` | 轻量 `artifacts[]`、可选 `artifacts_omitted` |
 | `SubAssistantCallCard` | 缩略图 / `+N` / 缺失占位 / 点击分区 |
 | `SubAssistantRecovery` / `finishInterruptedToolAfterGenerationStop` | 只重建文本 extras |
 | `ChatService` | 发送/编辑盖章，生成前 backfill |
@@ -513,20 +478,20 @@ Resolver 顺序：
 
 不改：`GenerationHandler` 主循环语义、Provider 编码、lineage / lease。
 
-主要测试：`AssistantCallToolTest`、`AttachmentRefsTest`、`AttachmentResolverTest`、`SafeRemoteMediaFetcherTest`、`ImageInputAdapterTest`、`AttachmentRefHintTransformerTest`、`SubAssistantAttachmentCoordinatorTest`、`SubAssistantChildPartsTest`、`SubAssistantResultProjectionTest`、`SubAssistantArtifactProjectionTest`、`SubAssistantRunPolicyTest`、`SubAssistantCallMetadataTest`、`SubAssistantRecoveryTest`、`ChatServiceToolApprovalTest` 停止路径。
+主要测试：`AssistantCallToolTest`、`AttachmentRefsTest`、`AttachmentResolverTest`、`SafeRemoteMediaFetcherTest`、`AttachmentProjectionTransformerTest`、`AttachmentInspectionToolTest`、`ShouldInjectAttachmentInspectionTest`、`SubAssistantAttachmentCoordinatorTest`、`SubAssistantChildPartsTest`、`SubAssistantResultProjectionTest`、`SubAssistantArtifactProjectionTest`、`SubAssistantRunPolicyTest`、`SubAssistantCallMetadataTest`、`SubAssistantRecoveryTest`、`ChatServiceToolApprovalTest` 停止路径。
 
 维护约束：
 
-- Transformer 默认不回写 Conversation。ref 必须在 send / tool output / backfill 时写入。Hint 文本绝不能 save 进消息。
+- Transformer 默认不回写 Conversation。ref 必须在 send / tool output / backfill 时写入。引用行 / capability hint 文本绝不能 save 进消息。
 - 任何 `copy(metadata = ...)` 都要从原 `JsonObject` 出发 merge。
-- 不要在 Coordinator 里做任务向 caption。入站 preflight 只问「能不能传」。
-- 注入与出站 Native 都共享 `file://`；不要在注入或展示时 `delete` 源文件。
-- 出站用 `settings.getChatModel(caller)`，且必须是本轮 Master Tool Loop 的 Caller 快照（`buildTools(callerSettings=...)` 一路传入），不是完成时的 latest。`observe()` 的 Context 由 Coordinator 注入，不要在纯提取函数里碰 IO。
-- 未点名 extras 时不要把 Image 写入 Master `Tool.output`，也不要调用视觉模型。DERIVED 不得把原图再塞进 output。
+- 不要在 Coordinator 里做任务向 caption。入站只验证 ref/资产。
+- 注入与出站 native 都共享 `file://`；不要在注入或展示时 `delete` 源文件。
+- Caller 投影不判能力、不调用识别模型；native/引用行统一由 `AttachmentProjectionTransformer` 按当次请求模型决定。
+- 未点名 extras 时不要把 Image 写入 Master `Tool.output`，也不要调用识别模型。
 - `errorResult` 迁移只限 `assistant_call`。
 - 用户可见字符串走 5 份 `strings.xml`。
 - 文档不要写行号或易变计数；用类名 / 函数名 / 常量名定位。
-- http / data: 图不会被 Adapter 转译。Child 只存 `file://`。
+- http / data: 图不会被投影器转译。Child 只存 `file://`。
 
 ---
 
@@ -536,17 +501,17 @@ Resolver 顺序：
 
 ### 9.1 类型扩展（产品上最常见的下一步）
 
-内部命名保持 Attachment。到时只加 Adapter 与 Resolver 的 MIME 分支，不再改 `attachments[]`、Child USER、lineage、RunSpec：
+内部命名保持 Attachment。到时只加投影器的类型分支与 Resolver 的 MIME 分支，不再改 `attachments[]`、Child USER、lineage、RunSpec：
 
 ```text
-AttachmentInputTransformer
-    ├── ImageInputAdapter        ← 已落地
-    ├── DocumentInputAdapter     ← Native PDF / 抽文本 / 渲染+视觉 / unavailable
-    ├── AudioInputAdapter        ← Native / transcript / unavailable
-    └── VideoInputAdapter        ← Native / transcript+关键帧 / unavailable
+AttachmentProjectionTransformer
+    ├── Image（native / reference-only）   ← 已落地
+    ├── Document    ← 引用行已落地；按需扩展投影与 inspect 支持
+    ├── Audio       ← 同上
+    └── Video       ← 同上
 ```
 
-出站对 Document / Audio / Video 做与 Image 对等的内容投影，而不只是引用清单 + `artifact_delivery=unavailable`。
+出站对 Document / Audio / Video 做与 Image 对等的投影与按需识别支持。
 
 文档类应复用 `DocumentAsPromptTransformer`，不要再写一套 PDF 抽文本。
 
@@ -560,7 +525,7 @@ OpenAI / Claude / Gemini 远端文件缓存。同一张图多轮反复发给同�
 
 ### 9.4 历史视觉 token
 
-点名 `extras=["artifacts"]` 后，原图或 observation 会留在 Master 历史并在后续 turn 回放。若要「只让本轮看见」，需另做历史 `assistant_call` 媒体折叠，并可能改 `GenerationHandler`。不要在未点名时发明「只发给本轮、不落盘」的通道。
+点名 `extras=["artifacts"]` 后，native Image 会留在 Master 历史并在后续 turn 回放（可读图模型持续消耗视觉 token；不可读模型只回放引用行）。若要「只让本轮看见」，需另做历史 `assistant_call` 媒体折叠，并可能改 `GenerationHandler`。不要在未点名时发明「只发给本轮、不落盘」的通道。
 
 ### 9.5 Target 跨 step 回放 `/upload`
 

@@ -162,7 +162,8 @@ class SettingsStore(
                 titleModelId = preferences[TITLE_MODEL]?.let { Uuid.parse(it) },
                 enableSuggestion = preferences[ENABLE_SUGGESTION] != false,
                 suggestionModelId = preferences[SUGGESTION_MODEL]?.let { Uuid.parse(it) },
-                imageGenerationModelId = preferences[IMAGE_GENERATION_MODEL]?.let { Uuid.parse(it) } ?: Uuid.random(),
+                imageGenerationModelId = preferences[IMAGE_GENERATION_MODEL]?.let { Uuid.parse(it) }
+                    ?: DEFAULT_AUTO_MODEL_ID,
                 titlePrompt = preferences[TITLE_PROMPT] ?: DEFAULT_TITLE_PROMPT,
                 suggestionPrompt = preferences[SUGGESTION_PROMPT] ?: DEFAULT_SUGGESTION_PROMPT,
                 attachmentInspectionModelId = preferences[ATTACHMENT_INSPECTION_MODEL]?.let { Uuid.parse(it) },

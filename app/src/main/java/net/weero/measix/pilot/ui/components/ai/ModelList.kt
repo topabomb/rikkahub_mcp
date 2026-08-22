@@ -170,7 +170,8 @@ fun ModelSelector(
         type = type,
     ),
     onlyIcon: Boolean = false,
-    allowClear: Boolean = false,
+    onClear: (() -> Unit)? = null,
+    placeholder: String? = null,
     onSelect: (Model) -> Unit
 ) {
     state.update(
@@ -199,17 +200,17 @@ fun ModelSelector(
                     )
                 }
                 Text(
-                    text = model?.displayName ?: stringResource(R.string.model_list_select_model),
+                    text = model?.displayName
+                        ?: placeholder
+                        ?: stringResource(R.string.model_list_select_model),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodySmall
                 )
             }
-            if (allowClear && model != null) {
+            if (onClear != null && model != null) {
                 IconButton(
-                    onClick = {
-                        onSelect(Model())
-                    }
+                    onClick = onClear
                 ) {
                     Icon(
                         imageVector = HugeIcons.Cancel01,

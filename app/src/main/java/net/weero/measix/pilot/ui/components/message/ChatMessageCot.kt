@@ -2,7 +2,9 @@ package net.weero.measix.pilot.ui.components.message
 
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.util.fastForEachIndexed
+import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.ai.tools.local.GENERATE_IMAGE_TOOL_NAME
 
 /**
@@ -118,4 +120,26 @@ private val EmptyConversationAlbum: () -> List<String> = { emptyList() }
 
 val LocalConversationImages = compositionLocalOf<() -> List<String>> {
     EmptyConversationAlbum
+}
+
+/**
+ * 附件缩略图只读解析（设计文档 §8.7/§13.10）：会话宿主按 stable `attachment:<uuid>`
+ * 返回本地 `file:` url；不做远程下载、不触发识别，解析不到返回 null 由消费点显示占位。
+ * UI 可显示缩略图不代表当前模型收到图片像素（presentation 与 projection 解耦）。
+ */
+private val NoAttachmentPreview: (String) -> String? = { null }
+
+val LocalAttachmentPreview = compositionLocalOf<(String) -> String?> {
+    NoAttachmentPreview
+}
+
+internal fun resolveAttachmentPreviewUrl(messages: List<UIMessage>, ref: String): String? {
+    val normalized = AttachmentRefs.parse(ref)?.let { AttachmentRefs.format(it) } ?: return null
+    return AttachmentRefs.walkMessageParts(messages)
+        .firstOrNull { part ->
+            AttachmentRefs.getRef(part)?.let { AttachmentRefs.parse(it) }?.let { AttachmentRefs.format(it) } == normalized
+        }
+        ?.let { it as? UIMessagePart.Image }
+        ?.url
+        ?.takeIf { it.startsWith("file:", ignoreCase = true) }
 }

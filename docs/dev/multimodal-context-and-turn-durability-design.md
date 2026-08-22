@@ -1,12 +1,12 @@
 # 多模态上下文与 Turn 持久化设计
 
-> 状态：核心 P0 已实施，资产持久化增强待后续迭代
+> 状态：**已被取代**（2026-08-22）——附件视觉方案已切换为统一投影 + `inspect_attachments` 按需识别，
+> 见 [`multimodal-attachment-context-and-analysis-design.md`](multimodal-attachment-context-and-analysis-design.md)。
+> 本文中 OCR/DERIVED 相关设计未按原样实施；Turn 持久化部分（`TurnExecution` / `ToolExecution`）已实施并继续有效。
 >
 > 日期：2026-08-21
 >
 > 适用范围：Master 普通聊天、用户上传附件、本地工具附件产物、未来创建或下载文件的工具
->
-> 明确排除：本阶段不新增独立 OCR、图像识别或 `inspect_image` 工具
 
 本文以当前代码和已支持协议为事实基线，解决两个相互关联但职责不同的问题：
 

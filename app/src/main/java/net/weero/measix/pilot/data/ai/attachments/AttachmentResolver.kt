@@ -38,14 +38,17 @@ class AttachmentResolver(
     suspend fun resolve(
         masterMessages: List<UIMessage>,
         refs: List<String>,
+        deduplicate: Boolean = true,
     ): AttachmentResolveResult {
         if (refs.isEmpty()) return AttachmentResolveResult.Success(emptyList())
         val createdIds = mutableListOf<Long>()
         val resolved = ArrayList<UIMessagePart.Image>(refs.size)
         val seenFiles = LinkedHashSet<String>()
+        // 同一远程 url 在本次批量解析内只 fetch/落盘一次；命中后按调用方 preferredRef 重打标记。
+        val remoteResolved = HashMap<String, UIMessagePart.Image>()
         try {
             for (ref in refs) {
-                when (val one = resolveOne(masterMessages, ref, createdIds)) {
+                when (val one = resolveOne(masterMessages, ref, createdIds, remoteResolved)) {
                     is AttachmentResolveResult.Failure -> {
                         deleteCreated(createdIds)
                         return one
@@ -56,8 +59,10 @@ class AttachmentResolver(
                                 deleteCreated(createdIds)
                                 return AttachmentResolveResult.Failure(AttachmentFailureReasons.ATTACHMENT_NOT_FOUND)
                             }
-                        val key = canonicalFileKey(image.url)
-                        if (key != null && !seenFiles.add(key)) continue
+                        if (deduplicate) {
+                            val key = canonicalFileKey(image.url)
+                            if (key != null && !seenFiles.add(key)) continue
+                        }
                         resolved += image
                     }
                 }
@@ -72,6 +77,9 @@ class AttachmentResolver(
     /**
      * `inspect_attachments` 的收紧批量入口：只接受 stable `attachment:<uuid>`，1..4 个，
      * all-or-nothing。安全/存在性校验复用 [resolve]，不在工具层复制路径逻辑。
+     *
+     * 禁用去重：输入顺序即识别/比较顺序（设计文档 §8.4），refs 与产出必须 1:1——
+     * 重复 ref 或多个 ref 指向同一文件时保留全部输入，由识别调用内的序号标签消歧。
      */
     suspend fun resolveImages(
         masterMessages: List<UIMessage>,
@@ -84,21 +92,22 @@ class AttachmentResolver(
         if (normalized.any { AttachmentRefs.parse(it) == null }) {
             return AttachmentResolveResult.Failure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
         }
-        return resolve(masterMessages, normalized)
+        return resolve(masterMessages, normalized, deduplicate = false)
     }
 
     private suspend fun resolveOne(
         masterMessages: List<UIMessage>,
         rawRef: String,
         createdIds: MutableList<Long>,
+        remoteResolved: MutableMap<String, UIMessagePart.Image>,
     ): AttachmentResolveResult {
         val ref = rawRef.trim()
         return when {
-            AttachmentRefs.parse(ref) != null -> resolveAttachmentHandle(masterMessages, ref, createdIds)
+            AttachmentRefs.parse(ref) != null -> resolveAttachmentHandle(masterMessages, ref, createdIds, remoteResolved)
             LocalToolPath.parseUploadToolPath(ref) != null -> resolveUploadPath(masterMessages, ref)
             ref.startsWith("file:", ignoreCase = true) -> resolveFileUrl(masterMessages, ref)
             ref.startsWith("http://", ignoreCase = true) ||
-                ref.startsWith("https://", ignoreCase = true) -> resolveRemoteUrl(ref, createdIds)
+                ref.startsWith("https://", ignoreCase = true) -> resolveRemoteUrl(ref, createdIds, remoteResolved)
             else -> AttachmentResolveResult.Failure(AttachmentFailureReasons.ATTACHMENT_NOT_FOUND)
         }
     }
@@ -107,6 +116,7 @@ class AttachmentResolver(
         masterMessages: List<UIMessage>,
         ref: String,
         createdIds: MutableList<Long>,
+        remoteResolved: MutableMap<String, UIMessagePart.Image>,
     ): AttachmentResolveResult {
         val normalized = AttachmentRefs.format(AttachmentRefs.parse(ref) ?: return notFound())
         val part = AttachmentRefs.walkMessageParts(masterMessages).firstOrNull { candidate ->
@@ -114,7 +124,7 @@ class AttachmentResolver(
                 normalized
         }
         if (part != null) {
-            return materializeExistingPart(masterMessages, part, preferredRef = normalized, createdIds = createdIds)
+            return materializeExistingPart(masterMessages, part, preferredRef = normalized, createdIds = createdIds, remoteResolved = remoteResolved)
         }
         val metadataArtifact = findMetadataArtifact(masterMessages, normalized) ?: return notFound()
         val file = metadataArtifact.file(context.filesDir)
@@ -142,10 +152,20 @@ class AttachmentResolver(
         return wrapLocalImage(masterMessages, file)
     }
 
-    private suspend fun resolveRemoteUrl(url: String, createdIds: MutableList<Long>): AttachmentResolveResult {
+    private suspend fun resolveRemoteUrl(
+        url: String,
+        createdIds: MutableList<Long>,
+        remoteResolved: MutableMap<String, UIMessagePart.Image>,
+    ): AttachmentResolveResult {
+        // 单次批量解析内的请求级复用：同一 url 不重复 fetch/落盘。
+        remoteResolved[url]?.let { return AttachmentResolveResult.Success(listOf(it)) }
         return when (val fetched = fetcher.fetch(url)) {
             is RemoteMediaFetchResult.Failure -> AttachmentResolveResult.Failure(fetched.reason)
-            is RemoteMediaFetchResult.Success -> persistFetchedImage(fetched, createdIds)
+            is RemoteMediaFetchResult.Success -> persistFetchedImage(fetched, createdIds).also { result ->
+                if (result is AttachmentResolveResult.Success) {
+                    result.parts.singleOrNull()?.let { remoteResolved[url] = it }
+                }
+            }
         }
     }
 
@@ -185,22 +205,15 @@ class AttachmentResolver(
         part: UIMessagePart,
         preferredRef: String,
         createdIds: MutableList<Long>,
+        remoteResolved: MutableMap<String, UIMessagePart.Image>,
     ): AttachmentResolveResult {
         val url = partUrl(part) ?: return unsupported()
         if (url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true)) {
-            return when (val fetched = resolveRemoteUrl(url, createdIds)) {
+            return when (val fetched = resolveRemoteUrl(url, createdIds, remoteResolved)) {
                 is AttachmentResolveResult.Failure -> fetched
                 is AttachmentResolveResult.Success -> {
                     val image = fetched.parts.single()
-                    val withRef = AttachmentRefs.withMetadata(
-                        image,
-                        AttachmentRefs.mergeMetadata(
-                            image.metadata,
-                            mapOf(
-                                AttachmentRefs.METADATA_KEY to kotlinx.serialization.json.JsonPrimitive(preferredRef),
-                            ),
-                        ),
-                    ) as UIMessagePart.Image
+                    val withRef = withPreferredRef(image, preferredRef)
                     AttachmentResolveResult.Success(listOf(withRef))
                 }
             }
@@ -210,6 +223,17 @@ class AttachmentResolver(
         if (!isAllowedLocalFile(file)) return notFound()
         return wrapLocalImage(masterMessages, file, preferredRef = preferredRef, sourcePart = part)
     }
+
+    private fun withPreferredRef(
+        image: UIMessagePart.Image,
+        preferredRef: String,
+    ): UIMessagePart.Image = AttachmentRefs.withMetadata(
+        image,
+        AttachmentRefs.mergeMetadata(
+            image.metadata,
+            mapOf(AttachmentRefs.METADATA_KEY to kotlinx.serialization.json.JsonPrimitive(preferredRef)),
+        ),
+    ) as UIMessagePart.Image
 
     private suspend fun wrapLocalImage(
         masterMessages: List<UIMessage>,

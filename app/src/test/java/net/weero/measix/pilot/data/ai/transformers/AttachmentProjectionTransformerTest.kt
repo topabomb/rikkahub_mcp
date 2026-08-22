@@ -186,4 +186,20 @@ class AttachmentProjectionTransformerTest {
         assertTrue(asNativeAgain.single().parts.any { it is UIMessagePart.Image })
         assertFalse(asNativeAgain.single().parts.last().let { it is UIMessagePart.Text && it.text == AttachmentProjectionTransformer.CAPABILITY_HINT })
     }
+
+    @Test
+    fun `projection never mutates durable messages`() = runTest {
+        // A/B/C 切换只产生请求级副本，durable Conversation 原对象不受影响
+        val image = stampedImage()
+        val originalParts = listOf(UIMessagePart.Text("hi"), image)
+        val message = UIMessage(role = MessageRole.USER, parts = originalParts)
+
+        AttachmentProjectionTransformer.transform(ctxFor(textModel), listOf(message))
+        AttachmentProjectionTransformer.transform(ctxFor(visionModel), listOf(message))
+
+        assertEquals(2, message.parts.size)
+        assertTrue(message.parts[0] === originalParts[0])
+        assertTrue(message.parts[1] === originalParts[1])
+        assertEquals(image.url, (message.parts[1] as UIMessagePart.Image).url)
+    }
 }

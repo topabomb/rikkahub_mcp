@@ -49,6 +49,7 @@
   <string name="assistant_page_chat_background_desc">어시스턴트 채팅 페이지의 배경 이미지 설정</string>
   <string name="assistant_page_chat_model">채팅 모델</string>
   <string name="assistant_page_chat_model_desc">어시스턴트의 기본 채팅 모델 설정. 미설정 시 전역 기본 채팅 모델 사용</string>
+  <string name="assistant_page_follow_default_model">기본 모델 따르기</string>
   <string name="assistant_page_clone">복제</string>
   <string name="assistant_page_confirm">확인</string>
   <string name="assistant_page_creative">창의적</string>
@@ -797,7 +798,8 @@
   <string name="setting_model_page_chat_model">채팅 모델</string>
   <string name="setting_model_page_chat_model_desc">전역 기본 채팅 모델</string>
   <string name="setting_model_page_compress_model">모델 압축</string>
-  <string name="setting_model_page_compress_model_desc">대화 기록 압축용 모델</string>
+  <string name="setting_model_page_compress_model_desc">대화 기록 압축용 모델. 설정하지 않으면 채팅 모델을 따릅니다</string>
+  <string name="setting_model_page_follow_chat_model">채팅 모델 따르기</string>
   <string name="setting_model_page_compress_prompt_vars">변수: {content}, {target_tokens}, {additional_context}</string>
   <string name="setting_model_page_image_generation_model">Image Generation Model</string>
   <string name="setting_model_page_image_generation_model_desc">이미지 생성 기본 모델, 이미지 페이지와 채팅 내 이미지 생성에 공통으로 사용됩니다</string>
@@ -806,11 +808,12 @@
   <string name="setting_model_page_prompt">프롬프트</string>
   <string name="setting_model_page_reset_to_default">기본값으로 재설정</string>
   <string name="setting_model_page_suggestion_model">채팅 제안 모델</string>
-  <string name="setting_model_page_suggestion_model_desc">대화 제안을 생성하는 모델. 설정되지 않으면 빠른 모델을 사용합니다</string>
+  <string name="setting_model_page_suggestion_model_desc">대화 제안을 생성하는 모델. 설정되지 않으면 빠른 모델, 그다음 채팅 모델로 대체됩니다</string>
   <string name="setting_model_page_suggestion_prompt_vars">변수: 대화 내용: {content}, 언어: {locale}</string>
+  <string name="setting_model_page_title_prompt_vars">변수: 대화 내용: {content}, 언어: {locale}</string>
   <string name="setting_model_page_title">모델 설정</string>
   <string name="setting_model_page_title_model">제목 요약 모델</string>
-  <string name="setting_model_page_title_model_desc">대화 제목을 요약하는 모델. 설정되지 않으면 빠른 모델을 사용합니다</string>
+  <string name="setting_model_page_title_model_desc">대화 제목을 요약하는 모델. 설정되지 않으면 빠른 모델, 그다음 채팅 모델로 대체됩니다</string>
   <string name="setting_page_about">정보</string>
   <string name="setting_page_about_desc">앱 정보</string>
   <string name="setting_page_assistant">어시스턴트</string>
@@ -1155,7 +1158,7 @@
   <string name="setting_display_page_bubble_opacity_title">버블 불투명도</string>
   <string name="setting_provider_page_include_history_reasoning">이전 추론 내용 전송</string>
   <string name="setting_model_page_fast_model">빠른 모델</string>
-  <string name="setting_model_page_fast_model_desc">빠른 작업 또는 백그라운드 작업을 위한 모델이며, 설정되지 않은 경우 제목 및 제안 모델의 대체로도 사용됩니다.</string>
+  <string name="setting_model_page_fast_model_desc">제목, 제안 등 빠른 백그라운드 작업용 모델. 설정하지 않으면 이 작업들은 채팅 모델을 따릅니다</string>
   <string name="setting_model_page_enable_suggestion">채팅 제안 활성화</string>
   <string name="assistant_page_gradient_background">그라데이션 배경</string>
   <string name="assistant_page_gradient_background_desc">채팅 페이지에서 동적 그라데이션 배경 사용</string>
@@ -1269,7 +1272,6 @@
   <string name="workspace_file_editor_too_large">파일이 너무 커서 미리볼 수 없습니다 (%d 바이트)</string>
   <string name="image_crop_failed">이미지를 자르지 못했습니다</string>
   <string name="chat_message_tool_inspect_attachments_title">첨부 파일 확인</string>
-  <string name="chat_message_tool_inspect_attachments_count">첨부 파일 %1$d개</string>
   <string name="chat_readiness_title_prefix"/>
   <string name="chat_readiness_title_suffix">의 대화 설정</string>
   <string name="chat_readiness_model_required_toast">보내기 전에 대화 모델을 선택하세요.</string>

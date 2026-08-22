@@ -42,6 +42,7 @@ import me.rerere.hugeicons.stroke.AiEditing
 import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.hugeicons.stroke.Cancel01
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.data.datastore.DEFAULT_AUTO_MODEL_ID
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.ui.components.ai.ModelListSheet
@@ -126,6 +127,8 @@ private fun ModelSettingsPage(settings: Settings, vm: SettingVM, contentPadding:
                 modelId = settings.fastModelId,
                 providers = settings.providers,
                 onSelect = { model -> vm.updateSettings { it.copy(fastModelId = model.id) } },
+                onClear = { vm.updateSettings { it.copy(fastModelId = DEFAULT_AUTO_MODEL_ID) } },
+                placeholder = stringResource(R.string.setting_model_page_follow_chat_model),
             )
         }
         item {
@@ -155,6 +158,7 @@ private fun ModelSettingsPage(settings: Settings, vm: SettingVM, contentPadding:
                 modelId = settings.imageGenerationModelId,
                 providers = imageProviders,
                 onSelect = { model -> vm.updateSettings { it.copy(imageGenerationModelId = model.id) } },
+                onClear = { vm.updateSettings { it.copy(imageGenerationModelId = DEFAULT_AUTO_MODEL_ID) } },
                 type = ModelType.IMAGE,
             )
         }
@@ -184,6 +188,8 @@ private fun ModelSettingsPage(settings: Settings, vm: SettingVM, contentPadding:
                 modelId = settings.compressModelId,
                 providers = settings.providers,
                 onSelect = { model -> vm.updateSettings { it.copy(compressModelId = model.id) } },
+                onClear = { vm.updateSettings { it.copy(compressModelId = DEFAULT_AUTO_MODEL_ID) } },
+                placeholder = stringResource(R.string.setting_model_page_follow_chat_model),
             )
         }
     }
@@ -272,6 +278,7 @@ private fun ModelSettingItem(
     providers: List<ProviderSetting>,
     onSelect: (Model) -> Unit,
     onClear: (() -> Unit)? = null,
+    placeholder: String? = null,
     type: ModelType = ModelType.CHAT,
 ) {
     val state = rememberModelListState(
@@ -292,6 +299,7 @@ private fun ModelSettingItem(
                     ) {
                         Text(
                             text = state.currentModel?.displayName
+                                ?: placeholder
                                 ?: stringResource(R.string.model_list_select_model),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,

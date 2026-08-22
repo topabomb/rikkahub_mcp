@@ -335,6 +335,136 @@ class AttachmentResolverTest {
         env.cleanup()
     }
 
+    @Test
+    fun `resolveImages keeps duplicate refs one to one in order`() = runTest {
+        // inspect_attachments 的顺序契约（设计文档 §8.4）：refs 与产出 1:1，重复 ref 不去重
+        val env = Env()
+        val ref = AttachmentRefs.format(Uuid.random())
+        val messages = listOf(
+            UIMessage(
+                role = MessageRole.USER,
+                parts = listOf(
+                    UIMessagePart.Image(
+                        url = AttachmentRefs.fileToFileUrl(env.png),
+                        metadata = buildJsonObject { put(AttachmentRefs.METADATA_KEY, ref) },
+                    ),
+                ),
+            ),
+        )
+        val result = env.resolver.resolveImages(messages, listOf(ref, ref))
+        val parts = (result as AttachmentResolveResult.Success).parts
+        assertEquals(2, parts.size)
+        assertEquals(listOf(ref, ref), parts.map { AttachmentRefs.getRef(it) })
+        env.cleanup()
+    }
+
+    @Test
+    fun `resolveImages keeps two refs pointing to the same file`() = runTest {
+        val env = Env()
+        val refA = AttachmentRefs.format(Uuid.random())
+        val refB = AttachmentRefs.format(Uuid.random())
+        val messages = listOf(
+            UIMessage(
+                role = MessageRole.USER,
+                parts = listOf(
+                    UIMessagePart.Image(
+                        url = AttachmentRefs.fileToFileUrl(env.png),
+                        metadata = buildJsonObject { put(AttachmentRefs.METADATA_KEY, refA) },
+                    ),
+                    UIMessagePart.Image(
+                        url = AttachmentRefs.fileToFileUrl(env.png),
+                        metadata = buildJsonObject { put(AttachmentRefs.METADATA_KEY, refB) },
+                    ),
+                ),
+            ),
+        )
+        val result = env.resolver.resolveImages(messages, listOf(refB, refA))
+        val parts = (result as AttachmentResolveResult.Success).parts
+        assertEquals(2, parts.size)
+        assertEquals(listOf(refB, refA), parts.map { AttachmentRefs.getRef(it) })
+        env.cleanup()
+    }
+
+    @Test
+    fun `resolve keeps canonical file deduplication by default`() = runTest {
+        // assistant_call 等通用入口维持既有去重语义
+        val env = Env()
+        val refA = AttachmentRefs.format(Uuid.random())
+        val refB = AttachmentRefs.format(Uuid.random())
+        val messages = listOf(
+            UIMessage(
+                role = MessageRole.USER,
+                parts = listOf(
+                    UIMessagePart.Image(
+                        url = AttachmentRefs.fileToFileUrl(env.png),
+                        metadata = buildJsonObject { put(AttachmentRefs.METADATA_KEY, refA) },
+                    ),
+                    UIMessagePart.Image(
+                        url = AttachmentRefs.fileToFileUrl(env.png),
+                        metadata = buildJsonObject { put(AttachmentRefs.METADATA_KEY, refB) },
+                    ),
+                ),
+            ),
+        )
+        val result = env.resolver.resolve(messages, listOf(refA, refB))
+        val parts = (result as AttachmentResolveResult.Success).parts
+        assertEquals(1, parts.size)
+        assertEquals(refA, AttachmentRefs.getRef(parts.single()))
+        env.cleanup()
+    }
+
+    @Test
+    fun `same remote url within one inspection batch is fetched once`() = runTest {
+        val env = Env()
+        val remoteName = "remote.png"
+        val persisted = File(env.upload, remoteName).apply { writeBytes(TINY_PNG) }
+        io.mockk.coEvery { env.fetcher.fetch("https://cdn.example/a.png") } returns RemoteMediaFetchResult.Success(
+            bytes = TINY_PNG,
+            mimeType = "image/png",
+            fileName = remoteName,
+        )
+        io.mockk.coEvery {
+            env.filesManager.saveManagedFromBytes("upload", TINY_PNG, remoteName, "image/png")
+        } returns ManagedFileEntity(
+            id = 42,
+            folder = "upload",
+            relativePath = "upload/$remoteName",
+            displayName = remoteName,
+            mimeType = "image/png",
+            sizeBytes = TINY_PNG.size.toLong(),
+            createdAt = 1,
+            updatedAt = 1,
+        )
+        io.mockk.every { env.filesManager.getFile(any()) } returns persisted
+        val refA = AttachmentRefs.format(Uuid.parse("44444444-4444-4444-4444-444444444444"))
+        val refB = AttachmentRefs.format(Uuid.parse("55555555-5555-5555-5555-555555555555"))
+        val messages = listOf(
+            UIMessage(
+                role = MessageRole.USER,
+                parts = listOf(
+                    UIMessagePart.Image(
+                        url = "https://cdn.example/a.png",
+                        metadata = buildJsonObject { put(AttachmentRefs.METADATA_KEY, refA) },
+                    ),
+                    UIMessagePart.Image(
+                        url = "https://cdn.example/a.png",
+                        metadata = buildJsonObject { put(AttachmentRefs.METADATA_KEY, refB) },
+                    ),
+                ),
+            ),
+        )
+        val result = env.resolver.resolveImages(messages, listOf(refA, refB))
+        val parts = (result as AttachmentResolveResult.Success).parts
+        assertEquals(2, parts.size)
+        // 各自的 preferredRef 保留在 metadata 上
+        assertEquals(refA, AttachmentRefs.getRef(parts[0]))
+        assertEquals(refB, AttachmentRefs.getRef(parts[1]))
+        // 同一 url 单次批量解析内只 fetch/落盘一次
+        io.mockk.coVerify(exactly = 1) { env.fetcher.fetch("https://cdn.example/a.png") }
+        io.mockk.coVerify(exactly = 1) { env.filesManager.saveManagedFromBytes("upload", TINY_PNG, remoteName, "image/png") }
+        env.cleanup()
+    }
+
     private class Env {
         val filesDir: File = createTempDirectory("attachment-resolver").toFile()
         val upload: File = File(filesDir, "upload").apply { mkdirs() }

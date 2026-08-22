@@ -763,15 +763,23 @@ class SubAssistantCoordinator(
 
         // 每个 step 重新解析资源并应用“运行快照 ∩ 当前配置”，但复用 TTS 播放上下文。
         // 工具能力依据本次 run 的 resolved model（设计文档 §11.2）。
+        // Tool schema 稳定原则（与主链路一致）：配置变更在下一次构建时生效——主链路是下一轮
+        // turn，Target 是下一次 assistant_call。run 内 inspection 能力用 run 开始时的值冻结，
+        // 避免 `inspect_attachments` 在工具循环中途出现/消失；Target 删除、撤权等运行安全信号
+        // 仍每 step 走 latest。
+        val runStartSettings = settings
         val toolProvider: suspend () -> List<Tool> = {
             val currentSettings = settingsStore.settingsFlow.value
             val latestTarget = currentSettings.getAssistantById(target.id)
             if (latestTarget == null) {
                 emptyList()
             } else {
+                val effectiveSettings = currentSettings.copy(
+                    attachmentInspectionModelId = runStartSettings.attachmentInspectionModelId,
+                )
                 toolSetFactory.buildTools(
                     assistant = intersectTargetToolCapabilities(target, latestTarget),
-                    settings = currentSettings,
+                    settings = effectiveSettings,
                     resolvedModel = model,
                     workspaceCwd = conversation.workspaceCwd,
                     runMode = ToolSetRunMode.TARGET,

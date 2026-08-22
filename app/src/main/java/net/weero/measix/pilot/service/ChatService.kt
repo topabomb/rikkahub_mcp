@@ -1366,7 +1366,9 @@ class ChatService(
 
         try {
             val settings = settingsStore.settingsFlow.first()
-            val model = settings.findModelById(settings.titleModelId, fallback = settings.fastModelId) ?: return
+            val model = settings.findModelById(settings.titleModelId, fallback = settings.fastModelId)
+                ?: settings.getCurrentChatModel()
+                ?: return
             val provider = model.findProvider(settings.providers) ?: return
 
             if (!force) {
@@ -1424,7 +1426,9 @@ class ChatService(
         runCatching {
             val settings = settingsStore.settingsFlow.first()
             if (!settings.enableSuggestion) return
-            val model = settings.findModelById(settings.suggestionModelId, fallback = settings.fastModelId) ?: return
+            val model = settings.findModelById(settings.suggestionModelId, fallback = settings.fastModelId)
+                ?: settings.getCurrentChatModel()
+                ?: return
             val provider = model.findProvider(settings.providers) ?: return
 
             mergeSessionConversation(conversationId) { it.copy(chatSuggestions = emptyList()) }

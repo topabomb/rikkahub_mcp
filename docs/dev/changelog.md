@@ -10,10 +10,9 @@
 
 ### 新增
 
-- 多模态附件投影与按需识别架构：附件以稳定 `attachment:<uuid>` 为唯一引用身份，`AttachmentProjectionTransformer` 按本次模型能力投影——可读图片的模型保留原图+引用行，不可读的模型得到引用行+能力提示，不再有 per-turn OCR 改写
-- `inspect_attachments` 工具：当前模型不能看图且配置了附件识别模型时注入，按需读取附件内容（1–4 个 ref，单次识别调用返回文本）；附件解析经 `ToolExecutionContext` 的最小只读 `resolveAttachments` 能力走统一 Resolver，工具不接触会话消息
-- 附件识别模型设置项（`attachmentInspectionModelId`）：选择声明 IMAGE 输入的 Chat 模型，未配置即关闭；旧 OCR 模型配置自动迁移，OCR prompt 设置项移除
-- `generate_image` 产出与用户上传图同构：持久化时锚定引用身份，下一 step 由统一投影管线交付；`media_id` 从模型可见 JSON 移除
+- 附件投影架构：图片按当前模型能力投影，能看图的模型保留原图，不能的得到引用行与提示，替代逐轮 OCR 改写
+- `inspect_attachments` 工具：模型不能看图且配置了附件识别模型时，按需读取附件内容返回文本
+- 附件识别模型设置项：未配置即关闭；旧 OCR 模型自动迁移，OCR 提示词设置移除
 - `assistant_call` 可附带最多 4 个任务相关附件；第一阶段支持图片。主助手只决定传哪些，Target 用自己的 resolved model 与统一投影链处理
 - 会话图片会盖上稳定 `attachment:<uuid>` 句柄，模型可在工具参数里引用；外部 HTTPS 图先落地再注入 Child
 - 子助手可按配置调用 `generate_image`；主卡片用轻量引用显示交付物，Caller 默认只拿文本和 `artifacts[]`，点名 `extras=["artifacts"]` 后才按 Caller 能力拿到原图或 visual observation
@@ -24,8 +23,8 @@
 ### 变更
 
 - `assistant_call` 进入 Coordinator 前的参数错误改为与终态一致的 `status` + `reason` 信封
-- 附件视觉适配改为请求级无状态投影：移除 per-turn OCR observation 机制（`ImageInputAdapter`）、`artifact_delivery` 三态与 Caller 快照传递链；Caller/Target 能力判定统一收敛到 `AttachmentProjectionTransformer`
-- `/upload` 上下文注入语义修正：从「用户上传文件」改为「会话共享文件（上传与生成的媒体）」，与 generate_image 产物落点一致
+- 附件能力判定收敛到 `AttachmentProjectionTransformer`：移除 per-turn OCR observation、`artifact_delivery` 三态与 Caller 快照链；`generate_image` 结果移除模型可见的 `media_id`
+- `/upload` 注入语义修正为「会话共享文件（上传与生成的媒体）」
 - Target 不再永久过滤 `generate_image`；未开启 `TextToImage` 或没有有效默认图片模型时仍不注册
 - Target 非交互下需审批工具自动拒绝的返回统一为 `tool_not_permitted` + `approval_unavailable` + `message`：语义为「需要审批但当前运行环境无法提供审批，不要原样重试」；只拒绝当前 ToolCall，不终止整个 Run。`ask_user` 仍走交互桥接，与审批错误协议无关
 - 文件管理删除收口两套语义：新增 `ManagedFileDeletionService`，显式删除前先解除助手背景/头像等可变引用；`FilesManager` 物理删除 API 更名为 destructive 语义；「清理」改为「清空」，确认框显示实际影响
@@ -37,6 +36,9 @@
 
 ### 修复
 
+- 模型设置页：快速/图片生成/压缩模型支持清除回未配置；快速模型未设置时标题与建议回退聊天模型，不再静默失效
+- 模型设置页：标题提示词的变量说明错用建议的键，已拆分；移除死参数
+- 助手配置页：聊天模型支持清除回「跟随默认模型」；`ModelSelector` 移除不可用的死参数 `allowClear`，改为 `onClear` 回调
 - 等待工具审批不再当成一轮生成完成：不启动标题/建议等完成副作用
 - 标题、建议、置顶改为列级更新并 merge 当前 Session，避免旧 Conversation 整对象覆盖正在生成的消息树
 - Conversation 普通状态更新不再按瞬时文件差做物理 GC；压缩等生命周期操作走统一的引用检查

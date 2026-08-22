@@ -49,6 +49,7 @@
   <string name="assistant_page_chat_background_desc">Установить фоновое изображение для страницы чата с ассистентом</string>
   <string name="assistant_page_chat_model">Модель чата</string>
   <string name="assistant_page_chat_model_desc">Установить модель чата по умолчанию для ассистента. Если не задано, будет использована глобальная модель чата по умолчанию</string>
+  <string name="assistant_page_follow_default_model">Как у модели по умолчанию</string>
   <string name="assistant_page_clone">Клонировать</string>
   <string name="assistant_page_confirm">Подтвердить</string>
   <string name="assistant_page_creative">Творческий</string>
@@ -797,7 +798,8 @@
   <string name="setting_model_page_chat_model">Модель чата</string>
   <string name="setting_model_page_chat_model_desc">Глобальная модель чата по умолчанию</string>
   <string name="setting_model_page_compress_model">Сжать модель</string>
-  <string name="setting_model_page_compress_model_desc">Модель для сжатия истории разговоров</string>
+  <string name="setting_model_page_compress_model_desc">Модель для сжатия истории разговоров. Без настройки используется модель чата</string>
+  <string name="setting_model_page_follow_chat_model">Как у модели чата</string>
   <string name="setting_model_page_compress_prompt_vars">Переменные: {content}, {target_tokens}, {additional_context}</string>
   <string name="setting_model_page_image_generation_model">Image Generation Model</string>
   <string name="setting_model_page_image_generation_model_desc">Модель генерации изображений по умолчанию, общая для страницы изображений и генерации в чате</string>
@@ -806,11 +808,12 @@
   <string name="setting_model_page_prompt">Промпт</string>
   <string name="setting_model_page_reset_to_default">Сбросить до значения по умолчанию</string>
   <string name="setting_model_page_suggestion_model">Модель предложений чата</string>
-  <string name="setting_model_page_suggestion_model_desc">Модель для генерации предложений в чате. Если не задана, используется быстрая модель</string>
+  <string name="setting_model_page_suggestion_model_desc">Модель для генерации предложений в чате. Без настройки — быстрая модель, затем модель чата</string>
   <string name="setting_model_page_suggestion_prompt_vars">Переменные: Содержание разговора: {content}, Язык: {locale}</string>
+  <string name="setting_model_page_title_prompt_vars">Переменные: Содержание разговора: {content}, Язык: {locale}</string>
   <string name="setting_model_page_title">Настройки модели</string>
   <string name="setting_model_page_title_model">Модель сводки заголовков</string>
-  <string name="setting_model_page_title_model_desc">Модель для генерации заголовков бесед. Если не задана, используется быстрая модель</string>
+  <string name="setting_model_page_title_model_desc">Модель для генерации заголовков бесед. Без настройки — быстрая модель, затем модель чата</string>
   <string name="setting_page_about">О приложении</string>
   <string name="setting_page_about_desc">Об этом приложении</string>
   <string name="setting_page_assistant">Ассистент</string>
@@ -1155,7 +1158,7 @@
   <string name="setting_display_page_bubble_opacity_title">Прозрачность пузырьков</string>
   <string name="setting_provider_page_include_history_reasoning">Отправлять историю рассуждений</string>
   <string name="setting_model_page_fast_model">Быстрая модель</string>
-  <string name="setting_model_page_fast_model_desc">Модель для быстрых или фоновых задач, также используется как резервная для моделей заголовков и предложений, если не задана</string>
+  <string name="setting_model_page_fast_model_desc">Модель для быстрых фоновых задач (заголовки, подсказки). Без настройки эти задачи используют модель чата</string>
   <string name="setting_model_page_enable_suggestion">Включить подсказки чата</string>
   <string name="assistant_page_gradient_background">Градиентный фон</string>
   <string name="assistant_page_gradient_background_desc">Использовать динамический градиентный фон на странице чата</string>
@@ -1269,7 +1272,6 @@
   <string name="workspace_file_editor_too_large">Файл слишком велик для предпросмотра (%d байт)</string>
   <string name="image_crop_failed">Не удалось обрезать изображение</string>
   <string name="chat_message_tool_inspect_attachments_title">Проверка вложений</string>
-  <string name="chat_message_tool_inspect_attachments_count">Вложений: %1$d</string>
   <string name="chat_readiness_title_prefix">Настроить для</string>
   <string name="chat_readiness_title_suffix"/>
   <string name="chat_readiness_model_required_toast">Перед отправкой выберите модель диалога.</string>

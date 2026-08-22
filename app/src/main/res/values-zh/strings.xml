@@ -49,6 +49,7 @@
   <string name="assistant_page_chat_background_desc">设置助手聊天页面的背景图片</string>
   <string name="assistant_page_chat_model">聊天模型</string>
   <string name="assistant_page_chat_model_desc">设置助手的默认聊天模型，如果不设置，则使用全局默认聊天模型</string>
+  <string name="assistant_page_follow_default_model">跟随默认模型</string>
   <string name="assistant_page_clone">复制</string>
   <string name="assistant_page_confirm">确定</string>
   <string name="assistant_page_creative">创造</string>
@@ -806,7 +807,8 @@
   <string name="setting_model_page_chat_model">聊天模型</string>
   <string name="setting_model_page_chat_model_desc">全局默认的聊天模型</string>
   <string name="setting_model_page_compress_model">压缩模型</string>
-  <string name="setting_model_page_compress_model_desc">用于压缩对话历史的模型</string>
+  <string name="setting_model_page_compress_model_desc">用于压缩对话历史的模型，未设置时跟随聊天模型</string>
+  <string name="setting_model_page_follow_chat_model">跟随聊天模型</string>
   <string name="setting_model_page_compress_prompt_vars">变量：{content}、{target_tokens}、{additional_context}</string>
   <string name="setting_model_page_image_generation_model">文生图模型</string>
   <string name="setting_model_page_image_generation_model_desc">图片页与聊天内生成图片共用的默认模型</string>
@@ -815,11 +817,12 @@
   <string name="setting_model_page_prompt">提示词</string>
   <string name="setting_model_page_reset_to_default">重置为默认</string>
   <string name="setting_model_page_suggestion_model">聊天建议模型</string>
-  <string name="setting_model_page_suggestion_model_desc">用于生成聊天建议的模型。未设置时使用快速模型</string>
+  <string name="setting_model_page_suggestion_model_desc">用于生成聊天建议的模型，未设置时依次回退到快速模型和聊天模型</string>
   <string name="setting_model_page_suggestion_prompt_vars">变量: 对话内容: {content}, 语言: {locale}</string>
+  <string name="setting_model_page_title_prompt_vars">变量: 对话内容: {content}, 语言: {locale}</string>
   <string name="setting_model_page_title">模型设置</string>
   <string name="setting_model_page_title_model">标题总结模型</string>
-  <string name="setting_model_page_title_model_desc">用于总结对话标题的模型。未设置时使用快速模型</string>
+  <string name="setting_model_page_title_model_desc">用于总结对话标题的模型，未设置时依次回退到快速模型和聊天模型</string>
   <string name="setting_page_about">关于</string>
   <string name="setting_page_about_desc">关于本APP</string>
   <string name="setting_page_assistant">助手</string>
@@ -1157,7 +1160,7 @@
   <string name="setting_display_page_bubble_opacity_title">气泡不透明度</string>
   <string name="setting_provider_page_include_history_reasoning">回传历史思考过程</string>
   <string name="setting_model_page_fast_model">快速模型</string>
-  <string name="setting_model_page_fast_model_desc">用于快速或后台任务的模型，当未设置时也用作标题和建议模型的后备</string>
+  <string name="setting_model_page_fast_model_desc">用于标题、建议等快速后台任务的模型。未设置时，这些任务跟随聊天模型</string>
   <string name="setting_model_page_enable_suggestion">启用聊天建议</string>
   <string name="assistant_page_gradient_background">渐变背景</string>
   <string name="assistant_page_gradient_background_desc">在聊天页面使用动态渐变背景</string>
@@ -1269,7 +1272,6 @@
   <string name="workspace_file_editor_too_large">文件过大，无法预览（%d 字节）</string>
   <string name="image_crop_failed">图片裁剪失败</string>
   <string name="chat_message_tool_inspect_attachments_title">识别附件</string>
-  <string name="chat_message_tool_inspect_attachments_count">%1$d 个附件</string>
   <string name="chat_readiness_title_prefix">为</string>
   <string name="chat_readiness_title_suffix">配置本次会话</string>
   <string name="chat_readiness_model_required_toast">发送前请选择对话模型。</string>

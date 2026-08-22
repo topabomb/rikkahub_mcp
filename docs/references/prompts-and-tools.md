@@ -286,8 +286,9 @@ Provider 可用、自身声明 IMAGE 输入的附件识别模型（`attachmentIn
   from the [Attachment ref=...] lines in the conversation. Currently image attachments
   only. Up to 4; order is preserved.` items：`An attachment ref as it appears in the
   conversation (attachment:<uuid>)`
-- `request`（string，required）：`The specific information to look for in the attachments.
-  Keep it focused on the current task.`
+- `request`（string，required）：`The specific information needed and its expected form: exact text to
+  transcribe, details to compare across images, or facts to verify. Prefer precise requests over vague
+  descriptions. Keep it focused on the current task.`
 
 成功结果为普通 Text part（识别模型输出），不携带附件数据。失败结果为带稳定 `reason` 的
 JSON：

@@ -90,7 +90,9 @@ fun createAttachmentInspectionTool(
                         put("type", "string")
                         put(
                             "description",
-                            "The specific information to look for in the attachments. " +
+                            "The specific information needed and its expected form: exact text to " +
+                                "transcribe, details to compare across images, or facts to verify. " +
+                                "Prefer precise requests over vague descriptions. " +
                                 "Keep it focused on the current task.",
                         )
                     },

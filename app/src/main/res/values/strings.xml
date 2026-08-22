@@ -49,6 +49,7 @@
   <string name="assistant_page_chat_background_desc">Set background image for assistant chat page</string>
   <string name="assistant_page_chat_model">Chat Model</string>
   <string name="assistant_page_chat_model_desc">Set the default chat model for the assistant. If not set, the global default chat model will be used</string>
+  <string name="assistant_page_follow_default_model">Follow default model</string>
   <string name="assistant_page_clone">Clone</string>
   <string name="assistant_page_confirm">Confirm</string>
   <string name="assistant_page_creative">Creative</string>
@@ -808,8 +809,9 @@
   <string name="setting_model_page_chat_model_desc">Global default chat model</string>
   <string name="setting_model_page_compress_model">Compress Model</string>
   <string name="setting_model_page_fast_model">Fast Model</string>
-  <string name="setting_model_page_fast_model_desc">Model for fast or background tasks, also used as fallback for title and suggestion models when not set</string>
-  <string name="setting_model_page_compress_model_desc">Model for compressing conversation history</string>
+  <string name="setting_model_page_fast_model_desc">Model for quick background tasks such as titles and suggestions. When unset, these tasks follow the chat model</string>
+  <string name="setting_model_page_follow_chat_model">Follow chat model</string>
+  <string name="setting_model_page_compress_model_desc">Model for compressing conversation history. Follows the chat model when unset</string>
   <string name="setting_model_page_compress_prompt_vars">Variables: {content}, {target_tokens}, {additional_context}</string>
   <string name="setting_model_page_image_generation_model">Image Generation Model</string>
   <string name="setting_model_page_image_generation_model_desc">Default model for image generation, shared by the image page and in-chat image generation</string>
@@ -819,11 +821,12 @@
   <string name="setting_model_page_reset_to_default">Reset to default</string>
   <string name="setting_model_page_enable_suggestion">Enable Chat Suggestions</string>
   <string name="setting_model_page_suggestion_model">Chat Suggestion Model</string>
-  <string name="setting_model_page_suggestion_model_desc">Model used to generate conversation suggestions. If not set, uses the fast model</string>
+  <string name="setting_model_page_suggestion_model_desc">Model used to generate conversation suggestions. Falls back to the fast model, then the chat model when unset</string>
   <string name="setting_model_page_suggestion_prompt_vars">Variables: Conversation content: {content}, Language: {locale}</string>
+  <string name="setting_model_page_title_prompt_vars">Variables: Conversation content: {content}, Language: {locale}</string>
   <string name="setting_model_page_title">Model Settings</string>
   <string name="setting_model_page_title_model">Title Summary Model</string>
-  <string name="setting_model_page_title_model_desc">Model used to summarize conversation titles. If not set, uses the fast model</string>
+  <string name="setting_model_page_title_model_desc">Model used to summarize conversation titles. Falls back to the fast model, then the chat model when unset</string>
   <string name="setting_page_about">About</string>
   <string name="setting_page_about_desc">About this app</string>
   <string name="setting_page_assistant">Assistant</string>
@@ -1269,7 +1272,6 @@
   <string name="workspace_file_editor_too_large">File too large to preview (%d bytes)</string>
   <string name="image_crop_failed">Failed to crop image</string>
   <string name="chat_message_tool_inspect_attachments_title">Inspect Attachments</string>
-  <string name="chat_message_tool_inspect_attachments_count">%1$d attachment(s)</string>
   <string name="chat_readiness_title_prefix">Configure for</string>
   <string name="chat_readiness_title_suffix"/>
   <string name="chat_readiness_model_required_toast">Select a conversation model before sending.</string>
