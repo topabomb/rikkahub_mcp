@@ -1,7 +1,10 @@
 package net.weero.measix.pilot.ui.components.message
 
+import me.rerere.ai.ui.MessageTerminalStatus
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.mediaPersistenceFailurePart
+import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.ai.tools.local.GENERATE_IMAGE_TOOL_NAME
 import net.weero.measix.pilot.ui.components.ui.selectCollapsedSteps
 import org.junit.Assert.assertEquals
@@ -76,5 +79,40 @@ class ChatMessageCotTest {
         assertTrue(image.shouldStayVisibleWhenCollapsed())
         assertTrue(pending.shouldStayVisibleWhenCollapsed())
         assertFalse(reasoning.shouldStayVisibleWhenCollapsed())
+    }
+
+    @Test
+    fun `media failure placeholders render at top level and inside tool output`() {
+        val failure = mediaPersistenceFailurePart(
+            UIMessagePart.Image(url = "data:image/png;base64,broken"),
+        )
+        val rendered = listOf(
+            failure,
+            tool("generate_image").copy(output = listOf(failure)),
+        ).withMediaFailurePlaceholders("Image unavailable")
+
+        assertEquals("Image unavailable", (rendered[0] as UIMessagePart.Text).text)
+        val toolOutput = (rendered[1] as UIMessagePart.Tool).output.single() as UIMessagePart.Text
+        assertEquals("Image unavailable", toolOutput.text)
+    }
+
+    @Test
+    fun `every terminal status has a localized resource`() {
+        assertEquals(
+            R.string.chat_message_terminal_cancelled,
+            terminalStatusTextResource(MessageTerminalStatus.CANCELLED),
+        )
+        assertEquals(
+            R.string.chat_message_terminal_failed,
+            terminalStatusTextResource(MessageTerminalStatus.FAILED),
+        )
+        assertEquals(
+            R.string.chat_message_terminal_incomplete,
+            terminalStatusTextResource(MessageTerminalStatus.INCOMPLETE),
+        )
+        assertEquals(
+            R.string.chat_message_terminal_interrupted,
+            terminalStatusTextResource(MessageTerminalStatus.INTERRUPTED),
+        )
     }
 }

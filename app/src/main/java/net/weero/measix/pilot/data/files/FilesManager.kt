@@ -9,6 +9,7 @@ import androidx.core.net.toUri
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
@@ -19,6 +20,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.mediaPersistenceFailurePart
 import me.rerere.common.android.Logging
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
@@ -197,36 +199,44 @@ class FilesManager(
     @OptIn(ExperimentalEncodingApi::class)
     suspend fun convertBase64ImagePartToLocalFile(message: UIMessage): UIMessage =
         withContext(Dispatchers.IO) {
-            message.copy(
-                parts = message.parts.map { part ->
-                    when (part) {
-                        is UIMessagePart.Image -> {
-                            if (part.url.startsWith("data:image")) {
-                                val sourceByteArray = Base64.decode(part.url.substringAfter("base64,").toByteArray())
-                                val bitmap = BitmapFactory.decodeByteArray(sourceByteArray, 0, sourceByteArray.size)
-                                val byteArray = FileUtils.compressBitmapToPng(bitmap)
-                                val urls = createChatFilesByByteArrays(listOf(byteArray))
-                                Log.i(
-                                    TAG,
-                                    "convertBase64ImagePartToLocalFile: convert base64 img to ${urls.joinToString(", ")}"
-                                )
-                                val converted = part.copy(
-                                    url = urls.first().toString(),
-                                )
-                                // 落盘即盖章稳定 ref：Child 侧没有每轮 backfill，不在这里盖章的话
-                                // 出站提取每次都会生成新的随机 ref，Master metadata 与 Child 失去关联。
-                                // ensureAttachmentRef 对已有合法 ref 的 part 是恒等变换。
-                                AttachmentRefs.ensureAttachmentRef(converted)
-                            } else {
-                                part
-                            }
-                        }
-
-                        else -> part
-                    }
-                }
-            )
+            message.copy(parts = convertBase64Parts(message.parts))
         }
+
+    private suspend fun convertBase64Parts(parts: List<UIMessagePart>): List<UIMessagePart> {
+        return parts.map { part ->
+            when (part) {
+                is UIMessagePart.Image -> convertBase64Image(part)
+                is UIMessagePart.Tool -> part.copy(output = convertBase64Parts(part.output))
+                else -> part
+            }
+        }
+    }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    private suspend fun convertBase64Image(part: UIMessagePart.Image): UIMessagePart {
+        if (!part.url.startsWith("data:image")) return part
+        return recoverMediaPersistenceFailure(
+            onFailure = { error ->
+                Log.w(TAG, "convertBase64ImagePartToLocalFile: replace unpersistable image", error)
+                mediaPersistenceFailurePart(part)
+            },
+        ) {
+            val sourceByteArray = Base64.decode(part.url.substringAfter("base64,").toByteArray())
+            val bitmap = BitmapFactory.decodeByteArray(sourceByteArray, 0, sourceByteArray.size)
+                ?: error("incomplete image data")
+            val byteArray = FileUtils.compressBitmapToPng(bitmap)
+            val urls = createChatFilesByByteArrays(listOf(byteArray))
+            Log.i(
+                TAG,
+                "convertBase64ImagePartToLocalFile: convert base64 img to ${urls.joinToString(", ")}"
+            )
+            val converted = part.copy(url = urls.first().toString())
+            // 落盘即盖章稳定 ref：Child 侧没有每轮 backfill，不在这里盖章的话
+            // 出站提取每次都会生成新的随机 ref，Master metadata 与 Child 失去关联。
+            // ensureAttachmentRef 对已有合法 ref 的 part 是恒等变换。
+            AttachmentRefs.ensureAttachmentRef(converted)
+        }
+    }
 
     /** 只删除 App filesDir 内由 FilesManager 管理的 file URI。 */
     fun deleteChatFiles(uris: List<Uri>): Boolean {
@@ -564,6 +574,18 @@ class FilesManager(
 
     private fun guessMimeType(file: File, fileName: String): String =
         FileUtils.guessMimeType(file, fileName)
+}
+
+/** Converts expected media failures without swallowing cancellation or fatal VM errors. */
+internal suspend inline fun <T> recoverMediaPersistenceFailure(
+    onFailure: (Exception) -> T,
+    block: suspend () -> T,
+): T = try {
+    block()
+} catch (error: CancellationException) {
+    throw error
+} catch (error: Exception) {
+    onFailure(error)
 }
 
 data class SyncResult(

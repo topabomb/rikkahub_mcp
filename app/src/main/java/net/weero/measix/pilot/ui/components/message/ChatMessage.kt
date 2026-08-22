@@ -66,10 +66,12 @@ import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.provider.Model
+import me.rerere.ai.ui.MessageTerminalStatus
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.isEmptyUIMessage
+import me.rerere.ai.ui.mediaFailureMetadataOrNull
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.MusicNote03
@@ -135,12 +137,17 @@ fun ChatMessage(
     val navController = LocalNavController.current
     val context = LocalContext.current
     val colorScheme = MaterialTheme.colorScheme
+    val mediaFailureText = stringResource(R.string.chat_message_media_persistence_failed)
+    val renderableParts = remember(message.parts, mediaFailureText) {
+        message.parts.withMediaFailurePlaceholders(mediaFailureText)
+    }
+    val hasVisibleMessage = !renderableParts.isEmptyUIMessage() || message.terminalStatus != null
     Column(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = if (message.role == MessageRole.USER) Alignment.End else Alignment.Start,
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        if (!message.parts.isEmptyUIMessage()) {
+        if (hasVisibleMessage) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth(),
@@ -168,7 +175,7 @@ fun ChatMessage(
                 assistant = assistant,
                 messageId = message.id,
                 role = message.role,
-                parts = message.parts,
+                parts = renderableParts,
                 annotations = message.annotations,
                 loading = loading,
                 model = model,
@@ -179,12 +186,16 @@ fun ChatMessage(
             )
         }
 
+        message.terminalStatus?.let { terminalStatus ->
+            MessageTerminalStatusNotice(terminalStatus)
+        }
+
         val showActions = if (readOnly) {
             false
         } else if (lastMessage) {
             !loading
         } else {
-            message.parts.isEmptyUIMessage().not()
+            hasVisibleMessage
         }
 
         AnimatedVisibility(
@@ -257,6 +268,39 @@ fun ChatMessage(
             onDismissRequest = {
                 showSelectCopySheet = false
             }
+        )
+    }
+}
+
+internal fun List<UIMessagePart>.withMediaFailurePlaceholders(
+    placeholder: String,
+): List<UIMessagePart> = map { part ->
+    when (part) {
+        is UIMessagePart.Tool -> part.copy(
+            output = part.output.withMediaFailurePlaceholders(placeholder),
+        )
+        else -> if (part.mediaFailureMetadataOrNull() != null) UIMessagePart.Text(placeholder) else part
+    }
+}
+
+internal fun terminalStatusTextResource(status: MessageTerminalStatus): Int = when (status) {
+    MessageTerminalStatus.CANCELLED -> R.string.chat_message_terminal_cancelled
+    MessageTerminalStatus.FAILED -> R.string.chat_message_terminal_failed
+    MessageTerminalStatus.INCOMPLETE -> R.string.chat_message_terminal_incomplete
+    MessageTerminalStatus.INTERRUPTED -> R.string.chat_message_terminal_interrupted
+}
+
+@Composable
+private fun MessageTerminalStatusNotice(status: MessageTerminalStatus) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.errorContainer,
+    ) {
+        Text(
+            text = stringResource(terminalStatusTextResource(status)),
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
         )
     }
 }

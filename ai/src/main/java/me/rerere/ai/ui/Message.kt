@@ -3,11 +3,13 @@ package me.rerere.ai.ui
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.Model
+import me.rerere.ai.util.json
 import kotlin.math.roundToInt
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
@@ -27,6 +29,13 @@ data class UIMessage(
     val translation: String? = null,
     /** Provider protocol state used for lossless stateless replay; never rendered as user content. */
     val providerMetadata: JsonObject? = null,
+    /**
+     * Non-success Master turn outcome stored on the visible assistant message.
+     * Null means a normal completed (or still-running) message.
+     */
+    val terminalStatus: MessageTerminalStatus? = null,
+    /** Stable English reason for [terminalStatus], e.g. `user_stop`. */
+    val terminalReason: String? = null,
 ) {
     private fun appendChunk(chunk: MessageChunk): UIMessage {
         val choice = chunk.choices.getOrNull(0)
@@ -260,8 +269,11 @@ data class UIMessage(
         }
     }
 
-    fun hasBase64Part(): Boolean = parts.any {
-        it is UIMessagePart.Image && it.url.startsWith("data:")
+    fun hasBase64Part(): Boolean = partsContainBase64(parts)
+
+    fun withoutUnpersistableBase64(): UIMessage {
+        if (!hasBase64Part()) return this
+        return copy(parts = stripUnpersistableBase64(parts))
     }
 
     operator fun plus(chunk: MessageChunk): UIMessage {
@@ -311,14 +323,29 @@ internal fun renderableImageUrl(url: String, mimeType: String = "image/png"): St
  * @param model 模型, 可以不传，如果传了，会把模型id写入到消息，标记是哪个模型输出的消息
  * @return 新消息列表
  */
-fun List<UIMessage>.handleMessageChunk(chunk: MessageChunk, model: Model? = null): List<UIMessage> {
+fun List<UIMessage>.handleMessageChunk(
+    chunk: MessageChunk,
+    model: Model? = null,
+    assistantMessageId: Uuid? = null,
+): List<UIMessage> {
     require(this.isNotEmpty()) {
         "messages must not be empty"
     }
     val choice = chunk.choices.getOrNull(0) ?: return this
     val message = choice.delta ?: choice.message ?: return this
     if (this.last().role != message.role) {
-        return this + (UIMessage(modelId = model?.id, role = message.role, parts = emptyList()) + chunk)
+        val messageId = if (message.role == MessageRole.ASSISTANT) {
+            assistantMessageId ?: Uuid.random()
+        } else {
+            Uuid.random()
+        }
+        val nextMessage = UIMessage(
+            id = messageId,
+            modelId = model?.id,
+            role = message.role,
+            parts = emptyList(),
+        ) + chunk
+        return this + nextMessage
     } else {
         val last = this.last() + chunk
         return this.dropLast(1) + last
@@ -407,6 +434,190 @@ fun List<UIMessage>.findUserTurnStart(startIndex: Int): Int {
         if (this[index].role == MessageRole.USER) return index
     }
     return safeStartIndex
+}
+
+@Serializable
+enum class MessageTerminalStatus {
+    @SerialName("cancelled")
+    CANCELLED,
+
+    @SerialName("failed")
+    FAILED,
+
+    @SerialName("incomplete")
+    INCOMPLETE,
+
+    @SerialName("interrupted")
+    INTERRUPTED,
+}
+
+/** A durable, renderer-visible replacement for media bytes that could not be persisted. */
+@Serializable
+enum class MessageMediaFailureReason {
+    @SerialName("persistence_failed")
+    PERSISTENCE_FAILED,
+}
+
+@Serializable
+enum class MessageMediaKind {
+    @SerialName("image")
+    IMAGE,
+}
+
+/**
+ * Typed metadata stored on an empty Text placeholder. Keeping the placeholder out of Image avoids
+ * treating a fake or blank URL as loading media while preserving its attachment metadata.
+ */
+@Serializable
+data class MessageMediaFailureMetadata(
+    @SerialName("media_failure")
+    val reason: MessageMediaFailureReason? = null,
+    @SerialName("media_kind")
+    val mediaKind: MessageMediaKind? = null,
+) : PartMetadata
+
+object TurnTerminalReasons {
+    const val USER_STOP = "user_stop"
+    const val SUPERSEDED_BY_NEW_TURN = "superseded_by_new_turn"
+    const val PROVIDER_FAILED = "provider_failed"
+    const val PROVIDER_INCOMPLETE = "provider_incomplete"
+    const val RUNTIME_ERROR = "runtime_error"
+    const val TOOL_LOOP_LIMIT = "tool_loop_limit"
+    const val INTERACTION_LIMIT = "interaction_limit"
+    const val PROCESS_RESTARTED = "process_restarted"
+}
+
+fun partsContainBase64(parts: List<UIMessagePart>): Boolean = parts.any { part ->
+    when (part) {
+        is UIMessagePart.Image -> part.url.startsWith("data:")
+        is UIMessagePart.Tool -> partsContainBase64(part.output)
+        else -> false
+    }
+}
+
+fun mediaPersistenceFailurePart(image: UIMessagePart.Image): UIMessagePart.Text {
+    val marker = MessageMediaFailureMetadata(
+        reason = MessageMediaFailureReason.PERSISTENCE_FAILED,
+        mediaKind = MessageMediaKind.IMAGE,
+    ).toMetadata()
+    return UIMessagePart.Text(
+        text = "",
+        metadata = JsonObject(image.metadata.orEmpty() + marker),
+    )
+}
+
+fun UIMessagePart.mediaFailureMetadataOrNull(): MessageMediaFailureMetadata? {
+    val failure = metadataAs<MessageMediaFailureMetadata>() ?: return null
+    return failure.takeIf { it.reason != null && it.mediaKind != null }
+}
+
+fun List<UIMessagePart>.countMediaPersistenceFailures(): Int = sumOf { part ->
+    when (part) {
+        is UIMessagePart.Tool -> part.output.countMediaPersistenceFailures()
+        else -> if (
+            part.mediaFailureMetadataOrNull()?.reason == MessageMediaFailureReason.PERSISTENCE_FAILED
+        ) {
+            1
+        } else {
+            0
+        }
+    }
+}
+
+fun stripUnpersistableBase64(parts: List<UIMessagePart>): List<UIMessagePart> = parts.map { part ->
+    when (part) {
+        is UIMessagePart.Image -> if (part.url.startsWith("data:")) mediaPersistenceFailurePart(part) else part
+        is UIMessagePart.Tool -> part.copy(output = stripUnpersistableBase64(part.output))
+        else -> part
+    }
+}
+
+private const val MEDIA_FAILURE_TOOL_RESULT =
+    "{\"status\":\"failed\",\"error\":\"Image bytes could not be persisted and are unavailable.\"}"
+private const val TERMINAL_REPLAY_MARKER = "[Previous assistant response did not complete.]"
+
+/**
+ * Builds the Provider-facing history without mutating the visible/persisted conversation.
+ *
+ * A non-success assistant message is a draft, not lossless Provider state: opaque metadata and
+ * reasoning may represent an incomplete wire item, and an open tool call cannot be replayed as a
+ * completed call. Valid text/media and fully paired tool facts remain available, followed by an
+ * explicit request-only marker so partial text is not presented as a normal completed answer.
+ */
+fun List<UIMessage>.replaySafeProjection(): List<UIMessage> = mapNotNull { message ->
+    message.replaySafeProjection()
+}
+
+fun UIMessage.replaySafeProjection(): UIMessage? {
+    val isTerminalAssistant = role == MessageRole.ASSISTANT && terminalStatus != null
+    val projectedParts = parts.replaySafeParts(
+        terminalAssistant = isTerminalAssistant,
+        toolOutput = false,
+    ).toMutableList()
+    if (isTerminalAssistant && projectedParts.isNotEmpty()) {
+        projectedParts += UIMessagePart.Text(TERMINAL_REPLAY_MARKER)
+    }
+    val projected = copy(
+        parts = projectedParts,
+        providerMetadata = if (isTerminalAssistant) null else providerMetadata,
+        terminalStatus = if (isTerminalAssistant) null else terminalStatus,
+        terminalReason = if (isTerminalAssistant) null else terminalReason,
+    )
+    return projected.takeIf { it.isValidToUpload() }
+}
+
+private fun List<UIMessagePart>.replaySafeParts(
+    terminalAssistant: Boolean,
+    toolOutput: Boolean,
+): List<UIMessagePart> = mapNotNull { part ->
+    when (part) {
+        is UIMessagePart.Text -> {
+            if (part.mediaFailureMetadataOrNull() == null) {
+                part
+            } else if (toolOutput) {
+                UIMessagePart.Text(MEDIA_FAILURE_TOOL_RESULT)
+            } else {
+                null
+            }
+        }
+
+        is UIMessagePart.Reasoning -> if (terminalAssistant) null else part
+
+        is UIMessagePart.Image -> {
+            if (part.url.startsWith("data:")) {
+                if (toolOutput) UIMessagePart.Text(MEDIA_FAILURE_TOOL_RESULT) else null
+            } else {
+                part
+            }
+        }
+
+        is UIMessagePart.Tool -> {
+            if (terminalAssistant && (!part.isExecuted || !part.hasReplaySafeEnvelope())) {
+                null
+            } else {
+                val output = part.output.replaySafeParts(
+                    terminalAssistant = terminalAssistant,
+                    toolOutput = true,
+                )
+                part.copy(
+                    output = if (part.isExecuted && output.isEmpty()) {
+                        listOf(UIMessagePart.Text(MEDIA_FAILURE_TOOL_RESULT))
+                    } else {
+                        output
+                    },
+                )
+            }
+        }
+
+        else -> part
+    }
+}
+
+private fun UIMessagePart.Tool.hasReplaySafeEnvelope(): Boolean {
+    if (toolCallId.isBlank() || toolName.isBlank()) return false
+    return runCatching {
+        json.parseToJsonElement(input.ifBlank { "{}" })
+    }.isSuccess
 }
 
 fun UIMessage.finishReasoning(): UIMessage {

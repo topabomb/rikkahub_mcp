@@ -1431,5 +1431,10 @@
   <string name="chat_message_tool_generate_image_prompt_copied">프롬프트를 복사했습니다</string>
   <string name="chat_message_tool_generate_image_path_copied">경로를 복사했습니다</string>
   <string name="image_viewer_save_need_permission">저장소 권한을 허용한 다음 다시 저장하세요</string>
+  <string name="chat_message_terminal_cancelled">응답이 완료되기 전에 중지되었습니다.</string>
+  <string name="chat_message_terminal_failed">응답이 완료되기 전에 실패했습니다.</string>
+  <string name="chat_message_terminal_incomplete">작업이 완료되기 전에 응답이 종료되었습니다.</string>
+  <string name="chat_message_terminal_interrupted">응답이 중단되었습니다.</string>
+  <string name="chat_message_media_persistence_failed">이미지를 저장하지 못해 사용할 수 없습니다.</string>
 </resources>
 

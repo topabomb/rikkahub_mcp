@@ -1431,5 +1431,10 @@
   <string name="chat_message_tool_generate_image_prompt_copied">プロンプトをコピーしました</string>
   <string name="chat_message_tool_generate_image_path_copied">パスをコピーしました</string>
   <string name="image_viewer_save_need_permission">ストレージ権限を許可してから、もう一度保存してください</string>
+  <string name="chat_message_terminal_cancelled">応答は完了前に停止されました。</string>
+  <string name="chat_message_terminal_failed">応答は完了前に失敗しました。</string>
+  <string name="chat_message_terminal_incomplete">タスクが完了する前に応答が終了しました。</string>
+  <string name="chat_message_terminal_interrupted">応答が中断されました。</string>
+  <string name="chat_message_media_persistence_failed">画像を保存できなかったため、利用できません。</string>
 </resources>
 

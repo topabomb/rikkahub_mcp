@@ -18,22 +18,12 @@ object AttachmentInputTransformer : InputMessageTransformer {
         val capability = ImageInputAdapter.resolveCapability(ctx.model, ctx.settings)
         if (capability == ImageAdaptCapability.NATIVE) return messages
 
-        val hasLocalImages = messages.any { message ->
-            message.parts.any { part -> part is UIMessagePart.Image && part.url.startsWith("file:") }
-        }
+        val hasLocalImages = messages.any { message -> message.parts.hasLocalImage() }
         if (!hasLocalImages) return messages
 
         if (capability == ImageAdaptCapability.UNAVAILABLE) {
             return messages.map { message ->
-                message.copy(
-                    parts = message.parts.map { part ->
-                        if (part is UIMessagePart.Image && part.url.startsWith("file:")) {
-                            ImageInputAdapter.adaptImage(ctx, message, part, capability)
-                        } else {
-                            part
-                        }
-                    },
-                )
+                message.copy(parts = adaptParts(ctx, message, message.parts, capability))
             }
         }
 
@@ -43,19 +33,36 @@ object AttachmentInputTransformer : InputMessageTransformer {
                     ctx.context.getString(R.string.image_observation_processing)
                 }.getOrDefault("Reading image...")
                 messages.map { message ->
-                    message.copy(
-                        parts = message.parts.map { part ->
-                            if (part is UIMessagePart.Image && part.url.startsWith("file:")) {
-                                ImageInputAdapter.adaptImage(ctx, message, part, capability)
-                            } else {
-                                part
-                            }
-                        },
-                    )
+                    message.copy(parts = adaptParts(ctx, message, message.parts, capability))
                 }
             } finally {
                 ctx.processingStatus.value = null
             }
+        }
+    }
+
+    private fun List<UIMessagePart>.hasLocalImage(): Boolean = any { part ->
+        when (part) {
+            is UIMessagePart.Image -> part.url.startsWith("file:")
+            is UIMessagePart.Tool -> part.output.hasLocalImage()
+            else -> false
+        }
+    }
+
+    private suspend fun adaptParts(
+        ctx: TransformerContext,
+        message: UIMessage,
+        parts: List<UIMessagePart>,
+        capability: ImageAdaptCapability,
+    ): List<UIMessagePart> = parts.map { part ->
+        when {
+            part is UIMessagePart.Image && part.url.startsWith("file:") -> {
+                ImageInputAdapter.adaptImage(ctx, message, part, capability)
+            }
+            part is UIMessagePart.Tool -> part.copy(
+                output = adaptParts(ctx, message, part.output, capability),
+            )
+            else -> part
         }
     }
 }

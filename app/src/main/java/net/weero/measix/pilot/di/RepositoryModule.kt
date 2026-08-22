@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.di
+package net.weero.measix.pilot.di
 
 import android.content.Context
 import net.weero.measix.pilot.data.files.FileFolders
@@ -21,7 +21,7 @@ import java.io.File
 
 val repositoryModule = module {
     single {
-        ConversationRepository(get(), get(), get(), get(), get(), get())
+        ConversationRepository(get(), get(), get(), get(), get(), get(), get(), get())
     }
 
     single {

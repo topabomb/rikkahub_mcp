@@ -40,6 +40,8 @@ class ChatServiceRecoveryGateTest {
         val gate = AssistantDataRecoveryGate()
         val repository = mockk<ConversationRepository>(relaxed = true)
         val sessionRegistry = mockk<ConversationSessionRegistry>(relaxed = true)
+        val appScope = mockk<AppScope>()
+        every { appScope.coroutineContext } returns coroutineContext
         val conversation = Conversation(
             id = Uuid.random(),
             assistantId = Uuid.random(),
@@ -52,7 +54,7 @@ class ChatServiceRecoveryGateTest {
         mockkObject(ProcessLifecycleOwner)
         every { ProcessLifecycleOwner.get() } returns lifecycleOwner
         val service = try {
-            createService(gate, repository, sessionRegistry)
+            createService(gate, repository, sessionRegistry, appScope)
         } finally {
             unmockkObject(ProcessLifecycleOwner)
         }
@@ -64,6 +66,7 @@ class ChatServiceRecoveryGateTest {
         gate.complete()
         advanceUntilIdle()
 
+        coVerify(exactly = 1) { repository.recoverInterruptedExecutions(any(), any()) }
         coVerify(exactly = 1) { repository.deleteConversation(conversation) }
         assertTrue(deletion.isCompleted)
     }
@@ -72,9 +75,10 @@ class ChatServiceRecoveryGateTest {
         gate: AssistantDataRecoveryGate,
         repository: ConversationRepository,
         sessionRegistry: ConversationSessionRegistry,
+        appScope: AppScope,
     ) = ChatService(
         context = mockk<Application>(relaxed = true),
-        appScope = mockk<AppScope>(relaxed = true),
+        appScope = appScope,
         appEventBus = mockk<AppEventBus>(relaxed = true),
         settingsStore = mockk<SettingsStore>(relaxed = true),
         conversationRepo = repository,

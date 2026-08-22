@@ -1431,5 +1431,10 @@
   <string name="chat_message_tool_generate_image_prompt_copied">提示词已复制</string>
   <string name="chat_message_tool_generate_image_path_copied">路径已复制</string>
   <string name="image_viewer_save_need_permission">请授予存储权限后再保存</string>
+  <string name="chat_message_terminal_cancelled">回复在完成前已停止。</string>
+  <string name="chat_message_terminal_failed">回复在完成前失败。</string>
+  <string name="chat_message_terminal_incomplete">回复在任务完成前结束。</string>
+  <string name="chat_message_terminal_interrupted">回复已中断。</string>
+  <string name="chat_message_media_persistence_failed">图片无法保存，现已不可用。</string>
 </resources>
 

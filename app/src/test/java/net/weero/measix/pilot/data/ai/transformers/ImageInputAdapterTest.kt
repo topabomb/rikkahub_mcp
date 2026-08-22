@@ -1,15 +1,22 @@
 package net.weero.measix.pilot.data.ai.transformers
 
+import android.content.Context
+import io.mockk.mockk
 import java.io.File
 import kotlin.io.path.createTempDirectory
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.test.runTest
+import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.ai.attachments.TINY_PNG
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.model.Assistant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -147,5 +154,67 @@ class ImageInputAdapterTest {
         val keyPrompt = ImageInputAdapter.cacheKey(ImageInputAdapter.contentHash(a), modelId, "other")
         assertTrue(keyA != keyPrompt)
         dir.deleteRecursively()
+    }
+
+    @Test
+    fun `native capability preserves images nested in tool output`() = runTest {
+        val image = UIMessagePart.Image(url = "file:///tmp/generated.png")
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "call-1",
+                    toolName = "generate_image",
+                    input = "{}",
+                    output = listOf(image),
+                )
+            ),
+        )
+        val result = AttachmentInputTransformer.transform(
+            TransformerContext(
+                context = mockk<Context>(relaxed = true),
+                model = visionModel,
+                assistant = Assistant(),
+                settings = Settings(),
+            ),
+            listOf(message),
+        )
+        val nested = (result.single().parts.single() as UIMessagePart.Tool).output.single()
+        assertEquals(image, nested)
+    }
+
+    @Test
+    fun `current uploaded image fails before provider when no image path exists`() = runTest {
+        val message = UIMessage(
+            role = MessageRole.USER,
+            parts = listOf(UIMessagePart.Image(url = "file:///tmp/upload.png")),
+        )
+        var failedBeforeProvider = false
+        try {
+            AttachmentInputTransformer.transform(
+                TransformerContext(
+                    context = mockk<Context>(relaxed = true),
+                    model = textModel,
+                    assistant = Assistant(),
+                    settings = Settings(),
+                    currentTaskMessageId = message.id,
+                ),
+                listOf(message),
+            )
+        } catch (_: CurrentImageInputUnavailableException) {
+            failedBeforeProvider = true
+        }
+        assertTrue(failedBeforeProvider)
+    }
+
+    @Test
+    fun `ocr observation preserves coroutine cancellation`() = runTest {
+        var cancelled = false
+        try {
+            resultPreservingCancellation<String> { throw CancellationException("stop") }
+        } catch (_: CancellationException) {
+            cancelled = true
+        }
+        assertTrue(cancelled)
     }
 }

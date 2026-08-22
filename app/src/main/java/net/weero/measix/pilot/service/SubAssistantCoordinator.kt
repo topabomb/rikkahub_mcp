@@ -833,6 +833,12 @@ class SubAssistantCoordinator(
                 imageAdaptMode = ImageAdaptMode.SUB_ASSISTANT,
                 currentTaskMessageId = childTaskNodeId,
                 maxSteps = 256,
+                onCheckpoint = { checkpoint ->
+                    lastMessages = checkpoint.messages
+                    val checkpointConversation = session.state.value.updateCurrentMessages(lastMessages)
+                    sessionRegistry.updateConversationState(childConversationId, checkpointConversation)
+                    conversationRepo.checkpointConversation(checkpointConversation)
+                },
             ).collect { chunk ->
                 when (chunk) {
                     is GenerationChunk.Messages -> {
@@ -867,10 +873,7 @@ class SubAssistantCoordinator(
                     }
 
                     is GenerationChunk.Checkpoint -> {
-                        // 在明确边界保存 Child
-                        val currentConversation = session.state.value
-                        val updatedConversation = currentConversation.updateCurrentMessages(lastMessages)
-                        conversationRepo.updateConversation(updatedConversation)
+                        // Durability is awaited by onCheckpoint before generation may continue.
                     }
 
                     is GenerationChunk.Finished -> {

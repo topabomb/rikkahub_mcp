@@ -6,8 +6,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -22,6 +24,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.core.MessageRole
@@ -31,7 +36,9 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.ui.MessageTerminalStatus
 import me.rerere.ai.ui.ToolApprovalState
+import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.findUserTurnStart
@@ -40,14 +47,24 @@ import me.rerere.ai.ui.finishInterruptedTools
 import me.rerere.ai.ui.finishPendingTools
 import me.rerere.ai.ui.finishReasoning
 import me.rerere.ai.ui.isEmptyInputMessage
+import me.rerere.ai.util.HttpException
+import me.rerere.ai.util.ProviderTerminalStatus
 import me.rerere.common.android.Logging
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.event.AppEvent
 import net.weero.measix.pilot.data.event.AppEventBus
+import net.weero.measix.pilot.data.ai.CheckpointKind
 import net.weero.measix.pilot.data.ai.FinishedReason
 import net.weero.measix.pilot.data.ai.GenerationChunk
 import net.weero.measix.pilot.data.ai.GenerationHandler
+import net.weero.measix.pilot.data.ai.GenerationCheckpoint
+import net.weero.measix.pilot.data.ai.ToolExecutionEventStatus
+import net.weero.measix.pilot.data.ai.replaceToolsAtOrdinals
+import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
+import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
+import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
+import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.ai.tools.shouldUseExternalWebSearch
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
 import net.weero.measix.pilot.data.ai.subassistant.buildSubAssistantCallResult
@@ -82,6 +99,7 @@ import net.weero.measix.pilot.data.datastore.getCurrentChatModel
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantAffectScope
 import net.weero.measix.pilot.data.model.replaceRegexes
@@ -243,7 +261,40 @@ internal fun collectUserAttentionKeys(
 }
 
 internal fun shouldLaunchCompletionSideEffects(reason: FinishedReason?): Boolean {
-    return reason != FinishedReason.AWAITING_APPROVAL
+    return reason == FinishedReason.COMPLETED
+}
+
+internal enum class MasterTurnOutcome {
+    SUCCESS,
+    AWAITING_APPROVAL,
+    CANCELLED,
+    FAILED,
+    INCOMPLETE,
+}
+
+internal fun retainValidMessageNodes(nodes: List<MessageNode>): List<MessageNode> {
+    var messagesNodes = nodes.map { node ->
+        val current = runCatching { node.currentMessage }.getOrNull() ?: return@map node
+        val tools = current.getTools()
+        val hasUnexecutedTools = tools.any { !it.isExecuted }
+        if (!hasUnexecutedTools) return@map node
+        if (tools.any { !it.isExecuted && (it.isPending || it.approvalState.canResumeToolExecution()) }) {
+            return@map node
+        }
+        if (current.terminalStatus != null) return@map node
+        node.copy(
+            messages = node.messages.filter { it.id != current.id },
+            selectIndex = node.selectIndex - 1,
+        )
+    }
+    messagesNodes = messagesNodes.map { node ->
+        if (node.messages.isNotEmpty() && node.selectIndex !in node.messages.indices) {
+            node.copy(selectIndex = 0)
+        } else {
+            node
+        }
+    }
+    return messagesNodes.filter { it.messages.isNotEmpty() }
 }
 
 private val inputTransformers by lazy {
@@ -252,8 +303,6 @@ private val inputTransformers by lazy {
         PromptInjectionTransformer,
         PlaceholderTransformer,
         DocumentAsPromptTransformer,
-        AttachmentRefHintTransformer,
-        AttachmentInputTransformer,
     )
 }
 
@@ -297,6 +346,7 @@ class ChatService(
     val errors: StateFlow<List<ChatError>> = _errors.asStateFlow()
 
     private val autoTitleGeneration = AutoTitleGenerationTracker()
+    private val turnRecoveryReady = CompletableDeferred<Unit>()
 
     fun addError(
         error: Throwable,
@@ -344,11 +394,88 @@ class ChatService(
             R.raw.loop_step,
             R.raw.loop_approval
         )
+        appScope.launch {
+            runCatching {
+                recoveryGate.awaitReady()
+                recoverInterruptedTurns()
+            }.onFailure { error ->
+                Logging.log(TAG, "turn recovery failed: ${error.message}")
+            }
+            turnRecoveryReady.complete(Unit)
+        }
     }
 
     fun cleanup() = runCatching {
         ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
         sessionRegistry.cleanup()
+    }
+
+    private suspend fun recoverInterruptedTurns() {
+        val recoverable = conversationRepo.getRecoverableTurnExecutionsByConversation()
+        recoverable.forEach { (conversationId, executions) ->
+            executions.forEach executionLoop@ { execution ->
+                val assistantMessageId = execution.assistantMessageId
+                    ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+                    ?: return@executionLoop
+                var conversation = conversationRepo.getConversationById(conversationId) ?: return@executionLoop
+                val located = conversation.locateAssistant(assistantMessageId) ?: return@executionLoop
+                val startedTools = conversationRepo.getToolExecutions(execution.turnId)
+                    .filter { it.status == ToolExecutionStatus.STARTED }
+                if (startedTools.isNotEmpty()) {
+                    val (nodeIndex, message) = located
+                    val messageTools = message.getTools()
+                    val replacements = startedTools.mapNotNull { toolExecution ->
+                        val tool = messageTools.getOrNull(toolExecution.toolOrdinal) ?: return@mapNotNull null
+                        toolExecution.toolOrdinal to tool.copy(
+                            output = listOf(
+                                UIMessagePart.Text(
+                                    """{"status":"unknown","error":"The app stopped after tool execution started; the side-effect outcome is unknown and will not be retried automatically."}"""
+                                )
+                            ),
+                        )
+                    }.toMap()
+                    val recoveredMessage = message.replaceToolsAtOrdinals(replacements)
+                    conversation = conversation.copy(
+                        messageNodes = conversation.messageNodes.mapIndexed { index, node ->
+                            if (index == nodeIndex) {
+                                node.copy(
+                                    messages = node.messages.map { candidate ->
+                                        if (candidate.id == assistantMessageId) recoveredMessage else candidate
+                                    }
+                                )
+                            } else {
+                                node
+                            }
+                        }
+                    )
+                }
+                conversation = conversation.markAssistantTerminal(
+                    messageId = assistantMessageId,
+                    status = MessageTerminalStatus.INTERRUPTED,
+                    reason = TurnTerminalReasons.PROCESS_RESTARTED,
+                )
+                val now = System.currentTimeMillis()
+                conversationRepo.finalizeTurn(
+                    conversation = conversation,
+                    turnExecution = execution.copy(
+                        status = TurnExecutionStatus.INTERRUPTED,
+                        reason = TurnTerminalReasons.PROCESS_RESTARTED,
+                        updatedAt = now,
+                    ),
+                    toolExecutions = startedTools.map { tool ->
+                        tool.copy(
+                            status = ToolExecutionStatus.UNKNOWN,
+                            reason = TurnTerminalReasons.PROCESS_RESTARTED,
+                            updatedAt = now,
+                        )
+                    },
+                )
+            }
+        }
+        // Even if an execution cannot be projected back into a message (for example an
+        // imported/corrupted snapshot has lost the assistant id), it must not remain RUNNING
+        // forever. The transactional sweep only touches records that were not finalized above.
+        conversationRepo.recoverInterruptedExecutions(updatedAt = System.currentTimeMillis())
     }
 
     // ---- Session 管理 ----
@@ -404,11 +531,13 @@ class ChatService(
 
     suspend fun initializeConversation(conversationId: Uuid) {
         recoveryGate.awaitReady()
+        turnRecoveryReady.await()
         val session = getOrCreateSession(conversationId)
         val conversation = conversationRepo.getConversationById(conversationId)
         if (conversation != null) {
             val live = session.state.value
             val keepLiveTree = session.isGenerating ||
+                session.isDirty() ||
                 (live.messageNodes.isNotEmpty() && !live.updateAt.isBefore(conversation.updateAt))
             if (keepLiveTree) {
                 mergeSessionConversation(conversationId) { current ->
@@ -419,7 +548,7 @@ class ChatService(
                     )
                 }
             } else {
-                updateConversation(conversationId, conversation)
+                updateConversation(conversationId, conversation, markDirty = false)
             }
             settingsStore.updateAssistant(conversation.assistantId)
         } else {
@@ -431,7 +560,7 @@ class ChatService(
                 assistantId = assistant.id,
                 newConversation = true
             ).updateCurrentMessages(assistant.presetMessages)
-            updateConversation(conversationId, newConversation)
+            updateConversation(conversationId, newConversation, markDirty = false)
         }
     }
 
@@ -442,11 +571,18 @@ class ChatService(
 
         val session = getOrCreateSession(conversationId)
         val previousJob = session.getJob()
-        previousJob?.cancel()
+        val previousTurnId = session.currentTurnId()
+        if (previousJob != null && previousTurnId != null) {
+            session.requestCancel(previousTurnId, TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN)
+            previousJob.cancel()
+        }
 
+        val turnId = Uuid.random()
+        session.beginTurn(turnId)
         val job = appScope.launch {
             try {
                 recoveryGate.awaitReady()
+                turnRecoveryReady.await()
                 runCatching { previousJob?.join() }
                 finishInterruptedPendingTools(conversationId)
 
@@ -467,18 +603,17 @@ class ChatService(
 
                 // 开始补全
                 if (answer) {
-                    handleMessageComplete(conversationId)
+                    handleMessageComplete(conversationId, turnId = turnId)
                 }
 
                 _generationDoneFlow.emit(conversationId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                e.printStackTrace()
                 addError(e, conversationId, title = context.getString(R.string.error_title_send_message))
             }
         }
-        session.setJob(job)
+        session.setJob(job, turnId)
     }
 
     private fun preprocessUserInputParts(parts: List<UIMessagePart>, assistant: Assistant): List<UIMessagePart> {
@@ -508,11 +643,18 @@ class ChatService(
     ) {
         val session = getOrCreateSession(conversationId)
         val previousJob = session.getJob()
-        previousJob?.cancel()
+        val previousTurnId = session.currentTurnId()
+        if (previousJob != null && previousTurnId != null) {
+            session.requestCancel(previousTurnId, TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN)
+            previousJob.cancel()
+        }
 
+        val turnId = Uuid.random()
+        session.beginTurn(turnId)
         val job = appScope.launch {
             try {
                 recoveryGate.awaitReady()
+                turnRecoveryReady.await()
                 runCatching { previousJob?.join() }
                 finishInterruptedPendingTools(conversationId)
                 val conversation = subAssistantCoordinator.recoverMasterForMutation(session.state.value)
@@ -525,12 +667,12 @@ class ChatService(
                         messageNodes = conversation.messageNodes.subList(0, indexAt + 1)
                     )
                     saveMasterTreeMutation(conversationId, newConversation)
-                    handleMessageComplete(conversationId)
+                    handleMessageComplete(conversationId, turnId = turnId)
                 } else {
                     if (regenerateAssistantMsg) {
                         val node = conversation.getMessageNodeByMessage(message)
                         val nodeIndex = conversation.messageNodes.indexOf(node)
-                        handleMessageComplete(conversationId, messageRange = 0..<nodeIndex)
+                        handleMessageComplete(conversationId, turnId = turnId, messageRange = 0..<nodeIndex)
                     } else {
                         saveConversation(conversationId, conversation)
                     }
@@ -544,7 +686,7 @@ class ChatService(
             }
         }
 
-        session.setJob(job)
+        session.setJob(job, turnId)
     }
 
     // ---- 处理工具调用审批 ----
@@ -560,6 +702,7 @@ class ChatService(
         appScope.launch {
             try {
                 recoveryGate.awaitReady()
+                turnRecoveryReady.await()
                 session.withToolApprovalLock {
                     // Pending is emitted just before the generation Flow ends. Wait for its
                     // final checkpoint/save instead of cancelling it. Rapid decisions for
@@ -583,11 +726,17 @@ class ChatService(
                     if (hasPendingTools) {
                         _generationDoneFlow.emit(conversationId)
                     } else {
+                        val turnId = Uuid.random()
+                        session.beginTurn(turnId)
                         val resumeJob = appScope.launch {
-                            handleMessageComplete(conversationId, resumeExistingTtsTurn = true)
+                            handleMessageComplete(
+                                conversationId = conversationId,
+                                turnId = turnId,
+                                resumeExistingTtsTurn = true,
+                            )
                             _generationDoneFlow.emit(conversationId)
                         }
-                        session.setJob(resumeJob)
+                        session.setJob(resumeJob, turnId)
                     }
                 }
             } catch (e: CancellationException) {
@@ -606,26 +755,67 @@ class ChatService(
 
     private suspend fun handleMessageComplete(
         conversationId: Uuid,
+        turnId: Uuid,
         messageRange: ClosedRange<Int>? = null,
         resumeExistingTtsTurn: Boolean = false,
     ) {
-        val settings = settingsStore.settingsFlow.first()
-        val initialConversation = getConversationFlow(conversationId).value
-        val assistant = settings.getAssistantById(initialConversation.assistantId)
-            ?: settings.getCurrentAssistant()
-        val model = settings.getChatModel(assistant) ?: return
-
-        val senderName = if (assistant.useAssistantAvatar) {
-            assistant.name.ifEmpty { context.getString(R.string.assistant_page_default_assistant) }
-        } else {
-            model.displayName
-        }
-
         var finishedReason: FinishedReason? = null
-        runCatching {
+        var inFlightAssistantId: Uuid? = null
+        var senderName: String? = null
+        var generationSoundEnabled = false
+        try {
+            val settings = settingsStore.settingsFlow.first()
+            val initialConversation = getConversationFlow(conversationId).value
+            val assistant = settings.getAssistantById(initialConversation.assistantId)
+                ?: settings.getCurrentAssistant()
+            generationSoundEnabled = settings.displaySetting.enableMessageGenerationSoundEffect
 
             // reset suggestions
             updateConversationState(conversationId) { it.copy(chatSuggestions = emptyList()) }
+
+            checkInvalidMessages(conversationId)
+            val loadedConversation = getConversationFlow(conversationId).value
+            val backfilled = AttachmentRefs.backfillConversation(loadedConversation)
+            if (backfilled != loadedConversation) {
+                updateConversation(conversationId, backfilled)
+            }
+
+            var conversation = getConversationFlow(conversationId).value
+            val sourceMessages = if (messageRange != null) {
+                conversation.currentMessages.subList(messageRange.start, messageRange.endInclusive + 1)
+            } else {
+                conversation.currentMessages
+            }
+            val resumableAssistant = sourceMessages.lastOrNull()
+                ?.takeIf { message ->
+                    message.role == MessageRole.ASSISTANT &&
+                        message.getTools().any { !it.isExecuted && it.approvalState.canResumeToolExecution() }
+                }
+            val assistantSlot = resumableAssistant ?: UIMessage(
+                id = Uuid.random(),
+                role = MessageRole.ASSISTANT,
+                parts = emptyList(),
+            )
+            inFlightAssistantId = assistantSlot.id
+            val generationMessages = if (resumableAssistant == null) sourceMessages + assistantSlot else sourceMessages
+            if (resumableAssistant == null) {
+                conversation = conversation.updateCurrentMessages(generationMessages)
+                updateConversation(conversationId, conversation)
+            }
+            persistTurnCheckpoint(
+                conversationId = conversationId,
+                turnId = turnId,
+                assistantMessageId = assistantSlot.id,
+                status = TurnExecutionStatus.RUNNING,
+            )
+
+            val model = settings.getChatModel(assistant)
+                ?: error("No chat model is configured for assistant ${assistant.id}")
+            senderName = if (assistant.useAssistantAvatar) {
+                assistant.name.ifEmpty { context.getString(R.string.assistant_page_default_assistant) }
+            } else {
+                model.displayName
+            }
 
             // memory tool
             if (!model.abilities.contains(ModelAbility.TOOL)) {
@@ -638,14 +828,7 @@ class ChatService(
                 }
             }
 
-            // check invalid messages
-            checkInvalidMessages(conversationId)
-            val loadedConversation = getConversationFlow(conversationId).value
-            val backfilled = AttachmentRefs.backfillConversation(loadedConversation)
-            if (backfilled != loadedConversation) {
-                updateConversation(conversationId, backfilled)
-            }
-            val conversation = getConversationFlow(conversationId).value
+            conversation = getConversationFlow(conversationId).value
 
             // start generating
             val session = getOrCreateSession(conversationId)
@@ -665,13 +848,9 @@ class ChatService(
                 settings = settings,
                 model = model,
                 processingStatus = session.processingStatus,
-                messages = conversation.currentMessages.let {
-                    if (messageRange != null) {
-                        it.subList(messageRange.start, messageRange.endInclusive + 1)
-                    } else {
-                        it
-                    }
-                },
+                messages = generationMessages,
+                assistantMessageId = assistantSlot.id,
+                currentTaskMessageId = generationMessages.lastOrNull { it.role == MessageRole.USER }?.id,
                 assistant = assistant,
                 conversationSystemPrompt = conversation.customSystemPrompt,
                 conversationModeInjectionIds = conversation.modeInjectionIds,
@@ -686,6 +865,8 @@ class ChatService(
                     add(templateTransformer)
                     add(workspaceReminderTransformer)
                     toolArtifactReplayTransformer?.let(::add)
+                    add(AttachmentRefHintTransformer)
+                    add(AttachmentInputTransformer)
                 },
                 outputTransformers = outputTransformers,
                 tools = toolSetFactory.buildTools(
@@ -712,51 +893,43 @@ class ChatService(
                         )
                     },
                 ),
-            ).onCompletion {
-                // 可能被取消了，或者意外结束，兜底更新
-                val updatedConversation = getConversationFlow(conversationId).value.copy(
-                    messageNodes = getConversationFlow(conversationId).value.messageNodes.map { node ->
-                        node.copy(messages = node.messages.map { it.finishReasoning() })
-                    },
-                    updateAt = Instant.now()
-                )
-                updateConversation(conversationId, updatedConversation)
-
-                // 生成结束：取消 Live Update 通知，后台时发送完成通知
-                appEventBus.emit(
-                    AppEvent.ChatGenerationEnded(
+                onCheckpoint = { checkpoint ->
+                    val latest = getConversationFlow(conversationId).value
+                        .updateCurrentMessages(checkpoint.messages)
+                    updateConversation(conversationId, latest)
+                    persistTurnCheckpoint(
                         conversationId = conversationId,
-                        senderName = senderName,
-                        contentPreview = updatedConversation.currentMessages.lastOrNull()
-                            ?.toText()?.take(50)?.trim() ?: "",
+                        turnId = turnId,
+                        assistantMessageId = assistantSlot.id,
+                        status = TurnExecutionStatus.RUNNING,
+                        checkpoint = checkpoint,
                     )
-                )
-            }.collect { chunk ->
+                },
+            ).collect { chunk ->
                 when (chunk) {
                     is GenerationChunk.Messages -> {
                         val updatedConversation = getConversationFlow(conversationId).value
                             .updateCurrentMessages(chunk.messages)
                         updateConversation(conversationId, updatedConversation)
+                        chunk.messages.lastOrNull { it.role == MessageRole.ASSISTANT }?.id
+                            ?.let { inFlightAssistantId = it }
 
                         // 通知等边缘副作用由 ChatNotificationManager 消费；
                         // tryEmit 不挂起，事件丢失只影响单次通知更新，不能反压生成链
                         chunk.messages.lastOrNull()?.let { lastMessage ->
                             appEventBus.tryEmit(
-                                AppEvent.ChatGenerationUpdate(conversationId, lastMessage, senderName)
+                                AppEvent.ChatGenerationUpdate(conversationId, lastMessage, senderName.orEmpty())
                             )
                         }
 
                         // 前台声音反馈: 单步生成完成 + 工具待审批
                         if (isForeground.value && settings.displaySetting.enableMessageGenerationSoundEffect) {
-                            // 单步生成完成: 最后一条消息 finishedAt 变为新值
-                            // (每步完成时 GenerationHandler 设置新时间戳, 流式 emit 保留旧值, 可区分)
                             val lastMsg = chunk.messages.lastOrNull()
                             if (lastMsg != null && lastMsg.finishedAt != null && lastMsg.finishedAt != previousFinishedAt) {
                                 soundEffectPlayer.play(R.raw.loop_step)
                             }
                             previousFinishedAt = lastMsg?.finishedAt
 
-                            // 普通工具 Pending，以及子助手桥接的 ask_user
                             val attentionKeys = collectUserAttentionKeys(chunk.messages, json)
                             if (attentionKeys.any { previousAttentionKeys.add(it) }) {
                                 soundEffectPlayer.play(R.raw.loop_approval)
@@ -764,7 +937,6 @@ class ChatService(
                         }
                     }
 
-                    // Phase 和 Checkpoint 事件由普通聊天忽略；子助手 collector 消费这些事件
                     is GenerationChunk.Phase -> { }
                     is GenerationChunk.Checkpoint -> { }
                     is GenerationChunk.Finished -> {
@@ -772,33 +944,29 @@ class ChatService(
                     }
                 }
             }
-        }.onFailure {
-            if (it is CancellationException) {
-                return@onFailure
-            }
-            // 兜底取消 Live Update 通知（生成开始前失败时 onCompletion 不会执行）
-            appEventBus.tryEmit(AppEvent.ChatGenerationEnded(conversationId, senderName, null))
 
-            it.printStackTrace()
-            addError(it, conversationId, title = context.getString(R.string.error_title_generation))
-            Logging.log(TAG, "handleMessageComplete failed: ${it.message}")
-            Logging.log(TAG, it.stackTraceToString().lines().take(6).joinToString("\n"))
-
-            // loop 异常失败: 排除用户主动取消 (runCatching 会捕获 CancellationException, 需手动过滤)
-            if (it !is CancellationException && isForeground.value && settings.displaySetting.enableMessageGenerationSoundEffect) {
-                soundEffectPlayer.play(R.raw.loop_failed)
-            }
-        }.onSuccess {
-            val finalConversation = getConversationFlow(conversationId).value
-            saveConversation(conversationId, finalConversation)
-
+            finalizeMasterTurn(
+                conversationId = conversationId,
+                turnId = turnId,
+                outcome = when (finishedReason) {
+                    FinishedReason.COMPLETED -> MasterTurnOutcome.SUCCESS
+                    FinishedReason.AWAITING_APPROVAL -> MasterTurnOutcome.AWAITING_APPROVAL
+                    FinishedReason.STEP_LIMIT_REACHED,
+                    FinishedReason.INTERACTION_LIMIT_REACHED,
+                    -> MasterTurnOutcome.INCOMPLETE
+                    null -> MasterTurnOutcome.INCOMPLETE
+                },
+                finishedReason = finishedReason,
+                inFlightAssistantId = inFlightAssistantId,
+                senderName = senderName.orEmpty(),
+            )
             if (!shouldLaunchCompletionSideEffects(finishedReason)) {
-                return@onSuccess
+                return
             }
             val hasPendingApproval = getConversationFlow(conversationId).value
                 .currentMessages.lastOrNull()?.getTools()?.any { it.isPending } == true
             if (hasPendingApproval) {
-                return@onSuccess
+                return
             }
 
             if (isForeground.value && settings.displaySetting.enableMessageGenerationSoundEffect) {
@@ -811,6 +979,37 @@ class ChatService(
             launchWithConversationReference(conversationId) {
                 generateSuggestion(conversationId, getConversationFlow(conversationId).value)
             }
+        } catch (e: CancellationException) {
+            finalizeMasterTurn(
+                conversationId = conversationId,
+                turnId = turnId,
+                outcome = MasterTurnOutcome.CANCELLED,
+                finishedReason = finishedReason,
+                inFlightAssistantId = inFlightAssistantId,
+                senderName = senderName.orEmpty(),
+            )
+            throw e
+        } catch (e: Exception) {
+            Logging.log(TAG, "handleMessageComplete failed: ${e.message}")
+            Logging.log(TAG, e.stackTraceToString().lines().take(6).joinToString("\n"))
+            if (isForeground.value && generationSoundEnabled) {
+                soundEffectPlayer.play(R.raw.loop_failed)
+            }
+            finalizeMasterTurn(
+                conversationId = conversationId,
+                turnId = turnId,
+                outcome = if (
+                    e is HttpException && e.terminalStatus == ProviderTerminalStatus.INCOMPLETE
+                ) {
+                    MasterTurnOutcome.INCOMPLETE
+                } else {
+                    MasterTurnOutcome.FAILED
+                },
+                finishedReason = finishedReason,
+                error = e,
+                inFlightAssistantId = inFlightAssistantId,
+                senderName = senderName.orEmpty(),
+            )
         }
     }
 
@@ -818,50 +1017,289 @@ class ChatService(
 
     private fun checkInvalidMessages(conversationId: Uuid) {
         val conversation = getConversationFlow(conversationId).value
-        var messagesNodes = conversation.messageNodes
+        val messagesNodes = retainValidMessageNodes(conversation.messageNodes)
+        if (messagesNodes == conversation.messageNodes) return
+        updateConversation(conversationId, conversation.copy(messageNodes = messagesNodes))
+    }
 
-        // 移除无效 tool (未执行的 Tool)
-        messagesNodes = messagesNodes.mapIndexed { _, node ->
-            // Check for Tool type with non-executed tools
-            val hasPendingTools = node.currentMessage.getTools().any { !it.isExecuted }
-
-            if (hasPendingTools) {
-                // Keep messages that are ready to resume, such as approved/denied/answered tools.
-                val hasResumableTool = node.currentMessage.getTools().any {
-                    !it.isExecuted && it.approvalState.canResumeToolExecution()
+    private suspend fun finalizeMasterTurn(
+        conversationId: Uuid,
+        turnId: Uuid,
+        outcome: MasterTurnOutcome,
+        finishedReason: FinishedReason?,
+        error: Throwable? = null,
+        inFlightAssistantId: Uuid? = null,
+        senderName: String,
+    ) {
+        withContext(NonCancellable) {
+            // 幂等守卫：一个 turn 只允许提交一次终态。SUCCESS 提交后 job 可能仍在收尾
+            // （例如 generationDoneFlow 的 emit 等待慢订阅者时被取消），CancellationException
+            // 路径会再次进入这里；已提交的终态不允许被覆盖为 CANCELLED。
+            if (getOrCreateSession(conversationId).isTurnFinalized(turnId)) {
+                Logging.log(TAG, "turn $turnId already finalized; skip duplicate ${outcome.name} finalization")
+                return@withContext
+            }
+            val reason = when (outcome) {
+                MasterTurnOutcome.SUCCESS -> null
+                MasterTurnOutcome.AWAITING_APPROVAL -> null
+                MasterTurnOutcome.CANCELLED -> {
+                    getOrCreateSession(conversationId).consumeCancelReason(turnId)
+                        ?: TurnTerminalReasons.USER_STOP
                 }
-                if (hasResumableTool) {
-                    return@mapIndexed node
+                MasterTurnOutcome.FAILED -> if (error is HttpException) {
+                    TurnTerminalReasons.PROVIDER_FAILED
+                } else {
+                    TurnTerminalReasons.RUNTIME_ERROR
                 }
-
-                // If all tools are executed, it's valid
-                val allToolsExecuted = node.currentMessage.getTools().all { it.isExecuted }
-                if (allToolsExecuted && node.currentMessage.getTools().isNotEmpty()) {
-                    return@mapIndexed node
+                MasterTurnOutcome.INCOMPLETE -> when (finishedReason) {
+                    FinishedReason.STEP_LIMIT_REACHED -> TurnTerminalReasons.TOOL_LOOP_LIMIT
+                    FinishedReason.INTERACTION_LIMIT_REACHED -> TurnTerminalReasons.INTERACTION_LIMIT
+                    else -> TurnTerminalReasons.PROVIDER_INCOMPLETE
                 }
+            }
+            var lastCommitError: Throwable? = null
+            for (attempt in 0 until 3) {
+                try {
+                    withTimeout(30_000L) {
+                        val latestConversation = getConversationFlow(conversationId).value
+                        var conversation = latestConversation.copy(
+                            messageNodes = latestConversation.messageNodes.map { node ->
+                                node.copy(messages = node.messages.map { it.finishReasoning() })
+                            },
+                            updateAt = Instant.now(),
+                        )
+                        if (outcome == MasterTurnOutcome.CANCELLED || outcome == MasterTurnOutcome.FAILED) {
+                            conversation = closeOpenTools(
+                                conversation = conversation,
+                                messageId = inFlightAssistantId,
+                                cancelledByUser = outcome == MasterTurnOutcome.CANCELLED,
+                            )
+                        }
+                        val terminal = when (outcome) {
+                            MasterTurnOutcome.SUCCESS,
+                            MasterTurnOutcome.AWAITING_APPROVAL,
+                            -> null
+                            MasterTurnOutcome.CANCELLED -> MessageTerminalStatus.CANCELLED
+                            MasterTurnOutcome.FAILED -> MessageTerminalStatus.FAILED
+                            MasterTurnOutcome.INCOMPLETE -> MessageTerminalStatus.INCOMPLETE
+                        }
+                        if (terminal != null && inFlightAssistantId != null) {
+                            conversation = conversation.markAssistantTerminal(
+                                messageId = inFlightAssistantId,
+                                status = terminal,
+                                reason = reason,
+                            )
+                        }
+                        conversation = materializeMediaForPersistence(conversation)
+                        updateConversation(conversationId, conversation)
 
-                // Remove messages that still have unresolved tool approvals.
-                return@mapIndexed node.copy(
-                    messages = node.messages.filter { it.id != node.currentMessage.id },
-                    selectIndex = node.selectIndex - 1
+                        val session = getOrCreateSession(conversationId)
+                        session.withPersistLock {
+                            val revision = session.currentRevision()
+                            val now = System.currentTimeMillis()
+                            val previous = conversationRepo.getTurnExecution(turnId.toString())
+                            val turn = TurnExecutionEntity(
+                                turnId = turnId.toString(),
+                                conversationId = conversationId.toString(),
+                                assistantMessageId = inFlightAssistantId?.toString(),
+                                status = when (outcome) {
+                                    MasterTurnOutcome.SUCCESS -> TurnExecutionStatus.COMPLETED
+                                    MasterTurnOutcome.AWAITING_APPROVAL -> TurnExecutionStatus.AWAITING_APPROVAL
+                                    MasterTurnOutcome.CANCELLED -> TurnExecutionStatus.CANCELLED
+                                    MasterTurnOutcome.FAILED -> TurnExecutionStatus.FAILED
+                                    MasterTurnOutcome.INCOMPLETE -> TurnExecutionStatus.INCOMPLETE
+                                },
+                                reason = reason,
+                                createdAt = previous?.createdAt ?: now,
+                                updatedAt = now,
+                            )
+                            val terminalTools = conversationRepo.getToolExecutions(turnId.toString()).map { tool ->
+                                if (tool.status == ToolExecutionStatus.STARTED) {
+                                    tool.copy(
+                                        status = if (outcome == MasterTurnOutcome.CANCELLED) {
+                                            ToolExecutionStatus.CANCELLED
+                                        } else {
+                                            ToolExecutionStatus.UNKNOWN
+                                        },
+                                        reason = reason,
+                                        updatedAt = now,
+                                    )
+                                } else {
+                                    tool
+                                }
+                            }
+                            conversationRepo.finalizeTurn(conversation, turn, terminalTools)
+                            session.markTurnFinalized(turnId)
+                            session.markPersisted(revision)
+                        }
+                    }
+                    lastCommitError = null
+                    break
+                } catch (commitError: Throwable) {
+                    lastCommitError = commitError
+                    Logging.log(TAG, "turn finalization attempt ${attempt + 1} failed: ${commitError.message}")
+                    if (attempt < 2) delay(150L * (attempt + 1))
+                }
+            }
+            lastCommitError?.let { commitError ->
+                addError(
+                    commitError,
+                    conversationId,
+                    title = context.getString(R.string.error_title_generation),
                 )
             }
-            node
-        }
-
-        // 更新index
-        messagesNodes = messagesNodes.map { node ->
-            if (node.messages.isNotEmpty() && node.selectIndex !in node.messages.indices) {
-                node.copy(selectIndex = 0)
-            } else {
-                node
+            if (outcome == MasterTurnOutcome.FAILED && error != null) {
+                addError(error, conversationId, title = context.getString(R.string.error_title_generation))
             }
+            val finalMessage = getConversationFlow(conversationId).value.currentMessages
+                .firstOrNull { it.id == inFlightAssistantId }
+            appEventBus.tryEmit(
+                AppEvent.ChatGenerationEnded(
+                    conversationId = conversationId,
+                    senderName = senderName,
+                    contentPreview = finalMessage?.toText()?.take(50)?.trim(),
+                )
+            )
         }
+    }
 
-        // 移除无效消息
-        messagesNodes = messagesNodes.filter { it.messages.isNotEmpty() }
+    private suspend fun closeOpenTools(
+        conversation: Conversation,
+        messageId: Uuid?,
+        cancelledByUser: Boolean = true,
+    ): Conversation {
+        val located = conversation.locateAssistant(messageId) ?: return conversation
+        val (nodeIndex, targetMessage) = located
+        var updatedMessage = targetMessage.finishPendingTools { tool ->
+            if (cancelledByUser) cancelToolByUser(tool) else interruptPendingTool(tool)
+        }
+        val childMessagesByConversation = loadChildMessagesForInterruptedCalls(updatedMessage)
+        updatedMessage = updatedMessage.finishInterruptedTools { tool ->
+            val childId = tool.getSubAssistantCallMetadata(json)?.childConversationId
+                ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+            finishInterruptedToolAfterGenerationStop(
+                tool = tool,
+                json = json,
+                childMessages = childId?.let { childMessagesByConversation[it] }.orEmpty(),
+            )
+        }
+        if (updatedMessage == targetMessage) return conversation
+        return conversation.copy(
+            messageNodes = conversation.messageNodes.mapIndexed { index, node ->
+                if (index != nodeIndex) {
+                    node
+                } else {
+                    node.copy(
+                        messages = node.messages.map { message ->
+                            if (message.id == targetMessage.id) updatedMessage else message
+                        },
+                    )
+                }
+            },
+        )
+    }
 
-        updateConversation(conversationId, conversation.copy(messageNodes = messagesNodes))
+    private suspend fun materializeMediaForPersistence(conversation: Conversation): Conversation {
+        if (conversation.messageNodes.none { node -> node.messages.any { it.hasBase64Part() } }) {
+            return conversation
+        }
+        return conversation.copy(
+            messageNodes = conversation.messageNodes.map { node ->
+                node.copy(
+                    messages = node.messages.map { message ->
+                        if (!message.hasBase64Part()) {
+                            message
+                        } else {
+                            filesManager.convertBase64ImagePartToLocalFile(message)
+                        }
+                    },
+                )
+            },
+        )
+    }
+
+    private suspend fun persistLoadedConversation(
+        conversationId: Uuid,
+        reindexFts: Boolean,
+    ) {
+        recoveryGate.awaitReady()
+        val session = getOrCreateSession(conversationId)
+        session.withPersistLock {
+            var revision = session.currentRevision()
+            var snapshot = session.state.value
+            val persistable = snapshot.sanitizeForPersistence()
+            if (persistable != snapshot) {
+                snapshot = persistable
+                session.state.value = persistable
+                revision = session.bumpStateRevision()
+            }
+            if (revision < session.lastPersistedRevision()) return@withPersistLock
+            val exists = conversationRepo.existsConversationById(snapshot.id)
+            if (!exists && snapshot.title.isBlank() && snapshot.messageNodes.isEmpty()) {
+                session.markPersisted(revision)
+                return@withPersistLock
+            }
+            if (!exists) {
+                conversationRepo.insertConversation(snapshot)
+            } else if (reindexFts) {
+                conversationRepo.updateConversation(snapshot)
+            } else {
+                conversationRepo.checkpointConversation(snapshot)
+            }
+            session.markPersisted(revision)
+        }
+    }
+
+    private suspend fun persistTurnCheckpoint(
+        conversationId: Uuid,
+        turnId: Uuid,
+        assistantMessageId: Uuid,
+        status: TurnExecutionStatus,
+        reason: String? = null,
+        checkpoint: GenerationCheckpoint? = null,
+    ) {
+        recoveryGate.awaitReady()
+        val session = getOrCreateSession(conversationId)
+        session.withPersistLock {
+            var revision = session.currentRevision()
+            var snapshot = session.state.value
+            val persistable = snapshot.sanitizeForPersistence()
+            if (persistable != snapshot) {
+                snapshot = persistable
+                session.state.value = persistable
+                revision = session.bumpStateRevision()
+            }
+            val now = System.currentTimeMillis()
+            val existingTurn = conversationRepo.getTurnExecution(turnId.toString())
+            val turn = TurnExecutionEntity(
+                turnId = turnId.toString(),
+                conversationId = conversationId.toString(),
+                assistantMessageId = assistantMessageId.toString(),
+                status = status,
+                reason = reason,
+                createdAt = existingTurn?.createdAt ?: now,
+                updatedAt = now,
+            )
+            val event = checkpoint?.toolExecution
+            val toolExecution = event?.let {
+                val existingTool = conversationRepo.getToolExecution(it.executionId)
+                ToolExecutionEntity(
+                    executionId = it.executionId,
+                    turnId = turnId.toString(),
+                    toolOrdinal = it.toolOrdinal,
+                    status = when (it.status) {
+                        ToolExecutionEventStatus.STARTED -> ToolExecutionStatus.STARTED
+                        ToolExecutionEventStatus.COMPLETED -> ToolExecutionStatus.COMPLETED
+                        ToolExecutionEventStatus.FAILED -> ToolExecutionStatus.FAILED
+                    },
+                    reason = null,
+                    createdAt = existingTool?.createdAt ?: now,
+                    updatedAt = now,
+                )
+            }
+            conversationRepo.checkpointTurn(snapshot, turn, toolExecution)
+            session.markPersisted(revision)
+        }
     }
 
     private fun cancelToolByUser(tool: UIMessagePart.Tool): UIMessagePart.Tool {
@@ -875,6 +1313,14 @@ class ChatService(
         )
     }
 
+    private fun interruptPendingTool(tool: UIMessagePart.Tool): UIMessagePart.Tool = tool.copy(
+        output = listOf(
+            UIMessagePart.Text(
+                """{"status":"interrupted","error":"Tool execution was interrupted before completion."}"""
+            )
+        ),
+    )
+
     /**
      * 标记执行中断的工具（超时、异常等导致 output 为空但 approvalState 非 Pending）。
      * 与 [cancelToolByUser] 区分: 这不是用户主动取消，而是执行过程中被中断。
@@ -882,35 +1328,14 @@ class ChatService(
      */
     private suspend fun finishInterruptedPendingTools(conversationId: Uuid) {
         val currentConversation = getConversationFlow(conversationId).value
-        val lastNode = currentConversation.messageNodes.lastOrNull() ?: return
-        val lastMessage = lastNode.currentMessage
-
-        // 1. 处理 Pending 工具（等待用户审批但被中断）→ 标记为用户取消
-        var updatedMessage = lastMessage.finishPendingTools(::cancelToolByUser)
-
-        // 2. 处理执行中断的工具（非 Pending 但 output 为空，如超时/异常中断）→ 标记为中断
-        val childMessagesByConversation = loadChildMessagesForInterruptedCalls(updatedMessage)
-        updatedMessage = updatedMessage.finishInterruptedTools { tool ->
-            val childId = tool.getSubAssistantCallMetadata(json)?.childConversationId
-                ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
-            finishInterruptedToolAfterGenerationStop(
-                tool = tool,
-                json = json,
-                childMessages = childId?.let { childMessagesByConversation[it] }.orEmpty(),
-            )
-        }
-
-        if (updatedMessage == lastMessage) {
+        val assistantId = currentConversation.currentMessages.lastOrNull()
+            ?.takeIf { it.role == MessageRole.ASSISTANT }
+            ?.id
+            ?: return
+        val updatedConversation = closeOpenTools(currentConversation, messageId = assistantId)
+        if (updatedConversation == currentConversation) {
             return
         }
-
-        val updatedConversation = currentConversation.copy(
-            messageNodes = currentConversation.messageNodes.dropLast(1) + lastNode.copy(
-                messages = lastNode.messages.map { message ->
-                    if (message.id == lastMessage.id) updatedMessage else message
-                }
-            )
-        )
         saveConversation(conversationId, updatedConversation)
     }
 
@@ -1135,10 +1560,17 @@ class ChatService(
 
     // ---- 对话状态更新 ----
 
-    private fun updateConversation(conversationId: Uuid, conversation: Conversation) {
+    private fun updateConversation(
+        conversationId: Uuid,
+        conversation: Conversation,
+        markDirty: Boolean = true,
+    ) {
         if (conversation.id != conversationId) return
         val session = getOrCreateSession(conversationId)
         session.state.value = conversation
+        if (markDirty) {
+            session.bumpStateRevision()
+        }
     }
 
     fun updateConversationState(conversationId: Uuid, update: (Conversation) -> Conversation) {
@@ -1208,21 +1640,8 @@ class ChatService(
 
     suspend fun saveConversation(conversationId: Uuid, conversation: Conversation) {
         recoveryGate.awaitReady()
-        val exists = conversationRepo.existsConversationById(conversation.id)
-        val updatedConversation = conversation.copy()
-
-        // 始终更新内存状态，即使空会话不持久化到 DB
-        updateConversation(conversationId, updatedConversation)
-
-        if (!exists && conversation.title.isBlank() && conversation.messageNodes.isEmpty()) {
-            return // 新会话且为空时不持久化到 DB
-        }
-
-        if (!exists) {
-            conversationRepo.insertConversation(updatedConversation)
-        } else {
-            conversationRepo.updateConversation(updatedConversation)
-        }
+        updateConversation(conversationId, conversation.copy())
+        persistLoadedConversation(conversationId, reindexFts = true)
     }
 
     /** Serializes user-initiated repository writes behind startup recovery. */
@@ -1464,6 +1883,8 @@ class ChatService(
             deletedChildren = plan.deletedChildren,
         )
         updateConversation(conversationId, updatedMaster)
+        val session = getOrCreateSession(conversationId)
+        session.markPersisted(session.currentRevision())
         plan.retainedChildren.forEach { child ->
             sessionRegistry.getSession(child.id)?.let {
                 sessionRegistry.updateConversationState(child.id, child)
@@ -1510,9 +1931,57 @@ class ChatService(
     // 停止当前会话生成任务（不清理会话缓存）
     suspend fun stopGeneration(conversationId: Uuid) {
         recoveryGate.awaitReady()
-        val job = sessionRegistry.getSession(conversationId)?.getJob() ?: return
+        turnRecoveryReady.await()
+        val session = sessionRegistry.getSession(conversationId) ?: return
+        val job = session.getJob() ?: return
+        // job 已自然结束时无需停止；提前返回避免 requestCancel 写入后无人消费，
+        // 在「job 完成与 invokeOnCompletion 清理」的竞态窗口里残留取消原因。
+        if (job.isCompleted) return
+        val turnId = session.currentTurnId() ?: return
+        session.requestCancel(turnId, TurnTerminalReasons.USER_STOP)
         job.cancel()
         runCatching { job.join() }
-        finishInterruptedPendingTools(conversationId)
     }
+}
+
+private fun Conversation.sanitizeForPersistence(): Conversation {
+    if (messageNodes.none { node -> node.messages.any { it.hasBase64Part() } }) return this
+    return copy(
+        messageNodes = messageNodes.map { node ->
+            node.copy(messages = node.messages.map { it.withoutUnpersistableBase64() })
+        },
+    )
+}
+
+private fun Conversation.locateAssistant(messageId: Uuid?): Pair<Int, UIMessage>? {
+    if (messageId == null) return null
+    messageNodes.forEachIndexed { index, node ->
+        val message = node.messages.firstOrNull { it.id == messageId && it.role == MessageRole.ASSISTANT }
+        if (message != null) return index to message
+    }
+    return null
+}
+
+private fun Conversation.markAssistantTerminal(
+    messageId: Uuid?,
+    status: MessageTerminalStatus,
+    reason: String?,
+): Conversation {
+    val located = locateAssistant(messageId) ?: return this
+    val (nodeIndex, targetMessage) = located
+    if (targetMessage.role != MessageRole.ASSISTANT) return this
+    val marked = targetMessage.copy(terminalStatus = status, terminalReason = reason)
+    return copy(
+        messageNodes = messageNodes.mapIndexed { index, node ->
+            if (index != nodeIndex) {
+                node
+            } else {
+                node.copy(
+                    messages = node.messages.map { message ->
+                        if (message.id == targetMessage.id) marked else message
+                    },
+                )
+            }
+        },
+    )
 }

@@ -1431,5 +1431,10 @@
   <string name="chat_message_tool_generate_image_prompt_copied">Подсказка скопирована</string>
   <string name="chat_message_tool_generate_image_path_copied">Путь скопирован</string>
   <string name="image_viewer_save_need_permission">Разрешите доступ к хранилищу и сохраните снова</string>
+  <string name="chat_message_terminal_cancelled">Ответ был остановлен до завершения.</string>
+  <string name="chat_message_terminal_failed">Не удалось завершить ответ.</string>
+  <string name="chat_message_terminal_incomplete">Ответ завершился до выполнения задачи.</string>
+  <string name="chat_message_terminal_interrupted">Ответ был прерван.</string>
+  <string name="chat_message_media_persistence_failed">Не удалось сохранить изображение, поэтому оно недоступно.</string>
 </resources>
 

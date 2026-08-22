@@ -8,9 +8,10 @@
 
 | 类型 | 职责 |
 |------|------|
-| `ChatService` | 会话入口与编排；选择助手/模型，装配 Transformer、Tools、Memory 和 Workspace 上下文 |
-| `ConversationSession` | 单会话内存状态、引用计数、生成 Job 和处理状态 |
-| `GenerationHandler` | 构建请求、驱动最多 256 步的模型/工具循环、合并流式输出 |
+| `ChatService` | 会话入口与编排；持有 Master turn 生命周期、终态收口和请求装配 |
+| `ConversationSession` | 单会话内存状态、引用计数、turn-bound Job/取消原因、dirty revision 和处理状态 |
+| `GenerationHandler` | 构建请求、驱动最多 256 步的模型/工具循环、合并流式输出并发出 awaited checkpoint |
+| `ConversationRepository` | 原子提交 MessageNode、TurnExecution 和 ToolExecution；恢复遗留执行记录 |
 | `InputMessageTransformer` | 请求发送前，以固定顺序变换消息 |
 | `OutputMessageTransformer` | 流式显示、持久化变换和生成结束后的收口处理 |
 | Provider 实现 | 把统一的 `UIMessage` / `TextGenerationParams` 转为 OpenAI、Claude、Google 等协议 |
@@ -22,13 +23,14 @@
   │
   ▼
 ChatService.sendMessage()
-  ├─ 取消并等待上一生成 Job
+  ├─ 以旧 turnId 记录取消原因，取消并等待上一生成 Job
   ├─ finishInterruptedPendingTools()
   ├─ preprocessUserInputParts()：执行 USER 范围正则
   ├─ 追加 UIMessage(USER) 到 Conversation.messageNodes
   └─ handleMessageComplete()
        │
        ├─ 解析当前 Assistant 与可用 CHAT Model
+       ├─ 分配稳定 turnId / assistantMessageId，原子提交 RUNNING 响应槽
        ├─ 校验消息与工具能力
        ├─ 装配 Input/Output Transformers
        ├─ 装配 Search / Local / Conversation / Workspace / Skill / MCP Tools
@@ -42,19 +44,23 @@ ChatService.sendMessage()
             │    ├─ 构建 TextGenerationParams
             │    └─ Provider streamText() / generateText()
             │
+            ├─ 先对 terminal 历史执行 replaySafeProjection，再构建请求
             ├─ 合并 chunk，执行 Output Transformers 并持续 emit
             ├─ 结束当前 step，写入 finishedAt
             ├─ 无工具调用：结束
             ├─ 工具待审批：写入 Pending 后暂停
-            └─ 工具可执行：执行并把结果写回同一 ASSISTANT UIMessage，进入下一 step
+            └─ 工具可执行：提交 STARTED 后执行；逐工具提交结果，再进入下一 step
                  │
                  ▼
 ChatService.collect()
   ├─ 更新 ConversationSession（不根据瞬时 Conversation 差异删除本地文件）
   ├─ 通过 AppEventBus 发布生成进度、声音和通知事件
-  └─ 消费 GenerationChunk.Finished：
-     - COMPLETED / STEP_LIMIT_REACHED：保存会话，再异步生成标题和建议回复
-     - AWAITING_APPROVAL：只保存挂起检查点，不启动完成副作用
+  ├─ awaited onCheckpoint：消息、turn 与可选工具 execution 在一个 Room transaction 提交
+  └─ 所有退出路径进入同一 terminal finalizer：
+     - COMPLETED：保存会话，再异步生成标题和建议回复
+     - STEP/INTERACTION_LIMIT：保存 INCOMPLETE，不启动完成副作用
+     - CANCELLED / FAILED / Provider INCOMPLETE：保留部分内容和明确终态
+     - AWAITING_APPROVAL：保存可恢复挂起状态，不启动完成副作用
      自动标题只在标题仍空白时发起；同一会话进程内同时只跑一次，
      被挡住的触发在当前请求结束后另起会话引用任务补一次。
      实际 LLM 请求最多 MAX_AUTO_TITLE_GENERATION_ATTEMPTS 次。
@@ -70,8 +76,8 @@ ChatService.collect()
 
 `GenerationHandler.generateInternal()` 的顺序是有意固定的：
 
-1. 从原始会话历史计算 `contextMessages`。未启用自动裁剪时保持原列表；启用后只改变本次请求，
-   不改写 `Conversation`。
+1. 排除仅用于持久化的空 in-flight assistant，对非成功 assistant 建立 `replaySafeProjection()`，再计算
+   `contextMessages`。未启用自动裁剪时保持投影列表；启用后只改变本次请求，不改写 `Conversation`。
 2. 使用同一份 `contextMessages` 构建 Tool system prompt，避免工具提示和实际发送历史看到不同上下文。
 3. 组装 System message：
 
@@ -95,11 +101,11 @@ Transformer 以 `fold` 顺序执行，后一个接收前一个的输出：
 | 2 | `PromptInjectionTransformer` | 注入 Assistant 或会话绑定的 Mode Injection |
 | 3 | `PlaceholderTransformer` | 替换内置占位符 |
 | 4 | `DocumentAsPromptTransformer` | 将文档附件内容注入提示 |
-| 5 | `AttachmentRefHintTransformer` | 在带 `attachment_ref` 的多媒体 part 前插入模型可见句柄 |
-| 6 | `AttachmentInputTransformer` | 按本次模型选择 NATIVE 保留图片、DERIVED 换成 observation，或聊天兼容占位 |
-| 7 | `TemplateTransformer` | 按消息自己的 `createdAt` 渲染模板，避免历史文本每轮变化 |
-| 8 | `WorkspaceReminderTransformer` | Workspace Shell 就绪时向 System 追加环境和路径约束 |
-| 9 | `ToolArtifactReplayTransformer` | 按 artifact metadata 重写历史 Tool Result 的 `/upload/<file>` 与 Image URL |
+| 5 | `TemplateTransformer` | 按消息自己的 `createdAt` 渲染模板，避免历史文本每轮变化 |
+| 6 | `WorkspaceReminderTransformer` | Workspace Shell 就绪时向 System 追加环境和路径约束 |
+| 7 | `ToolArtifactReplayTransformer` | 先按 artifact metadata 物化历史 Tool Result 的路径和 Image URL |
+| 8 | `AttachmentRefHintTransformer` | 在带 `attachment_ref` 的多媒体 part 前插入模型可见句柄 |
+| 9 | `AttachmentInputTransformer` | 递归顶层与 `Tool.output`，按 NATIVE / DERIVED / UNAVAILABLE 投影图片 |
 
 `PromptInjectionTransformer` 支持 `BEFORE_SYSTEM_PROMPT`、`AFTER_SYSTEM_PROMPT`、
 `TOP_OF_CHAT`、`BOTTOM_OF_CHAT` 和 `AT_DEPTH`。插入点会避开用户消息与其工具回复之间的边界。
@@ -223,9 +229,15 @@ OpenAI Images 的 `moderation_blocked` / `content_policy_violation`，以及 xAI
 
 - 页面通过 `acquire()` / `release()` 维护引用；
 - 生成 Job 活跃时即使页面离开也保留 Session；
-- 无引用且未生成时，空闲超时后由 `ChatService` 清理；
+- dirty revision 未提交时禁止回收；提交完成后即使没有新引用变化也会重新安排空闲检查；
+- 无引用、未生成且无 dirty revision 时，空闲超时后由 Registry 清理；
+- 取消原因与 active turnId 绑定，旧 Job 的结束回调不能清除新 turn 状态；
 - 生成结束、失败或取消都通过 `AppEventBus` 发布事件；
 - `ChatNotificationManager` 独立消费事件，生成主链路不直接持有通知状态。
+
+应用启动后、接受新的聊天操作前，`ChatService` 会恢复遗留 `CREATED/RUNNING`：assistant 消息标记
+`INTERRUPTED`，仍为 `STARTED` 的工具标记 `UNKNOWN` 并写入不可自动重试的结果。UI 保留原始部分内容；
+下一次 Provider 请求只读取安全投影。
 
 ## 子助手生成管线扩展
 

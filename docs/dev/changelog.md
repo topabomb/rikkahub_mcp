@@ -6,13 +6,16 @@
 
 ---
 
-## 0.0.17（versionCode 17）— 2026-08-17 ~ 2026-08-20
+## 0.0.17（versionCode 17）— 2026-08-17 ~ 2026-08-22
 
 ### 新增
 
 - `assistant_call` 可附带最多 4 个任务相关附件；第一阶段支持图片。主助手只决定传哪些，Runtime 按 Target 本次模型选择原图或 visual observation
 - 会话图片会盖上稳定 `attachment:<uuid>` 句柄，模型可在工具参数里引用；外部 HTTPS 图先落地再注入 Child
 - 子助手可按配置调用 `generate_image`；主卡片用轻量引用显示交付物，Caller 默认只拿文本和 `artifacts[]`，点名 `extras=["artifacts"]` 后才按 Caller 能力拿到原图或 visual observation
+- `TurnExecution` / `ToolExecution` 双表（DB v5，`Migration_4_5`）：每轮对话与每次工具执行的检查点与终态（COMPLETED / CANCELLED / FAILED / INCOMPLETE / INTERRUPTED / AWAITING_APPROVAL）持久化，FK 级联删除
+- 启动时在接受新聊天操作前恢复遗留进行中的轮次：标为「已中断」，结果未知的工具写不可自动重试的协议结果
+- 消息终态（取消/失败/不完整/中断）在 UI 显示明确的本地化标签；媒体保存失败显示可见占位
 
 ### 变更
 
@@ -21,6 +24,10 @@
 - Target 非交互下需审批工具自动拒绝的返回统一为 `tool_not_permitted` + `approval_unavailable` + `message`：语义为「需要审批但当前运行环境无法提供审批，不要原样重试」；只拒绝当前 ToolCall，不终止整个 Run。`ask_user` 仍走交互桥接，与审批错误协议无关
 - 文件管理删除收口两套语义：新增 `ManagedFileDeletionService`，显式删除前先解除助手背景/头像等可变引用；`FilesManager` 物理删除 API 更名为 destructive 语义；「清理」改为「清空」，确认框显示实际影响
 - `generate_image` 消息卡把执行结果与文件可用性分开：生成成功但文件缺失显示「图片已生成 · 文件不可用」，`artifact_missing` 移出失败文案
+- 工具先落盘「开始执行」再真正执行，逐个提交结果；任一崩溃点后协议历史都完整合法
+- 下一次请求对非成功 assistant 回复只用安全投影：剔除未完成思考、开放工具调用和残缺 Base64，屏幕上仍完整保留原文
+- Base64 图片不再持久化进数据库：收尾时尽量转存本地文件，失败替换为 typed 占位；工具结果内嵌图片同样处理
+- 附件处理顺序调整：历史 artifact 先物化，再做附件提示注入与图片能力适配
 
 ### 修复
 
@@ -29,6 +36,9 @@
 - Conversation 普通状态更新不再按瞬时文件差做物理 GC；压缩等生命周期操作走统一的引用检查
 - 历史 Tool artifact 缺失时保持执行 `status=completed`，只把文件标为不可用
 - 文件管理删除正被助手背景/头像引用的文件后，不再留下悬空引用（背景透明却无背景图）
+- 已完成的一轮生成不会再被误标为「已取消」（停止请求与收尾竞态）；停止已结束的生成不再残留取消原因
+- 等待审批或已有终态的 assistant 消息不再被当作无效消息移除
+- OpenAI Responses 断流/incomplete 不再统一按失败收口（其余 Provider 逐协议接入为后续工作）
 
 ---
 

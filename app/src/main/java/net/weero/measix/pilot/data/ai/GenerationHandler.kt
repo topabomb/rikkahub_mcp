@@ -35,6 +35,7 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.handleMessageChunk
 import me.rerere.ai.ui.limitContext
+import me.rerere.ai.ui.replaySafeProjection
 import net.weero.measix.pilot.data.ai.transformers.InputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.MessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.OutputMessageTransformer
@@ -61,6 +62,8 @@ import kotlin.uuid.Uuid
 private const val TAG = "GenerationHandler"
 private const val MAX_TOOL_OUTPUT_CHARS = 32 * 1024
 private const val TOOL_OUTPUT_PREVIEW_CHARS = 4 * 1024
+
+private class CheckpointCommitException(cause: Throwable) : RuntimeException(cause)
 
 internal data class ToolApprovalResolution(
     val tools: List<UIMessagePart.Tool>,
@@ -199,8 +202,38 @@ enum class CheckpointKind {
     TOOL_RESULT_COMPLETED,
 
     @Serializable
+    TOOL_EXECUTION_STARTED,
+
+    @Serializable
     TERMINAL_STATE,
 }
+
+@Serializable
+enum class ToolExecutionEventStatus {
+    @SerialName("started") STARTED,
+    @SerialName("completed") COMPLETED,
+    @SerialName("failed") FAILED,
+}
+
+@Serializable
+data class ToolExecutionEvent(
+    val executionId: String,
+    val messageId: Uuid,
+    val toolOrdinal: Int,
+    val toolCallId: String,
+    val toolName: String,
+    val status: ToolExecutionEventStatus,
+)
+
+/**
+ * An awaited durability boundary. Production owners must not return until both the
+ * message snapshot and optional tool execution fact are committed.
+ */
+data class GenerationCheckpoint(
+    val kind: CheckpointKind,
+    val messages: List<UIMessage>,
+    val toolExecution: ToolExecutionEvent? = null,
+)
 
 class GenerationHandler(
     private val context: Context,
@@ -238,11 +271,27 @@ class GenerationHandler(
         imageAdaptMode: net.weero.measix.pilot.data.ai.transformers.ImageAdaptMode =
             net.weero.measix.pilot.data.ai.transformers.ImageAdaptMode.CHAT_COMPAT,
         currentTaskMessageId: Uuid? = null,
+        assistantMessageId: Uuid? = null,
+        onCheckpoint: suspend (GenerationCheckpoint) -> Unit = {},
     ): Flow<GenerationChunk> = channelFlow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
 
         var messages: List<UIMessage> = messages
+
+        suspend fun commitCheckpoint(
+            kind: CheckpointKind,
+            toolExecution: ToolExecutionEvent? = null,
+        ) {
+            try {
+                onCheckpoint(GenerationCheckpoint(kind, messages, toolExecution))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                throw CheckpointCommitException(e)
+            }
+            send(GenerationChunk.Checkpoint(kind))
+        }
 
         // 跟踪循环退出原因，默认 step_limit_reached
         var finishReason = FinishedReason.STEP_LIMIT_REACHED
@@ -319,6 +368,7 @@ class GenerationHandler(
                     workspaceCwd = workspaceCwd,
                     imageAdaptMode = imageAdaptMode,
                     currentTaskMessageId = currentTaskMessageId,
+                    assistantMessageId = assistantMessageId,
                     onPhase = { phase -> send(GenerationChunk.Phase(phase)) },
                 )
                 messages = messages.visualTransforms(
@@ -340,7 +390,7 @@ class GenerationHandler(
                         .toLocalDateTime(TimeZone.currentSystemDefault())
                 )
                 send(GenerationChunk.Messages(messages))
-                send(GenerationChunk.Checkpoint(CheckpointKind.STEP_COMPLETED))
+                commitCheckpoint(CheckpointKind.STEP_COMPLETED)
 
                 unexecutedTools = messages.last().getTools().filter { !it.isExecuted }
                 if (unexecutedTools.isEmpty()) {
@@ -381,7 +431,7 @@ class GenerationHandler(
             val toolsToProcess = unexecutedOrdinals.zip(updatedTools)
                 .filter { (_, tool) -> !tool.isExecuted }
             if (toolsToProcess.isEmpty()) {
-                send(GenerationChunk.Checkpoint(CheckpointKind.TOOL_RESULT_COMPLETED))
+                commitCheckpoint(CheckpointKind.TOOL_RESULT_COMPLETED)
                 continue
             }
 
@@ -389,6 +439,8 @@ class GenerationHandler(
             // tool_executing phase with registered tool name is emitted per-tool below
             val executedTools = linkedMapOf<Int, UIMessagePart.Tool>()
             toolsToProcess.forEach { (toolOrdinalInMessage, tool) ->
+                var executionEvent: ToolExecutionEvent? = null
+                var executionFailed = false
                 when (tool.approvalState) {
                     is ToolApprovalState.Denied -> {
                         // Tool was denied by user
@@ -428,18 +480,32 @@ class GenerationHandler(
                         runCatching {
                             val toolDef = toolsInternal.find { toolDef -> toolDef.name == tool.toolName }
                                 ?: error("Tool ${tool.toolName} not found")
-                            // 执行每个具体 ToolCall 前必须发出 Phase(tool_executing, registeredToolName)
-                            send(GenerationChunk.Phase("tool_executing", toolDef.name))
                             val args = runCatching {
                                 json.parseToJsonElement(tool.input.ifBlank { "{}" })
                             }.getOrElse {
                                 error("Invalid tool arguments JSON for ${tool.toolName}: ${it.message}")
                             }
+                            // 执行每个具体 ToolCall 前必须发出 Phase(tool_executing, registeredToolName)
+                            send(GenerationChunk.Phase("tool_executing", toolDef.name))
+                            val currentMessageId = messages.last().id
+                            val executionId = "${currentMessageId}_${toolOrdinalInMessage}"
+                                .replace(Regex("[^A-Za-z0-9_-]"), "_")
+                            executionEvent = ToolExecutionEvent(
+                                executionId = executionId,
+                                messageId = currentMessageId,
+                                toolOrdinal = toolOrdinalInMessage,
+                                toolCallId = tool.toolCallId,
+                                toolName = toolDef.name,
+                                status = ToolExecutionEventStatus.STARTED,
+                            )
+                            commitCheckpoint(
+                                kind = CheckpointKind.TOOL_EXECUTION_STARTED,
+                                toolExecution = executionEvent,
+                            )
                             Log.i(TAG, "generateText: executing tool ${toolDef.name} with args: $args")
 
                             // 构建 ToolExecutionContext，提供 reportMetadata 回写能力
                             // messageId + toolOrdinal 是精确 locator，不依赖 toolCallId
-                            val currentMessageId = messages.last().id
                             val toolOrdinal = toolOrdinalInMessage
                             val execContext = ToolExecutionContext(
                                 messageId = currentMessageId,
@@ -483,7 +549,7 @@ class GenerationHandler(
                                         )
                                     )
                                     if (checkpoint) {
-                                        send(GenerationChunk.Checkpoint(CheckpointKind.TOOL_STATE_CHANGED))
+                                        commitCheckpoint(CheckpointKind.TOOL_STATE_CHANGED)
                                     }
                                 }
                             )
@@ -496,8 +562,6 @@ class GenerationHandler(
                             val hasShellAccess = toolsInternal.any { it.name == "workspace_shell" }
                             // 使用 locator 唯一确定的 execution ID，不使用 Provider toolCallId
                             // 避免空值、跨 step 复用或路径字符造成覆盖与越界风险
-                            val executionId = "${currentMessageId}_${toolOrdinal}"
-                                .replace(Regex("[^A-Za-z0-9_-]"), "_")
                             executedTools[toolOrdinalInMessage] = finalTool.copy(
                                 output = maybeTruncateToolOutput(
                                     executionId = executionId,
@@ -507,9 +571,11 @@ class GenerationHandler(
                                 )
                             )
                         }.onFailure {
+                            if (it is CheckpointCommitException) throw it.cause ?: it
                             // 1. 工具超时: TimeoutCancellationException 是 CancellationException 子类
                             //    → 降级为错误 JSON 返回给 AI，不中断对话
                             if (it is TimeoutCancellationException) {
+                                executionFailed = true
                                 Log.w(TAG, "Tool ${tool.toolName} timed out: ${it.message}")
                                 executedTools[toolOrdinalInMessage] = tool.copy(
                                     output = listOf(
@@ -527,6 +593,7 @@ class GenerationHandler(
                             }
                             // 2. 取消必须向上传播，否则停止生成会被误报为工具执行错误
                             if (it is CancellationException) throw it
+                            executionFailed = true
                             // 3. 其他异常: 包装为结构化错误 JSON 返回给 AI
                             Log.w(TAG, "Tool ${tool.toolName} failed: ${it.message}", it)
                             executedTools[toolOrdinalInMessage] = tool.copy(
@@ -549,33 +616,37 @@ class GenerationHandler(
                         }
                     }
                 }
-            }
 
-            if (executedTools.isEmpty()) {
-                // No results to add (all tools were pending)
-                finishReason = FinishedReason.AWAITING_APPROVAL
-                break
-            }
-
-            // Update last message with executed tools (NOT create TOOL message)
-            // 从最新 messages 重新取得 Tool，保留执行期间写入的 metadata
-            // 使用 ordinal-based 匹配，不依赖 toolCallId find（文档禁止首项匹配）
-            messages = messages.dropLast(1) + messages.last().replaceToolsAtOrdinals(
-                replacements = executedTools,
-                preserveCurrentMetadata = true,
-            )
-            send(
-                GenerationChunk.Messages(
-                    messages.transforms(
-                        transformers = outputTransformers,
-                        context = context,
-                        model = model,
-                        assistant = assistant,
-                        settings = settings
+                val executedTool = executedTools.remove(toolOrdinalInMessage)
+                if (executedTool != null) {
+                    messages = messages.dropLast(1) + messages.last().replaceToolsAtOrdinals(
+                        replacements = mapOf(toolOrdinalInMessage to executedTool),
+                        preserveCurrentMetadata = true,
                     )
-                )
-            )
-            send(GenerationChunk.Checkpoint(CheckpointKind.TOOL_RESULT_COMPLETED))
+                    send(
+                        GenerationChunk.Messages(
+                            messages.transforms(
+                                transformers = outputTransformers,
+                                context = context,
+                                model = model,
+                                assistant = assistant,
+                                settings = settings,
+                            )
+                        )
+                    )
+                    commitCheckpoint(
+                        kind = CheckpointKind.TOOL_RESULT_COMPLETED,
+                        toolExecution = executionEvent?.copy(
+                            status = if (executionFailed) {
+                                ToolExecutionEventStatus.FAILED
+                            } else {
+                                ToolExecutionEventStatus.COMPLETED
+                            },
+                        ),
+                    )
+                }
+            }
+
             send(GenerationChunk.Phase("between_steps"))
         }
 
@@ -603,9 +674,17 @@ class GenerationHandler(
         imageAdaptMode: net.weero.measix.pilot.data.ai.transformers.ImageAdaptMode =
             net.weero.measix.pilot.data.ai.transformers.ImageAdaptMode.CHAT_COMPAT,
         currentTaskMessageId: Uuid? = null,
+        assistantMessageId: Uuid? = null,
         onPhase: (suspend (String) -> Unit)? = null,
     ) {
-        val contextMessages = messages.limitContext(assistant.effectiveContextMessageLimit())
+        val contextMessages = messages
+            .filterNot { message ->
+                message.id == assistantMessageId &&
+                    message.role == MessageRole.ASSISTANT &&
+                    message.parts.isEmpty()
+            }
+            .replaySafeProjection()
+            .limitContext(assistant.effectiveContextMessageLimit())
         val internalMessages = buildList {
             val system = buildString {
                 val effectiveSystemPrompt =
@@ -672,7 +751,11 @@ class GenerationHandler(
                 messages = internalMessages,
                 params = params
             ).collect {
-                messages = messages.handleMessageChunk(chunk = it, model = model)
+                messages = messages.handleMessageChunk(
+                    chunk = it,
+                    model = model,
+                    assistantMessageId = assistantMessageId,
+                )
                 it.usage?.let { usage ->
                     messages = messages.mapIndexed { index, message ->
                         if (index == messages.lastIndex) {
@@ -709,7 +792,11 @@ class GenerationHandler(
                 messages = internalMessages,
                 params = params,
             )
-            messages = messages.handleMessageChunk(chunk = chunk, model = model)
+            messages = messages.handleMessageChunk(
+                chunk = chunk,
+                model = model,
+                assistantMessageId = assistantMessageId,
+            )
             chunk.usage?.let { usage ->
                 messages = messages.mapIndexed { index, message ->
                     if (index == messages.lastIndex) {

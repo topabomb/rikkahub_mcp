@@ -1,13 +1,17 @@
 package me.rerere.ai.ui
 
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.util.json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.uuid.Uuid
 
 class MessageTest {
 
@@ -326,6 +330,131 @@ class MessageTest {
         )
         assertTrue(isCompleteImageUrl("content://media/external/images/media/1"))
         assertTrue(isCompleteImageUrl("android.resource://net.weero.measix.pilot/drawable/icon"))
+    }
+
+    @Test
+    fun `hasBase64Part walks nested tool output`() {
+        val nested = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "c1",
+                    toolName = "generate_image",
+                    input = "{}",
+                    output = listOf(UIMessagePart.Image(url = "data:image/png;base64,AAA")),
+                )
+            ),
+        )
+        val topLevel = UIMessage.assistant("ok").copy(
+            parts = listOf(UIMessagePart.Image(url = "data:image/png;base64,BBB")),
+        )
+        val clean = UIMessage.assistant("ok").copy(
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "c1",
+                    toolName = "generate_image",
+                    input = "{}",
+                    output = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")),
+                )
+            ),
+        )
+
+        assertTrue(nested.hasBase64Part())
+        assertTrue(topLevel.hasBase64Part())
+        assertFalse(clean.hasBase64Part())
+        val strippedMessage = nested.withoutUnpersistableBase64()
+        assertFalse(strippedMessage.hasBase64Part())
+        val placeholder = strippedMessage.getTools().single().output.single()
+        assertTrue(placeholder is UIMessagePart.Text)
+        assertEquals(
+            MessageMediaFailureReason.PERSISTENCE_FAILED,
+            placeholder.mediaFailureMetadataOrNull()?.reason,
+        )
+        assertEquals(1, strippedMessage.parts.countMediaPersistenceFailures())
+    }
+
+    @Test
+    fun `replay safe projection removes terminal draft protocol state and keeps paired facts`() {
+        val mediaFailure = mediaPersistenceFailurePart(
+            UIMessagePart.Image(url = "data:image/png;base64,broken"),
+        )
+        val openTool = UIMessagePart.Tool(
+            toolCallId = "open-call",
+            toolName = "unfinished_tool",
+            input = "{",
+        )
+        val completedTool = UIMessagePart.Tool(
+            toolCallId = "done-call",
+            toolName = "generate_image",
+            input = "{}",
+            output = listOf(mediaFailure),
+        )
+        val terminal = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Text("partial answer"),
+                UIMessagePart.Reasoning(reasoning = "unfinished reasoning", finishedAt = null),
+                openTool,
+                completedTool,
+                mediaFailure,
+            ),
+            providerMetadata = buildJsonObject { put("opaque", "draft") },
+            terminalStatus = MessageTerminalStatus.FAILED,
+            terminalReason = TurnTerminalReasons.PROVIDER_FAILED,
+        )
+
+        val projected = listOf(terminal).replaySafeProjection().single()
+
+        assertEquals(null, projected.providerMetadata)
+        assertEquals(null, projected.terminalStatus)
+        assertEquals(null, projected.terminalReason)
+        assertTrue(projected.parts.none { it is UIMessagePart.Reasoning })
+        assertTrue(projected.parts.none { it === openTool })
+        assertTrue(projected.toText().contains("partial answer"))
+        assertTrue(projected.toText().contains("did not complete"))
+        val projectedTool = projected.getTools().single()
+        assertEquals("done-call", projectedTool.toolCallId)
+        assertTrue(projectedTool.output.single().let { it is UIMessagePart.Text && it.text.contains("unavailable") })
+        assertEquals(0, projected.parts.countMediaPersistenceFailures())
+    }
+
+    @Test
+    fun `assistant chunk uses stable requested id and preserves an existing placeholder id`() {
+        val requestedId = Uuid.random()
+        var messages = listOf(UIMessage.user("hello"))
+
+        messages = messages.handleMessageChunk(
+            chunk = assistantChunk(UIMessagePart.Text("first")),
+            assistantMessageId = requestedId,
+        )
+        assertEquals(requestedId, messages.last().id)
+
+        messages = messages.handleMessageChunk(
+            chunk = assistantChunk(UIMessagePart.Text(" second")),
+            assistantMessageId = Uuid.random(),
+        )
+        assertEquals(requestedId, messages.last().id)
+        assertEquals("first second", messages.last().toText())
+    }
+
+    @Test
+    fun `media failure placeholder survives message serialization`() {
+        val original = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                mediaPersistenceFailurePart(
+                    UIMessagePart.Image(url = "data:image/png;base64,broken"),
+                )
+            ),
+        )
+
+        val restored = json.decodeFromString<UIMessage>(json.encodeToString(original))
+
+        assertEquals(
+            MessageMediaFailureReason.PERSISTENCE_FAILED,
+            restored.parts.single().mediaFailureMetadataOrNull()?.reason,
+        )
+        assertEquals(MessageMediaKind.IMAGE, restored.parts.single().mediaFailureMetadataOrNull()?.mediaKind)
     }
 
     @Test

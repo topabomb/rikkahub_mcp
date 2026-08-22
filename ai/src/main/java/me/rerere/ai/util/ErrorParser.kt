@@ -12,11 +12,17 @@ import kotlinx.serialization.json.jsonPrimitive
 private const val FORMATTED_HTTP_MESSAGE_MAX_CHARS = 2 * 1024
 private const val ENVELOPE_WALK_DEPTH = 6
 
+enum class ProviderTerminalStatus {
+    FAILED,
+    INCOMPLETE,
+}
+
 class HttpException(
     message: String,
     val statusCode: Int? = null,
     val errorCode: String? = null,
     val errorType: String? = null,
+    val terminalStatus: ProviderTerminalStatus = ProviderTerminalStatus.FAILED,
 ) : RuntimeException(message)
 
 data class ProviderErrorEnvelope(

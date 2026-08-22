@@ -6,9 +6,12 @@ import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.Model
+import me.rerere.ai.ui.MessageTerminalStatus
+import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.FinishedReason
+import net.weero.measix.pilot.data.model.toMessageNode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -77,11 +80,44 @@ class ChatServiceTest {
     }
 
     @Test
-    fun `completed and step limit launch completion side effects`() {
+    fun `retainValidMessageNodes keeps finalized interrupted assistant with open tools`() {
+        val openTool = UIMessagePart.Tool(
+            toolCallId = "call-1",
+            toolName = "generate_image",
+            input = "{}",
+        )
+        val cancelled = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(openTool),
+            terminalStatus = MessageTerminalStatus.CANCELLED,
+            terminalReason = "user_stop",
+        ).toMessageNode()
+        val resumable = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(openTool.copy(approvalState = ToolApprovalState.Approved)),
+        ).toMessageNode()
+        val illegal = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(openTool),
+        ).toMessageNode()
+
+        val pending = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(openTool.copy(approvalState = ToolApprovalState.Pending)),
+        ).toMessageNode()
+        val retained = retainValidMessageNodes(listOf(cancelled, resumable, pending, illegal))
+        assertEquals(3, retained.size)
+        assertEquals(cancelled.id, retained[0].id)
+        assertEquals(resumable.id, retained[1].id)
+        assertEquals(pending.id, retained[2].id)
+    }
+
+    @Test
+    fun `only completed turns launch completion side effects`() {
         assertTrue(shouldLaunchCompletionSideEffects(FinishedReason.COMPLETED))
-        assertTrue(shouldLaunchCompletionSideEffects(FinishedReason.STEP_LIMIT_REACHED))
-        assertTrue(shouldLaunchCompletionSideEffects(FinishedReason.INTERACTION_LIMIT_REACHED))
-        assertTrue(shouldLaunchCompletionSideEffects(null))
+        assertFalse(shouldLaunchCompletionSideEffects(FinishedReason.STEP_LIMIT_REACHED))
+        assertFalse(shouldLaunchCompletionSideEffects(FinishedReason.INTERACTION_LIMIT_REACHED))
+        assertFalse(shouldLaunchCompletionSideEffects(null))
     }
 
     // endregion

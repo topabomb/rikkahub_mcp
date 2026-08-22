@@ -9,6 +9,7 @@ import io.mockk.mockk
 import java.io.ByteArrayInputStream
 import java.io.File
 import kotlin.io.path.createTempDirectory
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import net.weero.measix.pilot.AppScope
@@ -16,7 +17,9 @@ import net.weero.measix.pilot.data.db.entity.ManagedFileEntity
 import net.weero.measix.pilot.data.repository.FilesRepository
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class FilesManagerCompensationTest {
@@ -150,5 +153,40 @@ class FilesManagerCompensationTest {
         assertTrue(result.isFailure)
         assertFalse(file.exists())
         filesDir.deleteRecursively()
+    }
+
+    @Test
+    fun `media failure recovery never swallows cancellation`() = runTest {
+        val cancellation = CancellationException("stop")
+
+        try {
+            recoverMediaPersistenceFailure(
+                onFailure = { "fallback" },
+                block = { throw cancellation },
+            )
+            fail("CancellationException must be rethrown")
+        } catch (actual: CancellationException) {
+            assertSame(cancellation, actual)
+        }
+    }
+
+    @Test
+    fun `media failure recovery catches expected exceptions but not fatal errors`() = runTest {
+        val fallback = recoverMediaPersistenceFailure(
+            onFailure = { error -> error.message.orEmpty() },
+            block = { throw IllegalArgumentException("invalid image") },
+        )
+        assertEquals("invalid image", fallback)
+
+        val fatal = AssertionError("fatal")
+        try {
+            recoverMediaPersistenceFailure(
+                onFailure = { "fallback" },
+                block = { throw fatal },
+            )
+            fail("Fatal errors must be rethrown")
+        } catch (actual: AssertionError) {
+            assertSame(fatal, actual)
+        }
     }
 }

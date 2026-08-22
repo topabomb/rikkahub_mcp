@@ -348,6 +348,8 @@ class ChatServiceConversationWriteTest {
                     memoryToolAllowed = any(),
                     imageAdaptMode = any(),
                     currentTaskMessageId = any(),
+                    assistantMessageId = any(),
+                    onCheckpoint = any(),
                 )
             } returns flowOf(GenerationChunk.Finished(finishReason))
         }

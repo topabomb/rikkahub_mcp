@@ -2,6 +2,7 @@ package net.weero.measix.pilot.data.ai.transformers
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.serializer
@@ -26,6 +27,10 @@ import java.security.MessageDigest
 import kotlin.time.Duration.Companion.days
 
 private const val TAG = "ImageInputAdapter"
+
+class CurrentImageInputUnavailableException : IllegalStateException(
+    "The current chat model cannot read the submitted image and no compatible OCR model is configured."
+)
 
 object ImageInputAdapter : KoinComponent {
     const val RENDITION_VERSION = 1
@@ -121,6 +126,9 @@ object ImageInputAdapter : KoinComponent {
     ): UIMessagePart {
         if (capability == ImageAdaptCapability.NATIVE) return part
         if (capability == ImageAdaptCapability.UNAVAILABLE) {
+            if (ctx.imageAdaptMode == ImageAdaptMode.CHAT_COMPAT && isCurrentTask(ctx, message)) {
+                throw CurrentImageInputUnavailableException()
+            }
             return adaptPartForView(
                 part = part,
                 capability = capability,
@@ -129,7 +137,7 @@ object ImageInputAdapter : KoinComponent {
                 observationText = null,
             )
         }
-        val observed = runCatching { observe(ctx, part) }
+        val observed = resultPreservingCancellation { observe(ctx, part) }
         return adaptPartForView(
             part = part,
             capability = capability,
@@ -201,6 +209,16 @@ object ImageInputAdapter : KoinComponent {
             cache = created
             return created
         }
+    }
+}
+
+internal suspend fun <T> resultPreservingCancellation(block: suspend () -> T): Result<T> {
+    return try {
+        Result.success(block())
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 }
 

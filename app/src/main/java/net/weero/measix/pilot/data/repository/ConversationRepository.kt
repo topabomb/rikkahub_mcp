@@ -18,8 +18,14 @@ import net.weero.measix.pilot.data.db.dao.ConversationDAO
 import net.weero.measix.pilot.data.db.dao.FavoriteDAO
 import net.weero.measix.pilot.data.db.dao.LightConversationEntity
 import net.weero.measix.pilot.data.db.dao.MessageNodeDAO
+import net.weero.measix.pilot.data.db.dao.ToolExecutionDAO
+import net.weero.measix.pilot.data.db.dao.TurnExecutionDAO
 import net.weero.measix.pilot.data.db.entity.ConversationEntity
 import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
+import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
+import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
+import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
+import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
@@ -28,6 +34,11 @@ import net.weero.measix.pilot.utils.JsonInstant
 import java.time.Instant
 import kotlin.uuid.Uuid
 
+data class RecoveredExecutionCount(
+    val turns: Int,
+    val tools: Int,
+)
+
 class ConversationRepository(
     private val conversationDAO: ConversationDAO,
     private val messageNodeDAO: MessageNodeDAO,
@@ -35,6 +46,8 @@ class ConversationRepository(
     private val database: AppDatabase,
     private val filesManager: FilesManager,
     private val messageFtsManager: MessageFtsManager,
+    private val turnExecutionDAO: TurnExecutionDAO,
+    private val toolExecutionDAO: ToolExecutionDAO,
 ) {
     companion object {
         private const val PAGE_SIZE = 20
@@ -317,19 +330,159 @@ class ConversationRepository(
     }
 
     suspend fun updateConversation(conversation: Conversation) {
+        persistConversationNodes(conversation, reindexFts = true)
+    }
+
+    /**
+     * Upserts the current message tree without rebuilding FTS.
+     * Used for generation checkpoints so a mid-turn persist does not rewrite search rows.
+     */
+    suspend fun checkpointConversation(conversation: Conversation) {
+        database.withTransaction {
+            persistGenerationCheckpoint(conversation)
+        }
+    }
+
+    /**
+     * Atomically commits the replay-safe message snapshot and its execution facts.
+     * The conversation header update is deliberately narrow so a stale generation snapshot
+     * cannot overwrite title, folder, pin, suggestions, or other independently owned columns.
+     */
+    suspend fun checkpointTurn(
+        conversation: Conversation,
+        turnExecution: TurnExecutionEntity,
+        toolExecution: ToolExecutionEntity? = null,
+    ) {
+        commitTurnCheckpoint(
+            conversation = conversation,
+            turnExecution = turnExecution,
+            toolExecutions = listOfNotNull(toolExecution),
+            reindexFts = false,
+        )
+    }
+
+    suspend fun finalizeTurn(
+        conversation: Conversation,
+        turnExecution: TurnExecutionEntity,
+        toolExecutions: List<ToolExecutionEntity> = emptyList(),
+    ) {
+        commitTurnCheckpoint(
+            conversation = conversation,
+            turnExecution = turnExecution,
+            toolExecutions = toolExecutions,
+            reindexFts = true,
+        )
+    }
+
+    private suspend fun commitTurnCheckpoint(
+        conversation: Conversation,
+        turnExecution: TurnExecutionEntity,
+        toolExecutions: List<ToolExecutionEntity> = emptyList(),
+        reindexFts: Boolean = false,
+    ) {
+        require(turnExecution.conversationId == conversation.id.toString()) {
+            "Turn ${turnExecution.turnId} does not belong to Conversation ${conversation.id}"
+        }
+        require(toolExecutions.all { it.turnId == turnExecution.turnId }) {
+            "Every ToolExecution must belong to Turn ${turnExecution.turnId}"
+        }
+        database.withTransaction {
+            persistGenerationCheckpoint(conversation)
+            turnExecutionDAO.upsert(turnExecution)
+            toolExecutionDAO.upsertAll(toolExecutions)
+        }
+        if (reindexFts && conversation.parentConversationId == null) {
+            val latestEntity = conversationDAO.getConversationById(conversation.id.toString())
+            val latest = latestEntity?.let { conversationEntityToConversation(it, conversation.messageNodes) }
+                ?: conversation
+            messageFtsManager.indexConversation(latest)
+        }
+    }
+
+    private suspend fun persistConversationNodes(
+        conversation: Conversation,
+        reindexFts: Boolean,
+    ) {
         database.withTransaction {
             requireValidParent(conversation)
             conversationDAO.update(
                 conversationToConversationEntity(conversation)
             )
-            // 删除旧的节点，插入新的节点
-            messageNodeDAO.deleteByConversation(conversation.id.toString())
-            saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
+            persistMessageNodes(conversation)
         }
-        // Child Conversation 不进入 FTS 索引，只通过调用卡片详情页访问
-        if (conversation.parentConversationId == null) {
+        if (reindexFts && conversation.parentConversationId == null) {
             messageFtsManager.indexConversation(conversation)
         }
+    }
+
+    suspend fun upsertTurnExecution(execution: TurnExecutionEntity) {
+        turnExecutionDAO.upsert(execution)
+    }
+
+    suspend fun getTurnExecution(turnId: String): TurnExecutionEntity? =
+        turnExecutionDAO.getById(turnId)
+
+    suspend fun getTurnExecutions(conversationId: Uuid): List<TurnExecutionEntity> =
+        turnExecutionDAO.getByConversationId(conversationId.toString())
+
+    suspend fun getRecoverableTurnExecutionsByConversation(): Map<Uuid, List<TurnExecutionEntity>> =
+        turnExecutionDAO.getByStatuses(
+            listOf(TurnExecutionStatus.CREATED, TurnExecutionStatus.RUNNING)
+        ).mapNotNull { execution ->
+            runCatching { Uuid.parse(execution.conversationId) }.getOrNull()?.let { it to execution }
+        }.groupBy(keySelector = { it.first }, valueTransform = { it.second })
+
+    suspend fun upsertToolExecution(execution: ToolExecutionEntity) {
+        toolExecutionDAO.upsert(execution)
+    }
+
+    suspend fun getToolExecution(executionId: String): ToolExecutionEntity? =
+        toolExecutionDAO.getById(executionId)
+
+    suspend fun getToolExecutions(turnId: String): List<ToolExecutionEntity> =
+        toolExecutionDAO.getByTurnId(turnId)
+
+    suspend fun recoverInterruptedExecutions(
+        updatedAt: Long,
+        reason: String = "process_restarted",
+    ): RecoveredExecutionCount = database.withTransaction {
+        val recoverableTurnStatuses = listOf(TurnExecutionStatus.CREATED, TurnExecutionStatus.RUNNING)
+        val tools = toolExecutionDAO.updateStatusForTurns(
+            sourceStatus = ToolExecutionStatus.STARTED,
+            sourceTurnStatuses = recoverableTurnStatuses,
+            targetStatus = ToolExecutionStatus.UNKNOWN,
+            reason = reason,
+            updatedAt = updatedAt,
+        )
+        val turns = turnExecutionDAO.updateStatuses(
+            sourceStatuses = recoverableTurnStatuses,
+            targetStatus = TurnExecutionStatus.INTERRUPTED,
+            reason = reason,
+            updatedAt = updatedAt,
+        )
+        RecoveredExecutionCount(turns = turns, tools = tools)
+    }
+
+    private suspend fun persistMessageNodes(conversation: Conversation) {
+        val conversationId = conversation.id.toString()
+        val existing = messageNodeDAO.getNodesOfConversation(conversationId)
+        val newIds = conversation.messageNodes.mapTo(mutableSetOf()) { it.id.toString() }
+        existing.filter { it.id !in newIds }.forEach { stale ->
+            favoriteDAO.deleteByRefKey("node:$conversationId:${stale.id}")
+            messageNodeDAO.deleteById(stale.id)
+        }
+        saveMessageNodes(conversationId, conversation.messageNodes)
+    }
+
+    private suspend fun persistGenerationCheckpoint(conversation: Conversation) {
+        requireValidParent(conversation)
+        check(
+            conversationDAO.updateGenerationCheckpoint(
+                id = conversation.id.toString(),
+                updateAt = conversation.updateAt.toEpochMilli(),
+            ) == 1
+        ) { "Conversation ${conversation.id} does not exist" }
+        persistMessageNodes(conversation)
     }
 
     suspend fun deleteConversation(conversation: Conversation) {

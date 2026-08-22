@@ -1431,5 +1431,10 @@
   <string name="image_viewer_save_need_permission">Grant storage permission, then save again</string>
   <string name="sub_assistant_card_artifact_missing">Image unavailable</string>
   <string name="sub_assistant_card_more_artifacts">+%1$d</string>
+  <string name="chat_message_terminal_cancelled">Response stopped before completion.</string>
+  <string name="chat_message_terminal_failed">Response failed before completion.</string>
+  <string name="chat_message_terminal_incomplete">Response ended before the task was complete.</string>
+  <string name="chat_message_terminal_interrupted">Response was interrupted.</string>
+  <string name="chat_message_media_persistence_failed">An image could not be saved and is unavailable.</string>
 </resources>
 

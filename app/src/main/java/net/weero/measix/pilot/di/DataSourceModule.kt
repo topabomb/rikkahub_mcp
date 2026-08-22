@@ -27,6 +27,7 @@ import net.weero.measix.pilot.data.db.fts.SimpleDictManager
 import net.weero.measix.pilot.data.db.migrations.Migration_1_2
 import net.weero.measix.pilot.data.db.migrations.Migration_2_3
 import net.weero.measix.pilot.data.db.migrations.Migration_3_4
+import net.weero.measix.pilot.data.db.migrations.Migration_4_5
 import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.data.ai.mcp.NetworkMonitor
 import net.weero.measix.pilot.data.sync.webdav.WebDavSync
@@ -49,7 +50,7 @@ val dataSourceModule = module {
         val context: Context = get()
         Room.databaseBuilder(context, AppDatabase::class.java, "measix_pilot")
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-            .addMigrations(Migration_1_2, Migration_2_3, Migration_3_4)
+            .addMigrations(Migration_1_2, Migration_2_3, Migration_3_4, Migration_4_5)
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onOpen(db: SupportSQLiteDatabase) {
                     val dictDir = SimpleDictManager.extractDict(context)
@@ -149,6 +150,14 @@ val dataSourceModule = module {
 
     single {
         get<AppDatabase>().folderDao()
+    }
+
+    single {
+        get<AppDatabase>().turnExecutionDao()
+    }
+
+    single {
+        get<AppDatabase>().toolExecutionDao()
     }
 
     single {

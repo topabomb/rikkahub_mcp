@@ -12,6 +12,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import net.weero.measix.pilot.data.model.Conversation
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.uuid.Uuid
 
 private const val TAG = "ConversationSession"
@@ -38,7 +40,56 @@ class ConversationSession(
     private var ttsQueueSessionId: String? = null
     val generationJob: StateFlow<Job?> = _generationJob.asStateFlow()
     val isGenerating: Boolean get() = _generationJob.value?.isActive == true
-    val isInUse: Boolean get() = refCount.get() > 0 || isGenerating
+    val isInUse: Boolean get() = refCount.get() > 0 || isGenerating || isDirty()
+
+    private val stateRevision = AtomicInteger(0)
+    private val persistedRevision = AtomicInteger(0)
+    private val persistMutex = Mutex()
+    private val activeTurnId = AtomicReference<Uuid?>(null)
+    private val cancelReasons = ConcurrentHashMap<Uuid, String>()
+    private val finalizedTurns: MutableSet<Uuid> = ConcurrentHashMap.newKeySet()
+
+    fun currentRevision(): Int = stateRevision.get()
+
+    fun lastPersistedRevision(): Int = persistedRevision.get()
+
+    fun bumpStateRevision(): Int = stateRevision.incrementAndGet()
+
+    fun markPersisted(revision: Int) {
+        persistedRevision.updateAndGet { current -> maxOf(current, revision) }
+        if (refCount.get() <= 0 && !isGenerating && !isDirty()) {
+            scheduleIdleCheck()
+        }
+    }
+
+    fun isDirty(): Boolean = stateRevision.get() > persistedRevision.get()
+
+    fun beginTurn(turnId: Uuid) {
+        activeTurnId.set(turnId)
+    }
+
+    fun currentTurnId(): Uuid? = activeTurnId.get()
+
+    fun requestCancel(turnId: Uuid, reason: String) {
+        cancelReasons[turnId] = reason
+    }
+
+    fun consumeCancelReason(turnId: Uuid): String? = cancelReasons.remove(turnId)
+
+    fun peekCancelReason(turnId: Uuid): String? = cancelReasons[turnId]
+
+    /**
+     * 登记已提交终态的 turn。一个 turn 只允许提交一次终态：
+     * SUCCESS 提交后 job 可能仍在收尾（例如 generationDoneFlow 的 emit
+     * 等待慢订阅者），此时被取消会再次进入 finalizer，已提交的终态不允许被覆盖。
+     */
+    fun markTurnFinalized(turnId: Uuid) {
+        finalizedTurns.add(turnId)
+    }
+
+    fun isTurnFinalized(turnId: Uuid): Boolean = finalizedTurns.contains(turnId)
+
+    suspend fun <T> withPersistLock(block: suspend () -> T): T = persistMutex.withLock { block() }
 
     // 空闲检查任务
     private var idleCheckJob: Job? = null
@@ -73,14 +124,21 @@ class ConversationSession(
         }
     }
 
-    fun setJob(job: Job?) {
+    fun setJob(job: Job?, turnId: Uuid? = null) {
         _generationJob.value?.cancel()
         _generationJob.value = job
+        if (job != null && turnId != null) {
+            activeTurnId.set(turnId)
+        }
         job?.invokeOnCompletion {
             // A cancelled previous job may finish after its replacement was installed.
             // Only the job that is still current may clear the slot or schedule eviction.
-            if (_generationJob.compareAndSet(job, null) && refCount.get() <= 0) {
-                scheduleIdleCheck()
+            if (_generationJob.compareAndSet(job, null)) {
+                if (turnId != null) {
+                    activeTurnId.compareAndSet(turnId, null)
+                    cancelReasons.remove(turnId)
+                }
+                if (refCount.get() <= 0) scheduleIdleCheck()
             }
         }
     }
@@ -109,7 +167,7 @@ class ConversationSession(
         idleCheckJob?.cancel()
         idleCheckJob = scope.launch {
             delay(IDLE_TIMEOUT_MS)
-            if (refCount.get() <= 0 && !isGenerating) {
+            if (refCount.get() <= 0 && !isGenerating && !isDirty()) {
                 onIdle(id)
             }
         }
@@ -123,6 +181,9 @@ class ConversationSession(
     fun cleanup() {
         _generationJob.value?.cancel()
         _generationJob.value = null
+        activeTurnId.set(null)
+        cancelReasons.clear()
+        finalizedTurns.clear()
         ttsQueueSessionId = null
         idleCheckJob?.cancel()
         idleCheckJob = null

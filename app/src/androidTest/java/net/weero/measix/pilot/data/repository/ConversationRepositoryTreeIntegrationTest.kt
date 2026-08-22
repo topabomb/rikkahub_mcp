@@ -16,10 +16,15 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.fts.MessageFtsManager
+import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
+import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
+import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
+import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -68,6 +73,8 @@ class ConversationRepositoryTreeIntegrationTest {
             database = database,
             filesManager = filesManager,
             messageFtsManager = MessageFtsManager(database),
+            turnExecutionDAO = database.turnExecutionDao(),
+            toolExecutionDAO = database.toolExecutionDao(),
         )
     }
 
@@ -261,6 +268,116 @@ class ConversationRepositoryTreeIntegrationTest {
         )
 
         assertTrue(artifact.exists())
+    }
+
+    @Test
+    fun checkpointPreservesNarrowColumnWritesMadeAfterSnapshot() = runBlocking {
+        val conversation = conversation(
+            id = Uuid.random(),
+            assistantId = Uuid.random(),
+            parentId = null,
+        ).copy(
+            title = "stale-title",
+            chatSuggestions = listOf("stale-suggestion"),
+            folderId = null,
+            isPinned = false,
+        )
+        repository.insertConversation(conversation)
+
+        val staleCheckpoint = conversation.copy(
+            messageNodes = listOf(UIMessage.user("checkpoint-message").toMessageNode()),
+            updateAt = java.time.Instant.ofEpochMilli(9_999L),
+        )
+        database.conversationDao().updateTitle(conversation.id.toString(), "new-title")
+        database.conversationDao().updatePinStatus(conversation.id.toString(), true)
+        database.conversationDao().updateFolderId(conversation.id.toString(), "new-folder")
+        database.conversationDao().updateChatSuggestions(conversation.id.toString(), "[\"new-suggestion\"]")
+
+        repository.checkpointConversation(staleCheckpoint)
+
+        val entity = requireNotNull(database.conversationDao().getConversationById(conversation.id.toString()))
+        assertEquals("new-title", entity.title)
+        assertTrue(entity.isPinned)
+        assertEquals("new-folder", entity.folderId)
+        assertEquals("[\"new-suggestion\"]", entity.chatSuggestions)
+        assertEquals(9_999L, entity.updateAt)
+        val restored = requireNotNull(repository.getConversationById(conversation.id))
+        assertEquals("checkpoint-message", restored.currentMessages.single().toText())
+    }
+
+    @Test
+    fun recoveryAtomicallyMarksRunningTurnsAndStartedToolsUnknown() = runBlocking {
+        val conversation = conversation(Uuid.random(), Uuid.random(), null)
+        repository.insertConversation(conversation)
+        val turnId = Uuid.random().toString()
+        val executionId = "$turnId:0"
+        val runningTurn = TurnExecutionEntity(
+            turnId = turnId,
+            conversationId = conversation.id.toString(),
+            assistantMessageId = Uuid.random().toString(),
+            status = TurnExecutionStatus.RUNNING,
+            reason = null,
+            createdAt = 10L,
+            updatedAt = 10L,
+        )
+        val startedTool = ToolExecutionEntity(
+            executionId = executionId,
+            turnId = turnId,
+            toolOrdinal = 0,
+            status = ToolExecutionStatus.STARTED,
+            reason = null,
+            createdAt = 11L,
+            updatedAt = 11L,
+        )
+        repository.checkpointTurn(
+            conversation = conversation.copy(updateAt = java.time.Instant.ofEpochMilli(11L)),
+            turnExecution = runningTurn,
+            toolExecution = startedTool,
+        )
+        val recoverable = repository.getRecoverableTurnExecutionsByConversation()
+        assertEquals(listOf(turnId), recoverable[conversation.id]?.map { it.turnId })
+
+        // Updating the parent through Room @Upsert must not REPLACE it and cascade-delete its tools.
+        repository.upsertTurnExecution(
+            requireNotNull(repository.getTurnExecution(turnId)).copy(updatedAt = 12L)
+        )
+        assertNotNull(repository.getToolExecution(executionId))
+
+        val awaitingTurnId = Uuid.random().toString()
+        val awaitingExecutionId = "$awaitingTurnId:0"
+        repository.upsertTurnExecution(
+            runningTurn.copy(
+                turnId = awaitingTurnId,
+                status = TurnExecutionStatus.AWAITING_APPROVAL,
+            )
+        )
+        repository.upsertToolExecution(
+            startedTool.copy(
+                executionId = awaitingExecutionId,
+                turnId = awaitingTurnId,
+            )
+        )
+
+        val recovered = repository.recoverInterruptedExecutions(updatedAt = 20L)
+
+        assertEquals(1, recovered.turns)
+        assertEquals(1, recovered.tools)
+        val turn = requireNotNull(repository.getTurnExecution(turnId))
+        assertEquals(TurnExecutionStatus.INTERRUPTED, turn.status)
+        assertEquals("process_restarted", turn.reason)
+        assertEquals(20L, turn.updatedAt)
+        val tool = requireNotNull(repository.getToolExecution(executionId))
+        assertEquals(ToolExecutionStatus.UNKNOWN, tool.status)
+        assertEquals("process_restarted", tool.reason)
+        assertEquals(20L, tool.updatedAt)
+        assertEquals(
+            TurnExecutionStatus.AWAITING_APPROVAL,
+            repository.getTurnExecution(awaitingTurnId)?.status,
+        )
+        assertEquals(
+            ToolExecutionStatus.STARTED,
+            repository.getToolExecution(awaitingExecutionId)?.status,
+        )
     }
 
     private fun conversation(

@@ -44,6 +44,7 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.util.HttpException
+import me.rerere.ai.util.ProviderTerminalStatus
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeBase64
@@ -91,7 +92,10 @@ internal class ResponseStreamState {
     fun prematureCloseError(): HttpException? = if (terminalSeen.get()) {
         null
     } else {
-        HttpException("Response stream closed before a terminal event")
+        HttpException(
+            message = "Response stream closed before a terminal event",
+            terminalStatus = ProviderTerminalStatus.INCOMPLETE,
+        )
     }
 }
 
@@ -1120,7 +1124,10 @@ class ResponseAPI(
                     ?.jsonPrimitiveOrNull
                     ?.contentOrNull
                     ?: "unknown reason"
-                HttpException("Response incomplete: $reason")
+                HttpException(
+                    message = "Response incomplete: $reason",
+                    terminalStatus = ProviderTerminalStatus.INCOMPLETE,
+                )
             }
 
             else -> null

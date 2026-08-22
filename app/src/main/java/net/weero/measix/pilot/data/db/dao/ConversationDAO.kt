@@ -62,6 +62,9 @@ interface ConversationDAO {
     @Update
     suspend fun update(conversation: ConversationEntity)
 
+    @Query("UPDATE conversationentity SET update_at = :updateAt WHERE id = :id")
+    suspend fun updateGenerationCheckpoint(id: String, updateAt: Long): Int
+
     @Delete
     suspend fun delete(conversation: ConversationEntity)
 
