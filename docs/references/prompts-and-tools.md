@@ -295,6 +295,12 @@ Provider 可用、自身声明 IMAGE 输入的附件识别模型（`attachmentIn
   transcribe, details to compare across images, or facts to verify. Prefer precise requests over vague
   descriptions. Keep it focused on the current task.`
 
+识别调用内部以 `reasoningLevel = AUTO`（Provider 使用模型默认推理档）发起，不表达「关闭
+推理」——`OFF` 在 Gemini 3 系列上会映射为 `thinkingLevel = "minimal"`，Gemini 3.7 Flash
+不支持该档位（显式设置返回 API 校验错误）。Provider 异常经统一分类器 `classifyProviderFailure`
+映射为细分 `reason` 并附 sanitized `detail` 诊断文本（与 `generate_image` / `assistant_call`
+的失败契约一致）；原始异常写入 logcat。
+
 成功结果为普通 Text part（识别模型输出），不携带附件数据。失败结果为带稳定 `reason` 的
 JSON：
 
@@ -304,7 +310,8 @@ JSON：
 | `attachment_not_found` / `unsupported_attachment_type` / `unsafe_attachment_url` / `attachment_fetch_failed` | 统一 Resolver 解析失败，reason 原样透传 |
 | `attachment_resolution_unavailable` | 执行环境未提供附件解析能力 |
 | `inspection_model_unavailable` | 识别模型未配置 / Provider 不可用 / 模型不接收 IMAGE |
-| `inspection_failed` | 识别调用失败或输出为空 |
+| `rate_limited` / `quota_exhausted` / `auth_failed` / `permission_denied` / `invalid_request` / `provider_unavailable` / `provider_error` / `content_blocked` / `runtime_error` | Provider 调用失败，`classifyProviderFailure` 细分（与 `ProviderFailureKind` 字面一致）；失败信封可携带 `detail`（sanitized 诊断文本） |
+| `inspection_failed` | 识别输出为空（兜底，无 `detail`） |
 
 媒体资源的两种身份（全工具链统一语义）：
 

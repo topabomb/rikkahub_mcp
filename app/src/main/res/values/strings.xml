@@ -270,6 +270,22 @@
   <string name="chat_message_tool_generate_image_background_copy_failed">Background not updated: copy failed</string>
   <string name="chat_message_tool_generate_image_background_settings_failed">Background not updated: settings write failed</string>
   <string name="chat_message_tool_generate_image_failed_assistant_missing">Assistant no longer exists</string>
+  <!-- inspect_attachments: 底层错误诊断文案，按 AGENTS.md 规则仅保留英文源语言 -->
+  <string name="chat_message_tool_inspection">Inspect attachments</string>
+  <string name="chat_message_tool_inspection_running">Inspecting attachments</string>
+  <string name="chat_message_tool_inspection_failed">Attachment inspection failed</string>
+  <string name="chat_message_tool_inspection_failed_invalid_arguments">Invalid inspect_attachments arguments</string>
+  <string name="chat_message_tool_inspection_failed_attachment">Attachment could not be resolved</string>
+  <string name="chat_message_tool_inspection_failed_model_unavailable">Inspection model unavailable</string>
+  <string name="chat_message_tool_inspection_failed_rate_limited">Attachment inspection rate limit reached</string>
+  <string name="chat_message_tool_inspection_failed_quota_exhausted">Attachment inspection quota or credits exhausted</string>
+  <string name="chat_message_tool_inspection_failed_auth">Attachment inspection rejected the API key</string>
+  <string name="chat_message_tool_inspection_failed_permission">Attachment inspection access denied</string>
+  <string name="chat_message_tool_inspection_failed_invalid_request">Attachment inspection request rejected</string>
+  <string name="chat_message_tool_inspection_failed_unavailable">Attachment inspection service unavailable</string>
+  <string name="chat_message_tool_inspection_failed_provider">Attachment inspection provider error</string>
+  <string name="chat_message_tool_inspection_failed_content_blocked">Attachment blocked by the usage policy</string>
+  <string name="chat_message_tool_inspection_failed_runtime">Attachment inspection failed unexpectedly</string>
   <string name="chat_message_tool_generate_image_model">Model: %1$s</string>
   <string name="chat_message_tool_generate_image_provider">Provider: %1$s</string>
   <string name="chat_message_tool_generate_image_file_path">File</string>

@@ -140,7 +140,7 @@ class ProviderFailureTest {
         val error = formatProviderHttpError(502, "<html><body>Bad Gateway</body></html>")
         val classified = classifyProviderFailure(error)
         assertEquals(ProviderFailureKind.PROVIDER_UNAVAILABLE, classified.kind)
-        assertEquals("The image service is temporarily unavailable. Retry later.", classified.detail)
+        assertEquals("The provider is temporarily unavailable. Retry later.", classified.detail)
         assertFalse(classified.detail.contains("<html>"))
         assertFalse(classified.detail.contains("HttpException"))
     }
@@ -150,7 +150,7 @@ class ProviderFailureTest {
         val error = formatProviderHttpError(400, "")
         val classified = classifyProviderFailure(error)
         assertEquals(ProviderFailureKind.INVALID_REQUEST, classified.kind)
-        assertEquals("The image service rejected the request parameters.", classified.detail)
+        assertEquals("The provider rejected the request parameters.", classified.detail)
         assertFalse(classified.detail.contains("HttpException"))
     }
 

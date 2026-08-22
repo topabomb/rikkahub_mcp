@@ -15,6 +15,22 @@ object AttachmentFailureReasons {
     const val ATTACHMENT_RESOLUTION_UNAVAILABLE = "attachment_resolution_unavailable"
     const val INSPECTION_MODEL_UNAVAILABLE = "inspection_model_unavailable"
     const val INSPECTION_FAILED = "inspection_failed"
+
+    /**
+     * `inspect_attachments` Provider 调用失败的细分 reason，由统一分类器
+     * [me.rerere.ai.util.classifyProviderFailure] 产出，与
+     * [me.rerere.ai.util.ProviderFailureKind] 的 reason 字面一致（reason 表可全局搜索）。
+     * `inspection_failed` 仅保留给「识别输出为空」兜底。
+     */
+    const val CONTENT_BLOCKED = "content_blocked"
+    const val RATE_LIMITED = "rate_limited"
+    const val QUOTA_EXHAUSTED = "quota_exhausted"
+    const val AUTH_FAILED = "auth_failed"
+    const val PERMISSION_DENIED = "permission_denied"
+    const val INVALID_REQUEST = "invalid_request"
+    const val PROVIDER_UNAVAILABLE = "provider_unavailable"
+    const val PROVIDER_ERROR = "provider_error"
+    const val RUNTIME_ERROR = "runtime_error"
 }
 
 const val MAX_ASSISTANT_CALL_ATTACHMENTS = 4

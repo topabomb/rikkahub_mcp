@@ -368,21 +368,21 @@ private fun buildModelVisibleDetail(
 private fun cannedDetail(kind: ProviderFailureKind): String = when (kind) {
     ProviderFailureKind.CONTENT_BLOCKED -> CONTENT_BLOCKED_MODEL_DETAIL
     ProviderFailureKind.RATE_LIMITED ->
-        "The image service rate-limited the request. Wait briefly and retry."
+        "The provider rate-limited the request. Wait briefly and retry."
     ProviderFailureKind.QUOTA_EXHAUSTED ->
-        "The image service has no remaining quota or credits. Ask the user to check billing."
+        "The provider has no remaining quota or credits. Ask the user to check billing."
     ProviderFailureKind.AUTH_FAILED ->
-        "The image service rejected the API key. Ask the user to check provider settings."
+        "The provider rejected the API key. Ask the user to check provider settings."
     ProviderFailureKind.PERMISSION_DENIED ->
-        "The image service denied access to this model or account."
+        "The provider denied access to this model or account."
     ProviderFailureKind.INVALID_REQUEST ->
-        "The image service rejected the request parameters."
+        "The provider rejected the request parameters."
     ProviderFailureKind.PROVIDER_UNAVAILABLE ->
-        "The image service is temporarily unavailable. Retry later."
+        "The provider is temporarily unavailable. Retry later."
     ProviderFailureKind.PROVIDER_ERROR ->
-        "The image service returned an error."
+        "The provider returned an error."
     ProviderFailureKind.RUNTIME_ERROR ->
-        "Image generation failed unexpectedly."
+        "The request failed unexpectedly."
 }
 
 internal fun sanitizeProviderDetail(text: String): String {

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.tools
 
+import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -10,6 +11,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolExecutionContext
@@ -18,6 +20,7 @@ import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.util.classifyProviderFailure
 import net.weero.measix.pilot.data.ai.attachments.AttachmentFailureReasons
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.ai.attachments.MAX_INSPECTION_ATTACHMENTS
@@ -26,6 +29,8 @@ import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
 
 const val ATTACHMENT_INSPECTION_TOOL_NAME = "inspect_attachments"
+
+private const val TAG = "AttachmentInspectionTool"
 
 /**
  * 工具实现契约内的固定系统指令（设计文档 §8.5）：只约束证据边界、安全边界和不确定性，
@@ -165,6 +170,9 @@ internal suspend fun executeInspection(
             ),
             params = TextGenerationParams(
                 model = inspectionModel,
+                // 内部识别调用不表达「关闭推理」：AUTO 让 Provider 使用模型默认推理档，
+                // 避免 OFF 在 Gemini 3 系列上映射为 minimal（3.1 Pro / 3.7 Flash 不支持，直接 400）。
+                reasoningLevel = ReasoningLevel.AUTO,
                 customHeaders = inspectionModel.customHeaders,
                 customBody = inspectionModel.customBodies,
             ),
@@ -178,7 +186,19 @@ internal suspend fun executeInspection(
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
-        inspectionFailure(AttachmentFailureReasons.INSPECTION_FAILED)
+        // Provider 异常经统一分类器映射为细分 reason（429 → rate_limited 等）并附 sanitized detail，
+        // 与 generate_image / assistant_call 的失败契约一致；原始异常仍写 logcat。
+        val classified = classifyProviderFailure(e)
+        Log.w(
+            TAG,
+            "Attachment inspection failed: provider=${providerSetting::class.simpleName}, " +
+                "model=${inspectionModel.modelId}, reason=${classified.kind.reason}",
+            e,
+        )
+        inspectionFailure(
+            reason = classified.kind.reason,
+            detail = classified.detail.takeIf { it.isNotBlank() },
+        )
     }
 }
 
@@ -190,11 +210,12 @@ internal fun imageLabel(index: Int, image: UIMessagePart.Image): String {
     return "[Image ${index + 1}$refAttr name=\"$name\"]"
 }
 
-internal fun inspectionFailure(reason: String): List<UIMessagePart> = listOf(
+internal fun inspectionFailure(reason: String, detail: String? = null): List<UIMessagePart> = listOf(
     UIMessagePart.Text(
         buildJsonObject {
             put("status", "failed")
             put("reason", reason)
+            if (!detail.isNullOrBlank()) put("detail", detail)
         }.toString(),
     ),
 )

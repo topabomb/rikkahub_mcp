@@ -61,6 +61,7 @@ Fork 前架构见 [`docs/dev/original-architecture.md`](docs/dev/original-archit
 
 - 字符串资源在 `app/src/main/res/values*/strings.xml`（`search` 等模块可能另有自己的）。
 - **所有用户可见字符串必须本地化**：禁止在 Kotlin 硬编码。先在 `values/strings.xml`（英文源语言）定义，再同步其他语言；翻译暂缺时复制英文占位。
+- **例外——底层错误诊断文案只需英文**：工具失败 reason、provider 错误 detail 等技术诊断类字符串只在 `values/strings.xml` 定义即可，不必同步其他 locale；面向正常交互的 UI 文案（标题、按钮、设置项等）仍需全量本地化。
 - 支持 locale：en(`values`)、zh(`values-zh`)、ja(`values-ja`)、ko(`values-ko-rKR`)、ru(`values-ru`)。
 - Compose 用 `stringResource(R.string.key)`；非 Composable 用 `context.getString(R.string.key, args...)`。页面级字符串用页面前缀（如 `setting_page_`）。
 

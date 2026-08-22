@@ -207,6 +207,9 @@ TOOL 能力，不发送 thinking。
 
 - Gemini 2.5 使用 `thinkingBudget`；Pro 型号不能保证完全关闭时不会强行发送 `0`。MAX 的 32000 预算在 Flash/Flash-Lite 上钳到 24576，Pro 钳到 32768。
 - `ModelRegistry.GEMINI_3_SERIES` 使用 `thinkingLevel`，项目 XHIGH / MAX 收敛为 HIGH。
+- `GEMINI_3_NO_MINIMAL_THINKING`（3.1 Pro 全形态 + 3.7 Flash）不支持 `minimal`（官方 API 校验错误，
+  无法停用思考），`ReasoningLevel.OFF` 降级为 `low`。`GEMINI_3_PRO` 通过 `notTokens("1")` 排除
+  3.1 Pro 的 subsequence 宽匹配，版本号优先由 `GEMINI_3_1_PRO` 独立接管。
 - `GoogleThoughtMetadata` 在 Text、Reasoning、Image 和 FunctionCall 等 Part 上保留 `thoughtSignature`。
 - 带签名 Part 不能与相邻 Part 合并；空文本 Part 上的签名也必须保留。
 - function call 的 API ID 保存并回填到对应 `functionResponse.id`。

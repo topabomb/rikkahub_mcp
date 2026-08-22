@@ -41,6 +41,57 @@ class ModelRegistryTest {
     }
 
     @Test
+    fun testGemini37Flash() {
+        // 3.7 Flash 需要显式建模，不能再靠 GEMINI_3_FLASH 的 subsequence 宽匹配继承协议行为
+        assertTrue(ModelRegistry.GEMINI_3_7_FLASH.match("gemini-3.7-flash"))
+        assertTrue(ModelRegistry.GEMINI_3_7_FLASH.match("gemini-3.7-flash-preview"))
+        assertFalse(ModelRegistry.GEMINI_3_7_FLASH.match("gemini-3-flash"))
+        assertFalse(ModelRegistry.GEMINI_3_7_FLASH.match("gemini-3.5-flash"))
+        assertFalse(ModelRegistry.GEMINI_3_7_FLASH.match("gemini-3.6-flash"))
+        assertFalse(ModelRegistry.GEMINI_3_7_FLASH.match("gemini-3.7-pro"))
+        assertTrue(ModelRegistry.GEMINI_3_SERIES.match("gemini-3.7-flash"))
+        // minimal 不支持集合：只覆盖 3.7 Flash，不吞掉支持 minimal 的旧 3 系列
+        assertTrue(ModelRegistry.GEMINI_3_NO_MINIMAL_THINKING.match("gemini-3.7-flash"))
+        assertFalse(ModelRegistry.GEMINI_3_NO_MINIMAL_THINKING.match("gemini-3-flash"))
+        assertFalse(ModelRegistry.GEMINI_3_NO_MINIMAL_THINKING.match("gemini-3.6-flash"))
+        assertFalse(ModelRegistry.GEMINI_3_NO_MINIMAL_THINKING.match("gemini-2.5-flash"))
+        assertEquals(
+            listOf(Modality.TEXT, Modality.IMAGE),
+            ModelRegistry.MODEL_INPUT_MODALITIES.getData("gemini-3.7-flash")
+        )
+        assertEquals(
+            listOf(ModelAbility.TOOL, ModelAbility.REASONING),
+            ModelRegistry.MODEL_ABILITIES.getData("gemini-3.7-flash")
+        )
+    }
+
+    @Test
+    fun testGemini31Pro() {
+        // 3.1 Pro 全形态（含 preview / customtools）都命中 3.1 定义，不再被 GEMINI_3_PRO 宽匹配吞掉
+        assertTrue(ModelRegistry.GEMINI_3_1_PRO.match("gemini-3.1-pro"))
+        assertTrue(ModelRegistry.GEMINI_3_1_PRO.match("gemini-3.1-pro-preview"))
+        assertTrue(ModelRegistry.GEMINI_3_1_PRO.match("gemini-3.1-pro-preview-customtools"))
+        // 版本号优先：3.1 不应落回 3 Pro（GEMINI_3_PRO 已排除含 "1" 的 id）
+        assertFalse(ModelRegistry.GEMINI_3_PRO.match("gemini-3.1-pro"))
+        assertTrue(ModelRegistry.GEMINI_3_PRO.match("gemini-3-pro"))
+        assertTrue(ModelRegistry.GEMINI_3_PRO.match("gemini-3-pro-preview"))
+        assertFalse(ModelRegistry.GEMINI_3_PRO.match("gemini-3.5-flash"))
+        // 3.1 Pro 不支持 minimal → OFF 降级 low；仍在 3 系列
+        assertTrue(ModelRegistry.GEMINI_3_NO_MINIMAL_THINKING.match("gemini-3.1-pro"))
+        assertTrue(ModelRegistry.GEMINI_3_NO_MINIMAL_THINKING.match("gemini-3.1-pro-preview"))
+        assertTrue(ModelRegistry.GEMINI_3_NO_MINIMAL_THINKING.match("gemini-3.1-pro-preview-customtools"))
+        assertTrue(ModelRegistry.GEMINI_3_SERIES.match("gemini-3.1-pro"))
+        assertEquals(
+            listOf(Modality.TEXT, Modality.IMAGE),
+            ModelRegistry.MODEL_INPUT_MODALITIES.getData("gemini-3.1-pro")
+        )
+        assertEquals(
+            listOf(ModelAbility.TOOL, ModelAbility.REASONING),
+            ModelRegistry.MODEL_ABILITIES.getData("gemini-3.1-pro")
+        )
+    }
+
+    @Test
     fun testClaudeSeries() {
         assertTrue(ModelRegistry.CLAUDE_SERIES.match("claude-sonnet-4.5-20250929"))
         assertTrue(ModelRegistry.CLAUDE_SERIES.match("claude-4.5-sonnet"))

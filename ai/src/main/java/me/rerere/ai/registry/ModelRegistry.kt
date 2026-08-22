@@ -141,6 +141,15 @@ object ModelRegistry {
 
     val GEMINI_3_PRO = defineModel {
         tokens("gemini", "3", "pro")
+        // 防止 gemini-3.1-pro 因缺 preview token 落回 3 Pro（subsequence 匹配）；
+        // 3.1 Pro 已单独建模，能力/thinking 档位不同。
+        notTokens("1")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    val GEMINI_3_1_PRO = defineModel {
+        tokens("gemini", "3", "1", "pro")
         visionInput()
         toolReasoningAbility()
     }
@@ -176,6 +185,12 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
+    val GEMINI_3_7_FLASH = defineModel {
+        tokens("gemini", "3", "7", "flash")
+        visionInput()
+        toolReasoningAbility()
+    }
+
     val GEMINI_FLASH_LATEST = defineModel {
         exact("gemini-flash-latest")
         visionInput()
@@ -193,7 +208,17 @@ object ModelRegistry {
     }
 
     val GEMINI_3_SERIES = defineGroup {
-        add(GEMINI_3_PRO, GEMINI_3_FLASH, GEMINI_3_1_PRO_PREVIEW, GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS, GEMINI_3_5)
+        add(GEMINI_3_PRO, GEMINI_3_FLASH, GEMINI_3_1_PRO_PREVIEW, GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS, GEMINI_3_1_PRO, GEMINI_3_5, GEMINI_3_7_FLASH)
+    }
+
+    /**
+     * Gemini 3 系列中不支持 `thinkingLevel = "minimal"` 的模型（显式设置会返回 API 校验错误，
+     * 无法停用思考）：3.1 Pro（low/medium/high，无 minimal）与 3.7 Flash（low/medium/high，默认
+     * medium）。ReasoningLevel.OFF 对这些模型降级为最低支持档 low，
+     * 避免依赖宽匹配继承旧 3 Flash / 3 Pro 的协议行为。
+     */
+    val GEMINI_3_NO_MINIMAL_THINKING = defineGroup {
+        add(GEMINI_3_1_PRO, GEMINI_3_1_PRO_PREVIEW, GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS, GEMINI_3_7_FLASH)
     }
 
     val GEMINI_SERIES = defineGroup {
@@ -604,10 +629,12 @@ object ModelRegistry {
         GEMINI_NANO_BANANA,
         GEMINI_3_PRO,
         GEMINI_3_FLASH,
+        GEMINI_3_1_PRO,
         GEMINI_3_1_PRO_PREVIEW,
         GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS,
         GEMINI_3_1_FLASH_IMAGE,
         GEMINI_3_5,
+        GEMINI_3_7_FLASH,
         GEMINI_FLASH_LATEST,
         GEMINI_PRO_LATEST,
         CLAUDE_SONNET_3_5,

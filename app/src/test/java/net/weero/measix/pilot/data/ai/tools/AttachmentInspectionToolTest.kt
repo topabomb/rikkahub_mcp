@@ -8,8 +8,10 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
@@ -18,6 +20,7 @@ import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.util.HttpException
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
@@ -26,6 +29,7 @@ import net.weero.measix.pilot.data.ai.attachments.AttachmentFailureReasons
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
@@ -81,6 +85,12 @@ class AttachmentInspectionToolTest {
         val text = (parts.single() as UIMessagePart.Text).text
         val payload = JsonInstant.parseToJsonElement(text) as JsonObject
         return (payload["reason"] as JsonPrimitive).content
+    }
+
+    private fun resultDetail(parts: List<UIMessagePart>): String? {
+        val text = (parts.single() as UIMessagePart.Text).text
+        val payload = JsonInstant.parseToJsonElement(text) as JsonObject
+        return (payload["detail"] as? JsonPrimitive)?.contentOrNull
     }
 
     @Test
@@ -252,7 +262,33 @@ class AttachmentInspectionToolTest {
     }
 
     @Test
-    fun `model call failure returns inspection_failed`() = runTest {
+    fun `inspection call requests reasoningLevel auto`() = runTest {
+        every { providerManager.getProviderByType(any()) } returns provider
+        var sentParams: TextGenerationParams? = null
+        coEvery {
+            provider.generateText(any(), any(), any<TextGenerationParams>())
+        } answers {
+            sentParams = thirdArg()
+            successChunk("ok")
+        }
+
+        val result = executeInspection(
+            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+            settings = settingsFor(visionModel),
+            providerManager = providerManager,
+            resolveAttachments = {
+                ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
+            },
+        )
+
+        assertEquals("ok", (result.single() as UIMessagePart.Text).text)
+        // 内部识别调用必须用 AUTO（模型默认推理档）：
+        // OFF 在 Gemini 3 系列上映射 minimal，Gemini 3.7 Flash 不支持会直接 400。
+        assertEquals(ReasoningLevel.AUTO, sentParams?.reasoningLevel)
+    }
+
+    @Test
+    fun `model call failure is classified as runtime_error with detail`() = runTest {
         every { providerManager.getProviderByType(any()) } returns provider
         coEvery {
             provider.generateText(any(), any(), any<TextGenerationParams>())
@@ -266,7 +302,31 @@ class AttachmentInspectionToolTest {
                 ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
             },
         )
-        assertEquals(AttachmentFailureReasons.INSPECTION_FAILED, resultReason(result))
+        assertEquals(AttachmentFailureReasons.RUNTIME_ERROR, resultReason(result))
+        assertFalse(resultDetail(result).isNullOrEmpty())
+    }
+
+    @Test
+    fun `rate limited provider failure maps to rate_limited with sanitized detail`() = runTest {
+        every { providerManager.getProviderByType(any()) } returns provider
+        coEvery {
+            provider.generateText(any(), any(), any<TextGenerationParams>())
+        } throws HttpException(
+            message = "Failed to get response: 429 rate_limit_exceeded Please retry after 1 second.",
+            statusCode = 429,
+            errorCode = "rate_limit_exceeded",
+        )
+
+        val result = executeInspection(
+            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+            settings = settingsFor(visionModel),
+            providerManager = providerManager,
+            resolveAttachments = {
+                ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
+            },
+        )
+        assertEquals(AttachmentFailureReasons.RATE_LIMITED, resultReason(result))
+        assertTrue(resultDetail(result).orEmpty().contains("retry after 1 second"))
     }
 
     @Test

@@ -395,7 +395,13 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
                         ReasoningLevel.OFF -> {
                             if (ModelRegistry.GEMINI_3_SERIES.match(modelId = params.model.modelId)) {
-                                put("thinkingLevel", "minimal")
+                                if (ModelRegistry.GEMINI_3_NO_MINIMAL_THINKING.match(modelId = params.model.modelId)) {
+                                    // 3.1 Pro / 3.7 Flash 不支持 minimal（low / medium / high），显式设置会返回 API 校验错误；
+                                    // OFF 降级到最低支持档，与 OpenAI-compatible 未知网关的 OFF → low 回退一致。
+                                    put("thinkingLevel", "low")
+                                } else {
+                                    put("thinkingLevel", "minimal")
+                                }
                             } else if (!isGeminiPro) {
                                 put("thinkingBudget", 0)
                                 put("includeThoughts", false)

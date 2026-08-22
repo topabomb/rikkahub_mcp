@@ -518,6 +518,94 @@ class GoogleProviderMessageTest {
     }
 
     @Test
+    fun `gemini 3_7 flash off reasoning falls back to low instead of unsupported minimal`() {
+        // Gemini 3.7 Flash 只支持 low/medium/high，显式 minimal 会返回 API 校验错误
+        val body = invokeBuildRequest(
+            messages = listOf(UIMessage.user("hello")),
+            params = TextGenerationParams(
+                model = Model(
+                    modelId = "gemini-3.7-flash",
+                    displayName = "gemini-3.7-flash",
+                    abilities = listOf(ModelAbility.REASONING),
+                ),
+                reasoningLevel = ReasoningLevel.OFF,
+            ),
+        )
+        val config = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
+        assertEquals("low", config["thinkingLevel"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `gemini 3 series off reasoning keeps minimal where supported`() {
+        listOf("gemini-3-flash", "gemini-3.6-flash", "gemini-3-pro").forEach { modelId ->
+            val body = invokeBuildRequest(
+                messages = listOf(UIMessage.user("hello")),
+                params = TextGenerationParams(
+                    model = Model(
+                        modelId = modelId,
+                        displayName = modelId,
+                        abilities = listOf(ModelAbility.REASONING),
+                    ),
+                    reasoningLevel = ReasoningLevel.OFF,
+                ),
+            )
+            val config = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
+            assertEquals("minimal", config["thinkingLevel"]!!.jsonPrimitive.content)
+        }
+    }
+
+    @Test
+    fun `gemini 3_1 pro off reasoning falls back to low instead of unsupported minimal`() {
+        // 3.1 Pro 只支持 low / medium / high，无法停用思考；显式 minimal 会返回 API 校验错误
+        listOf("gemini-3.1-pro", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools").forEach { modelId ->
+            val body = invokeBuildRequest(
+                messages = listOf(UIMessage.user("hello")),
+                params = TextGenerationParams(
+                    model = Model(
+                        modelId = modelId,
+                        displayName = modelId,
+                        abilities = listOf(ModelAbility.REASONING),
+                    ),
+                    reasoningLevel = ReasoningLevel.OFF,
+                ),
+            )
+            val config = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
+            assertEquals("low", config["thinkingLevel"]!!.jsonPrimitive.content)
+        }
+    }
+
+    @Test
+    fun `gemini 3_7 flash auto reasoning omits thinkingLevel and explicit levels map directly`() {
+        val autoBody = invokeBuildRequest(
+            messages = listOf(UIMessage.user("hello")),
+            params = TextGenerationParams(
+                model = Model(
+                    modelId = "gemini-3.7-flash",
+                    displayName = "gemini-3.7-flash",
+                    abilities = listOf(ModelAbility.REASONING),
+                ),
+                reasoningLevel = ReasoningLevel.AUTO,
+            ),
+        )
+        val autoConfig = autoBody["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
+        assertFalse(autoConfig.containsKey("thinkingLevel"))
+
+        val lowBody = invokeBuildRequest(
+            messages = listOf(UIMessage.user("hello")),
+            params = TextGenerationParams(
+                model = Model(
+                    modelId = "gemini-3.7-flash",
+                    displayName = "gemini-3.7-flash",
+                    abilities = listOf(ModelAbility.REASONING),
+                ),
+                reasoningLevel = ReasoningLevel.LOW,
+            ),
+        )
+        val lowConfig = lowBody["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
+        assertEquals("low", lowConfig["thinkingLevel"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun `gemini 25 pro max reasoning budget stays under pro limit`() {
         assertEquals(32_000, gemini25ThinkingBudget("gemini-2.5-pro", ReasoningLevel.MAX))
         assertEquals(16_000, gemini25ThinkingBudget("gemini-2.5-flash", ReasoningLevel.XHIGH))
