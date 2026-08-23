@@ -47,6 +47,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import androidx.core.net.toFile
 import androidx.core.net.toUri
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
@@ -115,6 +116,9 @@ fun UIAvatar(
     fun saveAvatarImage(uri: Uri) {
         scope.launch {
             val localUris = filesManager.createChatFilesByContents(listOf(uri))
+            // 剪裁输出文件所有权由 CropLauncher 移交至此（RESULT_OK 后不再代删），
+            // 复制消费完成后删除，规避"同步删除 vs 异步消费"竞态
+            runCatching { uri.toFile()?.delete() }
             localUris.firstOrNull()?.let { localUri ->
                 onUpdate?.invoke(Avatar.Image(localUri.toString()))
             }

@@ -15,6 +15,7 @@ import kotlinx.coroutines.test.runTest
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.data.datastore.DisplaySetting
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.dao.ArtifactDAO
@@ -76,6 +77,8 @@ class ArtifactStoreTest {
         folderDeleted: MutableList<String> = mutableListOf(),
         update: suspend (Settings) -> Settings = { it },
         backfilled: Boolean = true,
+        gcCandidates: List<ArtifactEntity> = emptyList(),
+        referencedArtifactIds: Set<Long> = emptySet(),
     ): ArtifactStore {
         val filesManager = mockk<FilesManager>()
         entities.forEach { e ->
@@ -98,9 +101,11 @@ class ArtifactStoreTest {
         coEvery { dao.compareAndSetState(any(), ArtifactState.ACTIVE.name, ArtifactState.DELETING.name, any()) } returns 1
         // 回滚方向 DELETING→ACTIVE（settings 失败时 ArtifactStore 主动回滚）
         coEvery { dao.compareAndSetState(any(), ArtifactState.DELETING.name, ArtifactState.ACTIVE.name, any()) } returns 1
+        // GC 候选集（窗口过滤在 DAO SQL 层，此处直接给定已过滤结果）
+        coEvery { dao.listByStateCreatedBefore(ArtifactState.ACTIVE.name, any()) } returns gcCandidates
 
         val refDAO = mockk<ArtifactReferenceDAO>()
-        coEvery { refDAO.existsByArtifactId(any()) } returns false
+        coEvery { refDAO.existsByArtifactId(any()) } answers { firstArg<Long>() in referencedArtifactIds }
 
         val metaDAO = mockk<SystemMetaDAO>()
         coEvery { metaDAO.get(ArtifactStore.BACKFILL_FLAG) } returns if (backfilled) "true" else null
@@ -753,6 +758,162 @@ class ArtifactStoreTest {
         val result = store.deletePermanently(target)
         assertTrue(result is ArtifactDeleteResult.Rejected)
         assertEquals(ArtifactDeleteResult.RejectionReason.IN_PROGRESS, (result as ArtifactDeleteResult.Rejected).reason)
+        filesDir.deleteRecursively()
+    }
+
+    // ---- GC（collectUnreferencedArtifacts）----
+    // 引用面双重豁免回归锁定：消息历史引用（artifact_reference）与
+    // Settings 域可变当前引用（助手头像/背景）任一命中即不可回收。
+
+    @Test
+    fun `gc keeps file referenced as assistant avatar`() = runTest {
+        val filesDir = tempDir("gc-avatar")
+        val avatarFile = entity(21, "upload/avatar_img.png")
+        val uri = fileUriOf(filesDir, avatarFile.relativePath)
+        val assistant = Assistant(id = Uuid.random(), avatar = Avatar.Image(uri))
+        val settings = MutableStateFlow(Settings(assistants = listOf(assistant)))
+        val deletedIds = mutableListOf<Long>()
+        val store = store(
+            filesDir, settings, listOf(avatarFile),
+            deletedIds = deletedIds,
+            gcCandidates = listOf(avatarFile),
+        )
+
+        val collected = store.collectUnreferencedArtifacts()
+
+        assertTrue(collected.isEmpty())
+        assertTrue(deletedIds.isEmpty())
+        assertEquals(uri, settings.value.assistants.single().avatar.let { (it as Avatar.Image).url })
+        filesDir.deleteRecursively()
+    }
+
+    @Test
+    fun `gc keeps file referenced as assistant background`() = runTest {
+        val filesDir = tempDir("gc-bg")
+        val bgFile = entity(22, "upload/bg_img.png")
+        val uri = fileUriOf(filesDir, bgFile.relativePath)
+        val assistant = Assistant(id = Uuid.random(), background = uri)
+        val settings = MutableStateFlow(Settings(assistants = listOf(assistant)))
+        val deletedIds = mutableListOf<Long>()
+        val store = store(
+            filesDir, settings, listOf(bgFile),
+            deletedIds = deletedIds,
+            gcCandidates = listOf(bgFile),
+        )
+
+        val collected = store.collectUnreferencedArtifacts()
+
+        assertTrue(collected.isEmpty())
+        assertTrue(deletedIds.isEmpty())
+        assertEquals(uri, settings.value.assistants.single().background)
+        filesDir.deleteRecursively()
+    }
+
+    @Test
+    fun `gc keeps file referenced by message history`() = runTest {
+        val filesDir = tempDir("gc-history")
+        val referenced = entity(23, "upload/attached.png")
+        val orphan = entity(24, "upload/orphan.png")
+        val settings = MutableStateFlow(Settings(assistants = emptyList()))
+        val deletedIds = mutableListOf<Long>()
+        val store = store(
+            filesDir, settings, listOf(referenced, orphan),
+            deletedIds = deletedIds,
+            gcCandidates = listOf(referenced, orphan),
+            referencedArtifactIds = setOf(referenced.id),
+        )
+
+        val collected = store.collectUnreferencedArtifacts()
+
+        assertEquals(listOf(orphan), collected)
+        assertEquals(listOf(orphan.id), deletedIds)
+        filesDir.deleteRecursively()
+    }
+
+    @Test
+    fun `gc collects unreferenced file beyond protection window`() = runTest {
+        val filesDir = tempDir("gc-orphan")
+        val orphan = entity(25, "upload/unreferenced.png")
+        val settings = MutableStateFlow(Settings(assistants = emptyList()))
+        val deletedIds = mutableListOf<Long>()
+        val store = store(
+            filesDir, settings, listOf(orphan),
+            deletedIds = deletedIds,
+            gcCandidates = listOf(orphan),
+        )
+
+        val collected = store.collectUnreferencedArtifacts()
+
+        assertEquals(listOf(orphan), collected)
+        assertEquals(listOf(orphan.id), deletedIds)
+        filesDir.deleteRecursively()
+    }
+
+    @Test
+    fun `gc keeps file referenced as user avatar`() = runTest {
+        val filesDir = tempDir("gc-user-avatar")
+        val avatarFile = entity(27, "upload/user_avatar.png")
+        val uri = fileUriOf(filesDir, avatarFile.relativePath)
+        val settings = MutableStateFlow(
+            Settings(
+                assistants = emptyList(),
+                displaySetting = DisplaySetting(userAvatar = Avatar.Image(uri)),
+            )
+        )
+        val deletedIds = mutableListOf<Long>()
+        val store = store(
+            filesDir, settings, listOf(avatarFile),
+            deletedIds = deletedIds,
+            gcCandidates = listOf(avatarFile),
+        )
+
+        val collected = store.collectUnreferencedArtifacts()
+
+        assertTrue(collected.isEmpty())
+        assertTrue(deletedIds.isEmpty())
+        assertEquals(uri, (settings.value.displaySetting.userAvatar as Avatar.Image).url)
+        filesDir.deleteRecursively()
+    }
+
+    @Test
+    fun `explicit delete resets user avatar to default`() = runTest {
+        val filesDir = tempDir("del-user-avatar")
+        val target = entity(28, "upload/user_img.png")
+        val uri = fileUriOf(filesDir, target.relativePath)
+        val settings = MutableStateFlow(
+            Settings(
+                assistants = emptyList(),
+                displaySetting = DisplaySetting(userAvatar = Avatar.Image(uri)),
+            )
+        )
+        val deletedIds = mutableListOf<Long>()
+        val store = store(filesDir, settings, listOf(target), deletedIds = deletedIds)
+
+        val result = store.deletePermanently(target)
+
+        assertTrue(result is ArtifactDeleteResult.Completed)
+        assertEquals(listOf(28L), deletedIds)
+        assertEquals(Avatar.Dummy, settings.value.displaySetting.userAvatar)
+        filesDir.deleteRecursively()
+    }
+
+    @Test
+    fun `gc skips entirely before reference backfill completes`() = runTest {
+        val filesDir = tempDir("gc-unbackfilled")
+        val orphan = entity(26, "upload/stale.png")
+        val settings = MutableStateFlow(Settings(assistants = emptyList()))
+        val deletedIds = mutableListOf<Long>()
+        val store = store(
+            filesDir, settings, listOf(orphan),
+            deletedIds = deletedIds,
+            gcCandidates = listOf(orphan),
+            backfilled = false,
+        )
+
+        val collected = store.collectUnreferencedArtifacts()
+
+        assertTrue(collected.isEmpty())
+        assertTrue(deletedIds.isEmpty())
         filesDir.deleteRecursively()
     }
 }

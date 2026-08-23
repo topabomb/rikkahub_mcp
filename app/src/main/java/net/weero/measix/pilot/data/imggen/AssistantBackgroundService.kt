@@ -172,6 +172,11 @@ class AssistantBackgroundService(
         ) {
             return true
         }
+        // 用户头像与助手背景/头像是同一引用面（ArtifactStore.collectMutableReferenceUris 同清单）
+        val userAvatar = settings.displaySetting.userAvatar
+        if (userAvatar is Avatar.Image && userAvatar.url == fileUri) {
+            return true
+        }
         val media = genMediaRepository.getAllMediaList()
         if (media.any { entity ->
                 entity.path == relativePath ||

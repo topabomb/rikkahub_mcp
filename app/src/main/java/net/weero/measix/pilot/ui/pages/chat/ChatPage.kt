@@ -59,6 +59,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.content.FileProvider
+import androidx.core.net.toFile
 import androidx.core.net.toUri
 import com.dokar.sonner.ToastType
 import dev.chrisbanes.haze.hazeSource
@@ -736,6 +737,8 @@ private fun ChatFilesPickerSheet(
         onCroppedImageReady = { croppedUri ->
             scope.launch {
                 inputState.addImages(filesManager.createChatFilesByContents(listOf(croppedUri)))
+                // 剪裁输出文件所有权由 CropLauncher 移交至此，消费完成后删除
+                runCatching { croppedUri.toFile()?.delete() }
                 dismissAll()
             }
         },
@@ -781,6 +784,8 @@ private fun ChatFilesPickerSheet(
         onCroppedImageReady = { croppedUri ->
             scope.launch {
                 inputState.addImages(filesManager.createChatFilesByContents(listOf(croppedUri)))
+                // 剪裁输出文件所有权由 CropLauncher 移交至此，消费完成后删除
+                runCatching { croppedUri.toFile()?.delete() }
                 dismissAll()
             }
         },

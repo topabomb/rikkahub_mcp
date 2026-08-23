@@ -5,6 +5,7 @@ import android.util.Log
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.first
 import me.rerere.ai.ui.UIMessage
+import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.dao.ArtifactDAO
 import net.weero.measix.pilot.data.db.dao.ArtifactReferenceDAO
@@ -120,9 +121,13 @@ class ArtifactStore(
         val fileUri = buildFileUri(artifact)
         val settings = settingsStore.settingsFlow.value
         val backgroundCount = settings.assistants.count { it.background == fileUri }
+        // 头像影响计数含助手头像与用户头像（displaySetting.userAvatar），二者删除时都会被重置
+        val userAvatarHit = settings.displaySetting.userAvatar.let {
+            it is Avatar.Image && it.url == fileUri
+        }
         val avatarCount = settings.assistants.count {
             it.avatar is Avatar.Image && it.avatar.url == fileUri
-        }
+        } + if (userAvatarHit) 1 else 0
         val referencedByHistory = if (isBackfilled()) {
             artifactReferenceDAO.existsByArtifactId(artifact.id)
         } else {
@@ -225,15 +230,22 @@ class ArtifactStore(
     // ---- GC ----
 
     /**
-     * GC：回收 state=ACTIVE 且 artifact_reference 无引用、created_at 超过保护窗口的 artifact。
-     * 回填未完成时保守跳过。
+     * GC：回收 state=ACTIVE 且无任何引用、created_at 超过保护窗口的 artifact。
+     * 引用面有两个，缺一不可：
+     *  - 消息历史引用（artifact_reference 投影）；
+     *  - Settings 域可变当前引用（助手头像/背景 + 用户头像，统一见
+     *    [collectMutableReferenceUris]）。此类文件虽不在消息历史中，但正被 UI
+     *    消费，回收即制造"Settings 指向已删除文件"的悬挂引用（头像回退纯色/背景消失）。
+     * 回填未完成时保守跳过（宁可保留文件）。
      */
     suspend fun collectUnreferencedArtifacts(protectionWindowMillis: Long = 24 * 3600 * 1000L): List<ArtifactEntity> {
         if (!isBackfilled()) return emptyList()
         val threshold = System.currentTimeMillis() - protectionWindowMillis
         val candidates = artifactDAO.listByStateCreatedBefore(ArtifactState.ACTIVE.name, threshold)
+        val mutableReferenceUris = collectMutableReferenceUris(settingsStore.settingsFlow.value)
         val toDelete = candidates.filter { entity ->
-            !artifactReferenceDAO.existsByArtifactId(entity.id)
+            !artifactReferenceDAO.existsByArtifactId(entity.id) &&
+                buildFileUri(entity) !in mutableReferenceUris
         }
         toDelete.forEach { entity ->
             filesManager.deleteManagedFilePermanently(entity.id, deleteFromDisk = true)
@@ -285,9 +297,7 @@ class ArtifactStore(
         if (fileUris.isEmpty()) return true
         val committed = try {
             settingsStore.updateAtomicAndGet { settings ->
-                settings.copy(
-                    assistants = settings.assistants.map { detachAssistantRefs(it, fileUris) },
-                )
+                detachSettingsReferences(settings, fileUris)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -295,11 +305,35 @@ class ArtifactStore(
             Log.e(TAG, "failed to detach assistant references", error)
             return false
         }
-        val stillReferenced = committed.assistants.any { assistant ->
-            assistant.background in fileUris ||
-                (assistant.avatar is Avatar.Image && assistant.avatar.url in fileUris)
-        }
+        val stillReferenced = collectMutableReferenceUris(committed).any { it in fileUris }
         return !stillReferenced
+    }
+
+    /**
+     * Settings 域可变当前引用的 file URI 全集：助手背景、助手头像、用户头像
+     * （displaySetting.userAvatar）。三者都可能指向受管 upload 文件，但不进
+     * artifact_reference 投影（可变当前引用，非历史事实）。GC 豁免、删除解除、
+     * 影响检查共用本引用面——新增 Settings 内本地文件引用字段时必须同步此处
+     * 与 [detachSettingsReferences]。
+     */
+    private fun collectMutableReferenceUris(settings: Settings): Set<String> = buildSet {
+        settings.assistants.forEach { assistant ->
+            assistant.background?.let(::add)
+            (assistant.avatar as? Avatar.Image)?.url?.let(::add)
+        }
+        (settings.displaySetting.userAvatar as? Avatar.Image)?.url?.let(::add)
+    }
+
+    /** 解除 Settings 域对给定 file URI 的全部可变引用（背景置空、头像重置）。 */
+    private fun detachSettingsReferences(settings: Settings, fileUris: Set<String>): Settings {
+        val assistants = settings.assistants.map { detachAssistantRefs(it, fileUris) }
+        val userAvatar = settings.displaySetting.userAvatar
+        val displaySetting = if (userAvatar is Avatar.Image && userAvatar.url in fileUris) {
+            settings.displaySetting.copy(userAvatar = Avatar.Dummy)
+        } else {
+            settings.displaySetting
+        }
+        return settings.copy(assistants = assistants, displaySetting = displaySetting)
     }
 
     private fun detachAssistantRefs(assistant: Assistant, fileUris: Set<String>): Assistant {

@@ -40,6 +40,9 @@ internal fun useCropLauncher(
     ) { result ->
         when (result.resultCode) {
             android.app.Activity.RESULT_OK -> {
+                // 输出文件所有权移交消费方：消费方在协程中复制完成后自行删除。
+                // 此处绝不同步删除——消费是异步的（suspend 文件登记），
+                // 同步删除会与消费协程竞态，导致消费方读到已删除的文件。
                 cropOutputUri?.let { croppedUri ->
                     onCroppedImageReady(croppedUri)
                 }
@@ -56,8 +59,13 @@ internal fun useCropLauncher(
                     type = ToastType.Error
                 )
             }
+
+            else -> Unit
         }
-        cropOutputUri?.toFile()?.delete()
+        if (result.resultCode != android.app.Activity.RESULT_OK) {
+            // 失败/取消：输出文件无消费方，此处清理（uCrop 失败时通常未写入，删除幂等）
+            cropOutputUri?.toFile()?.delete()
+        }
         cropOutputUri = null
         onCleanup?.invoke()
     }

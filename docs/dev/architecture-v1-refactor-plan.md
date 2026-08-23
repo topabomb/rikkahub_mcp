@@ -1660,3 +1660,49 @@ N（任意时点，机械）
 - 引用行 FK 安全：`resolveNodeReferenceEntities` 仅在 artifact 行存在时（`getByPath` 命中）插入引用行。
 - `ConversationDAO.insert` 无 REPLACE 策略（默认 ABORT），不存在 conversation 行替换级联。
 - executeCall 重写行为等价：preflight 顺序/lease 时机/附件回滚/撤权监听/终态分类与 HEAD 逐段对照一致；差异仅为结构化（四阶段 + 唯一 finally）。
+
+## 14. 已知问题：落地后 UI 链路复查与修复记录（2026-08-24）
+
+> 本节为 v1 落地后的缺陷记录与修复实录。两项缺陷均属"行为恢复"级修复，不改变 §10–§13 的架构契约；但根因揭示了两类系统性适配风险，记录于此供后续重构对照。
+
+### 14.1 缺陷 A：头像剪裁后静默不生效（文件生命周期竞态）
+
+**现象**：助手头像选择图片、剪裁并确定后头像未更新（保持纯色默认头像），无任何错误提示；偶发另见"裁剪失败"toast（该 toast 为 uCrop 自身加载/解码失败的既有独立路径，与本缺陷无关）。
+
+**根因**：修订记录 10 将 `FilesManager` 写入路径 suspend 化（`createChatFilesByContents` 等改 `withContext(Dispatchers.IO)`）后，UI 调用点被机械包装为 `scope.launch { ... }` 协程化适配。而 `useCropLauncher`（`CropLauncher.kt`）的既有契约是**在 activity result 回调返回前同步删除剪裁输出临时文件**。旧同步实现中消费（文件复制）在回调栈内完成、删除发生在消费之后，时序安全；协程化后消费被调度到 IO 线程排队，回调栈内的同步删除**必然先于**消费执行——`openInputStream` 读到已删除文件，异常被 `runCatching` 吞掉，返回空 URI 列表，`onUpdate` 不被调用，静默失败。
+
+**波及面**（`useCropLauncher` 全部消费方）：
+
+| 调用点 | 暴露条件 |
+| --- | --- |
+| `UIAvatar.saveAvatarImage`（助手头像 + 用户头像 `ChatDrawer`） | 强制剪裁，无跳过开关——必现 |
+| `ChatPage` 拍照剪裁 / 选图剪裁两处 | 仅当 `DisplaySetting.skipCropImage` 为 false（默认 true 绕过剪裁路径） |
+
+**不受影响**（复查确认）：`BackgroundPicker`（源为 content URI，无剪裁无临时文件）；`AssistantBackgroundService.replaceBackground` 两条链路（手工设背景经图片查看器、文生图工具设背景——均为 await 完成后 `finally` 删除源文件，时序正确）；`ChatInput` 粘贴（content URI / 内存字符串）；相机跳过剪裁路径（协程内先消费后删）。
+
+**修复**：输出文件所有权移交消费方——`useCropLauncher` 在 RESULT_OK 后不再代删输出文件（失败/取消分支仍清理，幂等）；`UIAvatar` 与 `ChatPage` 两处在消费协程完成复制后删除源文件。契约变更已在 `CropLauncher.kt` 注释中写明。
+
+**教训**：suspend 化适配时，"临时文件所有权/清理责任"是随调用链传递的隐式契约，机械包一层 `scope.launch` 不转移该契约。凡"回调内同步清理 + 异步消费"的组合都是该模式的高危点，后续重构必须显式标注文件所有权的移交点。
+
+### 14.2 缺陷 B：GC 误删 Settings 域引用的文件（引用面缺口）
+
+**现象**（潜伏，非立即显现）：设置超过 24 小时的助手头像/背景文件，在任意触发 GC 的操作（删除会话、会话压缩）后被回收——Settings 残留指向已删除文件的引用，头像回退纯色、背景消失。手工设背景/文生图设背景实测正常是因为新文件处于 24 小时保护窗口内。
+
+**根因**：旧 GC（`ManagedFileDeletionService` 时代的探测式删除）候选集仅限"本次树变更中不再被引用的文件"，Settings 域文件（头像/背景）从不在消息树中、天然不进候选集。E1 合并为 `ArtifactStore.collectUnreferencedArtifacts` 后 GC 语义变为**全库扫荡式**（artifact 表中全部超保护窗口文件），而豁免条件只实现了 §4.3 KDoc 所写的消息历史引用（`artifact_reference` 投影）——§3.3 明知 Settings 域引用"不进本表"，两条款组合即必然误删。`inspect`/`deletePermanently` 均正确识别 Settings 引用面（`detachMutableReferences`），唯独 GC 遗漏：**引用面清单在三个消费点各写一份，且测试矩阵 C-8 与 GC KDoc 一样未包含 Settings 豁免，GC 此前零测试**。
+
+**修复**（引用面收敛为单一定义）：
+
+- `ArtifactStore.collectMutableReferenceUris(settings)`：Settings 域可变引用全集的唯一所有者——助手背景、助手头像、用户头像（`DisplaySetting.userAvatar`，复查中发现的原有双重遗漏：GC 豁免与 detach 均未覆盖，用户头像经 `UIAvatar` 同样写入受管 upload 文件）。
+- `ArtifactStore.detachSettingsReferences(settings, uris)`：删除时解除全部可变引用的唯一实现，GC 豁免、显式删除解除、删除影响检查（`inspect` 头像计数含用户头像）三处共用上述定义。
+- `AssistantBackgroundService.isReferenced` 同步对齐（换背景清理旧背景的引用检查补入用户头像）。
+- 复查确认无其他 Settings 字段引用受管文件：自定义字体（`chatCustomFontPath`）存于 `fonts/` 自管目录，不进 artifact 表且形式为相对路径，GC 结构性触达不到。
+
+**测试锁定**：`ArtifactStoreTest` 补 GC 引用面矩阵——助手头像豁免、助手背景豁免、用户头像豁免、消息引用豁免与孤儿回收、显式删除重置用户头像、未回填跳过。
+
+**教训**：同一引用面（"哪些 Settings 字段持有受管文件 URI"）必须收敛为单一定义并被全部消费方（GC 豁免、删除解除、影响检查、独立清理服务）引用；语义从探测式放宽为扫荡式时，豁免面必须同步扩到与新候选集匹配。
+
+### 14.3 遗留风险与手测建议
+
+- UI 时序类缺陷（缺陷 A）依赖 activity result + uCrop 真机链路，JVM 单测无法锁定，建议手测清单：助手头像设置、用户头像设置（抽屉侧栏）、关闭"跳过剪裁"后的聊天选图/拍照附加。
+- 缺陷 B 的历史损伤不可逆：若用户此前已有头像/背景被误删，文件无法恢复，重新设置即可；Settings 中残留的死引用会在下次 detach/GC 时被自然清理。
+- 本轮修复未变更 `versionCode`/`versionName`。
