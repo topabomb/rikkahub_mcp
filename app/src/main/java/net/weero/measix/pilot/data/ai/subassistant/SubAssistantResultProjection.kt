@@ -11,6 +11,9 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.ai.attachments.MAX_ASSISTANT_CALL_ATTACHMENTS
 import net.weero.measix.pilot.data.ai.tools.local.GENERATE_IMAGE_TOOL_NAME
+import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.data.model.AssistantAffectScope
+import net.weero.measix.pilot.data.model.replaceRegexes
 import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.files.FileUtils
 import net.weero.measix.pilot.data.files.LocalArtifactRef
@@ -289,4 +292,316 @@ internal fun guessMime(path: String, fallback: String): String {
         "mp4", "webm", "mov" -> "video/*"
         else -> fallback
     }
+}
+
+/**
+ * 从 Child 会话消息中提取 final answer。
+ *
+ * 优先取最后一个 Target ASSISTANT step 中、最后一个“工作工具”
+ * 之后的顶层可见 Text。`text_to_speech` 等副作用工具不挡住答案。
+ * 最后一步只有 Reasoning/空 Text 时，回退到更早 step 的 post-tool 文本；
+ * 仍为空时取最后一条有文本的 ASSISTANT 消息的末段 Text island，避免主助手拿到空 content。
+ */
+internal fun extractFinalAnswerInternal(
+    messages: List<UIMessage>,
+    childTaskNodeId: Uuid,
+): String {
+    val range = messagesInRunRange(messages, childTaskNodeId) ?: return ""
+    val assistants = range.filter { it.role == MessageRole.ASSISTANT }
+    if (assistants.isEmpty()) return ""
+
+    extractTextAfterLastWorkTool(assistants.last())
+        .takeIf { it.isNotBlank() }
+        ?.let { return it }
+
+    for (i in assistants.lastIndex - 1 downTo 0) {
+        extractTextAfterLastWorkTool(assistants[i])
+            .takeIf { it.isNotBlank() }
+            ?.let { return it }
+    }
+
+    for (msg in assistants.asReversed()) {
+        lastTextIsland(msg).takeIf { it.isNotBlank() }?.let { return it }
+    }
+    return ""
+}
+
+/**
+ * 本次 run 是否有用户可见的非文本交付物（generate_image 成功图或最终 ASSISTANT 顶层媒体）。
+ */
+internal fun checkNonTextOutputInternal(
+    messages: List<UIMessage>,
+    childTaskNodeId: Uuid,
+    filesDir: java.io.File? = null,
+): Boolean = extractDeliverableArtifacts(messages, childTaskNodeId, filesDir).hasNonTextOutput
+
+internal data class SubAssistantCallCollectedOutputs(
+    val toolCalls: List<Pair<String, Int>> = emptyList(),
+    val ttsTexts: List<String> = emptyList(),
+    val ttsStats: SubAssistantTtsStats? = null,
+)
+
+internal fun collectSubAssistantCallOutputs(
+    messages: List<UIMessage>,
+    childTaskNodeId: Uuid?,
+    extras: Set<String>,
+): SubAssistantCallCollectedOutputs {
+    if (childTaskNodeId == null) return SubAssistantCallCollectedOutputs()
+    val range = messagesInRunRange(messages, childTaskNodeId) ?: return SubAssistantCallCollectedOutputs()
+
+    val needToolCalls = ASSISTANT_CALL_EXTRA_TOOL_CALLS in extras
+    val needTtsTexts = ASSISTANT_CALL_EXTRA_TTS in extras
+    val toolCounts = if (needToolCalls) linkedMapOf<String, Int>() else null
+    val ttsTexts = if (needTtsTexts) mutableListOf<String>() else null
+    var ttsCalls = 0
+    var ttsChars = 0
+
+    for (message in range) {
+        for (part in message.parts) {
+            if (part !is UIMessagePart.Tool) continue
+            toolCounts?.let { counts ->
+                counts[part.toolName] = (counts[part.toolName] ?: 0) + 1
+            }
+            if (part.toolName != "text_to_speech") continue
+            // 次数按发出计；空白或无法解析的入参不计字符，也不进入 extras 文本表。
+            ttsCalls++
+            val text = parseTtsInputText(part.input)
+            if (text != null) {
+                ttsChars += text.length
+                ttsTexts?.add(text)
+            }
+        }
+    }
+
+    return SubAssistantCallCollectedOutputs(
+        toolCalls = toolCounts?.map { it.key to it.value }.orEmpty(),
+        ttsTexts = ttsTexts.orEmpty(),
+        ttsStats = if (ttsCalls > 0) SubAssistantTtsStats(calls = ttsCalls, chars = ttsChars) else null,
+    )
+}
+
+/**
+ * 本次 run 范围内每个工具名的发出次数，按首次出现顺序。
+ */
+internal fun collectRunToolCalls(
+    messages: List<UIMessage>,
+    childTaskNodeId: Uuid,
+): List<Pair<String, Int>> = collectSubAssistantCallOutputs(
+    messages = messages,
+    childTaskNodeId = childTaskNodeId,
+    extras = setOf(ASSISTANT_CALL_EXTRA_TOOL_CALLS),
+).toolCalls
+
+/**
+ * 本次 run 范围内 `text_to_speech` 入参 text，按调用顺序；空白或无法解析的跳过。
+ */
+internal fun collectRunTtsTexts(
+    messages: List<UIMessage>,
+    childTaskNodeId: Uuid,
+): List<String> = collectSubAssistantCallOutputs(
+    messages = messages,
+    childTaskNodeId = childTaskNodeId,
+    extras = setOf(ASSISTANT_CALL_EXTRA_TTS),
+).ttsTexts
+
+/**
+ * 本次 run 范围内 `text_to_speech` 的调用次数，以及可解析朗读文本的字符合计。
+ */
+internal fun collectRunTtsStats(
+    messages: List<UIMessage>,
+    childTaskNodeId: Uuid,
+): SubAssistantTtsStats? = collectSubAssistantCallOutputs(
+    messages = messages,
+    childTaskNodeId = childTaskNodeId,
+    extras = emptySet(),
+).ttsStats
+
+private fun parseTtsInputText(input: String): String? = runCatching {
+    val obj = kotlinx.serialization.json.Json.parseToJsonElement(input) as? JsonObject
+    obj?.get("text")?.let { it as? JsonPrimitive }?.content?.trim()
+}.getOrNull()?.takeIf { it.isNotEmpty() }
+
+private val SUB_ASSISTANT_SIDE_EFFECT_TOOLS = setOf("text_to_speech")
+
+private fun extractTextAfterLastWorkTool(message: UIMessage): String {
+    val parts = message.parts
+    var lastWorkToolEnd = 0
+    for ((idx, part) in parts.withIndex()) {
+        if (part is UIMessagePart.Tool &&
+            part.isExecuted &&
+            part.toolName !in SUB_ASSISTANT_SIDE_EFFECT_TOOLS
+        ) {
+            lastWorkToolEnd = idx + 1
+        }
+    }
+    return parts.drop(lastWorkToolEnd)
+        .filterIsInstance<UIMessagePart.Text>()
+        .joinToString("\n") { it.text }
+        .trim()
+}
+
+private fun lastTextIsland(message: UIMessage): String {
+    val parts = message.parts
+    var end = parts.lastIndex
+    while (end >= 0 && parts[end] !is UIMessagePart.Text) end--
+    if (end < 0) return ""
+    var start = end
+    while (start >= 0 && parts[start] is UIMessagePart.Text) start--
+    return parts.subList(start + 1, end + 1)
+        .filterIsInstance<UIMessagePart.Text>()
+        .joinToString("\n") { it.text }
+        .trim()
+}
+
+// ---- 工具结果形状（Tool Result 构建） ----
+
+/**
+ * 构建返回给 Caller 模型的 Tool Result parts（状态 JSON + 可选投影附件）。
+ */
+internal fun buildSubAssistantCallResultParts(
+    json: kotlinx.serialization.json.Json,
+    status: String,
+    assistantName: String,
+    content: String = "",
+    reason: String? = null,
+    detail: String? = null,
+    hasNonTextOutput: Boolean = false,
+    messages: List<UIMessage> = emptyList(),
+    childTaskNodeId: Uuid? = null,
+    extras: Set<String> = emptySet(),
+    artifacts: List<SubAssistantCallArtifact> = emptyList(),
+    artifactsOmitted: Int = 0,
+    extraParts: List<UIMessagePart> = emptyList(),
+): List<UIMessagePart> {
+    val outputs = collectSubAssistantCallOutputs(messages, childTaskNodeId, extras)
+    val resultJson = buildSubAssistantCallResult(
+        json = json,
+        status = status,
+        assistantName = assistantName,
+        content = content,
+        reason = reason,
+        detail = detail,
+        hasNonTextOutput = hasNonTextOutput,
+        toolCalls = outputs.toolCalls,
+        ttsTexts = outputs.ttsTexts,
+        ttsStats = outputs.ttsStats,
+        artifacts = artifacts,
+        artifactsOmitted = artifactsOmitted,
+    )
+    return listOf(UIMessagePart.Text(resultJson)) + extraParts
+}
+
+/** 调用被拒（readiness/lease/附件失败等）：UNAVAILABLE metadata + 不可用结果。 */
+internal suspend fun buildUnavailableCallResult(
+    json: kotlinx.serialization.json.Json,
+    execContext: me.rerere.ai.core.ToolExecutionContext,
+    targetAssistantId: Uuid,
+    assistantName: String,
+    reason: String,
+    runId: String = Uuid.random().toString(),
+): List<UIMessagePart> {
+    val metadata = buildInitialSubAssistantCallMetadata(
+        runId = runId,
+        targetAssistantId = targetAssistantId,
+        targetNameSnapshot = assistantName,
+    ).copy(
+        state = SubAssistantCallState.UNAVAILABLE,
+        reason = reason,
+    )
+    reportSubAssistantMetadataPatch(json, execContext, metadata, checkpoint = false)
+    return buildSubAssistantCallResultParts(
+        json = json,
+        status = "unavailable",
+        assistantName = assistantName,
+        reason = reason,
+    )
+}
+
+/** 调用前置失败（持久化/初始 metadata 写入异常）：FAILED metadata + 分类失败结果。 */
+internal suspend fun buildClassifiedFailureResult(
+    json: kotlinx.serialization.json.Json,
+    error: Exception,
+    execContext: me.rerere.ai.core.ToolExecutionContext,
+    targetAssistantId: Uuid,
+    assistantName: String,
+    extras: Set<String>,
+    runId: String,
+): List<UIMessagePart> {
+    val failureReason = classifySubAssistantFailure(error)
+    val metadata = buildInitialSubAssistantCallMetadata(
+        runId = runId,
+        targetAssistantId = targetAssistantId,
+        targetNameSnapshot = assistantName,
+    ).copy(
+        state = SubAssistantCallState.FAILED,
+        reason = failureReason,
+    )
+    runCatching { reportSubAssistantMetadataPatch(json, execContext, metadata, checkpoint = false) }
+    return buildSubAssistantCallResultParts(
+        json = json,
+        status = "failed",
+        assistantName = assistantName,
+        reason = failureReason,
+        detail = modelVisibleFailureDetail(failureReason, error),
+        extras = extras,
+    )
+}
+
+/** 将 sub_assistant_call metadata 补丁上报给生成管道（checkpoint=true 时随事实行落库）。 */
+internal suspend fun reportSubAssistantMetadataPatch(
+    json: kotlinx.serialization.json.Json,
+    execContext: me.rerere.ai.core.ToolExecutionContext,
+    meta: SubAssistantCallMetadata,
+    checkpoint: Boolean,
+) {
+    val patch = kotlinx.serialization.json.JsonObject(
+        mapOf("sub_assistant_call" to json.encodeToJsonElement(SubAssistantCallMetadata.serializer(), meta))
+    )
+    execContext.reportMetadata(patch, checkpoint)
+}
+
+/** 流式 phase 事件 → 卡片 phase 枚举。 */
+internal fun mapSubAssistantCallPhase(phase: String): SubAssistantCallPhase? = when (phase) {
+    "preparing" -> SubAssistantCallPhase.PREPARING
+    "model_waiting" -> SubAssistantCallPhase.MODEL_WAITING
+    "reasoning_streaming" -> SubAssistantCallPhase.REASONING_STREAMING
+    "answer_streaming" -> SubAssistantCallPhase.ANSWER_STREAMING
+    "tool_executing" -> SubAssistantCallPhase.TOOL_EXECUTING
+    "between_steps" -> SubAssistantCallPhase.BETWEEN_STEPS
+    else -> null
+}
+
+// ---- 入站任务投影 ----
+
+/** Child 任务消息 parts：request 文本 + 解析后的入站附件。 */
+internal fun buildChildUserParts(
+    processedTask: String,
+    images: List<UIMessagePart.Image>,
+): List<UIMessagePart> = buildList {
+    add(UIMessagePart.Text(processedTask))
+    addAll(images)
+}
+
+/** 对 Child 任务文本应用 Target 的用户侧正则替换。 */
+internal fun preprocessSubAssistantTask(
+    task: String,
+    target: Assistant,
+): String = task.replaceRegexes(
+    assistant = target,
+    scope = AssistantAffectScope.USER,
+    visual = false,
+)
+
+/** 取消原因归一（撤权/重启/用户取消的受控词表）。 */
+internal fun normalizeSubAssistantCancellationReason(message: String?): String = when (message) {
+    "target_removed",
+    "target_disabled",
+    "target_access_revoked",
+    "target_model_unavailable",
+    "caller_model_unavailable",
+    "app_restarted",
+    "child_missing",
+    "user_cancelled" -> message
+    "assistant_removed" -> "target_removed"
+    else -> "user_cancelled"
 }

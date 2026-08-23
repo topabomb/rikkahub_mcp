@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.RawQuery
+import androidx.room.Transaction
 import androidx.room.Update
 import androidx.sqlite.db.SimpleSQLiteQuery
 import androidx.sqlite.db.SupportSQLiteQuery
@@ -25,18 +26,33 @@ interface MessageNodeDAO {
         offset: Int
     ): List<MessageNodeEntity>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    /**
+     * IGNORE + UPDATE 组合的真 upsert（不使用 REPLACE）。
+     *
+     * SQLite 的 INSERT OR REPLACE 对已存在主键执行 DELETE + INSERT——FK 级联启用
+     * （v7 起）后会级联删除该节点的全部 artifact_reference 行，在事务提交与引用
+     * 重建（syncReferences）之间留下 GC 误删窗口。IGNORE 跳过已存在行，UPDATE
+     * 命中全列更新：无 DELETE 语义、无级联。
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAll(nodes: List<MessageNodeEntity>)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(node: MessageNodeEntity)
 
     /** delta upsert 原语（delta 持久化）。 */
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertAll(nodes: List<MessageNodeEntity>)
+    @Transaction
+    suspend fun upsertAll(nodes: List<MessageNodeEntity>) {
+        if (nodes.isEmpty()) return
+        insertAll(nodes)
+        updateAll(nodes)
+    }
 
     @Update
     suspend fun update(node: MessageNodeEntity)
+
+    @Update
+    suspend fun updateAll(nodes: List<MessageNodeEntity>)
 
     @Query("DELETE FROM message_node WHERE conversation_id = :conversationId")
     suspend fun deleteByConversation(conversationId: String)

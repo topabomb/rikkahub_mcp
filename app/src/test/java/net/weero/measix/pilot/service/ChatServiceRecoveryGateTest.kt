@@ -28,6 +28,7 @@ import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.FolderRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
+import net.weero.measix.pilot.service.TurnRecovery
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.DelegationCoordinator
 import net.weero.measix.pilot.utils.JsonInstant
@@ -99,5 +100,11 @@ class ChatServiceRecoveryGateTest {
         sessionRegistry = sessionRegistry,
         recoveryGate = gate,
         json = JsonInstant,
+        turnRecovery = TurnRecovery(
+            conversationRepo = repository,
+            sessionRegistry = sessionRegistry,
+            settingsStore = mockk(relaxed = true),
+            json = JsonInstant,
+        ),
     )
 }

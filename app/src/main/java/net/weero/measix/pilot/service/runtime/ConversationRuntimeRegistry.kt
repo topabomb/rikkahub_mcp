@@ -44,7 +44,7 @@ class ConversationRuntimeRegistry(
                 initial = Conversation.ofId(
                     id = id,
                     assistantId = assistantId
-                ),
+                ).toSnapshot(),
                 scope = appScope,
                 onIdle = { removeSession(it) },
                 repository = repository,
@@ -59,7 +59,7 @@ class ConversationRuntimeRegistry(
         return runtimes.computeIfAbsent(conversationId) { id ->
             ConversationRuntime(
                 id = id,
-                initial = conversation,
+                initial = conversation.toSnapshot(),
                 scope = appScope,
                 onIdle = { removeSession(it) },
                 repository = repository,
@@ -93,10 +93,6 @@ class ConversationRuntimeRegistry(
         runtimes[conversationId]?.release()
     }
 
-    fun getConversationFlow(conversationId: Uuid): StateFlow<Conversation> {
-        return getOrCreateSession(conversationId).state
-    }
-
     fun getGenerationJobStateFlow(conversationId: Uuid): Flow<Job?> {
         val runtime = runtimes[conversationId] ?: return flowOf(null)
         return runtime.generationJob
@@ -122,11 +118,14 @@ class ConversationRuntimeRegistry(
         }
     }
 
-    fun updateConversationState(conversationId: Uuid, conversation: Conversation) {
+    /**
+     * 整对象装载（DB 加载 / 导入路径）：内存快照与持久化基线同步重置。
+     */
+    fun loadConversation(conversationId: Uuid, conversation: Conversation) {
         if (conversation.id != conversationId) return
         // 使用 getOrCreateSessionWithConversation 避免先创建空 Session 再覆盖
         val runtime = getOrCreateSessionWithConversation(conversationId, conversation)
-        runtime.replaceState(conversation)
+        runtime.loadSnapshot(conversation)
     }
 
     fun getAllActiveSessionIds(): Set<Uuid> = runtimes.keys.toSet()
@@ -144,7 +143,7 @@ class ConversationRuntimeRegistry(
     /** 取消并等待指定 Assistant 的普通会话生成，避免清理后迟到 checkpoint 重新写回会话。 */
     suspend fun cancelGenerationsForAssistant(assistantId: Uuid, reason: String) {
         val jobs = runtimes.values
-            .filter { it.state.value.assistantId == assistantId }
+            .filter { it.snapshot.value.header.assistantId == assistantId }
             .mapNotNull { it.generationJob.value }
             .distinct()
         jobs.forEach { it.cancel(reason) }

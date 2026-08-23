@@ -226,6 +226,8 @@ data class ToolExecutionEvent(
     val toolCallId: String,
     val toolName: String,
     val status: ToolExecutionEventStatus,
+    /** 委派类工具派生的 Child 会话 id（调用↔Child 关系归位到执行事实行）。 */
+    val childConversationId: String? = null,
 )
 
 /**
@@ -560,7 +562,19 @@ class GenerationHandler(
                                     if (checkpoint) {
                                         commitCheckpoint(CheckpointKind.TOOL_STATE_CHANGED)
                                     }
-                                }
+                                },
+                                // 委派类工具派生会话确定后，将 child id 并入本次执行的 durable 事实
+                                reportChildConversation = { childConversationId ->
+                                    executionEvent = executionEvent?.copy(
+                                        childConversationId = childConversationId,
+                                    )
+                                    if (executionEvent != null) {
+                                        commitCheckpoint(
+                                            CheckpointKind.TOOL_STATE_CHANGED,
+                                            toolExecution = executionEvent,
+                                        )
+                                    }
+                                },
                             )
 
                             val result = toolDef.executeWithContext(execContext, args)

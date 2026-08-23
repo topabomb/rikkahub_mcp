@@ -3,7 +3,7 @@ package net.weero.measix.pilot.service
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runTest
-import net.weero.measix.pilot.service.runtime.finalizeInterruptedRunSafely
+import net.weero.measix.pilot.service.finalizeInterruptedRunSafely
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test

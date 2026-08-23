@@ -20,6 +20,8 @@ import net.weero.measix.pilot.service.AssistantDataRecovery
 import net.weero.measix.pilot.service.AssistantDataRecoveryGate
 import net.weero.measix.pilot.service.ChatNotificationManager
 import net.weero.measix.pilot.service.ChatService
+import net.weero.measix.pilot.service.SubAssistantRunGate
+import net.weero.measix.pilot.service.TurnRecovery
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.FavoriteModelService
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
@@ -179,6 +181,18 @@ val appModule = module {
         )
     }
 
+    single { SubAssistantRunGate() }
+
+    single {
+        TurnRecovery(
+            conversationRepo = get(),
+            sessionRegistry = get(),
+            settingsStore = get(),
+            json = get(),
+            runGate = get(),
+        )
+    }
+
     single {
         DelegationCoordinator(
             generationHandler = get(),
@@ -193,6 +207,8 @@ val appModule = module {
             json = get(),
             attachmentResolver = get(),
             context = get(),
+            turnRecovery = get(),
+            runGate = get(),
         )
     }
 
@@ -214,7 +230,7 @@ val appModule = module {
             appScope = get(),
             settingsStore = get(),
             assistantManagementService = get(),
-            delegationCoordinator = get(),
+            turnRecovery = get(),
             recoveryGate = get(),
         )
     }
@@ -242,6 +258,7 @@ val appModule = module {
             recoveryGate = get(),
             json = get(),
             toolArtifactRewriter = get(),
+            turnRecovery = get(),
         )
     }
 }

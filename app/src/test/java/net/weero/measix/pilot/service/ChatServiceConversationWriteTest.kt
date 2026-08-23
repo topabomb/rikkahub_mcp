@@ -53,7 +53,9 @@ import net.weero.measix.pilot.data.repository.FolderRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
+import net.weero.measix.pilot.service.TurnRecovery
 import net.weero.measix.pilot.service.runtime.DelegationCoordinator
+import net.weero.measix.pilot.service.runtime.toConversation
 import net.weero.measix.pilot.utils.JsonInstant
 import net.weero.measix.pilot.utils.SoundEffectPlayer
 import org.junit.After
@@ -121,9 +123,9 @@ class ChatServiceConversationWriteTest {
         // 活跃会话（持引用不被 idle 逐出）走 UpdateHeader 命令通道
         env.service.addConversationReference(conversationId)
 
-        env.service.generateTitle(stale)
+        env.service.sideEffects.generateTitle(stale)
 
-        val current = env.service.getConversationFlow(conversationId).value
+        val current = env.service.getConversationSnapshot(conversationId).value.toConversation()
         assertEquals("A generated title", current.title)
         assertTrue(current.hasGenerateImageArtifact())
         // 标题写入走 UpdateHeader 命令（applyMutation 窄列 headerPatch），不再直接调窄列方法
@@ -153,9 +155,9 @@ class ChatServiceConversationWriteTest {
         // 活跃会话（持引用不被 idle 逐出）走 UpdateHeader 命令通道
         env.service.addConversationReference(conversationId)
 
-        env.service.generateSuggestion(conversationId, stale)
+        env.service.sideEffects.generateSuggestion(conversationId, stale)
 
-        val current = env.service.getConversationFlow(conversationId).value
+        val current = env.service.getConversationSnapshot(conversationId).value.toConversation()
         assertEquals(listOf("Ask about the image", "Try another style"), current.chatSuggestions)
         assertTrue(current.hasGenerateImageArtifact())
         // 建议写入走 UpdateHeader 命令（applyMutation 窄列 headerPatch）
@@ -234,7 +236,7 @@ class ChatServiceConversationWriteTest {
 
         env.service.initializeConversation(conversationId)
 
-        val current = env.service.getConversationFlow(conversationId).value
+        val current = env.service.getConversationSnapshot(conversationId).value.toConversation()
         assertTrue(current.hasGenerateImageArtifact())
         verify(exactly = 0) { filesManager.deleteChatFiles(any()) }
         session.setJob(null)
@@ -258,7 +260,7 @@ class ChatServiceConversationWriteTest {
 
         env.service.initializeConversation(conversationId)
 
-        assertTrue(env.service.getConversationFlow(conversationId).value.hasGenerateImageArtifact())
+        assertTrue(env.service.getConversationSnapshot(conversationId).value.toConversation().hasGenerateImageArtifact())
     }
 
     @Test
@@ -279,7 +281,7 @@ class ChatServiceConversationWriteTest {
 
         env.service.initializeConversation(conversationId)
 
-        val current = env.service.getConversationFlow(conversationId).value
+        val current = env.service.getConversationSnapshot(conversationId).value.toConversation()
         assertEquals("from-db", current.title)
         assertEquals("newer persisted", current.currentMessages.single().toText())
     }
@@ -414,6 +416,12 @@ class ChatServiceConversationWriteTest {
                 delegationCoordinator = mockk<DelegationCoordinator>(relaxed = true),
                 sessionRegistry = sessionRegistry,
                 json = JsonInstant,
+                turnRecovery = TurnRecovery(
+                    conversationRepo = repository,
+                    sessionRegistry = sessionRegistry,
+                    settingsStore = settingsStore,
+                    json = JsonInstant,
+                ),
             )
         } finally {
             unmockkObject(ProcessLifecycleOwner)

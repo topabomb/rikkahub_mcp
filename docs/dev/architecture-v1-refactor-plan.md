@@ -1,6 +1,6 @@
 # Architecture V1 重构方案：Runtime Core / Persistence / Projection
 
-> 状态：方案已落地（versionCode 18 / `0.0.18`，git 里程碑 **pre1**）。§0–§8 与附录为实施前方案原文；**§9 为落地后相对草图的约定变更（以代码为准）**。
+> 状态：pre 阶段已落地（versionCode 18 / `0.0.18`，git 里程碑 **pre1**）。§0–§8 与附录为实施前方案原文；**§9 为 pre 落地后相对草图的约定变更（以代码为准）**；**§10–§12 为 V1 正式阶段（架构收敛）方案**；**§13 为 V1 实施落点记录（versionCode 18 保持不变，行数账本以实测为准）**。
 > 范围：`app` 模块（`service` / `data` / `ui`）。`ai` / `workspace` / `speech` / `search` 模块对外 API 不变更。
 > 配置持久化（SettingsStore / Settings）本轮零改动；企业下发走既定 `EnterprisePolicyStore` 路线。
 > 本轮为一次完整重构，不分发布阶段；工作流 A–J 为工程依赖序，同一版本交付。
@@ -1337,3 +1337,326 @@ Master `launchRun` 与 Target `runTargetGeneration` 都是：`BeginTurn` → 空
 
 - androidTest 打包排除 JUnit 5 重复的 `META-INF/LICENSE.md` / `LICENSE-notice.md` / `NOTICE.md`，否则 `Migration_5_6Test` 无法安装到设备。
 - `ConversationDAO.searchConversations` 非分页版、`resetConversationNodes` 等 J1 项未在本里程碑继续清扫。
+
+---
+
+## 10. Pre 阶段达成分析
+
+> 基线：versionCode 18（git 里程碑 pre / pre1），对照 §2.2 不变式与 §6 验收标准逐条裁决。证据以类名/函数名定位（可全局检索）。本章为 §11–§12 的输入：所有缺口必须归因到「计划内未完成 / 计划缺口 / 设计缺口」之一，V1 阶段的范围 = 缺口全集。
+
+### 10.1 已达成项
+
+§6.2 缺陷消除验收六项全部达成（长会话卡顿、删除重启复活、删除重入、标题/folder 覆盖、删除确认迟缓、Master/Target 漂移）。§2.2 六大不变式逐条裁决：
+
+| 不变式 | 裁决 | 证据 |
+| --- | --- | --- |
+| 1 每类 durable state 单一 owner | 达成 | Runtime 命令通道 / TurnEngine 执行事实 / ArtifactStore |
+| 2 全库无整对象回写 | 达成 | I1 契约测试；§9.8 白名单外无路径 |
+| 3 提交协议唯一实现 | 达成 | TurnEngine Master/Target 共用（§9.5/§9.6）；T-1 等价测试 |
+| 4 投影可重建、永不当事实源 | 达成 | message_fts 增量 / artifact_reference / Snapshot；I2 / I6 |
+| 5 破坏性操作 durable / 幂等 / 可恢复 | 达成 | ArtifactStore CAS + reconcileStartup；I4 |
+| 6 文件配额 | 达成 | Runtime 5 文件；DelegationCoordinator 按 §9.9 归 Application 编排 |
+
+delta 持久化含新树下标（§9.1）、生成期命令不短路（§9.2）、流式单消息变换（I5）、Target 整段 run 一次 BeginTurn（§9.6）、Finalize 只收口活跃 reasoning（§9.7）均达成。
+
+### 10.2 未达成项
+
+| # | 缺口 | 证据 | 归因 |
+| --- | --- | --- | --- |
+| G-1 | §4.1.4「过渡策略」未执行终态：兼容投影仍在每 chunk 双写 | `ConversationRuntime` 维护三份状态（`_state` / `_compatibleState` / `_snapshot`）；`applyStreamingDelta` 每 chunk 派生一次 O(N) 兼容投影；`ConversationSnapshot.renderNodes` 实现为 `conversation.messageNodes`（绕回投影）；`ChatVM` 同时订阅 conversation 流与 snapshot 流 | 计划内未完成——工作流 G 仅迁移 ChatList 一处 |
+| G-2 | §2.1「ChatService 收缩为装配 + 副作用薄壳」未达成 | ChatService 约 1656 行、约 20 个构造依赖；仍持有崩溃恢复（`recoverInterruptedTurns`）、中断收口原语（`closeOpenTools` 族）、标题/建议/压缩三胞胎、child retention 编排、fork 文件复制 | 计划缺口——§2.1 有愿景，工作流 D2 只删装配段，无对应条目 |
+| G-3 | §4.7 性能承诺部分兑现：会话恢复路径 O(全库) | `DelegationCoordinator.performRecovery` 经 `getAllTopLevelConversationsSync` 全库反序列化；`ChatService.recoverInterruptedTurns` 在 execution 循环内逐条全树加载 | 设计缺口——§6.3 基线未覆盖会话恢复；恢复输入未接入修订记录 6 已铺好的 `turn_execution` 事实链路 |
+| G-4 | 数据层未贯彻「主/子同构」哲学 | 运行时协议已统一（T-1），但 `conversation.parentConversationId` 无 FK 无索引、级联删除靠应用层（孤儿 child 因此存在，恢复需全库扫描清理）；调用 ↔ child 对应关系埋在消息 JSON metadata（无关系查询路径） | 设计缺口——pre 聚焦运行时协议统一，数据层关系表达未跟进 |
+
+### 10.3 制度化过渡层的检讨
+
+附录 B 将 `getConversationFlow` 列入「保持不变的公开 API」——等于把 §4.1.4 自己声明为过渡的投影层合法化，G-1 因此获得了存续依据。V1 阶段显式推翻该条目（§11.3 块 1 / §12 工作流 N）。
+
+### 10.4 结论
+
+pre 达成 Runtime 内核全部不变式与 §6.2 全部缺陷消除；未完成的是三类收敛——**状态形状（G-1）、职责（G-2）、恢复与关系（G-3/G-4）**。三者共同特征：目标语义在 §0–§9 中均有正确描述，缺的是「旧路径退役」的交付边界。V1 阶段以此三类收敛为全部范围，验收判据是**切换完成**而非兼容并存。
+
+---
+
+## 11. V1 正式阶段方案（架构收敛）
+
+> 阶段命名：pre = 预备/地基（已交付，versionCode 18）；**V1 正式阶段 = 完成态**。设计哲学：**负代码收敛**——pre 建新架构，V1 删旧架构。每项变更必须是净删除、等量搬家或等量替换；纯新增代码仅限两类：通过数据结构三判据裁决的 v7 修正项、turn 骨架唯一化的吸收段。切换纪律：**符号删除不留 deprecated 转发，靠编译失败保证迁移彻底**。
+
+### 11.1 数据结构裁决纪律（三判据）
+
+后续任何数据结构提案必须依次通过（本轮评审中事实表方案的否决过程固化为纪律）：
+
+1. **需要关系查询的信息 → 范式化为列**。禁止埋进文档 JSON 后再用全量反序列化扫描取回。
+2. **关系的完整性 → 用外键表达**。禁止用应用层清理约定替代数据库约束——应用层约定意味着每个写入点都要记得，遗漏即悬挂。
+3. **只需整体读写的聚合 → 文档化 JSON**；当其内部出现真实的关系查询需求时**用投影表**（`artifact_reference` 模式），不回头改事实表。
+
+曾评估并否决的方案记录：`SubAssistantRun` 执行事实表——其全部字段可由 `turn_execution` / `tool_execution` + 定点消息加载推导，属可推导冗余状态（可推导即禁止存储）；且会成为第三张执行事实表，而 assistant_call 的执行事实本就属于 `tool_execution` 的语言。教训：把「缺查询路径」误判为「缺事实表」。
+
+### 11.2 同构性与 3NF 审计 → v7 修正性 Migration
+
+**同构前提**：子代理调用与主会话是同构体。一次 assistant_call 在数据层只有三个侧面——执行侧 = master turn 的一次工具执行（`tool_execution` 已承载）；会话侧 = 派生的普通 Conversation（`conversation` / `message_node` / `turn_execution` 已承载）；**唯一差别是关系**，而这恰是当前唯一未用关系机制表达的部分。
+
+**现有 schema 的 3NF 审计**：
+
+| # | 偏离 | 性质 | 裁决 |
+| --- | --- | --- | --- |
+| 1 | `message_node.messages` 整树消息变体存单 JSON 列 | 违反 1NF（文档模型） | **保留（正确偏离）**。part 为多态密封类型，拆表即 EAV 反模式；读写恒为节点粒度（delta 即节点级），无按 part 查询需求；唯一真实的按元素查询（文件引用）已由 `artifact_reference` 投影满足。范式化边界 = 「有无关系查询需求」 |
+| 2 | `conversation.chatSuggestions` / `modeInjectionIds` JSON 列 | 违反 1NF | **保留**。无按元素查询需求，拆表零收益 |
+| 3 | `conversation.nodes` 空置死列 | 死数据 | **删除**（随表重建） |
+| 4 | `parentConversationId` 无 FK / 无索引 / 级联删除靠应用层 | **关系完整性缺失（结构性缺口）** | **修复**。主/子唯一差别是关系，该关系应交还数据库：自引用 FK + ON DELETE CASCADE + 索引。孤儿 child 从「启动清扫」变为「结构上不可能」 |
+| 5 | 调用 ↔ child 对应关系埋在消息 metadata JSON | 关系可查询性缺失 | **补一列**：`tool_execution.child_conversation_id`。非新表、非投影、非冗余——一次执行派生哪个 child 本就是该行执行事实的自然属性（如 `toolOrdinal`），函数依赖 executionId，3NF 合法；写入点即已有 STARTED upsert |
+| 6 | `assistantId` 引用 DataStore 实体（跨存储） | 跨域债务 | 本轮不动（SettingsStore 迁移为既定非目标），记录为已知债务 |
+
+审计结论：**没有一张表多余，也没有一张新表必要；缺一个外键和一列。**
+
+**Migration_6_7**（重建 conversation 表一次完成；列清单以 `ConversationEntity` 为准）：
+
+```kotlin
+val Migration_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // 1) 清理存量孤儿 child（加 FK 前必须收敛；此后孤儿结构性不可能）
+        db.execSQL("""
+            DELETE FROM conversationentity WHERE parent_conversation_id IS NOT NULL
+            AND parent_conversation_id NOT IN (SELECT id FROM conversationentity)
+        """.trimIndent())
+        // 2) 重建 conversationentity（SQLite 无法 ALTER 添加 FK），标准流程：
+        //    foreign_keys=OFF → CREATE 新表（+ FK(parent_conversation_id) REFERENCES conversationentity(id)
+        //    ON DELETE CASCADE、+ Index(parent_conversation_id)、− nodes 死列）
+        //    → INSERT SELECT 复制全列（除 nodes）→ DROP 旧表 → RENAME → 建索引
+        //    → foreign_keys=ON → foreign_key_check 校验
+        // 3) tool_execution 增列 + 索引
+        //    ALTER TABLE tool_execution ADD COLUMN child_conversation_id TEXT
+        //    CREATE INDEX index_tool_execution_child ON tool_execution(child_conversation_id)
+    }
+}
+```
+
+配套：`ConversationEntity` 声明自引用 FK 与索引、删除 `nodes` 属性；`ToolExecutionEntity` 增列；`message_node` 既有 FK 不受影响（表名不变、行数据不动）。表重建行数 = 会话数（毫秒级）。
+
+v7 换来的代码删除：`performRecovery` 孤儿扫描与删除（约 40 行）、`deleteConversation` 显式 child 级联（约 10 行）、恢复路径全库扫描（块 2）。
+
+### 11.3 四个工作块
+
+**块 1 状态形状统一（G-1 终态）**：`ConversationSnapshot` 成为唯一事实流；`Conversation` 退回持久化边界（DB 映射与命令构造处的形状，不再作为运行时状态）。
+
+- reducer 状态换快照：`reduce(snapshot, command): Snapshot`；`UpdateHeader` 仅 copy header（不再触碰 nodes）；`toSnapshot()` 转换删除。
+- 删除：`_state` / `_compatibleState` / `state` / `toSnapshot()` / `ConversationSnapshot.conversation` getter / `submitGeneration` 别名；`replaceState` 改名 `loadSnapshot`（整对象装载语义显式化）。
+- `renderNodes` 真快路径：activeTurn 为空时即 `nodes`；非空时仅末 assistant 节点替换（每帧一次 O(N) 浅拷贝、元素引用共享，conflation 后为不可变列表模型下的下限）；新增 `snapshot.currentMessages()` 命令语义读取入口（调用时一次 O(N)，仅 turn 边界低频点使用）。
+- 消费方迁移：ChatService 内部读点、DelegationCoordinator 内部读点、ChatVM / ChatPage / ChatList / TTSAutoPlay / SubAssistantDetailVM；删除 `Registry.getConversationFlow` 与 `ChatService.getConversationFlow`（附录 B 修正）。
+
+**块 2 恢复与关系归位（G-3 / G-4 终态）**：恢复输入从「全库扫描推导」切换到「执行事实 + 关系查询」；恢复语义合并为单文件。
+
+- v7（§11.2）落地。
+- assistant_call STARTED 时 `tool_execution` upsert 携带 `childConversationId`（写入点已存在，加字段赋值，与 metadata patch 同点）。
+- 恢复链路重写（`TurnRecovery.recoverInterruptedRuns`）：`turn_execution` 状态查询 JOIN conversation 过滤 child → master 行定点加载收口 stale 调用 + 经 `child_conversation_id` 定点收口 child；child 行（parent NOT NULL）定点加载收口。孤儿扫描整体删除（FK 接管）。
+- `recoverInterruptedTurns` 修复：会话级分组加载（外层每会话一次，替代 execution 循环内逐条全树加载）；Child 过滤下沉 DAO JOIN。
+- 恢复域合并：`SubAssistantRecovery.kt` 改名 `TurnRecovery.kt`，吸收 `ChatService.recoverInterruptedTurns` / `closeOpenTools` 族 / `finishInterruptedToolAfterGenerationStop` / `finalizeDanglingToolExecutions` / `finishInterruptedPendingTools` 与 `DelegationCoordinator.performRecovery` / `recoverMasterForMutation` / `recoverInterruptedChild` / `finalizeInterruptedRun` / `submitRecoveredTree`；四处重复的树替换收口原语（`markAssistantTerminal` 等）合一。
+- 写路径读消除：`ConversationMutation` 增 `titleForIndex`（Runtime 内存 header 为权威，随 delta 携带）；`applyMutation` 删除事务后 `getConversationById` 回查。
+
+**块 3 turn 骨架与公用逻辑唯一化（G-2 部分）**：
+
+- `TurnEngine` 吸收 `startTurn()`：resumable 槽探测 + `BeginTurn` + 空 `CommitCheckpoint(RUNNING)`（`launchRun` 与 `runTargetGeneration` 各写一遍的骨架段归一）。
+- 文件克隆合一：`copyForkedPart`（ChatService，fork 场景）与 `copyPartForChildClone`（Coordinator，clone 场景）合并为 `AttachmentCloner`（参数化 `toolArtifactRewriter`）。
+- 背景生成三胞胎合并：`generateTitle` / `generateSuggestion` / `compressConversation` 的公共样板（settings → 专属模型(fallback fastModel) → provider → generateText → 命令提交）提取为私有 `runBackgroundGeneration`。
+- `executeCall` 分四阶段：`preflightRun`（readiness + runSpec + lineage → sealed 结果）/ `materializeChild`（lease use 结构 + 附件 + create/reuse/clone）/ `runChildTurn` / `toToolResult`。五处手动 `runLeases.release` 归 use 结构。
+- child retention 编排（`applyChildRetentionAfterTreeMutation`）移交 Delegation 域。
+- 子助手输出纯函数（`extractFinalAnswerInternal` / `collectSubAssistantCallOutputs` 族）合并进 `data/ai/subassistant/SubAssistantResultProjection.kt`。
+
+**块 4 命名与死代码清理**：
+
+- 改名：`recoverMasterForMutation` → `finalizeStaleRunsBeforeMutation`（它是变更前收口不是崩溃恢复）；`finishInterruptedPendingTools` → `finalizeSupersededTurn`（处理被新 turn 取代者）；`performRecovery` → `recoverInterruptedRuns`；`getAllTopLevelConversationsSync` → `loadAllTopLevelConversations`（Sync 后缀歧义；`AssistantBackgroundService` 保留消费）。
+- 删除：J1 遗留（`searchConversations` 非分页版 / `resetConversationNodes`）；ChatService 尾部私有 `sanitizeForPersistence` 与 `markAssistantTerminal`（reducer 已有等价实现）；`updateConversationState` 经消费方核查后处置（若收藏回填仍有消费方则保留并改名 `patchTransientProjection`）。
+- 附录 B 修正：移除 `getConversationFlow` 条目。
+
+### 11.4 文件目标值
+
+| 文件 | pre 基线（行） | V1 目标（行） | Δ | 职责终态 |
+| --- | --- | --- | --- | --- |
+| `service/ChatService.kt` | 1656 | ~1200 | -456 | Master turn 编排 + 会话/消息 CRUD 门面 + 错误总线 |
+| `service/runtime/DelegationCoordinator.kt` | 1454 | ~1070 | -384 | executeCall 四阶段 + child 管理 + target 循环 + ask_user 桥 |
+| `service/TurnRecovery.kt`（原 SubAssistantRecovery） | 195 | ~610 | +415 | 中断/崩溃恢复语义唯一所有者（master turn + sub-assistant run + 取消收口原语） |
+| `data/ai/subassistant/SubAssistantResultProjection.kt` | 269 | ~400 | +131 | 子助手输出侧纯函数（final answer / outputs / artifacts 投影） |
+| `service/runtime/ConversationRuntime.kt` | 387 | ~300 | -87 | 单写通道；快照唯一状态 |
+| `service/runtime/TurnEngine.kt` | 278 | ~360 | +82 | turn 骨架唯一实现（startTurn 吸收） |
+| `service/runtime/ConversationReducer.kt` | 376 | ~400 | +24 | 快照态纯函数 |
+| `service/runtime/ConversationCommands.kt` | 199 | ~190 | -9 | 命令 + 快照（兼容投影删除） |
+| `data/repository/ConversationRepository.kt` | 746 | ~700 | -46 | mutation 事务 + 定向查询（title 回查删除 / 级联简化 / 死代码清扫） |
+| `data/db`（Migration_6_7 + entity + DAO 增量） | — | ~120 | +120 | 自引用 FK + child 列 + 孤儿清理 |
+| UI 消费方（ChatVM / ChatPage / ChatList / TTSAutoPlay / SubAssistantDetailVM） | — | — | ~-40 | snapshot 单订阅 |
+
+主引擎文件（ChatService + DelegationCoordinator + Runtime + Commands + Repository）合计降幅约 982 行。
+
+### 11.5 行数账本
+
+- **纯删除 ≈ -500 行**：兼容层三状态与投影（130）、三胞胎样板（58）、文件克隆重复（25）、turn 骨架内联（90）、死代码与别名（60）、收口原语合一（80）、孤儿扫描与显式级联（50）、title 回查（8）。
+- **纯新增 ≈ +226 行**：v7（120）、`TurnEngine.startTurn`（82）、reducer 快照化（24）。**纯新增 < 纯删除**。
+- **搬家 ≈ 550 行**（不计增减）：恢复域归位 TurnRecovery（约 415）、输出纯函数并入 ResultProjection（约 131）。
+- **代码库净行数 ≈ -250（±10% 容差）**。验收判据：净行数 ≤ 0，且主引擎文件合计降幅 ≥ 900 行。
+
+---
+
+## 12. V1 正式阶段执行计划
+
+> 工作流 K–P 续接 §5 的 A–J 字母序。依赖关系：K 与 L 可并行；M 依赖 K 完成（`launchRun` 收缩在投影清理后做，避免双改）；N 任意时点（机械）；O 依赖 K / L / M；P 收口。V1 落地后的实施落点相对本章的偏离记录为 §13（落地后补写），§0–§9 维持冻结。
+
+### 工作流 K：状态形状统一
+
+| # | 动作 | 文件 | 内容 |
+| --- | --- | --- | --- |
+| K1 | 测试先行 | `ConversationReducerTest` 扩展 | 快照态等价用例：同命令序列下，旧 Conversation reducer 与新 Snapshot reducer 产出 currentMessages 逐项等价（旧实现保留至本组用例通过后删除） |
+| K2 | 改造 | `ConversationReducer.kt` | `reduce(current: ConversationSnapshot, command): ConversationSnapshot`；UpdateHeader 仅 copy header；structural sharing 断言不变（R-4 延续） |
+| K3 | 改造 | `ConversationRuntime.kt` | 删 `_state` / `_compatibleState` / `state` / `toSnapshot()`；submit 单状态发布；`persistedState` 基线换快照；`buildMutation` 输入 old/new 快照（含 `titleForIndex` 填充）；`replaceState` → `loadSnapshot` |
+| K4 | 改造 | `ConversationCommands.kt` | 删 `conversation` getter；`renderNodes` 真快路径；增 `currentMessages()` |
+| K5 | 迁移 | ChatService / DelegationCoordinator 内部读点 | `session.state.value.currentMessages` → `session.snapshot.value.currentMessages()`（turn 边界低频点） |
+| K6 | 迁移 | ChatVM / ChatPage / ChatList / TTSAutoPlay / SubAssistantDetailVM | 单订阅 snapshot；删 conversation 流与 `getConversationFlow` 调用；**与 K7 同 PR 交付，杜绝半迁移状态入库** |
+| K7 | 删除 | Registry / ChatService / Runtime | `getConversationFlow` / `submitGeneration` 别名；符号物理删除不留 deprecated 转发，编译失败兜底迁移彻底性 |
+| K8 | 测试 | `ConversationRuntimeTest` | `applyStreamingDelta` 快照路径零 DB 调用；`renderNodes` 未变节点引用相同 |
+
+### 工作流 L：恢复与关系归位
+
+| # | 动作 | 文件 | 内容 |
+| --- | --- | --- | --- |
+| L1 | 新增 | `Migration_6_7` + `ConversationEntity` / `ToolExecutionEntity` | §11.2：孤儿清理 → 表重建（FK + CASCADE + 索引 + 删 nodes 死列）→ `tool_execution` 补列 |
+| L2 | 测试 | `Migration_6_7Test` | 孤儿清理三态（有 parent / 无 parent / parent 悬挂）；FK 级联（删 master → child / message_node / artifact_reference 级联消失）；schema 校验；v6→v7 与直建 v7 同构 |
+| L3 | 修改 | TurnEngine / GenerationHandler 事实写入 | assistant_call STARTED 的 `tool_execution` upsert 携带 `childConversationId` |
+| L4 | 合并 | `SubAssistantRecovery.kt` → `TurnRecovery.kt` | §11.3 块 2 合并清单；逐函数平移不重写；树替换收口原语合一 |
+| L5 | 重写 | `TurnRecovery.recoverInterruptedRuns` | 定点链路（§11.3 块 2）；孤儿扫描删除；`recoverInterruptedTurns` 会话级分组 + DAO JOIN 过滤 child |
+| L6 | 修改 | `ConversationRepository.kt` | `getRecoverableTurnExecutionsByConversation` 加 JOIN；`deleteConversation` 级联简化；title 回查删除；`getAllTopLevelConversationsSync` 改名 |
+| L7 | 测试 | `TurnRecoveryTest` | 中断恢复矩阵：master 生成中 kill → 收口；assistant_call 运行中 kill → master metadata + child 双侧收口；child 生成中 kill → 收口；恢复涉及会话与库规模无关（与 I8 呼应的 JVM 级断言） |
+
+### 工作流 M：骨架与公用逻辑
+
+| # | 动作 | 文件 | 内容 |
+| --- | --- | --- | --- |
+| M1 | 扩展 | `TurnEngine.kt` | `startTurn()` 吸收（resumable 探测 + BeginTurn + RUNNING checkpoint）；`launchRun` / `runTargetGeneration` 骨架段删除 |
+| M2 | 合并 | `AttachmentCloner`（data/files/） | `copyForkedPart` + `copyPartForChildClone` 归一，参数化 `toolArtifactRewriter` |
+| M3 | 合并 | `ChatService.kt` | `runBackgroundGeneration` 提取；三胞胎调用点收缩 |
+| M4 | 重构 | `DelegationCoordinator.executeCall` | 四阶段拆分；lease use 结构 |
+| M5 | 平移 | `SubAssistantResultProjection.kt` | 输出侧纯函数并入（`extractFinalAnswerInternal` / `collectSubAssistantCallOutputs` 族） |
+| M6 | 移交 | Delegation 域 | `applyChildRetentionAfterTreeMutation` 归 Coordinator |
+| M7 | 测试 | `TurnEngineTest` 扩展 | startTurn 等价：Master / Target 经新骨架的完整命令序列一致（T-1 扩展） |
+
+### 工作流 N：命名与死代码
+
+| # | 动作 | 内容 |
+| --- | --- | --- |
+| N1 | 改名 | §11.3 块 4 清单（随 L4 / L5 / M 落点执行） |
+| N2 | 删除 | `searchConversations` 非分页版 / `resetConversationNodes` / ChatService 私有 `sanitizeForPersistence` / `markAssistantTerminal` |
+| N3 | 核查 | `updateConversationState` 消费方清点 → 删除或改名 `patchTransientProjection` |
+| N4 | 修正 | 附录 B：移除 `getConversationFlow` 条目；标注 `getConversationSnapshot` / `submitConversationCommand` 为 VM 唯一入口 |
+
+### 工作流 O：契约测试（常驻 gate）
+
+| # | 测试 | 断言 |
+| --- | --- | --- |
+| I7 | `SnapshotOnlyContractTest` | CI grep：全库无 `getConversationFlow` / 兼容投影 `state` 引用；`ConversationRuntime` 无第二状态流 |
+| I8 | `RecoveryCostDecouplingTest` | 500 会话库 vs 50 会话库（各含同量中断执行）：恢复耗时同数量级（恢复成本与库大小解耦） |
+| I9 | `TurnSkeletonEquivalenceTest` | T-1 扩展：`startTurn` + `bind` 全序列 Master / Target 等价 |
+
+### 工作流 P：文档与验收
+
+| # | 动作 | 内容 |
+| --- | --- | --- |
+| P1 | 版本 | `changelog.md` 新条目；`versionCode` 19 |
+| P2 | 文档 | `AGENTS.md` Runtime Core 段（TurnRecovery / 结果投影归位）；`docs/references/` 相应文档同步（chat-generation-pipeline / sub-assistant-architecture） |
+| P3 | 交付 | 行数账本核对（§11.5，±10%）；文件目标值核对（§11.4，±10%）；净行数 ≤ 0 |
+
+### 依赖图
+
+```text
+K ───────► M ──► O ──► P
+L ───────► ▲
+N（任意时点，机械）
+```
+
+### 验收标准
+
+1. **切换完成**：I7 通过（无兼容符号、Runtime 无第二状态流）；全部 UI 单订阅 snapshot；`Conversation` 不再作为运行时状态形状出现。
+2. **恢复成本**：I8 通过；恢复耗时与库大小解耦（G-3 关闭）。
+3. **负代码**：代码库净行数 ≤ 0；主引擎文件合计降幅 ≥ 900 行；纯新增（≈226）< 纯删除（≈500）。
+4. **行为等价**：既有测试全绿（`ChatServiceTest` / `ChatServiceConversationWriteTest` / `SubAssistant*` / `ConversationReducerTest` / `ConversationRuntimeTest` 等）；K1 / L2 / L7 / M7 新增用例全绿；手测：生成中 kill -9 → 重启 master metadata + child 双侧收口无悬挂。
+5. **schema**：v7 迁移测试（L2）通过；`fallbackToDestructiveMigration` 保持关闭。
+
+### 风险与回滚
+
+| 风险 | 缓解 |
+| --- | --- |
+| 消费方迁移遗漏（K5 / K6 遗漏读点） | K7 符号物理删除不留转发，编译失败兜底；I7 grep 契约常驻 |
+| reducer 快照化语义回归 | K1 等价测试先行，旧实现保留至通过后删除；R-1–R-5 全量延续 |
+| v7 表重建失败 | 标准重建流程（foreign_keys=OFF → 复制 → RENAME → foreign_key_check）；行数 = 会话数（毫秒级）；L2 覆盖孤儿三态与双级联；schema 校验对齐 M7 范式 |
+| `childConversationId` 写入遗漏 | L3 与既有 STARTED upsert 同点；L7 恢复矩阵覆盖「运行中 kill」用例 |
+| TurnRecovery 合并行为漂移 | 逐函数平移不重写（对齐 B2 纪律）；崩溃恢复专项回归 |
+| 迁移期 UI 半态 | K6 与 K7 同 PR 交付；主干禁止出现「双订阅并存」的中间提交 |
+| 回滚 | v7 对旧代码可运行（新列 nullable；FK CASCADE 与旧显式删除幂等共存）；代码级 revert 后 migration 幂等重跑 |
+
+---
+
+## 13. V1 实施落点记录（落地后补写，以代码为准）
+
+> versionCode 18 保持不变（本轮不发布）。§0–§12 维持冻结；本节记录实际交付与 §11/§12 的偏离。
+
+### 13.1 已落地（全部结构目标达成）
+
+- **块 1 状态形状统一**：`ConversationSnapshot` 唯一事实流；`_state`/`_compatibleState`/`state`/`toSnapshot()`/`conversation` getter/`submitGeneration` 别名全部物理删除；`renderNodes` 真快路径（末节点 activeTurn 覆盖）；`currentMessages()` 命令语义读取；`toConversation()` 顶层纯函数（持久化边界转换）；消费方全量迁移（ChatService/Coordinator 内部读点、ChatVM/ChatPage/ChatList/TTSAutoPlay/SubAssistantDetailVM）；`getConversationFlow` API 删除（附录 B 修正）。**修复实录**：原 `submit` 经 `toSnapshot()` 重建隐式清空 activeTurn——快照化后 activeTurn 残留会遮蔽终态投影，已改为结构性命令提交后显式收口流式态（`ChatServiceTurnPersistenceTest` 停止/失败两用例验证）。
+- **块 2 恢复与关系归位**：v7 修正性 Migration（自引用 FK CASCADE + 索引 + 删 nodes 死列 + `tool_execution.child_conversation_id` + 孤儿收敛）；`recoverInterruptedRuns` 定点链路（`getNonTerminalTurnExecutionsWithScope` 状态索引为唯一输入，全库扫描与孤儿清理删除）；`recoverInterruptedTurns` 会话级分组 + DAO JOIN 过滤 Child；恢复语义唯一所有者 `TurnRecovery.kt`（吸收 ChatService 收口族/Coordinator 恢复段/原 SubAssistantRecovery）；title 随 mutation 携带（applyMutation 零回查）。
+- **块 3 骨架与公用逻辑**：`TurnEngine.start` 唯一骨架（Master/Target 共用，I9 锁定）；`AttachmentCloner` 文件克隆唯一实现；背景生成三胞胎整体迁出 ChatService → `GenerationSideEffects`（音效反馈 + 标题/建议/压缩共用后台生成骨架）；子助手输出/结果形状/入站投影纯函数归位 `SubAssistantResultProjection.kt`。
+- **第二轮收敛（职责彻底归位）**：`SubAssistantRunGate` 新设 run 门禁域（lease + pending ask_user 组合并发原语，Coordinator 与 TurnRecovery 共同消费）；恢复入口 `recoverInterruptedRuns` / 变更前收口 `finalizeStaleRunsBeforeMutation` / retention `applyChildRetentionAfterTreeMutation` / `finalizeInterruptedRun` 全部归位 TurnRecovery（ChatService 直连，Coordinator 不再持有恢复语义）；executeCall 四阶段化（preflight → materialize → run → terminal，终态失败三分支收敛为 `failedTerminal`，lease 由唯一 `finally` 释放替代五处手动 release）；`answerToolAtLocator` 死代码删除；AssistantDataRecovery 直连 TurnRecovery。
+- **块 4 清理**：`finalizeStaleRunsBeforeMutation`/`loadAllTopLevelConversations` 改名落地；`searchConversationsOfAssistant`（非分页版）/`sanitizeForPersistence`/私有 `markAssistantTerminal` 删除。
+- **契约测试**：I7（快照唯一，grep 契约）/I8（恢复成本与库大小解耦，结构性断言：恢复输入仅状态索引、健康库零加载）/I9（骨架命令形状唯一）；既有 1030 用例全量迁移并全绿（合计 1037）。
+- **迁移测试**：`Migration_6_7Test` 八用例（孤儿三态/FK 双级联/列删除数据保全/悬挂插入拒绝/schema 同构/**v5→v7 全链路**——managed_files→artifact 改名数据、会话树、消息节点无损到达 v7）。androidTest 编译与 Room schema 校验通过（7.json 生成）；仪器执行待设备。
+
+### 13.2 行数账本（实测，两轮收敛后）
+
+| 文件 | pre | 实测 | Δ | §11.4 目标 |
+| --- | --- | --- | --- | --- |
+| ChatService.kt | 1656 | 1083 | **-573** | ~1200 ✓ 超额 |
+| DelegationCoordinator.kt | 1454 | 960 | **-494** | ~1070 ✓ 超额 |
+| TurnRecovery.kt（原 SubAssistantRecovery 195） | 195 | 731 | +536 | 恢复/中断/retention/lease 收口语义唯一所有者 |
+| GenerationSideEffects.kt（新） | 0 | 375 | +375 | 音效反馈 + 标题/建议/压缩衍生生成唯一所有者 |
+| SubAssistantRunGate.kt（新） | 0 | 67 | +67 | run 门禁（lease + pending ask_user）并发原语 |
+| ConversationRuntime.kt | 387 | 363 | -24 | ~300 |
+| ConversationReducer.kt | 376 | 371 | -5 | ~400 ✓ |
+| ConversationCommands.kt | 199 | 215 | +16 | 快照 + 持久化边界转换 |
+| TurnEngine.kt | 278 | 335 | +57 | ~360 ✓ 骨架唯一实现 |
+| ConversationRepository.kt | 746 | 750 | +4 | ~700 ✓ |
+| SubAssistantResultProjection.kt | 269 | 557 | +288 | 输出/结果形状/入站投影纯函数唯一所有者 |
+| AttachmentCloner.kt（新）/ Migration_6_7.kt（新） | 0/0 | 45/79 | +124 | — |
+
+- **主引擎文件（ChatService/Coordinator/Runtime/Commands/Repository）合计 -1071 行**——超过 §11.5 判据（≥900）。ChatService -35%、DelegationCoordinator -34%（相对 pre 基线），两文件合计 3110 → 2043。
+- 代码库全局净 +371：引擎移出的约 1300 行归位到五个职责域文件（TurnRecovery/SideEffects/Gate/ResultProjection），归位侧含必要的新增文档注释与结构骨架；纯新增逻辑（v7 + TurnEngine.start + reducer 快照化 + Gate 原语）约 330 行。
+- 结构判据全部达成：每个文件单一职责域、无兼容层、恢复/副作用/投影/门禁各有唯一所有者。
+
+### 13.3 未执行项与后续
+
+- **Migration_6_7Test 仪器执行**：需要设备/emulator（`gradlew connectedDebugAndroidTest`），编译与 schema 校验已过。
+- 版本号 18 与 changelog 维持现状（本轮为未发布重构）。
+
+### 13.4 修订记录
+
+1. 快照化的 activeTurn 收口语义修复（见 13.1 块 1 修复实录）。
+2. `ConversationMutation.titleForIndex` 移至参数表末位并设默认值（兼容既有位置参数构造与测试）。
+3. I1 白名单条目迁移：`updateConversation` 白名单文件由 DelegationCoordinator.kt 改为 TurnRecovery.kt（恢复域归位的契约跟随）。
+4. `ConversationDAO.searchConversationsOfAssistant` 非分页版删除（J1 收尾），分页版为唯一搜索入口。
+5. 第二轮收敛中 lease 释放重构为 executeCall 唯一 `finally`（materialize 失败路径的泄漏由测试暴露后修复）；`reportSubAssistantMetadataPatch` 因底层 `ToolExecutionContext.reportMetadata` 为 suspend 而标记 suspend（全部调用方均在挂起上下文）。
+6. `SubAssistantRunGate` 对外的 lease API 标记 internal（`SubAssistantRunKey`/`SubAssistantRunLease` 为 internal 类型），DI 暴露 public 门面。
+7. 见 13.5——FK 约束启用与 REPLACE 级联消除（落地后全量审查发现的两处数据完整性缺陷）。
+
+### 13.5 落地后审查：数据完整性缺陷与修复
+
+> 对照 §11.2/§11.3 全量审查 v7 与重构实现后发现：**v7 的 FK 承诺在运行时从未生效**——Room 默认不启用外键约束（SQLite 默认 `foreign_keys=OFF`），且未配置任何开启路径。该缺陷同时波及 pre 阶段的既有设计（`artifact_reference` 的"node FK 级联自动清"注释是错误假设，实际依赖显式删除兜底）。
+
+| # | 发现 | 后果（若不修复） | 修复 |
+| --- | --- | --- | --- |
+| R1 | FK 约束从未启用：`setForeignKeyConstraintsEnabled` 类配置缺失，SQLite 默认 OFF | v7 自引用 CASCADE 不生效——"孤儿 child 结构性不可能"落空；`message_node`/`artifact_reference` 的级联清理全部依赖应用层显式删除，遗漏即悬挂 | `DataSourceModule` 的 `RoomDatabase.Callback.onOpen` 首行执行 `PRAGMA foreign_keys = ON`（onOpen 晚于 onUpgrade → 迁移期间 FK 保持 OFF，`Migration_6_7` 的表重建天然安全；migration 内保留显式 OFF/ON 包裹作防御） |
+| R2 | `MessageNodeDAO` 全部写入用 `OnConflictStrategy.REPLACE`——SQLite 的 REPLACE 对已存在主键执行 DELETE+INSERT，FK ON 后级联删除该节点的全部 `artifact_reference` 行 | delta upsert 与事务后的 `syncReferences` 重建之间存在引用真空——GC 恰在此窗口跑 `collectUnreferencedArtifacts` 会误删仍被引用的文件（保护窗口仅覆盖新 artifact） | `upsertAll` 改为 `INSERT OR IGNORE + UPDATE` 组合（@Transaction 默认方法）：无 DELETE 语义、无级联，引用行保留 |
+| R3 | `deleteConversation` / `updateChildRetention(deleted)` 只删 conversation 行，依赖（未生效的）FK 级联清理 `message_node` / `artifact_reference` | 删除会话/child 留悬挂行（FK ON 后已自动级联，但该路径历史上一直在留残渣） | 两处事务内补显式清理（`messageNodeDAO.deleteByConversation` + `artifactStore.deleteReferencesOfConversation`）——与 FK 级联双路径幂等 |
+| R4 | 历史残留：FK OFF 期间删除路径遗留的悬挂 `message_node` / `artifact_reference` 行 | FK ON 后 `PRAGMA foreign_key_check` 恒有违规行；悬挂行干扰引用计数与 GC 判定 | v7 migration 增加存量悬挂清理（conversation 不存在的 node、node 不存在的 reference），新增迁移用例 m9 |
+
+新增行为锁定用例：m9（悬挂清理）、m10（IGNORE+UPDATE upsert 在 FK ON 下不级联删除引用行）。既有 m3/m4/m8 的 FK 级联/拒绝用例继续通过（它们显式 `PRAGMA foreign_keys = ON`，与生产 onOpen 开关语义一致）。
+
+### 13.6 审查确认（无缺陷项）
+
+- 写入顺序 FK 安全：`insertConversation` / `insertConversationTree`（fork）均为父 conversation 行先于 nodes；`applyMutation` 的 node upsert 时会话已在库。
+- 引用行 FK 安全：`resolveNodeReferenceEntities` 仅在 artifact 行存在时（`getByPath` 命中）插入引用行。
+- `ConversationDAO.insert` 无 REPLACE 策略（默认 ABORT），不存在 conversation 行替换级联。
+- executeCall 重写行为等价：preflight 顺序/lease 时机/附件回滚/撤权监听/终态分类与 HEAD 逐段对照一致；差异仅为结构化（四阶段 + 唯一 finally）。

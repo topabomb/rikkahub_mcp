@@ -22,7 +22,7 @@ AttachmentProjectionTransformer（按本次 resolved model 的 inputModalities�
     inspect_attachments(refs, request)
         → ToolExecutionContext.resolveAttachments → 识别模型（单次多图调用）→ Text
     ▼
-Turn / Tool 执行事实（ConversationRepository.checkpointTurn / finalizeTurn，Room 事务）
+Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → ConversationRepository.applyMutation，Room 事务）
     ▼
 崩溃恢复（INTERRUPTED / UNKNOWN）与 replay-safe 回放
 ```
@@ -163,8 +163,8 @@ Schema 见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and
 
 ### 6.2 checkpoint 与 finalize
 
-- `ConversationRepository.checkpointTurn()`：工具循环内以 Room 事务提交当前会话消息与执行状态（消息快照 + 状态 upsert，FTS 可选重索引）。
-- `finalizeTurn()`：run 终止后一次性提交终态（reindexFts = true）。
+- `CommitCheckpoint` 命令（`TurnEngine.onCheckpoint` 提交）：工具循环内以 Room 事务（`ConversationRepository.applyMutation`）提交当前会话消息 delta 与执行事实（消息快照 + 状态 upsert，FTS 可选重索引）。
+- `FinalizeTurn` 命令（`TurnEngine.bind` 在终态提交）：run 终止后一次性提交终态（reindexFts = true）。
 - 工具执行期间崩溃：从最近 checkpoint 恢复，丢失窗口 = 当前工具 step。
 
 ### 6.3 定位与副作用顺序
@@ -180,7 +180,7 @@ Schema 见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and
 
 ## 7. 崩溃恢复与回放
 
-### 7.1 重启恢复（`recoverInterruptedExecutions`）
+### 7.1 重启恢复（`TurnRecovery.recoverInterruptedTurns`）
 
 | 重启时状态 | 恢复动作 | 默认失败原因 |
 |-----------|----------|--------------|
@@ -204,7 +204,8 @@ Schema 见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and
 | `ToolExecutionContext` / `ToolAttachmentResolution` | ai 模块最小只读附件能力接口 |
 | `GenerationHandler` | 工具循环、checkpoint、`resolveAttachments` 注入 |
 | `ChatService` / `DelegationCoordinator` | 盖章时机、Target run 工具集 |
-| `ConversationRepository.checkpointTurn` / `finalizeTurn` | Turn 持久化事务 |
+| `TurnRecovery` | 重启恢复与中断收口语义唯一所有者（master turn + 子助手 run，定点链路） |
+| `ConversationRepository.applyMutation` | Turn 持久化事务（命令通道唯一落库入口） |
 | `TurnExecutionStatus` / `ToolExecutionStatus` | 执行事实状态枚举 |
 | `SettingsOcrMigration` / `migrateLegacySettingsJson` | 旧 OCR 设置迁移边界 |
 

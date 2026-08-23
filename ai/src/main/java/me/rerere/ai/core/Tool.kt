@@ -53,6 +53,11 @@ data class ToolExecutionContext(
     val resolveAttachments: suspend (refs: List<String>) -> ToolAttachmentResolution = {
         ToolAttachmentResolution(failureReason = "attachment_resolution_unavailable")
     },
+    /**
+     * 委派类工具在派生会话确定后回写其 id（执行事实归位）。
+     * 未注入时为空操作；Runtime 实现应将其并入本次工具执行的 durable 事实。
+     */
+    val reportChildConversation: suspend (childConversationId: String) -> Unit = {},
 )
 
 @Serializable

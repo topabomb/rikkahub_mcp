@@ -42,7 +42,7 @@ class ConversationRuntimeTest {
     private fun runtime(scope: CoroutineScope, onIdle: () -> Unit = {}): ConversationRuntime =
         ConversationRuntime(
             id = Uuid.random(),
-            initial = Conversation.ofId(Uuid.random(), assistantId = DEFAULT_ASSISTANT_ID),
+            initial = Conversation.ofId(Uuid.random(), assistantId = DEFAULT_ASSISTANT_ID).toSnapshot(),
             scope = scope,
             onIdle = { onIdle() },
         )
@@ -58,9 +58,9 @@ class ConversationRuntimeTest {
             }
         }
         jobs.awaitAll()
-        assertEquals(n, rt.state.value.messageNodes.size)
+        assertEquals(n, rt.snapshot.value.nodes.size)
         // 每条用户消息都保留
-        val texts = rt.state.value.messageNodes.map { it.messages.single().toText() }
+        val texts = rt.snapshot.value.nodes.map { it.messages.single().toText() }
         (0 until n).forEach { i ->
             assertTrue("msg-$i present", texts.contains("msg-$i"))
         }
@@ -82,8 +82,8 @@ class ConversationRuntimeTest {
         )
         // applyStreamingDelta 直接更新 activeTurn（无 DB 调用，纯内存）
         rt.applyStreamingDelta(turnId, assistantId, listOf(streamingText))
-        // 兼容投影 conversation.currentMessages 能看到流式内容
-        val last = rt.state.value.currentMessages.lastOrNull()
+        // currentMessages() 读取入口能看到流式内容（activeTurn 覆盖末节点）
+        val last = rt.snapshot.value.currentMessages().lastOrNull()
         assertNotNull(last)
         assertEquals(assistantId, last?.id)
         assertEquals("streamed", last?.toText())
@@ -97,7 +97,7 @@ class ConversationRuntimeTest {
         val rt = ConversationRuntime(
             id = Uuid.random(),
             initial = Conversation.ofId(Uuid.random(), assistantId = DEFAULT_ASSISTANT_ID)
-                .copy(messageNodes = listOf(userNode)),
+                .copy(messageNodes = listOf(userNode)).toSnapshot(),
             scope = scope,
             onIdle = {},
         )
@@ -113,11 +113,12 @@ class ConversationRuntimeTest {
             assistantId,
             listOf(UIMessage(id = assistantId, role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("delta")))),
         )
-        val overlay = rt.snapshot.value.conversation
-        assertEquals(MessageRole.USER, overlay.messageNodes[0].messages.single().role)
-        assertEquals("child task", overlay.messageNodes[0].messages.single().toText())
-        assertEquals(MessageRole.ASSISTANT, overlay.currentMessages.last().role)
-        assertEquals("delta", overlay.currentMessages.last().toText())
+        // currentMessages 读取入口：activeTurn 覆盖末节点，未污染用户节点
+        val current = rt.snapshot.value.currentMessages()
+        assertEquals(MessageRole.USER, current[0].role)
+        assertEquals("child task", current[0].toText())
+        assertEquals(MessageRole.ASSISTANT, current.last().role)
+        assertEquals("delta", current.last().toText())
         assertSame(userNode, rt.snapshot.value.nodes[0])
         scope.cancel()
     }
@@ -127,9 +128,9 @@ class ConversationRuntimeTest {
         val scope = CoroutineScope(Job())
         val rt = runtime(scope)
         val result = rt.submit(AppendUserMessage(user("hello")))
-        assertEquals(1, result.messageNodes.size)
-        assertEquals(1, rt.state.value.messageNodes.size)
-        assertEquals(rt.state.value, result)
+        assertEquals(1, result.nodes.size)
+        assertEquals(1, rt.snapshot.value.nodes.size)
+        assertEquals(rt.snapshot.value, result)
         scope.cancel()
     }
 
@@ -140,7 +141,7 @@ class ConversationRuntimeTest {
         val scope = CoroutineScope(Job())
         val rt = ConversationRuntime(
             id = Uuid.random(),
-            initial = Conversation.ofId(Uuid.random(), assistantId = DEFAULT_ASSISTANT_ID),
+            initial = Conversation.ofId(Uuid.random(), assistantId = DEFAULT_ASSISTANT_ID).toSnapshot(),
             scope = scope,
             onIdle = {},
         )
@@ -167,7 +168,7 @@ class ConversationRuntimeTest {
         }
         val rt = ConversationRuntime(
             id = Uuid.random(),
-            initial = Conversation.ofId(Uuid.random(), assistantId = DEFAULT_ASSISTANT_ID),
+            initial = Conversation.ofId(Uuid.random(), assistantId = DEFAULT_ASSISTANT_ID).toSnapshot(),
             scope = this,
             onIdle = {},
         )
@@ -198,7 +199,7 @@ class ConversationRuntimeTest {
         }
         val rt = ConversationRuntime(
             id = Uuid.random(),
-            initial = Conversation.ofId(Uuid.random(), assistantId = DEFAULT_ASSISTANT_ID),
+            initial = Conversation.ofId(Uuid.random(), assistantId = DEFAULT_ASSISTANT_ID).toSnapshot(),
             scope = this,
             onIdle = {},
         )

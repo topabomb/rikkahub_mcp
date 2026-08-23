@@ -14,6 +14,7 @@ import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
 import net.weero.measix.pilot.service.runtime.ConversationReducer
 import net.weero.measix.pilot.service.runtime.UpdateToolApproval
+import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import kotlin.uuid.Uuid
@@ -37,11 +38,11 @@ class ChatServiceToolApprovalTest {
 
         // HITL 审批走 UpdateToolApproval 命令（reducer 唯一路径）
         val updated = ConversationReducer.reduce(
-            conversation,
+            conversation.toSnapshot(),
             UpdateToolApproval(message.id, 1, ToolApprovalState.Answered("answer")),
         )
 
-        val tools = updated.currentMessages.last().getTools()
+        val tools = updated.currentMessages().last().getTools()
         assertEquals(ToolApprovalState.Pending, tools[0].approvalState)
         assertEquals(ToolApprovalState.Answered("answer"), tools[1].approvalState)
     }
@@ -99,11 +100,12 @@ class ChatServiceToolApprovalTest {
         )
 
         // locator 指向不存在的消息 → reducer 返回原引用（无变更、不落库）
+        val snapshot = conversation.toSnapshot()
         val updated = ConversationReducer.reduce(
-            conversation,
+            snapshot,
             UpdateToolApproval(Uuid.random(), 0, ToolApprovalState.Approved),
         )
-        assertEquals(conversation, updated)
+        assertEquals(snapshot, updated)
     }
 
     @Test
@@ -118,7 +120,7 @@ class ChatServiceToolApprovalTest {
         )
 
         val afterFirst = ConversationReducer.reduce(
-            conversation,
+            conversation.toSnapshot(),
             UpdateToolApproval(message.id, 0, ToolApprovalState.Answered("first")),
         )
         val afterSecond = ConversationReducer.reduce(
@@ -128,7 +130,7 @@ class ChatServiceToolApprovalTest {
 
         assertEquals(
             listOf(ToolApprovalState.Answered("first"), ToolApprovalState.Answered("second")),
-            afterSecond.currentMessages.last().getTools().map { it.approvalState },
+            afterSecond.currentMessages().last().getTools().map { it.approvalState },
         )
     }
 

@@ -20,8 +20,8 @@ fun TTSAutoPlay(vm: ChatVM, setting: Settings, conversation: Conversation) {
     LaunchedEffect(vm, conversation.id) {
         vm.generationDoneFlow.collect { conversationId ->
             if (conversation.id != conversationId) return@collect
-            // SharedFlow 完成事件可能先于 Compose 参数重组到达，直接读取 ChatService 的权威 StateFlow。
-            val completedConversation = vm.conversation.value
+            // SharedFlow 完成事件可能先于 Compose 参数重组到达，直接读取内存快照（权威事实源）。
+            val completedConversation = vm.currentConversation()
             if (updatedSetting.displaySetting.autoPlayTTSAfterGeneration &&
                 shouldAutoPlayTts(conversationId, completedConversation)
             ) {

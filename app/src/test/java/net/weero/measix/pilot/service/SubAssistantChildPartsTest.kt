@@ -8,9 +8,9 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
+import net.weero.measix.pilot.data.ai.subassistant.buildChildUserParts
+import net.weero.measix.pilot.data.files.AttachmentCloner
 import net.weero.measix.pilot.data.files.FilesManager
-import net.weero.measix.pilot.service.runtime.buildChildUserParts
-import net.weero.measix.pilot.service.runtime.copyPartForChildClone
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -37,7 +37,7 @@ class SubAssistantChildPartsTest {
             },
         )
         val filesManager = mockk<FilesManager>(relaxed = true)
-        val copied = copyPartForChildClone(image, filesManager) as UIMessagePart.Image
+        val copied = AttachmentCloner.clonePart(image, filesManager) as UIMessagePart.Image
         assertEquals(ref, AttachmentRefs.getRef(copied))
         assertEquals("sig", (copied.metadata!!["thoughtSignature"] as JsonPrimitive).content)
         assertEquals(image.url, copied.url)
@@ -57,7 +57,7 @@ class SubAssistantChildPartsTest {
                 ),
             ),
         )
-        val copied = copyPartForChildClone(tool, mockk(relaxed = true)) as UIMessagePart.Tool
+        val copied = AttachmentCloner.clonePart(tool, mockk(relaxed = true)) as UIMessagePart.Tool
         assertEquals(ref, AttachmentRefs.getRef(copied.output.single()))
         assertTrue(copied.output.single() is UIMessagePart.Image)
     }

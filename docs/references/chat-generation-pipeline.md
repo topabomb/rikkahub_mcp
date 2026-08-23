@@ -9,9 +9,11 @@
 
 | 类型 | 职责 |
 |------|------|
-| `ChatService` | 会话入口与编排：装配 Turn 输入、提交域命令、消费 TurnEvent 副作用（标题/建议/TTS/通知）；不实现第二套 chunk 落库协议 |
-| `ConversationRuntime` | 单会话事实源：`commandMutex` 单写、`snapshot`/`state` 投影、`applyStreamingDelta` 内存态、`submit` 差异落库 |
-| `TurnEngine` / `TurnPipelineFactory` | 生成期 chunk→持久化的统一提交协议（Master/Target 共享）；Transformer 装配 |
+| `ChatService` | 会话入口与编排：装配 Turn 输入、提交域命令、消费 TurnEvent 副作用（TTS/通知）；不实现第二套 chunk 落库协议 |
+| `ConversationRuntime` | 单会话事实源：`commandMutex` 单写、`snapshot` 唯一状态流（`ConversationSnapshot`，无兼容投影）、`applyStreamingDelta` 内存态、`submit` 差异落库 |
+| `TurnEngine` / `TurnPipelineFactory` | 生成期 chunk→持久化的统一提交协议（Master/Target 共享，turn 骨架唯一实现 `TurnEngine.start`）；Transformer 装配 |
+| `GenerationSideEffects` | 生成副作用域：音效反馈 + 标题/建议/压缩等会话衍生数据生成（共用后台生成骨架） |
+| `TurnRecovery` | 中断/崩溃恢复语义唯一所有者：master turn 启动恢复、子助手 run 定点收口、取消收口原语、retention |
 | `ConversationRepository` | 单事务 `applyMutation`（message tree + 执行事实）；投影（FTS / artifact_reference）事务后维护 |
 | `InputMessageTransformer` | 请求发送前，以固定顺序变换消息 |
 | `OutputMessageTransformer` | 流式显示、持久化变换和生成结束后的收口处理 |
@@ -217,7 +219,7 @@ OpenAI Images 的 `moderation_blocked` / `content_policy_violation`，以及 xAI
 
 ### 显式语义压缩
 
-用户可通过“压缩上下文”调用 `ChatService.compressConversation()`：
+用户可通过“压缩上下文”调用 `GenerationSideEffects.compressConversation()`（生成副作用域，`ChatService` 暴露 `sideEffects` 入口）：
 
 - 较早历史交给压缩模型生成摘要；
 - 至少保留用户指定数量的最近消息，并把切点回退到完整 USER 轮次；
@@ -242,13 +244,13 @@ OpenAI Images 的 `moderation_blocked` / `content_policy_violation`，以及 xAI
 - 生成结束、失败或取消都通过 `AppEventBus` 发布事件；
 - `ChatNotificationManager` 独立消费事件，生成主链路不直接持有通知状态。
 
-应用启动后、接受新的聊天操作前，`ChatService` 会恢复遗留 `CREATED/RUNNING`：assistant 消息标记
-`INTERRUPTED`，仍为 `STARTED` 的工具标记 `UNKNOWN` 并写入不可自动重试的结果。UI 保留原始部分内容；
+应用启动后、接受新的聊天操作前，`TurnRecovery`（恢复语义唯一所有者）会恢复遗留 `CREATED/RUNNING`：assistant 消息标记
+`INTERRUPTED`，仍为 `STARTED` 的工具标记 `UNKNOWN` 并写入不可自动重试的结果。恢复按会话分组定点加载（`turn_execution` 状态索引查询，DAO JOIN 过滤 Child），不重复反序列化。UI 保留原始部分内容；
 下一次 Provider 请求只读取安全投影。
 
 ## 子助手生成管线扩展
 
-子助手不是另一套生成引擎。它由 `DelegationCoordinator` 在通用 Generation Pipeline 外增加 preflight、lineage、lease、Child 持久化、运行状态和恢复编排；Target 内部仍使用同一 `GenerationHandler`、附件投影、Provider、工具循环和 checkpoint。
+子助手不是另一套生成引擎。它由 `DelegationCoordinator` 在通用 Generation Pipeline 外增加四阶段编排（preflight → materialize Child → run → terminal）；并发门禁（lease + pending ask_user）归 `SubAssistantRunGate`，恢复语义归 `TurnRecovery`，结果形状纯函数归 `SubAssistantResultProjection`。Target 内部仍使用同一 `GenerationHandler`、附件投影、Provider、工具循环和 checkpoint。
 
 通用管线为此提供：
 
@@ -258,7 +260,7 @@ OpenAI Images 的 `moderation_blocked` / `content_policy_violation`，以及 xAI
 - Target 非交互审批策略，以及可由宿主承接的 `ask_user` 例外
 - Master/Child 共用的 `ConversationRuntimeRegistry`
 
-`assistant_call` 同步完成以下流程：校验 Caller、Target、访问与模型；解析当前 Master 分支的 lineage；获取 Master/Target lease；用最新 Settings 重验；新建、复用或克隆 Child；运行 Target；持续保存 Child 与 Master metadata；最后返回成功内容或稳定失败原因。内容政策拒绝、Provider HTTP 失败和未分类异常分别记为 `content_blocked`、`provider_error` 与 `runtime_error`，并带回裁剪后的 `detail`；默认带 `tts_stats` 与轻量 `artifacts[]`，完整 `tts` / `tool_calls` / 交付物内容由 `extras` 按需返回。普通工具 Pending 与子助手桥接的 `ask_user` 共用前台审批音效 `loop_approval`。
+`assistant_call` 同步完成以下流程：校验 Caller、Target、访问与模型；解析当前 Master 分支的 lineage；经 `SubAssistantRunGate` 获取 Master/Target lease；用最新 Settings 重验；新建、复用或克隆 Child；运行 Target；持续保存 Child 与 Master metadata；最后返回成功内容或稳定失败原因。lease 与交互等待器由 executeCall 的唯一 `finally` 释放。内容政策拒绝、Provider HTTP 失败和未分类异常分别记为 `content_blocked`、`provider_error` 与 `runtime_error`，并带回裁剪后的 `detail`；默认带 `tts_stats` 与轻量 `artifacts[]`，完整 `tts` / `tool_calls` / 交付物内容由 `extras` 按需返回。普通工具 Pending 与子助手桥接的 `ask_user` 共用前台审批音效 `loop_approval`。
 
 Target 永久过滤 Assistant 管理与再次委托。`generate_image` 按 Target 快照 ∩ 当前配置允许，不再永久过滤。附件识别模型选择在 Target run 开始时冻结，Target 删除、撤权等运行安全条件仍在 step 边界重验。其他工具继续按子助手运行策略动态装配；Memory Tool 在执行前独立重验。需审批工具默认拒绝，只有 `ask_user` 会按 Child locator 桥接到主聊天。
 
@@ -276,21 +278,24 @@ ai/src/main/java/me/rerere/ai/
 
 app/src/main/java/net/weero/measix/pilot/
 ├─ service/
-│  ├─ ChatService.kt                     # 会话编排、工具装配、显式压缩
+│  ├─ ChatService.kt                     # 会话编排、工具装配
+│  ├─ GenerationSideEffects.kt           # 生成副作用域（音效 + 标题/建议/压缩衍生生成）
+│  ├─ TurnRecovery.kt                    # 恢复语义唯一所有者（master turn + 子助手 run + 取消收口）
+│  ├─ SubAssistantRunGate.kt             # run 门禁（lease + pending ask_user 并发原语）
 │  ├─ runtime/                           # Runtime Core（v1 重构）
-│  │  ├─ ConversationCommands.kt         # 密封命令（BeginTurn/CommitCheckpoint/FinalizeTurn/UpdateHeader/...）
-│  │  ├─ ConversationReducer.kt          # 纯函数 reducer（structural sharing）
-│  │  ├─ ConversationRuntime.kt          # 单写 submit 命令通道 + applyStreamingDelta 流式投影
+│  │  ├─ ConversationCommands.kt         # 密封命令 + ConversationSnapshot（唯一状态形状）
+│  │  ├─ ConversationReducer.kt          # 纯函数 reducer（快照态，structural sharing）
+│  │  ├─ ConversationRuntime.kt          # 单写 submit 命令通道 + applyStreamingDelta 流式投影（snapshot 唯一事实流）
 │  │  ├─ ConversationRuntimeRegistry.kt  # Master/Child 共用 Runtime 生命周期
-│  │  ├─ TurnEngine.kt                   # chunk→投影 / checkpoint→CommitCheckpoint / 终态→FinalizeTurn 的唯一提交协议
-│  │  └─ DelegationCoordinator.kt        # Target 执行协调器
+│  │  ├─ TurnEngine.kt                   # turn 骨架唯一实现（start）+ chunk→投影 / checkpoint→CommitCheckpoint / 终态→FinalizeTurn
+│  │  └─ DelegationCoordinator.kt        # 子助手四阶段编排（preflight/materialize/run/terminal）
 │  ├─ AssistantManagementService.kt      # Assistant CRUD、原子授权、删除编排
 │  └─ ChatNotificationManager.kt         # 通知事件消费者
 └─ data/ai/
    ├─ GenerationHandler.kt               # Provider 请求与工具循环（含 Phase/Checkpoint/Finished）
    ├─ attachments/                       # stable ref、Resolver、安全取图
    ├─ transformers/                      # request/output projection
-   ├─ subassistant/                      # 访问策略、lineage、reducer、metadata、preview、catalog
+   ├─ subassistant/                      # 访问策略、lineage、reducer、metadata、preview、catalog、结果投影纯函数
    └─ tools/
       ├─ AssistantToolFactory.kt         # assistant_manage/inspect/call 工具构建
       ├─ AttachmentInspectionTool.kt      # 按需附件识别

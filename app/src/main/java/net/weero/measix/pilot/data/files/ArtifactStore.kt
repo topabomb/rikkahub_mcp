@@ -70,7 +70,7 @@ class ArtifactStore(
     /**
      * delta 同步，替换语义：
      *  - upsertedNodes：先 deleteByNodeIds 再 insertAll（node 变更后可能不再引用某文件）
-     *  - deletedNodeIds：无需显式删除（node FK 级联），此处仅为调用序兜底
+     *  - deletedNodeIds：显式删除（node FK 级联为主路径，此为 FK 关闭环境的兜底）
      */
     suspend fun syncReferences(
         conversationId: Uuid,
@@ -86,6 +86,11 @@ class ArtifactStore(
         if (deletedNodeIds.isNotEmpty()) {
             artifactReferenceDAO.deleteByNodeIds(deletedNodeIds.map { it.toString() })
         }
+    }
+
+    /** 会话级引用清理（删除会话时随事务调用；node FK 级联为主路径，此为显式兜底）。 */
+    suspend fun deleteReferencesOfConversation(conversationId: Uuid) {
+        artifactReferenceDAO.deleteByConversationId(conversationId.toString())
     }
 
     /** 引用回填：幂等；未置位时逐会话提取引用 token（URL + metadata 相对路径）登记。 */

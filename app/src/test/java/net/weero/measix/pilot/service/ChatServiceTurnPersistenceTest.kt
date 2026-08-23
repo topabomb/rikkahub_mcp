@@ -54,8 +54,10 @@ import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.FolderRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
+import net.weero.measix.pilot.service.TurnRecovery
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.DelegationCoordinator
+import net.weero.measix.pilot.service.runtime.toConversation
 import net.weero.measix.pilot.utils.JsonInstant
 import net.weero.measix.pilot.utils.SoundEffectPlayer
 import org.junit.After
@@ -99,7 +101,7 @@ class ChatServiceTurnPersistenceTest {
         env.service.stopGeneration(conversationId)
         advanceUntilIdle()
 
-        val live = env.service.getConversationFlow(conversationId).value
+        val live = env.service.getConversationSnapshot(conversationId).value.toConversation()
         assertTrue(live.currentMessages.any { it.toText().contains("partial reply") })
         val assistant = live.currentMessages.last { it.role == MessageRole.ASSISTANT }
         assertEquals(MessageTerminalStatus.CANCELLED, assistant.terminalStatus)
@@ -135,7 +137,7 @@ class ChatServiceTurnPersistenceTest {
         env.service.sendMessage(conversationId, listOf(UIMessagePart.Text("hello")))
         advanceUntilIdle()
 
-        val live = env.service.getConversationFlow(conversationId).value
+        val live = env.service.getConversationSnapshot(conversationId).value.toConversation()
         val assistant = live.currentMessages.last { it.role == MessageRole.ASSISTANT }
         assertTrue(assistant.toText().contains("partial reply"))
         assertEquals(MessageTerminalStatus.FAILED, assistant.terminalStatus)
@@ -257,7 +259,7 @@ class ChatServiceTurnPersistenceTest {
         env.service.regenerateAtMessage(conversationId, originalAssistant)
         advanceUntilIdle()
 
-        val assistantNode = env.service.getConversationFlow(conversationId).value.messageNodes[1]
+        val assistantNode = env.service.getConversationSnapshot(conversationId).value.toConversation().messageNodes[1]
         val preserved = assistantNode.messages.single { it.id == originalAssistant.id }
         assertEquals("completed answer", preserved.toText())
         assertNull(preserved.terminalStatus)
@@ -407,7 +409,8 @@ class ChatServiceTurnPersistenceTest {
         mockkObject(ProcessLifecycleOwner)
         every { ProcessLifecycleOwner.get() } returns lifecycleOwner
         val delegationCoordinator = mockk<DelegationCoordinator>(relaxed = true)
-        coEvery { delegationCoordinator.recoverMasterForMutation(any()) } answers { firstArg() }
+        val turnRecovery = mockk<TurnRecovery>(relaxed = true)
+        coEvery { turnRecovery.finalizeStaleRunsBeforeMutation(any()) } answers { firstArg() }
         val service = try {
             ChatService(
                 context = mockk<Application>(relaxed = true),
@@ -429,6 +432,7 @@ class ChatServiceTurnPersistenceTest {
                 delegationCoordinator = delegationCoordinator,
                 sessionRegistry = sessionRegistry,
                 json = JsonInstant,
+                turnRecovery = turnRecovery,
             )
         } finally {
             unmockkObject(ProcessLifecycleOwner)

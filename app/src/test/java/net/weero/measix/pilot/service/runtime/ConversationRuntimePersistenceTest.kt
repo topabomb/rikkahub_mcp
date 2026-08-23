@@ -32,7 +32,7 @@ class ConversationRuntimePersistenceTest {
         val scope = CoroutineScope(Job())
         val rt = ConversationRuntime(
             id = Uuid.random(),
-            initial = Conversation.ofId(Uuid.random()),
+            initial = Conversation.ofId(Uuid.random()).toSnapshot(),
             scope = scope,
             onIdle = {},
             repository = repo,
@@ -98,7 +98,7 @@ class ConversationRuntimePersistenceTest {
         val scope = CoroutineScope(Job())
         val rt = ConversationRuntime(
             id = conversationId,
-            initial = Conversation.ofId(conversationId).copy(messageNodes = listOf(histUser, histAssistant, active)),
+            initial = Conversation.ofId(conversationId).copy(messageNodes = listOf(histUser, histAssistant, active)).toSnapshot(),
             scope = scope,
             onIdle = {},
             repository = repo,

@@ -24,6 +24,7 @@ import net.weero.measix.pilot.service.runtime.BeginTurn
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.OptionalFolderId
 import net.weero.measix.pilot.service.runtime.UpdateHeader
+import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -79,7 +80,7 @@ class FolderOwnershipTest {
         val scope = CoroutineScope(Dispatchers.Default)
         val rt = ConversationRuntime(
             id = conversationId,
-            initial = initial,
+            initial = initial.toSnapshot(),
             scope = scope,
             onIdle = {},
             repository = repo,

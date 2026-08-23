@@ -36,7 +36,7 @@ class AssistantBackgroundServiceTest {
         settings: MutableStateFlow<Settings>,
         artifactStore: ManagedLocalArtifactStore,
         conversations: ConversationRepository = mockk {
-            coEvery { getAllTopLevelConversationsSync() } returns emptyList()
+            coEvery { loadAllTopLevelConversations() } returns emptyList()
             coEvery { getAllChildConversationIds() } returns emptyList()
         },
         media: GenMediaRepository = mockk {
@@ -114,7 +114,7 @@ class AssistantBackgroundServiceTest {
             throw CancellationException("cancelled after commit")
         }
         val conversations = mockk<ConversationRepository>()
-        coEvery { conversations.getAllTopLevelConversationsSync() } returns emptyList()
+        coEvery { conversations.loadAllTopLevelConversations() } returns emptyList()
         coEvery { conversations.getAllChildConversationIds() } returns emptyList()
         val media = mockk<GenMediaRepository>()
         coEvery { media.getAllMediaList() } returns emptyList()
@@ -230,7 +230,7 @@ class AssistantBackgroundServiceTest {
         val artifactStore = mockk<ManagedLocalArtifactStore>()
         coEvery { artifactStore.copyFile(any(), any(), any(), any(), any()) } returns copy
         val conversations = mockk<ConversationRepository>()
-        coEvery { conversations.getAllTopLevelConversationsSync() } returns listOf(
+        coEvery { conversations.loadAllTopLevelConversations() } returns listOf(
             Conversation(
                 assistantId = assistantId,
                 messageNodes = listOf(

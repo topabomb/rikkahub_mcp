@@ -42,6 +42,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -91,6 +92,7 @@ import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.service.runtime.OptionalString
 import net.weero.measix.pilot.service.runtime.SelectNodeVariant
 import net.weero.measix.pilot.service.runtime.UpdateHeader
+import net.weero.measix.pilot.service.runtime.toConversation
 import net.weero.measix.pilot.ui.theme.ProvideChatSurfacePolicy
 import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
@@ -137,7 +139,11 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
     val scope = rememberCoroutineScope()
 
     val setting by vm.settings.collectAsStateWithLifecycle()
-    val conversation by vm.conversation.collectAsStateWithLifecycle()
+    // Conversation 形状按需派生（纯函数转换）：Runtime 单流订阅，
+    // 需要 Conversation 签名的 UI 组件共享同一派生实例（每 snapshot 变化至多一次）。
+    val conversation by remember {
+        derivedStateOf { vm.snapshot.value.toConversation() }
+    }
     val loadingJob by vm.conversationJob.collectAsStateWithLifecycle()
     val processingStatus by vm.processingStatus.collectAsStateWithLifecycle()
     val enableWebSearch by vm.enableWebSearch.collectAsStateWithLifecycle()

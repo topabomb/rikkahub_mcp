@@ -36,6 +36,7 @@ import net.weero.measix.pilot.service.runtime.ConversationHeaderPatch
 import net.weero.measix.pilot.service.runtime.ConversationMutation
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.ExecutionFacts
+import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -174,7 +175,7 @@ class ConversationRepositoryMutationTest {
         val scope = CoroutineScope(Job())
         val runtime = ConversationRuntime(
             id = id,
-            initial = conversation,
+            initial = conversation.toSnapshot(),
             scope = scope,
             onIdle = {},
             repository = repo,
@@ -277,7 +278,7 @@ class ConversationRepositoryMutationTest {
         val scope = CoroutineScope(Job())
         val runtime = ConversationRuntime(
             id = id,
-            initial = conversation,
+            initial = conversation.toSnapshot(),
             scope = scope,
             onIdle = {},
             repository = persistingRepo,

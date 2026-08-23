@@ -48,6 +48,64 @@ class TurnEngine(
     private val assistantMessageId: Uuid,
     private val prepareFinalize: (suspend (TurnExecutionStatus, List<UIMessage>) -> List<UIMessage>)? = null,
 ) {
+    /** turn 骨架启动结果：槽位 id + 可复用的既有 assistant 消息（null = 新建槽）。 */
+    data class StartedTurn(
+        val engine: TurnEngine,
+        val assistantMessageId: Uuid,
+        val resumableMessage: UIMessage?,
+    )
+
+    /**
+     * turn 生命周期骨架唯一实现（Master 与 Target 共用）：
+     * resumable 槽探测 → BeginTurn（打开 assistant 槽）→ 空 CommitCheckpoint（RUNNING
+     * turn 事实，崩溃恢复扫描依据）→ 构造并返回绑定槽位的 engine。
+     *
+     * @param messages 生成输入（resumable 探测基于其末条消息）
+     * @param resumeFilter 末条 assistant 消息可复用判定（Master 含审批恢复语义；
+     *   默认为 Target 语义：存在未执行工具即可复用）
+     * @param prepareFinalize 命令构造前的 Application IO（取消时并入 Child 消息等）
+     */
+    companion object {
+        suspend fun start(
+            runtime: ConversationRuntime,
+            turnId: Uuid,
+            messages: List<UIMessage>,
+            resumeFilter: (UIMessage) -> Boolean = { message ->
+                message.role == me.rerere.ai.core.MessageRole.ASSISTANT &&
+                    message.getTools().any { !it.isExecuted }
+            },
+            prepareFinalize: (suspend (TurnExecutionStatus, List<UIMessage>) -> List<UIMessage>)? = null,
+            onStart: Boolean = true,
+        ): StartedTurn {
+            val resumable = messages.lastOrNull()?.takeIf(resumeFilter)
+            val slotId = resumable?.id ?: Uuid.random()
+            runtime.submit(
+                BeginTurn(
+                    turnId = turnId,
+                    assistantMessageId = slotId,
+                    fromNodeId = null,
+                    resume = resumable != null,
+                    onStart = onStart,
+                )
+            )
+            runtime.submit(
+                CommitCheckpoint(
+                    turnId = turnId,
+                    assistantMessageId = slotId,
+                    messages = emptyList(),
+                    turnStatus = TurnExecutionStatus.RUNNING,
+                    turnReason = null,
+                    toolExecution = null,
+                )
+            )
+            return StartedTurn(
+                engine = TurnEngine(runtime, turnId, slotId, prepareFinalize),
+                assistantMessageId = slotId,
+                resumableMessage = resumable,
+            )
+        }
+    }
+
     /** Last FinalizeTurn status submitted by this engine; null if none yet. */
     var lastFinalizedStatus: TurnExecutionStatus? = null
         private set
@@ -61,7 +119,7 @@ class TurnEngine(
     /** 交给 generateText(onCheckpoint=…) 的回调：将 GenerationCheckpoint 落为 CommitCheckpoint 命令。 */
     suspend fun onCheckpoint(checkpoint: net.weero.measix.pilot.data.ai.GenerationCheckpoint) {
         val turnStatus = checkpoint.kind.toTurnStatus()
-        runtime.submitGeneration(
+        runtime.submit(
             CommitCheckpoint(
                 turnId = turnId,
                 assistantMessageId = assistantMessageId,
@@ -138,7 +196,7 @@ class TurnEngine(
         if (lastFinalizedStatus == terminalStatus && runtime.isTurnFinalized(turnId)) {
             return
         }
-        runtime.submitGeneration(
+        runtime.submit(
             FinalizeTurn(
                 turnId = turnId,
                 assistantMessageId = assistantMessageId,
@@ -292,6 +350,7 @@ private fun ToolExecutionEvent?.toToolExecutionEntity(turnId: Uuid): ToolExecuti
             net.weero.measix.pilot.data.ai.ToolExecutionEventStatus.STARTED -> ToolExecutionStatus.STARTED
         },
         reason = null,
+        childConversationId = childConversationId,
         createdAt = now,
         updatedAt = now,
     )

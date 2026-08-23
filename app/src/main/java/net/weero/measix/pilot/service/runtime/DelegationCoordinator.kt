@@ -2,53 +2,35 @@ package net.weero.measix.pilot.service.runtime
 
 import android.content.Context
 import android.util.Log
-import androidx.core.net.toUri
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
-import me.rerere.ai.ui.finishInterruptedTools
-import me.rerere.ai.ui.finishPendingTools
-import me.rerere.ai.ui.finishReasoning
 import me.rerere.ai.ui.ToolApprovalState
-import net.weero.measix.pilot.data.ai.GenerationChunk
 import net.weero.measix.pilot.data.ai.FinishedReason
 import net.weero.measix.pilot.data.ai.GenerationHandler
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallPhase
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
-import net.weero.measix.pilot.data.ai.subassistant.SubAssistantUserInteraction
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantRunStateReducer
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantRunSpecResolution
-import net.weero.measix.pilot.data.ai.subassistant.ASSISTANT_CALL_EXTRA_ARTIFACTS
-import net.weero.measix.pilot.data.ai.subassistant.ASSISTANT_CALL_EXTRA_TOOL_CALLS
-import net.weero.measix.pilot.data.ai.subassistant.ASSISTANT_CALL_EXTRA_TTS
-import net.weero.measix.pilot.data.ai.subassistant.CallerArtifactProjection
-import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallArtifact
-import net.weero.measix.pilot.data.ai.subassistant.SubAssistantDeliverableArtifact
-import net.weero.measix.pilot.data.ai.subassistant.SubAssistantTtsStats
 import net.weero.measix.pilot.data.ai.subassistant.buildInitialSubAssistantCallMetadata
-import net.weero.measix.pilot.data.ai.subassistant.buildSubAssistantCallResult
+import net.weero.measix.pilot.data.ai.subassistant.buildClassifiedFailureResult
+import net.weero.measix.pilot.data.ai.subassistant.buildUnavailableCallResult
+import net.weero.measix.pilot.data.ai.subassistant.buildChildUserParts
+import net.weero.measix.pilot.data.ai.subassistant.buildSubAssistantCallResultParts
+import net.weero.measix.pilot.data.ai.subassistant.extractFinalAnswerInternal
 import net.weero.measix.pilot.data.ai.subassistant.extractDeliverableArtifacts
-import net.weero.measix.pilot.data.ai.subassistant.messagesInRunRange
 import net.weero.measix.pilot.data.ai.subassistant.projectArtifactsForCaller
 import net.weero.measix.pilot.data.ai.subassistant.computeSubAssistantPreview
 import net.weero.measix.pilot.data.ai.subassistant.computeTerminalPreview
@@ -58,49 +40,44 @@ import net.weero.measix.pilot.data.ai.subassistant.findPreviousCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.classifySubAssistantFailure
 import net.weero.measix.pilot.data.ai.subassistant.modelVisibleFailureDetail
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
+import net.weero.measix.pilot.data.ai.subassistant.mapSubAssistantCallPhase
+import net.weero.measix.pilot.data.ai.subassistant.normalizeSubAssistantCancellationReason
+import net.weero.measix.pilot.data.ai.subassistant.preprocessSubAssistantTask
+import net.weero.measix.pilot.data.ai.subassistant.reportSubAssistantMetadataPatch
 import net.weero.measix.pilot.data.ai.subassistant.resolveLineage
 import net.weero.measix.pilot.data.ai.subassistant.resolveActiveRunStopReason
 import net.weero.measix.pilot.data.ai.subassistant.resolvePreWriteBlockReason
 import net.weero.measix.pilot.data.ai.subassistant.resolveSubAssistantRunSpec
 import net.weero.measix.pilot.data.ai.subassistant.validateReadiness
+import net.weero.measix.pilot.data.ai.subassistant.ReadinessResult
+import net.weero.measix.pilot.data.ai.subassistant.LineageDecision
+import net.weero.measix.pilot.data.ai.subassistant.SubAssistantDeliverableArtifact
 import net.weero.measix.pilot.data.ai.tools.GenerationToolSetFactory
 import net.weero.measix.pilot.data.ai.tools.ToolSetRunMode
+import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
 import net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
-import net.weero.measix.pilot.data.ai.attachments.AttachmentFailureReasons
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolveResult
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
-import net.weero.measix.pilot.data.ai.transformers.AttachmentProjectionTransformer
-import net.weero.measix.pilot.data.ai.transformers.Base64ImageToLocalFileTransformer
-import net.weero.measix.pilot.data.ai.transformers.DocumentAsPromptTransformer
-import net.weero.measix.pilot.data.ai.transformers.InputMessageTransformer
-import net.weero.measix.pilot.data.ai.transformers.OutputMessageTransformer
-import net.weero.measix.pilot.data.ai.transformers.TransformerContext
-import net.weero.measix.pilot.data.ai.transformers.PlaceholderTransformer
-import net.weero.measix.pilot.data.ai.transformers.PromptInjectionTransformer
-import net.weero.measix.pilot.data.ai.transformers.RegexOutputTransformer
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
-import net.weero.measix.pilot.data.ai.transformers.ThinkTagTransformer
-import net.weero.measix.pilot.data.ai.transformers.TimeReminderTransformer
 import net.weero.measix.pilot.data.ai.transformers.WorkspaceReminderTransformer
-import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getAssistantById
-import net.weero.measix.pilot.data.datastore.getChatModel
+import net.weero.measix.pilot.data.files.AttachmentCloner
 import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
-import net.weero.measix.pilot.data.model.AssistantAffectScope
-import net.weero.measix.pilot.data.model.replaceRegexes
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
-import net.weero.measix.pilot.service.SubAssistantRunLeaseRegistry
+import net.weero.measix.pilot.service.SubAssistantRunGate
 import net.weero.measix.pilot.service.SubAssistantRunKey
-import net.weero.measix.pilot.service.recoverMasterSubAssistantCalls
-import net.weero.measix.pilot.service.resolveValidRecoveryChild
-import java.util.concurrent.ConcurrentHashMap
+import net.weero.measix.pilot.service.TurnRecovery
+import net.weero.measix.pilot.service.runtime.toConversation
+import kotlinx.coroutines.Job
+import kotlin.coroutines.coroutineContext
 import kotlin.uuid.Uuid
 
 private const val TAG = "DelegationCoordinator"
@@ -108,49 +85,19 @@ private const val PREVIEW_THROTTLE_MS = 100L
 private const val MAX_SUB_ASSISTANT_INTERACTIONS = 16
 private const val FINALIZATION_TIMEOUT_MS = 5_000L
 
-internal data class InterruptedRunFinalizationFailures(
-    val child: Throwable?,
-    val metadata: Throwable?,
-)
-
-internal suspend fun finalizeInterruptedRunSafely(
-    timeoutMillis: Long,
-    finalizeChild: suspend () -> Unit,
-    finalizeMetadata: suspend () -> Unit,
-): InterruptedRunFinalizationFailures = withContext(NonCancellable) {
-    val childFailure = runCatching {
-        withTimeout(timeoutMillis) { finalizeChild() }
-    }.exceptionOrNull()
-    val metadataFailure = runCatching {
-        withTimeout(timeoutMillis) { finalizeMetadata() }
-    }.exceptionOrNull()
-    InterruptedRunFinalizationFailures(childFailure, metadataFailure)
-}
-
-/**
- * Target Generation 运行结果。
- * 包含最终消息列表和 Finished 原因（可能为 null 兼容旧路径）。
- */
+/** Target Generation 运行结果（最终消息 + Finished 原因）。 */
 private data class TargetGenerationResult(
-    val messages: List<me.rerere.ai.ui.UIMessage>,
+    val messages: List<UIMessage>,
     val finishReason: FinishedReason?,
 )
 
 /**
- * 子助手调用协调器。
+ * 子助手调用协调器（编排域）。
  *
- * 职责：Readiness、RunSpec、Child create/reuse/clone、Target Generation、
- * 进度桥接、终态与恢复。不依赖 [ChatService]，避免循环依赖。
- *
- * 依赖方向：
- * ```
- * AssistantToolFactory
- *   └─> DelegationCoordinator
- *           ├─> GenerationToolSetFactory
- *           ├─> ConversationRuntimeRegistry
- *           ├─> ConversationRepository
- *           └─> GenerationHandler
- * ```
+ * executeCall 四阶段：preflight（readiness/lineage/lease）→ materialize（附件 + Child
+ * create/reuse/clone）→ run（Target 生成循环）→ terminal（终态分类与结果构建）。
+ * 恢复语义归 [TurnRecovery]，结果形状归 SubAssistantResultProjection，并发门禁归
+ * [SubAssistantRunGate]。不依赖 ChatService，避免循环依赖。
  */
 class DelegationCoordinator(
     private val generationHandler: GenerationHandler,
@@ -165,51 +112,52 @@ class DelegationCoordinator(
     private val json: Json,
     private val attachmentResolver: AttachmentResolver,
     private val context: Context,
+    private val turnRecovery: TurnRecovery,
+    private val runGate: SubAssistantRunGate,
 ) {
-    private data class PendingUserInteraction(
-        val interactionId: String,
-        val answer: CompletableDeferred<String> = CompletableDeferred(),
-    )
-
-    private val runLeases = SubAssistantRunLeaseRegistry()
-    private val pendingUserInteractions = ConcurrentHashMap<String, PendingUserInteraction>()
-    private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
-
     // Master/Target 共用管道装配。Target 管道不注入 ToolArtifactReplay
     // （run 内 artifact 重放仅 Master 侧需要），与 targetInput() 的固定清单一致。
     private val turnPipelineFactory = TurnPipelineFactory(
         templateTransformer = templateTransformer,
-        workspaceReminderTransformer = workspaceReminderTransformer,
+        workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository),
         toolArtifactReplayTransformer = null,
     )
 
     /** 删除 Target 前取消并等待其所有正在执行的 Target Run 停止写回。 */
     suspend fun cancelRunsForAssistant(assistantId: Uuid) {
-        runLeases.cancelForAssistant(assistantId)
+        runGate.cancelRunsForAssistant(assistantId)
     }
 
     /** 主聊天 UI 回答子助手当前 ask_user；过期或重复 interaction 会被拒绝。 */
     fun answerUserInteraction(runId: String, interactionId: String, answer: String): Boolean {
-        val pending = pendingUserInteractions[runId] ?: return false
-        if (pending.interactionId != interactionId) return false
-        return pending.answer.complete(answer)
+        return runGate.completeAnswer(runId, interactionId, answer)
     }
 
-    /**
-     * 执行 assistant_call。
-     *
-     * @return Tool Result parts
-     */
-    suspend fun executeCall(
+    // ---- Phase A: preflight ----
+
+    /** preflight 产物：放行（含 lease）或拒绝（含结果 parts）。 */
+    private sealed interface Preflight {
+        data class Ready(
+            val runSpec: net.weero.measix.pilot.data.ai.subassistant.SubAssistantRunSpec,
+            val target: Assistant,
+            val model: me.rerere.ai.provider.Model,
+            val processedTask: String,
+            val lineageDecision: LineageDecision,
+            val runId: String,
+            val runKey: SubAssistantRunKey,
+            val lease: net.weero.measix.pilot.service.SubAssistantRunLease,
+        ) : Preflight
+
+        data class Blocked(val parts: List<UIMessagePart>) : Preflight
+    }
+
+    private suspend fun preflightCall(
         callerAssistantId: Uuid,
         masterConversationId: Uuid,
         targetAssistantId: Uuid,
         task: String,
         execContext: ToolExecutionContext,
-        turnTtsContext: TtsToolPlaybackContext? = null,
-        extras: Set<String> = emptySet(),
-        attachments: List<String> = emptyList(),
-    ): List<UIMessagePart> {
+    ): Preflight {
         val settings = settingsStore.settingsFlow.value
         val targetAssistant = settings.getAssistantById(targetAssistantId)
         val callerAssistant = settings.getAssistantById(callerAssistantId)
@@ -227,13 +175,10 @@ class DelegationCoordinator(
             (runSpecResolution as? SubAssistantRunSpecResolution.Blocked)?.reason
                 ?: "target_model_unavailable"
 
-        // 1. Readiness 验证
-        // key 为 (masterConversationId, targetAssistantId) 组合，允许不同 Master 并发调用同一 Target
-        val activeRunKey = SubAssistantRunKey(masterConversationId, targetAssistantId)
-        val isActiveRun = runLeases.isBusy(activeRunKey)
+        val runKey = SubAssistantRunKey(masterConversationId, targetAssistantId)
         val callerAllowedIds = callerAssistant?.allowedSubAssistantIds ?: emptySet()
         val callerHasDelegation = callerAssistant?.localTools?.any {
-            it == net.weero.measix.pilot.data.ai.tools.local.LocalToolOption.AssistantDelegation
+            it == LocalToolOption.AssistantDelegation
         } ?: false
         val readiness = validateReadiness(
             targetAssistant = targetAssistant,
@@ -241,28 +186,29 @@ class DelegationCoordinator(
             callerAllowedSubAssistantIds = callerAllowedIds,
             callerHasDelegation = callerHasDelegation,
             settingsChatModel = resolvedRunSpec?.model,
-            isActiveRun = isActiveRun,
+            isActiveRun = runGate.isBusy(runKey),
             modelUnavailableReason = modelUnavailableReason,
         )
-        if (readiness is net.weero.measix.pilot.data.ai.subassistant.ReadinessResult.Blocked) {
-            return unavailableResult(
-                execContext = execContext,
-                targetAssistantId = targetAssistantId,
-                assistantName = targetAssistant?.name ?: targetAssistantId.toString(),
-                reason = readiness.reason,
+        if (readiness is ReadinessResult.Blocked) {
+            return Preflight.Blocked(
+                buildUnavailableCallResult(
+                    json = json,
+                    execContext = execContext,
+                    targetAssistantId = targetAssistantId,
+                    assistantName = targetAssistant?.name ?: targetAssistantId.toString(),
+                    reason = readiness.reason,
+                )
             )
         }
 
         val runSpec = requireNotNull(resolvedRunSpec)
         val target = runSpec.assistant
-        val model = runSpec.model
         val processedTask = preprocessSubAssistantTask(task, target)
 
-        // 2. 从 session registry 获取 Master 当前消息（用于 lineage 解析）
-        val masterMessages = sessionRegistry.getSession(masterConversationId)?.state?.value?.currentMessages
+        // lineage：previous run 元数据（当前调用之前的同 Target 调用）决定 Child 语义
+        val masterMessages = sessionRegistry.getSession(masterConversationId)
+            ?.snapshot?.value?.currentMessages()
             ?: emptyList()
-
-        // 3. 解析 previous run 与 Child lineage
         val previousMeta = findPreviousCallMetadata(
             masterMessages = masterMessages,
             currentMessageId = execContext.messageId,
@@ -270,15 +216,12 @@ class DelegationCoordinator(
             targetAssistantId = targetAssistantId,
             json = json,
         )
-
-        val runId = Uuid.random().toString()
-
-        // 4. 根据 lineage 决策创建/复用/克隆 Child
         val lineageDecision = when (previousMeta) {
-            null -> net.weero.measix.pilot.data.ai.subassistant.LineageDecision.CreateNew
+            null -> LineageDecision.CreateNew
             else -> {
                 val childConversation = previousMeta.childConversationId?.let { childIdStr ->
-                    runCatching { Uuid.parse(childIdStr) }.getOrNull()?.let { conversationRepo.getConversationById(it) }
+                    runCatching { Uuid.parse(childIdStr) }.getOrNull()
+                        ?.let { conversationRepo.getConversationById(it) }
                 }
                 resolveLineage(
                     previousMeta = previousMeta,
@@ -289,184 +232,262 @@ class DelegationCoordinator(
             }
         }
 
-        // 所有路径先得到最终 Child ID 并取得 lease，
-        // 再创建/克隆持久化数据或追加 request。
-        // 对于 ReuseChild，lineage 已知 Child ID，先按该 ID 检查是否已有活跃 Job。
-        // 对于 CreateNew/CreateNewDueToError/CloneChild，使用 lineage key 检查
-        // （新 Child 不存在同 Child 冲突，但同一 Master+Target 不应并发）。
-        // runLeases 已在 preflight 阶段检查过，这里再次确认并在执行前原子获取 lease。
-        val activeTargetRun = runLeases.tryAcquire(
-            key = activeRunKey,
+        // 原子获取 lease（lineage 决策后、持久化前；同 Master+Target 不可并发）
+        val runId = Uuid.random().toString()
+        val lease = runGate.tryAcquire(
+            key = runKey,
             runId = runId,
             callerAssistantId = callerAssistantId,
-            parentJob = kotlin.coroutines.coroutineContext[Job],
-        )
-        if (activeTargetRun == null) {
-            // preflight 与此处之间可能产生了并发调用
-            return unavailableResult(
+            parentJob = coroutineContext[Job],
+        ) ?: return Preflight.Blocked(
+            buildUnavailableCallResult(
+                json = json,
                 execContext = execContext,
                 targetAssistantId = targetAssistantId,
                 assistantName = target.name,
                 reason = "target_busy",
                 runId = runId,
             )
-        }
+        )
 
-        // 写入 request 前再做一次访问校验，
-        // 关闭 preflight 与持久化之间的竞态窗口。
-        val latestSettingsCheck = settingsStore.settingsFlow.value
+        // 写入 request 前复验（关闭 preflight 与持久化之间的撤权竞态窗口）
         val latestBlockReason = resolvePreWriteBlockReason(
-            settings = latestSettingsCheck,
+            settings = settingsStore.settingsFlow.value,
             callerAssistantId = callerAssistantId,
             targetAssistantId = targetAssistantId,
             runSpec = runSpec,
         )
         if (latestBlockReason != null) {
-            runLeases.release(activeRunKey, activeTargetRun)
-            return unavailableResult(
-                execContext = execContext,
-                targetAssistantId = targetAssistantId,
-                assistantName = target.name,
-                reason = latestBlockReason,
-                runId = runId,
+            runGate.release(runKey, lease)
+            return Preflight.Blocked(
+                buildUnavailableCallResult(
+                    json = json,
+                    execContext = execContext,
+                    targetAssistantId = targetAssistantId,
+                    assistantName = target.name,
+                    reason = latestBlockReason,
+                    runId = runId,
+                )
             )
         }
-        val runJob = activeTargetRun.job
 
-        // 能力不足不是附件失败：入站只验证 attachment ref/资产，
-        // 视觉能力由 Target run 自己的 AttachmentProjectionTransformer 与 tool set 表达。
+        return Preflight.Ready(
+            runSpec = runSpec,
+            target = target,
+            model = runSpec.model,
+            processedTask = processedTask,
+            lineageDecision = lineageDecision,
+            runId = runId,
+            runKey = runKey,
+            lease = lease,
+        )
+    }
 
-        val childConversationId: Uuid
-        val childTaskNodeId: Uuid
+    // ---- Phase B: materialize Child ----
+
+    /** materialize 产物：Child 定位 + 初始 metadata，或失败（含结果 parts）。 */
+    private sealed interface Materialized {
+        data class Ready(
+            val childConversationId: Uuid,
+            val childTaskNodeId: Uuid,
+            val runJob: Job,
+        ) : Materialized
+
+        data class Failure(val parts: List<UIMessagePart>) : Materialized
+    }
+
+    private suspend fun materializeChild(
+        preflight: Preflight.Ready,
+        masterConversationId: Uuid,
+        targetAssistantId: Uuid,
+        execContext: ToolExecutionContext,
+        attachments: List<String>,
+        extras: Set<String>,
+    ): Materialized {
+        val target = preflight.target
         // 本批解析新落地的远程文件；Child 写入失败时要回滚，避免留下孤儿文件。
         var createdManagedFileIds: List<Long> = emptyList()
-
         try {
             val latestMasterMessages = sessionRegistry.getSession(masterConversationId)
-                ?.state?.value?.currentMessages
-                ?: masterMessages
+                ?.snapshot?.value?.currentMessages()
+                ?: emptyList()
+            // 能力不足不是附件失败：入站只验证 attachment ref/资产，
+            // 视觉能力由 Target run 自己的 AttachmentProjectionTransformer 与 tool set 表达。
             val resolvedImages = if (attachments.isEmpty()) {
                 emptyList()
             } else {
                 when (val resolved = attachmentResolver.resolve(latestMasterMessages, attachments)) {
-                    is AttachmentResolveResult.Failure -> {
-                        runLeases.release(activeRunKey, activeTargetRun)
-                        return unavailableResult(
+                    is AttachmentResolveResult.Failure -> return Materialized.Failure(
+                        buildUnavailableCallResult(
+                            json = json,
                             execContext = execContext,
                             targetAssistantId = targetAssistantId,
                             assistantName = target.name,
                             reason = resolved.reason,
-                            runId = runId,
+                            runId = preflight.runId,
                         )
-                    }
+                    )
                     is AttachmentResolveResult.Success -> {
                         createdManagedFileIds = resolved.createdManagedFileIds
                         resolved.parts
                     }
                 }
             }
-            val userParts = buildChildUserParts(processedTask, resolvedImages)
+            val userParts = buildChildUserParts(preflight.processedTask, resolvedImages)
 
-            when (lineageDecision) {
-                is net.weero.measix.pilot.data.ai.subassistant.LineageDecision.CreateNew,
-                is net.weero.measix.pilot.data.ai.subassistant.LineageDecision.CreateNewDueToError -> {
-                    val result = createNewChild(target, masterConversationId, userParts)
-                    childConversationId = result.first
-                    childTaskNodeId = result.second
+            return when (preflight.lineageDecision) {
+                is LineageDecision.CreateNew,
+                is LineageDecision.CreateNewDueToError,
+                -> {
+                    val (childId, taskNodeId) = createNewChild(target, masterConversationId, userParts)
+                    Materialized.Ready(childId, taskNodeId, preflight.lease.job)
                 }
 
-                is net.weero.measix.pilot.data.ai.subassistant.LineageDecision.ReuseChild -> {
-                    val result = reuseChild(target, lineageDecision.childConversationId, userParts)
-                    childConversationId = lineageDecision.childConversationId
-                    childTaskNodeId = result
+                is LineageDecision.ReuseChild -> {
+                    val taskNodeId = reuseChild(target, preflight.lineageDecision.childConversationId, userParts)
+                    Materialized.Ready(preflight.lineageDecision.childConversationId, taskNodeId, preflight.lease.job)
                 }
 
-                is net.weero.measix.pilot.data.ai.subassistant.LineageDecision.CloneChild -> {
-                    val result = cloneChild(
+                is LineageDecision.CloneChild -> {
+                    val (childId, taskNodeId) = cloneChild(
                         target = target,
                         masterConversationId = masterConversationId,
-                        sourceChildId = lineageDecision.sourceChildConversationId,
-                        throughTaskMessageId = lineageDecision.throughTaskMessageId,
+                        sourceChildId = preflight.lineageDecision.sourceChildConversationId,
+                        throughTaskMessageId = preflight.lineageDecision.throughTaskMessageId,
                         userParts = userParts,
                     )
-                    childConversationId = result.first
-                    childTaskNodeId = result.second
+                    Materialized.Ready(childId, taskNodeId, preflight.lease.job)
                 }
             }
         } catch (e: Exception) {
-            runLeases.release(activeRunKey, activeTargetRun)
             // Child 写入/持久化失败：删除本批刚落地的远程附件，避免孤儿文件。
+            // lease 释放由 executeCall 的统一 finally 负责。
             createdManagedFileIds.forEach { id ->
                 runCatching { filesManager.deleteManagedFilePermanently(id, deleteFromDisk = true) }
             }
             if (e is CancellationException) throw e
-            return classifiedFailureResult(
-                error = e,
-                execContext = execContext,
-                targetAssistantId = targetAssistantId,
-                assistantName = target.name,
-                extras = extras,
-                runId = runId,
-            )
-        }
-
-        // Child 与 Master 使用同一 Registry。该 Job 也是 run lease 中的结构化子 Job，
-        // 主回合取消、Target 删除或 App 清理都会命中同一个生命周期对象。
-        sessionRegistry.getOrCreateSession(childConversationId).setJob(runJob)
-
-        // 5. 写初始 metadata 到 Master tool（start link）
-        val initialMeta = buildInitialSubAssistantCallMetadata(
-            runId = runId,
-            targetAssistantId = targetAssistantId,
-            targetNameSnapshot = target.name,
-            previousRunId = when (lineageDecision) {
-                is net.weero.measix.pilot.data.ai.subassistant.LineageDecision.ReuseChild ->
-                    lineageDecision.previousRunId
-                is net.weero.measix.pilot.data.ai.subassistant.LineageDecision.CloneChild ->
-                    lineageDecision.sourceRunId
-                else -> null
-            },
-        ).copy(
-            childConversationId = childConversationId.toString(),
-            childTaskNodeId = childTaskNodeId.toString(),
-            state = SubAssistantCallState.RUNNING,
-            phase = SubAssistantCallPhase.PREPARING,
-        )
-        val runState = SubAssistantRunStateReducer(initialMeta)
-
-        try {
-            reportMetadataPatch(execContext, initialMeta, checkpoint = true)
-        } catch (e: Exception) {
-            runLeases.release(activeRunKey, activeTargetRun)
-            if (e is CancellationException) throw e
-            return classifiedFailureResult(
-                error = e,
-                execContext = execContext,
-                targetAssistantId = targetAssistantId,
-                assistantName = target.name,
-                extras = extras,
-                runId = runId,
-            )
-        }
-
-        // 运行中 Settings 撤权监听器
-        // 监听最新 Settings，重算 caller/Target 关系；变化时立即取消 Child Job
-        val runScope = CoroutineScope(kotlin.coroutines.coroutineContext + runJob)
-        val settingsWatcher = runScope.launch {
-            settingsStore.settingsFlow.collect { latestSettings ->
-                resolveActiveRunStopReason(
-                    settings = latestSettings,
-                    callerAssistantId = callerAssistantId,
+            return Materialized.Failure(
+                buildClassifiedFailureResult(
+                    json = json,
+                    error = e,
+                    execContext = execContext,
                     targetAssistantId = targetAssistantId,
-                    runSpec = runSpec,
-                )?.let { reason ->
-                    runJob.cancel(reason)
+                    assistantName = target.name,
+                    extras = extras,
+                    runId = preflight.runId,
+                )
+            )
+        }
+    }
+
+    // ---- executeCall：四阶段主线 ----
+
+    /**
+     * 执行 assistant_call。
+     *
+     * @return Tool Result parts
+     */
+    suspend fun executeCall(
+        callerAssistantId: Uuid,
+        masterConversationId: Uuid,
+        targetAssistantId: Uuid,
+        task: String,
+        execContext: ToolExecutionContext,
+        turnTtsContext: TtsToolPlaybackContext? = null,
+        extras: Set<String> = emptySet(),
+        attachments: List<String> = emptyList(),
+    ): List<UIMessagePart> {
+        // Phase A: preflight — readiness / lineage / lease
+        val preflight = preflightCall(
+            callerAssistantId = callerAssistantId,
+            masterConversationId = masterConversationId,
+            targetAssistantId = targetAssistantId,
+            task = task,
+            execContext = execContext,
+        )
+        if (preflight is Preflight.Blocked) return preflight.parts
+        val ready = preflight as Preflight.Ready
+        val target = ready.target
+        val model = ready.model
+
+        var settingsWatcher: kotlinx.coroutines.Job? = null
+        var runScope: CoroutineScope? = null
+        var childConversationId: Uuid? = null
+        var childTaskNodeId: Uuid? = null
+        var runState: SubAssistantRunStateReducer? = null
+        try {
+            // Phase B: materialize — 附件解析 + Child create/reuse/clone
+            val materialized = materializeChild(
+                preflight = ready,
+                masterConversationId = masterConversationId,
+                targetAssistantId = targetAssistantId,
+                execContext = execContext,
+                attachments = attachments,
+                extras = extras,
+            )
+            if (materialized is Materialized.Failure) return materialized.parts
+            val child = materialized as Materialized.Ready
+            childConversationId = child.childConversationId
+            childTaskNodeId = child.childTaskNodeId
+            val runJob = child.runJob
+
+            // Child 与 Master 使用同一 Registry。该 Job 也是 run lease 中的结构化子 Job，
+            // 主回合取消、Target 删除或 App 清理都会命中同一个生命周期对象。
+            sessionRegistry.getOrCreateSession(childConversationId).setJob(runJob)
+
+            // 调用↔Child 关系归位：本次工具执行的 durable 事实携带 child id
+            // （崩溃恢复经 turn_execution(status) → child_conversation_id 定点收口）。
+            runCatching { execContext.reportChildConversation(childConversationId.toString()) }
+                .onFailure { Log.w(TAG, "reportChildConversation failed: ${it.message}") }
+
+            // 初始 metadata（start link）
+            val initialMeta = buildInitialSubAssistantCallMetadata(
+                runId = ready.runId,
+                targetAssistantId = targetAssistantId,
+                targetNameSnapshot = target.name,
+                previousRunId = when (val lineage = ready.lineageDecision) {
+                    is LineageDecision.ReuseChild -> lineage.previousRunId
+                    is LineageDecision.CloneChild -> lineage.sourceRunId
+                    else -> null
+                },
+            ).copy(
+                childConversationId = childConversationId.toString(),
+                childTaskNodeId = childTaskNodeId.toString(),
+                state = SubAssistantCallState.RUNNING,
+                phase = SubAssistantCallPhase.PREPARING,
+            )
+            runState = SubAssistantRunStateReducer(initialMeta)
+            try {
+                reportSubAssistantMetadataPatch(json, execContext, initialMeta, checkpoint = true)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                return buildClassifiedFailureResult(
+                    json = json,
+                    error = e,
+                    execContext = execContext,
+                    targetAssistantId = targetAssistantId,
+                    assistantName = target.name,
+                    extras = extras,
+                    runId = ready.runId,
+                )
+            }
+
+            // 运行中 Settings 撤权监听器：重算 caller/Target 关系，变化即取消 Child Job
+            runScope = CoroutineScope(coroutineContext + runJob)
+            settingsWatcher = runScope.launch {
+                settingsStore.settingsFlow.collect { latestSettings ->
+                    resolveActiveRunStopReason(
+                        settings = latestSettings,
+                        callerAssistantId = callerAssistantId,
+                        targetAssistantId = targetAssistantId,
+                        runSpec = ready.runSpec,
+                    )?.let { reason ->
+                        runJob.cancel(reason)
+                    }
                 }
             }
-        }
 
-        try {
-            // 6. 运行 Target Generation
+            // Phase C: run — Target Generation
             runJob.ensureActive()
             val genResult = withContext(runJob) {
                 runTargetGeneration(
@@ -475,7 +496,7 @@ class DelegationCoordinator(
                     childConversationId = childConversationId,
                     childTaskNodeId = childTaskNodeId,
                     execContext = execContext,
-                    runId = runId,
+                    runId = ready.runId,
                     runState = runState,
                     turnTtsContext = turnTtsContext,
                 )
@@ -487,174 +508,194 @@ class DelegationCoordinator(
                 settings = settingsStore.settingsFlow.value,
                 callerAssistantId = callerAssistantId,
                 targetAssistantId = targetAssistantId,
-                runSpec = runSpec,
+                runSpec = ready.runSpec,
             )?.let { reason -> throw CancellationException(reason) }
 
-            // 7. 根据 FinishedReason 确定终态
-            when (genResult.finishReason) {
-                FinishedReason.STEP_LIMIT_REACHED -> {
-                    val terminalMeta = runState.updateTerminalState(
-                        state = SubAssistantCallState.FAILED,
-                        reason = "step_limit_reached",
-                    )
-                    reportMetadataPatch(execContext, terminalMeta, checkpoint = false)
-                    return buildCallResultParts(
-                        status = "failed",
-                        assistantName = target.name,
-                        reason = "step_limit_reached",
-                        messages = genResult.messages,
-                        childTaskNodeId = childTaskNodeId,
-                        extras = extras,
-                    )
-                }
-                FinishedReason.INTERACTION_LIMIT_REACHED -> {
-                    val terminalMeta = runState.updateTerminalState(
-                        state = SubAssistantCallState.FAILED,
-                        reason = "interaction_limit_reached",
-                    )
-                    reportMetadataPatch(execContext, terminalMeta, checkpoint = false)
-                    return buildCallResultParts(
-                        status = "failed",
-                        assistantName = target.name,
-                        reason = "interaction_limit_reached",
-                        messages = genResult.messages,
-                        childTaskNodeId = childTaskNodeId,
-                        extras = extras,
-                    )
-                }
-                FinishedReason.AWAITING_APPROVAL -> {
-                    // 只有无法桥接 Pending ask_user 或达到交互上限时才会返回到这里。
-                    val terminalMeta = runState.updateTerminalState(
-                        state = SubAssistantCallState.FAILED,
-                        reason = "approval_blocked",
-                    )
-                    reportMetadataPatch(execContext, terminalMeta, checkpoint = false)
-                    return buildCallResultParts(
-                        status = "failed",
-                        assistantName = target.name,
-                        reason = "approval_blocked",
-                        messages = genResult.messages,
-                        childTaskNodeId = childTaskNodeId,
-                        extras = extras,
-                    )
-                }
-                else -> {
-                    // COMPLETED 或 null（兼容旧路径）
-                    val finalText = extractFinalAnswer(genResult.messages, childTaskNodeId)
-                    val extracted = extractDeliverableArtifacts(
-                        messages = genResult.messages,
-                        childTaskNodeId = childTaskNodeId,
-                        filesDir = context.filesDir,
-                    )
-                    val artifacts = extracted.artifacts.map { it.toMetadata() }
-                    val hasNonTextOutput = extracted.hasNonTextOutput
-                    val callerProjection = projectCompletedArtifacts(
-                        extras = extras,
-                        extracted = extracted.artifacts,
-                    )
-
-                    val terminalMeta = runState.updateTerminalState(
-                        state = SubAssistantCallState.COMPLETED,
-                        preview = computeTerminalPreview(finalText).ifEmpty { null },
-                        hasNonTextOutput = hasNonTextOutput,
-                        artifacts = artifacts,
-                        artifactOmitted = extracted.omitted,
-                    )
-                    reportMetadataPatch(execContext, terminalMeta, checkpoint = false)
-
-                    return buildCallResultParts(
-                        status = "completed",
-                        assistantName = target.name,
-                        content = finalText,
-                        hasNonTextOutput = hasNonTextOutput,
-                        messages = genResult.messages,
-                        childTaskNodeId = childTaskNodeId,
-                        extras = extras,
-                        artifacts = artifacts,
-                        artifactsOmitted = extracted.omitted,
-                        extraParts = callerProjection.extraParts,
-                    )
-                }
-            }
-
+            // Phase D: terminal — 终态分类与结果构建
+            return terminalResult(
+                finishReason = genResult.finishReason,
+                genResult = genResult,
+                target = target,
+                childTaskNodeId = childTaskNodeId,
+                childConversationId = childConversationId,
+                runState = runState,
+                execContext = execContext,
+                extras = extras,
+            )
         } catch (e: CancellationException) {
-            // 区分撤权取消和用户主动取消
-            // 撤权监听器取消时 message 为 target_removed/target_disabled/target_access_revoked/
-            // target_model_unavailable/caller_model_unavailable
-            // 用户主动取消时 message 为 null 或 "user_cancelled"
+            // materialize 阶段取消：无 Child 无 run，直接上抛
+            val currentChild = childConversationId ?: throw e
+            val currentTaskId = childTaskNodeId ?: throw e
+            val currentRunState = runState ?: throw e
+            // 撤权取消 message 为 target_removed/...；用户取消为 null 或 user_cancelled
             val cancelReason = normalizeSubAssistantCancellationReason(e.message)
-            val masterCancelled = kotlin.coroutines.coroutineContext[Job]?.isActive == false
-            val terminalMeta = runState.updateTerminalState(
+            val masterCancelled = coroutineContext[Job]?.isActive == false
+            val terminalMeta = currentRunState.updateTerminalState(
                 state = SubAssistantCallState.STOPPED,
                 reason = cancelReason,
             )
-            finalizeInterruptedRun(childConversationId, cancelReason, execContext, terminalMeta)
+            turnRecovery.finalizeInterruptedRun(
+                childConversationId = currentChild,
+                reason = cancelReason,
+                execContext = execContext,
+                terminalMeta = terminalMeta,
+                json = json,
+            )
             if (masterCancelled) throw e
-            return buildCallResultParts(
+            return buildSubAssistantCallResultParts(
+                json = json,
                 status = "stopped",
                 assistantName = target.name,
                 reason = cancelReason,
-                messages = childRunMessages(childConversationId),
-                childTaskNodeId = childTaskNodeId,
+                messages = childRunMessages(currentChild),
+                childTaskNodeId = currentTaskId,
                 extras = extras,
             )
-
         } catch (e: Exception) {
+            // materialize 阶段异常已由 materializeChild 分类；此处只剩 run 阶段失败
+            val currentChild = childConversationId ?: throw e
+            val currentTaskId = childTaskNodeId ?: throw e
+            val currentRunState = runState ?: throw e
             Log.e(TAG, "Target generation failed", e)
             val failureReason = classifySubAssistantFailure(e)
-            val terminalMeta = runState.updateTerminalState(
+            val terminalMeta = currentRunState.updateTerminalState(
                 state = SubAssistantCallState.FAILED,
                 reason = failureReason,
             )
-            finalizeInterruptedRun(childConversationId, failureReason, execContext, terminalMeta)
-
-            return buildCallResultParts(
+            turnRecovery.finalizeInterruptedRun(
+                childConversationId = currentChild,
+                reason = failureReason,
+                execContext = execContext,
+                terminalMeta = terminalMeta,
+                json = json,
+            )
+            return buildSubAssistantCallResultParts(
+                json = json,
                 status = "failed",
                 assistantName = target.name,
                 reason = failureReason,
                 detail = modelVisibleFailureDetail(failureReason, e),
-                messages = childRunMessages(childConversationId),
-                childTaskNodeId = childTaskNodeId,
+                messages = childRunMessages(currentChild),
+                childTaskNodeId = currentTaskId,
                 extras = extras,
             )
-
         } finally {
-            settingsWatcher.cancel()
-            runScope.cancel()
-            runLeases.release(activeRunKey, activeTargetRun)
+            settingsWatcher?.cancel()
+            runScope?.cancel()
+            runGate.release(ready.runKey, ready.lease)
         }
+    }
+
+    /** Phase D：按 FinishedReason 收敛终态（失败三分支共享同一形状）。 */
+    private suspend fun terminalResult(
+        finishReason: FinishedReason?,
+        genResult: TargetGenerationResult,
+        target: Assistant,
+        childTaskNodeId: Uuid,
+        childConversationId: Uuid,
+        runState: SubAssistantRunStateReducer,
+        execContext: ToolExecutionContext,
+        extras: Set<String>,
+    ): List<UIMessagePart> = when (finishReason) {
+        FinishedReason.STEP_LIMIT_REACHED ->
+            failedTerminal("step_limit_reached", target, genResult, childTaskNodeId, runState, execContext, extras)
+        FinishedReason.INTERACTION_LIMIT_REACHED ->
+            failedTerminal("interaction_limit_reached", target, genResult, childTaskNodeId, runState, execContext, extras)
+        FinishedReason.AWAITING_APPROVAL ->
+            // 只有无法桥接 Pending ask_user 或达到交互上限时才会返回到这里。
+            failedTerminal("approval_blocked", target, genResult, childTaskNodeId, runState, execContext, extras)
+        else -> {
+            // COMPLETED 或 null（兼容旧路径）
+            val finalText = extractFinalAnswerInternal(genResult.messages, childTaskNodeId)
+            val extracted = extractDeliverableArtifacts(
+                messages = genResult.messages,
+                childTaskNodeId = childTaskNodeId,
+                filesDir = context.filesDir,
+            )
+            val artifacts = extracted.artifacts.map { it.toMetadata() }
+            // Caller native/reference 投影统一交给 AttachmentProjectionTransformer
+            // 按本次请求的 resolved model 决定，这里不判断 Caller 能力。
+            val callerProjection = projectArtifactsForCaller(
+                artifacts = extracted.artifacts,
+                extras = extras,
+            )
+            val terminalMeta = runState.updateTerminalState(
+                state = SubAssistantCallState.COMPLETED,
+                preview = computeTerminalPreview(finalText).ifEmpty { null },
+                hasNonTextOutput = extracted.hasNonTextOutput,
+                artifacts = artifacts,
+                artifactOmitted = extracted.omitted,
+            )
+            reportSubAssistantMetadataPatch(json, execContext, terminalMeta, checkpoint = false)
+            buildSubAssistantCallResultParts(
+                json = json,
+                status = "completed",
+                assistantName = target.name,
+                content = finalText,
+                hasNonTextOutput = extracted.hasNonTextOutput,
+                messages = genResult.messages,
+                childTaskNodeId = childTaskNodeId,
+                extras = extras,
+                artifacts = artifacts,
+                artifactsOmitted = extracted.omitted,
+                extraParts = callerProjection.extraParts,
+            )
+        }
+    }
+
+    private suspend fun failedTerminal(
+        reason: String,
+        target: Assistant,
+        genResult: TargetGenerationResult,
+        childTaskNodeId: Uuid,
+        runState: SubAssistantRunStateReducer,
+        execContext: ToolExecutionContext,
+        extras: Set<String>,
+    ): List<UIMessagePart> {
+        val terminalMeta = runState.updateTerminalState(
+            state = SubAssistantCallState.FAILED,
+            reason = reason,
+        )
+        reportSubAssistantMetadataPatch(json, execContext, terminalMeta, checkpoint = false)
+        return buildSubAssistantCallResultParts(
+            json = json,
+            status = "failed",
+            assistantName = target.name,
+            reason = reason,
+            messages = genResult.messages,
+            childTaskNodeId = childTaskNodeId,
+            extras = extras,
+        )
     }
 
     // ---- Child Conversation 管理 ----
 
     private suspend fun createNewChild(
-        target: net.weero.measix.pilot.data.model.Assistant,
+        target: Assistant,
         masterConversationId: Uuid,
         userParts: List<UIMessagePart>,
     ): Pair<Uuid, Uuid> {
         val childId = Uuid.random()
         // 首次创建时只写入 Target 的 preset messages
-        val presetMessages = target.presetMessages
         val taskMessage = UIMessage(role = MessageRole.USER, parts = userParts)
         val conversation = Conversation(
             id = childId,
             assistantId = target.id,
             title = target.name,
-            messageNodes = presetMessages.map { it.toMessageNode() } + taskMessage.toMessageNode(),
+            messageNodes = target.presetMessages.map { it.toMessageNode() } + taskMessage.toMessageNode(),
             parentConversationId = masterConversationId,
         )
         conversationRepo.insertConversation(conversation)
         sessionRegistry.getOrCreateSessionWithConversation(childId, conversation)
 
-        // child_task_node_id 是本次 USER 的 UIMessage.id，供 extractFinalAnswer /
-        // extractDeliverableArtifacts / computeSubAssistantPreview 按 messagesInRunRange 定位。
-        val taskNodeId = taskMessage.id
-        Log.i(TAG, "createNewChild: child=$childId, taskMsg=$taskNodeId")
-        return childId to taskNodeId
+        // child_task_node_id 是本次 USER 的 UIMessage.id，供 final answer / artifacts /
+        // preview 按 messagesInRunRange 定位。
+        Log.i(TAG, "createNewChild: child=$childId, taskMsg=${taskMessage.id}")
+        return childId to taskMessage.id
     }
 
     private suspend fun reuseChild(
-        target: net.weero.measix.pilot.data.model.Assistant,
+        target: Assistant,
         childConversationId: Uuid,
         userParts: List<UIMessagePart>,
     ): Uuid {
@@ -666,13 +707,12 @@ class DelegationCoordinator(
         val session = sessionRegistry.getOrCreateSessionWithConversation(childConversationId, conversation)
         session.submit(AppendUserMessage(taskMessage))
 
-        val taskNodeId = taskMessage.id
-        Log.i(TAG, "reuseChild: child=$childConversationId, taskMsg=$taskNodeId")
-        return taskNodeId
+        Log.i(TAG, "reuseChild: child=$childConversationId, taskMsg=${taskMessage.id}")
+        return taskMessage.id
     }
 
     private suspend fun cloneChild(
-        target: net.weero.measix.pilot.data.model.Assistant,
+        target: Assistant,
         masterConversationId: Uuid,
         sourceChildId: Uuid,
         throughTaskMessageId: Uuid,
@@ -689,7 +729,7 @@ class DelegationCoordinator(
             node.copy(
                 id = Uuid.random(),
                 messages = node.messages.map { message ->
-                    message.copy(parts = message.parts.map { copyPartForChildClone(it, filesManager) })
+                    message.copy(parts = AttachmentCloner.cloneParts(message.parts, filesManager))
                 },
             )
         }
@@ -704,15 +744,14 @@ class DelegationCoordinator(
         conversationRepo.insertConversation(conversation)
         sessionRegistry.getOrCreateSessionWithConversation(newChildId, conversation)
 
-        val taskNodeId = taskMessage.id
-        Log.i(TAG, "cloneChild: source=$sourceChildId, new=$newChildId, taskMsg=$taskNodeId")
-        return newChildId to taskNodeId
+        Log.i(TAG, "cloneChild: source=$sourceChildId, new=$newChildId, taskMsg=${taskMessage.id}")
+        return newChildId to taskMessage.id
     }
 
-    // ---- Target Generation ----
+    // ---- Phase C: Target Generation 循环 ----
 
     private suspend fun runTargetGeneration(
-        target: net.weero.measix.pilot.data.model.Assistant,
+        target: Assistant,
         model: me.rerere.ai.provider.Model,
         childConversationId: Uuid,
         childTaskNodeId: Uuid,
@@ -723,11 +762,7 @@ class DelegationCoordinator(
     ): TargetGenerationResult {
         val settings = settingsStore.settingsFlow.value
         val session = sessionRegistry.getOrCreateSession(childConversationId)
-        val conversation = session.state.value
-
-        // 装配走 TurnPipelineFactory，Master/Target 共用管道清单
-        val targetInputTransformers = turnPipelineFactory.targetInput()
-        val targetOutputTransformers = turnPipelineFactory.targetOutput()
+        val conversation = session.snapshot.value.toConversation()
 
         // Target memories
         val memories = if (target.enableMemory) {
@@ -740,31 +775,18 @@ class DelegationCoordinator(
             emptyList()
         }
 
-        // 复用 turn-level TtsToolPlaybackContext 的 sessionId，
-        // 使整轮 turn 内的 Master 和所有 Target 的 TTS 调用归属同一条播放队列。
-        // 无 turnTtsContext 时（测试或旧调用路径）回退到独立 context。
-        val ttsPlaybackContext = if (turnTtsContext != null) {
-            TtsToolPlaybackContext(
-                sessionId = turnTtsContext.sessionId,
-                assistantId = target.id,
-                assistantName = target.name,
-                sourceType = TtsPlaybackSource.SourceType.SUB_ASSISTANT,
-            )
-        } else {
-            TtsToolPlaybackContext(
-                sessionId = Uuid.random().toString(),
-                assistantId = target.id,
-                assistantName = target.name,
-                sourceType = TtsPlaybackSource.SourceType.SUB_ASSISTANT,
-            )
-        }
+        // 复用 turn-level TtsToolPlaybackContext 的 sessionId，使整轮 turn 内的 Master 和
+        // 所有 Target 的 TTS 调用归属同一条播放队列；无 turnTtsContext 时回退独立 context。
+        val ttsPlaybackContext = TtsToolPlaybackContext(
+            sessionId = turnTtsContext?.sessionId ?: Uuid.random().toString(),
+            assistantId = target.id,
+            assistantName = target.name,
+            sourceType = TtsPlaybackSource.SourceType.SUB_ASSISTANT,
+        )
 
         // 每个 step 重新解析资源并应用“运行快照 ∩ 当前配置”，但复用 TTS 播放上下文。
-        // 工具能力依据本次 run 的 resolved model。
-        // Tool schema 稳定原则（与主链路一致）：配置变更在下一次构建时生效——主链路是下一轮
-        // turn，Target 是下一次 assistant_call。run 内 inspection 能力用 run 开始时的值冻结，
-        // 避免 `inspect_attachments` 在工具循环中途出现/消失；Target 删除、撤权等运行安全信号
-        // 仍每 step 走 latest。
+        // 工具能力依据本次 run 的 resolved model；run 内 inspection 能力冻结在 run 开始值，
+        // 避免 inspect_attachments 在工具循环中途出现/消失；运行安全信号仍每 step 走 latest。
         val runStartSettings = settings
         val toolProvider: suspend () -> List<Tool> = {
             val currentSettings = settingsStore.settingsFlow.value
@@ -791,36 +813,17 @@ class DelegationCoordinator(
         var finishReason: FinishedReason? = null
         var interactionCount = 0
 
-        // Target turn 与 Master 同一提交协议：先 BeginTurn 打开 assistant 槽（否则
-        // snapshot 流式覆盖会画到末条 USER 任务节点上），再 CommitCheckpoint(RUNNING)。
+        // Target turn 与 Master 同一提交协议（turn 骨架唯一实现 TurnEngine.start：
+        // BeginTurn 打开 assistant 槽——否则 snapshot 流式覆盖会画到末条 USER 任务节点上，
+        // 随后 CommitCheckpoint(RUNNING) 落 turn 事实）。
         val targetTurnId = Uuid.random()
-        val resumableAssistant = lastMessages.lastOrNull()
-            ?.takeIf { message ->
-                message.role == MessageRole.ASSISTANT &&
-                    message.getTools().any { !it.isExecuted }
-            }
-        val assistantSlotId = resumableAssistant?.id ?: Uuid.random()
-        session.submitGeneration(
-            BeginTurn(
-                turnId = targetTurnId,
-                assistantMessageId = assistantSlotId,
-                fromNodeId = null,
-                resume = resumableAssistant != null,
-                onStart = true,
-            )
+        val started = TurnEngine.start(
+            runtime = session,
+            turnId = targetTurnId,
+            messages = lastMessages,
         )
-        lastMessages = session.state.value.currentMessages
-        val turnEngine = TurnEngine(session, targetTurnId, assistantSlotId)
-        session.submitGeneration(
-            CommitCheckpoint(
-                turnId = targetTurnId,
-                assistantMessageId = assistantSlotId,
-                messages = emptyList(),
-                turnStatus = TurnExecutionStatus.RUNNING,
-                turnReason = null,
-                toolExecution = null,
-            )
-        )
+        val turnEngine = started.engine
+        lastMessages = session.snapshot.value.currentMessages()
 
         while (true) {
             finishReason = null
@@ -828,8 +831,8 @@ class DelegationCoordinator(
                 settings = settings,
                 model = model,
                 messages = lastMessages,
-                inputTransformers = targetInputTransformers,
-                outputTransformers = targetOutputTransformers,
+                inputTransformers = turnPipelineFactory.targetInput(),
+                outputTransformers = turnPipelineFactory.targetOutput(),
                 assistant = target,
                 memories = memories,
                 tools = toolProvider(), // 初始工具列表
@@ -841,7 +844,7 @@ class DelegationCoordinator(
                     latestTarget?.enableMemory == true &&
                         latestTarget.useGlobalMemory == target.useGlobalMemory
                 },
-                assistantMessageId = assistantSlotId,
+                assistantMessageId = started.assistantMessageId,
                 processingStatus = session.processingStatus,
                 conversationSystemPrompt = null, // Child 不设置对话级 System Prompt
                 // Child does not inherit the Master's mode injection. Passing the Target IDs also
@@ -861,7 +864,7 @@ class DelegationCoordinator(
                             // 流式 delta 已由 bind 内 applyStreamingDelta 更新 Child session 投影
                             lastMessages = event.messages
 
-                            // 节流回写 preview 到 Master；内容未变则不 patch，避免主聊天无意义重组。
+                            // 节流回写 preview 到 Master；内容未变则不 patch。
                             val now = System.currentTimeMillis()
                             if (now - lastPreviewUpdate >= PREVIEW_THROTTLE_MS) {
                                 lastPreviewUpdate = now
@@ -869,19 +872,18 @@ class DelegationCoordinator(
                                 val before = runState.snapshot()
                                 val meta = runState.updatePreview(preview.ifEmpty { null })
                                 if (meta !== before) {
-                                    reportMetadataPatch(execContext, meta, checkpoint = false)
+                                    reportSubAssistantMetadataPatch(json, execContext, meta, checkpoint = false)
                                 }
                             }
                         }
 
                         is TurnEvent.Phase -> {
                             // 立即更新 card 状态；phase/tool 未变则不回写 Master。
-                            val phase = mapPhase(event.phase)
-                            if (phase != null) {
+                            mapSubAssistantCallPhase(event.phase)?.let { phase ->
                                 val before = runState.snapshot()
                                 val meta = runState.updatePhase(phase, event.toolName)
                                 if (meta !== before) {
-                                    reportMetadataPatch(execContext, meta, checkpoint = false)
+                                    reportSubAssistantMetadataPatch(json, execContext, meta, checkpoint = false)
                                 }
                             }
                         }
@@ -892,7 +894,7 @@ class DelegationCoordinator(
 
                         is TurnEvent.Finished -> {
                             // bind 将流内异常/取消转为 Finished(null, error)；此处重抛，
-                            // 由调用方（runLeases/取消路径）统一处理
+                            // 由调用方（lease/取消路径）统一处理
                             if (event.error != null) throw event.error
                             finishReason = event.reason
                         }
@@ -961,14 +963,10 @@ class DelegationCoordinator(
         if (toolOrdinal < 0) return null
         val tool = message.getTools()[toolOrdinal]
         val interactionId = "${runId}_${message.id}_$toolOrdinal"
-        val pending = PendingUserInteraction(interactionId)
-        check(pendingUserInteractions.putIfAbsent(runId, pending) == null) {
-            "Run $runId already has a pending user interaction"
-        }
+        val answer = runGate.registerPendingInteraction(runId, interactionId)
 
-        // ask_user 挂起 = CommitCheckpoint(AWAITING_APPROVAL)（消息分发 + turn 事实
-        // 同事务落库，消除整对象双写）
         val session = sessionRegistry.getOrCreateSession(childConversationId)
+        // ask_user 挂起 = CommitCheckpoint(AWAITING_APPROVAL)（消息分发 + turn 事实同事务落库）
         session.submit(
             CommitCheckpoint(
                 turnId = turnId,
@@ -980,7 +978,7 @@ class DelegationCoordinator(
             )
         )
 
-        val interaction = SubAssistantUserInteraction(
+        val interaction = net.weero.measix.pilot.data.ai.subassistant.SubAssistantUserInteraction(
             interactionId = interactionId,
             messageId = message.id.toString(),
             toolOrdinal = toolOrdinal,
@@ -991,576 +989,36 @@ class DelegationCoordinator(
             interaction = interaction,
             preview = computeSubAssistantPreview(messages, childTaskNodeId).ifEmpty { null },
         )
-        reportMetadataPatch(execContext, waitingMetadata, checkpoint = true)
+        reportSubAssistantMetadataPatch(json, execContext, waitingMetadata, checkpoint = true)
 
         return try {
-            val answer = pending.answer.await()
+            val answered = answer.await()
             // 应答 = UpdateToolApproval(Answered) 命令（与 Master HITL 同一命令路径）
-            val before = session.state.value
+            val before = session.snapshot.value
             session.submit(
                 UpdateToolApproval(
                     messageId = message.id,
                     toolOrdinal = toolOrdinal,
-                    approvalState = ToolApprovalState.Answered(answer),
+                    approvalState = ToolApprovalState.Answered(answered),
                 )
             )
-            if (session.state.value === before) {
+            if (session.snapshot.value === before) {
                 error("Pending ask_user locator is no longer valid")
             }
-            reportMetadataPatch(
+            reportSubAssistantMetadataPatch(
+                json = json,
                 execContext = execContext,
                 meta = runState.clearUserInteraction(),
                 checkpoint = true,
             )
-            session.state.value.currentMessages
+            session.snapshot.value.currentMessages()
         } finally {
-            pendingUserInteractions.remove(runId, pending)
+            runGate.unregisterPendingInteraction(runId)
         }
-    }
-
-    // ---- 恢复与清理 ----
-
-    /**
-     * App 启动时执行 recovery。
-     * - metadata 仍是 starting/running 且没有 active Job：标记 stopped/app_restarted
-     * - 未被任何 Master run 引用的 Child：删除
-     */
-    suspend fun performRecovery() {
-        withTimeout(FINALIZATION_TIMEOUT_MS) {
-            runLeases.cancelAll("app_restarted")
-        }
-        pendingUserInteractions.values.forEach { it.answer.cancel() }
-        pendingUserInteractions.clear()
-        val settings = settingsStore.settingsFlow.value
-        val masters = conversationRepo.getAllTopLevelConversationsSync()
-        val allChildIds = conversationRepo.getAllChildConversationIds().toSet()
-        val linkedChildIds = masters.asSequence()
-            .flatMap { master -> master.messageNodes.asSequence() }
-            .flatMap { node -> node.messages.asSequence() }
-            .flatMap { message -> message.parts.filterIsInstance<UIMessagePart.Tool>().asSequence() }
-            .mapNotNull { tool -> tool.getSubAssistantCallMetadata(json)?.childConversationId }
-            .mapNotNull { id -> runCatching { Uuid.parse(id) }.getOrNull() }
-            .filter { it in allChildIds }
-            .toSet()
-        val childrenById = linkedChildIds.mapNotNull { childId ->
-            conversationRepo.getConversationById(childId)?.let { childId to it }
-        }.toMap()
-        val referencedChildIds = mutableSetOf<Uuid>()
-        val childStopReasons = mutableMapOf<Uuid, String>()
-
-        masters.forEach { master ->
-            val result = recoverMasterSubAssistantCalls(master, settings, childrenById, json)
-            referencedChildIds += result.referencedChildIds
-            result.childStopReasons.forEach { (childId, reason) ->
-                childStopReasons.putIfAbsent(childId, reason)
-            }
-            if (result.master != master) {
-                Log.i(TAG, "performRecovery: finalized stale runs in ${master.id}")
-                submitRecoveredTree(master.id, result.master)
-            }
-        }
-
-        // Every valid referenced Child is protocol-complete before it can be reused.
-        referencedChildIds.forEach { childId ->
-            val child = childrenById[childId] ?: return@forEach
-            val reason = childStopReasons[childId] ?: "app_restarted"
-            val recoveredNodes = child.messageNodes.map { node ->
-                node.copy(
-                    messages = node.messages.map { message ->
-                        message.finishReasoning().recoverSubAssistantToolsAfterInterruption(reason)
-                    }
-                )
-            }
-            if (recoveredNodes != child.messageNodes) {
-                submitRecoveredTree(childId, child.copy(messageNodes = recoveredNodes))
-            }
-            // Child turn 由本组件全权收口（Master 全库扫描过滤 Child）
-            conversationRepo.finalizeRunningTurnsOfConversation(childId, reason)
-        }
-
-        // Only a unique, structurally valid Master link retains a Child.
-        val orphanChildIds = allChildIds - referencedChildIds
-        for (orphanId in orphanChildIds) {
-            Log.i(TAG, "performRecovery: deleting orphan child $orphanId")
-            runCatching {
-                conversationRepo.getConversationById(orphanId)?.let {
-                    conversationRepo.deleteConversation(it)
-                }
-                sessionRegistry.evictSession(orphanId)
-            }
-        }
-    }
-
-    /** Finalizes stale runs and orphan links before a Master tree mutation such as fork/delete. */
-    suspend fun recoverMasterForMutation(master: Conversation): Conversation {
-        require(master.parentConversationId == null)
-        val children = conversationRepo.getChildConversations(master.id).associateBy { it.id }
-        val result = recoverMasterSubAssistantCalls(
-            master = master,
-            settings = settingsStore.settingsFlow.value,
-            childrenById = children,
-            json = json,
-        )
-        if (result.master != master) {
-            submitRecoveredTree(master.id, result.master)
-        }
-        result.referencedChildIds.forEach { childId ->
-            val child = children[childId] ?: return@forEach
-            val reason = result.childStopReasons[childId] ?: "app_restarted"
-            val recoveredNodes = child.messageNodes.map { node ->
-                node.copy(
-                    messages = node.messages.map { message ->
-                        message.finishReasoning().recoverSubAssistantToolsAfterInterruption(reason)
-                    }
-                )
-            }
-            if (recoveredNodes != child.messageNodes) {
-                submitRecoveredTree(childId, child.copy(messageNodes = recoveredNodes))
-            }
-            conversationRepo.finalizeRunningTurnsOfConversation(childId, reason)
-        }
-        (children.keys - result.referencedChildIds).forEach { orphanId ->
-            conversationRepo.deleteConversation(children.getValue(orphanId))
-            sessionRegistry.evictSession(orphanId)
-        }
-        return result.master
-    }
-
-    // ---- 工具函数 ----
-
-    private fun mapPhase(phase: String): SubAssistantCallPhase? = when (phase) {
-        "preparing" -> SubAssistantCallPhase.PREPARING
-        "model_waiting" -> SubAssistantCallPhase.MODEL_WAITING
-        "reasoning_streaming" -> SubAssistantCallPhase.REASONING_STREAMING
-        "answer_streaming" -> SubAssistantCallPhase.ANSWER_STREAMING
-        "tool_executing" -> SubAssistantCallPhase.TOOL_EXECUTING
-        "between_steps" -> SubAssistantCallPhase.BETWEEN_STEPS
-        else -> null
-    }
-
-    private suspend fun reportMetadataPatch(
-        execContext: ToolExecutionContext,
-        meta: SubAssistantCallMetadata,
-        checkpoint: Boolean,
-    ) {
-        val patch = JsonObject(mapOf("sub_assistant_call" to json.encodeToJsonElement(
-            SubAssistantCallMetadata.serializer(), meta
-        )))
-        execContext.reportMetadata(patch, checkpoint)
-    }
-
-    private fun extractFinalAnswer(
-        messages: List<UIMessage>,
-        childTaskNodeId: Uuid,
-    ): String = extractFinalAnswerInternal(messages, childTaskNodeId)
-
-    private suspend fun projectCompletedArtifacts(
-        extras: Set<String>,
-        extracted: List<SubAssistantDeliverableArtifact>,
-    ): CallerArtifactProjection {
-        // Child artifact 的稳定引用始终是交付事实；Caller native/reference 投影统一交给
-        // AttachmentProjectionTransformer 按本次请求的 resolved model 决定，
-        // 这里不再判断 Caller 能力，也不自动识别。
-        return projectArtifactsForCaller(
-            artifacts = extracted,
-            extras = extras,
-        )
-    }
-
-
-
-    private suspend fun recoverInterruptedChild(childConversationId: Uuid, reason: String) {
-        val session = sessionRegistry.getSession(childConversationId) ?: run {
-            val persisted = conversationRepo.getConversationById(childConversationId)
-            if (persisted == null) {
-                Log.w(TAG, "recoverInterruptedChild: child $childConversationId no longer exists")
-                return
-            }
-            sessionRegistry.getOrCreateSessionWithConversation(childConversationId, persisted)
-        }
-        val conversation = session.state.value
-        val recoveredNodes = conversation.messageNodes.map { node ->
-            node.copy(
-                messages = node.messages.map { message ->
-                    message.finishReasoning().recoverSubAssistantToolsAfterInterruption(reason)
-                }
-            )
-        }
-        if (recoveredNodes == conversation.messageNodes) return
-
-        submitRecoveredTree(childConversationId, conversation.copy(messageNodes = recoveredNodes))
-    }
-
-    /**
-     * 恢复收口的树写入——活跃 session 走 ReplaceMessageTree 命令（delta 落库，
-     * 与 Master 同一提交协议）；启动早期无内存态时走 repo 整写（导入/迁移/启动恢复
-     * 白名单路径）。
-     */
-    private suspend fun submitRecoveredTree(conversationId: Uuid, recovered: Conversation) {
-        val session = sessionRegistry.getSession(conversationId)
-        if (session != null) {
-            session.submit(ReplaceMessageTree(recovered.messageNodes))
-        } else {
-            conversationRepo.updateConversation(recovered)
-        }
-    }
-
-    private suspend fun finalizeInterruptedRun(
-        childConversationId: Uuid,
-        reason: String,
-        execContext: ToolExecutionContext,
-        terminalMeta: SubAssistantCallMetadata,
-    ) {
-        val failures = finalizeInterruptedRunSafely(
-            timeoutMillis = FINALIZATION_TIMEOUT_MS,
-            finalizeChild = { recoverInterruptedChild(childConversationId, reason) },
-            finalizeMetadata = { reportMetadataPatch(execContext, terminalMeta, checkpoint = false) },
-        )
-        failures.child?.let { error ->
-            Log.e(TAG, "Unable to finalize interrupted child $childConversationId", error)
-        }
-        failures.metadata?.let { error ->
-            Log.e(TAG, "Unable to persist terminal metadata for ${terminalMeta.runId}", error)
-        }
-    }
-
-    private suspend fun classifiedFailureResult(
-        error: Exception,
-        execContext: ToolExecutionContext,
-        targetAssistantId: Uuid,
-        assistantName: String,
-        extras: Set<String>,
-        runId: String,
-    ): List<UIMessagePart> {
-        val failureReason = classifySubAssistantFailure(error)
-        Log.e(TAG, "Sub-assistant setup failed", error)
-        val metadata = buildInitialSubAssistantCallMetadata(
-            runId = runId,
-            targetAssistantId = targetAssistantId,
-            targetNameSnapshot = assistantName,
-        ).copy(
-            state = SubAssistantCallState.FAILED,
-            reason = failureReason,
-        )
-        runCatching { reportMetadataPatch(execContext, metadata, checkpoint = false) }
-        return buildCallResultParts(
-            status = "failed",
-            assistantName = assistantName,
-            reason = failureReason,
-            detail = modelVisibleFailureDetail(failureReason, error),
-            extras = extras,
-        )
-    }
-
-    private suspend fun unavailableResult(
-        execContext: ToolExecutionContext,
-        targetAssistantId: Uuid,
-        assistantName: String,
-        reason: String,
-        runId: String = Uuid.random().toString(),
-    ): List<UIMessagePart> {
-        val metadata = buildInitialSubAssistantCallMetadata(
-            runId = runId,
-            targetAssistantId = targetAssistantId,
-            targetNameSnapshot = assistantName,
-        ).copy(
-            state = SubAssistantCallState.UNAVAILABLE,
-            reason = reason,
-        )
-        reportMetadataPatch(execContext, metadata, checkpoint = false)
-        return buildCallResultParts(
-            status = "unavailable",
-            assistantName = assistantName,
-            reason = reason,
-        )
     }
 
     private fun childRunMessages(childConversationId: Uuid): List<UIMessage> {
-        return sessionRegistry.getSession(childConversationId)?.state?.value?.currentMessages
+        return sessionRegistry.getSession(childConversationId)?.snapshot?.value?.currentMessages()
             ?: emptyList()
     }
-
-    private fun buildCallResultParts(
-        status: String,
-        assistantName: String,
-        content: String = "",
-        reason: String? = null,
-        detail: String? = null,
-        hasNonTextOutput: Boolean = false,
-        messages: List<UIMessage> = emptyList(),
-        childTaskNodeId: Uuid? = null,
-        extras: Set<String> = emptySet(),
-        artifacts: List<SubAssistantCallArtifact> = emptyList(),
-        artifactsOmitted: Int = 0,
-        extraParts: List<UIMessagePart> = emptyList(),
-    ): List<UIMessagePart> {
-        val outputs = collectSubAssistantCallOutputs(messages, childTaskNodeId, extras)
-        val resultJson = buildSubAssistantCallResult(
-            json = json,
-            status = status,
-            assistantName = assistantName,
-            content = content,
-            reason = reason,
-            detail = detail,
-            hasNonTextOutput = hasNonTextOutput,
-            toolCalls = outputs.toolCalls,
-            ttsTexts = outputs.ttsTexts,
-            ttsStats = outputs.ttsStats,
-            artifacts = artifacts,
-            artifactsOmitted = artifactsOmitted,
-        )
-        return listOf(UIMessagePart.Text(resultJson)) + extraParts
-    }
-}
-
-internal fun normalizeSubAssistantCancellationReason(message: String?): String = when (message) {
-    "target_removed",
-    "target_disabled",
-    "target_access_revoked",
-    "target_model_unavailable",
-    "caller_model_unavailable",
-    "app_restarted",
-    "child_missing",
-    "user_cancelled" -> message
-    "assistant_removed" -> "target_removed"
-    else -> "user_cancelled"
-}
-
-/**
- * 从 Child 会话消息中提取 final answer。
- *
- * 优先取最后一个 Target ASSISTANT step 中、最后一个“工作工具”
- * 之后的顶层可见 Text。`text_to_speech` 等副作用工具不挡住答案。
- * 最后一步只有 Reasoning/空 Text 时，回退到更早 step 的 post-tool 文本；
- * 仍为空时取最后一条有文本的 ASSISTANT 消息的末段 Text island，避免主助手拿到空 content。
- */
-internal fun extractFinalAnswerInternal(
-    messages: List<UIMessage>,
-    childTaskNodeId: Uuid,
-): String {
-    val range = messagesInRunRange(messages, childTaskNodeId) ?: return ""
-    val assistants = range.filter { it.role == MessageRole.ASSISTANT }
-    if (assistants.isEmpty()) return ""
-
-    extractTextAfterLastWorkTool(assistants.last())
-        .takeIf { it.isNotBlank() }
-        ?.let { return it }
-
-    for (i in assistants.lastIndex - 1 downTo 0) {
-        extractTextAfterLastWorkTool(assistants[i])
-            .takeIf { it.isNotBlank() }
-            ?.let { return it }
-    }
-
-    for (msg in assistants.asReversed()) {
-        lastTextIsland(msg).takeIf { it.isNotBlank() }?.let { return it }
-    }
-    return ""
-}
-
-/**
- * 本次 run 是否有用户可见的非文本交付物（generate_image 成功图或最终 ASSISTANT 顶层媒体）。
- */
-internal fun checkNonTextOutputInternal(
-    messages: List<UIMessage>,
-    childTaskNodeId: Uuid,
-    filesDir: java.io.File? = null,
-): Boolean = extractDeliverableArtifacts(messages, childTaskNodeId, filesDir).hasNonTextOutput
-
-internal data class SubAssistantCallCollectedOutputs(
-    val toolCalls: List<Pair<String, Int>> = emptyList(),
-    val ttsTexts: List<String> = emptyList(),
-    val ttsStats: SubAssistantTtsStats? = null,
-)
-
-internal fun collectSubAssistantCallOutputs(
-    messages: List<UIMessage>,
-    childTaskNodeId: Uuid?,
-    extras: Set<String>,
-): SubAssistantCallCollectedOutputs {
-    if (childTaskNodeId == null) return SubAssistantCallCollectedOutputs()
-    val range = messagesInRunRange(messages, childTaskNodeId) ?: return SubAssistantCallCollectedOutputs()
-
-    val needToolCalls = ASSISTANT_CALL_EXTRA_TOOL_CALLS in extras
-    val needTtsTexts = ASSISTANT_CALL_EXTRA_TTS in extras
-    val toolCounts = if (needToolCalls) linkedMapOf<String, Int>() else null
-    val ttsTexts = if (needTtsTexts) mutableListOf<String>() else null
-    var ttsCalls = 0
-    var ttsChars = 0
-
-    for (message in range) {
-        for (part in message.parts) {
-            if (part !is UIMessagePart.Tool) continue
-            toolCounts?.let { counts ->
-                counts[part.toolName] = (counts[part.toolName] ?: 0) + 1
-            }
-            if (part.toolName != "text_to_speech") continue
-            // 次数按发出计；空白或无法解析的入参不计字符，也不进入 extras 文本表。
-            ttsCalls++
-            val text = parseTtsInputText(part.input)
-            if (text != null) {
-                ttsChars += text.length
-                ttsTexts?.add(text)
-            }
-        }
-    }
-
-    return SubAssistantCallCollectedOutputs(
-        toolCalls = toolCounts?.map { it.key to it.value }.orEmpty(),
-        ttsTexts = ttsTexts.orEmpty(),
-        ttsStats = if (ttsCalls > 0) SubAssistantTtsStats(calls = ttsCalls, chars = ttsChars) else null,
-    )
-}
-
-/**
- * 本次 run 范围内每个工具名的发出次数，按首次出现顺序。
- */
-internal fun collectRunToolCalls(
-    messages: List<UIMessage>,
-    childTaskNodeId: Uuid,
-): List<Pair<String, Int>> = collectSubAssistantCallOutputs(
-    messages = messages,
-    childTaskNodeId = childTaskNodeId,
-    extras = setOf(ASSISTANT_CALL_EXTRA_TOOL_CALLS),
-).toolCalls
-
-/**
- * 本次 run 范围内 `text_to_speech` 入参 text，按调用顺序；空白或无法解析的跳过。
- */
-internal fun collectRunTtsTexts(
-    messages: List<UIMessage>,
-    childTaskNodeId: Uuid,
-): List<String> = collectSubAssistantCallOutputs(
-    messages = messages,
-    childTaskNodeId = childTaskNodeId,
-    extras = setOf(ASSISTANT_CALL_EXTRA_TTS),
-).ttsTexts
-
-/**
- * 本次 run 范围内 `text_to_speech` 的调用次数，以及可解析朗读文本的字符合计。
- */
-internal fun collectRunTtsStats(
-    messages: List<UIMessage>,
-    childTaskNodeId: Uuid,
-): SubAssistantTtsStats? = collectSubAssistantCallOutputs(
-    messages = messages,
-    childTaskNodeId = childTaskNodeId,
-    extras = emptySet(),
-).ttsStats
-
-private fun parseTtsInputText(input: String): String? = runCatching {
-    val obj = kotlinx.serialization.json.Json.parseToJsonElement(input) as? JsonObject
-    obj?.get("text")?.let { it as? JsonPrimitive }?.content?.trim()
-}.getOrNull()?.takeIf { it.isNotEmpty() }
-
-private val SUB_ASSISTANT_SIDE_EFFECT_TOOLS = setOf("text_to_speech")
-
-private fun extractTextAfterLastWorkTool(message: UIMessage): String {
-    val parts = message.parts
-    var lastWorkToolEnd = 0
-    for ((idx, part) in parts.withIndex()) {
-        if (part is UIMessagePart.Tool &&
-            part.isExecuted &&
-            part.toolName !in SUB_ASSISTANT_SIDE_EFFECT_TOOLS
-        ) {
-            lastWorkToolEnd = idx + 1
-        }
-    }
-    return parts.drop(lastWorkToolEnd)
-        .filterIsInstance<UIMessagePart.Text>()
-        .joinToString("\n") { it.text }
-        .trim()
-}
-
-private fun lastTextIsland(message: UIMessage): String {
-    val parts = message.parts
-    var end = parts.lastIndex
-    while (end >= 0 && parts[end] !is UIMessagePart.Text) end--
-    if (end < 0) return ""
-    var start = end
-    while (start >= 0 && parts[start] is UIMessagePart.Text) start--
-    return parts.subList(start + 1, end + 1)
-        .filterIsInstance<UIMessagePart.Text>()
-        .joinToString("\n") { it.text }
-        .trim()
-}
-
-internal fun buildChildUserParts(
-    processedTask: String,
-    images: List<UIMessagePart.Image>,
-): List<UIMessagePart> = buildList {
-    add(UIMessagePart.Text(processedTask))
-    addAll(images)
-}
-
-internal suspend fun copyPartForChildClone(part: UIMessagePart, filesManager: FilesManager): UIMessagePart {
-    suspend fun copyUrl(url: String): String {
-        if (!url.startsWith("file:")) return url
-        return filesManager.createChatFilesByContents(listOf(url.toUri()))
-            .firstOrNull()?.toString() ?: url
-    }
-    return when (part) {
-        is UIMessagePart.Image -> part.copy(url = copyUrl(part.url))
-        is UIMessagePart.Document -> part.copy(url = copyUrl(part.url))
-        is UIMessagePart.Video -> part.copy(url = copyUrl(part.url))
-        is UIMessagePart.Audio -> part.copy(url = copyUrl(part.url))
-        is UIMessagePart.Tool -> part.copy(output = part.output.map { copyPartForChildClone(it, filesManager) })
-        else -> part
-    }
-}
-
-internal fun preprocessSubAssistantTask(
-    task: String,
-    target: net.weero.measix.pilot.data.model.Assistant,
-): String = task.replaceRegexes(
-    assistant = target,
-    scope = AssistantAffectScope.USER,
-    visual = false,
-)
-
-internal fun UIMessage.recoverSubAssistantToolsAfterInterruption(reason: String): UIMessage {
-    fun markInterrupted(tool: UIMessagePart.Tool): UIMessagePart.Tool = tool.copy(
-        output = listOf(
-            UIMessagePart.Text(
-                """{"status":"interrupted","reason":"$reason"}"""
-            )
-        ),
-        approvalState = if (tool.approvalState is ToolApprovalState.Pending) {
-            ToolApprovalState.Denied(reason)
-        } else {
-            tool.approvalState
-        },
-    )
-    return finishPendingTools(::markInterrupted).finishInterruptedTools(::markInterrupted)
-}
-
-internal fun UIMessage.recoverSubAssistantToolsAfterRestart(): UIMessage =
-    recoverSubAssistantToolsAfterInterruption("app_restarted")
-
-/** 精确回答 Child Assistant message 中指定 ordinal 的待处理 ask_user。 */
-internal fun answerToolAtLocator(
-    messages: List<UIMessage>,
-    messageId: Uuid,
-    toolOrdinal: Int,
-    answer: String,
-): List<UIMessage>? {
-    var matched = false
-    val updated = messages.map messageMap@{ message ->
-        if (message.id != messageId) return@messageMap message
-        var ordinal = 0
-        val parts = message.parts.map partMap@{ part ->
-            if (part !is UIMessagePart.Tool) return@partMap part
-            val currentOrdinal = ordinal++
-            if (currentOrdinal != toolOrdinal) return@partMap part
-            if (part.toolName != "ask_user" || part.isExecuted ||
-                part.approvalState !is ToolApprovalState.Pending
-            ) {
-                return null
-            }
-            matched = true
-            part.copy(approvalState = ToolApprovalState.Answered(answer))
-        }
-        message.copy(parts = parts)
-    }
-    return updated.takeIf { matched }
 }

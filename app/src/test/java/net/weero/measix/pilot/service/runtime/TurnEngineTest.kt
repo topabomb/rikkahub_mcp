@@ -32,7 +32,7 @@ class TurnEngineTest {
         UIMessage(id = Uuid.random(), role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text(text)))
 
     private fun runtime(): ConversationRuntime = mockk<ConversationRuntime>(relaxed = true).also {
-        coEvery { it.submitGeneration(any()) } returns net.weero.measix.pilot.data.model.Conversation.ofId(Uuid.random())
+        coEvery { it.submit(any()) } returns net.weero.measix.pilot.data.model.Conversation.ofId(Uuid.random()).toSnapshot()
         coEvery { it.isTurnFinalized(any()) } returns false
     }
 
@@ -49,7 +49,7 @@ class TurnEngineTest {
         )
         engine.onCheckpoint(checkpoint)
         val cmdSlot = slot<ConversationCommand>()
-        coVerify { runtime.submitGeneration(capture(cmdSlot)) }
+        coVerify { runtime.submit(capture(cmdSlot)) }
         assertTrue("CommitCheckpoint committed", cmdSlot.captured is CommitCheckpoint)
         val commit = cmdSlot.captured as CommitCheckpoint
         assertEquals(turnId, commit.turnId)
@@ -74,7 +74,7 @@ class TurnEngineTest {
         assertTrue(events is TurnEvent.Finished)
         assertEquals(FinishedReason.COMPLETED, (events as TurnEvent.Finished).reason)
         val cmdSlot = slot<ConversationCommand>()
-        coVerify { runtime.submitGeneration(capture(cmdSlot)) }
+        coVerify { runtime.submit(capture(cmdSlot)) }
         assertTrue(cmdSlot.captured is FinalizeTurn)
         assertEquals(TurnExecutionStatus.COMPLETED, (cmdSlot.captured as FinalizeTurn).terminalStatus)
     }
@@ -93,7 +93,7 @@ class TurnEngineTest {
         val finished = events.filterIsInstance<TurnEvent.Finished>().single()
         assertEquals(boom, finished.error)
         val cmds = mutableListOf<ConversationCommand>()
-        coVerify { runtime.submitGeneration(capture(cmds)) }
+        coVerify { runtime.submit(capture(cmds)) }
         assertTrue(cmds.any { it is FinalizeTurn && it.terminalStatus == TurnExecutionStatus.FAILED })
     }
 
@@ -111,7 +111,7 @@ class TurnEngineTest {
         }.exceptionOrNull()
         assertTrue(thrown is CancellationException)
         val cmds = mutableListOf<ConversationCommand>()
-        coVerify { runtime.submitGeneration(capture(cmds)) }
+        coVerify { runtime.submit(capture(cmds)) }
         assertTrue(cmds.any { it is FinalizeTurn && it.terminalStatus == TurnExecutionStatus.CANCELLED })
     }
 
@@ -148,9 +148,9 @@ class TurnEngineTest {
         suspend fun drive(): List<ConversationCommand> {
             val runtime = runtime()
             val recorded = mutableListOf<ConversationCommand>()
-            coEvery { runtime.submitGeneration(any()) } answers {
+            coEvery { runtime.submit(any()) } answers {
                 recorded.add(invocation.args[0] as ConversationCommand)
-                net.weero.measix.pilot.data.model.Conversation.ofId(Uuid.random())
+                net.weero.measix.pilot.data.model.Conversation.ofId(Uuid.random()).toSnapshot()
             }
             val engine = TurnEngine(runtime, turnId, assistantId)
             engine.onCheckpoint(checkpoint)

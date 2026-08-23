@@ -18,6 +18,7 @@ import net.weero.measix.pilot.data.db.dao.ConversationDAO
 import net.weero.measix.pilot.data.db.dao.FavoriteDAO
 import net.weero.measix.pilot.data.db.dao.LightConversationEntity
 import net.weero.measix.pilot.data.db.dao.MessageNodeDAO
+import net.weero.measix.pilot.data.db.dao.ScopedTurnExecution
 import net.weero.measix.pilot.data.db.dao.ToolExecutionDAO
 import net.weero.measix.pilot.data.db.dao.TurnExecutionDAO
 import net.weero.measix.pilot.data.db.entity.ArtifactEntity
@@ -334,8 +335,8 @@ class ConversationRepository(
             executionFacts?.toolExecution?.let { toolExecutionDAO.upsert(it) }
         }
 
-        // 事务后投影
-        val title = conversationDAO.getConversationById(conversationId)?.title ?: ""
+        // 事务后投影（title 由 mutation 携带——Runtime 内存 header 为权威，禁止回查 DB）
+        val title = mutation.titleForIndex ?: ""
         if (mutation.upsertedNodes.isNotEmpty()) {
             messageFtsManager.reindexNodes(
                 conversationId = conversationId,
@@ -415,11 +416,17 @@ class ConversationRepository(
         turnExecutionDAO.getByConversationId(conversationId.toString())
 
     suspend fun getRecoverableTurnExecutionsByConversation(): Map<Uuid, List<TurnExecutionEntity>> =
-        turnExecutionDAO.getByStatuses(
+        turnExecutionDAO.getMasterByStatuses(
             listOf(TurnExecutionStatus.CREATED, TurnExecutionStatus.RUNNING)
         ).mapNotNull { execution ->
             runCatching { Uuid.parse(execution.conversationId) }.getOrNull()?.let { it to execution }
         }.groupBy(keySelector = { it.first }, valueTransform = { it.second })
+
+    /** 非终态 turn 事实行 + Master/Child 域标注——子助手恢复域的定点输入。 */
+    suspend fun getNonTerminalTurnExecutionsWithScope(): List<ScopedTurnExecution> =
+        turnExecutionDAO.getByStatusesWithScope(
+            listOf(TurnExecutionStatus.CREATED, TurnExecutionStatus.RUNNING)
+        )
 
     suspend fun upsertToolExecution(execution: ToolExecutionEntity) {
         toolExecutionDAO.upsert(execution)
@@ -476,10 +483,14 @@ class ConversationRepository(
         }
         val conversationsToDelete = childConversations + fullConversation
 
-        // Master、Child、MessageNode 和 Favorite 必须在同一个 Room 事务中提交。
+        // Master、Child、MessageNode、ArtifactReference 和 Favorite 必须在同一个
+        // Room 事务中提交。message_node / artifact_reference 同时依赖 FK 级联
+        // （v7 起运行时启用）与显式删除——双路径幂等，FK 关闭的环境仍有兜底。
         database.withTransaction {
             conversationsToDelete.forEach { item ->
                 favoriteDAO.deleteNodeFavoritesOfConversation(item.id.toString())
+                messageNodeDAO.deleteByConversation(item.id.toString())
+                artifactStore.deleteReferencesOfConversation(item.id)
             }
             if (persisted.parentConversationId == null) {
                 conversationDAO.deleteChildConversations(conversation.id.toString())
@@ -491,8 +502,7 @@ class ConversationRepository(
         conversationsToDelete.forEach { item ->
             messageFtsManager.deleteConversation(item.id.toString())
         }
-        // 引用投影经 node FK 级联自动清；文件清理走 GC
-        // （findUnshared* 探测路径删除，collectUnreferencedArtifacts 兜底回收）
+        // 文件清理走 GC（findUnshared* 探测路径删除，collectUnreferencedArtifacts 兜底回收）
         runCatching { collectUnreferencedArtifacts() }
     }
 
@@ -564,8 +574,7 @@ class ConversationRepository(
     }
 
     /**
-     * 获取所有 Child 会话 ID（保留——供 DelegationCoordinator.performRecovery 的
-     * orphan 识别与 AssistantBackgroundService 的全库引用扫描使用）
+     * 获取所有 Child 会话 ID（供 AssistantBackgroundService 的全库引用扫描使用）
      */
     suspend fun getAllChildConversationIds(): List<Uuid> {
         return conversationDAO.getAllChildConversationIds().mapNotNull {
@@ -574,7 +583,7 @@ class ConversationRepository(
     }
 
     /** Loads complete top-level conversations without deserializing every Child payload. */
-    suspend fun getAllTopLevelConversationsSync(): List<Conversation> {
+    suspend fun loadAllTopLevelConversations(): List<Conversation> {
         return conversationDAO.getAllIds().mapNotNull { id ->
             val entity = conversationDAO.getConversationById(id) ?: return@mapNotNull null
             conversationEntityToConversation(entity, loadMessageNodes(id))
@@ -586,7 +595,6 @@ class ConversationRepository(
         return ConversationEntity(
             id = conversation.id.toString(),
             title = conversation.title,
-            nodes = "[]",  // nodes 现在存储在单独的表中
             createAt = conversation.createAt.toEpochMilli(),
             updateAt = conversation.updateAt.toEpochMilli(),
             assistantId = conversation.assistantId.toString(),
@@ -695,6 +703,8 @@ class ConversationRepository(
             }
             deletedChildren.forEach { child ->
                 favoriteDAO.deleteNodeFavoritesOfConversation(child.id.toString())
+                messageNodeDAO.deleteByConversation(child.id.toString())
+                artifactStore.deleteReferencesOfConversation(child.id)
                 conversationDAO.deleteById(child.id.toString())
             }
         }

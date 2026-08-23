@@ -29,6 +29,7 @@ import net.weero.measix.pilot.data.db.migrations.Migration_2_3
 import net.weero.measix.pilot.data.db.migrations.Migration_3_4
 import net.weero.measix.pilot.data.db.migrations.Migration_4_5
 import net.weero.measix.pilot.data.db.migrations.Migration_5_6
+import net.weero.measix.pilot.data.db.migrations.Migration_6_7
 import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.data.ai.mcp.NetworkMonitor
 import net.weero.measix.pilot.data.sync.webdav.WebDavSync
@@ -51,9 +52,14 @@ val dataSourceModule = module {
         val context: Context = get()
         Room.databaseBuilder(context, AppDatabase::class.java, "measix_pilot")
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-            .addMigrations(Migration_1_2, Migration_2_3, Migration_3_4, Migration_4_5, Migration_5_6)
+            .addMigrations(Migration_1_2, Migration_2_3, Migration_3_4, Migration_4_5, Migration_5_6, Migration_6_7)
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onOpen(db: SupportSQLiteDatabase) {
+                    // FK 约束运行时启用（每个连接）：v7 自引用 CASCADE（孤儿 child
+                    // 结构性不可能）与 message_node / artifact_reference 的级联清理
+                    // 依赖此开关。onOpen 晚于 onUpgrade → 迁移期间 FK 保持 OFF，
+                    // Migration_6_7 的表重建安全（DROP TABLE 的隐式 DELETE 不级联）。
+                    db.execSQL("PRAGMA foreign_keys = ON")
                     val dictDir = SimpleDictManager.extractDict(context)
                     val cursor = db.query("SELECT jieba_dict(?)", arrayOf(dictDir.absolutePath))
                     cursor.use {

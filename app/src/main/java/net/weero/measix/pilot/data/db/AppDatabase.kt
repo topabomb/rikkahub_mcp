@@ -46,7 +46,7 @@ import net.weero.measix.pilot.utils.JsonInstant
         TurnExecutionEntity::class,
         ToolExecutionEntity::class,
     ],
-    version = 6,
+    version = 7,
     autoMigrations = [],
 )
 @TypeConverters(TokenUsageConverter::class)

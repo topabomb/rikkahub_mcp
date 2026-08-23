@@ -43,6 +43,7 @@ import net.weero.measix.pilot.service.runtime.OptionalFolderId
 import net.weero.measix.pilot.service.runtime.OptionalString
 import net.weero.measix.pilot.service.runtime.OptionalUuidSet
 import net.weero.measix.pilot.service.runtime.UpdateHeader
+import net.weero.measix.pilot.service.runtime.toConversation
 import net.weero.measix.pilot.ui.components.ai.SearchMode
 import net.weero.measix.pilot.ui.components.ai.searchModeEnablesBuiltIn
 import net.weero.measix.pilot.ui.components.ai.searchModeEnablesLocal
@@ -65,11 +66,13 @@ class ChatVM(
     private val favoriteRepository: FavoriteRepository,
 ) : ViewModel() {
     private val _conversationId: Uuid = Uuid.parse(id)
-    val conversation: StateFlow<Conversation> = chatService.getConversationFlow(_conversationId)
 
-    // 唯一内部事实流（nodes + activeTurn + header），UI 主订阅源；
-    // conversation 为兼容投影（activeTurn 覆盖最后 assistant 节点当前消息）
+    // 唯一内部事实流（nodes + activeTurn + header），UI 主订阅源。
+    // 需要 Conversation 形状的消费方经 [currentConversation] 按需转换（纯函数）。
     val snapshot: StateFlow<ConversationSnapshot> = chatService.getConversationSnapshot(_conversationId)
+
+    /** 命令语义读取（turn 边界低频点）：内存快照 → Conversation 形状。 */
+    fun currentConversation(): Conversation = snapshot.value.toConversation()
     var chatListInitialized by mutableStateOf(false) // 聊天列表是否已经滚动到底部
 
     // 聊天输入状态 - 保存在 ViewModel 中避免 TransactionTooLargeException
@@ -112,8 +115,8 @@ class ChatVM(
         settingsStore.settingsFlow.stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
     // 网络搜索(每个助手独立)
-    val enableWebSearch = combine(settings, conversation) { currentSettings, currentConversation ->
-        currentSettings.getConversationAssistant(currentConversation.assistantId).enableWebSearch
+    val enableWebSearch = combine(settings, snapshot) { currentSettings, currentSnapshot ->
+        currentSettings.getConversationAssistant(currentSnapshot.header.assistantId).enableWebSearch
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // 错误状态
@@ -214,9 +217,9 @@ class ChatVM(
 
     fun handleCompressContext(additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int): Job {
         return viewModelScope.launch {
-            chatService.compressConversation(
+            chatService.sideEffects.compressConversation(
                 _conversationId,
-                conversation.value,
+                currentConversation(),
                 additionalPrompt,
                 targetTokens,
                 keepRecentMessages
@@ -296,7 +299,7 @@ class ChatVM(
         viewModelScope.launch {
             val conversationFull = if (conversation.id == _conversationId) {
                 // 活跃会话以内存状态为准，避免 DB 中的旧快照覆盖尚未落库的更新。
-                this@ChatVM.conversation.value
+                currentConversation()
             } else {
                 conversationRepo.getConversationById(conversation.id) ?: conversation
             }
@@ -322,13 +325,13 @@ class ChatVM(
     fun generateTitle(conversation: Conversation, force: Boolean = false) {
         viewModelScope.launch {
             val conversationFull = conversationRepo.getConversationById(conversation.id) ?: return@launch
-            chatService.generateTitle(conversationFull, force)
+            chatService.sideEffects.generateTitle(conversationFull, force)
         }
     }
 
     fun generateSuggestion(conversation: Conversation) {
         viewModelScope.launch {
-            chatService.generateSuggestion(_conversationId, conversation)
+            chatService.sideEffects.generateSuggestion(_conversationId, conversation)
         }
     }
 
@@ -337,7 +340,7 @@ class ChatVM(
      * 回调签名不重写；差异字段经 UpdateHeader 三态字段提交，不再整对象回写）。
      */
     fun updateConversationHeader(next: Conversation) {
-        val current = conversation.value
+        val current = currentConversation()
         submit(
             UpdateHeader(
                 title = next.title.takeIf { it != current.title },
@@ -384,7 +387,7 @@ class ChatVM(
                 favoriteRepository.addNodeFavorite(
                     NodeFavoriteTarget(
                         conversationId = _conversationId,
-                        conversationTitle = conversation.value.title,
+                        conversationTitle = snapshot.value.header.title,
                         nodeId = node.id,
                         node = node
                     )

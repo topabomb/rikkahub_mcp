@@ -181,7 +181,7 @@ class AssistantBackgroundService(
         ) {
             return true
         }
-        val conversations = conversationRepository.getAllTopLevelConversationsSync() +
+        val conversations = conversationRepository.loadAllTopLevelConversations() +
             conversationRepository.getAllChildConversationIds().mapNotNull { id ->
                 conversationRepository.getConversationById(id)
             }

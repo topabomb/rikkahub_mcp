@@ -74,6 +74,7 @@ import net.weero.measix.pilot.data.ai.transformers.AttachmentProjectionTransform
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.data.ai.transformers.ToolArtifactReplayTransformer
 import net.weero.measix.pilot.data.ai.transformers.WorkspaceReminderTransformer
+import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
@@ -81,6 +82,7 @@ import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.datastore.getCurrentAssistant
 import net.weero.measix.pilot.data.datastore.getCurrentChatModel
+import net.weero.measix.pilot.data.files.AttachmentCloner
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.data.model.Conversation
@@ -106,6 +108,7 @@ import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 import net.weero.measix.pilot.service.runtime.TurnPipelineFactory
 import net.weero.measix.pilot.service.runtime.TurnEngine
 import net.weero.measix.pilot.service.runtime.TurnEvent
+import net.weero.measix.pilot.service.runtime.toConversation
 import net.weero.measix.pilot.service.runtime.AppendUserMessage
 import net.weero.measix.pilot.service.runtime.BeginTurn
 import net.weero.measix.pilot.service.runtime.CommitCheckpoint
@@ -119,19 +122,8 @@ import net.weero.measix.pilot.service.runtime.SelectNodeVariant
 import net.weero.measix.pilot.service.runtime.TruncateToNodeIndex
 import net.weero.measix.pilot.service.runtime.UpdateHeader
 import net.weero.measix.pilot.service.runtime.UpdateToolApproval
-import net.weero.measix.pilot.service.runtime.collectSubAssistantCallOutputs
 
 private const val TAG = "ChatService"
-
-internal fun backgroundTextGenerationParams(
-    model: Model,
-    reasoningLevel: ReasoningLevel = ReasoningLevel.AUTO,
-): TextGenerationParams = TextGenerationParams(
-    model = model,
-    reasoningLevel = reasoningLevel,
-    customHeaders = model.customHeaders,
-    customBody = model.customBodies,
-)
 
 data class ChatError(
     val id: Uuid = Uuid.random(),
@@ -147,101 +139,9 @@ enum class ChatErrorSolution {
 }
 
 /**
- * 主回合被用户停止或被新回合替换后，为尚未返回的 ToolCall 补齐协议结果。
- * assistant_call 还必须同步收口 Running Card，避免持久化后继续显示运行中。
+ * 主回合被用户停止或被新回合替换后的 ToolCall 收口在 TurnRecovery
+ * （恢复语义唯一所有者）。音效注意力键 / 完成副作用判定在 GenerationSideEffects。
  */
-internal fun finishInterruptedToolAfterGenerationStop(
-    tool: UIMessagePart.Tool,
-    json: Json,
-    childMessages: List<UIMessage> = emptyList(),
-): UIMessagePart.Tool {
-    if (tool.toolName == "assistant_call") {
-        val metadata = tool.getSubAssistantCallMetadata(json)
-        if (metadata != null && !metadata.state.isTerminal()) {
-            val stoppedMetadata = metadata.copy(
-                state = SubAssistantCallState.STOPPED,
-                phase = null,
-                activeToolName = null,
-                reason = "user_cancelled",
-                userInteraction = null,
-            )
-            val taskId = metadata.childTaskNodeId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
-            val outputs = collectSubAssistantCallOutputs(
-                messages = childMessages,
-                childTaskNodeId = taskId,
-                extras = parseAssistantCallExtrasFromInput(tool.input),
-            )
-            return tool.mergeSubAssistantCallMetadata(json, stoppedMetadata).copy(
-                output = listOf(
-                    UIMessagePart.Text(
-                        buildSubAssistantCallResult(
-                            json = json,
-                            status = "stopped",
-                            assistantName = metadata.targetNameSnapshot,
-                            content = "",
-                            reason = "user_cancelled",
-                            toolCalls = outputs.toolCalls,
-                            ttsTexts = outputs.ttsTexts,
-                            ttsStats = outputs.ttsStats,
-                        )
-                    )
-                )
-            )
-        }
-    }
-    return tool.copy(
-        output = listOf(
-            UIMessagePart.Text(
-                """{"status":"interrupted","error":"Tool execution was interrupted before completion."}"""
-            )
-        )
-    )
-}
-
-/**
- * 需要用户立刻处理的注意力键：普通工具 Pending，以及子助手桥接的 ask_user。
- * 用于前台审批音效去重，避免同一交互重复播放。
- */
-internal fun collectUserAttentionKeys(
-    messages: List<UIMessage>,
-    json: Json,
-): Set<String> {
-    val keys = linkedSetOf<String>()
-    messages.forEach { message ->
-        message.getTools().forEachIndexed { ordinal, tool ->
-            if (tool.isPending) {
-                keys += "tool:${message.id}:$ordinal"
-            }
-            if (tool.toolName == "assistant_call") {
-                val metadata = tool.getSubAssistantCallMetadata(json)
-                val interaction = metadata?.userInteraction
-                if (
-                    metadata != null &&
-                    !metadata.state.isTerminal() &&
-                    interaction?.toolName == "ask_user"
-                ) {
-                    val interactionId = interaction.interactionId.takeIf { it.isNotBlank() }
-                    if (interactionId != null) {
-                        keys += "ask:$interactionId"
-                    }
-                }
-            }
-        }
-    }
-    return keys
-}
-
-internal fun shouldLaunchCompletionSideEffects(reason: FinishedReason?): Boolean {
-    return reason == FinishedReason.COMPLETED
-}
-
-internal enum class MasterTurnOutcome {
-    SUCCESS,
-    AWAITING_APPROVAL,
-    CANCELLED,
-    FAILED,
-    INCOMPLETE,
-}
 
 internal fun retainValidMessageNodes(nodes: List<MessageNode>): List<MessageNode> {
     var messagesNodes = nodes.map { node ->
@@ -286,6 +186,7 @@ class ChatService(
     private val soundEffectPlayer: SoundEffectPlayer,
     private val assistantToolFactory: AssistantToolFactory,
     private val delegationCoordinator: DelegationCoordinator,
+    private val turnRecovery: TurnRecovery,
     private val sessionRegistry: ConversationRuntimeRegistry,
     private val recoveryGate: AssistantDataRecoveryGate = AssistantDataRecoveryGate.completed(),
     private val json: Json,
@@ -306,8 +207,20 @@ class ChatService(
     private val _errors = MutableStateFlow<List<ChatError>>(emptyList())
     val errors: StateFlow<List<ChatError>> = _errors.asStateFlow()
 
-    private val autoTitleGeneration = AutoTitleGenerationTracker()
     private val turnRecoveryReady = CompletableDeferred<Unit>()
+
+    /** 生成副作用域（音效反馈 + 标题/建议/压缩衍生生成），UI 经此访问衍生生成。 */
+    val sideEffects = GenerationSideEffects(
+        context = context,
+        appScope = appScope,
+        settingsStore = settingsStore,
+        providerManager = providerManager,
+        conversationRepo = conversationRepo,
+        sessionRegistry = sessionRegistry,
+        soundEffectPlayer = soundEffectPlayer,
+        json = json,
+        reportError = { chatError -> _errors.update { it + chatError } },
+    )
 
     fun addError(
         error: Throwable,
@@ -348,13 +261,8 @@ class ChatService(
     init {
         // 添加生命周期观察者
         ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
-        // 预加载 loop 声音反馈资源
-        soundEffectPlayer.preload(
-            R.raw.loop_complete,
-            R.raw.loop_failed,
-            R.raw.loop_step,
-            R.raw.loop_approval
-        )
+        // 预加载 loop 声音反馈资源（生成副作用域）
+        sideEffects.preloadSoundEffects()
         appScope.launch {
             runCatching {
                 recoveryGate.awaitReady()
@@ -372,84 +280,7 @@ class ChatService(
     }
 
     private suspend fun recoverInterruptedTurns() {
-        val recoverable = conversationRepo.getRecoverableTurnExecutionsByConversation()
-        recoverable.forEach { (conversationId, executions) ->
-            executions.forEach executionLoop@ { execution ->
-                val assistantMessageId = execution.assistantMessageId
-                    ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
-                    ?: return@executionLoop
-                var conversation = conversationRepo.getConversationById(conversationId) ?: return@executionLoop
-                // Child 会话的 turn 由 DelegationCoordinator（SubAssistantRecovery
-                // 载体）全权收口，Master 全库扫描跳过，避免双路径收口
-                if (conversation.parentConversationId != null) return@executionLoop
-                val located = conversation.locateAssistant(assistantMessageId) ?: return@executionLoop
-                val startedTools = conversationRepo.getToolExecutions(execution.turnId)
-                    .filter { it.status == ToolExecutionStatus.STARTED }
-                if (startedTools.isNotEmpty()) {
-                    val (nodeIndex, message) = located
-                    val messageTools = message.getTools()
-                    val replacements = startedTools.mapNotNull { toolExecution ->
-                        val tool = messageTools.getOrNull(toolExecution.toolOrdinal) ?: return@mapNotNull null
-                        toolExecution.toolOrdinal to tool.copy(
-                            output = listOf(
-                                UIMessagePart.Text(
-                                    """{"status":"unknown","error":"The app stopped after tool execution started; the side-effect outcome is unknown and will not be retried automatically."}"""
-                                )
-                            ),
-                        )
-                    }.toMap()
-                    val recoveredMessage = message.replaceToolsAtOrdinals(replacements)
-                    conversation = conversation.copy(
-                        messageNodes = conversation.messageNodes.mapIndexed { index, node ->
-                            if (index == nodeIndex) {
-                                node.copy(
-                                    messages = node.messages.map { candidate ->
-                                        if (candidate.id == assistantMessageId) recoveredMessage else candidate
-                                    }
-                                )
-                            } else {
-                                node
-                            }
-                        }
-                    )
-                }
-                conversation = conversation.markAssistantTerminal(
-                    messageId = assistantMessageId,
-                    status = MessageTerminalStatus.INTERRUPTED,
-                    reason = TurnTerminalReasons.PROCESS_RESTARTED,
-                )
-                val now = System.currentTimeMillis()
-                // 恢复收口走 FinalizeTurn（消息分发 + markAssistantTerminal 幂等 +
-                // turn INTERRUPTED 事实 delta 落库）；startedTools 的 UNKNOWN 语义由 App 层
-                // 构造、命令提交后单独落库
-                val session = getOrCreateSession(conversationId)
-                session.replaceState(conversation)
-                session.submitGeneration(
-                    FinalizeTurn(
-                        turnId = runCatching { Uuid.parse(execution.turnId) }.getOrNull()
-                            ?: return@executionLoop,
-                        assistantMessageId = assistantMessageId,
-                        messages = conversation.currentMessages,
-                        terminalStatus = TurnExecutionStatus.INTERRUPTED,
-                        terminalReason = TurnTerminalReasons.PROCESS_RESTARTED,
-                        closeInterruptedTools = false,
-                    )
-                )
-                startedTools.forEach { tool ->
-                    conversationRepo.upsertToolExecution(
-                        tool.copy(
-                            status = ToolExecutionStatus.UNKNOWN,
-                            reason = TurnTerminalReasons.PROCESS_RESTARTED,
-                            updatedAt = now,
-                        )
-                    )
-                }
-            }
-        }
-        // Even if an execution cannot be projected back into a message (for example an
-        // imported/corrupted snapshot has lost the assistant id), it must not remain RUNNING
-        // forever. The transactional sweep only touches records that were not finalized above.
-        conversationRepo.recoverInterruptedExecutions(updatedAt = System.currentTimeMillis())
+        turnRecovery.recoverInterruptedTurns()
     }
 
     // ---- Session 管理 ----
@@ -482,8 +313,12 @@ class ChatService(
 
     // ---- 对话状态访问 ----
 
-    fun getConversationFlow(conversationId: Uuid): StateFlow<Conversation> {
-        return sessionRegistry.getConversationFlow(conversationId)
+    /**
+     * 命令语义读取（turn 边界低频点）：内存快照 → Conversation 形状。
+     * 流式高频路径禁止使用（订阅 [getConversationSnapshot]）。
+     */
+    private fun liveConversation(conversationId: Uuid): Conversation {
+        return sessionRegistry.getOrCreateSession(conversationId).snapshot.value.toConversation()
     }
 
     /** 唯一内部事实流（UI 主订阅源）。 */
@@ -493,7 +328,7 @@ class ChatService(
 
     /** 所有结构性修改的唯一入口（UI/Application 提交命令）。 */
     suspend fun submitConversationCommand(conversationId: Uuid, command: ConversationCommand): Conversation {
-        return sessionRegistry.getOrCreateSession(conversationId).submit(command)
+        return sessionRegistry.getOrCreateSession(conversationId).submit(command).toConversation()
     }
 
     fun getGenerationJobStateFlow(conversationId: Uuid): Flow<Job?> {
@@ -519,7 +354,7 @@ class ChatService(
         val session = getOrCreateSession(conversationId)
         val conversation = conversationRepo.getConversationById(conversationId)
         if (conversation != null) {
-            val live = session.state.value
+            val live = session.snapshot.value.toConversation()
             val keepLiveTree = session.isGenerating ||
                 session.isDirty() ||
                 (live.messageNodes.isNotEmpty() && !live.updateAt.isBefore(conversation.updateAt))
@@ -530,10 +365,10 @@ class ChatService(
                     isPinned = conversation.isPinned,
                     folderId = conversation.folderId,
                 )
-                session.replaceState(merged)
+                session.loadSnapshot(merged)
             } else {
                 // DB 为权威：整树装载（装载路径）
-                session.replaceState(conversation)
+                session.loadSnapshot(conversation)
             }
             settingsStore.updateAssistant(conversation.assistantId)
         } else {
@@ -545,7 +380,7 @@ class ChatService(
                 assistantId = assistant.id,
                 newConversation = true
             ).updateCurrentMessages(assistant.presetMessages)
-            session.replaceState(newConversation)
+            session.loadSnapshot(newConversation)
         }
     }
 
@@ -569,9 +404,9 @@ class ChatService(
                 recoveryGate.awaitReady()
                 turnRecoveryReady.await()
                 runCatching { previousJob?.join() }
-                finishInterruptedPendingTools(conversationId, previousTurnId)
+                turnRecovery.finishInterruptedPendingTools(conversationId, previousTurnId)
 
-                val currentConversation = session.state.value
+                val currentConversation = session.snapshot.value.toConversation()
                 val settings = settingsStore.settingsFlow.first()
                 val assistant = settings.getAssistantById(currentConversation.assistantId)
                     ?: settings.getCurrentAssistant()
@@ -580,7 +415,7 @@ class ChatService(
                 // append 用户消息走命令协议（AppendUserMessage → reducer → delta 落库；
                 // reducer 同时清理 newConversation 运行态标记）
                 if (!conversationRepo.existsConversationById(conversationId)) {
-                    conversationRepo.insertConversation(session.state.value)
+                    conversationRepo.insertConversation(session.snapshot.value.toConversation())
                 }
                 session.submit(
                     AppendUserMessage(
@@ -646,8 +481,8 @@ class ChatService(
                 recoveryGate.awaitReady()
                 turnRecoveryReady.await()
                 runCatching { previousJob?.join() }
-                finishInterruptedPendingTools(conversationId, previousTurnId)
-                val conversation = delegationCoordinator.recoverMasterForMutation(session.state.value)
+                turnRecovery.finishInterruptedPendingTools(conversationId, previousTurnId)
+                val conversation = turnRecovery.finalizeStaleRunsBeforeMutation(session.snapshot.value.toConversation())
 
                 if (message.role == MessageRole.USER) {
                     // 如果是用户消息，则截止到当前消息（TruncateToNodeIndex，master 树 delta 落库）
@@ -704,7 +539,7 @@ class ChatService(
                         approved -> ToolApprovalState.Approved
                         else -> ToolApprovalState.Denied(reason)
                     }
-                    val before = session.state.value
+                    val before = session.snapshot.value
                     session.submit(
                         UpdateToolApproval(
                             messageId = locator.messageId,
@@ -712,8 +547,8 @@ class ChatService(
                             approvalState = newApprovalState,
                         )
                     )
-                    val updatedConversation = session.state.value
-                    if (updatedConversation === before) return@withToolApprovalLock
+                    if (session.snapshot.value === before) return@withToolApprovalLock
+                    val updatedConversation = session.snapshot.value.toConversation()
 
                     val hasPendingTools = updatedConversation.currentMessages.lastOrNull()
                         ?.getTools()?.any { it.isPending } == true
@@ -760,7 +595,7 @@ class ChatService(
         try {
             val session = getOrCreateSession(conversationId)
             val settings = settingsStore.settingsFlow.first()
-            val initialConversation = getConversationFlow(conversationId).value
+            val initialConversation = liveConversation(conversationId)
             val assistant = settings.getAssistantById(initialConversation.assistantId)
                 ?: settings.getCurrentAssistant()
             generationSoundEnabled = settings.displaySetting.enableMessageGenerationSoundEffect
@@ -769,66 +604,52 @@ class ChatService(
             session.submit(UpdateHeader(suggestions = emptyList()))
 
             checkInvalidMessages(conversationId)
-            val loadedConversation = getConversationFlow(conversationId).value
+            val loadedConversation = liveConversation(conversationId)
             val backfilled = AttachmentRefs.backfillConversation(loadedConversation)
             if (backfilled != loadedConversation) {
                 // 附件引用回填为内存投影修正（随首个 checkpoint 落库，无独立持久化需求）
-                session.replaceState(backfilled)
+                session.loadSnapshot(backfilled)
             }
 
-            var conversation = getConversationFlow(conversationId).value
+            var conversation = liveConversation(conversationId)
             val sourceMessages = if (messageRange != null) {
                 conversation.currentMessages.subList(messageRange.start, messageRange.endInclusive + 1)
             } else {
                 conversation.currentMessages
             }
-            val resumableAssistant = sourceMessages.lastOrNull()
-                ?.takeIf { message ->
+            inFlightAssistantId = null
+            // turn 骨架唯一实现：resumable 槽探测 + BeginTurn + RUNNING turn 事实（TurnEngine.start），
+            // 终态 FinalizeTurn 由 bind 提交；此处仅注入取消/失败时的 Child 消息并入。
+            val started = TurnEngine.start(
+                runtime = session,
+                turnId = turnId,
+                messages = sourceMessages,
+                resumeFilter = { message ->
                     message.role == MessageRole.ASSISTANT &&
                         message.getTools().any { !it.isExecuted && it.approvalState.canResumeToolExecution() }
-                }
-            val assistantSlot = resumableAssistant ?: UIMessage(
-                id = Uuid.random(),
+                },
+                prepareFinalize = { status, messages ->
+                    if (status == TurnExecutionStatus.CANCELLED || status == TurnExecutionStatus.FAILED) {
+                        turnRecovery.closeOpenTools(
+                            conversation = liveConversation(conversationId),
+                            messageId = inFlightAssistantId,
+                            cancelledByUser = status == TurnExecutionStatus.CANCELLED,
+                        ).currentMessages
+                    } else {
+                        val current = liveConversation(conversationId).currentMessages
+                        current.ifEmpty { messages }
+                    }
+                },
+            )
+            val turnEngine = started.engine
+            inFlightAssistantId = started.assistantMessageId
+            val assistantSlot = started.resumableMessage ?: UIMessage(
+                id = started.assistantMessageId,
                 role = MessageRole.ASSISTANT,
                 parts = emptyList(),
             )
-            inFlightAssistantId = assistantSlot.id
-            val generationMessages = if (resumableAssistant == null) sourceMessages + assistantSlot else sourceMessages
-            // turn 开始走命令协议——BeginTurn 打开 assistant 槽（reducer 分发 + delta 落库），
-            // 随后空消息 CommitCheckpoint 落 RUNNING turn 事实（崩溃恢复扫描依据）。
-            // 终态 FinalizeTurn 由 TurnEngine.bind 提交；此处仅注入取消/失败时的 Child 消息并入。
-            val turnEngine = TurnEngine(session, turnId, assistantSlot.id) { status, messages ->
-                if (status == TurnExecutionStatus.CANCELLED || status == TurnExecutionStatus.FAILED) {
-                    closeOpenTools(
-                        conversation = getConversationFlow(conversationId).value,
-                        messageId = inFlightAssistantId,
-                        cancelledByUser = status == TurnExecutionStatus.CANCELLED,
-                    ).currentMessages
-                } else {
-                    val current = getConversationFlow(conversationId).value.currentMessages
-                    current.ifEmpty { messages }
-                }
-            }
-            session.submitGeneration(
-                BeginTurn(
-                    turnId = turnId,
-                    assistantMessageId = assistantSlot.id,
-                    fromNodeId = null,
-                    resume = resumableAssistant != null,
-                    onStart = true,
-                )
-            )
-            session.submitGeneration(
-                CommitCheckpoint(
-                    turnId = turnId,
-                    assistantMessageId = assistantSlot.id,
-                    messages = emptyList(),
-                    turnStatus = TurnExecutionStatus.RUNNING,
-                    turnReason = null,
-                    toolExecution = null,
-                )
-            )
-            conversation = getConversationFlow(conversationId).value
+            val generationMessages = if (started.resumableMessage == null) sourceMessages + assistantSlot else sourceMessages
+            conversation = liveConversation(conversationId)
 
             val model = settings.getChatModel(assistant)
                 ?: error("No chat model is configured for assistant ${assistant.id}")
@@ -849,12 +670,11 @@ class ChatService(
                 }
             }
 
-            conversation = getConversationFlow(conversationId).value
+            conversation = liveConversation(conversationId)
 
             // start generating
-            // loop 声音反馈状态跟踪
-            var previousFinishedAt: LocalDateTime? = null
-            val previousAttentionKeys = mutableSetOf<String>()
+            // loop 声音反馈（生成副作用域：per-turn 去重器）
+            val soundTracker = sideEffects.soundTracker()
             // 每轮 Master Generation 创建一个 turn-level TtsToolPlaybackContext，
             // 在整轮 turn 内被 Master 和所有 Target 共享。播放器以 sessionId 独占队列：
             // 新 turn 替换旧队列；同一 turn 是否追加由顺序播放开关决定。
@@ -924,16 +744,7 @@ class ChatService(
 
                             // 前台声音反馈: 单步生成完成 + 工具待审批
                             if (isForeground.value && settings.displaySetting.enableMessageGenerationSoundEffect) {
-                                val lastMsg = event.lastMessage
-                                if (lastMsg != null && lastMsg.finishedAt != null && lastMsg.finishedAt != previousFinishedAt) {
-                                    soundEffectPlayer.play(R.raw.loop_step)
-                                }
-                                previousFinishedAt = lastMsg?.finishedAt
-
-                                val attentionKeys = collectUserAttentionKeys(listOfNotNull(lastMsg), json)
-                                if (attentionKeys.any { previousAttentionKeys.add(it) }) {
-                                    soundEffectPlayer.play(R.raw.loop_approval)
-                                }
+                                soundTracker.onStreaming(event.lastMessage)
                             }
                         }
 
@@ -966,21 +777,21 @@ class ChatService(
             if (!shouldLaunchCompletionSideEffects(finishedReason)) {
                 return
             }
-            val hasPendingApproval = getConversationFlow(conversationId).value
+            val hasPendingApproval = liveConversation(conversationId)
                 .currentMessages.lastOrNull()?.getTools()?.any { it.isPending } == true
             if (hasPendingApproval) {
                 return
             }
 
             if (isForeground.value && settings.displaySetting.enableMessageGenerationSoundEffect) {
-                soundEffectPlayer.play(R.raw.loop_complete)
+                sideEffects.playTurnCompleteSound()
             }
 
             launchWithConversationReference(conversationId) {
-                generateTitle(getConversationFlow(conversationId).value)
+                sideEffects.generateTitle(liveConversation(conversationId))
             }
             launchWithConversationReference(conversationId) {
-                generateSuggestion(conversationId, getConversationFlow(conversationId).value)
+                sideEffects.generateSuggestion(conversationId, liveConversation(conversationId))
             }
         } catch (e: CancellationException) {
             applyMasterTurnSideEffects(
@@ -995,7 +806,7 @@ class ChatService(
             Logging.log(TAG, "launchRun failed: ${e.message}")
             Logging.log(TAG, e.stackTraceToString().lines().take(6).joinToString("\n"))
             if (isForeground.value && generationSoundEnabled) {
-                soundEffectPlayer.play(R.raw.loop_failed)
+                sideEffects.playTurnFailedSound()
             }
             applyMasterTurnSideEffects(
                 conversationId = conversationId,
@@ -1017,7 +828,7 @@ class ChatService(
     // ---- 检查无效消息 ----
 
     private suspend fun checkInvalidMessages(conversationId: Uuid) {
-        val conversation = getConversationFlow(conversationId).value
+        val conversation = liveConversation(conversationId)
         val messagesNodes = retainValidMessageNodes(conversation.messageNodes)
         if (messagesNodes == conversation.messageNodes) return
         // 无效消息清理 = 树替换（命令通道 delta 落库）
@@ -1052,11 +863,11 @@ class ChatService(
                 }
                 MasterTurnOutcome.INCOMPLETE -> TurnTerminalReasons.PROVIDER_INCOMPLETE
             }
-            finalizeDanglingToolExecutions(turnId, outcome, reason)
+            turnRecovery.finalizeDanglingToolExecutions(turnId, outcome, reason)
             if (outcome == MasterTurnOutcome.FAILED && error != null) {
                 addError(error, conversationId, title = context.getString(R.string.error_title_generation))
             }
-            val finalMessage = getConversationFlow(conversationId).value.currentMessages
+            val finalMessage = liveConversation(conversationId).currentMessages
                 .firstOrNull { it.id == inFlightAssistantId }
             appEventBus.tryEmit(
                 AppEvent.ChatGenerationEnded(
@@ -1069,346 +880,9 @@ class ChatService(
     }
 
     /**
-     * 终态后收口 dangling tool executions：turn 内仍处 STARTED 的工具行，
-     * CANCELLED → CANCELLED（用户停止），FAILED/INCOMPLETE → UNKNOWN（无法确认结果）。
+     * 取消 / 中断 / 崩溃收口原语统一在 [TurnRecovery]（恢复语义唯一所有者）：
+     * closeOpenTools / finishInterruptedPendingTools / finalizeDanglingToolExecutions。
      */
-    private suspend fun finalizeDanglingToolExecutions(
-        turnId: Uuid,
-        outcome: MasterTurnOutcome,
-        reason: String?,
-    ) {
-        val now = System.currentTimeMillis()
-        val dangling = conversationRepo.getToolExecutions(turnId.toString())
-            .filter { it.status == ToolExecutionStatus.STARTED }
-        if (dangling.isEmpty()) return
-        dangling.forEach { tool ->
-            conversationRepo.upsertToolExecution(
-                tool.copy(
-                    status = if (outcome == MasterTurnOutcome.CANCELLED) {
-                        ToolExecutionStatus.CANCELLED
-                    } else {
-                        ToolExecutionStatus.UNKNOWN
-                    },
-                    reason = reason,
-                    updatedAt = now,
-                )
-            )
-        }
-    }
-
-    private suspend fun closeOpenTools(
-        conversation: Conversation,
-        messageId: Uuid?,
-        cancelledByUser: Boolean = true,
-    ): Conversation {
-        val located = conversation.locateAssistant(messageId) ?: return conversation
-        val (nodeIndex, targetMessage) = located
-        var updatedMessage = targetMessage.finishPendingTools { tool ->
-            if (cancelledByUser) cancelToolByUser(tool) else interruptPendingTool(tool)
-        }
-        val childMessagesByConversation = loadChildMessagesForInterruptedCalls(updatedMessage)
-        updatedMessage = updatedMessage.finishInterruptedTools { tool ->
-            val childId = tool.getSubAssistantCallMetadata(json)?.childConversationId
-                ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
-            finishInterruptedToolAfterGenerationStop(
-                tool = tool,
-                json = json,
-                childMessages = childId?.let { childMessagesByConversation[it] }.orEmpty(),
-            )
-        }
-        if (updatedMessage == targetMessage) return conversation
-        return conversation.copy(
-            messageNodes = conversation.messageNodes.mapIndexed { index, node ->
-                if (index != nodeIndex) {
-                    node
-                } else {
-                    node.copy(
-                        messages = node.messages.map { message ->
-                            if (message.id == targetMessage.id) updatedMessage else message
-                        },
-                    )
-                }
-            },
-        )
-    }
-
-    private fun cancelToolByUser(tool: UIMessagePart.Tool): UIMessagePart.Tool {
-        return tool.copy(
-            output = listOf(
-                UIMessagePart.Text(
-                    """{"status":"cancelled","error":"Generation cancelled by user before tool execution completed."}"""
-                )
-            ),
-            approvalState = ToolApprovalState.Denied("Generation cancelled by user")
-        )
-    }
-
-    private fun interruptPendingTool(tool: UIMessagePart.Tool): UIMessagePart.Tool = tool.copy(
-        output = listOf(
-            UIMessagePart.Text(
-                """{"status":"interrupted","error":"Tool execution was interrupted before completion."}"""
-            )
-        ),
-    )
-
-    /**
-     * 上一回合残留的开放工具收口：仅当确有未终态的上一 turn、且末条 assistant 仍有未执行工具时
-     * 才提交 FinalizeTurn(closeInterruptedTools=true)。不得编造 turnId，也不得覆盖
-     * bind 已提交的 CANCELLED/COMPLETED 事实。
-     */
-    private suspend fun finishInterruptedPendingTools(conversationId: Uuid, previousTurnId: Uuid?) {
-        val turnId = previousTurnId ?: return
-        val session = getOrCreateSession(conversationId)
-        if (session.isTurnFinalized(turnId)) return
-        val lastAssistant = session.state.value.currentMessages.lastOrNull()
-            ?.takeIf { it.role == MessageRole.ASSISTANT }
-            ?: return
-        if (lastAssistant.getTools().none { !it.isExecuted }) return
-        session.submit(
-            FinalizeTurn(
-                turnId = turnId,
-                assistantMessageId = lastAssistant.id,
-                messages = null,
-                terminalStatus = TurnExecutionStatus.INTERRUPTED,
-                terminalReason = null,
-                closeInterruptedTools = true,
-            )
-        )
-    }
-
-    private suspend fun loadChildMessagesForInterruptedCalls(
-        message: UIMessage,
-    ): Map<Uuid, List<UIMessage>> {
-        val childIds = message.getTools().mapNotNull { tool ->
-            if (tool.toolName != "assistant_call") return@mapNotNull null
-            tool.getSubAssistantCallMetadata(json)?.childConversationId
-                ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
-        }.toSet()
-        return childIds.associateWith { childId ->
-            sessionRegistry.getSession(childId)?.state?.value?.currentMessages
-                ?: conversationRepo.getConversationById(childId)?.currentMessages
-                ?: emptyList()
-        }
-    }
-
-    // ---- 生成标题 ----
-
-    suspend fun generateTitle(
-        conversation: Conversation,
-        force: Boolean = false,
-    ) {
-        val conversationId = conversation.id
-        val decision = autoTitleGeneration.begin(
-            conversationId = conversationId,
-            force = force,
-            titleBlank = conversation.title.isBlank(),
-        )
-        if (decision != AutoTitleGenerationDecision.Proceed) return
-
-        try {
-            val settings = settingsStore.settingsFlow.first()
-            val model = settings.findModelById(settings.titleModelId, fallback = settings.fastModelId)
-                ?: settings.getCurrentChatModel()
-                ?: return
-            val provider = model.findProvider(settings.providers) ?: return
-
-            if (!force) {
-                autoTitleGeneration.recordAttempt(conversationId)
-            }
-
-            runCatching {
-                val providerHandler = providerManager.getProviderByType(provider)
-                val result = providerHandler.generateText(
-                    providerSetting = provider,
-                    messages = listOf(
-                        UIMessage.user(
-                            prompt = settings.titlePrompt.applyPlaceholders(
-                                "locale" to Locale.getDefault().displayName,
-                                "content" to conversation.currentMessages
-                                    .takeLast(4).joinToString("\n\n") { it.summaryAsText(maxLength = 500) })
-                        ),
-                    ),
-                    params = backgroundTextGenerationParams(model),
-                )
-
-                val generatedTitle = result.choices.getOrNull(0)?.message?.toText().orEmpty()
-                val latestTitle = sessionRegistry.getSession(conversationId)?.state?.value?.title
-                    ?: conversation.title
-                val titleToWrite = resolveGeneratedTitleWrite(
-                    force = force,
-                    latestTitle = latestTitle,
-                    generatedTitle = generatedTitle,
-                ) ?: return@runCatching
-                submitHeaderUpdate(
-                    conversationId,
-                    fallback = { conversationRepo.updateConversationTitle(conversationId, titleToWrite) },
-                    build = { UpdateHeader(title = titleToWrite) },
-                )
-            }.onFailure {
-                it.printStackTrace()
-                addError(
-                    error = it,
-                    conversationId = conversationId,
-                    title = context.getString(R.string.error_title_generate_title),
-                    solution = ChatErrorSolution.CheckTitleModelSettings,
-                )
-            }
-        } finally {
-            val retry = autoTitleGeneration.end(conversationId)
-            if (retry != null) {
-                launchWithConversationReference(conversationId) {
-                    val latest = conversationRepo.getConversationById(conversationId) ?: return@launchWithConversationReference
-                    generateTitle(latest, force = retry.force)
-                }
-            }
-        }
-    }
-
-    // ---- 生成建议 ----
-
-    suspend fun generateSuggestion(conversationId: Uuid, conversation: Conversation) {
-        runCatching {
-            val settings = settingsStore.settingsFlow.first()
-            if (!settings.enableSuggestion) return
-            val model = settings.findModelById(settings.suggestionModelId, fallback = settings.fastModelId)
-                ?: settings.getCurrentChatModel()
-                ?: return
-            val provider = model.findProvider(settings.providers) ?: return
-
-            submitHeaderUpdate(
-                conversationId,
-                fallback = {
-                    if (conversationRepo.existsConversationById(conversationId)) {
-                        conversationRepo.updateConversationSuggestions(conversationId, emptyList())
-                    }
-                },
-                build = { UpdateHeader(suggestions = emptyList()) },
-            )
-
-            val providerHandler = providerManager.getProviderByType(provider)
-            val result = providerHandler.generateText(
-                providerSetting = provider,
-                messages = listOf(
-                    UIMessage.user(
-                        settings.suggestionPrompt.applyPlaceholders(
-                            "locale" to Locale.getDefault().displayName,
-                            "content" to conversation.currentMessages
-                                .takeLast(8).joinToString("\n\n") { it.summaryAsText(maxLength = 500) }),
-                    )
-                ),
-                params = backgroundTextGenerationParams(model),
-            )
-            val suggestions =
-                result.choices[0].message?.toText()?.split("\n")?.map { it.trim() }
-                    ?.filter { it.isNotBlank() }
-                    ?.take(10)
-                    ?: emptyList()
-
-            submitHeaderUpdate(
-                conversationId,
-                fallback = {
-                    if (conversationRepo.existsConversationById(conversationId)) {
-                        conversationRepo.updateConversationSuggestions(conversationId, suggestions)
-                    }
-                },
-                build = { UpdateHeader(suggestions = suggestions) },
-            )
-        }.onFailure {
-            it.printStackTrace()
-        }
-    }
-
-    // ---- 压缩对话历史 ----
-
-    suspend fun compressConversation(
-        conversationId: Uuid,
-        conversation: Conversation,
-        additionalPrompt: String,
-        targetTokens: Int,
-        keepRecentMessages: Int = 32
-    ): Result<Unit> = runCatching {
-        val settings = settingsStore.settingsFlow.first()
-        val model = settings.findModelById(settings.compressModelId)
-            ?: settings.getCurrentChatModel()
-            ?: throw IllegalStateException("No model available for compression")
-        val provider = model.findProvider(settings.providers)
-            ?: throw IllegalStateException("Provider not found")
-
-        val providerHandler = providerManager.getProviderByType(provider)
-
-        val maxMessagesPerChunk = 256
-        val allMessages = conversation.currentMessages
-
-        // Split messages into those to compress and those to keep
-        val messagesToCompress: List<UIMessage>
-        val messagesToKeep: List<UIMessage>
-
-        if (keepRecentMessages > 0 && allMessages.size > keepRecentMessages) {
-            val keepStartIndex = allMessages.findUserTurnStart(allMessages.size - keepRecentMessages)
-            messagesToCompress = allMessages.take(keepStartIndex)
-            messagesToKeep = allMessages.drop(keepStartIndex)
-            if (messagesToCompress.isEmpty()) {
-                throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
-            }
-        } else if (keepRecentMessages > 0) {
-            // Not enough messages to compress while keeping recent ones
-            throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
-        } else {
-            messagesToCompress = allMessages
-            messagesToKeep = emptyList()
-        }
-
-        fun splitMessages(messages: List<UIMessage>): List<List<UIMessage>> {
-            if (messages.size <= maxMessagesPerChunk) return listOf(messages)
-            val rawMid = messages.size / 2
-            val mid = messages.findUserTurnStart(rawMid).takeIf { it > 0 } ?: rawMid
-            val left = splitMessages(messages.subList(0, mid))
-            val right = splitMessages(messages.subList(mid, messages.size))
-            return left + right
-        }
-
-        suspend fun compressMessages(messages: List<UIMessage>): String {
-            val contentToCompress = messages.joinToString("\n\n") { it.summaryAsText(maxLength = 2000) }
-            val prompt = settings.compressPrompt.applyPlaceholders(
-                "content" to contentToCompress,
-                "target_tokens" to targetTokens.toString(),
-                "additional_context" to if (additionalPrompt.isNotBlank()) {
-                    "Additional instructions from user: $additionalPrompt"
-                } else "",
-                "locale" to Locale.getDefault().displayName
-            )
-
-            val result = providerHandler.generateText(
-                providerSetting = provider,
-                messages = listOf(UIMessage.user(prompt)),
-                params = backgroundTextGenerationParams(model),
-            )
-
-            return result.choices[0].message?.toText()?.trim()
-                ?: throw IllegalStateException("Failed to generate compressed summary")
-        }
-
-        val compressedSummaries = coroutineScope {
-            splitMessages(messagesToCompress)
-                .map { chunk -> async { compressMessages(chunk) } }
-                .awaitAll()
-        }
-
-        // Replace older history with summary messages while preserving complete recent turns.
-        val newMessageNodes = buildList {
-            compressedSummaries.forEach { summary ->
-                add(UIMessage.user(summary).toMessageNode())
-            }
-            addAll(messagesToKeep.map { it.toMessageNode() })
-        }
-
-        // 压缩 = ReplaceMessageTree（树替换 delta：旧行删除 + 新行 upsert + FTS 增量
-        // + 引用投影替换）+ 清空建议；原 deleteUnreferencedChatFiles 全量扫描路径由 GC 取代
-        val session = getOrCreateSession(conversationId)
-        session.submit(ReplaceMessageTree(newMessageNodes))
-        session.submit(UpdateHeader(suggestions = emptyList()))
-        conversationRepo.collectUnreferencedArtifacts()
-    }
 
     // ---- 对话状态更新 ----
 
@@ -1418,7 +892,7 @@ class ChatService(
      */
     fun updateConversationState(conversationId: Uuid, update: (Conversation) -> Conversation) {
         val session = getOrCreateSession(conversationId)
-        session.replaceState(update(session.state.value))
+        session.loadSnapshot(update(session.snapshot.value.toConversation()))
     }
 
     /**
@@ -1474,7 +948,7 @@ class ChatService(
      */
     fun hasGeneratingConversationInFolder(folderId: Uuid): Boolean {
         return sessionRegistry.getSessionsSnapshot()
-            .any { it.isGenerating && it.state.value.folderId == folderId }
+            .any { it.isGenerating && it.snapshot.value.header.folderId == folderId }
     }
 
     /**
@@ -1487,7 +961,7 @@ class ChatService(
     suspend fun deleteFolder(folderId: Uuid) {
         recoveryGate.awaitReady()
         sessionRegistry.getSessionsSnapshot()
-            .filter { it.state.value.folderId == folderId }
+            .filter { it.snapshot.value.header.folderId == folderId }
             .forEach { it.submit(UpdateHeader(folderId = OptionalFolderId.Clear)) }
         folderRepository.deleteFolder(folderId)
     }
@@ -1497,7 +971,7 @@ class ChatService(
         recoveryGate.awaitReady()
         conversationRepo.insertConversation(conversation)
         sessionRegistry.getSession(conversation.id)?.let {
-            sessionRegistry.updateConversationState(conversation.id, conversation)
+            sessionRegistry.loadConversation(conversation.id, conversation)
         }
     }
 
@@ -1510,7 +984,7 @@ class ChatService(
         conversationRepo.updateConversationAssistantId(conversation.id, conversation.assistantId)
         conversationRepo.updateConversationFolderId(conversation.id, null)
         sessionRegistry.getSession(conversation.id)?.let {
-            sessionRegistry.updateConversationState(conversation.id, conversation)
+            sessionRegistry.loadConversation(conversation.id, conversation)
         }
     }
 
@@ -1520,10 +994,10 @@ class ChatService(
         val childIds = conversationRepo.getChildConversations(conversation.id).map { it.id }
         conversationRepo.deleteConversation(conversation)
         childIds.forEach { childId ->
-            autoTitleGeneration.clear(childId)
+            sideEffects.clearTitleTracking(childId)
             sessionRegistry.evictSession(childId)
         }
-        autoTitleGeneration.clear(conversation.id)
+        sideEffects.clearTitleTracking(conversation.id)
         sessionRegistry.evictSession(conversation.id)
     }
 
@@ -1540,7 +1014,7 @@ class ChatService(
             fallback = { conversationRepo.togglePinStatus(conversationId) },
             build = {
                 val session = sessionRegistry.getSession(conversationId)!!
-                UpdateHeader(isPinned = !session.state.value.isPinned)
+                UpdateHeader(isPinned = !session.snapshot.value.header.isPinned)
             },
         )
     }
@@ -1555,7 +1029,7 @@ class ChatService(
         if (parts.isEmptyInputMessage()) return
         recoveryGate.awaitReady()
 
-        val currentConversation = getConversationFlow(conversationId).value
+        val currentConversation = liveConversation(conversationId)
         val settings = settingsStore.settingsFlow.first()
         val assistant = settings.getAssistantById(currentConversation.assistantId)
             ?: settings.getCurrentAssistant()
@@ -1581,8 +1055,8 @@ class ChatService(
         messageId: Uuid
     ): Conversation {
         stopGeneration(conversationId)
-        val currentConversation = delegationCoordinator.recoverMasterForMutation(
-            getConversationFlow(conversationId).value
+        val currentConversation = turnRecovery.finalizeStaleRunsBeforeMutation(
+            liveConversation(conversationId)
         )
         val targetNodeIndex = currentConversation.messageNodes.indexOfFirst { node ->
             node.messages.any { it.id == messageId }
@@ -1632,7 +1106,7 @@ class ChatService(
         }
         conversationRepo.insertConversationTree(forkConversation, forkedChildren)
         // fork 直建新会话（明确不经 Runtime 命令通道）；装载进 runtime 供后续交互
-        getOrCreateSession(forkConversation.id).replaceState(forkConversation)
+        getOrCreateSession(forkConversation.id).loadSnapshot(forkConversation)
         return forkConversation
     }
 
@@ -1642,7 +1116,7 @@ class ChatService(
         selectIndex: Int
     ) {
         recoveryGate.awaitReady()
-        val currentConversation = getConversationFlow(conversationId).value
+        val currentConversation = liveConversation(conversationId)
         val targetNode = currentConversation.messageNodes.firstOrNull { it.id == nodeId }
             ?: throw NoSuchElementException("Message node not found")
 
@@ -1660,14 +1134,14 @@ class ChatService(
         failIfMissing: Boolean = true,
     ) {
         stopGeneration(conversationId)
-        delegationCoordinator.recoverMasterForMutation(
-            getConversationFlow(conversationId).value
+        turnRecovery.finalizeStaleRunsBeforeMutation(
+            liveConversation(conversationId)
         )
         // 删除消息变体 = DeleteMessage 命令（master 树 delta 落库 + FTS 增量 + 引用投影）
         val session = getOrCreateSession(conversationId)
-        val before = session.state.value
+        val before = session.snapshot.value
         session.submit(DeleteMessage(messageId))
-        if (session.state.value === before) {
+        if (session.snapshot.value === before) {
             if (failIfMissing) {
                 throw NoSuchElementException("Message not found")
             }
@@ -1685,58 +1159,15 @@ class ChatService(
     }
 
     /**
-     * master 树 mutation（删除/截断）后的 Child retention 收口（子助手域编排保留 App 层，
-     * master 树本身已由命令通道 delta 落库）。retained children 走 children 收缩
-     * 事务（引用替换 + GC），deleted children 删除 + evict。
+     * master 树 mutation（删除/截断）后的 Child retention 收口（子助手域职责，
+     * 编排在 DelegationCoordinator）。
      */
     private suspend fun applyChildRetentionAfterTreeMutation(conversationId: Uuid) {
-        val master = getConversationFlow(conversationId).value
-        val children = conversationRepo.getChildConversations(master.id).associateBy { it.id }
-        val plan = planSubAssistantRetention(master, children, json)
-        conversationRepo.updateChildRetention(
-            retainedChildren = plan.retainedChildren,
-            deletedChildren = plan.deletedChildren,
-        )
-        plan.retainedChildren.forEach { child ->
-            sessionRegistry.getSession(child.id)?.let {
-                sessionRegistry.updateConversationState(child.id, child)
-            }
-        }
-        plan.deletedChildren.forEach { child -> sessionRegistry.evictSession(child.id) }
+        turnRecovery.applyChildRetentionAfterTreeMutation(conversationId)
     }
 
     private suspend fun List<UIMessagePart>.copyWithForkedFilesRecursively(): List<UIMessagePart> =
-        buildList {
-            for (part in this@copyWithForkedFilesRecursively) {
-                add(part.copyForkedPart())
-            }
-        }
-
-    private suspend fun UIMessagePart.copyForkedPart(): UIMessagePart {
-        suspend fun copyLocalFileIfNeeded(url: String): String {
-            if (!url.startsWith("file:")) return url
-            val copied = filesManager.createChatFilesByContents(listOf(url.toUri())).firstOrNull()
-            return copied?.toString() ?: url
-        }
-
-        return when (this) {
-            is UIMessagePart.Image -> copy(url = copyLocalFileIfNeeded(url))
-            is UIMessagePart.Document -> copy(url = copyLocalFileIfNeeded(url))
-            is UIMessagePart.Video -> copy(url = copyLocalFileIfNeeded(url))
-            is UIMessagePart.Audio -> copy(url = copyLocalFileIfNeeded(url))
-            is UIMessagePart.Tool -> {
-                val rewriter = toolArtifactRewriter
-                val sourceRef = metadata?.let { rewriter?.decodeArtifactRef(it) }
-                if (rewriter != null && sourceRef != null) {
-                    val (newOutput, newMetadata) = rewriter.rewriteToolOutput(output, metadata)
-                    copy(output = newOutput, metadata = newMetadata)
-                } else {
-                    copy(output = output.copyWithForkedFilesRecursively())
-                }
-            }
-            else -> this
-        }
-    }
+        AttachmentCloner.cloneParts(this, filesManager, toolArtifactRewriter)
 
 
 
@@ -1756,44 +1187,3 @@ class ChatService(
     }
 }
 
-private fun Conversation.sanitizeForPersistence(): Conversation {
-    if (messageNodes.none { node -> node.messages.any { it.hasBase64Part() } }) return this
-    return copy(
-        messageNodes = messageNodes.map { node ->
-            node.copy(messages = node.messages.map { it.withoutUnpersistableBase64() })
-        },
-    )
-}
-
-private fun Conversation.locateAssistant(messageId: Uuid?): Pair<Int, UIMessage>? {
-    if (messageId == null) return null
-    messageNodes.forEachIndexed { index, node ->
-        val message = node.messages.firstOrNull { it.id == messageId && it.role == MessageRole.ASSISTANT }
-        if (message != null) return index to message
-    }
-    return null
-}
-
-private fun Conversation.markAssistantTerminal(
-    messageId: Uuid?,
-    status: MessageTerminalStatus,
-    reason: String?,
-): Conversation {
-    val located = locateAssistant(messageId) ?: return this
-    val (nodeIndex, targetMessage) = located
-    if (targetMessage.role != MessageRole.ASSISTANT) return this
-    val marked = targetMessage.copy(terminalStatus = status, terminalReason = reason)
-    return copy(
-        messageNodes = messageNodes.mapIndexed { index, node ->
-            if (index != nodeIndex) {
-                node
-            } else {
-                node.copy(
-                    messages = node.messages.map { message ->
-                        if (message.id == targetMessage.id) marked else message
-                    },
-                )
-            }
-        },
-    )
-}

@@ -358,7 +358,6 @@ class ArtifactStoreTest {
         id = id,
         assistantId = Uuid.random().toString(),
         title = "t",
-        nodes = "[]",
         createAt = 0L,
         updateAt = 0L,
         chatSuggestions = "[]",

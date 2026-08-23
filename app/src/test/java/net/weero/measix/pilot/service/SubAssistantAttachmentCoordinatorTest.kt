@@ -21,9 +21,11 @@ import net.weero.measix.pilot.data.ai.FinishedReason
 import net.weero.measix.pilot.service.runtime.AppendUserMessage
 import net.weero.measix.pilot.service.runtime.BeginTurn
 import net.weero.measix.pilot.service.runtime.ConversationCommand
+import net.weero.measix.pilot.service.TurnRecovery
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.DelegationCoordinator
+import net.weero.measix.pilot.service.runtime.toSnapshot
 import net.weero.measix.pilot.data.ai.GenerationChunk
 import net.weero.measix.pilot.data.ai.GenerationHandler
 import net.weero.measix.pilot.data.ai.attachments.AttachmentFailureReasons
@@ -91,7 +93,7 @@ class SubAssistantAttachmentCoordinatorTest {
         assertTrue(user.parts.any { it is UIMessagePart.Image && it.url == image.url })
         assertTrue(user.id.toString().isNotBlank())
         coVerify {
-            harness.childSession.submitGeneration(match { it is BeginTurn })
+            harness.childSession.submit(match { it is BeginTurn })
         }
     }
 
@@ -183,7 +185,7 @@ class SubAssistantAttachmentCoordinatorTest {
         // reuseChild 走 AppendUserMessage 命令（经 session.submit 唯一提交通道）
         io.mockk.coEvery { harness.childSession.submit(any()) } answers {
             submittedCommands += invocation.args[0] as ConversationCommand
-            child
+            child.toSnapshot()
         }
         val previous = findPreviousCallMetadata(
             masterMessages = listOf(previousAssistant, currentAssistant),
@@ -320,17 +322,17 @@ class SubAssistantAttachmentCoordinatorTest {
         }
         val sessionRegistry = mockk<ConversationRuntimeRegistry>(relaxed = true)
         val masterSession = mockk<ConversationRuntime>(relaxed = true)
-        every { masterSession.state } returns MutableStateFlow(
+        every { masterSession.snapshot } returns MutableStateFlow(
             Conversation.ofId(
                 id = masterId,
                 assistantId = callerId,
                 messages = masterMessages.map { it.toMessageNode() },
-            ),
+            ).toSnapshot(),
         )
         every { sessionRegistry.getSession(any()) } returns masterSession
         val childSession = mockk<ConversationRuntime>(relaxed = true)
-        every { childSession.state } returns MutableStateFlow(
-            Conversation.ofId(Uuid.random(), assistantId = targetId),
+        every { childSession.snapshot } returns MutableStateFlow(
+            Conversation.ofId(Uuid.random(), assistantId = targetId).toSnapshot(),
         )
         every { childSession.processingStatus } returns MutableStateFlow(null)
         every { sessionRegistry.getOrCreateSessionWithConversation(any(), any()) } returns childSession
@@ -360,6 +362,13 @@ class SubAssistantAttachmentCoordinatorTest {
             json = JsonInstant,
             attachmentResolver = resolver,
             context = mockk(relaxed = true),
+            turnRecovery = TurnRecovery(
+                conversationRepo = conversationRepo,
+                sessionRegistry = sessionRegistry,
+                settingsStore = settingsStore,
+                json = JsonInstant,
+            ),
+            runGate = SubAssistantRunGate(),
         )
         return Harness(coordinator, conversationRepo, filesManager, childSession)
     }

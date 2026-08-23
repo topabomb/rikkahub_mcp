@@ -23,6 +23,7 @@ import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
+import net.weero.measix.pilot.service.runtime.toConversation
 import kotlin.uuid.Uuid
 
 data class SubAssistantDetailLink(
@@ -165,7 +166,7 @@ class SubAssistantDetailVM(
 
             // Step 1: 解析 link（一次性，不随 master 状态变化重复解析）
             val activeMaster = sessionRegistry.getSession(masterId)
-            val initialMaster = activeMaster?.state?.value
+            val initialMaster = activeMaster?.snapshot?.value?.toConversation()
                 ?: conversationRepository.getConversationById(masterId)
                 ?: return@launch markUnavailable()
 
@@ -179,8 +180,8 @@ class SubAssistantDetailVM(
             launch {
                 val activeChild = sessionRegistry.getSession(link.childConversationId)
                 if (activeChild != null) {
-                    activeChild.state.collect { child ->
-                        updateReady(masterId, link, child)
+                    activeChild.snapshot.collect { child ->
+                        updateReady(masterId, link, child.toConversation())
                     }
                 } else {
                     val child = conversationRepository.getConversationById(link.childConversationId)
@@ -197,8 +198,8 @@ class SubAssistantDetailVM(
             // 使用 Dispatchers.Default 避免在 Main 上执行 resolveSubAssistantDetailLink。
             if (activeMaster != null) {
                 launch(Dispatchers.Default) {
-                    activeMaster.state.collect { master ->
-                        val result = resolveSubAssistantDetailLink(master, runId, json)
+                    activeMaster.snapshot.collect { master ->
+                        val result = resolveSubAssistantDetailLink(master.toConversation(), runId, json)
                         if (result is SubAssistantDetailLinkResult.Ready) {
                             _uiState.update { state ->
                                 if (state is SubAssistantDetailUiState.Ready) {
@@ -248,10 +249,10 @@ class SubAssistantDetailVM(
         // 监听 master StateFlow 直到 link 出现。
         // 此时 master 可能正在生成，tool metadata 尚未写入。
         // 使用 first：找到匹配值后自动取消收集并返回。
-        val resolvedMaster = activeMaster.state.first { master ->
-            resolveSubAssistantDetailLink(master, runId, json) !is SubAssistantDetailLinkResult.Pending
+        val resolvedMaster = activeMaster.snapshot.first { master ->
+            resolveSubAssistantDetailLink(master.toConversation(), runId, json) !is SubAssistantDetailLinkResult.Pending
         }
-        return when (val result = resolveSubAssistantDetailLink(resolvedMaster, runId, json)) {
+        return when (val result = resolveSubAssistantDetailLink(resolvedMaster.toConversation(), runId, json)) {
             is SubAssistantDetailLinkResult.Ready -> result.link
             SubAssistantDetailLinkResult.Pending -> null
             SubAssistantDetailLinkResult.Unavailable -> {

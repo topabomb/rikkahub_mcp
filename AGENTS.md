@@ -51,8 +51,9 @@
 - **UI Architecture**：自适应布局、导航、主题体系。[ui-architecture.md](docs/references/ui-architecture.md)
 - **Message Rendering**：消息渲染管线（Markdown 双路径、代码块三态、Mermaid/HTML WebView、LaTeX 原生）。[message-rendering-pipeline.md](docs/references/message-rendering-pipeline.md)
 - **Update Mechanism**：版本检查、优先级比较、下载与 CI 发布。[update-mechanism.md](docs/references/update-mechanism.md)
-- **Runtime Core（v1 重构）**：会话状态机与提交协议——`ConversationRuntime`（单写 `submit` 命令通道 + 流式 `applyStreamingDelta` 投影）、`ConversationReducer` 纯函数（structural sharing）、`TurnEngine`（chunk→投影 / checkpoint→CommitCheckpoint / 终态→FinalizeTurn 的唯一提交协议实现）、`TurnPipelineFactory`（Master/Target 共用管道装配）、`DelegationCoordinator`（子助手域编排）。`service/runtime/`。深度设计见 `docs/dev/architecture-v1-refactor-plan.md`（§4）。
-- **Sub-Assistant**：子助手访问、Child lineage、持久化、撤权与恢复；执行协调由 `DelegationCoordinator` 负责。[sub-assistant-architecture.md](docs/references/sub-assistant-architecture.md)；附件入站/交付出站见 [sub-assistant-multimodal.md](docs/references/sub-assistant-multimodal.md)
+- **Runtime Core（v1 正式阶段·架构收敛）**：会话状态机与提交协议——`ConversationRuntime`（单写 `submit` 命令通道 + 流式 `applyStreamingDelta` 投影；`ConversationSnapshot` 唯一事实流，无兼容投影）、`ConversationReducer` 纯函数（快照态，structural sharing）、`TurnEngine`（turn 骨架唯一实现 `start`；chunk→投影 / checkpoint→CommitCheckpoint / 终态→FinalizeTurn 的唯一提交协议）、`TurnPipelineFactory`（Master/Target 共用管道装配）、`DelegationCoordinator`（子助手四阶段编排）。`service/runtime/`。深度设计见 `docs/dev/architecture-v1-refactor-plan.md`（§10–§13）。
+- **Sub-Assistant**：子助手访问、Child lineage、持久化、撤权与恢复；执行协调由 `DelegationCoordinator`（四阶段编排）负责，并发门禁归 `SubAssistantRunGate`，恢复语义唯一所有者为 `TurnRecovery`（启动恢复 + 定点收口），结果形状纯函数在 `SubAssistantResultProjection`；Child 关系经 v7 自引用 FK CASCADE 结构性保证。见 [sub-assistant-architecture.md](docs/references/sub-assistant-architecture.md)；附件入站/交付出站见 [sub-assistant-multimodal.md](docs/references/sub-assistant-multimodal.md)
+- **Generation Side Effects**：生成副作用域（`service/GenerationSideEffects.kt`）——音效反馈 + 标题/建议/压缩等会话衍生数据生成（`ChatService.sideEffects` 入口，共用后台生成骨架）。
 - **Multimodal Context & Turn Durability**：附件事实、请求级投影、`inspect_attachments`、Turn/Tool 执行事实与崩溃恢复。[multimodal-context-and-turn-durability.md](docs/references/multimodal-context-and-turn-durability.md)
 - **Prompts and Tools**：模型可见的系统注入、工具 description、Tool Result 形状。[prompts-and-tools.md](docs/references/prompts-and-tools.md)
 

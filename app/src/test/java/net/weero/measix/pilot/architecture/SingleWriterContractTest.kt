@@ -66,7 +66,8 @@ class SingleWriterContractTest {
     fun `I1 deprecated updateConversation calls confined to startup-recovery whitelist`() {
         val violations = referencingFiles(
             "conversationRepo.updateConversation(",
-            "service/runtime/DelegationCoordinator.kt",
+            // submitRecoveredTree：启动早期无内存态时的恢复整写（恢复域唯一所有者 TurnRecovery）
+            "service/TurnRecovery.kt",
         )
         assertTrue(
             "updateConversation(Conversation) 仅限导入/迁移/启动恢复专用（@Deprecated 白名单），" +

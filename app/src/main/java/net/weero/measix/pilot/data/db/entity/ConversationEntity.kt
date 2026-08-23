@@ -2,12 +2,25 @@ package net.weero.measix.pilot.data.db.entity
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
+/**
+ * 会话表。主/子会话同构：Child 与 Master 唯一差别是关系，由 [parentConversationId]
+ * 自引用外键表达（ON DELETE CASCADE——孤儿 Child 结构上不可能产生）。
+ */
 @Entity(
     tableName = "ConversationEntity",
-    indices = [Index("parent_conversation_id"), Index("assistant_id")]
+    indices = [Index("parent_conversation_id"), Index("assistant_id")],
+    foreignKeys = [
+        ForeignKey(
+            entity = ConversationEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["parent_conversation_id"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
 )
 data class ConversationEntity(
     @PrimaryKey
@@ -16,8 +29,6 @@ data class ConversationEntity(
     val assistantId: String,
     @ColumnInfo("title")
     val title: String,
-    @ColumnInfo("nodes")
-    val nodes: String,
     @ColumnInfo("create_at")
     val createAt: Long,
     @ColumnInfo("update_at")

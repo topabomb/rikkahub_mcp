@@ -5,7 +5,6 @@ import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
-import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import kotlin.uuid.Uuid
 
@@ -24,8 +23,7 @@ sealed interface DomainCommand : ConversationCommand
 sealed interface ConversationCommand
 
 /**
- * 流式增量：无锁、conflated、永不落库。
- * 仅更新 activeTurn.messages 并派生 conversation 投影（旧消费方继续看到更新）。
+ * 流式增量：无锁、conflated、永不落库。仅更新 activeTurn.messages。
  */
 data class ApplyStreamingDelta(val messages: List<UIMessage>) : GenerationCommand
 
@@ -136,6 +134,11 @@ data class ConversationMutation(
      * Size must equal [upsertedNodes].
      */
     val upsertedNodeIndices: List<Int>,
+    /**
+     * FTS 索引用标题（Runtime 内存 header 为权威，随 delta 携带；
+     * applyMutation 不得为取 title 回查 DB）。null = 测试/无标题场景，FTS 回退空串。
+     */
+    val titleForIndex: String? = null,
 )
 
 data class ConversationHeaderPatch(
@@ -154,7 +157,7 @@ data class ExecutionFacts(
     val toolExecution: ToolExecutionEntity?,
 )
 
-/** 会话头投影（snapshot 的一部分） */
+/** 会话头（snapshot 的一部分；header 变更不触碰 nodes） */
 data class ConversationHeader(
     val id: Uuid,
     val title: String,
@@ -166,7 +169,7 @@ data class ConversationHeader(
     val modeInjectionIds: Set<Uuid>,
     val workspaceCwd: String?,
     val parentConversationId: Uuid?,
-    /** @Transient 运行态标记；snapshot 派生 conversation 投影时必须保留 */
+    /** @Transient 运行态标记 */
     val newConversation: Boolean,
     val createAt: Long,
     val updateAt: Long,
@@ -178,50 +181,64 @@ data class ActiveTurnState(
     val messages: List<UIMessage>,
 )
 
-class ConversationSnapshot(
+/**
+ * 会话唯一事实源：header 与 nodes 分离（UpdateHeader 不再触碰 nodes），
+ * 流式期间仅 activeTurn 变化（nodes 引用共享）。
+ */
+data class ConversationSnapshot(
     val conversationId: Uuid,
     val header: ConversationHeader,
     val nodes: List<MessageNode>,
     val activeTurn: ActiveTurnState?,
 ) {
     /**
-     * 渲染顺序：未变节点保持 [nodes] 中的同一实例；流式期间仅末节点由 [activeTurn] 覆盖。
-     * ChatList 应订阅此列表，而不是兼容投影 [conversation] 的整树。
+     * 渲染顺序：未变节点保持 [nodes] 中的同一实例引用（structural sharing → Compose skip）；
+     * 流式期间仅末节点由 [activeTurn] 覆盖（每次求值一次 O(N) 浅拷贝，conflation 后每帧至多一次）。
      */
     val renderNodes: List<MessageNode>
-        get() = conversation.messageNodes
+        get() {
+            val turn = activeTurn ?: return nodes
+            if (turn.messages.isEmpty() || nodes.isEmpty()) return nodes
+            val lastIndex = nodes.lastIndex
+            return nodes.mapIndexed { i, n ->
+                if (i != lastIndex) n else n.copy(
+                    messages = listOf(turn.messages.last()),
+                    selectIndex = 0,
+                )
+            }
+        }
 
-    /** 兼容投影：header + nodes（含 activeTurn 覆盖）派生；newConversation 保留 */
-    val conversation: Conversation
-        get() = Conversation(
-            id = conversationId,
-            assistantId = header.assistantId,
-            title = header.title,
-            messageNodes = buildList {
-                addAll(nodes)
-                activeTurn?.let { turn ->
-                    // 最后一个 assistant 节点当前消息替换为 activeTurn 内容
-                    val lastIdx = lastIndex
-                    if (lastIdx >= 0) {
-                        val last = this[lastIdx]
-                        if (turn.messages.isNotEmpty()) {
-                            this[lastIdx] = last.copy(
-                                messages = listOf(turn.messages.last()),
-                                selectIndex = 0,
-                            )
-                        }
-                    }
-                }
-            },
-            chatSuggestions = header.chatSuggestions,
-            isPinned = header.isPinned,
-            createAt = java.time.Instant.ofEpochMilli(header.createAt),
-            updateAt = java.time.Instant.ofEpochMilli(header.updateAt),
-            customSystemPrompt = header.customSystemPrompt,
-            modeInjectionIds = header.modeInjectionIds,
-            workspaceCwd = header.workspaceCwd,
-            folderId = header.folderId,
-            parentConversationId = header.parentConversationId,
-            newConversation = header.newConversation,
-        )
+    /**
+     * 命令语义读取入口：当前选中消息序列（末 assistant 消息由 activeTurn 覆盖）。
+     * 调用时一次 O(N) 派生——仅用于 turn 边界低频点，流式高频路径禁用。
+     */
+    fun currentMessages(): List<UIMessage> {
+        val turn = activeTurn
+        if (turn == null || turn.messages.isEmpty() || nodes.isEmpty()) {
+            return nodes.map { it.currentMessage }
+        }
+        return nodes.subList(0, nodes.lastIndex).map { it.currentMessage } + turn.messages.last()
+    }
 }
+
+/**
+ * 持久化边界形状转换（纯函数，显式调用）：供以 Conversation 为参数的域纯函数
+ * （link 解析 / retention 计划等）使用。运行时状态不采用该形状——快照是唯一事实源。
+ */
+fun ConversationSnapshot.toConversation(): net.weero.measix.pilot.data.model.Conversation =
+    net.weero.measix.pilot.data.model.Conversation(
+        id = conversationId,
+        assistantId = header.assistantId,
+        title = header.title,
+        messageNodes = renderNodes,
+        chatSuggestions = header.chatSuggestions,
+        isPinned = header.isPinned,
+        createAt = java.time.Instant.ofEpochMilli(header.createAt),
+        updateAt = java.time.Instant.ofEpochMilli(header.updateAt),
+        customSystemPrompt = header.customSystemPrompt,
+        modeInjectionIds = header.modeInjectionIds,
+        workspaceCwd = header.workspaceCwd,
+        folderId = header.folderId,
+        parentConversationId = header.parentConversationId,
+        newConversation = header.newConversation,
+    )

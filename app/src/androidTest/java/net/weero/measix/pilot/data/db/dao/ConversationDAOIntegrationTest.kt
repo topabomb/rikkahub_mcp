@@ -59,10 +59,6 @@ class ConversationDAOIntegrationTest {
         assertEquals(listOf(master.id), dao.getAll().first().map { it.id })
         assertEquals(listOf(master.id), dao.getConversationsOfAssistant(assistantId).first().map { it.id })
         assertEquals(listOf(master.id), dao.getRecentConversationsOfAssistant(assistantId, 10).map { it.id })
-        assertEquals(
-            listOf(master.id),
-            dao.searchConversationsOfAssistant(assistantId, "matching").first().map { it.id },
-        )
         assertEquals(listOf(master.id), dao.getPinnedConversations().first().map { it.id })
         assertEquals(listOf(master.id), dao.getAllIds())
         assertEquals(1, dao.countAll())
@@ -150,7 +146,6 @@ class ConversationDAOIntegrationTest {
         id = id,
         assistantId = assistantId,
         title = title,
-        nodes = "[]",
         createAt = System.currentTimeMillis(),
         updateAt = System.currentTimeMillis(),
         chatSuggestions = "[]",
