@@ -1699,10 +1699,53 @@ N（任意时点，机械）
 
 **测试锁定**：`ArtifactStoreTest` 补 GC 引用面矩阵——助手头像豁免、助手背景豁免、用户头像豁免、消息引用豁免与孤儿回收、显式删除重置用户头像、未回填跳过。
 
+**后续复查补充（同模式第 5 处）**：`AssistantManagementService.cleanupAssistantFilesIfNotReferenced`（删除助手的 tombstone 文件清理）同样只查其他 Assistant 引用、漏用户头像，已对齐修复。至此该引用面的全部消费点（GC 豁免、删除解除、影响检查、换背景清理、删助手清理）均已收敛一致。
+
 **教训**：同一引用面（"哪些 Settings 字段持有受管文件 URI"）必须收敛为单一定义并被全部消费方（GC 豁免、删除解除、影响检查、独立清理服务）引用；语义从探测式放宽为扫荡式时，豁免面必须同步扩到与新候选集匹配。
 
-### 14.3 遗留风险与手测建议
+### 14.3 缺陷 C：切换当前助手后界面停留旧助手（derivedStateOf 冻结）
 
-- UI 时序类缺陷（缺陷 A）依赖 activity result + uCrop 真机链路，JVM 单测无法锁定，建议手测清单：助手头像设置、用户头像设置（抽屉侧栏）、关闭"跳过剪裁"后的聊天选图/拍照附加。
+**现象**：抽屉助手选择器切换当前助手后，聊天页顶栏/输入区仍显示旧助手（初始为助手列表第一项），但消息列表正常、实际生成管道使用新助手——展示与交互目的不符、展示内容与实际执行不一致。
+
+**根因**：v1 收敛将 UI 主订阅源改为 Runtime 单流（`ConversationSnapshot`）时，`ChatPage` 中需要 `Conversation` 形状的派生值写成了：
+
+`remember { derivedStateOf { vm.snapshot.value.toConversation() } }`
+
+`derivedStateOf` 的依赖追踪基于 Compose 快照系统，只对 Compose 状态（`mutableStateOf` 等）读取生效；块内读取的是 `StateFlow.value`（普通 Kotlin 属性），**不构成依赖**——派生值永不失效重算，冻结在首次求值（Runtime 初始快照，其 `assistantId` 为 `assistants.firstOrNull()`，即列表第一个助手）。而同页消息列表直接订阅 `snapshot` 热流（`collectAsStateWithLifecycle`）不受影响，生成管道经 `liveConversation` 直读 Runtime 快照——三条链路数据源分裂，造成"消息正常、顶栏冻结"的割裂表现。旧实现（`ConversationSession.state` 经 `collectAsState` 订阅）不存在此问题，属 v1 迁移时引入。
+
+**波及面**（全库同模式复查）：`derivedStateOf` 块内读取 `.value` 的用法全库共两处——本处（`vm.snapshot` 是 `StateFlow`，冻结成立）与 `UpdateCard` 的 `errorDismissed`（其类型是 `mutableStateOf` 产出的 Compose State，依赖追踪正常，**非缺陷**；同名 `.value` 不同类型，勿混淆）。除此之外无其他波及。
+
+**修复**：`ChatPage` 改为两段式——`vm.snapshot.collectAsStateWithLifecycle()` 先将流订阅入组合树，`derivedStateOf { snapshotState.value.toConversation() }` 再从 Compose State 派生（保持"每 snapshot 变化至多一次转换、共享同一派生实例"的注释意图）；消息列表同步复用同一订阅实例。
+
+**教训**：`derivedStateOf` 的块内只能依赖 Compose 快照状态；Flow/StateFlow 必须经 `collectAsState`/`collectAsStateWithLifecycle` 入组合树。跨数据源（快照流 vs 派生值 vs 服务直读）的迁移中，任何一条未走订阅协议的链路都会造成静默的数据面分裂。
+
+### 14.4 遗留风险与手测建议
+
+- UI 时序类缺陷（缺陷 A/C）依赖 activity result / uCrop / 真机导航链路，JVM 单测无法锁定，建议手测清单：助手头像设置、用户头像设置（抽屉侧栏）、关闭"跳过剪裁"后的聊天选图/拍照附加、抽屉切换当前助手后顶栏/输入区即时跟随。
 - 缺陷 B 的历史损伤不可逆：若用户此前已有头像/背景被误删，文件无法恢复，重新设置即可；Settings 中残留的死引用会在下次 detach/GC 时被自然清理。
+- 理论性风险记录（未修）：`ChatInput` 粘贴图片的 clipboard content URI 在协程化后为异步消费，若用户在消费前更换剪贴板内容，URI 权限可能已失效——与重构前风险等价（剪贴板权限时效极短），实际未见报告，暂不处理。
 - 本轮修复未变更 `versionCode`/`versionName`。
+
+### 14.5 共性架构缺陷归纳
+
+缺陷 A/B/C 并非孤立失误，反映本轮重构的三类系统性风险。逐类排查结论与防范守则如下，供后续重构对照：
+
+**模式一：两套状态体系的依赖追踪语义混用（缺陷 C 根因）**
+
+重构引入 Runtime 单流（`StateFlow<ConversationSnapshot>`）后，UI 侧存在两套状态体系：Compose 快照状态（`mutableStateOf`/`collectAsState` 产物，参与依赖追踪）与 Kotlin Flow（不参与）。凡在 `derivedStateOf`/`remember` 计算块内直读 `Flow.value` 的代码，派生值都会静默冻结——编译期无警告、运行期无异常，仅表现为"部分 UI 停留在旧值"，且因同屏其他区域（正确订阅的）仍在流动而极具迷惑性。
+
+排查结论：全库 `derivedStateOf` 共四处，仅 `ChatPage` 一处为 Flow 冻结（已修）；其余三处读取 Compose 状态（安全）。守则：**Flow 必须经 `collectAsState`/`collectAsStateWithLifecycle` 入组合树后方可参与派生；`derivedStateOf` 块内禁止出现 `Flow.value`。** 同名 `.value` 在 `StateFlow` 与 Compose `State` 上语义完全不同（`UpdateCard` 的 `errorDismissed` 即后者，勿误判）。
+
+**模式二：suspend 化适配撕裂隐式的资源生命周期契约（缺陷 A 根因）**
+
+"调用方协程化"（机械包一层 `scope.launch`）保持签名兼容，但**不转移隐式契约**：回调栈内"先同步清理临时资源、消费方假定资源仍存活"的时序约定在消费被调度到其他线程后必然破裂，且失败被 `runCatching` 静默吞没。凡"activity result / 生命周期回调内同步清理 + 消费方协程化"的组合都是高危点。
+
+排查结论：全库 `useCropLauncher` 消费方（`UIAvatar`、`ChatPage` 两处）已全部修复（输出文件所有权移交消费方）；其余 launch 适配点（`ChatInput` 粘贴、`ChatVM`、`SettingFilesPage`、`BackgroundPicker`）源资源由系统或 service 全程持有，无此模式。守则：**suspend 化改造时必须显式标注文件/资源所有权的移交点；"回调内同步清理"与"异步消费"不得共存。**
+
+**模式三：同一引用面在多个消费点各写一份清单（缺陷 B 根因）**
+
+"哪些 Settings 字段持有受管文件 URI"这一引用面事实，分散在 GC 豁免、删除解除（detach）、删除影响检查（inspect）、换背景清理（`AssistantBackgroundService.isReferenced`）、删助手清理（`AssistantManagementService.cleanupAssistantFilesIfNotReferenced`）五处手写。任何一处漏写/漏更新（如用户头像 `displaySetting.userAvatar`）即造成该消费点的数据丢失；且 GC 语义从探测式放宽为全库扫荡式时，候选集扩张但豁免面未同步——语义迁移放大了清单不一致的后果。
+
+排查结论：五处已全部对齐（含本轮补齐的两处），核心定义收敛于 `ArtifactStore.collectMutableReferenceUris`/`detachSettingsReferences`。守则：**引用面必须单一定义、多处引用；清理/回收语义放宽时，豁免面必须与候选集同步扩张。** 后续改进项：`AssistantBackgroundService` 与 `AssistantManagementService` 的引用检查应改为直接复用 `ArtifactStore` 的定义（或提取共享扩展函数），彻底消除手写清单。
+
+**共性教训**：三类模式的共同点是**重构保持编译兼容的适配方式（包协程、改派生写法、复制清单）让契约破损静默化**——编译通过、测试通过（测试矩阵本身按新契约写成）、仅真机特定交互序列暴露。后续同类规模重构应显式列出"隐式契约清单"（资源所有权、状态依赖体系、引用面事实）并逐项标注迁移方式，而非依赖调用点机械适配。

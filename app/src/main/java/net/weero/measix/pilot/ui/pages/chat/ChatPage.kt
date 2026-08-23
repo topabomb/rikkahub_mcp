@@ -140,10 +140,13 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
     val scope = rememberCoroutineScope()
 
     val setting by vm.settings.collectAsStateWithLifecycle()
-    // Conversation 形状按需派生（纯函数转换）：Runtime 单流订阅，
-    // 需要 Conversation 签名的 UI 组件共享同一派生实例（每 snapshot 变化至多一次）。
+    // Conversation 形状按需派生（纯函数转换）：Runtime 单流订阅（collectAsStateWithLifecycle
+    // 入组合树），需要 Conversation 签名的 UI 组件共享同一派生实例（每 snapshot 变化至多一次）。
+    // 注意 derivedStateOf 块内只能读 Compose 状态（订阅后的 State）——直读 StateFlow.value
+    // 不构成 Compose 依赖，派生值会冻结在初始快照（助手切换后顶栏/输入区停留旧助手的根因）。
+    val snapshotState by vm.snapshot.collectAsStateWithLifecycle()
     val conversation by remember {
-        derivedStateOf { vm.snapshot.value.toConversation() }
+        derivedStateOf { snapshotState.toConversation() }
     }
     val loadingJob by vm.conversationJob.collectAsStateWithLifecycle()
     val processingStatus by vm.processingStatus.collectAsStateWithLifecycle()

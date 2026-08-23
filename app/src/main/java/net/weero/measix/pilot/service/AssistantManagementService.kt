@@ -355,19 +355,21 @@ class AssistantManagementService(
 
     private fun cleanupAssistantFilesIfNotReferenced(tombstone: PendingAssistantDeletion): Boolean {
         val settings = settingsStore.settingsFlow.value
+        // 用户头像与助手头像/背景同引用面（对齐 ArtifactStore.collectMutableReferenceUris 清单）
+        val userAvatarUrl = (settings.displaySetting.userAvatar as? Avatar.Image)?.url
 
         // 只有在最新 Settings 中已无其他 Assistant 引用时才删除
         val uris = buildList {
             tombstone.avatarUri?.let { uri ->
                 val referenced = settings.assistants.any { other ->
                     (other.avatar as? Avatar.Image)?.url == uri
-                }
+                } || uri == userAvatarUrl
                 if (!referenced) add(uri.toUri())
             }
             tombstone.backgroundUri?.let { uri ->
                 val referenced = settings.assistants.any { other ->
                     other.background == uri
-                }
+                } || uri == userAvatarUrl
                 if (!referenced) add(uri.toUri())
             }
         }
