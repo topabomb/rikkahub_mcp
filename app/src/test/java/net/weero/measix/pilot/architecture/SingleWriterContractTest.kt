@@ -36,7 +36,7 @@ class SingleWriterContractTest {
     }
 
     @Test
-    fun `messageNodeDAO batch writes confined to ConversationRepository`() {
+    fun `I1 messageNodeDAO batch writes confined to ConversationRepository`() {
         val violations = mutableListOf<String>()
         for (call in listOf("messageNodeDAO.insertAll", "messageNodeDAO.upsertAll", "messageNodeDAO.deleteByIds")) {
             violations += referencingFiles(call, "data/repository/ConversationRepository.kt")
@@ -48,7 +48,7 @@ class SingleWriterContractTest {
     }
 
     @Test
-    fun `conversationDAO writes confined to ConversationRepository`() {
+    fun `I1 conversationDAO writes confined to ConversationRepository`() {
         val violations = mutableListOf<String>()
         for (call in listOf(
             "conversationDAO.insert(", "conversationDAO.update(", "conversationDAO.delete(",
@@ -63,7 +63,7 @@ class SingleWriterContractTest {
     }
 
     @Test
-    fun `deprecated updateConversation calls confined to startup-recovery whitelist`() {
+    fun `I1 deprecated updateConversation calls confined to startup-recovery whitelist`() {
         val violations = referencingFiles(
             "conversationRepo.updateConversation(",
             "service/runtime/DelegationCoordinator.kt",
@@ -76,8 +76,34 @@ class SingleWriterContractTest {
     }
 
     @Test
-    fun `messageNodeDAO is not constructed as a direct write owner elsewhere`() {
+    fun `I1 messageNodeDAO is not constructed as a direct write owner elsewhere`() {
         // 无除 ConversationRepository 外的类持有 messageNodeDAO 并做写入；此测试保证 grep 基线可维护
         assertTrue(srcDir.isDirectory)
+    }
+
+    @Test
+    fun `I1 persistMessageNodes is not a runtime checkpoint path`() {
+        val hits = mainSources().filter { file ->
+            file.readText().contains("persistMessageNodes")
+        }.map { it.relativeTo(srcDir).path }
+        assertTrue(
+            "persistMessageNodes 不得作为运行时 checkpoint 路径残留，违规：$hits",
+            hits.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `I1 handleMessageComplete and finalizeMasterTurn are not live persist paths`() {
+        val forbidden = listOf("handleMessageComplete", "finalizeMasterTurn")
+        val hits = mainSources().flatMap { file ->
+            val text = file.readText()
+            forbidden.filter { token -> text.contains(token) }.map { token ->
+                "${file.relativeTo(srcDir).path}:$token"
+            }
+        }
+        assertTrue(
+            "Master 生成不得再走 handleMessageComplete/finalizeMasterTurn 第二套持久化协议，违规：$hits",
+            hits.isEmpty(),
+        )
     }
 }

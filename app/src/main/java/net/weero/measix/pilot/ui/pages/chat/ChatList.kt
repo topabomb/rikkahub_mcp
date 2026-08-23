@@ -314,9 +314,10 @@ private fun ChatListNormal(
             .flatMap { it.models }
             .associateBy { it.id }
     }
-    // 消息列表数据源来自 snapshot（唯一事实源；投影 nodes 含 activeTurn
-    // 流式内容，未变节点引用相同 → Compose skip 生效）。key = node.id 不变。
-    val snapshotNodes = snapshot.conversation.messageNodes
+    // 消息列表数据源来自 snapshot.renderNodes（未变节点引用相同；流式期间
+    // 仅末节点由 activeTurn 覆盖 → Compose skip 生效）。key = node.id 不变。
+    val snapshotNodes = snapshot.renderNodes
+    val snapshotNodesUpdated by rememberUpdatedState(snapshotNodes)
     val lastMessageIndex = snapshotNodes.lastIndex
     val isEmptyConversation = snapshotNodes.isEmpty()
     val showsConfigurationPrompt = isEmptyConversation || !readiness.canSend
@@ -333,7 +334,7 @@ private fun ChatListNormal(
                     // println("is bottom = ${visibleItemsInfo.isAtBottom()}, scroll = ${state.isScrollInProgress}, can_scroll = ${state.canScrollForward}, loading = $loading")
                     if (!state.isScrollInProgress && loadingState) {
                         if (visibleItemsInfo.isAtBottom()) {
-                            state.requestScrollToItem(conversationUpdated.messageNodes.lastIndex + 10)
+                            state.requestScrollToItem(snapshotNodesUpdated.lastIndex + 10)
                             // Log.i(TAG, "ChatList: scroll to ${conversationUpdated.messageNodes.lastIndex}")
                         }
                     }
@@ -597,7 +598,7 @@ private fun ChatListNormal(
                                 if (selectedItems.isNotEmpty()) {
                                     selectedItems.clear()
                                 } else {
-                                    selectedItems.addAll(conversation.messageNodes.map { it.id })
+                                    selectedItems.addAll(snapshotNodes.map { it.id })
                                 }
                             }
                         ) {
@@ -612,7 +613,7 @@ private fun ChatListNormal(
                         FilledIconButton(
                             onClick = {
                                 selecting = false
-                                val messages = conversation.messageNodes.filter { it.id in selectedItems }
+                                val messages = snapshotNodes.filter { it.id in selectedItems }
                                 if (messages.isNotEmpty()) {
                                     showExportSheet = true
                                 }
@@ -632,7 +633,7 @@ private fun ChatListNormal(
                     selectedItems.clear()
                 },
                 conversation = conversation,
-                selectedMessages = conversation.messageNodes.filter { it.id in selectedItems }
+                selectedMessages = snapshotNodes.filter { it.id in selectedItems }
                     .map { it.currentMessage }
             )
 

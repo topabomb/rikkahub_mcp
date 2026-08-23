@@ -70,7 +70,7 @@ class CheckpointWriteAmplificationTest {
     }
 
     @Test
-    fun `checkpoint upserts stay constant independent of history`() = runTest {
+    fun `I2 checkpoint upserts stay constant independent of history`() = runTest {
         val nodeDAO = mockk<MessageNodeDAO>(relaxed = true)
         val upsertCalls = mutableListOf<List<MessageNodeEntity>>()
         coEvery { nodeDAO.upsertAll(capture(upsertCalls)) } just runs
@@ -95,26 +95,43 @@ class CheckpointWriteAmplificationTest {
             )
         }
         repo.applyMutation(
-            ConversationMutation(conversationId, null, historical, emptyList(), 0L)
+            ConversationMutation(
+                conversationId,
+                null,
+                historical,
+                emptyList(),
+                0L,
+                historical.indices.toList(),
+            )
         )
         assertEquals("initial full write = 500", 500, upsertCalls.sumOf { it.size })
 
-        // 50 次 checkpoint，每次只 upsert active node（delta）
+        // 50 次 checkpoint，每次只 upsert active node（新树下标 500，不随历史写成 0）
         val assistantId = Uuid.random()
         val activeNode = MessageNode.of(
             UIMessage(id = assistantId, role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("active")))
         )
         (0 until 50).forEach { i ->
             repo.applyMutation(
-                ConversationMutation(conversationId, null, listOf(activeNode), emptyList(), i.toLong())
+                ConversationMutation(
+                    conversationId,
+                    null,
+                    listOf(activeNode),
+                    emptyList(),
+                    i.toLong(),
+                    listOf(500),
+                )
             )
         }
 
         // 累计 upsert = 500 + 50×1 = 550（每 checkpoint 只写 1 行，不随历史增长）
         val totalUpserts = upsertCalls.sumOf { it.size }
         assertEquals("accumulated upserts = initial + 50×1", 550, totalUpserts)
-        // 每次 checkpoint 的 upsert 入参长度均为 1（只 active 节点）
         assertTrue("every checkpoint upserts exactly 1 node", upsertCalls.drop(1).all { it.size == 1 })
+        assertTrue(
+            "checkpoint node_index is the new-tree position, not 0",
+            upsertCalls.drop(1).all { it.single().nodeIndex == 500 },
+        )
         coVerify(exactly = 51) { nodeDAO.upsertAll(any()) }
     }
 }

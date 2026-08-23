@@ -18,6 +18,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.model.MessageNode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
@@ -86,6 +87,38 @@ class ConversationRuntimeTest {
         assertNotNull(last)
         assertEquals(assistantId, last?.id)
         assertEquals("streamed", last?.toText())
+        scope.cancel()
+    }
+
+    @Test
+    fun `streaming after user task overlays the BeginTurn assistant slot not the user node`() = runTest {
+        val scope = CoroutineScope(Job())
+        val userNode = MessageNode.of(user("child task"))
+        val rt = ConversationRuntime(
+            id = Uuid.random(),
+            initial = Conversation.ofId(Uuid.random(), assistantId = DEFAULT_ASSISTANT_ID)
+                .copy(messageNodes = listOf(userNode)),
+            scope = scope,
+            onIdle = {},
+        )
+        val turnId = Uuid.random()
+        val assistantId = Uuid.random()
+        rt.submit(BeginTurn(turnId, assistantId, null, resume = false, onStart = true))
+        assertEquals(2, rt.snapshot.value.nodes.size)
+        assertSame(userNode, rt.snapshot.value.nodes[0])
+        assertEquals(MessageRole.ASSISTANT, rt.snapshot.value.nodes[1].messages.single().role)
+
+        rt.applyStreamingDelta(
+            turnId,
+            assistantId,
+            listOf(UIMessage(id = assistantId, role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("delta")))),
+        )
+        val overlay = rt.snapshot.value.conversation
+        assertEquals(MessageRole.USER, overlay.messageNodes[0].messages.single().role)
+        assertEquals("child task", overlay.messageNodes[0].messages.single().toText())
+        assertEquals(MessageRole.ASSISTANT, overlay.currentMessages.last().role)
+        assertEquals("delta", overlay.currentMessages.last().toText())
+        assertSame(userNode, rt.snapshot.value.nodes[0])
         scope.cancel()
     }
 

@@ -1,9 +1,12 @@
 package net.weero.measix.pilot.service.runtime
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
+import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.util.HttpException
+import me.rerere.ai.util.ProviderTerminalStatus
 import net.weero.measix.pilot.data.ai.CheckpointKind
 import net.weero.measix.pilot.data.ai.FinishedReason
 import net.weero.measix.pilot.data.ai.GenerationChunk
@@ -29,17 +32,32 @@ import kotlin.uuid.Uuid
 /**
  * Turn 提交协议唯一实现。
  *
- * Master 与 Target 共用同一 [TurnEngine.onCheckpoint] 回调（持久化边界）+ [bind] 流绑定
- * （提交协议），消除 ChatService.collect 与 Coordinator.collect 的双轨。
+ * Master 与 Target 共用同一 [onCheckpoint] 回调（awaited durability boundary）与
+ * [bind]（流式投影 + 终态 FinalizeTurn）。Application 层只装配请求并消费副作用事件。
  *
- * [onCheckpoint] 作为 `generateText(onCheckpoint=…)` 参数传入，是 awaited durability
- * boundary；[bind] 消费 GenerationChunk 流做流式/Phase/Checkpoint/Finished 事件转发。
+ * [onCheckpoint] 作为 `generateText(onCheckpoint=…)` 参数传入；[bind] 消费
+ * GenerationChunk 流：Messages → applyStreamingDelta（永不落库），Finished / 异常 /
+ * 取消 → FinalizeTurn。
+ *
+ * [prepareFinalize] 仅用于命令构造前的 Application IO（例如取消时并入 Child 消息）；
+ * reducer 保持零 IO。
  */
 class TurnEngine(
     private val runtime: ConversationRuntime,
     private val turnId: Uuid,
     private val assistantMessageId: Uuid,
+    private val prepareFinalize: (suspend (TurnExecutionStatus, List<UIMessage>) -> List<UIMessage>)? = null,
 ) {
+    /** Last FinalizeTurn status submitted by this engine; null if none yet. */
+    var lastFinalizedStatus: TurnExecutionStatus? = null
+        private set
+
+    /** True after a true terminal (not AWAITING_APPROVAL) was submitted. */
+    fun hasSubmittedTerminal(): Boolean {
+        val status = lastFinalizedStatus ?: return false
+        return status != TurnExecutionStatus.AWAITING_APPROVAL
+    }
+
     /** 交给 generateText(onCheckpoint=…) 的回调：将 GenerationCheckpoint 落为 CommitCheckpoint 命令。 */
     suspend fun onCheckpoint(checkpoint: net.weero.measix.pilot.data.ai.GenerationCheckpoint) {
         val turnStatus = checkpoint.kind.toTurnStatus()
@@ -57,36 +75,69 @@ class TurnEngine(
 
     /** 把 GenerationChunk 流绑定到提交协议（冷流，collect 触发执行）。 */
     fun bind(source: Flow<GenerationChunk>): Flow<TurnEvent> = flow {
-        source.collect { chunk ->
-            when (chunk) {
-                is GenerationChunk.Messages -> {
-                    runtime.applyStreamingDelta(turnId, assistantMessageId, chunk.messages)
-                    emit(TurnEvent.Streaming(chunk.messages.lastOrNull(), chunk.messages))
-                }
-                is GenerationChunk.Phase -> {
-                    emit(TurnEvent.Phase(chunk.phase, chunk.toolName))
-                }
-                is GenerationChunk.Checkpoint -> {
-                    // 真正的落库已在 onCheckpoint 回调完成；此处仅发事件供调用方做副作用
-                    emit(TurnEvent.Checkpoint(chunk.kind))
-                }
-                is GenerationChunk.Finished -> {
-                    emit(TurnEvent.Finished(chunk.reason, null))
+        var lastMessages: List<UIMessage> = emptyList()
+        try {
+            source.collect { chunk ->
+                when (chunk) {
+                    is GenerationChunk.Messages -> {
+                        lastMessages = chunk.messages
+                        runtime.applyStreamingDelta(turnId, assistantMessageId, chunk.messages)
+                        emit(TurnEvent.Streaming(chunk.messages.lastOrNull(), chunk.messages))
+                    }
+                    is GenerationChunk.Phase -> {
+                        emit(TurnEvent.Phase(chunk.phase, chunk.toolName))
+                    }
+                    is GenerationChunk.Checkpoint -> {
+                        emit(TurnEvent.Checkpoint(chunk.kind))
+                    }
+                    is GenerationChunk.Finished -> {
+                        val status = chunk.reason.toTerminalStatus()
+                        submitStreamFinalize(
+                            status = status,
+                            lastMessages = lastMessages,
+                            terminalReason = terminalReasonFor(status, chunk.reason, error = null),
+                            closeInterruptedTools = false,
+                        )
+                        emit(TurnEvent.Finished(chunk.reason, null))
+                    }
                 }
             }
+        } catch (error: CancellationException) {
+            // first()/take() abort the collector with AbortFlowException; that is not a user cancel.
+            if (!error.isCollectorAbort()) {
+                submitStreamFinalize(
+                    status = TurnExecutionStatus.CANCELLED,
+                    lastMessages = lastMessages,
+                    terminalReason = runtime.consumeCancelReason(turnId) ?: TurnTerminalReasons.USER_STOP,
+                    closeInterruptedTools = prepareFinalize == null,
+                )
+            }
+            throw error
+        } catch (error: Exception) {
+            val status = error.toFailedOrIncompleteStatus()
+            submitStreamFinalize(
+                status = status,
+                lastMessages = lastMessages,
+                terminalReason = terminalReasonFor(status, reason = null, error = error),
+                closeInterruptedTools = prepareFinalize == null && status == TurnExecutionStatus.FAILED,
+            )
+            emit(TurnEvent.Finished(null, error))
         }
-    }.catch { error ->
-        // 流内异常/取消：转发为 Finished 错误态，由调用方决定终态收口
-        emit(TurnEvent.Finished(null, error))
     }
 
-    /** 终态提交（Master/Target 共享；在调用方确定 outcome 后调用）。 */
+    /**
+     * 终态提交（Master/Target 共享）。bind 在 Finished/异常/取消时调用；
+     * Target 的 ask_user 循环在本地把 AWAITING_APPROVAL 升级为 INCOMPLETE 时也可调用。
+     */
     suspend fun submitFinalize(
         messages: List<UIMessage>?,
         terminalStatus: TurnExecutionStatus,
         terminalReason: String?,
         closeInterruptedTools: Boolean,
     ) {
+        if (lastFinalizedStatus == terminalStatus && runtime.isTurnFinalized(turnId)) {
+            return
+        }
         runtime.submitGeneration(
             FinalizeTurn(
                 turnId = turnId,
@@ -97,7 +148,27 @@ class TurnEngine(
                 closeInterruptedTools = closeInterruptedTools,
             )
         )
-        runtime.markTurnFinalized(turnId)
+        lastFinalizedStatus = terminalStatus
+        if (terminalStatus != TurnExecutionStatus.AWAITING_APPROVAL) {
+            runtime.markTurnFinalized(turnId)
+        }
+    }
+
+    private suspend fun submitStreamFinalize(
+        status: TurnExecutionStatus,
+        lastMessages: List<UIMessage>,
+        terminalReason: String?,
+        closeInterruptedTools: Boolean,
+    ) {
+        val prepared = prepareFinalize?.invoke(status, lastMessages)
+        val messages = prepared?.takeIf { it.isNotEmpty() }
+            ?: lastMessages.takeIf { it.isNotEmpty() }
+        submitFinalize(
+            messages = messages,
+            terminalStatus = status,
+            terminalReason = terminalReason,
+            closeInterruptedTools = closeInterruptedTools,
+        )
     }
 }
 
@@ -113,9 +184,8 @@ sealed interface TurnEvent {
 /**
  * Master/Target 共用管道装配清单。
  *
- * 装配等价性：masterInput 输出与现 ChatService 装配段逐项一致；targetInput 与现
- * Coordinator 硬编码列表一致；BASE_OUTPUT 与现顶层 outputTransformers 一致。
- * D2/D3 落地后，ChatService 与 Coordinator 不再各自硬编码 transformer 列表。
+ * masterInput 顺序对齐 ChatService 装配段；targetInput 对齐 Coordinator 装配段；
+ * BASE_OUTPUT 为两侧共用输出变换。
  */
 class TurnPipelineFactory(
     private val templateTransformer: TemplateTransformer,
@@ -123,7 +193,6 @@ class TurnPipelineFactory(
     private val toolArtifactReplayTransformer: ToolArtifactReplayTransformer?,
 ) {
     companion object {
-        /** 现顶层 inputTransformers（ChatService + Coordinator 共用基底）。 */
         val BASE_INPUT: List<InputMessageTransformer> = listOf(
             TimeReminderTransformer,
             PromptInjectionTransformer,
@@ -131,7 +200,6 @@ class TurnPipelineFactory(
             DocumentAsPromptTransformer,
         )
 
-        /** 现顶层 outputTransformers（Master 与 Target 共用基底）。 */
         val BASE_OUTPUT: List<OutputMessageTransformer> = listOf(
             ThinkTagTransformer,
             Base64ImageToLocalFileTransformer,
@@ -139,7 +207,7 @@ class TurnPipelineFactory(
         )
     }
 
-    /** Master 输入管道（对齐 ChatService.handleMessageComplete 装配段）。 */
+    /** Master 输入管道。 */
     fun masterInput(): List<InputMessageTransformer> = buildList {
         addAll(BASE_INPUT)
         add(templateTransformer)
@@ -150,7 +218,7 @@ class TurnPipelineFactory(
 
     fun masterOutput(): List<OutputMessageTransformer> = BASE_OUTPUT
 
-    /** Target 输入管道（对齐 Coordinator 硬编码列表）。 */
+    /** Target 输入管道（无 toolArtifactReplay；AttachmentProjection 在 template 之前）。 */
     fun targetInput(): List<InputMessageTransformer> = listOf(
         TimeReminderTransformer,
         PromptInjectionTransformer,
@@ -164,9 +232,51 @@ class TurnPipelineFactory(
     fun targetOutput(): List<OutputMessageTransformer> = BASE_OUTPUT
 }
 
+private fun CancellationException.isCollectorAbort(): Boolean =
+    javaClass.simpleName == "AbortFlowException"
+
 private fun CheckpointKind.toTurnStatus(): TurnExecutionStatus = when (this) {
     CheckpointKind.TERMINAL_STATE -> TurnExecutionStatus.COMPLETED
     else -> TurnExecutionStatus.RUNNING
+}
+
+private fun FinishedReason?.toTerminalStatus(): TurnExecutionStatus = when (this) {
+    FinishedReason.COMPLETED -> TurnExecutionStatus.COMPLETED
+    FinishedReason.AWAITING_APPROVAL -> TurnExecutionStatus.AWAITING_APPROVAL
+    FinishedReason.STEP_LIMIT_REACHED,
+    FinishedReason.INTERACTION_LIMIT_REACHED,
+    -> TurnExecutionStatus.INCOMPLETE
+    null -> TurnExecutionStatus.INCOMPLETE
+}
+
+private fun Throwable.toFailedOrIncompleteStatus(): TurnExecutionStatus {
+    return if (this is HttpException && terminalStatus == ProviderTerminalStatus.INCOMPLETE) {
+        TurnExecutionStatus.INCOMPLETE
+    } else {
+        TurnExecutionStatus.FAILED
+    }
+}
+
+private fun terminalReasonFor(
+    status: TurnExecutionStatus,
+    reason: FinishedReason?,
+    error: Throwable?,
+): String? = when (status) {
+    TurnExecutionStatus.COMPLETED,
+    TurnExecutionStatus.AWAITING_APPROVAL,
+    -> null
+    TurnExecutionStatus.CANCELLED -> TurnTerminalReasons.USER_STOP
+    TurnExecutionStatus.FAILED -> if (error is HttpException) {
+        TurnTerminalReasons.PROVIDER_FAILED
+    } else {
+        TurnTerminalReasons.RUNTIME_ERROR
+    }
+    TurnExecutionStatus.INCOMPLETE -> when (reason) {
+        FinishedReason.STEP_LIMIT_REACHED -> TurnTerminalReasons.TOOL_LOOP_LIMIT
+        FinishedReason.INTERACTION_LIMIT_REACHED -> TurnTerminalReasons.INTERACTION_LIMIT
+        else -> TurnTerminalReasons.PROVIDER_INCOMPLETE
+    }
+    else -> null
 }
 
 private fun ToolExecutionEvent?.toToolExecutionEntity(turnId: Uuid): ToolExecutionEntity? {

@@ -51,7 +51,7 @@ class StreamingTransformScopeTest {
     }
 
     @Test
-    fun `history messages never enter transformStreaming during 5000 chunk stream`() = runTest {
+    fun `I5 history messages never enter transformStreaming during 5000 chunk stream`() = runTest {
         val chunkCount = 5_000
         val counting = CountingStreamingTransformer()
 

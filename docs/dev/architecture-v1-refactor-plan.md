@@ -1,6 +1,6 @@
 # Architecture V1 重构方案：Runtime Core / Persistence / Projection
 
-> 状态：本文档是本轮重构的唯一实施依据。含语义化命名体系、数据库 v6 一次性变更（每项变更附必要性裁决）、核心组件设计、逐文件执行计划与代码删除清单。
+> 状态：方案已落地（versionCode 18 / `0.0.18`，git 里程碑 **pre1**）。§0–§8 与附录为实施前方案原文；**§9 为落地后相对草图的约定变更（以代码为准）**。
 > 范围：`app` 模块（`service` / `data` / `ui`）。`ai` / `workspace` / `speech` / `search` 模块对外 API 不变更。
 > 配置持久化（SettingsStore / Settings）本轮零改动；企业下发走既定 `EnterprisePolicyStore` 路线。
 > 本轮为一次完整重构，不分发布阶段；工作流 A–J 为工程依赖序，同一版本交付。
@@ -20,6 +20,7 @@
 9. **`reconcileStartup` 需保留启动补录开关语义**：现 `MeasixPilotApp.syncManagedFiles` 调 `filesManager.syncFolder()`；修订后启动路径只做 reconcile（无 INSERT），原补录能力移至文件页显式 `rescanUntracked()`（正文 §4.3 已含，此处强调 E5 落点）。
 10. **（实施中裁决）`rescanUntracked` 与 `MISSING` 状态整体移除，写入路径原子化**：修订记录 9 保留的"文件页重新扫描补录入口"与 §3.3 的 `MISSING` 状态，经实施复核判定为对根因的事后补救而非修复——根因是 `FilesManager.trackManagedFile` 为 fire-and-forget 异步登记（失败仅日志），写文件成功但登记失败/未完成时遗留"磁盘有文件、DB 无记录"的不一致数据，`rescanUntracked`（补录）与 `MISSING`（缺失诊断）两个补丁功能均由此而来。裁决：① `trackManagedFile` 改造为同步 `registerTrackedFile`（登记失败 → 回滚删除磁盘文件、不返回失效 URI，"文件 + 记录"要么都在要么都不在，`createChatFilesByContents` / `createChatFilesByByteArrays` / `createChatTextFile` 相应 suspend 化、调用方协程化）；② 删除 `rescanUntracked()` / `FilesManager.syncFolder()` / 文件页"重新扫描"入口及相关本地化键；③ `ArtifactState` 只保留 `ACTIVE` / `DELETING`，`reconcileStartup` 对磁盘缺失的 ACTIVE 行直接删除（死数据清理，引用行经 FK 级联消失），删除 `MISSING` 徽标与 `files_page_state_missing` 键。数据完整性契约收敛为：DB 是唯一事实源，应用侧写入路径原子保证一致性，磁盘侧外部不一致由冷启动 reconcile 单向收敛（缺失→清行；外部放入→仅日志、绝不补录）。
 11. **（实施中裁决）`ArtifactOrigin` 诞生方式列并入 v6，语义账本与注释纪律同步收口**：文件管理页暴露出"上传"语义名不副实（upload 目录实际混居五类居民：用户附件、生成图 chat copy、助手背景/头像副本、工具产物、MCP 资源），根因是 artifact 领域模型缺失"诞生面"。裁决：① v6 `artifact` 表新增 `origin TEXT NOT NULL DEFAULT 'USER'`（`ArtifactOrigin { USER, GENERATED, SYSTEM }`，String 列存 `.name`，不索引）——USER=用户引入（聊天上传/背景选图/头像选图/查看器设背景）、GENERATED=生成媒体派生副本（文生图 chat copy、工具设背景）、SYSTEM=其余系统创建（模型输出落盘、Workspace/MCP 工具产物、子助手远程附件拉取）；② 两条写入规则：结构性复制继承源 origin（`createChatFilesByContents` 对 `file://` upload 源反查继承，覆盖 fork/克隆/子助手入站；`ManagedLocalArtifactStore.copyFilePreservingOrigin` 覆盖 tool output 重写），系统链路显式传参（`GeneratedMediaStore`/`AssistantBackgroundService.replaceBackground`/`convertBase64Image`/`WorkspaceTools`/`McpManager`/`AttachmentResolver`）；③ 文件页条目显示来源徽标（`setting_files_page_origin_*` 键 ×5 locale），tab 结构与删除流程不变；④ 语义账本定稿：`artifact` 表=聊天域+设置域的受引用文件实体注册表，`gen_media`=相册域化身编目，`tool_outputs`=非受管落盘层，`ArtifactStore`=生命周期协调器、`ManagedLocalArtifactStore`=写入门面（类名不改、KDoc 互声明边界）；⑤ 注释纪律：全部代码注释清除对本计划文档的术语引用（工作流编号/章节号/修订记录号/用例编号），改为语义自足描述——本计划归档后代码不依赖其编号体系。
+12. **（落地后）草图与不变式的局部修正**：实施中若干草图字段/对象无法原样落地（`node_index`、TurnSession 外形、附录 A 个别符号、`new===old` 短路等）。**不回写 §4 草图**——原文保留为设计意图；**以 §9 为当前约定**。核心不变式未改：单写 `submit`、流式永不落库、Master/Target 同一 chunk→checkpoint→终态协议、投影可重建、Artifact CAS。
 
 ---
 
@@ -1255,3 +1256,84 @@ checkpoint 持久化行数/字节每轮、FTS 变更行数每轮、流式 chunk 
 - `MessageFtsManager.search / updateConversationTitle`；`ConversationRepository.rebuildAllIndexes(onProgress)`
 - `SettingsStore` / `Settings` 全部；`ai` 模块全部模型
 - `FilesManager` 公开方法（上传/保存/observe/list/get，签名不变，metadata 委托 ArtifactStore）
+
+---
+
+## 9. 实施落点：相对方案草图的约定变更
+
+> 本节记录落地代码相对 §4 / 附录草图的**有意偏离**。理由在先，结果在后。未列出的条目按方案原文执行。
+> 工作流 A–J 已在同一 versionCode 18 交付；git 里程碑 `架构重构 v1（pre）` 为地基，`架构重构 v1（pre1）` 收口提交协议与 delta `node_index`。
+
+### 9.1 持久化 delta 必须携带新树下标
+
+**草图**：`ConversationMutation.upsertedNodes` 是变更子集，无下标字段；`applyMutation` 对子集 `upsertAll`。
+**问题**：`MessageNodeEntity.node_index` 是全树位置。对子集 `mapIndexed` 会把非空树上的 append/checkpoint 写成 `0..k`，破坏排序与 I2。
+**结果**：`ConversationMutation` 增加必填 `upsertedNodeIndices`（与 `upsertedNodes` 1:1，值为**新树**下标）。`ConversationRuntime.buildMutation` 在 structural diff 时记录下标 `i`；`applyMutation` 写入 `nodeIndex = upsertedNodeIndices[i]`。C-2 / I2 锁定非空树 append 与 checkpoint 下标。
+
+### 9.2 生成期命令即使内存无变化也要落库
+
+**草图**：`submit` 在 `new === old` 时直接返回，不持久化。
+**问题**：空消息 `CommitCheckpoint(RUNNING)`、纯 turn 事实推进等命令可能不改 `messageNodes`，但必须写入 `turn_execution`。
+**结果**：生成期命令（`CommitCheckpoint` / `FinalizeTurn`）在 reducer 无节点变化时仍走 `applyMutation(..., executionFacts)`，不因引用相等而短路。
+
+### 9.3 真实节点与流式投影必须分槽
+
+**草图**：`state` 由 `_snapshot.map { it.conversation }.stateIn(...)` 派生；`applyStreamingDelta(messages)` 只改 `activeTurn`。
+**问题**：若 reducer 输入与兼容投影共用同一份「已 overlay 的树」，后续 `CommitCheckpoint` 的 structural diff 会把流式投影误判为已落盘而无 delta。
+**结果**：`_state` 为 reducer 真实节点（不含流式 overlay）；`_compatibleState` / `ConversationSnapshot.conversation` 为兼容投影（末节点由 `activeTurn` 覆盖）。`applyStreamingDelta(turnId, assistantMessageId, messages)` 只更新 snapshot + 兼容投影，永不 `submit`、永不落库。`ChatList` 订 `snapshot.renderNodes`（即该 overlay 列表），不是裸 `snapshot.nodes`。
+
+### 9.4 BeginTurn / 审批定位字段对齐产品，而不是草图最小集
+
+**草图**：`BeginTurn(turnId, assistantMessageId)`；`UpdateToolApproval(..., toolCallId: String)`。
+**问题**：发送/重生成/审批恢复需要区分「新开槽 / 复用槽 / 是否立刻露出空 assistant」；产品工具定位键是 `toolOrdinal`，不是 `toolCallId`。
+**结果**：`BeginTurn` 增加 `fromNodeId` / `resume` / `onStart`。`UpdateToolApproval` 使用 `toolOrdinal: Int`。不另建平行 id 体系。
+
+### 9.5 TurnEngine 按 turn 构造，bind 自己提交终态
+
+**草图**：Koin 单例 `TurnEngine(appEventBus)` + `beginTurn(...): TurnSession` + `bind(session, flow)`；`TurnEvent.Finished` 带 `MasterTurnOutcome`；bind 内 `appEventBus.tryEmit`；E6 注册 `TurnEngine`。
+**问题**：提交协议状态（`lastFinalizedStatus`、取消/失败时的 Child 消息并入）是**单次 turn** 的，不是进程单例。`Flow.first()` / `take()` 会抛 `AbortFlowException`（也是 `CancellationException`），若一律 `FinalizeTurn(CANCELLED)` 会把收集器中止当成用户停止。
+**结果**：
+
+- `TurnEngine(runtime, turnId, assistantMessageId, prepareFinalize?)` 每次 launch 新建；`onCheckpoint` 与 `bind` 在同一实例上。无 `TurnSession` 类型；不注册 Koin。
+- `TurnPipelineFactory` 为带依赖的 **class**（注入 `TemplateTransformer` 等），不是草图里的 `object` + 方法参数。
+- `bind`：`Messages` → `applyStreamingDelta`；`onCheckpoint` → `CommitCheckpoint`；`Finished` / 非 Abort 的取消 / 异常 → `FinalizeTurn`。`AbortFlowException` 跳过终态提交并原样重抛。
+- 取消路径重抛、不 `emit(Finished)`，避免调用方把收集器中止当成生成失败。
+- `prepareFinalize` 仅用于命令构造前 IO（Master 取消/失败时并入 Child 消息）；reducer 仍零 IO。
+- 通知 `AppEventBus` 留在 `ChatService.launchRun` 的 `TurnEvent.Streaming` 消费处，不进 TurnEngine。
+- `TurnEvent.Finished(reason: FinishedReason?, error: Throwable?)`，outcome 由调用方映射。
+
+Master `launchRun` 与 Target `runTargetGeneration` 都是：`BeginTurn` → 空 `CommitCheckpoint(RUNNING)` → `generateText(onCheckpoint = turnEngine::onCheckpoint)` → `bind.collect` 副作用。`ChatService` 不再存在 `handleMessageComplete` / `finalizeMasterTurn`。
+
+### 9.6 Target 在整段 run 开始时 BeginTurn 一次
+
+**草图**：ask_user 多步循环「每步一次 beginTurn + bind」。
+**问题**：循环每步再 `BeginTurn` 会重复开槽；若不先 `BeginTurn`，snapshot overlay 会画到末条 USER 任务节点上。
+**结果**：`runTargetGeneration` 在进入 `while` 之前提交一次 `BeginTurn`（assistant 槽与后续 `TurnEngine` / `generateText(assistantMessageId=…)` 同一 id），再 `CommitCheckpoint(RUNNING)`，循环内每步只 `bind`。循环末尾仅当 `!hasSubmittedTerminal()` 时补 `submitFinalize`（ask_user 次数上限把 `AWAITING_APPROVAL` 升为 `INCOMPLETE`）。
+
+### 9.7 FinalizeTurn 只收口未结束的 reasoning
+
+**草图**：终态 `finishReasoning` 扫全部消息。
+**问题**：历史节点里已有 `finishedAt` 的 Reasoning 也会被 copy，整树变脏，checkpoint 写放大，违背 I2 / R-4。
+**结果**：`applyFinishReasoning` 只处理 `finishedAt == null` 的段；已结束的历史节点保持同一实例。`ConversationRuntimePersistenceTest` 锁定三节点树上 Finalize 只 upsert 活跃节点且 `upsertedNodeIndices = [2]`。
+
+### 9.8 附录 A 个别符号保留为门面或白名单，而不是物理删除
+
+| 草图 | 结果 | 理由 |
+| --- | --- | --- |
+| 删除 `saveMessageNodes` / `persistMessageNodes` | 私有 `saveMessageNodes` 仅 insert/fork 全量下标；`persistImportedMessageNodes` 仅 `updateConversation`（导入/迁移/启动恢复） | 新建会话与 fork 是整树首次写入，不是 runtime checkpoint；C2 禁止的是 **checkpoint 全量重写** |
+| `updateConversation`「导入/迁移专用」 | `@Deprecated`；I1 白名单再含 `DelegationCoordinator.submitRecoveredTree`：无内存 Runtime 时的 Child 恢复整写 | 启动早期可能还没有 session；有 session 则走 `ReplaceMessageTree` |
+| 删除 `ChatService.updateConversationState` | 保留，仅 `@Transient` 投影（如 `isFavorite`）；不落库 | 收藏事实在 `FavoriteRepository`；整对象回写仍禁止 |
+| `finishInterruptedPendingTools` 并入 FinalizeTurn 后删除包装 | 保留为门面：仅当 `previousTurnId` 存在、该 turn 尚未 `isTurnFinalized`、末条 assistant 仍有未执行工具时，提交 `FinalizeTurn(INTERRUPTED, closeInterruptedTools=true)` | 无条件调用会用随机 id 写 INTERRUPTED，或覆盖 bind 已提交的 CANCELLED/COMPLETED |
+| `closeOpenTools` 迁入 reducer 后 ChatService 删除 | reducer 有纯变换 `closePendingTools`；ChatService 仍保留 IO 版 `closeOpenTools`（加载 Child 消息）经 `prepareFinalize` 喂给 `FinalizeTurn.messages` | 子助手中断结果不能进 reducer |
+| E6 注册 `TurnEngine` | 不注册；每次 turn `TurnEngine(...)` | 见 9.5 |
+| J1 删除 `getAllTopLevelConversationsSync` / `getAllChildConversationIds` | **保留**：`DelegationCoordinator` 恢复扫描与 `AssistantBackgroundService` 仍消费 | 附录 A 第 4 组本就是「待核查」；核查后仍有读路径，不删 |
+
+### 9.9 Runtime 目录与「5 文件」配额
+
+**草图**：`service/runtime/` 固定 5 文件（Commands / Reducer / Runtime / Registry / TurnEngine）。
+**结果**：上述 5 个仍是 Runtime 层。`DelegationCoordinator` 按 D3 放在同一包，但是 **Application 编排**（谱系/租约/ask_user/恢复），不计入 Runtime 5 文件配额，也不承担第二套提交协议。
+
+### 9.10 工程备注（非架构不变式）
+
+- androidTest 打包排除 JUnit 5 重复的 `META-INF/LICENSE.md` / `LICENSE-notice.md` / `NOTICE.md`，否则 `Migration_5_6Test` 无法安装到设备。
+- `ConversationDAO.searchConversations` 非分页版、`resetConversationNodes` 等 J1 项未在本里程碑继续清扫。

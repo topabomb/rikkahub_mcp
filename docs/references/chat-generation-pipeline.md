@@ -9,7 +9,7 @@
 
 | 类型 | 职责 |
 |------|------|
-| `ChatService` | 会话入口与编排；通过 `ConversationRuntime.submit` 提交命令、请求装配与终态收口桥接 |
+| `ChatService` | 会话入口与编排：装配 Turn 输入、提交域命令、消费 TurnEvent 副作用（标题/建议/TTS/通知）；不实现第二套 chunk 落库协议 |
 | `ConversationRuntime` | 单会话事实源：`commandMutex` 单写、`snapshot`/`state` 投影、`applyStreamingDelta` 内存态、`submit` 差异落库 |
 | `TurnEngine` / `TurnPipelineFactory` | 生成期 chunk→持久化的统一提交协议（Master/Target 共享）；Transformer 装配 |
 | `ConversationRepository` | 单事务 `applyMutation`（message tree + 执行事实）；投影（FTS / artifact_reference）事务后维护 |
@@ -28,7 +28,7 @@ ChatService.sendMessage()
   ├─ finishInterruptedPendingTools()
   ├─ preprocessUserInputParts()：执行 USER 范围正则
   ├─ 追加 UIMessage(USER) 到 Conversation.messageNodes
-  └─ handleMessageComplete()
+  └─ launchRun()
        │
        ├─ 解析当前 Assistant 与可用 CHAT Model
        ├─ 分配稳定 turnId / assistantMessageId，原子提交 RUNNING 响应槽
@@ -53,12 +53,12 @@ ChatService.sendMessage()
             └─ 工具可执行：提交 STARTED 后执行；逐工具提交结果，再进入下一 step
                  │
                  ▼
-TurnEngine.bind().collect()（唯一提交协议，Master 与 Target 共用）
+TurnEngine.bind()（唯一提交协议，Master 与 Target 共用；ChatService / DelegationCoordinator 只消费副作用）
   ├─ chunk → Streaming：ConversationRuntime.applyStreamingDelta 流式投影（纯内存，不落库）
-  ├─ 通过 AppEventBus 发布生成进度、声音和通知事件
+  ├─ 调用方经 AppEventBus / TurnEvent 做进度、声音、通知、卡片 Phase 等副作用
   ├─ awaited onCheckpoint → CommitCheckpoint 命令：delta 节点写入、turn 与可选工具 execution
   │   事实在一个 Room transaction 提交（ConversationRepository.applyMutation）
-  └─ 所有退出路径进入同一 terminal finalizer（FinalizeTurn 命令）：
+  └─ bind 在 Finished / 异常 / 取消时提交 FinalizeTurn（不再由 ChatService 第二套 collect 终态落库）：
      - COMPLETED：收口 turn，再异步生成标题和建议回复
      - STEP/INTERACTION_LIMIT：保存 INCOMPLETE，不启动完成副作用
      - CANCELLED / FAILED / Provider INCOMPLETE：保留部分内容和明确终态
@@ -127,7 +127,7 @@ Target 复用相同附件投影语义，Transformer 装配统一走 `TurnPipelin
 
 ## 工具装配与执行
 
-`ChatService.handleMessageComplete()` 按以下顺序装配工具：
+`ChatService.launchRun()` 按以下顺序装配工具：
 
 1. Search Tools：`shouldUseExternalWebSearch(assistant, model)` 为真时（助手开启外挂搜索，且模型未带 `BuiltInTools.Search`）；
 2. Local Tools：JavaScript、时间、剪贴板、语音播报、向用户提问、屏幕使用时间、日历、条件注册的 `generate_image` 等；

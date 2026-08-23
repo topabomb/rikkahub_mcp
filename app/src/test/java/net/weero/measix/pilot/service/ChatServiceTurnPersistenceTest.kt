@@ -192,6 +192,12 @@ class ChatServiceTurnPersistenceTest {
                 },
             )
         }
+        coVerify(exactly = 0) {
+            repository.applyMutation(
+                any(),
+                match { facts -> facts?.turn?.status == TurnExecutionStatus.INTERRUPTED },
+            )
+        }
         env.service.stopGeneration(conversationId)
         advanceUntilIdle()
     }
@@ -303,6 +309,31 @@ class ChatServiceTurnPersistenceTest {
         }
         releaseSubscriber.complete(Unit)
         advanceUntilIdle()
+    }
+
+    @Test
+    fun `sendMessage after completed turn does not persist INTERRUPTED fact`() = runTest {
+        val conversationId = Uuid.random()
+        val repository = mockk<ConversationRepository>(relaxed = true)
+        coEvery { repository.existsConversationById(conversationId) } returns true
+        val env = createEnv(repository, GenerateMode.Complete)
+        env.sessionRegistry.getOrCreateSessionWithConversation(
+            conversationId,
+            Conversation(id = conversationId, assistantId = assistantId, messageNodes = emptyList()),
+        )
+        env.service.addConversationReference(conversationId)
+        env.service.sendMessage(conversationId, listOf(UIMessagePart.Text("first")))
+        advanceUntilIdle()
+        env.service.sendMessage(conversationId, listOf(UIMessagePart.Text("second")))
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) {
+            repository.applyMutation(
+                any(),
+                match { facts -> facts?.turn?.status == TurnExecutionStatus.INTERRUPTED },
+            )
+        }
+        env.service.removeConversationReference(conversationId)
     }
 
     private enum class GenerateMode {

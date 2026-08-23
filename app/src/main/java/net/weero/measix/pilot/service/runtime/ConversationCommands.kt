@@ -42,8 +42,7 @@ data class BeginTurn(
 ) : GenerationCommand
 
 /**
- * checkpoint 持久化（= 现 persistTurnCheckpoint 语义）：
- * 提交 checkpoint 时点完整 currentMessages + turn/tool 执行事实。
+ * checkpoint 持久化：提交时点完整 currentMessages + turn/tool 执行事实。
  */
 data class CommitCheckpoint(
     val turnId: Uuid,
@@ -131,6 +130,12 @@ data class ConversationMutation(
     val upsertedNodes: List<MessageNode>,
     val deletedNodeIds: List<Uuid>,
     val updateAt: Long,
+    /**
+     * Each upserted node's position in the **new** message tree (not the index inside
+     * [upsertedNodes]). applyMutation writes this value to message_node.node_index.
+     * Size must equal [upsertedNodes].
+     */
+    val upsertedNodeIndices: List<Int>,
 )
 
 data class ConversationHeaderPatch(
@@ -179,6 +184,13 @@ class ConversationSnapshot(
     val nodes: List<MessageNode>,
     val activeTurn: ActiveTurnState?,
 ) {
+    /**
+     * 渲染顺序：未变节点保持 [nodes] 中的同一实例；流式期间仅末节点由 [activeTurn] 覆盖。
+     * ChatList 应订阅此列表，而不是兼容投影 [conversation] 的整树。
+     */
+    val renderNodes: List<MessageNode>
+        get() = conversation.messageNodes
+
     /** 兼容投影：header + nodes（含 activeTurn 覆盖）派生；newConversation 保留 */
     val conversation: Conversation
         get() = Conversation(

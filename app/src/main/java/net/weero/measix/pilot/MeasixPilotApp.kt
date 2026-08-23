@@ -141,7 +141,7 @@ class MeasixPilotApp : Application() {
 
     private fun reconcileArtifacts() {
         get<AppScope>().launch(Dispatchers.IO) {
-            // E5：启动只做 reconcile（无 INSERT 补录），修复"已删除文件重启复活"缺陷 C4；
+            // 启动只做 reconcile（无 INSERT 补录），避免已删除文件在重启后被重新登记；
             // 历史引用回填在 reconcile 后非阻塞执行。
             runCatching {
                 get<ArtifactStore>().reconcileStartup()

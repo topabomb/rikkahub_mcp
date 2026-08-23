@@ -24,9 +24,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.core.MessageRole
@@ -54,9 +52,7 @@ import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.event.AppEvent
 import net.weero.measix.pilot.data.event.AppEventBus
-import net.weero.measix.pilot.data.ai.CheckpointKind
 import net.weero.measix.pilot.data.ai.FinishedReason
-import net.weero.measix.pilot.data.ai.GenerationChunk
 import net.weero.measix.pilot.data.ai.GenerationHandler
 import net.weero.measix.pilot.data.ai.ToolExecutionEventStatus
 import net.weero.measix.pilot.data.ai.replaceToolsAtOrdinals
@@ -103,10 +99,8 @@ import java.time.Instant
 import java.util.Locale
 import kotlinx.datetime.LocalDateTime
 import kotlin.uuid.Uuid
-import net.weero.measix.pilot.service.runtime.ConversationMutation
 import net.weero.measix.pilot.service.runtime.ConversationCommand
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
-import net.weero.measix.pilot.service.runtime.ExecutionFacts
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 import net.weero.measix.pilot.service.runtime.TurnPipelineFactory
@@ -425,7 +419,7 @@ class ChatService(
                     reason = TurnTerminalReasons.PROCESS_RESTARTED,
                 )
                 val now = System.currentTimeMillis()
-                // D2：恢复收口走 FinalizeTurn 命令（消息分发 + markAssistantTerminal 幂等 +
+                // 恢复收口走 FinalizeTurn（消息分发 + markAssistantTerminal 幂等 +
                 // turn INTERRUPTED 事实 delta 落库）；startedTools 的 UNKNOWN 语义由 App 层
                 // 构造、命令提交后单独落库
                 val session = getOrCreateSession(conversationId)
@@ -583,7 +577,7 @@ class ChatService(
                     ?: settings.getCurrentAssistant()
                 val processedContent = preprocessUserInputParts(content, assistant)
 
-                // D2：append 用户消息走命令协议（AppendUserMessage → reducer → delta 落库；
+                // append 用户消息走命令协议（AppendUserMessage → reducer → delta 落库；
                 // reducer 同时清理 newConversation 运行态标记）
                 if (!conversationRepo.existsConversationById(conversationId)) {
                     conversationRepo.insertConversation(session.state.value)
@@ -599,7 +593,7 @@ class ChatService(
 
                 // 开始补全
                 if (answer) {
-                    handleMessageComplete(conversationId, turnId = turnId)
+                    launchRun(conversationId, turnId = turnId)
                 }
 
                 _generationDoneFlow.emit(conversationId)
@@ -661,12 +655,12 @@ class ChatService(
                     val indexAt = conversation.messageNodes.indexOf(node)
                     session.submit(TruncateToNodeIndex(nodeIndexInclusive = indexAt))
                     applyChildRetentionAfterTreeMutation(conversationId)
-                    handleMessageComplete(conversationId, turnId = turnId)
+                    launchRun(conversationId, turnId = turnId)
                 } else {
                     if (regenerateAssistantMsg) {
                         val node = conversation.getMessageNodeByMessage(message)
                         val nodeIndex = conversation.messageNodes.indexOf(node)
-                        handleMessageComplete(conversationId, turnId = turnId, messageRange = 0..<nodeIndex)
+                        launchRun(conversationId, turnId = turnId, messageRange = 0..<nodeIndex)
                     } else {
                         // recoverMasterForMutation 可能已收口树（stale runs），同步落库
                         session.submit(ReplaceMessageTree(conversation.messageNodes))
@@ -704,7 +698,7 @@ class ChatService(
                     // several cards are serialized so one answer cannot cancel another.
                     session.getJob()?.join()
 
-                    // D2：工具审批走 UpdateToolApproval 命令（reducer 纯变换 + delta 落库）
+                    // 工具审批走 UpdateToolApproval 命令（reducer 纯变换 + delta 落库）
                     val newApprovalState = when {
                         answer != null -> ToolApprovalState.Answered(answer)
                         approved -> ToolApprovalState.Approved
@@ -729,7 +723,7 @@ class ChatService(
                         val turnId = Uuid.random()
                         session.beginTurn(turnId)
                         val resumeJob = appScope.launch {
-                            handleMessageComplete(
+                            launchRun(
                                 conversationId = conversationId,
                                 turnId = turnId,
                                 resumeExistingTtsTurn = true,
@@ -753,7 +747,7 @@ class ChatService(
 
     // ---- 处理消息补全 ----
 
-    private suspend fun handleMessageComplete(
+    private suspend fun launchRun(
         conversationId: Uuid,
         turnId: Uuid,
         messageRange: ClosedRange<Int>? = null,
@@ -800,9 +794,21 @@ class ChatService(
             )
             inFlightAssistantId = assistantSlot.id
             val generationMessages = if (resumableAssistant == null) sourceMessages + assistantSlot else sourceMessages
-            // D2：turn 开始走命令协议——BeginTurn 打开 assistant 槽（reducer 分发 + delta 落库），
-            // 随后空消息 CommitCheckpoint 落 RUNNING turn 事实（崩溃恢复扫描依据）
-            val turnEngine = TurnEngine(session, turnId, assistantSlot.id)
+            // turn 开始走命令协议——BeginTurn 打开 assistant 槽（reducer 分发 + delta 落库），
+            // 随后空消息 CommitCheckpoint 落 RUNNING turn 事实（崩溃恢复扫描依据）。
+            // 终态 FinalizeTurn 由 TurnEngine.bind 提交；此处仅注入取消/失败时的 Child 消息并入。
+            val turnEngine = TurnEngine(session, turnId, assistantSlot.id) { status, messages ->
+                if (status == TurnExecutionStatus.CANCELLED || status == TurnExecutionStatus.FAILED) {
+                    closeOpenTools(
+                        conversation = getConversationFlow(conversationId).value,
+                        messageId = inFlightAssistantId,
+                        cancelledByUser = status == TurnExecutionStatus.CANCELLED,
+                    ).currentMessages
+                } else {
+                    val current = getConversationFlow(conversationId).value.currentMessages
+                    current.ifEmpty { messages }
+                }
+            }
             session.submitGeneration(
                 BeginTurn(
                     turnId = turnId,
@@ -900,8 +906,8 @@ class ChatService(
                 ),
                 onCheckpoint = turnEngine::onCheckpoint,
             ).let { source ->
-                // D2：提交协议唯一实现——chunk→applyStreamingDelta（永不落库）、
-                // checkpoint→CommitCheckpoint（onCheckpoint 回调内，delta + facts 同事务落库）
+                // 提交协议唯一实现——chunk→applyStreamingDelta（永不落库）、
+                // checkpoint→CommitCheckpoint、Finished/异常/取消→FinalizeTurn
                 turnEngine.bind(source).collect { event ->
                     when (event) {
                         is TurnEvent.Streaming -> {
@@ -943,7 +949,7 @@ class ChatService(
                 }
             }
 
-            finalizeMasterTurn(
+            applyMasterTurnSideEffects(
                 conversationId = conversationId,
                 turnId = turnId,
                 outcome = when (finishedReason) {
@@ -954,7 +960,6 @@ class ChatService(
                     -> MasterTurnOutcome.INCOMPLETE
                     null -> MasterTurnOutcome.INCOMPLETE
                 },
-                finishedReason = finishedReason,
                 inFlightAssistantId = inFlightAssistantId,
                 senderName = senderName.orEmpty(),
             )
@@ -978,22 +983,21 @@ class ChatService(
                 generateSuggestion(conversationId, getConversationFlow(conversationId).value)
             }
         } catch (e: CancellationException) {
-            finalizeMasterTurn(
+            applyMasterTurnSideEffects(
                 conversationId = conversationId,
                 turnId = turnId,
                 outcome = MasterTurnOutcome.CANCELLED,
-                finishedReason = finishedReason,
                 inFlightAssistantId = inFlightAssistantId,
                 senderName = senderName.orEmpty(),
             )
             throw e
         } catch (e: Exception) {
-            Logging.log(TAG, "handleMessageComplete failed: ${e.message}")
+            Logging.log(TAG, "launchRun failed: ${e.message}")
             Logging.log(TAG, e.stackTraceToString().lines().take(6).joinToString("\n"))
             if (isForeground.value && generationSoundEnabled) {
                 soundEffectPlayer.play(R.raw.loop_failed)
             }
-            finalizeMasterTurn(
+            applyMasterTurnSideEffects(
                 conversationId = conversationId,
                 turnId = turnId,
                 outcome = if (
@@ -1003,7 +1007,6 @@ class ChatService(
                 } else {
                     MasterTurnOutcome.FAILED
                 },
-                finishedReason = finishedReason,
                 error = e,
                 inFlightAssistantId = inFlightAssistantId,
                 senderName = senderName.orEmpty(),
@@ -1021,26 +1024,23 @@ class ChatService(
         getOrCreateSession(conversationId).submit(ReplaceMessageTree(messagesNodes))
     }
 
-    private suspend fun finalizeMasterTurn(
+    /**
+     * Master 终态副作用（通知、dangling 工具行、错误上报）。
+     * FinalizeTurn 已由 TurnEngine.bind 提交；此处不再落库。
+     */
+    private suspend fun applyMasterTurnSideEffects(
         conversationId: Uuid,
         turnId: Uuid,
         outcome: MasterTurnOutcome,
-        finishedReason: FinishedReason?,
         error: Throwable? = null,
         inFlightAssistantId: Uuid? = null,
         senderName: String,
     ) {
         withContext(NonCancellable) {
-            // 幂等守卫：一个 turn 只允许提交一次终态。SUCCESS 提交后 job 可能仍在收尾
-            // （例如 generationDoneFlow 的 emit 等待慢订阅者时被取消），CancellationException
-            // 路径会再次进入这里；已提交的终态不允许被覆盖为 CANCELLED。
-            if (getOrCreateSession(conversationId).isTurnFinalized(turnId)) {
-                Logging.log(TAG, "turn $turnId already finalized; skip duplicate ${outcome.name} finalization")
-                return@withContext
-            }
             val reason = when (outcome) {
-                MasterTurnOutcome.SUCCESS -> null
-                MasterTurnOutcome.AWAITING_APPROVAL -> null
+                MasterTurnOutcome.SUCCESS,
+                MasterTurnOutcome.AWAITING_APPROVAL,
+                -> null
                 MasterTurnOutcome.CANCELLED -> {
                     getOrCreateSession(conversationId).consumeCancelReason(turnId)
                         ?: TurnTerminalReasons.USER_STOP
@@ -1050,62 +1050,9 @@ class ChatService(
                 } else {
                     TurnTerminalReasons.RUNTIME_ERROR
                 }
-                MasterTurnOutcome.INCOMPLETE -> when (finishedReason) {
-                    FinishedReason.STEP_LIMIT_REACHED -> TurnTerminalReasons.TOOL_LOOP_LIMIT
-                    FinishedReason.INTERACTION_LIMIT_REACHED -> TurnTerminalReasons.INTERACTION_LIMIT
-                    else -> TurnTerminalReasons.PROVIDER_INCOMPLETE
-                }
+                MasterTurnOutcome.INCOMPLETE -> TurnTerminalReasons.PROVIDER_INCOMPLETE
             }
-            var lastCommitError: Throwable? = null
-            for (attempt in 0 until 3) {
-                try {
-                    withTimeout(30_000L) {
-                        val session = getOrCreateSession(conversationId)
-                        // ① 终态收口的 IO 前置（子助手消息并入、未闭合工具收口）在 Application 层完成
-                        var latest = getConversationFlow(conversationId).value
-                        if (outcome == MasterTurnOutcome.CANCELLED || outcome == MasterTurnOutcome.FAILED) {
-                            latest = closeOpenTools(
-                                conversation = latest,
-                                messageId = inFlightAssistantId,
-                                cancelledByUser = outcome == MasterTurnOutcome.CANCELLED,
-                            )
-                        }
-                        // ② FinalizeTurn 命令：reducer 纯收口（消息分发 + finishReasoning +
-                        // markAssistantTerminal）+ delta 落库 + turn 事实，提交协议唯一实现
-                        session.submitGeneration(
-                            FinalizeTurn(
-                                turnId = turnId,
-                                assistantMessageId = inFlightAssistantId ?: Uuid.random(),
-                                messages = latest.currentMessages,
-                                terminalStatus = when (outcome) {
-                                    MasterTurnOutcome.SUCCESS -> TurnExecutionStatus.COMPLETED
-                                    MasterTurnOutcome.AWAITING_APPROVAL -> TurnExecutionStatus.AWAITING_APPROVAL
-                                    MasterTurnOutcome.CANCELLED -> TurnExecutionStatus.CANCELLED
-                                    MasterTurnOutcome.FAILED -> TurnExecutionStatus.FAILED
-                                    MasterTurnOutcome.INCOMPLETE -> TurnExecutionStatus.INCOMPLETE
-                                },
-                                terminalReason = reason,
-                                closeInterruptedTools = false, // IO 前置已在 ① 完成
-                            )
-                        )
-                        // ③ dangling tool executions 收口（STARTED → CANCELLED/UNKNOWN）
-                        finalizeDanglingToolExecutions(turnId, outcome, reason)
-                    }
-                    lastCommitError = null
-                    break
-                } catch (commitError: Throwable) {
-                    lastCommitError = commitError
-                    Logging.log(TAG, "turn finalization attempt ${attempt + 1} failed: ${commitError.message}")
-                    if (attempt < 2) delay(150L * (attempt + 1))
-                }
-            }
-            lastCommitError?.let { commitError ->
-                addError(
-                    commitError,
-                    conversationId,
-                    title = context.getString(R.string.error_title_generation),
-                )
-            }
+            finalizeDanglingToolExecutions(turnId, outcome, reason)
             if (outcome == MasterTurnOutcome.FAILED && error != null) {
                 addError(error, conversationId, title = context.getString(R.string.error_title_generation))
             }
@@ -1205,20 +1152,22 @@ class ChatService(
     )
 
     /**
-     * 上一回合残留的开放工具收口：并入 FinalizeTurn(closeInterruptedTools=true)，
-     * 与 Master 崩溃恢复同一命令路径。[previousTurnId] 用于终态事实归属（可空：无活跃 turn 时）。
+     * 上一回合残留的开放工具收口：仅当确有未终态的上一 turn、且末条 assistant 仍有未执行工具时
+     * 才提交 FinalizeTurn(closeInterruptedTools=true)。不得编造 turnId，也不得覆盖
+     * bind 已提交的 CANCELLED/COMPLETED 事实。
      */
     private suspend fun finishInterruptedPendingTools(conversationId: Uuid, previousTurnId: Uuid?) {
+        val turnId = previousTurnId ?: return
         val session = getOrCreateSession(conversationId)
-        val currentConversation = session.state.value
-        val assistantId = currentConversation.currentMessages.lastOrNull()
+        if (session.isTurnFinalized(turnId)) return
+        val lastAssistant = session.state.value.currentMessages.lastOrNull()
             ?.takeIf { it.role == MessageRole.ASSISTANT }
-            ?.id
             ?: return
+        if (lastAssistant.getTools().none { !it.isExecuted }) return
         session.submit(
             FinalizeTurn(
-                turnId = previousTurnId ?: Uuid.random(),
-                assistantMessageId = assistantId,
+                turnId = turnId,
+                assistantMessageId = lastAssistant.id,
                 messages = null,
                 terminalStatus = TurnExecutionStatus.INTERRUPTED,
                 terminalReason = null,

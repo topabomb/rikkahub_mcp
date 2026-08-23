@@ -31,6 +31,7 @@ Assistant.workspaceId 有效
 | `WorkspaceTerminalSession` | 通过 Termux PTY 提供用户交互终端 |
 
 `workspace` Gradle 模块不依赖应用 UI；`app` 模块负责 Room、Compose、文件上传、工具注册和 DI。
+Workspace 工具由 `GenerationToolSetFactory` 在 Master/Target 共用的 `TurnEngine` 管道中装配；工具执行事实经 `CommitCheckpoint` / `FinalizeTurn` 写入，不另开落库路径。
 
 `WorkspaceDocumentsProvider.queryDocument` 在解析到具体文件后必须先确认 `File.exists()`，已删除路径不能再写入 SAF 游标。
 

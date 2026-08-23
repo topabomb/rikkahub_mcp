@@ -109,7 +109,7 @@ internal object ConversationReducer {
     private fun finalizeTurn(current: Conversation, command: FinalizeTurn): Conversation {
         var result = current
         command.messages?.let { result = result.updateCurrentMessagesByUIMessages(it) }
-        // 终态收口 1：所有消息的 reasoning 段标记 finishedAt（对齐 ChatService.finishReasoning，纯变换）
+        // 终态收口：未结束的 reasoning 标记 finishedAt（已结束的历史节点保持同一实例）
         result = result.applyFinishReasoning()
         // 标记 assistant 终态（仅非成功状态；COMPLETED 的 terminalStatus 保持 null）。
         // 抑制场景：messages=null 且 closeInterruptedTools=true 的纯工具收口
@@ -128,17 +128,29 @@ internal object ConversationReducer {
         return result
     }
 
-    /** 对所有消息应用 finishReasoning（终态收口；对齐 ChatService.finalize 段的 finishReasoning 语义）。 */
+    /**
+     * 只收口未结束的 reasoning（finishedAt == null）。已结束的历史节点保持同一实例，
+     * 避免 FinalizeTurn 把整棵树标脏导致 checkpoint 写放大。
+     */
     private fun Conversation.applyFinishReasoning(): Conversation {
-        val needsChange = messageNodes.any { node ->
-            node.messages.any { msg -> msg.parts.any { it is UIMessagePart.Reasoning } }
+        var changed = false
+        val newNodes = messageNodes.map { node ->
+            val hasUnfinished = node.messages.any { msg ->
+                msg.parts.any { it is UIMessagePart.Reasoning && it.finishedAt == null }
+            }
+            if (!hasUnfinished) {
+                node
+            } else {
+                changed = true
+                node.copy(
+                    messages = node.messages.map { msg ->
+                        val unfinished = msg.parts.any { it is UIMessagePart.Reasoning && it.finishedAt == null }
+                        if (unfinished) msg.finishReasoning() else msg
+                    },
+                )
+            }
         }
-        if (!needsChange) return this
-        return copy(
-            messageNodes = messageNodes.map { node ->
-                node.copy(messages = node.messages.map { it.finishReasoning() })
-            },
-        )
+        return if (!changed) this else copy(messageNodes = newNodes)
     }
 
     /** 将持久化 turn 终态映射为渲染可见的 MessageTerminalStatus（成功态映射为 null）。 */

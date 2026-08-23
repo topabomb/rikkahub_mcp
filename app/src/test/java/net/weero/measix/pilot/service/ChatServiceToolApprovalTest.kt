@@ -35,7 +35,7 @@ class ChatServiceToolApprovalTest {
             messageNodes = listOf(message.toMessageNode()),
         )
 
-        // D2：HITL 审批走 UpdateToolApproval 命令（reducer 唯一路径）
+        // HITL 审批走 UpdateToolApproval 命令（reducer 唯一路径）
         val updated = ConversationReducer.reduce(
             conversation,
             UpdateToolApproval(message.id, 1, ToolApprovalState.Answered("answer")),

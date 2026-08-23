@@ -130,7 +130,7 @@ class Migration_5_6Test {
     }
 
     @Test
-    fun m4_deletingMessageNodeCascadesToArtifactReference() {
+    fun m5_deletingMessageNodeCascadesToArtifactReference() {
         val db = migratedWithData()
         db.execSQL("PRAGMA foreign_keys = ON")
         db.execSQL("INSERT INTO ConversationEntity (id, title, nodes, create_at, update_at) VALUES ('c2', 't', '[]', 1, 1)")
@@ -148,7 +148,10 @@ class Migration_5_6Test {
         val db = migratedWithData()
         val artifactCols = columns(db, "artifact")
         assertEquals(
-            setOf("id", "folder", "relative_path", "display_name", "mime_type", "size_bytes", "created_at", "updated_at", "state"),
+            setOf(
+                "id", "folder", "relative_path", "display_name", "mime_type",
+                "size_bytes", "created_at", "updated_at", "state", "origin",
+            ),
             artifactCols
         )
         val refCols = columns(db, "artifact_reference")

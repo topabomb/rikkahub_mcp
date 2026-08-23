@@ -8,6 +8,15 @@
 
 ## 0.0.18（versionCode 18）— 2026-08-23
 
+### 收口（pre1）
+
+- `TurnEngine.bind` 自身提交 `FinalizeTurn`：删除 `handleMessageComplete` / `finalizeMasterTurn` 第二套终态落库；Master `launchRun` 与 Target `runTargetGeneration` 共用 chunk → `applyStreamingDelta` / checkpoint → `CommitCheckpoint` / 终态 → `FinalizeTurn`
+- `ConversationMutation.upsertedNodeIndices`：delta 按**新树** `node_index` 写入，禁止把变更子集下标写成 `0..k`
+- `FinalizeTurn` 只收口 `finishedAt == null` 的 reasoning，历史节点保持结构共享
+- Target 在 `bind` 前 `BeginTurn`，流式 overlay 落在 assistant 槽而不是 USER 任务节点
+- `finishInterruptedPendingTools` 仅在上一 turn 未终态且仍有未执行工具时提交 `FinalizeTurn(INTERRUPTED)`
+- 计划文档新增 §9，同步上述相对草图的约定变更
+
 ### 新增
 
 - Runtime Core：`ConversationRuntime`（原 `ConversationSession`）+ 单写 `submit` 命令通道 + `ConversationReducer` 纯函数（structural sharing），所有结构性修改经唯一入口落库

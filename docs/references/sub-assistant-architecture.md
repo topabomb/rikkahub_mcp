@@ -62,7 +62,8 @@ Target.allowAsSubAssistant
 |------|------|
 | `AssistantToolFactory` | 注册 Assistant 工具、构建动态 Catalog、把 `assistant_call` 交给 Coordinator |
 | `AssistantManagementService` | Assistant CRUD、授权更新、删除 tombstone 与恢复清理 |
-| `DelegationCoordinator` | preflight、lineage、lease、Child 生命周期、Target 生成、交互桥接、终态收口 |
+| `DelegationCoordinator` | preflight、lineage、lease、Child 生命周期、ask_user 循环、卡片 Phase、交互桥接；不实现第二套 chunk 落库协议 |
+| `TurnEngine` / `TurnPipelineFactory` | Master 与 Target 共用的 chunk→CommitCheckpoint→FinalizeTurn 提交协议与输入/输出管道 |
 | `SubAssistantAccessPolicy` | 统一计算发现、管理和调用的有效访问范围 |
 | `SubAssistantRunPolicy` | 模型解析、运行中停止条件和 Target 工具边界 |
 | `SubAssistantLineageResolver` | 在 Master 当前分支上决定新建、复用或克隆 Child |

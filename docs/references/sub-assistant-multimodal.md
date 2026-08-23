@@ -222,7 +222,7 @@ metadata.attachment_ref = "attachment:<uuid>"
 
 `AttachmentProjectionTransformer` 递归处理消息 parts（含 `Tool.output`）。Master 上的 `generate_image` 结果由统一投影按当次 Caller 模型呈现：可读图时保留原图 + 前插引用行，不可读时替换为引用行；Caller 要把生图交给 Target，应引用该 Image 的 `attachment_ref` 或 JSON 里的 `/upload/<file>`。
 
-历史消息没有 ref：`ChatService.handleMessageComplete()` 在 Master 生成前调用 `AttachmentRefs.backfillConversation()`，并随现有 `updateConversation()` 写回。不要在 Input Transformer 里只做一次性临时 id。
+历史消息没有 ref：`ChatService.launchRun()` 在 Master 生成前调用 `AttachmentRefs.backfillConversation()`，只修正内存投影；随随后 checkpoint 的 `CommitCheckpoint` 落库。不要在 Input Transformer 里只做一次性临时 id，也不要用 `updateConversation()` 整对象回写。
 
 Child clone / Master fork 已保留 metadata（`copyPartForChildClone()` / `copyForkedPart()`）。Resolver 以「当前消息树里带该 ref 的 part.url」为准，不把 ref 理解成全局文件主键。
 
@@ -258,7 +258,7 @@ Child clone / Master fork 已保留 metadata（`copyPartForChildClone()` / `copy
 | 管线 | 相对顺序 |
 |------|----------|
 | Master `ChatService` | `DocumentAsPromptTransformer` 之后：`AttachmentProjectionTransformer`，再 Template / Workspace / `ToolArtifactReplayTransformer` |
-| Target `runTargetGeneration()` | 同一 transformer 链，用自己的 resolved model |
+| Target `TurnPipelineFactory.targetInput()` | 同一 transformer 链，用自己的 resolved model |
 
 不要写 `SubAssistantOcrTransformer`，也不要给投影器加 `assistant_call` 特例。
 

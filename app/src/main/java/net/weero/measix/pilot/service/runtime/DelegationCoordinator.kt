@@ -661,7 +661,7 @@ class DelegationCoordinator(
         val conversation = conversationRepo.getConversationById(childConversationId)
             ?: throw IllegalStateException("Child conversation not found: $childConversationId")
 
-        // D3：追加任务消息 = AppendUserMessage 命令（delta 落库，消除整对象回写）
+        // 追加任务消息 = AppendUserMessage 命令（delta 落库，消除整对象回写）
         val taskMessage = UIMessage(role = MessageRole.USER, parts = userParts)
         val session = sessionRegistry.getOrCreateSessionWithConversation(childConversationId, conversation)
         session.submit(AppendUserMessage(taskMessage))
@@ -725,7 +725,7 @@ class DelegationCoordinator(
         val session = sessionRegistry.getOrCreateSession(childConversationId)
         val conversation = session.state.value
 
-        // D3：装配走 TurnPipelineFactory（契约 D8），消除 Master/Target 双轨清单
+        // 装配走 TurnPipelineFactory，Master/Target 共用管道清单
         val targetInputTransformers = turnPipelineFactory.targetInput()
         val targetOutputTransformers = turnPipelineFactory.targetOutput()
 
@@ -791,16 +791,30 @@ class DelegationCoordinator(
         var finishReason: FinishedReason? = null
         var interactionCount = 0
 
-        // D3：Target turn 执行事实——与 Master 同一提交协议（TurnEngine.bind 唯一实现）。
-        // turn 生命周期：RUNNING 起始事实（崩溃恢复扫描依据）→ checkpoint delta → 终态收口。
+        // Target turn 与 Master 同一提交协议：先 BeginTurn 打开 assistant 槽（否则
+        // snapshot 流式覆盖会画到末条 USER 任务节点上），再 CommitCheckpoint(RUNNING)。
         val targetTurnId = Uuid.random()
-        val initialAssistantId = lastMessages.lastOrNull { it.role == MessageRole.ASSISTANT }?.id
-            ?: Uuid.random()
-        val turnEngine = TurnEngine(session, targetTurnId, initialAssistantId)
+        val resumableAssistant = lastMessages.lastOrNull()
+            ?.takeIf { message ->
+                message.role == MessageRole.ASSISTANT &&
+                    message.getTools().any { !it.isExecuted }
+            }
+        val assistantSlotId = resumableAssistant?.id ?: Uuid.random()
+        session.submitGeneration(
+            BeginTurn(
+                turnId = targetTurnId,
+                assistantMessageId = assistantSlotId,
+                fromNodeId = null,
+                resume = resumableAssistant != null,
+                onStart = true,
+            )
+        )
+        lastMessages = session.state.value.currentMessages
+        val turnEngine = TurnEngine(session, targetTurnId, assistantSlotId)
         session.submitGeneration(
             CommitCheckpoint(
                 turnId = targetTurnId,
-                assistantMessageId = initialAssistantId,
+                assistantMessageId = assistantSlotId,
                 messages = emptyList(),
                 turnStatus = TurnExecutionStatus.RUNNING,
                 turnReason = null,
@@ -827,6 +841,7 @@ class DelegationCoordinator(
                     latestTarget?.enableMemory == true &&
                         latestTarget.useGlobalMemory == target.useGlobalMemory
                 },
+                assistantMessageId = assistantSlotId,
                 processingStatus = session.processingStatus,
                 conversationSystemPrompt = null, // Child 不设置对话级 System Prompt
                 // Child does not inherit the Master's mode injection. Passing the Target IDs also
@@ -902,30 +917,29 @@ class DelegationCoordinator(
             lastMessages = resumedMessages
         }
 
-        // D3：终态收口走 FinalizeTurn 命令（reducer 消息分发 + finishReasoning +
-        // markAssistantTerminal + delta 落库 + turn 事实），替代整对象 updateConversation
-        val terminalStatus = when (finishReason) {
-            FinishedReason.COMPLETED -> TurnExecutionStatus.COMPLETED
-            FinishedReason.INTERACTION_LIMIT_REACHED -> TurnExecutionStatus.INCOMPLETE
-            FinishedReason.AWAITING_APPROVAL -> TurnExecutionStatus.AWAITING_APPROVAL
-            null -> TurnExecutionStatus.INCOMPLETE
-            else -> TurnExecutionStatus.INCOMPLETE
+        // bind 已在 Finished/异常/取消时提交 FinalizeTurn。此处只覆盖循环本地升级
+        // （ask_user 次数上限把 AWAITING_APPROVAL 升为 INCOMPLETE）等尚未真正终态的情况。
+        if (!turnEngine.hasSubmittedTerminal()) {
+            val terminalStatus = when (finishReason) {
+                FinishedReason.COMPLETED -> TurnExecutionStatus.COMPLETED
+                FinishedReason.INTERACTION_LIMIT_REACHED -> TurnExecutionStatus.INCOMPLETE
+                FinishedReason.AWAITING_APPROVAL -> TurnExecutionStatus.AWAITING_APPROVAL
+                null -> TurnExecutionStatus.INCOMPLETE
+                else -> TurnExecutionStatus.INCOMPLETE
+            }
+            if (turnEngine.lastFinalizedStatus != terminalStatus) {
+                turnEngine.submitFinalize(
+                    messages = lastMessages,
+                    terminalStatus = terminalStatus,
+                    terminalReason = if (finishReason == FinishedReason.INTERACTION_LIMIT_REACHED) {
+                        "interaction_limit_reached"
+                    } else {
+                        null
+                    },
+                    closeInterruptedTools = false,
+                )
+            }
         }
-        val finalAssistantId = lastMessages.lastOrNull { it.role == MessageRole.ASSISTANT }?.id ?: initialAssistantId
-        session.submitGeneration(
-            FinalizeTurn(
-                turnId = targetTurnId,
-                assistantMessageId = finalAssistantId,
-                messages = lastMessages,
-                terminalStatus = terminalStatus,
-                terminalReason = if (finishReason == FinishedReason.INTERACTION_LIMIT_REACHED) {
-                    "interaction_limit_reached"
-                } else {
-                    null
-                },
-                closeInterruptedTools = false,
-            )
-        )
 
         return TargetGenerationResult(lastMessages, finishReason)
     }
@@ -952,7 +966,7 @@ class DelegationCoordinator(
             "Run $runId already has a pending user interaction"
         }
 
-        // D3：ask_user 挂起 = CommitCheckpoint(AWAITING_APPROVAL)（消息分发 + turn 事实
+        // ask_user 挂起 = CommitCheckpoint(AWAITING_APPROVAL)（消息分发 + turn 事实
         // 同事务落库，消除整对象双写）
         val session = sessionRegistry.getOrCreateSession(childConversationId)
         session.submit(
@@ -981,7 +995,7 @@ class DelegationCoordinator(
 
         return try {
             val answer = pending.answer.await()
-            // D3：应答 = UpdateToolApproval(Answered) 命令（与 Master HITL 同一命令路径）
+            // 应答 = UpdateToolApproval(Answered) 命令（与 Master HITL 同一命令路径）
             val before = session.state.value
             session.submit(
                 UpdateToolApproval(
@@ -1178,9 +1192,9 @@ class DelegationCoordinator(
     }
 
     /**
-     * D3：恢复收口的树写入——活跃 session 走 ReplaceMessageTree 命令（delta 落库，
-     * 与 Master 同一提交协议）；启动早期无内存态时走 repo 整写（迁移语义，
-     * updateConversation 的 @Deprecated 白名单路径）。
+     * 恢复收口的树写入——活跃 session 走 ReplaceMessageTree 命令（delta 落库，
+     * 与 Master 同一提交协议）；启动早期无内存态时走 repo 整写（导入/迁移/启动恢复
+     * 白名单路径）。
      */
     private suspend fun submitRecoveredTree(conversationId: Uuid, recovered: Conversation) {
         val session = sessionRegistry.getSession(conversationId)

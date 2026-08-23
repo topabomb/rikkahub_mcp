@@ -137,6 +137,14 @@ android {
             useLegacyPackaging = true
             pickFirsts += "lib/*/libtermux.so"
         }
+        resources {
+            // JUnit 5 (pulled by androidTest deps) ships duplicate META-INF license files.
+            excludes += setOf(
+                "META-INF/LICENSE.md",
+                "META-INF/LICENSE-notice.md",
+                "META-INF/NOTICE.md",
+            )
+        }
     }
     tasks.withType<KotlinCompile>().configureEach {
         compilerOptions.optIn.add("androidx.compose.material3.ExperimentalMaterial3Api")

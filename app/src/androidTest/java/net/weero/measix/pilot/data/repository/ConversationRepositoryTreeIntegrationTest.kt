@@ -238,6 +238,7 @@ class ConversationRepositoryTreeIntegrationTest {
                 deletedNodeIds = emptyList(),
                 upsertedNodes = checkpointNodes,
                 updateAt = 9_999L,
+                upsertedNodeIndices = listOf(0),
             ),
             executionFacts = null,
         )

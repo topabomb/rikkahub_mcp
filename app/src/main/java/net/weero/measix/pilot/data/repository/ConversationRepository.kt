@@ -316,11 +316,14 @@ class ConversationRepository(
                 messageNodeDAO.deleteByIds(deletedIds)
             }
             if (mutation.upsertedNodes.isNotEmpty()) {
-                val entities = mutation.upsertedNodes.mapIndexed { index, node ->
+                require(mutation.upsertedNodeIndices.size == mutation.upsertedNodes.size) {
+                    "upsertedNodeIndices must align 1:1 with upsertedNodes (new-tree positions)"
+                }
+                val entities = mutation.upsertedNodes.mapIndexed { i, node ->
                     MessageNodeEntity(
                         id = node.id.toString(),
                         conversationId = conversationId,
-                        nodeIndex = index,
+                        nodeIndex = mutation.upsertedNodeIndices[i],
                         messages = JsonInstant.encodeToString(node.messages),
                         selectIndex = node.selectIndex,
                     )
@@ -394,7 +397,7 @@ class ConversationRepository(
             conversationDAO.update(
                 conversationToConversationEntity(conversation)
             )
-            persistMessageNodes(conversation)
+            persistImportedMessageNodes(conversation)
         }
         if (reindexFts && conversation.parentConversationId == null) {
             messageFtsManager.indexConversation(conversation)
@@ -449,7 +452,8 @@ class ConversationRepository(
         RecoveredExecutionCount(turns = turns, tools = tools)
     }
 
-    private suspend fun persistMessageNodes(conversation: Conversation) {
+    /** 导入/迁移/启动恢复整树落库：按新树全量下标写入。运行时 checkpoint 不得走此路径。 */
+    private suspend fun persistImportedMessageNodes(conversation: Conversation) {
         val conversationId = conversation.id.toString()
         val existing = messageNodeDAO.getNodesOfConversation(conversationId)
         val newIds = conversation.messageNodes.mapTo(mutableSetOf()) { it.id.toString() }

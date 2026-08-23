@@ -29,6 +29,7 @@ import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
+import net.weero.measix.pilot.service.runtime.AppendUserMessage
 import net.weero.measix.pilot.service.runtime.BeginTurn
 import net.weero.measix.pilot.service.runtime.CommitCheckpoint
 import net.weero.measix.pilot.service.runtime.ConversationHeaderPatch
@@ -64,6 +65,22 @@ class ConversationRepositoryMutationTest {
         UIMessage(id = Uuid.random(), role = MessageRole.USER, parts = listOf(UIMessagePart.Text(text)))
 
     private fun node(text: String): MessageNode = MessageNode.of(user(text))
+
+    private fun mutation(
+        id: Uuid,
+        nodes: List<MessageNode> = emptyList(),
+        deleted: List<Uuid> = emptyList(),
+        indices: List<Int> = nodes.indices.toList(),
+        header: ConversationHeaderPatch? = null,
+        updateAt: Long = System.currentTimeMillis(),
+    ) = ConversationMutation(
+        conversationId = id,
+        headerPatch = header,
+        upsertedNodes = nodes,
+        deletedNodeIds = deleted,
+        updateAt = updateAt,
+        upsertedNodeIndices = indices,
+    )
 
     @Before
     fun setup() {
@@ -123,13 +140,7 @@ class ConversationRepositoryMutationTest {
         val id = Uuid.random()
         insertConversation(id)
         val repo = repo()
-        val mutation = ConversationMutation(
-            conversationId = id,
-            headerPatch = ConversationHeaderPatch(title = "new-title"),
-            upsertedNodes = emptyList(),
-            deletedNodeIds = emptyList(),
-            updateAt = System.currentTimeMillis(),
-        )
+        val mutation = mutation(id, header = ConversationHeaderPatch(title = "new-title"))
         val written = repo.applyMutation(mutation)
         assertTrue(written)
         assertEquals(0, messageNodeDAO.getNodesOfConversation(id.toString()).size)
@@ -143,17 +154,44 @@ class ConversationRepositoryMutationTest {
         insertConversation(id)
         val repo = repo()
         val appended = node("hello")
-        val mutation = ConversationMutation(
-            conversationId = id,
-            headerPatch = null,
-            upsertedNodes = listOf(appended),
-            deletedNodeIds = emptyList(),
-            updateAt = System.currentTimeMillis(),
-        )
-        repo.applyMutation(mutation)
+        repo.applyMutation(mutation(id, nodes = listOf(appended), indices = listOf(0)))
         val nodes = messageNodeDAO.getNodesOfConversation(id.toString())
         assertEquals(1, nodes.size)
         assertEquals(appended.id.toString(), nodes[0].id)
+        assertEquals(0, nodes[0].nodeIndex)
+    }
+
+    @Test
+    fun `C2 append on non-empty tree persists new-tree node_index`() = runTest {
+        val id = Uuid.random()
+        val existing = listOf(node("a"), node("b"), node("c"))
+        val conversation = Conversation.ofId(id, assistantId = Uuid.random()).copy(
+            title = "title",
+            messageNodes = existing,
+        )
+        val repo = repo()
+        repo.insertConversation(conversation)
+        val scope = CoroutineScope(Job())
+        val runtime = ConversationRuntime(
+            id = id,
+            initial = conversation,
+            scope = scope,
+            onIdle = {},
+            repository = repo,
+        )
+        val appended = user("appended-tail")
+        runtime.submit(AppendUserMessage(appended))
+        val rows = messageNodeDAO.getNodesOfConversation(id.toString()).sortedBy { it.nodeIndex }
+        assertEquals(4, rows.size)
+        assertEquals(listOf(0, 1, 2, 3), rows.map { it.nodeIndex })
+        assertEquals(existing[0].id.toString(), rows[0].id)
+        assertEquals(existing[1].id.toString(), rows[1].id)
+        assertEquals(existing[2].id.toString(), rows[2].id)
+        assertTrue(
+            "appended user message is stored on the new-tree last node",
+            rows[3].messages.contains("appended-tail"),
+        )
+        scope.cancel()
     }
 
     @Test
@@ -162,13 +200,9 @@ class ConversationRepositoryMutationTest {
         insertConversation(id)
         val repo = repo()
         val existing = node("to-delete")
-        repo.applyMutation(
-            ConversationMutation(id, null, listOf(existing), emptyList(), System.currentTimeMillis())
-        )
+        repo.applyMutation(mutation(id, nodes = listOf(existing), indices = listOf(0)))
         assertEquals(1, messageNodeDAO.getNodesOfConversation(id.toString()).size)
-        repo.applyMutation(
-            ConversationMutation(id, null, emptyList(), listOf(existing.id), System.currentTimeMillis())
-        )
+        repo.applyMutation(mutation(id, deleted = listOf(existing.id)))
         assertEquals(0, messageNodeDAO.getNodesOfConversation(id.toString()).size)
     }
 
@@ -189,7 +223,7 @@ class ConversationRepositoryMutationTest {
         )
         // 同事务提交：节点 + 执行事实一起落盘
         repo.applyMutation(
-            ConversationMutation(id, null, listOf(node("hi")), emptyList(), System.currentTimeMillis()),
+            mutation(id, nodes = listOf(node("hi")), indices = listOf(0)),
             ExecutionFacts(turn = turn, toolExecution = tool),
         )
         val persistedTurn = database.turnExecutionDao().getById("t1")
@@ -206,7 +240,7 @@ class ConversationRepositoryMutationTest {
         )
         val thrown = runCatching {
             throwingRepo.applyMutation(
-                ConversationMutation(id, null, listOf(node("rollback")), emptyList(), System.currentTimeMillis()),
+                mutation(id, nodes = listOf(node("rollback")), indices = listOf(0)),
                 ExecutionFacts(turn = turn2, toolExecution = null),
             )
         }.exceptionOrNull()
@@ -216,7 +250,7 @@ class ConversationRepositoryMutationTest {
 
     @Test
     fun `C5 persist failure retries with previous delta included`() = runTest {
-        // C-5：持久化失败一次 → 再次 submit 任意命令 → 重试差异包含上次未落盘变更（失败不丢 delta）。
+        // 持久化失败一次 → 再次 submit 任意命令 → 重试差异包含上次未落盘变更（失败不丢 delta）。
         // 通过 ConversationRuntime 的持久化基线（persistedState）驱动：失败期间内存前进而基线停驻，
         // 重试 diff 以基线为起点，structural sharing 不会跳过未落盘节点。
         val id = Uuid.random()
@@ -306,13 +340,9 @@ class ConversationRepositoryMutationTest {
         val newNode = oldNode.copy(
             messages = listOf(UIMessage(id = Uuid.random(), role = MessageRole.USER, parts = listOf(UIMessagePart.Text("no file")))),
         )
-        repo.applyMutation(
-            ConversationMutation(id, null, listOf(oldNode), emptyList(), System.currentTimeMillis()),
-        )
+        repo.applyMutation(mutation(id, nodes = listOf(oldNode), indices = listOf(0)))
         // 替换语义：同一节点 upsert 后消息不再含 X → syncReferences 以"删旧+插新"替换（非纯 INSERT）
-        repo.applyMutation(
-            ConversationMutation(id, null, listOf(newNode), emptyList(), System.currentTimeMillis()),
-        )
+        repo.applyMutation(mutation(id, nodes = listOf(newNode), indices = listOf(0)))
         coVerify(exactly = 2) { artifactStore.syncReferences(id, any(), any()) }
         // 触发替换路径：syncReferences 收到的是替换后的节点（不再含 X）
         coVerify {

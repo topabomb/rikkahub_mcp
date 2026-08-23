@@ -62,7 +62,7 @@ class DestructiveIdempotencyTest {
     }
 
     @Test
-    fun `20 concurrent deletes hit disk exactly once`() = runTest {
+    fun `I4 20 concurrent deletes hit disk exactly once`() = runTest {
         val settings = MutableStateFlow(Settings(assistants = emptyList()))
         val settingsStore = mockk<SettingsStore>()
         every { settingsStore.settingsFlow } returns settings

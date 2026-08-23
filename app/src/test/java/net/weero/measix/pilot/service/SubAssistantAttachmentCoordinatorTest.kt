@@ -19,6 +19,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.FinishedReason
 import net.weero.measix.pilot.service.runtime.AppendUserMessage
+import net.weero.measix.pilot.service.runtime.BeginTurn
 import net.weero.measix.pilot.service.runtime.ConversationCommand
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
@@ -89,6 +90,9 @@ class SubAssistantAttachmentCoordinatorTest {
         assertEquals("Describe the image", (user.parts.first() as UIMessagePart.Text).text)
         assertTrue(user.parts.any { it is UIMessagePart.Image && it.url == image.url })
         assertTrue(user.id.toString().isNotBlank())
+        coVerify {
+            harness.childSession.submitGeneration(match { it is BeginTurn })
+        }
     }
 
     @Test
@@ -176,7 +180,7 @@ class SubAssistantAttachmentCoordinatorTest {
         io.mockk.coEvery { harness.conversationRepo.insertConversation(any()) } answers {
             inserts += invocation.args[0] as Conversation
         }
-        // D3：reuseChild 走 AppendUserMessage 命令（经 session.submit 唯一提交通道）
+        // reuseChild 走 AppendUserMessage 命令（经 session.submit 唯一提交通道）
         io.mockk.coEvery { harness.childSession.submit(any()) } answers {
             submittedCommands += invocation.args[0] as ConversationCommand
             child
@@ -208,7 +212,7 @@ class SubAssistantAttachmentCoordinatorTest {
             attachments = listOf(AttachmentRefs.getRef(image)!!),
         )
 
-        // D3：reuseChild 追加任务消息走 AppendUserMessage 命令（session.submit 唯一提交通道）
+        // reuseChild 追加任务消息走 AppendUserMessage 命令（session.submit 唯一提交通道）
         val appendCommand = submittedCommands.filterIsInstance<AppendUserMessage>().singleOrNull()
             ?: error("no AppendUserMessage submitted; commands=${submittedCommands.size} updates=${updates.size}")
         val task = appendCommand.message

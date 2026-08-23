@@ -27,18 +27,17 @@ private const val TAG = "ConversationRuntime"
 private const val IDLE_TIMEOUT_MS = 5_000L
 
 /**
- * 会话运行时主体（原 ConversationSession 改名+改造）。
+ * 会话运行时主体：单写命令通道、流式投影与 delta 落库。
  *
  * 保留既有职责与签名：refCount / idle 逐出 / generationJob / turn 取消 / TTS 队列 / 审批锁。
- * 新增：
  *  - [snapshot] 唯一内部事实流（UI 主订阅源）
  *  - [state] 兼容投影（由 snapshot 派生，旧消费方继续读 conversation.currentMessages）
  *  - [submit] / [submitGeneration] 所有结构性修改唯一入口（commandMutex 单写互斥）
  *  - [applyStreamingDelta] 流式高频更新（无锁、conflated、永不落库）
  *  - [isWriteInFlight] 写通道占用（Registry idle 守卫）
  *
- * B3 已完成：persistMutex/stateRevision/persistedRevision/withPersistLock 移除（被
- * commandMutex 吸收）；"内存领先于 DB"由 [pendingPersist] 失败标记承载。
+ * persistMutex / stateRevision / persistedRevision / withPersistLock 已由 commandMutex 吸收；
+ * "内存领先于 DB"由 [pendingPersist] 失败标记承载。
  */
 class ConversationRuntime(
     val id: Uuid,
@@ -82,12 +81,12 @@ class ConversationRuntime(
     // "内存领先于 DB"仅发生在持久化失败时。
     private val pendingPersist = AtomicBoolean(false)
 
-    // 持久化基线：上次成功落库的状态（用例 C5）。失败期间内存前进而基线停驻，
+    // 持久化基线：上次成功落库的状态。失败期间内存前进而基线停驻，
     // 重试 diff 以基线为起点——structural sharing 对内存相同实例的跳过不会丢掉
     // 未落盘变更；成功后基线追平内存，恢复正常 delta 语义。
     private var persistedState: Conversation? = null
 
-    // ---- 计划新增：单事实源投影 ----
+    // ---- snapshot 事实源 ----
 
     /** UI 主订阅源 */
     val snapshot: StateFlow<ConversationSnapshot> = _snapshot.asStateFlow()
@@ -184,6 +183,7 @@ class ConversationRuntime(
 
     private fun buildMutation(old: Conversation, new: Conversation): ConversationMutation {
         val changedNodes = mutableListOf<MessageNode>()
+        val changedIndices = mutableListOf<Int>()
         val deletedNodeIds = mutableListOf<Uuid>()
         val max = maxOf(old.messageNodes.size, new.messageNodes.size)
         for (i in 0 until max) {
@@ -192,12 +192,19 @@ class ConversationRuntime(
             when {
                 newNode == null -> oldNode?.let { deletedNodeIds.add(it.id) }
                 oldNode === newNode -> Unit // structural sharing：未变
-                oldNode == null -> changedNodes.add(newNode)
+                oldNode == null -> {
+                    changedNodes.add(newNode)
+                    changedIndices.add(i)
+                }
                 oldNode.id != newNode.id -> {
                     deletedNodeIds.add(oldNode.id)
                     changedNodes.add(newNode)
+                    changedIndices.add(i)
                 }
-                else -> changedNodes.add(newNode)
+                else -> {
+                    changedNodes.add(newNode)
+                    changedIndices.add(i)
+                }
             }
         }
         val headerChanged = new.title != old.title ||
@@ -230,6 +237,7 @@ class ConversationRuntime(
             upsertedNodes = changedNodes,
             deletedNodeIds = deletedNodeIds,
             updateAt = new.updateAt.toEpochMilli(),
+            upsertedNodeIndices = changedIndices,
         )
     }
 

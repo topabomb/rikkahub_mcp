@@ -144,6 +144,38 @@ class ConversationReducerTest {
         assertTrue(output.contains("interrupted"))
     }
 
+    @Test
+    fun `R4 historical nodes stay identical across FinalizeTurn`() {
+        val finishedReasoning = UIMessagePart.Reasoning(
+            reasoning = "already done",
+            finishedAt = kotlin.time.Instant.fromEpochMilliseconds(1),
+        )
+        val histUser = MessageNode.of(user(Uuid.random()))
+        val histAssistant = MessageNode.of(
+            assistant(Uuid.random(), listOf(finishedReasoning, UIMessagePart.Text("old"))),
+        )
+        val activeId = Uuid.random()
+        val active = MessageNode.of(
+            assistant(
+                activeId,
+                listOf(
+                    UIMessagePart.Reasoning(reasoning = "live", finishedAt = null),
+                    UIMessagePart.Text("new"),
+                ),
+            ),
+        )
+        val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(histUser, histAssistant, active))
+        val r = ConversationReducer.reduce(
+            c,
+            FinalizeTurn(Uuid.random(), activeId, null, TurnExecutionStatus.COMPLETED, null, closeInterruptedTools = false),
+        )
+        assertSame(histUser, r.messageNodes[0])
+        assertSame(histAssistant, r.messageNodes[1])
+        assertNotSame(active, r.messageNodes[2])
+        val liveReasoning = r.messageNodes[2].messages.single().parts.filterIsInstance<UIMessagePart.Reasoning>().single()
+        assertTrue(liveReasoning.finishedAt != null)
+    }
+
     // ---- R-4：树操作 ----
 
     @Test

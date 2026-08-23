@@ -4,7 +4,9 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import me.rerere.ai.core.MessageRole
@@ -22,7 +24,7 @@ import kotlin.uuid.Uuid
 
 /**
  * TurnEngine 权威测试（提交协议等价）。
- * 用 fake Flow 驱动：chunk→Streaming 顺序、checkpoint→CommitCheckpoint 次数、Finished→FinalizeTurn。
+ * fake Flow 驱动：chunk→Streaming、checkpoint→CommitCheckpoint、Finished→FinalizeTurn。
  */
 class TurnEngineTest {
 
@@ -31,6 +33,7 @@ class TurnEngineTest {
 
     private fun runtime(): ConversationRuntime = mockk<ConversationRuntime>(relaxed = true).also {
         coEvery { it.submitGeneration(any()) } returns net.weero.measix.pilot.data.model.Conversation.ofId(Uuid.random())
+        coEvery { it.isTurnFinalized(any()) } returns false
     }
 
     @Test
@@ -64,11 +67,52 @@ class TurnEngineTest {
     }
 
     @Test
-    fun `bind maps Finished chunk to Finished event`() = runTest {
-        val engine = TurnEngine(runtime(), Uuid.random(), Uuid.random())
+    fun `bind Finished submits FinalizeTurn and emits Finished`() = runTest {
+        val runtime = runtime()
+        val engine = TurnEngine(runtime, Uuid.random(), Uuid.random())
         val events = engine.bind(flowOf(GenerationChunk.Finished(FinishedReason.COMPLETED))).first()
         assertTrue(events is TurnEvent.Finished)
         assertEquals(FinishedReason.COMPLETED, (events as TurnEvent.Finished).reason)
+        val cmdSlot = slot<ConversationCommand>()
+        coVerify { runtime.submitGeneration(capture(cmdSlot)) }
+        assertTrue(cmdSlot.captured is FinalizeTurn)
+        assertEquals(TurnExecutionStatus.COMPLETED, (cmdSlot.captured as FinalizeTurn).terminalStatus)
+    }
+
+    @Test
+    fun `bind exception submits FinalizeTurn FAILED without rethrowing`() = runTest {
+        val runtime = runtime()
+        val engine = TurnEngine(runtime, Uuid.random(), Uuid.random())
+        val boom = RuntimeException("provider failed")
+        val events = engine.bind(
+            flow {
+                emit(GenerationChunk.Messages(listOf(msg("partial"))))
+                throw boom
+            }
+        ).toListSafe()
+        val finished = events.filterIsInstance<TurnEvent.Finished>().single()
+        assertEquals(boom, finished.error)
+        val cmds = mutableListOf<ConversationCommand>()
+        coVerify { runtime.submitGeneration(capture(cmds)) }
+        assertTrue(cmds.any { it is FinalizeTurn && it.terminalStatus == TurnExecutionStatus.FAILED })
+    }
+
+    @Test
+    fun `bind cancellation submits FinalizeTurn CANCELLED and rethrows`() = runTest {
+        val runtime = runtime()
+        val engine = TurnEngine(runtime, Uuid.random(), Uuid.random())
+        val thrown = runCatching {
+            engine.bind(
+                flow {
+                    emit(GenerationChunk.Messages(listOf(msg("partial"))))
+                    throw CancellationException("user stop")
+                }
+            ).collect { }
+        }.exceptionOrNull()
+        assertTrue(thrown is CancellationException)
+        val cmds = mutableListOf<ConversationCommand>()
+        coVerify { runtime.submitGeneration(capture(cmds)) }
+        assertTrue(cmds.any { it is FinalizeTurn && it.terminalStatus == TurnExecutionStatus.CANCELLED })
     }
 
     @Test
@@ -82,15 +126,14 @@ class TurnEngineTest {
     }
 
     /**
-     * Master 与 Target 以相同 fake 事件序列驱动
-     * TurnEngine（chunk → bind 流式投影 / checkpoint → CommitCheckpoint / 终态 → FinalizeTurn），
-     * 两者对 Runtime 提交的命令序列完全一致——提交协议单一实现（无 Master/Target 分支）的直接锁定。
+     * Master 与 Target 以相同 fake chunk 序列驱动同一 TurnEngine.bind：
+     * onCheckpoint → CommitCheckpoint，Finished → FinalizeTurn。
+     * 两者对 Runtime 提交的命令序列完全一致。
      */
     @Test
     fun `T-1 master and target commit identical command sequences for the same chunk stream`() = runTest {
         val turnId = Uuid.random()
         val assistantId = Uuid.random()
-        // 冷流：两次收集发射完全相同的 chunk 序列（流式 + checkpoint 信号 + 终态）
         val chunks = flowOf(
             GenerationChunk.Messages(listOf(msg("hi"))),
             GenerationChunk.Checkpoint(CheckpointKind.STEP_COMPLETED),
@@ -106,23 +149,28 @@ class TurnEngineTest {
             val runtime = runtime()
             val recorded = mutableListOf<ConversationCommand>()
             coEvery { runtime.submitGeneration(any()) } answers {
-                recorded.add(firstArg())
+                recorded.add(invocation.args[0] as ConversationCommand)
                 net.weero.measix.pilot.data.model.Conversation.ofId(Uuid.random())
             }
             val engine = TurnEngine(runtime, turnId, assistantId)
             engine.onCheckpoint(checkpoint)
             engine.bind(chunks).collect { }
-            engine.submitFinalize(null, TurnExecutionStatus.COMPLETED, null, closeInterruptedTools = false)
             return recorded
         }
 
         val masterCommands = drive()
         val targetCommands = drive()
 
-        // 命令序列逐条结构相等（CommitCheckpoint + FinalizeTurn）
         assertEquals(masterCommands, targetCommands)
         assertEquals(2, masterCommands.size)
         assertTrue(masterCommands[0] is CommitCheckpoint)
         assertTrue(masterCommands[1] is FinalizeTurn)
+        assertEquals(TurnExecutionStatus.COMPLETED, (masterCommands[1] as FinalizeTurn).terminalStatus)
     }
+}
+
+private suspend fun kotlinx.coroutines.flow.Flow<TurnEvent>.toListSafe(): List<TurnEvent> {
+    val out = mutableListOf<TurnEvent>()
+    collect { out.add(it) }
+    return out
 }
