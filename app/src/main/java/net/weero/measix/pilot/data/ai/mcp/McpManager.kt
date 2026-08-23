@@ -58,6 +58,7 @@ import kotlinx.serialization.json.JsonObject
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.event.AppEvent
 import net.weero.measix.pilot.data.event.AppEventBus
 import net.weero.measix.pilot.data.model.Assistant
@@ -315,10 +316,12 @@ class McpManager(
         val bytes = Base64.decode(image.data)
         val ext = android.webkit.MimeTypeMap.getSingleton()
             .getExtensionFromMimeType(image.mimeType) ?: "bin"
+        // MCP server 返回的图片资源——系统产物
         val entity = filesManager.saveUploadFromBytes(
             bytes = bytes,
             displayName = "mcp_image.$ext",
             mimeType = image.mimeType,
+            origin = ArtifactOrigin.SYSTEM,
         )
         val uri = filesManager.getFile(entity).toUri()
         return net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.ensureAttachmentRef(

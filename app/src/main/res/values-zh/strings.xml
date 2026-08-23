@@ -760,6 +760,11 @@
   <string name="setting_files_page_deleted_toast">已删除</string>
   <string name="setting_files_page_folder_upload">上传</string>
   <string name="setting_files_page_no_files">无文件</string>
+  <string name="setting_files_page_origin_user">用户上传</string>
+  <string name="setting_files_page_origin_generated">生成媒体副本</string>
+  <string name="setting_files_page_origin_system">应用创建</string>
+  <string name="setting_files_page_delete_in_progress_toast">删除正在进行中</string>
+  <string name="setting_files_page_delete_already_deleted_toast">文件已被删除</string>
   <string name="setting_files_page_title">文件管理</string>
   <string name="setting_mcp_page_add_header">添加请求头</string>
   <string name="setting_mcp_page_add_one_to_get_started">添加一个即可开始使用</string>

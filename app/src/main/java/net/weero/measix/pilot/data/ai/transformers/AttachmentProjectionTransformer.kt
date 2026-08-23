@@ -11,7 +11,7 @@ import org.koin.core.component.KoinComponent
 import org.koin.core.component.get
 
 /**
- * Request-only 附件投影（设计文档 multimodal-attachment-context-and-analysis-design.md §7）：
+ * Request-only 附件投影（见 multimodal-attachment-context-and-analysis-design.md）：
  *
  * 1. 递归遍历顶层消息与 `Tool.output` 中的 media part，在 model view 中加入短稳定引用行；
  * 2. 当前 resolved model 原生支持 IMAGE 输入时保留 Image part（NATIVE），否则仅保留引用文本（REFERENCE_ONLY）；

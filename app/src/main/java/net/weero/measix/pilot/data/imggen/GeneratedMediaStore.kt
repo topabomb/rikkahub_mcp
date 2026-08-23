@@ -13,6 +13,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import me.rerere.ai.ui.ImageGenerationItem
+import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.db.entity.GenMediaEntity
 import net.weero.measix.pilot.data.files.LocalArtifactRef
 import net.weero.measix.pilot.data.files.ManagedLocalArtifactStore
@@ -90,10 +91,12 @@ class GeneratedMediaStore(
                 pending.delete()
             }
             if (GeneratedMediaConsumer.CHAT_TOOL_RESULT in consumerPlan.consumers) {
+                // 生成媒体在聊天域的副本——诞生方式为生成派生
                 chatArtifact = artifactStore.copyFile(
                     source = finalFile,
                     mimeType = mimeType,
                     displayName = fileName,
+                    origin = ArtifactOrigin.GENERATED,
                 )
             }
             val relativePath = "$IMAGES_DIR/${finalFile.name}"

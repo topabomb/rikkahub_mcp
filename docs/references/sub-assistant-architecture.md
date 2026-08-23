@@ -62,12 +62,12 @@ Target.allowAsSubAssistant
 |------|------|
 | `AssistantToolFactory` | 注册 Assistant 工具、构建动态 Catalog、把 `assistant_call` 交给 Coordinator |
 | `AssistantManagementService` | Assistant CRUD、授权更新、删除 tombstone 与恢复清理 |
-| `SubAssistantCoordinator` | preflight、lineage、lease、Child 生命周期、Target 生成、交互桥接、终态收口 |
+| `DelegationCoordinator` | preflight、lineage、lease、Child 生命周期、Target 生成、交互桥接、终态收口 |
 | `SubAssistantAccessPolicy` | 统一计算发现、管理和调用的有效访问范围 |
 | `SubAssistantRunPolicy` | 模型解析、运行中停止条件和 Target 工具边界 |
 | `SubAssistantLineageResolver` | 在 Master 当前分支上决定新建、复用或克隆 Child |
 | `SubAssistantRunStateReducer` | 串行维护单次 Run 的完整 metadata 快照和单向状态转换 |
-| `ConversationSessionRegistry` | 为 Master 与 Child 提供同一套 Session、Job 和状态流生命周期 |
+| `ConversationRuntimeRegistry` | 为 Master 与 Child 提供同一套 Runtime、Job 和状态流生命周期 |
 | `GenerationHandler` | 通用模型循环、Tool locator、审批策略、phase/checkpoint/finished 事件 |
 | `GenerationToolSetFactory` | 按 Assistant、资源和 Run Mode 统一装配工具 |
 | `SubAssistantRecovery` | 启动恢复、链接校验、未完成 Run 收口和孤儿清理 |
@@ -198,9 +198,9 @@ Fork 顶层会话时，`forkSubAssistantTree` 同时复制有效 Child，重建 
 
 删除 Master 会级联处理 Child 与只被该会话树引用的本地文件。普通用户入口始终过滤 Child，避免内部工作会话泄漏到历史、搜索或最近会话工具。
 
-## 9. Session、取消与 TTS
+## 9. Runtime、取消与 TTS
 
-`ConversationSessionRegistry` 保证一个 Conversation ID 对应一个 Session。加载持久化 Child 使用 `getOrCreateSessionWithConversation()`；中断收尾在 Session 不存在时先读取 Room，Child 已删除则停止修复，不会用默认空会话覆盖持久化快照。页面引用归零但 Job 活跃时 Session 继续保留；生成结束且空闲后再清理。
+`ConversationRuntimeRegistry` 保证一个 Conversation ID 对应一个 Runtime。加载持久化 Child 使用 `getOrCreateSessionWithConversation()`；中断收尾在 Runtime 不存在时先读取 Room，Child 已删除则停止修复，不会用默认空会话覆盖持久化快照。页面引用归零但 Job 活跃时 Runtime 继续保留；生成结束且空闲后再清理。
 
 停止 Master、删除 Target、撤销访问、模型失效、回答等待中断或应用恢复都会取消 Target Job。Coordinator 在 `NonCancellable` 收尾区分别尝试 Child 修复和 Master 终态回写，各自有独立超时；Child 修复失败不会跳过 Master 终态，也不会让超时异常取代稳定的 stopped/failed Tool Result。lease 与交互等待器在 `finally` 中释放。
 
@@ -215,4 +215,4 @@ Fork 顶层会话时，`forkSubAssistantTree` 同时复制有效 Child，重建 
 - 修改 Target 生成时，应优先复用通用 Generation Pipeline；任何差异都要作为明确的 Run Mode policy 表达。
 - 修改用户可见文案时，必须同步所有支持的 locale。
 
-主要回归测试集中在 `data/ai/subassistant`、`service/SubAssistant*Test`、`ui/pages/subassistant`，以及 Room migration、DAO 与 ConversationRepository 的 instrumentation tests。
+主要回归测试集中在 `data/ai/subassistant`、`service/DelegationCoordinator*Test`、`ui/pages/subassistant`，以及 Room migration、DAO 与 ConversationRepository 的 instrumentation tests。

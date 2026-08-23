@@ -8,6 +8,12 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.subassistant.ASSISTANT_CALL_EXTRA_TOOL_CALLS
 import net.weero.measix.pilot.data.ai.subassistant.ASSISTANT_CALL_EXTRA_TTS
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantTtsStats
+import net.weero.measix.pilot.service.runtime.checkNonTextOutputInternal
+import net.weero.measix.pilot.service.runtime.collectRunToolCalls
+import net.weero.measix.pilot.service.runtime.collectRunTtsStats
+import net.weero.measix.pilot.service.runtime.collectRunTtsTexts
+import net.weero.measix.pilot.service.runtime.collectSubAssistantCallOutputs
+import net.weero.measix.pilot.service.runtime.extractFinalAnswerInternal
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

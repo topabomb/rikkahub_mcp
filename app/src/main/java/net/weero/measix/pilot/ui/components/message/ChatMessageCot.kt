@@ -123,7 +123,7 @@ val LocalConversationImages = compositionLocalOf<() -> List<String>> {
 }
 
 /**
- * 附件缩略图只读解析（设计文档 §8.7/§13.10）：会话宿主按 stable `attachment:<uuid>`
+ * 附件缩略图只读解析：会话宿主按 stable `attachment:<uuid>`
  * 返回本地 `file:` url；不做远程下载、不触发识别，解析不到返回 null 由消费点显示占位。
  * UI 可显示缩略图不代表当前模型收到图片像素（presentation 与 projection 解耦）。
  */

@@ -28,6 +28,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.datastore.getCurrentAssistant
+import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.imggen.AssistantBackgroundService
 import net.weero.measix.pilot.data.imggen.BackgroundUpdateResult
 import net.weero.measix.pilot.data.imggen.localFileFromUri
@@ -190,10 +191,12 @@ internal suspend fun applyImageAsBackground(
     val source = materialized.first
     val isTemp = source.parentFile?.absoluteFile == context.cacheDir.absoluteFile
     return try {
+        // 用户在图片查看器中主动挑选图片设为背景——诞生方式为用户引入
         backgroundService.replaceBackground(
             assistantId = assistantId,
             source = source,
             mimeType = materialized.second,
+            origin = ArtifactOrigin.USER,
         )
     } finally {
         if (isTemp) source.delete()

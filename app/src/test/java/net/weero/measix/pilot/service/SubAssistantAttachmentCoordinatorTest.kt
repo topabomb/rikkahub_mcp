@@ -18,6 +18,11 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.FinishedReason
+import net.weero.measix.pilot.service.runtime.AppendUserMessage
+import net.weero.measix.pilot.service.runtime.ConversationCommand
+import net.weero.measix.pilot.service.runtime.ConversationRuntime
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
+import net.weero.measix.pilot.service.runtime.DelegationCoordinator
 import net.weero.measix.pilot.data.ai.GenerationChunk
 import net.weero.measix.pilot.data.ai.GenerationHandler
 import net.weero.measix.pilot.data.ai.attachments.AttachmentFailureReasons
@@ -88,7 +93,7 @@ class SubAssistantAttachmentCoordinatorTest {
 
     @Test
     fun `text target still creates child with durable image parts`() = runTest {
-        // 能力不足不是附件失败（设计文档 §11.1）：Target 模型不接收 IMAGE 时 Child 照常创建，
+        // 能力不足不是附件失败：Target 模型不接收 IMAGE 时 Child 照常创建，
         // durable 消息保留 Image parts，视觉投影交给 Target run 的 AttachmentProjectionTransformer。
         val image = UIMessagePart.Image(url = "file:///tmp/a.png")
         val harness = harness(
@@ -157,6 +162,7 @@ class SubAssistantAttachmentCoordinatorTest {
         )
         val updates = mutableListOf<Conversation>()
         val inserts = mutableListOf<Conversation>()
+        val submittedCommands = mutableListOf<ConversationCommand>()
         val harness = harness(
             modelModalities = listOf(Modality.TEXT, Modality.IMAGE),
             resolveResult = AttachmentResolveResult.Success(listOf(image)),
@@ -169,6 +175,11 @@ class SubAssistantAttachmentCoordinatorTest {
         }
         io.mockk.coEvery { harness.conversationRepo.insertConversation(any()) } answers {
             inserts += invocation.args[0] as Conversation
+        }
+        // D3：reuseChild 走 AppendUserMessage 命令（经 session.submit 唯一提交通道）
+        io.mockk.coEvery { harness.childSession.submit(any()) } answers {
+            submittedCommands += invocation.args[0] as ConversationCommand
+            child
         }
         val previous = findPreviousCallMetadata(
             masterMessages = listOf(previousAssistant, currentAssistant),
@@ -197,19 +208,17 @@ class SubAssistantAttachmentCoordinatorTest {
             attachments = listOf(AttachmentRefs.getRef(image)!!),
         )
 
-        val written = (updates + inserts).firstOrNull { conversation ->
-            conversation.messageNodes.any { node ->
-                node.messages.getOrNull(node.selectIndex)?.parts?.any { it is UIMessagePart.Image } == true
-            }
-        } ?: error("no Child write with image; updates=${updates.size} inserts=${inserts.size}")
-        val users = written.messageNodes.mapNotNull { node ->
-            node.messages.getOrNull(node.selectIndex)?.takeIf { it.role == MessageRole.USER }
-        }
-        val task = users.last { it.parts.any { part -> part is UIMessagePart.Image } }
+        // D3：reuseChild 追加任务消息走 AppendUserMessage 命令（session.submit 唯一提交通道）
+        val appendCommand = submittedCommands.filterIsInstance<AppendUserMessage>().singleOrNull()
+            ?: error("no AppendUserMessage submitted; commands=${submittedCommands.size} updates=${updates.size}")
+        val task = appendCommand.message
+        assertEquals(MessageRole.USER, task.role)
         assertEquals("Look again", (task.parts.first() as UIMessagePart.Text).text)
-        assertTrue(updates.isNotEmpty())
+        assertTrue(task.parts.any { it is UIMessagePart.Image && it.url == image.url })
+        assertTrue(task.id.toString().isNotBlank())
+        // 不再走整对象回写（单一写者不变式）
+        assertTrue(updates.isEmpty())
         assertTrue(inserts.isEmpty())
-        assertEquals(2, users.size)
     }
 
     @Test
@@ -305,8 +314,8 @@ class SubAssistantAttachmentCoordinatorTest {
         if (existingChild != null) {
             coEvery { conversationRepo.getConversationById(existingChild.id) } returns existingChild
         }
-        val sessionRegistry = mockk<ConversationSessionRegistry>(relaxed = true)
-        val masterSession = mockk<ConversationSession>(relaxed = true)
+        val sessionRegistry = mockk<ConversationRuntimeRegistry>(relaxed = true)
+        val masterSession = mockk<ConversationRuntime>(relaxed = true)
         every { masterSession.state } returns MutableStateFlow(
             Conversation.ofId(
                 id = masterId,
@@ -315,7 +324,7 @@ class SubAssistantAttachmentCoordinatorTest {
             ),
         )
         every { sessionRegistry.getSession(any()) } returns masterSession
-        val childSession = mockk<ConversationSession>(relaxed = true)
+        val childSession = mockk<ConversationRuntime>(relaxed = true)
         every { childSession.state } returns MutableStateFlow(
             Conversation.ofId(Uuid.random(), assistantId = targetId),
         )
@@ -334,7 +343,7 @@ class SubAssistantAttachmentCoordinatorTest {
         val resolver = mockk<AttachmentResolver>()
         coEvery { resolver.resolve(any(), any()) } returns resolveResult
         val filesManager = mockk<FilesManager>(relaxed = true)
-        val coordinator = SubAssistantCoordinator(
+        val coordinator = DelegationCoordinator(
             generationHandler = generationHandler,
             conversationRepo = conversationRepo,
             sessionRegistry = sessionRegistry,
@@ -348,12 +357,13 @@ class SubAssistantAttachmentCoordinatorTest {
             attachmentResolver = resolver,
             context = mockk(relaxed = true),
         )
-        return Harness(coordinator, conversationRepo, filesManager)
+        return Harness(coordinator, conversationRepo, filesManager, childSession)
     }
 
     private class Harness(
-        val coordinator: SubAssistantCoordinator,
+        val coordinator: DelegationCoordinator,
         val conversationRepo: ConversationRepository,
         val filesManager: FilesManager,
+        val childSession: ConversationRuntime,
     )
 }

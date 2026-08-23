@@ -1,4 +1,4 @@
-package net.weero.measix.pilot.service
+package net.weero.measix.pilot.service.runtime
 
 import android.content.Context
 import android.util.Log
@@ -92,13 +92,18 @@ import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.AssistantAffectScope
 import net.weero.measix.pilot.data.model.replaceRegexes
 import net.weero.measix.pilot.data.model.toMessageNode
+import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
+import net.weero.measix.pilot.service.SubAssistantRunLeaseRegistry
+import net.weero.measix.pilot.service.SubAssistantRunKey
+import net.weero.measix.pilot.service.recoverMasterSubAssistantCalls
+import net.weero.measix.pilot.service.resolveValidRecoveryChild
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.Uuid
 
-private const val TAG = "SubAssistantCoordinator"
+private const val TAG = "DelegationCoordinator"
 private const val PREVIEW_THROTTLE_MS = 100L
 private const val MAX_SUB_ASSISTANT_INTERACTIONS = 16
 private const val FINALIZATION_TIMEOUT_MS = 5_000L
@@ -140,17 +145,17 @@ private data class TargetGenerationResult(
  * 依赖方向：
  * ```
  * AssistantToolFactory
- *   └─> SubAssistantCoordinator
+ *   └─> DelegationCoordinator
  *           ├─> GenerationToolSetFactory
- *           ├─> ConversationSessionRegistry
+ *           ├─> ConversationRuntimeRegistry
  *           ├─> ConversationRepository
  *           └─> GenerationHandler
  * ```
  */
-class SubAssistantCoordinator(
+class DelegationCoordinator(
     private val generationHandler: GenerationHandler,
     private val conversationRepo: ConversationRepository,
-    private val sessionRegistry: ConversationSessionRegistry,
+    private val sessionRegistry: ConversationRuntimeRegistry,
     private val toolSetFactory: GenerationToolSetFactory,
     private val settingsStore: SettingsStore,
     private val memoryRepository: MemoryRepository,
@@ -169,6 +174,14 @@ class SubAssistantCoordinator(
     private val runLeases = SubAssistantRunLeaseRegistry()
     private val pendingUserInteractions = ConcurrentHashMap<String, PendingUserInteraction>()
     private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
+
+    // Master/Target 共用管道装配。Target 管道不注入 ToolArtifactReplay
+    // （run 内 artifact 重放仅 Master 侧需要），与 targetInput() 的固定清单一致。
+    private val turnPipelineFactory = TurnPipelineFactory(
+        templateTransformer = templateTransformer,
+        workspaceReminderTransformer = workspaceReminderTransformer,
+        toolArtifactReplayTransformer = null,
+    )
 
     /** 删除 Target 前取消并等待其所有正在执行的 Target Run 停止写回。 */
     suspend fun cancelRunsForAssistant(assistantId: Uuid) {
@@ -320,7 +333,7 @@ class SubAssistantCoordinator(
         }
         val runJob = activeTargetRun.job
 
-        // 能力不足不是附件失败（设计文档 §11.1）：入站只验证 attachment ref/资产，
+        // 能力不足不是附件失败：入站只验证 attachment ref/资产，
         // 视觉能力由 Target run 自己的 AttachmentProjectionTransformer 与 tool set 表达。
 
         val childConversationId: Uuid
@@ -648,12 +661,10 @@ class SubAssistantCoordinator(
         val conversation = conversationRepo.getConversationById(childConversationId)
             ?: throw IllegalStateException("Child conversation not found: $childConversationId")
 
+        // D3：追加任务消息 = AppendUserMessage 命令（delta 落库，消除整对象回写）
         val taskMessage = UIMessage(role = MessageRole.USER, parts = userParts)
-        val updatedConversation = conversation.copy(
-            messageNodes = conversation.messageNodes + taskMessage.toMessageNode()
-        )
-        conversationRepo.updateConversation(updatedConversation)
-        sessionRegistry.updateConversationState(childConversationId, updatedConversation)
+        val session = sessionRegistry.getOrCreateSessionWithConversation(childConversationId, conversation)
+        session.submit(AppendUserMessage(taskMessage))
 
         val taskNodeId = taskMessage.id
         Log.i(TAG, "reuseChild: child=$childConversationId, taskMsg=$taskNodeId")
@@ -714,22 +725,9 @@ class SubAssistantCoordinator(
         val session = sessionRegistry.getOrCreateSession(childConversationId)
         val conversation = session.state.value
 
-        // Target uses its own complete Assistant-level transformer pipeline. Conversation-level
-        // overrides remain disabled below; PromptInjection receives the Target's own mode IDs.
-        val targetInputTransformers = listOf<InputMessageTransformer>(
-            TimeReminderTransformer,
-            PromptInjectionTransformer,
-            PlaceholderTransformer,
-            DocumentAsPromptTransformer,
-            AttachmentProjectionTransformer,
-            templateTransformer,
-            workspaceReminderTransformer,
-        )
-        val targetOutputTransformers = listOf<OutputMessageTransformer>(
-            ThinkTagTransformer,
-            Base64ImageToLocalFileTransformer,
-            RegexOutputTransformer,
-        )
+        // D3：装配走 TurnPipelineFactory（契约 D8），消除 Master/Target 双轨清单
+        val targetInputTransformers = turnPipelineFactory.targetInput()
+        val targetOutputTransformers = turnPipelineFactory.targetOutput()
 
         // Target memories
         val memories = if (target.enableMemory) {
@@ -762,7 +760,7 @@ class SubAssistantCoordinator(
         }
 
         // 每个 step 重新解析资源并应用“运行快照 ∩ 当前配置”，但复用 TTS 播放上下文。
-        // 工具能力依据本次 run 的 resolved model（设计文档 §11.2）。
+        // 工具能力依据本次 run 的 resolved model。
         // Tool schema 稳定原则（与主链路一致）：配置变更在下一次构建时生效——主链路是下一轮
         // turn，Target 是下一次 assistant_call。run 内 inspection 能力用 run 开始时的值冻结，
         // 避免 `inspect_attachments` 在工具循环中途出现/消失；Target 删除、撤权等运行安全信号
@@ -793,6 +791,23 @@ class SubAssistantCoordinator(
         var finishReason: FinishedReason? = null
         var interactionCount = 0
 
+        // D3：Target turn 执行事实——与 Master 同一提交协议（TurnEngine.bind 唯一实现）。
+        // turn 生命周期：RUNNING 起始事实（崩溃恢复扫描依据）→ checkpoint delta → 终态收口。
+        val targetTurnId = Uuid.random()
+        val initialAssistantId = lastMessages.lastOrNull { it.role == MessageRole.ASSISTANT }?.id
+            ?: Uuid.random()
+        val turnEngine = TurnEngine(session, targetTurnId, initialAssistantId)
+        session.submitGeneration(
+            CommitCheckpoint(
+                turnId = targetTurnId,
+                assistantMessageId = initialAssistantId,
+                messages = emptyList(),
+                turnStatus = TurnExecutionStatus.RUNNING,
+                turnReason = null,
+                toolExecution = null,
+            )
+        )
+
         while (true) {
             finishReason = null
             generationHandler.generateText(
@@ -820,51 +835,52 @@ class SubAssistantCoordinator(
                 workspaceCwd = conversation.workspaceCwd,
                 maxSteps = 256,
                 onCheckpoint = { checkpoint ->
+                    // checkpoint→CommitCheckpoint（delta + turn/tool 事实同事务落库）
                     lastMessages = checkpoint.messages
-                    val checkpointConversation = session.state.value.updateCurrentMessages(lastMessages)
-                    sessionRegistry.updateConversationState(childConversationId, checkpointConversation)
-                    conversationRepo.checkpointConversation(checkpointConversation)
+                    turnEngine.onCheckpoint(checkpoint)
                 },
-            ).collect { chunk ->
-                when (chunk) {
-                    is GenerationChunk.Messages -> {
-                        lastMessages = chunk.messages
-                        // 更新 Child session
-                        val updatedConversation = session.state.value.updateCurrentMessages(chunk.messages)
-                        sessionRegistry.updateConversationState(childConversationId, updatedConversation)
+            ).let { source ->
+                turnEngine.bind(source).collect { event ->
+                    when (event) {
+                        is TurnEvent.Streaming -> {
+                            // 流式 delta 已由 bind 内 applyStreamingDelta 更新 Child session 投影
+                            lastMessages = event.messages
 
-                        // 节流回写 preview 到 Master；内容未变则不 patch，避免主聊天无意义重组。
-                        val now = System.currentTimeMillis()
-                        if (now - lastPreviewUpdate >= PREVIEW_THROTTLE_MS) {
-                            lastPreviewUpdate = now
-                            val preview = computeSubAssistantPreview(chunk.messages, childTaskNodeId)
-                            val before = runState.snapshot()
-                            val meta = runState.updatePreview(preview.ifEmpty { null })
-                            if (meta !== before) {
-                                reportMetadataPatch(execContext, meta, checkpoint = false)
+                            // 节流回写 preview 到 Master；内容未变则不 patch，避免主聊天无意义重组。
+                            val now = System.currentTimeMillis()
+                            if (now - lastPreviewUpdate >= PREVIEW_THROTTLE_MS) {
+                                lastPreviewUpdate = now
+                                val preview = computeSubAssistantPreview(event.messages, childTaskNodeId)
+                                val before = runState.snapshot()
+                                val meta = runState.updatePreview(preview.ifEmpty { null })
+                                if (meta !== before) {
+                                    reportMetadataPatch(execContext, meta, checkpoint = false)
+                                }
                             }
                         }
-                    }
 
-                    is GenerationChunk.Phase -> {
-                        // 立即更新 card 状态；phase/tool 未变则不回写 Master。
-                        val phase = mapPhase(chunk.phase)
-                        if (phase != null) {
-                            val before = runState.snapshot()
-                            val meta = runState.updatePhase(phase, chunk.toolName)
-                            if (meta !== before) {
-                                reportMetadataPatch(execContext, meta, checkpoint = false)
+                        is TurnEvent.Phase -> {
+                            // 立即更新 card 状态；phase/tool 未变则不回写 Master。
+                            val phase = mapPhase(event.phase)
+                            if (phase != null) {
+                                val before = runState.snapshot()
+                                val meta = runState.updatePhase(phase, event.toolName)
+                                if (meta !== before) {
+                                    reportMetadataPatch(execContext, meta, checkpoint = false)
+                                }
                             }
                         }
-                    }
 
-                    is GenerationChunk.Checkpoint -> {
-                        // Durability is awaited by onCheckpoint before generation may continue.
-                    }
+                        is TurnEvent.Checkpoint -> {
+                            // Durability is awaited by onCheckpoint before generation may continue.
+                        }
 
-                    is GenerationChunk.Finished -> {
-                        // 记录结束原因，用于确定终态
-                        finishReason = chunk.reason
+                        is TurnEvent.Finished -> {
+                            // bind 将流内异常/取消转为 Finished(null, error)；此处重抛，
+                            // 由调用方（runLeases/取消路径）统一处理
+                            if (event.error != null) throw event.error
+                            finishReason = event.reason
+                        }
                     }
                 }
             }
@@ -878,6 +894,7 @@ class SubAssistantCoordinator(
                 childConversationId = childConversationId,
                 childTaskNodeId = childTaskNodeId,
                 runId = runId,
+                turnId = targetTurnId,
                 messages = lastMessages,
                 execContext = execContext,
                 runState = runState,
@@ -885,10 +902,30 @@ class SubAssistantCoordinator(
             lastMessages = resumedMessages
         }
 
-        // 最终保存 Child
-        val finalConversation = session.state.value.updateCurrentMessages(lastMessages)
-        sessionRegistry.updateConversationState(childConversationId, finalConversation)
-        conversationRepo.updateConversation(finalConversation)
+        // D3：终态收口走 FinalizeTurn 命令（reducer 消息分发 + finishReasoning +
+        // markAssistantTerminal + delta 落库 + turn 事实），替代整对象 updateConversation
+        val terminalStatus = when (finishReason) {
+            FinishedReason.COMPLETED -> TurnExecutionStatus.COMPLETED
+            FinishedReason.INTERACTION_LIMIT_REACHED -> TurnExecutionStatus.INCOMPLETE
+            FinishedReason.AWAITING_APPROVAL -> TurnExecutionStatus.AWAITING_APPROVAL
+            null -> TurnExecutionStatus.INCOMPLETE
+            else -> TurnExecutionStatus.INCOMPLETE
+        }
+        val finalAssistantId = lastMessages.lastOrNull { it.role == MessageRole.ASSISTANT }?.id ?: initialAssistantId
+        session.submitGeneration(
+            FinalizeTurn(
+                turnId = targetTurnId,
+                assistantMessageId = finalAssistantId,
+                messages = lastMessages,
+                terminalStatus = terminalStatus,
+                terminalReason = if (finishReason == FinishedReason.INTERACTION_LIMIT_REACHED) {
+                    "interaction_limit_reached"
+                } else {
+                    null
+                },
+                closeInterruptedTools = false,
+            )
+        )
 
         return TargetGenerationResult(lastMessages, finishReason)
     }
@@ -897,6 +934,7 @@ class SubAssistantCoordinator(
         childConversationId: Uuid,
         childTaskNodeId: Uuid,
         runId: String,
+        turnId: Uuid,
         messages: List<UIMessage>,
         execContext: ToolExecutionContext,
         runState: SubAssistantRunStateReducer,
@@ -914,10 +952,19 @@ class SubAssistantCoordinator(
             "Run $runId already has a pending user interaction"
         }
 
-        val pendingConversation = sessionRegistry.getOrCreateSession(childConversationId)
-            .state.value.updateCurrentMessages(messages)
-        sessionRegistry.updateConversationState(childConversationId, pendingConversation)
-        conversationRepo.updateConversation(pendingConversation)
+        // D3：ask_user 挂起 = CommitCheckpoint(AWAITING_APPROVAL)（消息分发 + turn 事实
+        // 同事务落库，消除整对象双写）
+        val session = sessionRegistry.getOrCreateSession(childConversationId)
+        session.submit(
+            CommitCheckpoint(
+                turnId = turnId,
+                assistantMessageId = message.id,
+                messages = messages,
+                turnStatus = TurnExecutionStatus.AWAITING_APPROVAL,
+                turnReason = null,
+                toolExecution = null,
+            )
+        )
 
         val interaction = SubAssistantUserInteraction(
             interactionId = interactionId,
@@ -934,21 +981,24 @@ class SubAssistantCoordinator(
 
         return try {
             val answer = pending.answer.await()
-            val answeredMessages = answerToolAtLocator(
-                messages = messages,
-                messageId = message.id,
-                toolOrdinal = toolOrdinal,
-                answer = answer,
-            ) ?: error("Pending ask_user locator is no longer valid")
-            val answeredConversation = pendingConversation.updateCurrentMessages(answeredMessages)
-            sessionRegistry.updateConversationState(childConversationId, answeredConversation)
-            conversationRepo.updateConversation(answeredConversation)
+            // D3：应答 = UpdateToolApproval(Answered) 命令（与 Master HITL 同一命令路径）
+            val before = session.state.value
+            session.submit(
+                UpdateToolApproval(
+                    messageId = message.id,
+                    toolOrdinal = toolOrdinal,
+                    approvalState = ToolApprovalState.Answered(answer),
+                )
+            )
+            if (session.state.value === before) {
+                error("Pending ask_user locator is no longer valid")
+            }
             reportMetadataPatch(
                 execContext = execContext,
                 meta = runState.clearUserInteraction(),
                 checkpoint = true,
             )
-            answeredMessages
+            session.state.value.currentMessages
         } finally {
             pendingUserInteractions.remove(runId, pending)
         }
@@ -992,10 +1042,7 @@ class SubAssistantCoordinator(
             }
             if (result.master != master) {
                 Log.i(TAG, "performRecovery: finalized stale runs in ${master.id}")
-                conversationRepo.updateConversation(result.master)
-                sessionRegistry.getSession(master.id)?.let {
-                    sessionRegistry.updateConversationState(master.id, result.master)
-                }
+                submitRecoveredTree(master.id, result.master)
             }
         }
 
@@ -1011,12 +1058,10 @@ class SubAssistantCoordinator(
                 )
             }
             if (recoveredNodes != child.messageNodes) {
-                val recoveredChild = child.copy(messageNodes = recoveredNodes)
-                conversationRepo.updateConversation(recoveredChild)
-                sessionRegistry.getSession(childId)?.let {
-                    sessionRegistry.updateConversationState(childId, recoveredChild)
-                }
+                submitRecoveredTree(childId, child.copy(messageNodes = recoveredNodes))
             }
+            // Child turn 由本组件全权收口（Master 全库扫描过滤 Child）
+            conversationRepo.finalizeRunningTurnsOfConversation(childId, reason)
         }
 
         // Only a unique, structurally valid Master link retains a Child.
@@ -1043,8 +1088,7 @@ class SubAssistantCoordinator(
             json = json,
         )
         if (result.master != master) {
-            conversationRepo.updateConversation(result.master)
-            sessionRegistry.updateConversationState(master.id, result.master)
+            submitRecoveredTree(master.id, result.master)
         }
         result.referencedChildIds.forEach { childId ->
             val child = children[childId] ?: return@forEach
@@ -1057,12 +1101,9 @@ class SubAssistantCoordinator(
                 )
             }
             if (recoveredNodes != child.messageNodes) {
-                val recovered = child.copy(messageNodes = recoveredNodes)
-                conversationRepo.updateConversation(recovered)
-                sessionRegistry.getSession(childId)?.let {
-                    sessionRegistry.updateConversationState(childId, recovered)
-                }
+                submitRecoveredTree(childId, child.copy(messageNodes = recoveredNodes))
             }
+            conversationRepo.finalizeRunningTurnsOfConversation(childId, reason)
         }
         (children.keys - result.referencedChildIds).forEach { orphanId ->
             conversationRepo.deleteConversation(children.getValue(orphanId))
@@ -1104,7 +1145,7 @@ class SubAssistantCoordinator(
         extracted: List<SubAssistantDeliverableArtifact>,
     ): CallerArtifactProjection {
         // Child artifact 的稳定引用始终是交付事实；Caller native/reference 投影统一交给
-        // AttachmentProjectionTransformer 按本次请求的 resolved model 决定（设计文档 §11.4），
+        // AttachmentProjectionTransformer 按本次请求的 resolved model 决定，
         // 这里不再判断 Caller 能力，也不自动识别。
         return projectArtifactsForCaller(
             artifacts = extracted,
@@ -1133,9 +1174,21 @@ class SubAssistantCoordinator(
         }
         if (recoveredNodes == conversation.messageNodes) return
 
-        val recovered = conversation.copy(messageNodes = recoveredNodes)
-        sessionRegistry.updateConversationState(childConversationId, recovered)
-        conversationRepo.updateConversation(recovered)
+        submitRecoveredTree(childConversationId, conversation.copy(messageNodes = recoveredNodes))
+    }
+
+    /**
+     * D3：恢复收口的树写入——活跃 session 走 ReplaceMessageTree 命令（delta 落库，
+     * 与 Master 同一提交协议）；启动早期无内存态时走 repo 整写（迁移语义，
+     * updateConversation 的 @Deprecated 白名单路径）。
+     */
+    private suspend fun submitRecoveredTree(conversationId: Uuid, recovered: Conversation) {
+        val session = sessionRegistry.getSession(conversationId)
+        if (session != null) {
+            session.submit(ReplaceMessageTree(recovered.messageNodes))
+        } else {
+            conversationRepo.updateConversation(recovered)
+        }
     }
 
     private suspend fun finalizeInterruptedRun(
@@ -1426,8 +1479,8 @@ internal fun buildChildUserParts(
     addAll(images)
 }
 
-internal fun copyPartForChildClone(part: UIMessagePart, filesManager: FilesManager): UIMessagePart {
-    fun copyUrl(url: String): String {
+internal suspend fun copyPartForChildClone(part: UIMessagePart, filesManager: FilesManager): UIMessagePart {
+    suspend fun copyUrl(url: String): String {
         if (!url.startsWith("file:")) return url
         return filesManager.createChatFilesByContents(listOf(url.toUri()))
             .firstOrNull()?.toString() ?: url

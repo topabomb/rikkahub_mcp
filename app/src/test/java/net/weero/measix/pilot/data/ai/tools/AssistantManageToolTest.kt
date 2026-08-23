@@ -62,7 +62,7 @@ class AssistantManageToolTest {
             settingsStore = settingsStore,
             assistantManagementService = managementService,
             json = json,
-            subAssistantCoordinator = null,
+            delegationCoordinator = null,
         )
     }
 

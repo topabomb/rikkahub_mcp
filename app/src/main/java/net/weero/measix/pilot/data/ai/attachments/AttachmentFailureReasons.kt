@@ -35,5 +35,5 @@ object AttachmentFailureReasons {
 
 const val MAX_ASSISTANT_CALL_ATTACHMENTS = 4
 
-/** `inspect_attachments` 单次调用的输入上限（设计文档 §8.4）。 */
+/** `inspect_attachments` 单次调用的输入上限。 */
 const val MAX_INSPECTION_ATTACHMENTS = 4

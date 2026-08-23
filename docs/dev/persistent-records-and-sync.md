@@ -114,8 +114,9 @@ UI 快照和市场包都不能因 `@Transient` 默认值而清空它。
 
 Room 事务只能保证数据库内部一致性，不能覆盖 `filesDir`。当前项目按不同业务采用补偿式协议：
 
-- `FilesManager` 以 Mutex 串行文件/`managed_files` 变更，写 DB 失败时删除已创建文件，并可用
-  `syncFolder` 对账；
+- `FilesManager` 以 Mutex 串行文件/`artifact` 变更，写 DB 失败时删除已创建文件（`registerTrackedFile`
+  同步登记失败回滚，"文件 + 记录"要么都在要么都不在）；启动 `ArtifactStore.reconcileStartup()`
+  单向收敛磁盘侧外部不一致（缺失行清理、untracked 仅日志，无补录）；
 - `GeneratedMediaStore` 使用 pending 文件、rename、Room 元数据与 `reconcile`；
 - `SkillManager` 用 staging/backup 目录原子替换 Skill，但删除 Skill 后再清理 Assistant 引用，
   失败时需要后续 orphan prune；
@@ -199,7 +200,7 @@ Room 事务只能保证数据库内部一致性，不能覆盖 `filesDir`。当�
 | `WorkspaceEntity` | `id` | 被 `Assistant.workspaceId` 引用 | 定义可打包；Rootfs 走文件/备份 | `root` 唯一。`toolApprovals` 是用户覆盖 |
 | `FolderEntity` | `id` | `assistantId` | 备份 | 助手内分组 |
 | `FavoriteEntity` | 自有主键 | 指向消息/会话 | 备份 | |
-| `GenMediaEntity` / `ManagedFileEntity` | 自有主键 | 文件路径 | 备份 | 元数据；字节在 `filesDir` |
+| `GenMediaEntity` / `ArtifactEntity` | 自有主键 | 文件路径 | 备份 | 元数据；字节在 `filesDir` |
 
 普通用户列表、搜索、最近对话工具只看 `parent_conversation_id IS NULL` 的会话。Child 行是子助手内部工作区。
 

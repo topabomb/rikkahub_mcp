@@ -85,7 +85,7 @@ class ImageGenerationToolCompensationTest {
             )
         )
         val backgroundService = mockk<AssistantBackgroundService>()
-        coEvery { backgroundService.replaceBackground(any(), any(), any()) } throws
+        coEvery { backgroundService.replaceBackground(any(), any(), any(), any()) } throws
             CancellationException("stop after persist")
         val artifactStore = mockk<ManagedLocalArtifactStore>()
         coEvery { artifactStore.delete(artifact) } returns Unit
@@ -146,7 +146,7 @@ class ImageGenerationToolCompensationTest {
             )
         )
         val backgroundService = mockk<AssistantBackgroundService>()
-        coEvery { backgroundService.replaceBackground(any(), any(), any()) } returns
+        coEvery { backgroundService.replaceBackground(any(), any(), any(), any()) } returns
             BackgroundUpdateResult(requested = true, updated = true)
         val artifactStore = mockk<ManagedLocalArtifactStore>()
         val factory = ImageGenerationToolFactory(

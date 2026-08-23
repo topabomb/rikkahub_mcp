@@ -58,6 +58,51 @@ class MessageFtsManager(private val database: AppDatabase) {
         db.execSQL("DELETE FROM message_fts WHERE conversation_id = ?", arrayOf(conversationId))
     }
 
+    /**
+     * 节点级增量：删旧 FTS 行 + 插入当前内容行。
+     * message_id 前缀 "<convId>:nodeId:" 对齐现有 schema。
+     */
+    suspend fun reindexNodes(
+        conversationId: String,
+        title: String,
+        updateAt: Long,
+        nodes: List<MessageNode>,
+    ) = withContext(Dispatchers.IO) {
+        nodes.forEach { node ->
+            // 删旧行（按 conversation_id + node_id）
+            db.execSQL(
+                "DELETE FROM message_fts WHERE conversation_id = ? AND node_id = ?",
+                arrayOf(conversationId, node.id.toString()),
+            )
+            node.messages.forEach { message ->
+                val text = message.extractFtsText()
+                if (text.isNotBlank()) {
+                    db.execSQL(
+                        "INSERT INTO message_fts(text, node_id, message_id, conversation_id, title, update_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        arrayOf(
+                            text,
+                            node.id.toString(),
+                            message.id.toString(),
+                            conversationId,
+                            title,
+                            updateAt.toString(),
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    /** 节点删除的索引清理。 */
+    suspend fun deleteNodesIndex(conversationId: String, nodeIds: List<kotlin.uuid.Uuid>) = withContext(Dispatchers.IO) {
+        nodeIds.forEach { nodeId ->
+            db.execSQL(
+                "DELETE FROM message_fts WHERE conversation_id = ? AND node_id = ?",
+                arrayOf(conversationId, nodeId.toString()),
+            )
+        }
+    }
+
     /** Updates the denormalized conversation title without rewriting message rows. */
     suspend fun updateConversationTitle(conversationId: String, title: String) = withContext(Dispatchers.IO) {
         runCatching {

@@ -95,7 +95,7 @@ Turn / Tool 执行事实（ConversationRepository.checkpointTurn / finalizeTurn�
 | `Tool.output` 内媒体 | 递归同上（否则模型看不到生图结果上的 ref） | 递归同上 |
 
 - capability hint 固定文本：「附件图片本次运行不可直接可见，不要仅凭引用推断视觉细节」。模型可见，不进入持久化，也不在 UI 显示；不写 `use inspect_attachments`（何时调用由工具 description 表达）。
-- 引用行含 ref / type / name；不含 mime、host path。显示名优先 `ManagedFileEntity.displayName`，否则磁盘文件名。
+- 引用行含 ref / type / name；不含 mime、host path。显示名优先 `ArtifactEntity.displayName`，否则磁盘文件名。
 
 ### 3.3 不变量
 
@@ -203,7 +203,7 @@ Schema 见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and
 | `AttachmentInspectionTool` / `shouldInjectAttachmentInspection` | `inspect_attachments` 工具与注入判定 |
 | `ToolExecutionContext` / `ToolAttachmentResolution` | ai 模块最小只读附件能力接口 |
 | `GenerationHandler` | 工具循环、checkpoint、`resolveAttachments` 注入 |
-| `ChatService` / `SubAssistantCoordinator` | 盖章时机、Target run 工具集 |
+| `ChatService` / `DelegationCoordinator` | 盖章时机、Target run 工具集 |
 | `ConversationRepository.checkpointTurn` / `finalizeTurn` | Turn 持久化事务 |
 | `TurnExecutionStatus` / `ToolExecutionStatus` | 执行事实状态枚举 |
 | `SettingsOcrMigration` / `migrateLegacySettingsJson` | 旧 OCR 设置迁移边界 |

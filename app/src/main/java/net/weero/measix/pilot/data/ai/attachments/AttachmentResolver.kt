@@ -6,6 +6,7 @@ import androidx.core.net.toUri
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
+import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.files.LocalArtifactRef
@@ -78,7 +79,7 @@ class AttachmentResolver(
      * `inspect_attachments` 的收紧批量入口：只接受 stable `attachment:<uuid>`，1..4 个，
      * all-or-nothing。安全/存在性校验复用 [resolve]，不在工具层复制路径逻辑。
      *
-     * 禁用去重：输入顺序即识别/比较顺序（设计文档 §8.4），refs 与产出必须 1:1——
+     * 禁用去重：输入顺序即识别/比较顺序，refs 与产出必须 1:1——
      * 重复 ref 或多个 ref 指向同一文件时保留全部输入，由识别调用内的序号标签消歧。
      */
     suspend fun resolveImages(
@@ -180,11 +181,13 @@ class AttachmentResolver(
             return AttachmentResolveResult.Failure(AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE)
         }
         val entity = runCatching {
+            // 子助手入站链路自动拉取远程附件落盘——系统产物
             filesManager.saveManagedFromBytes(
                 folder = FileFolders.UPLOAD,
                 bytes = fetched.bytes,
                 displayName = fetched.fileName,
                 mimeType = fetched.mimeType,
+                origin = ArtifactOrigin.SYSTEM,
             )
         }.getOrElse {
             return AttachmentResolveResult.Failure(AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED)

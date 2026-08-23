@@ -751,6 +751,11 @@
   <string name="setting_files_page_deleted_toast">削除しました</string>
   <string name="setting_files_page_folder_upload">アップロード</string>
   <string name="setting_files_page_no_files">ファイルがありません</string>
+  <string name="setting_files_page_origin_user">ユーザーアップロード</string>
+  <string name="setting_files_page_origin_generated">生成メディアのコピー</string>
+  <string name="setting_files_page_origin_system">アプリが作成</string>
+  <string name="setting_files_page_delete_in_progress_toast">削除処理が進行中です</string>
+  <string name="setting_files_page_delete_already_deleted_toast">ファイルは既に削除されています</string>
   <string name="setting_files_page_title">ファイル管理</string>
   <string name="setting_mcp_page_add_header">ヘッダーを追加</string>
   <string name="setting_mcp_page_add_one_to_get_started">1つ追加して始める</string>

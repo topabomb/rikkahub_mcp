@@ -98,6 +98,7 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ChatError
+import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import net.weero.measix.pilot.ui.components.message.ChatMessage
 import net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview
@@ -127,6 +128,7 @@ private const val ScrollBottomKey = "ScrollBottomKey"
 internal fun ChatList(
     innerPadding: PaddingValues,
     conversation: Conversation,
+    snapshot: ConversationSnapshot,
     state: LazyListState,
     loading: Boolean,
     processingStatus: String? = null,
@@ -180,6 +182,7 @@ internal fun ChatList(
             ChatListNormal(
                 innerPadding = innerPadding,
                 conversation = conversation,
+                snapshot = snapshot,
                 state = state,
                 loading = loading,
                 processingStatus = processingStatus,
@@ -219,6 +222,7 @@ internal fun ChatList(
 private fun ChatListNormal(
     innerPadding: PaddingValues,
     conversation: Conversation,
+    snapshot: ConversationSnapshot,
     state: LazyListState,
     loading: Boolean,
     processingStatus: String? = null,
@@ -310,8 +314,11 @@ private fun ChatListNormal(
             .flatMap { it.models }
             .associateBy { it.id }
     }
-    val lastMessageIndex = conversation.messageNodes.lastIndex
-    val isEmptyConversation = conversation.messageNodes.isEmpty()
+    // 消息列表数据源来自 snapshot（唯一事实源；投影 nodes 含 activeTurn
+    // 流式内容，未变节点引用相同 → Compose skip 生效）。key = node.id 不变。
+    val snapshotNodes = snapshot.conversation.messageNodes
+    val lastMessageIndex = snapshotNodes.lastIndex
+    val isEmptyConversation = snapshotNodes.isEmpty()
     val showsConfigurationPrompt = isEmptyConversation || !readiness.canSend
 
     Box(
@@ -432,7 +439,7 @@ private fun ChatListNormal(
                     }
 
                     itemsIndexed(
-                        items = conversation.messageNodes,
+                        items = snapshotNodes,
                         key = { index, item -> item.id },
                     ) { index, node ->
                         Column {
@@ -469,8 +476,8 @@ private fun ChatListNormal(
                                     onShare = {
                                         selecting = true  // 使用 CoroutineScope 延迟状态更新
                                         selectedItems.clear()
-                                        selectedItems.addAll(conversation.messageNodes.map { it.id }
-                                            .subList(0, conversation.messageNodes.indexOf(node) + 1))
+                                        selectedItems.addAll(snapshotNodes.map { it.id }
+                                            .subList(0, snapshotNodes.indexOf(node) + 1))
                                     },
                                     onUpdate = {
                                         onUpdateMessage(it)

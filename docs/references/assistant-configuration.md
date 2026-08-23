@@ -207,7 +207,7 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 | 请求构建、工具循环与 Transformer | `GenerationHandler` |
 | 工具创建/修改/删除助手 | `AssistantManagementService`、`AssistantToolFactory` |
 | Target 默认模板和运行过滤 | `SubAssistantRunPolicy` |
-| 子助手执行与恢复 | `SubAssistantCoordinator` |
+| 子助手执行与恢复 | `DelegationCoordinator` |
 | Provider 参数映射 | `ai/.../provider/providers/` |
 
 维护配置时应从“持久化默认值 → UI/工具创建入口 → 解析与归一化 → 请求消费 → 测试/文档”完整检查，

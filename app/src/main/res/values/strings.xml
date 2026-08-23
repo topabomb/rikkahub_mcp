@@ -777,6 +777,11 @@
   <string name="setting_files_page_deleted_toast">Deleted</string>
   <string name="setting_files_page_folder_upload">Upload</string>
   <string name="setting_files_page_no_files">No Files</string>
+  <string name="setting_files_page_origin_user">User upload</string>
+  <string name="setting_files_page_origin_generated">Generated media copy</string>
+  <string name="setting_files_page_origin_system">Created by app</string>
+  <string name="setting_files_page_delete_in_progress_toast">Deletion is already in progress</string>
+  <string name="setting_files_page_delete_already_deleted_toast">File is already deleted</string>
   <string name="setting_files_page_title">File Management</string>
   <string name="setting_mcp_page_add_header">Add Header</string>
   <string name="setting_mcp_page_add_one_to_get_started">Add one to get started</string>

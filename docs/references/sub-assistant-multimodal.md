@@ -45,7 +45,7 @@ Caller 模型需要读取交付物内容
 
 > **现在只完整支持 Image，但协议与内部命名从第一天使用通用 Attachment 语义。**
 
-因此：工具参数是通用 `attachments?: string[]`，没有 `images` / `documents`，也没有 `ocr` / `vision` / `mode`。不把附件写进 System Prompt。`SubAssistantCoordinator` 只解析引用并注入 Child，不做任务向视觉理解。本次 `attachments[]` 是强契约；Child **历史**附件可降级，避免换模型后永久卡死。
+因此：工具参数是通用 `attachments?: string[]`，没有 `images` / `documents`，也没有 `ocr` / `vision` / `mode`。不把附件写进 System Prompt。`DelegationCoordinator` 只解析引用并注入 Child，不做任务向视觉理解。本次 `attachments[]` 是强契约；Child **历史**附件可降级，避免换模型后永久卡死。
 
 出站与共用：
 
@@ -109,7 +109,7 @@ Main Agent
     ▼
 AssistantToolFactory                 形状校验；统一 unavailable 信封
     ▼
-SubAssistantCoordinator
+DelegationCoordinator
     │  AttachmentResolver → Child USER = Text + 原始 Image（只校验 ref/资产，不判视觉能力）
     │  Target GenerationHandler（用自己的 resolved model）
     │      AttachmentProjectionTransformer   ← 统一投影：可读图保留原图+引用行；不可读替换为引用行+hint
@@ -156,7 +156,7 @@ Main：assistant_call(..., extras=["artifacts"])
 | `attachments` | 可选 string 数组；`maxItems` 与运行时上限均为 `MAX_ASSISTANT_CALL_ATTACHMENTS` |
 | `extras` | 可选；白名单 `artifacts` / `tts` / `tool_calls`（`ASSISTANT_CALL_EXTRA_*`）。未知值丢弃 |
 
-`SubAssistantCoordinator.executeCall()` 接收 `attachments` 与 `extras`。缺省或空数组视为未传附件。
+`DelegationCoordinator.executeCall()` 接收 `attachments` 与 `extras`。缺省或空数组视为未传附件。
 
 `extras` 的工具 description 写明 **for the caller model**：用户能不能看见，不由这个参数控制。点名 `artifacts` 表示 Caller 需要检查、推理或继续使用 Target 产出的文件内容。`tts_stats` 仍默认精简投影，不要把 `artifacts` 学成「默认也给像素」。
 
@@ -240,7 +240,7 @@ Child clone / Master fork 已保留 metadata（`copyPartForChildClone()` / `copy
 - **无状态**：无跨请求缓存、无 per-turn 改写。同一 durable 消息按不同模型投影出不同请求副本，Conversation 原对象不变。
 - **递归**：`Tool.output` 内的 Image 同样处理（否则模型看不到生图结果上的 ref）。
 - **Document / Audio / Video**：始终保留 part + 前插引用行，不做 native/reference 分叉。
-- 引用行含 ref/type/name，不含 mime/path；显示名优先 `ManagedFileEntity.displayName`，否则磁盘文件名。无 ref 的 legacy Image 在 reference-only 下退化为 `[Image]` 占位。
+- 引用行含 ref/type/name，不含 mime/path；显示名优先 `ArtifactEntity.displayName`，否则磁盘文件名。无 ref 的 legacy Image 在 reference-only 下退化为 `[Image]` 占位。
 - capability hint 只在最后一条消息出现一次，内容固定为「附件图片本次运行不可直接可见，不要仅凭引用推断视觉细节」；不写 `use inspect_attachments`（何时调用由工具 description 表达）。
 
 按需识别（替代旧 per-turn OCR）：
@@ -467,7 +467,7 @@ Resolver 顺序：
 | `AttachmentProjectionTransformer` | 请求级无状态统一投影（native / reference-only） |
 | `AttachmentInspectionTool` / `shouldInjectAttachmentInspection` | `inspect_attachments` 工具与注入判定 |
 | `AssistantToolFactory` | schema、校验、统一 unavailable 信封 |
-| `SubAssistantCoordinator` | 入站 resolve / 注入；出站提取 / 投影 |
+| `DelegationCoordinator` | 入站 resolve / 注入；出站提取 / 投影 |
 | `extractDeliverableArtifacts` / `projectArtifactsForCaller` | 纯提取与 Caller native parts 投影 |
 | `SubAssistantCallMetadata` / `SubAssistantRunStateReducer` | `artifacts[]` / `artifact_omitted`；终态快照 |
 | `buildSubAssistantCallResult` | 轻量 `artifacts[]`、可选 `artifacts_omitted` |

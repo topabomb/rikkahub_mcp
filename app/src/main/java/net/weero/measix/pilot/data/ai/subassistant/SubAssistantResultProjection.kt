@@ -123,7 +123,7 @@ fun extractDeliverableArtifacts(
  * Project extracted artifacts into Caller Tool.output parts.
  *
  * Caller native/reference 投影统一交给 AttachmentProjectionTransformer 按本次请求的
- * resolved model 决定（设计文档 §11.4）：这里只投影带 stable ref 的 native Image parts，
+ * resolved model 决定：这里只投影带 stable ref 的 native Image parts，
  * 不判断 Caller 能力、不调用识别模型。
  */
 suspend fun projectArtifactsForCaller(

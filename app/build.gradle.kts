@@ -43,14 +43,19 @@ android {
         applicationId = "net.weero.measix.pilot"
         minSdk = 26
         targetSdk = 37
-        versionCode = 17
-        versionName = "0.0.17"
+        versionCode = 18
+        versionName = "0.0.18"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
+    }
+
+    sourceSets {
+        // Room MigrationTestHelper（androidTest 插桩迁移测试）需要 schema JSON 作为插桩测试 assets
+        getByName("androidTest").assets.srcDirs("$projectDir/schemas")
     }
 
     splits {
@@ -321,8 +326,12 @@ dependencies {
     // SLF4J simple for JVM tests: MockK uses SLF4J, but slf4j-android provider
     // cannot initialize in JVM test context. slf4j-simple provides a lightweight fallback.
     testImplementation("org.slf4j:slf4j-simple:2.0.18")
+    testImplementation("org.robolectric:robolectric:4.15.1")
+    testImplementation("androidx.test:core:1.6.1")
+    testImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(libs.mockk)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.ui.test.junit4)
     androidTestImplementation(libs.androidx.room.testing)

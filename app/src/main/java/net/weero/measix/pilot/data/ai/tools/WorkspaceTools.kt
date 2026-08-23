@@ -11,6 +11,7 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.DiffMetadata
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.toMetadata
+import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import net.weero.measix.pilot.utils.generateUnifiedDiff
@@ -293,9 +294,12 @@ private suspend fun WorkspaceRepository.readImageInRootfs(
     val bytes = readRootfsBuffer(workspaceId, path).toByteArray()
 
     val filesManager = getKoin().get<FilesManager>()
-    val uris = filesManager.createChatFilesByByteArrays(listOf(bytes))
+    // 工具读取沙箱文件产生的副本——系统产物
+    val uris = filesManager.createChatFilesByByteArrays(listOf(bytes), ArtifactOrigin.SYSTEM)
+    val imageUrl = uris.firstOrNull()?.toString()
+        ?: error("Failed to persist image artifact for $path")
     return listOf(
-        UIMessagePart.Image(url = uris.first().toString()),
+        UIMessagePart.Image(url = imageUrl),
         UIMessagePart.Text(
             buildJsonObject {
                 put("path", path)

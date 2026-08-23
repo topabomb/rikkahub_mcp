@@ -37,6 +37,12 @@ import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.FavoriteRepository
 import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.service.ChatService
+import net.weero.measix.pilot.service.runtime.ConversationCommand
+import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.OptionalFolderId
+import net.weero.measix.pilot.service.runtime.OptionalString
+import net.weero.measix.pilot.service.runtime.OptionalUuidSet
+import net.weero.measix.pilot.service.runtime.UpdateHeader
 import net.weero.measix.pilot.ui.components.ai.SearchMode
 import net.weero.measix.pilot.ui.components.ai.searchModeEnablesBuiltIn
 import net.weero.measix.pilot.ui.components.ai.searchModeEnablesLocal
@@ -60,6 +66,10 @@ class ChatVM(
 ) : ViewModel() {
     private val _conversationId: Uuid = Uuid.parse(id)
     val conversation: StateFlow<Conversation> = chatService.getConversationFlow(_conversationId)
+
+    // 唯一内部事实流（nodes + activeTurn + header），UI 主订阅源；
+    // conversation 为兼容投影（activeTurn 覆盖最后 assistant 节点当前消息）
+    val snapshot: StateFlow<ConversationSnapshot> = chatService.getConversationSnapshot(_conversationId)
     var chatListInitialized by mutableStateOf(false) // 聊天列表是否已经滚动到底部
 
     // 聊天输入状态 - 保存在 ViewModel 中避免 TransactionTooLargeException
@@ -265,12 +275,6 @@ class ChatVM(
         }
     }
 
-    fun saveConversationAsync() {
-        viewModelScope.launch {
-            chatService.saveConversation(_conversationId, conversation.value)
-        }
-    }
-
     fun updateTitle(title: String) {
         viewModelScope.launch {
             chatService.updateConversationTitle(_conversationId, title)
@@ -296,15 +300,21 @@ class ChatVM(
             } else {
                 conversationRepo.getConversationById(conversation.id) ?: conversation
             }
-            val updatedConversation = conversationFull.withAssistant(targetAssistantId)
-            if (updatedConversation === conversationFull) return@launch
+            if (conversationFull.assistantId == targetAssistantId) return@launch
 
-            // 文件夹是助手内分组，切换助手后原文件夹在新助手下不可见，需清空归属避免会话丢失
+            // 文件夹是助手内分组，切换助手后原文件夹在新助手下不可见，需清空归属避免会话丢失。
+            // UpdateHeader 命令（内存 + 窄列原子提交）
             if (conversation.id == _conversationId) {
-                chatService.saveConversation(_conversationId, updatedConversation)
+                submit(
+                    UpdateHeader(
+                        assistantId = targetAssistantId,
+                        folderId = OptionalFolderId.Clear,
+                    )
+                )
                 settingsStore.updateAssistant(targetAssistantId)
             } else {
-                chatService.updatePersistedConversation(updatedConversation)
+                val updated = conversationFull.withAssistant(targetAssistantId)
+                chatService.updatePersistedConversation(updated)
             }
         }
     }
@@ -322,9 +332,46 @@ class ChatVM(
         }
     }
 
-    fun updateConversation(newConversation: Conversation) {
-        chatService.updateConversationState(_conversationId) {
-            newConversation
+    /**
+     * header 级整对象回调的命令分解（UI 组件保持 (Conversation) -> Unit
+     * 回调签名不重写；差异字段经 UpdateHeader 三态字段提交，不再整对象回写）。
+     */
+    fun updateConversationHeader(next: Conversation) {
+        val current = conversation.value
+        submit(
+            UpdateHeader(
+                title = next.title.takeIf { it != current.title },
+                suggestions = next.chatSuggestions.takeIf { it != current.chatSuggestions },
+                isPinned = next.isPinned.takeIf { it != current.isPinned },
+                folderId = when {
+                    next.folderId == current.folderId -> OptionalFolderId.Keep
+                    next.folderId == null -> OptionalFolderId.Clear
+                    else -> OptionalFolderId.SetTo(next.folderId)
+                },
+                assistantId = next.assistantId.takeIf { it != current.assistantId },
+                customSystemPrompt = if (next.customSystemPrompt != current.customSystemPrompt) {
+                    OptionalString.Set(next.customSystemPrompt)
+                } else {
+                    OptionalString.Keep
+                },
+                modeInjectionIds = if (next.modeInjectionIds != current.modeInjectionIds) {
+                    OptionalUuidSet.Set(next.modeInjectionIds)
+                } else {
+                    OptionalUuidSet.Keep
+                },
+                workspaceCwd = if (next.workspaceCwd != current.workspaceCwd) {
+                    OptionalString.Set(next.workspaceCwd)
+                } else {
+                    OptionalString.Keep
+                },
+            )
+        )
+    }
+
+    // 命令提交入口（UI 结构性修改走 reducer 唯一路径）
+    fun submit(command: ConversationCommand) {
+        viewModelScope.launch {
+            chatService.submitConversationCommand(_conversationId, command)
         }
     }
 

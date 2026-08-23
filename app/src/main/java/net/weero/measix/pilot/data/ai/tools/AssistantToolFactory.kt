@@ -33,7 +33,7 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.utils.jsonPrimitiveOrNull
 import net.weero.measix.pilot.service.AssistantDeletionResult
 import net.weero.measix.pilot.service.AssistantManagementService
-import net.weero.measix.pilot.service.SubAssistantCoordinator
+import net.weero.measix.pilot.service.runtime.DelegationCoordinator
 import kotlin.uuid.Uuid
 
 private const val TOOL_ASSISTANT_MANAGE = "assistant_manage"
@@ -68,7 +68,7 @@ class AssistantToolFactory(
     /**
      * 子助手执行协调器。Phase D 注入；为 null 时 assistant_call 返回 failed/runtime_error 并带 detail。
      */
-    private val subAssistantCoordinator: SubAssistantCoordinator? = null,
+    private val delegationCoordinator: DelegationCoordinator? = null,
     /** 提供 Target Run 可注册工具名；memory_tool 由 GenerationHandler 另加，listing 时需补上。 */
     private val toolSetFactory: GenerationToolSetFactory? = null,
 ) {
@@ -506,7 +506,7 @@ class AssistantToolFactory(
 
     /**
      * assistant_call 执行入口。
-     * 通过 SubAssistantCoordinator 实现完整 Target 执行。
+     * 通过 DelegationCoordinator 实现完整 Target 执行。
      */
     private suspend fun executeAssistantCall(
         callerAssistantId: Uuid,
@@ -515,7 +515,7 @@ class AssistantToolFactory(
         args: kotlinx.serialization.json.JsonElement,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
     ): List<UIMessagePart> {
-        val coordinator = subAssistantCoordinator
+        val coordinator = delegationCoordinator
             ?: return listOf(UIMessagePart.Text(buildSubAssistantCallResult(
                 json = json,
                 status = "failed",

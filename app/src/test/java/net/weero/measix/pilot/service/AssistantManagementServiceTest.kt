@@ -16,6 +16,8 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
+import net.weero.measix.pilot.service.runtime.DelegationCoordinator
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -56,7 +58,7 @@ class AssistantManagementServiceTest {
             conversationRepo = conversationRepo,
             filesManager = filesManager,
             sessionRegistry = mockk(relaxed = true),
-            subAssistantCoordinator = mockk(relaxed = true),
+            delegationCoordinator = mockk(relaxed = true),
         )
     }
 
@@ -187,14 +189,14 @@ class AssistantManagementServiceTest {
         }
         val memoryRepo = mockk<MemoryRepository>(relaxed = true)
         val conversationRepo = mockk<ConversationRepository>(relaxed = true)
-        val sessionRegistry = mockk<ConversationSessionRegistry>(relaxed = true)
+        val sessionRegistry = mockk<ConversationRuntimeRegistry>(relaxed = true)
         val service = AssistantManagementService(
             settingsStore = settingsStore,
             memoryRepository = memoryRepo,
             conversationRepo = conversationRepo,
             filesManager = mockk(relaxed = true),
             sessionRegistry = sessionRegistry,
-            subAssistantCoordinator = mockk(relaxed = true),
+            delegationCoordinator = mockk(relaxed = true),
         )
 
         val result = service.deleteAssistant(targetId).getOrThrow()
@@ -230,7 +232,7 @@ class AssistantManagementServiceTest {
             conversationRepo = conversationRepo,
             filesManager = mockk(relaxed = true),
             sessionRegistry = mockk(relaxed = true),
-            subAssistantCoordinator = mockk(relaxed = true),
+            delegationCoordinator = mockk(relaxed = true),
         )
 
         val deletion = service.deleteAssistant(targetId).getOrThrow()
@@ -257,18 +259,18 @@ class AssistantManagementServiceTest {
         coEvery { settingsStore.updateAtomic(any()) } answers {
             settingsFlow.value = firstArg<(Settings) -> Settings>()(settingsFlow.value)
         }
-        val coordinator = mockk<SubAssistantCoordinator>()
+        val coordinator = mockk<DelegationCoordinator>()
         coEvery { coordinator.cancelRunsForAssistant(targetId) } coAnswers { awaitCancellation() }
         val memoryRepo = mockk<MemoryRepository>(relaxed = true)
         val conversationRepo = mockk<ConversationRepository>(relaxed = true)
-        val sessionRegistry = mockk<ConversationSessionRegistry>(relaxed = true)
+        val sessionRegistry = mockk<ConversationRuntimeRegistry>(relaxed = true)
         val service = AssistantManagementService(
             settingsStore = settingsStore,
             memoryRepository = memoryRepo,
             conversationRepo = conversationRepo,
             filesManager = mockk(relaxed = true),
             sessionRegistry = sessionRegistry,
-            subAssistantCoordinator = coordinator,
+            delegationCoordinator = coordinator,
         )
 
         val deletion = service.deleteAssistant(targetId).getOrThrow()
@@ -302,7 +304,7 @@ class AssistantManagementServiceTest {
             conversationRepo = conversationRepo,
             filesManager = mockk(relaxed = true),
             sessionRegistry = mockk(relaxed = true),
-            subAssistantCoordinator = mockk(relaxed = true),
+            delegationCoordinator = mockk(relaxed = true),
         )
 
         service.performPendingDeletionCleanup()
@@ -386,7 +388,7 @@ class AssistantManagementServiceTest {
             conversationRepo = mockk(relaxed = true),
             filesManager = mockk(relaxed = true),
             sessionRegistry = mockk(relaxed = true),
-            subAssistantCoordinator = mockk(relaxed = true),
+            delegationCoordinator = mockk(relaxed = true),
         )
 
         val result = service.listAssistantMemory(targetId)
@@ -420,7 +422,7 @@ class AssistantManagementServiceTest {
             conversationRepo = mockk(relaxed = true),
             filesManager = mockk(relaxed = true),
             sessionRegistry = mockk(relaxed = true),
-            subAssistantCoordinator = mockk(relaxed = true),
+            delegationCoordinator = mockk(relaxed = true),
         )
 
         val result = service.listAssistantMemory(targetId)
@@ -449,7 +451,7 @@ class AssistantManagementServiceTest {
             conversationRepo = mockk(relaxed = true),
             filesManager = mockk(relaxed = true),
             sessionRegistry = mockk(relaxed = true),
-            subAssistantCoordinator = mockk(relaxed = true),
+            delegationCoordinator = mockk(relaxed = true),
         )
 
         val result = service.listAssistantMemory(targetId)
@@ -482,7 +484,7 @@ class AssistantManagementServiceTest {
             conversationRepo = mockk(relaxed = true),
             filesManager = mockk(relaxed = true),
             sessionRegistry = mockk(relaxed = true),
-            subAssistantCoordinator = mockk(relaxed = true),
+            delegationCoordinator = mockk(relaxed = true),
         )
 
         // Create two assistants "concurrently"

@@ -10,7 +10,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.db.entity.ManagedFileEntity
+import net.weero.measix.pilot.data.db.entity.ArtifactEntity
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -38,7 +38,7 @@ class LocalArtifactStoreTest {
         val context = io.mockk.mockk<android.content.Context>(relaxed = true)
         io.mockk.every { context.filesDir } returns filesDir
         val filesManager = io.mockk.mockk<FilesManager>()
-        io.mockk.coEvery { filesManager.getByRelativePath("upload/ok.png") } returns ManagedFileEntity(
+        io.mockk.coEvery { filesManager.getByRelativePath("upload/ok.png") } returns ArtifactEntity(
             id = 1,
             folder = "upload",
             relativePath = "upload/ok.png",
@@ -87,7 +87,7 @@ class LocalArtifactStoreTest {
         val sourceRef = LocalArtifactRef(relativePath = "upload/source.png", mimeType = "image/png")
         io.mockk.every { store.materialize(sourceRef) } returns sourceRef
         io.mockk.coEvery {
-            store.copyFile(any(), any(), any(), any())
+            store.copyFilePreservingOrigin(any(), any(), any(), any())
         } answers {
             source.copyTo(copied, overwrite = true)
             LocalArtifactRef(relativePath = "upload/copy.png", mimeType = "image/png")
@@ -136,7 +136,7 @@ class LocalArtifactStoreTest {
         assertTrue(rewritten.none { it is UIMessagePart.Image })
         assertCompletedArtifactUnavailable(text)
         assertFalse(text.contains("\"path\":\"/upload/gone.png\""))
-        io.mockk.coVerify(exactly = 0) { store.copyFile(any(), any(), any(), any()) }
+        io.mockk.coVerify(exactly = 0) { store.copyFilePreservingOrigin(any(), any(), any(), any()) }
         filesDir.deleteRecursively()
     }
 

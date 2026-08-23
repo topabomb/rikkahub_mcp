@@ -43,10 +43,10 @@ private const val REQUEST_MAX_CHARS = 80
 private const val THUMBNAIL_SIZE = 64
 
 /**
- * `inspect_attachments` 薄渲染器（设计文档 §8.7 / §13.10）：
+ * `inspect_attachments` 薄渲染器：
  * 标题固定、`request` 1–2 行摘要、输入附件按参数顺序显示约 64dp 缩略图；
  * ref 解析不到本地资产时退化为 Image 占位，不让 UI 失败。
- * 失败信封 `{status:"failed", reason, detail?}` 在标题与详情中以分类文案呈现（§8.5）。
+ * 失败信封 `{status:"failed", reason, detail?}` 在标题与详情中以分类文案呈现。
  * UI 只读取已存在的 attachment facts——不触发识别模型、Provider 或远程下载；
  * UI 可显示缩略图不代表当前模型收到图片像素（presentation 与 projection 解耦）。
  */

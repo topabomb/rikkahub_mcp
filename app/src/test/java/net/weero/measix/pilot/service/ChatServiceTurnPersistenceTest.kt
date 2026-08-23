@@ -54,6 +54,8 @@ import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.FolderRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
+import net.weero.measix.pilot.service.runtime.DelegationCoordinator
 import net.weero.measix.pilot.utils.JsonInstant
 import net.weero.measix.pilot.utils.SoundEffectPlayer
 import org.junit.After
@@ -101,17 +103,19 @@ class ChatServiceTurnPersistenceTest {
         assertTrue(live.currentMessages.any { it.toText().contains("partial reply") })
         val assistant = live.currentMessages.last { it.role == MessageRole.ASSISTANT }
         assertEquals(MessageTerminalStatus.CANCELLED, assistant.terminalStatus)
+        // 终态持久化走 FinalizeTurn 命令 → applyMutation（delta + turn 事实同事务）
         coVerify {
-            repository.finalizeTurn(
-                match { conversation ->
-                    conversation.currentMessages.any { message ->
-                        message.role == MessageRole.ASSISTANT &&
-                            message.toText().contains("partial reply") &&
-                            message.terminalStatus == MessageTerminalStatus.CANCELLED
+            repository.applyMutation(
+                match { mutation ->
+                    mutation.upsertedNodes.any { node ->
+                        node.messages.any { message ->
+                            message.role == MessageRole.ASSISTANT &&
+                                message.toText().contains("partial reply") &&
+                                message.terminalStatus == MessageTerminalStatus.CANCELLED
+                        }
                     }
                 },
-                match { it.status == TurnExecutionStatus.CANCELLED },
-                any(),
+                match { facts -> facts?.turn?.status == TurnExecutionStatus.CANCELLED },
             )
         }
     }
@@ -135,17 +139,19 @@ class ChatServiceTurnPersistenceTest {
         val assistant = live.currentMessages.last { it.role == MessageRole.ASSISTANT }
         assertTrue(assistant.toText().contains("partial reply"))
         assertEquals(MessageTerminalStatus.FAILED, assistant.terminalStatus)
+        // 终态持久化走 FinalizeTurn 命令 → applyMutation
         coVerify {
-            repository.finalizeTurn(
-                match { conversation ->
-                    conversation.currentMessages.any { message ->
-                        message.role == MessageRole.ASSISTANT &&
-                            message.toText().contains("partial reply") &&
-                            message.terminalStatus == MessageTerminalStatus.FAILED
+            repository.applyMutation(
+                match { mutation ->
+                    mutation.upsertedNodes.any { node ->
+                        node.messages.any { message ->
+                            message.role == MessageRole.ASSISTANT &&
+                                message.toText().contains("partial reply") &&
+                                message.terminalStatus == MessageTerminalStatus.FAILED
+                        }
                     }
                 },
-                match { it.status == TurnExecutionStatus.FAILED },
-                any(),
+                match { facts -> facts?.turn?.status == TurnExecutionStatus.FAILED },
             )
         }
     }
@@ -168,21 +174,22 @@ class ChatServiceTurnPersistenceTest {
         advanceUntilIdle()
 
         coVerify {
-            repository.finalizeTurn(
-                match { conversation ->
-                    conversation.currentMessages.any { message ->
-                        message.role == MessageRole.ASSISTANT &&
-                            message.toText().contains("partial reply") &&
-                            message.terminalStatus == MessageTerminalStatus.CANCELLED &&
-                            message.terminalReason ==
-                            me.rerere.ai.ui.TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN
+            repository.applyMutation(
+                match { mutation ->
+                    mutation.upsertedNodes.any { node ->
+                        node.messages.any { message ->
+                            message.role == MessageRole.ASSISTANT &&
+                                message.toText().contains("partial reply") &&
+                                message.terminalStatus == MessageTerminalStatus.CANCELLED &&
+                                message.terminalReason ==
+                                me.rerere.ai.ui.TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN
+                        }
                     }
                 },
-                match {
-                    it.status == TurnExecutionStatus.CANCELLED &&
-                        it.reason == me.rerere.ai.ui.TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN
+                match { facts ->
+                    facts?.turn?.status == TurnExecutionStatus.CANCELLED &&
+                        facts.turn.reason == me.rerere.ai.ui.TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN
                 },
-                any(),
             )
         }
         env.service.stopGeneration(conversationId)
@@ -204,22 +211,19 @@ class ChatServiceTurnPersistenceTest {
         env.service.sendMessage(conversationId, listOf(UIMessagePart.Text("hello")))
         advanceUntilIdle()
 
+        // checkpoint 持久化走 applyMutation，turn 状态 RUNNING 同事务落库
         coVerify {
-            repository.checkpointTurn(
-                match { conversation ->
-                    conversation.currentMessages.any { it.toText().contains("partial reply") }
+            repository.applyMutation(
+                match { mutation ->
+                    mutation.upsertedNodes.any { node -> node.messages.any { it.toText().contains("partial reply") } }
                 },
-                match { it.status == TurnExecutionStatus.RUNNING },
-                any(),
+                match { facts -> facts?.turn?.status == TurnExecutionStatus.RUNNING },
             )
         }
         coVerify {
-            repository.finalizeTurn(
-                match { conversation ->
-                    conversation.currentMessages.any { it.toText().contains("partial reply") }
-                },
-                match { it.status == TurnExecutionStatus.COMPLETED },
+            repository.applyMutation(
                 any(),
+                match { facts -> facts?.turn?.status == TurnExecutionStatus.COMPLETED },
             )
         }
     }
@@ -286,17 +290,15 @@ class ChatServiceTurnPersistenceTest {
         advanceUntilIdle()
 
         coVerify(exactly = 1) {
-            repository.finalizeTurn(
+            repository.applyMutation(
                 any(),
-                match { it.status == TurnExecutionStatus.COMPLETED },
-                any(),
+                match { facts -> facts?.turn?.status == TurnExecutionStatus.COMPLETED },
             )
         }
         coVerify(exactly = 0) {
-            repository.finalizeTurn(
+            repository.applyMutation(
                 any(),
-                match { it.status == TurnExecutionStatus.CANCELLED },
-                any(),
+                match { facts -> facts?.turn?.status == TurnExecutionStatus.CANCELLED },
             )
         }
         releaseSubscriber.complete(Unit)
@@ -336,7 +338,7 @@ class ChatServiceTurnPersistenceTest {
         every { settingsStore.settingsFlow } returns MutableStateFlow(settings)
         every { settingsStore.settingsFlowRaw } returns flowOf(settings)
         val appScope = AppScope()
-        val sessionRegistry = ConversationSessionRegistry(appScope, settingsStore)
+        val sessionRegistry = ConversationRuntimeRegistry(appScope, settingsStore, repository)
         val generationHandler = mockk<GenerationHandler>(relaxed = true)
         every {
             generationHandler.generateText(
@@ -373,8 +375,8 @@ class ChatServiceTurnPersistenceTest {
         every { lifecycleOwner.lifecycle } returns mockk<Lifecycle>(relaxed = true)
         mockkObject(ProcessLifecycleOwner)
         every { ProcessLifecycleOwner.get() } returns lifecycleOwner
-        val subAssistantCoordinator = mockk<SubAssistantCoordinator>(relaxed = true)
-        coEvery { subAssistantCoordinator.recoverMasterForMutation(any()) } answers { firstArg() }
+        val delegationCoordinator = mockk<DelegationCoordinator>(relaxed = true)
+        coEvery { delegationCoordinator.recoverMasterForMutation(any()) } answers { firstArg() }
         val service = try {
             ChatService(
                 context = mockk<Application>(relaxed = true),
@@ -393,7 +395,7 @@ class ChatServiceTurnPersistenceTest {
                 folderRepository = mockk<FolderRepository>(relaxed = true),
                 soundEffectPlayer = mockk<SoundEffectPlayer>(relaxed = true),
                 assistantToolFactory = mockk<AssistantToolFactory>(relaxed = true),
-                subAssistantCoordinator = subAssistantCoordinator,
+                delegationCoordinator = delegationCoordinator,
                 sessionRegistry = sessionRegistry,
                 json = JsonInstant,
             )
@@ -439,6 +441,6 @@ class ChatServiceTurnPersistenceTest {
 
     private data class TestEnv(
         val service: ChatService,
-        val sessionRegistry: ConversationSessionRegistry,
+        val sessionRegistry: ConversationRuntimeRegistry,
     )
 }

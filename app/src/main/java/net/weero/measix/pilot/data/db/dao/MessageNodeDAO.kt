@@ -31,6 +31,10 @@ interface MessageNodeDAO {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(node: MessageNodeEntity)
 
+    /** delta upsert 原语（delta 持久化）。 */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(nodes: List<MessageNodeEntity>)
+
     @Update
     suspend fun update(node: MessageNodeEntity)
 
@@ -39,6 +43,17 @@ interface MessageNodeDAO {
 
     @Query("DELETE FROM message_node WHERE id = :nodeId")
     suspend fun deleteById(nodeId: String)
+
+    @Query("DELETE FROM message_node WHERE id IN (:nodeIds)")
+    suspend fun deleteByIds(nodeIds: List<String>)
+
+    /** 会话全部 node id（ArtifactStore backfill/inspect 用）。 */
+    @Query("SELECT id FROM message_node WHERE conversation_id = :conversationId")
+    suspend fun getNodeIdsOfConversation(conversationId: String): List<String>
+
+    /** 单 node 的 messages JSON（ArtifactStore backfill 用）。 */
+    @Query("SELECT messages FROM message_node WHERE id = :nodeId")
+    suspend fun getMessagesJsonById(nodeId: String): String?
 
     /**
      * 在排除指定会话后，按 LIKE 探测仍包含 [needle] 的 messages JSON。

@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.service.runtime.DelegationCoordinator
 
 private const val TAG = "AssistantDataRecovery"
 
@@ -13,7 +14,7 @@ class AssistantDataRecovery(
     appScope: AppScope,
     settingsStore: SettingsStore,
     assistantManagementService: AssistantManagementService,
-    subAssistantCoordinator: SubAssistantCoordinator,
+    delegationCoordinator: DelegationCoordinator,
     recoveryGate: AssistantDataRecoveryGate,
 ) {
     init {
@@ -21,7 +22,7 @@ class AssistantDataRecovery(
             try {
                 settingsStore.settingsFlow.first { !it.init }
                 runCatching {
-                    subAssistantCoordinator.performRecovery()
+                    delegationCoordinator.performRecovery()
                 }.onFailure { error ->
                     Log.e(TAG, "Unable to recover sub-assistant conversations", error)
                 }

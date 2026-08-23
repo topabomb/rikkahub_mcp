@@ -4,14 +4,18 @@ import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.files.FilesManager
 import org.koin.java.KoinJavaComponent.getKoin
 
-object Base64ImageToLocalFileTransformer : OutputMessageTransformer {
-    override suspend fun onGenerationFinish(
+object Base64ImageToLocalFileTransformer : OutputMessageTransformer, StreamingMessageTransformer {
+    // 流式期间不转换（chunk 可能携带不完整 base64）；终态统一落盘
+    override suspend fun transformStreaming(
         ctx: TransformerContext,
-        messages: List<UIMessage>,
-    ): List<UIMessage> {
+        message: UIMessage,
+    ): UIMessage = message
+
+    override suspend fun onStreamingFinish(
+        ctx: TransformerContext,
+        message: UIMessage,
+    ): UIMessage {
         val filesManager = getKoin().get<FilesManager>()
-        return messages.map { message ->
-            filesManager.convertBase64ImagePartToLocalFile(message)
-        }
+        return filesManager.convertBase64ImagePartToLocalFile(message)
     }
 }

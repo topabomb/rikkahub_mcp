@@ -174,7 +174,7 @@ fun shouldUseExternalWebSearch(assistant: Assistant, model: Model?): Boolean {
 }
 
 /**
- * B 场景注入 `inspect_attachments`（设计文档 §9）：当前模型不原生接收 IMAGE，
+ * 识别模型场景注入 `inspect_attachments`：当前模型不原生接收 IMAGE，
  * 且配置了存在、Provider 可用且自身支持 IMAGE 输入的附件识别模型。
  * 不根据当前消息是否包含 Image 决定 tool schema。
  */

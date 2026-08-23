@@ -15,6 +15,8 @@ import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.model.normalizeDescription
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
+import net.weero.measix.pilot.service.runtime.DelegationCoordinator
 import kotlin.uuid.Uuid
 
 private const val TAG = "AssistantManagementService"
@@ -29,8 +31,8 @@ class AssistantManagementService(
     private val memoryRepository: MemoryRepository,
     private val conversationRepo: ConversationRepository,
     private val filesManager: FilesManager,
-    private val sessionRegistry: ConversationSessionRegistry,
-    private val subAssistantCoordinator: SubAssistantCoordinator,
+    private val sessionRegistry: ConversationRuntimeRegistry,
+    private val delegationCoordinator: DelegationCoordinator,
     private val recoveryGate: AssistantDataRecoveryGate = AssistantDataRecoveryGate.completed(),
 ) {
     /**
@@ -318,7 +320,7 @@ class AssistantManagementService(
             // On timeout the tombstone remains durable and startup will retry without deleting data
             // that an active run may still be using.
             withTimeout(ASSISTANT_CLEANUP_STOP_TIMEOUT_MS) {
-                subAssistantCoordinator.cancelRunsForAssistant(
+                delegationCoordinator.cancelRunsForAssistant(
                     assistantId = tombstone.assistantId,
                 )
                 sessionRegistry.cancelGenerationsForAssistant(

@@ -28,6 +28,8 @@ import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.FolderRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
+import net.weero.measix.pilot.service.runtime.DelegationCoordinator
 import net.weero.measix.pilot.utils.JsonInstant
 import net.weero.measix.pilot.utils.SoundEffectPlayer
 import org.junit.Assert.assertTrue
@@ -39,7 +41,7 @@ class ChatServiceRecoveryGateTest {
     fun `history deletion cannot reach repository before startup recovery completes`() = runTest {
         val gate = AssistantDataRecoveryGate()
         val repository = mockk<ConversationRepository>(relaxed = true)
-        val sessionRegistry = mockk<ConversationSessionRegistry>(relaxed = true)
+        val sessionRegistry = mockk<ConversationRuntimeRegistry>(relaxed = true)
         val appScope = mockk<AppScope>()
         every { appScope.coroutineContext } returns coroutineContext
         val conversation = Conversation(
@@ -74,7 +76,7 @@ class ChatServiceRecoveryGateTest {
     private fun createService(
         gate: AssistantDataRecoveryGate,
         repository: ConversationRepository,
-        sessionRegistry: ConversationSessionRegistry,
+        sessionRegistry: ConversationRuntimeRegistry,
         appScope: AppScope,
     ) = ChatService(
         context = mockk<Application>(relaxed = true),
@@ -93,7 +95,7 @@ class ChatServiceRecoveryGateTest {
         folderRepository = mockk<FolderRepository>(relaxed = true),
         soundEffectPlayer = mockk<SoundEffectPlayer>(relaxed = true),
         assistantToolFactory = mockk<AssistantToolFactory>(relaxed = true),
-        subAssistantCoordinator = mockk<SubAssistantCoordinator>(relaxed = true),
+        delegationCoordinator = mockk<DelegationCoordinator>(relaxed = true),
         sessionRegistry = sessionRegistry,
         recoveryGate = gate,
         json = JsonInstant,

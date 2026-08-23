@@ -42,11 +42,11 @@ import me.rerere.ai.ui.replaySafeProjection
 import net.weero.measix.pilot.data.ai.transformers.InputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.MessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.OutputMessageTransformer
+import net.weero.measix.pilot.data.ai.transformers.StreamingMessageTransformer
+import net.weero.measix.pilot.data.ai.transformers.TransformerContext
 import net.weero.measix.pilot.data.files.FileFolders
 import java.io.File
-import net.weero.measix.pilot.data.ai.transformers.onGenerationFinish
 import net.weero.measix.pilot.data.ai.transformers.transforms
-import net.weero.measix.pilot.data.ai.transformers.visualTransforms
 import net.weero.measix.pilot.data.ai.tools.buildMemoryTools
 import net.weero.measix.pilot.data.ai.tools.local.askUserApprovalRejection
 import net.weero.measix.pilot.data.ai.tools.local.generateImageApprovalRejection
@@ -297,6 +297,31 @@ class GenerationHandler(
         // 跟踪循环退出原因，默认 step_limit_reached
         var finishReason = FinishedReason.STEP_LIMIT_REACHED
 
+        // 流式单消息通道：历史消息 immutable，仅最后一条（active assistant 消息）进入变换。
+        // 流式契约：流式期间历史消息进入 transformStreaming 的次数为 0。
+        suspend fun transformStreamingLast(current: List<UIMessage>): List<UIMessage> {
+            if (current.isEmpty()) return current
+            val ctx = TransformerContext(context, model, assistant, settings)
+            var last = current.last()
+            for (transformer in outputTransformers) {
+                if (transformer is StreamingMessageTransformer) last = transformer.transformStreaming(ctx, last)
+            }
+            if (last === current.last()) return current
+            return current.dropLast(1) + last
+        }
+
+        // 终态收口：step 完成时对最后一条消息应用 onStreamingFinish（reasoning 补时戳、base64 落盘）
+        suspend fun finishStreamingLast(current: List<UIMessage>): List<UIMessage> {
+            if (current.isEmpty()) return current
+            val ctx = TransformerContext(context, model, assistant, settings)
+            var last = current.last()
+            for (transformer in outputTransformers) {
+                if (transformer is StreamingMessageTransformer) last = transformer.onStreamingFinish(ctx, last)
+            }
+            if (last === current.last()) return current
+            return current.dropLast(1) + last
+        }
+
         for (stepIndex in 0 until maxSteps) {
             Log.i(TAG, "streamText: start step #$stepIndex (${model.id})")
 
@@ -346,13 +371,7 @@ class GenerationHandler(
                         )
                         send(
                             GenerationChunk.Messages(
-                                messages.visualTransforms(
-                                    transformers = outputTransformers,
-                                    context = context,
-                                    model = model,
-                                    assistant = assistant,
-                                    settings = settings
-                                )
+                                transformStreamingLast(messages)
                             )
                         )
                     },
@@ -370,20 +389,7 @@ class GenerationHandler(
                     assistantMessageId = assistantMessageId,
                     onPhase = { phase -> send(GenerationChunk.Phase(phase)) },
                 )
-                messages = messages.visualTransforms(
-                    transformers = outputTransformers,
-                    context = context,
-                    model = model,
-                    assistant = assistant,
-                    settings = settings
-                )
-                messages = messages.onGenerationFinish(
-                    transformers = outputTransformers,
-                    context = context,
-                    model = model,
-                    assistant = assistant,
-                    settings = settings
-                )
+                messages = finishStreamingLast(messages)
                 messages = messages.slice(0 until messages.lastIndex) + messages.last().copy(
                     finishedAt = Clock.System.now()
                         .toLocalDateTime(TimeZone.currentSystemDefault())
@@ -548,13 +554,7 @@ class GenerationHandler(
                                     messages = messages.dropLast(1) + lastMsg.copy(parts = newParts)
                                     send(
                                         GenerationChunk.Messages(
-                                            messages.visualTransforms(
-                                                transformers = outputTransformers,
-                                                context = context,
-                                                model = model,
-                                                assistant = assistant,
-                                                settings = settings
-                                            )
+                                            transformStreamingLast(messages)
                                         )
                                     )
                                     if (checkpoint) {

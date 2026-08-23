@@ -22,7 +22,7 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.AssistantManagementService
-import net.weero.measix.pilot.service.SubAssistantCoordinator
+import net.weero.measix.pilot.service.runtime.DelegationCoordinator
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -45,7 +45,7 @@ class AssistantCallToolTest {
         description = "Target",
     )
 
-    private fun createTool(coordinator: SubAssistantCoordinator?): me.rerere.ai.core.Tool {
+    private fun createTool(coordinator: DelegationCoordinator?): me.rerere.ai.core.Tool {
         val settingsFlow = MutableStateFlow(
             Settings(
                 assistants = listOf(caller, target),
@@ -59,7 +59,7 @@ class AssistantCallToolTest {
             settingsStore = settingsStore,
             assistantManagementService = mockk<AssistantManagementService>(relaxed = true),
             json = Json,
-            subAssistantCoordinator = coordinator,
+            delegationCoordinator = coordinator,
         ).buildTools(caller, masterConversationId).single { it.name == "assistant_call" }
     }
 
@@ -117,7 +117,7 @@ class AssistantCallToolTest {
 
     @Test
     fun `blank request is rejected before coordinator starts a run`() = runTest {
-        val coordinator = mockk<SubAssistantCoordinator>(relaxed = true)
+        val coordinator = mockk<DelegationCoordinator>(relaxed = true)
         val tool = createTool(coordinator)
 
         val result = tool.executeWithContext(
@@ -136,7 +136,7 @@ class AssistantCallToolTest {
 
     @Test
     fun `more than four attachments is rejected before coordinator starts a run`() = runTest {
-        val coordinator = mockk<SubAssistantCoordinator>(relaxed = true)
+        val coordinator = mockk<DelegationCoordinator>(relaxed = true)
         val tool = createTool(coordinator)
         val result = tool.executeWithContext(
             executionContext(),
@@ -160,7 +160,7 @@ class AssistantCallToolTest {
 
     @Test
     fun `attachments are forwarded after dedup`() = runTest {
-        val coordinator = mockk<SubAssistantCoordinator>()
+        val coordinator = mockk<DelegationCoordinator>()
         val tool = createTool(coordinator)
         val expected = listOf(UIMessagePart.Text("done"))
         val ref = "attachment:11111111-1111-1111-1111-111111111111"
@@ -208,7 +208,7 @@ class AssistantCallToolTest {
 
     @Test
     fun `nonblank request delegates with caller and master context`() = runTest {
-        val coordinator = mockk<SubAssistantCoordinator>()
+        val coordinator = mockk<DelegationCoordinator>()
         val tool = createTool(coordinator)
         val expected = listOf(UIMessagePart.Text("done"))
         coEvery {
@@ -237,7 +237,7 @@ class AssistantCallToolTest {
 
     @Test
     fun `extras are forwarded and unknown values dropped`() = runTest {
-        val coordinator = mockk<SubAssistantCoordinator>()
+        val coordinator = mockk<DelegationCoordinator>()
         val tool = createTool(coordinator)
         val expected = listOf(UIMessagePart.Text("done"))
         coEvery {

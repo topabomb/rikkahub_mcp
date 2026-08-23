@@ -21,6 +21,7 @@ import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.files.LocalArtifactRef
 import net.weero.measix.pilot.data.files.ManagedLocalArtifactStore
 import net.weero.measix.pilot.data.files.ToolArtifactRewriter
@@ -280,10 +281,12 @@ private suspend fun executeGenerateImage(
                 var background = BackgroundUpdateResult(requested = parsed.setAsBackground, updated = false)
                 if (parsed.setAsBackground) {
                     reportPhase("setting_background", checkpoint = true)
+                    // 生成媒体派生的背景副本——诞生方式为生成
                     background = backgroundService.replaceBackground(
                         assistantId = ownerAssistantId,
                         source = media.canonicalFile,
                         mimeType = media.mimeType,
+                        origin = ArtifactOrigin.GENERATED,
                     )
                 }
                 val text = buildJsonObject {

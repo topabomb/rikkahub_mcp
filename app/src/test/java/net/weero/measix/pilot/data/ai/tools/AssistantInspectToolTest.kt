@@ -59,7 +59,7 @@ class AssistantInspectToolTest {
             settingsStore = settingsStore,
             assistantManagementService = managementService,
             json = json,
-            subAssistantCoordinator = null,
+            delegationCoordinator = null,
             toolSetFactory = toolSetFactory,
         )
     }

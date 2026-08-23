@@ -751,6 +751,11 @@
   <string name="setting_files_page_deleted_toast">삭제됨</string>
   <string name="setting_files_page_folder_upload">업로드</string>
   <string name="setting_files_page_no_files">파일 없음</string>
+  <string name="setting_files_page_origin_user">사용자 업로드</string>
+  <string name="setting_files_page_origin_generated">생성 미디어 사본</string>
+  <string name="setting_files_page_origin_system">앱이 생성</string>
+  <string name="setting_files_page_delete_in_progress_toast">삭제가 진행 중입니다</string>
+  <string name="setting_files_page_delete_already_deleted_toast">파일이 이미 삭제되었습니다</string>
   <string name="setting_files_page_title">파일 관리</string>
   <string name="setting_mcp_page_add_header">헤더 추가</string>
   <string name="setting_mcp_page_add_one_to_get_started">시작하려면 하나를 추가하세요</string>

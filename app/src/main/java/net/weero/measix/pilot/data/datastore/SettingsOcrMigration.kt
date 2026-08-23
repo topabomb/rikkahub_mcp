@@ -19,7 +19,7 @@ internal val LEGACY_OCR_PROMPT = stringPreferencesKey("ocr_prompt")
 /**
  * 旧 `ocr_model` / `ocr_prompt` → `attachment_inspection_model` 的一次性 cutover。
  *
- * 迁移规则（设计文档 multimodal-attachment-context-and-analysis-design.md §6）：
+ * 迁移规则（见 multimodal-attachment-context-and-analysis-design.md）：
  * 1. 新 key 已存在时以新值为准，只清理旧 key；
  * 2. 旧模型 ID 能解析到当前存在、Provider 存在且支持 IMAGE 输入的模型时写入新 key；
  * 3. 否则新值为 null，不猜测替代模型；

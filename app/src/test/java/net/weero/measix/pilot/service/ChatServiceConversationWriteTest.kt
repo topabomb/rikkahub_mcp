@@ -52,6 +52,8 @@ import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.FolderRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
+import net.weero.measix.pilot.service.runtime.DelegationCoordinator
 import net.weero.measix.pilot.utils.JsonInstant
 import net.weero.measix.pilot.utils.SoundEffectPlayer
 import org.junit.After
@@ -78,6 +80,9 @@ class ChatServiceConversationWriteTest {
 
     @Test
     fun `session update without a file does not delete the previous artifact`() = runTest {
+        // saveConversation 整对象路径已删除；等价防回归由
+        // ArtifactStore 引用投影契约测试承担：树替换只经 applyMutation
+        // 的引用投影替换，文件删除只经 GC。
         val conversationId = Uuid.random()
         val withArtifact = conversationWithImage(conversationId)
         val withoutArtifact = Conversation(
@@ -92,10 +97,10 @@ class ChatServiceConversationWriteTest {
         val env = createEnv(repository = repository, filesManager = filesManager)
         env.sessionRegistry.getOrCreateSessionWithConversation(conversationId, withArtifact)
 
-        env.service.saveConversation(conversationId, withoutArtifact)
+        env.service.updatePersistedConversation(withoutArtifact)
 
         verify(exactly = 0) { filesManager.deleteChatFiles(any()) }
-        coVerify(exactly = 1) { repository.updateConversation(withoutArtifact) }
+        coVerify(exactly = 1) { repository.updateConversationAssistantId(conversationId, assistantId) }
     }
 
     @Test
@@ -113,13 +118,18 @@ class ChatServiceConversationWriteTest {
         coEvery { repository.getConversationById(conversationId) } returns stale
         val env = createEnv(repository = repository, filesManager = filesManager)
         env.sessionRegistry.getOrCreateSessionWithConversation(conversationId, live)
+        // 活跃会话（持引用不被 idle 逐出）走 UpdateHeader 命令通道
+        env.service.addConversationReference(conversationId)
 
         env.service.generateTitle(stale)
 
         val current = env.service.getConversationFlow(conversationId).value
         assertEquals("A generated title", current.title)
         assertTrue(current.hasGenerateImageArtifact())
-        coVerify { repository.updateConversationTitle(conversationId, "A generated title") }
+        // 标题写入走 UpdateHeader 命令（applyMutation 窄列 headerPatch），不再直接调窄列方法
+        coVerify {
+            repository.applyMutation(match { mutation -> mutation.headerPatch?.title == "A generated title" }, any())
+        }
         coVerify(exactly = 0) { repository.updateConversation(any()) }
         verify(exactly = 0) { filesManager.deleteChatFiles(any()) }
     }
@@ -140,13 +150,21 @@ class ChatServiceConversationWriteTest {
             suggestionText = "Ask about the image\nTry another style",
         )
         env.sessionRegistry.getOrCreateSessionWithConversation(conversationId, live)
+        // 活跃会话（持引用不被 idle 逐出）走 UpdateHeader 命令通道
+        env.service.addConversationReference(conversationId)
 
         env.service.generateSuggestion(conversationId, stale)
 
         val current = env.service.getConversationFlow(conversationId).value
         assertEquals(listOf("Ask about the image", "Try another style"), current.chatSuggestions)
         assertTrue(current.hasGenerateImageArtifact())
-        coVerify { repository.updateConversationSuggestions(conversationId, listOf("Ask about the image", "Try another style")) }
+        // 建议写入走 UpdateHeader 命令（applyMutation 窄列 headerPatch）
+        coVerify {
+            repository.applyMutation(
+                match { mutation -> mutation.headerPatch?.chatSuggestions == listOf("Ask about the image", "Try another style") },
+                any(),
+            )
+        }
         coVerify(exactly = 0) { repository.updateConversation(any()) }
         verify(exactly = 0) { filesManager.deleteChatFiles(any()) }
     }
@@ -186,11 +204,15 @@ class ChatServiceConversationWriteTest {
             conversationId,
             Conversation(id = conversationId, assistantId = assistantId, messageNodes = emptyList()),
         )
+        env.service.addConversationReference(conversationId)
 
         env.service.sendMessage(conversationId, listOf(UIMessagePart.Text("hello")))
         advanceUntilIdle()
 
-        coVerify { repository.updateConversationTitle(conversationId, "A generated title") }
+        // 标题写入走 UpdateHeader 命令（applyMutation 窄列 headerPatch）
+        coVerify {
+            repository.applyMutation(match { mutation -> mutation.headerPatch?.title == "A generated title" }, any())
+        }
     }
 
     @Test
@@ -324,7 +346,7 @@ class ChatServiceConversationWriteTest {
         every { settingsStore.settingsFlow } returns MutableStateFlow(settings)
         every { settingsStore.settingsFlowRaw } returns flowOf(settings)
         val appScope = AppScope()
-        val sessionRegistry = ConversationSessionRegistry(appScope, settingsStore)
+        val sessionRegistry = ConversationRuntimeRegistry(appScope, settingsStore, repository)
         val generationHandler = mockk<GenerationHandler>(relaxed = true)
         if (finishReason != null) {
             every {
@@ -389,7 +411,7 @@ class ChatServiceConversationWriteTest {
                 folderRepository = mockk<FolderRepository>(relaxed = true),
                 soundEffectPlayer = mockk<SoundEffectPlayer>(relaxed = true),
                 assistantToolFactory = mockk<AssistantToolFactory>(relaxed = true),
-                subAssistantCoordinator = mockk<SubAssistantCoordinator>(relaxed = true),
+                delegationCoordinator = mockk<DelegationCoordinator>(relaxed = true),
                 sessionRegistry = sessionRegistry,
                 json = JsonInstant,
             )
@@ -401,7 +423,7 @@ class ChatServiceConversationWriteTest {
 
     private data class TestEnv(
         val service: ChatService,
-        val sessionRegistry: ConversationSessionRegistry,
+        val sessionRegistry: ConversationRuntimeRegistry,
     )
 
     private fun Conversation.hasGenerateImageArtifact(): Boolean =

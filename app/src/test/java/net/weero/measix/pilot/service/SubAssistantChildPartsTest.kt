@@ -2,12 +2,15 @@ package net.weero.measix.pilot.service
 
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.service.runtime.buildChildUserParts
+import net.weero.measix.pilot.service.runtime.copyPartForChildClone
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -24,7 +27,7 @@ class SubAssistantChildPartsTest {
     }
 
     @Test
-    fun `clone copy keeps attachment ref on non-file parts`() {
+    fun `clone copy keeps attachment ref on non-file parts`() = runTest {
         val ref = AttachmentRefs.format(Uuid.random())
         val image = UIMessagePart.Image(
             url = "https://example.com/a.png",
@@ -41,7 +44,7 @@ class SubAssistantChildPartsTest {
     }
 
     @Test
-    fun `clone copy of tool output preserves nested ref`() {
+    fun `clone copy of tool output preserves nested ref`() = runTest {
         val ref = AttachmentRefs.format(Uuid.random())
         val tool = UIMessagePart.Tool(
             toolCallId = "t",

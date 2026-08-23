@@ -1,7 +1,6 @@
 package net.weero.measix.pilot.service
 
 import me.rerere.ai.core.MessageRole
-import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -13,8 +12,9 @@ import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
+import net.weero.measix.pilot.service.runtime.ConversationReducer
+import net.weero.measix.pilot.service.runtime.UpdateToolApproval
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 import kotlin.uuid.Uuid
 
@@ -35,11 +35,11 @@ class ChatServiceToolApprovalTest {
             messageNodes = listOf(message.toMessageNode()),
         )
 
-        val updated = updateCurrentToolApproval(
-            conversation = conversation,
-            locator = ToolCallLocator(message.id, 1),
-            approvalState = ToolApprovalState.Answered("answer"),
-        )!!
+        // D2：HITL 审批走 UpdateToolApproval 命令（reducer 唯一路径）
+        val updated = ConversationReducer.reduce(
+            conversation,
+            UpdateToolApproval(message.id, 1, ToolApprovalState.Answered("answer")),
+        )
 
         val tools = updated.currentMessages.last().getTools()
         assertEquals(ToolApprovalState.Pending, tools[0].approvalState)
@@ -98,13 +98,12 @@ class ChatServiceToolApprovalTest {
             messageNodes = listOf(message.toMessageNode()),
         )
 
-        assertNull(
-            updateCurrentToolApproval(
-                conversation = conversation,
-                locator = ToolCallLocator(Uuid.random(), 0),
-                approvalState = ToolApprovalState.Approved,
-            )
+        // locator 指向不存在的消息 → reducer 返回原引用（无变更、不落库）
+        val updated = ConversationReducer.reduce(
+            conversation,
+            UpdateToolApproval(Uuid.random(), 0, ToolApprovalState.Approved),
         )
+        assertEquals(conversation, updated)
     }
 
     @Test
@@ -118,16 +117,14 @@ class ChatServiceToolApprovalTest {
             messageNodes = listOf(message.toMessageNode()),
         )
 
-        val afterFirst = updateCurrentToolApproval(
+        val afterFirst = ConversationReducer.reduce(
             conversation,
-            ToolCallLocator(message.id, 0),
-            ToolApprovalState.Answered("first"),
-        )!!
-        val afterSecond = updateCurrentToolApproval(
+            UpdateToolApproval(message.id, 0, ToolApprovalState.Answered("first")),
+        )
+        val afterSecond = ConversationReducer.reduce(
             afterFirst,
-            ToolCallLocator(message.id, 1),
-            ToolApprovalState.Answered("second"),
-        )!!
+            UpdateToolApproval(message.id, 1, ToolApprovalState.Answered("second")),
+        )
 
         assertEquals(
             listOf(ToolApprovalState.Answered("first"), ToolApprovalState.Answered("second")),

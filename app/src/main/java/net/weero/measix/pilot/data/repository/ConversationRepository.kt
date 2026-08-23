@@ -20,16 +20,24 @@ import net.weero.measix.pilot.data.db.dao.LightConversationEntity
 import net.weero.measix.pilot.data.db.dao.MessageNodeDAO
 import net.weero.measix.pilot.data.db.dao.ToolExecutionDAO
 import net.weero.measix.pilot.data.db.dao.TurnExecutionDAO
+import net.weero.measix.pilot.data.db.entity.ArtifactEntity
 import net.weero.measix.pilot.data.db.entity.ConversationEntity
 import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
 import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
+import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.model.collectFileReferenceTokens
+import net.weero.measix.pilot.service.runtime.ConversationHeaderPatch
+import net.weero.measix.pilot.service.runtime.ConversationMutation
+import net.weero.measix.pilot.service.runtime.ExecutionFacts
+import net.weero.measix.pilot.service.runtime.OptionalFolderId
+import net.weero.measix.pilot.service.runtime.OptionalString
+import net.weero.measix.pilot.service.runtime.OptionalUuidSet
 import net.weero.measix.pilot.utils.JsonInstant
 import java.time.Instant
 import kotlin.uuid.Uuid
@@ -48,6 +56,7 @@ class ConversationRepository(
     private val messageFtsManager: MessageFtsManager,
     private val turnExecutionDAO: TurnExecutionDAO,
     private val toolExecutionDAO: ToolExecutionDAO,
+    private val artifactStore: ArtifactStore,
 ) {
     companion object {
         private const val PAGE_SIZE = 20
@@ -180,16 +189,6 @@ class ConversationRepository(
         }
     }
 
-    fun searchConversations(titleKeyword: String): Flow<List<Conversation>> {
-        return conversationDAO
-            .searchConversations(titleKeyword)
-            .map { flow ->
-                flow.map { entity ->
-                    conversationEntityToConversation(entity, emptyList())
-                }
-            }
-    }
-
     fun searchConversationsPaging(titleKeyword: String): Flow<PagingData<Conversation>> = Pager(
         config = PagingConfig(
             pageSize = PAGE_SIZE,
@@ -201,16 +200,6 @@ class ConversationRepository(
         pagingData.map { entity ->
             conversationSummaryToConversation(entity)
         }
-    }
-
-    fun searchConversationsOfAssistant(assistantId: Uuid, titleKeyword: String): Flow<List<Conversation>> {
-        return conversationDAO
-            .searchConversationsOfAssistant(assistantId.toString(), titleKeyword)
-            .map { flow ->
-                flow.map { entity ->
-                    conversationEntityToConversation(entity, emptyList())
-                }
-            }
     }
 
     fun searchConversationsOfAssistantPaging(assistantId: Uuid, titleKeyword: String): Flow<PagingData<Conversation>> =
@@ -260,6 +249,10 @@ class ConversationRepository(
         if (conversation.parentConversationId == null) {
             messageFtsManager.indexConversation(conversation)
         }
+        // 引用投影登记（新会话创建 → 全部节点登记）
+        if (conversation.messageNodes.isNotEmpty()) {
+            artifactStore.syncReferences(conversation.id, conversation.messageNodes, emptyList())
+        }
     }
 
     /** Inserts a forked top-level Master and all remapped Child lineages atomically in Room. */
@@ -278,126 +271,119 @@ class ConversationRepository(
             }
         }
         messageFtsManager.indexConversation(master)
-    }
-
-    /** Updates one Master and prunes/truncates its Child tree in a single Room transaction. */
-    suspend fun updateConversationTree(
-        master: Conversation,
-        retainedChildren: List<Conversation>,
-        deletedChildren: List<Conversation>,
-    ) {
-        require(master.parentConversationId == null)
-        require(retainedChildren.all { it.parentConversationId == master.id })
-        val retainedIds = retainedChildren.mapTo(mutableSetOf()) { it.id }
-        require(deletedChildren.none { it.id in retainedIds })
-
-        val oldMaster = getConversationById(master.id)
-            ?: error("Master Conversation ${master.id} does not exist")
-        val oldChildren = getChildConversations(master.id)
-        val oldChildIds = oldChildren.mapTo(mutableSetOf()) { it.id }
-        require(retainedChildren.map { it.id }.distinct().size == retainedChildren.size)
-        require(deletedChildren.map { it.id }.distinct().size == deletedChildren.size)
-        require(retainedIds + deletedChildren.map { it.id } == oldChildIds) {
-            "Retained and deleted Child sets must cover the persisted Master tree exactly"
+        // 引用投影登记（fork 入口无悬挂）
+        if (master.messageNodes.isNotEmpty()) {
+            artifactStore.syncReferences(master.id, master.messageNodes, emptyList())
         }
-        val oldTreeFiles = (oldChildren + oldMaster).flatMap { it.files }.toSet()
-        val excludedIds = buildSet {
-            add(master.id)
-            addAll(oldChildIds)
-        }
-
-        database.withTransaction {
-            conversationDAO.update(conversationToConversationEntity(master))
-            messageNodeDAO.deleteByConversation(master.id.toString())
-            saveMessageNodes(master.id.toString(), master.messageNodes)
-            retainedChildren.forEach { child ->
-                conversationDAO.update(conversationToConversationEntity(child))
-                messageNodeDAO.deleteByConversation(child.id.toString())
-                saveMessageNodes(child.id.toString(), child.messageNodes)
-            }
-            deletedChildren.forEach { child ->
-                favoriteDAO.deleteNodeFavoritesOfConversation(child.id.toString())
-                conversationDAO.deleteById(child.id.toString())
+        children.forEach { child ->
+            if (child.messageNodes.isNotEmpty()) {
+                artifactStore.syncReferences(child.id, child.messageNodes, emptyList())
             }
         }
-        messageFtsManager.indexConversation(master)
-        deletedChildren.forEach { messageFtsManager.deleteConversation(it.id.toString()) }
-        deleteUnreferencedChatFiles(
-            previousFiles = oldTreeFiles,
-            retainedConversations = retainedChildren + master,
-            excludedConversationIds = excludedIds,
-        )
     }
 
+    /** @Deprecated 导入/迁移/启动恢复专用（运行时零调用由单一写者契约测试锁定）。 */
+    @Deprecated("导入/迁移/启动恢复专用", ReplaceWith("applyMutation"))
     suspend fun updateConversation(conversation: Conversation) {
         persistConversationNodes(conversation, reindexFts = true)
     }
 
     /**
-     * Upserts the current message tree without rebuilding FTS.
-     * Used for generation checkpoints so a mid-turn persist does not rewrite search rows.
+     * Runtime 结构性修改的唯一落库入口。
+     * 单事务提交：
+     *  1. headerPatch → 窄列原语
+     *  2. deletedNodeIds → deleteByIds + favorite 清理（引用行经 node FK 级联自动清）
+     *  3. upsertedNodes → upsertAll
+     *  4. executionFacts → TurnExecutionDAO / ToolExecutionDAO upsert（事务内）
+     * 事务提交后（投影，允许最终一致）：
+     *  - MessageFtsManager.reindexNodes / deleteNodesIndex
+     *  - ArtifactStore.syncReferences(conversationId, upsertedNodes, deletedNodeIds)
+     * 返回是否实际写入。
      */
-    suspend fun checkpointConversation(conversation: Conversation) {
+    suspend fun applyMutation(mutation: ConversationMutation, executionFacts: ExecutionFacts? = null): Boolean {
+        val headerPatch = mutation.headerPatch
+        val hasHeaderChange = headerPatch != null
+        val hasNodeChange = mutation.upsertedNodes.isNotEmpty() || mutation.deletedNodeIds.isNotEmpty()
+        val hasExecutionFacts = executionFacts != null
+        if (!hasHeaderChange && !hasNodeChange && !hasExecutionFacts) return false
+
+        val conversationId = mutation.conversationId.toString()
         database.withTransaction {
-            persistGenerationCheckpoint(conversation)
+            headerPatch?.let { patch -> applyHeaderPatch(mutation.conversationId, patch, mutation.updateAt) }
+            if (mutation.deletedNodeIds.isNotEmpty()) {
+                val deletedIds = mutation.deletedNodeIds.map { it.toString() }
+                favoriteDAO.deleteNodeFavoritesByRefKeys(deletedIds.map { "node:$conversationId:$it" })
+                messageNodeDAO.deleteByIds(deletedIds)
+            }
+            if (mutation.upsertedNodes.isNotEmpty()) {
+                val entities = mutation.upsertedNodes.mapIndexed { index, node ->
+                    MessageNodeEntity(
+                        id = node.id.toString(),
+                        conversationId = conversationId,
+                        nodeIndex = index,
+                        messages = JsonInstant.encodeToString(node.messages),
+                        selectIndex = node.selectIndex,
+                    )
+                }
+                messageNodeDAO.upsertAll(entities)
+            }
+            executionFacts?.turn?.let { turnExecutionDAO.upsert(it) }
+            executionFacts?.toolExecution?.let { toolExecutionDAO.upsert(it) }
         }
+
+        // 事务后投影
+        val title = conversationDAO.getConversationById(conversationId)?.title ?: ""
+        if (mutation.upsertedNodes.isNotEmpty()) {
+            messageFtsManager.reindexNodes(
+                conversationId = conversationId,
+                title = title,
+                updateAt = mutation.updateAt,
+                nodes = mutation.upsertedNodes,
+            )
+            artifactStore.syncReferences(mutation.conversationId, mutation.upsertedNodes, mutation.deletedNodeIds)
+        } else if (mutation.deletedNodeIds.isNotEmpty()) {
+            messageFtsManager.deleteNodesIndex(conversationId, mutation.deletedNodeIds)
+        }
+        return true
+    }
+
+    private suspend fun applyHeaderPatch(
+        conversationId: Uuid,
+        patch: ConversationHeaderPatch,
+        updateAt: Long,
+    ) {
+        val id = conversationId.toString()
+        patch.title?.let { conversationDAO.updateTitle(id, it) }
+        patch.chatSuggestions?.let { conversationDAO.updateChatSuggestions(id, JsonInstant.encodeToString(it)) }
+        patch.isPinned?.let { conversationDAO.updatePinStatus(id, it) }
+        when (patch.folderId) {
+            is OptionalFolderId.Keep -> Unit
+            is OptionalFolderId.Clear -> conversationDAO.updateFolderId(id, "")
+            is OptionalFolderId.SetTo -> conversationDAO.updateFolderId(id, patch.folderId.id.toString())
+        }
+        patch.assistantId?.let { conversationDAO.updateAssistantId(id, it.toString()) }
+        when (patch.customSystemPrompt) {
+            is OptionalString.Keep -> Unit
+            is OptionalString.Set -> conversationDAO.updateCustomSystemPrompt(id, patch.customSystemPrompt.value ?: "")
+        }
+        when (patch.modeInjectionIds) {
+            is OptionalUuidSet.Keep -> Unit
+            is OptionalUuidSet.Set -> conversationDAO.updateModeInjectionIds(id, JsonInstant.encodeToString(patch.modeInjectionIds.value))
+        }
+        when (patch.workspaceCwd) {
+            is OptionalString.Keep -> Unit
+            is OptionalString.Set -> conversationDAO.updateWorkspaceCwd(id, patch.workspaceCwd.value ?: "")
+        }
+        conversationDAO.updateGenerationCheckpoint(id, updateAt)
     }
 
     /**
-     * Atomically commits the replay-safe message snapshot and its execution facts.
-     * The conversation header update is deliberately narrow so a stale generation snapshot
-     * cannot overwrite title, folder, pin, suggestions, or other independently owned columns.
+     * GC：回收 state=ACTIVE 且 artifact_reference 无引用、created_at 超过保护窗口的 artifact。
+     * 回填未完成时保守跳过（宁可保留文件）。
      */
-    suspend fun checkpointTurn(
-        conversation: Conversation,
-        turnExecution: TurnExecutionEntity,
-        toolExecution: ToolExecutionEntity? = null,
-    ) {
-        commitTurnCheckpoint(
-            conversation = conversation,
-            turnExecution = turnExecution,
-            toolExecutions = listOfNotNull(toolExecution),
-            reindexFts = false,
-        )
-    }
-
-    suspend fun finalizeTurn(
-        conversation: Conversation,
-        turnExecution: TurnExecutionEntity,
-        toolExecutions: List<ToolExecutionEntity> = emptyList(),
-    ) {
-        commitTurnCheckpoint(
-            conversation = conversation,
-            turnExecution = turnExecution,
-            toolExecutions = toolExecutions,
-            reindexFts = true,
-        )
-    }
-
-    private suspend fun commitTurnCheckpoint(
-        conversation: Conversation,
-        turnExecution: TurnExecutionEntity,
-        toolExecutions: List<ToolExecutionEntity> = emptyList(),
-        reindexFts: Boolean = false,
-    ) {
-        require(turnExecution.conversationId == conversation.id.toString()) {
-            "Turn ${turnExecution.turnId} does not belong to Conversation ${conversation.id}"
-        }
-        require(toolExecutions.all { it.turnId == turnExecution.turnId }) {
-            "Every ToolExecution must belong to Turn ${turnExecution.turnId}"
-        }
-        database.withTransaction {
-            persistGenerationCheckpoint(conversation)
-            turnExecutionDAO.upsert(turnExecution)
-            toolExecutionDAO.upsertAll(toolExecutions)
-        }
-        if (reindexFts && conversation.parentConversationId == null) {
-            val latestEntity = conversationDAO.getConversationById(conversation.id.toString())
-            val latest = latestEntity?.let { conversationEntityToConversation(it, conversation.messageNodes) }
-                ?: conversation
-            messageFtsManager.indexConversation(latest)
-        }
-    }
+    suspend fun collectUnreferencedArtifacts(
+        protectionWindowMillis: Long = 24 * 3600 * 1000L,
+    ): List<ArtifactEntity> = artifactStore.collectUnreferencedArtifacts(protectionWindowMillis)
 
     private suspend fun persistConversationNodes(
         conversation: Conversation,
@@ -474,17 +460,6 @@ class ConversationRepository(
         saveMessageNodes(conversationId, conversation.messageNodes)
     }
 
-    private suspend fun persistGenerationCheckpoint(conversation: Conversation) {
-        requireValidParent(conversation)
-        check(
-            conversationDAO.updateGenerationCheckpoint(
-                id = conversation.id.toString(),
-                updateAt = conversation.updateAt.toEpochMilli(),
-            ) == 1
-        ) { "Conversation ${conversation.id} does not exist" }
-        persistMessageNodes(conversation)
-    }
-
     suspend fun deleteConversation(conversation: Conversation) {
         val persisted = conversationDAO.getConversationById(conversation.id.toString()) ?: return
         val fullConversation = getConversationById(conversation.id) ?: conversation
@@ -496,7 +471,6 @@ class ConversationRepository(
             emptyList()
         }
         val conversationsToDelete = childConversations + fullConversation
-        val safeFilesToDelete = findUnsharedFilesForDeletion(conversationsToDelete)
 
         // Master、Child、MessageNode 和 Favorite 必须在同一个 Room 事务中提交。
         database.withTransaction {
@@ -513,7 +487,9 @@ class ConversationRepository(
         conversationsToDelete.forEach { item ->
             messageFtsManager.deleteConversation(item.id.toString())
         }
-        filesManager.deleteChatFiles(safeFilesToDelete)
+        // 引用投影经 node FK 级联自动清；文件清理走 GC
+        // （findUnshared* 探测路径删除，collectUnreferencedArtifacts 兜底回收）
+        runCatching { collectUnreferencedArtifacts() }
     }
 
     suspend fun searchMessages(
@@ -570,7 +546,6 @@ class ConversationRepository(
         val children = conversationDAO.getChildConversations(parentConversationId.toString()).mapNotNull { child ->
             runCatching { Uuid.parse(child.id) }.getOrNull()?.let { getConversationById(it) }
         }
-        val safeFilesToDelete = findUnsharedFilesForDeletion(children)
         database.withTransaction {
             children.forEach { child ->
                 favoriteDAO.deleteNodeFavoritesOfConversation(child.id.toString())
@@ -580,53 +555,13 @@ class ConversationRepository(
         children.forEach { child ->
             messageFtsManager.deleteConversation(child.id.toString())
         }
-        filesManager.deleteChatFiles(safeFilesToDelete)
-    }
-
-    /** Returns only local files no conversation outside [conversationsToDelete] still references. */
-    private suspend fun findUnsharedFilesForDeletion(
-        conversationsToDelete: Collection<Conversation>,
-    ): List<android.net.Uri> {
-        if (conversationsToDelete.isEmpty()) return emptyList()
-        val deletedIds = conversationsToDelete.mapTo(mutableSetOf()) { it.id }
-        val candidates = conversationsToDelete.flatMap { it.files }.toSet()
-        return findUnsharedFileUris(candidates, deletedIds)
+        // 引用投影经 node FK 级联自动清；文件清理走 GC
+        runCatching { collectUnreferencedArtifacts() }
     }
 
     /**
-     * 对每个候选 file:// URI 用 LIKE 探测其他会话的 messages JSON，
-     * 命中后再反序列化该节点校验，避免为文件清理加载所有会话及消息。
-     *
-     * 除 file:// URL 外，也探测 filesDir 相对路径 token：Master 卡片通过
-     * sub_assistant_call.artifacts[].artifact / generate_image 的 "artifact" metadata
-     * 引用文件（不出现 file:// URL），这些引用同样阻止删除。
-     */
-    private suspend fun findUnsharedFileUris(
-        candidates: Set<android.net.Uri>,
-        excludedConversationIds: Set<Uuid>,
-    ): List<android.net.Uri> {
-        if (candidates.isEmpty()) return emptyList()
-        val excludedIds = excludedConversationIds.map { it.toString() }
-        if (excludedIds.isEmpty()) return emptyList()
-        return candidates.filter { uri ->
-            val tokens = fileReferenceTokensFor(uri)
-            val hits = tokens.flatMap { token ->
-                val needle = ConversationFileReferences.likeNeedleForToken(token)
-                messageNodeDAO.findMessagesJsonContaining(excludedIds, needle)
-            }.distinct()
-            !ConversationFileReferences.isFileRetained(tokens, hits, JsonInstant)
-        }
-    }
-
-    /** 候选 URI 的引用 token 集合：完整 URL + filesDir 相对路径（与 metadata 存储形态一致）。 */
-    private fun fileReferenceTokensFor(uri: android.net.Uri): Set<String> {
-        val url = uri.toString()
-        val relative = runCatching { filesManager.getRelativePathForUri(uri) }.getOrNull()
-        return if (relative != null && relative != url) setOf(url, relative) else setOf(url)
-    }
-
-    /**
-     * 获取所有 Child 会话 ID（用于 recovery 时识别 orphan）
+     * 获取所有 Child 会话 ID（保留——供 DelegationCoordinator.performRecovery 的
+     * orphan 识别与 AssistantBackgroundService 的全库引用扫描使用）
      */
     suspend fun getAllChildConversationIds(): List<Uuid> {
         return conversationDAO.getAllChildConversationIds().mapNotNull {
@@ -709,6 +644,69 @@ class ConversationRepository(
         )
     }
 
+    /**
+     * 单列更新会话归属助手（非活跃会话的助手迁移；活跃会话走 UpdateHeader 命令）。
+     * 调用方负责配套的 folder 清空（withAssistant 语义）。
+     */
+    suspend fun updateConversationAssistantId(conversationId: Uuid, assistantId: Uuid) {
+        conversationDAO.updateAssistantId(conversationId.toString(), assistantId.toString())
+    }
+
+    /**
+     * Child 恢复收口：把指定会话的 RUNNING turn 行置为 INTERRUPTED。
+     * Master 全库恢复扫描（recoverInterruptedTurns）过滤 Child 会话的 turn——Child 由
+     * DelegationCoordinator（SubAssistantRecovery 载体）全权收口，避免双路径。
+     */
+    suspend fun finalizeRunningTurnsOfConversation(conversationId: Uuid, reason: String) {
+        val now = System.currentTimeMillis()
+        turnExecutionDAO.getByConversationId(conversationId.toString())
+            .filter { it.status == TurnExecutionStatus.RUNNING }
+            .forEach { execution ->
+                turnExecutionDAO.upsert(
+                    execution.copy(
+                        status = TurnExecutionStatus.INTERRUPTED,
+                        reason = reason,
+                        updatedAt = now,
+                    )
+                )
+            }
+    }
+
+    /**
+     * Child retention 收缩（master 树 mutation 后的子助手域收口；master 树本身已由
+     * 命令通道 applyMutation delta 落库，本方法只处理 children）：
+     * retained children 全量收缩事务 + deleted children 删除；事务后 FTS 增删、
+     * retained 节点引用替换登记、无引用文件 GC（引用维护表）。
+     */
+    suspend fun updateChildRetention(
+        retainedChildren: List<Conversation>,
+        deletedChildren: List<Conversation>,
+    ) {
+        if (retainedChildren.isEmpty() && deletedChildren.isEmpty()) return
+        database.withTransaction {
+            retainedChildren.forEach { child ->
+                conversationDAO.update(conversationToConversationEntity(child))
+                messageNodeDAO.deleteByConversation(child.id.toString())
+                saveMessageNodes(child.id.toString(), child.messageNodes)
+            }
+            deletedChildren.forEach { child ->
+                favoriteDAO.deleteNodeFavoritesOfConversation(child.id.toString())
+                conversationDAO.deleteById(child.id.toString())
+            }
+        }
+        // Child 不进入 FTS 索引（与 insertConversation 的裁决一致）：
+        // retained children 只做 DB 收缩，无索引动作；deleted children 防御性清理
+        // （历史数据若曾入索引，避免悬挂行）。
+        deletedChildren.forEach { messageFtsManager.deleteConversation(it.id.toString()) }
+        // 引用投影同步（retained 节点全量登记替换）
+        retainedChildren.forEach { child ->
+            if (child.messageNodes.isNotEmpty()) {
+                artifactStore.syncReferences(child.id, child.messageNodes, emptyList())
+            }
+        }
+        collectUnreferencedArtifacts()
+    }
+
     /** Column-only title write. Does not replace message nodes. */
     suspend fun updateConversationTitle(conversationId: Uuid, title: String) {
         conversationDAO.updateTitle(conversationId.toString(), title)
@@ -721,30 +719,6 @@ class ConversationRepository(
             id = conversationId.toString(),
             chatSuggestions = JsonInstant.encodeToString(suggestions),
         )
-    }
-
-    /**
-     * Deletes local files that [previousFiles] contained and no retained conversation still
-     * references, including Tool metadata artifact tokens. Prefer keeping a file when retain
-     * checks cannot decode a hit.
-     */
-    suspend fun deleteUnreferencedChatFiles(
-        previousFiles: Set<android.net.Uri>,
-        retainedConversations: Collection<Conversation>,
-        excludedConversationIds: Set<Uuid>,
-    ) {
-        if (previousFiles.isEmpty()) return
-        val retainedFiles = retainedConversations.flatMap { it.files }.toSet()
-        val retainedReferenceTokens = retainedConversations
-            .flatMap { conversation -> conversation.messageNodes.flatMap { node -> node.messages } }
-            .let { messages -> messages.collectFileReferenceTokens() }
-        val deletionCandidates = (previousFiles - retainedFiles).filter { uri ->
-            fileReferenceTokensFor(uri).none { it in retainedReferenceTokens }
-        }.toSet()
-        val safeFilesToDelete = findUnsharedFileUris(deletionCandidates, excludedConversationIds)
-        if (safeFilesToDelete.isNotEmpty()) {
-            filesManager.deleteChatFiles(safeFilesToDelete)
-        }
     }
 
     private fun conversationSummaryToConversation(entity: LightConversationEntity): Conversation {

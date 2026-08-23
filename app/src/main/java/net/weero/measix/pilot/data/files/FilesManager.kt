@@ -24,8 +24,9 @@ import me.rerere.ai.ui.mediaPersistenceFailurePart
 import me.rerere.common.android.Logging
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
-import net.weero.measix.pilot.data.db.entity.ManagedFileEntity
-import net.weero.measix.pilot.data.repository.FilesRepository
+import net.weero.measix.pilot.data.db.dao.ArtifactDAO
+import net.weero.measix.pilot.data.db.entity.ArtifactEntity
+import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.utils.ImageExportResult
 import net.weero.measix.pilot.utils.exportImage
 import net.weero.measix.pilot.utils.exportImageFile
@@ -37,7 +38,7 @@ internal const val IMAGE_SAVE_PERMISSION_REQUIRED = "permission_required"
 
 class FilesManager(
     private val context: Context,
-    private val repository: FilesRepository,
+    private val artifactDAO: ArtifactDAO,
     private val appScope: AppScope,
 ) {
     companion object {
@@ -51,7 +52,8 @@ class FilesManager(
         uri: Uri,
         displayName: String? = null,
         mimeType: String? = null,
-    ): ManagedFileEntity = mutationMutex.withLock {
+        origin: ArtifactOrigin = ArtifactOrigin.USER,
+    ): ArtifactEntity = mutationMutex.withLock {
         withContext(Dispatchers.IO) {
             val resolvedName = displayName ?: getFileNameFromUri(uri) ?: "file"
             val resolvedMime = mimeType ?: getFileMimeType(uri) ?: "application/octet-stream"
@@ -64,11 +66,12 @@ class FilesManager(
                         stream.copyTo(output)
                     }
                 }
-                createManagedFileEntity(
+                createArtifactEntity(
                     folder = folder,
                     file = target,
                     displayName = resolvedName,
                     mimeType = resolvedMime,
+                    origin = origin,
                 )
             }
         }
@@ -79,16 +82,18 @@ class FilesManager(
         bytes: ByteArray,
         displayName: String,
         mimeType: String = "application/octet-stream",
-    ): ManagedFileEntity = mutationMutex.withLock {
+        origin: ArtifactOrigin = ArtifactOrigin.USER,
+    ): ArtifactEntity = mutationMutex.withLock {
         withContext(Dispatchers.IO) {
             val target = createTargetFile(folder, displayName, mimeType)
             commitManagedFile(target) {
                 target.writeBytes(bytes)
-                createManagedFileEntity(
+                createArtifactEntity(
                     folder = folder,
                     file = target,
                     displayName = displayName,
                     mimeType = mimeType,
+                    origin = origin,
                 )
             }
         }
@@ -99,35 +104,46 @@ class FilesManager(
         text: String,
         displayName: String = "pasted_text.txt",
         mimeType: String = "text/plain",
-    ): ManagedFileEntity = mutationMutex.withLock {
+        origin: ArtifactOrigin = ArtifactOrigin.USER,
+    ): ArtifactEntity = mutationMutex.withLock {
         withContext(Dispatchers.IO) {
             val target = createTargetFile(folder, displayName, mimeType)
             commitManagedFile(target) {
                 target.writeText(text)
-                createManagedFileEntity(
+                createArtifactEntity(
                     folder = folder,
                     file = target,
                     displayName = displayName,
                     mimeType = mimeType,
+                    origin = origin,
                 )
             }
         }
     }
 
-    fun observe(folder: String = FileFolders.UPLOAD): Flow<List<ManagedFileEntity>> =
-        repository.listByFolder(folder)
+    fun observe(folder: String = FileFolders.UPLOAD): Flow<List<ArtifactEntity>> =
+        artifactDAO.listByFolder(folder)
 
-    suspend fun list(folder: String = FileFolders.UPLOAD): List<ManagedFileEntity> =
-        repository.listByFolder(folder).first()
+    suspend fun list(folder: String = FileFolders.UPLOAD): List<ArtifactEntity> =
+        artifactDAO.listByFolder(folder).first()
 
-    suspend fun get(id: Long): ManagedFileEntity? = repository.getById(id)
+    suspend fun get(id: Long): ArtifactEntity? = artifactDAO.getById(id)
 
-    suspend fun getByRelativePath(relativePath: String): ManagedFileEntity? = repository.getByPath(relativePath)
+    suspend fun getByRelativePath(relativePath: String): ArtifactEntity? = artifactDAO.getByPath(relativePath)
 
-    fun getFile(entity: ManagedFileEntity): File =
+    fun getFile(entity: ArtifactEntity): File =
         File(context.filesDir, entity.relativePath)
 
-    fun createChatFilesByContents(uris: List<Uri>): List<Uri> {
+    /**
+     * 写入 + 登记原子化：登记失败回滚删除磁盘文件，URI 不返回。
+     * "文件 + 记录"要么都在、要么都不在——DB 是唯一事实源，
+     * 不存在"磁盘有文件、DB 无记录"的应用侧路径（untracked 只可能来自外部）。
+     *
+     * 诞生方式（origin）自动判定：源 URI 指向已登记的本地 artifact（会话 fork、
+     * 子助手克隆、附件入站等结构性复制场景）→ 继承源实体 origin；否则视为用户
+     * 引入新内容（[ArtifactOrigin.USER]）。
+     */
+    suspend fun createChatFilesByContents(uris: List<Uri>): List<Uri> = withContext(Dispatchers.IO) {
         val newUris = mutableListOf<Uri>()
         val dir = context.filesDir.resolve(FileFolders.UPLOAD)
         if (!dir.exists()) {
@@ -150,12 +166,9 @@ class FilesManager(
                     }
                 }
                 val guessedMime = sourceMime ?: guessMimeType(file, sourceName)
-                trackManagedFile(
-                    folder = FileFolders.UPLOAD,
-                    file = file,
-                    displayName = sourceName,
-                    mimeType = guessedMime
-                )
+                if (!registerTrackedFile(FileFolders.UPLOAD, file, sourceName, guessedMime, inheritOriginOrDefault(uri))) {
+                    error("artifact registration failed for ${file.absolutePath}")
+                }
                 newUris.add(file.toUri())
             }.onFailure {
                 it.printStackTrace()
@@ -166,34 +179,38 @@ class FilesManager(
                 )
             }
         }
-        return newUris
+        newUris
     }
 
-    fun createChatFilesByByteArrays(byteArrays: List<ByteArray>): List<Uri> {
+    /** 语义同 [createChatFilesByContents]：登记失败回滚删文件，不返回失效 URI。origin 由调用方按产物链路指定。 */
+    suspend fun createChatFilesByByteArrays(
+        byteArrays: List<ByteArray>,
+        origin: ArtifactOrigin,
+    ): List<Uri> = withContext(Dispatchers.IO) {
         val newUris = mutableListOf<Uri>()
         val dir = context.filesDir.resolve(FileFolders.UPLOAD)
         if (!dir.exists()) {
             dir.mkdirs()
         }
         byteArrays.forEach { byteArray ->
-            val fileName = buildUuidFileName(displayName = "image.png", mimeType = "image/png")
-            val file = dir.resolve(fileName)
-            if (!file.exists()) {
-                file.createNewFile()
+            runCatching {
+                val fileName = buildUuidFileName(displayName = "image.png", mimeType = "image/png")
+                val file = dir.resolve(fileName)
+                if (!file.exists()) {
+                    file.createNewFile()
+                }
+                file.outputStream().use { outputStream ->
+                    outputStream.write(byteArray)
+                }
+                if (!registerTrackedFile(FileFolders.UPLOAD, file, "image.png", "image/png", origin)) {
+                    error("artifact registration failed for ${file.absolutePath}")
+                }
+                newUris.add(file.toUri())
+            }.onFailure {
+                Log.e(TAG, "createChatFilesByByteArrays: Failed to save file", it)
             }
-            val newUri = file.toUri()
-            file.outputStream().use { outputStream ->
-                outputStream.write(byteArray)
-            }
-            trackManagedFile(
-                folder = FileFolders.UPLOAD,
-                file = file,
-                displayName = "image.png",
-                mimeType = "image/png"
-            )
-            newUris.add(newUri)
         }
-        return newUris
+        newUris
     }
 
     @OptIn(ExperimentalEncodingApi::class)
@@ -225,7 +242,12 @@ class FilesManager(
             val bitmap = BitmapFactory.decodeByteArray(sourceByteArray, 0, sourceByteArray.size)
                 ?: error("incomplete image data")
             val byteArray = FileUtils.compressBitmapToPng(bitmap)
-            val urls = createChatFilesByByteArrays(listOf(byteArray))
+            // 模型输出落盘——系统产物
+            val urls = createChatFilesByByteArrays(listOf(byteArray), ArtifactOrigin.SYSTEM)
+            if (urls.isEmpty()) {
+                // 登记失败已回滚删文件；抛出由 recoverMediaPersistenceFailure 降级为持久化失败占位
+                error("artifact registration failed for base64 image")
+            }
             Log.i(
                 TAG,
                 "convertBase64ImagePartToLocalFile: convert base64 img to ${urls.joinToString(", ")}"
@@ -253,7 +275,7 @@ class FilesManager(
         if (relativePaths.isNotEmpty()) {
             appScope.launch(Dispatchers.IO) {
                 relativePaths.forEach { path ->
-                    repository.deleteByPath(path)
+                    artifactDAO.deleteByPath(path)
                 }
             }
         }
@@ -271,7 +293,7 @@ class FilesManager(
         Pair(count, size)
     }
 
-    fun createChatTextFile(text: String): UIMessagePart.Document {
+    suspend fun createChatTextFile(text: String): UIMessagePart.Document = withContext(Dispatchers.IO) {
         val dir = context.filesDir.resolve(FileFolders.UPLOAD)
         if (!dir.exists()) {
             dir.mkdirs()
@@ -279,13 +301,11 @@ class FilesManager(
         val fileName = buildUuidFileName(displayName = "pasted_text.txt", mimeType = "text/plain")
         val file = dir.resolve(fileName)
         file.writeText(text)
-        trackManagedFile(
-            folder = FileFolders.UPLOAD,
-            file = file,
-            displayName = "pasted_text.txt",
-            mimeType = "text/plain"
-        )
-        return UIMessagePart.Document(
+        // 用户粘贴的文本转文件——用户引入
+        if (!registerTrackedFile(FileFolders.UPLOAD, file, "pasted_text.txt", "text/plain", ArtifactOrigin.USER)) {
+            error("artifact registration failed for ${file.absolutePath}")
+        }
+        UIMessagePart.Document(
             url = file.toUri().toString(),
             fileName = "pasted_text.txt",
             mime = "text/plain"
@@ -376,70 +396,24 @@ class FilesManager(
         }
     }
 
-    suspend fun syncFolder(folder: String = FileFolders.UPLOAD): SyncResult = withContext(Dispatchers.IO) {
-        val dir = File(context.filesDir, folder)
-        val diskFiles = if (dir.exists()) {
-            dir.listFiles()?.filter { it.isFile }
-                ?: return@withContext SyncResult(inserted = 0, removed = 0)
-        } else {
-            emptyList()
-        }
-
-        // 磁盘 -> 数据库：补录尚未登记的文件
-        var inserted = 0
-        val diskRelativePaths = HashSet<String>()
-        diskFiles.forEach { file ->
-            val relativePath = "${folder}/${file.name}"
-            diskRelativePaths.add(relativePath)
-            val existing = repository.getByPath(relativePath)
-            if (existing == null) {
-                val now = System.currentTimeMillis()
-                val displayName = file.name
-                val mimeType = guessMimeType(file, displayName)
-                repository.insert(
-                    ManagedFileEntity(
-                        folder = folder,
-                        relativePath = relativePath,
-                        displayName = displayName,
-                        mimeType = mimeType,
-                        sizeBytes = file.length(),
-                        createdAt = file.lastModified().takeIf { it > 0 } ?: now,
-                        updatedAt = now,
-                    )
-                )
-                inserted += 1
-            }
-        }
-
-        // 数据库 -> 磁盘：清理文件已不存在的孤儿记录
-        var removed = 0
-        repository.listByFolder(folder).first().forEach { entity ->
-            if (entity.relativePath !in diskRelativePaths && !getFile(entity).isFile) {
-                removed += repository.deleteByPath(entity.relativePath)
-            }
-        }
-
-        SyncResult(inserted = inserted, removed = removed)
-    }
-
     /**
      * 永久删除单个托管文件（unchecked destructive delete）。
      *
      * 不做任何引用检查：调用方必须自行确认删除语义——
-     * - 自动清理路径必须走 reference-aware 检查（见 ConversationRepository.deleteUnreferencedChatFiles）
-     * - 用户显式删除路径必须先解除可变当前引用（见 ManagedFileDeletionService）
+     * - 自动清理路径必须走 reference-aware 检查（见 ArtifactStore.collectUnreferencedArtifacts）
+     * - 用户显式删除路径必须先解除可变当前引用（见 ArtifactStore.detachMutableReferences）
      */
     suspend fun deleteManagedFilePermanently(id: Long, deleteFromDisk: Boolean = true): Boolean =
         mutationMutex.withLock {
             withContext(Dispatchers.IO) {
-                val entity = repository.getById(id) ?: return@withContext false
+                val entity = artifactDAO.getById(id) ?: return@withContext false
                 if (deleteFromDisk) {
                     val file = getFile(entity)
                     if (file.exists() && !file.delete()) {
                         return@withContext false
                     }
                 }
-                repository.deleteById(id) > 0
+                artifactDAO.deleteById(id) > 0
             }
         }
 
@@ -465,13 +439,13 @@ class FilesManager(
                 }
 
                 if (allDeletedFromDisk) {
-                    repository.deleteByFolder(folder)
+                    artifactDAO.deleteByFolder(folder)
                     return@withContext true
                 }
 
-                repository.listByFolder(folder).first().forEach { entity ->
+                artifactDAO.listByFolder(folder).first().forEach { entity ->
                     if (!getFile(entity).exists()) {
-                        repository.deleteById(entity.id)
+                        artifactDAO.deleteById(entity.id)
                     }
                 }
                 false
@@ -480,8 +454,8 @@ class FilesManager(
 
     private suspend fun commitManagedFile(
         target: File,
-        writeAndInsert: suspend () -> ManagedFileEntity,
-    ): ManagedFileEntity {
+        writeAndInsert: suspend () -> ArtifactEntity,
+    ): ArtifactEntity {
         return try {
             writeAndInsert()
         } catch (error: Throwable) {
@@ -503,37 +477,50 @@ class FilesManager(
     private fun buildUuidFileName(displayName: String?, mimeType: String?): String =
         FileUtils.buildUuidFileName(displayName, mimeType)
 
-    private suspend fun createManagedFileEntity(
+    private suspend fun createArtifactEntity(
         folder: String,
         file: File,
         displayName: String,
         mimeType: String,
-    ): ManagedFileEntity {
+        origin: ArtifactOrigin,
+    ): ArtifactEntity {
         val now = System.currentTimeMillis()
-        return repository.insert(
-            ManagedFileEntity(
-                folder = folder,
-                relativePath = buildRelativePath(folder, file),
-                displayName = displayName,
-                mimeType = mimeType,
-                sizeBytes = file.length(),
-                createdAt = now,
-                updatedAt = now,
-            )
+        val entity = ArtifactEntity(
+            folder = folder,
+            relativePath = buildRelativePath(folder, file),
+            displayName = displayName,
+            mimeType = mimeType,
+            sizeBytes = file.length(),
+            createdAt = now,
+            updatedAt = now,
+            origin = origin.name,
         )
+        val id = artifactDAO.insert(entity)
+        return entity.copy(id = id)
     }
 
-    private fun trackManagedFile(folder: String, file: File, displayName: String, mimeType: String) {
+    /**
+     * 同步登记 artifact 元数据（DB 是唯一事实源）。
+     *
+     * 登记失败时回滚删除磁盘文件并返回 false，保证"文件 + 记录"要么都在、
+     * 要么都不在。根因修复：旧 trackManagedFile 为 fire-and-forget 异步登记、
+     * 失败仅日志，会遗留"磁盘有文件、DB 无记录"的不一致数据
+     * （rescan 补录与 MISSING 状态两个补丁功能的来源，均已移除）。
+     */
+    private suspend fun registerTrackedFile(
+        folder: String,
+        file: File,
+        displayName: String,
+        mimeType: String,
+        origin: ArtifactOrigin,
+    ): Boolean {
         val relativePath = buildRelativePath(folder, file)
-        appScope.launch(Dispatchers.IO) {
-            runCatching {
-                val existing = repository.getByPath(relativePath)
-                if (existing != null) {
-                    return@runCatching
-                }
+        return try {
+            val existing = artifactDAO.getByPath(relativePath)
+            if (existing == null) {
                 val now = System.currentTimeMillis()
-                repository.insert(
-                    ManagedFileEntity(
+                artifactDAO.insert(
+                    ArtifactEntity(
                         folder = folder,
                         relativePath = relativePath,
                         displayName = displayName,
@@ -541,16 +528,34 @@ class FilesManager(
                         sizeBytes = file.length(),
                         createdAt = now,
                         updatedAt = now,
+                        origin = origin.name,
                     )
                 )
-            }.onFailure {
-                Log.e(TAG, "trackManagedFile: Failed to track file ${file.absolutePath}", it)
-                Logging.log(
-                    TAG,
-                    "trackManagedFile: Failed to track file ${file.absolutePath}: ${it.message}"
-                )
             }
+            true
+        } catch (error: Throwable) {
+            withContext(NonCancellable) {
+                runCatching { if (file.exists()) file.delete() }
+            }
+            Log.e(TAG, "registerTrackedFile: registration failed, file rolled back: ${file.absolutePath}", error)
+            Logging.log(
+                TAG,
+                "registerTrackedFile: registration failed, file rolled back: ${file.absolutePath}: ${error.message}"
+            )
+            false
         }
+    }
+
+    /**
+     * 诞生方式判定：源 URI 指向已登记的 upload 文件（结构性复制场景——会话 fork、
+     * 子助手克隆、附件入站）→ 继承源实体 origin（内容来源不变）；否则为用户引入
+     * 新内容 → [ArtifactOrigin.USER]。
+     */
+    private suspend fun inheritOriginOrDefault(uri: Uri): ArtifactOrigin {
+        val relativePath = getRelativePathForUri(uri) ?: return ArtifactOrigin.USER
+        if (!relativePath.startsWith("${FileFolders.UPLOAD}/")) return ArtifactOrigin.USER
+        val source = artifactDAO.getByPath(relativePath) ?: return ArtifactOrigin.USER
+        return runCatching { ArtifactOrigin.valueOf(source.origin) }.getOrDefault(ArtifactOrigin.USER)
     }
 
     private fun buildRelativePath(folder: String, file: File): String =
@@ -564,6 +569,17 @@ class FilesManager(
         if (!uri.toString().startsWith("file:", ignoreCase = true)) return null
         val file = runCatching { uri.toFile() }.getOrNull() ?: return null
         return getRelativePathInFilesDir(file)
+    }
+
+    /** reconcileStartup 专用：扫描 upload 目录，仅日志报告磁盘存在但未登记的 untracked 文件（绝不补录）。 */
+    fun logUntrackedUploadFiles() {
+        val dir = File(context.filesDir, FileFolders.UPLOAD)
+        if (!dir.exists()) return
+        dir.listFiles()?.filter { it.isFile }?.forEach { file ->
+            val relativePath = "${FileFolders.UPLOAD}/${file.name}"
+            // 仅日志；ArtifactStore.reconcileStartup 保证不自动补录（重启复活缺陷回归锁定）
+            Log.i(TAG, "reconcileStartup: untracked file on disk (not inserted): $relativePath")
+        }
     }
 
     fun getFileNameFromUri(uri: Uri): String? =
@@ -588,15 +604,12 @@ internal suspend inline fun <T> recoverMediaPersistenceFailure(
     onFailure(error)
 }
 
-data class SyncResult(
-    val inserted: Int,
-    val removed: Int,
-)
-
 object FileFolders {
     const val UPLOAD = "upload"
     const val SKILLS = "skills"
     const val FONTS = "fonts"
+
+    /** 工具超长输出落盘目录——无引用需求、不由 artifact 表管理（非受管落盘层）。 */
     const val TOOL_OUTPUTS = "tool_outputs"
 }
 
@@ -604,31 +617,37 @@ suspend fun FilesManager.saveUploadFromUri(
     uri: Uri,
     displayName: String? = null,
     mimeType: String? = null,
-): ManagedFileEntity = saveManagedFromUri(
+    origin: ArtifactOrigin = ArtifactOrigin.USER,
+): ArtifactEntity = saveManagedFromUri(
     folder = FileFolders.UPLOAD,
     uri = uri,
     displayName = displayName,
     mimeType = mimeType,
+    origin = origin,
 )
 
 suspend fun FilesManager.saveUploadFromBytes(
     bytes: ByteArray,
     displayName: String,
     mimeType: String = "application/octet-stream",
-): ManagedFileEntity = saveManagedFromBytes(
+    origin: ArtifactOrigin = ArtifactOrigin.USER,
+): ArtifactEntity = saveManagedFromBytes(
     folder = FileFolders.UPLOAD,
     bytes = bytes,
     displayName = displayName,
     mimeType = mimeType,
+    origin = origin,
 )
 
 suspend fun FilesManager.saveUploadText(
     text: String,
     displayName: String = "pasted_text.txt",
     mimeType: String = "text/plain",
-): ManagedFileEntity = saveManagedText(
+    origin: ArtifactOrigin = ArtifactOrigin.USER,
+): ArtifactEntity = saveManagedText(
     folder = FileFolders.UPLOAD,
     text = text,
     displayName = displayName,
     mimeType = mimeType,
+    origin = origin,
 )

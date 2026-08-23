@@ -36,28 +36,23 @@ interface MessageTransformer {
 
 interface InputMessageTransformer : MessageTransformer
 
-interface OutputMessageTransformer : MessageTransformer {
-    /**
-     * 一个视觉的转换，例如转换think tag为reasoning parts
-     * 但是不实际转换消息，因为流式输出需要处理消息delta chunk
-     * 不能还没结束生成就transform，因此提供一个visualTransform
-     */
-    suspend fun visualTransform(
-        ctx: TransformerContext,
-        messages: List<UIMessage>,
-    ): List<UIMessage> {
-        return messages
-    }
+interface OutputMessageTransformer : MessageTransformer
 
-    /**
-     * 消息生成完成后调用
-     */
-    suspend fun onGenerationFinish(
-        ctx: TransformerContext,
-        messages: List<UIMessage>,
-    ): List<UIMessage> {
-        return messages
-    }
+/**
+ * 流式变换器：只处理 active assistant 消息（流式期间最后一条）。
+ *
+ * 历史消息在流式期间 immutable——由 GenerationHandler 保证 `dropLast(1)` 部分逐 chunk
+ * 零次进入本接口（契约测试 I5：StreamingTransformScopeTest）。
+ *
+ * 与请求级 [OutputMessageTransformer.transform] 的分工：
+ *  - [transformStreaming]：每个流式 chunk 对最新累积消息的最后一条做视觉变换
+ *    （think 标签 → reasoning、流式正则替换等），不落库、可重复调用；
+ *  - [onStreamingFinish]：step 终态收口（reasoning 补 finishedAt、base64 → 本地文件等）。
+ */
+interface StreamingMessageTransformer {
+    suspend fun transformStreaming(ctx: TransformerContext, message: UIMessage): UIMessage = message
+
+    suspend fun onStreamingFinish(ctx: TransformerContext, message: UIMessage): UIMessage = message
 }
 
 suspend fun List<UIMessage>.transforms(
@@ -81,39 +76,5 @@ suspend fun List<UIMessage>.transforms(
     )
     return transformers.fold(this) { acc, transformer ->
         transformer.transform(ctx, acc)
-    }
-}
-
-suspend fun List<UIMessage>.visualTransforms(
-    transformers: List<MessageTransformer>,
-    context: Context,
-    model: Model,
-    assistant: Assistant,
-    settings: Settings,
-): List<UIMessage> {
-    val ctx = TransformerContext(context, model, assistant, settings)
-    return transformers.fold(this) { acc, transformer ->
-        if (transformer is OutputMessageTransformer) {
-            transformer.visualTransform(ctx, acc)
-        } else {
-            acc
-        }
-    }
-}
-
-suspend fun List<UIMessage>.onGenerationFinish(
-    transformers: List<MessageTransformer>,
-    context: Context,
-    model: Model,
-    assistant: Assistant,
-    settings: Settings,
-): List<UIMessage> {
-    val ctx = TransformerContext(context, model, assistant, settings)
-    return transformers.fold(this) { acc, transformer ->
-        if (transformer is OutputMessageTransformer) {
-            transformer.onGenerationFinish(ctx, acc)
-        } else {
-            acc
-        }
     }
 }

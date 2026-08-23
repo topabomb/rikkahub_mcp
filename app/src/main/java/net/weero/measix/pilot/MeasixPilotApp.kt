@@ -28,6 +28,7 @@ import net.weero.measix.pilot.di.appModule
 import net.weero.measix.pilot.di.dataSourceModule
 import net.weero.measix.pilot.di.repositoryModule
 import net.weero.measix.pilot.di.viewModelModule
+import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.utils.CrashHandler
@@ -77,8 +78,8 @@ class MeasixPilotApp : Application() {
         // check workspace integrity (mark workspaces with missing files as broken after backup restore)
         checkWorkspaceIntegrity()
 
-        // sync upload files to DB
-        syncManagedFiles()
+        // reconcile artifact store (verify DB rows against disk, no INSERT backfill)
+        reconcileArtifacts()
 
         // Increment launch count
         incrementLaunchCount()
@@ -138,12 +139,19 @@ class MeasixPilotApp : Application() {
         }
     }
 
-    private fun syncManagedFiles() {
+    private fun reconcileArtifacts() {
         get<AppScope>().launch(Dispatchers.IO) {
+            // E5：启动只做 reconcile（无 INSERT 补录），修复"已删除文件重启复活"缺陷 C4；
+            // 历史引用回填在 reconcile 后非阻塞执行。
             runCatching {
-                get<FilesManager>().syncFolder()
+                get<ArtifactStore>().reconcileStartup()
             }.onFailure {
-                Log.e(TAG, "syncManagedFiles failed", it)
+                Log.e(TAG, "artifact reconcile failed", it)
+            }
+            runCatching {
+                get<ArtifactStore>().backfillReferences()
+            }.onFailure {
+                Log.e(TAG, "backfillReferences failed", it)
             }
         }
     }

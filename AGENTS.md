@@ -51,7 +51,8 @@
 - **UI Architecture**：自适应布局、导航、主题体系。[ui-architecture.md](docs/references/ui-architecture.md)
 - **Message Rendering**：消息渲染管线（Markdown 双路径、代码块三态、Mermaid/HTML WebView、LaTeX 原生）。[message-rendering-pipeline.md](docs/references/message-rendering-pipeline.md)
 - **Update Mechanism**：版本检查、优先级比较、下载与 CI 发布。[update-mechanism.md](docs/references/update-mechanism.md)
-- **Sub-Assistant**：子助手访问、Child lineage、持久化、撤权与恢复。[sub-assistant-architecture.md](docs/references/sub-assistant-architecture.md)；附件入站/交付出站见 [sub-assistant-multimodal.md](docs/references/sub-assistant-multimodal.md)
+- **Runtime Core（v1 重构）**：会话状态机与提交协议——`ConversationRuntime`（单写 `submit` 命令通道 + 流式 `applyStreamingDelta` 投影）、`ConversationReducer` 纯函数（structural sharing）、`TurnEngine`（chunk→投影 / checkpoint→CommitCheckpoint / 终态→FinalizeTurn 的唯一提交协议实现）、`TurnPipelineFactory`（Master/Target 共用管道装配）、`DelegationCoordinator`（子助手域编排）。`service/runtime/`。深度设计见 `docs/dev/architecture-v1-refactor-plan.md`（§4）。
+- **Sub-Assistant**：子助手访问、Child lineage、持久化、撤权与恢复；执行协调由 `DelegationCoordinator` 负责。[sub-assistant-architecture.md](docs/references/sub-assistant-architecture.md)；附件入站/交付出站见 [sub-assistant-multimodal.md](docs/references/sub-assistant-multimodal.md)
 - **Multimodal Context & Turn Durability**：附件事实、请求级投影、`inspect_attachments`、Turn/Tool 执行事实与崩溃恢复。[multimodal-context-and-turn-durability.md](docs/references/multimodal-context-and-turn-durability.md)
 - **Prompts and Tools**：模型可见的系统注入、工具 description、Tool Result 形状。[prompts-and-tools.md](docs/references/prompts-and-tools.md)
 

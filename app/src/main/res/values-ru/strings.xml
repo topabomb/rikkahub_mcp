@@ -751,6 +751,11 @@
   <string name="setting_files_page_deleted_toast">Удалено</string>
   <string name="setting_files_page_folder_upload">Загрузить</string>
   <string name="setting_files_page_no_files">Нет файлов</string>
+  <string name="setting_files_page_origin_user">Загружено пользователем</string>
+  <string name="setting_files_page_origin_generated">Копия сгенерированного медиа</string>
+  <string name="setting_files_page_origin_system">Создано приложением</string>
+  <string name="setting_files_page_delete_in_progress_toast">Удаление уже выполняется</string>
+  <string name="setting_files_page_delete_already_deleted_toast">Файл уже удалён</string>
   <string name="setting_files_page_title">Управление файлами</string>
   <string name="setting_mcp_page_add_header">Добавить заголовок</string>
   <string name="setting_mcp_page_add_one_to_get_started">Добавьте один, чтобы начать</string>

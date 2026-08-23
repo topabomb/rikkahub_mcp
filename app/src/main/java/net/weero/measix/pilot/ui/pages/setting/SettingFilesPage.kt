@@ -54,12 +54,16 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
+import androidx.annotation.StringRes
+import net.weero.measix.pilot.data.db.entity.ArtifactEntity
+import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.db.entity.GenMediaEntity
-import net.weero.measix.pilot.data.db.entity.ManagedFileEntity
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.data.files.ArtifactDeleteImpact
+import net.weero.measix.pilot.data.files.ArtifactDeleteResult
+import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.files.FilesManager
-import net.weero.measix.pilot.data.files.ManagedFileDeletionService
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.data.repository.GenMediaRepository
 import net.weero.measix.pilot.ui.components.nav.BackButton
@@ -80,12 +84,19 @@ private enum class FileCategory {
     GENERATED_IMAGES,
 }
 
+/** 上传文件删除流程状态机（防重入；Confirming → Executing → Idle） */
+private sealed interface UploadDeleteState {
+    data object Idle : UploadDeleteState
+    data class Confirming(val target: ArtifactEntity) : UploadDeleteState
+    data class Executing(val target: ArtifactEntity) : UploadDeleteState
+}
+
 @Composable
 fun SettingFilesPage(
     filesManager: FilesManager = koinInject(),
     genMediaRepository: GenMediaRepository = koinInject(),
     generatedMediaStore: GeneratedMediaStore = koinInject(),
-    managedFileDeletionService: ManagedFileDeletionService = koinInject(),
+    artifactStore: ArtifactStore = koinInject(),
 ) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val uploadGridState = rememberLazyStaggeredGridState()
@@ -95,13 +106,15 @@ fun SettingFilesPage(
 
     val deletedToast = stringResource(R.string.setting_files_page_deleted_toast)
     val deleteFailedToast = stringResource(R.string.setting_files_page_delete_failed_toast)
+    val deleteInProgressToast = stringResource(R.string.setting_files_page_delete_in_progress_toast)
+    val deleteAlreadyDeletedToast = stringResource(R.string.setting_files_page_delete_already_deleted_toast)
     val cleanedToast = stringResource(R.string.setting_files_page_cleaned_toast)
     val cleanFailedToast = stringResource(R.string.setting_files_page_clean_failed_toast)
 
     var selectedCategory by remember { mutableStateOf(FileCategory.UPLOAD) }
-    var pendingUploadDelete by remember { mutableStateOf<ManagedFileEntity?>(null) }
+    var uploadDeleteState by remember { mutableStateOf<UploadDeleteState>(UploadDeleteState.Idle) }
     var pendingUploadDeleteImpact by remember {
-        mutableStateOf<ManagedFileDeletionService.ManagedFileDeleteImpact?>(null)
+        mutableStateOf<ArtifactDeleteImpact?>(null)
     }
     var pendingGeneratedDelete by remember { mutableStateOf<GenMediaEntity?>(null) }
     var showCleanDialog by remember { mutableStateOf(false) }
@@ -114,17 +127,22 @@ fun SettingFilesPage(
     val isUpload = selectedCategory == FileCategory.UPLOAD
     val hasItems = if (isUpload) uploadFiles.isNotEmpty() else generatedImages.isNotEmpty()
 
+    val pendingUploadDelete = (uploadDeleteState as? UploadDeleteState.Confirming)?.target
+        ?: (uploadDeleteState as? UploadDeleteState.Executing)?.target
     if (pendingUploadDelete != null) {
         val target = pendingUploadDelete!!
+        val executing = uploadDeleteState is UploadDeleteState.Executing
         LaunchedEffect(target.id) {
             pendingUploadDeleteImpact = runCatching {
-                managedFileDeletionService.inspect(target)
+                artifactStore.inspect(target)
             }.getOrNull()
         }
         AlertDialog(
             onDismissRequest = {
-                pendingUploadDelete = null
-                pendingUploadDeleteImpact = null
+                if (!executing) {
+                    uploadDeleteState = UploadDeleteState.Idle
+                    pendingUploadDeleteImpact = null
+                }
             },
             title = { Text(stringResource(R.string.setting_files_page_delete_file_title)) },
             text = {
@@ -160,12 +178,24 @@ fun SettingFilesPage(
             },
             confirmButton = {
                 TextButton(
+                    enabled = !executing,
                     onClick = {
-                        scope.launch {
-                            val ok = managedFileDeletionService.deletePermanently(target)
-                            toaster.show(if (ok) deletedToast else deleteFailedToast)
-                            pendingUploadDelete = null
-                            pendingUploadDeleteImpact = null
+                        if (uploadDeleteState is UploadDeleteState.Confirming) {
+                            uploadDeleteState = UploadDeleteState.Executing(target)
+                            scope.launch {
+                                val result = artifactStore.deletePermanently(target)
+                                val toast = when (result) {
+                                    is ArtifactDeleteResult.Completed -> deletedToast
+                                    is ArtifactDeleteResult.Rejected -> when (result.reason) {
+                                        ArtifactDeleteResult.RejectionReason.IN_PROGRESS -> deleteInProgressToast
+                                        ArtifactDeleteResult.RejectionReason.ALREADY_DELETED -> deleteAlreadyDeletedToast
+                                    }
+                                    is ArtifactDeleteResult.Failed -> deleteFailedToast
+                                }
+                                toaster.show(toast)
+                                uploadDeleteState = UploadDeleteState.Idle
+                                pendingUploadDeleteImpact = null
+                            }
                         }
                     }
                 ) {
@@ -173,10 +203,13 @@ fun SettingFilesPage(
                 }
             },
             dismissButton = {
-                TextButton(onClick = {
-                    pendingUploadDelete = null
-                    pendingUploadDeleteImpact = null
-                }) {
+                TextButton(
+                    enabled = !executing,
+                    onClick = {
+                        uploadDeleteState = UploadDeleteState.Idle
+                        pendingUploadDeleteImpact = null
+                    }
+                ) {
                     Text(stringResource(R.string.setting_files_page_cancel_action))
                 }
             }
@@ -243,7 +276,7 @@ fun SettingFilesPage(
                         showCleanDialog = false
                         scope.launch {
                             val ok = if (isUpload) {
-                                managedFileDeletionService.deleteFolderPermanently(FileFolders.UPLOAD)
+                                artifactStore.deleteFolderPermanently(FileFolders.UPLOAD) is ArtifactDeleteResult.Completed
                             } else {
                                 generatedMediaStore.deleteAll()
                             }
@@ -326,7 +359,10 @@ fun SettingFilesPage(
                                 FileItem(
                                     file = file,
                                     fileOnDisk = fileOnDisk,
-                                    onDelete = { pendingUploadDelete = file },
+                                    deleteExecuting = uploadDeleteState.let { state ->
+                                        state is UploadDeleteState.Executing && state.target.id == file.id
+                                    },
+                                    onDelete = { uploadDeleteState = UploadDeleteState.Confirming(file) },
                                     onImageClick = fileOnDisk.absolutePath.let { path ->
                                         imagePathIndex["file://$path"]?.let { index ->
                                             {
@@ -461,8 +497,9 @@ private fun categoryDisplayName(category: FileCategory): String = when (category
 
 @Composable
 private fun FileItem(
-    file: ManagedFileEntity,
+    file: ArtifactEntity,
     fileOnDisk: File,
+    deleteExecuting: Boolean,
     onDelete: () -> Unit,
     onImageClick: (() -> Unit)? = null,
 ) {
@@ -475,6 +512,7 @@ private fun FileItem(
                 model = fileOnDisk.takeIf { file.mimeType.startsWith("image/") },
                 contentDescription = file.displayName,
                 onDelete = onDelete,
+                deleteEnabled = !deleteExecuting,
                 onClick = onImageClick,
             )
             Column(
@@ -498,9 +536,23 @@ private fun FileItem(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Text(
+                    text = stringResource(originLabel(file.origin)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
             }
         }
     }
+}
+
+/** 诞生方式徽标文案（存量行可能缺该列值，未知时按用户引入展示）。 */
+@StringRes
+private fun originLabel(origin: String): Int = when (runCatching { ArtifactOrigin.valueOf(origin) }.getOrNull()) {
+    ArtifactOrigin.USER -> R.string.setting_files_page_origin_user
+    ArtifactOrigin.GENERATED -> R.string.setting_files_page_origin_generated
+    ArtifactOrigin.SYSTEM -> R.string.setting_files_page_origin_system
+    null -> R.string.setting_files_page_origin_user
 }
 
 @Composable
@@ -557,6 +609,7 @@ private fun MediaThumb(
     model: Any?,
     contentDescription: String,
     onDelete: () -> Unit,
+    deleteEnabled: Boolean = true,
     onClick: (() -> Unit)? = null,
 ) {
     Box(modifier = Modifier.fillMaxWidth()) {
@@ -586,6 +639,7 @@ private fun MediaThumb(
         }
         IconButton(
             onClick = onDelete,
+            enabled = deleteEnabled,
             modifier = Modifier.align(Alignment.TopEnd)
         ) {
             Icon(

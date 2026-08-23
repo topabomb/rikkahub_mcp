@@ -1,4 +1,4 @@
-package net.weero.measix.pilot.service
+package net.weero.measix.pilot.service.runtime
 
 import android.util.Log
 import kotlinx.coroutines.Job
@@ -16,67 +16,72 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.joinAll
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.repository.ConversationRepository
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.Uuid
 
-private const val TAG = "ConversationSessionRegistry"
+private const val TAG = "ConversationRuntimeRegistry"
 
 /**
- * 从 ChatService 抽取的会话生命周期管理，供 Master 和 Child 共用。
- * 管理 Session/Job/StateFlow 的创建、引用计数和空闲清理。
+ * 会话运行时生命周期管理。
+ * 管理 Runtime/Job/StateFlow 的创建、引用计数和空闲清理。
+ * idle 判定并入 [ConversationRuntime.isWriteInFlight]（写通道占用期间不回收）。
  */
-class ConversationSessionRegistry(
+class ConversationRuntimeRegistry(
     private val appScope: net.weero.measix.pilot.AppScope,
     private val settingsStore: SettingsStore,
+    private val repository: ConversationRepository,
 ) {
-    private val sessions = ConcurrentHashMap<Uuid, ConversationSession>()
-    private val _sessionsVersion = MutableStateFlow(0L)
+    private val runtimes = ConcurrentHashMap<Uuid, ConversationRuntime>()
+    private val _runtimesVersion = MutableStateFlow(0L)
 
-    fun getOrCreateSession(conversationId: Uuid): ConversationSession {
-        return sessions.computeIfAbsent(conversationId) { id ->
+    fun getOrCreateSession(conversationId: Uuid): ConversationRuntime {
+        return runtimes.computeIfAbsent(conversationId) { id ->
             val settings = settingsStore.settingsFlow.value
             val assistantId = settings.assistants.firstOrNull()?.id ?: Uuid.random()
-            ConversationSession(
+            ConversationRuntime(
                 id = id,
                 initial = Conversation.ofId(
                     id = id,
                     assistantId = assistantId
                 ),
                 scope = appScope,
-                onIdle = { removeSession(it) }
+                onIdle = { removeSession(it) },
+                repository = repository,
             ).also {
-                _sessionsVersion.value++
-                Log.i(TAG, "createSession: $id (total: ${sessions.size + 1})")
+                _runtimesVersion.value++
+                Log.i(TAG, "createSession: $id (total: ${runtimes.size + 1})")
             }
         }
     }
 
-    fun getOrCreateSessionWithConversation(conversationId: Uuid, conversation: Conversation): ConversationSession {
-        return sessions.computeIfAbsent(conversationId) { id ->
-            ConversationSession(
+    fun getOrCreateSessionWithConversation(conversationId: Uuid, conversation: Conversation): ConversationRuntime {
+        return runtimes.computeIfAbsent(conversationId) { id ->
+            ConversationRuntime(
                 id = id,
                 initial = conversation,
                 scope = appScope,
-                onIdle = { removeSession(it) }
+                onIdle = { removeSession(it) },
+                repository = repository,
             ).also {
-                _sessionsVersion.value++
-                Log.i(TAG, "createSession with conversation: $id (total: ${sessions.size + 1})")
+                _runtimesVersion.value++
+                Log.i(TAG, "createSession with conversation: $id (total: ${runtimes.size + 1})")
             }
         }
     }
 
-    fun getSession(conversationId: Uuid): ConversationSession? = sessions[conversationId]
+    fun getSession(conversationId: Uuid): ConversationRuntime? = runtimes[conversationId]
 
     private fun removeSession(conversationId: Uuid) {
-        val session = sessions[conversationId] ?: return
-        if (session.isInUse) {
+        val runtime = runtimes[conversationId] ?: return
+        if (runtime.isInUse) {
             Log.d(TAG, "removeSession: skipped $conversationId (still in use)")
             return
         }
-        if (sessions.remove(conversationId, session)) {
-            session.cleanup()
-            _sessionsVersion.value++
-            Log.i(TAG, "removeSession: $conversationId (remaining: ${sessions.size})")
+        if (runtimes.remove(conversationId, runtime)) {
+            runtime.cleanup()
+            _runtimesVersion.value++
+            Log.i(TAG, "removeSession: $conversationId (remaining: ${runtimes.size})")
         }
     }
 
@@ -85,7 +90,7 @@ class ConversationSessionRegistry(
     }
 
     fun removeConversationReference(conversationId: Uuid) {
-        sessions[conversationId]?.release()
+        runtimes[conversationId]?.release()
     }
 
     fun getConversationFlow(conversationId: Uuid): StateFlow<Conversation> {
@@ -93,23 +98,23 @@ class ConversationSessionRegistry(
     }
 
     fun getGenerationJobStateFlow(conversationId: Uuid): Flow<Job?> {
-        val session = sessions[conversationId] ?: return flowOf(null)
-        return session.generationJob
+        val runtime = runtimes[conversationId] ?: return flowOf(null)
+        return runtime.generationJob
     }
 
     fun getProcessingStatusFlow(conversationId: Uuid): StateFlow<String?> {
-        val session = sessions[conversationId] ?: return MutableStateFlow(null)
-        return session.processingStatus
+        val runtime = runtimes[conversationId] ?: return MutableStateFlow(null)
+        return runtime.processingStatus
     }
 
     fun getConversationJobs(): Flow<Map<Uuid, Job?>> {
-        return _sessionsVersion.flatMapLatest {
-            val currentSessions = sessions.values.toList()
-            if (currentSessions.isEmpty()) {
+        return _runtimesVersion.flatMapLatest {
+            val currentRuntimes = runtimes.values.toList()
+            if (currentRuntimes.isEmpty()) {
                 flowOf(emptyMap())
             } else {
-                combine(currentSessions.map { session ->
-                    session.generationJob.map { job -> session.id to job }
+                combine(currentRuntimes.map { runtime ->
+                    runtime.generationJob.map { job -> runtime.id to job }
                 }) { pairs ->
                     pairs.filter { it.second != null }.toMap()
                 }
@@ -119,27 +124,26 @@ class ConversationSessionRegistry(
 
     fun updateConversationState(conversationId: Uuid, conversation: Conversation) {
         if (conversation.id != conversationId) return
-        // 使用 getOrCreateSessionWithConversation 避免先创建空 Session 再覆盖，
-        // 持久化会话必须显式打开，不能先创建空 Session 再遮蔽 Room 快照。
-        val session = getOrCreateSessionWithConversation(conversationId, conversation)
-        session.state.value = conversation
+        // 使用 getOrCreateSessionWithConversation 避免先创建空 Session 再覆盖
+        val runtime = getOrCreateSessionWithConversation(conversationId, conversation)
+        runtime.replaceState(conversation)
     }
 
-    fun getAllActiveSessionIds(): Set<Uuid> = sessions.keys.toSet()
+    fun getAllActiveSessionIds(): Set<Uuid> = runtimes.keys.toSet()
 
-    fun getSessionsSnapshot(): List<ConversationSession> = sessions.values.toList()
+    fun getSessionsSnapshot(): List<ConversationRuntime> = runtimes.values.toList()
 
     /** Removes a conversation that has already been durably deleted. */
     fun evictSession(conversationId: Uuid) {
-        sessions.remove(conversationId)?.let { session ->
-            session.cleanup()
-            _sessionsVersion.value++
+        runtimes.remove(conversationId)?.let { runtime ->
+            runtime.cleanup()
+            _runtimesVersion.value++
         }
     }
 
     /** 取消并等待指定 Assistant 的普通会话生成，避免清理后迟到 checkpoint 重新写回会话。 */
     suspend fun cancelGenerationsForAssistant(assistantId: Uuid, reason: String) {
-        val jobs = sessions.values
+        val jobs = runtimes.values
             .filter { it.state.value.assistantId == assistantId }
             .mapNotNull { it.generationJob.value }
             .distinct()
@@ -148,7 +152,7 @@ class ConversationSessionRegistry(
     }
 
     fun cleanup() = runCatching {
-        sessions.values.forEach { it.cleanup() }
-        sessions.clear()
+        runtimes.values.forEach { it.cleanup() }
+        runtimes.clear()
     }
 }

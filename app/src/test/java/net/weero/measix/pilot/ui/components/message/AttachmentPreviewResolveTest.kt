@@ -33,7 +33,7 @@ class AttachmentPreviewResolveTest {
 
     @Test
     fun `remote url ref resolves to null for ui boundary`() {
-        // UI 不为渲染发起远程下载（设计文档 §8.7）
+        // UI 不为渲染发起远程下载
         val messages = listOf(
             message(
                 UIMessagePart.Image(

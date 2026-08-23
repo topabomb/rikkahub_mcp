@@ -9,6 +9,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.files.FileUtils
 import net.weero.measix.pilot.data.files.LocalArtifactRef
 import net.weero.measix.pilot.data.files.ManagedLocalArtifactStore
@@ -31,16 +32,25 @@ class AssistantBackgroundService(
     private val conversationRepository: ConversationRepository,
     private val genMediaRepository: GenMediaRepository,
 ) {
+    /**
+     * 替换助手背景：复制源文件为设置域引用实体并原子发布到 Settings。
+     *
+     * [origin] 由调用方按触发链路指定——用户在界面上挑选图片（含图片查看器
+     * "设为背景"）为 [ArtifactOrigin.USER]；文生图工具自动设背景为
+     * [ArtifactOrigin.GENERATED]。
+     */
     suspend fun replaceBackground(
         assistantId: Uuid,
         source: File,
         mimeType: String,
+        origin: ArtifactOrigin,
     ): BackgroundUpdateResult {
         val copy = try {
             artifactStore.copyFile(
                 source = source,
                 mimeType = mimeType,
                 displayName = source.name,
+                origin = origin,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled

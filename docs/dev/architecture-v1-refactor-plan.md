@@ -16,8 +16,10 @@
 5. **`addMigrations` 注册位置**：在 `di/DataSourceModule.kt`（非 `AppDatabase.kt`）；DAO getter 命名风格为小写驼峰（`managedFileDao()`）。修订：A5 按实际位置与命名风格执行（`artifactDao()` / `artifactReferenceDao()` / `systemMetaDao()`）。
 6. **Target 执行事实**：Target 走 TurnEngine 后将开始写 `turn_execution`/`tool_execution`（现状 Target checkpoint 只窄列写）。Master 全库恢复扫描（`recoverInterruptedTurns`）需过滤 Child 会话的 turn（由 `SubAssistantRecovery` 全权收口 Child），避免双路径收口（§5 工作流 D3、H2）。
 7. **`ConversationHeader` 补 `newConversation`**：`Conversation.newConversation` 是 `@Transient` 运行态标记（新建未落库标记），snapshot 派生 `conversation` 投影时必须保留，否则标题生成等行为回归（§4.1.2）。
-8. **测试基建**：项目当前无 Robolectric 依赖；A9 的 `runMigrationsAndValidate`（M7/M8）需要 `testImplementation` 增加 `androidx.room.testing` + Robolectric（FTS 虚表与 libsimple 不在 Room schema 内，Migration 测试不受影响）。
+8. **测试基建**：Room 迁移测试对齐**上游范式**（`app/src/androidTest/.../Migration_11_12_Test.kt`）——用 **androidTest 插桩测试**（非 Robolectric JVM）：`build.gradle.kts` 配 `sourceSets { getByName("androidTest").assets.srcDirs("$projectDir/schemas") }`，`MigrationTestHelper` 用 4 参 `(instrumentation, AppDatabase::class.java, emptyList(), FrameworkSQLiteOpenHelperFactory())`。级联（FK）测试须显式 `PRAGMA foreign_keys = ON`（框架连接默认关闭）。`connectedDebugAndroidTest` 运行。FTS 虚表与 libsimple 不在 Room schema 内，Migration 测试不受影响。
 9. **`reconcileStartup` 需保留启动补录开关语义**：现 `MeasixPilotApp.syncManagedFiles` 调 `filesManager.syncFolder()`；修订后启动路径只做 reconcile（无 INSERT），原补录能力移至文件页显式 `rescanUntracked()`（正文 §4.3 已含，此处强调 E5 落点）。
+10. **（实施中裁决）`rescanUntracked` 与 `MISSING` 状态整体移除，写入路径原子化**：修订记录 9 保留的"文件页重新扫描补录入口"与 §3.3 的 `MISSING` 状态，经实施复核判定为对根因的事后补救而非修复——根因是 `FilesManager.trackManagedFile` 为 fire-and-forget 异步登记（失败仅日志），写文件成功但登记失败/未完成时遗留"磁盘有文件、DB 无记录"的不一致数据，`rescanUntracked`（补录）与 `MISSING`（缺失诊断）两个补丁功能均由此而来。裁决：① `trackManagedFile` 改造为同步 `registerTrackedFile`（登记失败 → 回滚删除磁盘文件、不返回失效 URI，"文件 + 记录"要么都在要么都不在，`createChatFilesByContents` / `createChatFilesByByteArrays` / `createChatTextFile` 相应 suspend 化、调用方协程化）；② 删除 `rescanUntracked()` / `FilesManager.syncFolder()` / 文件页"重新扫描"入口及相关本地化键；③ `ArtifactState` 只保留 `ACTIVE` / `DELETING`，`reconcileStartup` 对磁盘缺失的 ACTIVE 行直接删除（死数据清理，引用行经 FK 级联消失），删除 `MISSING` 徽标与 `files_page_state_missing` 键。数据完整性契约收敛为：DB 是唯一事实源，应用侧写入路径原子保证一致性，磁盘侧外部不一致由冷启动 reconcile 单向收敛（缺失→清行；外部放入→仅日志、绝不补录）。
+11. **（实施中裁决）`ArtifactOrigin` 诞生方式列并入 v6，语义账本与注释纪律同步收口**：文件管理页暴露出"上传"语义名不副实（upload 目录实际混居五类居民：用户附件、生成图 chat copy、助手背景/头像副本、工具产物、MCP 资源），根因是 artifact 领域模型缺失"诞生面"。裁决：① v6 `artifact` 表新增 `origin TEXT NOT NULL DEFAULT 'USER'`（`ArtifactOrigin { USER, GENERATED, SYSTEM }`，String 列存 `.name`，不索引）——USER=用户引入（聊天上传/背景选图/头像选图/查看器设背景）、GENERATED=生成媒体派生副本（文生图 chat copy、工具设背景）、SYSTEM=其余系统创建（模型输出落盘、Workspace/MCP 工具产物、子助手远程附件拉取）；② 两条写入规则：结构性复制继承源 origin（`createChatFilesByContents` 对 `file://` upload 源反查继承，覆盖 fork/克隆/子助手入站；`ManagedLocalArtifactStore.copyFilePreservingOrigin` 覆盖 tool output 重写），系统链路显式传参（`GeneratedMediaStore`/`AssistantBackgroundService.replaceBackground`/`convertBase64Image`/`WorkspaceTools`/`McpManager`/`AttachmentResolver`）；③ 文件页条目显示来源徽标（`setting_files_page_origin_*` 键 ×5 locale），tab 结构与删除流程不变；④ 语义账本定稿：`artifact` 表=聊天域+设置域的受引用文件实体注册表，`gen_media`=相册域化身编目，`tool_outputs`=非受管落盘层，`ArtifactStore`=生命周期协调器、`ManagedLocalArtifactStore`=写入门面（类名不改、KDoc 互声明边界）；⑤ 注释纪律：全部代码注释清除对本计划文档的术语引用（工作流编号/章节号/修订记录号/用例编号），改为语义自足描述——本计划归档后代码不依赖其编号体系。
 
 ---
 
@@ -143,7 +145,7 @@ Work（一次持续任务 = 一个 Conversation）
 | 变更 | 目的 / 实际操作频次 | 必要性裁决 |
 | --- | --- | --- |
 | `managed_files` RENAME → `artifact` | 语义统一；零运行时成本（一次性 DDL） | 采纳：语义化是本轮既定要求 |
-| `artifact.state` 列（ACTIVE / DELETING / MISSING）+ 索引 | 删除幂等屏障（CAS）+ 崩溃续删 + 缺失诊断。写频次 = 删除操作（低频）；读频次 = 文件页列表 + 每次冷启动 reconcile（按 state 索引扫） | 采纳：一个列同时解决 C4/C5，且是幂等屏障的唯一承载（见 3.2） |
+| `artifact.state` 列（ACTIVE / DELETING）+ 索引 | 删除幂等屏障（CAS）+ 崩溃续删。写频次 = 删除操作（低频）；读频次 = 文件页列表 + 每次冷启动 reconcile（按 state 索引扫）。磁盘缺失的 ACTIVE 行由 reconcile 直接清行（修订记录 10：无 MISSING 态） | 采纳：一个列同时解决 C4/C5，且是幂等屏障的唯一承载（见 3.2） |
 | 新表 `artifact_reference` | inspect（删除影响检查）从全库反序列化降为索引查询；GC 判定从内存对象匹配降为 SQL。写频次 = 每 checkpoint 增量小批量；读频次 = 删除确认（低频但关键路径） | 采纳：这是 C3 的唯一结构性解法 |
 | 新表 `system_meta(key, value)` | 软件级一次性标记（backfill flag 等）。写一次、读冷启动一次 | 采纳：必须随 DB 备份/恢复走（SharedPreferences 会在恢复后与库失配，见 3.5）；定义宽度足够承载未来任何一次性迁移标记 |
 | ~~`message_node.revision` 列~~ | delta 持久化 | **否决**：单写通道下 delta 由内存 structural diff（引用不等）计算，DB 层无任何读路径；列只为"未来可能的并发"预设，违背最小 schema 原则。未来真需要时加列是 additive migration |
@@ -171,7 +173,7 @@ WHERE id = :id AND state = 'ACTIVE'
 `data/db/entity/ArtifactEntity.kt`（原 `ManagedFileEntity.kt` 改名，既有列名不变；既有两个索引必须保留声明，见修订记录 1）：
 
 ```kotlin
-enum class ArtifactState { ACTIVE, DELETING, MISSING }
+enum class ArtifactState { ACTIVE, DELETING }
 
 @Entity(
     tableName = "artifact",
@@ -191,6 +193,7 @@ data class ArtifactEntity(
     @ColumnInfo(name = "created_at") val createdAt: Long,
     @ColumnInfo(name = "updated_at") val updatedAt: Long,
     @ColumnInfo(name = "state") val state: String = ArtifactState.ACTIVE.name,
+    @ColumnInfo(name = "origin") val origin: String = ArtifactOrigin.USER.name,  // 修订记录 11：诞生方式（USER / GENERATED / SYSTEM）
 )
 ```
 
@@ -862,13 +865,12 @@ class ArtifactStore(
     /**
      * 每次冷启动执行一次（成本：artifact 全表读 + 每文件一次 stat，文件数为百级时毫秒级）：
      *  - state=DELETING → 续删（步骤 3-4）
-     *  - state=ACTIVE 且磁盘缺失 → state=MISSING（日志）
+     *  - state=ACTIVE 且磁盘缺失 → 删除行（文件已不存在，记录是死数据；引用行经 FK 级联消失）
      *  - 磁盘存在但 DB 无记录 → 仅日志，绝不自动补录
+     * （修订记录 10：无 MISSING 中间态、无 rescanUntracked 补录入口——
+     *   应用侧写入路径已原子化，untracked 只可能来自外部，DB 是唯一事实源）
      */
     suspend fun reconcileStartup()
-
-    /** 文件页"重新扫描"显式入口（原 syncFolder 的补录能力，移出启动路径） */
-    suspend fun rescanUntracked()
 }
 ```
 
@@ -881,7 +883,7 @@ class ArtifactStore(
 | 文件已删、行未删 | 缺 | DELETING | 删行（引用级联），完成 |
 | 行已删 | 缺 | 无行 | 完成（无残留状态） |
 
-`FilesManager` 收缩为纯 payload IO：文件创建/写入/base64 落盘/删除/导出；metadata 登记（原私有 `trackManagedFile` + `FilesRepository` 调用）移交 `ArtifactStore`，`FilesManager` 上传/保存的公开方法签名不变、内部委托，**调用方零改动**。
+`FilesManager` 收缩为纯 payload IO + 登记门面：文件创建/写入/base64 落盘/删除/导出；metadata 登记经私有 `registerTrackedFile`（同步失败回滚删文件，修订记录 10）直连 `ArtifactDAO`（E4 备选分支裁决：`ArtifactStore` 构造依赖 `FilesManager`，反向注入成环，故登记门面留在 `FilesManager`、`ArtifactStore` 聚焦引用投影与生命周期）。上传/保存的公开方法签名除 suspend 化外不变，调用方以协程包裹适配。
 
 ### 4.4 Transformer 双通道
 
@@ -935,7 +937,7 @@ suspend fun submitConversationCommand(conversationId: Uuid, command: Conversatio
 
 **ChatList**：items 数据源 `conversation.messageNodes` → `snapshot.nodes`（key = node.id 不变）；未变节点引用相同 → Compose skip 真正生效。
 
-**SettingFilesPage**：`DeleteState { Idle; Confirming(target); Executing(target); Failed(reason) }`；进入 Executing 即禁用确认按钮（UX 层防重入）；底层幂等由 CAS 保证（4.3），重复请求返回 `Rejected` 时按 IN_PROGRESS（"删除进行中"）/ ALREADY_DELETED（"已删除，视为成功"）分别提示，不报错。列表项 state 徽标（MISSING；本地化键 `files_page_state_missing`，全 locale 同步）。
+**SettingFilesPage**：`DeleteState { Idle; Confirming(target); Executing(target); Failed(reason) }`；进入 Executing 即禁用确认按钮（UX 层防重入）；底层幂等由 CAS 保证（4.3），重复请求返回 `Rejected` 时按 IN_PROGRESS（"删除进行中"）/ ALREADY_DELETED（"已删除，视为成功"）分别提示，不报错。（修订记录 10：无 state 徽标——磁盘缺失行由 reconcile 清行，文件页不存在 MISSING 展示态。）
 
 ### 4.7 性能设计（四大机制）
 
@@ -968,7 +970,7 @@ suspend fun submitConversationCommand(conversationId: Uuid, command: Conversatio
 | A6 | 改名 | `ManagedFileDAO.kt` → `ArtifactDAO.kt` | 表名 `artifact`（@Query SQL 全量 `managed_files`→`artifact`）；现有方法保留；+ `compareAndSetState` / `listByState` / `getById` |
 | A7 | 新增 | `ArtifactReferenceDAO.kt` / `SystemMetaDAO.kt` | §3.6 |
 | A8 | 修改 | `MessageNodeDAO.kt` | + `upsertAll` / `deleteByIds` |
-| A9 | 测试 | `Migration_5_6Test.kt` | 用例集 M1–M8（见测试覆盖矩阵一：RENAME 数据完整、默认值、索引、FK 双级联、schema 校验、迁移/新建同构）。**基建**：`app/build.gradle.kts` 增加 `testImplementation(androidx.room.testing)` + `testImplementation(robolectric)`（M7 `runMigrationsAndValidate` / M8 schema 对比需要；现有套件无 Robolectric，仅本用例引入） |
+| A9 | 测试 | `app/src/androidTest/.../migrations/Migration_5_6Test.kt` | 用例集 M1–M8（见测试覆盖矩阵一：RENAME 数据完整、默认值、索引、FK 双级联、schema 校验、迁移/新建同构）。**基建**：`build.gradle.kts` `androidTest.assets.srcDirs("$projectDir/schemas")`（见修订记录 8）；级联用例 `PRAGMA foreign_keys = ON`；`connectedDebugAndroidTest` 运行 |
 
 ### 工作流 B：ConversationRuntime
 
@@ -1019,11 +1021,11 @@ suspend fun submitConversationCommand(conversationId: Uuid, command: Conversatio
 | E1 | 新增 | `data/files/ArtifactStore.kt` | §4.3 全部职责（合并吸收 `ManagedFileDeletionService` + `data/repository/FilesRepository.kt`，修订记录 2） |
 | E2 | 删除 | `ManagedFileDeletionService.kt` | 逻辑并入 E1：`inspect`（投影查询 + 回退）、`collectFileUrlStrings`、`detachMutableReferences`、删除协议（CAS 版） |
 | E3 | 删除 | `data/repository/FilesRepository.kt` | DB CRUD 职责并入 E1（非 `ManagedFileRepository`，该文件不存在；修订记录 2）。`ArtifactStore` 构造注入 `ArtifactDAO` 替代 `FilesRepository` |
-| E4 | 收缩 | `FilesManager.kt` | 纯磁盘 IO；metadata 登记委托 ArtifactStore（构造注入改 `ArtifactStore` 或保留 `ArtifactDAO` + 由 `ArtifactStore.registerCreation` 登记）；`syncFolder` 标注仅供 `rescanUntracked` |
-| E5 | 修改 | `MeasixPilotApp.kt` | `syncManagedFiles()` 内 `filesManager.syncFolder()` → `artifactStore.reconcileStartup()`（无 INSERT 补录路径）；其后启动 `backfillReferences()`（Application scope，不阻塞 UI；修订记录 9 强调 reconcile 不含补录，原补录能力移至文件页 `rescanUntracked`） |
+| E4 | 收缩 | `FilesManager.kt` | 纯磁盘 IO；metadata 登记保留 `ArtifactDAO` 直连（E4 备选分支裁决：`FilesManager` 无法注入 `ArtifactStore`——后者依赖前者，构造注入成环；登记走私有 `registerTrackedFile` 同步失败回滚，修订记录 10）；`syncFolder` 删除（补录能力整体移除，修订记录 10） |
+| E5 | 修改 | `MeasixPilotApp.kt` | `syncManagedFiles()` 内 `filesManager.syncFolder()` → `artifactStore.reconcileStartup()`（无 INSERT 补录路径）；其后启动 `backfillReferences()`（Application scope，不阻塞 UI；修订记录 10：无 `rescanUntracked` 后续入口——补录能力整体移除） |
 | E6 | 修改 | `di/AppModule.kt` / `di/RepositoryModule.kt`（Koin） | 新增注册：`ArtifactStore`（依赖 ArtifactDAO / ArtifactReferenceDAO / SystemMetaDAO / ConversationDAO / MessageNodeDAO / FilesManager / SettingsStore）、`TurnEngine`、`ConversationRuntimeRegistry`；移除旧绑定：`ManagedFileDeletionService`、`FilesRepository`（`FilesManager` 构造注入同步调整） |
-| E7 | 修改 | `SettingFilesPage.kt` | `DeleteState` 防重入 + `Rejected` 结果处理 + state 徽标 |
-| E8 | 修改 | `values/strings.xml` + zh/ja/ko/ru | `files_page_state_missing` 等新键全量同步 |
+| E7 | 修改 | `SettingFilesPage.kt` | `DeleteState` 防重入 + `Rejected` 结果处理（修订记录 10：无 state 徽标、无"重新扫描"入口） |
+| E8 | 修改 | `values/strings.xml` + zh/ja/ko/ru | 删除流程新增键全量同步（修订记录 10：`files_page_state_missing` 与 `files_page_rescan_*` 键随功能移除，不入库） |
 | E9 | 测试 | `ArtifactStoreTest.kt` | 用例集 BF1–BF5（回填）+ RS1–RS5（启动恢复，即 §4.3 时序表四行的机器可执行版）+ 并发 20 次 `deletePermanently` → 单次副作用 + CAS 二次调用返回 Rejected(IN_PROGRESS) + 行删除后再调返回 Rejected(ALREADY_DELETED)；存量 `ManagedFileDeletionServiceTest` 用例迁移并入 |
 
 ### 工作流 F/G：FTS 与 UI 消费切换
@@ -1113,7 +1115,7 @@ A ──► B ──► C ──► D ──► F/G ──► H ──► I ─�
 | --- | --- | --- | --- |
 | RS1 | artifact state=DELETING、磁盘文件在 | `reconcileStartup()` | 文件删除、行删除（续删完成） |
 | RS2 | state=DELETING、磁盘文件缺 | `reconcileStartup()` | 行删除（完成悬挂删除） |
-| RS3 | state=ACTIVE、磁盘文件缺 | `reconcileStartup()` | state=MISSING、行保留 |
+| RS3 | state=ACTIVE、磁盘文件缺 | `reconcileStartup()` | 行删除（死数据清理，引用级联消失；修订记录 10：无 MISSING 态） |
 | RS4 | 磁盘存在 untracked 文件、DB 无记录 | `reconcileStartup()` | **不 INSERT**，artifact 行数不变（"重启复活"缺陷的回归锁定） |
 | RS5 | artifact 表为空 | `reconcileStartup()` | 正常返回无异常 |
 
@@ -1173,7 +1175,7 @@ A ──► B ──► C ──► D ──► F/G ──► H ──► I ─�
 | 原现象 | 验收 |
 | --- | --- |
 | 长会话生成卡顿 | I2 + I5 + G3：checkpoint 写入与历史规模解耦；流式期间历史节点零变换零重组 |
-| 删除文件重启复活 | E5 + E9：启动无 INSERT 路径；reconcile 仅 MISSING/续删/日志 |
+| 删除文件重启复活 | E5 + E9 + 修订记录 10：启动无 INSERT 路径、写入路径原子化（登记失败回滚）；reconcile 仅续删/清行/日志 |
 | 删除重复点击 DB 异常 | I4：并发全收敛为单次副作用，无 operationId 依赖 |
 | 标题/folder 覆盖 | I3 + I1：无丢失更新、全库无整对象回写 |
 | 删除确认迟缓 | E1：inspect 为 EXISTS 索引查询；千会话级库 P95 < 50ms（本地基准） |

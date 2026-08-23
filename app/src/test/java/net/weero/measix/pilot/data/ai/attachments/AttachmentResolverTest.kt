@@ -13,7 +13,8 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.db.entity.ManagedFileEntity
+import net.weero.measix.pilot.data.db.entity.ArtifactEntity
+import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallArtifact
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
@@ -161,8 +162,8 @@ class AttachmentResolverTest {
             fileName = remoteName,
         )
         io.mockk.coEvery {
-            env.filesManager.saveManagedFromBytes("upload", TINY_PNG, remoteName, "image/png")
-        } returns ManagedFileEntity(
+            env.filesManager.saveManagedFromBytes("upload", TINY_PNG, remoteName, "image/png", ArtifactOrigin.SYSTEM)
+        } returns ArtifactEntity(
             id = 42,
             folder = "upload",
             relativePath = "upload/$remoteName",
@@ -192,8 +193,8 @@ class AttachmentResolverTest {
             fileName = remoteName,
         )
         io.mockk.coEvery {
-            env.filesManager.saveManagedFromBytes("upload", TINY_PNG, remoteName, "image/png")
-        } returns ManagedFileEntity(
+            env.filesManager.saveManagedFromBytes("upload", TINY_PNG, remoteName, "image/png", ArtifactOrigin.SYSTEM)
+        } returns ArtifactEntity(
             id = 42,
             folder = "upload",
             relativePath = "upload/$remoteName",
@@ -337,7 +338,7 @@ class AttachmentResolverTest {
 
     @Test
     fun `resolveImages keeps duplicate refs one to one in order`() = runTest {
-        // inspect_attachments 的顺序契约（设计文档 §8.4）：refs 与产出 1:1，重复 ref 不去重
+        // inspect_attachments 的顺序契约：refs 与产出 1:1，重复 ref 不去重
         val env = Env()
         val ref = AttachmentRefs.format(Uuid.random())
         val messages = listOf(
@@ -424,8 +425,8 @@ class AttachmentResolverTest {
             fileName = remoteName,
         )
         io.mockk.coEvery {
-            env.filesManager.saveManagedFromBytes("upload", TINY_PNG, remoteName, "image/png")
-        } returns ManagedFileEntity(
+            env.filesManager.saveManagedFromBytes("upload", TINY_PNG, remoteName, "image/png", ArtifactOrigin.SYSTEM)
+        } returns ArtifactEntity(
             id = 42,
             folder = "upload",
             relativePath = "upload/$remoteName",
@@ -461,7 +462,7 @@ class AttachmentResolverTest {
         assertEquals(refB, AttachmentRefs.getRef(parts[1]))
         // 同一 url 单次批量解析内只 fetch/落盘一次
         io.mockk.coVerify(exactly = 1) { env.fetcher.fetch("https://cdn.example/a.png") }
-        io.mockk.coVerify(exactly = 1) { env.filesManager.saveManagedFromBytes("upload", TINY_PNG, remoteName, "image/png") }
+        io.mockk.coVerify(exactly = 1) { env.filesManager.saveManagedFromBytes("upload", TINY_PNG, remoteName, "image/png", ArtifactOrigin.SYSTEM) }
         env.cleanup()
     }
 
@@ -483,7 +484,7 @@ class AttachmentResolverTest {
                 val relative = firstArg<String>()
                 val file = File(filesDir, relative)
                 if (!file.isFile) null
-                else ManagedFileEntity(
+                else ArtifactEntity(
                     id = 1,
                     folder = "upload",
                     relativePath = relative,
@@ -495,7 +496,7 @@ class AttachmentResolverTest {
                 )
             }
             every { filesManager.getFile(any()) } answers {
-                val entity = firstArg<ManagedFileEntity>()
+                val entity = firstArg<ArtifactEntity>()
                 File(filesDir, entity.relativePath)
             }
             coEvery { artifactStore.resolveToolPath(any()) } answers {

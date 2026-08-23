@@ -44,7 +44,7 @@ class GeneratedMediaStoreTest {
         coEvery { repository.insertMedia(any()) } returns 42L
         val artifactStore = mockk<ManagedLocalArtifactStore>()
         coEvery {
-            artifactStore.copyFile(any(), any(), any(), any())
+            artifactStore.copyFile(any(), any(), any(), any(), any())
         } returns LocalArtifactRef(relativePath = "upload/chat.png", mimeType = "image/png")
         val store = GeneratedMediaStore(filesDir, repository, artifactStore)
         val committed = store.commit(

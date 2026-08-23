@@ -36,6 +36,10 @@ interface FavoriteDAO {
     @Query("DELETE FROM favorites WHERE ref_key LIKE 'node:' || :conversationId || ':%'")
     suspend fun deleteNodeFavoritesOfConversation(conversationId: String): Int
 
+    /** 删除指定 node 的 favorites（applyMutation 增量节点删除用；ref_key = "node:<conversationId>:<nodeId>"）。 */
+    @Query("DELETE FROM favorites WHERE ref_key IN (:refKeys)")
+    suspend fun deleteNodeFavoritesByRefKeys(refKeys: List<String>): Int
+
     @Query("DELETE FROM favorites WHERE id = :id")
     suspend fun deleteById(id: String): Int
 }

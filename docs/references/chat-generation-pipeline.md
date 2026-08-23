@@ -9,10 +9,10 @@
 
 | 类型 | 职责 |
 |------|------|
-| `ChatService` | 会话入口与编排；持有 Master turn 生命周期、终态收口和请求装配 |
-| `ConversationSession` | 单会话内存状态、引用计数、turn-bound Job/取消原因、dirty revision 和处理状态 |
-| `GenerationHandler` | 构建请求、驱动最多 256 步的模型/工具循环、合并流式输出并发出 awaited checkpoint |
-| `ConversationRepository` | 原子提交 MessageNode、TurnExecution 和 ToolExecution；恢复遗留执行记录 |
+| `ChatService` | 会话入口与编排；通过 `ConversationRuntime.submit` 提交命令、请求装配与终态收口桥接 |
+| `ConversationRuntime` | 单会话事实源：`commandMutex` 单写、`snapshot`/`state` 投影、`applyStreamingDelta` 内存态、`submit` 差异落库 |
+| `TurnEngine` / `TurnPipelineFactory` | 生成期 chunk→持久化的统一提交协议（Master/Target 共享）；Transformer 装配 |
+| `ConversationRepository` | 单事务 `applyMutation`（message tree + 执行事实）；投影（FTS / artifact_reference）事务后维护 |
 | `InputMessageTransformer` | 请求发送前，以固定顺序变换消息 |
 | `OutputMessageTransformer` | 流式显示、持久化变换和生成结束后的收口处理 |
 | Provider 实现 | 把统一的 `UIMessage` / `TextGenerationParams` 转为 OpenAI、Claude、Google 等协议 |
@@ -53,12 +53,13 @@ ChatService.sendMessage()
             └─ 工具可执行：提交 STARTED 后执行；逐工具提交结果，再进入下一 step
                  │
                  ▼
-ChatService.collect()
-  ├─ 更新 ConversationSession（不根据瞬时 Conversation 差异删除本地文件）
+TurnEngine.bind().collect()（唯一提交协议，Master 与 Target 共用）
+  ├─ chunk → Streaming：ConversationRuntime.applyStreamingDelta 流式投影（纯内存，不落库）
   ├─ 通过 AppEventBus 发布生成进度、声音和通知事件
-  ├─ awaited onCheckpoint：消息、turn 与可选工具 execution 在一个 Room transaction 提交
-  └─ 所有退出路径进入同一 terminal finalizer：
-     - COMPLETED：保存会话，再异步生成标题和建议回复
+  ├─ awaited onCheckpoint → CommitCheckpoint 命令：delta 节点写入、turn 与可选工具 execution
+  │   事实在一个 Room transaction 提交（ConversationRepository.applyMutation）
+  └─ 所有退出路径进入同一 terminal finalizer（FinalizeTurn 命令）：
+     - COMPLETED：收口 turn，再异步生成标题和建议回复
      - STEP/INTERACTION_LIMIT：保存 INCOMPLETE，不启动完成副作用
      - CANCELLED / FAILED / Provider INCOMPLETE：保留部分内容和明确终态
      - AWAITING_APPROVAL：保存可恢复挂起状态，不启动完成副作用
@@ -66,7 +67,7 @@ ChatService.collect()
      被挡住的触发在当前请求结束后另起会话引用任务补一次。
      实际 LLM 请求最多 MAX_AUTO_TITLE_GENERATION_ATTEMPTS 次。
      缺模型不计入次数。空白结果不写回。抽屉里的手动重新生成不受该上限。
-     标题和建议只 patch 对应列并 merge 当前 Session，禁止用旧 Conversation 整对象覆盖消息树。
+     标题和建议只经 UpdateHeader 命令 patch 对应列，禁止用旧 Conversation 整对象覆盖消息树。
 ```
 
 工具结果在统一模型中内联于 `UIMessagePart.Tool.output`，不会作为持久化的
@@ -107,21 +108,22 @@ Master 路径按 `ChatService` 当前装配顺序执行，后一个接收前一�
 | 7 | `ToolArtifactReplayTransformer` | 按 artifact metadata 物化历史 Tool Result 的路径和 Image URL |
 | 8 | `AttachmentProjectionTransformer` | 递归顶层与 `Tool.output`：当前模型接收 IMAGE 时保留原图并附稳定引用行，否则只保留引用行并追加一次 capability hint |
 
-Target 复用相同附件投影语义，但由 `SubAssistantCoordinator` 组装自己的 Transformer 列表；它不是 Master 顺序的机械复制。子助手差异见 [`sub-assistant-multimodal.md`](sub-assistant-multimodal.md)。
+Target 复用相同附件投影语义，Transformer 装配统一走 `TurnPipelineFactory.targetInput()/targetOutput()`（与 Master 共用管道工厂，仅 Target 侧差异化选择项）；它不是 Master 顺序的机械复制。子助手差异见 [`sub-assistant-multimodal.md`](sub-assistant-multimodal.md)。
 
 `PromptInjectionTransformer` 支持 `BEFORE_SYSTEM_PROMPT`、`AFTER_SYSTEM_PROMPT`、
 `TOP_OF_CHAT`、`BOTTOM_OF_CHAT` 和 `AT_DEPTH`。插入点会避开用户消息与其工具回复之间的边界。
 
 ## Output Transformer 管道
 
-| 时机 | 方法 | 当前职责 |
+| 时机 | 接口 / 方法 | 当前职责 |
 |------|------|----------|
-| 流式 chunk 到达 | `transforms()` | `RegexOutputTransformer` 等真实变换，结果进入会话状态 |
-| 流式 UI 展示 | `visualTransforms()` | `ThinkTagTransformer` 等仅展示变换 |
-| 单步生成完成 | `onGenerationFinish()` | 提取最终 reasoning、将 base64 图片落盘 |
+| 流式 chunk 到达 | `StreamingMessageTransformer.transformStreaming()` | 只变换最后一条消息（单消息通道），`ThinkTagTransformer` 等展示变换在此生效，历史消息 immutable |
+| 流式结束 | `StreamingMessageTransformer.onStreamingFinish()` | 最后一条消息的收尾变换 |
+| checkpoint 提交前 | `OutputMessageTransformer.transform()` | `RegexOutputTransformer` 等真实变换，结果进入持久化事实 |
+| 单步生成完成 | `Base64ImageToLocalFileTransformer` 等 | 提取最终 reasoning、将 base64 图片落盘 |
 
-`visualTransforms()` 不应修改持久化事实；最终需要保存的变化必须进入 `transforms()` 或
-`onGenerationFinish()`。
+`transformStreaming()` 不应修改持久化事实（流式投影永不落库）；最终需要保存的变化必须进入
+`transform()`（checkpoint 路径）或由落盘 Transformer 在终态完成。
 
 ## 工具装配与执行
 
@@ -175,12 +177,13 @@ UI 层用 `resolveImageGenerationUiState()` 把执行结果与 artifact 可用�
 Conversation 状态更新不等于文件 GC。物理删除分两套语义：
 
 - 自动清理（删除消息/会话/分支、压缩历史、孤儿回收）必须经过
-  `ConversationRepository.deleteUnreferencedChatFiles()` 按 `collectFileReferenceTokens()`
-  做全局引用检查，有引用绝不删除；反序列化失败时保留文件。
+  `ArtifactStore.collectUnreferencedArtifacts()` 按 `collectFileReferenceTokens()`
+  做全局引用检查（含 `artifact_reference` 投影与 Assistant metadata 引用），有引用绝不删除；
+  反序列化失败时保留文件。
 - 用户在文件管理页明确确认的永久删除属于 destructive operation，由
-  `ManagedFileDeletionService` 协调：先原子解除 Assistant background/avatar 等
-  可变当前引用（Settings 写入成功才继续，失败则保留文件），再执行物理删除；
-  历史 Conversation 引用保持不动，Replay 投影为不可用。
+  `ArtifactStore.deletePermanently()` 协调（CAS 幂等，IN_PROGRESS 并发拒绝）：先原子解除
+  Assistant background/avatar 等可变当前引用（Settings 写入成功才继续，失败则保留文件），
+  再执行物理删除；历史 Conversation 引用保持不动，Replay 投影为不可用。
   显式删除造成的 `artifact_missing` 是正常状态，不得从 Gallery canonical 图
   自动复制回来「复活」文件，否则违反用户删除意图。
 
@@ -229,12 +232,12 @@ OpenAI Images 的 `moderation_blocked` / `content_policy_violation`，以及 xAI
 
 ## 会话与通知生命周期
 
-`ConversationSession` 负责单会话状态：
+`ConversationRuntime` 负责单会话状态（`service/runtime/`）：
 
 - 页面通过 `acquire()` / `release()` 维护引用；
-- 生成 Job 活跃时即使页面离开也保留 Session；
-- dirty revision 未提交时禁止回收；提交完成后即使没有新引用变化也会重新安排空闲检查；
-- 无引用、未生成且无 dirty revision 时，空闲超时后由 Registry 清理；
+- 生成 Job 活跃时即使页面离开也保留 Runtime；
+- 持久化失败标记 `pendingPersist` 未清除时禁止回收；落库成功后重新安排空闲检查；
+- 无引用、未生成且无 `pendingPersist` 时，空闲超时后由 `ConversationRuntimeRegistry` 清理；
 - 取消原因与 active turnId 绑定，旧 Job 的结束回调不能清除新 turn 状态；
 - 生成结束、失败或取消都通过 `AppEventBus` 发布事件；
 - `ChatNotificationManager` 独立消费事件，生成主链路不直接持有通知状态。
@@ -245,7 +248,7 @@ OpenAI Images 的 `moderation_blocked` / `content_policy_violation`，以及 xAI
 
 ## 子助手生成管线扩展
 
-子助手不是另一套生成引擎。它由 `SubAssistantCoordinator` 在通用 Generation Pipeline 外增加 preflight、lineage、lease、Child 持久化、运行状态和恢复编排；Target 内部仍使用同一 `GenerationHandler`、附件投影、Provider、工具循环和 checkpoint。
+子助手不是另一套生成引擎。它由 `DelegationCoordinator` 在通用 Generation Pipeline 外增加 preflight、lineage、lease、Child 持久化、运行状态和恢复编排；Target 内部仍使用同一 `GenerationHandler`、附件投影、Provider、工具循环和 checkpoint。
 
 通用管线为此提供：
 
@@ -253,7 +256,7 @@ OpenAI Images 的 `moderation_blocked` / `content_policy_violation`，以及 xAI
 - `GenerationChunk.Messages/Phase/Checkpoint/Finished`，区分消息更新、阶段、持久化边界和结束原因
 - 每个模型 step 重建工具的 `toolProvider`
 - Target 非交互审批策略，以及可由宿主承接的 `ask_user` 例外
-- Master/Child 共用的 `ConversationSessionRegistry`
+- Master/Child 共用的 `ConversationRuntimeRegistry`
 
 `assistant_call` 同步完成以下流程：校验 Caller、Target、访问与模型；解析当前 Master 分支的 lineage；获取 Master/Target lease；用最新 Settings 重验；新建、复用或克隆 Child；运行 Target；持续保存 Child 与 Master metadata；最后返回成功内容或稳定失败原因。内容政策拒绝、Provider HTTP 失败和未分类异常分别记为 `content_blocked`、`provider_error` 与 `runtime_error`，并带回裁剪后的 `detail`；默认带 `tts_stats` 与轻量 `artifacts[]`，完整 `tts` / `tool_calls` / 交付物内容由 `extras` 按需返回。普通工具 Pending 与子助手桥接的 `ask_user` 共用前台审批音效 `loop_approval`。
 
@@ -274,10 +277,14 @@ ai/src/main/java/me/rerere/ai/
 app/src/main/java/net/weero/measix/pilot/
 ├─ service/
 │  ├─ ChatService.kt                     # 会话编排、工具装配、显式压缩
-│  ├─ ConversationSession.kt             # 单会话状态
-│  ├─ ConversationSessionRegistry.kt     # Master/Child 共用 Session 生命周期
+│  ├─ runtime/                           # Runtime Core（v1 重构）
+│  │  ├─ ConversationCommands.kt         # 密封命令（BeginTurn/CommitCheckpoint/FinalizeTurn/UpdateHeader/...）
+│  │  ├─ ConversationReducer.kt          # 纯函数 reducer（structural sharing）
+│  │  ├─ ConversationRuntime.kt          # 单写 submit 命令通道 + applyStreamingDelta 流式投影
+│  │  ├─ ConversationRuntimeRegistry.kt  # Master/Child 共用 Runtime 生命周期
+│  │  ├─ TurnEngine.kt                   # chunk→投影 / checkpoint→CommitCheckpoint / 终态→FinalizeTurn 的唯一提交协议
+│  │  └─ DelegationCoordinator.kt        # Target 执行协调器
 │  ├─ AssistantManagementService.kt      # Assistant CRUD、原子授权、删除编排
-│  ├─ SubAssistantCoordinator.kt         # Target 执行协调器
 │  └─ ChatNotificationManager.kt         # 通知事件消费者
 └─ data/ai/
    ├─ GenerationHandler.kt               # Provider 请求与工具循环（含 Phase/Checkpoint/Finished）

@@ -20,11 +20,11 @@ import net.weero.measix.pilot.service.AssistantDataRecovery
 import net.weero.measix.pilot.service.AssistantDataRecoveryGate
 import net.weero.measix.pilot.service.ChatNotificationManager
 import net.weero.measix.pilot.service.ChatService
-import net.weero.measix.pilot.service.ConversationSessionRegistry
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.FavoriteModelService
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher
-import net.weero.measix.pilot.service.SubAssistantCoordinator
+import net.weero.measix.pilot.service.runtime.DelegationCoordinator
 import net.weero.measix.pilot.utils.EmojiData
 import net.weero.measix.pilot.utils.EmojiUtils
 import net.weero.measix.pilot.utils.JsonInstant
@@ -141,15 +141,16 @@ val appModule = module {
             conversationRepo = get(),
             filesManager = get(),
             sessionRegistry = get(),
-            subAssistantCoordinator = get(),
+            delegationCoordinator = get(),
             recoveryGate = get(),
         )
     }
 
     single {
-        ConversationSessionRegistry(
+        ConversationRuntimeRegistry(
             appScope = get(),
             settingsStore = get(),
+            repository = get(),
         )
     }
 
@@ -179,7 +180,7 @@ val appModule = module {
     }
 
     single {
-        SubAssistantCoordinator(
+        DelegationCoordinator(
             generationHandler = get(),
             conversationRepo = get(),
             sessionRegistry = get(),
@@ -200,7 +201,7 @@ val appModule = module {
             settingsStore = get(),
             assistantManagementService = get(),
             json = get(),
-            subAssistantCoordinator = get(),
+            delegationCoordinator = get(),
             toolSetFactory = get(),
         )
     }
@@ -213,7 +214,7 @@ val appModule = module {
             appScope = get(),
             settingsStore = get(),
             assistantManagementService = get(),
-            subAssistantCoordinator = get(),
+            delegationCoordinator = get(),
             recoveryGate = get(),
         )
     }
@@ -236,7 +237,7 @@ val appModule = module {
             folderRepository = get(),
             soundEffectPlayer = get(),
             assistantToolFactory = get(),
-            subAssistantCoordinator = get(),
+            delegationCoordinator = get(),
             sessionRegistry = get(),
             recoveryGate = get(),
             json = get(),

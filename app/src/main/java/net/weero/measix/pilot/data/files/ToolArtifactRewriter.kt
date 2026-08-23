@@ -28,7 +28,7 @@ class ToolArtifactRewriter(
             return unreadableOutput(output) to metadata
         }
         val sourceFile = materialized.file(filesDir)
-        val copied = artifactStore.copyFile(
+        val copied = artifactStore.copyFilePreservingOrigin(
             source = sourceFile,
             mimeType = materialized.mimeType,
             displayName = sourceFile.name,

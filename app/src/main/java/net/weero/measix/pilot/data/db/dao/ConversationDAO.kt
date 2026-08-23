@@ -32,9 +32,6 @@ interface ConversationDAO {
     @Query("SELECT * FROM conversationentity WHERE parent_conversation_id IS NULL AND assistant_id = :assistantId ORDER BY is_pinned DESC, update_at DESC LIMIT :limit")
     suspend fun getRecentConversationsOfAssistant(assistantId: String, limit: Int): List<ConversationEntity>
 
-    @Query("SELECT * FROM conversationentity WHERE parent_conversation_id IS NULL AND title LIKE '%' || :searchText || '%' ORDER BY is_pinned DESC, update_at DESC")
-    fun searchConversations(searchText: String): Flow<List<ConversationEntity>>
-
     @Query("SELECT id, assistant_id as assistantId, title, is_pinned as isPinned, create_at as createAt, update_at as updateAt, folder_id as folderId FROM conversationentity WHERE parent_conversation_id IS NULL AND title LIKE '%' || :searchText || '%' ORDER BY is_pinned DESC, update_at DESC")
     fun searchConversationsPaging(searchText: String): PagingSource<Int, LightConversationEntity>
 
@@ -68,9 +65,6 @@ interface ConversationDAO {
     @Delete
     suspend fun delete(conversation: ConversationEntity)
 
-    @Query("UPDATE conversationentity SET nodes = '[]' WHERE id = :id")
-    suspend fun resetConversationNodes(id: String)
-
     @Query("DELETE FROM conversationentity WHERE id = :id")
     suspend fun deleteById(id: String)
 
@@ -91,6 +85,18 @@ interface ConversationDAO {
 
     @Query("UPDATE conversationentity SET folder_id = :folderId WHERE id = :id")
     suspend fun updateFolderId(id: String, folderId: String)
+
+    @Query("UPDATE conversationentity SET assistant_id = :assistantId WHERE id = :id")
+    suspend fun updateAssistantId(id: String, assistantId: String)
+
+    @Query("UPDATE conversationentity SET custom_system_prompt = :prompt WHERE id = :id")
+    suspend fun updateCustomSystemPrompt(id: String, prompt: String)
+
+    @Query("UPDATE conversationentity SET mode_injection_ids = :ids WHERE id = :id")
+    suspend fun updateModeInjectionIds(id: String, ids: String)
+
+    @Query("UPDATE conversationentity SET workspace_cwd = :cwd WHERE id = :id")
+    suspend fun updateWorkspaceCwd(id: String, cwd: String)
 
     @Query("UPDATE conversationentity SET folder_id = '' WHERE folder_id = :folderId")
     suspend fun clearFolder(folderId: String)
@@ -118,6 +124,11 @@ interface ConversationDAO {
     @Query("DELETE FROM conversationentity WHERE parent_conversation_id = :parentConversationId")
     suspend fun deleteChildConversations(parentConversationId: String)
 
+    /**
+     * 全库 Child 会话 id（核查保留）：消费方为 DelegationCoordinator（Master 恢复过滤）
+     * 与 AssistantBackgroundService（背景任务跳过 Child）——两者均非"旧 inspect/Recovery"路径，
+     * 不在删除清单内。
+     */
     @Query("SELECT id FROM conversationentity WHERE parent_conversation_id IS NOT NULL")
     suspend fun getAllChildConversationIds(): List<String>
 

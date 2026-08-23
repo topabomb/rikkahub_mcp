@@ -7,33 +7,38 @@ import net.weero.measix.pilot.data.model.AssistantAffectScope
 import net.weero.measix.pilot.data.model.replaceRegexes
 import org.koin.core.component.KoinComponent
 
-object RegexOutputTransformer : OutputMessageTransformer, KoinComponent {
-    override suspend fun visualTransform(
+object RegexOutputTransformer : OutputMessageTransformer, StreamingMessageTransformer, KoinComponent {
+    override suspend fun transformStreaming(
         ctx: TransformerContext,
-        messages: List<UIMessage>,
-    ): List<UIMessage> {
+        message: UIMessage,
+    ): UIMessage = applyRegexes(ctx, message)
+
+    override suspend fun onStreamingFinish(
+        ctx: TransformerContext,
+        message: UIMessage,
+    ): UIMessage = applyRegexes(ctx, message)
+
+    private fun applyRegexes(ctx: TransformerContext, message: UIMessage): UIMessage {
         val assistant = ctx.assistant
-        if (assistant.regexes.isEmpty()) return messages // No regexes, return original messages
-        return messages.map { message ->
-            val scope = when (message.role) {
-                MessageRole.ASSISTANT -> AssistantAffectScope.ASSISTANT
-                else -> return@map message // Skip non-assistant messages
-            }
-            message.copy(
-                parts = message.parts.map { part ->
-                    when (part) {
-                        is UIMessagePart.Text -> {
-                            part.copy(text = part.text.replaceRegexes(assistant, scope, visual = false))
-                        }
-
-                        is UIMessagePart.Reasoning -> {
-                            part.copy(reasoning = part.reasoning.replaceRegexes(assistant, scope, visual = false))
-                        }
-
-                        else -> part
-                    }
-                }
-            )
+        if (assistant.regexes.isEmpty()) return message
+        val scope = when (message.role) {
+            MessageRole.ASSISTANT -> AssistantAffectScope.ASSISTANT
+            else -> return message // Skip non-assistant messages
         }
+        return message.copy(
+            parts = message.parts.map { part ->
+                when (part) {
+                    is UIMessagePart.Text -> {
+                        part.copy(text = part.text.replaceRegexes(assistant, scope, visual = false))
+                    }
+
+                    is UIMessagePart.Reasoning -> {
+                        part.copy(reasoning = part.reasoning.replaceRegexes(assistant, scope, visual = false))
+                    }
+
+                    else -> part
+                }
+            }
+        )
     }
 }

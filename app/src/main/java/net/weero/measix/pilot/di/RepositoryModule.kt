@@ -1,14 +1,14 @@
 package net.weero.measix.pilot.di
 
 import android.content.Context
+import net.weero.measix.pilot.data.db.dao.ArtifactDAO
+import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.files.FilesManager
-import net.weero.measix.pilot.data.files.ManagedFileDeletionService
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.FavoriteRepository
 import net.weero.measix.pilot.data.repository.FolderRepository
-import net.weero.measix.pilot.data.repository.FilesRepository
 import net.weero.measix.pilot.data.repository.GenMediaRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
@@ -21,7 +21,7 @@ import java.io.File
 
 val repositoryModule = module {
     single {
-        ConversationRepository(get(), get(), get(), get(), get(), get(), get(), get())
+        ConversationRepository(get(), get(), get(), get(), get(), get(), get(), get(), get())
     }
 
     single {
@@ -34,10 +34,6 @@ val repositoryModule = module {
 
     single {
         GenMediaRepository(get())
-    }
-
-    single {
-        FilesRepository(get())
     }
 
     single {
@@ -81,7 +77,15 @@ val repositoryModule = module {
     }
 
     single {
-        ManagedFileDeletionService(get(), get(), get())
+        ArtifactStore(
+            filesManager = get(),
+            artifactDAO = get<ArtifactDAO>(),
+            artifactReferenceDAO = get(),
+            systemMetaDAO = get(),
+            conversationDAO = get(),
+            messageNodeDAO = get(),
+            settingsStore = get(),
+        )
     }
 
     single {

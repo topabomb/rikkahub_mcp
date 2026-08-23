@@ -33,7 +33,7 @@ const val ATTACHMENT_INSPECTION_TOOL_NAME = "inspect_attachments"
 private const val TAG = "AttachmentInspectionTool"
 
 /**
- * 工具实现契约内的固定系统指令（设计文档 §8.5）：只约束证据边界、安全边界和不确定性，
+ * 工具实现契约内的固定系统指令：只约束证据边界、安全边界和不确定性，
  * 不携带主会话历史、Assistant system prompt 或用户可配置 Prompt。
  */
 private const val INSPECTION_SYSTEM_INSTRUCTION =
@@ -42,7 +42,7 @@ private const val INSPECTION_SYSTEM_INSTRUCTION =
         "Report relevant visible evidence and state uncertainty rather than guess."
 
 /**
- * `inspect_attachments`：按需读取附件内容的 Runtime capability tool（设计文档 §8）。
+ * `inspect_attachments`：按需读取附件内容的 Runtime capability tool。
  *
  * - 只接受 stable `attachment:<uuid>`，1..4 个，输入顺序即识别/比较顺序；
  * - 附件解析统一走 [ToolExecutionContext.resolveAttachments]（单一解析规则），
@@ -144,7 +144,7 @@ internal suspend fun executeInspection(
         return inspectionFailure(AttachmentFailureReasons.INSPECTION_MODEL_UNAVAILABLE)
     }
 
-    // 单一解析规则：refs → Runtime resolver → parts；失败 reason 原样透传（§5）。
+    // 单一解析规则：refs → Runtime resolver → parts；失败 reason 原样透传。
     val resolution = resolveAttachments(refs)
     resolution.failureReason?.let { return inspectionFailure(it) }
     val images = resolution.parts.filterIsInstance<UIMessagePart.Image>()
@@ -202,7 +202,7 @@ internal suspend fun executeInspection(
     }
 }
 
-/** 多图输入的内部标签，保证跨图比较无歧义（§8.4）。 */
+/** 多图输入的内部标签，保证跨图比较无歧义。 */
 internal fun imageLabel(index: Int, image: UIMessagePart.Image): String {
     val ref = AttachmentRefs.getRef(image)
     val name = image.url.substringAfterLast('/').substringBefore('?').ifBlank { "image" }

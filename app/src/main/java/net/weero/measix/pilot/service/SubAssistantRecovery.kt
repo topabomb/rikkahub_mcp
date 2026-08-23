@@ -16,6 +16,7 @@ import net.weero.measix.pilot.data.ai.subassistant.resolveSubAssistantRunSpec
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.service.runtime.collectSubAssistantCallOutputs
 import kotlin.uuid.Uuid
 
 internal data class SubAssistantRecoveryResult(

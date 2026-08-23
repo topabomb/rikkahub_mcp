@@ -90,7 +90,7 @@ fun SubAssistantCallCard(
         return
     }
 
-    // 实时解析 Target 头像：失败或已删除时使用默认头像（文档 §10.1）
+    // 实时解析 Target 头像：失败或已删除时使用默认头像
     val settings = LocalSettings.current
     val targetAvatar = remember(metadata.targetAssistantId, settings.assistants) {
         runCatching {

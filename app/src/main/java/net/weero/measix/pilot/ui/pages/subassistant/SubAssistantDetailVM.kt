@@ -22,7 +22,7 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
-import net.weero.measix.pilot.service.ConversationSessionRegistry
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import kotlin.uuid.Uuid
 
 data class SubAssistantDetailLink(
@@ -144,7 +144,7 @@ class SubAssistantDetailVM(
     private val runId: String,
     private val conversationRepository: ConversationRepository,
     settingsStore: SettingsStore,
-    private val sessionRegistry: ConversationSessionRegistry,
+    private val sessionRegistry: ConversationRuntimeRegistry,
     private val json: Json,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow<SubAssistantDetailUiState>(SubAssistantDetailUiState.Loading)
@@ -227,7 +227,7 @@ class SubAssistantDetailVM(
     private suspend fun resolveLinkOnce(
         masterId: Uuid,
         initialMaster: Conversation,
-        activeMaster: net.weero.measix.pilot.service.ConversationSession?,
+        activeMaster: net.weero.measix.pilot.service.runtime.ConversationRuntime?,
     ): SubAssistantDetailLink? {
         // 先从当前状态尝试
         val initialResult = resolveSubAssistantDetailLink(initialMaster, runId, json)

@@ -37,7 +37,7 @@ System
                                   不可读时只保留引用行 + 末尾一次 capability hint
 ```
 
-Target 复用相同模型可见语义，但 Transformer 装配由 `SubAssistantCoordinator` 独立负责；完整顺序见
+Target 复用相同模型可见语义，但 Transformer 装配由 `DelegationCoordinator` 独立负责；完整顺序见
 [`chat-generation-pipeline.md`](chat-generation-pipeline.md) 与
 [`sub-assistant-multimodal.md`](sub-assistant-multimodal.md)。
 
