@@ -17,11 +17,11 @@ import net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
-import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.files.SkillManager
+import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.model.Assistant
-import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
+import net.weero.measix.pilot.service.ConversationQueryService
 import me.rerere.workspace.WorkspaceShellStatus
 import kotlinx.serialization.json.jsonObject
 import kotlin.uuid.Uuid
@@ -30,44 +30,42 @@ private const val TAG = "GenerationToolSetFactory"
 
 /**
  * 按 Assistant、资源和 Run Mode 统一装配 Search/Local/Conversation/Workspace/Skill/MCP 工具。
- * 从 ChatService 抽取，供 Master 和 Child（Target Run）共用。
+ * 供 Master 和 Child（Target Run）共用的工具装配 owner。
  */
 class GenerationToolSetFactory(
     private val localTools: LocalTools,
-    private val conversationRepo: ConversationRepository,
+    private val conversationQueryService: ConversationQueryService,
     private val skillManager: SkillManager,
     private val workspaceRepository: WorkspaceRepository,
     private val mcpManager: McpManager,
     private val providerManager: ProviderManager,
+    private val artifactStore: ArtifactStore,
 ) {
     /**
      * 构建指定 Assistant 的工具集（不含 Memory Tools，那些由 GenerationHandler 内部添加）。
      *
      * @param assistant 目标助手
      * @param settings 当前设置（本 run 的 snapshot）
-     * @param resolvedModel 本次 run 实际使用的 resolved chat model；Master/Target 都必须传真实模型，
-     *   不能回退到 `settings.getChatModel(assistant)` 猜测（Target 可在运行时继承 Caller model）。
+     * @param capabilityModel 本次 run 的实际模型，或非运行时检查中显式解析的配置模型。
      * @param workspaceCwd 工作目录（可覆盖会话级别）
      * @param runMode Target Run 时过滤 Assistant Tools；ask_user 保留给 Coordinator 桥接
      */
     suspend fun buildTools(
         assistant: Assistant,
         settings: Settings,
-        resolvedModel: Model? = null,
+        capabilityModel: Model?,
         workspaceCwd: String? = null,
         runMode: ToolSetRunMode = ToolSetRunMode.NORMAL,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
         additionalToolsBeforeMcp: List<Tool> = emptyList(),
         onInvalidMcpServerNames: (List<String>) -> Unit = {},
     ): List<Tool> {
-        // 能力判断优先使用本次 run 的真实模型；缺省时回退静态 Assistant 设置（仅测试/旧调用）。
-        val effectiveModel = resolvedModel ?: settings.getChatModel(assistant)
         return buildList {
-            if (shouldUseExternalWebSearch(assistant, effectiveModel)) {
+            if (shouldUseExternalWebSearch(assistant, capabilityModel)) {
                 addAll(createSearchTools(settings))
             }
 
-            if (shouldInjectAttachmentInspection(effectiveModel, settings)) {
+            if (shouldInjectAttachmentInspection(capabilityModel, settings)) {
                 add(createAttachmentInspectionTool(settings, providerManager))
             }
 
@@ -99,7 +97,7 @@ class GenerationToolSetFactory(
             )
 
             if (assistant.enableRecentChatsReference) {
-                addAll(createConversationTools(conversationRepo, assistant.id))
+                addAll(createConversationTools(conversationQueryService, assistant.id))
             }
 
             addAll(createWorkspaceToolsIfReady(assistant.workspaceId?.toString(), workspaceCwd))
@@ -135,8 +133,11 @@ class GenerationToolSetFactory(
                             description = tool.description ?: "",
                             parameters = { tool.inputSchema },
                             needsApproval = { tool.needsApproval },
-                            execute = {
-                                mcpManager.callTool(serverId, tool.name, it.jsonObject)
+                            execute = { error("MCP tools require ToolExecutionContext") },
+                            contextualExecute = {
+                                mcpManager.callTool(serverId, tool.name, it.jsonObject) { owned ->
+                                    registerUnpublishedResource(artifactStore.unpublishedLease(owned))
+                                }
                             },
                         )
                     )
@@ -161,7 +162,7 @@ class GenerationToolSetFactory(
             )
             return emptyList()
         }
-        return createWorkspaceTools(workspaceId, workspaceRepository, cwd)
+        return createWorkspaceTools(workspaceId, workspaceRepository, artifactStore, cwd)
     }
 }
 

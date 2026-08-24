@@ -172,6 +172,7 @@
   <string name="backup_page_export_desc">Export app data to a file</string>
   <string name="backup_page_exporting">Exporting...</string>
   <string name="backup_page_files">Files</string>
+  <string name="backup_page_durable_aggregate">Chats and managed files</string>
   <string name="backup_page_import_desc">Import local backup file</string>
   <string name="backup_page_import_export">Local</string>
   <string name="backup_page_importing">Importing...</string>
@@ -223,6 +224,10 @@
   <string name="chat_input_placeholder">Chat with AI</string>
   <string name="chat_input_unsupported_file_type">Unsupported file type: %s</string>
   <string name="chat_input_file_read_failed">Failed to read file: %s</string>
+  <string name="chat_conversation_missing_title">Conversation unavailable</string>
+  <string name="chat_conversation_missing_message">This conversation could not be found. Retry to initialize it again.</string>
+  <string name="chat_conversation_load_failed_title">Unable to load conversation</string>
+  <string name="chat_conversation_load_failed_message">The conversation data could not be loaded: %1$s</string>
   <string name="chat_message_add_favorite">Add Favorite</string>
   <string name="chat_message_remove_favorite">Remove Favorite</string>
   <string name="chat_message_tool_approve">Approve</string>
@@ -628,12 +633,14 @@
   <string name="search_detail_username">Username</string>
   <string name="search_page_hint">Enter keywords and press Search to find messages</string>
   <string name="search_page_no_results">No results</string>
+  <string name="search_page_query_failed">Search failed. Try again.</string>
   <string name="search_page_placeholder">Search message content...</string>
   <string name="search_page_rebuild_button">Rebuild Index</string>
   <string name="search_page_rebuild_index">Rebuild Message Index</string>
   <string name="search_page_rebuild_index_desc">This will clear the existing index and re-scan all chat history. The more messages, the longer it takes. Continue?</string>
   <string name="search_page_rebuilding">Rebuilding index (%1$d / %2$d)...</string>
   <string name="search_page_rebuilding_simple">Rebuilding index...</string>
+  <string name="search_page_rebuild_failed">Could not rebuild the search index.</string>
   <string name="search_page_sort">Sort</string>
   <string name="search_page_sort_newest">Newest first</string>
   <string name="search_page_sort_oldest">Oldest first</string>
@@ -703,6 +710,7 @@
   <string name="setting_display_page_custom_font_import_success">Custom font imported</string>
   <string name="setting_display_page_custom_font_not_imported">No custom font imported. Supports .ttf, .otf, and .ttc files.</string>
   <string name="setting_display_page_custom_font_remove">Remove custom font</string>
+  <string name="setting_display_page_custom_font_remove_failed">Failed to remove font: %1$s</string>
   <string name="setting_display_page_custom_font_title">Custom Font</string>
   <string name="setting_display_page_enable_auto_scroll_desc">Automatically scroll to the bottom when AI is generating content</string>
   <string name="setting_display_page_enable_auto_scroll_title">Auto Scroll</string>
@@ -1458,5 +1466,21 @@
   <string name="chat_message_terminal_incomplete">Response ended before the task was complete.</string>
   <string name="chat_message_terminal_interrupted">Response was interrupted.</string>
   <string name="chat_message_media_persistence_failed">An image could not be saved and is unavailable.</string>
+  <string name="application_recovery_loading">Restoring application data…</string>
+  <string name="application_recovery_failed">Application data recovery failed</string>
+  <string name="application_recovery_retry">Retry</string>
+  <string name="conversation_activity_generating_response">Generating response</string>
+  <string name="conversation_activity_generating_title">Generating title</string>
+  <string name="image_viewer_delete_failed">Failed to delete image</string>
+  <string name="chat_page_delete_message_generating">Stop generation before deleting this message.</string>
+  <string name="image_import_failed">Failed to import image.</string>
+  <string name="imggen_page_add_reference_image">Add reference image</string>
+  <string name="imggen_page_reference_import_failed">Some reference images could not be added.</string>
+  <string name="workspace_detail_load_failed">Failed to load workspace</string>
+  <string name="workspace_detail_load_files_failed">Failed to load workspace files</string>
+  <string name="workspace_detail_import_failed">Failed to import file</string>
+  <string name="workspace_detail_export_failed">Failed to export file</string>
+  <string name="workspace_detail_delete_failed">Failed to delete file</string>
+  <string name="chat_page_export_failed">Export failed: %1$s</string>
 </resources>
 

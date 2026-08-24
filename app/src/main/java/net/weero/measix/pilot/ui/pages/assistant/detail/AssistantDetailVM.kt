@@ -1,7 +1,7 @@
 package net.weero.measix.pilot.ui.pages.assistant.detail
 
+import android.net.Uri
 import android.util.Log
-import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -17,7 +17,7 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
-import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.service.ArtifactUseCase
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.files.SkillMetadata
 import net.weero.measix.pilot.data.model.Assistant
@@ -34,7 +34,7 @@ class AssistantDetailVM(
     private val id: String,
     private val settingsStore: SettingsStore,
     private val memoryRepository: MemoryRepository,
-    private val filesManager: FilesManager,
+    private val artifactUseCase: ArtifactUseCase,
     private val skillManager: SkillManager,
     private val workspaceRepository: WorkspaceRepository,
 ) : ViewModel() {
@@ -177,52 +177,45 @@ class AssistantDetailVM(
     fun update(assistant: Assistant) {
         val pageSnapshot = this.assistant.value
         viewModelScope.launch {
-            // 关闭"作为子助手"时同一次原子更新中关闭"全局可见"并从所有
-            // Assistant 的允许列表移除其 ID，避免重新开启时静默恢复旧授权。
-            // 使用 updateAtomic 保证读取最新值 → 修改 → 提交在同一 Mutex 串行块内完成。
-            var committedChange: Pair<Assistant, Assistant>? = null
-            settingsStore.updateAtomic { currentSettings ->
-                val oldAssistant = currentSettings.assistants.find { it.id == assistant.id }
-                    ?: return@updateAtomic currentSettings
-                val baseline = pageSnapshot.takeIf { it.id == assistant.id } ?: oldAssistant
-                val mergedAssistant = mergeAssistantDelta(
-                    baseline = baseline,
-                    edited = assistant,
-                    current = oldAssistant,
-                )
+            updateAndAwait(pageSnapshot, assistant)
+        }
+    }
 
-                // 检测是否从子助手关闭为普通 Assistant
-                val wasSubAssistant = oldAssistant.allowAsSubAssistant
-                val isNowSubAssistant = mergedAssistant.allowAsSubAssistant
-                val subAssistantDisabled = wasSubAssistant && !isNowSubAssistant
+    suspend fun importAvatar(uri: Uri) {
+        importAssistantImage(uri) { current, localUri ->
+            current.copy(avatar = Avatar.Image(localUri.toString()))
+        }
+    }
 
-                val finalAssistant = if (subAssistantDisabled) {
-                    // 关闭子助手类别时同步关闭全局可见
-                    mergedAssistant.copy(isSubAssistantGloballyVisible = false)
-                } else {
-                    mergedAssistant
-                }
-                committedChange = oldAssistant to finalAssistant
+    suspend fun importBackground(uri: Uri) {
+        importAssistantImage(uri) { current, localUri -> current.copy(background = localUri.toString()) }
+    }
 
-                val updatedAssistants = currentSettings.assistants.map {
-                    if (it.id == assistant.id) {
-                        finalAssistant
-                    } else {
-                        // 关闭子助手类别时从所有 Assistant 的允许列表移除其 ID
-                        if (subAssistantDisabled && it.allowedSubAssistantIds.contains(assistant.id)) {
-                            it.copy(allowedSubAssistantIds = it.allowedSubAssistantIds - assistant.id)
-                        } else {
-                            it
-                        }
-                    }
-                }
+    private suspend fun importAssistantImage(uri: Uri, edit: (Assistant, Uri) -> Assistant) {
+        val pageSnapshot = assistant.value
+        var committedChange: Pair<Assistant, Assistant>? = null
+        artifactUseCase.importSettingsImage(uri) { currentSettings, localUri ->
+            val update = buildAssistantSettingsUpdate(currentSettings, pageSnapshot, edit(pageSnapshot, localUri))
+            committedChange = update.change
+            update.settings
+        }
+        collectReplacedArtifacts(committedChange)
+    }
 
-                currentSettings.copy(assistants = updatedAssistants)
-            }
-            // 文件副作用必须在 DataStore 提交成功之后执行。
-            committedChange?.let { (oldAssistant, newAssistant) ->
-                checkAvatarDelete(old = oldAssistant, new = newAssistant)
-                checkBackgroundDelete(old = oldAssistant, new = newAssistant)
+    private suspend fun updateAndAwait(pageSnapshot: Assistant, edited: Assistant) {
+        var committedChange: Pair<Assistant, Assistant>? = null
+        artifactUseCase.updateSettingsReferences { currentSettings ->
+            val update = buildAssistantSettingsUpdate(currentSettings, pageSnapshot, edited)
+            committedChange = update.change
+            update.settings
+        }
+        collectReplacedArtifacts(committedChange)
+    }
+
+    private suspend fun collectReplacedArtifacts(change: Pair<Assistant, Assistant>?) {
+        change?.let { (oldAssistant, newAssistant) ->
+            if (oldAssistant.avatar != newAssistant.avatar || oldAssistant.background != newAssistant.background) {
+                artifactUseCase.maintainStorage()
             }
         }
     }
@@ -265,27 +258,37 @@ class AssistantDetailVM(
         }
     }
 
-    fun checkAvatarDelete(old: Assistant, new: Assistant) {
-        if (old.avatar is Avatar.Image && old.avatar != new.avatar) {
-            filesManager.deleteChatFiles(listOf(old.avatar.url.toUri()))
+}
+
+private data class AssistantSettingsUpdate(
+    val settings: Settings,
+    val change: Pair<Assistant, Assistant>?,
+)
+
+private fun buildAssistantSettingsUpdate(
+    currentSettings: Settings,
+    pageSnapshot: Assistant,
+    edited: Assistant,
+): AssistantSettingsUpdate {
+    val oldAssistant = currentSettings.assistants.find { it.id == edited.id }
+        ?: return AssistantSettingsUpdate(currentSettings, null)
+    val baseline = pageSnapshot.takeIf { it.id == edited.id } ?: oldAssistant
+    val mergedAssistant = mergeAssistantDelta(baseline, edited, oldAssistant)
+    val subAssistantDisabled = oldAssistant.allowAsSubAssistant && !mergedAssistant.allowAsSubAssistant
+    val finalAssistant = if (subAssistantDisabled) {
+        mergedAssistant.copy(isSubAssistantGloballyVisible = false)
+    } else {
+        mergedAssistant
+    }
+    val assistants = currentSettings.assistants.map { candidate ->
+        when {
+            candidate.id == edited.id -> finalAssistant
+            subAssistantDisabled && edited.id in candidate.allowedSubAssistantIds ->
+                candidate.copy(allowedSubAssistantIds = candidate.allowedSubAssistantIds - edited.id)
+            else -> candidate
         }
     }
-
-    fun checkBackgroundDelete(old: Assistant, new: Assistant) {
-        val oldBackground = old.background
-        val newBackground = new.background
-
-        if (oldBackground != null && oldBackground != newBackground) {
-            try {
-                val oldUri = oldBackground.toUri()
-                if (oldUri.scheme == "content" || oldUri.scheme == "file") {
-                    filesManager.deleteChatFiles(listOf(oldUri))
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to delete background file: $oldBackground", e)
-            }
-        }
-    }
+    return AssistantSettingsUpdate(currentSettings.copy(assistants = assistants), oldAssistant to finalAssistant)
 }
 
 private fun <T> pickAssistantField(baseline: T, edited: T, current: T): T =

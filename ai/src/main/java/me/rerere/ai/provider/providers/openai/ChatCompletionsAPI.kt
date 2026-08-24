@@ -263,7 +263,8 @@ class ChatCompletionsAPI(
                 buildMessages(
                     messages = messages,
                     // OpenAI 官方 Chat Completions 不定义 reasoning_content，且 tool 消息只接受文本。
-                    // 兼容服务仍保留原扩展能力；这里按固定 host 自动收敛，不增加用户配置或方言选择。
+                    // 兼容网关可提供 reasoning_content 和多模态 tool result 扩展；
+                    // 官方 OpenAI host 使用标准 Chat Completions 形状。
                     includeHistoryReasoning = providerSetting.includeHistoryReasoning && !isOfficialOpenAI,
                     supportToolResultModalities = if (isOfficialOpenAI) {
                         listOf(Modality.TEXT)

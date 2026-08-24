@@ -5,19 +5,21 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.subassistant.cloneLineagePrefix
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.model.MessageNode
 import kotlin.uuid.Uuid
 
 internal data class SubAssistantRetentionPlan(
-    val retainedChildren: List<Conversation>,
+    val truncatedChildren: List<Conversation>,
     val deletedChildren: List<Conversation>,
 )
 
 internal fun planSubAssistantRetention(
-    master: Conversation,
+    masterId: Uuid,
+    masterNodes: List<MessageNode>,
     children: Map<Uuid, Conversation>,
     json: Json,
 ): SubAssistantRetentionPlan {
-    val metadata = master.messageNodes
+    val metadata = masterNodes
         .flatMap { it.messages }
         .flatMap { it.parts }
         .filterIsInstance<UIMessagePart.Tool>()
@@ -27,7 +29,7 @@ internal fun planSubAssistantRetention(
     val tasksByChild = metadata
         .filter { it.runId.isNotBlank() && runCounts[it.runId] == 1 }
         .mapNotNull { call ->
-            val child = resolveValidRecoveryChild(master, call, children) ?: return@mapNotNull null
+            val child = resolveValidChildLineage(masterId, call, children) ?: return@mapNotNull null
             val taskId = call.childTaskNodeId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
                 ?: return@mapNotNull null
             child.id to taskId
@@ -43,7 +45,9 @@ internal fun planSubAssistantRetention(
     }
     val retainedIds = retained.mapTo(mutableSetOf()) { it.id }
     return SubAssistantRetentionPlan(
-        retainedChildren = retained,
+        truncatedChildren = retained.filter { retainedChild ->
+            retainedChild.messageNodes != children[retainedChild.id]?.messageNodes
+        },
         deletedChildren = children.filterKeys { it !in retainedIds }.values.toList(),
     )
 }

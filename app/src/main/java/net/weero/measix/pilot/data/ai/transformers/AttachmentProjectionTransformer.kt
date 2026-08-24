@@ -6,9 +6,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.files.FileUtils
-import net.weero.measix.pilot.data.files.FilesManager
-import org.koin.core.component.KoinComponent
-import org.koin.core.component.get
+import net.weero.measix.pilot.data.files.ArtifactStore
 
 /**
  * Request-only 附件投影（见 multimodal-attachment-context-and-analysis-design.md）：
@@ -19,20 +17,23 @@ import org.koin.core.component.get
  *
  * 禁止：调用附件识别模型、读写分析缓存、写回 Conversation、因模型不能看图抛 turn-level failure。
  */
-object AttachmentProjectionTransformer : InputMessageTransformer, KoinComponent {
-    /** B/C 共用同一提示；A 不注入。 */
-    const val CAPABILITY_HINT =
-        "Attached images are not directly visible in this run. Do not infer visual details from attachment references alone."
+class AttachmentProjectionTransformer(
+    private val artifactStore: ArtifactStore,
+) : InputMessageTransformer {
+    companion object {
+        /** B/C 共用同一提示；A 不注入。 */
+        const val CAPABILITY_HINT =
+            "Attached images are not directly visible in this run. Do not infer visual details from attachment references alone."
 
-    /** 未解析出 stable ref 的 Image 在 reference-only 模式下的退化占位。 */
-    private const val IMAGE_PLACEHOLDER = "[Image]"
+        /** 未解析出 stable ref 的 Image 在 reference-only 模式下的退化占位。 */
+        private const val IMAGE_PLACEHOLDER = "[Image]"
+    }
 
     override suspend fun transform(
         ctx: TransformerContext,
         messages: List<UIMessage>,
     ): List<UIMessage> {
         val nativeImageSupported = ctx.model.inputModalities.contains(Modality.IMAGE)
-        val filesManager = runCatching { get<FilesManager>() }.getOrNull()
         var sawReferenceOnlyImage = false
 
         val projected = messages.map { message ->
@@ -40,7 +41,7 @@ object AttachmentProjectionTransformer : InputMessageTransformer, KoinComponent 
                 parts = projectParts(
                     parts = message.parts,
                     nativeImageSupported = nativeImageSupported,
-                    filesManager = filesManager,
+                    artifactStore = artifactStore,
                     filesDir = ctx.context.filesDir,
                     onReferenceOnlyImage = { sawReferenceOnlyImage = true },
                 ),
@@ -58,7 +59,7 @@ object AttachmentProjectionTransformer : InputMessageTransformer, KoinComponent 
     private suspend fun projectParts(
         parts: List<UIMessagePart>,
         nativeImageSupported: Boolean,
-        filesManager: FilesManager?,
+        artifactStore: ArtifactStore,
         filesDir: File,
         onReferenceOnlyImage: () -> Unit,
     ): List<UIMessagePart> {
@@ -69,7 +70,7 @@ object AttachmentProjectionTransformer : InputMessageTransformer, KoinComponent 
                     output = projectParts(
                         parts = part.output,
                         nativeImageSupported = nativeImageSupported,
-                        filesManager = filesManager,
+                        artifactStore = artifactStore,
                         filesDir = filesDir,
                         onReferenceOnlyImage = onReferenceOnlyImage,
                     ),
@@ -80,7 +81,7 @@ object AttachmentProjectionTransformer : InputMessageTransformer, KoinComponent 
                     if (nativeImageSupported) {
                         ref?.let { refValue ->
                             result += UIMessagePart.Text(
-                                attachmentRefLine(refValue, "image", displayNameOf(part, filesManager, filesDir)),
+                                attachmentRefLine(refValue, "image", displayNameOf(part, artifactStore, filesDir)),
                             )
                         }
                         result += part
@@ -88,7 +89,7 @@ object AttachmentProjectionTransformer : InputMessageTransformer, KoinComponent 
                         onReferenceOnlyImage()
                         if (ref != null) {
                             result += UIMessagePart.Text(
-                                attachmentRefLine(refValue = ref, type = "image", displayName = displayNameOf(part, filesManager, filesDir)),
+                                attachmentRefLine(refValue = ref, type = "image", displayName = displayNameOf(part, artifactStore, filesDir)),
                             )
                         } else {
                             result += UIMessagePart.Text(IMAGE_PLACEHOLDER)
@@ -99,7 +100,7 @@ object AttachmentProjectionTransformer : InputMessageTransformer, KoinComponent 
                 is UIMessagePart.Document -> {
                     AttachmentRefs.getRef(part)?.let { ref ->
                         result += UIMessagePart.Text(
-                            attachmentRefLine(ref, "document", displayNameOf(part, filesManager, filesDir)),
+                            attachmentRefLine(ref, "document", displayNameOf(part, artifactStore, filesDir)),
                         )
                     }
                     result += part
@@ -108,7 +109,7 @@ object AttachmentProjectionTransformer : InputMessageTransformer, KoinComponent 
                 is UIMessagePart.Audio -> {
                     AttachmentRefs.getRef(part)?.let { ref ->
                         result += UIMessagePart.Text(
-                            attachmentRefLine(ref, "audio", displayNameOf(part, filesManager, filesDir)),
+                            attachmentRefLine(ref, "audio", displayNameOf(part, artifactStore, filesDir)),
                         )
                     }
                     result += part
@@ -117,7 +118,7 @@ object AttachmentProjectionTransformer : InputMessageTransformer, KoinComponent 
                 is UIMessagePart.Video -> {
                     AttachmentRefs.getRef(part)?.let { ref ->
                         result += UIMessagePart.Text(
-                            attachmentRefLine(ref, "video", displayNameOf(part, filesManager, filesDir)),
+                            attachmentRefLine(ref, "video", displayNameOf(part, artifactStore, filesDir)),
                         )
                     }
                     result += part
@@ -136,7 +137,7 @@ internal fun attachmentRefLine(refValue: String, type: String, displayName: Stri
 
 private suspend fun displayNameOf(
     part: UIMessagePart,
-    filesManager: FilesManager?,
+    artifactStore: ArtifactStore,
     filesDir: File,
 ): String {
     val url = when (part) {
@@ -153,8 +154,8 @@ private suspend fun displayNameOf(
         val file = AttachmentRefs.parseFileUrl(url)
         if (file != null) {
             val relative = FileUtils.getRelativePathInFilesDir(filesDir, file)
-            if (relative != null && filesManager != null) {
-                val entity = filesManager.getByRelativePath(relative)
+            if (relative != null) {
+                val entity = artifactStore.getByRelativePath(relative)
                 val display = entity?.displayName?.trim().orEmpty()
                 if (display.isNotEmpty()) return display
             }

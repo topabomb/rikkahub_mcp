@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.favorite
+package net.weero.measix.pilot.ui.pages.favorite
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Delete01
@@ -44,6 +44,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.theme.CustomColors
+import net.weero.measix.pilot.service.NodeFavoriteItem
 import net.weero.measix.pilot.utils.navigateToChatPage
 import net.weero.measix.pilot.utils.plus
 import net.weero.measix.pilot.utils.toLocalDateTime
@@ -105,15 +106,14 @@ fun FavoritePage(vm: FavoriteVM = koinViewModel()) {
                     onClick = { navigateToChatPage(navController, item.conversationId, nodeId = item.nodeId) },
                     onDelete = {
                         scope.launch {
-                            val entity = vm.getEntityByRefKey(item.refKey) ?: return@launch
-                            vm.removeFavorite(item.refKey)
+                            val restoreToken = vm.removeForUndo(item.refKey) ?: return@launch
                             val result = snackbarHostState.showSnackbar(
                                 message = favoriteRemovedText,
                                 actionLabel = undoText,
                                 withDismissAction = true,
                             )
                             if (result == SnackbarResult.ActionPerformed) {
-                                vm.restoreFavorite(entity)
+                                vm.restoreFavorite(restoreToken)
                             }
                         }
                     },
@@ -129,7 +129,7 @@ fun FavoritePage(vm: FavoriteVM = koinViewModel()) {
 
 @Composable
 private fun SwipeableFavoriteCard(
-    item: NodeFavoriteListItem,
+    item: NodeFavoriteItem,
     onClick: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
@@ -180,7 +180,7 @@ private fun SwipeableFavoriteCard(
 
 @Composable
 private fun FavoriteCard(
-    item: NodeFavoriteListItem,
+    item: NodeFavoriteItem,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {

@@ -1,13 +1,12 @@
-﻿package net.weero.measix.pilot.data.ai.transformers
+package net.weero.measix.pilot.data.ai.transformers
 
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.model.AssistantAffectScope
 import net.weero.measix.pilot.data.model.replaceRegexes
-import org.koin.core.component.KoinComponent
 
-object RegexOutputTransformer : OutputMessageTransformer, StreamingMessageTransformer, KoinComponent {
+object RegexOutputTransformer : OutputMessageTransformer, StreamingMessageTransformer {
     override suspend fun transformStreaming(
         ctx: TransformerContext,
         message: UIMessage,

@@ -8,17 +8,26 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.subassistant.ASSISTANT_CALL_EXTRA_TOOL_CALLS
 import net.weero.measix.pilot.data.ai.subassistant.ASSISTANT_CALL_EXTRA_TTS
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantTtsStats
-import net.weero.measix.pilot.data.ai.subassistant.checkNonTextOutputInternal
-import net.weero.measix.pilot.data.ai.subassistant.collectRunToolCalls
-import net.weero.measix.pilot.data.ai.subassistant.collectRunTtsStats
-import net.weero.measix.pilot.data.ai.subassistant.collectRunTtsTexts
 import net.weero.measix.pilot.data.ai.subassistant.collectSubAssistantCallOutputs
+import net.weero.measix.pilot.data.ai.subassistant.extractDeliverableArtifacts
 import net.weero.measix.pilot.data.ai.subassistant.extractFinalAnswerInternal
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
+
+private fun checkNonTextOutputInternal(messages: List<UIMessage>, childTaskNodeId: Uuid): Boolean =
+    extractDeliverableArtifacts(messages, childTaskNodeId).hasNonTextOutput
+
+private fun collectRunToolCalls(messages: List<UIMessage>, childTaskNodeId: Uuid): List<Pair<String, Int>> =
+    collectSubAssistantCallOutputs(messages, childTaskNodeId, setOf(ASSISTANT_CALL_EXTRA_TOOL_CALLS)).toolCalls
+
+private fun collectRunTtsTexts(messages: List<UIMessage>, childTaskNodeId: Uuid): List<String> =
+    collectSubAssistantCallOutputs(messages, childTaskNodeId, setOf(ASSISTANT_CALL_EXTRA_TTS)).ttsTexts
+
+private fun collectRunTtsStats(messages: List<UIMessage>, childTaskNodeId: Uuid): SubAssistantTtsStats? =
+    collectSubAssistantCallOutputs(messages, childTaskNodeId, emptySet()).ttsStats
 
 class SubAssistantFinalAnswerTest {
 

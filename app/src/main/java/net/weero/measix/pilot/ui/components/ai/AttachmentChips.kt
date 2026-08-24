@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ai
+package net.weero.measix.pilot.ui.components.ai
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -23,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,27 +40,33 @@ import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Files02
 import me.rerere.hugeicons.stroke.MusicNote03
 import me.rerere.hugeicons.stroke.Video01
-import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.service.ArtifactUseCase
+import net.weero.measix.pilot.service.ArtifactDraftScope
+import kotlinx.coroutines.launch
 import net.weero.measix.pilot.ui.hooks.ChatInputState
 import org.koin.compose.koinInject
 
 @Composable
 internal fun MediaFileInputRow(
     state: ChatInputState,
+    artifactDraftScope: ArtifactDraftScope,
 ) {
-    val filesManager: FilesManager = koinInject()
-    val managedFiles by filesManager.observe().collectAsState(initial = emptyList())
-    val displayNameByRelativePath = remember(managedFiles) {
-        managedFiles.associate { it.relativePath to it.displayName }
+    val artifactUseCase: ArtifactUseCase = koinInject()
+    val scope = rememberCoroutineScope()
+    val managedFiles by artifactUseCase.observeUploads().collectAsState(initial = emptyList())
+    val displayNameByUri = remember(managedFiles) {
+        managedFiles.associate { it.contentUri to it.displayName }
     }
     val displayNameByFileName = remember(managedFiles) {
-        managedFiles.associate { it.relativePath.substringAfterLast('/') to it.displayName }
+        managedFiles.mapNotNull { artifact ->
+            artifact.contentUri.toUri().lastPathSegment?.let { it to artifact.displayName }
+        }.toMap()
     }
 
     fun removePart(part: UIMessagePart, url: String) {
         state.messageContent = state.messageContent.filterNot { it == part }
         if (state.shouldDeleteFileOnRemove(part)) {
-            filesManager.deleteChatFiles(listOf(url.toUri()))
+            scope.launch { artifactDraftScope.discard(url.toUri()) }
         }
     }
 
@@ -77,7 +84,7 @@ internal fun MediaFileInputRow(
                         title = attachmentNameFromUrl(
                             url = part.url,
                             fallback = "image",
-                            displayNameByRelativePath = displayNameByRelativePath,
+                            displayNameByUri = displayNameByUri,
                             displayNameByFileName = displayNameByFileName
                         ),
                         leading = {
@@ -103,7 +110,7 @@ internal fun MediaFileInputRow(
                         title = attachmentNameFromUrl(
                             url = part.url,
                             fallback = "video",
-                            displayNameByRelativePath = displayNameByRelativePath,
+                            displayNameByUri = displayNameByUri,
                             displayNameByFileName = displayNameByFileName
                         ),
                         leading = { AttachmentLeadingIcon(icon = HugeIcons.Video01) },
@@ -116,7 +123,7 @@ internal fun MediaFileInputRow(
                         title = attachmentNameFromUrl(
                             url = part.url,
                             fallback = "audio",
-                            displayNameByRelativePath = displayNameByRelativePath,
+                            displayNameByUri = displayNameByUri,
                             displayNameByFileName = displayNameByFileName
                         ),
                         leading = { AttachmentLeadingIcon(icon = HugeIcons.MusicNote03) },
@@ -129,7 +136,7 @@ internal fun MediaFileInputRow(
                         title = attachmentNameFromUrl(
                             url = part.url,
                             fallback = part.fileName,
-                            displayNameByRelativePath = displayNameByRelativePath,
+                            displayNameByUri = displayNameByUri,
                             displayNameByFileName = displayNameByFileName
                         ),
                         leading = { AttachmentLeadingIcon(icon = HugeIcons.Files02) },
@@ -214,15 +221,11 @@ private fun AttachmentLeadingIcon(
 private fun attachmentNameFromUrl(
     url: String,
     fallback: String,
-    displayNameByRelativePath: Map<String, String>,
+    displayNameByUri: Map<String, String>,
     displayNameByFileName: Map<String, String>,
 ): String {
+    displayNameByUri[url]?.let { return it }
     val parsed = runCatching { url.toUri() }.getOrNull()
-    val relativePath = parsed?.path?.substringAfter("/files/", missingDelimiterValue = "")?.takeIf { it.isNotBlank() }
-    if (relativePath != null) {
-        displayNameByRelativePath[relativePath]?.let { return it }
-    }
-
     val storedFileName = parsed?.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
     if (storedFileName != null) {
         displayNameByFileName[storedFileName]?.let { return it }

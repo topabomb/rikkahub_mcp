@@ -162,20 +162,6 @@ class AttachmentInspectionToolTest {
     }
 
     @Test
-    fun `uninjected resolver maps to attachment_resolution_unavailable`() = runTest {
-        // ai 模块 ToolExecutionContext 的默认 resolveAttachments 行为：
-        // 工具不解释 reason，只透传。
-        val defaultResolution = ToolExecutionContextDefault.resolveAttachments
-        val result = executeInspection(
-            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
-            resolveAttachments = defaultResolution,
-        )
-        assertEquals(AttachmentFailureReasons.ATTACHMENT_RESOLUTION_UNAVAILABLE, resultReason(result))
-    }
-
-    @Test
     fun `resolution without image parts is invalid`() = runTest {
         val result = executeInspection(
             args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
@@ -368,15 +354,4 @@ class AttachmentInspectionToolTest {
             // expected
         }
     }
-}
-
-/** 引用 ai 模块默认 lambda，验证 fallback reason 与 app 层常量字面一致。 */
-private object ToolExecutionContextDefault {
-    val resolveAttachments: suspend (List<String>) -> ToolAttachmentResolution =
-        me.rerere.ai.core.ToolExecutionContext(
-            messageId = Uuid.random(),
-            toolOrdinal = 0,
-            toolCallId = "default",
-            reportMetadata = { _, _ -> },
-        ).resolveAttachments
 }

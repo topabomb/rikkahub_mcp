@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.setting
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.SharingStarted
@@ -10,10 +11,15 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
+import net.weero.measix.pilot.data.datastore.DisplaySetting
+import net.weero.measix.pilot.service.CustomChatFontService
+import net.weero.measix.pilot.service.ArtifactUseCase
 
 class SettingVM(
     private val settingsStore: SettingsStore,
-    private val mcpManager: McpManager
+    private val mcpManager: McpManager,
+    private val customChatFontService: CustomChatFontService,
+    private val artifactUseCase: ArtifactUseCase,
 ) :
     ViewModel() {
     val settings: StateFlow<Settings> = settingsStore.settingsFlow
@@ -21,9 +27,14 @@ class SettingVM(
 
     fun updateSettings(transform: (Settings) -> Settings) {
         viewModelScope.launch {
-            settingsStore.updateAtomic(fn = transform)
+            artifactUseCase.updateSettingsReferences(transform)
         }
     }
+
+    suspend fun importCustomChatFont(uri: Uri): DisplaySetting = customChatFontService.import(uri)
+
+    suspend fun removeCustomChatFont(expectedRelativePath: String): DisplaySetting =
+        customChatFontService.remove(expectedRelativePath)
 
     /**
      * 导入 MCP 服务器配置，按 name 去重。

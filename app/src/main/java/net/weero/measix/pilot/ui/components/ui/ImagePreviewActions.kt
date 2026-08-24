@@ -1,7 +1,6 @@
 package net.weero.measix.pilot.ui.components.ui
 
 import android.content.Context
-import android.graphics.BitmapFactory
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.compositionLocalOf
@@ -19,25 +18,17 @@ import com.dokar.sonner.ToastType
 import com.dokar.sonner.ToasterState
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ImageComposition
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.datastore.getCurrentAssistant
-import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.imggen.AssistantBackgroundService
 import net.weero.measix.pilot.data.imggen.BackgroundUpdateResult
-import net.weero.measix.pilot.data.imggen.localFileFromUri
 import net.weero.measix.pilot.ui.components.ai.AssistantPickerSheet
 import org.koin.compose.koinInject
-import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration
 import kotlin.uuid.Uuid
@@ -78,130 +69,11 @@ internal fun backgroundFailureMessage(context: Context, reason: String?): String
     }
 }
 
-internal fun localFileFromImageUrl(url: String): File? {
-    val trimmed = url.trim()
-    if (trimmed.startsWith("data:", ignoreCase = true) || trimmed.startsWith("http", ignoreCase = true)) {
-        return null
-    }
-    localFileFromUri(trimmed)?.takeIf { it.exists() }?.let { return it }
-    return File(trimmed.removePrefix("file://")).takeIf { it.exists() }
-}
-
-internal fun writeDataUriToCache(cacheDir: File, url: String): Pair<File, String>? {
-    if (!url.startsWith("data:", ignoreCase = true)) return null
-    val header = url.substringBefore(',')
-    val payload = url.substringAfter(',', "")
-    val bytes = runCatching { java.util.Base64.getDecoder().decode(payload) }.getOrNull() ?: return null
-    if (bytes.isEmpty()) return null
-    val mime = header.removePrefix("data:").substringBefore(';').takeIf { it.startsWith("image/") }
-        ?: sniffImageMime(bytes)
-        ?: "image/png"
-    val file = File(cacheDir, "preview_bg_${UUID.randomUUID()}.${extensionForMime(mime)}")
-    return runCatching {
-        file.writeBytes(bytes)
-        file to mime
-    }.getOrNull()
-}
-
-internal fun extensionForMime(mime: String): String = when (mime.lowercase()) {
-    "image/jpeg", "image/jpg" -> "jpg"
-    "image/webp" -> "webp"
-    "image/gif" -> "gif"
-    "image/bmp" -> "bmp"
-    "image/heic" -> "heic"
-    "image/heif" -> "heif"
-    "image/avif" -> "avif"
-    else -> "png"
-}
-
-internal fun sniffImageMime(bytes: ByteArray): String? {
-    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
-    return opts.outMimeType.takeIf { !it.isNullOrBlank() }
-}
-
-internal fun mimeFromFile(file: File): String {
-    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    runCatching { BitmapFactory.decodeFile(file.absolutePath, opts) }
-    return opts.outMimeType?.takeIf { it.isNotBlank() }
-        ?: when (file.extension.lowercase()) {
-            "jpg", "jpeg" -> "image/jpeg"
-            "webp" -> "image/webp"
-            "gif" -> "image/gif"
-            "bmp" -> "image/bmp"
-            "heic" -> "image/heic"
-            "heif" -> "image/heif"
-            "avif" -> "image/avif"
-            else -> "image/png"
-        }
-}
-
-internal suspend fun materializeImageForBackground(context: Context, url: String): Pair<File, String>? =
-    withContext(Dispatchers.IO) {
-        localFileFromImageUrl(url)?.let { return@withContext it to mimeFromFile(it) }
-        writeDataUriToCache(context.cacheDir, url)?.let { return@withContext it }
-        if (!url.startsWith("http", ignoreCase = true)) return@withContext null
-        downloadImageToCache(context.cacheDir, url)
-    }
-
-private fun downloadImageToCache(cacheDir: File, url: String): Pair<File, String>? {
-    var connection: HttpURLConnection? = null
-    return try {
-        connection = URL(url).openConnection() as HttpURLConnection
-        connection.connectTimeout = 15_000
-        connection.readTimeout = 15_000
-        connection.instanceFollowRedirects = true
-        connection.connect()
-        if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
-        val tmp = File(cacheDir, "preview_bg_${UUID.randomUUID()}.bin")
-        connection.inputStream.use { input ->
-            tmp.outputStream().use { output -> input.copyTo(output) }
-        }
-        if (!tmp.exists() || tmp.length() == 0L) {
-            tmp.delete()
-            return null
-        }
-        val mime = connection.contentType?.substringBefore(';')?.takeIf { it.startsWith("image/") }
-            ?: mimeFromFile(tmp)
-        val named = File(cacheDir, "preview_bg_${UUID.randomUUID()}.${extensionForMime(mime)}")
-        if (!tmp.renameTo(named)) {
-            tmp.copyTo(named, overwrite = true)
-            tmp.delete()
-        }
-        named to mime
-    } catch (_: Exception) {
-        null
-    } finally {
-        connection?.disconnect()
-    }
-}
-
 internal suspend fun applyImageAsBackground(
-    context: Context,
     url: String,
     assistantId: Uuid,
     backgroundService: AssistantBackgroundService,
-): BackgroundUpdateResult {
-    val materialized = materializeImageForBackground(context, url)
-        ?: return BackgroundUpdateResult(
-            requested = true,
-            updated = false,
-            reason = "background_copy_failed",
-        )
-    val source = materialized.first
-    val isTemp = source.parentFile?.absoluteFile == context.cacheDir.absoluteFile
-    return try {
-        // 用户在图片查看器中主动挑选图片设为背景——诞生方式为用户引入
-        backgroundService.replaceBackground(
-            assistantId = assistantId,
-            source = source,
-            mimeType = materialized.second,
-            origin = ArtifactOrigin.USER,
-        )
-    } finally {
-        if (isTemp) source.delete()
-    }
-}
+): BackgroundUpdateResult = backgroundService.replaceUserSelectedBackground(assistantId, url)
 
 internal fun assistantDisplayName(name: String?, fallback: String): String =
     name?.trim().orEmpty().ifBlank { fallback }
@@ -279,7 +151,7 @@ fun rememberImageBackgroundHost(
         )
     }
 
-    val overlay: @Composable () -> Unit = remember {
+    val overlay: @Composable () -> Unit = remember(pickerTitle, defaultAssistantName) {
         {
             DisposableEffect(Unit) {
                 onDispose {
@@ -362,7 +234,7 @@ internal fun setBackgroundWithFeedback(
                 id = toastId,
                 duration = Duration.INFINITE,
             )
-            val result = applyImageAsBackground(context, url, assistantId, backgroundService)
+            val result = applyImageAsBackground(url, assistantId, backgroundService)
             if (result.updated) {
                 toaster.show(
                     message = context.getString(R.string.image_viewer_background_set, assistantName),

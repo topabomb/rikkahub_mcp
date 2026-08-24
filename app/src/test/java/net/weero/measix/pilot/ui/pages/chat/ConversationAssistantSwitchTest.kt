@@ -4,6 +4,9 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getConversationAssistant
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.service.runtime.ConversationReducer
+import net.weero.measix.pilot.service.runtime.MoveToAssistant
+import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Test
@@ -46,14 +49,17 @@ class ConversationAssistantSwitchTest {
             messageNodes = emptyList(),
         )
 
-        val updated = conversation.withAssistant(targetAssistantId)
+        val updated = ConversationReducer.reduce(
+            conversation.toSnapshot(),
+            MoveToAssistant(targetAssistantId),
+        )
 
-        assertEquals(targetAssistantId, updated.assistantId)
-        assertEquals(null, updated.folderId)
+        assertEquals(targetAssistantId, updated.header.assistantId)
+        assertEquals(null, updated.header.folderId)
     }
 
     @Test
-    fun `selecting the current assistant is a no-op`() {
+    fun `selecting the current assistant preserves its folder`() {
         val assistantId = Uuid.random()
         val conversation = Conversation(
             assistantId = assistantId,
@@ -61,9 +67,12 @@ class ConversationAssistantSwitchTest {
             messageNodes = emptyList(),
         )
 
-        val updated = conversation.withAssistant(assistantId)
+        val updated = ConversationReducer.reduce(
+            conversation.toSnapshot(),
+            MoveToAssistant(assistantId),
+        )
 
-        assertSame(conversation, updated)
-        assertEquals(conversation.folderId, updated.folderId)
+        assertEquals(assistantId, updated.header.assistantId)
+        assertEquals(conversation.folderId, updated.header.folderId)
     }
 }

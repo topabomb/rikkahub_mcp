@@ -4,7 +4,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
- * v6 → v7：主/子会话关系归位（V1 正式阶段·架构收敛，§11.2）。
+ * v6 → v7：建立主/子会话关系约束并清理历史悬挂数据。
  *
  * 1) 存量孤儿 Child 清理（加 FK 前必须收敛；此后孤儿结构性不可能产生）。
  * 2) 重建 ConversationEntity 表（SQLite 无法 ALTER 添加 FK）：

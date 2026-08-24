@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.history;
+package net.weero.measix.pilot.ui.pages.history
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Pin
@@ -50,7 +50,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
-import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.service.ConversationSummary
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.utils.navigateToChatPage
@@ -115,16 +115,18 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
                     },
                     onDelete = {
                         scope.launch {
-                            // 先获取完整的对话数据（包含 messageNodes），用于撤销恢复
-                            val fullConversation = vm.getFullConversation(conversation.id) ?: conversation
-                            vm.deleteConversation(conversation)
-                            val result = snackbarHostState.showSnackbar(
-                                message = snackMessageDeleted,
-                                actionLabel = snackMessageUndo,
-                                withDismissAction = true,
-                            )
-                            if (result == SnackbarResult.ActionPerformed) {
-                                vm.restoreConversation(fullConversation)
+                            val restoreToken = vm.deleteForUndo(conversation.id)
+                            try {
+                                val result = snackbarHostState.showSnackbar(
+                                    message = snackMessageDeleted,
+                                    actionLabel = snackMessageUndo,
+                                    withDismissAction = true,
+                                )
+                                if (result == SnackbarResult.ActionPerformed) {
+                                    vm.restoreConversation(restoreToken)
+                                }
+                            } finally {
+                                vm.discardRestoreToken(restoreToken)
                             }
                         }
                     },
@@ -165,7 +167,7 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
 
 @Composable
 private fun SwipeableConversationItem(
-    conversation: Conversation,
+    conversation: ConversationSummary,
     modifier: Modifier = Modifier,
     onDelete: () -> Unit = {},
     onTogglePin: () -> Unit = {},
@@ -222,7 +224,7 @@ private fun SwipeableConversationItem(
 
 @Composable
 private fun ConversationItem(
-    conversation: Conversation,
+    conversation: ConversationSummary,
     modifier: Modifier = Modifier,
     onTogglePin: () -> Unit = {},
     onClick: () -> Unit = {},
@@ -234,28 +236,6 @@ private fun ConversationItem(
         modifier = modifier
     ) {
         ListItem(
-            headlineContent = {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    if (conversation.isPinned) {
-                        Icon(
-                            imageVector = HugeIcons.Pin,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
-                    Text(
-                        text = conversation.title.ifBlank { stringResource(R.string.history_page_new_conversation) }
-                            .trim(),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                }
-            },
             supportingContent = {
                 Text(conversation.createAt.toLocalDateTime())
             },
@@ -270,7 +250,28 @@ private fun ConversationItem(
                         )
                     )
                 }
+            },
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (conversation.isPinned) {
+                    Icon(
+                        imageVector = HugeIcons.Pin,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+                Text(
+                    text = conversation.title.ifBlank { stringResource(R.string.history_page_new_conversation) }
+                        .trim(),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.titleMedium,
+                )
             }
-        )
+        }
     }
 }

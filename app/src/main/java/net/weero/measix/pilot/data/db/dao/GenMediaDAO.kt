@@ -21,9 +21,11 @@ interface GenMediaDAO {
     @Query("SELECT * FROM genmediaentity WHERE id = :id")
     suspend fun getById(id: Int): GenMediaEntity?
 
+    /** Caller dispatches to IO; the row commit and returned id must not be split by coroutine cancellation. */
     @Insert
-    suspend fun insert(media: GenMediaEntity): Long
+    fun insert(media: GenMediaEntity): Long
 
+    /** Caller dispatches to IO and pairs this commit with a recoverable payload tombstone. */
     @Query("DELETE FROM genmediaentity WHERE id = :id")
-    suspend fun delete(id: Int)
+    fun delete(id: Int)
 }

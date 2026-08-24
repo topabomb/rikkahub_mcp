@@ -8,10 +8,12 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.files.FileFolders
-import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.LocalArtifactRef
 import net.weero.measix.pilot.data.files.LocalToolPath
-import net.weero.measix.pilot.data.files.ManagedLocalArtifactStore
+import net.weero.measix.pilot.data.files.OwnedArtifact
+import me.rerere.ai.core.ToolResourceLease
+import net.weero.measix.pilot.data.files.requireDiscarded
 import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.utils.JsonInstant
@@ -20,8 +22,8 @@ import java.io.File
 sealed class AttachmentResolveResult {
     data class Success(
         val parts: List<UIMessagePart.Image>,
-        /** 本批解析新登记的 managed 文件 id；调用方在后续持久化失败时应删除它们。 */
-        val createdManagedFileIds: List<Long> = emptyList(),
+        /** 本批解析新创建且尚未发布的 artifact；后续持久化失败时由所有权令牌补偿。 */
+        val createdArtifacts: List<OwnedArtifact> = emptyList(),
     ) : AttachmentResolveResult()
     data class Failure(val reason: String) : AttachmentResolveResult()
 }
@@ -31,8 +33,7 @@ sealed class AttachmentResolveResult {
  */
 class AttachmentResolver(
     private val context: Context,
-    private val filesManager: FilesManager,
-    private val artifactStore: ManagedLocalArtifactStore,
+    private val artifactStore: ArtifactStore,
     private val fetcher: SafeRemoteMediaFetcher,
     private val artifactRewriter: ToolArtifactRewriter,
 ) {
@@ -42,22 +43,22 @@ class AttachmentResolver(
         deduplicate: Boolean = true,
     ): AttachmentResolveResult {
         if (refs.isEmpty()) return AttachmentResolveResult.Success(emptyList())
-        val createdIds = mutableListOf<Long>()
+        val createdArtifacts = mutableListOf<OwnedArtifact>()
         val resolved = ArrayList<UIMessagePart.Image>(refs.size)
         val seenFiles = LinkedHashSet<String>()
         // 同一远程 url 在本次批量解析内只 fetch/落盘一次；命中后按调用方 preferredRef 重打标记。
         val remoteResolved = HashMap<String, UIMessagePart.Image>()
         try {
             for (ref in refs) {
-                when (val one = resolveOne(masterMessages, ref, createdIds, remoteResolved)) {
+                when (val one = resolveOne(masterMessages, ref, createdArtifacts, remoteResolved)) {
                     is AttachmentResolveResult.Failure -> {
-                        deleteCreated(createdIds)
+                        discardCreated(createdArtifacts)
                         return one
                     }
                     is AttachmentResolveResult.Success -> {
                         val image = one.parts.singleOrNull()
                             ?: run {
-                                deleteCreated(createdIds)
+                                discardCreated(createdArtifacts)
                                 return AttachmentResolveResult.Failure(AttachmentFailureReasons.ATTACHMENT_NOT_FOUND)
                             }
                         if (deduplicate) {
@@ -68,9 +69,9 @@ class AttachmentResolver(
                     }
                 }
             }
-            return AttachmentResolveResult.Success(resolved, createdIds.toList())
+            return AttachmentResolveResult.Success(resolved, createdArtifacts.toList())
         } catch (error: Exception) {
-            deleteCreated(createdIds)
+            discardCreated(createdArtifacts)
             throw error
         }
     }
@@ -99,16 +100,16 @@ class AttachmentResolver(
     private suspend fun resolveOne(
         masterMessages: List<UIMessage>,
         rawRef: String,
-        createdIds: MutableList<Long>,
+        createdArtifacts: MutableList<OwnedArtifact>,
         remoteResolved: MutableMap<String, UIMessagePart.Image>,
     ): AttachmentResolveResult {
         val ref = rawRef.trim()
         return when {
-            AttachmentRefs.parse(ref) != null -> resolveAttachmentHandle(masterMessages, ref, createdIds, remoteResolved)
+            AttachmentRefs.parse(ref) != null -> resolveAttachmentHandle(masterMessages, ref, createdArtifacts, remoteResolved)
             LocalToolPath.parseUploadToolPath(ref) != null -> resolveUploadPath(masterMessages, ref)
             ref.startsWith("file:", ignoreCase = true) -> resolveFileUrl(masterMessages, ref)
             ref.startsWith("http://", ignoreCase = true) ||
-                ref.startsWith("https://", ignoreCase = true) -> resolveRemoteUrl(ref, createdIds, remoteResolved)
+                ref.startsWith("https://", ignoreCase = true) -> resolveRemoteUrl(ref, createdArtifacts, remoteResolved)
             else -> AttachmentResolveResult.Failure(AttachmentFailureReasons.ATTACHMENT_NOT_FOUND)
         }
     }
@@ -116,7 +117,7 @@ class AttachmentResolver(
     private suspend fun resolveAttachmentHandle(
         masterMessages: List<UIMessage>,
         ref: String,
-        createdIds: MutableList<Long>,
+        createdArtifacts: MutableList<OwnedArtifact>,
         remoteResolved: MutableMap<String, UIMessagePart.Image>,
     ): AttachmentResolveResult {
         val normalized = AttachmentRefs.format(AttachmentRefs.parse(ref) ?: return notFound())
@@ -125,7 +126,13 @@ class AttachmentResolver(
                 normalized
         }
         if (part != null) {
-            return materializeExistingPart(masterMessages, part, preferredRef = normalized, createdIds = createdIds, remoteResolved = remoteResolved)
+            return materializeExistingPart(
+                masterMessages,
+                part,
+                preferredRef = normalized,
+                createdArtifacts = createdArtifacts,
+                remoteResolved = remoteResolved,
+            )
         }
         val metadataArtifact = findMetadataArtifact(masterMessages, normalized) ?: return notFound()
         val file = metadataArtifact.file(context.filesDir)
@@ -155,14 +162,14 @@ class AttachmentResolver(
 
     private suspend fun resolveRemoteUrl(
         url: String,
-        createdIds: MutableList<Long>,
+        createdArtifacts: MutableList<OwnedArtifact>,
         remoteResolved: MutableMap<String, UIMessagePart.Image>,
     ): AttachmentResolveResult {
         // 单次批量解析内的请求级复用：同一 url 不重复 fetch/落盘。
         remoteResolved[url]?.let { return AttachmentResolveResult.Success(listOf(it)) }
         return when (val fetched = fetcher.fetch(url)) {
             is RemoteMediaFetchResult.Failure -> AttachmentResolveResult.Failure(fetched.reason)
-            is RemoteMediaFetchResult.Success -> persistFetchedImage(fetched, createdIds).also { result ->
+            is RemoteMediaFetchResult.Success -> persistFetchedImage(fetched, createdArtifacts).also { result ->
                 if (result is AttachmentResolveResult.Success) {
                     result.parts.singleOrNull()?.let { remoteResolved[url] = it }
                 }
@@ -172,29 +179,31 @@ class AttachmentResolver(
 
     private suspend fun persistFetchedImage(
         fetched: RemoteMediaFetchResult.Success,
-        createdIds: MutableList<Long>,
+        createdArtifacts: MutableList<OwnedArtifact>,
     ): AttachmentResolveResult {
         if (ImageMime.isUnsupportedNonImage(fetched.bytes, fetched.mimeType)) {
             return AttachmentResolveResult.Failure(AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE)
         }
-        if (!ImageMime.isAcceptedImage(fetched.bytes, fetched.mimeType)) {
+        if (!ImageMime.isAcceptedImage(fetched.bytes)) {
             return AttachmentResolveResult.Failure(AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE)
         }
-        val entity = runCatching {
+        val owned = try {
             // 子助手入站链路自动拉取远程附件落盘——系统产物
-            filesManager.saveManagedFromBytes(
+            artifactStore.createFromBytes(
                 folder = FileFolders.UPLOAD,
                 bytes = fetched.bytes,
                 displayName = fetched.fileName,
                 mimeType = fetched.mimeType,
                 origin = ArtifactOrigin.SYSTEM,
             )
-        }.getOrElse {
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (error: Exception) {
             return AttachmentResolveResult.Failure(AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED)
         }
-        createdIds += entity.id
-        val file = filesManager.getFile(entity)
-        if (!file.isFile || !ImageMime.isAcceptedImage(fetched.bytes, entity.mimeType)) {
+        createdArtifacts += owned
+        val file = artifactStore.file(owned.entity)
+        if (!file.isFile || !ImageMime.isAcceptedImage(fetched.bytes)) {
             return AttachmentResolveResult.Failure(AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE)
         }
         val image = AttachmentRefs.ensureAttachmentRef(
@@ -207,12 +216,12 @@ class AttachmentResolver(
         masterMessages: List<UIMessage>,
         part: UIMessagePart,
         preferredRef: String,
-        createdIds: MutableList<Long>,
+        createdArtifacts: MutableList<OwnedArtifact>,
         remoteResolved: MutableMap<String, UIMessagePart.Image>,
     ): AttachmentResolveResult {
         val url = partUrl(part) ?: return unsupported()
         if (url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true)) {
-            return when (val fetched = resolveRemoteUrl(url, createdIds, remoteResolved)) {
+            return when (val fetched = resolveRemoteUrl(url, createdArtifacts, remoteResolved)) {
                 is AttachmentResolveResult.Failure -> fetched
                 is AttachmentResolveResult.Success -> {
                     val image = fetched.parts.single()
@@ -250,11 +259,11 @@ class AttachmentResolver(
         val bytes = runCatching { file.readBytes() }.getOrElse {
             return AttachmentResolveResult.Failure(AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED)
         }
-        val declared = filesManager.getByRelativePath(
+        val declared = artifactStore.getByRelativePath(
             net.weero.measix.pilot.data.files.FileUtils.getRelativePathInFilesDir(context.filesDir, file).orEmpty(),
         )?.mimeType
         if (ImageMime.isUnsupportedNonImage(bytes, declared)) return unsupported()
-        if (!ImageMime.isAcceptedImage(bytes, declared)) return unsupported()
+        if (!ImageMime.isAcceptedImage(bytes)) return unsupported()
 
         val url = AttachmentRefs.fileToFileUrl(file)
         val existingRef = preferredRef
@@ -372,9 +381,16 @@ class AttachmentResolver(
     private fun canonicalFileKey(url: String): String? =
         parseExistingLocalFile(url)?.let { runCatching { it.canonicalPath }.getOrNull() }
 
-    private suspend fun deleteCreated(ids: List<Long>) {
-        ids.forEach { id ->
-            runCatching { filesManager.deleteManagedFilePermanently(id, deleteFromDisk = true) }
+    fun temporaryLease(owned: OwnedArtifact): ToolResourceLease = ToolResourceLease(
+        // Request projection artifacts are inputs, not checkpoint outputs. Their successful
+        // completion action is intentionally empty; the tool-execution owner always discards them.
+        publish = {},
+        discard = { discardCreated(listOf(owned)) },
+    )
+
+    private suspend fun discardCreated(artifacts: List<OwnedArtifact>) {
+        artifacts.forEach { owned ->
+            artifactStore.discardUnpublished(owned).requireDiscarded("attachment batch rollback")
         }
     }
 

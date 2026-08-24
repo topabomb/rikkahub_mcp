@@ -12,19 +12,21 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.service.AssistantManagementService
+import net.weero.measix.pilot.service.ArtifactUseCase
 import kotlin.uuid.Uuid
 
 class AssistantVM(
     private val settingsStore: SettingsStore,
     private val memoryRepository: MemoryRepository,
     private val assistantManagementService: AssistantManagementService,
+    private val artifactUseCase: ArtifactUseCase,
 ) : ViewModel() {
     val settings: StateFlow<Settings> = settingsStore.settingsFlow
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
     fun reorderAssistants(orderedIds: List<Uuid>) {
         viewModelScope.launch {
-            settingsStore.updateAtomic { current ->
+            artifactUseCase.updateSettingsReferences { current ->
                 val requestedIds = orderedIds.toSet()
                 val assistantsById = current.assistants.associateBy { it.id }
                 current.copy(
@@ -37,7 +39,7 @@ class AssistantVM(
 
     fun reorderAssistantTags(orderedIds: List<Uuid>) {
         viewModelScope.launch {
-            settingsStore.updateAtomic { current ->
+            artifactUseCase.updateSettingsReferences { current ->
                 val requestedIds = orderedIds.toSet()
                 val tagsById = current.assistantTags.associateBy { it.id }
                 current.copy(
@@ -50,7 +52,7 @@ class AssistantVM(
 
     fun addAssistant(assistant: Assistant) {
         viewModelScope.launch {
-            settingsStore.updateAtomic { current ->
+            artifactUseCase.updateSettingsReferences { current ->
                 current.copy(
                     assistants = current.assistants.plus(assistant),
                 )
@@ -60,7 +62,6 @@ class AssistantVM(
 
     fun removeAssistant(assistant: Assistant) {
         viewModelScope.launch {
-            // UI 删除复用 AssistantManagementService，避免两套清理逻辑
             assistantManagementService.deleteAssistant(assistant.id)
         }
     }
@@ -75,7 +76,7 @@ class AssistantVM(
                 isSubAssistantGloballyVisible = false,
                 allowedSubAssistantIds = emptySet(),
             )
-            settingsStore.updateAtomic { current ->
+            artifactUseCase.updateSettingsReferences { current ->
                 current.copy(
                     assistants = current.assistants.plus(copiedAssistant),
                 )

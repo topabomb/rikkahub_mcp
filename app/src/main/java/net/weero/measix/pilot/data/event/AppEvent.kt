@@ -26,14 +26,14 @@ sealed class AppEvent {
         val error: String?,
     ) : AppEvent()
 
-    /** 流式生成过程中的增量更新，由 ChatService 发出、ChatNotificationManager 消费。 */
+    /** 流式生成过程中的增量更新，由 MasterTurnCoordinator 发出。 */
     data class ChatGenerationUpdate(
         val conversationId: Uuid,
         val lastMessage: UIMessage,
         val senderName: String,
     ) : AppEvent()
 
-    /** 生成结束（正常完成或失败），由 ChatService 发出、ChatNotificationManager 消费。 */
+    /** 生成结束（正常完成或失败），由 MasterTurnCoordinator 发出。 */
     data class ChatGenerationEnded(
         val conversationId: Uuid,
         val senderName: String,

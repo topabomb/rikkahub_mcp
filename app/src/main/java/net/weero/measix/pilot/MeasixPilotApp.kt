@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import net.weero.measix.pilot.data.files.FileFolders
 import java.io.File
@@ -21,19 +22,18 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.flow.first
 import me.rerere.common.android.appTempFolder
 import com.whl.quickjs.android.QuickJSLoader
 import net.weero.measix.pilot.di.appModule
 import net.weero.measix.pilot.di.dataSourceModule
 import net.weero.measix.pilot.di.repositoryModule
 import net.weero.measix.pilot.di.viewModelModule
-import net.weero.measix.pilot.data.files.ArtifactStore
-import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.sync.PendingBackupRestore
 import net.weero.measix.pilot.utils.CrashHandler
 import net.weero.measix.pilot.utils.DatabaseUtil
-import net.weero.measix.pilot.data.repository.WorkspaceRepository
+import net.weero.measix.pilot.data.db.dao.WorkspaceDAO
+import net.weero.measix.pilot.data.provider.WorkspaceDocumentsDependencies
 import me.rerere.workspace.WorkspaceManager
 import org.koin.android.ext.android.get
 import org.koin.android.ext.koin.androidContext
@@ -46,9 +46,13 @@ private const val TAG = "MeasixPilotApp"
 const val CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID = "chat_completed"
 const val CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID = "chat_live_update"
 
-class MeasixPilotApp : Application() {
+class MeasixPilotApp : Application(), WorkspaceDocumentsDependencies {
+    override val workspaceManager: WorkspaceManager by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { get() }
+    override val workspaceDao: WorkspaceDAO by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { get() }
+
     override fun onCreate() {
         super.onCreate()
+        PendingBackupRestore.bootstrapBeforeDatabaseOpen(this)
         startKoin {
             androidLogger()
             androidContext(this@MeasixPilotApp)
@@ -75,46 +79,17 @@ class MeasixPilotApp : Application() {
         // cleanup workspace temp dirs (proot + rootfs /tmp)
         cleanupWorkspaceTempDirs()
 
-        // check workspace integrity (mark workspaces with missing files as broken after backup restore)
-        checkWorkspaceIntegrity()
-
-        // reconcile artifact store (verify DB rows against disk, no INSERT backfill)
-        reconcileArtifacts()
-
-        // Increment launch count
-        incrementLaunchCount()
-
         // Composer.setDiagnosticStackTraceMode(ComposeStackTraceMode.Auto)
-    }
-
-    private fun incrementLaunchCount() {
-        get<AppScope>().launch {
-            runCatching {
-                val store = get<SettingsStore>()
-                store.update { current -> current.copy(launchCount = current.launchCount + 1) }
-                Log.i(TAG, "incrementLaunchCount: ${store.settingsFlowRaw.first().launchCount}")
-            }.onFailure {
-                Log.e(TAG, "incrementLaunchCount failed", it)
-            }
-        }
     }
 
     private fun cleanupWorkspaceTempDirs() {
         get<AppScope>().launch(Dispatchers.IO) {
-            runCatching {
+            try {
                 get<WorkspaceManager>().cleanupAllTempDirs()
-            }.onFailure {
-                Log.e(TAG, "cleanupWorkspaceTempDirs failed", it)
-            }
-        }
-    }
-
-    private fun checkWorkspaceIntegrity() {
-        get<AppScope>().launch(Dispatchers.IO) {
-            runCatching {
-                get<WorkspaceRepository>().checkIntegrity()
-            }.onFailure {
-                Log.e(TAG, "checkWorkspaceIntegrity failed", it)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.e(TAG, "cleanupWorkspaceTempDirs failed", error)
             }
         }
     }
@@ -130,28 +105,15 @@ class MeasixPilotApp : Application() {
 
     private fun cleanupToolOutputs() {
         get<AppScope>().launch(Dispatchers.IO) {
-            runCatching {
+            try {
                 val dir = File(filesDir, FileFolders.TOOL_OUTPUTS)
                 if (dir.exists()) {
                     dir.deleteRecursively()
                 }
-            }
-        }
-    }
-
-    private fun reconcileArtifacts() {
-        get<AppScope>().launch(Dispatchers.IO) {
-            // 启动只做 reconcile（无 INSERT 补录），避免已删除文件在重启后被重新登记；
-            // 历史引用回填在 reconcile 后非阻塞执行。
-            runCatching {
-                get<ArtifactStore>().reconcileStartup()
-            }.onFailure {
-                Log.e(TAG, "artifact reconcile failed", it)
-            }
-            runCatching {
-                get<ArtifactStore>().backfillReferences()
-            }.onFailure {
-                Log.e(TAG, "backfillReferences failed", it)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.e(TAG, "cleanupToolOutputs failed", error)
             }
         }
     }
@@ -185,9 +147,11 @@ class MeasixPilotApp : Application() {
     }
 }
 
-class AppScope : CoroutineScope by CoroutineScope(
+class AppScope(
+    dispatcher: CoroutineDispatcher = Dispatchers.Main,
+) : CoroutineScope by CoroutineScope(
     SupervisorJob()
-        + Dispatchers.Main
+        + dispatcher
         + CoroutineName("AppScope")
         + CoroutineExceptionHandler { _, e ->
         Log.e(TAG, "AppScope exception", e)

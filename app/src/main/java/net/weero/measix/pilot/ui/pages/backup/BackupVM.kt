@@ -1,8 +1,8 @@
 package net.weero.measix.pilot.ui.pages.backup
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
@@ -10,7 +10,6 @@ import kotlinx.coroutines.launch
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.WebDavConfig
-import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.sync.webdav.WebDavBackupItem
 import net.weero.measix.pilot.data.sync.webdav.WebDavSync
 import net.weero.measix.pilot.data.sync.S3BackupItem
@@ -18,13 +17,10 @@ import net.weero.measix.pilot.data.sync.S3Sync
 import net.weero.measix.pilot.utils.UiState
 import java.io.File
 
-private const val TAG = "BackupVM"
-
 class BackupVM(
     private val settingsStore: SettingsStore,
     private val webDavSync: WebDavSync,
     private val s3Sync: S3Sync,
-    private val conversationRepository: ConversationRepository,
 ) : ViewModel() {
     val settings = settingsStore.settingsFlow.stateIn(
         scope = viewModelScope,
@@ -48,7 +44,7 @@ class BackupVM(
 
     fun loadBackupFileItems() {
         viewModelScope.launch {
-            runCatching {
+            try {
                 webDavBackupItems.emit(UiState.Loading)
                 webDavBackupItems.emit(
                     value = UiState.Success(
@@ -57,8 +53,10 @@ class BackupVM(
                         ).sortedByDescending { it.lastModified }
                     )
                 )
-            }.onFailure {
-                webDavBackupItems.emit(UiState.Error(it))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                webDavBackupItems.emit(UiState.Error(error))
             }
         }
     }
@@ -98,7 +96,7 @@ class BackupVM(
     // S3 Backup methods
     fun loadS3BackupFileItems() {
         viewModelScope.launch {
-            runCatching {
+            try {
                 s3BackupItems.emit(UiState.Loading)
                 s3BackupItems.emit(
                     value = UiState.Success(
@@ -107,8 +105,10 @@ class BackupVM(
                         )
                     )
                 )
-            }.onFailure {
-                s3BackupItems.emit(UiState.Error(it))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                s3BackupItems.emit(UiState.Error(error))
             }
         }
     }

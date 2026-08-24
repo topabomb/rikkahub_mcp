@@ -814,7 +814,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         add(buildJsonObject {
                             // 重新组装 inlineData，并在内部注入 displayName
                             put("inlineData", buildJsonObject {
-                                // 复制原有的 mimeType 和 data
+                                // 保留 mimeType 和 data。
                                 inlineData.forEach { (k, v) -> put(k, v) }
                                 // 添加能够让 $ref 认出它的唯一名称
                                 put("displayName", refName)

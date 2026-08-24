@@ -38,7 +38,7 @@ class AssistantInspectToolTest {
     private fun createFactory(
         assistants: List<Assistant>,
         memoryResult: Result<MemoryListResult>? = null,
-        toolSetFactory: GenerationToolSetFactory? = null,
+        toolSetFactory: GenerationToolSetFactory = mockk(relaxed = true),
     ): AssistantToolFactory {
         val caller = assistants.find { it.id == callerId } ?: Assistant(id = callerId, name = "Caller")
         val settings = Settings(
@@ -59,7 +59,7 @@ class AssistantInspectToolTest {
             settingsStore = settingsStore,
             assistantManagementService = managementService,
             json = json,
-            delegationCoordinator = null,
+            delegationCoordinator = mockk(relaxed = true),
             toolSetFactory = toolSetFactory,
         )
     }
@@ -180,6 +180,7 @@ class AssistantInspectToolTest {
             toolSetFactory.buildTools(
                 assistant = any(),
                 settings = any(),
+                capabilityModel = any(),
                 workspaceCwd = any(),
                 runMode = ToolSetRunMode.TARGET,
                 ttsPlaybackContext = any(),

@@ -25,11 +25,11 @@ import net.weero.measix.pilot.data.db.dao.TurnExecutionDAO
 import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
 import net.weero.measix.pilot.data.db.fts.MessageFtsManager
 import net.weero.measix.pilot.data.files.ArtifactStore
-import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.service.runtime.ConversationMutation
+import net.weero.measix.pilot.data.files.ArtifactReferenceDelta
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -70,21 +70,28 @@ class CheckpointWriteAmplificationTest {
     }
 
     @Test
-    fun `I2 checkpoint upserts stay constant independent of history`() = runTest {
+    fun `checkpoint upserts stay constant independent of history`() = runTest {
         val nodeDAO = mockk<MessageNodeDAO>(relaxed = true)
         val upsertCalls = mutableListOf<List<MessageNodeEntity>>()
         coEvery { nodeDAO.upsertAll(capture(upsertCalls)) } just runs
+
+        val artifactStore = mockk<ArtifactStore>()
+        coEvery { artifactStore.prepareReferenceDelta(any(), any()) } returns
+            ArtifactReferenceDelta(emptyList(), emptyList(), emptyList())
+        coEvery { artifactStore.withLifecycleLock<Any>(any()) } coAnswers {
+            firstArg<suspend () -> Any>().invoke()
+        }
+        coEvery { artifactStore.applyReferenceDeltaInTransaction(any()) } just runs
 
         val repo = ConversationRepository(
             conversationDAO = database.conversationDao(),
             messageNodeDAO = nodeDAO, // 计数代理
             favoriteDAO = database.favoriteDao(),
             database = database, // 真实 Room（withTransaction 正常）
-            filesManager = mockk<FilesManager>(relaxed = true),
             messageFtsManager = mockk<MessageFtsManager>(relaxed = true),
             turnExecutionDAO = database.turnExecutionDao(),
             toolExecutionDAO = database.toolExecutionDao(),
-            artifactStore = mockk<ArtifactStore>(relaxed = true),
+            artifactStore = artifactStore,
         )
         val conversationId = Uuid.random()
 

@@ -1,10 +1,11 @@
-﻿package net.weero.measix.pilot.data.ai.transformers
+package net.weero.measix.pilot.data.ai.transformers
 
 import me.rerere.ai.ui.UIMessage
-import net.weero.measix.pilot.data.files.FilesManager
-import org.koin.java.KoinJavaComponent.getKoin
+import net.weero.measix.pilot.data.files.ArtifactStore
 
-object Base64ImageToLocalFileTransformer : OutputMessageTransformer, StreamingMessageTransformer {
+class Base64ImageToLocalFileTransformer(
+    private val artifactStore: ArtifactStore,
+) : OutputMessageTransformer, StreamingMessageTransformer {
     // 流式期间不转换（chunk 可能携带不完整 base64）；终态统一落盘
     override suspend fun transformStreaming(
         ctx: TransformerContext,
@@ -15,7 +16,10 @@ object Base64ImageToLocalFileTransformer : OutputMessageTransformer, StreamingMe
         ctx: TransformerContext,
         message: UIMessage,
     ): UIMessage {
-        val filesManager = getKoin().get<FilesManager>()
-        return filesManager.convertBase64ImagePartToLocalFile(message)
+        val persisted = artifactStore.persistBase64Images(message)
+        persisted.ownedArtifacts.forEach { owned ->
+            ctx.registerUnpublishedResource(artifactStore.unpublishedLease(owned))
+        }
+        return persisted.message
     }
 }

@@ -3,8 +3,9 @@ package net.weero.measix.pilot.data.db.dao
 import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Embedded
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import androidx.room.Upsert
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 
@@ -13,12 +14,28 @@ data class ScopedTurnExecution(
     @Embedded val execution: TurnExecutionEntity,
     /** 所属会话是否为 Child（parent_conversation_id 非空）。 */
     @ColumnInfo(name = "is_child") val isChild: Boolean,
+    @ColumnInfo(name = "parent_conversation_id") val parentConversationId: String?,
 )
 
 @Dao
 interface TurnExecutionDAO {
-    @Upsert
-    suspend fun upsert(execution: TurnExecutionEntity)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(execution: TurnExecutionEntity): Long
+
+    @Query(
+        "UPDATE turn_execution SET status = :targetStatus, reason = :reason, updated_at = :updatedAt " +
+            "WHERE turn_id = :turnId AND conversation_id = :conversationId " +
+            "AND assistant_message_id = :assistantMessageId AND status IN (:sourceStatuses)"
+    )
+    suspend fun transition(
+        turnId: String,
+        conversationId: String,
+        sourceStatuses: List<TurnExecutionStatus>,
+        targetStatus: TurnExecutionStatus,
+        reason: String?,
+        assistantMessageId: String?,
+        updatedAt: Long,
+    ): Int
 
     @Query("SELECT * FROM turn_execution WHERE turn_id = :turnId")
     suspend fun getById(turnId: String): TurnExecutionEntity?
@@ -26,12 +43,9 @@ interface TurnExecutionDAO {
     @Query("SELECT * FROM turn_execution WHERE conversation_id = :conversationId ORDER BY created_at ASC")
     suspend fun getByConversationId(conversationId: String): List<TurnExecutionEntity>
 
-    @Query("SELECT * FROM turn_execution WHERE status IN (:statuses) ORDER BY updated_at ASC")
-    suspend fun getByStatuses(statuses: List<TurnExecutionStatus>): List<TurnExecutionEntity>
-
     /** 恢复候选：非终态 turn 事实 JOIN 会话表区分 Master/Child（恢复成本与库大小解耦）。 */
     @Query(
-        "SELECT turn_execution.*, " +
+        "SELECT turn_execution.*, ConversationEntity.parent_conversation_id, " +
             "CASE WHEN ConversationEntity.parent_conversation_id IS NULL THEN 0 ELSE 1 END AS is_child " +
             "FROM turn_execution " +
             "JOIN ConversationEntity ON turn_execution.conversation_id = ConversationEntity.id " +
@@ -50,14 +64,4 @@ interface TurnExecutionDAO {
     )
     suspend fun getMasterByStatuses(statuses: List<TurnExecutionStatus>): List<TurnExecutionEntity>
 
-    @Query(
-        "UPDATE turn_execution SET status = :targetStatus, reason = :reason, updated_at = :updatedAt " +
-            "WHERE status IN (:sourceStatuses)"
-    )
-    suspend fun updateStatuses(
-        sourceStatuses: List<TurnExecutionStatus>,
-        targetStatus: TurnExecutionStatus,
-        reason: String,
-        updatedAt: Long,
-    ): Int
 }

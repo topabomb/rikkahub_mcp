@@ -3,7 +3,6 @@ package net.weero.measix.pilot.ui.pages.chat
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
-import android.widget.Toast
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Book02
 import me.rerere.hugeicons.stroke.Book04
@@ -69,6 +68,7 @@ import coil3.request.allowHardware
 import coil3.request.crossfade
 import com.dokar.sonner.ToastType
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -83,7 +83,6 @@ import me.rerere.common.android.appTempFolder
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findModelById
-import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.ui.components.message.MessagePartBlock
 import net.weero.measix.pilot.ui.components.message.ThinkingStep
 import net.weero.measix.pilot.ui.components.message.groupMessageParts
@@ -96,8 +95,8 @@ import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalSettings
 import com.dokar.sonner.rememberToasterState
 import net.weero.measix.pilot.ui.context.LocalToaster
+import net.weero.measix.pilot.service.MediaExportService
 import net.weero.measix.pilot.ui.theme.MeasixTheme
-import net.weero.measix.pilot.utils.exportImage
 import net.weero.measix.pilot.utils.getActivity
 import net.weero.measix.pilot.utils.JsonInstantPretty
 import net.weero.measix.pilot.utils.jsonPrimitiveOrNull
@@ -111,7 +110,7 @@ import kotlin.time.DurationUnit
 fun ChatExportSheet(
     visible: Boolean,
     onDismissRequest: () -> Unit,
-    conversation: Conversation,
+    conversationTitle: String,
     selectedMessages: List<UIMessage>
 ) {
     val context = LocalContext.current
@@ -119,7 +118,10 @@ fun ChatExportSheet(
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val settings = LocalSettings.current
+    val mediaExportService: MediaExportService = org.koin.compose.koinInject()
     var imageExportOptions by remember { mutableStateOf(ImageExportOptions()) }
+    var exporting by remember { mutableStateOf(false) }
+    val exportFailedFormat = stringResource(R.string.chat_page_export_failed)
 
     if (visible) {
         AdaptiveModal(
@@ -139,13 +141,26 @@ fun ChatExportSheet(
                     stringResource(id = R.string.chat_page_export_success, "Markdown")
                 OutlinedCard(
                     onClick = {
-                        exportToMarkdown(context, conversation, selectedMessages)
-                        toaster.show(
-                            markdownSuccessMessage,
-                            type = ToastType.Success
-                        )
-                        onDismissRequest()
+                        if (exporting) return@OutlinedCard
+                        exporting = true
+                        scope.launch {
+                            try {
+                                exportToMarkdown(context, conversationTitle, selectedMessages)
+                                toaster.show(markdownSuccessMessage, type = ToastType.Success)
+                                onDismissRequest()
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (error: Exception) {
+                                toaster.show(
+                                    exportFailedFormat.format(error.message.orEmpty()),
+                                    type = ToastType.Error,
+                                )
+                            } finally {
+                                exporting = false
+                            }
+                        }
                     },
+                    enabled = !exporting,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     ListItem(
@@ -200,31 +215,35 @@ fun ChatExportSheet(
                         ) {
                             Button(
                                 onClick = {
+                                    if (exporting) return@Button
+                                    exporting = true
                                     scope.launch {
-                                        runCatching {
+                                        try {
                                             exportToImage(
                                                 context = context,
                                                 scope = scope,
                                                 density = density,
-                                                conversation = conversation,
+                                                conversationTitle = conversationTitle,
                                                 messages = selectedMessages,
                                                 settings = settings,
+                                                mediaExportService = mediaExportService,
                                                 options = imageExportOptions
                                             )
-                                        }.onFailure {
-                                            it.printStackTrace()
+                                            toaster.show(imageSuccessMessage, type = ToastType.Success)
+                                            onDismissRequest()
+                                        } catch (cancelled: CancellationException) {
+                                            throw cancelled
+                                        } catch (error: Exception) {
                                             toaster.show(
-                                                message = "Failed to export image: ${it.message}",
-                                                type = ToastType.Error
+                                                message = exportFailedFormat.format(error.message.orEmpty()),
+                                                type = ToastType.Error,
                                             )
+                                        } finally {
+                                            exporting = false
                                         }
                                     }
-                                    toaster.show(
-                                        imageSuccessMessage,
-                                        type = ToastType.Success
-                                    )
-                                    onDismissRequest()
-                                }
+                                },
+                                enabled = !exporting,
                             ) {
                                 Text(stringResource(R.string.mermaid_export))
                             }
@@ -236,15 +255,15 @@ fun ChatExportSheet(
     }
 }
 
-private fun exportToMarkdown(
+private suspend fun exportToMarkdown(
     context: Context,
-    conversation: Conversation,
+    conversationTitle: String,
     messages: List<UIMessage>
 ) {
     val filename = "chat-export-${LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))}.md"
 
     val sb = buildAnnotatedString {
-        append("# ${conversation.title}\n\n")
+        append("# $conversationTitle\n\n")
         append("*Exported on ${LocalDateTime.now().toLocalString()}*\n\n")
 
         messages.forEach { message ->
@@ -349,50 +368,37 @@ private fun exportToMarkdown(
         }
     }
 
-    try {
+    val file = withContext(Dispatchers.IO) {
         val dir = context.appTempFolder
-        val file = dir.resolve(filename)
-        if (!file.exists()) {
-            file.createNewFile()
+        val target = dir.resolve(filename)
+        if (!target.exists()) {
+            check(target.createNewFile()) { "Unable to create export file" }
         } else {
-            file.delete()
-            file.createNewFile()
+            check(target.delete()) { "Unable to replace previous export" }
+            check(target.createNewFile()) { "Unable to create export file" }
         }
-        FileOutputStream(file).use {
+        FileOutputStream(target).use {
             it.write(sb.toString().toByteArray())
         }
-
-        // Share the file
-        val uri = FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            file
-        )
-        shareFile(context, uri, "text/markdown")
-
-    } catch (e: Exception) {
-        e.printStackTrace()
+        target
     }
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    shareFile(context, uri, "text/markdown")
 }
 
 private suspend fun exportToImage(
     context: Context,
     scope: CoroutineScope,
     density: Density,
-    conversation: Conversation,
+    conversationTitle: String,
     messages: List<UIMessage>,
     settings: Settings,
+    mediaExportService: MediaExportService,
     options: ImageExportOptions = ImageExportOptions()
 ) {
     val filename = "chat-export-${LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))}.png"
     val composer = BitmapComposer(scope)
-    val activity = context.getActivity()
-    if (activity == null) {
-        withContext(Dispatchers.Main) {
-            Toast.makeText(context, "Failed to get activity", Toast.LENGTH_SHORT).show()
-        }
-        return
-    }
+    val activity = requireNotNull(context.getActivity()) { "Unable to access the current activity" }
 
     val bitmap = composer.composableToBitmap(
         activity = activity,
@@ -401,7 +407,7 @@ private suspend fun exportToImage(
         content = {
             CompositionLocalProvider(LocalSettings provides settings) {
                 ExportedChatImage(
-                    conversation = conversation,
+                    conversationTitle = conversationTitle,
                     messages = messages,
                     options = options
                 )
@@ -410,34 +416,28 @@ private suspend fun exportToImage(
     )
 
     try {
-        val dir = context.appTempFolder
-        val file = dir.resolve(filename)
-        if (!file.exists()) {
-            file.createNewFile()
-        } else {
-            file.delete()
-            file.createNewFile()
+        val file = withContext(Dispatchers.IO) {
+            val target = context.appTempFolder.resolve(filename)
+            if (!target.exists()) {
+                check(target.createNewFile()) { "Unable to create export file" }
+            } else {
+                check(target.delete()) { "Unable to replace previous export" }
+                check(target.createNewFile()) { "Unable to create export file" }
+            }
+            FileOutputStream(target).use { output ->
+                check(bitmap.compress(Bitmap.CompressFormat.PNG, 90, output)) {
+                    "Unable to encode image export"
+                }
+            }
+            mediaExportService.saveBitmap(context, bitmap, filename)
+            target
         }
-
-        FileOutputStream(file).use { fos ->
-            bitmap.compress(Bitmap.CompressFormat.PNG, 90, fos)
-        }
-
-        // Save to gallery
-        context.exportImage(activity, bitmap, filename)
-
-        // Share the file
         val uri = FileProvider.getUriForFile(
             context,
             "${context.packageName}.fileprovider",
             file
         )
         shareFile(context, uri, "image/png")
-    } catch (e: Exception) {
-        e.printStackTrace()
-        withContext(Dispatchers.Main) {
-            Toast.makeText(context, "Failed to export image: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
     } finally {
         bitmap.recycle()
     }
@@ -447,7 +447,7 @@ data class ImageExportOptions(val expandReasoning: Boolean = false)
 
 @Composable
 private fun ExportedChatImage(
-    conversation: Conversation,
+    conversationTitle: String,
     messages: List<UIMessage>,
     options: ImageExportOptions = ImageExportOptions()
 ) {
@@ -476,7 +476,7 @@ private fun ExportedChatImage(
                     ) {
                         Column(modifier = Modifier.weight(1f, fill = false)) {
                             Text(
-                                text = conversation.title,
+                                text = conversationTitle,
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                             )

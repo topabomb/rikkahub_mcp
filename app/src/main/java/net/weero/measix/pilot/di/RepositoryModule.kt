@@ -2,9 +2,12 @@ package net.weero.measix.pilot.di
 
 import android.content.Context
 import net.weero.measix.pilot.data.db.dao.ArtifactDAO
+import net.weero.measix.pilot.data.db.DatabaseTransactionRunner
+import net.weero.measix.pilot.data.db.RoomDatabaseTransactionRunner
 import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.ArtifactPayloadStore
+import net.weero.measix.pilot.data.files.ArtifactSettingsCoordinator
 import net.weero.measix.pilot.data.files.FileFolders
-import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.FavoriteRepository
@@ -20,8 +23,10 @@ import org.koin.dsl.module
 import java.io.File
 
 val repositoryModule = module {
+    single<DatabaseTransactionRunner> { RoomDatabaseTransactionRunner(get()) }
+
     single {
-        ConversationRepository(get(), get(), get(), get(), get(), get(), get(), get(), get())
+        ConversationRepository(get(), get(), get(), get(), get(), get(), get(), get())
     }
 
     single {
@@ -72,19 +77,20 @@ val repositoryModule = module {
         WorkspaceRepository(get(), get(), get(), get())
     }
 
-    single {
-        FilesManager(get(), get(), get())
-    }
+    single { ArtifactPayloadStore(get()) }
+
+    single { ArtifactSettingsCoordinator(get()) }
 
     single {
         ArtifactStore(
-            filesManager = get(),
+            payloadStore = get(),
             artifactDAO = get<ArtifactDAO>(),
             artifactReferenceDAO = get(),
             systemMetaDAO = get(),
             conversationDAO = get(),
             messageNodeDAO = get(),
-            settingsStore = get(),
+            settingsCoordinator = get(),
+            transactionRunner = get(),
         )
     }
 

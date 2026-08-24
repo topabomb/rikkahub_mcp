@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.chat
+package net.weero.measix.pilot.ui.pages.chat
 
 import android.app.Application
 import androidx.lifecycle.SavedStateHandle
@@ -24,9 +24,9 @@ import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.model.Folder
-import net.weero.measix.pilot.data.repository.ConversationRepository
-import net.weero.measix.pilot.data.repository.FolderRepository
-import net.weero.measix.pilot.service.ChatService
+import net.weero.measix.pilot.service.ConversationApplicationService
+import net.weero.measix.pilot.service.ConversationActivity
+import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.utils.toLocalString
 import java.time.LocalDate
 import java.time.ZoneId
@@ -35,9 +35,8 @@ import kotlin.uuid.Uuid
 class ChatDrawerVM(
     private val context: Application,
     private val settingsStore: SettingsStore,
-    conversationRepo: ConversationRepository,
-    private val folderRepo: FolderRepository,
-    private val chatService: ChatService,
+    private val conversationQueryService: ConversationQueryService,
+    private val conversationApplicationService: ConversationApplicationService,
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -51,8 +50,12 @@ class ChatDrawerVM(
 
     // 当前助手的文件夹列表（Room Flow，增删改自动刷新）
     val folders: StateFlow<List<Folder>> = assistantIdFlow
-        .flatMapLatest { folderRepo.getFoldersOfAssistant(it) }
+        .flatMapLatest { conversationQueryService.foldersOfAssistant(it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val conversationActivities: StateFlow<Map<Uuid, Set<ConversationActivity>>> =
+        conversationQueryService.conversationActivities()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     val conversations: Flow<PagingData<ConversationListItem>> =
         combine(assistantIdFlow, _selectedFolderId) { assistantId, folderId ->
@@ -60,9 +63,9 @@ class ChatDrawerVM(
         }
             .flatMapLatest { (assistantId, folderId) ->
                 if (folderId == null) {
-                    conversationRepo.getUnfiledConversationsOfAssistantPaging(assistantId)
+                    conversationQueryService.unfiledPaging(assistantId)
                 } else {
-                    conversationRepo.getConversationsOfFolderPaging(folderId)
+                    conversationQueryService.folderPaging(folderId)
                 }
             }
             .map { pagingData ->
@@ -147,7 +150,7 @@ class ChatDrawerVM(
         if (trimmed.isEmpty()) return
         viewModelScope.launch {
             val assistantId = assistantIdFlow.first()
-            folderRepo.createFolder(assistantId, trimmed)
+            conversationApplicationService.createFolder(assistantId, trimmed)
         }
     }
 
@@ -155,7 +158,7 @@ class ChatDrawerVM(
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return
         viewModelScope.launch {
-            folderRepo.renameFolder(folderId, trimmed)
+            conversationApplicationService.renameFolder(folderId, trimmed)
         }
     }
 
@@ -163,12 +166,11 @@ class ChatDrawerVM(
      * 删除文件夹。若文件夹内有正在生成回复的会话，拒绝删除并返回 false（UI 层据此提示用户）。
      */
     fun deleteFolder(folderId: Uuid): Boolean {
-        if (chatService.hasGeneratingConversationInFolder(folderId)) {
+        if (conversationApplicationService.hasGeneratingConversationInFolder(folderId)) {
             return false
         }
         viewModelScope.launch {
-            // 经 ChatService 删除：会同步清空活跃 session 内存态的 folderId，避免整对象保存写回已删文件夹
-            chatService.deleteFolder(folderId)
+            conversationApplicationService.deleteFolder(folderId)
             if (_selectedFolderId.value == folderId) {
                 _selectedFolderId.value = null
             }
@@ -178,8 +180,7 @@ class ChatDrawerVM(
 
     fun moveConversationToFolder(conversationId: Uuid, folderId: Uuid?) {
         viewModelScope.launch {
-            // 经 ChatService 移动：活跃会话会先同步内存态，避免后续整对象保存覆盖 folder_id
-            chatService.moveConversationToFolder(conversationId, folderId)
+            conversationApplicationService.moveToFolder(conversationId, folderId)
         }
     }
 

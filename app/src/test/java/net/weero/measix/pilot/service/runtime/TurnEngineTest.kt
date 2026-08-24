@@ -2,12 +2,16 @@ package net.weero.measix.pilot.service.runtime
 
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
@@ -17,160 +21,227 @@ import net.weero.measix.pilot.data.ai.FinishedReason
 import net.weero.measix.pilot.data.ai.GenerationCheckpoint
 import net.weero.measix.pilot.data.ai.GenerationChunk
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
+import net.weero.measix.pilot.data.model.Conversation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
 
-/**
- * TurnEngine 权威测试（提交协议等价）。
- * fake Flow 驱动：chunk→Streaming、checkpoint→CommitCheckpoint、Finished→FinalizeTurn。
- */
 class TurnEngineTest {
+    private fun msg(text: String): UIMessage = UIMessage(
+        id = Uuid.random(),
+        role = MessageRole.ASSISTANT,
+        parts = listOf(UIMessagePart.Text(text)),
+    )
 
-    private fun msg(text: String): UIMessage =
-        UIMessage(id = Uuid.random(), role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text(text)))
+    private data class Harness(
+        val coordinator: ConversationCommandCoordinator,
+        val runtime: ConversationRuntime,
+        val handle: TurnHandle,
+        val engine: TurnEngine,
+    )
 
-    private fun runtime(): ConversationRuntime = mockk<ConversationRuntime>(relaxed = true).also {
-        coEvery { it.submit(any()) } returns net.weero.measix.pilot.data.model.Conversation.ofId(Uuid.random()).toSnapshot()
-        coEvery { it.isTurnFinalized(any()) } returns false
+    private fun harness(): Harness {
+        val id = Uuid.random()
+        val runtime = mockk<ConversationRuntime>()
+        every { runtime.id } returns id
+        every { runtime.applyStreamingDelta(any(), any()) } returns StreamingDeltaResult.APPLIED
+        every { runtime.peekCancelReason(any()) } returns "user_stop"
+        val coordinator = mockk<ConversationCommandCoordinator>()
+        coEvery { coordinator.executeOrThrow(any(), any()) } returns Unit
+        val handle = TurnHandle(id, 1, Uuid.random(), Uuid.random())
+        return Harness(coordinator, runtime, handle, TurnEngine(coordinator, runtime, handle))
     }
 
     @Test
-    fun `checkpoint onCheckpoint commits CommitCheckpoint to runtime`() = runTest {
-        val runtime = runtime()
-        val turnId = Uuid.random()
-        val assistantId = Uuid.random()
-        val engine = TurnEngine(runtime, turnId, assistantId)
-        val checkpoint = GenerationCheckpoint(
-            kind = CheckpointKind.TERMINAL_STATE,
-            messages = listOf(msg("done")),
-            toolExecution = null,
+    fun `checkpoint commits one typed checkpoint command`() = runTest {
+        val harness = harness()
+        harness.engine.onCheckpoint(
+            GenerationCheckpoint(
+                kind = CheckpointKind.STEP_COMPLETED,
+                messages = listOf(msg("done")),
+                toolExecution = null,
+            )
         )
-        engine.onCheckpoint(checkpoint)
-        val cmdSlot = slot<ConversationCommand>()
-        coVerify { runtime.submit(capture(cmdSlot)) }
-        assertTrue("CommitCheckpoint committed", cmdSlot.captured is CommitCheckpoint)
-        val commit = cmdSlot.captured as CommitCheckpoint
-        assertEquals(turnId, commit.turnId)
-        assertEquals(TurnExecutionStatus.COMPLETED, commit.turnStatus)
+
+        val command = slot<ConversationCommand>()
+        coVerify(exactly = 1) { harness.coordinator.executeOrThrow(any(), capture(command)) }
+        val checkpoint = command.captured as CommitCheckpoint
+        assertEquals(harness.handle, checkpoint.handle)
+        assertEquals(TurnExecutionStatus.RUNNING, checkpoint.turnStatus)
     }
 
     @Test
-    fun `bind maps Messages chunk to Streaming event`() = runTest {
-        val engine = TurnEngine(runtime(), Uuid.random(), Uuid.random())
-        val chunk = GenerationChunk.Messages(listOf(msg("hi")))
-        val events = engine.bind(flowOf(chunk)).first()
-        assertTrue(events is TurnEvent.Streaming)
-        val streaming = events as TurnEvent.Streaming
-        assertEquals("hi", streaming.lastMessage?.parts?.filterIsInstance<UIMessagePart.Text>()?.single()?.text)
+    fun `streaming chunks update only the owned projection`() = runTest {
+        val harness = harness()
+        val messages = listOf(msg("hi"))
+
+        val events = harness.engine.bind(flowOf(GenerationChunk.Messages(messages))).toListSafe()
+
+        assertTrue(events.single() is TurnEvent.Streaming)
+        coVerify(exactly = 0) { harness.coordinator.executeOrThrow(any(), any()) }
+        io.mockk.verify(exactly = 1) { harness.runtime.applyStreamingDelta(harness.handle, messages) }
     }
 
     @Test
-    fun `bind Finished submits FinalizeTurn and emits Finished`() = runTest {
-        val runtime = runtime()
-        val engine = TurnEngine(runtime, Uuid.random(), Uuid.random())
-        val events = engine.bind(flowOf(GenerationChunk.Finished(FinishedReason.COMPLETED))).first()
-        assertTrue(events is TurnEvent.Finished)
-        assertEquals(FinishedReason.COMPLETED, (events as TurnEvent.Finished).reason)
-        val cmdSlot = slot<ConversationCommand>()
-        coVerify { runtime.submit(capture(cmdSlot)) }
-        assertTrue(cmdSlot.captured is FinalizeTurn)
-        assertEquals(TurnExecutionStatus.COMPLETED, (cmdSlot.captured as FinalizeTurn).terminalStatus)
+    fun `finished chunk submits the sealed completed outcome`() = runTest {
+        val harness = harness()
+
+        val events = harness.engine.bind(
+            flowOf(GenerationChunk.Finished(FinishedReason.COMPLETED))
+        ).toListSafe()
+
+        val finished = events.single() as TurnEvent.Finished
+        assertEquals(TurnOutcome.Completed, finished.outcome)
+        val command = slot<ConversationCommand>()
+        coVerify { harness.coordinator.executeOrThrow(any(), capture(command)) }
+        assertEquals(TurnExecutionStatus.COMPLETED, (command.captured as FinalizeTurn).terminalStatus)
     }
 
     @Test
-    fun `bind exception submits FinalizeTurn FAILED without rethrowing`() = runTest {
-        val runtime = runtime()
-        val engine = TurnEngine(runtime, Uuid.random(), Uuid.random())
-        val boom = RuntimeException("provider failed")
-        val events = engine.bind(
+    fun `provider failure submits failed outcome and retains the exception`() = runTest {
+        val harness = harness()
+        val failure = IllegalStateException("provider failed")
+
+        val events = harness.engine.bind(
             flow {
                 emit(GenerationChunk.Messages(listOf(msg("partial"))))
-                throw boom
+                throw failure
             }
         ).toListSafe()
-        val finished = events.filterIsInstance<TurnEvent.Finished>().single()
-        assertEquals(boom, finished.error)
-        val cmds = mutableListOf<ConversationCommand>()
-        coVerify { runtime.submit(capture(cmds)) }
-        assertTrue(cmds.any { it is FinalizeTurn && it.terminalStatus == TurnExecutionStatus.FAILED })
+
+        val outcome = (events.last() as TurnEvent.Finished).outcome as TurnOutcome.Failed
+        assertEquals(failure, outcome.error)
+        val commands = mutableListOf<ConversationCommand>()
+        coVerify { harness.coordinator.executeOrThrow(any(), capture(commands)) }
+        assertTrue(commands.any { it is FinalizeTurn && it.terminalStatus == TurnExecutionStatus.FAILED })
     }
 
     @Test
-    fun `bind cancellation submits FinalizeTurn CANCELLED and rethrows`() = runTest {
-        val runtime = runtime()
-        val engine = TurnEngine(runtime, Uuid.random(), Uuid.random())
+    fun `finalization failure propagates without rewriting the outcome`() = runTest {
+        val harness = harness()
+        val failure = IllegalStateException("commit failed")
+        val commands = mutableListOf<ConversationCommand>()
+        coEvery { harness.coordinator.executeOrThrow(any(), capture(commands)) } throws failure
+
         val thrown = runCatching {
-            engine.bind(
+            harness.engine.bind(
+                flowOf(GenerationChunk.Finished(FinishedReason.COMPLETED)),
+            ).collect { }
+        }.exceptionOrNull()
+
+        assertEquals(failure, thrown)
+        assertEquals(1, commands.size)
+        assertEquals(TurnExecutionStatus.COMPLETED, (commands.single() as FinalizeTurn).terminalStatus)
+    }
+
+    @Test
+    fun `cancellation submits cancelled once and rethrows`() = runTest {
+        val harness = harness()
+
+        val thrown = runCatching {
+            harness.engine.bind(
                 flow {
                     emit(GenerationChunk.Messages(listOf(msg("partial"))))
-                    throw CancellationException("user stop")
+                    throw CancellationException("stop")
                 }
             ).collect { }
         }.exceptionOrNull()
+
         assertTrue(thrown is CancellationException)
-        val cmds = mutableListOf<ConversationCommand>()
-        coVerify { runtime.submit(capture(cmds)) }
-        assertTrue(cmds.any { it is FinalizeTurn && it.terminalStatus == TurnExecutionStatus.CANCELLED })
+        val commands = mutableListOf<ConversationCommand>()
+        coVerify { harness.coordinator.executeOrThrow(any(), capture(commands)) }
+        assertEquals(1, commands.filterIsInstance<FinalizeTurn>().size)
+        assertEquals(TurnExecutionStatus.CANCELLED, commands.filterIsInstance<FinalizeTurn>().single().terminalStatus)
     }
 
     @Test
-    fun `submitFinalize commits FinalizeTurn and marks turn finalized`() = runTest {
-        val runtime = runtime()
-        val turnId = Uuid.random()
-        val assistantId = Uuid.random()
-        val engine = TurnEngine(runtime, turnId, assistantId)
-        engine.submitFinalize(null, TurnExecutionStatus.CANCELLED, "user_stop", closeInterruptedTools = true)
-        coVerify { runtime.markTurnFinalized(turnId) }
+    fun `cancelling collector job durably submits cancelled outcome`() = runTest {
+        val harness = harness()
+        val started = CompletableDeferred<Unit>()
+        val collector = launch {
+            harness.engine.bind(
+                flow {
+                    started.complete(Unit)
+                    awaitCancellation()
+                }
+            ).collect { }
+        }
+
+        started.await()
+        collector.cancelAndJoin()
+
+        val commands = mutableListOf<ConversationCommand>()
+        coVerify(exactly = 1) { harness.coordinator.executeOrThrow(any(), capture(commands)) }
+        assertEquals(TurnExecutionStatus.CANCELLED, (commands.single() as FinalizeTurn).terminalStatus)
     }
 
-    /**
-     * Master 与 Target 以相同 fake chunk 序列驱动同一 TurnEngine.bind：
-     * onCheckpoint → CommitCheckpoint，Finished → FinalizeTurn。
-     * 两者对 Runtime 提交的命令序列完全一致。
-     */
     @Test
-    fun `T-1 master and target commit identical command sequences for the same chunk stream`() = runTest {
-        val turnId = Uuid.random()
-        val assistantId = Uuid.random()
-        val chunks = flowOf(
-            GenerationChunk.Messages(listOf(msg("hi"))),
-            GenerationChunk.Checkpoint(CheckpointKind.STEP_COMPLETED),
-            GenerationChunk.Finished(FinishedReason.COMPLETED),
-        )
-        val checkpoint = GenerationCheckpoint(
-            kind = CheckpointKind.STEP_COMPLETED,
-            messages = listOf(msg("hi"), msg("world")),
-            toolExecution = null,
-        )
-
+    fun `master and target use identical command shapes`() = runTest {
         suspend fun drive(): List<ConversationCommand> {
-            val runtime = runtime()
+            val harness = harness()
             val recorded = mutableListOf<ConversationCommand>()
-            coEvery { runtime.submit(any()) } answers {
-                recorded.add(invocation.args[0] as ConversationCommand)
-                net.weero.measix.pilot.data.model.Conversation.ofId(Uuid.random()).toSnapshot()
-            }
-            val engine = TurnEngine(runtime, turnId, assistantId)
-            engine.onCheckpoint(checkpoint)
-            engine.bind(chunks).collect { }
+            coEvery { harness.coordinator.executeOrThrow(any(), capture(recorded)) } returns Unit
+            harness.engine.onCheckpoint(
+                GenerationCheckpoint(
+                    kind = CheckpointKind.STEP_COMPLETED,
+                    messages = listOf(msg("checkpoint")),
+                    toolExecution = null,
+                )
+            )
+            harness.engine.bind(
+                flowOf(GenerationChunk.Finished(FinishedReason.COMPLETED))
+            ).collect { }
             return recorded
         }
 
-        val masterCommands = drive()
-        val targetCommands = drive()
+        val master = drive()
+        val target = drive()
+        assertEquals(master.map { it::class }, target.map { it::class })
+        assertEquals(listOf(CommitCheckpoint::class, FinalizeTurn::class), master.map { it::class })
+    }
 
-        assertEquals(masterCommands, targetCommands)
-        assertEquals(2, masterCommands.size)
-        assertTrue(masterCommands[0] is CommitCheckpoint)
-        assertTrue(masterCommands[1] is FinalizeTurn)
-        assertEquals(TurnExecutionStatus.COMPLETED, (masterCommands[1] as FinalizeTurn).terminalStatus)
+    @Test
+    fun `approval pause and continuation keep one handle until terminal finalization`() = runTest {
+        val harness = harness()
+        val recorded = mutableListOf<ConversationCommand>()
+        coEvery { harness.coordinator.executeOrThrow(any(), capture(recorded)) } returns Unit
+        val waitingMessages = listOf(msg("waiting"))
+
+        harness.engine.bind(
+            flowOf(
+                GenerationChunk.Messages(waitingMessages),
+                GenerationChunk.Finished(FinishedReason.AWAITING_APPROVAL),
+            )
+        ).collect { }
+        harness.engine.onCheckpoint(
+            GenerationCheckpoint(
+                kind = CheckpointKind.STEP_COMPLETED,
+                messages = waitingMessages,
+                toolExecution = null,
+            )
+        )
+        harness.engine.bind(
+            flowOf(GenerationChunk.Finished(FinishedReason.COMPLETED))
+        ).collect { }
+
+        assertEquals(
+            listOf(CommitCheckpoint::class, CommitCheckpoint::class, FinalizeTurn::class),
+            recorded.map { it::class },
+        )
+        assertEquals(
+            TurnExecutionStatus.AWAITING_APPROVAL,
+            (recorded[0] as CommitCheckpoint).turnStatus,
+        )
+        assertEquals(TurnExecutionStatus.RUNNING, (recorded[1] as CommitCheckpoint).turnStatus)
+        assertEquals(harness.handle, (recorded[0] as CommitCheckpoint).handle)
+        assertEquals(harness.handle, (recorded[1] as CommitCheckpoint).handle)
+        assertEquals(harness.handle, (recorded[2] as FinalizeTurn).handle)
     }
 }
 
 private suspend fun kotlinx.coroutines.flow.Flow<TurnEvent>.toListSafe(): List<TurnEvent> {
-    val out = mutableListOf<TurnEvent>()
-    collect { out.add(it) }
-    return out
+    val events = mutableListOf<TurnEvent>()
+    collect(events::add)
+    return events
 }

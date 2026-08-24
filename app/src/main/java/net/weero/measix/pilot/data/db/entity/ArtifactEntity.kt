@@ -5,8 +5,9 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
-/** 删除幂等屏障状态机：ACTIVE → DELETING（CAS）→ 行删除。无 MISSING 态——磁盘缺失由 reconcile 直接清行。 */
+/** 可恢复生命周期：CREATING → ACTIVE → DELETING → 行删除。 */
 enum class ArtifactState {
+    CREATING,
     ACTIVE,
     DELETING,
 }
@@ -61,6 +62,9 @@ data class ArtifactEntity(
     val updatedAt: Long,
     @ColumnInfo("state", defaultValue = "ACTIVE")
     val state: String = ArtifactState.ACTIVE.name,
+    /** CREATING 的 staging 文件名；ACTIVE 后清空。 */
+    @ColumnInfo("payload_token")
+    val payloadToken: String? = null,
     /** 诞生方式（[ArtifactOrigin.name]），写入时一次确定后不变。 */
     @ColumnInfo("origin", defaultValue = "USER")
     val origin: String = ArtifactOrigin.USER.name,

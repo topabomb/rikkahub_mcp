@@ -7,25 +7,25 @@ import androidx.compose.runtime.rememberUpdatedState
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 import net.weero.measix.pilot.ui.context.LocalTTSState
 import net.weero.measix.pilot.utils.extractQuotedContentAsText
 import net.weero.measix.pilot.utils.removeBracketedContent
 
 @Composable
-fun TTSAutoPlay(vm: ChatVM, setting: Settings, conversation: Conversation) {
+fun TTSAutoPlay(vm: ChatVM, setting: Settings, snapshot: ConversationSnapshot) {
     // Auto-play TTS after generation completes
     val tts = LocalTTSState.current
     val updatedSetting by rememberUpdatedState(setting)
-    LaunchedEffect(vm, conversation.id) {
+    LaunchedEffect(vm, snapshot.conversationId) {
         vm.generationDoneFlow.collect { conversationId ->
-            if (conversation.id != conversationId) return@collect
+            if (snapshot.conversationId != conversationId) return@collect
             // SharedFlow 完成事件可能先于 Compose 参数重组到达，直接读取内存快照（权威事实源）。
-            val completedConversation = vm.currentConversation()
+            val completedSnapshot = vm.currentSnapshot()
             if (updatedSetting.displaySetting.autoPlayTTSAfterGeneration &&
-                shouldAutoPlayTts(conversationId, completedConversation)
+                shouldAutoPlayTts(conversationId, completedSnapshot)
             ) {
-                val lastMessage = completedConversation.currentMessages.lastOrNull()
+                val lastMessage = completedSnapshot.currentMessages().lastOrNull()
                 if (lastMessage != null && lastMessage.role == MessageRole.ASSISTANT) {
                     val text = lastMessage.toText()
                     var textToSpeak = text
@@ -56,9 +56,9 @@ fun TTSAutoPlay(vm: ChatVM, setting: Settings, conversation: Conversation) {
 internal fun autoPlayReplacesWithinTurn(queueSessionId: String?, sequentialEnabled: Boolean): Boolean =
     queueSessionId == null || !sequentialEnabled
 
-internal fun shouldAutoPlayTts(conversationId: kotlin.uuid.Uuid, conversation: Conversation): Boolean {
-    if (conversation.id != conversationId) return false
-    val lastMessage = conversation.currentMessages.lastOrNull() ?: return false
+internal fun shouldAutoPlayTts(conversationId: kotlin.uuid.Uuid, snapshot: ConversationSnapshot): Boolean {
+    if (snapshot.conversationId != conversationId) return false
+    val lastMessage = snapshot.currentMessages().lastOrNull() ?: return false
     if (lastMessage.role != MessageRole.ASSISTANT) return false
     val hasPendingTools = lastMessage.parts.any { it is UIMessagePart.Tool && it.isPending }
     if (hasPendingTools) return false

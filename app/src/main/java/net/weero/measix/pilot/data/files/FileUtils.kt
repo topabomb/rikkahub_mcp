@@ -43,6 +43,9 @@ object FileUtils {
     }
 
     fun getFileNameFromUri(context: Context, uri: Uri): String? {
+        if (uri.scheme == "file") {
+            return uri.path?.let(::File)?.name?.takeIf(String::isNotBlank)
+        }
         return runCatching {
             var fileName: String? = null
             val projection = arrayOf(
@@ -73,20 +76,29 @@ object FileUtils {
         return when (uri.scheme) {
             "content" -> runCatching {
                 context.contentResolver.getType(uri)
+                    ?: getFileNameFromUri(context, uri)?.let(::mimeTypeFromFileName)
             }.onFailure {
                 Log.w(TAG, "getFileMimeType: Failed to resolve MIME for $uri", it)
             }.getOrNull()
+            "file" -> uri.path
+                ?.let(::File)
+                ?.takeIf(File::isFile)
+                ?.let { file -> guessMimeType(file, file.name) }
             else -> null
         }
     }
 
     fun guessMimeType(file: File, fileName: String): String {
-        val ext = fileName.substringAfterLast('.', "").lowercase()
-        if (ext.isNotEmpty()) {
-            return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
-                ?: "application/octet-stream"
-        }
-        return sniffMimeType(file)
+        return mimeTypeFromFileName(fileName)
+            ?.takeUnless { it == "application/octet-stream" }
+            ?: sniffMimeType(file)
+    }
+
+    private fun mimeTypeFromFileName(fileName: String): String? {
+        val ext = fileName.substringAfterLast('.', "").lowercase().takeIf(String::isNotEmpty)
+            ?: return null
+        return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+            ?: "application/octet-stream"
     }
 
     fun compressBitmapToPng(bitmap: Bitmap): ByteArray = ByteArrayOutputStream().use {

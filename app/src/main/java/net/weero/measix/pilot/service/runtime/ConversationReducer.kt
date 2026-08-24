@@ -26,35 +26,38 @@ import kotlin.uuid.Uuid
 internal object ConversationReducer {
 
     fun reduce(current: ConversationSnapshot, command: ConversationCommand): ConversationSnapshot = when (command) {
-        is BeginTurn -> beginTurn(current, command)
-        is ApplyStreamingDelta -> current // 仅 activeTurn 更新，reducer 不动 nodes；由 Runtime 直接处理
-        is CommitCheckpoint -> replaceMessages(current, command.assistantMessageId, command.messages)
+        is StartTurn -> startTurn(current, command)
+        is CommitCheckpoint -> replaceMessages(current, command.handle.assistantMessageId, command.messages)
         is FinalizeTurn -> finalizeTurn(current, command)
+        is RecoverInterruptedTurn -> recoverInterruptedTurn(current, command)
         is AppendUserMessage -> appendUser(current, command.message)
         is EditMessageVariant -> editVariant(current, command)
         is DeleteMessage -> deleteMessage(current, command)
         is SelectNodeVariant -> selectNodeVariant(current, command)
         is TruncateToNodeIndex -> truncateTo(current, command.nodeIndexInclusive)
         is ReplaceMessageTree -> current.copy(nodes = command.nodes)
-        is UpdateHeader -> updateHeader(current, command)
+        is BackfillAttachmentRefs -> backfillAttachmentRefs(current, command.nodes)
+        is UpdateHeader -> current.copy(header = reduceHeader(current.header, command))
+        is MoveToAssistant -> current.copy(header = reduceHeader(current.header, command))
+        TogglePinned -> current.copy(header = reduceHeader(current.header, TogglePinned))
         is UpdateToolApproval -> updateToolApproval(current, command)
     }
 
-    // ---- BeginTurn：在节点树末端追加/复用 assistant 槽 ----
+    // ---- StartTurn：在节点树末端追加/复用 assistant 槽 ----
 
-    private fun beginTurn(current: ConversationSnapshot, command: BeginTurn): ConversationSnapshot {
+    private fun startTurn(current: ConversationSnapshot, command: StartTurn): ConversationSnapshot {
         if (current.nodes.isEmpty()) {
             val node = MessageNode.of(emptyAssistantMessage(command.assistantMessageId))
             return current.copy(nodes = listOf(node))
         }
         val last = current.nodes.last()
-        val lastMsg = last.messages.lastOrNull()
+        val lastMsg = last.currentMessage
         // resume：末尾已是同 assistant 节点 → 直接复用（幂等）
-        if (command.resume && lastMsg != null && lastMsg.id == command.assistantMessageId && lastMsg.role == MessageRole.ASSISTANT) {
+        if (command.resume && lastMsg.id == command.assistantMessageId && lastMsg.role == MessageRole.ASSISTANT) {
             return current
         }
         val nodes = current.nodes.toMutableList()
-        if (lastMsg != null && lastMsg.role == MessageRole.ASSISTANT && lastMsg.terminalStatus == null) {
+        if (lastMsg.role == MessageRole.ASSISTANT && lastMsg.terminalStatus == null) {
             // 追加到现有未闭合 assistant 节点
             val msg = emptyAssistantMessage(command.assistantMessageId)
             nodes[nodes.lastIndex] = last.copy(messages = last.messages + msg, selectIndex = last.messages.size)
@@ -66,86 +69,62 @@ internal object ConversationReducer {
 
     // ---- 消息替换（checkpoint / 终态）----
 
-    /**
-     * checkpoint 消息分发：messages 为完整 currentMessages，按 index 对应节点分发；
-     * 未被触及的节点保持同一实例引用（structural sharing，是 delta 持久化 O(changed)
-     * 与 Compose skip 的前提）。
-     */
+    /** Checkpoint 只允许替换 active assistant；历史消息即使随请求传入也不参与遍历或复制。 */
     private fun replaceMessages(current: ConversationSnapshot, assistantMessageId: Uuid, messages: List<UIMessage>): ConversationSnapshot {
-        if (messages.isEmpty()) return current
-        val newNodes = current.nodes.toMutableList()
-        messages.forEachIndexed { index, message ->
-            val node = newNodes.getOrElse(index) { MessageNode.of(message) }
-            val existingIndex = node.messages.indexOfFirst { it.id == message.id }
-            val newNode: MessageNode
-            if (existingIndex >= 0) {
-                if (node.messages[existingIndex] === message) {
-                    // 引用相同 → 节点未变，保持原引用（structural sharing）
-                    if (index <= newNodes.lastIndex) return@forEachIndexed
-                    newNode = node
-                } else {
-                    newNode = node.copy(
-                        messages = node.messages.mapIndexed { i, m -> if (i == existingIndex) message else m },
-                        selectIndex = node.selectIndex,
-                    )
-                }
-            } else {
-                val newMessages = node.messages + message
-                newNode = node.copy(messages = newMessages, selectIndex = newMessages.lastIndex)
-            }
-            if (index > newNodes.lastIndex) newNodes.add(newNode) else newNodes[index] = newNode
+        val message = messages.lastOrNull() ?: return current
+        require(message.id == assistantMessageId) {
+            "Checkpoint payload does not end with the active assistant message"
         }
-        if (newNodes == current.nodes) return current
-        return current.copy(nodes = newNodes)
+        return current.replaceMessageById(assistantMessageId, message, requireLastNode = true)
     }
 
     // ---- FinalizeTurn 终态收口 ----
 
     private fun finalizeTurn(current: ConversationSnapshot, command: FinalizeTurn): ConversationSnapshot {
         var result = current
-        command.messages?.let { result = result.updateCurrentMessagesByUIMessages(it) }
-        // 终态收口：未结束的 reasoning 标记 finishedAt（已结束的历史节点保持同一实例）
-        result = result.applyFinishReasoning()
+        command.messages?.let { result = replaceMessages(result, command.handle.assistantMessageId, it) }
+        result = result.finishReasoning(command.handle.assistantMessageId)
         // 标记 assistant 终态（仅非成功状态；COMPLETED 的 terminalStatus 保持 null）。
-        // 抑制场景：messages=null 且 closeInterruptedTools=true 的纯工具收口
-        // （finalizeSupersededTurn 的 super-section 收口）——不标记消息终态，
-        // 旧 assistant 分支的终态由其所属 turn 的正常 FinalizeTurn 管理。
-        val suppressTerminalMark = command.messages == null && command.closeInterruptedTools
-        if (!suppressTerminalMark) {
-            toMessageTerminalStatus(command.terminalStatus)?.let { status ->
-                result = result.markAssistantTerminalInternal(command.assistantMessageId, status, command.terminalReason)
-            }
+        toMessageTerminalStatus(command.terminalStatus)?.let { status ->
+            result = result.markAssistantTerminalInternal(command.handle.assistantMessageId, status, command.terminalReason)
         }
         // 关闭未完工具
         if (command.closeInterruptedTools) {
-            result = result.closePendingTools(cancelledByUser = false)
+            result = result.closePendingTools(command.handle.assistantMessageId, cancelledByUser = false)
         }
         return result
     }
 
-    /**
-     * 只收口未结束的 reasoning（finishedAt == null）。已结束的历史节点保持同一实例，
-     * 避免 FinalizeTurn 把整棵树标脏导致 checkpoint 写放大。
-     */
-    private fun ConversationSnapshot.applyFinishReasoning(): ConversationSnapshot {
-        var changed = false
-        val newNodes = nodes.map { node ->
-            val hasUnfinished = node.messages.any { msg ->
-                msg.parts.any { it is UIMessagePart.Reasoning && it.finishedAt == null }
+    private fun recoverInterruptedTurn(
+        current: ConversationSnapshot,
+        command: RecoverInterruptedTurn,
+    ): ConversationSnapshot {
+        var result = current
+        command.messages?.let { messages ->
+            val message = requireNotNull(messages.lastOrNull { it.id == command.assistantMessageId }) {
+                "Recovery payload does not contain the owning assistant message"
             }
-            if (!hasUnfinished) {
-                node
-            } else {
-                changed = true
-                node.copy(
-                    messages = node.messages.map { msg ->
-                        val unfinished = msg.parts.any { it is UIMessagePart.Reasoning && it.finishedAt == null }
-                        if (unfinished) msg.finishReasoning() else msg
-                    },
-                )
-            }
+            result = result.replaceMessageById(command.assistantMessageId, message, requireLastNode = false)
         }
-        return if (!changed) this else copy(nodes = newNodes)
+        require(result.findMessage(command.assistantMessageId)?.role == MessageRole.ASSISTANT) {
+            "Recovery target is not an assistant message: ${command.assistantMessageId}"
+        }
+        result = result.finishReasoning(command.assistantMessageId)
+        result = result.markAssistantTerminalInternal(
+            command.assistantMessageId,
+            MessageTerminalStatus.INTERRUPTED,
+            command.terminalReason,
+        )
+        if (command.closeInterruptedTools) {
+            result = result.closePendingTools(command.assistantMessageId, cancelledByUser = false)
+        }
+        return result
+    }
+
+    private fun ConversationSnapshot.finishReasoning(messageId: Uuid): ConversationSnapshot {
+        val message = findMessage(messageId) ?: return this
+        val unfinished = message.parts.any { it is UIMessagePart.Reasoning && it.finishedAt == null }
+        return if (unfinished) replaceMessageById(messageId, message.finishReasoning(), false) else this
     }
 
     /** 将持久化 turn 终态映射为渲染可见的 MessageTerminalStatus（成功态映射为 null）。 */
@@ -168,7 +147,7 @@ internal object ConversationReducer {
         )
     }
 
-    /** 编辑 = 在目标节点追加新变体并选中（对齐 ChatService.editMessage 语义）。 */
+    /** 编辑 = 在目标节点追加新变体并选中。 */
     private fun editVariant(current: ConversationSnapshot, command: EditMessageVariant): ConversationSnapshot {
         val nodeIndex = current.nodes.indexOfFirst { it.id == command.nodeId }
         if (nodeIndex < 0) return current
@@ -233,41 +212,50 @@ internal object ConversationReducer {
         return current.copy(nodes = current.nodes.subList(0, nodeIndexInclusive + 1))
     }
 
+    private fun backfillAttachmentRefs(
+        current: ConversationSnapshot,
+        nodes: List<MessageNode>,
+    ): ConversationSnapshot {
+        require(nodes.size == current.nodes.size && nodes.indices.all { nodes[it].id == current.nodes[it].id }) {
+            "attachment reference backfill cannot change the message tree shape"
+        }
+        return if (nodes == current.nodes) current else current.copy(nodes = nodes)
+    }
+
     // ---- Header（只动 header，不触碰 nodes）----
 
-    private fun updateHeader(current: ConversationSnapshot, command: UpdateHeader): ConversationSnapshot {
-        var nodes = current.nodes
-        if (command.sanitizeForPersistence) {
-            nodes = current.sanitizeBase64Nodes()
+    fun reduceHeader(old: ConversationHeader, command: UpdateHeader): ConversationHeader = old.copy(
+        title = command.title ?: old.title,
+        chatSuggestions = command.suggestions ?: old.chatSuggestions,
+        isPinned = command.isPinned ?: old.isPinned,
+        folderId = when (command.folderId) {
+            is OptionalFolderId.Keep -> old.folderId
+            is OptionalFolderId.Clear -> null
+            is OptionalFolderId.SetTo -> command.folderId.id
+        },
+        customSystemPrompt = when (command.customSystemPrompt) {
+            is OptionalString.Keep -> old.customSystemPrompt
+            is OptionalString.Set -> command.customSystemPrompt.value
+        },
+        modeInjectionIds = when (command.modeInjectionIds) {
+            is OptionalUuidSet.Keep -> old.modeInjectionIds
+            is OptionalUuidSet.Set -> command.modeInjectionIds.value
+        },
+        workspaceCwd = when (command.workspaceCwd) {
+            is OptionalString.Keep -> old.workspaceCwd
+            is OptionalString.Set -> command.workspaceCwd.value
+        },
+    )
+
+    fun reduceHeader(old: ConversationHeader, command: MoveToAssistant): ConversationHeader =
+        if (old.assistantId == command.assistantId) {
+            old
+        } else {
+            old.copy(assistantId = command.assistantId, folderId = null)
         }
-        val old = current.header
-        return current.copy(
-            nodes = nodes,
-            header = old.copy(
-                title = command.title ?: old.title,
-                chatSuggestions = command.suggestions ?: old.chatSuggestions,
-                isPinned = command.isPinned ?: old.isPinned,
-                folderId = when (command.folderId) {
-                    is OptionalFolderId.Keep -> old.folderId
-                    is OptionalFolderId.Clear -> null
-                    is OptionalFolderId.SetTo -> command.folderId.id
-                },
-                assistantId = command.assistantId ?: old.assistantId,
-                customSystemPrompt = when (command.customSystemPrompt) {
-                    is OptionalString.Keep -> old.customSystemPrompt
-                    is OptionalString.Set -> command.customSystemPrompt.value
-                },
-                modeInjectionIds = when (command.modeInjectionIds) {
-                    is OptionalUuidSet.Keep -> old.modeInjectionIds
-                    is OptionalUuidSet.Set -> command.modeInjectionIds.value
-                },
-                workspaceCwd = when (command.workspaceCwd) {
-                    is OptionalString.Keep -> old.workspaceCwd
-                    is OptionalString.Set -> command.workspaceCwd.value
-                },
-            ),
-        )
-    }
+
+    fun reduceHeader(old: ConversationHeader, command: TogglePinned): ConversationHeader =
+        old.copy(isPinned = !old.isPinned)
 
     /**
      * HITL 工具审批：仅作用于最后一条消息；按 toolOrdinal 定位；目标必须是未执行且
@@ -312,23 +300,32 @@ internal object ConversationReducer {
         parts = emptyList(),
     )
 
-    private fun ConversationSnapshot.updateCurrentMessagesByUIMessages(messages: List<UIMessage>): ConversationSnapshot {
-        val newNodes = nodes.toMutableList()
-        messages.forEachIndexed { index, message ->
-            val node = newNodes.getOrElse(index) { MessageNode.of(message) }
-            val newMessages = node.messages.toMutableList()
-            var newIndex = node.selectIndex
-            val existingIndex = newMessages.indexOfFirst { it.id == message.id }
-            if (existingIndex >= 0) {
-                newMessages[existingIndex] = message
-            } else {
-                newMessages.add(message)
-                newIndex = newMessages.lastIndex
-            }
-            val newNode = node.copy(messages = newMessages, selectIndex = newIndex)
-            if (index > newNodes.lastIndex) newNodes.add(newNode) else newNodes[index] = newNode
+    private fun ConversationSnapshot.findMessage(messageId: Uuid): UIMessage? {
+        nodes.lastOrNull()?.messages?.firstOrNull { it.id == messageId }?.let { return it }
+        return nodes.asSequence().flatMap { it.messages.asSequence() }.firstOrNull { it.id == messageId }
+    }
+
+    private fun ConversationSnapshot.replaceMessageById(
+        messageId: Uuid,
+        replacement: UIMessage,
+        requireLastNode: Boolean,
+    ): ConversationSnapshot {
+        val lastIndex = nodes.lastIndex
+        val nodeIndex = if (lastIndex >= 0 && nodes[lastIndex].messages.any { it.id == messageId }) {
+            lastIndex
+        } else {
+            check(!requireLastNode) { "Active assistant message is not in the last node" }
+            nodes.indexOfFirst { node -> node.messages.any { it.id == messageId } }
         }
-        return copy(nodes = newNodes)
+        check(nodeIndex >= 0) { "Assistant message is missing from the durable tree: $messageId" }
+        val node = nodes[nodeIndex]
+        val messageIndex = node.messages.indexOfFirst { it.id == messageId }
+        if (node.messages[messageIndex] == replacement && node.selectIndex == messageIndex) return this
+        val updatedMessages = node.messages.toMutableList().apply { set(messageIndex, replacement) }
+        val updatedNodes = nodes.toMutableList().apply {
+            set(nodeIndex, node.copy(messages = updatedMessages, selectIndex = messageIndex))
+        }
+        return copy(nodes = updatedNodes)
     }
 
     private fun ConversationSnapshot.markAssistantTerminalInternal(
@@ -337,43 +334,30 @@ internal object ConversationReducer {
         reason: String?,
     ): ConversationSnapshot {
         if (messageId == null) return this
-        nodes.forEachIndexed { index, node ->
-            val message = node.messages.firstOrNull { it.id == messageId && it.role == MessageRole.ASSISTANT }
-            if (message != null) {
-                val marked = message.copy(terminalStatus = status, terminalReason = reason)
-                return copy(
-                    nodes = nodes.mapIndexed { i, n ->
-                        if (i != index) n else n.copy(
-                            messages = n.messages.map { m -> if (m.id == messageId) marked else m },
-                        )
-                    },
-                )
-            }
-        }
-        return this
+        val message = findMessage(messageId)?.takeIf { it.role == MessageRole.ASSISTANT } ?: return this
+        return replaceMessageById(
+            messageId,
+            message.copy(terminalStatus = status, terminalReason = reason),
+            requireLastNode = false,
+        )
     }
 
-    /** 关闭所有未完成工具（FinalizeTurn closeInterruptedTools） */
-    private fun ConversationSnapshot.closePendingTools(cancelledByUser: Boolean): ConversationSnapshot {
-        var changed = false
-        val newNodes = nodes.map { node ->
-            val newMessages = node.messages.map { message ->
-                val hasPending = message.parts.any { it is UIMessagePart.Tool && it.approvalState is ToolApprovalState.Pending }
-                if (!hasPending) message else {
-                    changed = true
-                    message.copy(parts = message.parts.map { part ->
-                        if (part is UIMessagePart.Tool && part.approvalState is ToolApprovalState.Pending) {
-                            if (cancelledByUser) cancelToolByUserInternal(part) else interruptToolInternal(part)
-                        } else {
-                            part
-                        }
-                    })
-                }
+    /** 只关闭目标 turn 的未完成工具，不改变历史 turn。 */
+    private fun ConversationSnapshot.closePendingTools(
+        messageId: Uuid,
+        cancelledByUser: Boolean,
+    ): ConversationSnapshot {
+        val message = findMessage(messageId) ?: return this
+        val hasPending = message.parts.any { it is UIMessagePart.Tool && it.approvalState is ToolApprovalState.Pending }
+        if (!hasPending) return this
+        val updated = message.copy(parts = message.parts.map { part ->
+            if (part is UIMessagePart.Tool && part.approvalState is ToolApprovalState.Pending) {
+                if (cancelledByUser) cancelToolByUserInternal(part) else interruptToolInternal(part)
+            } else {
+                part
             }
-            if (newMessages == node.messages) node else node.copy(messages = newMessages)
-        }
-        if (!changed) return this
-        return copy(nodes = newNodes)
+        })
+        return replaceMessageById(messageId, updated, false)
     }
 
     private fun cancelToolByUserInternal(tool: UIMessagePart.Tool): UIMessagePart.Tool = tool.copy(
@@ -389,11 +373,4 @@ internal object ConversationReducer {
         ),
     )
 
-    private fun ConversationSnapshot.sanitizeBase64Nodes(): List<MessageNode> {
-        // UIMessage 自带 hasBase64Part() 成员；无 base64 时短路保持引用不变
-        if (nodes.none { node -> node.messages.any { it.hasBase64Part() } }) return nodes
-        return nodes.map { node ->
-            node.copy(messages = node.messages.map { it.withoutUnpersistableBase64() })
-        }
-    }
 }

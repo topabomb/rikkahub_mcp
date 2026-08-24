@@ -5,6 +5,8 @@ import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.channelFlow
@@ -23,6 +25,7 @@ import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolExecutionContext
+import me.rerere.ai.core.ToolResourceLease
 import me.rerere.ai.core.merge
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolveResult
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
@@ -67,6 +70,40 @@ private const val MAX_TOOL_OUTPUT_CHARS = 32 * 1024
 private const val TOOL_OUTPUT_PREVIEW_CHARS = 4 * 1024
 
 private class CheckpointCommitException(cause: Throwable) : RuntimeException(cause)
+
+private class UnpublishedResourceScope {
+    private val resources = mutableListOf<ToolResourceLease>()
+
+    fun register(resource: ToolResourceLease) {
+        synchronized(resources) { resources += resource }
+    }
+
+    suspend fun publishAll() {
+        withContext(NonCancellable) {
+            while (true) {
+                val resource = synchronized(resources) { resources.firstOrNull() } ?: break
+                resource.publish()
+                synchronized(resources) { resources.remove(resource) }
+            }
+        }
+    }
+
+    suspend fun discardAll(): Throwable? = withContext(NonCancellable) {
+        val owned = synchronized(resources) {
+            resources.toList().also { resources.clear() }
+        }
+        var failure: Throwable? = null
+        owned.asReversed().forEach { resource ->
+            try {
+                resource.discard()
+            } catch (error: Throwable) {
+                val previous = failure
+                if (previous == null) failure = error else previous.addSuppressed(error)
+            }
+        }
+        failure
+    }
+}
 
 internal data class ToolApprovalResolution(
     val tools: List<UIMessagePart.Tool>,
@@ -187,14 +224,10 @@ enum class FinishedReason {
     @SerialName("completed") COMPLETED,
     @SerialName("awaiting_approval") AWAITING_APPROVAL,
     @SerialName("step_limit_reached") STEP_LIMIT_REACHED,
-    @SerialName("interaction_limit_reached") INTERACTION_LIMIT_REACHED,
 }
 
 @Serializable
 enum class CheckpointKind {
-    @Serializable
-    USER_TASK_WRITTEN,
-
     @Serializable
     STEP_COMPLETED,
 
@@ -206,9 +239,6 @@ enum class CheckpointKind {
 
     @Serializable
     TOOL_EXECUTION_STARTED,
-
-    @Serializable
-    TERMINAL_STATE,
 }
 
 @Serializable
@@ -277,6 +307,9 @@ class GenerationHandler(
         assistantMessageId: Uuid? = null,
         onCheckpoint: suspend (GenerationCheckpoint) -> Unit = {},
     ): Flow<GenerationChunk> = channelFlow {
+        val unpublishedResources = UnpublishedResourceScope()
+        var generationFailure: Throwable? = null
+        try {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
 
@@ -285,25 +318,52 @@ class GenerationHandler(
         suspend fun commitCheckpoint(
             kind: CheckpointKind,
             toolExecution: ToolExecutionEvent? = null,
+            publishResources: Boolean = false,
         ) {
             try {
-                onCheckpoint(GenerationCheckpoint(kind, messages, toolExecution))
+                onCheckpoint(
+                    GenerationCheckpoint(
+                        kind = kind,
+                        messages = messages,
+                        toolExecution = toolExecution,
+                    )
+                )
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 throw CheckpointCommitException(e)
             }
-            send(GenerationChunk.Checkpoint(kind))
+            if (publishResources) {
+                // The durable message/reference transaction is already committed. Resource
+                // publication is a separate ownership acknowledgement, never part of the
+                // checkpoint commit result.
+                unpublishedResources.publishAll()
+            }
+            // The durable callback already returned a committed receipt. A cancelled projection
+            // send must not turn that success into a tool-level failure that triggers compensation.
+            try {
+                send(GenerationChunk.Checkpoint(kind))
+            } catch (_: CancellationException) {
+                // Cancellation remains active and will be observed at the next safe boundary.
+            }
         }
 
         // 跟踪循环退出原因，默认 step_limit_reached
         var finishReason = FinishedReason.STEP_LIMIT_REACHED
 
+        fun resourceTrackingTransformerContext() = TransformerContext(
+            context = context,
+            model = model,
+            assistant = assistant,
+            settings = settings,
+            registerUnpublishedResource = unpublishedResources::register,
+        )
+
         // 流式单消息通道：历史消息 immutable，仅最后一条（active assistant 消息）进入变换。
         // 流式契约：流式期间历史消息进入 transformStreaming 的次数为 0。
         suspend fun transformStreamingLast(current: List<UIMessage>): List<UIMessage> {
             if (current.isEmpty()) return current
-            val ctx = TransformerContext(context, model, assistant, settings)
+            val ctx = resourceTrackingTransformerContext()
             var last = current.last()
             for (transformer in outputTransformers) {
                 if (transformer is StreamingMessageTransformer) last = transformer.transformStreaming(ctx, last)
@@ -315,7 +375,7 @@ class GenerationHandler(
         // 终态收口：step 完成时对最后一条消息应用 onStreamingFinish（reasoning 补时戳、base64 落盘）
         suspend fun finishStreamingLast(current: List<UIMessage>): List<UIMessage> {
             if (current.isEmpty()) return current
-            val ctx = TransformerContext(context, model, assistant, settings)
+            val ctx = resourceTrackingTransformerContext()
             var last = current.last()
             for (transformer in outputTransformers) {
                 if (transformer is StreamingMessageTransformer) last = transformer.onStreamingFinish(ctx, last)
@@ -369,7 +429,8 @@ class GenerationHandler(
                             context = context,
                             model = model,
                             assistant = assistant,
-                            settings = settings
+                            settings = settings,
+                            registerUnpublishedResource = unpublishedResources::register,
                         )
                         send(
                             GenerationChunk.Messages(
@@ -389,6 +450,7 @@ class GenerationHandler(
                     conversationModeInjectionIds = conversationModeInjectionIds,
                     workspaceCwd = workspaceCwd,
                     assistantMessageId = assistantMessageId,
+                    registerUnpublishedResource = unpublishedResources::register,
                     onPhase = { phase -> send(GenerationChunk.Phase(phase)) },
                 )
                 messages = finishStreamingLast(messages)
@@ -397,7 +459,7 @@ class GenerationHandler(
                         .toLocalDateTime(TimeZone.currentSystemDefault())
                 )
                 send(GenerationChunk.Messages(messages))
-                commitCheckpoint(CheckpointKind.STEP_COMPLETED)
+                commitCheckpoint(CheckpointKind.STEP_COMPLETED, publishResources = true)
 
                 unexecutedTools = messages.last().getTools().filter { !it.isExecuted }
                 if (unexecutedTools.isEmpty()) {
@@ -448,6 +510,9 @@ class GenerationHandler(
             toolsToProcess.forEach { (toolOrdinalInMessage, tool) ->
                 var executionEvent: ToolExecutionEvent? = null
                 var executionFailed = false
+                val temporaryResources = UnpublishedResourceScope()
+                var toolFailure: Throwable? = null
+                try {
                 when (tool.approvalState) {
                     is ToolApprovalState.Denied -> {
                         // Tool was denied by user
@@ -522,7 +587,12 @@ class GenerationHandler(
                                 // 消息快照（含本 run 内已完成的 Tool 结果）是 Runtime 实现细节，不暴露给工具。
                                 resolveAttachments = { refs ->
                                     when (val resolved = attachmentResolver.resolveImages(messages, refs)) {
-                                        is AttachmentResolveResult.Success -> ToolAttachmentResolution(resolved.parts)
+                                        is AttachmentResolveResult.Success -> {
+                                            resolved.createdArtifacts.forEach { owned ->
+                                                temporaryResources.register(attachmentResolver.temporaryLease(owned))
+                                            }
+                                            ToolAttachmentResolution(resolved.parts)
+                                        }
                                         is AttachmentResolveResult.Failure -> ToolAttachmentResolution(
                                             failureReason = resolved.reason,
                                         )
@@ -572,9 +642,11 @@ class GenerationHandler(
                                         commitCheckpoint(
                                             CheckpointKind.TOOL_STATE_CHANGED,
                                             toolExecution = executionEvent,
+                                            publishResources = true,
                                         )
                                     }
                                 },
+                                registerUnpublishedResource = unpublishedResources::register,
                             )
 
                             val result = toolDef.executeWithContext(execContext, args)
@@ -639,6 +711,18 @@ class GenerationHandler(
                         }
                     }
                 }
+                } catch (error: Throwable) {
+                    toolFailure = error
+                    throw error
+                } finally {
+                    temporaryResources.discardAll()?.let { cleanupFailure ->
+                        if (toolFailure != null) {
+                            requireNotNull(toolFailure).addSuppressed(cleanupFailure)
+                        } else {
+                            throw cleanupFailure
+                        }
+                    }
+                }
 
                 val executedTool = executedTools.remove(toolOrdinalInMessage)
                 if (executedTool != null) {
@@ -654,6 +738,7 @@ class GenerationHandler(
                                 model = model,
                                 assistant = assistant,
                                 settings = settings,
+                                registerUnpublishedResource = unpublishedResources::register,
                             )
                         )
                     )
@@ -666,6 +751,7 @@ class GenerationHandler(
                                 ToolExecutionEventStatus.COMPLETED
                             },
                         ),
+                        publishResources = true,
                     )
                 }
             }
@@ -675,6 +761,19 @@ class GenerationHandler(
 
         // 生成结束事件：Collector 必须区分正常完成、待审批和 step 上限
         send(GenerationChunk.Finished(finishReason))
+
+        } catch (error: Throwable) {
+            generationFailure = error
+            throw error
+        } finally {
+            unpublishedResources.discardAll()?.let { cleanupFailure ->
+                if (generationFailure != null) {
+                    requireNotNull(generationFailure).addSuppressed(cleanupFailure)
+                } else {
+                    throw cleanupFailure
+                }
+            }
+        }
 
     }.flowOn(Dispatchers.IO)
 
@@ -695,6 +794,7 @@ class GenerationHandler(
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
         assistantMessageId: Uuid? = null,
+        registerUnpublishedResource: (ToolResourceLease) -> Unit,
         onPhase: (suspend (String) -> Unit)? = null,
     ) {
         val contextMessages = messages
@@ -740,6 +840,7 @@ class GenerationHandler(
             conversationModeInjectionIds = conversationModeInjectionIds,
             processingStatus = processingStatus,
             workspaceCwd = workspaceCwd,
+            registerUnpublishedResource = registerUnpublishedResource,
         )
 
         var messages: List<UIMessage> = messages

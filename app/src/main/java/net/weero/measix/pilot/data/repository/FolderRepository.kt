@@ -32,11 +32,14 @@ class FolderRepository(
         folderDAO.rename(id.toString(), name)
     }
 
-    /**
-     * 删除文件夹，先把归属该文件夹的会话 folder_id 清空，再删除文件夹本身（不影响会话）。
-     */
-    suspend fun deleteFolder(id: Uuid) {
-        conversationDAO.clearFolder(id.toString())
+    suspend fun getConversationIds(id: Uuid): List<Uuid> =
+        conversationDAO.getIdsByFolder(id.toString()).map(Uuid::parse)
+
+    /** 会话归属必须先经 ConversationCommandCoordinator 清空；这里只删除 folder metadata。 */
+    suspend fun deleteEmptyFolder(id: Uuid) {
+        check(conversationDAO.getIdsByFolder(id.toString()).isEmpty()) {
+            "Folder still owns conversations: $id"
+        }
         folderDAO.deleteById(id.toString())
     }
 }

@@ -29,6 +29,7 @@ import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getAssistantById
+import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.utils.jsonPrimitiveOrNull
 import net.weero.measix.pilot.service.AssistantDeletionResult
@@ -65,12 +66,10 @@ class AssistantToolFactory(
     private val settingsStore: SettingsStore,
     private val assistantManagementService: AssistantManagementService,
     private val json: Json,
-    /**
-     * 子助手执行协调器。Phase D 注入；为 null 时 assistant_call 返回 failed/runtime_error 并带 detail。
-     */
-    private val delegationCoordinator: DelegationCoordinator? = null,
+    /** 子助手调用的唯一执行协调器。 */
+    private val delegationCoordinator: DelegationCoordinator,
     /** 提供 Target Run 可注册工具名；memory_tool 由 GenerationHandler 另加，listing 时需补上。 */
-    private val toolSetFactory: GenerationToolSetFactory? = null,
+    private val toolSetFactory: GenerationToolSetFactory,
 ) {
     /**
      * 按 caller Assistant 的 LocalTool 配置构建工具。
@@ -383,11 +382,12 @@ class AssistantToolFactory(
     }
 
     private suspend fun listTargetToolNames(target: Assistant, settings: Settings): List<String> {
-        val built = toolSetFactory?.buildTools(
+        val built = toolSetFactory.buildTools(
             assistant = target,
             settings = settings,
+            capabilityModel = settings.getChatModel(target),
             runMode = ToolSetRunMode.TARGET,
-        )?.map { it.name }.orEmpty()
+        ).map { it.name }
         return buildList {
             addAll(built)
             if (target.enableMemory && "memory_tool" !in built) {
@@ -496,7 +496,7 @@ class AssistantToolFactory(
             executeAssistantCall(callerAssistantId, masterConversationId, this, args, ttsPlaybackContext)
         },
         execute = { _ ->
-            // Fallback: 缺少真实 locator/reportMetadata 时不能启动 Child
+            // assistant_call 必须由带 durable locator 与 metadata 回写能力的执行器调用。
             listOf(UIMessagePart.Text(buildJsonObject {
                 put("status", "unavailable")
                 put("reason", "context_required")
@@ -515,16 +515,6 @@ class AssistantToolFactory(
         args: kotlinx.serialization.json.JsonElement,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
     ): List<UIMessagePart> {
-        val coordinator = delegationCoordinator
-            ?: return listOf(UIMessagePart.Text(buildSubAssistantCallResult(
-                json = json,
-                status = "failed",
-                assistantName = "",
-                content = "",
-                reason = "runtime_error",
-                detail = "Sub-assistant coordinator is not available",
-            )))
-
         val obj = args as? JsonObject
             ?: return callUnavailable("invalid_arguments")
         val targetIdStr = obj["assistant_id"]?.let { (it as? JsonPrimitive)?.content }
@@ -532,7 +522,6 @@ class AssistantToolFactory(
         val targetId = runCatching { Uuid.parse(targetIdStr) }.getOrNull()
             ?: return callUnavailable("invalid_assistant_id")
         val task = obj["request"]?.let { (it as? JsonPrimitive)?.content }
-            ?: obj["task"]?.let { (it as? JsonPrimitive)?.content } // backward compat
             ?: return callUnavailable("request_required")
         if (task.isBlank()) return callUnavailable("request_required")
         val attachments = when (val parsed = parseAssistantCallAttachments(obj["attachments"])) {
@@ -541,7 +530,7 @@ class AssistantToolFactory(
             is AttachmentParseResult.Ok -> parsed.refs
         }
 
-        return coordinator.executeCall(
+        return delegationCoordinator.executeCall(
             callerAssistantId = callerAssistantId,
             masterConversationId = masterConversationId,
             targetAssistantId = targetId,

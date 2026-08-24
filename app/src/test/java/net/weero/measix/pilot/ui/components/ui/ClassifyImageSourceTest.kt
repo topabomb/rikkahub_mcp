@@ -23,9 +23,13 @@ class ClassifyImageSourceTest {
         val filesDir = temp.newFolder()
         val generated = File(filesDir, "images/x.png").absolutePath
         val upload = File(filesDir, "upload/y.png").absolutePath
+        val uploadUrl = "file://$upload"
 
         assertEquals(ImageInfoSource.Generated, classifyImageSource("file://$generated", filesDir))
-        assertEquals(ImageInfoSource.Upload, classifyImageSource("file://$upload", filesDir))
+        assertEquals(
+            ImageInfoSource.Upload,
+            classifyImageSource(uploadUrl, filesDir, isManagedUploadUrl = { it == uploadUrl }),
+        )
         assertEquals(ImageInfoSource.Generated, classifyImageSource(generated, filesDir))
         assertEquals(ImageInfoSource.Local, classifyImageSource("file:///sdcard/Pictures/z.png", filesDir))
         assertEquals(ImageInfoSource.Local, classifyImageSource("/sdcard/Pictures/z.png", filesDir))

@@ -31,6 +31,16 @@ data class ToolAttachmentResolution(
 )
 
 /**
+ * A resource created while producing tool output but not yet rooted by a durable checkpoint.
+ * The generation owner must either publish the resource after the checkpoint succeeds or call
+ * [discard] during failure/cancellation compensation.
+ */
+class ToolResourceLease(
+    val publish: suspend () -> Unit,
+    val discard: suspend () -> Unit,
+)
+
+/**
  * 通用工具执行上下文，提供 metadata 回写能力。
  * 不引入 App 的 Conversation 类型，保持 ai 模块的平台无关性。
  *
@@ -46,18 +56,12 @@ data class ToolExecutionContext(
     val toolOrdinal: Int,
     val toolCallId: String,
     val reportMetadata: suspend (patch: JsonObject, checkpoint: Boolean) -> Unit,
-    /**
-     * 按 stable attachment refs 批量解析附件 parts。
-     * 未注入时统一返回失败 reason `attachment_resolution_unavailable`。
-     */
-    val resolveAttachments: suspend (refs: List<String>) -> ToolAttachmentResolution = {
-        ToolAttachmentResolution(failureReason = "attachment_resolution_unavailable")
-    },
-    /**
-     * 委派类工具在派生会话确定后回写其 id（执行事实归位）。
-     * 未注入时为空操作；Runtime 实现应将其并入本次工具执行的 durable 事实。
-     */
-    val reportChildConversation: suspend (childConversationId: String) -> Unit = {},
+    /** 按 stable attachment refs 批量解析附件 parts。 */
+    val resolveAttachments: suspend (refs: List<String>) -> ToolAttachmentResolution,
+    /** 委派类工具在派生会话确定后回写其 id，并入本次工具执行的 durable 事实。 */
+    val reportChildConversation: suspend (childConversationId: String) -> Unit,
+    /** Transfers an unpublished output resource to the generation/checkpoint owner. */
+    val registerUnpublishedResource: (ToolResourceLease) -> Unit,
 )
 
 @Serializable
@@ -70,15 +74,14 @@ data class Tool(
     val outputPolicy: ToolOutputPolicy = ToolOutputPolicy.TRUNCATABLE_TEXT,
     val execute: suspend (JsonElement) -> List<UIMessagePart>,
     /**
-     * 带 receiver 的 contextual execute，可回写 metadata。
-     * 优先于 [execute] 使用；为 null 时回退到 [execute]。
-     * 现有工具不需要修改，只需在需要 metadata 回写的工具中设置此字段。
+     * 带 receiver 的 contextual execute，可回写 metadata 和使用请求级资源能力。
+     * 未声明时由 [execute] 处理普通无上下文工具。
      */
     @Transient
     val contextualExecute: (suspend ToolExecutionContext.(JsonElement) -> List<UIMessagePart>)? = null,
 ) {
     /**
-     * 统一执行入口：优先使用 contextualExecute，否则回退到 execute。
+     * 统一执行入口：上下文工具使用 [contextualExecute]，普通工具使用 [execute]。
      */
     suspend fun executeWithContext(
         context: ToolExecutionContext,

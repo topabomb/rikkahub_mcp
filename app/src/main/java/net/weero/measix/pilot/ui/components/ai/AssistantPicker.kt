@@ -5,10 +5,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -24,7 +22,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -40,9 +37,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowDown01
-import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Edit03
-import me.rerere.hugeicons.stroke.Search01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
@@ -198,39 +193,17 @@ fun AssistantPickerSheet(
                 modifier = Modifier.padding(bottom = 8.dp)
             )
 
-            // 搜索框
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text(stringResource(R.string.assistant_page_search_placeholder)) },
-                leadingIcon = {
-                    Icon(HugeIcons.Search01, contentDescription = null)
-                },
-                trailingIcon = {
-                    if (searchQuery.isNotBlank()) {
-                        IconButton(onClick = { searchQuery = "" }) {
-                            Icon(HugeIcons.Cancel01, contentDescription = null)
-                        }
-                    }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp)
+            AssistantSearchFilterRow(
+                query = searchQuery,
+                onQueryChange = { searchQuery = it },
+                showSubAssistants = showSubAssistants,
+                onShowSubAssistantsChange = { showSubAssistants = it },
             )
 
-            // "显示子助手" FilterChip — 类型筛选先于 Tag 筛选
-            FilterChip(
-                onClick = { showSubAssistants = !showSubAssistants },
-                label = { Text(stringResource(R.string.assistant_picker_show_sub_assistants)) },
-                selected = showSubAssistants,
-                shape = RoundedCornerShape(50),
-            )
-
-            // 标签过滤器
             if (settings.assistantTags.isNotEmpty()) {
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(bottom = 8.dp)
+                    contentPadding = PaddingValues(bottom = 8.dp),
                 ) {
                     items(settings.assistantTags, key = { tag -> tag.id }) { tag ->
                         FilterChip(
@@ -247,7 +220,6 @@ fun AssistantPickerSheet(
                         )
                     }
                 }
-                Spacer(modifier = Modifier.height(8.dp))
             }
 
             // 助手列表

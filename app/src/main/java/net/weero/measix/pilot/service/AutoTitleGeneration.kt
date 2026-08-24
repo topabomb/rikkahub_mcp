@@ -1,5 +1,9 @@
 package net.weero.measix.pilot.service
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.Uuid
 
@@ -55,7 +59,7 @@ internal fun resolveGeneratedTitleWrite(
  * 进行中被挡住的触发会记一笔待重试，当前请求结束后由调用方再跑一次。
  * 不落盘；进程退出或 [clear] 后重新计数。
  */
-internal class AutoTitleGenerationTracker(
+class AutoTitleGenerationTracker internal constructor(
     private val maxAttempts: Int = MAX_AUTO_TITLE_GENERATION_ATTEMPTS,
 ) {
     private class State {
@@ -66,8 +70,10 @@ internal class AutoTitleGenerationTracker(
     }
 
     private val states = ConcurrentHashMap<Uuid, State>()
+    private val _inFlightIds = MutableStateFlow<Set<Uuid>>(emptySet())
+    internal val inFlightIds: StateFlow<Set<Uuid>> = _inFlightIds.asStateFlow()
 
-    fun begin(
+    internal fun begin(
         conversationId: Uuid,
         force: Boolean,
         titleBlank: Boolean,
@@ -82,7 +88,10 @@ internal class AutoTitleGenerationTracker(
                 maxAttempts = maxAttempts,
             )
             when (decision) {
-                AutoTitleGenerationDecision.Proceed -> state.inFlight = true
+                AutoTitleGenerationDecision.Proceed -> {
+                    state.inFlight = true
+                    _inFlightIds.update { it + conversationId }
+                }
                 AutoTitleGenerationDecision.SkipInFlight -> if (force) {
                     state.pendingForce = true
                 } else {
@@ -95,14 +104,14 @@ internal class AutoTitleGenerationTracker(
         }
     }
 
-    fun recordAttempt(conversationId: Uuid) {
+    internal fun recordAttempt(conversationId: Uuid) {
         val state = states[conversationId] ?: return
         synchronized(state) {
             state.attempts++
         }
     }
 
-    fun end(conversationId: Uuid): AutoTitleRetry? {
+    internal fun end(conversationId: Uuid): AutoTitleRetry? {
         val state = states[conversationId] ?: return null
         synchronized(state) {
             state.inFlight = false
@@ -113,11 +122,13 @@ internal class AutoTitleGenerationTracker(
             }
             state.pendingForce = false
             state.pendingAuto = false
+            _inFlightIds.update { it - conversationId }
             return retry
         }
     }
 
-    fun clear(conversationId: Uuid) {
+    internal fun clear(conversationId: Uuid) {
         states.remove(conversationId)
+        _inFlightIds.update { it - conversationId }
     }
 }

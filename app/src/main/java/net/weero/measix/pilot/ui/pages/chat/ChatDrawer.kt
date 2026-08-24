@@ -79,9 +79,9 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
-import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.service.ConversationSummary
 import net.weero.measix.pilot.data.model.Folder
-import net.weero.measix.pilot.data.repository.ConversationRepository
+import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.ui.components.ai.AssistantPicker
 import net.weero.measix.pilot.ui.components.ui.BackupReminderCard
 import net.weero.measix.pilot.ui.components.ui.Greeting
@@ -107,7 +107,7 @@ fun ChatDrawerContent(
     navController: Navigator,
     vm: ChatVM,
     settings: Settings,
-    current: Conversation,
+    currentConversationId: Uuid,
     modifier: Modifier = Modifier,
     permanent: Boolean = false,
     onCollapse: (() -> Unit)? = null,
@@ -117,7 +117,7 @@ fun ChatDrawerContent(
     val context = LocalContext.current
     val toaster = LocalToaster.current
     val isPlayStore = rememberIsPlayStoreVersion()
-    val repo = koinInject<ConversationRepository>()
+    val conversationQueryService = koinInject<ConversationQueryService>()
 
     val activity = LocalActivity.current as? ComponentActivity
         ?: error("ChatDrawerContent requires a ComponentActivity host")
@@ -152,7 +152,7 @@ fun ChatDrawerContent(
         }
     }
 
-    val conversationJobs by vm.conversationJobs.collectAsStateWithLifecycle(
+    val conversationActivities by drawerVm.conversationActivities.collectAsStateWithLifecycle(
         initialValue = emptyMap(),
     )
 
@@ -167,12 +167,12 @@ fun ChatDrawerContent(
 
     // 移动对话状态
     var showMoveToAssistantSheet by remember { mutableStateOf(false) }
-    var conversationToMove by remember { mutableStateOf<Conversation?>(null) }
+    var conversationToMove by remember { mutableStateOf<ConversationSummary?>(null) }
     val bottomSheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden)
 
     // 文件夹相关状态
     var showMoveToFolderSheet by remember { mutableStateOf(false) }
-    var conversationToMoveFolder by remember { mutableStateOf<Conversation?>(null) }
+    var conversationToMoveFolder by remember { mutableStateOf<ConversationSummary?>(null) }
     val folderSheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden)
     var showCreateFolderDialog by remember { mutableStateOf(false) }
     var folderToRename by remember { mutableStateOf<Folder?>(null) }
@@ -206,6 +206,7 @@ fun ChatDrawerContent(
                             )
                         }
                     },
+                    onImportImage = vm::importUserAvatar,
                     modifier = Modifier.size(50.dp),
                 )
 
@@ -298,9 +299,9 @@ fun ChatDrawerContent(
             )
 
             ConversationList(
-                current = current,
+                currentConversationId = currentConversationId,
                 conversations = conversations,
-                conversationJobs = conversationJobs.keys,
+                conversationActivities = conversationActivities,
                 listState = conversationListState,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -315,9 +316,9 @@ fun ChatDrawerContent(
                 },
                 onDelete = {
                     scope.launch {
-                        vm.deleteConversation(it).join()
+                        vm.deleteConversation(it)
                         conversations.refresh()
-                        if (it.id == current.id) {
+                        if (it.id == currentConversationId) {
                             navigateFromDrawer {
                                 navigateToChatPage(navController)
                             }
@@ -347,7 +348,7 @@ fun ChatDrawerContent(
                         val id = if (context.readBooleanPreference("create_new_conversation_on_start", true)) {
                             Uuid.random()
                         } else {
-                            repo.getConversationsOfAssistant(selectedAssistantId)
+                            conversationQueryService.conversationsOfAssistant(selectedAssistantId)
                                 .first()
                                 .firstOrNull()
                                 ?.id ?: Uuid.random()
@@ -728,7 +729,7 @@ fun ChatDrawerContent(
                             isCurrentAssistant = assistant.id == conversationToMove?.assistantId,
                             onClick = {
                                 conversationToMove?.let { conversation ->
-                                    vm.moveConversationToAssistant(conversation, assistant.id)
+                                    vm.moveConversationToAssistant(conversation.id, assistant.id)
                                     scope.launch {
                                         bottomSheetState.hide()
                                         showMoveToAssistantSheet = false

@@ -69,8 +69,13 @@ class ImageGenerationCoordinator(
 
     fun startBackgroundMaintenance() {
         scope.launch {
-            runCatching { mediaStore.reconcile() }
-                .onFailure { Log.e(TAG, "media reconcile failed", it) }
+            try {
+                mediaStore.reconcile()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.e(TAG, "media reconcile failed", error)
+            }
         }
     }
 
@@ -84,7 +89,7 @@ class ImageGenerationCoordinator(
                 ensureWorkerLocked()
             }
             return queued.result.await()
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
             withContext(NonCancellable) {
                 cancel(request.id)
             }
@@ -165,7 +170,7 @@ class ImageGenerationCoordinator(
             }
         } catch (cancelled: CancellationException) {
             if (!queued.result.isCompleted) queued.result.cancel(cancelled)
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
             Log.e(TAG, "image generation failed", error)
             val classified = classifyProviderFailure(error)
             queued.result.complete(
@@ -213,7 +218,7 @@ class ImageGenerationCoordinator(
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
             Log.e(TAG, "image persistence failed", error)
             queued.result.complete(ImageGenerationOutcome.Failure("persistence_error"))
             return

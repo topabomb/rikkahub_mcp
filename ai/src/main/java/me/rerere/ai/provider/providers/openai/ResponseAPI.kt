@@ -333,8 +333,8 @@ class ResponseAPI(
                                 put("type", "function")
                                 put("name", tool.name)
                                 put("description", tool.description)
-                                // Responses 省略 strict 会尝试严格模式；显式 false 保持项目原有
-                                // Chat Completions 的非严格工具语义，避免既有 JSON Schema 被隐式收紧。
+                                // Responses 省略 strict 会尝试严格模式；显式 false 保持
+                                // Chat Completions 的非严格工具语义，避免已配置 JSON Schema 被隐式收紧。
                                 put("strict", false)
                                 tool.parameters()?.let { put("parameters", it) }
                             })

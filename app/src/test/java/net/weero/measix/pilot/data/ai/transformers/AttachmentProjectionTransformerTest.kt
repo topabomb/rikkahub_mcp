@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.data.ai.transformers
 
 import io.mockk.mockk
+import io.mockk.every
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -12,6 +13,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.model.Assistant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -22,6 +24,8 @@ import kotlin.uuid.Uuid
 
 class AttachmentProjectionTransformerTest {
     private val context = mockk<android.content.Context>(relaxed = true)
+    private val artifactStore = mockk<ArtifactStore>(relaxed = true)
+    private val transformer = AttachmentProjectionTransformer(artifactStore)
     private val visionModel = Model(
         id = Uuid.random(),
         modelId = "vision",
@@ -39,11 +43,16 @@ class AttachmentProjectionTransformerTest {
     private val assistant = Assistant()
     private val settings = Settings()
 
+    init {
+        every { context.filesDir } returns java.io.File(requireNotNull(System.getProperty("java.io.tmpdir")))
+    }
+
     private fun ctxFor(model: Model) = TransformerContext(
         context = context,
         model = model,
         assistant = assistant,
         settings = settings,
+        registerUnpublishedResource = { error("projection transformer must not create resources") },
     )
 
     private fun stampedImage(ref: String = AttachmentRefs.format(Uuid.random())) = UIMessagePart.Image(
@@ -59,7 +68,7 @@ class AttachmentProjectionTransformerTest {
     fun `native keeps image part and prepends ref line`() = runTest {
         val image = stampedImage()
         val message = UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text("hi"), image))
-        val projected = AttachmentProjectionTransformer.transform(ctxFor(visionModel), listOf(message))
+        val projected = transformer.transform(ctxFor(visionModel), listOf(message))
 
         val parts = projected.single().parts
         assertEquals("hi", (parts[0] as UIMessagePart.Text).text)
@@ -76,7 +85,7 @@ class AttachmentProjectionTransformerTest {
     fun `reference only replaces image with ref line and appends hint once`() = runTest {
         val image = stampedImage()
         val message = UIMessage(role = MessageRole.USER, parts = listOf(image))
-        val projected = AttachmentProjectionTransformer.transform(ctxFor(textModel), listOf(message))
+        val projected = transformer.transform(ctxFor(textModel), listOf(message))
 
         val parts = projected.single().parts
         assertTrue(parts.none { it is UIMessagePart.Image })
@@ -89,7 +98,7 @@ class AttachmentProjectionTransformerTest {
     fun `hint is appended to the last message only`() = runTest {
         val first = UIMessage(role = MessageRole.USER, parts = listOf(stampedImage()))
         val second = UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text("more")))
-        val projected = AttachmentProjectionTransformer.transform(ctxFor(textModel), listOf(first, second))
+        val projected = transformer.transform(ctxFor(textModel), listOf(first, second))
 
         assertEquals(1, projected.count { m -> texts(m).any { it == AttachmentProjectionTransformer.CAPABILITY_HINT } })
         assertEquals(
@@ -102,7 +111,7 @@ class AttachmentProjectionTransformerTest {
     fun `image without ref degrades to placeholder in reference only mode`() = runTest {
         val image = UIMessagePart.Image(url = "file:///tmp/legacy.png")
         val message = UIMessage(role = MessageRole.USER, parts = listOf(image))
-        val projected = AttachmentProjectionTransformer.transform(ctxFor(textModel), listOf(message))
+        val projected = transformer.transform(ctxFor(textModel), listOf(message))
 
         val parts = projected.single().parts
         assertTrue(parts.none { it is UIMessagePart.Image })
@@ -114,7 +123,7 @@ class AttachmentProjectionTransformerTest {
     fun `image without ref is kept in native mode without ref line`() = runTest {
         val image = UIMessagePart.Image(url = "file:///tmp/legacy.png")
         val message = UIMessage(role = MessageRole.USER, parts = listOf(image))
-        val projected = AttachmentProjectionTransformer.transform(ctxFor(visionModel), listOf(message))
+        val projected = transformer.transform(ctxFor(visionModel), listOf(message))
 
         assertEquals(1, projected.single().parts.size)
         assertTrue(projected.single().parts.single() is UIMessagePart.Image)
@@ -130,7 +139,7 @@ class AttachmentProjectionTransformerTest {
             output = listOf(image),
         )
         val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool))
-        val projected = AttachmentProjectionTransformer.transform(ctxFor(textModel), listOf(message))
+        val projected = transformer.transform(ctxFor(textModel), listOf(message))
 
         val parts = projected.single().parts
         val outTool = parts.filterIsInstance<UIMessagePart.Tool>().single()
@@ -158,7 +167,7 @@ class AttachmentProjectionTransformerTest {
             metadata = buildJsonObject { put(AttachmentRefs.METADATA_KEY, ref) },
         )
         val message = UIMessage(role = MessageRole.USER, parts = listOf(document, audio, video))
-        val projected = AttachmentProjectionTransformer.transform(ctxFor(visionModel), listOf(message))
+        val projected = transformer.transform(ctxFor(visionModel), listOf(message))
 
         val parts = projected.single().parts
         assertEquals(6, parts.size)
@@ -177,9 +186,9 @@ class AttachmentProjectionTransformerTest {
         val image = stampedImage()
         val message = UIMessage(role = MessageRole.USER, parts = listOf(image))
 
-        val asNative = AttachmentProjectionTransformer.transform(ctxFor(visionModel), listOf(message))
-        val asReference = AttachmentProjectionTransformer.transform(ctxFor(textModel), listOf(message))
-        val asNativeAgain = AttachmentProjectionTransformer.transform(ctxFor(visionModel), listOf(message))
+        val asNative = transformer.transform(ctxFor(visionModel), listOf(message))
+        val asReference = transformer.transform(ctxFor(textModel), listOf(message))
+        val asNativeAgain = transformer.transform(ctxFor(visionModel), listOf(message))
 
         assertTrue(asNative.single().parts.any { it is UIMessagePart.Image })
         assertTrue(asReference.single().parts.none { it is UIMessagePart.Image })
@@ -194,8 +203,8 @@ class AttachmentProjectionTransformerTest {
         val originalParts = listOf(UIMessagePart.Text("hi"), image)
         val message = UIMessage(role = MessageRole.USER, parts = originalParts)
 
-        AttachmentProjectionTransformer.transform(ctxFor(textModel), listOf(message))
-        AttachmentProjectionTransformer.transform(ctxFor(visionModel), listOf(message))
+        transformer.transform(ctxFor(textModel), listOf(message))
+        transformer.transform(ctxFor(visionModel), listOf(message))
 
         assertEquals(2, message.parts.size)
         assertTrue(message.parts[0] === originalParts[0])

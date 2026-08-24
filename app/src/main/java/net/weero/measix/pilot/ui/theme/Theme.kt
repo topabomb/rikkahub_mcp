@@ -49,14 +49,13 @@ fun MeasixTheme(
         systemInDarkTheme = isSystemInDarkTheme(),
     )
     val amoledDarkMode by rememberAmoledDarkMode()
-    val sdkInt = Build.VERSION.SDK_INT
     val useDynamicColor = AppearancePolicy.isDynamicColorEffective(
         dynamicColor = settings.dynamicColor,
-        sdkInt = sdkInt,
+        sdkInt = Build.VERSION.SDK_INT,
     )
 
     val colorScheme = when {
-        useDynamicColor && sdkInt >= Build.VERSION_CODES.S -> {
+        useDynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }

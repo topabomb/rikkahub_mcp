@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.message
 
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
@@ -43,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -97,8 +100,14 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
 
     val renderer = remember(tool.toolName) { ToolUIRegistry.resolve(tool.toolName) }
     val rewriter = koinInject<ToolArtifactRewriter>()
-    val displayTool = remember(tool, rewriter) {
-        tool.copy(output = rewriter.materializeToolOutput(tool.output, tool.metadata))
+    val displayTool by produceState(initialValue = tool, tool, rewriter) {
+        try {
+            value = tool.copy(output = rewriter.materializeToolOutput(tool.output, tool.metadata))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.e("ChatMessageToolStep", "Failed to materialize tool output", error)
+        }
     }
     val context = remember(displayTool, loading) {
         ToolUIContext(

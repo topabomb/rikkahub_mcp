@@ -176,8 +176,10 @@ Settings 重算访问范围。
 
 ## 5. 工具描述与参数
 
-主会话的基础工具装配顺序见 `ChatService`：搜索、Local Tools、最近会话、Workspace、技能、
+主会话的基础工具装配顺序见 `MasterTurnCoordinator` / `GenerationToolSetFactory`：搜索、Local Tools、最近会话、Workspace、技能、
 Assistant Tools、MCP；运行时 `inspect_attachments` 由 `GenerationToolSetFactory` 按 resolved model 与设置条件加入；记忆工具由 `GenerationHandler` 在每个 step 按当前记忆状态加入。
+主/子 run 必须显式传入实际 resolved model；`assistant_inspect` 显式解析目标助手的配置模型。
+不允许用缺省或可空模型开启更宽的工具集。`AssistantToolFactory` 的委派与工具集依赖均为必填构造参数。
 Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过滤 `assistant_manage`、
 `assistant_inspect`、`assistant_call` 以及历史名 `assistant_memory_list`，
 保留并桥接 `ask_user`。`generate_image` 不再永久过滤：Target 已开启 `TextToImage` 且默认文生图模型可解析时才会注册。附件识别模型选择在 Target run 开始时冻结，其他动态权限按子助手运行策略重验。
@@ -442,6 +444,7 @@ create：`{"id":N}`。edit / delete：`{"success":true,"id":N}`。
 > Use `conversation_search` for message content.
 
 `limit` 默认 10、最大 30。结果为 id / title / last_chat 数组。
+该工具经 `ConversationQueryService` 读取轻量列表记录，不为标题与时间摘要加载消息树。
 
 ### `conversation_search`
 

@@ -3,6 +3,7 @@ package net.weero.measix.pilot.service
 import android.content.Context
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.datetime.LocalDateTime
@@ -15,28 +16,30 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.findUserTurnStart
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.ai.FinishedReason
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.datastore.getCurrentChatModel
-import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
-import net.weero.measix.pilot.data.repository.ConversationRepository
+import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
+import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
+import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 import net.weero.measix.pilot.service.runtime.UpdateHeader
 import net.weero.measix.pilot.service.runtime.ReplaceMessageTree
+import net.weero.measix.pilot.service.runtime.TurnOutcome
 import net.weero.measix.pilot.utils.SoundEffectPlayer
 import net.weero.measix.pilot.utils.applyPlaceholders
+import net.weero.measix.pilot.utils.runCatchingPreservingCancellation
 import java.util.Locale
 import kotlin.uuid.Uuid
 
 /**
- * 生成副作用域（V1 正式阶段·架构收敛 §11.3 块 3）。
+ * 会话生成副作用域。
  *
- * 对「生成事件」的非编排放应，独立于 turn 编排（ChatService）：
+ * 处理生成事件的非编排副作用，独立于 Master turn 编排：
  *  - 音效反馈（流式步进 / 审批提醒 / 完成 / 失败）
  *  - 会话衍生数据生成（标题 / 建议 / 压缩）——三者共用同一后台生成骨架
  *    （settings → 专属模型(可选 fastModel fallback) → provider → generateText → 命令提交）
@@ -46,14 +49,14 @@ class GenerationSideEffects(
     private val appScope: AppScope,
     private val settingsStore: SettingsStore,
     private val providerManager: ProviderManager,
-    private val conversationRepo: ConversationRepository,
-    private val sessionRegistry: ConversationRuntimeRegistry,
+    private val artifactStore: ArtifactStore,
+    private val runtimeRegistry: ConversationRuntimeRegistry,
+    private val commandCoordinator: ConversationCommandCoordinator,
     private val soundEffectPlayer: SoundEffectPlayer,
     private val json: Json,
-    private val reportError: (ChatError) -> Unit,
+    private val chatErrorStore: ChatErrorStore,
+    private val autoTitleGeneration: AutoTitleGenerationTracker,
 ) {
-    private val autoTitleGeneration = AutoTitleGenerationTracker()
-
     // ---- 音效反馈 ----
 
     /** 预装载音效资源（Application onCreate / Service init）。 */
@@ -143,17 +146,18 @@ class GenerationSideEffects(
     // ---- 生成标题 ----
 
     suspend fun generateTitle(
-        conversation: Conversation,
+        snapshot: ConversationSnapshot,
         force: Boolean = false,
     ) {
-        val conversationId = conversation.id
+        val conversationId = snapshot.conversationId
         val decision = autoTitleGeneration.begin(
             conversationId = conversationId,
             force = force,
-            titleBlank = conversation.title.isBlank(),
+            titleBlank = snapshot.header.title.isBlank(),
         )
         if (decision != AutoTitleGenerationDecision.Proceed) return
 
+        var cancelled = false
         try {
             val settings = settingsStore.settingsFlow.value
 
@@ -161,46 +165,42 @@ class GenerationSideEffects(
                 autoTitleGeneration.recordAttempt(conversationId)
             }
 
-            runCatching {
-                val generatedTitle = runBackgroundGeneration(
-                    settings = settings,
-                    modelId = settings.titleModelId,
-                    fallbackToFastModel = true,
-                    prompt = settings.titlePrompt.applyPlaceholders(
-                        "locale" to Locale.getDefault().displayName,
-                        "content" to conversation.currentMessages
-                            .takeLast(4).joinToString("\n\n") { it.summaryAsText(maxLength = 500) },
-                    ),
-                ).orEmpty()
-                val latestTitle = sessionRegistry.getSession(conversationId)?.snapshot?.value?.header?.title
-                    ?: conversation.title
-                val titleToWrite = resolveGeneratedTitleWrite(
-                    force = force,
-                    latestTitle = latestTitle,
-                    generatedTitle = generatedTitle,
-                ) ?: return@runCatching
-                submitHeaderUpdate(
-                    conversationId,
-                    fallback = { conversationRepo.updateConversationTitle(conversationId, titleToWrite) },
-                    build = { UpdateHeader(title = titleToWrite) },
+            val generatedTitle = runBackgroundGeneration(
+                settings = settings,
+                modelId = settings.titleModelId,
+                fallbackToFastModel = true,
+                prompt = settings.titlePrompt.applyPlaceholders(
+                    "locale" to Locale.getDefault().displayName,
+                    "content" to snapshot.currentMessages()
+                        .takeLast(4).joinToString("\n\n") { it.summaryAsText(maxLength = 500) },
+                ),
+            ).orEmpty()
+            val latestTitle = runtimeRegistry.findRuntime(conversationId)?.snapshot?.value?.header?.title
+                ?: snapshot.header.title
+            val titleToWrite = resolveGeneratedTitleWrite(
+                force = force,
+                latestTitle = latestTitle,
+                generatedTitle = generatedTitle,
+            ) ?: return
+            commandCoordinator.executeOrThrow(conversationId, UpdateHeader(title = titleToWrite))
+        } catch (error: CancellationException) {
+            cancelled = true
+            throw error
+        } catch (error: Exception) {
+            error.printStackTrace()
+            chatErrorStore.add(
+                ChatError(
+                    error = error,
+                    conversationId = conversationId,
+                    title = context.getString(R.string.error_title_generate_title),
+                    solution = ChatErrorSolution.CheckTitleModelSettings,
                 )
-            }.onFailure {
-                it.printStackTrace()
-                reportError(
-                    ChatError(
-                        error = it,
-                        conversationId = conversationId,
-                        title = context.getString(R.string.error_title_generate_title),
-                        solution = ChatErrorSolution.CheckTitleModelSettings,
-                    )
-                )
-            }
+            )
         } finally {
             val retry = autoTitleGeneration.end(conversationId)
-            if (retry != null) {
+            if (!cancelled && retry != null) {
                 launchWithConversationReference(conversationId) {
-                    val latest = conversationRepo.getConversationById(conversationId)
-                        ?: return@launchWithConversationReference
+                    val latest = commandCoordinator.load(conversationId).snapshot.value
                     generateTitle(latest, force = retry.force)
                 }
             }
@@ -209,20 +209,13 @@ class GenerationSideEffects(
 
     // ---- 生成建议 ----
 
-    suspend fun generateSuggestion(conversationId: Uuid, conversation: Conversation) {
-        runCatching {
+    suspend fun generateSuggestion(snapshot: ConversationSnapshot) {
+        val conversationId = snapshot.conversationId
+        try {
             val settings = settingsStore.settingsFlow.value
             if (!settings.enableSuggestion) return
 
-            submitHeaderUpdate(
-                conversationId,
-                fallback = {
-                    if (conversationRepo.existsConversationById(conversationId)) {
-                        conversationRepo.updateConversationSuggestions(conversationId, emptyList())
-                    }
-                },
-                build = { UpdateHeader(suggestions = emptyList()) },
-            )
+            commandCoordinator.executeOrThrow(conversationId, UpdateHeader(suggestions = emptyList()))
 
             val generated = runBackgroundGeneration(
                 settings = settings,
@@ -230,42 +223,35 @@ class GenerationSideEffects(
                 fallbackToFastModel = true,
                 prompt = settings.suggestionPrompt.applyPlaceholders(
                     "locale" to Locale.getDefault().displayName,
-                    "content" to conversation.currentMessages
+                    "content" to snapshot.currentMessages()
                         .takeLast(8).joinToString("\n\n") { it.summaryAsText(maxLength = 500) },
                 ),
             ) ?: return
-            val suggestions =
-                generated.split("\n")?.map { it.trim() }
-                    ?.filter { it.isNotBlank() }
-                    ?.take(10)
-                    ?: emptyList()
+            val suggestions = generated.split("\n")
+                .map(String::trim)
+                .filter(String::isNotBlank)
+                .take(10)
 
-            submitHeaderUpdate(
-                conversationId,
-                fallback = {
-                    if (conversationRepo.existsConversationById(conversationId)) {
-                        conversationRepo.updateConversationSuggestions(conversationId, suggestions)
-                    }
-                },
-                build = { UpdateHeader(suggestions = suggestions) },
-            )
-        }.onFailure {
-            it.printStackTrace()
+            commandCoordinator.executeOrThrow(conversationId, UpdateHeader(suggestions = suggestions))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            error.printStackTrace()
         }
     }
 
     // ---- 压缩对话历史 ----
 
     suspend fun compressConversation(
-        conversationId: Uuid,
-        conversation: Conversation,
+        snapshot: ConversationSnapshot,
         additionalPrompt: String,
         targetTokens: Int,
         keepRecentMessages: Int = 32
-    ): Result<Unit> = runCatching {
+    ): Result<Unit> = runCatchingPreservingCancellation {
         val settings = settingsStore.settingsFlow.value
         val maxMessagesPerChunk = 256
-        val allMessages = conversation.currentMessages
+        val conversationId = snapshot.conversationId
+        val allMessages = snapshot.currentMessages()
 
         // Split messages into those to compress and those to keep
         val messagesToCompress: List<UIMessage>
@@ -330,40 +316,22 @@ class GenerationSideEffects(
         }
 
         // 压缩 = ReplaceMessageTree（树替换 delta）+ 清空建议；全量文件扫描由 GC 取代
-        val session = sessionRegistry.getOrCreateSession(conversationId)
-        session.submit(ReplaceMessageTree(newMessageNodes))
-        session.submit(UpdateHeader(suggestions = emptyList()))
-        conversationRepo.collectUnreferencedArtifacts()
+        commandCoordinator.executeOrThrow(conversationId, ReplaceMessageTree(newMessageNodes))
+        commandCoordinator.executeOrThrow(conversationId, UpdateHeader(suggestions = emptyList()))
+        artifactStore.collectGarbage()
     }
 
     // ---- 私有基础设施 ----
-
-    /**
-     * Header 更新分流：活跃 session 走 UpdateHeader 命令（内存 + 窄列原子提交）；
-     * 非活跃会话无内存态，走 [fallback] 窄列写。
-     */
-    private suspend fun submitHeaderUpdate(
-        conversationId: Uuid,
-        fallback: suspend () -> Unit,
-        build: () -> UpdateHeader,
-    ) {
-        val session = sessionRegistry.getSession(conversationId)
-        if (session != null) {
-            session.submit(build())
-        } else {
-            fallback()
-        }
-    }
 
     private fun launchWithConversationReference(
         conversationId: Uuid,
         block: suspend () -> Unit
     ) = appScope.launch {
-        sessionRegistry.addConversationReference(conversationId)
+        val lease = runtimeRegistry.acquireRuntime(conversationId)
         try {
             block()
         } finally {
-            sessionRegistry.removeConversationReference(conversationId)
+            lease.close()
         }
     }
 }
@@ -401,8 +369,8 @@ internal fun collectUserAttentionKeys(
     return keys
 }
 
-internal fun shouldLaunchCompletionSideEffects(reason: FinishedReason?): Boolean {
-    return reason == FinishedReason.COMPLETED
+internal fun shouldLaunchCompletionSideEffects(outcome: TurnOutcome?): Boolean {
+    return outcome is TurnOutcome.Completed
 }
 
 internal fun backgroundTextGenerationParams(

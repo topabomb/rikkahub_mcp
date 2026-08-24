@@ -40,7 +40,7 @@ class ImagePreviewDialogProgressTest {
         assertEquals(
             "grant",
             imageSaveErrorMessage(
-                message = net.weero.measix.pilot.data.files.IMAGE_SAVE_PERMISSION_REQUIRED,
+                message = net.weero.measix.pilot.service.IMAGE_SAVE_PERMISSION_REQUIRED,
                 permissionText = "grant",
                 failedFormat = "failed: %s",
             ),
@@ -53,5 +53,20 @@ class ImagePreviewDialogProgressTest {
                 failedFormat = "failed: %s",
             ),
         )
+    }
+
+    @Test
+    fun `deleting a middle image keeps the same index for its successor`() {
+        assertEquals(1, nextImageIndexAfterDelete(itemCount = 4, deletedIndex = 1))
+    }
+
+    @Test
+    fun `deleting the last image selects the new last image`() {
+        assertEquals(2, nextImageIndexAfterDelete(itemCount = 4, deletedIndex = 3))
+    }
+
+    @Test
+    fun `deleting the only image closes the viewer`() {
+        assertEquals(null, nextImageIndexAfterDelete(itemCount = 1, deletedIndex = 0))
     }
 }

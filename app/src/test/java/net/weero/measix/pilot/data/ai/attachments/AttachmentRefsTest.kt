@@ -7,14 +7,12 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.model.Conversation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class AttachmentRefsTest {
     @Test
@@ -66,7 +64,7 @@ class AttachmentRefsTest {
     }
 
     @Test
-    fun `backfill stamps tool output images and writes conversation`() {
+    fun `backfill stamps tool output images and preserves unchanged node identity`() {
         val image = UIMessagePart.Image(url = "file:///tmp/tool.png")
         val tool = UIMessagePart.Tool(
             toolCallId = "c1",
@@ -76,17 +74,13 @@ class AttachmentRefsTest {
             metadata = JsonObject(mapOf("thoughtSignature" to JsonPrimitive("sig"))),
         )
         val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool))
-        val conversation = Conversation.ofId(
-            id = Uuid.random(),
-            assistantId = Uuid.random(),
-            messages = listOf(net.weero.measix.pilot.data.model.MessageNode.of(message)),
-        )
-        val backfilled = AttachmentRefs.backfillConversation(conversation)
-        assertNotEquals(conversation, backfilled)
-        val stampedTool = backfilled.currentMessages.single().parts.single() as UIMessagePart.Tool
+        val nodes = listOf(net.weero.measix.pilot.data.model.MessageNode.of(message))
+        val backfilled = AttachmentRefs.backfillNodes(nodes)
+        assertNotEquals(nodes, backfilled)
+        val stampedTool = backfilled.single().currentMessage.parts.single() as UIMessagePart.Tool
         assertEquals("sig", (stampedTool.metadata!!["thoughtSignature"] as JsonPrimitive).content)
         val stampedImage = stampedTool.output.single() as UIMessagePart.Image
         assertNotNull(AttachmentRefs.getRef(stampedImage))
-        assertSame(backfilled, AttachmentRefs.backfillConversation(backfilled))
+        assertSame(backfilled, AttachmentRefs.backfillNodes(backfilled))
     }
 }

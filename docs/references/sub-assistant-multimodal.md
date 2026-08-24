@@ -213,16 +213,16 @@ metadata.attachment_ref = "attachment:<uuid>"
 
 盖章在持久化写路径，不是 Transformer：
 
-- 用户发送与编辑重发：`ChatService.preprocessUserInputParts()`。
+- 用户发送与编辑重发：`ConversationApplicationService` / `MasterTurnCoordinator` 共用的 `preprocessUserInputParts()`。
 - `generate_image` 产出的 Tool.output Image：构造时盖章；权威文件仍是 Tool.metadata 的 `LocalArtifactRef`。
 - MCP `ImageContent`：`McpManager.convertImageContentToFilePart()` 落盘后盖章。
 - `assistant_call` 为外部 URL 新落地的 Image：新 ref。
-- Target 模型原生出图（`data:image`）：`FilesManager.convertBase64ImagePartToLocalFile()` 落盘时即 `ensureAttachmentRef()`。Child 没有每轮 backfill，不在这里盖章的话出站提取每次都会生成新的随机 ref。
+- Target 模型原生出图（`data:image`）：显式注入 `ArtifactStore` 的 `Base64ImageToLocalFileTransformer` 在终态落盘并盖章。
 - 从 Master 注入 Child 的 part：**复制源 `attachment_ref`**。
 
 `AttachmentProjectionTransformer` 递归处理消息 parts（含 `Tool.output`）。Master 上的 `generate_image` 结果由统一投影按当次 Caller 模型呈现：可读图时保留原图 + 前插引用行，不可读时替换为引用行；Caller 要把生图交给 Target，应引用该 Image 的 `attachment_ref` 或 JSON 里的 `/upload/<file>`。
 
-历史消息没有 ref：`ChatService.launchRun()` 在 Master 生成前调用 `AttachmentRefs.backfillConversation()`，只修正内存投影；随随后 checkpoint 的 `CommitCheckpoint` 落库。不要在 Input Transformer 里只做一次性临时 id，也不要用 `updateConversation()` 整对象回写。
+历史消息没有 ref：`MasterTurnCoordinator` 在生成前调用 `AttachmentRefs.backfillNodes()`，并提交 durable `BackfillAttachmentRefs` 命令。它与普通命令一样先落库再发布，不借整 Conversation 回写。
 
 Child clone / Master fork 已保留 metadata（`copyPartForChildClone()` / `copyForkedPart()`）。Resolver 以「当前消息树里带该 ref 的 part.url」为准，不把 ref 理解成全局文件主键。
 
@@ -257,7 +257,7 @@ Child clone / Master fork 已保留 metadata（`copyPartForChildClone()` / `copy
 
 | 管线 | 相对顺序 |
 |------|----------|
-| Master `ChatService` | `DocumentAsPromptTransformer` 之后：`AttachmentProjectionTransformer`，再 Template / Workspace / `ToolArtifactReplayTransformer` |
+| Master `TurnPipelineFactory.masterInput()` | Template / Workspace / 可选 `ToolArtifactReplayTransformer` 之后执行 `AttachmentProjectionTransformer` |
 | Target `TurnPipelineFactory.targetInput()` | 同一 transformer 链，用自己的 resolved model |
 
 不要写 `SubAssistantOcrTransformer`，也不要给投影器加 `assistant_call` 特例。
@@ -294,24 +294,24 @@ Child 不需要 `ToolArtifactReplayTransformer` 才能在本 run 里看见刚生
 可持久使用的 UIMessagePart.Image（file:// + metadata.attachment_ref）
 ```
 
-解析范围：**Master 当前选中分支**（含 Tool.output 递归）+ `ManagedLocalArtifactStore` 已登记且被该分支引用的 `/upload`。禁止跨会话、禁止任意 `file:`、禁止 Workspace `/workspace` 路径。Child **不继承** Master 的 `workspaceCwd`。
+解析范围：**Master 当前选中分支**（含 Tool.output 递归）+ `ArtifactStore` 已登记且被该分支引用的 `/upload`。禁止跨会话、禁止任意 `file:`、禁止 Workspace `/workspace` 路径。Child **不继承** Master 的 `workspaceCwd`。
 
 出站落地后，当前分支 `assistant_call` 的 `sub_assistant_call.artifacts[]` 也算 Master 引用。metadata 回退解析仍要求文件落在 `filesDir/upload` 或 `filesDir/images`。
 
 | 来源 | 处理 |
 |------|------|
 | `attachment:<uuid>` | `AttachmentRefs.walkMessageParts()` 找 `metadata.attachment_ref`。未命中再读当前分支 `sub_assistant_call.artifacts[]`。命中后使用该 part 的当前 `url` 或 metadata 中的 `LocalArtifactRef` |
-| `/upload/<file>` | `LocalToolPath.parseUploadToolPath()` + `ManagedLocalArtifactStore.resolveToolPath()`。再确认该文件被当前 Master 选中分支引用（顶层 / Tool.output 的 `file://`、同消息 `LocalArtifactRef`，或 `sub_assistant_call.artifacts[]`） |
+| `/upload/<file>` | `LocalToolPath.parseUploadToolPath()` + `ArtifactStore.resolveToolPath()`。再确认该文件被当前 Master 选中分支引用（顶层 / Tool.output 的 `file://`、同消息 `LocalArtifactRef`，或 `sub_assistant_call.artifacts[]`） |
 | `file:` | 规范化路径落在 `filesDir/upload` 或 `filesDir/images`，文件存在，且被当前分支引用 |
-| HTTP(S) | `SafeRemoteMediaFetcher.fetch()` → `FilesManager.saveManagedFromBytes()` 落地 → 新 Image + 新 ref |
+| HTTP(S) | `SafeRemoteMediaFetcher.fetch()` → `ArtifactStore.createFromBytes()` 落地 → 新 Image + 新 ref |
 
-同一规范化文件只注入一次（`resolve()` 默认按 canonical path 去重；`inspect_attachments` 走 `resolveImages()` 禁用去重，保证 refs 与产出 1:1、顺序稳定）。同一远程 url 在单次批量解析内只 fetch/落盘一次。同一 Master 文件注入 Child 时 **共享** `file://`，不先复制。命中 Master 已有 Image 时复制源 `attachment_ref`。若源 url 仍是 HTTP(S)，会先落地再注入，Child 只存 `file://`。Master 删除会级联 Child。批次中途失败或抛错时，`deleteCreated()` 删除本批新登记的远程落地文件；resolve 成功返回后由 `AttachmentResolveResult.Success.createdManagedFileIds` 交给 Coordinator，Child 写入 / 持久化失败时同样回滚，不留下孤儿文件。删除仍按 URL 引用计数，不要在注入时 `delete` 源文件。
+同一规范化文件只注入一次（`resolve()` 默认按 canonical path 去重；`inspect_attachments` 走 `resolveImages()` 禁用去重，保证 refs 与产出 1:1、顺序稳定）。同一远程 url 在单次批量解析内只 fetch/落盘一次。同一 Master 文件注入 Child 时 **共享** `file://`，不先复制。命中 Master 已有 Image 时复制源 `attachment_ref`。若源 url 仍是 HTTP(S)，会先落地再注入，Child 只存 `file://`。Master 删除会级联 Child。批次中途失败或抛错时，Resolver 以 `OwnedArtifact` 执行 `discardUnpublished`；成功后由 `AttachmentResolveResult.Success.createdArtifacts` 把所有权交给 Coordinator，只有 Child durable 写入成功才发布。
 
 本地附件（`/upload/<file>` 与 `file:`）在读取前同样受 `GeneratedMediaStore.MAX_IMAGE_BYTES` 体积上限，超限映射 `unsafe_attachment_url`，与远程路径一致，避免大文件整读进内存。
 
 `attachments` 留在工具入参里（与 `extras` 一样，恢复/审计从 tool input 读）。不另写一份到 `sub_assistant_call` metadata。
 
-`FilesManager.saveMessageImage()` 没有 SSRF 防护，不能复用为模型可控下载。统一走 `SafeRemoteMediaFetcher`：只允许 `http` / `https`；有限次重定向且每次重解析 host；禁止 `file:` / `content:` / `javascript:` 跳转；拒绝回环、链路本地、私网、metadata、CGNAT、IPv6 unique local，以及 IPv4-mapped / NAT64 / 6to4 里嵌套的私网地址；查 DNS 后把连接钉到已校验地址（HTTPS 用 `PinningSslSocketFactory`——包括 `createSocket(Socket, host, port, autoClose)` 这个 Android 平台实际使用的 layered overload，已连接的远端地址不等于 pin 即拒绝；明文 HTTP 改连 IP 并带原 `Host`）；超时与最大字节数与 `GeneratedMediaStore.MAX_IMAGE_BYTES` 对齐。先看 Content-Type，再以魔数解码。失败映射到 `unsafe_attachment_url` / `attachment_fetch_failed` / `unsupported_attachment_type`，不把内部 IP 或异常栈回给模型。测试可注入 `dnsLookup` 与 `RemoteHttpTransport`。
+模型可控下载统一走 `SafeRemoteMediaFetcher`：只允许 `http` / `https`；有限次重定向且每次重解析 host；禁止 `file:` / `content:` / `javascript:` 跳转；拒绝回环、链路本地、私网、metadata、CGNAT、IPv6 unique local，以及 IPv4-mapped / NAT64 / 6to4 里嵌套的私网地址；查 DNS 后把连接钉到已校验地址（HTTPS 用 `PinningSslSocketFactory`——包括 `createSocket(Socket, host, port, autoClose)` 这个 Android 平台实际使用的 layered overload，已连接的远端地址不等于 pin 即拒绝；明文 HTTP 改连 IP 并带原 `Host`）；超时与最大字节数与 `GeneratedMediaStore.MAX_IMAGE_BYTES` 对齐。先看 Content-Type，再以魔数解码。失败映射到 `unsafe_attachment_url` / `attachment_fetch_failed` / `unsupported_attachment_type`，不把内部 IP 或异常栈回给模型。
 
 `ImageMime` 当前通过才注入：魔数 JPEG / PNG / GIF / WEBP（`GeneratedMediaStore.detectImageMimeBySignature()`）；HEIC/HEIF 按 ISO-BMFF `ftyp` 品牌识别，若 `encodeBase64()` 能转 JPEG 则接受；声明为 `image/*` 但魔数不明时再尝试 `GeneratedMediaStore.detectImageMime()`。PDF、音频、视频、未知二进制 → `unsupported_attachment_type`。
 
@@ -426,7 +426,7 @@ artifact_omitted: Int = 0
 
 投影不再区分 NATIVE / DERIVED / UNAVAILABLE 三态，也不写 `artifact_delivery` 字段——Child artifact 的 stable ref 始终是交付事实；Caller 侧 native/引用行投影统一交给投影器逐请求决定。Caller 需要细节时显式调用 `inspect_attachments`。
 
-`unavailable` / failed / stopped 不加 artifacts 段，也不追加媒体 part。`SubAssistantRecovery` 与 `finishInterruptedToolAfterGenerationStop()` 只重建文本 extras（tts / tool_calls）。
+`unavailable` / failed / stopped 不加 artifacts 段，也不追加媒体 part。`TurnRecovery` 与 `TurnFinalization` 的中断投影只重建文本 extras（tts / tool_calls）。
 
 completed 且存在可持久化交付物时，无论是否 extras 都带：
 
@@ -472,13 +472,13 @@ Resolver 顺序：
 | `SubAssistantCallMetadata` / `SubAssistantRunStateReducer` | `artifacts[]` / `artifact_omitted`；终态快照 |
 | `buildSubAssistantCallResult` | 轻量 `artifacts[]`、可选 `artifacts_omitted` |
 | `SubAssistantCallCard` | 缩略图 / `+N` / 缺失占位 / 点击分区 |
-| `SubAssistantRecovery` / `finishInterruptedToolAfterGenerationStop` | 只重建文本 extras |
-| `ChatService` | 发送/编辑盖章，生成前 backfill |
+| `TurnRecovery` / `TurnFinalization` | 恢复与正常中断时只重建文本 extras |
+| `ConversationApplicationService` / `MasterTurnCoordinator` | 发送/编辑盖章，生成前 durable backfill |
 | `SubAssistantRunPolicy` / `filterTargetTools` | 不再永久过滤 `TextToImage` / `generate_image` |
 
 不改：`GenerationHandler` 主循环语义、Provider 编码、lineage / lease。
 
-主要测试：`AssistantCallToolTest`、`AttachmentRefsTest`、`AttachmentResolverTest`、`SafeRemoteMediaFetcherTest`、`AttachmentProjectionTransformerTest`、`AttachmentInspectionToolTest`、`ShouldInjectAttachmentInspectionTest`、`SubAssistantAttachmentCoordinatorTest`、`SubAssistantChildPartsTest`、`SubAssistantResultProjectionTest`、`SubAssistantArtifactProjectionTest`、`SubAssistantRunPolicyTest`、`SubAssistantCallMetadataTest`、`SubAssistantRecoveryTest`、`ChatServiceToolApprovalTest` 停止路径。
+主要测试：`AssistantCallToolTest`、`AttachmentRefsTest`、`AttachmentResolverTest`、`SafeRemoteMediaFetcherTest`、`AttachmentProjectionTransformerTest`、`AttachmentInspectionToolTest`、`ShouldInjectAttachmentInspectionTest`、`SubAssistantAttachmentCoordinatorTest`、`SubAssistantChildPartsTest`、`SubAssistantResultProjectionTest`、`SubAssistantArtifactProjectionTest`、`SubAssistantRunPolicyTest`、`SubAssistantCallMetadataTest` 与恢复/终态测试。
 
 维护约束：
 

@@ -2,19 +2,21 @@ package net.weero.measix.pilot.service.runtime
 
 import android.util.Log
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.joinAll
-import net.weero.measix.pilot.data.datastore.SettingsStore
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import java.util.concurrent.ConcurrentHashMap
@@ -22,127 +24,183 @@ import kotlin.uuid.Uuid
 
 private const val TAG = "ConversationRuntimeRegistry"
 
+sealed interface ConversationRuntimeState {
+    data object Loading : ConversationRuntimeState
+    data class Draft(val runtime: ConversationRuntime) : ConversationRuntimeState
+    data class Ready(val runtime: ConversationRuntime) : ConversationRuntimeState
+    data object Missing : ConversationRuntimeState
+    data class Failed(val error: Throwable) : ConversationRuntimeState
+}
+
+class ConversationNotFoundException(id: Uuid) :
+    IllegalStateException("conversation does not exist: $id")
+
 /**
- * 会话运行时生命周期管理。
- * 管理 Runtime/Job/StateFlow 的创建、引用计数和空闲清理。
- * idle 判定并入 [ConversationRuntime.isWriteInFlight]（写通道占用期间不回收）。
+ * Owns resident conversation runtimes. Durable conversations publish [ConversationRuntimeState.Ready];
+ * a new-chat screen publishes an explicit non-durable [ConversationRuntimeState.Draft] and is
+ * promoted only with its first user-message transaction. Loading/Missing/Failed never fabricate a
+ * usable conversation snapshot.
  */
 class ConversationRuntimeRegistry(
-    private val appScope: net.weero.measix.pilot.AppScope,
-    private val settingsStore: SettingsStore,
+    private val appScope: AppScope,
     private val repository: ConversationRepository,
+    private val operationLocks: ConversationOperationLocks,
+    private val idleTimeoutMs: Long = 5_000L,
 ) {
-    private val runtimes = ConcurrentHashMap<Uuid, ConversationRuntime>()
+    private data class Entry(
+        val state: MutableStateFlow<ConversationRuntimeState> = MutableStateFlow(ConversationRuntimeState.Loading),
+        val loadMutex: Mutex = Mutex(),
+    )
+
+    private val entries = ConcurrentHashMap<Uuid, Entry>()
     private val _runtimesVersion = MutableStateFlow(0L)
 
-    fun getOrCreateSession(conversationId: Uuid): ConversationRuntime {
-        return runtimes.computeIfAbsent(conversationId) { id ->
-            val settings = settingsStore.settingsFlow.value
-            val assistantId = settings.assistants.firstOrNull()?.id ?: Uuid.random()
-            ConversationRuntime(
-                id = id,
-                initial = Conversation.ofId(
-                    id = id,
-                    assistantId = assistantId
-                ).toSnapshot(),
-                scope = appScope,
-                onIdle = { removeSession(it) },
-                repository = repository,
-            ).also {
-                _runtimesVersion.value++
-                Log.i(TAG, "createSession: $id (total: ${runtimes.size + 1})")
-            }
-        }
-    }
-
-    fun getOrCreateSessionWithConversation(conversationId: Uuid, conversation: Conversation): ConversationRuntime {
-        return runtimes.computeIfAbsent(conversationId) { id ->
-            ConversationRuntime(
-                id = id,
-                initial = conversation.toSnapshot(),
-                scope = appScope,
-                onIdle = { removeSession(it) },
-                repository = repository,
-            ).also {
-                _runtimesVersion.value++
-                Log.i(TAG, "createSession with conversation: $id (total: ${runtimes.size + 1})")
-            }
-        }
-    }
-
-    fun getSession(conversationId: Uuid): ConversationRuntime? = runtimes[conversationId]
-
-    private fun removeSession(conversationId: Uuid) {
-        val runtime = runtimes[conversationId] ?: return
-        if (runtime.isInUse) {
-            Log.d(TAG, "removeSession: skipped $conversationId (still in use)")
-            return
-        }
-        if (runtimes.remove(conversationId, runtime)) {
-            runtime.cleanup()
-            _runtimesVersion.value++
-            Log.i(TAG, "removeSession: $conversationId (remaining: ${runtimes.size})")
-        }
-    }
-
-    fun addConversationReference(conversationId: Uuid) {
-        getOrCreateSession(conversationId).acquire()
-    }
-
-    fun removeConversationReference(conversationId: Uuid) {
-        runtimes[conversationId]?.release()
-    }
-
-    fun getGenerationJobStateFlow(conversationId: Uuid): Flow<Job?> {
-        val runtime = runtimes[conversationId] ?: return flowOf(null)
-        return runtime.generationJob
-    }
-
-    fun getProcessingStatusFlow(conversationId: Uuid): StateFlow<String?> {
-        val runtime = runtimes[conversationId] ?: return MutableStateFlow(null)
-        return runtime.processingStatus
-    }
-
-    fun getConversationJobs(): Flow<Map<Uuid, Job?>> {
-        return _runtimesVersion.flatMapLatest {
-            val currentRuntimes = runtimes.values.toList()
-            if (currentRuntimes.isEmpty()) {
-                flowOf(emptyMap())
-            } else {
-                combine(currentRuntimes.map { runtime ->
-                    runtime.generationJob.map { job -> runtime.id to job }
-                }) { pairs ->
-                    pairs.filter { it.second != null }.toMap()
+    fun observeRuntimeState(conversationId: Uuid): StateFlow<ConversationRuntimeState> {
+        val entry = entries.computeIfAbsent(conversationId) { Entry() }
+        if (entry.state.value == ConversationRuntimeState.Loading) {
+            appScope.launch {
+                try {
+                    loadRuntime(conversationId)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: ConversationNotFoundException) {
+                    // loadRuntime has already published Missing.
+                } catch (error: Exception) {
+                    entry.state.value = ConversationRuntimeState.Failed(error)
                 }
             }
         }
+        return entry.state.asStateFlow()
     }
 
-    /**
-     * 整对象装载（DB 加载 / 导入路径）：内存快照与持久化基线同步重置。
-     */
-    fun loadConversation(conversationId: Uuid, conversation: Conversation) {
-        if (conversation.id != conversationId) return
-        // 使用 getOrCreateSessionWithConversation 避免先创建空 Session 再覆盖
-        val runtime = getOrCreateSessionWithConversation(conversationId, conversation)
-        runtime.loadSnapshot(conversation)
-    }
-
-    fun getAllActiveSessionIds(): Set<Uuid> = runtimes.keys.toSet()
-
-    fun getSessionsSnapshot(): List<ConversationRuntime> = runtimes.values.toList()
-
-    /** Removes a conversation that has already been durably deleted. */
-    fun evictSession(conversationId: Uuid) {
-        runtimes.remove(conversationId)?.let { runtime ->
-            runtime.cleanup()
-            _runtimesVersion.value++
+    suspend fun loadRuntime(conversationId: Uuid): ConversationRuntime {
+        return operationLocks.withLock(conversationId) {
+            loadRuntimeLocked(conversationId)
         }
     }
 
-    /** 取消并等待指定 Assistant 的普通会话生成，避免清理后迟到 checkpoint 重新写回会话。 */
+    private suspend fun loadRuntimeLocked(conversationId: Uuid): ConversationRuntime {
+        val entry = entries.computeIfAbsent(conversationId) { Entry() }
+        entry.state.value.runtimeOrNull()?.let { return it }
+        return entry.loadMutex.withLock {
+            entry.state.value.runtimeOrNull()?.let { return@withLock it }
+            entry.state.value = ConversationRuntimeState.Loading
+            val conversation = try {
+                repository.getConversationById(conversationId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                entry.state.value = ConversationRuntimeState.Failed(error)
+                throw error
+            }
+            if (conversation == null) {
+                entry.state.value = ConversationRuntimeState.Missing
+                throw ConversationNotFoundException(conversationId)
+            }
+            installReadyRuntime(entry, conversation)
+        }
+    }
+
+    /** Installs a conversation only after its create/import transaction has committed. */
+    suspend fun registerRuntime(conversation: Conversation): ConversationRuntime =
+        operationLocks.withLock(conversation.id) {
+            val entry = entries.computeIfAbsent(conversation.id) { Entry() }
+            entry.loadMutex.withLock {
+                when (val current = entry.state.value) {
+                    is ConversationRuntimeState.Ready -> {
+                        check(current.runtime.snapshot.value.header.id == conversation.id)
+                        current.runtime
+                    }
+                    is ConversationRuntimeState.Draft -> error(
+                        "durable runtime cannot replace a registered draft: ${conversation.id}",
+                    )
+                    else -> installReadyRuntime(entry, conversation)
+                }
+            }
+        }
+
+    /** Registers a non-durable new-chat draft. It is evicted without persistence when unused. */
+    internal suspend fun installDraft(conversation: Conversation): ConversationRuntime =
+        operationLocks.withLock(conversation.id) {
+            val entry = entries.computeIfAbsent(conversation.id) { Entry() }
+            entry.loadMutex.withLock {
+                when (val current = entry.state.value) {
+                    is ConversationRuntimeState.Draft -> current.runtime
+                    is ConversationRuntimeState.Ready -> error(
+                        "draft cannot replace a durable runtime: ${conversation.id}",
+                    )
+                    else -> installRuntime(entry, conversation, draft = true)
+                }
+            }
+        }
+
+    suspend fun promoteDraft(conversationId: Uuid, runtime: ConversationRuntime) =
+        operationLocks.withLock(conversationId) {
+            val entry = entries[conversationId]
+                ?: error("draft runtime entry is missing: $conversationId")
+            val current = entry.state.value
+            check(current is ConversationRuntimeState.Draft && current.runtime === runtime) {
+                "runtime is not the registered draft: $conversationId"
+            }
+            entry.state.value = ConversationRuntimeState.Ready(runtime)
+            _runtimesVersion.value++
+        }
+
+    fun isDraft(conversationId: Uuid): Boolean =
+        entries[conversationId]?.state?.value is ConversationRuntimeState.Draft
+
+    fun findRuntime(conversationId: Uuid): ConversationRuntime? =
+        entries[conversationId]?.state?.value.runtimeOrNull()
+
+    fun requireRuntime(conversationId: Uuid): ConversationRuntime =
+        findRuntime(conversationId) ?: error("conversation runtime is not Ready: $conversationId")
+
+    internal suspend fun acquireRuntime(conversationId: Uuid): ConversationRuntimeLease =
+        loadRuntime(conversationId).acquireLease()
+
+    internal suspend fun acquireRegisteredRuntime(
+        conversationId: Uuid,
+        expected: ConversationRuntime,
+    ): ConversationRuntimeLease = operationLocks.withLock(conversationId) {
+        check(findRuntime(conversationId) === expected) { "registered runtime changed before acquire: $conversationId" }
+        expected.acquireLease()
+    }
+
+    fun getGenerationJobFlow(conversationId: Uuid): Flow<Job?> =
+        observeRuntimeState(conversationId).flatMapLatest { state ->
+            state.runtimeOrNull()?.generationJob ?: flowOf(null)
+        }
+
+    fun getProcessingStatusFlow(conversationId: Uuid): Flow<String?> =
+        observeRuntimeState(conversationId).flatMapLatest { state ->
+            state.runtimeOrNull()?.processingStatus ?: flowOf(null)
+        }
+
+    fun getConversationJobs(): Flow<Map<Uuid, Job?>> = _runtimesVersion.flatMapLatest {
+        val current = activeRuntimes()
+        if (current.isEmpty()) {
+            flowOf(emptyMap())
+        } else {
+            combine(current.map { runtime ->
+                runtime.generationJob.map { job -> runtime.id to job }
+            }) { pairs -> pairs.filter { it.second != null }.toMap() }
+        }
+    }
+
+    fun activeRuntimes(): List<ConversationRuntime> = entries.values.mapNotNull { entry ->
+        entry.state.value.runtimeOrNull()
+    }
+
+    suspend fun evictRuntime(conversationId: Uuid) = operationLocks.withLock(conversationId) {
+        val entry = entries[conversationId] ?: return@withLock
+        val runtime = entry.state.value.runtimeOrNull()
+        entry.state.value = ConversationRuntimeState.Missing
+        runtime?.cleanup()
+        _runtimesVersion.value++
+    }
+
     suspend fun cancelGenerationsForAssistant(assistantId: Uuid, reason: String) {
-        val jobs = runtimes.values
+        val jobs = activeRuntimes()
             .filter { it.snapshot.value.header.assistantId == assistantId }
             .mapNotNull { it.generationJob.value }
             .distinct()
@@ -150,8 +208,50 @@ class ConversationRuntimeRegistry(
         jobs.joinAll()
     }
 
-    fun cleanup() = runCatching {
-        runtimes.values.forEach { it.cleanup() }
-        runtimes.clear()
+    private fun installReadyRuntime(entry: Entry, conversation: Conversation): ConversationRuntime =
+        installRuntime(entry, conversation, draft = false)
+
+    private fun installRuntime(
+        entry: Entry,
+        conversation: Conversation,
+        draft: Boolean,
+    ): ConversationRuntime {
+        val runtime = ConversationRuntime(
+            id = conversation.id,
+            initial = conversation.toSnapshot(),
+            scope = appScope,
+            onIdle = ::removeIdleRuntime,
+            idleTimeoutMs = idleTimeoutMs,
+        )
+        entry.state.value = if (draft) {
+            ConversationRuntimeState.Draft(runtime)
+        } else {
+            ConversationRuntimeState.Ready(runtime)
+        }
+        _runtimesVersion.value++
+        runtime.armIdleEviction()
+        Log.i(TAG, "runtime installed: ${conversation.id} (draft=$draft, active=${activeRuntimes().size})")
+        return runtime
     }
+
+    private fun removeIdleRuntime(conversationId: Uuid) {
+        appScope.launch {
+            operationLocks.withLock(conversationId) {
+                val entry = entries[conversationId] ?: return@withLock
+                val runtime = entry.state.value.runtimeOrNull() ?: return@withLock
+                if (runtime.isInUse) return@withLock
+                if (entries.remove(conversationId, entry)) {
+                    runtime.cleanup()
+                    _runtimesVersion.value++
+                    Log.i(TAG, "runtime evicted: $conversationId")
+                }
+            }
+        }
+    }
+}
+
+private fun ConversationRuntimeState?.runtimeOrNull(): ConversationRuntime? = when (this) {
+    is ConversationRuntimeState.Draft -> runtime
+    is ConversationRuntimeState.Ready -> runtime
+    else -> null
 }

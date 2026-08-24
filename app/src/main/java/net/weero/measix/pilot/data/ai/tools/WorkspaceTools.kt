@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.ai.tools
+package net.weero.measix.pilot.data.ai.tools
 
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -12,13 +12,12 @@ import me.rerere.ai.ui.DiffMetadata
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.toMetadata
 import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
-import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import net.weero.measix.pilot.utils.generateUnifiedDiff
 import me.rerere.workspace.WorkspaceCommandResult
 import me.rerere.workspace.WorkspaceFileEntry
 import me.rerere.workspace.WorkspaceManager
-import org.koin.java.KoinJavaComponent.getKoin
 import java.io.ByteArrayOutputStream
 
 private const val SHELL_TIMEOUT_MAX_SECONDS = 600L
@@ -37,6 +36,7 @@ fun resolveWorkspaceToolApproval(name: String, overrides: Map<String, Boolean>):
 suspend fun createWorkspaceTools(
     workspaceId: String?,
     workspaceRepository: WorkspaceRepository,
+    artifactStore: ArtifactStore,
     cwd: String? = null,
 ): List<Tool> {
     if (workspaceId.isNullOrBlank()) return emptyList()
@@ -46,7 +46,7 @@ suspend fun createWorkspaceTools(
     val shellCwd = cwd?.removePrefix("/workspace/")?.removePrefix("/workspace")
 
     return listOf(
-        createReadFileTool(workspaceId, ::needsApproval, workspaceRepository),
+        createReadFileTool(workspaceId, ::needsApproval, workspaceRepository, artifactStore),
         createWriteFileTool(workspaceId, ::needsApproval, workspaceRepository),
         createEditFileTool(workspaceId, ::needsApproval, workspaceRepository),
         createShellTool(workspaceId, ::needsApproval, workspaceRepository, shellCwd),
@@ -64,6 +64,7 @@ private fun createReadFileTool(
     workspaceId: String,
     needsApproval: (String) -> Boolean,
     workspaceRepository: WorkspaceRepository,
+    artifactStore: ArtifactStore,
 ) = Tool(
     name = "workspace_read_file",
     description = """
@@ -78,10 +79,18 @@ private fun createReadFileTool(
         )
     },
     needsApproval = { needsApproval("workspace_read_file") },
-    execute = {
+    execute = { error("workspace_read_file requires ToolExecutionContext") },
+    contextualExecute = {
         val path = it.jsonObject.absolutePath("path")
         if (path.isImagePath()) {
-            workspaceRepository.readImageInRootfs(workspaceId, path)
+            workspaceRepository.readImageInRootfs(
+                workspaceId,
+                path,
+                artifactStore,
+                onArtifactCreated = { owned ->
+                    registerUnpublishedResource(artifactStore.unpublishedLease(owned))
+                },
+            )
         } else {
             val text = workspaceRepository.readTextInRootfs(workspaceId, path)
             listOf(
@@ -290,16 +299,21 @@ private suspend fun WorkspaceRepository.readRootfsBuffer(
 private suspend fun WorkspaceRepository.readImageInRootfs(
     workspaceId: String,
     path: String,
+    artifactStore: ArtifactStore,
+    onArtifactCreated: (net.weero.measix.pilot.data.files.OwnedArtifact) -> Unit,
 ): List<UIMessagePart> {
     val bytes = readRootfsBuffer(workspaceId, path).toByteArray()
 
-    val filesManager = getKoin().get<FilesManager>()
     // 工具读取沙箱文件产生的副本——系统产物
-    val uris = filesManager.createChatFilesByByteArrays(listOf(bytes), ArtifactOrigin.SYSTEM)
-    val imageUrl = uris.firstOrNull()?.toString()
-        ?: error("Failed to persist image artifact for $path")
+    val owned = artifactStore.createFromBytes(
+        bytes = bytes,
+        displayName = "image.png",
+        mimeType = "image/png",
+        origin = ArtifactOrigin.SYSTEM,
+    )
+    onArtifactCreated(owned)
     return listOf(
-        UIMessagePart.Image(url = imageUrl),
+        UIMessagePart.Image(url = owned.uri.toString()),
         UIMessagePart.Text(
             buildJsonObject {
                 put("path", path)

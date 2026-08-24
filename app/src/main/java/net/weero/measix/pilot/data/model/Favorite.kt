@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.model
+package net.weero.measix.pilot.data.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -12,13 +12,9 @@ enum class FavoriteType(val value: String) {
     @SerialName("node")
     NODE("node"),
 
-    // Keep old value for compatibility with existing data.
+    // Persisted Favorite rows use this discriminator; changing it would corrupt existing data.
     @SerialName("message")
-    MESSAGE("message");
-
-    companion object {
-        fun fromValue(value: String): FavoriteType? = entries.firstOrNull { it.value == value }
-    }
+    MESSAGE("message"),
 }
 
 @Serializable

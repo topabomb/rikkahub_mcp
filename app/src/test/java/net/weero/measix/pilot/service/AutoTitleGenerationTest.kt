@@ -128,12 +128,14 @@ class AutoTitleGenerationTest {
             AutoTitleGenerationDecision.Proceed,
             tracker.begin(conversationId, force = false, titleBlank = true),
         )
+        assertEquals(setOf(conversationId), tracker.inFlightIds.value)
         assertEquals(
             AutoTitleGenerationDecision.SkipInFlight,
             tracker.begin(conversationId, force = false, titleBlank = true),
         )
 
         assertEquals(AutoTitleRetry(force = false), tracker.end(conversationId))
+        assertEquals(emptySet<Uuid>(), tracker.inFlightIds.value)
         assertNull(tracker.end(conversationId))
     }
 
@@ -237,7 +239,13 @@ class AutoTitleGenerationTest {
             tracker.recordAttempt(conversationId)
             tracker.end(conversationId)
         }
+        assertEquals(
+            AutoTitleGenerationDecision.Proceed,
+            tracker.begin(conversationId, force = true, titleBlank = true),
+        )
+        assertEquals(setOf(conversationId), tracker.inFlightIds.value)
         tracker.clear(conversationId)
+        assertEquals(emptySet<Uuid>(), tracker.inFlightIds.value)
 
         assertEquals(
             AutoTitleGenerationDecision.Proceed,

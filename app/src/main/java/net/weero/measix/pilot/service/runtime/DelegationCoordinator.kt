@@ -17,7 +17,7 @@ import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
-import net.weero.measix.pilot.data.ai.FinishedReason
+import me.rerere.ai.ui.TurnTerminalReasons
 import net.weero.measix.pilot.data.ai.GenerationHandler
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallPhase
@@ -60,11 +60,16 @@ import net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolveResult
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
+import net.weero.measix.pilot.data.ai.transformers.AttachmentProjectionTransformer
+import net.weero.measix.pilot.data.ai.transformers.Base64ImageToLocalFileTransformer
 import net.weero.measix.pilot.data.ai.transformers.WorkspaceReminderTransformer
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.files.AttachmentCloner
-import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.OwnedArtifact
+import net.weero.measix.pilot.data.files.ToolArtifactRewriter
+import net.weero.measix.pilot.data.files.requireDiscarded
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
@@ -74,8 +79,7 @@ import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import net.weero.measix.pilot.service.SubAssistantRunGate
 import net.weero.measix.pilot.service.SubAssistantRunKey
-import net.weero.measix.pilot.service.TurnRecovery
-import net.weero.measix.pilot.service.runtime.toConversation
+import net.weero.measix.pilot.service.TurnFinalization
 import kotlinx.coroutines.Job
 import kotlin.coroutines.coroutineContext
 import kotlin.uuid.Uuid
@@ -85,34 +89,36 @@ private const val PREVIEW_THROTTLE_MS = 100L
 private const val MAX_SUB_ASSISTANT_INTERACTIONS = 16
 private const val FINALIZATION_TIMEOUT_MS = 5_000L
 
-/** Target Generation 运行结果（最终消息 + Finished 原因）。 */
+/** Target Generation 运行结果（最终消息 + 唯一终态语义）。 */
 private data class TargetGenerationResult(
     val messages: List<UIMessage>,
-    val finishReason: FinishedReason?,
+    val outcome: TurnOutcome,
 )
 
 /**
  * 子助手调用协调器（编排域）。
  *
- * executeCall 四阶段：preflight（readiness/lineage/lease）→ materialize（附件 + Child
- * create/reuse/clone）→ run（Target 生成循环）→ terminal（终态分类与结果构建）。
- * 恢复语义归 [TurnRecovery]，结果形状归 SubAssistantResultProjection，并发门禁归
- * [SubAssistantRunGate]。不依赖 ChatService，避免循环依赖。
+ * [executeCall] 依次确认 readiness/lineage/lease，建立 Child 与附件所有权，
+ * 运行 Target 生成并构建终态结果。
+ * 正常终态归 [TurnFinalization]，结果形状归 SubAssistantResultProjection，并发门禁归
+ * [SubAssistantRunGate]。
  */
 class DelegationCoordinator(
     private val generationHandler: GenerationHandler,
     private val conversationRepo: ConversationRepository,
-    private val sessionRegistry: ConversationRuntimeRegistry,
+    private val runtimeRegistry: ConversationRuntimeRegistry,
+    private val commandCoordinator: ConversationCommandCoordinator,
     private val toolSetFactory: GenerationToolSetFactory,
     private val settingsStore: SettingsStore,
     private val memoryRepository: MemoryRepository,
     private val templateTransformer: TemplateTransformer,
     workspaceRepository: WorkspaceRepository,
-    private val filesManager: FilesManager,
+    private val artifactStore: ArtifactStore,
+    private val toolArtifactRewriter: ToolArtifactRewriter,
     private val json: Json,
     private val attachmentResolver: AttachmentResolver,
     private val context: Context,
-    private val turnRecovery: TurnRecovery,
+    private val turnFinalization: TurnFinalization,
     private val runGate: SubAssistantRunGate,
 ) {
     // Master/Target 共用管道装配。Target 管道不注入 ToolArtifactReplay
@@ -121,6 +127,8 @@ class DelegationCoordinator(
         templateTransformer = templateTransformer,
         workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository),
         toolArtifactReplayTransformer = null,
+        attachmentProjectionTransformer = AttachmentProjectionTransformer(artifactStore),
+        base64ImageToLocalFileTransformer = Base64ImageToLocalFileTransformer(artifactStore),
     )
 
     /** 删除 Target 前取消并等待其所有正在执行的 Target Run 停止写回。 */
@@ -133,8 +141,6 @@ class DelegationCoordinator(
         return runGate.completeAnswer(runId, interactionId, answer)
     }
 
-    // ---- Phase A: preflight ----
-
     /** preflight 产物：放行（含 lease）或拒绝（含结果 parts）。 */
     private sealed interface Preflight {
         data class Ready(
@@ -145,7 +151,7 @@ class DelegationCoordinator(
             val lineageDecision: LineageDecision,
             val runId: String,
             val runKey: SubAssistantRunKey,
-            val lease: net.weero.measix.pilot.service.SubAssistantRunLease,
+            val lease: SubAssistantRunGate.LeaseHandle,
         ) : Preflight
 
         data class Blocked(val parts: List<UIMessagePart>) : Preflight
@@ -206,7 +212,7 @@ class DelegationCoordinator(
         val processedTask = preprocessSubAssistantTask(task, target)
 
         // lineage：previous run 元数据（当前调用之前的同 Target 调用）决定 Child 语义
-        val masterMessages = sessionRegistry.getSession(masterConversationId)
+        val masterMessages = runtimeRegistry.findRuntime(masterConversationId)
             ?.snapshot?.value?.currentMessages()
             ?: emptyList()
         val previousMeta = findPreviousCallMetadata(
@@ -234,7 +240,7 @@ class DelegationCoordinator(
 
         // 原子获取 lease（lineage 决策后、持久化前；同 Master+Target 不可并发）
         val runId = Uuid.random().toString()
-        val lease = runGate.tryAcquire(
+        val lease = runGate.acquireLease(
             key = runKey,
             runId = runId,
             callerAssistantId = callerAssistantId,
@@ -258,7 +264,7 @@ class DelegationCoordinator(
             runSpec = runSpec,
         )
         if (latestBlockReason != null) {
-            runGate.release(runKey, lease)
+            lease.close()
             return Preflight.Blocked(
                 buildUnavailableCallResult(
                     json = json,
@@ -283,14 +289,14 @@ class DelegationCoordinator(
         )
     }
 
-    // ---- Phase B: materialize Child ----
-
     /** materialize 产物：Child 定位 + 初始 metadata，或失败（含结果 parts）。 */
     private sealed interface Materialized {
         data class Ready(
             val childConversationId: Uuid,
             val childTaskNodeId: Uuid,
             val runJob: Job,
+            val createdChild: Boolean,
+            val createdArtifacts: List<OwnedArtifact>,
         ) : Materialized
 
         data class Failure(val parts: List<UIMessagePart>) : Materialized
@@ -306,9 +312,9 @@ class DelegationCoordinator(
     ): Materialized {
         val target = preflight.target
         // 本批解析新落地的远程文件；Child 写入失败时要回滚，避免留下孤儿文件。
-        var createdManagedFileIds: List<Long> = emptyList()
+        val createdArtifacts = mutableListOf<OwnedArtifact>()
         try {
-            val latestMasterMessages = sessionRegistry.getSession(masterConversationId)
+            val latestMasterMessages = runtimeRegistry.findRuntime(masterConversationId)
                 ?.snapshot?.value?.currentMessages()
                 ?: emptyList()
             // 能力不足不是附件失败：入站只验证 attachment ref/资产，
@@ -328,7 +334,7 @@ class DelegationCoordinator(
                         )
                     )
                     is AttachmentResolveResult.Success -> {
-                        createdManagedFileIds = resolved.createdManagedFileIds
+                        createdArtifacts += resolved.createdArtifacts
                         resolved.parts
                     }
                 }
@@ -340,12 +346,18 @@ class DelegationCoordinator(
                 is LineageDecision.CreateNewDueToError,
                 -> {
                     val (childId, taskNodeId) = createNewChild(target, masterConversationId, userParts)
-                    Materialized.Ready(childId, taskNodeId, preflight.lease.job)
+                    Materialized.Ready(childId, taskNodeId, preflight.lease.job, true, createdArtifacts.toList())
                 }
 
                 is LineageDecision.ReuseChild -> {
                     val taskNodeId = reuseChild(target, preflight.lineageDecision.childConversationId, userParts)
-                    Materialized.Ready(preflight.lineageDecision.childConversationId, taskNodeId, preflight.lease.job)
+                    Materialized.Ready(
+                        preflight.lineageDecision.childConversationId,
+                        taskNodeId,
+                        preflight.lease.job,
+                        false,
+                        createdArtifacts.toList(),
+                    )
                 }
 
                 is LineageDecision.CloneChild -> {
@@ -355,16 +367,15 @@ class DelegationCoordinator(
                         sourceChildId = preflight.lineageDecision.sourceChildConversationId,
                         throughTaskMessageId = preflight.lineageDecision.throughTaskMessageId,
                         userParts = userParts,
+                        createdArtifacts = createdArtifacts,
                     )
-                    Materialized.Ready(childId, taskNodeId, preflight.lease.job)
+                    Materialized.Ready(childId, taskNodeId, preflight.lease.job, true, createdArtifacts.toList())
                 }
             }
         } catch (e: Exception) {
             // Child 写入/持久化失败：删除本批刚落地的远程附件，避免孤儿文件。
             // lease 释放由 executeCall 的统一 finally 负责。
-            createdManagedFileIds.forEach { id ->
-                runCatching { filesManager.deleteManagedFilePermanently(id, deleteFromDisk = true) }
-            }
+            discardCreatedArtifacts(createdArtifacts, "sub-assistant materialization rollback", e)
             if (e is CancellationException) throw e
             return Materialized.Failure(
                 buildClassifiedFailureResult(
@@ -380,7 +391,42 @@ class DelegationCoordinator(
         }
     }
 
-    // ---- executeCall：四阶段主线 ----
+    private suspend fun compensateUnlinkedChild(child: Materialized.Ready) {
+        var failure: Throwable? = null
+        try {
+            if (child.createdChild) {
+                commandCoordinator.deleteOrThrow(child.childConversationId)
+            } else {
+                commandCoordinator.executeOrThrow(child.childConversationId, DeleteMessage(child.childTaskNodeId))
+            }
+        } catch (error: Throwable) {
+            failure = error
+        }
+        child.createdArtifacts.asReversed().forEach { owned ->
+            try {
+                artifactStore.discardUnpublished(owned).requireDiscarded("unlinked Child rollback")
+            } catch (error: Throwable) {
+                if (failure == null) failure = error else failure.addSuppressed(error)
+            }
+        }
+        failure?.let { throw it }
+    }
+
+    private suspend fun discardCreatedArtifacts(
+        artifacts: List<OwnedArtifact>,
+        operation: String,
+        primary: Throwable,
+    ) = withContext(NonCancellable) {
+        artifacts.asReversed().forEach { owned ->
+            try {
+                artifactStore.discardUnpublished(owned).requireDiscarded(operation)
+            } catch (cleanupFailure: Throwable) {
+                primary.addSuppressed(cleanupFailure)
+            }
+        }
+    }
+
+    // ---- assistant_call 主线 ----
 
     /**
      * 执行 assistant_call。
@@ -397,7 +443,6 @@ class DelegationCoordinator(
         extras: Set<String> = emptySet(),
         attachments: List<String> = emptyList(),
     ): List<UIMessagePart> {
-        // Phase A: preflight — readiness / lineage / lease
         val preflight = preflightCall(
             callerAssistantId = callerAssistantId,
             masterConversationId = masterConversationId,
@@ -416,7 +461,6 @@ class DelegationCoordinator(
         var childTaskNodeId: Uuid? = null
         var runState: SubAssistantRunStateReducer? = null
         try {
-            // Phase B: materialize — 附件解析 + Child create/reuse/clone
             val materialized = materializeChild(
                 preflight = ready,
                 masterConversationId = masterConversationId,
@@ -431,15 +475,8 @@ class DelegationCoordinator(
             childTaskNodeId = child.childTaskNodeId
             val runJob = child.runJob
 
-            // Child 与 Master 使用同一 Registry。该 Job 也是 run lease 中的结构化子 Job，
-            // 主回合取消、Target 删除或 App 清理都会命中同一个生命周期对象。
-            sessionRegistry.getOrCreateSession(childConversationId).setJob(runJob)
-
             // 调用↔Child 关系归位：本次工具执行的 durable 事实携带 child id
             // （崩溃恢复经 turn_execution(status) → child_conversation_id 定点收口）。
-            runCatching { execContext.reportChildConversation(childConversationId.toString()) }
-                .onFailure { Log.w(TAG, "reportChildConversation failed: ${it.message}") }
-
             // 初始 metadata（start link）
             val initialMeta = buildInitialSubAssistantCallMetadata(
                 runId = ready.runId,
@@ -457,9 +494,28 @@ class DelegationCoordinator(
                 phase = SubAssistantCallPhase.PREPARING,
             )
             runState = SubAssistantRunStateReducer(initialMeta)
+            var childLinkCommitted = false
             try {
-                reportSubAssistantMetadataPatch(json, execContext, initialMeta, checkpoint = true)
+                // 先只更新内存投影，再由 child link 的单次 checkpoint 原子提交
+                // messages + tool_execution.child_conversation_id。不得拆成两个 durable 提交。
+                withContext(NonCancellable) {
+                    reportSubAssistantMetadataPatch(json, execContext, initialMeta, checkpoint = false)
+                    child.createdArtifacts.forEach { artifact ->
+                        execContext.registerUnpublishedResource(artifactStore.unpublishedLease(artifact))
+                    }
+                    execContext.reportChildConversation(childConversationId.toString())
+                    childLinkCommitted = true
+                }
             } catch (e: Exception) {
+                if (!childLinkCommitted) {
+                    withContext(NonCancellable) {
+                        try {
+                            compensateUnlinkedChild(child)
+                        } catch (cleanupFailure: Throwable) {
+                            e.addSuppressed(cleanupFailure)
+                        }
+                    }
+                }
                 if (e is CancellationException) throw e
                 return buildClassifiedFailureResult(
                     json = json,
@@ -471,6 +527,10 @@ class DelegationCoordinator(
                     runId = ready.runId,
                 )
             }
+
+            // Durable link 成功后才把 lease Job 安装进 Child Runtime；否则失败补偿会被
+            // active runtime 自己阻断，留下未关联 Child 与克隆 artifact。
+            commandCoordinator.load(childConversationId).setJob(runJob)
 
             // 运行中 Settings 撤权监听器：重算 caller/Target 关系，变化即取消 Child Job
             runScope = CoroutineScope(coroutineContext + runJob)
@@ -487,7 +547,6 @@ class DelegationCoordinator(
                 }
             }
 
-            // Phase C: run — Target Generation
             runJob.ensureActive()
             val genResult = withContext(runJob) {
                 runTargetGeneration(
@@ -511,13 +570,11 @@ class DelegationCoordinator(
                 runSpec = ready.runSpec,
             )?.let { reason -> throw CancellationException(reason) }
 
-            // Phase D: terminal — 终态分类与结果构建
             return terminalResult(
-                finishReason = genResult.finishReason,
+                outcome = genResult.outcome,
                 genResult = genResult,
                 target = target,
                 childTaskNodeId = childTaskNodeId,
-                childConversationId = childConversationId,
                 runState = runState,
                 execContext = execContext,
                 extras = extras,
@@ -534,13 +591,20 @@ class DelegationCoordinator(
                 state = SubAssistantCallState.STOPPED,
                 reason = cancelReason,
             )
-            turnRecovery.finalizeInterruptedRun(
-                childConversationId = currentChild,
-                reason = cancelReason,
-                execContext = execContext,
-                terminalMeta = terminalMeta,
-                json = json,
-            )
+            try {
+                turnFinalization.finalizeSubAssistantRun(
+                    childConversationId = currentChild,
+                    reason = cancelReason,
+                    execContext = execContext,
+                    terminalMetadata = terminalMeta,
+                )
+            } catch (finalizationFailure: Exception) {
+                if (masterCancelled) {
+                    e.addSuppressed(finalizationFailure)
+                    throw e
+                }
+                throw finalizationFailure
+            }
             if (masterCancelled) throw e
             return buildSubAssistantCallResultParts(
                 json = json,
@@ -562,13 +626,17 @@ class DelegationCoordinator(
                 state = SubAssistantCallState.FAILED,
                 reason = failureReason,
             )
-            turnRecovery.finalizeInterruptedRun(
-                childConversationId = currentChild,
-                reason = failureReason,
-                execContext = execContext,
-                terminalMeta = terminalMeta,
-                json = json,
-            )
+            try {
+                turnFinalization.finalizeSubAssistantRun(
+                    childConversationId = currentChild,
+                    reason = failureReason,
+                    execContext = execContext,
+                    terminalMetadata = terminalMeta,
+                )
+            } catch (finalizationFailure: Exception) {
+                finalizationFailure.addSuppressed(e)
+                throw finalizationFailure
+            }
             return buildSubAssistantCallResultParts(
                 json = json,
                 status = "failed",
@@ -582,30 +650,37 @@ class DelegationCoordinator(
         } finally {
             settingsWatcher?.cancel()
             runScope?.cancel()
-            runGate.release(ready.runKey, ready.lease)
+            ready.lease.close()
         }
     }
 
-    /** Phase D：按 FinishedReason 收敛终态（失败三分支共享同一形状）。 */
+    /** 按 [TurnOutcome] 统一生成终态，所有失败分支共享同一结果形状。 */
     private suspend fun terminalResult(
-        finishReason: FinishedReason?,
+        outcome: TurnOutcome,
         genResult: TargetGenerationResult,
         target: Assistant,
         childTaskNodeId: Uuid,
-        childConversationId: Uuid,
         runState: SubAssistantRunStateReducer,
         execContext: ToolExecutionContext,
         extras: Set<String>,
-    ): List<UIMessagePart> = when (finishReason) {
-        FinishedReason.STEP_LIMIT_REACHED ->
-            failedTerminal("step_limit_reached", target, genResult, childTaskNodeId, runState, execContext, extras)
-        FinishedReason.INTERACTION_LIMIT_REACHED ->
-            failedTerminal("interaction_limit_reached", target, genResult, childTaskNodeId, runState, execContext, extras)
-        FinishedReason.AWAITING_APPROVAL ->
+    ): List<UIMessagePart> = when (outcome) {
+        is TurnOutcome.Incomplete -> failedTerminal(
+            when (outcome.terminalReason) {
+                TurnTerminalReasons.TOOL_LOOP_LIMIT -> "step_limit_reached"
+                TurnTerminalReasons.INTERACTION_LIMIT -> "interaction_limit_reached"
+                else -> "provider_incomplete"
+            },
+            target,
+            genResult,
+            childTaskNodeId,
+            runState,
+            execContext,
+            extras,
+        )
+        TurnOutcome.AwaitingApproval ->
             // 只有无法桥接 Pending ask_user 或达到交互上限时才会返回到这里。
             failedTerminal("approval_blocked", target, genResult, childTaskNodeId, runState, execContext, extras)
-        else -> {
-            // COMPLETED 或 null（兼容旧路径）
+        TurnOutcome.Completed -> {
             val finalText = extractFinalAnswerInternal(genResult.messages, childTaskNodeId)
             val extracted = extractDeliverableArtifacts(
                 messages = genResult.messages,
@@ -641,6 +716,8 @@ class DelegationCoordinator(
                 extraParts = callerProjection.extraParts,
             )
         }
+        is TurnOutcome.Cancelled -> error("Cancelled Target outcome must be handled by executeCall")
+        is TurnOutcome.Failed -> throw outcome.error
     }
 
     private suspend fun failedTerminal(
@@ -685,8 +762,7 @@ class DelegationCoordinator(
             messageNodes = target.presetMessages.map { it.toMessageNode() } + taskMessage.toMessageNode(),
             parentConversationId = masterConversationId,
         )
-        conversationRepo.insertConversation(conversation)
-        sessionRegistry.getOrCreateSessionWithConversation(childId, conversation)
+        createOwnedChild(conversation)
 
         // child_task_node_id 是本次 USER 的 UIMessage.id，供 final answer / artifacts /
         // preview 按 messagesInRunRange 定位。
@@ -699,13 +775,20 @@ class DelegationCoordinator(
         childConversationId: Uuid,
         userParts: List<UIMessagePart>,
     ): Uuid {
-        val conversation = conversationRepo.getConversationById(childConversationId)
-            ?: throw IllegalStateException("Child conversation not found: $childConversationId")
-
         // 追加任务消息 = AppendUserMessage 命令（delta 落库，消除整对象回写）
         val taskMessage = UIMessage(role = MessageRole.USER, parts = userParts)
-        val session = sessionRegistry.getOrCreateSessionWithConversation(childConversationId, conversation)
-        session.submit(AppendUserMessage(taskMessage))
+        try {
+            commandCoordinator.executeOrThrow(childConversationId, AppendUserMessage(taskMessage))
+        } catch (error: Throwable) {
+            withContext(NonCancellable) {
+                try {
+                    commandCoordinator.executeOrThrow(childConversationId, DeleteMessage(taskMessage.id))
+                } catch (cleanupFailure: Throwable) {
+                    error.addSuppressed(cleanupFailure)
+                }
+            }
+            throw error
+        }
 
         Log.i(TAG, "reuseChild: child=$childConversationId, taskMsg=${taskMessage.id}")
         return taskMessage.id
@@ -717,6 +800,7 @@ class DelegationCoordinator(
         sourceChildId: Uuid,
         throughTaskMessageId: Uuid,
         userParts: List<UIMessagePart>,
+        createdArtifacts: MutableList<OwnedArtifact>,
     ): Pair<Uuid, Uuid> {
         val sourceConversation = conversationRepo.getConversationById(sourceChildId)
             ?: throw IllegalStateException("Source child conversation not found: $sourceChildId")
@@ -729,7 +813,14 @@ class DelegationCoordinator(
             node.copy(
                 id = Uuid.random(),
                 messages = node.messages.map { message ->
-                    message.copy(parts = AttachmentCloner.cloneParts(message.parts, filesManager))
+                    message.copy(
+                        parts = AttachmentCloner.cloneParts(
+                            message.parts,
+                            artifactStore,
+                            createdArtifacts = createdArtifacts,
+                            toolArtifactRewriter = toolArtifactRewriter,
+                        )
+                    )
                 },
             )
         }
@@ -741,14 +832,33 @@ class DelegationCoordinator(
             messageNodes = clonedNodes + taskMessage.toMessageNode(),
             parentConversationId = masterConversationId,
         )
-        conversationRepo.insertConversation(conversation)
-        sessionRegistry.getOrCreateSessionWithConversation(newChildId, conversation)
+        createOwnedChild(conversation)
 
         Log.i(TAG, "cloneChild: source=$sourceChildId, new=$newChildId, taskMsg=${taskMessage.id}")
         return newChildId to taskMessage.id
     }
 
-    // ---- Phase C: Target Generation 循环 ----
+    /**
+     * A create call can be cancelled while returning from its non-cancellable commit boundary.
+     * The random Child id is this operation's ownership token, so cancellation compensates that
+     * exact aggregate before attachment ownership is released by the caller.
+     */
+    private suspend fun createOwnedChild(conversation: Conversation) {
+        try {
+            commandCoordinator.create(conversation)
+        } catch (error: Throwable) {
+            if (error !is ConversationCommandConflictException) {
+                withContext(NonCancellable) {
+                    try {
+                        commandCoordinator.deleteOrThrow(conversation.id)
+                    } catch (cleanupFailure: Throwable) {
+                        error.addSuppressed(cleanupFailure)
+                    }
+                }
+            }
+            throw error
+        }
+    }
 
     private suspend fun runTargetGeneration(
         target: Assistant,
@@ -761,8 +871,8 @@ class DelegationCoordinator(
         turnTtsContext: TtsToolPlaybackContext? = null,
     ): TargetGenerationResult {
         val settings = settingsStore.settingsFlow.value
-        val session = sessionRegistry.getOrCreateSession(childConversationId)
-        val conversation = session.snapshot.value.toConversation()
+        val runtime = commandCoordinator.load(childConversationId)
+        val snapshot = runtime.snapshot.value
 
         // Target memories
         val memories = if (target.enableMemory) {
@@ -800,33 +910,45 @@ class DelegationCoordinator(
                 toolSetFactory.buildTools(
                     assistant = intersectTargetToolCapabilities(target, latestTarget),
                     settings = effectiveSettings,
-                    resolvedModel = model,
-                    workspaceCwd = conversation.workspaceCwd,
+                    capabilityModel = model,
+                    workspaceCwd = snapshot.header.workspaceCwd,
                     runMode = ToolSetRunMode.TARGET,
                     ttsPlaybackContext = ttsPlaybackContext,
                 )
             }
         }
 
-        var lastMessages = conversation.currentMessages
+        var lastMessages = snapshot.currentMessages()
         var lastPreviewUpdate = 0L
-        var finishReason: FinishedReason? = null
+        var outcome: TurnOutcome? = null
         var interactionCount = 0
 
-        // Target turn 与 Master 同一提交协议（turn 骨架唯一实现 TurnEngine.start：
-        // BeginTurn 打开 assistant 槽——否则 snapshot 流式覆盖会画到末条 USER 任务节点上，
-        // 随后 CommitCheckpoint(RUNNING) 落 turn 事实）。
-        val targetTurnId = Uuid.random()
+        // One sub-assistant run owns one durable turn and one epoch across every ask_user step.
         val started = TurnEngine.start(
-            runtime = session,
-            turnId = targetTurnId,
+            commandCoordinator = commandCoordinator,
+            runtime = runtime,
+            turnId = Uuid.random(),
             messages = lastMessages,
+            prepareFinalize = { terminalOutcome, messages ->
+                if (terminalOutcome is TurnOutcome.Cancelled || terminalOutcome is TurnOutcome.Failed) {
+                    turnFinalization.closeOpenTools(
+                        snapshot = runtime.snapshot.value,
+                        messageId = requireNotNull(runtime.snapshot.value.activeTurn?.assistantMessageId) {
+                            "active target turn has no assistant message owner"
+                        },
+                        reason = requireNotNull(terminalOutcome.terminalReason),
+                        cancelledByUser = terminalOutcome is TurnOutcome.Cancelled,
+                    ).currentMessages()
+                } else {
+                    runtime.snapshot.value.currentMessages().ifEmpty { messages }
+                }
+            },
         )
         val turnEngine = started.engine
-        lastMessages = session.snapshot.value.currentMessages()
+        lastMessages = runtime.snapshot.value.currentMessages()
 
         while (true) {
-            finishReason = null
+            outcome = null
             generationHandler.generateText(
                 settings = settings,
                 model = model,
@@ -845,12 +967,12 @@ class DelegationCoordinator(
                         latestTarget.useGlobalMemory == target.useGlobalMemory
                 },
                 assistantMessageId = started.assistantMessageId,
-                processingStatus = session.processingStatus,
+                processingStatus = runtime.processingStatus,
                 conversationSystemPrompt = null, // Child 不设置对话级 System Prompt
                 // Child does not inherit the Master's mode injection. Passing the Target IDs also
                 // keeps Target injections active when allowConversationPromptInjection is enabled.
                 conversationModeInjectionIds = target.modeInjectionIds,
-                workspaceCwd = conversation.workspaceCwd,
+                workspaceCwd = snapshot.header.workspaceCwd,
                 maxSteps = 256,
                 onCheckpoint = { checkpoint ->
                     // checkpoint→CommitCheckpoint（delta + turn/tool 事实同事务落库）
@@ -861,7 +983,7 @@ class DelegationCoordinator(
                 turnEngine.bind(source).collect { event ->
                     when (event) {
                         is TurnEvent.Streaming -> {
-                            // 流式 delta 已由 bind 内 applyStreamingDelta 更新 Child session 投影
+                            // 流式 delta 已由 bind 内 applyStreamingDelta 更新 Child Runtime 投影
                             lastMessages = event.messages
 
                             // 节流回写 preview 到 Master；内容未变则不 patch。
@@ -893,90 +1015,63 @@ class DelegationCoordinator(
                         }
 
                         is TurnEvent.Finished -> {
-                            // bind 将流内异常/取消转为 Finished(null, error)；此处重抛，
-                            // 由调用方（lease/取消路径）统一处理
-                            if (event.error != null) throw event.error
-                            finishReason = event.reason
+                            outcome = event.outcome
                         }
                     }
                 }
             }
 
-            if (finishReason != FinishedReason.AWAITING_APPROVAL) break
+            when (val finished = outcome) {
+                is TurnOutcome.Failed -> throw finished.error
+                is TurnOutcome.Cancelled -> throw CancellationException(finished.terminalReason)
+                else -> Unit
+            }
+
+            if (outcome !is TurnOutcome.AwaitingApproval) break
             if (interactionCount++ >= MAX_SUB_ASSISTANT_INTERACTIONS) {
-                finishReason = FinishedReason.INTERACTION_LIMIT_REACHED
+                val limitOutcome = TurnOutcome.Incomplete(TurnTerminalReasons.INTERACTION_LIMIT)
+                outcome = limitOutcome
+                turnEngine.submitOutcome(
+                    messages = runtime.snapshot.value.currentMessages(),
+                    outcome = limitOutcome,
+                    closeInterruptedTools = false,
+                )
                 break
             }
             val resumedMessages = awaitPendingAskUser(
-                childConversationId = childConversationId,
+                runtime = runtime,
                 childTaskNodeId = childTaskNodeId,
                 runId = runId,
-                turnId = targetTurnId,
                 messages = lastMessages,
                 execContext = execContext,
                 runState = runState,
-            ) ?: break
+            )
             lastMessages = resumedMessages
         }
 
-        // bind 已在 Finished/异常/取消时提交 FinalizeTurn。此处只覆盖循环本地升级
-        // （ask_user 次数上限把 AWAITING_APPROVAL 升为 INCOMPLETE）等尚未真正终态的情况。
-        if (!turnEngine.hasSubmittedTerminal()) {
-            val terminalStatus = when (finishReason) {
-                FinishedReason.COMPLETED -> TurnExecutionStatus.COMPLETED
-                FinishedReason.INTERACTION_LIMIT_REACHED -> TurnExecutionStatus.INCOMPLETE
-                FinishedReason.AWAITING_APPROVAL -> TurnExecutionStatus.AWAITING_APPROVAL
-                null -> TurnExecutionStatus.INCOMPLETE
-                else -> TurnExecutionStatus.INCOMPLETE
-            }
-            if (turnEngine.lastFinalizedStatus != terminalStatus) {
-                turnEngine.submitFinalize(
-                    messages = lastMessages,
-                    terminalStatus = terminalStatus,
-                    terminalReason = if (finishReason == FinishedReason.INTERACTION_LIMIT_REACHED) {
-                        "interaction_limit_reached"
-                    } else {
-                        null
-                    },
-                    closeInterruptedTools = false,
-                )
-            }
-        }
-
-        return TargetGenerationResult(lastMessages, finishReason)
+        return TargetGenerationResult(
+            messages = lastMessages,
+            outcome = outcome ?: TurnOutcome.Incomplete(TurnTerminalReasons.PROVIDER_INCOMPLETE),
+        )
     }
 
     private suspend fun awaitPendingAskUser(
-        childConversationId: Uuid,
+        runtime: ConversationRuntime,
         childTaskNodeId: Uuid,
         runId: String,
-        turnId: Uuid,
         messages: List<UIMessage>,
         execContext: ToolExecutionContext,
         runState: SubAssistantRunStateReducer,
-    ): List<UIMessage>? {
-        val message = messages.lastOrNull() ?: return null
+    ): List<UIMessage> {
+        val message = requireNotNull(messages.lastOrNull()) { "ask_user continuation has no assistant message" }
         val toolOrdinal = message.getTools().indexOfFirst { tool ->
             !tool.isExecuted && tool.toolName == "ask_user" &&
                 tool.approvalState is ToolApprovalState.Pending
         }
-        if (toolOrdinal < 0) return null
+        check(toolOrdinal >= 0) { "AWAITING_APPROVAL has no pending ask_user tool" }
         val tool = message.getTools()[toolOrdinal]
         val interactionId = "${runId}_${message.id}_$toolOrdinal"
         val answer = runGate.registerPendingInteraction(runId, interactionId)
-
-        val session = sessionRegistry.getOrCreateSession(childConversationId)
-        // ask_user 挂起 = CommitCheckpoint(AWAITING_APPROVAL)（消息分发 + turn 事实同事务落库）
-        session.submit(
-            CommitCheckpoint(
-                turnId = turnId,
-                assistantMessageId = message.id,
-                messages = messages,
-                turnStatus = TurnExecutionStatus.AWAITING_APPROVAL,
-                turnReason = null,
-                toolExecution = null,
-            )
-        )
 
         val interaction = net.weero.measix.pilot.data.ai.subassistant.SubAssistantUserInteraction(
             interactionId = interactionId,
@@ -994,15 +1089,16 @@ class DelegationCoordinator(
         return try {
             val answered = answer.await()
             // 应答 = UpdateToolApproval(Answered) 命令（与 Master HITL 同一命令路径）
-            val before = session.snapshot.value
-            session.submit(
+            val before = runtime.snapshot.value
+            commandCoordinator.executeOrThrow(
+                runtime.id,
                 UpdateToolApproval(
                     messageId = message.id,
                     toolOrdinal = toolOrdinal,
                     approvalState = ToolApprovalState.Answered(answered),
                 )
             )
-            if (session.snapshot.value === before) {
+            if (runtime.snapshot.value === before) {
                 error("Pending ask_user locator is no longer valid")
             }
             reportSubAssistantMetadataPatch(
@@ -1011,14 +1107,14 @@ class DelegationCoordinator(
                 meta = runState.clearUserInteraction(),
                 checkpoint = true,
             )
-            session.snapshot.value.currentMessages()
+            runtime.snapshot.value.currentMessages()
         } finally {
             runGate.unregisterPendingInteraction(runId)
         }
     }
 
     private fun childRunMessages(childConversationId: Uuid): List<UIMessage> {
-        return sessionRegistry.getSession(childConversationId)?.snapshot?.value?.currentMessages()
+        return runtimeRegistry.findRuntime(childConversationId)?.snapshot?.value?.currentMessages()
             ?: emptyList()
     }
 }

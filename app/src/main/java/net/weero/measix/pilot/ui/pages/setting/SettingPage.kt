@@ -53,7 +53,7 @@ import me.rerere.hugeicons.stroke.WavingHand01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.isNotConfigured
-import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.service.ArtifactUseCase
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.CardGroup
@@ -73,7 +73,7 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val navController = LocalNavController.current
     val settings by vm.settings.collectAsStateWithLifecycle()
-    val filesManager: FilesManager = koinInject()
+    val artifactUseCase: ArtifactUseCase = koinInject()
     val generatedMediaStore: GeneratedMediaStore = koinInject()
 
     Scaffold(
@@ -202,7 +202,7 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                 val lifecycleOwner = LocalLifecycleOwner.current
                 val storageState by produceState(-1 to 0L, lifecycleOwner) {
                     lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                        val (uploadCount, uploadSize) = filesManager.countChatFiles()
+                        val (uploadCount, uploadSize) = artifactUseCase.uploadStats()
                         val generated = generatedMediaStore.countCommitted()
                         value = (uploadCount + generated.count) to (uploadSize + generated.sizeBytes)
                     }

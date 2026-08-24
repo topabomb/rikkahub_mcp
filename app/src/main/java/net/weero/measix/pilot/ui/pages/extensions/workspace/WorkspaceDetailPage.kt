@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.extensions.workspace
+package net.weero.measix.pilot.ui.pages.extensions.workspace
 
 import android.content.Intent
 import android.provider.OpenableColumns
@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,10 +51,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import java.io.File
 import kotlinx.coroutines.launch
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowTurnBackward
@@ -75,6 +78,8 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDialog
+import net.weero.measix.pilot.ui.components.ui.ImagePreviewDeleteAction
+import net.weero.measix.pilot.ui.components.ui.ImagePreviewDeleteResult
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.utils.fileSizeToString
@@ -98,8 +103,10 @@ fun WorkspaceDetailPage(id: String) {
     val scope = rememberCoroutineScope()
     var deleteTarget by remember { mutableStateOf<WorkspaceFileEntry?>(null) }
     var showInstallDialog by remember { mutableStateOf(false) }
-    var previewImageUri by remember { mutableStateOf<String?>(null) }
+    var previewImage by remember { mutableStateOf<WorkspaceImagePreview?>(null) }
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val imageDeleteFailed = stringResource(R.string.image_viewer_delete_failed)
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri ->
@@ -208,7 +215,7 @@ fun WorkspaceDetailPage(id: String) {
                                 WorkspaceFileType.IMAGE -> vm.exportToCacheFile(entry, context.cacheDir) { file ->
                                     // 传绝对路径 (而非 content:// URI): Coil 可直接加载,
                                     // 预览弹窗的保存按钮 saveMessageImage 只认 "/" 开头路径, content URI 会报错
-                                    previewImageUri = file.absolutePath
+                                    previewImage = WorkspaceImagePreview(entry, file.absolutePath)
                                 }
 
                                 WorkspaceFileType.OTHER -> vm.exportToCacheFile(entry, context.cacheDir) { file ->
@@ -270,10 +277,13 @@ fun WorkspaceDetailPage(id: String) {
     }
 
     installError?.let { message ->
+        val displayMessage = message.ifBlank {
+            stringResource(R.string.workspace_detail_rootfs_install_failed)
+        }
         AlertDialog(
             onDismissRequest = vm::dismissInstallError,
             title = { Text(stringResource(R.string.workspace_detail_rootfs_install_failed)) },
-            text = { Text(message) },
+            text = { Text(displayMessage) },
             confirmButton = {
                 TextButton(onClick = vm::dismissInstallError) {
                     Text(stringResource(R.string.common_confirm))
@@ -282,10 +292,27 @@ fun WorkspaceDetailPage(id: String) {
         )
     }
 
-    previewImageUri?.let { uri ->
+    previewImage?.let { preview ->
+        DisposableEffect(preview.uri) {
+            onDispose { File(preview.uri).delete() }
+        }
         ImagePreviewDialog(
-            images = listOf(uri),
-            onDismissRequest = { previewImageUri = null },
+            images = listOf(preview.uri),
+            onDismissRequest = {
+                previewImage = null
+            },
+            deleteAction = ImagePreviewDeleteAction(
+                confirmationText = {
+                    resources.getString(R.string.workspace_detail_will_delete, preview.entry.path)
+                },
+                delete = {
+                    if (vm.delete(preview.entry)) {
+                        ImagePreviewDeleteResult.Deleted
+                    } else {
+                        ImagePreviewDeleteResult.Failed(imageDeleteFailed)
+                    }
+                },
+            ),
         )
     }
 
@@ -296,8 +323,10 @@ fun WorkspaceDetailPage(id: String) {
             confirmText = stringResource(R.string.common_delete),
             dismissText = stringResource(R.string.common_cancel),
             onConfirm = {
-                vm.delete(entry)
-                deleteTarget = null
+                scope.launch {
+                    vm.delete(entry)
+                    deleteTarget = null
+                }
             },
             onDismiss = { deleteTarget = null },
         ) {
@@ -305,6 +334,11 @@ fun WorkspaceDetailPage(id: String) {
         }
     }
 }
+
+private data class WorkspaceImagePreview(
+    val entry: WorkspaceFileEntry,
+    val uri: String,
+)
 
 @Composable
 private fun WorkspaceBasicPage(
@@ -610,7 +644,7 @@ private fun WorkspaceFilesPage(
 
         state.error?.let { error ->
             item {
-                ErrorCard(error)
+                ErrorCard(workspaceErrorMessage(error))
             }
         }
 
@@ -826,6 +860,18 @@ private fun ErrorCard(message: String) {
             color = MaterialTheme.colorScheme.error,
         )
     }
+}
+
+@Composable
+private fun workspaceErrorMessage(error: WorkspaceOperationError): String {
+    val fallback = when (error.operation) {
+        WorkspaceOperation.LOAD_WORKSPACE -> R.string.workspace_detail_load_failed
+        WorkspaceOperation.LOAD_FILES -> R.string.workspace_detail_load_files_failed
+        WorkspaceOperation.IMPORT -> R.string.workspace_detail_import_failed
+        WorkspaceOperation.EXPORT -> R.string.workspace_detail_export_failed
+        WorkspaceOperation.DELETE -> R.string.workspace_detail_delete_failed
+    }
+    return error.detail?.takeIf(String::isNotBlank) ?: stringResource(fallback)
 }
 
 @Composable

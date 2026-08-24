@@ -44,13 +44,21 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 
 | 入口 | 说明 |
 |------|------|
-| 用户上传 / 编辑消息 | `ChatService` 发送前 |
+| 用户上传 / 编辑消息 | `ConversationApplicationService` / `MasterTurnCoordinator` 提交前 |
 | `generate_image` 产出 | 工具成功时对 Image part 盖章 |
 | MCP 图片内容 | `McpManager` 转本地文件时 |
 | 外部 HTTPS 图 | 入站时落地（`wrapLocalImage`），Child 只存 `file://` |
-| base64 图片 | `FilesManager.convertBase64ImagePartToLocalFile` 落盘即盖章 |
+| base64 图片 | `Base64ImageToLocalFileTransformer` 经 `ArtifactStore` 终态落盘并盖章 |
 | `assistant_call` 注入 Child | 复制源 ref（跨会话引用同一 managed file） |
 | 历史消息补章 | 会话加载 / 生成前的 backfill |
+
+所有字节型图片入口都在创建 durable artifact 前限制输入规模并校验实际内容：
+
+- MCP `ImageContent` 先限制 base64 字符与解码字节，再按文件头与容器结构识别 MIME；声明 MIME 不能覆盖实际格式。
+- `GeneratedMediaStore` 对 URL/base64 结果使用同一尺寸上限与结构检查，并以检测 MIME 决定扩展名；WebP 校验遍历 RIFF chunk、padding 与 VP8X 后续图像/动画 payload，不把扩展头误当完整图像。Gallery 只通过 `resolveCanonicalFile` 解析根目录内路径。
+- 编辑器导入返回 `ArtifactDraftItem(uri, displayName, mimeType)`；路由、分享、粘贴和裁剪调用方直接使用托管时已经确定的 metadata，不对托管 `file://` URI 再走外部 ContentResolver 分类。裁剪输出扩展名与 PNG 压缩格式一致。
+- 头像与助手背景经 `ArtifactUseCase.importSettingsImage` 执行有界复制与结构检查，Settings root 提交成功后才发布，失败或取消回滚未发布 artifact。
+- 生成中预览与助手背景只接受经结构检查的图片，文件名与扩展名由实际内容生成，不信任模型名、索引或远程声明。
 
 ### 2.3 资源的两种身份
 
@@ -146,7 +154,7 @@ attachment:<uuid>（1..4 个）
 
 | 链路 | Transformer 顺序要点 |
 |------|---------------------|
-| Master 聊天 | `DocumentAsPromptTransformer` → `AttachmentProjectionTransformer` → Template / Workspace / `ToolArtifactReplayTransformer`（先按 artifact metadata 恢复历史 Tool Result 路径，再投影） |
+| Master 聊天 | `DocumentAsPromptTransformer` → Template → Workspace → 可选 `ToolArtifactReplayTransformer` → `AttachmentProjectionTransformer` |
 | `generate_image` 产出 | 成功时 Image part 落入本次 Tool.output 并盖章；下一个 step 的请求由投影管线回放（原图或引用行）。识别这张图 = 把它的 ref 传给 `inspect_attachments` |
 | Target（`assistant_call`） | Child 拥有完整 Assistant 级 transformer 链 + 自己的 resolved model；入站只校验 ref / 资产，视觉能力由 Target run 自己的投影与工具集表达 |
 
@@ -163,8 +171,9 @@ Schema 见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and
 
 ### 6.2 checkpoint 与 finalize
 
-- `CommitCheckpoint` 命令（`TurnEngine.onCheckpoint` 提交）：工具循环内以 Room 事务（`ConversationRepository.applyMutation`）提交当前会话消息 delta 与执行事实（消息快照 + 状态 upsert，FTS 可选重索引）。
-- `FinalizeTurn` 命令（`TurnEngine.bind` 在终态提交）：run 终止后一次性提交终态（reindexFts = true）。
+- `StartTurn` 单事务写 assistant 槽与 RUNNING turn fact，返回唯一 `TurnHandle`。
+- `CommitCheckpoint` 命令（`TurnEngine.onCheckpoint` 提交）：工具循环内以 Room 事务提交 changed-node delta、执行事实、artifact reference 与 FTS delta。
+- `FinalizeTurn` 命令（`TurnEngine.bind` 在终态提交）：同一事务先收口 STARTED tool fact，再 CAS turn 终态；失败整体回滚。
 - 工具执行期间崩溃：从最近 checkpoint 恢复，丢失窗口 = 当前工具 step。
 
 ### 6.3 定位与副作用顺序
@@ -175,8 +184,8 @@ Schema 见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and
 
 ### 6.4 终态收口
 
-- 终态只由 `finalizeTurn()` 一次写入；工具循环内只写非终态（`RUNNING` / `AWAITING_APPROVAL`）。
-- 恢复、停止、取消走统一终态路径，最终状态由 `TurnExecutionStatus` 决定；等待工具审批的 turn 不触发标题 / 建议等完成副作用。
+- 正常终态只由 `FinalizeTurn` command 写入；工具循环内只写非终态（`RUNNING` / `AWAITING_APPROVAL`）。
+- stop/supersede 归 `TurnFinalization`，进程恢复归 `TurnRecovery`；两者都经 CommandCoordinator 与同一 CAS 状态机。等待工具审批的 turn 不触发标题 / 建议等完成副作用。
 
 ## 7. 崩溃恢复与回放
 
@@ -184,7 +193,7 @@ Schema 见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and
 
 | 重启时状态 | 恢复动作 | 默认失败原因 |
 |-----------|----------|--------------|
-| Turn 为 `CREATED` / `RUNNING` / `AWAITING_APPROVAL` | 置 `INTERRUPTED`，工具占位按中断渲染 | `process_restarted` |
+| Turn 为 `CREATED` / `RUNNING` | 置 `INTERRUPTED`，工具占位按中断渲染 | `process_restarted` |
 | Tool 为 `STARTED` | 置 `UNKNOWN`（副作用可能已发生，结果不可判定，禁止标记为成功或失败） | — |
 
 ### 7.2 回放安全
@@ -203,9 +212,10 @@ Schema 见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and
 | `AttachmentInspectionTool` / `shouldInjectAttachmentInspection` | `inspect_attachments` 工具与注入判定 |
 | `ToolExecutionContext` / `ToolAttachmentResolution` | ai 模块最小只读附件能力接口 |
 | `GenerationHandler` | 工具循环、checkpoint、`resolveAttachments` 注入 |
-| `ChatService` / `DelegationCoordinator` | 盖章时机、Target run 工具集 |
-| `TurnRecovery` | 重启恢复与中断收口语义唯一所有者（master turn + 子助手 run，定点链路） |
-| `ConversationRepository.applyMutation` | Turn 持久化事务（命令通道唯一落库入口） |
+| `ConversationApplicationService` / `MasterTurnCoordinator` / `DelegationCoordinator` | 盖章时机、Master/Target 工具集 |
+| `TurnFinalization` | 正常 stop/supersede 与中断结果终态 |
+| `TurnRecovery` | 仅重启恢复（Master/Child/tool 定点链路） |
+| `ConversationCommandCoordinator` / `ConversationRepository.applyMutation` | durable command 唯一入口与 Room 事务 |
 | `TurnExecutionStatus` / `ToolExecutionStatus` | 执行事实状态枚举 |
 | `SettingsOcrMigration` / `migrateLegacySettingsJson` | 旧 OCR 设置迁移边界 |
 

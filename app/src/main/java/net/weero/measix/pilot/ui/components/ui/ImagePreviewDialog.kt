@@ -20,13 +20,17 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -35,6 +39,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -76,11 +81,12 @@ import kotlinx.coroutines.withContext
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Download01
+import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.InformationCircle
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.files.FileFolders
-import net.weero.measix.pilot.data.files.FilesManager
-import net.weero.measix.pilot.data.files.IMAGE_SAVE_PERMISSION_REQUIRED
+import net.weero.measix.pilot.service.ArtifactUseCase
+import net.weero.measix.pilot.service.MediaExportService
+import net.weero.measix.pilot.service.IMAGE_SAVE_PERMISSION_REQUIRED
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.utils.fileSizeToString
@@ -90,6 +96,22 @@ import java.io.File
 import java.time.Instant
 import kotlin.math.abs
 import kotlin.time.Duration
+
+sealed interface ImagePreviewDeleteResult {
+    data object Deleted : ImagePreviewDeleteResult
+    data class Failed(val message: String) : ImagePreviewDeleteResult
+}
+
+data class ImagePreviewDeleteAction(
+    val confirmationText: suspend (imageUrl: String) -> String,
+    val delete: suspend (imageUrl: String) -> ImagePreviewDeleteResult,
+)
+
+private data class PendingImagePreviewDelete(
+    val imageUrl: String,
+    val confirmationText: String,
+    val action: ImagePreviewDeleteAction,
+)
 
 // 拖拽关闭: 容器最大缩小比例
 private const val DRAG_DISMISS_SCALE_FACTOR = 0.35f
@@ -109,37 +131,68 @@ fun ImagePreviewDialog(
     onDismissRequest: () -> Unit,
     initialIndex: Int = 0,
     extraActions: List<ImagePreviewAction> = emptyList(),
+    deleteAction: ImagePreviewDeleteAction? = null,
     overlay: (@Composable () -> Unit)? = null,
 ) {
-    if (images.isEmpty()) return
+    if (images.isEmpty()) {
+        LaunchedEffect(Unit) { onDismissRequest() }
+        return
+    }
     val context = LocalContext.current
-    val filesManager: FilesManager = koinInject()
+    val artifactUseCase: ArtifactUseCase = koinInject()
+    val mediaExportService: MediaExportService = koinInject()
     val dialogToaster = rememberToasterState()
     val scope = rememberCoroutineScope()
     val dismissState = rememberUpdatedState(onDismissRequest)
     val extraActionsState = rememberUpdatedState(extraActions)
+    val deleteActionState = rememberUpdatedState(deleteAction)
     val overlayState = rememberUpdatedState(overlay)
     val savingToast = stringResource(R.string.image_viewer_saving)
     val savedToast = stringResource(R.string.image_viewer_saved)
     val saveFailedFormat = stringResource(R.string.image_viewer_save_failed)
     val savePermissionText = stringResource(R.string.image_viewer_save_need_permission)
     val saveActionDescription = stringResource(R.string.image_viewer_save_content_description)
+    val deleteActionLabel = stringResource(R.string.common_delete)
+    val cancelActionLabel = stringResource(R.string.common_cancel)
+    val deleteFailedMessage = stringResource(R.string.image_viewer_delete_failed)
     var saving by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
+    var pendingDelete by remember { mutableStateOf<PendingImagePreviewDelete?>(null) }
+    val viewerImages = remember { mutableStateListOf<String>().apply { addAll(images) } }
+    var locallyDeleted by remember { mutableStateOf(emptySet<String>()) }
     val pagerGestureScope = remember {
         PagerGestureScope(onTap = { dismissState.value() })
     }
-    val pageCount = images.size
+    val pageCount = viewerImages.size
     val startIndex = initialIndex.coerceIn(0, pageCount - 1)
-    val state = rememberZoomablePagerState(initialPage = startIndex) { pageCount }
+    val state = rememberZoomablePagerState(initialPage = startIndex) { viewerImages.size }
     val dragOffsetY = remember { mutableFloatStateOf(0f) }
     val dragOffsetX = remember { mutableFloatStateOf(0f) }
     val settleJobState = remember { mutableStateOf<Job?>(null) }
     var infoVisible by remember { mutableStateOf(false) }
-    val currentUrl = images.getOrNull(state.currentPage)
+    LaunchedEffect(images) {
+        locallyDeleted = locallyDeleted.intersect(images.toSet())
+        val reconciled = images.filterNot { it in locallyDeleted }
+        if (reconciled != viewerImages) {
+            val current = viewerImages.getOrNull(state.currentPage)
+            viewerImages.clear()
+            viewerImages.addAll(reconciled)
+            if (viewerImages.isEmpty()) {
+                dismissState.value()
+            } else {
+                val target = current?.let(viewerImages::indexOf)?.takeIf { it >= 0 }
+                    ?: state.currentPage.coerceAtMost(viewerImages.lastIndex)
+                state.scrollToPage(target)
+            }
+        }
+    }
+    val currentUrl = viewerImages.getOrNull(state.currentPage)
     var imageInfo by remember(currentUrl) { mutableStateOf<ImageInfo?>(null) }
     LaunchedEffect(currentUrl) {
         val url = currentUrl ?: return@LaunchedEffect
-        imageInfo = withContext(Dispatchers.IO) { resolveImageInfo(context, url) }
+        imageInfo = withContext(Dispatchers.IO) {
+            resolveImageInfo(context, url, artifactUseCase::isManagedUploadUrl)
+        }
     }
     val infoBlocked = rememberUpdatedState(infoVisible)
 
@@ -191,7 +244,7 @@ fun ImagePreviewDialog(
                         pagerState = state,
                         detectGesture = pagerGestureScope,
                         imageLoader = { index ->
-                            val painter = rememberAsyncImagePainter(images.getOrNull(index).orEmpty())
+                            val painter = rememberAsyncImagePainter(viewerImages.getOrNull(index).orEmpty())
                             return@ImagePager Pair(painter, painter.intrinsicSize)
                         },
                     )
@@ -236,7 +289,7 @@ fun ImagePreviewDialog(
                         IconButton(
                             enabled = !saving,
                             onClick = {
-                                val imageUrl = images.getOrNull(state.currentPage) ?: return@IconButton
+                                val imageUrl = viewerImages.getOrNull(state.currentPage) ?: return@IconButton
                                 if (saving) return@IconButton
                                 saving = true
                                 scope.launch {
@@ -247,7 +300,7 @@ fun ImagePreviewDialog(
                                             id = toastId,
                                             duration = Duration.INFINITE,
                                         )
-                                        val fileName = filesManager.saveMessageImage(context, imageUrl)
+                                        val fileName = mediaExportService.saveImage(context, imageUrl)
                                         dialogToaster.show(
                                             message = savedToast.format(fileName),
                                             type = ToastType.Success,
@@ -255,7 +308,7 @@ fun ImagePreviewDialog(
                                         )
                                     } catch (cancelled: CancellationException) {
                                         throw cancelled
-                                    } catch (error: Throwable) {
+                                    } catch (error: Exception) {
                                         error.printStackTrace()
                                         dialogToaster.show(
                                             message = imageSaveErrorMessage(
@@ -278,11 +331,54 @@ fun ImagePreviewDialog(
                                 tint = Color.White
                             )
                         }
+                        deleteActionState.value?.let { action ->
+                            IconButton(
+                                enabled = !saving && !deleting,
+                                onClick = {
+                                    viewerImages.getOrNull(state.currentPage)?.let { imageUrl ->
+                                        deleting = true
+                                        scope.launch {
+                                            try {
+                                                pendingDelete = PendingImagePreviewDelete(
+                                                    imageUrl = imageUrl,
+                                                    confirmationText = action.confirmationText(imageUrl),
+                                                    action = action,
+                                                )
+                                            } catch (cancelled: CancellationException) {
+                                                throw cancelled
+                                            } catch (error: Exception) {
+                                                dialogToaster.show(
+                                                    message = error.message?.takeIf(String::isNotBlank)
+                                                        ?: deleteFailedMessage,
+                                                    type = ToastType.Error,
+                                                )
+                                            } finally {
+                                                deleting = false
+                                            }
+                                        }
+                                    }
+                                },
+                            ) {
+                                if (deleting && pendingDelete == null) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        color = MaterialTheme.colorScheme.errorContainer,
+                                        strokeWidth = 2.dp,
+                                    )
+                                } else {
+                                    Icon(
+                                        HugeIcons.Delete01,
+                                        stringResource(R.string.common_delete),
+                                        tint = MaterialTheme.colorScheme.errorContainer,
+                                    )
+                                }
+                            }
+                        }
                         extraActionsState.value.forEach { action ->
                             IconButton(
-                                enabled = !saving,
+                                enabled = !saving && !deleting,
                                 onClick = {
-                                    val imgUrl = images.getOrNull(state.currentPage) ?: return@IconButton
+                                    val imgUrl = viewerImages.getOrNull(state.currentPage) ?: return@IconButton
                                     action.onClick(imgUrl, dialogToaster)
                                 }
                             ) {
@@ -334,6 +430,88 @@ fun ImagePreviewDialog(
             }
         }
     }
+
+    pendingDelete?.let { pending ->
+        AlertDialog(
+            onDismissRequest = {
+                if (!deleting) pendingDelete = null
+            },
+            title = { Text(deleteActionLabel) },
+            text = { Text(pending.confirmationText) },
+            confirmButton = {
+                TextButton(
+                    enabled = !deleting,
+                    onClick = {
+                        if (deleting) return@TextButton
+                        deleting = true
+                        scope.launch {
+                            try {
+                                val result = try {
+                                    pending.action.delete(pending.imageUrl)
+                                } catch (cancelled: CancellationException) {
+                                    throw cancelled
+                                } catch (error: Exception) {
+                                    ImagePreviewDeleteResult.Failed(
+                                        error.message?.takeIf(String::isNotBlank) ?: deleteFailedMessage,
+                                    )
+                                }
+                                when (result) {
+                                    ImagePreviewDeleteResult.Deleted -> {
+                                        locallyDeleted = locallyDeleted + pending.imageUrl
+                                        val deletedIndex = viewerImages.indexOf(pending.imageUrl)
+                                        val targetIndex = if (deletedIndex >= 0) {
+                                            nextImageIndexAfterDelete(viewerImages.size, deletedIndex)
+                                        } else {
+                                            state.currentPage.coerceAtMost(viewerImages.lastIndex)
+                                                .takeIf { viewerImages.isNotEmpty() }
+                                        }
+                                        if (deletedIndex >= 0) viewerImages.removeAt(deletedIndex)
+                                        pendingDelete = null
+                                        if (viewerImages.isEmpty() || targetIndex == null) {
+                                            dismissState.value()
+                                        } else {
+                                            state.scrollToPage(targetIndex.coerceAtMost(viewerImages.lastIndex))
+                                        }
+                                    }
+
+                                    is ImagePreviewDeleteResult.Failed -> {
+                                        pendingDelete = null
+                                        dialogToaster.show(
+                                            message = result.message.ifBlank { deleteFailedMessage },
+                                            type = ToastType.Error,
+                                        )
+                                    }
+                                }
+                            } finally {
+                                deleting = false
+                            }
+                        }
+                    },
+                ) {
+                    if (deleting) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text(deleteActionLabel)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !deleting,
+                    onClick = { pendingDelete = null },
+                ) {
+                    Text(cancelActionLabel)
+                }
+            },
+        )
+    }
+}
+
+internal fun nextImageIndexAfterDelete(itemCount: Int, deletedIndex: Int): Int? {
+    require(itemCount > 0)
+    require(deletedIndex in 0 until itemCount)
+    if (itemCount == 1) return null
+    return deletedIndex.coerceAtMost(itemCount - 2)
 }
 
 // 进度不设上限: 退出动画期间位移超过容器高, 背景与缩放按同进度继续变化
@@ -512,16 +690,19 @@ internal data class ImageInfo(
  * 按 url 与应用目录推断图片来源: data: 前缀为内联, http(s) 为网络,
  * 位于 filesDir/images 为生成图片, filesDir/upload 为上传文件, 其余为本地文件
  */
-internal fun classifyImageSource(url: String, filesDir: File): ImageInfoSource {
+internal fun classifyImageSource(
+    url: String,
+    filesDir: File,
+    isManagedUploadUrl: (String) -> Boolean = { false },
+): ImageInfoSource {
     if (url.startsWith("data:", ignoreCase = true)) return ImageInfoSource.Inline
     if (url.startsWith("http", ignoreCase = true)) return ImageInfoSource.Network
     val file = File(url.removePrefix("file://"))
     val generatedDir = File(filesDir, GeneratedMediaStore.IMAGES_DIR).absoluteFile.normalize()
-    val uploadDir = File(filesDir, FileFolders.UPLOAD).absoluteFile.normalize()
     val normalized = file.absoluteFile.normalize()
     return when {
         normalized.path.startsWith(generatedDir.path + File.separator) -> ImageInfoSource.Generated
-        normalized.path.startsWith(uploadDir.path + File.separator) -> ImageInfoSource.Upload
+        isManagedUploadUrl(url) -> ImageInfoSource.Upload
         else -> ImageInfoSource.Local
     }
 }
@@ -557,8 +738,12 @@ private fun guessMimeFromExtension(extension: String?): String? =
     extension?.lowercase()?.takeIf { it.isNotBlank() }?.let(EXTENSION_MIME_MAP::get)
 
 /** 只读图片头(不解码像素)与文件元数据, 全程 IO 线程 */
-internal fun resolveImageInfo(context: Context, url: String): ImageInfo {
-    val source = classifyImageSource(url, context.filesDir)
+internal fun resolveImageInfo(
+    context: Context,
+    url: String,
+    isManagedUploadUrl: (String) -> Boolean,
+): ImageInfo {
+    val source = classifyImageSource(url, context.filesDir, isManagedUploadUrl)
     return when {
         url.startsWith("data:", ignoreCase = true) -> {
             val bytes = runCatching {
@@ -680,4 +865,3 @@ private fun ImageInfoRow(label: String, value: @Composable () -> String?) {
         )
     }
 }
-

@@ -1,21 +1,20 @@
 package net.weero.measix.pilot.ui.pages.chat
 
 import android.app.Application
-import android.content.Context
-import androidx.compose.runtime.Composable
+import android.net.Uri
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import me.rerere.ai.core.ToolCallLocator
@@ -27,87 +26,112 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getConversationAssistant
-import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
-import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
-import net.weero.measix.pilot.data.model.NodeFavoriteTarget
-import net.weero.measix.pilot.data.repository.ConversationRepository
-import net.weero.measix.pilot.data.repository.FavoriteRepository
 import net.weero.measix.pilot.service.ChatError
-import net.weero.measix.pilot.service.ChatService
-import net.weero.measix.pilot.service.runtime.ConversationCommand
+import net.weero.measix.pilot.service.ChatErrorStore
+import net.weero.measix.pilot.service.MasterTurnCoordinator
+import net.weero.measix.pilot.service.ConversationApplicationService
+import net.weero.measix.pilot.service.ConversationQueryService
+import net.weero.measix.pilot.service.ConversationReadState
+import net.weero.measix.pilot.service.ConversationSummary
+import net.weero.measix.pilot.service.ConversationViewLease
+import net.weero.measix.pilot.data.ai.mcp.McpManager
+import net.weero.measix.pilot.service.ArtifactUseCase
+import net.weero.measix.pilot.service.ArtifactDraftScope
+import net.weero.measix.pilot.service.FavoriteService
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
-import net.weero.measix.pilot.service.runtime.OptionalFolderId
-import net.weero.measix.pilot.service.runtime.OptionalString
-import net.weero.measix.pilot.service.runtime.OptionalUuidSet
-import net.weero.measix.pilot.service.runtime.UpdateHeader
-import net.weero.measix.pilot.service.runtime.toConversation
 import net.weero.measix.pilot.ui.components.ai.SearchMode
 import net.weero.measix.pilot.ui.components.ai.searchModeEnablesBuiltIn
 import net.weero.measix.pilot.ui.components.ai.searchModeEnablesLocal
 import net.weero.measix.pilot.ui.hooks.writeStringPreference
 import net.weero.measix.pilot.ui.hooks.ChatInputState
 import net.weero.measix.pilot.utils.UpdateChecker
-import java.util.Locale
 import kotlin.uuid.Uuid
-
-private const val TAG = "ChatVM"
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 class ChatVM(
     id: String,
     private val context: Application,
     private val settingsStore: SettingsStore,
-    private val conversationRepo: ConversationRepository,
-    private val chatService: ChatService,
+    private val masterTurnCoordinator: MasterTurnCoordinator,
+    private val conversationApplicationService: ConversationApplicationService,
+    private val conversationQueryService: ConversationQueryService,
     val updateChecker: UpdateChecker,
-    private val filesManager: FilesManager,
-    private val favoriteRepository: FavoriteRepository,
+    private val artifactUseCase: ArtifactUseCase,
+    private val favoriteService: FavoriteService,
+    private val chatErrorStore: ChatErrorStore,
+    val mcpManager: McpManager,
 ) : ViewModel() {
     private val _conversationId: Uuid = Uuid.parse(id)
+    private val cleared = AtomicBoolean(false)
+    private val viewLease = AtomicReference<ConversationViewLease?>(null)
+    private val initializationOwner = Any()
+    private var initializationJob: Job? = null
 
-    // 唯一内部事实流（nodes + activeTurn + header），UI 主订阅源。
-    // 需要 Conversation 形状的消费方经 [currentConversation] 按需转换（纯函数）。
-    val snapshot: StateFlow<ConversationSnapshot> = chatService.getConversationSnapshot(_conversationId)
+    val conversationState: StateFlow<ConversationReadState> = conversationQueryService
+        .observeConversation(_conversationId)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, ConversationReadState.Loading)
 
-    /** 命令语义读取（turn 边界低频点）：内存快照 → Conversation 形状。 */
-    fun currentConversation(): Conversation = snapshot.value.toConversation()
+    // 唯一内部事实流（nodes + activeTurn + header）；仅 Ready 状态产生 snapshot 投影。
+    val snapshot: StateFlow<ConversationSnapshot?> = conversationState
+        .map { state -> (state as? ConversationReadState.Ready)?.snapshot }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    val favoriteNodeIds: StateFlow<Set<Uuid>> = favoriteService
+        .observeNodeIds(_conversationId)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+
+    fun currentSnapshot(): ConversationSnapshot = requireNotNull(snapshot.value)
     var chatListInitialized by mutableStateOf(false) // 聊天列表是否已经滚动到底部
 
     // 聊天输入状态 - 保存在 ViewModel 中避免 TransactionTooLargeException
     val inputState = ChatInputState()
+    val artifactDraftScope: ArtifactDraftScope = artifactUseCase.openDraftScope()
 
-    // 异步任务 (从ChatService获取，响应式)
+    // 当前会话的生成任务与处理状态。
     val conversationJob: StateFlow<Job?> =
-        chatService
-            .getGenerationJobStateFlow(_conversationId)
+        conversationQueryService
+            .generationJob(_conversationId)
             .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     val processingStatus: StateFlow<String?> =
-        chatService
-            .getProcessingStatusFlow(_conversationId)
-
-    val conversationJobs = chatService
-        .getConversationJobs()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+        conversationQueryService
+            .processingStatus(_conversationId)
+            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     init {
-        // 添加对话引用
-        chatService.addConversationReference(_conversationId)
-
-        // 初始化对话
-        viewModelScope.launch {
-            chatService.initializeConversation(_conversationId)
-        }
+        acquireViewLease()
 
         // 记住对话ID, 方便下次启动恢复
         context.writeStringPreference("lastConversationId", _conversationId.toString())
     }
 
+    fun retryConversationLoad() {
+        if (viewLease.get() == null) acquireViewLease()
+    }
+
+    private fun acquireViewLease(): Job = synchronized(initializationOwner) {
+        initializationJob?.takeIf(Job::isActive) ?: viewModelScope.launch {
+            try {
+                val acquired = conversationApplicationService.initialize(_conversationId)
+                if (!viewLease.compareAndSet(null, acquired)) acquired.close()
+                if (cleared.get()) viewLease.getAndSet(null)?.close()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                // ConversationReadState.Failed is the user-visible authority; this log preserves diagnostics.
+                Log.e("ChatVM", "Failed to initialize conversation $_conversationId", error)
+            }
+        }.also { initializationJob = it }
+    }
+
     override fun onCleared() {
-        // 移除对话引用
-        chatService.removeConversationReference(_conversationId)
+        cleared.set(true)
+        viewLease.getAndSet(null)?.close()
+        artifactDraftScope.close()
     }
 
     // 用户设置
@@ -116,39 +140,48 @@ class ChatVM(
 
     // 网络搜索(每个助手独立)
     val enableWebSearch = combine(settings, snapshot) { currentSettings, currentSnapshot ->
-        currentSettings.getConversationAssistant(currentSnapshot.header.assistantId).enableWebSearch
+        currentSnapshot?.let { snapshot ->
+            currentSettings.getConversationAssistant(snapshot.header.assistantId).enableWebSearch
+        } ?: false
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // 错误状态
-    val errors: StateFlow<List<ChatError>> = chatService.errors
+    val errors: StateFlow<List<ChatError>> = chatErrorStore.errors
 
-    fun dismissError(id: Uuid) = chatService.dismissError(id)
+    fun dismissError(id: Uuid) = chatErrorStore.dismiss(id)
 
-    fun clearAllErrors() = chatService.clearAllErrors()
+    fun clearAllErrors() = chatErrorStore.clear()
 
     // 生成完成
-    val generationDoneFlow: SharedFlow<Uuid> = chatService.generationDoneFlow
+    val generationDoneFlow: SharedFlow<Uuid> = masterTurnCoordinator.generationDoneFlow
 
     fun getTtsQueueSessionId(conversationId: Uuid): String? =
-        chatService.getTtsQueueSessionId(conversationId)
-
-    // MCP管理器
-    val mcpManager = chatService.mcpManager
+        conversationQueryService.ttsQueueSessionId(conversationId)
 
     // 更新设置
     fun updateSettings(transform: (Settings) -> Settings): Job {
         return viewModelScope.launch {
             var previousAvatar: Avatar? = null
-            val committed = settingsStore.updateAtomicAndGet { current ->
+            val committed = artifactUseCase.updateSettingsReferences { current ->
                 val updated = transform(current)
                 previousAvatar = current.displaySetting.userAvatar
                 updated
             }
-            // 文件副作用只能发生在 DataStore 提交成功之后。
             previousAvatar?.let { oldAvatar ->
-                checkUserAvatarDelete(oldAvatar, committed.displaySetting.userAvatar)
+                if (oldAvatar != committed.displaySetting.userAvatar) artifactUseCase.maintainStorage()
             }
         }
+    }
+
+    suspend fun importUserAvatar(uri: Uri) {
+        var previousAvatar: Avatar? = null
+        val committedUri = artifactUseCase.importSettingsImage(uri) { current, localUri ->
+            previousAvatar = current.displaySetting.userAvatar
+            current.copy(
+                displaySetting = current.displaySetting.copy(userAvatar = Avatar.Image(localUri.toString())),
+            )
+        }
+        if (previousAvatar != Avatar.Image(committedUri.toString())) artifactUseCase.maintainStorage()
     }
 
     fun updateSearchMode(assistantId: Uuid, model: Model?, mode: SearchMode) {
@@ -164,13 +197,6 @@ class ChatVM(
                     enableBuiltIn = enableBuiltIn,
                 )
             }
-        }
-    }
-
-    // 检查用户头像删除
-    private fun checkUserAvatarDelete(oldAvatar: Avatar, newAvatar: Avatar) {
-        if (oldAvatar is Avatar.Image && oldAvatar != newAvatar) {
-            filesManager.deleteChatFiles(listOf(oldAvatar.url.toUri()))
         }
     }
 
@@ -204,44 +230,43 @@ class ChatVM(
     fun handleMessageSend(content: List<UIMessagePart>,answer: Boolean = true) {
         if (content.isEmptyInputMessage()) return
 
-        chatService.sendMessage(_conversationId, content, answer)
+        masterTurnCoordinator.sendMessage(_conversationId, content, answer, artifactDraftScope)
     }
 
     fun handleMessageEdit(parts: List<UIMessagePart>, messageId: Uuid) {
         if (parts.isEmptyInputMessage()) return
 
         viewModelScope.launch {
-            chatService.editMessage(_conversationId, messageId, parts)
+            conversationApplicationService.editMessage(_conversationId, messageId, parts, artifactDraftScope)
         }
     }
 
     fun handleCompressContext(additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int): Job {
         return viewModelScope.launch {
-            chatService.sideEffects.compressConversation(
-                _conversationId,
-                currentConversation(),
+            conversationApplicationService.compress(
+                currentSnapshot(),
                 additionalPrompt,
                 targetTokens,
                 keepRecentMessages
             ).onFailure {
-                chatService.addError(it, title = context.getString(R.string.error_title_compress_conversation))
+                chatErrorStore.add(it, title = context.getString(R.string.error_title_compress_conversation))
             }
         }
     }
 
-    suspend fun forkMessage(message: UIMessage): Conversation {
-        return chatService.forkConversationAtMessage(_conversationId, message.id)
+    suspend fun forkMessage(message: UIMessage): Uuid {
+        return conversationApplicationService.forkAtMessage(_conversationId, message.id)
     }
 
     fun deleteMessage(message: UIMessage) {
         viewModelScope.launch {
-            chatService.deleteMessage(_conversationId, message)
+            conversationApplicationService.deleteMessage(_conversationId, message)
         }
     }
 
     fun showDeleteBlockedWhileGeneratingError() {
-        chatService.addError(
-            error = IllegalStateException("请先停止生成再删除消息"),
+        chatErrorStore.add(
+            error = IllegalStateException(context.getString(R.string.chat_page_delete_message_generating)),
             conversationId = _conversationId,
             title = context.getString(R.string.error_title_operation)
         )
@@ -251,7 +276,7 @@ class ChatVM(
         message: UIMessage,
         regenerateAssistantMsg: Boolean = true
     ) {
-        chatService.regenerateAtMessage(_conversationId, message, regenerateAssistantMsg)
+        masterTurnCoordinator.regenerateAtMessage(_conversationId, message, regenerateAssistantMsg)
     }
 
     fun handleToolApproval(
@@ -259,163 +284,92 @@ class ChatVM(
         approved: Boolean,
         reason: String = ""
     ) {
-        chatService.handleToolApproval(_conversationId, locator, approved, reason)
+        masterTurnCoordinator.handleToolApproval(_conversationId, locator, approved, reason)
     }
 
     fun handleToolAnswer(
         locator: ToolCallLocator,
         answer: String,
     ) {
-        chatService.handleToolApproval(_conversationId, locator, approved = true, answer = answer)
+        masterTurnCoordinator.handleToolApproval(_conversationId, locator, approved = true, answer = answer)
     }
 
     fun handleSubAssistantAnswer(runId: String, interactionId: String, answer: String): Boolean =
-        chatService.handleSubAssistantAnswer(runId, interactionId, answer)
+        masterTurnCoordinator.handleSubAssistantAnswer(runId, interactionId, answer)
 
     fun stopGeneration() {
         viewModelScope.launch {
-            chatService.stopGeneration(_conversationId)
+            conversationApplicationService.stopGeneration(_conversationId)
         }
     }
 
     fun updateTitle(title: String) {
         viewModelScope.launch {
-            chatService.updateConversationTitle(_conversationId, title)
+            conversationApplicationService.updateTitle(_conversationId, title)
         }
     }
 
-    fun deleteConversation(conversation: Conversation): Job =
-        viewModelScope.launch {
-            chatService.deleteConversation(conversation)
-        }
+    suspend fun deleteConversation(conversation: ConversationSummary) {
+        conversationApplicationService.delete(conversation.id)
+    }
 
-    fun updatePinnedStatus(conversation: Conversation) {
+    fun updatePinnedStatus(conversation: ConversationSummary) {
         viewModelScope.launch {
-            chatService.togglePinStatus(conversation.id)
+            conversationApplicationService.togglePin(conversation.id)
         }
     }
 
-    fun moveConversationToAssistant(conversation: Conversation, targetAssistantId: Uuid) {
-        viewModelScope.launch {
-            val conversationFull = if (conversation.id == _conversationId) {
-                // 活跃会话以内存状态为准，避免 DB 中的旧快照覆盖尚未落库的更新。
-                currentConversation()
-            } else {
-                conversationRepo.getConversationById(conversation.id) ?: conversation
-            }
-            if (conversationFull.assistantId == targetAssistantId) return@launch
+    fun moveConversationToAssistant(targetAssistantId: Uuid) {
+        moveConversationToAssistant(_conversationId, targetAssistantId)
+    }
 
-            // 文件夹是助手内分组，切换助手后原文件夹在新助手下不可见，需清空归属避免会话丢失。
-            // UpdateHeader 命令（内存 + 窄列原子提交）
-            if (conversation.id == _conversationId) {
-                submit(
-                    UpdateHeader(
-                        assistantId = targetAssistantId,
-                        folderId = OptionalFolderId.Clear,
-                    )
-                )
+    fun moveConversationToAssistant(conversationId: Uuid, targetAssistantId: Uuid) {
+        viewModelScope.launch {
+            conversationApplicationService.moveToAssistant(conversationId, targetAssistantId)
+            if (conversationId == _conversationId) {
                 settingsStore.updateAssistant(targetAssistantId)
-            } else {
-                val updated = conversationFull.withAssistant(targetAssistantId)
-                chatService.updatePersistedConversation(updated)
             }
         }
     }
 
-    fun generateTitle(conversation: Conversation, force: Boolean = false) {
+    fun generateTitle(conversation: ConversationSummary, force: Boolean = false) {
         viewModelScope.launch {
-            val conversationFull = conversationRepo.getConversationById(conversation.id) ?: return@launch
-            chatService.sideEffects.generateTitle(conversationFull, force)
+            conversationApplicationService.generateTitle(conversation.id, force)
         }
     }
 
-    fun generateSuggestion(conversation: Conversation) {
+    fun selectNode(nodeId: Uuid, selectIndex: Int) {
         viewModelScope.launch {
-            chatService.sideEffects.generateSuggestion(_conversationId, conversation)
+            conversationApplicationService.selectNode(_conversationId, nodeId, selectIndex)
         }
     }
 
-    /**
-     * header 级整对象回调的命令分解（UI 组件保持 (Conversation) -> Unit
-     * 回调签名不重写；差异字段经 UpdateHeader 三态字段提交，不再整对象回写）。
-     */
-    fun updateConversationHeader(next: Conversation) {
-        val current = currentConversation()
-        submit(
-            UpdateHeader(
-                title = next.title.takeIf { it != current.title },
-                suggestions = next.chatSuggestions.takeIf { it != current.chatSuggestions },
-                isPinned = next.isPinned.takeIf { it != current.isPinned },
-                folderId = when {
-                    next.folderId == current.folderId -> OptionalFolderId.Keep
-                    next.folderId == null -> OptionalFolderId.Clear
-                    else -> OptionalFolderId.SetTo(next.folderId)
-                },
-                assistantId = next.assistantId.takeIf { it != current.assistantId },
-                customSystemPrompt = if (next.customSystemPrompt != current.customSystemPrompt) {
-                    OptionalString.Set(next.customSystemPrompt)
-                } else {
-                    OptionalString.Keep
-                },
-                modeInjectionIds = if (next.modeInjectionIds != current.modeInjectionIds) {
-                    OptionalUuidSet.Set(next.modeInjectionIds)
-                } else {
-                    OptionalUuidSet.Keep
-                },
-                workspaceCwd = if (next.workspaceCwd != current.workspaceCwd) {
-                    OptionalString.Set(next.workspaceCwd)
-                } else {
-                    OptionalString.Keep
-                },
-            )
-        )
+    fun updateCustomSystemPrompt(prompt: String?) {
+        viewModelScope.launch {
+            conversationApplicationService.updateCustomSystemPrompt(_conversationId, prompt)
+        }
     }
 
-    // 命令提交入口（UI 结构性修改走 reducer 唯一路径）
-    fun submit(command: ConversationCommand) {
+    fun updateModeInjectionIds(ids: Set<Uuid>) {
         viewModelScope.launch {
-            chatService.submitConversationCommand(_conversationId, command)
+            conversationApplicationService.updateModeInjectionIds(_conversationId, ids)
+        }
+    }
+
+    fun updateWorkspaceCwd(cwd: String?) {
+        viewModelScope.launch {
+            conversationApplicationService.updateWorkspaceCwd(_conversationId, cwd)
         }
     }
 
     fun toggleMessageFavorite(node: MessageNode) {
         viewModelScope.launch {
-            val currentlyFavorited = favoriteRepository.isNodeFavorited(_conversationId, node.id)
-            if (currentlyFavorited) {
-                favoriteRepository.removeNodeFavorite(_conversationId, node.id)
-            } else {
-                favoriteRepository.addNodeFavorite(
-                    NodeFavoriteTarget(
-                        conversationId = _conversationId,
-                        conversationTitle = snapshot.value.header.title,
-                        nodeId = node.id,
-                        node = node
-                    )
-                )
-            }
-
-            chatService.updateConversationState(_conversationId) { currentConversation ->
-                currentConversation.copy(
-                    messageNodes = currentConversation.messageNodes.map { existingNode ->
-                        if (existingNode.id == node.id) {
-                            existingNode.copy(isFavorite = !currentlyFavorited)
-                        } else {
-                            existingNode
-                        }
-                    }
-                )
-            }
+            favoriteService.toggleNode(
+                conversationId = _conversationId,
+                conversationTitle = requireNotNull(snapshot.value).header.title,
+                node = node,
+            )
         }
     }
 
 }
-
-internal fun Conversation.withAssistant(targetAssistantId: Uuid): Conversation =
-    if (assistantId == targetAssistantId) {
-        this
-    } else {
-        copy(
-            assistantId = targetAssistantId,
-            folderId = null,
-        )
-    }

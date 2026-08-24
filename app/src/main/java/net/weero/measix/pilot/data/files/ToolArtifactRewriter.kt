@@ -2,6 +2,8 @@ package net.weero.measix.pilot.data.files
 
 import android.util.Log
 import java.io.File
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -9,23 +11,29 @@ import kotlinx.serialization.json.buildJsonObject
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.utils.JsonInstant
 
+data class ToolArtifactRewriteResult(
+    val output: List<UIMessagePart>,
+    val metadata: JsonObject?,
+    val ownedArtifact: OwnedArtifact?,
+)
+
 class ToolArtifactRewriter(
     private val filesDir: File,
-    private val artifactStore: ManagedLocalArtifactStore,
+    private val artifactStore: ArtifactStore,
     private val json: Json = JsonInstant,
 ) {
     suspend fun rewriteToolOutput(
         output: List<UIMessagePart>,
         metadata: JsonObject?,
-    ): Pair<List<UIMessagePart>, JsonObject?> {
+    ): ToolArtifactRewriteResult {
         val sourceRef = metadata?.let { decodeArtifactRef(it) }
         if (sourceRef == null) {
-            return output to metadata
+            return ToolArtifactRewriteResult(output, metadata, null)
         }
         val materialized = artifactStore.materialize(sourceRef)
         if (materialized == null) {
             Log.w(TAG, "rewrite skipped: source artifact missing or outside sandbox ${sourceRef.relativePath}")
-            return unreadableOutput(output) to metadata
+            return ToolArtifactRewriteResult(unreadableOutput(output), removeArtifactRef(metadata), null)
         }
         val sourceFile = materialized.file(filesDir)
         val copied = artifactStore.copyFilePreservingOrigin(
@@ -33,17 +41,33 @@ class ToolArtifactRewriter(
             mimeType = materialized.mimeType,
             displayName = sourceFile.name,
         )
-        val rewrittenOutput = output.map { part ->
-            when (part) {
-                is UIMessagePart.Image -> part.copy(url = copied.fileUri(filesDir))
-                is UIMessagePart.Text -> part.copy(text = rewriteFilePathJson(part.text, copied))
-                else -> part
+        try {
+            val copiedRef = copied.localRef
+            val rewrittenOutput = output.map { part ->
+                when (part) {
+                    is UIMessagePart.Image -> part.copy(url = copiedRef.fileUri(filesDir))
+                    is UIMessagePart.Text -> part.copy(text = rewriteFilePathJson(part.text, copiedRef))
+                    else -> part
+                }
             }
+            return ToolArtifactRewriteResult(
+                output = rewrittenOutput,
+                metadata = encodeArtifactRef(metadata, copiedRef),
+                ownedArtifact = copied,
+            )
+        } catch (error: Throwable) {
+            withContext(NonCancellable) {
+                try {
+                    artifactStore.discardUnpublished(copied).requireDiscarded("tool artifact rewrite rollback")
+                } catch (cleanupFailure: Throwable) {
+                    error.addSuppressed(cleanupFailure)
+                }
+            }
+            throw error
         }
-        return rewrittenOutput to encodeArtifactRef(metadata, copied)
     }
 
-    fun materializeToolOutput(
+    suspend fun materializeToolOutput(
         output: List<UIMessagePart>,
         metadata: JsonObject?,
     ): List<UIMessagePart> {
@@ -72,6 +96,11 @@ class ToolArtifactRewriter(
         val base = existing?.toMutableMap() ?: mutableMapOf()
         base[ARTIFACT_KEY] = json.encodeToJsonElement(LocalArtifactRef.serializer(), ref)
         return JsonObject(base)
+    }
+
+    private fun removeArtifactRef(existing: JsonObject?): JsonObject? {
+        if (existing == null || ARTIFACT_KEY !in existing) return existing
+        return JsonObject(existing.toMutableMap().apply { remove(ARTIFACT_KEY) })
     }
 
     private fun rewriteFilePathJson(text: String, ref: LocalArtifactRef): String {

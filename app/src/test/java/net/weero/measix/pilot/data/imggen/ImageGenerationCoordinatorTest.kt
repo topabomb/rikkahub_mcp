@@ -2,8 +2,11 @@ package net.weero.measix.pilot.data.imggen
 
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import java.io.File
+import java.util.concurrent.CountDownLatch
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.io.path.createTempDirectory
@@ -75,7 +78,7 @@ class ImageGenerationCoordinatorTest {
         }
         val filesDir = tempDir("img-coord")
         val repository = mockk<GenMediaRepository>()
-        coEvery { repository.insertMedia(any()) } returnsMany listOf(11L, 22L)
+        every { repository.insertMedia(any()) } returnsMany listOf(11L, 22L)
         val store = GeneratedMediaStore(
             filesDir = filesDir,
             genMediaRepository = repository,
@@ -120,7 +123,7 @@ class ImageGenerationCoordinatorTest {
         coEvery { succeeding.generateImage(any(), any()) } returns flowOf(pngItem())
         val filesDir = tempDir("img-fail")
         val repository = mockk<GenMediaRepository>()
-        coEvery { repository.insertMedia(any()) } returns 7L
+        every { repository.insertMedia(any()) } returns 7L
         val coordinator = ImageGenerationCoordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
@@ -207,7 +210,7 @@ class ImageGenerationCoordinatorTest {
         }
         val filesDir = tempDir("img-cancel")
         val repository = mockk<GenMediaRepository>()
-        coEvery { repository.insertMedia(any()) } returns 1L
+        every { repository.insertMedia(any()) } returns 1L
         val coordinator = ImageGenerationCoordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
@@ -248,7 +251,7 @@ class ImageGenerationCoordinatorTest {
         coEvery { secondProvider.generateImage(any(), any()) } returns flowOf(pngItem())
         val filesDir = tempDir("img-drain")
         val repository = mockk<GenMediaRepository>()
-        coEvery { repository.insertMedia(any()) } returnsMany listOf(1L, 2L)
+        every { repository.insertMedia(any()) } returnsMany listOf(1L, 2L)
         val coordinator = ImageGenerationCoordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
@@ -287,7 +290,7 @@ class ImageGenerationCoordinatorTest {
         }
         val filesDir = tempDir("img-phase-order")
         val repository = mockk<GenMediaRepository>()
-        coEvery { repository.insertMedia(any()) } returns 1L
+        every { repository.insertMedia(any()) } returns 1L
         val coordinator = ImageGenerationCoordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
@@ -337,7 +340,7 @@ class ImageGenerationCoordinatorTest {
         coordinator.cancel(request.id)
         advanceUntilIdle()
         assertTrue(result.getCompletionExceptionOrNull() is kotlinx.coroutines.CancellationException)
-        coVerify(exactly = 0) { repository.insertMedia(any()) }
+        verify(exactly = 0) { repository.insertMedia(any()) }
         filesDir.deleteRecursively()
     }
 
@@ -351,7 +354,7 @@ class ImageGenerationCoordinatorTest {
         }
         val filesDir = tempDir("img-extra")
         val repository = mockk<GenMediaRepository>()
-        coEvery { repository.insertMedia(any()) } returnsMany listOf(1L, 2L, 3L)
+        every { repository.insertMedia(any()) } returnsMany listOf(1L, 2L, 3L)
         val coordinator = ImageGenerationCoordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
@@ -368,7 +371,7 @@ class ImageGenerationCoordinatorTest {
         )
         assertTrue(outcome is ImageGenerationOutcome.Success)
         assertEquals(1, (outcome as ImageGenerationOutcome.Success).media.size)
-        coVerify(exactly = 1) { repository.insertMedia(any()) }
+        verify(exactly = 1) { repository.insertMedia(any()) }
         filesDir.deleteRecursively()
     }
 
@@ -386,7 +389,7 @@ class ImageGenerationCoordinatorTest {
         }
         val filesDir = tempDir("img-hang")
         val repository = mockk<GenMediaRepository>()
-        coEvery { repository.insertMedia(any()) } returns 1L
+        every { repository.insertMedia(any()) } returns 1L
         val coordinator = ImageGenerationCoordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
@@ -432,7 +435,7 @@ class ImageGenerationCoordinatorTest {
         }
         val filesDir = tempDir("img-caller-queued")
         val repository = mockk<GenMediaRepository>()
-        coEvery { repository.insertMedia(any()) } returns 1L
+        every { repository.insertMedia(any()) } returns 1L
         val coordinator = ImageGenerationCoordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
@@ -465,7 +468,7 @@ class ImageGenerationCoordinatorTest {
         first.join()
         assertTrue(blockingCancelled.isCompleted)
         coVerify(exactly = 0) { skipped.generateImage(any(), any()) }
-        coVerify(exactly = 0) { repository.insertMedia(any()) }
+        verify(exactly = 0) { repository.insertMedia(any()) }
         filesDir.deleteRecursively()
     }
 
@@ -503,20 +506,22 @@ class ImageGenerationCoordinatorTest {
         result.join()
         advanceUntilIdle()
         assertTrue(flowCancelled.isCompleted)
-        coVerify(exactly = 0) { repository.insertMedia(any()) }
+        verify(exactly = 0) { repository.insertMedia(any()) }
         filesDir.deleteRecursively()
     }
 
     @Test
-    fun `cancelling the enqueue caller during persist does not insert a completed result`() = runTest {
+    fun `cancelling the enqueue caller at the database commit point keeps durable media`() = runTest {
         val entered = CompletableDeferred<Unit>()
+        val release = CountDownLatch(1)
         val provider = mockk<Provider<ProviderSetting>>()
         coEvery { provider.generateImage(any(), any()) } returns flowOf(pngItem())
         val filesDir = tempDir("img-caller-persist")
         val repository = mockk<GenMediaRepository>()
-        coEvery { repository.insertMedia(any()) } coAnswers {
+        every { repository.insertMedia(any()) } answers {
             entered.complete(Unit)
-            awaitCancellation()
+            release.await()
+            51L
         }
         val coordinator = ImageGenerationCoordinator(
             this,
@@ -534,6 +539,7 @@ class ImageGenerationCoordinatorTest {
         }
         entered.await()
         result.cancel()
+        release.countDown()
         result.join()
         advanceUntilIdle()
         assertTrue(result.getCompletionExceptionOrNull() is kotlinx.coroutines.CancellationException)
@@ -547,20 +553,23 @@ class ImageGenerationCoordinatorTest {
             }
             remaining
         }
-        assertTrue(leftovers.isEmpty())
+        assertEquals(1, leftovers.size)
+        verify(exactly = 1) { repository.insertMedia(any()) }
         filesDir.deleteRecursively()
     }
 
     @Test
-    fun `cancel during persist is not rewritten as persistence_error`() = runTest {
+    fun `coordinator cancel at the database commit point is not rewritten as persistence error`() = runTest {
         val entered = CompletableDeferred<Unit>()
+        val release = CountDownLatch(1)
         val provider = mockk<Provider<ProviderSetting>>()
         coEvery { provider.generateImage(any(), any()) } returns flowOf(pngItem())
         val filesDir = tempDir("img-persist-cancel")
         val repository = mockk<GenMediaRepository>()
-        coEvery { repository.insertMedia(any()) } coAnswers {
+        every { repository.insertMedia(any()) } answers {
             entered.complete(Unit)
-            awaitCancellation()
+            release.await()
+            52L
         }
         val coordinator = ImageGenerationCoordinator(
             this,
@@ -575,8 +584,11 @@ class ImageGenerationCoordinatorTest {
         val result = async { coordinator.enqueue(request) }
         entered.await()
         coordinator.cancel(request.id)
+        release.countDown()
         advanceUntilIdle()
         assertTrue(result.getCompletionExceptionOrNull() is kotlinx.coroutines.CancellationException)
+        assertEquals(1, completedImageFiles(filesDir).size)
+        verify(exactly = 1) { repository.insertMedia(any()) }
         filesDir.deleteRecursively()
     }
 
@@ -612,7 +624,7 @@ class ImageGenerationCoordinatorTest {
         coEvery { provider.editImage(any(), any()) } returns flowOf(pngItem())
         val filesDir = tempDir("img-edit")
         val repository = mockk<GenMediaRepository>()
-        coEvery { repository.insertMedia(any()) } returns 33L
+        every { repository.insertMedia(any()) } returns 33L
         val coordinator = ImageGenerationCoordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),

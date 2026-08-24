@@ -1,6 +1,7 @@
-﻿package net.weero.measix.pilot.ui.components.ui
+package net.weero.measix.pilot.ui.components.ui
 
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -50,17 +51,18 @@ import androidx.compose.ui.unit.sp
 import androidx.core.net.toFile
 import androidx.core.net.toUri
 import coil3.compose.AsyncImage
+import com.dokar.sonner.ToastType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import me.rerere.common.android.appTempFolder
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Edit03
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.ui.components.ai.useCropLauncher
+import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.hooks.rememberAvatarShape
 import net.weero.measix.pilot.ui.hooks.subAssistantActivityRing
-import org.koin.compose.koinInject
 import java.io.File
 import java.security.MessageDigest
 import kotlin.math.abs
@@ -102,10 +104,12 @@ fun UIAvatar(
     loading: Boolean = false,
     subAssistant: Boolean = false,
     onUpdate: ((Avatar) -> Unit)? = null,
+    onImportImage: (suspend (Uri) -> Unit)? = null,
     onClick: (() -> Unit)? = null
 ) {
-    val filesManager: FilesManager = koinInject()
     val context = LocalContext.current
+    val toaster = LocalToaster.current
+    val importFailedMessage = stringResource(R.string.image_import_failed)
     val scope = rememberCoroutineScope()
     var showPickOption by remember { mutableStateOf(false) }
     var showEmojiPicker by remember { mutableStateOf(false) }
@@ -115,12 +119,23 @@ fun UIAvatar(
 
     fun saveAvatarImage(uri: Uri) {
         scope.launch {
-            val localUris = filesManager.createChatFilesByContents(listOf(uri))
-            // 剪裁输出文件所有权由 CropLauncher 移交至此（RESULT_OK 后不再代删），
-            // 复制消费完成后删除，规避"同步删除 vs 异步消费"竞态
-            runCatching { uri.toFile()?.delete() }
-            localUris.firstOrNull()?.let { localUri ->
-                onUpdate?.invoke(Avatar.Image(localUri.toString()))
+            try {
+                requireNotNull(onImportImage) { "image import requires a durable owner" }(uri)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.e("UIAvatar", "Failed to import avatar image", error)
+                toaster.show(importFailedMessage, type = ToastType.Error)
+            } finally {
+                // 剪裁输出文件所有权由 CropLauncher 移交至此；消费结束后再清理。
+                try {
+                    val output = uri.toFile()
+                    if (output.exists() && !output.delete()) {
+                        Log.w("UIAvatar", "Failed to delete crop output: $output")
+                    }
+                } catch (error: RuntimeException) {
+                    Log.w("UIAvatar", "Failed to delete crop output URI: $uri", error)
+                }
             }
         }
     }
@@ -142,15 +157,17 @@ fun UIAvatar(
     ) { uri: Uri? ->
         uri?.let { selectedUri ->
             val tempFile = File(context.appTempFolder, "avatar_pick_${System.currentTimeMillis()}.jpg")
-            runCatching {
+            try {
                 context.contentResolver.openInputStream(selectedUri)?.use { input ->
                     tempFile.outputStream().use { output -> input.copyTo(output) }
                 } ?: error("Failed to open input stream for $selectedUri")
                 preCropTempFile?.delete()
                 preCropTempFile = tempFile
                 launchImageCrop(tempFile.toUri())
-            }.onFailure {
+            } catch (error: Exception) {
                 tempFile.delete()
+                if (preCropTempFile == tempFile) preCropTempFile = null
+                Log.w("UIAvatar", "Failed to prepare local crop source; using selected URI", error)
                 launchImageCrop(selectedUri)
             }
         }
@@ -242,7 +259,7 @@ fun UIAvatar(
             ) {
                 Icon(
                     imageVector = HugeIcons.Edit03,
-                    contentDescription = "Edit",
+                    contentDescription = stringResource(R.string.avatar_change_avatar),
                     modifier = Modifier
                         .size(10.dp)
                         .padding(1.dp),
@@ -266,14 +283,16 @@ fun UIAvatar(
                 Column(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Button(
-                        onClick = {
-                            showPickOption = false
-                            imagePickerLauncher.launch("image/*")
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(text = stringResource(id = R.string.avatar_pick_image))
+                    if (onImportImage != null) {
+                        Button(
+                            onClick = {
+                                showPickOption = false
+                                imagePickerLauncher.launch("image/*")
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(text = stringResource(id = R.string.avatar_pick_image))
+                        }
                     }
                     Button(
                         onClick = {

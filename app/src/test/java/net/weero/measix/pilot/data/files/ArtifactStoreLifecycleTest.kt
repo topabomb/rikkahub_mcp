@@ -1,0 +1,587 @@
+package net.weero.measix.pilot.data.files
+
+import android.content.Context
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import io.mockk.coEvery
+import io.mockk.every
+import io.mockk.mockk
+import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.uuid.Uuid
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.Dispatchers
+import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.db.AppDatabase
+import net.weero.measix.pilot.data.db.RoomDatabaseTransactionRunner
+import net.weero.measix.pilot.data.db.entity.ArtifactEntity
+import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
+import net.weero.measix.pilot.data.db.entity.ArtifactState
+import net.weero.measix.pilot.data.db.entity.ArtifactReferenceEntity
+import net.weero.measix.pilot.data.db.entity.ArtifactReferenceType
+import net.weero.measix.pilot.data.db.entity.ConversationEntity
+import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
+import net.weero.measix.pilot.data.model.Assistant
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.annotation.Config
+
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [34])
+class ArtifactStoreLifecycleTest {
+    private lateinit var context: Context
+    private lateinit var database: AppDatabase
+    private lateinit var payloadStore: ArtifactPayloadStore
+    private lateinit var settingsFlow: MutableStateFlow<Settings>
+    private lateinit var store: ArtifactStore
+    private val folders = mutableSetOf<String>()
+
+    @Before
+    fun setUp() {
+        context = ApplicationProvider.getApplicationContext()
+        database = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        payloadStore = ArtifactPayloadStore(context)
+        settingsFlow = MutableStateFlow(Settings())
+        val settingsStore = mockk<SettingsStore>()
+        every { settingsStore.settingsFlow } returns settingsFlow
+        coEvery { settingsStore.updateAtomicAndGet(any()) } coAnswers {
+            firstArg<(Settings) -> Settings>()(settingsFlow.value).also { settingsFlow.value = it }
+        }
+        store = ArtifactStore(
+            payloadStore = payloadStore,
+            artifactDAO = database.artifactDao(),
+            artifactReferenceDAO = database.artifactReferenceDao(),
+            systemMetaDAO = database.systemMetaDao(),
+            conversationDAO = database.conversationDao(),
+            messageNodeDAO = database.messageNodeDao(),
+            settingsCoordinator = ArtifactSettingsCoordinator(settingsStore),
+            transactionRunner = RoomDatabaseTransactionRunner(database),
+        )
+    }
+
+    @After
+    fun tearDown() {
+        folders.forEach { File(context.filesDir, it).deleteRecursively() }
+        File(context.filesDir, ArtifactPayloadStore.STAGING_FOLDER).deleteRecursively()
+        database.close()
+    }
+
+    @Test
+    fun `create publishes active metadata and payload together`() = runTest {
+        val folder = folder()
+
+        val owned = store.createFromBytes(
+            bytes = byteArrayOf(1, 2, 3),
+            displayName = "sample.bin",
+            folder = folder,
+            origin = ArtifactOrigin.USER,
+        )
+
+        val persisted = requireNotNull(database.artifactDao().getById(owned.entity.id))
+        assertEquals(ArtifactState.ACTIVE.name, persisted.state)
+        assertNull(persisted.payloadToken)
+        assertTrue(store.file(persisted).isFile)
+        assertTrue(payloadStore.listStagingTokens().isEmpty())
+    }
+
+    @Test
+    fun `payload paths and staging tokens cannot escape app storage`() {
+        assertTrue(runCatching { payloadStore.file("../outside.bin") }.isFailure)
+        assertTrue(runCatching { payloadStore.stagingExists("../outside.part") }.isFailure)
+    }
+
+    @Test
+    fun `startup rolls back a creating row whose staging payload survived`() = runTest {
+        val folder = folder()
+        val staged = payloadStore.stageFromBytes(folder, byteArrayOf(9), "recover.bin", null)
+        val id = database.artifactDao().insert(
+            entity(staged.relativePath, folder, ArtifactState.CREATING, staged.stagingToken)
+        )
+
+        store.reconcileStartup()
+
+        assertNull(database.artifactDao().getById(id))
+        assertFalse(payloadStore.finalExists(staged.relativePath))
+        assertFalse(payloadStore.stagingExists(staged.stagingToken))
+    }
+
+    @Test
+    fun `startup rolls back a creating row whose final payload survived`() = runTest {
+        val folder = folder()
+        val staged = payloadStore.stageFromBytes(folder, byteArrayOf(9), "promoted.bin", null)
+        val id = database.artifactDao().insert(
+            entity(staged.relativePath, folder, ArtifactState.CREATING, staged.stagingToken)
+        )
+        payloadStore.promote(staged)
+
+        store.reconcileStartup()
+
+        assertNull(database.artifactDao().getById(id))
+        assertFalse(payloadStore.finalExists(staged.relativePath))
+        assertFalse(payloadStore.stagingExists(staged.stagingToken))
+    }
+
+    @Test
+    fun `cancellation while waiting for lifecycle ownership removes the staged payload`() = runTest {
+        val folder = folder()
+        val lockAcquired = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val holder = async {
+            store.withLifecycleLock {
+                lockAcquired.complete(Unit)
+                release.await()
+            }
+        }
+        lockAcquired.await()
+        val creator = async {
+            store.createFromBytes(byteArrayOf(1), "cancelled.bin", folder = folder, origin = ArtifactOrigin.USER)
+        }
+        withTimeout(5_000) {
+            while (payloadStore.listStagingTokens().isEmpty()) delay(10)
+        }
+
+        creator.cancelAndJoin()
+        release.complete(Unit)
+        holder.await()
+
+        assertTrue(payloadStore.listStagingTokens().isEmpty())
+        assertTrue(database.artifactDao().listAllStatesByFolder(folder).first().isEmpty())
+    }
+
+    @Test
+    fun `startup resumes deleting and removes both payload and metadata`() = runTest {
+        val folder = folder()
+        val owned = store.createFromBytes(byteArrayOf(7), "delete.bin", folder = folder, origin = ArtifactOrigin.USER)
+        assertEquals(
+            1,
+            database.artifactDao().compareAndSetState(
+                owned.entity.id,
+                ArtifactState.ACTIVE.name,
+                ArtifactState.DELETING.name,
+                2L,
+            ),
+        )
+
+        store.reconcileStartup()
+
+        assertNull(database.artifactDao().getById(owned.entity.id))
+        assertFalse(store.file(owned.entity).exists())
+    }
+
+    @Test
+    fun `read port exposes only active artifacts`() = runTest {
+        val folder = folder()
+        val active = store.createFromBytes(byteArrayOf(1), "active.bin", folder = folder, origin = ArtifactOrigin.USER)
+        val staging = payloadStore.stageFromBytes(folder, byteArrayOf(2), "creating.bin", null)
+        database.artifactDao().insert(entity(staging.relativePath, folder, ArtifactState.CREATING, staging.stagingToken))
+        val deleting = store.createFromBytes(byteArrayOf(3), "deleting.bin", folder = folder, origin = ArtifactOrigin.USER)
+        database.artifactDao().compareAndSetState(
+            deleting.entity.id,
+            ArtifactState.ACTIVE.name,
+            ArtifactState.DELETING.name,
+            2L,
+        )
+
+        val visible = store.list(folder)
+
+        assertEquals(listOf(active.entity.id), visible.map { it.id })
+    }
+
+    @Test
+    fun `startup fails closed when a message root points to missing active payload`() = runTest {
+        val folder = folder()
+        val owned = store.createFromBytes(byteArrayOf(4), "rooted.bin", folder = folder, origin = ArtifactOrigin.USER)
+        val conversationId = Uuid.random().toString()
+        val nodeId = Uuid.random().toString()
+        database.conversationDao().insert(
+            ConversationEntity(
+                id = conversationId,
+                assistantId = Uuid.random().toString(),
+                title = "rooted",
+                createAt = 1,
+                updateAt = 1,
+                chatSuggestions = "[]",
+                isPinned = false,
+            )
+        )
+        database.messageNodeDao().insertAll(
+            listOf(MessageNodeEntity(
+                id = nodeId,
+                conversationId = conversationId,
+                nodeIndex = 0,
+                messages = "[]",
+                selectIndex = 0,
+            ))
+        )
+        database.artifactReferenceDao().insertAll(
+            listOf(
+                ArtifactReferenceEntity(
+                    artifactId = owned.entity.id,
+                    nodeId = nodeId,
+                    referenceType = ArtifactReferenceType.ATTACHMENT.name,
+                )
+            )
+        )
+        assertTrue(store.file(owned.entity).delete())
+
+        val failure = runCatching { store.reconcileStartup() }.exceptionOrNull()
+
+        assertTrue(failure is ArtifactDataIntegrityException)
+        assertEquals(ArtifactState.ACTIVE.name, database.artifactDao().getById(owned.entity.id)?.state)
+    }
+
+    @Test
+    fun `startup fails closed when a settings root points to missing active payload`() = runTest {
+        val folder = folder()
+        val assistant = Assistant()
+        settingsFlow.value = Settings(assistants = listOf(assistant))
+        val owned = store.createFromBytes(byteArrayOf(5), "background.bin", folder = folder, origin = ArtifactOrigin.USER)
+        store.updateSettingsReferences { current ->
+            current.copy(assistants = current.assistants.map { it.copy(background = owned.uri.toString()) })
+        }
+        assertTrue(store.file(owned.entity).delete())
+
+        val failure = runCatching { store.reconcileStartup() }.exceptionOrNull()
+
+        assertTrue(failure is ArtifactDataIntegrityException)
+        assertEquals(ArtifactState.ACTIVE.name, database.artifactDao().getById(owned.entity.id)?.state)
+    }
+
+    @Test
+    fun `folder deletion resumes mixed active and creating lifecycle states`() = runTest {
+        val folder = folder()
+        settingsFlow.value = Settings(assistants = listOf(Assistant()))
+        val active = store.createFromBytes(
+            byteArrayOf(7),
+            "active.bin",
+            folder = folder,
+            origin = ArtifactOrigin.USER,
+        )
+        store.updateSettingsReferences { current ->
+            current.copy(assistants = current.assistants.map { it.copy(background = active.uri.toString()) })
+        }
+        store.updateSettingsReferences { current ->
+            current.copy(assistants = current.assistants.map { it.copy(background = null) })
+        }
+        val staged = payloadStore.stageFromBytes(folder, byteArrayOf(8), "creating.bin", null)
+        val creatingId = database.artifactDao().insert(
+            entity(staged.relativePath, folder, ArtifactState.CREATING, staged.stagingToken)
+        )
+
+        val result = store.deleteUserRequestedFolder(folder)
+
+        assertTrue(result is ArtifactDeleteResult.Completed)
+        assertNull(database.artifactDao().getById(active.entity.id))
+        assertNull(database.artifactDao().getById(creatingId))
+        assertFalse(payloadStore.finalExists(active.entity.relativePath))
+        assertFalse(payloadStore.stagingExists(staged.stagingToken))
+    }
+
+    @Test
+    fun `settings root and garbage collection are serialized`() = runTest {
+        val folder = folder()
+        val assistant = Assistant()
+        settingsFlow.value = Settings(assistants = listOf(assistant))
+        store.ensureReferenceProjection()
+        val owned = store.createFromBytes(byteArrayOf(3), "avatar.bin", folder = folder, origin = ArtifactOrigin.USER)
+        val lockAcquired = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val holder = async {
+            store.withLifecycleLock {
+                lockAcquired.complete(Unit)
+                release.await()
+            }
+        }
+        lockAcquired.await()
+        val publish = async {
+            store.updateSettingsReferences { current ->
+                current.copy(assistants = current.assistants.map { it.copy(background = owned.uri.toString()) })
+            }
+        }
+        runCurrent()
+        val gc = async { store.collectGarbage(0) }
+        release.complete(Unit)
+        holder.await()
+        publish.await()
+
+        assertTrue(gc.await().isEmpty())
+        assertEquals(ArtifactState.ACTIVE.name, database.artifactDao().getById(owned.entity.id)?.state)
+        assertTrue(store.file(owned.entity).isFile)
+    }
+
+    @Test
+    fun `discard rejects a published artifact and succeeds after detach`() = runTest {
+        val folder = folder()
+        val assistant = Assistant()
+        settingsFlow.value = Settings(assistants = listOf(assistant))
+        val owned = store.createFromBytes(byteArrayOf(4), "root.bin", folder = folder, origin = ArtifactOrigin.USER)
+        store.updateSettingsReferences { current ->
+            current.copy(assistants = current.assistants.map { it.copy(background = owned.uri.toString()) })
+        }
+
+        val rejected = store.discardUnpublished(owned)
+        assertTrue(rejected is ArtifactDeleteResult.Failed)
+
+        store.updateSettingsReferences { current ->
+            current.copy(assistants = current.assistants.map { it.copy(background = null) })
+        }
+        assertTrue(store.discardUnpublished(owned) is ArtifactDeleteResult.Failed)
+        assertTrue(store.deleteUserRequested(owned.entity.id) is ArtifactDeleteResult.Completed)
+        assertNull(database.artifactDao().getById(owned.entity.id))
+    }
+
+    @Test
+    fun `live unpublished ownership blocks garbage collection and explicit deletion`() = runTest {
+        val folder = folder()
+        store.ensureReferenceProjection()
+        val owned = store.createFromBytes(byteArrayOf(6), "draft.bin", folder = folder, origin = ArtifactOrigin.USER)
+
+        assertTrue(store.collectGarbage(0).isEmpty())
+        val deletion = store.deleteUserRequested(owned.entity.id)
+
+        assertTrue(deletion is ArtifactDeleteResult.Rejected)
+        assertEquals(
+            ArtifactDeleteResult.RejectionReason.IN_PROGRESS,
+            (deletion as ArtifactDeleteResult.Rejected).reason,
+        )
+        assertTrue(store.file(owned.entity).isFile)
+    }
+
+    @Test
+    fun `batch publication validates every root before consuming any ownership token`() = runTest {
+        val folder = folder()
+        val rooted = store.createFromBytes(
+            byteArrayOf(1),
+            "rooted.bin",
+            folder = folder,
+            origin = ArtifactOrigin.USER,
+        )
+        val unrooted = store.createFromBytes(
+            byteArrayOf(2),
+            "unrooted.bin",
+            folder = folder,
+            origin = ArtifactOrigin.USER,
+        )
+        val conversationId = Uuid.random().toString()
+        val nodeId = Uuid.random().toString()
+        database.conversationDao().insert(
+            ConversationEntity(
+                id = conversationId,
+                assistantId = Uuid.random().toString(),
+                title = "batch-root",
+                createAt = 1,
+                updateAt = 1,
+                chatSuggestions = "[]",
+                isPinned = false,
+            )
+        )
+        database.messageNodeDao().insertAll(
+            listOf(
+                MessageNodeEntity(
+                    id = nodeId,
+                    conversationId = conversationId,
+                    nodeIndex = 0,
+                    messages = "[]",
+                    selectIndex = 0,
+                )
+            )
+        )
+        database.artifactReferenceDao().insertAll(
+            listOf(
+                ArtifactReferenceEntity(
+                    artifactId = rooted.entity.id,
+                    nodeId = nodeId,
+                    referenceType = ArtifactReferenceType.ATTACHMENT.name,
+                )
+            )
+        )
+
+        val failure = runCatching {
+            store.publishAllUnpublished(listOf(rooted, unrooted))
+        }.exceptionOrNull()
+
+        assertTrue(failure is IllegalStateException)
+        val rootedDelete = store.deleteUserRequested(rooted.entity.id)
+        val unrootedDelete = store.deleteUserRequested(unrooted.entity.id)
+        assertEquals(
+            ArtifactDeleteResult.RejectionReason.IN_PROGRESS,
+            (rootedDelete as ArtifactDeleteResult.Rejected).reason,
+        )
+        assertEquals(
+            ArtifactDeleteResult.RejectionReason.IN_PROGRESS,
+            (unrootedDelete as ArtifactDeleteResult.Rejected).reason,
+        )
+    }
+
+    @Test
+    fun `startup deleting recovery detaches settings root before payload removal`() = runTest {
+        val folder = folder()
+        settingsFlow.value = Settings(assistants = listOf(Assistant()))
+        val owned = store.createFromBytes(byteArrayOf(8), "rooted-delete.bin", folder = folder, origin = ArtifactOrigin.USER)
+        store.updateSettingsReferences { current ->
+            current.copy(assistants = current.assistants.map { it.copy(background = owned.uri.toString()) })
+        }
+        assertEquals(
+            1,
+            database.artifactDao().compareAndSetState(
+                owned.entity.id,
+                ArtifactState.ACTIVE.name,
+                ArtifactState.DELETING.name,
+                3L,
+            ),
+        )
+
+        store.reconcileStartup()
+
+        assertNull(database.artifactDao().getById(owned.entity.id))
+        assertNull(settingsFlow.value.assistants.single().background)
+        assertFalse(store.file(owned.entity).exists())
+    }
+
+    @Test
+    fun `explicit delete resumes an interrupted deleting state`() = runTest {
+        val folder = folder()
+        settingsFlow.value = Settings(assistants = listOf(Assistant()))
+        val owned = store.createFromBytes(
+            bytes = byteArrayOf(9),
+            displayName = "retry-delete.bin",
+            folder = folder,
+            origin = ArtifactOrigin.USER,
+        )
+        store.updateSettingsReferences { current ->
+            current.copy(assistants = current.assistants.map { it.copy(background = owned.uri.toString()) })
+        }
+        store.publishUnpublished(owned)
+        assertEquals(
+            1,
+            database.artifactDao().compareAndSetState(
+                owned.entity.id,
+                ArtifactState.ACTIVE.name,
+                ArtifactState.DELETING.name,
+                4L,
+            ),
+        )
+
+        val result = store.deleteUserRequested(owned.entity.id)
+
+        assertTrue(result is ArtifactDeleteResult.Completed)
+        assertNull(database.artifactDao().getById(owned.entity.id))
+        assertNull(settingsFlow.value.assistants.single().background)
+        assertFalse(store.file(owned.entity).exists())
+    }
+
+    @Test
+    fun `concurrent explicit deletes invoke physical payload deletion exactly once`() = runTest {
+        val folder = folder()
+        val relativePath = "$folder/concurrent.bin"
+        val artifactId = database.artifactDao().insert(
+            entity(relativePath, folder, ArtifactState.ACTIVE, token = null)
+        )
+        val physicalDeletes = AtomicInteger()
+        val countingPayloadStore = mockk<ArtifactPayloadStore>()
+        every { countingPayloadStore.file(relativePath) } returns File(context.filesDir, relativePath)
+        coEvery { countingPayloadStore.deleteStaging(null) } returns true
+        coEvery { countingPayloadStore.deleteFinal(relativePath) } coAnswers {
+            physicalDeletes.incrementAndGet()
+            true
+        }
+        val localSettings = MutableStateFlow(Settings())
+        val settingsStore = mockk<SettingsStore>()
+        every { settingsStore.settingsFlow } returns localSettings
+        coEvery { settingsStore.updateAtomicAndGet(any()) } coAnswers {
+            firstArg<(Settings) -> Settings>()(localSettings.value).also { localSettings.value = it }
+        }
+        val countingStore = ArtifactStore(
+            payloadStore = countingPayloadStore,
+            artifactDAO = database.artifactDao(),
+            artifactReferenceDAO = database.artifactReferenceDao(),
+            systemMetaDAO = database.systemMetaDao(),
+            conversationDAO = database.conversationDao(),
+            messageNodeDAO = database.messageNodeDao(),
+            settingsCoordinator = ArtifactSettingsCoordinator(settingsStore),
+            transactionRunner = RoomDatabaseTransactionRunner(database),
+        )
+
+        val results = (0 until 20).map {
+            async(Dispatchers.Default) { countingStore.deleteUserRequested(artifactId) }
+        }.awaitAll()
+
+        assertEquals(1, physicalDeletes.get())
+        assertEquals(1, results.count { it is ArtifactDeleteResult.Completed })
+        assertTrue(results.filterIsInstance<ArtifactDeleteResult.Rejected>().all {
+            it.reason == ArtifactDeleteResult.RejectionReason.ALREADY_DELETED
+        })
+        assertNull(database.artifactDao().getById(artifactId))
+    }
+
+    @Test
+    fun `corrupt backfill node does not replace projection or mark it current`() = runTest {
+        val conversationId = Uuid.random().toString()
+        database.conversationDao().insert(
+            ConversationEntity(
+                id = conversationId,
+                assistantId = Uuid.random().toString(),
+                title = "corrupt",
+                createAt = 1,
+                updateAt = 1,
+                chatSuggestions = "[]",
+                isPinned = false,
+            )
+        )
+        database.messageNodeDao().upsertAll(
+            listOf(
+                MessageNodeEntity(
+                    id = Uuid.random().toString(),
+                    conversationId = conversationId,
+                    nodeIndex = 0,
+                    messages = "not-json",
+                    selectIndex = 0,
+                )
+            )
+        )
+
+        val failure = runCatching { store.ensureReferenceProjection() }.exceptionOrNull()
+
+        assertTrue(failure is ArtifactProjectionException)
+        assertFalse(store.isReferenceProjectionCurrent())
+    }
+
+    private fun folder(): String = "artifact-test-${Uuid.random()}".also(folders::add)
+
+    private fun entity(
+        relativePath: String,
+        folder: String,
+        state: ArtifactState,
+        token: String?,
+    ) = ArtifactEntity(
+        folder = folder,
+        relativePath = relativePath,
+        displayName = File(relativePath).name,
+        mimeType = "application/octet-stream",
+        sizeBytes = 1,
+        createdAt = 1,
+        updatedAt = 1,
+        state = state.name,
+        payloadToken = token,
+        origin = ArtifactOrigin.USER.name,
+    )
+}

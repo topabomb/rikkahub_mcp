@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.search
+package net.weero.measix.pilot.ui.pages.search
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Refresh01
@@ -164,6 +164,24 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
                                 ) else stringResource(R.string.search_page_rebuilding_simple),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    vm.failure != null -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = stringResource(
+                                    if (vm.failure == SearchFailure.REBUILD) {
+                                        R.string.search_page_rebuild_failed
+                                    } else {
+                                        R.string.search_page_query_failed
+                                    }
+                                ),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error,
                             )
                         }
                     }

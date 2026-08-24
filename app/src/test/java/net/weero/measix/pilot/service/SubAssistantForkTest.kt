@@ -44,7 +44,7 @@ class SubAssistantForkTest {
         val newMasterId = Uuid.random()
 
         val result = forkSubAssistantTree(
-            source,
+            source.id,
             copiedNodes,
             newMasterId,
             mapOf(child.id to child),
@@ -73,7 +73,7 @@ class SubAssistantForkTest {
         val source = master(listOf(run1, run2))
 
         val result = forkSubAssistantTree(
-            source,
+            source.id,
             source.messageNodes.map { it.copy(id = Uuid.random()) },
             Uuid.random(),
             mapOf(child.id to child),

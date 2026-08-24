@@ -28,7 +28,7 @@ private data class ForkedChild(
 )
 
 internal fun forkSubAssistantTree(
-    sourceMaster: Conversation,
+    sourceMasterId: Uuid,
     copiedMasterNodes: List<MessageNode>,
     newMasterId: Uuid,
     sourceChildren: Map<Uuid, Conversation>,
@@ -52,7 +52,7 @@ internal fun forkSubAssistantTree(
         if (occurrence.metadata.runId.isBlank() || oldRunCounts[occurrence.metadata.runId] != 1) {
             null
         } else {
-            resolveValidRecoveryChild(sourceMaster, occurrence.metadata, sourceChildren)
+            resolveValidChildLineage(sourceMasterId, occurrence.metadata, sourceChildren)
         }
     }
     val forkedChildren = validChildByOccurrence

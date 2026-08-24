@@ -71,16 +71,16 @@ class FtsDeltaScopeTest {
     }
 
     @Test
-    fun `I6 single node change leaves other node rows unchanged`() = runTest {
+    fun `single node change leaves other node rows unchanged`() = runTest {
         val conversationId = Uuid.random().toString()
         val nodeA = node("alpha original")
         val nodeB = node("bravo stable")
-        fts.reindexNodes(conversationId, "t", seq.incrementAndGet(), listOf(nodeA, nodeB))
+        fts.reindexNodesInTransaction(conversationId, "t", seq.incrementAndGet(), listOf(nodeA, nodeB))
 
         val nodeA2 = nodeA.copy(
             messages = listOf(UIMessage(id = Uuid.random(), role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("alpha updated")))),
         )
-        fts.reindexNodes(conversationId, "t", seq.incrementAndGet(), listOf(nodeA2))
+        fts.reindexNodesInTransaction(conversationId, "t", seq.incrementAndGet(), listOf(nodeA2))
 
         // 变更行仅属 nodeA；nodeB 行原样
         assertTrue(ftsNodeTexts(conversationId, nodeA.id.toString()).contains("alpha updated"))

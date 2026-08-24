@@ -21,6 +21,12 @@ import kotlin.uuid.Uuid
  * 核心：reducer 零 IO、纯函数、未被触及节点保持同一实例引用（structural sharing）。
  */
 class ConversationReducerTest {
+    private fun handle(conversationId: Uuid, assistantMessageId: Uuid) = TurnHandle(
+        conversationId = conversationId,
+        epoch = 1,
+        turnId = Uuid.random(),
+        assistantMessageId = assistantMessageId,
+    )
 
     private fun assistant(id: Uuid, parts: List<UIMessagePart> = listOf(UIMessagePart.Text("hi"))): UIMessage =
         UIMessage(id = id, role = MessageRole.ASSISTANT, parts = parts)
@@ -31,44 +37,75 @@ class ConversationReducerTest {
     // ---- BeginTurn 新槽追加 / resume 幂等 ----
 
     @Test
-    fun `R1 empty conversation appends single assistant node`() {
+    fun `empty conversation appends single assistant node`() {
         val c = Conversation.ofId(Uuid.random())
         val assistantId = Uuid.random()
-        val r = ConversationReducer.reduce(c.toSnapshot(), BeginTurn(Uuid.random(), assistantId, null, resume = false, onStart = true))
+        val r = ConversationReducer.reduce(c.toSnapshot(), StartTurn(Uuid.random(), assistantId, resume = false))
         assertEquals(1, r.nodes.size)
         assertEquals(assistantId, r.nodes[0].messages.single().id)
         assertEquals(MessageRole.ASSISTANT, r.nodes[0].messages.single().role)
     }
 
     @Test
-    fun `R1 resume on same assistant message is idempotent`() {
+    fun `resume on same assistant message is idempotent`() {
         val assistantId = Uuid.random()
         val node = MessageNode.of(assistant(assistantId))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
-        val r = ConversationReducer.reduce(c.toSnapshot(), BeginTurn(Uuid.random(), assistantId, null, resume = true, onStart = true))
+        val r = ConversationReducer.reduce(c.toSnapshot(), StartTurn(Uuid.random(), assistantId, resume = true))
         // 幂等：不新增节点，节点数不变
         assertEquals(1, r.nodes.size)
         assertEquals(1, r.nodes[0].messages.size)
     }
 
     @Test
-    fun `R1 non-resume with terminal assistant appends new node`() {
+    fun `resume uses the selected assistant variant`() {
+        val selectedId = Uuid.random()
+        val unselectedId = Uuid.random()
+        val node = MessageNode(
+            id = Uuid.random(),
+            messages = listOf(assistant(selectedId), assistant(unselectedId)),
+            selectIndex = 0,
+        )
+        val conversation = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
+
+        val reduced = ConversationReducer.reduce(
+            conversation.toSnapshot(),
+            StartTurn(Uuid.random(), selectedId, resume = true),
+        )
+
+        assertSame(node, reduced.nodes.single())
+        assertEquals(0, reduced.nodes.single().selectIndex)
+    }
+
+    @Test
+    fun `non-resume with terminal assistant appends new node`() {
         val assistantId = Uuid.random()
         val finished = assistant(assistantId).copy(
             terminalStatus = MessageTerminalStatus.INCOMPLETE,
             terminalReason = "user_stop",
         )
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(MessageNode.of(finished)))
-        val r = ConversationReducer.reduce(c.toSnapshot(), BeginTurn(Uuid.random(), assistantId, null, resume = false, onStart = true))
+        val r = ConversationReducer.reduce(c.toSnapshot(), StartTurn(Uuid.random(), assistantId, resume = false))
         // 旧节点已终态 → 追加新节点
         assertEquals(2, r.nodes.size)
         assertEquals(assistantId, r.nodes[1].messages.single().id)
     }
 
-    // ---- R-2：structural sharing ----
+    @Test
+    fun `pin toggle does not invalidate search metadata`() {
+        val old = Conversation.ofId(Uuid.random()).toSnapshot().header
+        val updated = ConversationReducer.reduceHeader(old, TogglePinned)
+        val mutation = ConversationMutationBuilder.buildHeader(old, updated)
+
+        assertTrue(updated.isPinned)
+        assertEquals(false, mutation.searchMetadataChanged)
+        assertEquals(true, mutation.headerPatch?.isPinned)
+    }
+
+    // ---- Structural sharing ----
 
     @Test
-    fun `R2 untouched nodes keep identical references`() {
+    fun `untouched nodes keep identical references`() {
         val n0 = MessageNode.of(user(Uuid.random()))
         val n1 = MessageNode.of(assistant(Uuid.random()))
         val n2 = MessageNode.of(user(Uuid.random()))
@@ -83,7 +120,29 @@ class ConversationReducerTest {
     }
 
     @Test
-    fun `R2 structural sharing across node replacement`() {
+    fun `delayed title and suggestion patches preserve completed tool output`() {
+        val completedTool = UIMessagePart.Tool(
+            toolCallId = "tool-1",
+            toolName = "generate_image",
+            input = "{}",
+            output = listOf(UIMessagePart.Image("file:///result.png")),
+        )
+        val node = MessageNode.of(assistant(Uuid.random(), listOf(completedTool)))
+        val snapshot = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node)).toSnapshot()
+
+        val updated = ConversationReducer.reduce(
+            snapshot,
+            UpdateHeader(title = "Generated title", suggestions = listOf("Next")),
+        )
+
+        assertSame(node, updated.nodes.single())
+        assertEquals(completedTool, updated.nodes.single().currentMessage.parts.single())
+        assertEquals("Generated title", updated.header.title)
+        assertEquals(listOf("Next"), updated.header.chatSuggestions)
+    }
+
+    @Test
+    fun `structural sharing across node replacement`() {
         val n0 = MessageNode.of(user(Uuid.random()))
         val n1 = MessageNode.of(assistant(Uuid.random()))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(n0, n1))
@@ -94,16 +153,16 @@ class ConversationReducerTest {
         assertEquals(3, r.nodes.size)
     }
 
-    // ---- R-3：FinalizeTurn 终态收口 ----
+    // ---- FinalizeTurn terminalization ----
 
     @Test
-    fun `R3 finalize marks assistant terminal for failure status`() {
+    fun `finalize marks assistant terminal for failure status`() {
         val assistantId = Uuid.random()
         val node = MessageNode.of(assistant(assistantId))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
         val r = ConversationReducer.reduce(
             c.toSnapshot(),
-            FinalizeTurn(Uuid.random(), assistantId, null, TurnExecutionStatus.FAILED, "boom", closeInterruptedTools = false),
+            FinalizeTurn(handle(c.id, assistantId), null, TurnExecutionStatus.FAILED, "boom", closeInterruptedTools = false),
         )
         val msg = r.nodes[0].messages.single()
         assertEquals(MessageTerminalStatus.FAILED, msg.terminalStatus)
@@ -111,19 +170,45 @@ class ConversationReducerTest {
     }
 
     @Test
-    fun `R3 finalize completed keeps terminal null`() {
+    fun `finalize completed keeps terminal null`() {
         val assistantId = Uuid.random()
         val node = MessageNode.of(assistant(assistantId))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
         val r = ConversationReducer.reduce(
             c.toSnapshot(),
-            FinalizeTurn(Uuid.random(), assistantId, null, TurnExecutionStatus.COMPLETED, null, closeInterruptedTools = false),
+            FinalizeTurn(handle(c.id, assistantId), null, TurnExecutionStatus.COMPLETED, null, closeInterruptedTools = false),
         )
         assertNull(r.nodes[0].messages.single().terminalStatus)
     }
 
     @Test
-    fun `R3 finalize with closeInterruptedTools closes pending tools`() {
+    fun `regeneration failure before a chunk keeps the previous assistant variant`() {
+        val conversationId = Uuid.random()
+        val original = assistant(Uuid.random(), listOf(UIMessagePart.Text("completed answer")))
+        val node = MessageNode.of(original)
+        val base = Conversation.ofId(conversationId).copy(messageNodes = listOf(node)).toSnapshot()
+        val replacementId = Uuid.random()
+        val started = ConversationReducer.reduce(base, StartTurn(Uuid.random(), replacementId, resume = false))
+
+        val failed = ConversationReducer.reduce(
+            started,
+            FinalizeTurn(
+                handle(conversationId, replacementId),
+                messages = null,
+                terminalStatus = TurnExecutionStatus.FAILED,
+                terminalReason = "provider_failed",
+                closeInterruptedTools = false,
+            ),
+        )
+
+        assertEquals(2, failed.nodes.single().messages.size)
+        assertEquals(original, failed.nodes.single().messages.first())
+        assertEquals(replacementId, failed.nodes.single().currentMessage.id)
+        assertEquals(MessageTerminalStatus.FAILED, failed.nodes.single().currentMessage.terminalStatus)
+    }
+
+    @Test
+    fun `finalize with closeInterruptedTools closes pending tools`() {
         val assistantId = Uuid.random()
         val tool = UIMessagePart.Tool(
             toolCallId = "t1",
@@ -135,9 +220,10 @@ class ConversationReducerTest {
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
         val r = ConversationReducer.reduce(
             c.toSnapshot(),
-            FinalizeTurn(Uuid.random(), assistantId, null, TurnExecutionStatus.INTERRUPTED, null, closeInterruptedTools = true),
+            FinalizeTurn(handle(c.id, assistantId), null, TurnExecutionStatus.INTERRUPTED, null, closeInterruptedTools = true),
         )
         val closedTool = r.nodes[0].messages.single().parts.filterIsInstance<UIMessagePart.Tool>().single()
+        assertEquals(MessageTerminalStatus.INTERRUPTED, r.nodes[0].messages.single().terminalStatus)
         // interrupt 语义：写入 interrupted output（isExecuted=true），保留原 approvalState
         assertTrue(closedTool.isExecuted)
         val output = closedTool.output.filterIsInstance<UIMessagePart.Text>().single().text
@@ -145,7 +231,7 @@ class ConversationReducerTest {
     }
 
     @Test
-    fun `R4 historical nodes stay identical across FinalizeTurn`() {
+    fun `historical nodes stay identical across FinalizeTurn`() {
         val finishedReasoning = UIMessagePart.Reasoning(
             reasoning = "already done",
             finishedAt = kotlin.time.Instant.fromEpochMilliseconds(1),
@@ -167,7 +253,7 @@ class ConversationReducerTest {
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(histUser, histAssistant, active))
         val r = ConversationReducer.reduce(
             c.toSnapshot(),
-            FinalizeTurn(Uuid.random(), activeId, null, TurnExecutionStatus.COMPLETED, null, closeInterruptedTools = false),
+            FinalizeTurn(handle(c.id, activeId), null, TurnExecutionStatus.COMPLETED, null, closeInterruptedTools = false),
         )
         assertSame(histUser, r.nodes[0])
         assertSame(histAssistant, r.nodes[1])
@@ -176,10 +262,10 @@ class ConversationReducerTest {
         assertTrue(liveReasoning.finishedAt != null)
     }
 
-    // ---- R-4：树操作 ----
+    // ---- Tree operations ----
 
     @Test
-    fun `R4 deleteMessage removes the owning node`() {
+    fun `deleteMessage removes the owning node`() {
         val target = user(Uuid.random())
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(
             MessageNode.of(target),
@@ -190,7 +276,7 @@ class ConversationReducerTest {
     }
 
     @Test
-    fun `R4 selectNodeVariant switches variant`() {
+    fun `selectNodeVariant switches variant`() {
         val nodeId = Uuid.random()
         val v0 = user(Uuid.random())
         val v1 = user(Uuid.random())
@@ -203,7 +289,7 @@ class ConversationReducerTest {
     }
 
     @Test
-    fun `R4 truncateToNodeIndex shrinks tree`() {
+    fun `truncateToNodeIndex shrinks tree`() {
         val n0 = MessageNode.of(user(Uuid.random()))
         val n1 = MessageNode.of(assistant(Uuid.random()))
         val n2 = MessageNode.of(user(Uuid.random()))
@@ -215,7 +301,7 @@ class ConversationReducerTest {
     }
 
     @Test
-    fun `R4 updateToolApproval marks tool approval`() {
+    fun `updateToolApproval marks tool approval`() {
         val assistantId = Uuid.random()
         val tool = UIMessagePart.Tool(
             toolCallId = "t1",

@@ -2,229 +2,774 @@ package net.weero.measix.pilot.data.files
 
 import android.net.Uri
 import android.util.Log
+import android.graphics.BitmapFactory
+import androidx.core.net.toUri
+import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import me.rerere.ai.ui.UIMessage
-import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsStore
+import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.core.ToolResourceLease
+import me.rerere.ai.ui.mediaPersistenceFailurePart
+import net.weero.measix.pilot.data.db.DatabaseTransactionRunner
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.db.dao.ArtifactDAO
 import net.weero.measix.pilot.data.db.dao.ArtifactReferenceDAO
 import net.weero.measix.pilot.data.db.dao.ConversationDAO
 import net.weero.measix.pilot.data.db.dao.MessageNodeDAO
+import net.weero.measix.pilot.data.db.dao.MessagePayloadReadException
+import net.weero.measix.pilot.data.db.dao.readMessagesPayload
 import net.weero.measix.pilot.data.db.dao.SystemMetaDAO
 import net.weero.measix.pilot.data.db.entity.ArtifactEntity
+import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.db.entity.ArtifactReferenceEntity
 import net.weero.measix.pilot.data.db.entity.ArtifactReferenceType
 import net.weero.measix.pilot.data.db.entity.ArtifactState
 import net.weero.measix.pilot.data.db.entity.SystemMetaEntity
-import net.weero.measix.pilot.data.model.Assistant
-import net.weero.measix.pilot.data.model.Avatar
+import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.MessageNode
+import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.collectFileReferenceTokens
-import net.weero.measix.pilot.data.model.collectFileUrlStrings
 import net.weero.measix.pilot.utils.JsonInstant
 import kotlin.uuid.Uuid
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
+
+private suspend inline fun <T> recoverArtifactPersistenceFailure(
+    onFailure: (Exception) -> T,
+    block: suspend () -> T,
+): T = try {
+    block()
+} catch (error: CancellationException) {
+    throw error
+} catch (error: Exception) {
+    onFailure(error)
+}
 
 /** 显式删除结果 */
 sealed interface ArtifactDeleteResult {
     data class Completed(val artifactId: Long) : ArtifactDeleteResult
+    /** 用户删除已被 DELETING 状态接受，剩余物理/元数据清理由启动恢复幂等续跑。 */
+    data class CleanupPending(val artifactId: Long, val reason: String) : ArtifactDeleteResult
     data class Rejected(val artifactId: Long, val reason: RejectionReason) : ArtifactDeleteResult
     data class Failed(val artifactId: Long, val reason: String) : ArtifactDeleteResult
 
     enum class RejectionReason { IN_PROGRESS, ALREADY_DELETED }
 }
 
-/** 删除影响（原 ManagedFileDeletionService.ManagedFileDeleteImpact 迁入） */
+/** Durable roots that must be detached before an artifact can be deleted. */
 data class ArtifactDeleteImpact(
     val referencedByHistory: Boolean,
     val assistantBackgroundCount: Int,
     val assistantAvatarCount: Int,
 )
 
+/** 创建完成但尚未交给 durable message/Settings root 的 artifact 所有权令牌。 */
+class OwnedArtifact internal constructor(
+    val entity: ArtifactEntity,
+    val uri: Uri,
+    val localRef: LocalArtifactRef,
+    internal val ownershipToken: String = Uuid.random().toString(),
+)
+
+/** Temporary GC/deletion pin for an application-level undo capability. */
+class ArtifactRetentionLease internal constructor(
+    private val releaseAction: () -> Unit,
+) : AutoCloseable {
+    private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    override fun close() {
+        if (closed.compareAndSet(false, true)) releaseAction()
+    }
+}
+
+data class PersistedMessageArtifacts(
+    val message: UIMessage,
+    val ownedArtifacts: List<OwnedArtifact>,
+)
+
+internal fun ArtifactDeleteResult.requireDiscarded(
+    context: String,
+    allowAlreadyPublished: Boolean = false,
+) {
+    when (this) {
+        is ArtifactDeleteResult.Completed -> Unit
+        is ArtifactDeleteResult.CleanupPending -> error("$context: deletion cleanup pending ($reason)")
+        is ArtifactDeleteResult.Rejected -> check(reason == ArtifactDeleteResult.RejectionReason.ALREADY_DELETED) {
+            "$context: deletion not acquired ($reason)"
+        }
+        is ArtifactDeleteResult.Failed -> check(allowAlreadyPublished && reason == "artifact_already_published") {
+            "$context: deletion failed ($reason)"
+        }
+    }
+}
+
+internal data class ArtifactReferenceDelta(
+    val replacedNodeIds: List<String>,
+    val deletedNodeIds: List<String>,
+    val references: List<ArtifactReferenceEntity>,
+)
+
+class ArtifactProjectionException(message: String, cause: Throwable? = null) :
+    IllegalStateException(message, cause)
+
+class ArtifactDataIntegrityException(message: String) : IllegalStateException(message)
+
 /**
- * Artifact 域唯一服务类（合并 ManagedFileDeletionService + FilesRepository）。
+ * 托管 artifact 元数据、引用与 payload 生命周期的唯一领域服务。
  *
- * 承载：引用投影（syncReferences/backfillReferences）、影响检查（inspect）、生命周期协议
+ * 承载：引用投影（事务内 delta + 版本化全量校验）、影响检查（inspect）、生命周期协议
  * （CAS 幂等删除）、启动恢复（reconcileStartup）、孤儿回收。
  *
- * 职责裁决：元数据的 CRUD 门面（observe/list/get/登记）由 [FilesManager]
- * 直接经 ArtifactDAO 承担（FilesManager 无法注入本类——本类依赖 FilesManager，构造注入会成环）；
- * 本类聚焦引用投影与生命周期事实，不重复暴露元数据门面。
- *
- * 数据完整性契约：DB 是唯一事实源。写入侧由 [FilesManager.registerTrackedFile] 保证
- * "文件 + 记录"原子（登记失败即回滚删文件）；磁盘侧不一致（外部删除/外部放入）由
- * [reconcileStartup] 冷启动收敛——缺失行直接清理、untracked 文件仅日志，绝不补录。
- *
- * 磁盘 payload 操作委托 [FilesManager]；引用投影可由消息 JSON 全量重建，永不当事实源。
+ * ArtifactDAO、创建、查询、引用、GC 与删除的唯一 owner。磁盘操作只委托无 DAO 的
+ * [ArtifactPayloadStore]；Settings roots 只通过 [ArtifactSettingsCoordinator] 访问。
  */
 class ArtifactStore(
-    private val filesManager: FilesManager,
+    private val payloadStore: ArtifactPayloadStore,
     private val artifactDAO: ArtifactDAO,
     private val artifactReferenceDAO: ArtifactReferenceDAO,
     private val systemMetaDAO: SystemMetaDAO,
     private val conversationDAO: ConversationDAO,
     private val messageNodeDAO: MessageNodeDAO,
-    private val settingsStore: SettingsStore,
+    private val settingsCoordinator: ArtifactSettingsCoordinator,
+    private val transactionRunner: DatabaseTransactionRunner,
 ) {
+    private val lifecycleMutex = Mutex()
+    private val unpublishedPins = mutableMapOf<Long, String>()
+    private val retentionPins = mutableMapOf<Long, Int>()
+
+    internal suspend fun <T> withLifecycleLock(block: suspend () -> T): T =
+        lifecycleMutex.withLock { block() }
+
+    // ---- 创建与查询 ----
+
+    fun observe(folder: String = FileFolders.UPLOAD): Flow<List<ArtifactEntity>> =
+        artifactDAO.listActiveByFolder(folder)
+
+    suspend fun list(folder: String = FileFolders.UPLOAD): List<ArtifactEntity> =
+        artifactDAO.listActiveByFolder(folder).first()
+
+    suspend fun get(id: Long): ArtifactEntity? = artifactDAO.getById(id)
+
+    suspend fun getByRelativePath(relativePath: String): ArtifactEntity? =
+        artifactDAO.getByPathAndState(relativePath, ArtifactState.ACTIVE.name)
+
+    fun file(entity: ArtifactEntity): File = payloadStore.file(entity.relativePath)
+
+    fun file(ref: LocalArtifactRef): File = payloadStore.file(ref.relativePath)
+
+    fun displayName(uri: Uri): String? = payloadStore.displayName(uri)
+
+    fun mimeType(uri: Uri): String? = payloadStore.mimeType(uri)
+
+    fun isUploadUri(uri: Uri): Boolean =
+        payloadStore.relativePathForUri(uri)?.replace('\\', '/')?.startsWith("${FileFolders.UPLOAD}/") == true
+
+    suspend fun materialize(ref: LocalArtifactRef): LocalArtifactRef? {
+        if (ref.version != LocalArtifactRef.CURRENT_VERSION) return null
+        val entity = artifactDAO.getByPathAndState(ref.relativePath, ArtifactState.ACTIVE.name) ?: return null
+        if (entity.mimeType != ref.mimeType) return null
+        val entityFile = payloadStore.file(ref.relativePath)
+        if (!entityFile.isFile) return null
+        val normalized = ref.relativePath.replace('\\', '/')
+        if (!normalized.startsWith("${FileFolders.UPLOAD}/") && !normalized.startsWith("images/")) return null
+        return ref
+    }
+
+    suspend fun resolveToolPath(path: String): File? {
+        val fileName = LocalToolPath.parseUploadToolPath(path) ?: return null
+        val entity = getByRelativePath("${FileFolders.UPLOAD}/$fileName") ?: return null
+        val candidate = payloadStore.file(entity.relativePath)
+        val upload = payloadStore.file(FileFolders.UPLOAD)
+        return candidate.takeIf { it.isFile && LocalToolPath.isInsideDirectory(it, upload) }
+    }
+
+    suspend fun copyFile(
+        source: File,
+        mimeType: String,
+        displayName: String,
+        folder: String = FileFolders.UPLOAD,
+        origin: ArtifactOrigin,
+    ): OwnedArtifact = createFromUri(source.toUri(), folder, displayName, mimeType, origin)
+
+    suspend fun copyFilePreservingOrigin(
+        source: File,
+        mimeType: String,
+        displayName: String,
+        folder: String = FileFolders.UPLOAD,
+    ): OwnedArtifact = copyFile(
+        source = source,
+        mimeType = mimeType,
+        displayName = displayName,
+        folder = folder,
+        origin = resolveOrigin(source.toUri(), ArtifactOrigin.GENERATED),
+    )
+
+    /** Settings artifact 字段的唯一写入口；新增的本地 root 必须指向 ACTIVE artifact。 */
+    suspend fun updateSettingsReferences(transform: (Settings) -> Settings): Settings = withLifecycleLock {
+        // Once this owner begins the durable Settings write, commit and creation-pin transfer are
+        // indivisible. Cancellation is observed by the caller after both facts agree.
+        withContext(NonCancellable) {
+            val active = artifactDAO.listByState(ArtifactState.ACTIVE.name)
+            val activePaths = active.mapTo(hashSetOf(), ArtifactEntity::relativePath)
+            val committed = settingsCoordinator.updateChecked(transform) { current, updated ->
+                val addedManagedRoots = (ArtifactReferencePolicy.roots(updated) - ArtifactReferencePolicy.roots(current))
+                    .mapNotNull { uri -> payloadStore.relativePathForUri(uri.toUri()) }
+                addedManagedRoots.forEach { relativePath ->
+                    check(relativePath in activePaths) {
+                        "Settings reference targets a non-active artifact: $relativePath"
+                    }
+                }
+            }
+            val rootedPaths = ArtifactReferencePolicy.roots(committed)
+                .mapNotNullTo(hashSetOf()) { uri -> payloadStore.relativePathForUri(uri.toUri()) }
+            val rootedIds = active.filter { it.relativePath in rootedPaths }.mapTo(hashSetOf(), ArtifactEntity::id)
+            synchronized(unpublishedPins) { unpublishedPins.keys.removeAll(rootedIds) }
+            committed
+        }
+    }
+
+    suspend fun createFromUri(
+        uri: Uri,
+        folder: String = FileFolders.UPLOAD,
+        displayName: String? = null,
+        mimeType: String? = null,
+        origin: ArtifactOrigin = ArtifactOrigin.USER,
+        maxBytes: Long? = null,
+    ): OwnedArtifact {
+        val resolvedName = displayName ?: payloadStore.displayName(uri) ?: "file"
+        val resolvedMime = mimeType ?: payloadStore.mimeType(uri) ?: "application/octet-stream"
+        val inheritedOrigin = resolveOrigin(uri, origin)
+        val staged = payloadStore.stageFromUri(folder, uri, resolvedName, resolvedMime, maxBytes)
+        return activateStaged(staged, resolvedName, resolvedMime, inheritedOrigin)
+    }
+
+    suspend fun createFromBytes(
+        bytes: ByteArray,
+        displayName: String,
+        mimeType: String = "application/octet-stream",
+        folder: String = FileFolders.UPLOAD,
+        origin: ArtifactOrigin,
+    ): OwnedArtifact {
+        val staged = payloadStore.stageFromBytes(folder, bytes, displayName, mimeType)
+        return activateStaged(staged, displayName, mimeType, origin)
+    }
+
+    suspend fun createText(
+        text: String,
+        displayName: String = "pasted_text.txt",
+        mimeType: String = "text/plain",
+        folder: String = FileFolders.UPLOAD,
+        origin: ArtifactOrigin = ArtifactOrigin.USER,
+    ): OwnedArtifact {
+        val staged = payloadStore.stageText(folder, text, displayName, mimeType)
+        return activateStaged(staged, displayName, mimeType, origin)
+    }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    suspend fun persistBase64Images(message: UIMessage): PersistedMessageArtifacts {
+        val ownedArtifacts = mutableListOf<OwnedArtifact>()
+        return try {
+            PersistedMessageArtifacts(
+                message = message.copy(parts = persistBase64Parts(message.parts, ownedArtifacts)),
+                ownedArtifacts = ownedArtifacts.toList(),
+            )
+        } catch (error: Throwable) {
+            withContext(NonCancellable) {
+                ownedArtifacts.forEach { owned ->
+                    try {
+                        discardUnpublished(owned).requireDiscarded("base64 transform rollback")
+                    } catch (cleanup: Throwable) {
+                        error.addSuppressed(cleanup)
+                    }
+                }
+            }
+            throw error
+        }
+    }
+
+    private suspend fun persistBase64Parts(
+        parts: List<UIMessagePart>,
+        ownedArtifacts: MutableList<OwnedArtifact>,
+    ): List<UIMessagePart> =
+        parts.map { part ->
+            when (part) {
+                is UIMessagePart.Image -> persistBase64Image(part, ownedArtifacts)
+                is UIMessagePart.Tool -> part.copy(output = persistBase64Parts(part.output, ownedArtifacts))
+                else -> part
+            }
+        }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    private suspend fun persistBase64Image(
+        part: UIMessagePart.Image,
+        ownedArtifacts: MutableList<OwnedArtifact>,
+    ): UIMessagePart {
+        if (!part.url.startsWith("data:image")) return part
+        return recoverArtifactPersistenceFailure(
+            onFailure = { error ->
+                Log.w(TAG, "base64 artifact persistence failed", error)
+                mediaPersistenceFailurePart(part)
+            },
+        ) {
+            val encoded = part.url.substringAfter("base64,", missingDelimiterValue = "")
+            require(encoded.isNotEmpty() && encoded.length <= MAX_BASE64_IMAGE_CHARS) {
+                "encoded image payload exceeds the size limit"
+            }
+            val source = Base64.decode(encoded.toByteArray())
+            val bitmap = BitmapFactory.decodeByteArray(source, 0, source.size)
+                ?: error("incomplete image data")
+            val pngBytes = try {
+                FileUtils.compressBitmapToPng(bitmap)
+            } finally {
+                bitmap.recycle()
+            }
+            val owned = createFromBytes(
+                bytes = pngBytes,
+                displayName = "image.png",
+                mimeType = "image/png",
+                origin = ArtifactOrigin.SYSTEM,
+            )
+            try {
+                AttachmentRefs.ensureAttachmentRef(part.copy(url = owned.uri.toString())).also {
+                    ownedArtifacts += owned
+                }
+            } catch (error: Throwable) {
+                withContext(NonCancellable) {
+                    try {
+                        discardUnpublished(owned).requireDiscarded("base64 projection rollback")
+                    } catch (cleanup: Throwable) {
+                        error.addSuppressed(cleanup)
+                    }
+                }
+                throw error
+            }
+        }
+    }
+
+    fun unpublishedLease(owned: OwnedArtifact): ToolResourceLease = ToolResourceLease(
+        publish = { publishUnpublished(owned) },
+        discard = { discardUnpublished(owned).requireDiscarded("unpublished tool resource rollback") },
+    )
+
+    private suspend fun activateStaged(
+        staged: ArtifactPayloadStore.StagedPayload,
+        displayName: String,
+        mimeType: String,
+        origin: ArtifactOrigin,
+    ): OwnedArtifact {
+        var insertedId: Long? = null
+        return try {
+            withLifecycleLock {
+                val now = System.currentTimeMillis()
+                val creating = ArtifactEntity(
+                    folder = staged.folder,
+                    relativePath = staged.relativePath,
+                    displayName = displayName,
+                    mimeType = mimeType,
+                    sizeBytes = staged.sizeBytes,
+                    createdAt = now,
+                    updatedAt = now,
+                    state = ArtifactState.CREATING.name,
+                    payloadToken = staged.stagingToken,
+                    origin = origin.name,
+                )
+                val id = artifactDAO.insert(creating)
+                check(id != -1L) { "Artifact metadata collision: ${staged.relativePath}" }
+                insertedId = id
+                payloadStore.promote(staged)
+                check(artifactDAO.activateCreated(id, staged.stagingToken, System.currentTimeMillis()) == 1) {
+                    "Artifact activation conflict: $id"
+                }
+                owned(creating.copy(id = id, state = ArtifactState.ACTIVE.name, payloadToken = null))
+            }
+        } catch (cancelled: CancellationException) {
+            rollbackCreating(insertedId, staged)?.let(cancelled::addSuppressed)
+            throw cancelled
+        } catch (error: Throwable) {
+            rollbackCreating(insertedId, staged)?.let(error::addSuppressed)
+            throw error
+        }
+    }
+
+    /**
+     * 只在 payload 已完全删除时删除 CREATING 事实行。若物理删除失败，
+     * 保留事实行交给冷启动恢复，避免制造无法归因的最终路径文件。
+     */
+    private suspend fun rollbackCreating(
+        id: Long?,
+        staged: ArtifactPayloadStore.StagedPayload,
+    ): Throwable? = withContext(NonCancellable) {
+        try {
+            if (id == null) {
+                return@withContext if (payloadStore.deleteStaging(staged.stagingToken)) {
+                    null
+                } else {
+                    IllegalStateException(
+                        "Artifact rollback retained unregistered staging payload: ${staged.stagingToken}"
+                    )
+                }
+            }
+            withLifecycleLock {
+                val stagingDeleted = payloadStore.deleteStaging(staged.stagingToken)
+                val finalDeleted = payloadStore.deleteFinal(staged.relativePath)
+                if (stagingDeleted && finalDeleted) {
+                    check(artifactDAO.deleteById(id) == 1 || artifactDAO.getById(id) == null) {
+                        "Failed to remove rolled-back artifact metadata: $id"
+                    }
+                }
+                if (!stagingDeleted || !finalDeleted) {
+                    IllegalStateException(
+                        "Artifact rollback retained CREATING metadata for startup recovery: ${staged.relativePath}"
+                    )
+                } else {
+                    null
+                }
+            }
+        } catch (error: Throwable) {
+            error
+        }
+    }
+
+    private fun owned(entity: ArtifactEntity): OwnedArtifact {
+        val file = payloadStore.file(entity.relativePath)
+        val token = Uuid.random().toString()
+        synchronized(unpublishedPins) {
+            check(unpublishedPins.put(entity.id, token) == null) {
+                "artifact already has an unpublished owner: ${entity.id}"
+            }
+        }
+        return OwnedArtifact(
+            entity = entity,
+            uri = file.toUri(),
+            localRef = LocalArtifactRef(relativePath = entity.relativePath, mimeType = entity.mimeType),
+            ownershipToken = token,
+        )
+    }
+
+    /**
+     * Transfers a creation pin only after an executable durable root exists. Validation and pin
+     * consumption are NonCancellable and share the lifecycle lock with GC/deletion, so a caller
+     * cannot publish early and cancellation cannot split durable handoff from ownership release.
+     * A consumed token is idempotent for retry after an uncertain caller return.
+     */
+    suspend fun publishUnpublished(owned: OwnedArtifact): Unit = publishAllUnpublished(listOf(owned))
+
+    /** Validates every durable root before consuming any token, so batch handoff cannot split. */
+    suspend fun publishAllUnpublished(artifacts: Collection<OwnedArtifact>): Unit = withContext(NonCancellable) {
+        if (artifacts.isEmpty()) return@withContext
+        require(artifacts.map { it.entity.id }.distinct().size == artifacts.size) {
+            "duplicate artifact in ownership transfer"
+        }
+        withLifecycleLock {
+            val pending = synchronized(unpublishedPins) {
+                artifacts.filter { unpublishedPins[it.entity.id] != null }
+            }
+            val settingsRoots = settingsCoordinator.withRootsLock(ArtifactReferencePolicy::roots)
+            pending.forEach { owned ->
+                val current = synchronized(unpublishedPins) { unpublishedPins[owned.entity.id] }
+                check(current == owned.ownershipToken) { "artifact ownership token mismatch: ${owned.entity.id}" }
+                val entity = artifactDAO.getById(owned.entity.id)
+                check(entity?.state == ArtifactState.ACTIVE.name) {
+                    "artifact is not active during ownership transfer: ${owned.entity.id}"
+                }
+                val messageRooted = artifactReferenceDAO.existsByArtifactId(owned.entity.id)
+                check(messageRooted || owned.uri.toString() in settingsRoots) {
+                    "artifact has no durable root during ownership transfer: ${owned.entity.id}"
+                }
+            }
+            synchronized(unpublishedPins) {
+                pending.forEach { owned ->
+                    check(unpublishedPins[owned.entity.id] == owned.ownershipToken) {
+                        "artifact ownership changed during transfer: ${owned.entity.id}"
+                    }
+                }
+                unpublishedPins.keys.removeAll(pending.mapTo(hashSetOf()) { it.entity.id })
+            }
+        }
+    }
+
+    /** Releases a creation pin without touching durable state; the unrooted artifact is then GC-owned. */
+    fun abandonUnpublished(owned: OwnedArtifact) {
+        synchronized(unpublishedPins) {
+            val current = unpublishedPins[owned.entity.id]
+            check(current == null || current == owned.ownershipToken) {
+                "artifact ownership token mismatch: ${owned.entity.id}"
+            }
+            unpublishedPins.remove(owned.entity.id, owned.ownershipToken)
+        }
+    }
+
+    suspend fun retainForUndo(conversations: List<Conversation>): ArtifactRetentionLease = withLifecycleLock {
+        val ids = conversations.flatMap { conversation ->
+            buildMutableReferencesForNodes(conversation.messageNodes).map(ArtifactReferenceEntity::artifactId)
+        }.toSet()
+        synchronized(retentionPins) {
+            ids.forEach { id -> retentionPins[id] = retentionPins.getOrDefault(id, 0) + 1 }
+        }
+        ArtifactRetentionLease {
+            synchronized(retentionPins) {
+                ids.forEach { id ->
+                    val remaining = retentionPins.getOrDefault(id, 0) - 1
+                    if (remaining <= 0) retentionPins.remove(id) else retentionPins[id] = remaining
+                }
+            }
+        }
+    }
+
     // ---- 引用投影 ----
 
     /**
      * delta 同步，替换语义：
      *  - upsertedNodes：先 deleteByNodeIds 再 insertAll（node 变更后可能不再引用某文件）
-     *  - deletedNodeIds：显式删除（node FK 级联为主路径，此为 FK 关闭环境的兜底）
+     *  - deletedNodeIds：同事务显式清理投影，不依赖于延后重建
      */
-    suspend fun syncReferences(
-        conversationId: Uuid,
+    internal suspend fun prepareReferenceDelta(
         upsertedNodes: List<MessageNode>,
         deletedNodeIds: List<Uuid>,
-    ) {
-        if (upsertedNodes.isNotEmpty()) {
-            val nodeIds = upsertedNodes.map { it.id.toString() }
-            artifactReferenceDAO.deleteByNodeIds(nodeIds)
-            val refs = buildMutableReferencesForNodes(upsertedNodes)
-            if (refs.isNotEmpty()) artifactReferenceDAO.insertAll(refs)
-        }
-        if (deletedNodeIds.isNotEmpty()) {
-            artifactReferenceDAO.deleteByNodeIds(deletedNodeIds.map { it.toString() })
-        }
-    }
-
-    /** 会话级引用清理（删除会话时随事务调用；node FK 级联为主路径，此为显式兜底）。 */
-    suspend fun deleteReferencesOfConversation(conversationId: Uuid) {
-        artifactReferenceDAO.deleteByConversationId(conversationId.toString())
-    }
-
-    /** 引用回填：幂等；未置位时逐会话提取引用 token（URL + metadata 相对路径）登记。 */
-    suspend fun backfillReferences() {
-        if (isBackfilled()) return
-        val inserted = mutableListOf<ArtifactReferenceEntity>()
-        conversationDAO.getAllConversations().forEach { conversationEntity ->
-            messageNodeDAO.getNodeIdsOfConversation(conversationEntity.id).forEach { nodeId ->
-                val messagesJson = messageNodeDAO.getMessagesJsonById(nodeId) ?: return@forEach
-                val messages = runCatching {
-                    JsonInstant.decodeFromString<List<UIMessage>>(messagesJson)
-                }.getOrNull() ?: return@forEach
-                val refs = resolveNodeReferenceEntities(nodeId, messages)
-                inserted.addAll(refs)
-            }
-        }
-        if (inserted.isNotEmpty()) artifactReferenceDAO.insertAll(inserted)
-        systemMetaDAO.put(SystemMetaEntity(BACKFILL_FLAG, "true"))
-    }
-
-    suspend fun isBackfilled(): Boolean =
-        runCatching { systemMetaDAO.get(BACKFILL_FLAG) == "true" }.getOrDefault(false)
-
-    // ---- 影响检查 ----
-
-    suspend fun inspect(artifact: ArtifactEntity): ArtifactDeleteImpact {
-        val fileUri = buildFileUri(artifact)
-        val settings = settingsStore.settingsFlow.value
-        val backgroundCount = settings.assistants.count { it.background == fileUri }
-        // 头像影响计数含助手头像与用户头像（displaySetting.userAvatar），二者删除时都会被重置
-        val userAvatarHit = settings.displaySetting.userAvatar.let {
-            it is Avatar.Image && it.url == fileUri
-        }
-        val avatarCount = settings.assistants.count {
-            it.avatar is Avatar.Image && it.avatar.url == fileUri
-        } + if (userAvatarHit) 1 else 0
-        val referencedByHistory = if (isBackfilled()) {
-            artifactReferenceDAO.existsByArtifactId(artifact.id)
-        } else {
-            hasConversationReferenceFallback(fileUri)
-        }
-        return ArtifactDeleteImpact(
-            referencedByHistory = referencedByHistory,
-            assistantBackgroundCount = backgroundCount,
-            assistantAvatarCount = avatarCount,
+    ): ArtifactReferenceDelta {
+        require(upsertedNodes.all { node -> node.id.toString().isNotBlank() })
+        return ArtifactReferenceDelta(
+            replacedNodeIds = upsertedNodes.map { it.id.toString() },
+            deletedNodeIds = deletedNodeIds.map { it.toString() },
+            references = buildMutableReferencesForNodes(upsertedNodes),
         )
     }
 
-    // ---- 生命周期协议（CAS 幂等，无 operationId） ----
-
-    suspend fun deletePermanently(artifact: ArtifactEntity): ArtifactDeleteResult {
-        val fileUri = buildFileUri(artifact)
-        // CAS 幂等屏障：ACTIVE → DELETING；0 行 = 已变迁
-        val gained = artifactDAO.compareAndSetState(artifact.id, ArtifactState.ACTIVE.name, ArtifactState.DELETING.name, System.currentTimeMillis())
-        if (gained != 1) {
-            val current = artifactDAO.getById(artifact.id)
-            val reason = if (current == null) ArtifactDeleteResult.RejectionReason.ALREADY_DELETED
-            else ArtifactDeleteResult.RejectionReason.IN_PROGRESS
-            return ArtifactDeleteResult.Rejected(artifact.id, reason)
+    /** Must be called from the same Room transaction that writes the corresponding nodes. */
+    internal suspend fun applyReferenceDeltaInTransaction(delta: ArtifactReferenceDelta) {
+        if (delta.replacedNodeIds.isNotEmpty()) {
+            artifactReferenceDAO.deleteByNodeIds(delta.replacedNodeIds)
         }
-        // 解除可变引用（失败回滚 ACTIVE）
-        if (!detachMutableReferences(setOf(fileUri))) {
-            artifactDAO.compareAndSetState(artifact.id, ArtifactState.DELETING.name, ArtifactState.ACTIVE.name, System.currentTimeMillis())
-            return ArtifactDeleteResult.Failed(artifact.id, "settings_detach_failed")
-        }
-        // 删磁盘 + 删行（引用行经 FK 级联自动清）
-        return try {
-            val diskOk = filesManager.deleteManagedFilePermanently(artifact.id, deleteFromDisk = true)
-            if (!diskOk) {
-                ArtifactDeleteResult.Failed(artifact.id, "disk_delete_failed")
-            } else {
-                ArtifactDeleteResult.Completed(artifact.id)
+        if (delta.references.isNotEmpty()) {
+            val artifactIds = delta.references.mapTo(linkedSetOf()) { it.artifactId }
+            val activeIds = artifactDAO.getIdsByState(artifactIds.toList(), ArtifactState.ACTIVE.name).toSet()
+            if (activeIds != artifactIds) {
+                throw ArtifactProjectionException("artifact reference targets a non-active artifact")
             }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Throwable) {
-            Log.e(TAG, "deletePermanently: unexpected error for ${artifact.id}", error)
-            ArtifactDeleteResult.Failed(artifact.id, error.message ?: "unknown")
+            artifactReferenceDAO.insertAll(delta.references)
+        }
+        if (delta.deletedNodeIds.isNotEmpty()) {
+            artifactReferenceDAO.deleteByNodeIds(delta.deletedNodeIds)
         }
     }
 
-    suspend fun deleteFolderPermanently(folder: String): ArtifactDeleteResult {
-        val entities = artifactDAO.listByFolder(folder).first()
-        if (entities.isEmpty()) {
-            filesManager.deleteManagedFolderPermanently(folder)
-            return ArtifactDeleteResult.Completed(0)
-        }
-        // 先解除可变引用（失败即中止，保持文件完整）
-        val fileUris = entities.map(::buildFileUri).toSet()
-        if (!detachMutableReferences(fileUris)) {
-            return ArtifactDeleteResult.Failed(0, "settings_detach_failed")
-        }
-        // 删磁盘 + 清行（引用行经 FK 级联自动清）
-        return try {
-            val diskOk = filesManager.deleteManagedFolderPermanently(folder)
-            if (diskOk) ArtifactDeleteResult.Completed(0)
-            else ArtifactDeleteResult.Failed(0, "disk_folder_delete_failed")
+    /** Ensures the versioned reference projection is complete before GC becomes available. */
+    suspend fun ensureReferenceProjection() = withLifecycleLock {
+        if (isReferenceProjectionCurrent()) return@withLifecycleLock
+        val inserted = mutableListOf<ArtifactReferenceEntity>()
+        try {
+            conversationDAO.getAllConversations().forEach { conversationEntity ->
+                messageNodeDAO.getNodeHeadersOfConversation(conversationEntity.id).forEach { header ->
+                    val messagesJson = try {
+                        messageNodeDAO.readMessagesPayload(header, "conversation=${conversationEntity.id}")
+                    } catch (error: MessagePayloadReadException) {
+                        throw ArtifactProjectionException(error.message ?: "invalid messages payload", error)
+                    }
+                    val messages = try {
+                        JsonInstant.decodeFromString<List<UIMessage>>(messagesJson)
+                    } catch (error: Exception) {
+                        throw ArtifactProjectionException(
+                            "invalid messages payload: conversation=${conversationEntity.id}, node=${header.id}",
+                            error,
+                        )
+                    }
+                    inserted.addAll(resolveNodeReferenceEntities(header.id, messages))
+                }
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (error: Throwable) {
-            Log.e(TAG, "deleteFolderPermanently: unexpected error", error)
-            ArtifactDeleteResult.Failed(0, error.message ?: "unknown")
+        } catch (error: ArtifactProjectionException) {
+            throw error
         }
+        transactionRunner.run {
+            artifactReferenceDAO.deleteAll()
+            if (inserted.isNotEmpty()) {
+                val artifactIds = inserted.mapTo(linkedSetOf()) { it.artifactId }
+                val activeIds = artifactDAO.getIdsByState(artifactIds.toList(), ArtifactState.ACTIVE.name).toSet()
+                if (activeIds != artifactIds) {
+                    throw ArtifactProjectionException("backfill resolved a non-active artifact")
+                }
+                artifactReferenceDAO.insertAll(inserted)
+            }
+            systemMetaDAO.put(SystemMetaEntity(REFERENCE_PROJECTION_VERSION_KEY, "true"))
+        }
+    }
+
+    suspend fun isReferenceProjectionCurrent(): Boolean =
+        systemMetaDAO.get(REFERENCE_PROJECTION_VERSION_KEY) == "true"
+
+    // ---- 影响检查 ----
+
+    suspend fun inspect(artifact: ArtifactEntity): ArtifactDeleteImpact =
+        settingsCoordinator.withRootsLock { settings ->
+            val fileUri = buildFileUri(artifact)
+            val backgroundCount = settings.assistants.count { it.background == fileUri }
+            val userAvatarHit = settings.displaySetting.userAvatar.let { avatar ->
+                avatar is net.weero.measix.pilot.data.model.Avatar.Image && avatar.url == fileUri
+            }
+            val avatarCount = settings.assistants.count { assistant ->
+                val avatar = assistant.avatar
+                avatar is net.weero.measix.pilot.data.model.Avatar.Image && avatar.url == fileUri
+            } + if (userAvatarHit) 1 else 0
+            ArtifactDeleteImpact(
+                // GC is closed until backfill is complete; inspect remains conservative too.
+                referencedByHistory = !isReferenceProjectionCurrent() || artifactReferenceDAO.existsByArtifactId(artifact.id),
+                assistantBackgroundCount = backgroundCount,
+                assistantAvatarCount = avatarCount,
+            )
+        }
+
+    // ---- 生命周期协议（CAS 幂等，无 operationId） ----
+
+    suspend fun deleteUserRequested(artifactId: Long): ArtifactDeleteResult = withLifecycleLock {
+        deleteUserRequestedLocked(artifactId)
+    }
+
+    private suspend fun deleteUserRequestedLocked(artifactId: Long): ArtifactDeleteResult {
+        val artifact = artifactDAO.getById(artifactId)
+            ?: return ArtifactDeleteResult.Rejected(
+                artifactId,
+                ArtifactDeleteResult.RejectionReason.ALREADY_DELETED,
+            )
+        if (isPinned(artifact.id)) {
+            return ArtifactDeleteResult.Rejected(artifact.id, ArtifactDeleteResult.RejectionReason.IN_PROGRESS)
+        }
+        if (artifact.state == ArtifactState.DELETING.name) {
+            return withContext(NonCancellable) { finishUserDeletion(artifact) }
+        }
+        if (artifact.state != ArtifactState.ACTIVE.name) {
+            return ArtifactDeleteResult.Rejected(artifact.id, ArtifactDeleteResult.RejectionReason.IN_PROGRESS)
+        }
+        return withContext(NonCancellable) {
+            val gained = artifactDAO.compareAndSetState(
+                artifact.id,
+                ArtifactState.ACTIVE.name,
+                ArtifactState.DELETING.name,
+                System.currentTimeMillis(),
+            )
+            if (gained != 1) return@withContext deletionConflict(artifact.id)
+            finishUserDeletion(artifact.copy(state = ArtifactState.DELETING.name))
+        }
+    }
+
+    /** 仅创建方持有的未发布令牌可走补偿删除；发布后存在任一 root 时明确拒绝。 */
+    suspend fun discardUnpublished(owned: OwnedArtifact): ArtifactDeleteResult = withLifecycleLock {
+        val current = artifactDAO.getById(owned.entity.id)
+            ?: return@withLifecycleLock ArtifactDeleteResult.Rejected(
+                owned.entity.id,
+                ArtifactDeleteResult.RejectionReason.ALREADY_DELETED,
+            )
+        if (!isPinnedBy(owned)) {
+            return@withLifecycleLock ArtifactDeleteResult.Failed(current.id, "artifact_ownership_already_transferred")
+        }
+        val rooted = artifactReferenceDAO.existsByArtifactId(current.id) ||
+            settingsCoordinator.withRootsLock { settings ->
+                buildFileUri(current) in ArtifactReferencePolicy.roots(settings)
+            }
+        if (rooted) return@withLifecycleLock ArtifactDeleteResult.Failed(current.id, "artifact_already_published")
+        withContext(NonCancellable) {
+            if (artifactDAO.compareAndSetState(
+                    current.id,
+                    ArtifactState.ACTIVE.name,
+                    ArtifactState.DELETING.name,
+                    System.currentTimeMillis(),
+                ) != 1
+            ) {
+                return@withContext deletionConflict(current.id)
+            }
+            synchronized(unpublishedPins) { unpublishedPins.remove(current.id, owned.ownershipToken) }
+            finishDeleting(current.copy(state = ArtifactState.DELETING.name))
+        }
+    }
+
+    suspend fun deleteUserRequestedFolder(folder: String): ArtifactDeleteResult = withLifecycleLock {
+        val entities = artifactDAO.listAllStatesByFolder(folder).first()
+        if (entities.isEmpty()) {
+            payloadStore.deleteEmptyFolder(folder)
+            return@withLifecycleLock ArtifactDeleteResult.Completed(0)
+        }
+        if (entities.any { isPinned(it.id) }) {
+            return@withLifecycleLock ArtifactDeleteResult.Rejected(0, ArtifactDeleteResult.RejectionReason.IN_PROGRESS)
+        }
+        var pendingCleanup: ArtifactDeleteResult.CleanupPending? = null
+        entities.forEach { entity ->
+            val result = when (entity.state) {
+                ArtifactState.ACTIVE.name -> deleteUserRequestedLocked(entity.id)
+                ArtifactState.DELETING.name -> finishUserDeletion(entity)
+                ArtifactState.CREATING.name -> discardCreating(entity)
+                else -> ArtifactDeleteResult.Failed(entity.id, "unknown_artifact_state:${entity.state}")
+            }
+            when (result) {
+                is ArtifactDeleteResult.Completed -> Unit
+                is ArtifactDeleteResult.CleanupPending -> if (pendingCleanup == null) pendingCleanup = result
+                is ArtifactDeleteResult.Rejected -> return@withLifecycleLock result
+                is ArtifactDeleteResult.Failed -> return@withLifecycleLock result
+            }
+        }
+        payloadStore.deleteEmptyFolder(folder)
+        pendingCleanup ?: ArtifactDeleteResult.Completed(0)
     }
 
     // ---- 启动恢复 ----
 
-    /**
-     * 每次冷启动执行一次：
-     *  - state=DELETING → 续删（删磁盘 + 删行）
-     *  - state=ACTIVE 且磁盘缺失 → 删除行（文件已不存在，记录是死数据，直接清理；
-     *    引用行经 FK 级联消失，不留悬挂）
-     *  - 磁盘存在但 DB 无记录 → 仅日志，绝不补录（untracked 只可能来自外部，
-     *    应用侧写入路径已原子化：登记失败即回滚删文件）
-     */
-    suspend fun reconcileStartup() {
+    /** 冷启动回滚已失去进程内 owner 的 CREATING，续跑 DELETING，并收口缺失 ACTIVE。 */
+    suspend fun reconcileStartup() = withLifecycleLock {
+        val creating = artifactDAO.listByState(ArtifactState.CREATING.name)
+        creating.forEach { entity ->
+            when (val result = discardCreating(entity)) {
+                is ArtifactDeleteResult.Completed -> Unit
+                is ArtifactDeleteResult.Failed -> error(
+                    "Failed to roll back interrupted artifact creation ${entity.id}: ${result.reason}"
+                )
+                else -> error("Unexpected CREATING rollback result for ${entity.id}: $result")
+            }
+        }
+        payloadStore.listStagingTokens().forEach { orphanToken ->
+            check(payloadStore.deleteStaging(orphanToken)) {
+                "Failed to remove orphan artifact staging payload: $orphanToken"
+            }
+        }
         artifactDAO.listByState(ArtifactState.DELETING.name).forEach { entity ->
-            val file = filesManager.getFile(entity)
-            if (file.exists()) {
-                runCatching { filesManager.deleteManagedFilePermanently(entity.id, deleteFromDisk = true) }
-            } else {
-                artifactDAO.deleteById(entity.id)
+            when (val result = finishUserDeletion(entity)) {
+                is ArtifactDeleteResult.CleanupPending -> error(
+                    "Failed to resume artifact deletion ${entity.id}: ${result.reason}"
+                )
+                is ArtifactDeleteResult.Failed -> error(
+                    "Failed to resume artifact deletion ${entity.id}: ${result.reason}"
+                )
+                else -> Unit
             }
         }
         artifactDAO.listByState(ArtifactState.ACTIVE.name).forEach { entity ->
-            val file = filesManager.getFile(entity)
-            if (!file.exists()) {
-                artifactDAO.deleteById(entity.id)
-                Log.w(TAG, "reconcileStartup: artifact ${entity.id} missing on disk → row removed")
+            if (!payloadStore.finalExists(entity.relativePath)) {
+                val messageRooted = artifactReferenceDAO.existsByArtifactId(entity.id) ||
+                    messageNodeDAO.existsMessagesJsonContaining(entity.relativePath) ||
+                    messageNodeDAO.existsMessagesJsonContaining(buildFileUri(entity))
+                val settingsRooted = settingsCoordinator.withRootsLock { settings ->
+                    buildFileUri(entity) in ArtifactReferencePolicy.roots(settings)
+                }
+                if (messageRooted || settingsRooted) {
+                    throw ArtifactDataIntegrityException(
+                        "Active artifact payload is missing while a durable root still references it: ${entity.id}"
+                    )
+                }
+                check(artifactDAO.compareAndSetState(
+                    entity.id,
+                    ArtifactState.ACTIVE.name,
+                    ArtifactState.DELETING.name,
+                    System.currentTimeMillis(),
+                ) == 1) { "Artifact state changed during recovery: ${entity.id}" }
+                check(artifactDAO.deleteById(entity.id) == 1) { "Failed to remove missing artifact ${entity.id}" }
+                Log.w(TAG, "reconcileStartup: missing artifact ${entity.id} removed")
             }
         }
-        // 磁盘存在但无 DB 记录：仅日志（不补录；重启复活缺陷的回归锁定）
-        filesManager.logUntrackedUploadFiles()
+        logUntrackedFinalFiles(FileFolders.UPLOAD)
     }
 
     // ---- GC ----
@@ -234,24 +779,44 @@ class ArtifactStore(
      * 引用面有两个，缺一不可：
      *  - 消息历史引用（artifact_reference 投影）；
      *  - Settings 域可变当前引用（助手头像/背景 + 用户头像，统一见
-     *    [collectMutableReferenceUris]）。此类文件虽不在消息历史中，但正被 UI
+     *    [ArtifactReferencePolicy.roots]）。此类文件虽不在消息历史中，但正被 UI
      *    消费，回收即制造"Settings 指向已删除文件"的悬挂引用（头像回退纯色/背景消失）。
      * 回填未完成时保守跳过（宁可保留文件）。
      */
-    suspend fun collectUnreferencedArtifacts(protectionWindowMillis: Long = 24 * 3600 * 1000L): List<ArtifactEntity> {
-        if (!isBackfilled()) return emptyList()
-        val threshold = System.currentTimeMillis() - protectionWindowMillis
-        val candidates = artifactDAO.listByStateCreatedBefore(ArtifactState.ACTIVE.name, threshold)
-        val mutableReferenceUris = collectMutableReferenceUris(settingsStore.settingsFlow.value)
-        val toDelete = candidates.filter { entity ->
-            !artifactReferenceDAO.existsByArtifactId(entity.id) &&
-                buildFileUri(entity) !in mutableReferenceUris
+    suspend fun collectGarbage(protectionWindowMillis: Long = 24 * 3600 * 1000L): List<ArtifactEntity> =
+        withLifecycleLock {
+            if (!isReferenceProjectionCurrent()) return@withLifecycleLock emptyList()
+            val threshold = System.currentTimeMillis() - protectionWindowMillis
+            val candidates = artifactDAO.listByStateCreatedBefore(ArtifactState.ACTIVE.name, threshold)
+            settingsCoordinator.withRootsLock { settings ->
+                val roots = ArtifactReferencePolicy.roots(settings)
+                val claimed = mutableListOf<ArtifactEntity>()
+                candidates.forEach { entity ->
+                    // Recheck every root while holding both lifecycle domains, then claim by CAS.
+                    if (!isPinned(entity.id) &&
+                        !artifactReferenceDAO.existsByArtifactId(entity.id) &&
+                        buildFileUri(entity) !in roots
+                    ) {
+                        if (artifactDAO.compareAndSetState(
+                                entity.id,
+                                ArtifactState.ACTIVE.name,
+                                ArtifactState.DELETING.name,
+                                System.currentTimeMillis(),
+                            ) == 1
+                        ) {
+                            claimed += entity
+                        }
+                    }
+                }
+                claimed.forEach { entity ->
+                    val result = finishDeleting(entity)
+                    check(result is ArtifactDeleteResult.Completed) {
+                        "Artifact GC deletion failed: id=${entity.id}, result=$result"
+                    }
+                }
+                claimed
+            }
         }
-        toDelete.forEach { entity ->
-            filesManager.deleteManagedFilePermanently(entity.id, deleteFromDisk = true)
-        }
-        return toDelete
-    }
 
     // ---- 私有 ----
 
@@ -263,22 +828,29 @@ class ArtifactStore(
         return refs
     }
 
+    private fun isPinnedBy(owned: OwnedArtifact): Boolean = synchronized(unpublishedPins) {
+        unpublishedPins[owned.entity.id] == owned.ownershipToken
+    }
+
+    private fun isPinned(id: Long): Boolean =
+        synchronized(unpublishedPins) { unpublishedPins.containsKey(id) } ||
+            synchronized(retentionPins) { retentionPins.containsKey(id) }
+
     /**
      * 节点引用解析：引用 token = file:// URL + Tool.metadata 的 LocalArtifactRef
      * 相对路径（collectFileReferenceTokens）。URL 转 filesDir 相对路径，相对路径 token 直用；
-     * metadata-only 引用（generate_image artifact 等）同样登记、阻止 GC 回收
-     * （对齐原 deleteUnreferencedChatFiles 的 metadata 保留判定）。
+     * metadata-only 引用（generate_image artifact 等）同样登记、阻止 GC 回收。
      */
     private suspend fun resolveNodeReferenceEntities(nodeId: String, messages: List<UIMessage>): List<ArtifactReferenceEntity> {
         val refs = mutableListOf<ArtifactReferenceEntity>()
         val seenArtifacts = mutableSetOf<Long>()
         messages.collectFileReferenceTokens().forEach { token ->
             val relativePath = if (token.startsWith("file:")) {
-                filesManager.getRelativePathForUri(token.toUriSafe()) ?: return@forEach
+                payloadStore.relativePathForUri(Uri.parse(token)) ?: return@forEach
             } else {
                 token
             }
-            artifactDAO.getByPath(relativePath)?.let { artifact ->
+            artifactDAO.getByPathAndState(relativePath, ArtifactState.ACTIVE.name)?.let { artifact ->
                 if (seenArtifacts.add(artifact.id)) {
                     refs.add(
                         ArtifactReferenceEntity(
@@ -293,84 +865,75 @@ class ArtifactStore(
         return refs
     }
 
-    private suspend fun detachMutableReferences(fileUris: Set<String>): Boolean {
-        if (fileUris.isEmpty()) return true
-        val committed = try {
-            settingsStore.updateAtomicAndGet { settings ->
-                detachSettingsReferences(settings, fileUris)
-            }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Throwable) {
-            Log.e(TAG, "failed to detach assistant references", error)
-            return false
-        }
-        val stillReferenced = collectMutableReferenceUris(committed).any { it in fileUris }
-        return !stillReferenced
-    }
-
-    /**
-     * Settings 域可变当前引用的 file URI 全集：助手背景、助手头像、用户头像
-     * （displaySetting.userAvatar）。三者都可能指向受管 upload 文件，但不进
-     * artifact_reference 投影（可变当前引用，非历史事实）。GC 豁免、删除解除、
-     * 影响检查共用本引用面——新增 Settings 内本地文件引用字段时必须同步此处
-     * 与 [detachSettingsReferences]。
-     */
-    private fun collectMutableReferenceUris(settings: Settings): Set<String> = buildSet {
-        settings.assistants.forEach { assistant ->
-            assistant.background?.let(::add)
-            (assistant.avatar as? Avatar.Image)?.url?.let(::add)
-        }
-        (settings.displaySetting.userAvatar as? Avatar.Image)?.url?.let(::add)
-    }
-
-    /** 解除 Settings 域对给定 file URI 的全部可变引用（背景置空、头像重置）。 */
-    private fun detachSettingsReferences(settings: Settings, fileUris: Set<String>): Settings {
-        val assistants = settings.assistants.map { detachAssistantRefs(it, fileUris) }
-        val userAvatar = settings.displaySetting.userAvatar
-        val displaySetting = if (userAvatar is Avatar.Image && userAvatar.url in fileUris) {
-            settings.displaySetting.copy(userAvatar = Avatar.Dummy)
-        } else {
-            settings.displaySetting
-        }
-        return settings.copy(assistants = assistants, displaySetting = displaySetting)
-    }
-
-    private fun detachAssistantRefs(assistant: Assistant, fileUris: Set<String>): Assistant {
-        var updated = assistant
-        if (updated.background != null && updated.background in fileUris) {
-            updated = updated.copy(background = null)
-        }
-        val avatar = updated.avatar
-        if (avatar is Avatar.Image && avatar.url in fileUris) {
-            updated = updated.copy(avatar = Avatar.Dummy)
-        }
-        return updated
-    }
-
     private fun buildFileUri(artifact: ArtifactEntity): String {
-        val path = filesManager.getFile(artifact).absolutePath.replace('\\', '/')
-        return if (path.startsWith("/")) "file://$path" else "file:///$path"
+        return payloadStore.file(artifact.relativePath).toUri().toString()
     }
 
-    /** 回填完成前 inspect 的降级：全量扫描会话消息。 */
-    private suspend fun hasConversationReferenceFallback(fileUri: String): Boolean {
-        conversationDAO.getAllConversations().forEach { conversationEntity ->
-            messageNodeDAO.getNodeIdsOfConversation(conversationEntity.id).forEach { nodeId ->
-                val messagesJson = messageNodeDAO.getMessagesJsonById(nodeId) ?: return@forEach
-                val messages = runCatching {
-                    JsonInstant.decodeFromString<List<UIMessage>>(messagesJson)
-                }.getOrNull() ?: return@forEach
-                if (messages.collectFileUrlStrings().any { it == fileUri }) return true
+    private suspend fun finishDeleting(entity: ArtifactEntity): ArtifactDeleteResult = try {
+        if (!payloadStore.deleteStaging(entity.payloadToken) || !payloadStore.deleteFinal(entity.relativePath)) {
+            ArtifactDeleteResult.CleanupPending(entity.id, "payload_delete_failed")
+        } else if (artifactDAO.deleteById(entity.id) == 1 || artifactDAO.getById(entity.id) == null) {
+            ArtifactDeleteResult.Completed(entity.id)
+        } else {
+            ArtifactDeleteResult.CleanupPending(entity.id, "metadata_delete_failed")
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        Log.e(TAG, "artifact deletion failed: ${entity.id}", error)
+        ArtifactDeleteResult.CleanupPending(entity.id, error.message ?: "unknown")
+    }
+
+    private suspend fun finishUserDeletion(entity: ArtifactEntity): ArtifactDeleteResult {
+        val fileUri = buildFileUri(entity)
+        if (!settingsCoordinator.detach(setOf(fileUri))) {
+            return ArtifactDeleteResult.CleanupPending(entity.id, "settings_detach_failed")
+        }
+        return finishDeleting(entity)
+    }
+
+    private suspend fun discardCreating(entity: ArtifactEntity): ArtifactDeleteResult = try {
+        if (!payloadStore.deleteStaging(entity.payloadToken) || !payloadStore.deleteFinal(entity.relativePath)) {
+            ArtifactDeleteResult.Failed(entity.id, "creating_payload_delete_failed")
+        } else if (artifactDAO.deleteById(entity.id) == 1 || artifactDAO.getById(entity.id) == null) {
+            ArtifactDeleteResult.Completed(entity.id)
+        } else {
+            ArtifactDeleteResult.Failed(entity.id, "creating_metadata_delete_failed")
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        ArtifactDeleteResult.Failed(entity.id, error.message ?: "unknown")
+    }
+
+    private suspend fun deletionConflict(id: Long): ArtifactDeleteResult {
+        val reason = if (artifactDAO.getById(id) == null) {
+            ArtifactDeleteResult.RejectionReason.ALREADY_DELETED
+        } else {
+            ArtifactDeleteResult.RejectionReason.IN_PROGRESS
+        }
+        return ArtifactDeleteResult.Rejected(id, reason)
+    }
+
+    private suspend fun resolveOrigin(uri: Uri, externalOrigin: ArtifactOrigin): ArtifactOrigin {
+        val relativePath = payloadStore.relativePathForUri(uri) ?: return externalOrigin
+        val source = artifactDAO.getByPathAndState(relativePath, ArtifactState.ACTIVE.name) ?: return externalOrigin
+        return ArtifactOrigin.valueOf(source.origin)
+    }
+
+    private suspend fun logUntrackedFinalFiles(folder: String) {
+        val knownPaths = artifactDAO.listAllStatesByFolder(folder).first().mapTo(hashSetOf()) { it.relativePath }
+        payloadStore.listFinalFiles(folder).forEach { file ->
+            val relativePath = FileUtils.buildRelativePath(folder, file)
+            if (relativePath !in knownPaths) {
+                Log.w(TAG, "reconcileStartup: untracked payload requires operator review: $relativePath")
             }
         }
-        return false
     }
-
-    private fun String.toUriSafe(): Uri = runCatching { Uri.parse(this) }.getOrNull() ?: Uri.EMPTY
 
     companion object {
         private const val TAG = "ArtifactStore"
-        const val BACKFILL_FLAG = "artifact_reference_backfilled"
+        private const val MAX_BASE64_IMAGE_CHARS = 32 * 1024 * 1024
+        const val REFERENCE_PROJECTION_VERSION_KEY = "artifact_reference_projection_transactional_v1"
     }
 }

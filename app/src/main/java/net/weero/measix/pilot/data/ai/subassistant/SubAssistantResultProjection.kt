@@ -326,15 +326,6 @@ internal fun extractFinalAnswerInternal(
     return ""
 }
 
-/**
- * 本次 run 是否有用户可见的非文本交付物（generate_image 成功图或最终 ASSISTANT 顶层媒体）。
- */
-internal fun checkNonTextOutputInternal(
-    messages: List<UIMessage>,
-    childTaskNodeId: Uuid,
-    filesDir: java.io.File? = null,
-): Boolean = extractDeliverableArtifacts(messages, childTaskNodeId, filesDir).hasNonTextOutput
-
 internal data class SubAssistantCallCollectedOutputs(
     val toolCalls: List<Pair<String, Int>> = emptyList(),
     val ttsTexts: List<String> = emptyList(),
@@ -379,42 +370,6 @@ internal fun collectSubAssistantCallOutputs(
         ttsStats = if (ttsCalls > 0) SubAssistantTtsStats(calls = ttsCalls, chars = ttsChars) else null,
     )
 }
-
-/**
- * 本次 run 范围内每个工具名的发出次数，按首次出现顺序。
- */
-internal fun collectRunToolCalls(
-    messages: List<UIMessage>,
-    childTaskNodeId: Uuid,
-): List<Pair<String, Int>> = collectSubAssistantCallOutputs(
-    messages = messages,
-    childTaskNodeId = childTaskNodeId,
-    extras = setOf(ASSISTANT_CALL_EXTRA_TOOL_CALLS),
-).toolCalls
-
-/**
- * 本次 run 范围内 `text_to_speech` 入参 text，按调用顺序；空白或无法解析的跳过。
- */
-internal fun collectRunTtsTexts(
-    messages: List<UIMessage>,
-    childTaskNodeId: Uuid,
-): List<String> = collectSubAssistantCallOutputs(
-    messages = messages,
-    childTaskNodeId = childTaskNodeId,
-    extras = setOf(ASSISTANT_CALL_EXTRA_TTS),
-).ttsTexts
-
-/**
- * 本次 run 范围内 `text_to_speech` 的调用次数，以及可解析朗读文本的字符合计。
- */
-internal fun collectRunTtsStats(
-    messages: List<UIMessage>,
-    childTaskNodeId: Uuid,
-): SubAssistantTtsStats? = collectSubAssistantCallOutputs(
-    messages = messages,
-    childTaskNodeId = childTaskNodeId,
-    extras = emptySet(),
-).ttsStats
 
 private fun parseTtsInputText(input: String): String? = runCatching {
     val obj = kotlinx.serialization.json.Json.parseToJsonElement(input) as? JsonObject
@@ -536,7 +491,7 @@ internal suspend fun buildClassifiedFailureResult(
         state = SubAssistantCallState.FAILED,
         reason = failureReason,
     )
-    runCatching { reportSubAssistantMetadataPatch(json, execContext, metadata, checkpoint = false) }
+    reportSubAssistantMetadataPatch(json, execContext, metadata, checkpoint = false)
     return buildSubAssistantCallResultParts(
         json = json,
         status = "failed",

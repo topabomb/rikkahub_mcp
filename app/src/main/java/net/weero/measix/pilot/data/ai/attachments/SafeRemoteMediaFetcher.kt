@@ -37,7 +37,7 @@ sealed class RemoteMediaFetchResult {
 
 /**
  * Model-controlled HTTP(S) download with SSRF limits. Do not reuse
- * [net.weero.measix.pilot.data.files.FilesManager.saveMessageImage] for this path.
+ * [net.weero.measix.pilot.data.files.ArtifactStore.createFromBytes] for this path.
  */
 class SafeRemoteMediaFetcher(
     private val maxBytes: Int = GeneratedMediaStore.MAX_IMAGE_BYTES,
@@ -101,13 +101,13 @@ class SafeRemoteMediaFetcher(
             if (ImageMime.isUnsupportedNonImage(response.body, contentType)) {
                 return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE)
             }
-            if (!ImageMime.isAcceptedImage(response.body, contentType)) {
+            if (!ImageMime.isAcceptedImage(response.body)) {
                 return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE)
             }
 
-            val mime = ImageMime.sniff(response.body)
-                ?: contentType?.substringBefore(';')?.trim()?.lowercase()?.takeIf { it.startsWith("image/") }
-                ?: "image/png"
+            val mime = requireNotNull(ImageMime.sniff(response.body)) {
+                "validated image MIME is unavailable"
+            }
             val fileName = guessFileName(current, headerValue(response.headers, "Content-Disposition"), mime)
             return RemoteMediaFetchResult.Success(
                 bytes = response.body,

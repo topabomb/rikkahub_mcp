@@ -765,7 +765,7 @@ class TurnSession(
     /** 交给 generateText(onCheckpoint=…) 的回调：将 GenerationCheckpoint 落为 CommitCheckpoint 命令。 */
     suspend fun onCheckpoint(checkpoint: GenerationCheckpoint)
     // TurnExecutionStatus / ToolExecutionEntity 映射 = 现 persistTurnCheckpoint 语义
-    // toolExecution = checkpoint.toolExecution；turnStatus 由 kind 推导（STEP_COMPLETED→RUNNING、TERMINAL_STATE→终态）
+    // toolExecution = checkpoint.toolExecution；所有 checkpoint 保持 RUNNING，终态只由 FinalizeTurn 提交
 }
 
 sealed interface TurnEvent {
@@ -1888,7 +1888,7 @@ Application Coordinators
   └─ ApplicationRecoveryCoordinator（唯一启动门禁）
                     │
 Runtime / Domain
-  ├─ ConversationRuntime（Ready Snapshot + active TurnHandle + job/TTS runtime state）
+  ├─ ConversationRuntime（显式 Draft/Ready Snapshot + active TurnHandle + job/TTS runtime state）
   ├─ ConversationReducer（Snapshot 纯函数）
   ├─ TurnEngine（唯一生成提交与非空 TurnOutcome）
   └─ ArtifactStore（artifact 与全部引用/生命周期的唯一 owner）
@@ -1902,7 +1902,7 @@ Data / Payload
 
 最终不变式：
 
-1. Ready Snapshot 才是事实；不存在默认 Assistant/空树伪造的可用 Conversation。
+1. Runtime state 必须显式区分非持久化 Draft 与持久化 Ready：Draft 只服务“尚未发送首条用户消息”的新聊天 UI，不进入会话列表、数据库或 turn；首条用户消息与完整会话创建在同一事务提交后原位晋升 Ready。除此以外只有 Ready Snapshot 可作为 durable Conversation 事实，Loading/Missing/Failed 不得伪造可用 Conversation。
 2. 所有 durable Conversation 命令只经 `ConversationCommandCoordinator`；resident 与 non-resident 共享同一 reducer、事务和错误语义。
 3. durable command 必须持久化成功后发布；streaming 是唯一允许先发布且不落库的投影。
 4. 每个 turn 只有一个 TurnHandle；start/checkpoint/finalize 由 durable CAS 状态机约束，stale worker 无写权限。
@@ -1934,7 +1934,7 @@ Data / Payload
 | # | 动作 | 交付 |
 | --- | --- | --- |
 | Q1 | 新建 | `ConversationCommandCoordinator`：conversationId keyed mutex；resident/non-resident 命令统一调度；HeaderCommand 可 O(1) 读取 header，TreeCommand 才加载 nodes |
-| Q2 | 重构 | Registry 引入 Loading/Ready/Missing/Failed 生命周期；只允许显式 create 或持久化 load 进入 Ready；全系 Session 命名改 Runtime |
+| Q2 | 重构 | Registry 引入 Loading/Draft/Ready/Missing/Failed 生命周期；Draft 是不入库的新聊天态，首条用户消息原子建库并晋升 Ready；只有显式 create/import 或持久化 load 可直接进入 Ready；全系 Session 命名改 Runtime |
 | Q3 | 改造 | durable 命令执行顺序固定为 reduce → 单事务 persist → publish；返回 typed success/conflict/failure，禁止吞异常 |
 | Q4 | 改造 | Runtime 只保留 committed Snapshot 和非 durable activeTurn；移除 repository nullable、pendingPersist 与“下一命令重试”协议 |
 | Q5 | 改造 | streaming 通过 TurnHandle + epoch 原子 update；Header 命令不清 activeTurn；树冲突命令显式取消/等待 active turn |
@@ -2011,7 +2011,7 @@ Data / Payload
 | # | 测试层 | 必须覆盖 |
 | --- | --- | --- |
 | X1 | 静态契约 | §16.2 禁止项零命中；UI→Repository/Registry/FilesManager、ArtifactDAO 多 owner、unchecked delete、fallback、deprecated 白名单均编译或测试失败 |
-| X2 | Runtime 并发 | stream×Header、stream×tree mutation、旧 turn×新 turn、load×submit、100 并发 command；无丢失、无 activeTurn 误清、stale 全拒绝 |
+| X2 | Runtime 并发 | stream×Header、stream×tree mutation、旧 turn×新 turn、load×submit、100 并发 command、Draft 首消息 materialization；无丢失、无 activeTurn 误清、stale 全拒绝、空 Draft 不落库 |
 | X3 | Durability fault injection | StartTurn、checkpoint、finalize、Child relation、message/ref/FTS 事务每个边界注入失败；失败不发布，重试幂等，终态不回退 |
 | X4 | Artifact fault injection | staging 各死亡点、Settings 引用并发、GC×新消息引用、GC×头像替换、folder delete 中断、backfill 单节点损坏 |
 | X5 | Recovery | 每个步骤 kill/restart；Recovery Failed 阻断写入；retry 后唯一收敛；Master/Child/tool 双侧无悬挂 |
@@ -2059,3 +2059,104 @@ W Performance：从 Q/T 开始记录基线，U/S 完成后封板
 ```
 
 阶段内允许 Q/S/T 为正确 owner 新增必要组件和最新 schema migration；禁止再用固定文件数或净行数否决结构性必需对象。任何临时桥接必须与其删除在同一工作流、同一合并批次完成，主分支不得出现“新旧协议长期并存”的中间完成态。
+
+## 17. V1C 实施收口记录（2026-08-24 至 2026-08-25）
+
+### 17.1 架构结论
+
+V1C 的生产代码收口已经按 §16 的目标结构落地。§15.3 的 F-01–F-34 不再表现为并存协议或职责重叠：会话写入只有 Application command → Coordinator → Runtime/Repository 一条链，turn 只有 TurnEngine 一套骨架与终态协议，Artifact 只有 ArtifactStore 一个元数据所有者，启动恢复只有 ApplicationRecoveryCoordinator 一个状态机。旧 facade、兼容投影、UI 整聚合转换、服务定位器和绕过写入口均已物理删除，而不是 deprecated 或转发保留。
+
+当前代码结构已经具备稳定演进的语义边界：
+
+- Runtime 只维护 resident snapshot、turn epoch 与串行命令投影，不依赖 Repository，也不制造缺失会话。Registry 状态显式区分非持久化 Draft 与持久化 Ready；重复打开新聊天只替换/逐出 Draft，不增加数据库或会话列表记录。
+- ConversationCommandCoordinator 是 durable command 的唯一应用入口；它与 Registry 共享 `ConversationOperationLocks`，使 load/install/evict/submit 位于同一 conversationId 临界区，resident 与 non-resident 更新共享同一恢复门禁和提交结果语义。Draft 的首条 `AppendUserMessage` 以完整聚合单事务建库，提交后晋升同一个 Runtime 为 Ready；提交失败则保持 Draft 且不发布伪事实。
+- non-resident Header command 只读取 `ConversationHeader`，列表查询只返回 `ConversationListRecord`；两者均不再用空 `messageNodes` 伪造完整 Conversation。pin toggle 在 coordinator 锁内由 reducer 计算，100 并发请求不会退化为 read-modify-write 竞态。
+- Repository 只实现事务化持久化，message node、FTS、artifact reference 与 execution fact 在各自命令事务内一致提交；失败不会提前发布 snapshot。
+- TurnEngine 同时承载 Master/Target turn；StartTurn 原子创建回复槽与 RUNNING fact，checkpoint 只提交 changed node，FinalizeTurn 关闭终态及遗留 STARTED tool，非法状态回退由 CAS 拒绝。
+- ArtifactPayloadStore 只管 payload，ArtifactStore 独占 ArtifactDAO 与生命周期锁；Settings roots 由 ArtifactReferencePolicy/ArtifactSettingsCoordinator 管理，创建、发布、删除、GC 和补偿使用同一状态机。工具、MCP、Workspace、base64 输出和附件解析均以 `ToolResourceLease` 把未发布资源交给 GenerationHandler：durable checkpoint 成功后才发布，失败或取消在 NonCancellable 收口区回滚；临时输入资源无条件回收。
+- GeneratedMediaStore 在 IO 线程内使用不可被 suspend 取消切开的 Room commit primitive，并以 `.deleting` tombstone 恢复中断删除；数据库提交点后的取消保留 gallery 事实，同时回收尚未发布的聊天 artifact。工具产物 clone 会显式返回 `OwnedArtifact` 给 fork/Child 事务补偿链。
+- 会话 UI 只消费 ConversationSnapshot、ConversationSummary 或专用 UiModel；会话、收藏、受管 Artifact 与对话文件夹 mutation 均经 application service/use case，不再持有持久化 Conversation 或会话底层 Repository。助手管理页与助手切换页共用 `AssistantSearchFilterRow`，子助手 FilterChip 与搜索输入位于同一条带统一水平边距的紧凑行，并统一为 56dp 行高与 12dp 圆角；标签仅在实际存在时显示下一条可滚动筛选行，不再存在独立无边距控件或无内容却空耗高度的布局。
+- Drawer 的活动态由 ConversationQueryService 合并 Runtime reply job 与 AutoTitleGenerationTracker 两个权威来源；行内仅显示无文字的三点脉冲/旋转标题图标，可同时呈现且带本地化无障碍语义，不再把含义不明确的绿色圆点作为通用状态。ImagePreviewDialog 只接受统一的可选 `ImagePreviewDeleteAction`：确认影响解析、执行中状态、失败提示与本地页序列更新都在查看器内完成；成功删除中间项后同索引显示下一张，删除末项后定位新末项，序列清空后关闭。图库、文件管理、Workspace 等外层已有删除能力的场景接入各自领域删除 API，聊天内图片和临时生成预览等没有独立删除语义的场景不显示按钮。
+- ApplicationRecoveryCoordinator 按 Settings、Artifact、Projection、Turn/Child、Assistant cleanup 的唯一顺序开放 Loading/Ready/Failed；失败时 durable command 不可进入。
+- Workspace DocumentsProvider 不再从 Koin `GlobalContext` 定位服务；Application 作为 composition root 实现 typed `WorkspaceDocumentsDependencies`，Provider 只消费显式宿主契约。
+- Conversation tools 不再持有 Repository；`recent_chats` / `conversation_search` 只经 `ConversationQueryService`，最近会话摘要使用轻量 record 且不加载消息树。工具能力判定要求显式 `capabilityModel`，`AssistantToolFactory` 的委派与工具集依赖均为必填，不保留缺失装配的运行时降级。
+- 图片入站统一按有界字节、结构魔数、实际 MIME 和 canonical root 处理；MCP、生成预览、Gallery、助手背景和 Settings 图片不信任远程 MIME、模型名或原始相对路径。
+- Chat 页面读取 `ConversationReadState` 的 Loading/Ready/Missing/Failed，不再把损坏 payload 或 Room 读取失败折叠成永久 spinner；Failed 保留诊断并由同一 Application 初始化入口受控重试。外部路由、分享、粘贴与裁剪附件通过 `ArtifactDraftItem` 接收托管 URI 及已持久化 displayName/MIME，不再对 `file://` 反查外部 ContentResolver。
+
+因此，§14 暴露的问题应归类为上一轮实现没有完整遵守架构边界所形成的实现缺陷，而不是 V1 目标架构本身不可用。V1C 删除这些偏离后，语义、职责、稳定性和规模效率已达到 §16 的架构预期；后续功能应扩展 command、snapshot、typed use case 或 projection，不得重新建立第二状态源和旁路写协议。
+
+### 17.2 物理删除与唯一所有者
+
+已物理删除的旧生产入口包括 ChatService、AssistantDataRecovery、AssistantDataRecoveryGate、FilesManager、ManagedLocalArtifactStore。外部媒体导出归入无 Artifact/DAO 权限的 MediaExportService，统计聚合归入 StatsQueryService，UI 不再借旧文件门面或直接 DAO 查询。旧的整聚合 submit/update、load-or-fabricate、Runtime compatible projection、unchecked managed-file delete、恢复 bulk transition、UI repository mutation 与 getKoin 服务定位路径均已删除。
+
+列表、搜索与 Header 定向查询也完成形状收敛：Repository 不再用空消息树构造 Conversation，未使用的手工分页/搜索/Flow DAO 入口已删除；会话删除只查询 Child id，不为级联加载 Master/Child 全树。undo 删除在同一 keyed lock 内先捕获完整 Master+Child lineage 再执行 FK cascade，恢复使用 `createTree` 原子重建，不会丢失 Child。
+
+最终 owner 对应关系如下：
+
+| 语义 | 唯一 owner | 外部入口 |
+| --- | --- | --- |
+| 会话 durable command | ConversationCommandCoordinator | ConversationApplicationService、MasterTurnCoordinator、SubAssistantLifecycle、TurnRecovery |
+| resident snapshot | ConversationRuntime | ConversationRuntimeRegistry 显式 Loading/Draft/Ready/Missing/Failed runtime state；Draft 首消息事务后晋升 |
+| 会话事务持久化 | ConversationRepository | Coordinator 提交的 ConversationMutation/ExecutionFact |
+| turn 骨架与终态 | TurnEngine | MasterTurnCoordinator、DelegationCoordinator |
+| 子助手生命周期 | SubAssistantLifecycle | DelegationCoordinator 与 application 层 |
+| 启动恢复 | ApplicationRecoveryCoordinator | RouteActivity 恢复门禁与 retry UI |
+| Artifact 元数据/状态机 | ArtifactStore | ArtifactUseCase 与领域服务 |
+| Artifact payload | ArtifactPayloadStore | 仅 ArtifactStore 调用 |
+| Settings artifact roots | ArtifactSettingsCoordinator | 头像、背景等 typed operation |
+| 会话查询 | ConversationQueryService | Drawer、History、Search、SubAssistant detail |
+
+Room schema 升至 v8 只增加 Artifact 恢复协议所需的 `payload_token`；生命周期查询继续使用 v6 已建立的 state 索引。Conversation/Message/Turn/Tool/Artifact 的既有数据通过显式 migration 保留；应用版本仍为 0.0.18，versionCode 仍为 18。
+
+### 17.3 正确性与故障边界证据
+
+测试覆盖已落在结构性不变式而非兼容白名单上：
+
+- Runtime/Coordinator：stream×header、stream×tree mutation、旧 turn×新 turn、load×submit、并发命令、持久化失败不发布、stale epoch 全拒绝。
+- 新聊天：空 Draft 不入库、不进列表，重复 New Chat 不累积记录；首条用户消息只执行一次完整聚合 insert，并原位晋升 Ready。
+- Command/Application：non-resident 100 并发 pin toggle、收藏 100 并发 toggle、删除前 active runtime 拒绝、Master+Child undo lineage 捕获与原子恢复。
+- UI 状态：标题生成门闩同步发布/清除 in-flight projection；Drawer 同时区分回复与标题活动，不引入第二份生成事实。全屏查看器以 typed suspend delete action 调用既有 application/domain API，单独测试中间项、末项与唯一项删除后的页索引；查看器本身不触碰文件或 DAO。
+- Turn：StartTurn 原子事实、insert-once、合法 CAS、终态不可逆、Master/Target 骨架等价、finalize 失败传播、终态事务同时关闭 STARTED tool，CAS 失败时整体回滚；真实 coroutine 取消下终态提交进入 NonCancellable，并始终把原始 CancellationException 重新抛给上层。
+- 顶层 turn 编排：replacement 先同步请求取消，再等待旧 Job 与 durable supersede finalization，之后才允许新 User/tree mutation；测试同时锁定首 chunk 前 regenerate 失败保留旧分支、迟到 cancel 不覆盖 Completed、只有 Completed 启动标题/建议，以及延迟 Header patch 不回滚工具输出。
+- Projection/装载：changed-node FTS 与 artifact refs 同事务，删除与 title/updateAt 同事务，backfill 节点损坏不置完成，健康库恢复不加载 Conversation aggregate。MessageNode payload 通过有界 Unicode slice 完整重组；缺片、长度不符或 JSON 损坏直接使 Runtime 进入 Failed，禁止跳页后发布不完整 Ready 聚合。
+- Artifact：staging/rename/row 各死亡点、创建补偿、删除状态回滚、Settings detach 失败、GC×发布锁、folder delete、20 路并发显式删除只执行一次 payload 删除、生成媒体提交点取消与 deletion tombstone 恢复、背景替换补偿、fork/Child/工具/MCP/Workspace/base64 产物所有权回传。UI/read port 只查询 ACTIVE；CREATING/DELETING 只对 lifecycle/recovery 可见。启动恢复遇到 ACTIVE 元数据有 durable root 但 payload 缺失时失败关闭并保留证据，只有确认无消息与 Settings root 的孤儿才可清理。
+- Child materialization：文本模型仍持久化已解析图片 parts，task message id 与 metadata link 一致；resolver 失败不创建 Child，Child 创建或关系 checkpoint 失败精确删除未关联 Child 并回滚本批 artifact。
+- Recovery：child-first、tool STARTED→UNKNOWN、损坏 turn UUID、仅 Child 非终态、重复恢复、Failed 门禁与 retry 收敛。
+- Migration：历史 migration 全链、v5/v6/v7→v8、fresh v8 schema 同构、数据保全、外键检查为空。
+- 静态契约：旧类与旧方法、UI→Repository/Registry/FilesManager、ArtifactDAO 多 owner、service locator、生产代码计划词汇、Runtime 装载旁路与可选工具资源所有权均以测试阻止回归；MCP OAuth 的 suspend `runCatching` 分支强制传播 cancellation。
+- 工具装配与查询：Assistant tool 构造不允许可空 Coordinator/Factory；Conversation tools 禁止 Repository import；最近会话查询测试锁定零 message-node 加载。
+- 媒体入站：Settings 图片在 root 提交前完成有界复制与结构验证；MCP/base64/生成媒体覆盖过大、声明 MIME 不符、非图片和非 canonical 路径；file URI 名称/MIME、PNG 裁剪扩展名与多 chunk VP8X WebP 容器均有直接回归测试。
+
+### 17.4 规模与重组证据
+
+性能测试使用固定数据集重复执行。before 数据由测试 harness 忠实复现封板前的整树 mutation/recovery 算法，current 数据执行 V1C 的 command-aware mutation 与 execution-index 恢复路径；它们不是两个独立 APK 的运行跟踪，因此只用于验证算法和写放大差异，不冒充设备端端到端时延。
+
+| 场景 | 规模 | before rows/bytes | current rows/bytes | before p50/p95 | current p50/p95 | identity invalidation |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| checkpoint | 50 nodes | 50 / 19,541 | 1 / 392 | 7 / 14 μs | 1 / 2 μs | 50 → 1 |
+| checkpoint | 500 nodes | 500 / 195,599 | 1 / 392 | 7 / 8 μs | 0 / 1 μs | 500 → 1 |
+| checkpoint | 5,000 nodes | 5,000 / 1,963,127 | 1 / 392 | 88 / 117 μs | 0 / 0 μs | 5,000 → 1 |
+| healthy recovery | 50 conversations | 50 / 58,315 | 0 / 0 | 1,308 / 2,135 μs | 0 / 2 μs | 不加载 aggregate |
+| healthy recovery | 500 conversations | 500 / 584,671 | 0 / 0 | 9,407 / 11,249 μs | 0 / 12 μs | 不加载 aggregate |
+| healthy recovery | 5,000 conversations | 5,000 / 5,857,582 | 0 / 0 | 29,766 / 32,471 μs | 0 / 0 μs | 不加载 aggregate |
+
+Android Compose instrumentation 使用 5,000-node snapshot 验证：生成中的 title/assistant/folder update 只重组 header consumer，stream delta 只重组 active node；最终计数为 header 2 次、history 1 次、active 2 次，且更新字段在语义树中可见。历史节点保持引用身份，header non-resident command 与健康恢复均不加载 message nodes。裁剪成功、错误与取消分别由同一 CropResultDisposition 决策验证所有权移交、错误提示和未发布输出清理，UI hook 不再散落判断。
+
+写放大还以字段级 delta 封板：pin/folder/assistant 等未改变 title/updateAt 的 Header mutation 不触发 FTS metadata 更新；Child retention 只提交 retained/deleted delta；取消不再被 suspend `runCatching` 吞没，stop/join、回滚和 materialization 补偿在明确的 NonCancellable 收口区完成。
+
+### 17.5 当前验证结果与发布边界
+
+在 Windows、串行 Gradle（`--no-parallel --max-workers=1`）下得到以下最终结果：
+
+| 验证 | 结果 |
+| --- | --- |
+| 全模块 JVM test | 通过；1,404 tests，0 failure，0 error；9 个 skipped case |
+| Android instrumentation | Pixel 10 Pro Fold AVD、Android 17/API 37；全模块 61 tests，0 skipped，0 failure，0 error；其中 app 架构/迁移/UI 套件 48 tests |
+| Debug APK | assembleDebug 通过；arm64-v8a、x86_64 与 universal artifact 生成 |
+| Android Lint | lintDebug 全模块通过；动态配色 API 守卫、附件检查 locale 缺失与查看器确认文案的配置感知资源读取均已从源头修复，无 baseline/suppress |
+| Release APK | assembleRelease 通过；R8、resource shrink、lint-vital、签名与 APK rename 完成 |
+| 模拟器启动 smoke | Debug APK 安装并启动 RouteActivity；启动后 logcat 无 FATAL EXCEPTION/ANR |
+| 静态封板 | §16.2 旧入口、UI 禁止依赖、service locator、生产计划词汇零命中；git diff --check 通过 |
+| 版本边界 | app/build.gradle.kts 无版本 diff，changelog 未新增版本 |
+
+代码架构与自动化验证已收口，但 §16.10 的 X8 明确要求真机，不允许用 AVD 代替。本次环境的 ADB 只有 emulator-5554，没有物理设备，因此当前不能把“V1C 最终发布验收 100%”写成已完成。接入真机后必须按 X8 原清单逐项记录设备型号、系统版本、数据库来源和结果；该项是外部发布证据缺口，不对应任何兼容代码、临时实现或待偿还架构债。

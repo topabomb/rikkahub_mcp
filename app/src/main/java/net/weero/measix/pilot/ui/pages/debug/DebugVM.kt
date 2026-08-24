@@ -14,10 +14,9 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
-import net.weero.measix.pilot.data.repository.ConversationRepository
-import net.weero.measix.pilot.service.ChatService
+import net.weero.measix.pilot.service.ConversationApplicationService
+import net.weero.measix.pilot.service.ConversationQueryService
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Clock
@@ -26,8 +25,8 @@ import kotlin.uuid.Uuid
 
 class DebugVM(
     private val settingsStore: SettingsStore,
-    private val conversationRepository: ConversationRepository,
-    private val chatService: ChatService,
+    private val conversationQueryService: ConversationQueryService,
+    private val conversationApplicationService: ConversationApplicationService,
 ) : ViewModel() {
     val settings: StateFlow<Settings> = settingsStore.settingsFlow
         .stateIn(viewModelScope, SharingStarted.Lazily, Settings.dummy())
@@ -41,7 +40,7 @@ class DebugVM(
 
     fun refreshConversationCount() {
         viewModelScope.launch {
-            _conversationCount.value = conversationRepository.countConversations()
+            _conversationCount.value = conversationQueryService.count()
         }
     }
 
@@ -94,14 +93,12 @@ class DebugVM(
                 index++
             }
 
-            val conversation = Conversation(
+            conversationApplicationService.createForDiagnostics(
                 id = Uuid.random(),
                 assistantId = DEFAULT_ASSISTANT_ID,
                 title = "超大对话测试 (${sizeMB}MB)",
-                messageNodes = messageNodes,
+                nodes = messageNodes,
             )
-
-            chatService.insertConversation(conversation)
         }
     }
 
@@ -120,14 +117,12 @@ class DebugVM(
                 messageNodes.add(MessageNode.of(message))
             }
 
-            val conversation = Conversation(
+            conversationApplicationService.createForDiagnostics(
                 id = Uuid.random(),
                 assistantId = DEFAULT_ASSISTANT_ID,
                 title = "${messageCount}条消息测试",
-                messageNodes = messageNodes,
+                nodes = messageNodes,
             )
-
-            chatService.insertConversation(conversation)
         }
     }
 

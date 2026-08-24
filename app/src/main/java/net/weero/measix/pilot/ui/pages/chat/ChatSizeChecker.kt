@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.chat
+package net.weero.measix.pilot.ui.pages.chat
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Alert01
@@ -12,7 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.res.stringResource
 import me.rerere.ai.core.MessageRole
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.model.MessageNode
 
 // 消息节点数量警告阈值
 const val MESSAGE_NODE_WARNING_THRESHOLD = 768
@@ -35,10 +35,10 @@ private val DefaultSizeInfo = ConversationSizeInfo(
 )
 
 @Composable
-fun rememberConversationSizeInfo(conversation: Conversation): ConversationSizeInfo {
-    return remember(conversation.messageNodes) {
-        val nodeCount = conversation.messageNodes.size
-        val lastAssistantInputTokens = conversation.messageNodes.asReversed()
+fun rememberConversationSizeInfo(nodes: List<MessageNode>): ConversationSizeInfo {
+    return remember(nodes) {
+        val nodeCount = nodes.size
+        val lastAssistantInputTokens = nodes.asReversed()
             .map { it.currentMessage }
             .firstOrNull { it.role == MessageRole.ASSISTANT }
             ?.usage

@@ -1,8 +1,6 @@
 package net.weero.measix.pilot.ui.pages.setting
 
-import android.content.Context
-import android.graphics.Typeface
-import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -31,23 +29,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dokar.sonner.ToastType
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Delete02
 import me.rerere.hugeicons.stroke.FileImport
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.ChatFontFamily
 import net.weero.measix.pilot.data.datastore.DisplaySetting
-import net.weero.measix.pilot.data.files.FileFolders
-import net.weero.measix.pilot.data.files.FileUtils
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.richtext.MarkdownBlock
 import net.weero.measix.pilot.ui.components.ui.CardGroup
@@ -57,13 +51,11 @@ import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.ui.theme.rememberChatFontFamily
 import net.weero.measix.pilot.utils.plus
 import org.koin.androidx.compose.koinViewModel
-import java.io.File
 
 @Composable
 fun SettingPreferencesUIPage(vm: SettingVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     var displaySetting by remember(settings) { mutableStateOf(settings.displaySetting) }
-    val context = LocalContext.current
     val toaster = LocalToaster.current
     val scope = rememberCoroutineScope()
     val chatFontFamily = rememberChatFontFamily(displaySetting)
@@ -78,25 +70,18 @@ fun SettingPreferencesUIPage(vm: SettingVM = koinViewModel()) {
 
     val importSuccessMsg = stringResource(R.string.setting_display_page_custom_font_import_success)
     val importFailedMsg = stringResource(R.string.setting_display_page_custom_font_import_failed)
+    val removeFailedMsg = stringResource(R.string.setting_display_page_custom_font_remove_failed)
     val fontPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         uri ?: return@rememberLauncherForActivityResult
         scope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    importCustomChatFontInternal(context, uri)
-                }
-            }.onSuccess { importedFont ->
-                updateDisplaySetting(
-                    displaySetting.copy(
-                        chatFontFamily = ChatFontFamily.CUSTOM,
-                        chatCustomFontPath = importedFont.relativePath,
-                        chatCustomFontName = importedFont.displayName,
-                    )
-                )
+            try {
+                displaySetting = vm.importCustomChatFont(uri)
                 toaster.show(importSuccessMsg, type = ToastType.Success)
-            }.onFailure { error ->
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
                 toaster.show(importFailedMsg.format(error.message.orEmpty()), type = ToastType.Error)
             }
         }
@@ -311,14 +296,20 @@ fun SettingPreferencesUIPage(vm: SettingVM = koinViewModel()) {
                                 if (displaySetting.chatCustomFontPath.isNotBlank()) {
                                     IconButton(
                                         onClick = {
-                                            deleteCustomChatFontInternal(context, displaySetting.chatCustomFontPath)
-                                            updateDisplaySetting(
-                                                displaySetting.copy(
-                                                    chatFontFamily = ChatFontFamily.DEFAULT,
-                                                    chatCustomFontPath = "",
-                                                    chatCustomFontName = "",
-                                                )
-                                            )
+                                            val removedPath = displaySetting.chatCustomFontPath
+                                            scope.launch {
+                                                try {
+                                                    displaySetting = vm.removeCustomChatFont(removedPath)
+                                                } catch (cancelled: CancellationException) {
+                                                    throw cancelled
+                                                } catch (error: Exception) {
+                                                    Log.e("SettingPreferences", "Failed to remove custom font", error)
+                                                    toaster.show(
+                                                        removeFailedMsg.format(error.message.orEmpty()),
+                                                        type = ToastType.Error,
+                                                    )
+                                                }
+                                            }
                                         }
                                     ) {
                                         Icon(
@@ -422,13 +413,6 @@ private val CustomFontMimeTypesUI = arrayOf(
     "*/*",
 )
 
-private val CustomFontExtensionsUI = setOf("ttf", "otf", "ttc")
-
-private data class ImportedChatFontUI(
-    val relativePath: String,
-    val displayName: String,
-)
-
 @Composable
 private fun ChatFontFamily.labelUI(): String = when (this) {
     ChatFontFamily.DEFAULT -> stringResource(R.string.setting_display_page_chat_font_family_default)
@@ -442,72 +426,4 @@ private fun ChatFontFamily.toFontFamilyUI(customFontFamily: FontFamily): FontFam
     ChatFontFamily.SERIF -> FontFamily.Serif
     ChatFontFamily.MONOSPACE -> FontFamily.Monospace
     ChatFontFamily.CUSTOM -> customFontFamily
-}
-
-private fun importCustomChatFontInternal(context: Context, uri: Uri): ImportedChatFontUI {
-    val displayName = FileUtils.getFileNameFromUri(context, uri)?.takeIf { it.isNotBlank() } ?: "custom_font"
-    val extension = displayName.substringAfterLast('.', "")
-        .lowercase()
-        .takeIf { it in CustomFontExtensionsUI }
-        ?: "ttf"
-    val fontDir = File(context.filesDir, FileFolders.FONTS).apply { mkdirs() }
-    val targetFile = File(fontDir, "chat_font.${System.currentTimeMillis()}.$extension")
-    val tempFile = File(fontDir, "chat_font_import.tmp")
-
-    try {
-        tempFile.delete()
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            tempFile.outputStream().use { output ->
-                input.copyTo(output)
-            }
-        } ?: error("Unable to open selected font")
-
-        runCatching {
-            Typeface.createFromFile(tempFile)
-        }.onFailure { error ->
-            throw IllegalArgumentException(error.message ?: "Invalid font file", error)
-        }
-
-        replaceCustomChatFontInternal(fontDir, tempFile, targetFile)
-    } catch (error: Throwable) {
-        tempFile.delete()
-        throw error
-    }
-
-    val relativePath = FileUtils.getRelativePathInFilesDir(context.filesDir, targetFile)
-        ?: "${FileFolders.FONTS}/${targetFile.name}"
-    return ImportedChatFontUI(relativePath = relativePath, displayName = displayName)
-}
-
-private fun replaceCustomChatFontInternal(fontDir: File, tempFile: File, targetFile: File) {
-    val existingFiles = fontDir.listFiles { file ->
-        file.isFile && file.name.startsWith("chat_font.") && file != tempFile
-    }?.toList().orEmpty()
-    val backups = existingFiles.map { file ->
-        file to File(fontDir, "previous_${file.name}").also { it.delete() }
-    }
-
-    try {
-        backups.forEach { (file, backup) ->
-            check(file.renameTo(backup)) { "Unable to prepare existing font for replacement" }
-        }
-        check(tempFile.renameTo(targetFile)) { "Unable to save selected font" }
-        backups.forEach { (_, backup) -> backup.delete() }
-    } catch (error: Throwable) {
-        tempFile.delete()
-        backups.forEach { (file, backup) ->
-            if (!file.exists() && backup.exists()) {
-                backup.renameTo(file)
-            }
-        }
-        throw error
-    }
-}
-
-private fun deleteCustomChatFontInternal(context: Context, relativePath: String) {
-    val filesDir = runCatching { context.filesDir.canonicalFile }.getOrNull() ?: return
-    val fontFile = runCatching { File(filesDir, relativePath).canonicalFile }.getOrNull() ?: return
-    if (fontFile.path.startsWith("${filesDir.path}${File.separator}")) {
-        fontFile.delete()
-    }
 }

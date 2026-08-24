@@ -1,110 +1,227 @@
 package net.weero.measix.pilot.architecture
 
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * 单一写者契约测试。
- *
- * 1. `messageNodeDAO` 整批写入（insertAll / upsertAll / deleteByIds）仅发生在
- *    `ConversationRepository` —— message 树唯一持久化入口（applyMutation 收敛后成立）。
- * 2. `conversationDAO` 写方法（insert / update / delete 系）仅发生在 `ConversationRepository`
- *    —— conversation header 唯一持久化入口。
- * 3. `updateConversation(Conversation)`（@Deprecated 导入/迁移/启动恢复专用）的运行时调用
- *    仅允许出现在 DelegationCoordinator 的启动恢复白名单路径
- *    （submitRecoveredTree：启动早期无内存态时的 Child 恢复整写）。
- *
- * 全库不存在任何整对象回写路径（不变式 2）；UI 侧回调命名 `onUpdateConversation`
- * 不是 repository 调用，不受本契约约束。
- */
+/** Dependency direction and removed-symbol architecture seal. */
 class SingleWriterContractTest {
+    private val sourceRoot = File("src/main/java/net/weero/measix/pilot")
+    private val sources by lazy {
+        sourceRoot.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
+    }
 
-    private val srcDir: File = File("src/main/java/net/weero/measix/pilot")
+    private fun hits(token: String, files: List<File> = sources): List<String> = files
+        .filter { it.readText().contains(token) }
+        .map { it.relativeTo(sourceRoot).invariantSeparatorsPath }
 
-    private fun mainSources(): List<File> =
-        srcDir.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
-
-    /** 在 srcDir 中查找引用 `call` 且不属于 `allowedFiles` 的文件。 */
-    private fun referencingFiles(call: String, vararg allowedFileSuffixes: String): List<String> {
-        val allowed = allowedFileSuffixes.map { File(srcDir, it).absolutePath }.toSet()
-        return mainSources()
-            .filter { file ->
-                file.absolutePath !in allowed && file.readText().contains(call)
-            }
-            .map { it.relativeTo(srcDir).path }
+    private fun assertNoHits(token: String, files: List<File> = sources) {
+        val violations = hits(token, files)
+        assertTrue("forbidden architecture token '$token': $violations", violations.isEmpty())
     }
 
     @Test
-    fun `I1 messageNodeDAO batch writes confined to ConversationRepository`() {
-        val violations = mutableListOf<String>()
-        for (call in listOf("messageNodeDAO.insertAll", "messageNodeDAO.upsertAll", "messageNodeDAO.deleteByIds")) {
-            violations += referencingFiles(call, "data/repository/ConversationRepository.kt")
+    fun `removed compatibility surfaces cannot return`() {
+        listOf(
+            "ConversationSnapshot.toConversation(",
+            "loadSnapshot(",
+            "updateConversationState",
+            "updatePersistedConversation",
+            "submitHeaderUpdate",
+            "getSession(",
+            "getOrCreateSession",
+            "getSessionsSnapshot",
+            "ApplyStreamingDelta",
+            "GenerationCommand",
+            "DomainCommand",
+            "BeginTurn",
+            "TransitionToolExecution",
+            "MasterTurnOutcome",
+            "FilesManager",
+            "ManagedLocalArtifactStore",
+            "deleteChatFiles",
+            "deleteManagedFilePermanently",
+            "deleteManagedFolderPermanently",
+            "finishInterruptedPendingTools",
+            "updateGenerationCheckpoint",
+            "recoverInterruptedExecutions",
+            "getAllChildConversationIds",
+            "retainedChildren",
+            "getConversationHeaderSnapshot",
+            "getConversationsOfAssistantPaging",
+            "getConversationsOfAssistantPage",
+            "searchConversationsOfAssistantPage",
+            "deleteRecovery",
+            "recoveryWrite",
+            "USER_TASK_WRITTEN",
+            "INTERACTION_LIMIT_REACHED",
+            "afterCommit",
+            "backward compat",
+            "Phase A",
+            "Phase B",
+            "Phase C",
+            "Phase D",
+            "TODO",
+            "FIXME",
+        ).forEach(::assertNoHits)
+        assertFalse(File(sourceRoot, "service/ChatService.kt").exists())
+        assertFalse(File(sourceRoot, "service/AssistantDataRecovery.kt").exists())
+        assertFalse(File(sourceRoot, "data/files/FilesManager.kt").exists())
+        assertFalse(File(sourceRoot, "data/files/ManagedLocalArtifactStore.kt").exists())
+    }
+
+    @Test
+    fun `UI depends only on application ports`() {
+        val ui = sources.filter { it.relativeTo(sourceRoot).invariantSeparatorsPath.startsWith("ui/") }
+        listOf(
+            "ConversationRepository",
+            "ConversationRuntimeRegistry",
+            "ConversationRuntimeLease",
+            "FilesManager",
+            "data.db.dao.",
+            "FavoriteRepository",
+            "FolderRepository",
+            "ConversationCommand",
+            "UpdateHeader",
+            "SelectNodeVariant",
+            "data.model.Conversation",
+            "data.db.entity.ArtifactEntity",
+            "data.db.entity.ArtifactOrigin",
+            "data.files.ArtifactStore",
+            "data.files.ArtifactDeleteImpact",
+            "data.files.ArtifactDeleteResult",
+        ).forEach { token -> assertNoHits(token, ui) }
+    }
+
+    @Test
+    fun `conversation persistence writes have one caller graph`() {
+        val coordinator = "service/runtime/ConversationCommandCoordinator.kt"
+        val allowed = mapOf(
+            "repository.applyMutation(" to setOf(coordinator),
+            "repository.insertConversation(" to setOf(coordinator),
+            "repository.insertConversationTree(" to setOf(coordinator),
+            "repository.deleteConversation(" to setOf(coordinator),
+        )
+        allowed.forEach { (call, owners) ->
+            val violations = hits(call).filterNot(owners::contains)
+            assertTrue("$call must be confined to $owners: $violations", violations.isEmpty())
         }
-        assertTrue(
-            "整批 message-node 写入必须仅由 ConversationRepository 执行（单一写者），违规文件：$violations",
-            violations.isEmpty(),
-        )
     }
 
     @Test
-    fun `I1 conversationDAO writes confined to ConversationRepository`() {
-        val violations = mutableListOf<String>()
-        for (call in listOf(
-            "conversationDAO.insert(", "conversationDAO.update(", "conversationDAO.delete(",
-            "conversationDAO.deleteById(", "conversationDAO.deleteChildConversations(",
-        )) {
-            violations += referencingFiles(call, "data/repository/ConversationRepository.kt")
+    fun `runtime loading is confined to registry and command coordinator`() {
+        val allowed = setOf(
+            "service/runtime/ConversationRuntimeRegistry.kt",
+            "service/runtime/ConversationCommandCoordinator.kt",
+        )
+        val violations = hits("loadRuntime(").filterNot(allowed::contains)
+        assertTrue("runtime load must share the command lock boundary: $violations", violations.isEmpty())
+    }
+
+    @Test
+    fun `tool output ownership transfer is mandatory`() {
+        val toolSource = File("../ai/src/main/java/me/rerere/ai/core/Tool.kt").readText()
+        val toolContext = toolSource
+            .substringAfter("data class ToolExecutionContext(")
+            .substringBefore("\n)")
+        val transformerContext = File(sourceRoot, "data/ai/transformers/Transformer.kt").readText()
+            .substringAfter("class TransformerContext(")
+            .substringBefore("\n)")
+        val lease = toolSource
+            .substringAfter("class ToolResourceLease(")
+            .substringBefore("\n)")
+        listOf(
+            "tool execution resource registration" to toolContext,
+            "transformer resource registration" to transformerContext,
+        ).forEach { (label, declaration) ->
+            val field = declaration.substringAfter("val registerUnpublishedResource:").substringBefore(",\n")
+            assertFalse("$label must not have a no-op default", field.contains("="))
         }
-        assertTrue(
-            "conversation 写方法必须仅由 ConversationRepository 执行（header 唯一写者），违规文件：$violations",
-            violations.isEmpty(),
-        )
-    }
-
-    @Test
-    fun `I1 deprecated updateConversation calls confined to startup-recovery whitelist`() {
-        val violations = referencingFiles(
-            "conversationRepo.updateConversation(",
-            // submitRecoveredTree：启动早期无内存态时的恢复整写（恢复域唯一所有者 TurnRecovery）
-            "service/TurnRecovery.kt",
-        )
-        assertTrue(
-            "updateConversation(Conversation) 仅限导入/迁移/启动恢复专用（@Deprecated 白名单），" +
-                "运行时结构性修改必须经 ConversationRuntime.submit；违规文件：$violations",
-            violations.isEmpty(),
-        )
-    }
-
-    @Test
-    fun `I1 messageNodeDAO is not constructed as a direct write owner elsewhere`() {
-        // 无除 ConversationRepository 外的类持有 messageNodeDAO 并做写入；此测试保证 grep 基线可维护
-        assertTrue(srcDir.isDirectory)
-    }
-
-    @Test
-    fun `I1 persistMessageNodes is not a runtime checkpoint path`() {
-        val hits = mainSources().filter { file ->
-            file.readText().contains("persistMessageNodes")
-        }.map { it.relativeTo(srcDir).path }
-        assertTrue(
-            "persistMessageNodes 不得作为运行时 checkpoint 路径残留，违规：$hits",
-            hits.isEmpty(),
-        )
-    }
-
-    @Test
-    fun `I1 handleMessageComplete and finalizeMasterTurn are not live persist paths`() {
-        val forbidden = listOf("handleMessageComplete", "finalizeMasterTurn")
-        val hits = mainSources().flatMap { file ->
-            val text = file.readText()
-            forbidden.filter { token -> text.contains(token) }.map { token ->
-                "${file.relativeTo(srcDir).path}:$token"
-            }
+        listOf("publish", "discard").forEach { operation ->
+            val field = lease.substringAfter("val $operation:").substringBefore(",\n")
+            assertFalse("resource lease $operation must be explicit", field.contains("="))
         }
-        assertTrue(
-            "Master 生成不得再走 handleMessageComplete/finalizeMasterTurn 第二套持久化协议，违规：$hits",
-            hits.isEmpty(),
+    }
+
+    @Test
+    fun `assistant tool composition is complete at construction`() {
+        val source = File(sourceRoot, "data/ai/tools/AssistantToolFactory.kt").readText()
+        val constructor = source
+            .substringAfter("class AssistantToolFactory(")
+            .substringBefore("\n) {")
+        assertFalse(constructor.contains("DelegationCoordinator?"))
+        assertFalse(constructor.contains("GenerationToolSetFactory?"))
+        assertFalse(source.contains("Sub-assistant coordinator is not available"))
+    }
+
+    @Test
+    fun `conversation query tools cannot bypass the query port or load message trees for summaries`() {
+        val toolSources = sources.filter {
+            it.relativeTo(sourceRoot).invariantSeparatorsPath.startsWith("data/ai/tools/")
+        }
+        assertNoHits("ConversationRepository", toolSources)
+
+        val repository = File(sourceRoot, "data/repository/ConversationRepository.kt").readText()
+        val recentRecords = repository
+            .substringAfter("suspend fun getRecentConversationRecords(")
+            .substringBefore("fun getConversationsOfAssistant(")
+        assertFalse(
+            "recent conversation summaries must not load message nodes",
+            recentRecords.contains("loadMessageNodes"),
         )
+    }
+
+    @Test
+    fun `ArtifactDAO has exactly one domain owner`() {
+        val domainOwners = hits("ArtifactDAO").filterNot {
+            it == "data/db/AppDatabase.kt" ||
+                it == "data/db/dao/ArtifactDAO.kt" ||
+                it == "di/RepositoryModule.kt"
+        }
+        assertTrue("ArtifactDAO domain owner must be ArtifactStore: $domainOwners", domainOwners == listOf("data/files/ArtifactStore.kt"))
+    }
+
+    @Test
+    fun `unchecked rollback cannot be silently swallowed`() {
+        assertNoHits("runCatching { artifactStore.discardUnpublished")
+        assertNoHits("runCatching { store.discardUnpublished")
+        assertNoHits("@Deprecated")
+        assertNoHits("getKoin()")
+        assertNoHits("KoinJavaComponent")
+        assertNoHits("GlobalContext")
+        assertNoHits("runCatching { previousJob?.join()")
+        assertNoHits("runCatching { job.join()")
+        assertNoHits("runCatching { loadRuntime(")
+        assertNoHits("conversationEntityToConversation(entity, emptyList())")
+    }
+
+    @Test
+    fun `MCP suspend recovery paths preserve cancellation`() {
+        val source = File(sourceRoot, "data/ai/mcp/McpManager.kt").readText()
+        fun section(start: String, end: String): String =
+            source.substringAfter(start).substringBefore(end)
+
+        val refresh = section("private suspend fun ensureFreshToken", "private suspend fun persistOAuthState")
+        val discovery = section("private suspend fun needsAuthorization", "/** 从异常链中提取")
+        val authorization = section("fun startAuthorization", "/** 取消进行中的 OAuth")
+        listOf(refresh, discovery, authorization).forEach { body ->
+            assertTrue(
+                "suspend runCatching path must rethrow CancellationException",
+                body.contains("is CancellationException) throw"),
+            )
+        }
+        assertFalse(authorization.contains("return@onFailure"))
+    }
+
+    @Test
+    fun `legacy master persistence skeleton cannot return`() {
+        assertNoHits("handleMessageComplete")
+        assertNoHits("finalizeMasterTurn")
+        assertNoHits("persistMessageNodes")
+        assertNoHits("V1C")
+        assertNoHits("工作流")
+        assertNoHits("修订记录")
+        assertNoHits("兼容白名单")
     }
 }

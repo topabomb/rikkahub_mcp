@@ -29,7 +29,7 @@ class SubAssistantAskUserBridgeTest {
             ),
         )
 
-        val recovered = message.recoverSubAssistantToolsAfterInterruption("app_restarted")
+        val recovered = message.finalizeSubAssistantToolsAfterInterruption("app_restarted")
         val tools = recovered.getTools()
 
         assertTrue(tools.all { it.isExecuted })
@@ -45,7 +45,7 @@ class SubAssistantAskUserBridgeTest {
             parts = listOf(pendingAsk("question")),
         )
 
-        val recovered = message.recoverSubAssistantToolsAfterInterruption("user_cancelled")
+        val recovered = message.finalizeSubAssistantToolsAfterInterruption("user_cancelled")
         val tool = recovered.getTools().single()
 
         assertTrue(tool.isExecuted)

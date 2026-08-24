@@ -30,11 +30,13 @@ import net.weero.measix.pilot.data.db.migrations.Migration_3_4
 import net.weero.measix.pilot.data.db.migrations.Migration_4_5
 import net.weero.measix.pilot.data.db.migrations.Migration_5_6
 import net.weero.measix.pilot.data.db.migrations.Migration_6_7
+import net.weero.measix.pilot.data.db.migrations.Migration_7_8
 import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.data.ai.mcp.NetworkMonitor
 import net.weero.measix.pilot.data.sync.webdav.WebDavSync
 import me.rerere.search.SearchService
 import net.weero.measix.pilot.data.sync.S3Sync
+import net.weero.measix.pilot.data.sync.BackupArchiveService
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -52,7 +54,15 @@ val dataSourceModule = module {
         val context: Context = get()
         Room.databaseBuilder(context, AppDatabase::class.java, "measix_pilot")
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-            .addMigrations(Migration_1_2, Migration_2_3, Migration_3_4, Migration_4_5, Migration_5_6, Migration_6_7)
+            .addMigrations(
+                Migration_1_2,
+                Migration_2_3,
+                Migration_3_4,
+                Migration_4_5,
+                Migration_5_6,
+                Migration_6_7,
+                Migration_7_8,
+            )
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onOpen(db: SupportSQLiteDatabase) {
                     // FK 约束运行时启用（每个连接）：v7 自引用 CASCADE（孤儿 child
@@ -179,7 +189,15 @@ val dataSourceModule = module {
         MessageFtsManager(get())
     }
 
-    single { McpManager(settingsStore = get(), appScope = get(), filesManager = get(), networkMonitor = get(), appEventBus = get()) }
+    single {
+        McpManager(
+            settingsStore = get(),
+            appScope = get(),
+            artifactStore = get(),
+            networkMonitor = get(),
+            appEventBus = get(),
+        )
+    }
 
     single { NetworkMonitor(get()) }
 
@@ -243,11 +261,21 @@ val dataSourceModule = module {
     }
 
     single {
-        WebDavSync(
+        BackupArchiveService(
+            context = get(),
             settingsStore = get(),
             json = get(),
+            database = get(),
+            artifactStore = get(),
+            generatedMediaStore = get(),
+        )
+    }
+
+    single {
+        WebDavSync(
             context = get(),
-            httpClient = get()
+            httpClient = get(),
+            archiveService = get(),
         )
     }
 
@@ -268,10 +296,9 @@ val dataSourceModule = module {
 
     single {
         S3Sync(
-            settingsStore = get(),
-            json = get(),
             context = get(),
-            httpClient = get()
+            httpClient = get(),
+            archiveService = get(),
         )
     }
 

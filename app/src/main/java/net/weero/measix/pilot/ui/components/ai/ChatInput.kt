@@ -99,9 +99,9 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.datastore.getQuickMessagesOfAssistant
-import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.QuickMessage
+import net.weero.measix.pilot.service.ArtifactDraftScope
 import net.weero.measix.pilot.ui.components.ai.completion.ChatCompletionContext
 import net.weero.measix.pilot.ui.components.ai.completion.ChatCompletionItem
 import net.weero.measix.pilot.ui.components.ai.completion.ChatCompletionList
@@ -125,6 +125,7 @@ import kotlin.time.Duration.Companion.seconds
 @Composable
 fun ChatInput(
     state: ChatInputState,
+    artifactDraftScope: ArtifactDraftScope,
     loading: Boolean,
     settings: Settings,
     assistant: Assistant,
@@ -244,7 +245,7 @@ fun ChatInput(
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     if (state.messageContent.isNotEmpty()) {
-                        MediaFileInputRow(state = state)
+                        MediaFileInputRow(state = state, artifactDraftScope = artifactDraftScope)
                     }
 
                     val actionRow: @Composable (Modifier) -> Unit = { actionModifier ->
@@ -408,6 +409,7 @@ fun ChatInput(
                         ) {
                             TextInputRow(
                                 state = state,
+                                artifactDraftScope = artifactDraftScope,
                                 assistant = assistant,
                                 completionProviders = completionProviders,
                                 onSendMessage = { sendMessage() },
@@ -419,6 +421,7 @@ fun ChatInput(
                     } else {
                         TextInputRow(
                             state = state,
+                            artifactDraftScope = artifactDraftScope,
                             assistant = assistant,
                             completionProviders = completionProviders,
                             onSendMessage = { sendMessage() },
@@ -455,6 +458,7 @@ private fun ActionIconButton(
 @Composable
 private fun TextInputRow(
     state: ChatInputState,
+    artifactDraftScope: ArtifactDraftScope,
     assistant: Assistant,
     completionProviders: List<ChatCompletionProvider>,
     onSendMessage: () -> Unit,
@@ -462,7 +466,9 @@ private fun TextInputRow(
     maxHeightInLines: Int = 5,
 ) {
     val settings = LocalSettings.current
-    val filesManager: FilesManager = koinInject()
+    val toaster = LocalToaster.current
+    val imageImportFailed = stringResource(R.string.image_import_failed)
+    val textImportFailed = stringResource(R.string.chat_input_file_read_failed, "pasted_text.txt")
     val scope = rememberCoroutineScope()
     val quickMessages = remember(settings.quickMessages, assistant.quickMessageIds) {
         settings.getQuickMessagesOfAssistant(assistant)
@@ -507,11 +513,17 @@ private fun TextInputRow(
                             val uri = item.uri
                             if (uri != null) {
                                 scope.launch {
-                                    state.addImages(
-                                        filesManager.createChatFilesByContents(
-                                            listOf(uri)
+                                    try {
+                                        state.addImages(
+                                            artifactDraftScope.importUrisOrThrow(
+                                                listOf(uri)
+                                            ).map { it.uri }
                                         )
-                                    )
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (_: Exception) {
+                                        toaster.show(imageImportFailed, type = ToastType.Error)
+                                    }
                                 }
                             }
                             uri != null
@@ -523,8 +535,13 @@ private fun TextInputRow(
                             val text = item.text?.toString()
                             if (text != null && text.length > settings.displaySetting.pasteLongTextThreshold) {
                                 scope.launch {
-                                    runCatching { filesManager.createChatTextFile(text) }
-                                        .onSuccess { document -> state.addFiles(listOf(document)) }
+                                    try {
+                                        state.addFiles(listOf(artifactDraftScope.createTextDocument(text)))
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (_: Exception) {
+                                        toaster.show(textImportFailed, type = ToastType.Error)
+                                    }
                                 }
                                 true
                             } else {

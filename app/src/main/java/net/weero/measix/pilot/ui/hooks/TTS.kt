@@ -17,8 +17,6 @@ import me.rerere.tts.provider.TTSManager
 import me.rerere.tts.provider.TTSProviderSetting
 import me.rerere.tts.controller.TtsController
 import org.koin.compose.koinInject
-import org.koin.core.component.KoinComponent
-import org.koin.core.component.inject
 
 private const val TAG = "TTS"
 
@@ -30,13 +28,14 @@ private const val TAG = "TTS"
 fun rememberCustomTtsState(): CustomTtsState {
     val context = LocalContext.current
     val settingsStore = koinInject<SettingsStore>()
+    val ttsManager = koinInject<TTSManager>()
     val settings by settingsStore.settingsFlow.collectAsStateWithLifecycle()
 
     // Remember the CustomTtsState instance across recompositions
     val ttsState = remember {
         CustomTtsStateImpl(
             context = context.applicationContext,
-            settingsStore = settingsStore
+            ttsManager = ttsManager,
         )
     }
 
@@ -137,10 +136,9 @@ interface CustomTtsState {
  */
 private class CustomTtsStateImpl(
     private val context: Context,
-    private val settingsStore: SettingsStore
-) : CustomTtsState, KoinComponent {
+    ttsManager: TTSManager,
+) : CustomTtsState {
 
-    private val ttsManager by inject<TTSManager>()
     private val controller by lazy { me.rerere.tts.controller.TtsController(context, ttsManager) }
 
     override val isAvailable: StateFlow<Boolean> get() = controller.isAvailable

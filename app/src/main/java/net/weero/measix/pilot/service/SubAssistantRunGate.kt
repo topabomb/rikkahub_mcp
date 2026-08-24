@@ -3,6 +3,7 @@ package net.weero.measix.pilot.service
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.uuid.Uuid
 
 /**
@@ -16,6 +17,17 @@ import kotlin.uuid.Uuid
  * 恢复入口得以不依赖编排器即可取消全部运行中资源。
  */
 class SubAssistantRunGate {
+    internal class LeaseHandle internal constructor(
+        val job: Job,
+        private val closeAction: () -> Unit,
+    ) : AutoCloseable {
+        private val closed = AtomicBoolean(false)
+
+        override fun close() {
+            if (closed.compareAndSet(false, true)) closeAction()
+        }
+    }
+
     private data class PendingUserInteraction(
         val interactionId: String,
         val answer: CompletableDeferred<String> = CompletableDeferred(),
@@ -28,15 +40,14 @@ class SubAssistantRunGate {
 
     internal fun isBusy(key: SubAssistantRunKey): Boolean = runLeases.isBusy(key)
 
-    internal fun tryAcquire(
+    internal fun acquireLease(
         key: SubAssistantRunKey,
         runId: String,
         callerAssistantId: Uuid,
         parentJob: Job?,
-    ): SubAssistantRunLease? = runLeases.tryAcquire(key, runId, callerAssistantId, parentJob)
-
-    internal fun release(key: SubAssistantRunKey, lease: SubAssistantRunLease) {
-        runLeases.release(key, lease)
+    ): LeaseHandle? {
+        val lease = runLeases.tryAcquire(key, runId, callerAssistantId, parentJob) ?: return null
+        return LeaseHandle(job = lease.job) { runLeases.release(key, lease) }
     }
 
     suspend fun cancelRunsForAssistant(assistantId: Uuid) {

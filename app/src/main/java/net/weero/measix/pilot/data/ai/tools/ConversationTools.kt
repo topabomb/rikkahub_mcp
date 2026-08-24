@@ -12,7 +12,7 @@ import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.db.fts.MessageSearchSort
-import net.weero.measix.pilot.data.repository.ConversationRepository
+import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.utils.JsonInstantPretty
 import net.weero.measix.pilot.utils.toLocalDate
 import kotlin.uuid.Uuid
@@ -22,7 +22,7 @@ import kotlin.uuid.Uuid
  * statically injecting recent chats into the system prompt (which would break prompt caching).
  */
 fun createConversationTools(
-    conversationRepo: ConversationRepository,
+    conversationQueryService: ConversationQueryService,
     assistantId: Uuid,
 ): List<Tool> = listOf(
     Tool(
@@ -46,7 +46,7 @@ fun createConversationTools(
         },
         execute = {
             val limit = (it.jsonObject["limit"]?.jsonPrimitive?.intOrNull ?: 10).coerceIn(1, 30)
-            val recent = conversationRepo.getRecentConversations(
+            val recent = conversationQueryService.recentConversations(
                 assistantId = assistantId,
                 limit = limit,
             )
@@ -90,7 +90,7 @@ fun createConversationTools(
             val query = it.jsonObject["query"]?.jsonPrimitive?.contentOrNull
                 ?: error("query is required")
             val limit = (it.jsonObject["limit"]?.jsonPrimitive?.intOrNull ?: 15).coerceIn(1, 50)
-            val results = conversationRepo
+            val results = conversationQueryService
                 .searchMessagesOfAssistant(assistantId, query, MessageSearchSort.RELEVANCE)
                 .take(limit)
             val payload = buildJsonArray {

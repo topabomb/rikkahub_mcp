@@ -1,8 +1,9 @@
 package net.weero.measix.pilot.data.imggen
 
-import android.graphics.BitmapFactory
 import android.util.Log
 import java.io.File
+import java.util.concurrent.atomic.AtomicReference
+import java.util.zip.CRC32
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
@@ -15,8 +16,9 @@ import kotlinx.coroutines.withContext
 import me.rerere.ai.ui.ImageGenerationItem
 import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.db.entity.GenMediaEntity
-import net.weero.measix.pilot.data.files.LocalArtifactRef
-import net.weero.measix.pilot.data.files.ManagedLocalArtifactStore
+import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.OwnedArtifact
+import net.weero.measix.pilot.data.files.requireDiscarded
 import net.weero.measix.pilot.data.repository.GenMediaRepository
 
 enum class GeneratedMediaConsumer {
@@ -37,7 +39,7 @@ data class CommittedGeneratedMedia(
     val canonicalRelativePath: String,
     val canonicalFile: File,
     val mimeType: String,
-    val chatArtifact: LocalArtifactRef? = null,
+    val chatArtifact: OwnedArtifact? = null,
 )
 
 data class GeneratedMediaStorageStats(
@@ -48,7 +50,8 @@ data class GeneratedMediaStorageStats(
 class GeneratedMediaStore(
     private val filesDir: File,
     private val genMediaRepository: GenMediaRepository,
-    private val artifactStore: ManagedLocalArtifactStore,
+    private val artifactStore: ArtifactStore,
+    private val deleteCommittedPayload: (File) -> Boolean = File::delete,
 ) {
     private val persistMutex = Mutex()
 
@@ -73,79 +76,94 @@ class GeneratedMediaStore(
         type: String,
         sourcePaths: String?,
         consumerPlan: GeneratedMediaConsumerPlan,
-    ): CommittedGeneratedMedia = withContext(Dispatchers.IO) {
-        val bytes = decodeImageBytes(item.data)
-        val inspected = inspectImagePayload(bytes, item.mimeType)
-        val mimeType = inspected.mimeType
-        val extension = inspected.extension
-        val imagesDir = File(filesDir, IMAGES_DIR).apply { mkdirs() }
-        val fileName = "${Uuid.random()}.$extension"
-        val pending = File(imagesDir, "$fileName.pending")
-        val finalFile = File(imagesDir, fileName)
-        var chatArtifact: LocalArtifactRef? = null
-        var insertedId: Long? = null
+    ): CommittedGeneratedMedia {
+        val durableCommit = AtomicReference<CommittedGeneratedMedia?>()
         try {
-            pending.writeBytes(bytes)
-            if (!pending.renameTo(finalFile)) {
-                pending.copyTo(finalFile, overwrite = true)
-                pending.delete()
+            return withContext(Dispatchers.IO) {
+                val bytes = decodeImageBytes(item.data)
+                val inspected = inspectImagePayload(bytes, item.mimeType)
+                val mimeType = inspected.mimeType
+                val extension = inspected.extension
+                val imagesDir = File(filesDir, IMAGES_DIR).apply { mkdirs() }
+                val fileName = "${Uuid.random()}.$extension"
+                val pending = File(imagesDir, "$fileName.pending")
+                val finalFile = File(imagesDir, fileName)
+                var chatArtifact: OwnedArtifact? = null
+                try {
+                    pending.writeBytes(bytes)
+                    if (!pending.renameTo(finalFile)) {
+                        pending.copyTo(finalFile, overwrite = true)
+                        pending.delete()
+                    }
+                    if (GeneratedMediaConsumer.CHAT_TOOL_RESULT in consumerPlan.consumers) {
+                        // 生成媒体在聊天域的副本——诞生方式为生成派生
+                        chatArtifact = artifactStore.copyFile(
+                            source = finalFile,
+                            mimeType = mimeType,
+                            displayName = fileName,
+                            origin = ArtifactOrigin.GENERATED,
+                        )
+                    }
+                    val relativePath = "$IMAGES_DIR/${finalFile.name}"
+                    val mediaId = genMediaRepository.insertMedia(
+                        GenMediaEntity(
+                            path = relativePath,
+                            modelId = modelLabel,
+                            prompt = prompt,
+                            createAt = System.currentTimeMillis(),
+                            type = type,
+                            sourcePaths = sourcePaths,
+                        )
+                    )
+                    CommittedGeneratedMedia(
+                        mediaId = mediaId,
+                        canonicalRelativePath = relativePath,
+                        canonicalFile = finalFile,
+                        mimeType = mimeType,
+                        chatArtifact = chatArtifact,
+                    ).also(durableCommit::set)
+                } catch (error: Throwable) {
+                    withContext(NonCancellable) {
+                        discardUnpublishedChatCopy(chatArtifact, "generated media rollback", error)
+                        if (pending.exists() && !pending.delete()) {
+                            error.addSuppressed(IllegalStateException("Failed to remove pending generated media: $pending"))
+                        }
+                        if (finalFile.exists() && !finalFile.delete()) {
+                            error.addSuppressed(IllegalStateException("Failed to remove generated media: $finalFile"))
+                        }
+                    }
+                    throw error
+                }
             }
-            if (GeneratedMediaConsumer.CHAT_TOOL_RESULT in consumerPlan.consumers) {
-                // 生成媒体在聊天域的副本——诞生方式为生成派生
-                chatArtifact = artifactStore.copyFile(
-                    source = finalFile,
-                    mimeType = mimeType,
-                    displayName = fileName,
-                    origin = ArtifactOrigin.GENERATED,
-                )
-            }
-            val relativePath = "$IMAGES_DIR/${finalFile.name}"
-            val mediaId = genMediaRepository.insertMedia(
-                GenMediaEntity(
-                    path = relativePath,
-                    modelId = modelLabel,
-                    prompt = prompt,
-                    createAt = System.currentTimeMillis(),
-                    type = type,
-                    sourcePaths = sourcePaths,
-                )
-            )
-            insertedId = mediaId
-            CommittedGeneratedMedia(
-                mediaId = mediaId,
-                canonicalRelativePath = relativePath,
-                canonicalFile = finalFile,
-                mimeType = mimeType,
-                chatArtifact = chatArtifact,
-            )
-        } catch (error: Throwable) {
-            if (error is CancellationException && insertedId != null) {
-                throw error
-            }
+        } catch (cancelled: CancellationException) {
             withContext(NonCancellable) {
-                chatArtifact?.let { runCatching { artifactStore.delete(it) } }
-                runCatching { pending.delete() }
-                runCatching { finalFile.delete() }
+                discardUnpublishedChatCopy(
+                    durableCommit.get()?.chatArtifact,
+                    "cancelled generated-media consumer",
+                    cancelled,
+                )
             }
-            throw error
+            throw cancelled
+        }
+    }
+
+    private suspend fun discardUnpublishedChatCopy(
+        owned: OwnedArtifact?,
+        operation: String,
+        primary: Throwable,
+    ) {
+        if (owned == null) return
+        try {
+            artifactStore.discardUnpublished(owned).requireDiscarded(operation)
+        } catch (cleanupFailure: Throwable) {
+            primary.addSuppressed(cleanupFailure)
         }
     }
 
     suspend fun delete(id: Int): Boolean = withPersistLock {
         withContext(Dispatchers.IO) {
             val entity = genMediaRepository.getMediaById(id) ?: return@withContext false
-            val file = canonicalFile(entity)
-            if (file.name.endsWith(PENDING_SUFFIX)) return@withContext false
-            if (file.exists() && !file.delete()) return@withContext false
-            try {
-                genMediaRepository.deleteMedia(entity.id)
-                true
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                Log.e(TAG, "failed to delete gallery row ${entity.id}", error)
-                false
-            }
+            deleteEntityLocked(entity)
         }
     }
 
@@ -154,33 +172,53 @@ class GeneratedMediaStore(
             val imagesDir = File(filesDir, IMAGES_DIR)
             var allDeleted = true
             genMediaRepository.getAllMediaList().forEach { entity ->
-                val file = canonicalFile(entity)
-                if (file.name.endsWith(PENDING_SUFFIX)) return@forEach
-                if (file.exists() && !file.delete()) {
-                    allDeleted = false
-                    return@forEach
-                }
-                try {
-                    genMediaRepository.deleteMedia(entity.id)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (error: Throwable) {
-                    Log.e(TAG, "failed to delete gallery row ${entity.id}", error)
-                    allDeleted = false
-                }
+                if (!deleteEntityLocked(entity)) allDeleted = false
             }
-            imagesDir.listFiles()?.forEach { file ->
-                if (!file.isFile || file.name.endsWith(PENDING_SUFFIX)) return@forEach
-                if (!file.delete()) allDeleted = false
+            if (allDeleted) {
+                imagesDir.listFiles()?.forEach { file ->
+                    if (!file.isFile || file.name.endsWith(PENDING_SUFFIX)) return@forEach
+                    if (!file.delete()) allDeleted = false
+                }
             }
             allDeleted
         }
     }
 
+    private suspend fun deleteEntityLocked(entity: GenMediaEntity): Boolean {
+        val original = canonicalFile(entity)
+        if (original.name.endsWith(PENDING_SUFFIX) || original.name.endsWith(DELETING_SUFFIX)) return false
+        if (original.exists() && !original.isFile) return false
+        val deleting = File(original.parentFile, "${original.name}$DELETING_SUFFIX")
+        if (deleting.exists()) return false
+        if (original.exists() && !original.renameTo(deleting)) return false
+        try {
+            genMediaRepository.deleteMedia(entity.id)
+        } catch (cancelled: CancellationException) {
+            restoreDeletingFile(original, deleting)?.let(cancelled::addSuppressed)
+            throw cancelled
+        } catch (error: Exception) {
+            restoreDeletingFile(original, deleting)?.let(error::addSuppressed)
+            Log.e(TAG, "failed to delete gallery row ${entity.id}", error)
+            return false
+        }
+        if (deleting.exists() && !deleteCommittedPayload(deleting)) {
+            Log.w(TAG, "gallery row deleted; payload cleanup deferred: $deleting")
+        }
+        return true
+    }
+
+    private fun restoreDeletingFile(original: File, deleting: File): Throwable? {
+        if (!deleting.exists()) return null
+        if (deleting.renameTo(original)) return null
+        return IllegalStateException("Failed to restore generated media after row deletion failure: $deleting")
+    }
+
     suspend fun countCommitted(): GeneratedMediaStorageStats = withContext(Dispatchers.IO) {
         val imagesDir = File(filesDir, IMAGES_DIR)
         val files = imagesDir.listFiles().orEmpty().filter { file ->
-            file.isFile && !file.name.endsWith(PENDING_SUFFIX)
+            file.isFile &&
+                !file.name.endsWith(PENDING_SUFFIX) &&
+                !file.name.endsWith(DELETING_SUFFIX)
         }
         GeneratedMediaStorageStats(
             count = files.size,
@@ -191,8 +229,16 @@ class GeneratedMediaStore(
     fun resolveCanonicalFile(entity: GenMediaEntity): File = canonicalFile(entity)
 
     private fun canonicalFile(entity: GenMediaEntity): File {
-        val imagesDir = File(filesDir, IMAGES_DIR)
-        return File(imagesDir, entity.path.removePrefix("$IMAGES_DIR/"))
+        val normalized = entity.path.replace('\\', '/')
+        require(normalized.startsWith("$IMAGES_DIR/")) {
+            "Generated-media payload is outside its managed domain: ${entity.path}"
+        }
+        val imagesDir = File(filesDir, IMAGES_DIR).canonicalFile
+        val target = File(imagesDir, normalized.removePrefix("$IMAGES_DIR/")).canonicalFile
+        require(target.path.startsWith(imagesDir.path + File.separator)) {
+            "Generated-media payload escapes its managed domain: ${entity.path}"
+        }
+        return target
     }
 
     suspend fun reconcile(nowMs: Long = System.currentTimeMillis()) = withPersistLock {
@@ -200,25 +246,40 @@ class GeneratedMediaStore(
             val imagesDir = File(filesDir, IMAGES_DIR)
             val records = genMediaRepository.getAllMediaList()
             val recordedNames = records.mapTo(mutableSetOf()) { entity ->
-                entity.path.removePrefix("$IMAGES_DIR/")
+                canonicalFile(entity).relativeTo(imagesDir.canonicalFile).invariantSeparatorsPath
             }
             imagesDir.listFiles()?.forEach { file ->
                 if (!file.isFile) return@forEach
                 val age = nowMs - file.lastModified()
                 if (file.name.endsWith(PENDING_SUFFIX)) {
                     if (age >= PROTECTION_MS) {
-                        file.delete()
+                        check(file.delete()) { "Failed to remove stale generated-media staging file: $file" }
+                    }
+                    return@forEach
+                }
+                if (file.name.endsWith(DELETING_SUFFIX)) {
+                    val originalName = file.name.removeSuffix(DELETING_SUFFIX)
+                    if (originalName in recordedNames) {
+                        val original = File(imagesDir, originalName)
+                        check(original.exists() || file.renameTo(original)) {
+                            "Failed to restore interrupted generated-media deletion: $file"
+                        }
+                        if (original.exists() && file.exists()) {
+                            check(file.delete()) { "Failed to remove duplicate generated-media tombstone: $file" }
+                        }
+                    } else {
+                        check(file.delete()) { "Failed to finish generated-media deletion: $file" }
                     }
                     return@forEach
                 }
                 if (file.name !in recordedNames && age >= PROTECTION_MS) {
-                    file.delete()
+                    check(file.delete()) { "Failed to remove untracked generated-media file: $file" }
                 }
             }
             records.forEach { entity ->
-                val file = File(imagesDir, entity.path.removePrefix("$IMAGES_DIR/"))
+                val file = canonicalFile(entity)
                 if (!file.isFile) {
-                    runCatching { genMediaRepository.deleteMedia(entity.id) }
+                    genMediaRepository.deleteMedia(entity.id)
                 }
             }
         }
@@ -227,6 +288,7 @@ class GeneratedMediaStore(
     companion object {
         const val IMAGES_DIR = "images"
         const val PENDING_SUFFIX = ".pending"
+        const val DELETING_SUFFIX = ".deleting"
         const val PROTECTION_MS = 10 * 60 * 1000L
         const val MAX_IMAGE_BYTES = 20 * 1024 * 1024
         private const val TAG = "GeneratedMediaStore"
@@ -250,6 +312,9 @@ class GeneratedMediaStore(
             } else {
                 data
             }
+            require(payload.isNotEmpty() && payload.length <= MAX_BASE64_IMAGE_CHARS) {
+                "encoded image payload exceeds the size limit"
+            }
             return Base64.decode(payload)
         }
 
@@ -272,12 +337,13 @@ class GeneratedMediaStore(
         }
 
         fun detectImageMime(bytes: ByteArray): String? {
-            val signature = detectImageMimeBySignature(bytes)
-            if (signature != null) return signature
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-            val outMime = bounds.outMimeType?.substringBefore(';')?.trim()?.lowercase()
-            return outMime?.takeIf { it in SUPPORTED_IMAGE_MIMES && bounds.outWidth > 0 && bounds.outHeight > 0 }
+            return when (detectImageMimeBySignature(bytes)) {
+                "image/png" -> "image/png".takeIf { isValidPngContainer(bytes) }
+                "image/jpeg" -> "image/jpeg".takeIf { isValidJpegContainer(bytes) }
+                "image/gif" -> "image/gif".takeIf { isValidGifContainer(bytes) }
+                "image/webp" -> "image/webp".takeIf { isValidWebpContainer(bytes) }
+                else -> null
+            }
         }
 
         fun detectImageMimeBySignature(bytes: ByteArray): String? = when {
@@ -309,6 +375,218 @@ class GeneratedMediaStore(
             "image/jpeg",
             "image/webp",
             "image/gif",
+        )
+
+        private const val MAX_BASE64_IMAGE_CHARS = (MAX_IMAGE_BYTES * 4 / 3) + 16
+
+        private fun isValidPngContainer(bytes: ByteArray): Boolean {
+            if (!startsWith(bytes, PNG_SIGNATURE)) return false
+            var offset = PNG_SIGNATURE.size
+            var first = true
+            var hasImageData = false
+            while (offset + 12 <= bytes.size) {
+                val length = readInt32(bytes, offset) ?: return false
+                if (length < 0 || length > bytes.size - offset - 12) return false
+                val typeOffset = offset + 4
+                val dataOffset = typeOffset + 4
+                val crcOffset = dataOffset + length
+                val type = bytes.copyOfRange(typeOffset, dataOffset).toString(Charsets.US_ASCII)
+                val crc = CRC32().apply { update(bytes, typeOffset, 4 + length) }.value
+                if (crc != readUInt32(bytes, crcOffset)) return false
+                if (first) {
+                    if (type != "IHDR" || length != 13) return false
+                    val width = readInt32(bytes, dataOffset) ?: return false
+                    val height = readInt32(bytes, dataOffset + 4) ?: return false
+                    if (width <= 0 || height <= 0) return false
+                    first = false
+                }
+                if (type == "IDAT") hasImageData = true
+                offset = crcOffset + 4
+                if (type == "IEND") return length == 0 && hasImageData && offset == bytes.size
+            }
+            return false
+        }
+
+        private fun isValidJpegContainer(bytes: ByteArray): Boolean {
+            if (!startsWith(bytes, JPEG_SIGNATURE) || bytes.size < 6) return false
+            var offset = 2
+            var hasDimensions = false
+            while (offset + 1 < bytes.size) {
+                if ((bytes[offset].toInt() and 0xFF) != 0xFF) return false
+                while (offset < bytes.size && (bytes[offset].toInt() and 0xFF) == 0xFF) offset++
+                if (offset >= bytes.size) return false
+                val marker = bytes[offset++].toInt() and 0xFF
+                if (marker == 0xD9) return hasDimensions
+                if (marker == 0x01 || marker in 0xD0..0xD7) continue
+                if (offset + 2 > bytes.size) return false
+                val length = readUInt16(bytes, offset)
+                if (length < 2 || offset + length > bytes.size) return false
+                if (marker in JPEG_SOF_MARKERS) {
+                    if (length < 7) return false
+                    val height = readUInt16(bytes, offset + 3)
+                    val width = readUInt16(bytes, offset + 5)
+                    if (width <= 0 || height <= 0) return false
+                    hasDimensions = true
+                }
+                offset += length
+                if (marker == 0xDA) {
+                    if (!hasDimensions) return false
+                    return bytes.size >= 2 &&
+                        (bytes[bytes.lastIndex - 1].toInt() and 0xFF) == 0xFF &&
+                        (bytes.last().toInt() and 0xFF) == 0xD9
+                }
+            }
+            return false
+        }
+
+        private fun isValidGifContainer(bytes: ByteArray): Boolean {
+            if (bytes.size < 14 ||
+                (!startsWith(bytes, GIF87_SIGNATURE) && !startsWith(bytes, GIF89_SIGNATURE))
+            ) return false
+            val width = readUInt16LittleEndian(bytes, 6)
+            val height = readUInt16LittleEndian(bytes, 8)
+            return width > 0 && height > 0 &&
+                bytes.last() == 0x3B.toByte() &&
+                (13 until bytes.lastIndex).any { bytes[it] == 0x2C.toByte() }
+        }
+
+        private fun isValidWebpContainer(bytes: ByteArray): Boolean {
+            if (!isWebp(bytes) || bytes.size < 30) return false
+            val declared = readUInt32LittleEndian(bytes, 4) ?: return false
+            if (declared + 8L != bytes.size.toLong()) return false
+            val chunks = parseWebpChunks(bytes, 12, bytes.size) ?: return false
+            val first = chunks.firstOrNull() ?: return false
+            return when (first.type) {
+                "VP8 " -> chunks.size == 1 && isValidVp8Chunk(bytes, first)
+                "VP8L" -> chunks.size == 1 && isValidVp8lChunk(bytes, first)
+                "VP8X" -> isValidExtendedWebp(bytes, chunks)
+                else -> false
+            }
+        }
+
+        private data class WebpChunk(
+            val type: String,
+            val dataOffset: Int,
+            val size: Int,
+        )
+
+        private fun parseWebpChunks(bytes: ByteArray, start: Int, end: Int): List<WebpChunk>? {
+            if (start !in 0..end || end > bytes.size) return null
+            val chunks = mutableListOf<WebpChunk>()
+            var offset = start
+            while (offset < end) {
+                if (offset + 8 > end) return null
+                val sizeLong = readUInt32LittleEndian(bytes, offset + 4) ?: return null
+                if (sizeLong > Int.MAX_VALUE) return null
+                val size = sizeLong.toInt()
+                val dataOffset = offset + 8
+                val dataEnd = dataOffset.toLong() + sizeLong
+                val paddedEnd = dataEnd + (sizeLong and 1L)
+                if (paddedEnd > end.toLong()) return null
+                chunks += WebpChunk(
+                    type = bytes.copyOfRange(offset, offset + 4).toString(Charsets.US_ASCII),
+                    dataOffset = dataOffset,
+                    size = size,
+                )
+                offset = paddedEnd.toInt()
+            }
+            return chunks.takeIf { offset == end }
+        }
+
+        private fun isValidVp8Chunk(bytes: ByteArray, chunk: WebpChunk): Boolean {
+            val offset = chunk.dataOffset
+            return chunk.size >= 10 &&
+                bytes[offset + 3] == 0x9D.toByte() &&
+                bytes[offset + 4] == 0x01.toByte() &&
+                bytes[offset + 5] == 0x2A.toByte() &&
+                (readUInt16LittleEndian(bytes, offset + 6) and 0x3FFF) > 0 &&
+                (readUInt16LittleEndian(bytes, offset + 8) and 0x3FFF) > 0
+        }
+
+        private fun isValidVp8lChunk(bytes: ByteArray, chunk: WebpChunk): Boolean {
+            if (chunk.size < 5 || bytes[chunk.dataOffset] != 0x2F.toByte()) return false
+            val packed = readUInt32LittleEndian(bytes, chunk.dataOffset + 1) ?: return false
+            val width = (packed and 0x3FFFL) + 1L
+            val height = ((packed shr 14) and 0x3FFFL) + 1L
+            return width > 0L && height > 0L
+        }
+
+        private fun isValidExtendedWebp(bytes: ByteArray, chunks: List<WebpChunk>): Boolean {
+            val header = chunks.first()
+            if (header.size != 10) return false
+            val flags = bytes[header.dataOffset].toInt() and 0xFF
+            if ((flags and 0xC1) != 0) return false
+            val canvasWidth = readUInt24LittleEndian(bytes, header.dataOffset + 4) + 1
+            val canvasHeight = readUInt24LittleEndian(bytes, header.dataOffset + 7) + 1
+            if (canvasWidth <= 0 || canvasHeight <= 0) return false
+
+            val payloadChunks = chunks.drop(1)
+            val animated = (flags and 0x02) != 0
+            return if (animated) {
+                payloadChunks.any { it.type == "ANIM" && it.size == 6 } &&
+                    payloadChunks.any { it.type == "ANMF" && isValidAnimatedWebpFrame(bytes, it) }
+            } else {
+                payloadChunks.none { it.type == "ANIM" || it.type == "ANMF" } &&
+                    payloadChunks.any { chunk ->
+                        when (chunk.type) {
+                            "VP8 " -> isValidVp8Chunk(bytes, chunk)
+                            "VP8L" -> isValidVp8lChunk(bytes, chunk)
+                            else -> false
+                        }
+                    }
+            }
+        }
+
+        private fun isValidAnimatedWebpFrame(bytes: ByteArray, frame: WebpChunk): Boolean {
+            if (frame.size < 24) return false
+            val frameWidth = readUInt24LittleEndian(bytes, frame.dataOffset + 6) + 1
+            val frameHeight = readUInt24LittleEndian(bytes, frame.dataOffset + 9) + 1
+            if (frameWidth <= 0 || frameHeight <= 0) return false
+            val nestedStart = frame.dataOffset + 16
+            val nestedEnd = frame.dataOffset + frame.size
+            val nested = parseWebpChunks(bytes, nestedStart, nestedEnd) ?: return false
+            return nested.any { chunk ->
+                when (chunk.type) {
+                    "VP8 " -> isValidVp8Chunk(bytes, chunk)
+                    "VP8L" -> isValidVp8lChunk(bytes, chunk)
+                    else -> false
+                }
+            }
+        }
+
+        private fun readInt32(bytes: ByteArray, offset: Int): Int? {
+            if (offset < 0 || offset + 4 > bytes.size) return null
+            return ((bytes[offset].toInt() and 0xFF) shl 24) or
+                ((bytes[offset + 1].toInt() and 0xFF) shl 16) or
+                ((bytes[offset + 2].toInt() and 0xFF) shl 8) or
+                (bytes[offset + 3].toInt() and 0xFF)
+        }
+
+        private fun readUInt32(bytes: ByteArray, offset: Int): Long =
+            readInt32(bytes, offset)?.toLong()?.and(0xFFFF_FFFFL) ?: -1L
+
+        private fun readUInt32LittleEndian(bytes: ByteArray, offset: Int): Long? {
+            if (offset < 0 || offset + 4 > bytes.size) return null
+            return (bytes[offset].toLong() and 0xFF) or
+                ((bytes[offset + 1].toLong() and 0xFF) shl 8) or
+                ((bytes[offset + 2].toLong() and 0xFF) shl 16) or
+                ((bytes[offset + 3].toLong() and 0xFF) shl 24)
+        }
+
+        private fun readUInt16(bytes: ByteArray, offset: Int): Int =
+            ((bytes[offset].toInt() and 0xFF) shl 8) or (bytes[offset + 1].toInt() and 0xFF)
+
+        private fun readUInt16LittleEndian(bytes: ByteArray, offset: Int): Int =
+            (bytes[offset].toInt() and 0xFF) or ((bytes[offset + 1].toInt() and 0xFF) shl 8)
+
+        private fun readUInt24LittleEndian(bytes: ByteArray, offset: Int): Int =
+            (bytes[offset].toInt() and 0xFF) or
+                ((bytes[offset + 1].toInt() and 0xFF) shl 8) or
+                ((bytes[offset + 2].toInt() and 0xFF) shl 16)
+
+        private val JPEG_SOF_MARKERS = setOf(
+            0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+            0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF,
         )
 
         private fun startsWith(bytes: ByteArray, prefix: ByteArray): Boolean {

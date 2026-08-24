@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.provider
+package net.weero.measix.pilot.data.provider
 
 import android.database.Cursor
 import android.database.MatrixCursor
@@ -14,7 +14,6 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.db.dao.WorkspaceDAO
 import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
 import me.rerere.workspace.WorkspaceManager
-import org.koin.core.context.GlobalContext
 import java.io.File
 
 /**
@@ -32,13 +31,21 @@ import java.io.File
  * - workspace 根目录：`ws/{root}`（root 为 workspace 在磁盘上的目录名，即 UUID）
  * - workspace 内文件：`ws/{root}/{相对 files/ 的路径}`
  */
+interface WorkspaceDocumentsDependencies {
+    val workspaceManager: WorkspaceManager
+    val workspaceDao: WorkspaceDAO
+}
+
 class WorkspaceDocumentsProvider : DocumentsProvider() {
 
-    private fun manager(): WorkspaceManager = GlobalContext.get().get()
+    private fun dependencies(): WorkspaceDocumentsDependencies =
+        requireNotNull(context?.applicationContext as? WorkspaceDocumentsDependencies) {
+            "Application does not provide WorkspaceDocumentsDependencies"
+        }
 
-    private fun dao(): WorkspaceDAO = GlobalContext.get().get()
+    private fun manager(): WorkspaceManager = dependencies().workspaceManager
 
-    private fun allWorkspaces(): List<WorkspaceEntity> = runBlocking { dao().getAll() }
+    private fun allWorkspaces(): List<WorkspaceEntity> = runBlocking { dependencies().workspaceDao.getAll() }
 
     private fun workspaceName(root: String): String =
         allWorkspaces().firstOrNull { it.root == root }?.name ?: root

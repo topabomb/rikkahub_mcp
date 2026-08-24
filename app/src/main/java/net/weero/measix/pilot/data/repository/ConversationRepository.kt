@@ -1,10 +1,8 @@
 package net.weero.measix.pilot.data.repository
 
-import android.database.sqlite.SQLiteBlobTooBigException
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
-import androidx.paging.PagingSource
 import androidx.paging.map
 import androidx.room.withTransaction
 import kotlinx.coroutines.flow.Flow
@@ -18,10 +16,11 @@ import net.weero.measix.pilot.data.db.dao.ConversationDAO
 import net.weero.measix.pilot.data.db.dao.FavoriteDAO
 import net.weero.measix.pilot.data.db.dao.LightConversationEntity
 import net.weero.measix.pilot.data.db.dao.MessageNodeDAO
+import net.weero.measix.pilot.data.db.dao.MessagePayloadReadException
+import net.weero.measix.pilot.data.db.dao.readMessagesPayload
 import net.weero.measix.pilot.data.db.dao.ScopedTurnExecution
 import net.weero.measix.pilot.data.db.dao.ToolExecutionDAO
 import net.weero.measix.pilot.data.db.dao.TurnExecutionDAO
-import net.weero.measix.pilot.data.db.entity.ArtifactEntity
 import net.weero.measix.pilot.data.db.entity.ConversationEntity
 import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
 import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
@@ -29,23 +28,28 @@ import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.files.ArtifactStore
-import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.data.files.ArtifactReferenceDelta
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
-import net.weero.measix.pilot.data.model.collectFileReferenceTokens
 import net.weero.measix.pilot.service.runtime.ConversationHeaderPatch
+import net.weero.measix.pilot.service.runtime.ConversationHeader
 import net.weero.measix.pilot.service.runtime.ConversationMutation
 import net.weero.measix.pilot.service.runtime.ExecutionFacts
 import net.weero.measix.pilot.service.runtime.OptionalFolderId
 import net.weero.measix.pilot.service.runtime.OptionalString
 import net.weero.measix.pilot.service.runtime.OptionalUuidSet
+import net.weero.measix.pilot.service.runtime.TurnExecutionOperation
+import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 import net.weero.measix.pilot.utils.JsonInstant
 import java.time.Instant
 import kotlin.uuid.Uuid
 
-data class RecoveredExecutionCount(
-    val turns: Int,
-    val tools: Int,
+class ExecutionStateConflictException(message: String) : IllegalStateException(message)
+
+private val RECOVERABLE_TURN_STATUSES = listOf(
+    TurnExecutionStatus.CREATED,
+    TurnExecutionStatus.RUNNING,
+    TurnExecutionStatus.AWAITING_APPROVAL,
 )
 
 class ConversationRepository(
@@ -53,7 +57,6 @@ class ConversationRepository(
     private val messageNodeDAO: MessageNodeDAO,
     private val favoriteDAO: FavoriteDAO,
     private val database: AppDatabase,
-    private val filesManager: FilesManager,
     private val messageFtsManager: MessageFtsManager,
     private val turnExecutionDAO: TurnExecutionDAO,
     private val toolExecutionDAO: ToolExecutionDAO,
@@ -64,41 +67,23 @@ class ConversationRepository(
         private const val INITIAL_LOAD_SIZE = 40
     }
 
-    suspend fun getRecentConversations(assistantId: Uuid, limit: Int = 10): List<Conversation> {
-        return conversationDAO.getRecentConversationsOfAssistant(
-            assistantId = assistantId.toString(),
-            limit = limit
-        ).map { entity ->
-            val nodes = loadMessageNodes(entity.id)
-            conversationEntityToConversation(entity, nodes)
-        }
-    }
+    suspend fun getRecentConversationRecords(
+        assistantId: Uuid,
+        limit: Int = 10,
+    ): List<ConversationListRecord> = conversationDAO.getRecentConversationsOfAssistant(
+        assistantId = assistantId.toString(),
+        limit = limit,
+    ).map(::conversationEntityToListRecord)
 
-    fun getConversationsOfAssistant(assistantId: Uuid): Flow<List<Conversation>> {
+    fun getConversationsOfAssistant(assistantId: Uuid): Flow<List<ConversationListRecord>> {
         return conversationDAO
             .getConversationsOfAssistant(assistantId.toString())
-            .map { flow ->
-                flow.map { entity ->
-                    // 列表视图不需要完整的 nodes，使用空列表
-                    conversationEntityToConversation(entity, emptyList())
-                }
-            }
+            .map { entities -> entities.map(::conversationEntityToListRecord) }
     }
 
-    fun getConversationsOfAssistantPaging(assistantId: Uuid): Flow<PagingData<Conversation>> = Pager(
-        config = PagingConfig(
-            pageSize = PAGE_SIZE,
-            initialLoadSize = INITIAL_LOAD_SIZE,
-            enablePlaceholders = false
-        ),
-        pagingSourceFactory = { conversationDAO.getConversationsOfAssistantPaging(assistantId.toString()) }
-    ).flow.map { pagingData ->
-        pagingData.map { entity ->
-            conversationSummaryToConversation(entity)
-        }
-    }
-
-    fun getUnfiledConversationsOfAssistantPaging(assistantId: Uuid): Flow<PagingData<Conversation>> = Pager(
+    fun getUnfiledConversationsOfAssistantPaging(
+        assistantId: Uuid,
+    ): Flow<PagingData<ConversationListRecord>> = Pager(
         config = PagingConfig(
             pageSize = PAGE_SIZE,
             initialLoadSize = INITIAL_LOAD_SIZE,
@@ -106,12 +91,10 @@ class ConversationRepository(
         ),
         pagingSourceFactory = { conversationDAO.getUnfiledConversationsOfAssistantPaging(assistantId.toString()) }
     ).flow.map { pagingData ->
-        pagingData.map { entity ->
-            conversationSummaryToConversation(entity)
-        }
+        pagingData.map(::lightEntityToListRecord)
     }
 
-    fun getConversationsOfFolderPaging(folderId: Uuid): Flow<PagingData<Conversation>> = Pager(
+    fun getConversationsOfFolderPaging(folderId: Uuid): Flow<PagingData<ConversationListRecord>> = Pager(
         config = PagingConfig(
             pageSize = PAGE_SIZE,
             initialLoadSize = INITIAL_LOAD_SIZE,
@@ -119,115 +102,14 @@ class ConversationRepository(
         ),
         pagingSourceFactory = { conversationDAO.getConversationsOfFolderPaging(folderId.toString()) }
     ).flow.map { pagingData ->
-        pagingData.map { entity ->
-            conversationSummaryToConversation(entity)
-        }
+        pagingData.map(::lightEntityToListRecord)
     }
-
-    suspend fun getConversationsOfAssistantPage(
-        assistantId: Uuid,
-        offset: Int,
-        limit: Int,
-    ): ConversationPageResult {
-        val pagingSource = conversationDAO.getConversationsOfAssistantPaging(assistantId.toString())
-        return try {
-            when (
-                val result = pagingSource.load(
-                    PagingSource.LoadParams.Refresh(
-                        key = if (offset == 0) null else offset,
-                        loadSize = limit,
-                        placeholdersEnabled = false
-                    )
-                )
-            ) {
-                is PagingSource.LoadResult.Page -> ConversationPageResult(
-                    items = result.data.map { entity ->
-                        conversationSummaryToConversation(entity)
-                    },
-                    nextOffset = result.nextKey
-                )
-
-                is PagingSource.LoadResult.Error -> throw result.throwable
-                is PagingSource.LoadResult.Invalid -> ConversationPageResult(emptyList(), null)
-            }
-        } finally {
-            pagingSource.invalidate()
-        }
-    }
-
-    suspend fun searchConversationsOfAssistantPage(
-        assistantId: Uuid,
-        titleKeyword: String,
-        offset: Int,
-        limit: Int,
-    ): ConversationPageResult {
-        val pagingSource = conversationDAO.searchConversationsOfAssistantPaging(
-            assistantId = assistantId.toString(),
-            searchText = titleKeyword
-        )
-        return try {
-            when (
-                val result = pagingSource.load(
-                    PagingSource.LoadParams.Refresh(
-                        key = if (offset == 0) null else offset,
-                        loadSize = limit,
-                        placeholdersEnabled = false
-                    )
-                )
-            ) {
-                is PagingSource.LoadResult.Page -> ConversationPageResult(
-                    items = result.data.map { entity ->
-                        conversationSummaryToConversation(entity)
-                    },
-                    nextOffset = result.nextKey
-                )
-
-                is PagingSource.LoadResult.Error -> throw result.throwable
-                is PagingSource.LoadResult.Invalid -> ConversationPageResult(emptyList(), null)
-            }
-        } finally {
-            pagingSource.invalidate()
-        }
-    }
-
-    fun searchConversationsPaging(titleKeyword: String): Flow<PagingData<Conversation>> = Pager(
-        config = PagingConfig(
-            pageSize = PAGE_SIZE,
-            initialLoadSize = INITIAL_LOAD_SIZE,
-            enablePlaceholders = false
-        ),
-        pagingSourceFactory = { conversationDAO.searchConversationsPaging(titleKeyword) }
-    ).flow.map { pagingData ->
-        pagingData.map { entity ->
-            conversationSummaryToConversation(entity)
-        }
-    }
-
-    fun searchConversationsOfAssistantPaging(assistantId: Uuid, titleKeyword: String): Flow<PagingData<Conversation>> =
-        Pager(
-            config = PagingConfig(
-                pageSize = PAGE_SIZE,
-                initialLoadSize = INITIAL_LOAD_SIZE,
-                enablePlaceholders = false
-            ),
-            pagingSourceFactory = {
-                conversationDAO.searchConversationsOfAssistantPaging(
-                    assistantId.toString(),
-                    titleKeyword
-                )
-            }
-        ).flow.map { pagingData ->
-            pagingData.map { entity ->
-                conversationSummaryToConversation(entity)
-            }
-        }
 
     suspend fun getConversationById(uuid: Uuid): Conversation? {
-        val entity = conversationDAO.getConversationById(uuid.toString())
-        return if (entity != null) {
-            val nodes = loadMessageNodes(entity.id)
-            conversationEntityToConversation(entity, nodes)
-        } else null
+        return database.withTransaction {
+            val entity = conversationDAO.getConversationById(uuid.toString()) ?: return@withTransaction null
+            conversationEntityToConversation(entity, loadMessageNodes(entity.id))
+        }
     }
 
     suspend fun existsConversationById(uuid: Uuid): Boolean {
@@ -238,55 +120,71 @@ class ConversationRepository(
         return conversationDAO.countAll()
     }
 
-    suspend fun insertConversation(conversation: Conversation) {
-        database.withTransaction {
-            requireValidParent(conversation)
-            conversationDAO.insert(
-                conversationToConversationEntity(conversation)
+    internal suspend fun insertConversation(conversation: Conversation) {
+        artifactStore.withLifecycleLock {
+            val referenceDelta = artifactStore.prepareReferenceDelta(
+                conversation.messageNodes,
+                emptyList(),
             )
-            saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
-        }
-        // Child Conversation 不进入 FTS 索引
-        if (conversation.parentConversationId == null) {
-            messageFtsManager.indexConversation(conversation)
-        }
-        // 引用投影登记（新会话创建 → 全部节点登记）
-        if (conversation.messageNodes.isNotEmpty()) {
-            artifactStore.syncReferences(conversation.id, conversation.messageNodes, emptyList())
+            database.withTransaction {
+                requireValidParent(conversation)
+                conversationDAO.insert(conversationToConversationEntity(conversation))
+                saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
+                artifactStore.applyReferenceDeltaInTransaction(referenceDelta)
+                if (conversation.parentConversationId == null) {
+                    messageFtsManager.indexConversationInTransaction(conversation)
+                }
+            }
         }
     }
 
+    suspend fun getConversationHeader(uuid: Uuid): ConversationHeader? =
+        conversationDAO.getConversationById(uuid.toString())
+            ?.let(::conversationEntityToHeader)
+
+    private fun conversationEntityToHeader(entity: ConversationEntity): ConversationHeader {
+        val id = Uuid.parse(entity.id)
+        return ConversationHeader(
+            id = id,
+            title = entity.title,
+            assistantId = Uuid.parse(entity.assistantId),
+            folderId = entity.folderId.ifEmpty { null }?.let(Uuid::parse),
+            isPinned = entity.isPinned,
+            chatSuggestions = JsonInstant.decodeFromString(entity.chatSuggestions),
+            customSystemPrompt = entity.customSystemPrompt.ifEmpty { null },
+            modeInjectionIds = JsonInstant.decodeFromString(entity.modeInjectionIds),
+            workspaceCwd = entity.workspaceCwd.ifEmpty { null },
+            parentConversationId = entity.parentConversationId?.let(Uuid::parse),
+            newConversation = false,
+            createAt = entity.createAt,
+            updateAt = entity.updateAt,
+        )
+    }
+
     /** Inserts a forked top-level Master and all remapped Child lineages atomically in Room. */
-    suspend fun insertConversationTree(master: Conversation, children: List<Conversation>) {
+    internal suspend fun insertConversationTree(master: Conversation, children: List<Conversation>) {
         require(master.parentConversationId == null) { "Fork root must be a top-level conversation" }
         require(children.map { it.id }.distinct().size == children.size) { "Duplicate Child conversation ID" }
         require(children.all { it.parentConversationId == master.id }) {
             "Every forked Child must reference the new Master"
         }
-        database.withTransaction {
-            conversationDAO.insert(conversationToConversationEntity(master))
-            saveMessageNodes(master.id.toString(), master.messageNodes)
-            children.forEach { child ->
-                conversationDAO.insert(conversationToConversationEntity(child))
-                saveMessageNodes(child.id.toString(), child.messageNodes)
+        artifactStore.withLifecycleLock {
+            val masterReferences = artifactStore.prepareReferenceDelta(master.messageNodes, emptyList())
+            val childReferences = children.associate { child ->
+                child.id to artifactStore.prepareReferenceDelta(child.messageNodes, emptyList())
+            }
+            database.withTransaction {
+                conversationDAO.insert(conversationToConversationEntity(master))
+                saveMessageNodes(master.id.toString(), master.messageNodes)
+                artifactStore.applyReferenceDeltaInTransaction(masterReferences)
+                children.forEach { child ->
+                    conversationDAO.insert(conversationToConversationEntity(child))
+                    saveMessageNodes(child.id.toString(), child.messageNodes)
+                    artifactStore.applyReferenceDeltaInTransaction(requireNotNull(childReferences[child.id]))
+                }
+                messageFtsManager.indexConversationInTransaction(master)
             }
         }
-        messageFtsManager.indexConversation(master)
-        // 引用投影登记（fork 入口无悬挂）
-        if (master.messageNodes.isNotEmpty()) {
-            artifactStore.syncReferences(master.id, master.messageNodes, emptyList())
-        }
-        children.forEach { child ->
-            if (child.messageNodes.isNotEmpty()) {
-                artifactStore.syncReferences(child.id, child.messageNodes, emptyList())
-            }
-        }
-    }
-
-    /** @Deprecated 导入/迁移/启动恢复专用（运行时零调用由单一写者契约测试锁定）。 */
-    @Deprecated("导入/迁移/启动恢复专用", ReplaceWith("applyMutation"))
-    suspend fun updateConversation(conversation: Conversation) {
-        persistConversationNodes(conversation, reindexFts = true)
     }
 
     /**
@@ -296,12 +194,10 @@ class ConversationRepository(
      *  2. deletedNodeIds → deleteByIds + favorite 清理（引用行经 node FK 级联自动清）
      *  3. upsertedNodes → upsertAll
      *  4. executionFacts → TurnExecutionDAO / ToolExecutionDAO upsert（事务内）
-     * 事务提交后（投影，允许最终一致）：
-     *  - MessageFtsManager.reindexNodes / deleteNodesIndex
-     *  - ArtifactStore.syncReferences(conversationId, upsertedNodes, deletedNodeIds)
+     *  5. artifact_reference 与 FTS 投影在同一事务同步
      * 返回是否实际写入。
      */
-    suspend fun applyMutation(mutation: ConversationMutation, executionFacts: ExecutionFacts? = null): Boolean {
+    internal suspend fun applyMutation(mutation: ConversationMutation, executionFacts: ExecutionFacts? = null): Boolean {
         val headerPatch = mutation.headerPatch
         val hasHeaderChange = headerPatch != null
         val hasNodeChange = mutation.upsertedNodes.isNotEmpty() || mutation.deletedNodeIds.isNotEmpty()
@@ -309,46 +205,225 @@ class ConversationRepository(
         if (!hasHeaderChange && !hasNodeChange && !hasExecutionFacts) return false
 
         val conversationId = mutation.conversationId.toString()
-        database.withTransaction {
-            headerPatch?.let { patch -> applyHeaderPatch(mutation.conversationId, patch, mutation.updateAt) }
-            if (mutation.deletedNodeIds.isNotEmpty()) {
-                val deletedIds = mutation.deletedNodeIds.map { it.toString() }
-                favoriteDAO.deleteNodeFavoritesByRefKeys(deletedIds.map { "node:$conversationId:$it" })
-                messageNodeDAO.deleteByIds(deletedIds)
-            }
-            if (mutation.upsertedNodes.isNotEmpty()) {
-                require(mutation.upsertedNodeIndices.size == mutation.upsertedNodes.size) {
-                    "upsertedNodeIndices must align 1:1 with upsertedNodes (new-tree positions)"
-                }
-                val entities = mutation.upsertedNodes.mapIndexed { i, node ->
-                    MessageNodeEntity(
-                        id = node.id.toString(),
-                        conversationId = conversationId,
-                        nodeIndex = mutation.upsertedNodeIndices[i],
-                        messages = JsonInstant.encodeToString(node.messages),
-                        selectIndex = node.selectIndex,
-                    )
-                }
-                messageNodeDAO.upsertAll(entities)
-            }
-            executionFacts?.turn?.let { turnExecutionDAO.upsert(it) }
-            executionFacts?.toolExecution?.let { toolExecutionDAO.upsert(it) }
+        require(mutation.upsertedNodeIndices.size == mutation.upsertedNodes.size) {
+            "upsertedNodeIndices must align 1:1 with upsertedNodes (new-tree positions)"
         }
-
-        // 事务后投影（title 由 mutation 携带——Runtime 内存 header 为权威，禁止回查 DB）
-        val title = mutation.titleForIndex ?: ""
-        if (mutation.upsertedNodes.isNotEmpty()) {
-            messageFtsManager.reindexNodes(
+        val nodeEntities = mutation.upsertedNodes.mapIndexed { i, node ->
+            MessageNodeEntity(
+                id = node.id.toString(),
                 conversationId = conversationId,
-                title = title,
-                updateAt = mutation.updateAt,
-                nodes = mutation.upsertedNodes,
+                nodeIndex = mutation.upsertedNodeIndices[i],
+                messages = JsonInstant.encodeToString(node.messages),
+                selectIndex = node.selectIndex,
             )
-            artifactStore.syncReferences(mutation.conversationId, mutation.upsertedNodes, mutation.deletedNodeIds)
-        } else if (mutation.deletedNodeIds.isNotEmpty()) {
-            messageFtsManager.deleteNodesIndex(conversationId, mutation.deletedNodeIds)
+        }
+        suspend fun commit(referenceDelta: ArtifactReferenceDelta?) {
+            database.withTransaction {
+                headerPatch?.let { patch -> applyHeaderPatch(mutation.conversationId, patch, mutation.updateAt) }
+                if (mutation.deletedNodeIds.isNotEmpty()) {
+                    val deletedIds = mutation.deletedNodeIds.map { it.toString() }
+                    favoriteDAO.deleteNodeFavoritesByRefKeys(deletedIds.map { "node:$conversationId:$it" })
+                    messageNodeDAO.deleteByIds(deletedIds)
+                }
+                if (nodeEntities.isNotEmpty()) {
+                    messageNodeDAO.upsertAll(nodeEntities)
+                }
+                persistExecutionFacts(executionFacts)
+                referenceDelta?.let { artifactStore.applyReferenceDeltaInTransaction(it) }
+                if (mutation.indexForSearch) {
+                    val title = mutation.titleForIndex ?: ""
+                    if (mutation.searchMetadataChanged) {
+                        messageFtsManager.updateConversationMetadataInTransaction(
+                            conversationId = conversationId,
+                            title = title,
+                            updateAt = mutation.updateAt,
+                        )
+                    }
+                    if (mutation.deletedNodeIds.isNotEmpty()) {
+                        messageFtsManager.deleteNodesIndexInTransaction(conversationId, mutation.deletedNodeIds)
+                    }
+                    if (mutation.upsertedNodes.isNotEmpty()) {
+                        messageFtsManager.reindexNodesInTransaction(
+                            conversationId = conversationId,
+                            title = title,
+                            updateAt = mutation.updateAt,
+                            nodes = mutation.upsertedNodes,
+                        )
+                    }
+                }
+            }
+        }
+        if (hasNodeChange) {
+            artifactStore.withLifecycleLock {
+                val referenceDelta = artifactStore.prepareReferenceDelta(
+                    mutation.upsertedNodes,
+                    mutation.deletedNodeIds,
+                )
+                commit(referenceDelta)
+            }
+        } else {
+            commit(null)
         }
         return true
+    }
+
+    private suspend fun persistExecutionFacts(facts: ExecutionFacts?) {
+        if (facts == null) return
+        facts.toolExecution?.let { persistToolExecution(it) }
+        facts.turn?.let { execution ->
+            if (execution.status.isTerminal()) {
+                toolExecutionDAO.transitionStartedByTurn(
+                    turnId = execution.turnId,
+                    targetStatus = if (execution.status == TurnExecutionStatus.CANCELLED) {
+                        ToolExecutionStatus.CANCELLED
+                    } else {
+                        ToolExecutionStatus.UNKNOWN
+                    },
+                    reason = execution.reason,
+                    updatedAt = execution.updatedAt,
+                )
+            }
+            persistTurnExecution(execution, facts.turnOperation)
+        }
+    }
+
+    private fun TurnExecutionStatus.isTerminal(): Boolean = when (this) {
+        TurnExecutionStatus.COMPLETED,
+        TurnExecutionStatus.CANCELLED,
+        TurnExecutionStatus.FAILED,
+        TurnExecutionStatus.INCOMPLETE,
+        TurnExecutionStatus.INTERRUPTED,
+        -> true
+        TurnExecutionStatus.CREATED,
+        TurnExecutionStatus.RUNNING,
+        TurnExecutionStatus.AWAITING_APPROVAL,
+        -> false
+    }
+
+    private suspend fun persistTurnExecution(
+        execution: TurnExecutionEntity,
+        operation: TurnExecutionOperation,
+    ) {
+        if (operation == TurnExecutionOperation.START) {
+            require(execution.status == TurnExecutionStatus.RUNNING) {
+                "a turn must start in RUNNING state"
+            }
+            requireNotNull(execution.assistantMessageId) {
+                "a turn must start with its assistant message owner"
+            }
+            if (turnExecutionDAO.insert(execution) != -1L) return
+            val current = turnExecutionDAO.getById(execution.turnId)
+            if (current?.conversationId == execution.conversationId &&
+                current.assistantMessageId == execution.assistantMessageId &&
+                current.status == TurnExecutionStatus.RUNNING
+            ) {
+                return
+            }
+            throw ExecutionStateConflictException(
+                "cannot start turn ${execution.turnId}: current=${current?.status}",
+            )
+        }
+
+        val sourceStatuses = when (operation) {
+            TurnExecutionOperation.START -> error("handled above")
+            TurnExecutionOperation.RECOVER -> listOf(
+                TurnExecutionStatus.CREATED,
+                TurnExecutionStatus.RUNNING,
+                TurnExecutionStatus.AWAITING_APPROVAL,
+            )
+            TurnExecutionOperation.ADVANCE -> when (execution.status) {
+                TurnExecutionStatus.RUNNING -> listOf(
+                    TurnExecutionStatus.RUNNING,
+                    TurnExecutionStatus.AWAITING_APPROVAL,
+                )
+                TurnExecutionStatus.AWAITING_APPROVAL -> listOf(
+                    TurnExecutionStatus.RUNNING,
+                    TurnExecutionStatus.AWAITING_APPROVAL,
+                )
+                TurnExecutionStatus.COMPLETED,
+                TurnExecutionStatus.CANCELLED,
+                TurnExecutionStatus.FAILED,
+                TurnExecutionStatus.INCOMPLETE,
+                TurnExecutionStatus.INTERRUPTED,
+                -> listOf(TurnExecutionStatus.RUNNING, TurnExecutionStatus.AWAITING_APPROVAL)
+                TurnExecutionStatus.CREATED -> emptyList()
+            }
+        }
+        val changed = if (sourceStatuses.isEmpty()) {
+            0
+        } else {
+            turnExecutionDAO.transition(
+                turnId = execution.turnId,
+                conversationId = execution.conversationId,
+                sourceStatuses = sourceStatuses,
+                targetStatus = execution.status,
+                reason = execution.reason,
+                assistantMessageId = execution.assistantMessageId,
+                updatedAt = execution.updatedAt,
+            )
+        }
+        if (changed == 1) return
+        val current = turnExecutionDAO.getById(execution.turnId)
+        if (current?.status == execution.status &&
+            current.conversationId == execution.conversationId &&
+            current.assistantMessageId == execution.assistantMessageId &&
+            current.reason == execution.reason
+        ) {
+            return
+        }
+        throw ExecutionStateConflictException(
+            "illegal turn transition ${execution.turnId}: ${current?.status} -> ${execution.status}",
+        )
+    }
+
+    private suspend fun persistToolExecution(execution: ToolExecutionEntity) {
+        if (execution.status == ToolExecutionStatus.STARTED) {
+            if (toolExecutionDAO.insertStartedIfTurnActive(
+                    executionId = execution.executionId,
+                    turnId = execution.turnId,
+                    toolOrdinal = execution.toolOrdinal,
+                    reason = execution.reason,
+                    childConversationId = execution.childConversationId,
+                    createdAt = execution.createdAt,
+                    updatedAt = execution.updatedAt,
+                ) != -1L
+            ) return
+            if (toolExecutionDAO.updateStartedIfTurnActive(
+                    executionId = execution.executionId,
+                    turnId = execution.turnId,
+                    toolOrdinal = execution.toolOrdinal,
+                    reason = execution.reason,
+                    childConversationId = execution.childConversationId,
+                    updatedAt = execution.updatedAt,
+                ) == 1
+            ) return
+            val current = toolExecutionDAO.getById(execution.executionId)
+            val owner = turnExecutionDAO.getById(execution.turnId)
+            throw ExecutionStateConflictException(
+                "cannot start tool ${execution.executionId}: current=${current?.status}, owner=${owner?.status}",
+            )
+        }
+        val changed = toolExecutionDAO.transition(
+            executionId = execution.executionId,
+            turnId = execution.turnId,
+            toolOrdinal = execution.toolOrdinal,
+            sourceStatuses = listOf(ToolExecutionStatus.STARTED),
+            targetStatus = execution.status,
+            reason = execution.reason,
+            childConversationId = execution.childConversationId,
+            updatedAt = execution.updatedAt,
+        )
+        if (changed == 1) return
+        val current = toolExecutionDAO.getById(execution.executionId)
+        if (current?.status == execution.status &&
+            current.turnId == execution.turnId &&
+            current.toolOrdinal == execution.toolOrdinal &&
+            current.reason == execution.reason &&
+            current.childConversationId == execution.childConversationId
+        ) return
+        throw ExecutionStateConflictException(
+            "illegal tool transition ${execution.executionId}: ${current?.status} -> ${execution.status}",
+        )
     }
 
     private suspend fun applyHeaderPatch(
@@ -378,35 +453,9 @@ class ConversationRepository(
             is OptionalString.Keep -> Unit
             is OptionalString.Set -> conversationDAO.updateWorkspaceCwd(id, patch.workspaceCwd.value ?: "")
         }
-        conversationDAO.updateGenerationCheckpoint(id, updateAt)
-    }
-
-    /**
-     * GC：回收 state=ACTIVE 且 artifact_reference 无引用、created_at 超过保护窗口的 artifact。
-     * 回填未完成时保守跳过（宁可保留文件）。
-     */
-    suspend fun collectUnreferencedArtifacts(
-        protectionWindowMillis: Long = 24 * 3600 * 1000L,
-    ): List<ArtifactEntity> = artifactStore.collectUnreferencedArtifacts(protectionWindowMillis)
-
-    private suspend fun persistConversationNodes(
-        conversation: Conversation,
-        reindexFts: Boolean,
-    ) {
-        database.withTransaction {
-            requireValidParent(conversation)
-            conversationDAO.update(
-                conversationToConversationEntity(conversation)
-            )
-            persistImportedMessageNodes(conversation)
+        check(conversationDAO.updateTimestamp(id, updateAt) == 1) {
+            "conversation disappeared during header mutation: $conversationId"
         }
-        if (reindexFts && conversation.parentConversationId == null) {
-            messageFtsManager.indexConversation(conversation)
-        }
-    }
-
-    suspend fun upsertTurnExecution(execution: TurnExecutionEntity) {
-        turnExecutionDAO.upsert(execution)
     }
 
     suspend fun getTurnExecution(turnId: String): TurnExecutionEntity? =
@@ -417,93 +466,34 @@ class ConversationRepository(
 
     suspend fun getRecoverableTurnExecutionsByConversation(): Map<Uuid, List<TurnExecutionEntity>> =
         turnExecutionDAO.getMasterByStatuses(
-            listOf(TurnExecutionStatus.CREATED, TurnExecutionStatus.RUNNING)
-        ).mapNotNull { execution ->
-            runCatching { Uuid.parse(execution.conversationId) }.getOrNull()?.let { it to execution }
-        }.groupBy(keySelector = { it.first }, valueTransform = { it.second })
+            RECOVERABLE_TURN_STATUSES
+        ).map { execution -> Uuid.parse(execution.conversationId) to execution }
+            .groupBy(keySelector = { it.first }, valueTransform = { it.second })
 
     /** 非终态 turn 事实行 + Master/Child 域标注——子助手恢复域的定点输入。 */
     suspend fun getNonTerminalTurnExecutionsWithScope(): List<ScopedTurnExecution> =
-        turnExecutionDAO.getByStatusesWithScope(
-            listOf(TurnExecutionStatus.CREATED, TurnExecutionStatus.RUNNING)
-        )
-
-    suspend fun upsertToolExecution(execution: ToolExecutionEntity) {
-        toolExecutionDAO.upsert(execution)
-    }
-
-    suspend fun getToolExecution(executionId: String): ToolExecutionEntity? =
-        toolExecutionDAO.getById(executionId)
+        turnExecutionDAO.getByStatusesWithScope(RECOVERABLE_TURN_STATUSES)
 
     suspend fun getToolExecutions(turnId: String): List<ToolExecutionEntity> =
         toolExecutionDAO.getByTurnId(turnId)
 
-    suspend fun recoverInterruptedExecutions(
-        updatedAt: Long,
-        reason: String = "process_restarted",
-    ): RecoveredExecutionCount = database.withTransaction {
-        val recoverableTurnStatuses = listOf(TurnExecutionStatus.CREATED, TurnExecutionStatus.RUNNING)
-        val tools = toolExecutionDAO.updateStatusForTurns(
-            sourceStatus = ToolExecutionStatus.STARTED,
-            sourceTurnStatuses = recoverableTurnStatuses,
-            targetStatus = ToolExecutionStatus.UNKNOWN,
-            reason = reason,
-            updatedAt = updatedAt,
-        )
-        val turns = turnExecutionDAO.updateStatuses(
-            sourceStatuses = recoverableTurnStatuses,
-            targetStatus = TurnExecutionStatus.INTERRUPTED,
-            reason = reason,
-            updatedAt = updatedAt,
-        )
-        RecoveredExecutionCount(turns = turns, tools = tools)
-    }
-
-    /** 导入/迁移/启动恢复整树落库：按新树全量下标写入。运行时 checkpoint 不得走此路径。 */
-    private suspend fun persistImportedMessageNodes(conversation: Conversation) {
-        val conversationId = conversation.id.toString()
-        val existing = messageNodeDAO.getNodesOfConversation(conversationId)
-        val newIds = conversation.messageNodes.mapTo(mutableSetOf()) { it.id.toString() }
-        existing.filter { it.id !in newIds }.forEach { stale ->
-            favoriteDAO.deleteByRefKey("node:$conversationId:${stale.id}")
-            messageNodeDAO.deleteById(stale.id)
-        }
-        saveMessageNodes(conversationId, conversation.messageNodes)
-    }
-
-    suspend fun deleteConversation(conversation: Conversation) {
-        val persisted = conversationDAO.getConversationById(conversation.id.toString()) ?: return
-        val fullConversation = getConversationById(conversation.id) ?: conversation
-        val childConversations = if (persisted.parentConversationId == null) {
-            conversationDAO.getChildConversations(conversation.id.toString()).mapNotNull { childEntity ->
-                runCatching { Uuid.parse(childEntity.id) }.getOrNull()?.let { getConversationById(it) }
-            }
+    internal suspend fun deleteConversation(conversationId: Uuid) {
+        val persisted = conversationDAO.getConversationById(conversationId.toString()) ?: return
+        val conversationIds = if (persisted.parentConversationId == null) {
+            conversationDAO.getChildConversationIds(conversationId.toString()).map(Uuid::parse) + conversationId
         } else {
-            emptyList()
+            listOf(conversationId)
         }
-        val conversationsToDelete = childConversations + fullConversation
 
-        // Master、Child、MessageNode、ArtifactReference 和 Favorite 必须在同一个
-        // Room 事务中提交。message_node / artifact_reference 同时依赖 FK 级联
-        // （v7 起运行时启用）与显式删除——双路径幂等，FK 关闭的环境仍有兜底。
+        // Favorite 与 FTS 是独立投影，必须显式清理；Conversation、Child、
+        // MessageNode 与 ArtifactReference 的主数据关系只由 FK CASCADE 收口。
         database.withTransaction {
-            conversationsToDelete.forEach { item ->
-                favoriteDAO.deleteNodeFavoritesOfConversation(item.id.toString())
-                messageNodeDAO.deleteByConversation(item.id.toString())
-                artifactStore.deleteReferencesOfConversation(item.id)
+            conversationIds.forEach { id ->
+                favoriteDAO.deleteNodeFavoritesOfConversation(id.toString())
+                messageFtsManager.deleteConversationInTransaction(id.toString())
             }
-            if (persisted.parentConversationId == null) {
-                conversationDAO.deleteChildConversations(conversation.id.toString())
-            }
-            conversationDAO.deleteById(conversation.id.toString())
+            conversationDAO.deleteById(conversationId.toString())
         }
-
-        // 可重建的 FTS 与文件在数据库提交后清理，数据库失败时不会留下半棵树。
-        conversationsToDelete.forEach { item ->
-            messageFtsManager.deleteConversation(item.id.toString())
-        }
-        // 文件清理走 GC（findUnshared* 探测路径删除，collectUnreferencedArtifacts 兜底回收）
-        runCatching { collectUnreferencedArtifacts() }
     }
 
     suspend fun searchMessages(
@@ -517,80 +507,43 @@ class ConversationRepository(
         sort: MessageSearchSort = MessageSearchSort.RELEVANCE,
     ) = messageFtsManager.search(keyword, sort, assistantId.toString())
 
-    suspend fun rebuildAllIndexes(onProgress: (current: Int, total: Int) -> Unit = { _, _ -> }) {
-        messageFtsManager.deleteAll()
-        val allIds = conversationDAO.getAllIds()
-        val total = allIds.size
-        allIds.forEachIndexed { index, id ->
-            val entity = conversationDAO.getConversationById(id) ?: return@forEachIndexed
-            val nodes = loadMessageNodes(entity.id)
-            val conversation = conversationEntityToConversation(entity, nodes)
-            messageFtsManager.indexConversation(conversation)
-            onProgress(index + 1, total)
+    internal suspend fun rebuildAllIndexes(onProgress: (current: Int, total: Int) -> Unit = { _, _ -> }) {
+        database.withTransaction {
+            val allIds = conversationDAO.getAllIds()
+            val total = allIds.size
+            messageFtsManager.deleteAllInTransaction()
+            allIds.forEachIndexed { index, id ->
+                val entity = conversationDAO.getConversationById(id) ?: return@forEachIndexed
+                val conversation = conversationEntityToConversation(entity, loadMessageNodes(entity.id))
+                if (conversation.parentConversationId == null) {
+                    messageFtsManager.indexConversationInTransaction(conversation)
+                }
+                onProgress(index + 1, total)
+            }
+            messageFtsManager.markProjectionCurrentInTransaction()
         }
     }
 
-    suspend fun deleteConversationOfAssistant(assistantId: Uuid) {
-        getConversationsOfAssistant(assistantId).first().forEach { conversation ->
-            deleteConversation(conversation)
-        }
+    suspend fun ensureSearchProjection() {
+        if (!messageFtsManager.isProjectionCurrent()) rebuildAllIndexes()
     }
 
     /**
      * 获取指定 Master 会话的所有 Child 会话
      */
     suspend fun getChildConversations(parentConversationId: Uuid): List<Conversation> {
-        return conversationDAO.getChildConversations(parentConversationId.toString()).map { entity ->
-            val nodes = loadMessageNodes(entity.id)
-            conversationEntityToConversation(entity, nodes)
-        }
-    }
-
-    /**
-     * 按 ID 获取单个会话（不加载 messageNodes），用于轻量级检查
-     */
-    suspend fun getConversationEntityById(uuid: Uuid): ConversationEntity? {
-        return conversationDAO.getConversationById(uuid.toString())
-    }
-
-    /**
-     * 删除指定 Master 会话的所有 Child 会话
-     */
-    suspend fun deleteChildConversations(parentConversationId: Uuid) {
-        val children = conversationDAO.getChildConversations(parentConversationId.toString()).mapNotNull { child ->
-            runCatching { Uuid.parse(child.id) }.getOrNull()?.let { getConversationById(it) }
-        }
-        database.withTransaction {
-            children.forEach { child ->
-                favoriteDAO.deleteNodeFavoritesOfConversation(child.id.toString())
+        return database.withTransaction {
+            conversationDAO.getChildConversations(parentConversationId.toString()).map { entity ->
+                val nodes = loadMessageNodes(entity.id)
+                conversationEntityToConversation(entity, nodes)
             }
-            conversationDAO.deleteChildConversations(parentConversationId.toString())
-        }
-        children.forEach { child ->
-            messageFtsManager.deleteConversation(child.id.toString())
-        }
-        // 引用投影经 node FK 级联自动清；文件清理走 GC
-        runCatching { collectUnreferencedArtifacts() }
-    }
-
-    /**
-     * 获取所有 Child 会话 ID（供 AssistantBackgroundService 的全库引用扫描使用）
-     */
-    suspend fun getAllChildConversationIds(): List<Uuid> {
-        return conversationDAO.getAllChildConversationIds().mapNotNull {
-            runCatching { Uuid.parse(it) }.getOrNull()
         }
     }
 
-    /** Loads complete top-level conversations without deserializing every Child payload. */
-    suspend fun loadAllTopLevelConversations(): List<Conversation> {
-        return conversationDAO.getAllIds().mapNotNull { id ->
-            val entity = conversationDAO.getConversationById(id) ?: return@mapNotNull null
-            conversationEntityToConversation(entity, loadMessageNodes(id))
-        }
-    }
+    suspend fun getChildConversationIds(parentConversationId: Uuid): List<Uuid> =
+        conversationDAO.getChildConversationIds(parentConversationId.toString()).map(Uuid::parse)
 
-    fun conversationToConversationEntity(conversation: Conversation): ConversationEntity {
+    internal fun conversationToConversationEntity(conversation: Conversation): ConversationEntity {
         require(conversation.messageNodes.none { it.messages.any { message -> message.hasBase64Part() } })
         return ConversationEntity(
             id = conversation.id.toString(),
@@ -615,7 +568,7 @@ class ConversationRepository(
         return Conversation(
             id = Uuid.parse(conversationEntity.id),
             title = conversationEntity.title,
-            messageNodes = messageNodes.filter { it.messages.isNotEmpty() },
+            messageNodes = messageNodes,
             createAt = Instant.ofEpochMilli(conversationEntity.createAt),
             updateAt = Instant.ofEpochMilli(conversationEntity.updateAt),
             assistantId = Uuid.parse(conversationEntity.assistantId),
@@ -629,124 +582,33 @@ class ConversationRepository(
         )
     }
 
-    fun getPinnedConversations(): Flow<List<Conversation>> {
+    fun getPinnedConversations(): Flow<List<ConversationListRecord>> {
         return conversationDAO
             .getPinnedConversations()
-            .map { flow ->
-                flow.map { entity ->
-                    conversationEntityToConversation(entity, emptyList())
-                }
-            }
+            .map { entities -> entities.map(::conversationEntityToListRecord) }
     }
 
-    suspend fun togglePinStatus(conversationId: Uuid) {
-        conversationDAO.updatePinStatus(
-            id = conversationId.toString(),
-            isPinned = !(getConversationById(conversationId)?.isPinned ?: false)
-        )
-    }
-
-    /**
-     * 单列更新会话的文件夹归属，folderId 为 null 表示移出文件夹（未归类）。
-     */
-    suspend fun updateConversationFolderId(conversationId: Uuid, folderId: Uuid?) {
-        conversationDAO.updateFolderId(
-            id = conversationId.toString(),
-            folderId = folderId?.toString() ?: ""
-        )
-    }
-
-    /**
-     * 单列更新会话归属助手（非活跃会话的助手迁移；活跃会话走 UpdateHeader 命令）。
-     * 调用方负责配套的 folder 清空（withAssistant 语义）。
-     */
-    suspend fun updateConversationAssistantId(conversationId: Uuid, assistantId: Uuid) {
-        conversationDAO.updateAssistantId(conversationId.toString(), assistantId.toString())
-    }
-
-    /**
-     * Child 恢复收口：把指定会话的 RUNNING turn 行置为 INTERRUPTED。
-     * Master 全库恢复扫描（recoverInterruptedTurns）过滤 Child 会话的 turn——Child 由
-     * DelegationCoordinator（SubAssistantRecovery 载体）全权收口，避免双路径。
-     */
-    suspend fun finalizeRunningTurnsOfConversation(conversationId: Uuid, reason: String) {
-        val now = System.currentTimeMillis()
-        turnExecutionDAO.getByConversationId(conversationId.toString())
-            .filter { it.status == TurnExecutionStatus.RUNNING }
-            .forEach { execution ->
-                turnExecutionDAO.upsert(
-                    execution.copy(
-                        status = TurnExecutionStatus.INTERRUPTED,
-                        reason = reason,
-                        updatedAt = now,
-                    )
-                )
-            }
-    }
-
-    /**
-     * Child retention 收缩（master 树 mutation 后的子助手域收口；master 树本身已由
-     * 命令通道 applyMutation delta 落库，本方法只处理 children）：
-     * retained children 全量收缩事务 + deleted children 删除；事务后 FTS 增删、
-     * retained 节点引用替换登记、无引用文件 GC（引用维护表）。
-     */
-    suspend fun updateChildRetention(
-        retainedChildren: List<Conversation>,
-        deletedChildren: List<Conversation>,
-    ) {
-        if (retainedChildren.isEmpty() && deletedChildren.isEmpty()) return
-        database.withTransaction {
-            retainedChildren.forEach { child ->
-                conversationDAO.update(conversationToConversationEntity(child))
-                messageNodeDAO.deleteByConversation(child.id.toString())
-                saveMessageNodes(child.id.toString(), child.messageNodes)
-            }
-            deletedChildren.forEach { child ->
-                favoriteDAO.deleteNodeFavoritesOfConversation(child.id.toString())
-                messageNodeDAO.deleteByConversation(child.id.toString())
-                artifactStore.deleteReferencesOfConversation(child.id)
-                conversationDAO.deleteById(child.id.toString())
-            }
-        }
-        // Child 不进入 FTS 索引（与 insertConversation 的裁决一致）：
-        // retained children 只做 DB 收缩，无索引动作；deleted children 防御性清理
-        // （历史数据若曾入索引，避免悬挂行）。
-        deletedChildren.forEach { messageFtsManager.deleteConversation(it.id.toString()) }
-        // 引用投影同步（retained 节点全量登记替换）
-        retainedChildren.forEach { child ->
-            if (child.messageNodes.isNotEmpty()) {
-                artifactStore.syncReferences(child.id, child.messageNodes, emptyList())
-            }
-        }
-        collectUnreferencedArtifacts()
-    }
-
-    /** Column-only title write. Does not replace message nodes. */
-    suspend fun updateConversationTitle(conversationId: Uuid, title: String) {
-        conversationDAO.updateTitle(conversationId.toString(), title)
-        messageFtsManager.updateConversationTitle(conversationId.toString(), title)
-    }
-
-    /** Column-only suggestion write. Does not replace message nodes. */
-    suspend fun updateConversationSuggestions(conversationId: Uuid, suggestions: List<String>) {
-        conversationDAO.updateChatSuggestions(
-            id = conversationId.toString(),
-            chatSuggestions = JsonInstant.encodeToString(suggestions),
-        )
-    }
-
-    private fun conversationSummaryToConversation(entity: LightConversationEntity): Conversation {
-        return Conversation(
+    private fun conversationEntityToListRecord(entity: ConversationEntity): ConversationListRecord =
+        ConversationListRecord(
             id = Uuid.parse(entity.id),
             assistantId = Uuid.parse(entity.assistantId),
             title = entity.title,
             isPinned = entity.isPinned,
             createAt = Instant.ofEpochMilli(entity.createAt),
             updateAt = Instant.ofEpochMilli(entity.updateAt),
-            messageNodes = emptyList(),
+            folderId = entity.folderId.ifEmpty { null }?.let(Uuid::parse),
+        )
+
+    private fun lightEntityToListRecord(entity: LightConversationEntity): ConversationListRecord =
+        ConversationListRecord(
+            id = Uuid.parse(entity.id),
+            assistantId = Uuid.parse(entity.assistantId),
+            title = entity.title,
+            isPinned = entity.isPinned,
+            createAt = Instant.ofEpochMilli(entity.createAt),
+            updateAt = Instant.ofEpochMilli(entity.updateAt),
             folderId = entity.folderId.ifEmpty { null }?.let { Uuid.parse(it) },
         )
-    }
 
     private suspend fun loadMessageNodes(conversationId: String): List<MessageNode> {
         val favoriteNodeIds = favoriteDAO
@@ -755,37 +617,33 @@ class ConversationRepository(
             .toSet()
 
         return database.withTransaction {
-            val nodes = mutableListOf<MessageNode>()
-            var offset = 0
-            val pageSize = 64
-            while (true) {
-                val page = try {
-                    messageNodeDAO.getNodesOfConversationPaged(conversationId, pageSize, offset)
-                } catch (e: SQLiteBlobTooBigException) {
-                    e.printStackTrace()
-                    offset += pageSize
-                    continue
-                } catch (e: IllegalStateException) {
-                    e.printStackTrace()
-                    offset += pageSize
-                    continue
+            messageNodeDAO.getNodeHeadersOfConversation(conversationId).map { header ->
+                val payload = try {
+                    messageNodeDAO.readMessagesPayload(header, "conversation=$conversationId")
+                } catch (error: MessagePayloadReadException) {
+                    throw ConversationPayloadException(error.message ?: "invalid message payload", error)
                 }
-                if (page.isEmpty()) break
-                page.forEach { entity ->
-                    val messages = JsonInstant.decodeFromString<List<UIMessage>>(entity.messages)
-                    val nodeId = Uuid.parse(entity.id)
-                    nodes.add(
-                        MessageNode(
-                            id = nodeId,
-                            messages = messages,
-                            selectIndex = entity.selectIndex,
-                            isFavorite = favoriteNodeIds.contains(nodeId)
-                        )
+                val messages = try {
+                    JsonInstant.decodeFromString<List<UIMessage>>(payload)
+                } catch (error: Exception) {
+                    throw ConversationPayloadException(
+                        "invalid message payload: conversation=$conversationId, node=${header.id}",
+                        error,
                     )
                 }
-                offset += page.size
+                if (messages.isEmpty() || header.selectIndex !in messages.indices) {
+                    throw ConversationPayloadException(
+                        "invalid message node shape: conversation=$conversationId, node=${header.id}",
+                    )
+                }
+                val nodeId = Uuid.parse(header.id)
+                MessageNode(
+                    id = nodeId,
+                    messages = messages,
+                    selectIndex = header.selectIndex,
+                    isFavorite = favoriteNodeIds.contains(nodeId),
+                )
             }
-            nodes
         }
     }
 
@@ -813,7 +671,15 @@ class ConversationRepository(
     }
 }
 
-data class ConversationPageResult(
-    val items: List<Conversation>,
-    val nextOffset: Int?,
+class ConversationPayloadException(message: String, cause: Throwable? = null) :
+    IllegalStateException(message, cause)
+
+data class ConversationListRecord(
+    val id: Uuid,
+    val assistantId: Uuid,
+    val title: String,
+    val folderId: Uuid?,
+    val isPinned: Boolean,
+    val createAt: Instant,
+    val updateAt: Instant,
 )

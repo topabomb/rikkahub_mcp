@@ -8,7 +8,6 @@ import net.weero.measix.pilot.data.ai.tools.GenerationToolSetFactory
 import net.weero.measix.pilot.data.ai.tools.local.ImageGenerationToolFactory
 import net.weero.measix.pilot.data.ai.tools.local.LocalTools
 import net.weero.measix.pilot.data.event.AppEventBus
-import net.weero.measix.pilot.data.files.ManagedLocalArtifactStore
 import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.data.imggen.AssistantBackgroundService
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
@@ -16,14 +15,29 @@ import net.weero.measix.pilot.data.imggen.ImageGenerationCoordinator
 import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.service.AssistantManagementService
-import net.weero.measix.pilot.service.AssistantDataRecovery
-import net.weero.measix.pilot.service.AssistantDataRecoveryGate
+import net.weero.measix.pilot.service.ArtifactUseCase
+import net.weero.measix.pilot.service.AutoTitleGenerationTracker
+import net.weero.measix.pilot.service.MediaExportService
+import net.weero.measix.pilot.service.ApplicationRecoveryCoordinator
+import net.weero.measix.pilot.service.ApplicationRecoveryGate
 import net.weero.measix.pilot.service.ChatNotificationManager
-import net.weero.measix.pilot.service.ChatService
+import net.weero.measix.pilot.service.MasterTurnCoordinator
+import net.weero.measix.pilot.service.ConversationApplicationService
+import net.weero.measix.pilot.service.ConversationQueryService
+import net.weero.measix.pilot.service.CustomChatFontService
+import net.weero.measix.pilot.service.SearchIndexMaintenanceService
+import net.weero.measix.pilot.service.ChatErrorStore
+import net.weero.measix.pilot.service.GenerationSideEffects
 import net.weero.measix.pilot.service.SubAssistantRunGate
+import net.weero.measix.pilot.service.SubAssistantDetailReader
+import net.weero.measix.pilot.service.SubAssistantLifecycle
+import net.weero.measix.pilot.service.StatsQueryService
+import net.weero.measix.pilot.service.TurnFinalization
 import net.weero.measix.pilot.service.TurnRecovery
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
+import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.FavoriteModelService
+import net.weero.measix.pilot.service.FavoriteService
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher
 import net.weero.measix.pilot.service.runtime.DelegationCoordinator
@@ -38,16 +52,18 @@ import org.koin.dsl.module
 val appModule = module {
     single<Json> { JsonInstant }
 
+    single { ApplicationRecoveryGate() }
+    single { ArtifactUseCase(get(), get()) }
+    single { MediaExportService(get()) }
+    single { StatsQueryService(get(), get(), get()) }
+    single { ChatErrorStore() }
+
     single {
         AppEventBus()
     }
 
     single {
         ImageGenerationSelectionResolver(get())
-    }
-
-    single {
-        ManagedLocalArtifactStore(get(), get())
     }
 
     single {
@@ -68,11 +84,9 @@ val appModule = module {
 
     single {
         AssistantBackgroundService(
-            context = get(),
-            settingsStore = get(),
             artifactStore = get(),
-            conversationRepository = get(),
-            genMediaRepository = get(),
+            context = get(),
+            remoteMediaFetcher = get(),
         )
     }
 
@@ -125,7 +139,7 @@ val appModule = module {
         SoundEffectPlayer(get())
     }
 
-    // 生成通知与业务解耦：ChatService 只发事件，通知由这里消费；
+    // 生成通知与业务解耦：MasterTurnCoordinator 只发事件，通知由这里消费；
     // createdAtStart 保证进程启动即订阅，否则后台生成的事件会因无订阅者而丢失
     single(createdAtStart = true) {
         ChatNotificationManager(
@@ -140,30 +154,44 @@ val appModule = module {
         AssistantManagementService(
             settingsStore = get(),
             memoryRepository = get(),
-            conversationRepo = get(),
-            filesManager = get(),
-            sessionRegistry = get(),
+            artifactStore = get(),
+            runtimeRegistry = get(),
             delegationCoordinator = get(),
             recoveryGate = get(),
+            conversationApplicationService = get(),
         )
+    }
+
+    single {
+        net.weero.measix.pilot.service.runtime.ConversationOperationLocks()
     }
 
     single {
         ConversationRuntimeRegistry(
             appScope = get(),
-            settingsStore = get(),
             repository = get(),
+            operationLocks = get(),
+        )
+    }
+
+    single {
+        ConversationCommandCoordinator(
+            registry = get(),
+            repository = get(),
+            recoveryGate = get(),
+            operationLocks = get(),
         )
     }
 
     single {
         GenerationToolSetFactory(
             localTools = get(),
-            conversationRepo = get(),
+            conversationQueryService = get(),
             skillManager = get(),
             workspaceRepository = get(),
             mcpManager = get(),
             providerManager = get(),
+            artifactStore = get(),
         )
     }
 
@@ -174,7 +202,6 @@ val appModule = module {
     single {
         AttachmentResolver(
             context = get(),
-            filesManager = get(),
             artifactStore = get(),
             fetcher = get(),
             artifactRewriter = get(),
@@ -186,7 +213,7 @@ val appModule = module {
     single {
         TurnRecovery(
             conversationRepo = get(),
-            sessionRegistry = get(),
+            commandCoordinator = get(),
             settingsStore = get(),
             json = get(),
             runGate = get(),
@@ -197,17 +224,19 @@ val appModule = module {
         DelegationCoordinator(
             generationHandler = get(),
             conversationRepo = get(),
-            sessionRegistry = get(),
+            runtimeRegistry = get(),
+            commandCoordinator = get(),
             toolSetFactory = get(),
             settingsStore = get(),
             memoryRepository = get(),
             templateTransformer = get(),
             workspaceRepository = get(),
-            filesManager = get(),
+            artifactStore = get(),
+            toolArtifactRewriter = get(),
             json = get(),
             attachmentResolver = get(),
             context = get(),
-            turnRecovery = get(),
+            turnFinalization = get(),
             runGate = get(),
         )
     }
@@ -222,43 +251,123 @@ val appModule = module {
         )
     }
 
-    single { AssistantDataRecoveryGate() }
-
-    // 启动即消费删除 tombstone，并修复进程中断的子助手运行。
+    // 唯一启动恢复入口；任一步失败都不会打开 durable write gate。
     single(createdAtStart = true) {
-        AssistantDataRecovery(
-            appScope = get(),
+        ApplicationRecoveryCoordinator(
+            appScope = get<AppScope>(),
             settingsStore = get(),
+            artifactStore = get(),
+            conversationRepository = get(),
             assistantManagementService = get(),
             turnRecovery = get(),
-            recoveryGate = get(),
+            gate = get(),
+            restorePendingBackup = {
+                net.weero.measix.pilot.data.sync.PendingBackupRestore.restoreSettingsIfPending(
+                    get(),
+                    get(),
+                    get(),
+                )
+            },
+            completePendingBackup = {
+                net.weero.measix.pilot.data.sync.PendingBackupRestore.complete(get())
+            },
+            postRecoveryMaintenance = {
+                get<net.weero.measix.pilot.service.CustomChatFontService>().reconcile()
+                get<net.weero.measix.pilot.data.repository.WorkspaceRepository>().checkIntegrity()
+                get<net.weero.measix.pilot.data.files.ArtifactStore>().collectGarbage()
+                get<net.weero.measix.pilot.data.datastore.SettingsStore>().update { current ->
+                    current.copy(launchCount = current.launchCount + 1)
+                }
+            },
         )
     }
 
     single {
-        ChatService(
+        TurnFinalization(
+            conversationRepository = get(),
+            runtimeRegistry = get(),
+            commandCoordinator = get(),
+            json = get(),
+        )
+    }
+
+    single {
+        SubAssistantLifecycle(
+            conversationRepository = get(),
+            runtimeRegistry = get(),
+            commandCoordinator = get(),
+            settingsStore = get(),
+            turnFinalization = get(),
+            json = get(),
+        )
+    }
+
+    single { AutoTitleGenerationTracker() }
+
+    single {
+        GenerationSideEffects(
+            context = get(),
+            appScope = get(),
+            settingsStore = get(),
+            providerManager = get(),
+            artifactStore = get(),
+            runtimeRegistry = get(),
+            commandCoordinator = get(),
+            soundEffectPlayer = get(),
+            json = get(),
+            chatErrorStore = get(),
+            autoTitleGeneration = get(),
+        )
+    }
+
+    single {
+        MasterTurnCoordinator(
             context = get(),
             appScope = get(),
             appEventBus = get(),
             settingsStore = get(),
-            conversationRepo = get(),
             memoryRepository = get(),
             generationHandler = get(),
             templateTransformer = get(),
-            providerManager = get(),
             mcpManager = get(),
-            filesManager = get(),
             toolSetFactory = get(),
             workspaceRepository = get(),
-            folderRepository = get(),
-            soundEffectPlayer = get(),
             assistantToolFactory = get(),
             delegationCoordinator = get(),
-            sessionRegistry = get(),
+            turnFinalization = get(),
+            subAssistantLifecycle = get(),
+            runtimeRegistry = get(),
+            commandCoordinator = get(),
             recoveryGate = get(),
-            json = get(),
+            chatErrorStore = get(),
+            sideEffects = get(),
+            artifactStore = get(),
+            artifactUseCase = get(),
             toolArtifactRewriter = get(),
-            turnRecovery = get(),
         )
     }
+
+    single {
+        ConversationApplicationService(
+            settingsStore = get(),
+            conversationRepo = get(),
+            folderRepository = get(),
+            runtimeRegistry = get(),
+            commandCoordinator = get(),
+            recoveryGate = get(),
+            subAssistantLifecycle = get(),
+            sideEffects = get(),
+            artifactStore = get(),
+            artifactUseCase = get(),
+            turnFinalization = get(),
+            json = get(),
+            toolArtifactRewriter = get(),
+        )
+    }
+
+    single { ConversationQueryService(get(), get(), get(), get()) }
+    single { CustomChatFontService(get(), get()) }
+    single { SearchIndexMaintenanceService(get(), get()) }
+    single { FavoriteService(get(), get()) }
+    single { SubAssistantDetailReader(get()) }
 }

@@ -37,6 +37,16 @@
 | **speech** | TTS（System / OpenAI / Gemini / MiMo）与 ASR（DashScope / OpenAI Realtime） |
 | **workspace** | PRoot 沙箱：shell 执行、文件读写、代码编辑工具 |
 
+## Architecture Guardrails
+
+- 每类事实只有一个 owner、一个写协议。新增功能应扩展现有 command、typed use case、projection 或状态机，不得增加旁路 DAO/Repository 写入、服务定位器、整聚合回写或第二状态源。
+- durable 状态必须在事务提交成功后发布；streaming projection 是唯一允许先发布且不落库的会话态。取消必须传播，`NonCancellable` 只用于已明确所有权的终态提交或补偿收口。
+- 新聊天使用非持久化 Draft；首条用户消息单事务建库并原位晋升 Ready。空 Draft 不得进入数据库或会话列表，也不得启动 turn。
+- 会话与受管 Artifact 的 UI/ViewModel 只依赖 application/query ports 和 UiModel；不得直连 DAO、ConversationRepository、Runtime Registry、ArtifactStore 或 payload 层。Provider 等 Android 入口通过 typed host contract 注入，不从全局容器取服务。
+- Artifact metadata、引用与生命周期只归 `ArtifactStore`；payload 层无 DAO。未发布资源必须以 typed lease/owner 交接，成功 checkpoint 后发布，失败或取消必须回滚。
+- 启动恢复 fail-closed；损坏或不完整聚合不得伪装 Ready。破坏性操作使用可恢复状态机和幂等/CAS 语义，不以日志、空列表或 best-effort 代表成功。
+- 架构迁移必须在同一交付中删除旧 facade、fallback、deprecated 转发、兼容白名单、过渡命名和无调用协议；同时更新静态契约测试与参考文档，不留下双路径。
+
 ## Core Concepts
 
 核心模型与链路的深度文档见 `docs/references/`，以下为索引（定义文件见各文档）：
@@ -51,9 +61,11 @@
 - **UI Architecture**：自适应布局、导航、主题体系。[ui-architecture.md](docs/references/ui-architecture.md)
 - **Message Rendering**：消息渲染管线（Markdown 双路径、代码块三态、Mermaid/HTML WebView、LaTeX 原生）。[message-rendering-pipeline.md](docs/references/message-rendering-pipeline.md)
 - **Update Mechanism**：版本检查、优先级比较、下载与 CI 发布。[update-mechanism.md](docs/references/update-mechanism.md)
-- **Runtime Core（v1 正式阶段·架构收敛）**：会话状态机与提交协议——`ConversationRuntime`（单写 `submit` 命令通道 + 流式 `applyStreamingDelta` 投影；`ConversationSnapshot` 唯一事实流，无兼容投影）、`ConversationReducer` 纯函数（快照态，structural sharing）、`TurnEngine`（turn 骨架唯一实现 `start`；chunk→投影 / checkpoint→CommitCheckpoint / 终态→FinalizeTurn 的唯一提交协议）、`TurnPipelineFactory`（Master/Target 共用管道装配）、`DelegationCoordinator`（子助手四阶段编排）。`service/runtime/`。深度设计见 `docs/dev/architecture-v1-refactor-plan.md`（§10–§13）。
-- **Sub-Assistant**：子助手访问、Child lineage、持久化、撤权与恢复；执行协调由 `DelegationCoordinator`（四阶段编排）负责，并发门禁归 `SubAssistantRunGate`，恢复语义唯一所有者为 `TurnRecovery`（启动恢复 + 定点收口），结果形状纯函数在 `SubAssistantResultProjection`；Child 关系经 v7 自引用 FK CASCADE 结构性保证。见 [sub-assistant-architecture.md](docs/references/sub-assistant-architecture.md)；附件入站/交付出站见 [sub-assistant-multimodal.md](docs/references/sub-assistant-multimodal.md)
-- **Generation Side Effects**：生成副作用域（`service/GenerationSideEffects.kt`）——音效反馈 + 标题/建议/压缩等会话衍生数据生成（`ChatService.sideEffects` 入口，共用后台生成骨架）。
+- **Runtime Core**：`ConversationCommandCoordinator`、`ConversationRuntimeRegistry`、`ConversationRuntime`、`ConversationReducer` 与 `TurnEngine` 构成唯一命令、Snapshot 与 turn 提交链。[chat-generation-pipeline.md](docs/references/chat-generation-pipeline.md)
+- **Application Ports & Recovery**：UI 经 `ConversationApplicationService`、`ConversationQueryService`、`SubAssistantDetailReader`、`StatsQueryService`、`ArtifactUseCase` 等端口；启动门禁归 `ApplicationRecoveryCoordinator`。
+- **Artifact Lifecycle**：`ArtifactStore` 唯一拥有 metadata/引用/状态机，`ArtifactPayloadStore` 只做磁盘 IO，Settings roots 经 `ArtifactSettingsCoordinator`。[multimodal-context-and-turn-durability.md](docs/references/multimodal-context-and-turn-durability.md)
+- **Sub-Assistant**：active run 归 `DelegationCoordinator`，并发归 `SubAssistantRunGate`，lineage/retention/delete 归 `SubAssistantLifecycle`，终态与恢复分别归 `TurnFinalization` / `TurnRecovery`。[sub-assistant-architecture.md](docs/references/sub-assistant-architecture.md)
+- **Generation Side Effects**：`GenerationSideEffects` 负责音效、标题、建议与压缩等衍生生成，由 `MasterTurnCoordinator` / `ConversationApplicationService` 显式注入和调用。
 - **Multimodal Context & Turn Durability**：附件事实、请求级投影、`inspect_attachments`、Turn/Tool 执行事实与崩溃恢复。[multimodal-context-and-turn-durability.md](docs/references/multimodal-context-and-turn-durability.md)
 - **Prompts and Tools**：模型可见的系统注入、工具 description、Tool Result 形状。[prompts-and-tools.md](docs/references/prompts-and-tools.md)
 

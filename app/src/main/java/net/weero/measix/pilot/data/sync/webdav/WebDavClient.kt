@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.sync.webdav
+package net.weero.measix.pilot.data.sync.webdav
 
 import android.util.Log
 import android.util.Xml
@@ -21,6 +21,7 @@ import io.ktor.util.cio.readChannel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.data.datastore.WebDavConfig
+import net.weero.measix.pilot.utils.runCatchingPreservingCancellation
 import org.xmlpull.v1.XmlPullParser
 import java.io.File
 import java.io.InputStream
@@ -53,7 +54,7 @@ class WebDavClient(
         data: ByteArray,
         contentType: String = "application/octet-stream",
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingPreservingCancellation {
             val url = config.buildUrl(path)
             Log.d(TAG, "PUT: $url")
 
@@ -83,7 +84,7 @@ class WebDavClient(
         file: File,
         contentType: String = "application/octet-stream",
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingPreservingCancellation {
             val url = config.buildUrl(path)
             Log.d(TAG, "PUT (stream file): $url")
 
@@ -110,7 +111,7 @@ class WebDavClient(
     }
 
     suspend fun get(path: String): Result<ByteArray> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingPreservingCancellation {
             val url = config.buildUrl(path)
             Log.d(TAG, "GET: $url")
 
@@ -131,7 +132,7 @@ class WebDavClient(
     }
 
     suspend fun getStream(path: String): Result<InputStream> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingPreservingCancellation {
             val url = config.buildUrl(path)
             Log.d(TAG, "GET (stream): $url")
 
@@ -151,7 +152,7 @@ class WebDavClient(
     }
 
     suspend fun downloadToFile(path: String, targetFile: File): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingPreservingCancellation {
             val url = config.buildUrl(path)
             Log.d(TAG, "GET (download to file): $url")
 
@@ -182,7 +183,7 @@ class WebDavClient(
     }
 
     suspend fun delete(path: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingPreservingCancellation {
             val url = config.buildUrl(path)
             Log.d(TAG, "DELETE: $url")
 
@@ -203,7 +204,7 @@ class WebDavClient(
     }
 
     suspend fun head(path: String): Result<WebDavResourceInfo> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingPreservingCancellation {
             val url = config.buildUrl(path)
             Log.d(TAG, "HEAD: $url")
 
@@ -228,7 +229,7 @@ class WebDavClient(
     }
 
     suspend fun mkcol(path: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingPreservingCancellation {
             val url = config.buildUrl(path)
             Log.d(TAG, "MKCOL: $url")
 
@@ -253,7 +254,7 @@ class WebDavClient(
         path: String = "",
         depth: Int = 1,
     ): Result<List<WebDavResourceInfo>> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingPreservingCancellation {
             val url = config.buildUrl(path)
             Log.d(TAG, "PROPFIND: $url, depth: $depth")
 
@@ -295,7 +296,7 @@ class WebDavClient(
     }
 
     suspend fun ensureCollectionExists(path: String = ""): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingPreservingCancellation {
             val targetUrl = config.buildUrl(path)
             Log.d(TAG, "Ensuring collection exists: $targetUrl")
 
@@ -303,7 +304,7 @@ class WebDavClient(
             val propfindResult = propfind(path, depth = 0)
             if (propfindResult.isSuccess) {
                 Log.d(TAG, "Collection already exists: $targetUrl")
-                return@runCatching
+                return@runCatchingPreservingCancellation
             }
 
             // Create collection if not exists
@@ -312,7 +313,7 @@ class WebDavClient(
     }
 
     suspend fun list(path: String = ""): Result<List<WebDavResourceInfo>> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingPreservingCancellation {
             val result = propfind(path, depth = 1).getOrThrow()
             // Filter out the parent directory itself (first entry)
             if (result.isNotEmpty()) {

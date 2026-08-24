@@ -69,6 +69,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -81,7 +82,9 @@ import androidx.paging.compose.itemKey
 import coil3.compose.AsyncImage
 import com.dokar.sonner.ToastType
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.rerere.ai.provider.ModelType
@@ -100,13 +103,15 @@ import me.rerere.hugeicons.stroke.Tools
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.files.FileUtils
-import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.service.MediaExportService
 import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.imggen.imageGenerationFailureStringRes
 import net.weero.measix.pilot.ui.components.ai.ModelSelector
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.FormItem
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDialog
+import net.weero.measix.pilot.ui.components.ui.ImagePreviewDeleteAction
+import net.weero.measix.pilot.ui.components.ui.ImagePreviewDeleteResult
 import net.weero.measix.pilot.ui.components.ui.OutlinedNumberInput
 import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
 import net.weero.measix.pilot.ui.components.ui.shortGeneratedLabel
@@ -357,25 +362,53 @@ private fun InputBar(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val toaster = LocalToaster.current
     val scope = rememberCoroutineScope()
+    val importFailed = stringResource(R.string.imggen_page_reference_import_failed)
+    val addReferenceImage = stringResource(R.string.imggen_page_add_reference_image)
     val imagePickerLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { selectedUris ->
             if (selectedUris.isNotEmpty()) {
                 scope.launch {
-                    val paths = selectedUris.mapNotNull { uri ->
-                        withContext(Dispatchers.IO) {
-                            runCatching {
-                                val bitmap = ImageUtils.loadOptimizedBitmap(context, uri, maxSize = 2048)
-                                    ?: error("Failed to decode image")
-                                val pngBytes = FileUtils.compressBitmapToPng(bitmap)
-                                bitmap.recycle()
-                                val file = File(context.appTempFolder, "imggen_ref_${Uuid.random()}.png")
-                                file.writeBytes(pngBytes)
-                                file.absolutePath
-                            }.getOrNull()
+                    val created = mutableListOf<String>()
+                    var failed = 0
+                    try {
+                        selectedUris.forEach { uri ->
+                            val path = try {
+                                withContext(Dispatchers.IO) {
+                                    val bitmap = ImageUtils.loadOptimizedBitmap(context, uri, maxSize = 2048)
+                                        ?: error("Failed to decode image")
+                                    val pngBytes = try {
+                                        FileUtils.compressBitmapToPng(bitmap)
+                                    } finally {
+                                        bitmap.recycle()
+                                    }
+                                    val file = File(context.appTempFolder, "imggen_ref_${Uuid.random()}.png")
+                                    try {
+                                        file.writeBytes(pngBytes)
+                                        file.absolutePath
+                                    } catch (error: Throwable) {
+                                        file.delete()
+                                        throw error
+                                    }
+                                }
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (error: Exception) {
+                                failed += 1
+                                null
+                            }
+                            path?.let(created::add)
                         }
+                        failed += vm.addReferenceImages(created)
+                        created.clear()
+                        if (failed > 0) toaster.show(importFailed, type = ToastType.Error)
+                    } catch (cancelled: CancellationException) {
+                        withContext(NonCancellable + Dispatchers.IO) {
+                            created.forEach { File(it).delete() }
+                        }
+                        throw cancelled
                     }
-                    vm.addReferenceImages(paths)
                 }
             }
         }
@@ -434,7 +467,7 @@ private fun InputBar(
             ) {
                 Icon(
                     imageVector = HugeIcons.Add01,
-                    contentDescription = "Add reference image"
+                    contentDescription = addReferenceImage,
                 )
             }
 
@@ -538,7 +571,8 @@ private fun ImageGalleryScreen(
 ) {
     val generatedImages = vm.generatedImages.collectAsLazyPagingItems()
     val context = LocalContext.current
-    val filesManager: FilesManager = koinInject()
+    val resources = LocalResources.current
+    val mediaExportService: MediaExportService = koinInject()
     @Suppress("DEPRECATION")
     val clipboardManager = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
@@ -548,6 +582,8 @@ private fun ImageGalleryScreen(
     var pendingDelete by remember { mutableStateOf<GeneratedImage?>(null) }
     val settings by vm.settings.collectAsStateWithLifecycle()
     val backgroundHost = rememberImageBackgroundHost(settings)
+    val generatedNoPrompt = stringResource(R.string.imggen_page_no_prompt)
+    val imageDeleteFailed = stringResource(R.string.image_viewer_delete_failed)
 
     PullToRefreshBox(
         isRefreshing = false,
@@ -653,11 +689,13 @@ private fun ImageGalleryScreen(
                                             onClick = {
                                                 scope.launch {
                                                     try {
-                                                        filesManager.saveMessageImage(context, "file://${it.filePath}")
+                                                        mediaExportService.saveImage(context, "file://${it.filePath}")
                                                         toaster.show(
                                                             message = imageSavedSuccess,
                                                             type = ToastType.Success
                                                         )
+                                                    } catch (cancelled: CancellationException) {
+                                                        throw cancelled
                                                     } catch (e: Exception) {
                                                         toaster.show(
                                                             message = saveFailedFmt.format(e.message),
@@ -714,6 +752,25 @@ private fun ImageGalleryScreen(
                 onDismissRequest = { previewIndex = -1 },
                 initialIndex = startIndex,
                 extraActions = listOf(backgroundHost.action),
+                deleteAction = ImagePreviewDeleteAction(
+                    confirmationText = { imageUrl ->
+                        val target = snapshotItems.firstOrNull { "file://${it.filePath}" == imageUrl }
+                        resources.getString(
+                            R.string.imggen_page_delete_image_confirmation,
+                            shortGeneratedLabel(target?.prompt.orEmpty(), generatedNoPrompt),
+                        )
+                    },
+                    delete = { imageUrl ->
+                        val target = snapshotItems.firstOrNull { "file://${it.filePath}" == imageUrl }
+                        if (target == null) {
+                            ImagePreviewDeleteResult.Failed(imageDeleteFailed)
+                        } else if (vm.deleteImage(target)) {
+                            ImagePreviewDeleteResult.Deleted
+                        } else {
+                            ImagePreviewDeleteResult.Failed(imageDeleteFailed)
+                        }
+                    },
+                ),
                 overlay = backgroundHost.overlay,
             )
         }
@@ -739,7 +796,11 @@ private fun ImageGalleryScreen(
                 TextButton(
                     onClick = {
                         pendingDelete = null
-                        vm.deleteImage(target)
+                        scope.launch {
+                            if (!vm.deleteImage(target)) {
+                                toaster.show(imageDeleteFailed, type = ToastType.Error)
+                            }
+                        }
                     }
                 ) {
                     Text(stringResource(R.string.imggen_page_delete))
@@ -831,7 +892,6 @@ private fun SettingsBottomSheet(
 private fun imageGenerationErrorMessage(error: String?): String = when (error) {
     null -> ""
     "image_model_unavailable" -> stringResource(R.string.imggen_page_error_no_model)
-    "delete_failed" -> stringResource(R.string.imggen_page_error_delete)
     "unknown" -> stringResource(R.string.imggen_page_error_generic)
     else -> stringResource(imageGenerationFailureStringRes(error))
 }

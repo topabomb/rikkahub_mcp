@@ -4,7 +4,7 @@ import androidx.core.net.toUri
 import me.rerere.ai.ui.UIMessagePart
 
 /**
- * 附件克隆唯一实现（Master fork 与 Child clone 共用，V1 正式阶段·架构收敛 §11.3 块 3）。
+ * 附件克隆唯一实现，供 Master fork 与 Child clone 共用。
  *
  * 语义：`file:` 引用的本地附件复制为新文件（内容级复制，脱离原会话的 GC 生命周期），
  * 其余引用原样返回；Tool part 递归克隆其 output。fork 场景注入 [ToolArtifactRewriter]
@@ -14,13 +14,15 @@ internal object AttachmentCloner {
 
     suspend fun clonePart(
         part: UIMessagePart,
-        filesManager: FilesManager,
+        artifactStore: ArtifactStore,
+        createdArtifacts: MutableList<OwnedArtifact>,
         toolArtifactRewriter: ToolArtifactRewriter? = null,
     ): UIMessagePart {
         suspend fun copyUrl(url: String): String {
             if (!url.startsWith("file:")) return url
-            return filesManager.createChatFilesByContents(listOf(url.toUri()))
-                .firstOrNull()?.toString() ?: url
+            val owned = artifactStore.createFromUri(url.toUri())
+            createdArtifacts += owned
+            return owned.uri.toString()
         }
         return when (part) {
             is UIMessagePart.Image -> part.copy(url = copyUrl(part.url))
@@ -31,10 +33,11 @@ internal object AttachmentCloner {
                 val rewriter = toolArtifactRewriter
                 val sourceRef = part.metadata?.let { rewriter?.decodeArtifactRef(it) }
                 if (rewriter != null && sourceRef != null) {
-                    val (newOutput, newMetadata) = rewriter.rewriteToolOutput(part.output, part.metadata)
-                    part.copy(output = newOutput, metadata = newMetadata)
+                    val rewritten = rewriter.rewriteToolOutput(part.output, part.metadata)
+                    rewritten.ownedArtifact?.let(createdArtifacts::add)
+                    part.copy(output = rewritten.output, metadata = rewritten.metadata)
                 } else {
-                    part.copy(output = cloneParts(part.output, filesManager))
+                    part.copy(output = cloneParts(part.output, artifactStore, createdArtifacts))
                 }
             }
             else -> part
@@ -43,7 +46,10 @@ internal object AttachmentCloner {
 
     suspend fun cloneParts(
         parts: List<UIMessagePart>,
-        filesManager: FilesManager,
+        artifactStore: ArtifactStore,
+        createdArtifacts: MutableList<OwnedArtifact>,
         toolArtifactRewriter: ToolArtifactRewriter? = null,
-    ): List<UIMessagePart> = parts.map { clonePart(it, filesManager, toolArtifactRewriter) }
+    ): List<UIMessagePart> = parts.map {
+        clonePart(it, artifactStore, createdArtifacts, toolArtifactRewriter)
+    }
 }

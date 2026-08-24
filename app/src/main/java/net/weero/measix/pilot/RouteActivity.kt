@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -67,6 +68,8 @@ import net.weero.measix.pilot.data.db.DatabaseMigrationTracker
 import net.weero.measix.pilot.data.db.MigrationState
 import net.weero.measix.pilot.data.event.AppEvent
 import net.weero.measix.pilot.data.event.AppEventBus
+import net.weero.measix.pilot.service.ApplicationRecoveryCoordinator
+import net.weero.measix.pilot.service.ApplicationRecoveryState
 import net.weero.measix.pilot.ui.activity.SafeModeActivity
 import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo
@@ -243,6 +246,8 @@ class RouteActivity : ComponentActivity() {
         val tts = rememberCustomTtsState()
         val asr = rememberCustomAsrState()
         val eventBus = koinInject<AppEventBus>()
+        val recoveryCoordinator = koinInject<ApplicationRecoveryCoordinator>()
+        val recoveryState by recoveryCoordinator.state.collectAsStateWithLifecycle()
         LaunchedEffect(tts) {
             eventBus.events.collect { event ->
                 when (event) {
@@ -302,7 +307,8 @@ class RouteActivity : ComponentActivity() {
                         .semantics { testTagsAsResourceId = true }
                         .background(MaterialTheme.colorScheme.background)
                 ) {
-                    NavDisplay(
+                    if (recoveryState is ApplicationRecoveryState.Ready) {
+                        NavDisplay(
                         backStack = backStack,
                         entryDecorators = listOf(
                             rememberSaveableStateHolderNavEntryDecorator(),
@@ -530,8 +536,14 @@ class RouteActivity : ComponentActivity() {
                                 )
                             }
                         }
-                    )
-                    if (BuildConfig.DEBUG) {
+                        )
+                    } else {
+                        ApplicationRecoveryContent(
+                            state = recoveryState,
+                            onRetry = recoveryCoordinator::retry,
+                        )
+                    }
+                    if (BuildConfig.DEBUG && recoveryState is ApplicationRecoveryState.Ready) {
                         Text(
                             text = "[开发模式]",
                             modifier = Modifier
@@ -573,6 +585,43 @@ class RouteActivity : ComponentActivity() {
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun ApplicationRecoveryContent(
+        state: ApplicationRecoveryState,
+        onRetry: () -> Unit,
+    ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(
+                modifier = Modifier.padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                when (state) {
+                    ApplicationRecoveryState.Loading -> {
+                        CircularProgressIndicator()
+                        Text(stringResource(R.string.application_recovery_loading))
+                    }
+                    is ApplicationRecoveryState.Failed -> {
+                        Text(
+                            text = stringResource(R.string.application_recovery_failed),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        Text(
+                            text = state.error.message ?: state.error::class.simpleName.orEmpty(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Button(onClick = onRetry) {
+                            Text(stringResource(R.string.application_recovery_retry))
+                        }
+                    }
+                    ApplicationRecoveryState.Ready -> Unit
                 }
             }
         }

@@ -12,57 +12,51 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getCurrentAssistant
-import net.weero.measix.pilot.data.model.Conversation
-import net.weero.measix.pilot.data.repository.ConversationRepository
-import net.weero.measix.pilot.service.ChatService
+import net.weero.measix.pilot.service.ConversationApplicationService
+import net.weero.measix.pilot.service.ConversationQueryService
+import net.weero.measix.pilot.service.ConversationSummary
 import kotlin.uuid.Uuid
 
 private const val TAG = "HistoryVM"
 
 class HistoryVM(
-    private val conversationRepo: ConversationRepository,
+    private val conversationQueryService: ConversationQueryService,
     private val settingsStore: SettingsStore,
-    private val chatService: ChatService,
+    private val conversationApplicationService: ConversationApplicationService,
 ) : ViewModel() {
     val assistant = settingsStore.settingsFlow
         .map { it.getCurrentAssistant() }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     val conversations = assistant.flatMapLatest { assistant ->
-        conversationRepo.getConversationsOfAssistant(assistant?.id ?: Uuid.random())
+        conversationQueryService.conversationsOfAssistant(assistant?.id ?: Uuid.random())
     }.catch {
         Log.e(TAG, "Error: ${it.message}")
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    fun deleteConversation(conversation: Conversation) {
-        viewModelScope.launch {
-            chatService.deleteConversation(conversation)
-        }
-    }
+    suspend fun deleteForUndo(conversationId: Uuid): ConversationApplicationService.RestoreToken =
+        conversationApplicationService.deleteForUndo(conversationId)
 
     fun deleteAllConversations() {
         val assistant = assistant.value ?: return
         viewModelScope.launch {
-            chatService.deleteConversationsOfAssistant(assistant.id)
+            conversationApplicationService.deleteOfAssistant(assistant.id)
         }
     }
 
     fun togglePinStatus(conversationId: Uuid) {
         viewModelScope.launch {
-            chatService.togglePinStatus(conversationId)
+            conversationApplicationService.togglePin(conversationId)
         }
     }
 
-    fun getPinnedConversations(): Flow<List<Conversation>> =
-        conversationRepo.getPinnedConversations()
+    fun getPinnedConversations(): Flow<List<ConversationSummary>> =
+        conversationQueryService.pinnedConversations()
 
-    fun restoreConversation(conversation: Conversation) {
-        viewModelScope.launch {
-            chatService.insertConversation(conversation)
-        }
-    }
+    suspend fun restoreConversation(token: ConversationApplicationService.RestoreToken) =
+        conversationApplicationService.restore(token)
 
-    suspend fun getFullConversation(conversationId: Uuid): Conversation? {
-        return conversationRepo.getConversationById(conversationId)
+    fun discardRestoreToken(token: ConversationApplicationService.RestoreToken) {
+        conversationApplicationService.discardRestoreToken(token)
     }
 }

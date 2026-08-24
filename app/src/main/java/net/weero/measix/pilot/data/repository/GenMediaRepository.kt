@@ -8,7 +8,7 @@ import net.weero.measix.pilot.data.db.entity.GenMediaEntity
 class GenMediaRepository(private val dao: GenMediaDAO) {
     fun getAllMedia(): PagingSource<Int, GenMediaEntity> = dao.getAll()
 
-    suspend fun insertMedia(media: GenMediaEntity): Long = dao.insert(media)
+    fun insertMedia(media: GenMediaEntity): Long = dao.insert(media)
 
     suspend fun getAllMediaList(): List<GenMediaEntity> = dao.getAllMedia()
 
@@ -16,5 +16,5 @@ class GenMediaRepository(private val dao: GenMediaDAO) {
 
     suspend fun getMediaById(id: Int): GenMediaEntity? = dao.getById(id)
 
-    suspend fun deleteMedia(id: Int) = dao.delete(id)
+    fun deleteMedia(id: Int) = dao.delete(id)
 }

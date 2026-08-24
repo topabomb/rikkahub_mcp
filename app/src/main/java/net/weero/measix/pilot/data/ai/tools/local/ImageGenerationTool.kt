@@ -21,9 +21,10 @@ import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.files.LocalArtifactRef
-import net.weero.measix.pilot.data.files.ManagedLocalArtifactStore
+import net.weero.measix.pilot.data.files.ArtifactDeleteResult
+import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.OwnedArtifact
 import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.data.imggen.AssistantBackgroundService
 import net.weero.measix.pilot.data.imggen.BackgroundUpdateResult
@@ -117,7 +118,7 @@ class ImageGenerationToolFactory(
     private val resolver: ImageGenerationSelectionResolver,
     private val coordinator: ImageGenerationCoordinator,
     private val backgroundService: AssistantBackgroundService,
-    private val artifactStore: ManagedLocalArtifactStore,
+    private val artifactStore: ArtifactStore,
     private val rewriter: ToolArtifactRewriter,
     private val json: Json = JsonInstant,
 ) {
@@ -187,7 +188,7 @@ private suspend fun executeGenerateImage(
     resolver: ImageGenerationSelectionResolver,
     coordinator: ImageGenerationCoordinator,
     backgroundService: AssistantBackgroundService,
-    artifactStore: ManagedLocalArtifactStore,
+    artifactStore: ArtifactStore,
     rewriter: ToolArtifactRewriter,
     json: Json,
 ): List<UIMessagePart> {
@@ -269,67 +270,76 @@ private suspend fun executeGenerateImage(
 
         is ImageGenerationOutcome.Success -> {
             val media = outcome.media.first()
-            val artifact = media.chatArtifact ?: return failedResult("persistence_error")
+            val ownedArtifact = media.chatArtifact ?: return failedResult("persistence_error")
+            val artifact = ownedArtifact.localRef
             val toolPath = artifact.toolPath() ?: run {
                 withContext(NonCancellable) {
-                    runCatching { artifactStore.delete(artifact) }
+                    discardGeneratedArtifactOrThrow(artifactStore, ownedArtifact)
                 }
                 return failedResult("persistence_error")
             }
-            var outputCommitted = false
-            try {
-                var background = BackgroundUpdateResult(requested = parsed.setAsBackground, updated = false)
-                if (parsed.setAsBackground) {
-                    reportPhase("setting_background", checkpoint = true)
-                    // 生成媒体派生的背景副本——诞生方式为生成
-                    background = backgroundService.replaceBackground(
-                        assistantId = ownerAssistantId,
-                        source = media.canonicalFile,
-                        mimeType = media.mimeType,
-                        origin = ArtifactOrigin.GENERATED,
-                    )
-                }
-                val text = buildJsonObject {
-                    put("status", "completed")
-                    put("file", buildJsonObject {
-                        put("path", toolPath)
-                        put("mime_type", media.mimeType)
-                    })
-                    put("background", buildJsonObject {
-                        put("requested", background.requested)
-                        put("updated", background.updated)
-                        background.reason?.let { put("reason", it) }
-                        if (background.cleanupPending) put("cleanup_pending", true)
-                    })
-                }.toString()
-                val terminal = ImageGenerationToolMetadata(
-                    phase = "completed",
-                    providerType = capturedSelection.descriptor.providerType,
-                    providerName = capturedSelection.descriptor.providerName,
-                    modelId = capturedSelection.descriptor.modelId,
-                    modelName = capturedSelection.descriptor.modelName,
-                    status = "completed",
-                    artifact = artifact,
+            context.registerUnpublishedResource(artifactStore.unpublishedLease(ownedArtifact))
+            var background = BackgroundUpdateResult(requested = parsed.setAsBackground, updated = false)
+            if (parsed.setAsBackground) {
+                reportPhase("setting_background", checkpoint = true)
+                background = backgroundService.replaceGeneratedBackground(
+                    assistantId = ownerAssistantId,
+                    source = media.canonicalFile,
+                    mimeType = media.mimeType,
                 )
-                val metadataJson = json.encodeToJsonElement(ImageGenerationToolMetadata.serializer(), terminal).jsonObject()
-                val withArtifact = rewriter.encodeArtifactRef(metadataJson, artifact)
-                context.reportMetadata(withArtifact, false)
-                outputCommitted = true
-                listOf(
-                    UIMessagePart.Text(text),
-                    net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.ensureAttachmentRef(
-                        UIMessagePart.Image(url = artifact.fileUri(filesDir)),
-                    ),
-                )
-            } catch (error: Throwable) {
-                if (!outputCommitted) {
-                    withContext(NonCancellable) {
-                        runCatching { artifactStore.delete(artifact) }
-                    }
-                }
-                throw error
+            }
+            val text = buildJsonObject {
+                put("status", "completed")
+                put("file", buildJsonObject {
+                    put("path", toolPath)
+                    put("mime_type", media.mimeType)
+                })
+                put("background", buildJsonObject {
+                    put("requested", background.requested)
+                    put("updated", background.updated)
+                    background.reason?.let { put("reason", it) }
+                    if (background.cleanupPending) put("cleanup_pending", true)
+                })
+            }.toString()
+            val terminal = ImageGenerationToolMetadata(
+                phase = "completed",
+                providerType = capturedSelection.descriptor.providerType,
+                providerName = capturedSelection.descriptor.providerName,
+                modelId = capturedSelection.descriptor.modelId,
+                modelName = capturedSelection.descriptor.modelName,
+                status = "completed",
+                artifact = artifact,
+            )
+            val metadataJson = json.encodeToJsonElement(ImageGenerationToolMetadata.serializer(), terminal).jsonObject()
+            val withArtifact = rewriter.encodeArtifactRef(metadataJson, artifact)
+            context.reportMetadata(withArtifact, false)
+            listOf(
+                UIMessagePart.Text(text),
+                net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.ensureAttachmentRef(
+                    UIMessagePart.Image(url = artifact.fileUri(filesDir)),
+                ),
+            )
+        }
+    }
+}
+
+private suspend fun discardGeneratedArtifactOrThrow(
+    artifactStore: ArtifactStore,
+    ownedArtifact: OwnedArtifact,
+) {
+    when (val result = artifactStore.discardUnpublished(ownedArtifact)) {
+        is ArtifactDeleteResult.Completed -> Unit
+        is ArtifactDeleteResult.CleanupPending -> error(
+            "Generated artifact cleanup pending: id=${result.artifactId}, reason=${result.reason}"
+        )
+        is ArtifactDeleteResult.Rejected -> {
+            check(result.reason == ArtifactDeleteResult.RejectionReason.ALREADY_DELETED) {
+                "Generated artifact cleanup was not acquired: $result"
             }
         }
+        is ArtifactDeleteResult.Failed -> error(
+            "Generated artifact cleanup failed: id=${result.artifactId}, reason=${result.reason}"
+        )
     }
 }
 

@@ -37,28 +37,28 @@ class SubAssistantRetentionTest {
     fun `removing last referenced run truncates unreferenced child tail`() {
         val master = master(call("run-1", task1.id))
 
-        val plan = planSubAssistantRetention(master, mapOf(child.id to child), json)
+        val plan = planSubAssistantRetention(master.id, master.messageNodes, mapOf(child.id to child), json)
 
         assertTrue(plan.deletedChildren.isEmpty())
-        assertEquals(2, plan.retainedChildren.single().messageNodes.size)
+        assertEquals(2, plan.truncatedChildren.single().messageNodes.size)
     }
 
     @Test
     fun `later retained run keeps its real intermediate history`() {
         val master = master(call("run-2", task2.id, previousRunId = "run-1"))
 
-        val plan = planSubAssistantRetention(master, mapOf(child.id to child), json)
+        val plan = planSubAssistantRetention(master.id, master.messageNodes, mapOf(child.id to child), json)
 
-        assertEquals(4, plan.retainedChildren.single().messageNodes.size)
+        assertTrue(plan.truncatedChildren.isEmpty())
     }
 
     @Test
     fun `child with no remaining valid references is deleted`() {
         val master = Conversation(id = masterId, assistantId = Uuid.random(), messageNodes = emptyList())
 
-        val plan = planSubAssistantRetention(master, mapOf(child.id to child), json)
+        val plan = planSubAssistantRetention(master.id, master.messageNodes, mapOf(child.id to child), json)
 
-        assertTrue(plan.retainedChildren.isEmpty())
+        assertTrue(plan.truncatedChildren.isEmpty())
         assertEquals(listOf(child.id), plan.deletedChildren.map { it.id })
     }
 

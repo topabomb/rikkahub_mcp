@@ -71,7 +71,6 @@ import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
 import net.weero.measix.pilot.data.model.Assistant
-import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import net.weero.measix.pilot.ui.components.ui.ExtensionSelector
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionCamera
@@ -87,13 +86,16 @@ import kotlin.uuid.Uuid
 
 @Composable
 internal fun FilesPicker(
-    conversation: Conversation,
+    conversationModeInjectionIds: Set<Uuid>,
+    messageNodeCount: Int,
+    workspaceCwd: String?,
     assistant: Assistant,
     state: ChatInputState,
     mcpManager: McpManager,
     onCompressContext: (additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int) -> Job,
     onUpdateAssistant: (Assistant) -> Unit,
-    onUpdateConversation: (Conversation) -> Unit,
+    onUpdateConversationModeInjectionIds: (Set<Uuid>) -> Unit,
+    onUpdateWorkspaceCwd: (String?) -> Unit,
     showInjectionSheet: Boolean,
     onShowInjectionSheetChange: (Boolean) -> Unit,
     showCompressDialog: Boolean,
@@ -142,10 +144,10 @@ internal fun FilesPicker(
         if (workspaces.isNotEmpty()) {
             WorkspacePickerListItem(
                 assistant = assistant,
-                conversation = conversation,
+                workspaceCwd = workspaceCwd,
                 workspaces = workspaces,
                 onUpdateAssistant = onUpdateAssistant,
-                onUpdateConversation = onUpdateConversation,
+                onUpdateWorkspaceCwd = onUpdateWorkspaceCwd,
                 onNavigateToDetail = { id ->
                     onDismiss()
                     navController.navigate(Screen.WorkspaceDetail(id))
@@ -173,7 +175,7 @@ internal fun FilesPicker(
         // Extensions (Quick Messages + Prompt Injections + Skills)
         val modeInjectionCount =
             if (assistant.allowConversationPromptInjection) {
-                conversation.modeInjectionIds.size
+                conversationModeInjectionIds.size
             } else {
                 assistant.modeInjectionIds.size
             }
@@ -218,9 +220,9 @@ internal fun FilesPicker(
                 )
             },
             trailingContent = {
-                if (conversation.messageNodes.isNotEmpty()) {
+                if (messageNodeCount > 0) {
                     Text(
-                        text = stringResource(R.string.chat_page_message_count, conversation.messageNodes.size),
+                        text = stringResource(R.string.chat_page_message_count, messageNodeCount),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -256,7 +258,7 @@ internal fun FilesPicker(
                 )
                 Spacer(Modifier.width(4.dp))
                 Text(
-                    text = conversation.workspaceCwd ?: "/workspace",
+                    text = workspaceCwd ?: "/workspace",
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -264,9 +266,9 @@ internal fun FilesPicker(
             if (showCwdSheet) {
                 WorkspaceCwdPickerSheet(
                     workspaceId = boundWorkspace.id,
-                    currentCwd = conversation.workspaceCwd,
+                    currentCwd = workspaceCwd,
                     onSelectCwd = { newCwd ->
-                        onUpdateConversation(conversation.copy(workspaceCwd = newCwd))
+                        onUpdateWorkspaceCwd(newCwd)
                     },
                     onDismiss = { showCwdSheet = false },
                 )
@@ -277,11 +279,11 @@ internal fun FilesPicker(
     // Injection Bottom Sheet
     if (showInjectionSheet) {
         InjectionQuickConfigSheet(
-            conversation = conversation,
+            conversationModeInjectionIds = conversationModeInjectionIds,
             assistant = assistant,
             settings = settings,
             onUpdateAssistant = onUpdateAssistant,
-            onUpdateConversation = onUpdateConversation,
+            onUpdateConversationModeInjectionIds = onUpdateConversationModeInjectionIds,
             onDismiss = { onShowInjectionSheetChange(false) },
             onDismissAll = onDismiss,
         )
@@ -301,10 +303,10 @@ internal fun FilesPicker(
 @Composable
 private fun WorkspacePickerListItem(
     assistant: Assistant,
-    conversation: Conversation,
+    workspaceCwd: String?,
     workspaces: List<WorkspaceEntity>,
     onUpdateAssistant: (Assistant) -> Unit,
-    onUpdateConversation: (Conversation) -> Unit,
+    onUpdateWorkspaceCwd: (String?) -> Unit,
     onNavigateToDetail: (String) -> Unit,
     onNavigateToTerminal: (String) -> Unit,
     onNavigateToManage: () -> Unit,
@@ -368,8 +370,8 @@ private fun WorkspacePickerListItem(
                 val newId = workspaceId?.let { Uuid.parse(it) }
                 if (newId != assistant.workspaceId) {
                     onUpdateAssistant(assistant.copy(workspaceId = newId))
-                    if (conversation.workspaceCwd != null) {
-                        onUpdateConversation(conversation.copy(workspaceCwd = null))
+                    if (workspaceCwd != null) {
+                        onUpdateWorkspaceCwd(null)
                     }
                 }
                 showSheet = false
@@ -385,11 +387,11 @@ private fun WorkspacePickerListItem(
 
 @Composable
 private fun InjectionQuickConfigSheet(
-    conversation: Conversation,
+    conversationModeInjectionIds: Set<Uuid>,
     assistant: Assistant,
     settings: Settings,
     onUpdateAssistant: (Assistant) -> Unit,
-    onUpdateConversation: (Conversation) -> Unit,
+    onUpdateConversationModeInjectionIds: (Set<Uuid>) -> Unit,
     onDismiss: () -> Unit,
     onDismissAll: () -> Unit,
 ) {
@@ -408,8 +410,8 @@ private fun InjectionQuickConfigSheet(
                 assistant = assistant,
                 settings = settings,
                 onUpdate = onUpdateAssistant,
-                conversation = conversation,
-                onUpdateConversation = onUpdateConversation,
+                conversationModeInjectionIds = conversationModeInjectionIds,
+                onUpdateConversationModeInjectionIds = onUpdateConversationModeInjectionIds,
                 modifier = Modifier.weight(1f),
                 onNavigateToQuickMessages = {
                     onDismissAll()

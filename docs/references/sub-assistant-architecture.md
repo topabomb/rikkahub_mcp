@@ -62,9 +62,12 @@ Target.allowAsSubAssistant
 |------|------|
 | `AssistantToolFactory` | 注册 Assistant 工具、构建动态 Catalog、把 `assistant_call` 交给 Coordinator |
 | `AssistantManagementService` | Assistant CRUD、授权更新、删除 tombstone 与恢复清理 |
-| `DelegationCoordinator` | 四阶段编排（preflight → materialize Child → run → terminal）、lineage、Child 生命周期、ask_user 桥接、卡片 Phase；不实现第二套 chunk 落库协议，不持有恢复语义 |
-| `SubAssistantRunGate` | run 门禁域：运行 lease 与 pending ask_user 两组并发原语的组合所有者（Coordinator 执行、TurnRecovery 恢复共同消费） |
-| `TurnRecovery` | 恢复语义唯一所有者：启动恢复（master turn + 子助手 run 定点收口）、变更前收口、retention、取消收口原语、中断 run 终态回写 |
+| `DelegationCoordinator` | 四阶段编排（preflight → materialize Child → run → terminal）、ask_user 桥接和卡片 Phase；不实现第二套提交或恢复协议 |
+| `SubAssistantRunGate` | scoped run lease 与 pending ask_user 并发所有者；原始 release 不向调用方暴露 |
+| `SubAssistantLifecycle` | lineage、retention、Child 删除和普通树变更前的 run 收口 |
+| `TurnFinalization` | 正常 stop/supersede 与中断结果的强制终态写入 |
+| `TurnRecovery` | 只处理进程恢复：按非终态 execution 定点收口 Master、Child 与工具事实 |
+| `ApplicationRecoveryCoordinator` | 唯一启动顺序与 fail-closed 写门禁 |
 | `SubAssistantResultProjection` | 子助手输出/结果形状/入站投影纯函数（final answer 提取、Tool Result 构建、metadata patch、任务预处理） |
 | `TurnEngine` / `TurnPipelineFactory` | Master 与 Target 共用的 turn 骨架（`TurnEngine.start`）与 chunk→CommitCheckpoint→FinalizeTurn 提交协议、输入/输出管道 |
 | `SubAssistantAccessPolicy` | 统一计算发现、管理和调用的有效访问范围 |
@@ -116,7 +119,7 @@ Master ToolCall
   -> 用最新 Settings 做写入前重验
   -> 解析 attachments 并做 Image 能力 preflight；无法消费则不写 Child
   -> 新建 / 复用 / 克隆 Child，并追加 USER（Text(request) + 原始 Image parts）
-  -> 回写 Child link 与 checkpoint
+  -> 强制提交 Child、tool STARTED 与 childConversationId 关系
   -> Target GenerationHandler 循环
   -> 持久化 Child、更新 phase/preview、桥接 ask_user
   -> 提取 final result，写入终态 metadata 与 Tool Result
@@ -180,20 +183,22 @@ Target 每个模型 step 都重新构建工具集。有效工具能力是“调�
 
 ### 启动恢复
 
-应用启动后，`TurnRecovery.recoverInterruptedRuns()` 以**执行事实为唯一输入**做定点收口（恢复成本与库大小解耦，I8 契约锁定）：
+应用启动后，`ApplicationRecoveryCoordinator` 在 artifact/reference/FTS 投影完成后调用
+`TurnRecovery.recoverInterruptedRuns()`，以**执行事实为唯一输入**做定点收口：
 
 - 输入 = `turn_execution` 非终态行（`getNonTerminalTurnExecutionsWithScope`，JOIN 会话表区分 Master/Child）；健康会话零加载，不再全库扫描。
 - Master 行 → 定点加载该会话，树中 `starting`/`running` 调用不会自动重放，而是按当前配置收口为 `stopped`；有效 Child 的可见预览会重建并保留。
-- 被非终态调用引用的 Child → 定点加载收口（finishReasoning + 工具中断 + turn 事实 `INTERRUPTED`）。
+- 被非终态调用引用的 Child → 定点加载收口（finishReasoning + 工具中断 + turn 事实 `INTERRUPTED`）；即使 Master metadata 缺失或损坏，Child execution 仍独立收口。
+- STARTED tool fact 先变为 `UNKNOWN`/`CANCELLED`，再提交 owning turn 终态；终态事务失败不会留下“turn 已终态、tool 仍 STARTED”的窗口。
 - 恢复先经 `SubAssistantRunGate` 取消全部运行 lease 与 pending ask_user，再读取 Room。
 - 孤儿 Child 由 v7 自引用 FK CASCADE 结构性杜绝（存量在 `Migration_6_7` 收敛），启动恢复不再扫描孤儿。
 - `target_removed`、`target_disabled`、`target_access_revoked`、模型不可用、`child_missing` 和 `app_restarted` 按确定优先级选择。
 
-`AssistantDataRecoveryGate` 在恢复和 tombstone 清理结束前阻止所有用户触发的 Conversation/Assistant 持久化，包括聊天、历史删除与恢复、抽屉移动和调试数据写入。
+`ApplicationRecoveryGate` 在完整恢复和 tombstone 清理结束前阻止所有 durable Conversation/Assistant 写入。任一步失败进入 `Failed(error)`；用户可显式 retry，但不能绕过门禁继续写。
 
 ### Master 分支变化与复制
 
-Master 分支切换或历史裁剪后，`planSubAssistantRetention` 只保留仍被任一有效 metadata 引用的 Child，并把共享 Child 收缩到最长仍被引用的 lineage 前缀。
+Master 分支切换或历史裁剪后，`SubAssistantLifecycle` 只保留仍被有效 metadata 引用的 Child，并把共享 Child 收缩到最长仍被引用的 lineage 前缀。未变化 Child 不重写，写入量只与裁剪 delta 相关。
 
 Fork 顶层会话时，`forkSubAssistantTree` 同时复制有效 Child，重建 `MessageNode.id`、`UIMessage.id`、`run_id`、`previous_run_id` 和 Child link。新 Child 改绑新 Master，Provider metadata 与选中消息内容保持不变。
 
@@ -205,9 +210,9 @@ Fork 顶层会话时，`forkSubAssistantTree` 同时复制有效 Child，重建 
 
 ## 9. Runtime、取消与 TTS
 
-`ConversationRuntimeRegistry` 保证一个 Conversation ID 对应一个 Runtime。加载持久化 Child 使用 `getOrCreateSessionWithConversation()`；中断收尾在 Runtime 不存在时先读取 Room，Child 已删除则停止修复，不会用默认空会话覆盖持久化快照。页面引用归零但 Job 活跃时 Runtime 继续保留；生成结束且空闲后再清理。
+`ConversationRuntimeRegistry` 保证一个 Conversation ID 对应一个 Runtime，并显式暴露 `Loading/Draft/Ready/Missing/Failed`；Draft 仅用于尚未发送首条消息的普通新聊天，Child 不使用 Draft。持久化 Child 只能经 `loadRuntime()` 安装已读取的 Ready Snapshot；不存在默认 Assistant 或空树占位。页面引用归零但 Job 活跃时 Runtime 继续保留；生成结束且空闲后再清理。
 
-停止 Master、删除 Target、撤销访问、模型失效、回答等待中断或应用恢复都会取消 Target Job。中断收口由 `TurnRecovery.finalizeInterruptedRun`（`NonCancellable` 收尾区）分别尝试 Child 修复和 Master 终态回写，各自有独立超时；Child 修复失败不会跳过 Master 终态，也不会让超时异常取代稳定的 stopped/failed Tool Result。lease 与交互等待器由 `executeCall` 的唯一 `finally` 释放（`SubAssistantRunGate`）。
+停止 Master、删除 Target、撤销访问、模型失效、回答等待中断或应用恢复都会取消 Target Job。正常运行中的中断由 `TurnFinalization` 在 `NonCancellable` 收尾区分别尝试 Child 与 Master metadata 终态写入；两侧都执行，任一失败最终仍向调用方传播，并以 suppressed exception 保留双侧诊断。lease 与交互等待器由 `SubAssistantRunGate.withLease` 的结构化作用域释放。
 
 每个 Master turn 创建共享的 `TtsToolPlaybackContext`，其中稳定 `sessionId` 是播放队列的唯一边界。Master 和该 turn 内的 Target 复用此 ID，Target 只替换 Assistant 身份和 `SUB_ASSISTANT` 来源类型；工具审批暂停与恢复继续使用原 ID，新消息或重新生成才轮换。`TtsController` 同时只接受一个 session 独占队列：新 session 替换旧队列；同 session 在顺序开关开启时追加、关闭时替换。Tool 不维护“是否首调”状态，UI `activeSource` 也不参与队列仲裁；每个 chunk 在入队时直接绑定来源，避免跳过或追加导致来源索引错位。控制条仅在当前来源是 Target 且该 Assistant 开启 `useAssistantAvatar` 时显示 Target 头像；播放结束会清空显示来源，但保留该 session 的队列所有权，以便同 turn 的迟到调用继续追加；Provider 切换、stop 或 dispose 才释放所有权。旧 worker 与旧播放器回调不能覆盖或停止新队列。`assistant_call` 结束不会中断已提交的音频。
 

@@ -1,8 +1,9 @@
-﻿package net.weero.measix.pilot.data.ai.transformers
+package net.weero.measix.pilot.data.ai.transformers
 
 import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import me.rerere.ai.provider.Model
+import me.rerere.ai.core.ToolResourceLease
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
@@ -16,6 +17,7 @@ class TransformerContext(
     val conversationModeInjectionIds: Set<Uuid> = emptySet(),
     val processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
     val workspaceCwd: String? = null,
+    val registerUnpublishedResource: (ToolResourceLease) -> Unit,
 )
 
 interface MessageTransformer {
@@ -42,7 +44,7 @@ interface OutputMessageTransformer : MessageTransformer
  * 流式变换器：只处理 active assistant 消息（流式期间最后一条）。
  *
  * 历史消息在流式期间 immutable——由 GenerationHandler 保证 `dropLast(1)` 部分逐 chunk
- * 零次进入本接口（契约测试 I5：StreamingTransformScopeTest）。
+ * 零次进入本接口（由 StreamingTransformScopeTest 锁定）。
  *
  * 与请求级 [OutputMessageTransformer.transform] 的分工：
  *  - [transformStreaming]：每个流式 chunk 对最新累积消息的最后一条做视觉变换
@@ -64,6 +66,7 @@ suspend fun List<UIMessage>.transforms(
     conversationModeInjectionIds: Set<Uuid> = emptySet(),
     processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
     workspaceCwd: String? = null,
+    registerUnpublishedResource: (ToolResourceLease) -> Unit,
 ): List<UIMessage> {
     val ctx = TransformerContext(
         context = context,
@@ -73,6 +76,7 @@ suspend fun List<UIMessage>.transforms(
         conversationModeInjectionIds = conversationModeInjectionIds,
         processingStatus = processingStatus,
         workspaceCwd = workspaceCwd,
+        registerUnpublishedResource = registerUnpublishedResource,
     )
     return transformers.fold(this) { acc, transformer ->
         transformer.transform(ctx, acc)

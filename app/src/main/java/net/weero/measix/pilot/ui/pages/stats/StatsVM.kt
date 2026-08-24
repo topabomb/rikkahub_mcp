@@ -1,18 +1,12 @@
-﻿package net.weero.measix.pilot.ui.pages.stats
+package net.weero.measix.pilot.ui.pages.stats
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import net.weero.measix.pilot.data.db.dao.ConversationDAO
-import net.weero.measix.pilot.data.db.dao.MessageNodeDAO
-import net.weero.measix.pilot.data.db.dao.getMessageCountPerDay
-import net.weero.measix.pilot.data.db.dao.getTokenStats
-import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.service.StatsQueryService
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.temporal.TemporalAdjusters
@@ -29,9 +23,7 @@ data class AppStats(
 )
 
 class StatsVM(
-    private val conversationDAO: ConversationDAO,
-    private val messageNodeDAO: MessageNodeDAO,
-    private val settingsStore: SettingsStore,
+    private val statsQueryService: StatsQueryService,
 ) : ViewModel() {
 
     private val _stats = MutableStateFlow(AppStats())
@@ -44,40 +36,20 @@ class StatsVM(
     private suspend fun loadStats() {
         delay(50)
 
-        val today = LocalDate.now()
-
-        // 热力图起始日期（52 周前的周日），格式 "yyyy-MM-dd" 直接与 JSON 中的 LocalDateTime 前缀比较
-        val startDate = today
+        val startDate = LocalDate.now()
             .with(TemporalAdjusters.previousOrSame(DayOfWeek.SUNDAY))
             .minusWeeks(52)
-            .toString()
-
-        // 基于用户消息的 createdAt 统计每日活跃消息数，SQLite 侧 GROUP BY，返回 ≤371 行
-        val conversationsPerDay = withContext(Dispatchers.IO) {
-            messageNodeDAO
-                .getMessageCountPerDay(startDate)
-                .mapNotNull { entry ->
-                    runCatching { LocalDate.parse(entry.day) to entry.count }.getOrNull()
-                }
-                .toMap()
-        }
-
-        val totalConversations = conversationDAO.countAll()
-
-        // json_each() + json_extract() 在 SQLite 侧聚合，不再加载完整 JSON 到 Kotlin
-        val tokenStats = messageNodeDAO.getTokenStats()
-
-        val launchCount = settingsStore.settingsFlow.value.launchCount
+        val snapshot = statsQueryService.load(startDate)
 
         _stats.value = AppStats(
             isLoading = false,
-            totalConversations = totalConversations,
-            totalMessages = tokenStats.totalMessages,
-            totalPromptTokens = tokenStats.promptTokens,
-            totalCompletionTokens = tokenStats.completionTokens,
-            totalCachedTokens = tokenStats.cachedTokens,
-            conversationsPerDay = conversationsPerDay,
-            launchCount = launchCount,
+            totalConversations = snapshot.totalConversations,
+            totalMessages = snapshot.totalMessages,
+            totalPromptTokens = snapshot.totalPromptTokens,
+            totalCompletionTokens = snapshot.totalCompletionTokens,
+            totalCachedTokens = snapshot.totalCachedTokens,
+            conversationsPerDay = snapshot.conversationsPerDay,
+            launchCount = snapshot.launchCount,
         )
     }
 }

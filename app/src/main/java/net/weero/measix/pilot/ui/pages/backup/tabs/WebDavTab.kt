@@ -46,13 +46,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dokar.sonner.ToastType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.WebDavConfig
@@ -77,7 +77,6 @@ fun WebDavTab(
     val webDavConfig = settings.webDavConfig
     val backupItemsState by vm.webDavBackupItems.collectAsStateWithLifecycle()
     val toaster = LocalToaster.current
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var showBackupFiles by remember { mutableStateOf(false) }
     var restoringItemId by remember { mutableStateOf<String?>(null) }
@@ -199,32 +198,19 @@ fun WebDavTab(
                     MultiChoiceSegmentedButtonRow(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        WebDavConfig.BackupItem.entries.forEachIndexed { index, item ->
                             SegmentedButton(
-                                shape = SegmentedButtonDefaults.itemShape(
-                                    index = index,
-                                    count = WebDavConfig.BackupItem.entries.size
-                                ),
+                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 1),
                                 onCheckedChange = { checked ->
                                     updateWebDavConfig { current ->
-                                        val newItems = if (checked) {
-                                            current.items + item
-                                        } else {
-                                            current.items - item
-                                        }
-                                        current.copy(items = newItems)
+                                        current.copy(
+                                            items = if (checked) WebDavConfig.BackupItem.entries else emptyList()
+                                        )
                                     }
                                 },
-                                checked = item in webDavConfig.items
+                                checked = webDavConfig.items.isNotEmpty()
                             ) {
-                                Text(
-                                    when (item) {
-                                        WebDavConfig.BackupItem.DATABASE -> stringResource(R.string.backup_page_chat_records)
-                                        WebDavConfig.BackupItem.FILES -> stringResource(R.string.backup_page_files)
-                                    }
-                                )
+                                Text(stringResource(R.string.backup_page_durable_aggregate))
                             }
-                        }
                     }
                     },
                 )
@@ -247,10 +233,11 @@ fun WebDavTab(
                                 connectionSuccess,
                                 type = ToastType.Success
                             )
-                        } catch (e: Exception) {
-                            e.printStackTrace()
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
                             toaster.show(
-                                connectionFailedFmt.format(e.message ?: ""),
+                                connectionFailedFmt.format(error.message ?: ""),
                                 type = ToastType.Error
                             )
                         }
@@ -271,21 +258,23 @@ fun WebDavTab(
                 onClick = {
                     scope.launch {
                         isBackingUp = true
-                        runCatching {
+                        try {
                             vm.backup()
                             vm.loadBackupFileItems()
                             toaster.show(
                                 backupSuccess,
                                 type = ToastType.Success
                             )
-                        }.onFailure {
-                            it.printStackTrace()
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
                             toaster.show(
-                                it.message ?: unknownError,
+                                error.message ?: unknownError,
                                 type = ToastType.Error
                             )
+                        } finally {
+                            isBackingUp = false
                         }
-                        isBackingUp = false
                     }
                 },
                 enabled = !isBackingUp
@@ -340,17 +329,18 @@ fun WebDavTab(
                                 isRestoring = restoringItemId == item.displayName,
                                 onDelete = {
                                     scope.launch {
-                                        runCatching {
+                                        try {
                                             vm.deleteWebDavBackupFile(item)
                                             toaster.show(
                                                 deleteSuccess,
                                                 type = ToastType.Success
                                             )
                                             vm.loadBackupFileItems()
-                                        }.onFailure { err ->
-                                            err.printStackTrace()
+                                        } catch (cancelled: CancellationException) {
+                                            throw cancelled
+                                        } catch (error: Exception) {
                                             toaster.show(
-                                                deleteFailedFmt.format(err.message ?: ""),
+                                                deleteFailedFmt.format(error.message ?: ""),
                                                 type = ToastType.Error
                                             )
                                         }
@@ -359,7 +349,7 @@ fun WebDavTab(
                                 onRestore = { restoreItem ->
                                     scope.launch {
                                         restoringItemId = restoreItem.displayName
-                                        runCatching {
+                                        try {
                                             vm.restore(item = restoreItem)
                                             toaster.show(
                                                 restoreSuccess,
@@ -367,14 +357,16 @@ fun WebDavTab(
                                             )
                                             showBackupFiles = false
                                             onShowRestartDialog()
-                                        }.onFailure { err ->
-                                            err.printStackTrace()
+                                        } catch (cancelled: CancellationException) {
+                                            throw cancelled
+                                        } catch (error: Exception) {
                                             toaster.show(
-                                                restoreFailedFmt.format(err.message ?: ""),
+                                                restoreFailedFmt.format(error.message ?: ""),
                                                 type = ToastType.Error
                                             )
+                                        } finally {
+                                            restoringItemId = null
                                         }
-                                        restoringItemId = null
                                     }
                                 },
                             )

@@ -91,7 +91,7 @@ class MessageFtsManagerIncrementalTest {
         val conversationId = Uuid.random().toString()
         val nodeA = node("alpha original")
         val nodeB = node("bravo unchanged")
-        fts.reindexNodes(conversationId, "t", seq.incrementAndGet(), listOf(nodeA, nodeB))
+        fts.reindexNodesInTransaction(conversationId, "t", seq.incrementAndGet(), listOf(nodeA, nodeB))
 
         // 全量两 node 已索引
         assertEquals(listOf("alpha original"), ftsRows(conversationId, nodeA.id.toString()))
@@ -101,7 +101,7 @@ class MessageFtsManagerIncrementalTest {
         val nodeA2 = nodeA.copy(
             messages = listOf(UIMessage(id = Uuid.random(), role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("alpha changed")))),
         )
-        fts.reindexNodes(conversationId, "t", seq.incrementAndGet(), listOf(nodeA2))
+        fts.reindexNodesInTransaction(conversationId, "t", seq.incrementAndGet(), listOf(nodeA2))
 
         // nodeA 行更新为增量后的值；nodeB 行完全不受影响
         assertEquals(listOf("alpha changed"), ftsRows(conversationId, nodeA.id.toString()))
@@ -113,10 +113,10 @@ class MessageFtsManagerIncrementalTest {
         val conversationId = Uuid.random().toString()
         val nodeA = node("alpha to delete")
         val nodeB = node("bravo keep")
-        fts.reindexNodes(conversationId, "t", seq.incrementAndGet(), listOf(nodeA, nodeB))
+        fts.reindexNodesInTransaction(conversationId, "t", seq.incrementAndGet(), listOf(nodeA, nodeB))
         assertEquals(2, ftsCount())
 
-        fts.deleteNodesIndex(conversationId, listOf(nodeA.id))
+        fts.deleteNodesIndexInTransaction(conversationId, listOf(nodeA.id))
         assertEquals(0, ftsRows(conversationId, nodeA.id.toString()).size)
         assertEquals(listOf("bravo keep"), ftsRows(conversationId, nodeB.id.toString()))
         assertEquals(1, ftsCount())
@@ -130,15 +130,15 @@ class MessageFtsManagerIncrementalTest {
         val nodeA = conversation.messageNodes[0]
         val nodeB = conversation.messageNodes[1]
         // 先全量，再增量更新 nodeA
-        fts.indexConversation(conversation)
+        fts.indexConversationInTransaction(conversation)
         val nodeA2 = nodeA.copy(
             messages = listOf(UIMessage(id = Uuid.random(), role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("alpha updated")))),
         )
-        fts.reindexNodes(conversationId, "t", seq.incrementAndGet(), listOf(nodeA2))
+        fts.reindexNodesInTransaction(conversationId, "t", seq.incrementAndGet(), listOf(nodeA2))
         val incremental = ftsRows(conversationId, nodeA.id.toString()) + ftsRows(conversationId, nodeB.id.toString())
 
         // 全量重建同一终态
-        fts.indexConversation(
+        fts.indexConversationInTransaction(
             conversation.copy(messageNodes = listOf(nodeA2, nodeB))
         )
         val rebuilt = ftsRows(conversationId, nodeA.id.toString()) + ftsRows(conversationId, nodeB.id.toString())
@@ -152,7 +152,7 @@ class MessageFtsManagerIncrementalTest {
         val conversationId = Uuid.random().toString()
         val nodeA = node("alpha")
         val nodeB = node("bravo")
-        fts.reindexNodes(conversationId, "t", seq.incrementAndGet(), listOf(nodeA, nodeB))
+        fts.reindexNodesInTransaction(conversationId, "t", seq.incrementAndGet(), listOf(nodeA, nodeB))
         assertEquals(2, ftsCount())
 
         // 会话删除：清空该会话全部 FTS 行

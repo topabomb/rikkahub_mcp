@@ -5,7 +5,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.common.http.jsonPrimitiveOrNull
-import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.model.MessageNode
 import java.io.File
 import java.net.URI
 import kotlin.uuid.Uuid
@@ -129,9 +129,9 @@ object AttachmentRefs {
         return if (changed) mapped else messages
     }
 
-    fun backfillConversation(conversation: Conversation): Conversation {
+    fun backfillNodes(nodes: List<MessageNode>): List<MessageNode> {
         var changed = false
-        val newNodes = conversation.messageNodes.map { node ->
+        val newNodes = nodes.map { node ->
             val newMessages = backfillMessages(node.messages)
             if (newMessages !== node.messages) {
                 changed = true
@@ -140,7 +140,7 @@ object AttachmentRefs {
                 node
             }
         }
-        return if (changed) conversation.copy(messageNodes = newNodes) else conversation
+        return if (changed) newNodes else nodes
     }
 
     fun fileToFileUrl(file: File): String {

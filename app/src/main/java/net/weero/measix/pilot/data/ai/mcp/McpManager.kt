@@ -10,6 +10,7 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import io.ktor.client.HttpClient
 import me.rerere.common.android.Logging
 import net.weero.measix.pilot.data.ai.RequestLoggingInterceptor
+import net.weero.measix.pilot.data.ai.attachments.ImageMime
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.sse.SSE
@@ -34,6 +35,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -62,8 +64,10 @@ import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.event.AppEvent
 import net.weero.measix.pilot.data.event.AppEventBus
 import net.weero.measix.pilot.data.model.Assistant
-import net.weero.measix.pilot.data.files.FilesManager
-import net.weero.measix.pilot.data.files.saveUploadFromBytes
+import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.OwnedArtifact
+import net.weero.measix.pilot.data.files.requireDiscarded
+import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.utils.JsonInstant
 import okhttp3.OkHttpClient
 import java.util.concurrent.ConcurrentHashMap
@@ -74,6 +78,7 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.Uuid
 
 private const val TAG = "McpManager"
+private const val MAX_MCP_IMAGE_BASE64_CHARS = (GeneratedMediaStore.MAX_IMAGE_BYTES * 4 / 3) + 4
 
 /**
  * MCP 服务器连接管理器
@@ -98,7 +103,7 @@ private const val TAG = "McpManager"
 class McpManager(
     private val settingsStore: SettingsStore,
     private val appScope: AppScope,
-    private val filesManager: FilesManager,
+    private val artifactStore: ArtifactStore,
     private val networkMonitor: NetworkMonitor,
     private val appEventBus: AppEventBus,
 ) {
@@ -239,7 +244,12 @@ class McpManager(
             }
     }
 
-    suspend fun callTool(serverId: Uuid, toolName: String, args: JsonObject): List<UIMessagePart> {
+    suspend fun callTool(
+        serverId: Uuid,
+        toolName: String,
+        args: JsonObject,
+        onArtifactCreated: (OwnedArtifact) -> Unit,
+    ): List<UIMessagePart> {
         return getServerLock(serverId).withLock {
             var client = clients[serverId]
                 ?: return@withLock listOf(UIMessagePart.Text("MCP server not connected"))
@@ -266,6 +276,7 @@ class McpManager(
 
             val serverName = config.commonOptions.name
 
+            val createdArtifacts = mutableListOf<OwnedArtifact>()
             runCatching {
                 val result = client.callTool(
                     CallToolRequest(CallToolRequestParams(name = toolName, arguments = args)),
@@ -274,11 +285,14 @@ class McpManager(
                 result.content.map {
                     when (it) {
                         is TextContent -> UIMessagePart.Text(it.text)
-                        is ImageContent -> convertImageContentToFilePart(it)
+                        is ImageContent -> convertImageContentToFilePart(it, createdArtifacts::add)
                         else -> UIMessagePart.Text(JsonInstant.encodeToString(it))
                     }
                 }.also { logMcp(serverName, "Tool '$toolName' succeeded") }
+            }.onSuccess {
+                createdArtifacts.forEach(onArtifactCreated)
             }.getOrElse { e ->
+                discardCreatedArtifacts(createdArtifacts, "MCP tool result rollback", e)
                 // 1. 工具超时: TimeoutCancellationException 是 CancellationException 子类，但表示工具超时
                 //    → 降级为错误文本返回给 AI，不中断对话，不重连（服务器还活着）
                 if (e is kotlinx.coroutines.TimeoutCancellationException) {
@@ -312,21 +326,47 @@ class McpManager(
         }
     }
 
-    private suspend fun convertImageContentToFilePart(image: ImageContent): UIMessagePart.Image {
+    private suspend fun convertImageContentToFilePart(
+        image: ImageContent,
+        onArtifactCreated: (OwnedArtifact) -> Unit,
+    ): UIMessagePart.Image {
+        require(image.data.isNotEmpty() && image.data.length <= MAX_MCP_IMAGE_BASE64_CHARS) {
+            "MCP image payload exceeds the size limit"
+        }
         val bytes = Base64.decode(image.data)
+        require(bytes.size <= GeneratedMediaStore.MAX_IMAGE_BYTES) { "MCP image payload exceeds the size limit" }
+        require(ImageMime.isAcceptedImage(bytes)) { "MCP image payload is invalid" }
+        val detectedMime = requireNotNull(ImageMime.sniff(bytes)) { "MCP image MIME cannot be detected" }
         val ext = android.webkit.MimeTypeMap.getSingleton()
-            .getExtensionFromMimeType(image.mimeType) ?: "bin"
-        // MCP server 返回的图片资源——系统产物
-        val entity = filesManager.saveUploadFromBytes(
+            .getExtensionFromMimeType(detectedMime) ?: "bin"
+        val owned = artifactStore.createFromBytes(
             bytes = bytes,
             displayName = "mcp_image.$ext",
-            mimeType = image.mimeType,
+            mimeType = detectedMime,
             origin = ArtifactOrigin.SYSTEM,
         )
-        val uri = filesManager.getFile(entity).toUri()
-        return net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.ensureAttachmentRef(
-            UIMessagePart.Image(url = uri.toString()),
-        ) as UIMessagePart.Image
+        return try {
+            net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.ensureAttachmentRef(
+                UIMessagePart.Image(url = owned.uri.toString()),
+            ).also { onArtifactCreated(owned) } as UIMessagePart.Image
+        } catch (error: Throwable) {
+            discardCreatedArtifacts(listOf(owned), "MCP image projection rollback", error)
+            throw error
+        }
+    }
+
+    private suspend fun discardCreatedArtifacts(
+        artifacts: List<OwnedArtifact>,
+        operation: String,
+        primary: Throwable,
+    ) = withContext(NonCancellable) {
+        artifacts.asReversed().forEach { owned ->
+            try {
+                artifactStore.discardUnpublished(owned).requireDiscarded(operation)
+            } catch (cleanupFailure: Throwable) {
+                primary.addSuppressed(cleanupFailure)
+            }
+        }
     }
 
     private fun getTransport(config: McpServerConfig): AbstractTransport {
@@ -588,10 +628,11 @@ class McpManager(
             reconnectAttempts[config.id] = 0
             logMcp(config.commonOptions.name, "Connected ($toolCount tools synced)")
             true
-        } catch (it: Throwable) {
-            // 无论什么异常（包括 CancellationException）都先清理 client，防止坏连接残留
+        } catch (cancelled: CancellationException) {
             closeClient(config.id)
-            if (it is CancellationException) throw it
+            throw cancelled
+        } catch (it: Exception) {
+            closeClient(config.id)
             if (needsAuthorization(config, it)) {
                 setStatus(config.id, McpStatus.NeedsAuthorization)
                 logMcp(config.commonOptions.name, "Needs OAuth authorization${extractHttpCode(it).let { c -> if (c.isNotEmpty()) " ($c)" else "" }}")
@@ -728,8 +769,8 @@ class McpManager(
             setStatus(config.id, McpStatus.Authorizing)
             runCatching { authorizeInternal(config, context.applicationContext) }
                 .onFailure {
-                    // 用户主动取消：状态由 cancelAuthorization 负责回退，这里不覆盖
-                    if (it is CancellationException) return@onFailure
+                    // 用户主动取消：状态由 cancelAuthorization 负责回退，同时保留 Job 取消语义。
+                    if (it is CancellationException) throw it
                     logMcp(config.commonOptions.name, "OAuth authorization failed: ${it.message}")
                     // 授权失败回到 NeedsAuthorization，让用户可以重试或调整配置
                     setStatus(config.id, McpStatus.NeedsAuthorization)
@@ -938,8 +979,9 @@ class McpManager(
             )
             persistOAuthState(config.id, updated)
             config.clone(commonOptions = config.commonOptions.copy(oauth = updated))
-        }.getOrElse {
-            logMcp(config.commonOptions.name, "Token refresh failed: ${it.message}")
+        }.getOrElse { error ->
+            if (error is CancellationException) throw error
+            logMcp(config.commonOptions.name, "Token refresh failed: ${error.message}")
             config // 刷新失败仍用旧令牌尝试，失败会转为 NeedsAuthorization
         }
     }
@@ -983,7 +1025,10 @@ class McpManager(
         if (hasManualAuth) return false
         // 主动探测：仅当 server 发布了受保护资源元数据 (protected resource metadata) 时才支持 OAuth
         return runCatching { oauthClient.discoverProtectedResource(config.serverUrl) }
-            .onFailure { logMcp(config.commonOptions.name, "OAuth probe failed: ${it.message}") }
+            .onFailure { error ->
+                if (error is CancellationException) throw error
+                logMcp(config.commonOptions.name, "OAuth probe failed: ${error.message}")
+            }
             .isSuccess
     }
 

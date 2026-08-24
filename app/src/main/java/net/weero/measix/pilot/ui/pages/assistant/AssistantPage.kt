@@ -3,7 +3,6 @@ package net.weero.measix.pilot.ui.pages.assistant
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Copy01
 import me.rerere.hugeicons.stroke.Add01
-import me.rerere.hugeicons.stroke.Search01
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.Cancel01
 import androidx.compose.foundation.layout.Arrangement
@@ -72,6 +71,7 @@ import net.weero.measix.pilot.ui.components.ui.FormItem
 import net.weero.measix.pilot.ui.components.ui.Tag
 import net.weero.measix.pilot.ui.components.ui.TagType
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
+import net.weero.measix.pilot.ui.components.ai.AssistantSearchFilterRow
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.hooks.EditState
 import net.weero.measix.pilot.ui.hooks.EditStateContent
@@ -202,45 +202,26 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
             }
             val haptic = LocalHapticFeedback.current
 
-            // 搜索框
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
+            AssistantSearchFilterRow(
+                query = searchQuery,
+                onQueryChange = { searchQuery = it },
+                showSubAssistants = showSubAssistants,
+                onShowSubAssistantsChange = { showSubAssistants = it },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp),
-                placeholder = { Text(stringResource(R.string.assistant_page_search_placeholder)) },
-                leadingIcon = {
-                    Icon(HugeIcons.Search01, contentDescription = null)
-                },
-                trailingIcon = {
-                    if (searchQuery.isNotBlank()) {
-                        IconButton(onClick = { searchQuery = "" }) {
-                            Icon(HugeIcons.Cancel01, contentDescription = null)
-                        }
+            )
+
+            if (settings.assistantTags.isNotEmpty()) {
+                AssistantTagFiltersRow(
+                    settings = settings,
+                    vm = vm,
+                    selectedTagIds = selectedTagIds,
+                    onUpdateSelectedTagIds = { ids ->
+                        selectedTagIds = ids
                     }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp)
-            )
-
-            // "显示子助手" FilterChip — 类型筛选先于 Tag 筛选
-            FilterChip(
-                onClick = { showSubAssistants = !showSubAssistants },
-                label = { Text(stringResource(R.string.assistant_picker_show_sub_assistants)) },
-                selected = showSubAssistants,
-                shape = RoundedCornerShape(50),
-            )
-
-            // 标签过滤器
-            AssistantTagsFilterRow(
-                settings = settings,
-                vm = vm,
-                selectedTagIds = selectedTagIds,
-                onUpdateSelectedTagIds = { ids ->
-                    selectedTagIds = ids
-                }
-            )
+                )
+            }
 
             LazyColumn(
                 modifier = Modifier
@@ -334,30 +315,32 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
 }
 
 @Composable
-private fun AssistantTagsFilterRow(
+private fun AssistantTagFiltersRow(
     settings: Settings,
     vm: AssistantVM,
     selectedTagIds: Set<Uuid>,
     onUpdateSelectedTagIds: (Set<Uuid>) -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
-    if (settings.assistantTags.isNotEmpty()) {
-        val tagsListState = rememberLazyListState()
-        val tagsReorderableState = rememberReorderableLazyListState(tagsListState) { from, to ->
+    val tagsListState = rememberLazyListState()
+    val tagsReorderableState = rememberReorderableLazyListState(tagsListState) { from, to ->
+        if (from.index in settings.assistantTags.indices && to.index in settings.assistantTags.indices) {
             val newTags = settings.assistantTags.toMutableList().apply {
                 add(to.index, removeAt(from.index))
             }
             vm.reorderAssistantTags(newTags.map { it.id })
         }
+    }
 
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(horizontal = 16.dp),
-            state = tagsListState
-        ) {
-            lazyItems(items = settings.assistantTags, key = { tag -> tag.id }) { tag ->
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        state = tagsListState,
+    ) {
+        lazyItems(items = settings.assistantTags, key = { tag -> tag.id }) { tag ->
                 ReorderableItem(
-                    state = tagsReorderableState, key = tag.id
+                    state = tagsReorderableState,
+                    key = tag.id,
                 ) { isDragging ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -391,7 +374,6 @@ private fun AssistantTagsFilterRow(
                         )
                     }
                 }
-            }
         }
     }
 }

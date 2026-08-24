@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ai
+package net.weero.measix.pilot.ui.components.ai
 
 import android.content.Intent
 import android.graphics.Bitmap
@@ -23,6 +23,35 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.context.LocalToaster
 import java.io.File
 
+internal data class CropResultDisposition(
+    val deliverOutput: Boolean,
+    val showError: Boolean,
+    val deleteOutput: Boolean,
+)
+
+internal fun cropResultDisposition(resultCode: Int): CropResultDisposition = when (resultCode) {
+    android.app.Activity.RESULT_OK -> CropResultDisposition(
+        deliverOutput = true,
+        showError = false,
+        deleteOutput = false,
+    )
+
+    UCrop.RESULT_ERROR -> CropResultDisposition(
+        deliverOutput = false,
+        showError = true,
+        deleteOutput = true,
+    )
+
+    else -> CropResultDisposition(
+        deliverOutput = false,
+        showError = false,
+        deleteOutput = true,
+    )
+}
+
+internal fun cropOutputFile(folder: File, timestampMillis: Long): File =
+    File(folder, "crop_output_$timestampMillis.png")
+
 @Composable
 internal fun useCropLauncher(
     onCroppedImageReady: (Uri) -> Unit,
@@ -38,40 +67,29 @@ internal fun useCropLauncher(
     val cropActivityLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        when (result.resultCode) {
-            android.app.Activity.RESULT_OK -> {
-                // 输出文件所有权移交消费方：消费方在协程中复制完成后自行删除。
-                // 此处绝不同步删除——消费是异步的（suspend 文件登记），
-                // 同步删除会与消费协程竞态，导致消费方读到已删除的文件。
-                cropOutputUri?.let { croppedUri ->
-                    onCroppedImageReady(croppedUri)
-                }
-            }
-
-            UCrop.RESULT_ERROR -> {
-                val error = result.data?.let { UCrop.getError(it) }
-                Logging.log(
-                    "CropLauncher",
-                    "crop failed: ${error?.message} | ${error?.stackTraceToString()}"
-                )
-                toaster.show(
-                    cropFailedMessage,
-                    type = ToastType.Error
-                )
-            }
-
-            else -> Unit
+        val disposition = cropResultDisposition(result.resultCode)
+        if (disposition.deliverOutput) {
+            // 成功后输出文件所有权移交消费方；消费方完成 suspend 文件登记后负责删除，
+            // 避免回调返回时同步删除与异步读取竞态。
+            cropOutputUri?.let(onCroppedImageReady)
         }
-        if (result.resultCode != android.app.Activity.RESULT_OK) {
-            // 失败/取消：输出文件无消费方，此处清理（uCrop 失败时通常未写入，删除幂等）
-            cropOutputUri?.toFile()?.delete()
+        if (disposition.showError) {
+            val error = result.data?.let { UCrop.getError(it) }
+            Logging.log(
+                "CropLauncher",
+                "crop failed: ${error?.message} | ${error?.stackTraceToString()}"
+            )
+            toaster.show(cropFailedMessage, type = ToastType.Error)
+        }
+        if (disposition.deleteOutput) {
+            cropOutputUri?.let { uri -> uri.toFile().delete() }
         }
         cropOutputUri = null
         onCleanup?.invoke()
     }
 
     val launchCrop: (Uri) -> Unit = { sourceUri ->
-        val outputFile = File(context.appTempFolder, "crop_output_${System.currentTimeMillis()}.jpg")
+        val outputFile = cropOutputFile(context.appTempFolder, System.currentTimeMillis())
         cropOutputUri = Uri.fromFile(outputFile)
 
         var crop = UCrop.of(sourceUri, cropOutputUri!!).withOptions(UCrop.Options().apply {

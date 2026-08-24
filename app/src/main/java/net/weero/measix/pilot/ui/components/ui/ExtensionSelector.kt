@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ui
+package net.weero.measix.pilot.ui.components.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -26,7 +26,7 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.files.SkillMetadata
 import net.weero.measix.pilot.data.model.Assistant
-import net.weero.measix.pilot.data.model.Conversation
+import kotlin.uuid.Uuid
 import net.weero.measix.pilot.ui.components.ai.ExtensionEmptyState
 import net.weero.measix.pilot.ui.components.ai.ModeInjectionsContent
 import net.weero.measix.pilot.ui.components.ai.QuickMessagesContent
@@ -40,8 +40,8 @@ fun ExtensionSelector(
     assistant: Assistant,
     settings: Settings,
     onUpdate: (Assistant) -> Unit,
-    conversation: Conversation? = null,
-    onUpdateConversation: ((Conversation) -> Unit)? = null,
+    conversationModeInjectionIds: Set<Uuid>? = null,
+    onUpdateConversationModeInjectionIds: ((Set<Uuid>) -> Unit)? = null,
     onNavigateToQuickMessages: () -> Unit = {},
     onNavigateToPrompts: () -> Unit = {},
     onNavigateToSkills: () -> Unit = {},
@@ -56,9 +56,11 @@ fun ExtensionSelector(
     }
 
     val useConversationInjections =
-        assistant.allowConversationPromptInjection && conversation != null && onUpdateConversation != null
+        assistant.allowConversationPromptInjection &&
+            conversationModeInjectionIds != null &&
+            onUpdateConversationModeInjectionIds != null
     val selectedModeInjectionIds = if (useConversationInjections) {
-        conversation.modeInjectionIds
+        requireNotNull(conversationModeInjectionIds)
     } else {
         assistant.modeInjectionIds
     }
@@ -140,7 +142,7 @@ fun ExtensionSelector(
                                     selectedModeInjectionIds - id
                                 }
                                 if (useConversationInjections) {
-                                    onUpdateConversation(conversation.copy(modeInjectionIds = newIds))
+                                    requireNotNull(onUpdateConversationModeInjectionIds)(newIds)
                                 } else {
                                     onUpdate(assistant.copy(modeInjectionIds = newIds))
                                 }

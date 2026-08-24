@@ -1,63 +1,24 @@
-﻿package net.weero.measix.pilot.ui.pages.favorite
+package net.weero.measix.pilot.ui.pages.favorite
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import net.weero.measix.pilot.data.db.entity.FavoriteEntity
-import net.weero.measix.pilot.data.favorite.NodeFavoriteAdapter
-import net.weero.measix.pilot.data.model.FavoriteType
-import net.weero.measix.pilot.data.repository.FavoriteRepository
-import kotlin.uuid.Uuid
-
-data class NodeFavoriteListItem(
-    val id: String,
-    val refKey: String,
-    val conversationId: Uuid,
-    val nodeId: Uuid,
-    val conversationTitle: String,
-    val preview: String,
-    val createdAt: Long,
-)
+import net.weero.measix.pilot.service.FavoriteService
 
 class FavoriteVM(
-    private val favoriteRepository: FavoriteRepository,
+    private val favoriteService: FavoriteService,
 ) : ViewModel() {
-    val nodeFavorites = favoriteRepository
-        .listByType(FavoriteType.NODE)
-        .map { favorites ->
-            favorites.mapNotNull { entity ->
-                val ref = NodeFavoriteAdapter.decodeRef(entity) ?: return@mapNotNull null
-                val meta = NodeFavoriteAdapter.decodeMeta(entity)
-
-                NodeFavoriteListItem(
-                    id = entity.id,
-                    refKey = entity.refKey,
-                    conversationId = ref.conversationId,
-                    nodeId = ref.nodeId,
-                    conversationTitle = meta?.title.orEmpty(),
-                    preview = meta?.previewText ?: "",
-                    createdAt = entity.createdAt,
-                )
-            }
-        }
+    val nodeFavorites = favoriteService.observeNodeFavorites()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    fun removeFavorite(refKey: String) {
-        viewModelScope.launch {
-            favoriteRepository.deleteByRefKey(refKey)
-        }
-    }
+    suspend fun removeForUndo(refKey: String): FavoriteService.RestoreToken? =
+        favoriteService.removeForUndo(refKey)
 
-    suspend fun getEntityByRefKey(refKey: String): FavoriteEntity? {
-        return favoriteRepository.getByRefKey(refKey)
-    }
-
-    fun restoreFavorite(entity: FavoriteEntity) {
+    fun restoreFavorite(token: FavoriteService.RestoreToken) {
         viewModelScope.launch {
-            favoriteRepository.upsert(entity)
+            favoriteService.restore(token)
         }
     }
 }

@@ -76,6 +76,7 @@ class Migration_4_5_Test {
         assertEquals(1, scalarCount(db, "SELECT COUNT(*) FROM turn_execution"))
         assertEquals(1, scalarCount(db, "SELECT COUNT(*) FROM tool_execution"))
 
+        db.execSQL("PRAGMA foreign_keys = ON")
         db.execSQL("DELETE FROM ConversationEntity WHERE id = ?", arrayOf(conversationId))
         assertEquals(0, scalarCount(db, "SELECT COUNT(*) FROM turn_execution"))
         assertEquals(0, scalarCount(db, "SELECT COUNT(*) FROM tool_execution"))

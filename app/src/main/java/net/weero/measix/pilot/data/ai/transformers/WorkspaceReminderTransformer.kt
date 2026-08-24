@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.ai.transformers
+package net.weero.measix.pilot.data.ai.transformers
 
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
@@ -22,7 +22,7 @@ class WorkspaceReminderTransformer(
     ): List<UIMessage> {
         val workspaceId = ctx.assistant.workspaceId?.toString() ?: return messages
         val workspace = workspaceRepository.getById(workspaceId) ?: return messages
-        // 与 ChatService.createWorkspaceToolsIfReady 保持一致: 仅在 shell 就绪时注入
+        // 仅在 shell 就绪时注入，保持提示与实际工具能力一致。
         if (workspace.shellStatus != WorkspaceShellStatus.READY.name) return messages
 
         // 设计权衡：不注入 cwd（当前工作目录）。模型自己执行了 cd，结果已记录在对话历史中。

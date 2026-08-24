@@ -251,6 +251,10 @@ verticalPaneSplit(windowWidthDp, fallbackListWidthDp, hingeBounds):
 > 相册式浏览需要完整的屏幕空间与手势域，不适配半屏 Sheet / 有界卡片的弹层约定。
 > 场景差异通过 `extraActions` / `overlay` 与 `LocalImagePreviewActions` /
 > `LocalImagePreviewOverlay` 注入（如设为背景、确认框、助手选择器），查看器不理解助手或页面。
+> 仅当宿主场景本身具有独立删除语义时才传入 `ImagePreviewDeleteAction`。查看器统一承载
+> 确认、执行中、失败提示和相册页序列更新，typed suspend action 仍由宿主调用既有领域删除
+> API；成功删除中间项后显示原下一项，删除末项后显示新末项，清空后关闭。聊天消息图片等
+> 只能随上层实体删除的内容不传该 action，避免查看器建立旁路文件删除协议。
 > Toast 画在 Dialog 窗口内，进行中与结果共用同一 toast id，避免被全屏层挡住应用根 `Toaster`。
 > 决策依据见 [`docs/dev/image-viewer-upgrade-plan.md`](../dev/image-viewer-upgrade-plan.md)。
 
@@ -420,7 +424,9 @@ ChatPageContent
 Koin 模块在 `di/AppModule.kt` 和 `di/DatabaseModule.kt` 等文件中定义。关键单例：
 
 - `UpdateChecker` — 应用更新检查（`by lazy` 缓存 `StateFlow`，AppScope 级共享，切换会话不重复请求）
-- `ChatService` — 后台生成服务
+- `MasterTurnCoordinator` — 主回合生成编排
+- `ConversationApplicationService` / `ConversationQueryService` — UI 写/读端口
+- `ApplicationRecoveryCoordinator` — 启动恢复与 fail-closed 门禁
 - `ChatNotificationManager` — 通知管理（`createdAtStart = true` 保证进程启动即订阅事件）
 - `AppEventBus` — 全局事件总线
 - `LocalTools` — 本地工具集

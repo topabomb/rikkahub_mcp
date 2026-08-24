@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.files
+package net.weero.measix.pilot.data.files
 
 import android.content.Context
 import android.util.Log
@@ -60,22 +60,14 @@ class SkillManager(
         skills
     }
 
-    fun readSkillBody(skillName: String): String? {
-        val skillFile = resolveSkillDir(skillName)?.resolve("SKILL.md") ?: return null
-        if (!skillFile.exists()) return null
-        return SkillFrontmatterParser.extractBody(skillFile.readText())
-    }
-
-    fun readSkillContent(skillName: String): String? {
-        val skillFile = resolveSkillDir(skillName)?.resolve("SKILL.md") ?: return null
-        if (!skillFile.exists()) return null
-        return skillFile.readText()
-    }
-
     fun saveSkill(name: String, content: String): SkillMetadata? {
+        return BackupSnapshotBarrier.withBlockingLock { saveSkillUnlocked(name, content) }
+    }
+
+    private fun saveSkillUnlocked(name: String, content: String): SkillMetadata? {
         // 通过原子写入(staging + rename)落盘，避免直接 mkdirs 失败时
         // writeText 抛出 FileNotFoundException 导致崩溃
-        if (!saveSkillFileBytesAtomically(name, mapOf("SKILL.md" to content.toByteArray()))) {
+        if (!saveSkillFileBytesAtomicallyUnlocked(name, mapOf("SKILL.md" to content.toByteArray()))) {
             return null
         }
         val skillDir = resolveSkillDir(name) ?: return null
@@ -83,7 +75,8 @@ class SkillManager(
     }
 
     suspend fun deleteSkill(name: String): Boolean = withContext(Dispatchers.IO) {
-        val skillDir = resolveSkillDir(name) ?: return@withContext false
+        BackupSnapshotBarrier.withLock lock@{
+        val skillDir = resolveSkillDir(name) ?: return@lock false
         val deleted = skillDir.deleteRecursively()
         if (deleted) {
             settingsStore.update { settings ->
@@ -99,26 +92,32 @@ class SkillManager(
             }
         }
         deleted
+        }
     }
 
     fun getSkillDir(skillName: String): File? = resolveSkillDir(skillName)
 
     fun saveSkillFile(skillName: String, relativePath: String, content: String): Boolean {
-        val skillDir = resolveSkillDir(skillName) ?: return false
-        val target = SkillPaths.resolveSkillFile(skillDir, relativePath) ?: return false
+        return BackupSnapshotBarrier.withBlockingLock lock@{
+        val skillDir = resolveSkillDir(skillName) ?: return@lock false
+        val target = SkillPaths.resolveSkillFile(skillDir, relativePath) ?: return@lock false
         target.parentFile?.mkdirs()
         target.writeText(content)
-        return true
+        true
+        }
     }
 
     fun saveSkillFilesAtomically(skillName: String, files: Map<String, String>): Boolean {
-        return saveSkillFileBytesAtomically(
+        return BackupSnapshotBarrier.withBlockingLock { saveSkillFileBytesAtomicallyUnlocked(
             skillName = skillName,
             files = files.mapValues { it.value.toByteArray() },
-        )
+        ) }
     }
 
-    fun saveSkillFileBytesAtomically(skillName: String, files: Map<String, ByteArray>): Boolean {
+    fun saveSkillFileBytesAtomically(skillName: String, files: Map<String, ByteArray>): Boolean =
+        BackupSnapshotBarrier.withBlockingLock { saveSkillFileBytesAtomicallyUnlocked(skillName, files) }
+
+    private fun saveSkillFileBytesAtomicallyUnlocked(skillName: String, files: Map<String, ByteArray>): Boolean {
         val skillsDir = getSkillsDir()
         val targetDir = resolveSkillDir(skillName) ?: return false
         val stagingDir = createTempSkillDir(skillsDir, skillName, "staging") ?: return false
@@ -164,9 +163,11 @@ class SkillManager(
     }
 
     fun deleteSkillFile(skillName: String, relativePath: String): Boolean {
-        val skillDir = resolveSkillDir(skillName) ?: return false
-        val target = SkillPaths.resolveSkillFile(skillDir, relativePath) ?: return false
-        return target.delete()
+        return BackupSnapshotBarrier.withBlockingLock lock@{
+        val skillDir = resolveSkillDir(skillName) ?: return@lock false
+        val target = SkillPaths.resolveSkillFile(skillDir, relativePath) ?: return@lock false
+        target.delete()
+        }
     }
 
     fun resolveSkillFile(skillName: String, relativePath: String): File? {

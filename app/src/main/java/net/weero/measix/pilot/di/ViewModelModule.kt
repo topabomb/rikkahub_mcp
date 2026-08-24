@@ -30,11 +30,14 @@ val viewModelModule = module {
             id = params.get(),
             context = get(),
             settingsStore = get(),
-            conversationRepo = get(),
-            chatService = get(),
+            masterTurnCoordinator = get(),
+            conversationApplicationService = get(),
+            conversationQueryService = get(),
             updateChecker = get(),
-            filesManager = get(),
-            favoriteRepository = get(),
+            artifactUseCase = get(),
+            favoriteService = get(),
+            chatErrorStore = get(),
+            mcpManager = get(),
         )
     }
     viewModelOf(::ChatDrawerVM)
@@ -47,7 +50,7 @@ val viewModelModule = module {
             id = it.get(),
             settingsStore = get(),
             memoryRepository = get(),
-            filesManager = get(),
+            artifactUseCase = get(),
             skillManager = get(),
             workspaceRepository = get(),
         )
@@ -74,14 +77,13 @@ val viewModelModule = module {
     viewModelOf(::FavoriteVM)
     viewModelOf(::SearchVM)
     viewModelOf(::StatsVM)
-viewModel<SubAssistantDetailVM> {
-SubAssistantDetailVM(
-    masterConversationId = it.get(),
-    runId = it.get(),
-    conversationRepository = get(),
-    settingsStore = get(),
-    sessionRegistry = get(),
-    json = get(),
-)
-}
+    viewModel<SubAssistantDetailVM> {
+        SubAssistantDetailVM(
+            masterConversationId = it.get(),
+            runId = it.get(),
+            detailReader = get(),
+            settingsStore = get(),
+            json = get(),
+        )
+    }
 }

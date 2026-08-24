@@ -202,12 +202,12 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 | Settings 持久化与解析 | `data/datastore/PreferencesStore.kt` |
 | 读取物化、写策略与提交顺序 | `SettingsNormalization.kt`、`SettingsWritePolicy.kt`、`SettingsCommitCoordinator.kt` |
 | UI 新建与编辑 | `ui/pages/assistant/` |
-| 会话助手归属与迁移 | `ChatVM`、`ChatPage`、`Conversation.withAssistant()` |
-| 模型 readiness 与主生成工具装配 | `ChatService` |
+| 会话助手归属与迁移 | `ConversationApplicationService.moveToAssistant()`、`UpdateHeader` |
+| 模型 readiness 与主生成工具装配 | `MasterTurnCoordinator`、`GenerationToolSetFactory` |
 | 请求构建、工具循环与 Transformer | `GenerationHandler` |
 | 工具创建/修改/删除助手 | `AssistantManagementService`、`AssistantToolFactory` |
 | Target 默认模板和运行过滤 | `SubAssistantRunPolicy` |
-| 子助手执行与恢复 | `DelegationCoordinator` |
+| 子助手执行与恢复 | `DelegationCoordinator`、`TurnRecovery`、`ApplicationRecoveryCoordinator` |
 | Provider 参数映射 | `ai/.../provider/providers/` |
 
 维护配置时应从“持久化默认值 → UI/工具创建入口 → 解析与归一化 → 请求消费 → 测试/文档”完整检查，

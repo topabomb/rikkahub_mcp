@@ -18,6 +18,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolResourceLease
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
@@ -28,6 +29,9 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
+import net.weero.measix.pilot.data.ai.transformers.OutputMessageTransformer
+import net.weero.measix.pilot.data.ai.transformers.StreamingMessageTransformer
+import net.weero.measix.pilot.data.ai.transformers.TransformerContext
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.repository.MemoryRepository
@@ -243,6 +247,110 @@ class GenerationHandlerFlowTest {
     }
 
     @Test
+    fun `tool output resource is discarded when completed checkpoint fails`() = runTest {
+        val model = Model(modelId = "test-model", displayName = "Test Model")
+        val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
+        val providerManager = mockk<ProviderManager>()
+        every { providerManager.getProviderByType(any<ProviderSetting.OpenAI>()) } returns
+            mockk<Provider<ProviderSetting.OpenAI>>(relaxed = true)
+        val handler = GenerationHandler(
+            context = mockk<Context>(relaxed = true),
+            providerManager = providerManager,
+            json = Json,
+            memoryRepo = mockk<MemoryRepository>(relaxed = true),
+            attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+        )
+        val assistant = Assistant(enableMemory = false)
+        val discarded = AtomicBoolean(false)
+        val tool = Tool(
+            name = "resource_tool",
+            description = "Creates an output resource.",
+            execute = { error("context required") },
+            contextualExecute = {
+                registerUnpublishedResource(
+                    ToolResourceLease(publish = {}, discard = { discarded.set(true) })
+                )
+                listOf(UIMessagePart.Text("resource result"))
+            },
+        )
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(UIMessagePart.Tool(toolCallId = "call", toolName = tool.name, input = "{}")),
+        )
+
+        val failure = runCatching {
+            handler.generateText(
+                settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
+                model = model,
+                messages = listOf(message),
+                assistant = assistant,
+                tools = listOf(tool),
+                maxSteps = 1,
+                onCheckpoint = { checkpoint ->
+                    if (checkpoint.kind == CheckpointKind.TOOL_RESULT_COMPLETED) {
+                        error("durable checkpoint failed")
+                    }
+                },
+            ).toList()
+        }.exceptionOrNull()
+
+        assertTrue(failure?.message?.contains("durable checkpoint failed") == true)
+        assertTrue(discarded.get())
+    }
+
+    @Test
+    fun `terminal transformer resource is discarded when step checkpoint fails`() = runTest {
+        val harness = createProviderHarness()
+        val discarded = AtomicBoolean(false)
+        val transformer = terminalResourceTransformer(discarded)
+
+        val failure = runCatching {
+            harness.handler.generateText(
+                settings = harness.settings,
+                model = harness.model,
+                messages = listOf(UIMessage.user("create image")),
+                outputTransformers = listOf(transformer),
+                assistant = harness.assistant,
+                maxSteps = 1,
+                onCheckpoint = { checkpoint ->
+                    if (checkpoint.kind == CheckpointKind.STEP_COMPLETED) {
+                        error("step checkpoint failed")
+                    }
+                },
+            ).toList()
+        }.exceptionOrNull()
+
+        assertTrue(failure?.message?.contains("step checkpoint failed") == true)
+        assertTrue(discarded.get())
+    }
+
+    @Test
+    fun `terminal transformer resource is discarded when checkpoint is cancelled`() = runTest {
+        val harness = createProviderHarness()
+        val discarded = AtomicBoolean(false)
+        val transformer = terminalResourceTransformer(discarded)
+
+        val failure = runCatching {
+            harness.handler.generateText(
+                settings = harness.settings,
+                model = harness.model,
+                messages = listOf(UIMessage.user("create image")),
+                outputTransformers = listOf(transformer),
+                assistant = harness.assistant,
+                maxSteps = 1,
+                onCheckpoint = { checkpoint ->
+                    if (checkpoint.kind == CheckpointKind.STEP_COMPLETED) {
+                        throw kotlinx.coroutines.CancellationException("collector cancelled")
+                    }
+                },
+            ).toList()
+        }.exceptionOrNull()
+
+        assertTrue(failure is kotlinx.coroutines.CancellationException)
+        assertTrue(discarded.get())
+    }
+
+    @Test
     fun `multiple tools commit started and completed state one by one`() = runTest {
         val model = Model(modelId = "test-model", displayName = "Test Model")
         val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
@@ -367,6 +475,20 @@ class GenerationHandlerFlowTest {
             assistant = assistant,
             providerMessages = providerMessages,
         )
+    }
+
+    private fun terminalResourceTransformer(discarded: AtomicBoolean) = object :
+        OutputMessageTransformer,
+        StreamingMessageTransformer {
+        override suspend fun onStreamingFinish(
+            ctx: TransformerContext,
+            message: UIMessage,
+        ): UIMessage {
+            ctx.registerUnpublishedResource(
+                ToolResourceLease(publish = {}, discard = { discarded.set(true) })
+            )
+            return message
+        }
     }
 
     private data class ProviderHarness(

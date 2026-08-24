@@ -62,7 +62,8 @@ class AssistantManageToolTest {
             settingsStore = settingsStore,
             assistantManagementService = managementService,
             json = json,
-            delegationCoordinator = null,
+            delegationCoordinator = mockk(relaxed = true),
+            toolSetFactory = mockk(relaxed = true),
         )
     }
 

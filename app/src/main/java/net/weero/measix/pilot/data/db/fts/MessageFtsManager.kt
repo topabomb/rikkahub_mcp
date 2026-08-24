@@ -31,7 +31,7 @@ class MessageFtsManager(private val database: AppDatabase) {
 
     private val db get() = database.openHelper.writableDatabase
 
-    suspend fun indexConversation(conversation: Conversation) = withContext(Dispatchers.IO) {
+    internal fun indexConversationInTransaction(conversation: Conversation) {
         val conversationId = conversation.id.toString()
         db.execSQL("DELETE FROM message_fts WHERE conversation_id = ?", arrayOf(conversationId))
         conversation.messageNodes.forEach { node ->
@@ -54,20 +54,17 @@ class MessageFtsManager(private val database: AppDatabase) {
         }
     }
 
-    suspend fun deleteConversation(conversationId: String) = withContext(Dispatchers.IO) {
+    internal fun deleteConversationInTransaction(conversationId: String) {
         db.execSQL("DELETE FROM message_fts WHERE conversation_id = ?", arrayOf(conversationId))
     }
 
-    /**
-     * 节点级增量：删旧 FTS 行 + 插入当前内容行。
-     * message_id 前缀 "<convId>:nodeId:" 对齐现有 schema。
-     */
-    suspend fun reindexNodes(
+    /** 节点级增量：按 conversation/node 删除旧行，再以实际 message ID 插入当前文本。 */
+    internal fun reindexNodesInTransaction(
         conversationId: String,
         title: String,
         updateAt: Long,
         nodes: List<MessageNode>,
-    ) = withContext(Dispatchers.IO) {
+    ) {
         nodes.forEach { node ->
             // 删旧行（按 conversation_id + node_id）
             db.execSQL(
@@ -94,7 +91,7 @@ class MessageFtsManager(private val database: AppDatabase) {
     }
 
     /** 节点删除的索引清理。 */
-    suspend fun deleteNodesIndex(conversationId: String, nodeIds: List<kotlin.uuid.Uuid>) = withContext(Dispatchers.IO) {
+    internal fun deleteNodesIndexInTransaction(conversationId: String, nodeIds: List<kotlin.uuid.Uuid>) {
         nodeIds.forEach { nodeId ->
             db.execSQL(
                 "DELETE FROM message_fts WHERE conversation_id = ? AND node_id = ?",
@@ -104,19 +101,39 @@ class MessageFtsManager(private val database: AppDatabase) {
     }
 
     /** Updates the denormalized conversation title without rewriting message rows. */
-    suspend fun updateConversationTitle(conversationId: String, title: String) = withContext(Dispatchers.IO) {
-        runCatching {
+    internal fun updateConversationMetadataInTransaction(
+        conversationId: String,
+        title: String,
+        updateAt: Long?,
+    ) {
+        if (updateAt == null) {
             db.execSQL(
                 "UPDATE message_fts SET title = ? WHERE conversation_id = ?",
                 arrayOf(title, conversationId),
             )
-        }.onFailure { error ->
-            Log.w(TAG, "updateConversationTitle failed for $conversationId", error)
+        } else {
+            db.execSQL(
+                "UPDATE message_fts SET title = ?, update_at = ? WHERE conversation_id = ?",
+                arrayOf(title, updateAt.toString(), conversationId),
+            )
         }
     }
 
-    suspend fun deleteAll() = withContext(Dispatchers.IO) {
+    internal fun deleteAllInTransaction() {
         db.execSQL("DELETE FROM message_fts")
+    }
+
+    suspend fun isProjectionCurrent(): Boolean = withContext(Dispatchers.IO) {
+        db.query("SELECT value FROM system_meta WHERE `key` = ?", arrayOf(PROJECTION_KEY)).use { cursor ->
+            cursor.moveToFirst() && cursor.getString(0) == PROJECTION_VERSION
+        }
+    }
+
+    internal fun markProjectionCurrentInTransaction() {
+        db.execSQL(
+            "INSERT OR REPLACE INTO system_meta(`key`, value) VALUES (?, ?)",
+            arrayOf(PROJECTION_KEY, PROJECTION_VERSION),
+        )
     }
 
     suspend fun search(
@@ -165,6 +182,9 @@ class MessageFtsManager(private val database: AppDatabase) {
         results
     }
 }
+
+private const val PROJECTION_KEY = "message_fts_projection"
+private const val PROJECTION_VERSION = "transactional-v1"
 
 private fun UIMessage.extractFtsText(): String =
     parts.filterIsInstance<UIMessagePart.Text>()

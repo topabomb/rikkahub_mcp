@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.chat
+package net.weero.measix.pilot.ui.pages.chat
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Folder01
@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -41,16 +40,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.itemKey
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.model.Conversation
-import net.weero.measix.pilot.ui.theme.extendColors
+import net.weero.measix.pilot.service.ConversationActivity
+import net.weero.measix.pilot.service.ConversationSummary
+import net.weero.measix.pilot.ui.components.ai.ConversationActivityIndicator
 import net.weero.measix.pilot.utils.toLocalString
 import java.time.LocalDate
 import java.time.ZoneId
@@ -66,30 +64,30 @@ sealed class ConversationListItem {
     ) : ConversationListItem()
     data object PinnedHeader : ConversationListItem()
     data class Item(
-        val conversation: Conversation
+        val conversation: ConversationSummary
     ) : ConversationListItem()
 }
 
 @Composable
 fun ColumnScope.ConversationList(
-    current: Conversation,
+    currentConversationId: Uuid,
     conversations: LazyPagingItems<ConversationListItem>,
-    conversationJobs: Collection<Uuid>,
+    conversationActivities: Map<Uuid, Set<ConversationActivity>>,
     listState: LazyListState,
     modifier: Modifier = Modifier,
-    onClick: (Conversation) -> Unit = {},
-    onDelete: (Conversation) -> Unit = {},
-    onRegenerateTitle: (Conversation) -> Unit = {},
-    onPin: (Conversation) -> Unit = {},
-    onMoveToAssistant: (Conversation) -> Unit = {},
-    onMoveToFolder: (Conversation) -> Unit = {}
+    onClick: (ConversationSummary) -> Unit = {},
+    onDelete: (ConversationSummary) -> Unit = {},
+    onRegenerateTitle: (ConversationSummary) -> Unit = {},
+    onPin: (ConversationSummary) -> Unit = {},
+    onMoveToAssistant: (ConversationSummary) -> Unit = {},
+    onMoveToFolder: (ConversationSummary) -> Unit = {}
 ) {
-    var hasScrolledToCurrent by remember(current.id) { mutableStateOf(false) }
+    var hasScrolledToCurrent by remember(currentConversationId) { mutableStateOf(false) }
 
-    LaunchedEffect(current.id, conversations.itemCount, hasScrolledToCurrent) {
+    LaunchedEffect(currentConversationId, conversations.itemCount, hasScrolledToCurrent) {
         if (hasScrolledToCurrent) return@LaunchedEffect
         val currentIndex = conversations.itemSnapshotList.items.indexOfFirst {
-            (it as? ConversationListItem.Item)?.conversation?.id == current.id
+            (it as? ConversationListItem.Item)?.conversation?.id == currentConversationId
         }
         if (currentIndex >= 0) {
             val isVisible = listState.layoutInfo.visibleItemsInfo.any { it.index == currentIndex }
@@ -151,8 +149,8 @@ fun ColumnScope.ConversationList(
                 is ConversationListItem.Item -> {
                     ConversationItem(
                         conversation = item.conversation,
-                        selected = item.conversation.id == current.id,
-                        loading = item.conversation.id in conversationJobs,
+                        selected = item.conversation.id == currentConversationId,
+                        activities = conversationActivities[item.conversation.id].orEmpty(),
                         onClick = onClick,
                         onDelete = onDelete,
                         onRegenerateTitle = onRegenerateTitle,
@@ -221,16 +219,16 @@ private fun PinnedHeader(
 
 @Composable
 private fun ConversationItem(
-    conversation: Conversation,
+    conversation: ConversationSummary,
     selected: Boolean,
-    loading: Boolean,
+    activities: Set<ConversationActivity>,
     modifier: Modifier = Modifier,
-    onDelete: (Conversation) -> Unit = {},
-    onRegenerateTitle: (Conversation) -> Unit = {},
-    onPin: (Conversation) -> Unit = {},
-    onMoveToAssistant: (Conversation) -> Unit = {},
-    onMoveToFolder: (Conversation) -> Unit = {},
-    onClick: (Conversation) -> Unit
+    onDelete: (ConversationSummary) -> Unit = {},
+    onRegenerateTitle: (ConversationSummary) -> Unit = {},
+    onPin: (ConversationSummary) -> Unit = {},
+    onMoveToAssistant: (ConversationSummary) -> Unit = {},
+    onMoveToFolder: (ConversationSummary) -> Unit = {},
+    onClick: (ConversationSummary) -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val backgroundColor = if (selected) {
@@ -277,15 +275,10 @@ private fun ConversationItem(
                     tint = MaterialTheme.colorScheme.primary
                 )
             }
-            AnimatedVisibility(loading) {
-                Box(
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(MaterialTheme.extendColors.green6)
-                        .size(4.dp)
-                        .semantics {
-                            contentDescription = "Loading"
-                        }
+            AnimatedVisibility(activities.isNotEmpty()) {
+                ConversationActivityIndicator(
+                    activities = activities,
+                    modifier = Modifier.padding(start = 6.dp),
                 )
             }
             DropdownMenu(

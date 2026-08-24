@@ -12,7 +12,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolExecutionContext
+import me.rerere.ai.core.ToolResourceLease
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.Provider
@@ -20,7 +22,12 @@ import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.files.LocalArtifactRef
-import net.weero.measix.pilot.data.files.ManagedLocalArtifactStore
+import net.weero.measix.pilot.data.files.ArtifactDeleteResult
+import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.OwnedArtifact
+import net.weero.measix.pilot.data.db.entity.ArtifactEntity
+import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
+import net.weero.measix.pilot.data.db.entity.ArtifactState
 import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.data.imggen.AssistantBackgroundService
 import net.weero.measix.pilot.data.imggen.BackgroundUpdateResult
@@ -60,8 +67,8 @@ class ImageGenerationToolCompensationTest {
             parentFile?.mkdirs()
             writeBytes(TINY_PNG)
         }
-        val artifact = LocalArtifactRef(relativePath = "upload/chat.png", mimeType = "image/png")
-        File(filesDir, artifact.relativePath).apply {
+        val artifact = ownedArtifact(filesDir, "upload/chat.png")
+        File(filesDir, artifact.localRef.relativePath).apply {
             parentFile?.mkdirs()
             writeBytes(TINY_PNG)
         }
@@ -85,10 +92,14 @@ class ImageGenerationToolCompensationTest {
             )
         )
         val backgroundService = mockk<AssistantBackgroundService>()
-        coEvery { backgroundService.replaceBackground(any(), any(), any(), any()) } throws
+        coEvery { backgroundService.replaceGeneratedBackground(any(), any(), any()) } throws
             CancellationException("stop after persist")
-        val artifactStore = mockk<ManagedLocalArtifactStore>()
-        coEvery { artifactStore.delete(artifact) } returns Unit
+        val artifactStore = mockk<ArtifactStore>()
+        coEvery { artifactStore.discardUnpublished(artifact) } returns ArtifactDeleteResult.Completed(artifact.entity.id)
+        every { artifactStore.unpublishedLease(artifact) } returns ToolResourceLease(
+            publish = {},
+            discard = { artifactStore.discardUnpublished(artifact) },
+        )
         val factory = ImageGenerationToolFactory(
             filesDir = filesDir,
             settingsStore = settingsStore,
@@ -99,6 +110,7 @@ class ImageGenerationToolCompensationTest {
             rewriter = ToolArtifactRewriter(filesDir, artifactStore),
         )
         val tool = factory.create(AssistantToolBuildContext(ownerId, settings))!!
+        val resources = mutableListOf<ToolResourceLease>()
         val result = runCatching {
             tool.executeWithContext(
                 ToolExecutionContext(
@@ -106,6 +118,9 @@ class ImageGenerationToolCompensationTest {
                     toolOrdinal = 0,
                     toolCallId = "call",
                     reportMetadata = { _, _ -> },
+                    resolveAttachments = { ToolAttachmentResolution(failureReason = "not_used") },
+                    reportChildConversation = { },
+                    registerUnpublishedResource = resources::add,
                 ),
                 buildJsonObject {
                     put("prompt", "a cat")
@@ -113,8 +128,10 @@ class ImageGenerationToolCompensationTest {
                 },
             )
         }
+        resources.forEach { it.discard() }
         assertTrue(result.exceptionOrNull() is CancellationException)
-        coVerify { artifactStore.delete(artifact) }
+        assertEquals(1, resources.size)
+        coVerify { artifactStore.discardUnpublished(artifact) }
         filesDir.deleteRecursively()
     }
 
@@ -125,7 +142,7 @@ class ImageGenerationToolCompensationTest {
             parentFile?.mkdirs()
             writeBytes(TINY_PNG)
         }
-        val artifact = LocalArtifactRef(relativePath = "upload/chat.png", mimeType = "image/png")
+        val artifact = ownedArtifact(filesDir, "upload/chat.png")
         val settings = Settings(
             assistants = listOf(Assistant(id = ownerId, localTools = listOf(LocalToolOption.TextToImage))),
         )
@@ -146,9 +163,13 @@ class ImageGenerationToolCompensationTest {
             )
         )
         val backgroundService = mockk<AssistantBackgroundService>()
-        coEvery { backgroundService.replaceBackground(any(), any(), any(), any()) } returns
+        coEvery { backgroundService.replaceGeneratedBackground(any(), any(), any()) } returns
             BackgroundUpdateResult(requested = true, updated = true)
-        val artifactStore = mockk<ManagedLocalArtifactStore>()
+        val artifactStore = mockk<ArtifactStore>()
+        every { artifactStore.unpublishedLease(artifact) } returns ToolResourceLease(
+            publish = {},
+            discard = { error("must not discard") },
+        )
         val factory = ImageGenerationToolFactory(
             filesDir = filesDir,
             settingsStore = settingsStore,
@@ -159,12 +180,16 @@ class ImageGenerationToolCompensationTest {
             rewriter = ToolArtifactRewriter(filesDir, artifactStore),
         )
         val tool = factory.create(AssistantToolBuildContext(ownerId, settings))!!
+        val resources = mutableListOf<ToolResourceLease>()
         val parts = tool.executeWithContext(
             ToolExecutionContext(
                 messageId = Uuid.random(),
                 toolOrdinal = 0,
                 toolCallId = "call",
                 reportMetadata = { _, _ -> },
+                resolveAttachments = { ToolAttachmentResolution(failureReason = "not_used") },
+                reportChildConversation = { },
+                registerUnpublishedResource = resources::add,
             ),
             buildJsonObject {
                 put("prompt", "a cat")
@@ -172,7 +197,34 @@ class ImageGenerationToolCompensationTest {
             },
         )
         assertEquals(2, parts.size)
-        coVerify(exactly = 0) { artifactStore.delete(any()) }
+        assertEquals(1, resources.size)
+        coVerify(exactly = 0) { artifactStore.discardUnpublished(any()) }
         filesDir.deleteRecursively()
+    }
+
+    private fun ownedArtifact(filesDir: File, relativePath: String): OwnedArtifact {
+        val file = File(filesDir, relativePath).apply {
+            parentFile?.mkdirs()
+            writeBytes(TINY_PNG)
+        }
+        val entity = ArtifactEntity(
+            id = 42,
+            folder = "upload",
+            relativePath = relativePath,
+            displayName = file.name,
+            mimeType = "image/png",
+            sizeBytes = file.length(),
+            createdAt = 1,
+            updatedAt = 1,
+            state = ArtifactState.ACTIVE.name,
+            origin = ArtifactOrigin.GENERATED.name,
+        )
+        val uri = mockk<android.net.Uri>()
+        every { uri.toString() } returns "file:///${file.absolutePath.replace('\\', '/')}"
+        return OwnedArtifact(
+            entity,
+            uri,
+            LocalArtifactRef(relativePath = relativePath, mimeType = "image/png"),
+        )
     }
 }

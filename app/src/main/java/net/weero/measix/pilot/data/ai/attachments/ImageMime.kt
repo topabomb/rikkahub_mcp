@@ -23,14 +23,8 @@ object ImageMime {
         }
     }.getOrNull()
 
-    fun isAcceptedImage(bytes: ByteArray, declaredMime: String? = null): Boolean {
-        if (sniff(bytes) != null) return true
-        val declared = normalizeDeclared(declaredMime)
-        if (declared != null && declared.startsWith("image/") && declared != "image/svg+xml") {
-            return GeneratedMediaStore.detectImageMime(bytes) != null
-        }
-        return GeneratedMediaStore.detectImageMime(bytes) != null
-    }
+    fun isAcceptedImage(bytes: ByteArray): Boolean =
+        GeneratedMediaStore.detectImageMime(bytes) != null || sniffHeic(bytes) != null
 
     fun isUnsupportedNonImage(bytes: ByteArray, declaredMime: String? = null): Boolean {
         val declared = normalizeDeclared(declaredMime).orEmpty()

@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.backup.tabs
+package net.weero.measix.pilot.ui.pages.backup.tabs
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.File01
@@ -24,6 +24,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.dokar.sonner.ToastType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.ui.CardGroup
@@ -50,6 +51,7 @@ fun ImportExportTab(
     val backupSuccess = stringResource(R.string.backup_page_backup_success)
     val restoreSuccess = stringResource(R.string.backup_page_restore_success)
     val restoreFailedFmt = stringResource(R.string.backup_page_restore_failed)
+    val unknownError = stringResource(R.string.backup_page_unknown_error)
 
     // 创建文件保存的launcher
     val createDocumentLauncher = rememberLauncherForActivityResult(
@@ -58,32 +60,24 @@ fun ImportExportTab(
         uri?.let { targetUri ->
             scope.launch {
                 isExporting = true
-                runCatching {
-                    // 导出文件
-                    val exportFile = vm.exportToFile()
-
-                    // 复制到用户选择的位置
+                var exportFile: File? = null
+                try {
+                    val prepared = vm.exportToFile()
+                    exportFile = prepared
                     context.contentResolver.openOutputStream(targetUri)?.use { outputStream ->
-                        FileInputStream(exportFile).use { inputStream ->
+                        FileInputStream(prepared).use { inputStream ->
                             inputStream.copyTo(outputStream)
                         }
-                    }
-
-                    // 清理临时文件
-                    exportFile.delete()
-
-                    toaster.show(
-                        backupSuccess,
-                        type = ToastType.Success
-                    )
-                }.onFailure { e ->
-                    e.printStackTrace()
-                    toaster.show(
-                        restoreFailedFmt.format(e.message ?: ""),
-                        type = ToastType.Error
-                    )
+                    } ?: error("Unable to open the selected backup destination")
+                    toaster.show(backupSuccess, type = ToastType.Success)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    toaster.show(error.message ?: unknownError, type = ToastType.Error)
+                } finally {
+                    exportFile?.delete()
+                    isExporting = false
                 }
-                isExporting = false
             }
         }
     }
@@ -95,36 +89,27 @@ fun ImportExportTab(
         uri?.let { sourceUri ->
             scope.launch {
                 isRestoring = true
-                runCatching {
-                    // 本地备份导入：处理zip文件
-                    val tempFile =
-                        File(context.cacheDir, "temp_restore_${System.currentTimeMillis()}.zip")
-
+                val tempFile = File(context.cacheDir, "temp_restore_${System.currentTimeMillis()}.zip")
+                try {
                     context.contentResolver.openInputStream(sourceUri)?.use { inputStream ->
                         FileOutputStream(tempFile).use { outputStream ->
                             inputStream.copyTo(outputStream)
                         }
-                    }
-
-                    // 从临时文件恢复
+                    } ?: error("Unable to open the selected backup archive")
                     vm.restoreFromLocalFile(tempFile)
-
-                    // 清理临时文件
-                    tempFile.delete()
-
-                    toaster.show(
-                        restoreSuccess,
-                        type = ToastType.Success
-                    )
+                    toaster.show(restoreSuccess, type = ToastType.Success)
                     onShowRestartDialog()
-                }.onFailure { e ->
-                    e.printStackTrace()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
                     toaster.show(
-                        restoreFailedFmt.format(e.message ?: ""),
-                        type = ToastType.Error
+                        restoreFailedFmt.format(error.message ?: ""),
+                        type = ToastType.Error,
                     )
+                } finally {
+                    tempFile.delete()
+                    isRestoring = false
                 }
-                isRestoring = false
             }
         }
     }

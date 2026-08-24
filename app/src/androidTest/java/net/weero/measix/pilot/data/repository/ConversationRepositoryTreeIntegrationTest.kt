@@ -1,53 +1,57 @@
 package net.weero.measix.pilot.data.repository
 
 import android.content.Context
-import androidx.core.net.toUri
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import java.io.File
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
-import io.mockk.every
-import io.mockk.mockk
-import net.weero.measix.pilot.AppScope
-import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.db.AppDatabase
-import net.weero.measix.pilot.data.db.fts.MessageFtsManager
-import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
-import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
+import net.weero.measix.pilot.data.db.RoomDatabaseTransactionRunner
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
+import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
+import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
+import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
+import net.weero.measix.pilot.data.db.fts.MessageFtsManager
+import net.weero.measix.pilot.data.files.ArtifactPayloadStore
+import net.weero.measix.pilot.data.files.ArtifactDeleteResult
+import net.weero.measix.pilot.data.files.ArtifactSettingsCoordinator
 import net.weero.measix.pilot.data.files.ArtifactStore
-import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.service.runtime.ConversationHeaderPatch
 import net.weero.measix.pilot.service.runtime.ConversationMutation
+import net.weero.measix.pilot.service.runtime.ExecutionFacts
+import net.weero.measix.pilot.service.runtime.TurnExecutionOperation
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import kotlin.uuid.Uuid
 
+/** Real Room tests for the repository's internal, transaction-only persistence boundary. */
 @RunWith(AndroidJUnit4::class)
 class ConversationRepositoryTreeIntegrationTest {
     private lateinit var context: Context
     private lateinit var database: AppDatabase
     private lateinit var appScope: AppScope
+    private lateinit var artifactStore: ArtifactStore
     private lateinit var repository: ConversationRepository
-    private val testFiles = mutableListOf<File>()
 
     @Before
     fun setUp() {
@@ -56,40 +60,25 @@ class ConversationRepositoryTreeIntegrationTest {
             .allowMainThreadQueries()
             .build()
         database.openHelper.writableDatabase.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS message_fts(
-                text,
-                node_id,
-                message_id,
-                conversation_id,
-                title,
-                update_at
-            )
-            """.trimIndent()
+            "CREATE TABLE IF NOT EXISTS message_fts(text, node_id, message_id, conversation_id, title, update_at)"
         )
         appScope = AppScope()
-        val filesManager = FilesManager(
-            context = context,
-            artifactDAO = database.artifactDao(),
-            appScope = appScope,
-        )
-        val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.settingsFlow } returns kotlinx.coroutines.flow.MutableStateFlow(Settings())
-        val artifactStore = ArtifactStore(
-            filesManager = filesManager,
+        val settingsStore = SettingsStore(context, appScope)
+        artifactStore = ArtifactStore(
+            payloadStore = ArtifactPayloadStore(context),
             artifactDAO = database.artifactDao(),
             artifactReferenceDAO = database.artifactReferenceDao(),
             systemMetaDAO = database.systemMetaDao(),
             conversationDAO = database.conversationDao(),
             messageNodeDAO = database.messageNodeDao(),
-            settingsStore = settingsStore,
+            settingsCoordinator = ArtifactSettingsCoordinator(settingsStore),
+            transactionRunner = RoomDatabaseTransactionRunner(database),
         )
         repository = ConversationRepository(
             conversationDAO = database.conversationDao(),
             messageNodeDAO = database.messageNodeDao(),
             favoriteDAO = database.favoriteDao(),
             database = database,
-            filesManager = filesManager,
             messageFtsManager = MessageFtsManager(database),
             turnExecutionDAO = database.turnExecutionDao(),
             toolExecutionDAO = database.toolExecutionDao(),
@@ -99,231 +88,339 @@ class ConversationRepositoryTreeIntegrationTest {
 
     @After
     fun tearDown() {
-        testFiles.forEach { it.delete() }
-        if (::appScope.isInitialized) appScope.cancel()
         if (::database.isInitialized) database.close()
     }
 
     @Test
-    fun masterTreeDeleteIsAtomicAndPreservesFilesReferencedOutsideTree() = runBlocking {
-        val assistantId = Uuid.random()
+    fun treeInsertAndMasterDeleteKeepConversationNodesAndArtifactReferencesAtomic() = runBlocking {
         val masterId = Uuid.random()
-        val sharedFile = createTestFile()
-        val sharedPart = UIMessagePart.Document(
-            url = sharedFile.toUri().toString(),
-            fileName = sharedFile.name,
+        val assistantId = Uuid.random()
+        val owned = artifactStore.createFromBytes(
+            byteArrayOf(1, 2, 3),
+            "tree.txt",
+            origin = ArtifactOrigin.USER,
+        )
+        val part = UIMessagePart.Document(
+            url = owned.uri.toString(),
+            fileName = "tree.txt",
             mime = "text/plain",
         )
-        val master = conversation(masterId, assistantId, null, sharedPart)
-        val child = conversation(Uuid.random(), assistantId, masterId, sharedPart)
-        val outside = conversation(Uuid.random(), assistantId, null, sharedPart)
+        val master = conversation(masterId, assistantId, null, part)
+        val child = conversation(Uuid.random(), assistantId, masterId, part)
 
-        repository.insertConversation(outside)
         repository.insertConversationTree(master, listOf(child))
-        repository.deleteConversation(master)
+
+        assertNotNull(repository.getConversationById(master.id))
+        assertNotNull(repository.getConversationById(child.id))
+        assertEquals(
+            setOf(master.id.toString(), child.id.toString()),
+            database.artifactReferenceDao().referencingConversationIds(owned.entity.id).toSet(),
+        )
+        val postCommitDiscard = artifactStore.discardUnpublished(owned)
+        assertTrue(postCommitDiscard is ArtifactDeleteResult.Failed)
+        assertEquals("artifact_already_published", (postCommitDiscard as ArtifactDeleteResult.Failed).reason)
+
+        repository.deleteConversation(master.id)
 
         assertNull(repository.getConversationById(master.id))
         assertNull(repository.getConversationById(child.id))
-        assertNotNull(repository.getConversationById(outside.id))
-        // 文件清理走 GC：引用投影级联清除后由
-        // collectUnreferencedArtifacts 兜底回收（保护窗内保留）
-        assertTrue(sharedFile.exists())
-
-        repository.deleteConversation(outside)
-        // 保护窗内不回收；零窗 GC 验证最终回收
-        assertTrue(sharedFile.exists())
-        repository.collectUnreferencedArtifacts(protectionWindowMillis = 0)
-        assertFalse(sharedFile.exists())
+        assertFalse(database.artifactReferenceDao().existsByArtifactId(owned.entity.id))
+        assertTrue(artifactStore.file(owned.entity).isFile)
     }
 
     @Test
-    fun childRetentionShrinksRetainedAndDeletesRemovedChildren() = runBlocking {
-        val assistantId = Uuid.random()
-        val master = conversation(Uuid.random(), assistantId, null)
-        val retained = conversation(Uuid.random(), assistantId, master.id)
-        val deleted = conversation(Uuid.random(), assistantId, master.id)
-        repository.insertConversationTree(master, listOf(retained, deleted))
-
-        val truncatedRetained = retained.copy(messageNodes = retained.messageNodes.take(1))
-        repository.updateChildRetention(
-            retainedChildren = listOf(truncatedRetained),
-            deletedChildren = listOf(deleted),
+    fun messagePublicationQueuedBeforeGarbageCollectionWinsTheLifecycleLock() = runBlocking {
+        artifactStore.ensureReferenceProjection()
+        val owned = artifactStore.createFromBytes(
+            byteArrayOf(4, 5, 6),
+            "race.txt",
+            origin = ArtifactOrigin.USER,
         )
+        val part = UIMessagePart.Document(
+            url = owned.uri.toString(),
+            fileName = "race.txt",
+            mime = "text/plain",
+        )
+        val conversation = conversation(Uuid.random(), Uuid.random(), null, part)
+        val acquired = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val holder = async(Dispatchers.Default) {
+            artifactStore.withLifecycleLock {
+                acquired.complete(Unit)
+                release.await()
+            }
+        }
+        acquired.await()
+        val publish = async(Dispatchers.Default, start = CoroutineStart.UNDISPATCHED) {
+            repository.insertConversation(conversation)
+        }
+        val gc = async(Dispatchers.Default, start = CoroutineStart.UNDISPATCHED) {
+            artifactStore.collectGarbage(0)
+        }
 
-        assertNotNull(repository.getConversationById(retained.id))
-        assertNull(repository.getConversationById(deleted.id))
+        release.complete(Unit)
+        holder.await()
+        publish.await()
+
+        assertTrue(gc.await().isEmpty())
+        assertTrue(database.artifactReferenceDao().existsByArtifactId(owned.entity.id))
+        assertTrue(artifactStore.file(owned.entity).isFile)
     }
 
     @Test
-    fun gcKeepsMetadataArtifactReferencesAndReleasesUnsharedFiles() = runBlocking {
-        val assistantId = Uuid.random()
-        val unshared = createTestFile("unshared")
-        val artifact = createTestFile("artifact")
-        val url = artifact.toUri().toString()
-        val relativePath = "upload/${artifact.name}"
-        val conversation = conversation(
-            id = Uuid.random(),
-            assistantId = assistantId,
-            parentId = null,
-            part = UIMessagePart.Document(
-                url = unshared.toUri().toString(),
-                fileName = unshared.name,
-                mime = "text/plain",
-            ),
-        )
-        val withArtifactMetadata = conversation.copy(
-            messageNodes = conversation.messageNodes + UIMessage(
-                role = MessageRole.ASSISTANT,
-                parts = listOf(
-                    UIMessagePart.Tool(
-                        toolCallId = "call-1",
-                        toolName = "generate_image",
-                        input = "{}",
-                        output = listOf(UIMessagePart.Text("""{"status":"completed"}""")),
-                        metadata = kotlinx.serialization.json.buildJsonObject {
-                            put(
-                                "artifact",
-                                kotlinx.serialization.json.buildJsonObject {
-                                    put("version", 1)
-                                    put("relativePath", relativePath)
-                                    put("mimeType", "image/jpeg")
-                                },
-                            )
-                        },
-                    ),
-                ),
-            ).toMessageNode(),
-        )
-        repository.insertConversation(withArtifactMetadata)
-
-        // 压缩：树替换为 summary（unshared 附件节点消失，metadata-only 引用保留）
-        val reduced = conversation.copy(
-            messageNodes = listOf(
-                UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text("summary"))).toMessageNode(),
-            ),
-        )
-        repository.updateConversation(reduced)
-        // 引用投影替换后，零窗 GC：metadata 相对路径引用阻止回收
-        repository.collectUnreferencedArtifacts(protectionWindowMillis = 0)
-
-        assertFalse(unshared.exists())
-        assertTrue(artifact.exists())
-    }
-
-    @Test
-    fun applyMutationCheckpointPreservesNarrowColumnWritesMadeAfterSnapshot() = runBlocking {
-        val conversation = conversation(
-            id = Uuid.random(),
-            assistantId = Uuid.random(),
-            parentId = null,
-        ).copy(
+    fun checkpointMutationDoesNotOverwriteConcurrentNarrowHeaderWrites() = runBlocking {
+        val conversation = conversation(Uuid.random(), Uuid.random(), null).copy(
             title = "stale-title",
             chatSuggestions = listOf("stale-suggestion"),
-            folderId = null,
-            isPinned = false,
         )
         repository.insertConversation(conversation)
-
-        val checkpointNodes = listOf(UIMessage.user("checkpoint-message").toMessageNode())
-        val headerPatch = ConversationHeaderPatch()
+        val newFolderId = Uuid.random()
         database.conversationDao().updateTitle(conversation.id.toString(), "new-title")
         database.conversationDao().updatePinStatus(conversation.id.toString(), true)
-        database.conversationDao().updateFolderId(conversation.id.toString(), "new-folder")
-        database.conversationDao().updateChatSuggestions(conversation.id.toString(), "[\"new-suggestion\"]")
+        database.conversationDao().updateFolderId(conversation.id.toString(), newFolderId.toString())
+        val checkpointNodes = listOf(
+            conversation.messageNodes.single().copy(messages = listOf(UIMessage.user("checkpoint-message")))
+        )
 
         repository.applyMutation(
             ConversationMutation(
                 conversationId = conversation.id,
-                headerPatch = headerPatch,
+                headerPatch = ConversationHeaderPatch(),
                 deletedNodeIds = emptyList(),
                 upsertedNodes = checkpointNodes,
                 updateAt = 9_999L,
                 upsertedNodeIndices = listOf(0),
             ),
-            executionFacts = null,
         )
 
         val entity = requireNotNull(database.conversationDao().getConversationById(conversation.id.toString()))
         assertEquals("new-title", entity.title)
         assertTrue(entity.isPinned)
-        assertEquals("new-folder", entity.folderId)
-        assertEquals("[\"new-suggestion\"]", entity.chatSuggestions)
+        assertEquals(newFolderId.toString(), entity.folderId)
         assertEquals(9_999L, entity.updateAt)
-        val restored = requireNotNull(repository.getConversationById(conversation.id))
-        assertEquals("checkpoint-message", restored.currentMessages.single().toText())
+        assertEquals("checkpoint-message", repository.getConversationById(conversation.id)?.currentMessages?.single()?.toText())
     }
 
     @Test
-    fun recoveryAtomicallyMarksRunningTurnsAndStartedToolsUnknown() = runBlocking {
+    fun executionFactsUseInsertAndCasAndCannotReopenATerminalTurn() = runBlocking {
         val conversation = conversation(Uuid.random(), Uuid.random(), null)
         repository.insertConversation(conversation)
-        val turnId = Uuid.random().toString()
-        val executionId = "$turnId:0"
-        val runningTurn = TurnExecutionEntity(
+        val turnId = Uuid.random()
+        val running = turn(conversation.id, turnId, TurnExecutionStatus.RUNNING, 10L)
+        val mutation = emptyMutation(conversation.id)
+
+        assertTrue(repository.applyMutation(mutation, ExecutionFacts(running, null, TurnExecutionOperation.START)))
+        val completed = running.copy(status = TurnExecutionStatus.COMPLETED, updatedAt = 20L)
+        assertTrue(repository.applyMutation(mutation, ExecutionFacts(completed, null)))
+        assertEquals(TurnExecutionStatus.COMPLETED, repository.getTurnExecution(turnId.toString())?.status)
+
+        assertThrows(ExecutionStateConflictException::class.java) {
+            runBlocking {
+                repository.applyMutation(mutation, ExecutionFacts(running.copy(updatedAt = 30L), null))
+            }
+        }
+        assertEquals(TurnExecutionStatus.COMPLETED, repository.getTurnExecution(turnId.toString())?.status)
+    }
+
+    @Test
+    fun turnAndToolTransitionsRequireTheExactDurableOwnerAndTerminalFacts() = runBlocking {
+        val conversation = conversation(Uuid.random(), Uuid.random(), null)
+        repository.insertConversation(conversation)
+        val turnId = Uuid.random()
+        val assistantMessageId = Uuid.random()
+        val running = turn(
+            conversationId = conversation.id,
             turnId = turnId,
-            conversationId = conversation.id.toString(),
-            assistantMessageId = Uuid.random().toString(),
             status = TurnExecutionStatus.RUNNING,
-            reason = null,
-            createdAt = 10L,
-            updatedAt = 10L,
+            now = 10L,
+            assistantMessageId = assistantMessageId,
         )
-        val startedTool = ToolExecutionEntity(
+        val mutation = emptyMutation(conversation.id)
+        repository.applyMutation(mutation, ExecutionFacts(running, null, TurnExecutionOperation.START))
+
+        listOf(
+            running.copy(
+                conversationId = Uuid.random().toString(),
+                status = TurnExecutionStatus.FAILED,
+                reason = "wrong-conversation",
+            ),
+            running.copy(
+                assistantMessageId = Uuid.random().toString(),
+                status = TurnExecutionStatus.FAILED,
+                reason = "wrong-message",
+            ),
+        ).forEach { conflicting ->
+            assertThrows(ExecutionStateConflictException::class.java) {
+                runBlocking { repository.applyMutation(mutation, ExecutionFacts(conflicting, null)) }
+            }
+        }
+        assertEquals(TurnExecutionStatus.RUNNING, repository.getTurnExecution(turnId.toString())?.status)
+
+        val childId = Uuid.random().toString()
+        val executionId = Uuid.random().toString()
+        val tool = ToolExecutionEntity(
             executionId = executionId,
-            turnId = turnId,
+            turnId = turnId.toString(),
+            toolOrdinal = 2,
+            status = ToolExecutionStatus.STARTED,
+            reason = null,
+            childConversationId = childId,
+            createdAt = 11L,
+            updatedAt = 11L,
+        )
+        repository.applyMutation(mutation, ExecutionFacts(null, tool))
+        listOf(
+            tool.copy(turnId = Uuid.random().toString(), status = ToolExecutionStatus.COMPLETED),
+            tool.copy(toolOrdinal = 3, status = ToolExecutionStatus.COMPLETED),
+            tool.copy(childConversationId = null, status = ToolExecutionStatus.COMPLETED),
+            tool.copy(childConversationId = Uuid.random().toString(), status = ToolExecutionStatus.COMPLETED),
+        ).forEach { conflicting ->
+            assertThrows(ExecutionStateConflictException::class.java) {
+                runBlocking { repository.applyMutation(mutation, ExecutionFacts(null, conflicting)) }
+            }
+        }
+        assertEquals(ToolExecutionStatus.STARTED, database.toolExecutionDao().getById(tool.executionId)?.status)
+
+        val completedTool = tool.copy(
+            status = ToolExecutionStatus.COMPLETED,
+            reason = "completed",
+            updatedAt = 12L,
+        )
+        repository.applyMutation(mutation, ExecutionFacts(null, completedTool))
+        assertThrows(ExecutionStateConflictException::class.java) {
+            runBlocking {
+                repository.applyMutation(
+                    mutation,
+                    ExecutionFacts(null, completedTool.copy(reason = "different-terminal-fact")),
+                )
+            }
+        }
+        assertEquals("completed", database.toolExecutionDao().getById(tool.executionId)?.reason)
+
+        val failed = running.copy(
+            status = TurnExecutionStatus.FAILED,
+            reason = "provider-failed",
+            updatedAt = 20L,
+        )
+        repository.applyMutation(mutation, ExecutionFacts(failed, null))
+        assertThrows(ExecutionStateConflictException::class.java) {
+            runBlocking {
+                repository.applyMutation(
+                    mutation,
+                    ExecutionFacts(failed.copy(reason = "different-terminal-fact"), null),
+                )
+            }
+        }
+        assertEquals("provider-failed", repository.getTurnExecution(turnId.toString())?.reason)
+    }
+
+    @Test
+    fun terminalTurnClosesStartedToolsInTheSameTransaction() = runBlocking {
+        val conversation = conversation(Uuid.random(), Uuid.random(), null)
+        repository.insertConversation(conversation)
+        val turnId = Uuid.random()
+        val running = turn(conversation.id, turnId, TurnExecutionStatus.RUNNING, 10L)
+        val mutation = emptyMutation(conversation.id)
+        repository.applyMutation(mutation, ExecutionFacts(running, null, TurnExecutionOperation.START))
+        val tool = ToolExecutionEntity(
+            executionId = Uuid.random().toString(),
+            turnId = turnId.toString(),
             toolOrdinal = 0,
             status = ToolExecutionStatus.STARTED,
             reason = null,
             createdAt = 11L,
             updatedAt = 11L,
         )
-        repository.upsertTurnExecution(runningTurn)
-        repository.upsertToolExecution(startedTool)
-        val recoverable = repository.getRecoverableTurnExecutionsByConversation()
-        assertEquals(listOf(turnId), recoverable[conversation.id]?.map { it.turnId })
+        repository.applyMutation(mutation, ExecutionFacts(null, tool))
 
-        // Updating the parent through Room @Upsert must not REPLACE it and cascade-delete its tools.
-        repository.upsertTurnExecution(
-            requireNotNull(repository.getTurnExecution(turnId)).copy(updatedAt = 12L)
+        val completed = running.copy(
+            status = TurnExecutionStatus.COMPLETED,
+            reason = "done",
+            updatedAt = 20L,
         )
-        assertNotNull(repository.getToolExecution(executionId))
+        repository.applyMutation(mutation, ExecutionFacts(completed, null))
 
-        val awaitingTurnId = Uuid.random().toString()
-        val awaitingExecutionId = "$awaitingTurnId:0"
-        repository.upsertTurnExecution(
-            runningTurn.copy(
-                turnId = awaitingTurnId,
-                status = TurnExecutionStatus.AWAITING_APPROVAL,
-            )
-        )
-        repository.upsertToolExecution(
-            startedTool.copy(
-                executionId = awaitingExecutionId,
-                turnId = awaitingTurnId,
-            )
-        )
-
-        val recovered = repository.recoverInterruptedExecutions(updatedAt = 20L)
-
-        assertEquals(1, recovered.turns)
-        assertEquals(1, recovered.tools)
-        val turn = requireNotNull(repository.getTurnExecution(turnId))
-        assertEquals(TurnExecutionStatus.INTERRUPTED, turn.status)
-        assertEquals("process_restarted", turn.reason)
-        assertEquals(20L, turn.updatedAt)
-        val tool = requireNotNull(repository.getToolExecution(executionId))
-        assertEquals(ToolExecutionStatus.UNKNOWN, tool.status)
-        assertEquals("process_restarted", tool.reason)
-        assertEquals(20L, tool.updatedAt)
-        assertEquals(
-            TurnExecutionStatus.AWAITING_APPROVAL,
-            repository.getTurnExecution(awaitingTurnId)?.status,
-        )
-        assertEquals(
-            ToolExecutionStatus.STARTED,
-            repository.getToolExecution(awaitingExecutionId)?.status,
-        )
+        assertEquals(TurnExecutionStatus.COMPLETED, repository.getTurnExecution(turnId.toString())?.status)
+        assertEquals(ToolExecutionStatus.UNKNOWN, database.toolExecutionDao().getById(tool.executionId)?.status)
+        assertEquals("done", database.toolExecutionDao().getById(tool.executionId)?.reason)
     }
+
+    @Test
+    fun failedTerminalTurnCasRollsBackStartedToolClosure() = runBlocking {
+        val conversation = conversation(Uuid.random(), Uuid.random(), null)
+        repository.insertConversation(conversation)
+        val turnId = Uuid.random()
+        val running = turn(conversation.id, turnId, TurnExecutionStatus.RUNNING, 10L)
+        val mutation = emptyMutation(conversation.id)
+        repository.applyMutation(mutation, ExecutionFacts(running, null, TurnExecutionOperation.START))
+        repository.applyMutation(
+            mutation,
+            ExecutionFacts(running.copy(status = TurnExecutionStatus.COMPLETED, updatedAt = 12L), null),
+        )
+        val tool = ToolExecutionEntity(
+            executionId = Uuid.random().toString(),
+            turnId = turnId.toString(),
+            toolOrdinal = 0,
+            status = ToolExecutionStatus.STARTED,
+            reason = null,
+            createdAt = 11L,
+            updatedAt = 11L,
+        )
+        // Fault injection: emulate a dangling STARTED row beside an already-terminal turn.
+        database.openHelper.writableDatabase.execSQL(
+            "INSERT INTO tool_execution " +
+                "(execution_id, turn_id, tool_ordinal, status, reason, child_conversation_id, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            arrayOf<Any?>(
+                tool.executionId,
+                tool.turnId,
+                tool.toolOrdinal,
+                tool.status.name,
+                tool.reason,
+                tool.childConversationId,
+                tool.createdAt,
+                tool.updatedAt,
+            ),
+        )
+        val conflicting = running.copy(
+            assistantMessageId = Uuid.random().toString(),
+            status = TurnExecutionStatus.FAILED,
+            reason = "should-rollback",
+            updatedAt = 20L,
+        )
+
+        assertThrows(ExecutionStateConflictException::class.java) {
+            runBlocking { repository.applyMutation(mutation, ExecutionFacts(conflicting, null)) }
+        }
+
+        assertEquals(TurnExecutionStatus.COMPLETED, repository.getTurnExecution(turnId.toString())?.status)
+        assertEquals(ToolExecutionStatus.STARTED, database.toolExecutionDao().getById(tool.executionId)?.status)
+    }
+
+    private fun emptyMutation(conversationId: Uuid) = ConversationMutation(
+        conversationId = conversationId,
+        headerPatch = null,
+        upsertedNodes = emptyList(),
+        deletedNodeIds = emptyList(),
+        updateAt = 1L,
+        upsertedNodeIndices = emptyList(),
+    )
+
+    private fun turn(
+        conversationId: Uuid,
+        turnId: Uuid,
+        status: TurnExecutionStatus,
+        now: Long,
+        assistantMessageId: Uuid = Uuid.random(),
+    ) = TurnExecutionEntity(
+        turnId = turnId.toString(),
+        conversationId = conversationId.toString(),
+        assistantMessageId = assistantMessageId.toString(),
+        status = status,
+        reason = null,
+        createdAt = now,
+        updatedAt = now,
+    )
 
     private fun conversation(
         id: Uuid,
@@ -335,16 +432,6 @@ class ConversationRepositoryTreeIntegrationTest {
         assistantId = assistantId,
         parentConversationId = parentId,
         title = if (parentId == null) "Master" else "Child",
-        messageNodes = listOf(
-            UIMessage(role = MessageRole.USER, parts = listOf(part)).toMessageNode(),
-        ),
+        messageNodes = listOf(UIMessage(role = MessageRole.USER, parts = listOf(part)).toMessageNode()),
     )
-
-    private fun createTestFile(prefix: String = "subassistant-repository-"): File {
-        val uploadDir = File(context.filesDir, "upload").apply { mkdirs() }
-        return File.createTempFile(prefix, ".txt", uploadDir).also {
-            it.writeText("shared")
-            testFiles += it
-        }
-    }
 }

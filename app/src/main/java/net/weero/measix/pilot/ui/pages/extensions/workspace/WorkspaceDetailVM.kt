@@ -1,14 +1,14 @@
-﻿package net.weero.measix.pilot.ui.pages.extensions.workspace
+package net.weero.measix.pilot.ui.pages.extensions.workspace
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.UUID
 import java.io.InputStream
 import java.io.OutputStream
 import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
@@ -16,7 +16,6 @@ import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import me.rerere.workspace.RootfsInstallProgress
 import me.rerere.workspace.RootfsInstallStage
 import me.rerere.workspace.WorkspaceFileEntry
-import me.rerere.workspace.WorkspaceCommandResult
 import me.rerere.workspace.WorkspaceStorageArea
 
 class WorkspaceDetailVM(
@@ -26,9 +25,6 @@ class WorkspaceDetailVM(
     private val _state = MutableStateFlow(WorkspaceDetailState())
     val state = _state.asStateFlow()
 
-    private val _terminalState = MutableStateFlow(WorkspaceTerminalState())
-    val terminalState = _terminalState.asStateFlow()
-
     private val _installProgress = MutableStateFlow<RootfsInstallProgress?>(null)
     val installProgress = _installProgress.asStateFlow()
 
@@ -36,8 +32,9 @@ class WorkspaceDetailVM(
     val installError = _installError.asStateFlow()
 
     init {
-        loadWorkspace()
-        refresh()
+        viewModelScope.launch {
+            if (loadWorkspaceNow()) refreshNow()
+        }
     }
 
     fun selectArea(area: WorkspaceStorageArea) {
@@ -73,73 +70,94 @@ class WorkspaceDetailVM(
 
     fun refresh() {
         viewModelScope.launch {
-            _state.update { it.copy(loading = true, error = null) }
-            runCatching {
-                repository.listFiles(
-                    id = id,
-                    area = state.value.area,
-                    path = state.value.path,
-                )
-            }.onSuccess { entries ->
-                _state.update { it.copy(entries = entries, loading = false) }
-            }.onFailure { error ->
-                _state.update {
-                    it.copy(
-                        entries = emptyList(),
-                        loading = false,
-                        error = error.message ?: "加载工作区文件失败",
-                    )
-                }
-            }
+            refreshNow()
         }
     }
 
-    fun delete(entry: WorkspaceFileEntry) {
-        viewModelScope.launch {
-            runCatching {
-                repository.deleteFile(
-                    id = id,
-                    area = state.value.area,
-                    path = entry.path,
-                    recursive = entry.isDirectory,
+    suspend fun delete(entry: WorkspaceFileEntry): Boolean = try {
+        val deleted = repository.deleteFile(
+            id = id,
+            area = state.value.area,
+            path = entry.path,
+            recursive = entry.isDirectory,
+        )
+        // 删除已经提交后，列表刷新是独立的读模型同步；不要让刷新取消把已提交删除误报为失败。
+        refresh()
+        if (!deleted) {
+            _state.update { it.copy(error = WorkspaceOperationError(WorkspaceOperation.DELETE)) }
+        }
+        deleted
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        _state.update {
+            it.copy(error = WorkspaceOperationError(WorkspaceOperation.DELETE, error.message))
+        }
+        false
+    }
+
+    private suspend fun refreshNow() {
+        _state.update { it.copy(loading = true, error = null) }
+        try {
+            val entries = repository.listFiles(
+                id = id,
+                area = state.value.area,
+                path = state.value.path,
+            )
+            _state.update { it.copy(entries = entries, loading = false) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            _state.update {
+                it.copy(
+                    entries = emptyList(),
+                    loading = false,
+                    error = WorkspaceOperationError(WorkspaceOperation.LOAD_FILES, error.message),
                 )
-            }.onSuccess {
-                refresh()
-            }.onFailure { error ->
-                _state.update { it.copy(error = error.message ?: "删除失败") }
             }
         }
     }
 
     fun importFile(inputStream: InputStream, fileName: String) {
         viewModelScope.launch {
-            runCatching {
-                repository.importFile(
-                    id = id,
-                    area = state.value.area,
-                    destinationPath = state.value.path,
-                    fileName = fileName,
-                    inputStream = inputStream,
-                )
-            }.onSuccess {
+            try {
+                inputStream.use { input ->
+                    repository.importFile(
+                        id = id,
+                        area = state.value.area,
+                        destinationPath = state.value.path,
+                        fileName = fileName,
+                        inputStream = input,
+                    )
+                }
                 refresh()
-            }.onFailure { error ->
-                _state.update { it.copy(error = error.message ?: "导入文件失败") }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.update {
+                    it.copy(error = WorkspaceOperationError(WorkspaceOperation.IMPORT, error.message))
+                }
             }
         }
     }
 
     fun exportFile(entry: WorkspaceFileEntry, outputStream: OutputStream) {
         viewModelScope.launch {
-            runCatching {
-                repository.exportFile(
-                    id = id,
-                    area = state.value.area,
-                    path = entry.path,
-                    outputStream = outputStream,
-                )
-            }.onFailure { error ->
-                _state.update { it.copy(error = error.message ?: "导出文件失败") }
+            try {
+                outputStream.use { output ->
+                    repository.exportFile(
+                        id = id,
+                        area = state.value.area,
+                        path = entry.path,
+                        outputStream = output,
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.update {
+                    it.copy(error = WorkspaceOperationError(WorkspaceOperation.EXPORT, error.message))
+                }
             }
         }
     }
@@ -150,10 +168,13 @@ class WorkspaceDetailVM(
      */
     fun exportToCacheFile(entry: WorkspaceFileEntry, cacheDir: File, onReady: (File) -> Unit) {
         viewModelScope.launch {
-            runCatching {
+            var file: File? = null
+            try {
                 val dir = File(cacheDir, "workspace_share").apply { mkdirs() }
-                val file = File(dir, entry.name)
-                file.outputStream().use { output ->
+                val safeName = File(entry.name).name.ifBlank { "workspace-file" }
+                val exported = File(dir, "${UUID.randomUUID()}_$safeName")
+                file = exported
+                exported.outputStream().use { output ->
                     repository.exportFile(
                         id = id,
                         area = state.value.area,
@@ -161,9 +182,16 @@ class WorkspaceDetailVM(
                         outputStream = output,
                     )
                 }
-                file
-            }.onSuccess(onReady).onFailure { error ->
-                _state.update { it.copy(error = error.message ?: "导出文件失败") }
+                onReady(exported)
+                file = null
+            } catch (cancelled: CancellationException) {
+                file?.delete()
+                throw cancelled
+            } catch (error: Exception) {
+                file?.delete()
+                _state.update {
+                    it.copy(error = WorkspaceOperationError(WorkspaceOperation.EXPORT, error.message))
+                }
             }
         }
     }
@@ -171,8 +199,16 @@ class WorkspaceDetailVM(
     fun setToolApproval(toolName: String, needsApproval: Boolean) {
         viewModelScope.launch {
             val workspace = state.value.workspace ?: return@launch
-            repository.setToolApproval(workspace.id, toolName, needsApproval)
-            loadWorkspace()
+            try {
+                repository.setToolApproval(workspace.id, toolName, needsApproval)
+                loadWorkspaceNow()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.update {
+                    it.copy(error = WorkspaceOperationError(WorkspaceOperation.LOAD_WORKSPACE, error.message))
+                }
+            }
         }
     }
 
@@ -185,12 +221,11 @@ class WorkspaceDetailVM(
                 repository.installRootfs(workspace.id, url) { progress ->
                     _installProgress.value = progress
                 }
-                loadWorkspace()
-                refresh()
+                if (loadWorkspaceNow()) refreshNow()
             } catch (e: CancellationException) {
                 throw e
-            } catch (error: Throwable) {
-                _installError.value = error.message ?: "Rootfs 安装失败"
+            } catch (error: Exception) {
+                _installError.value = error.message.orEmpty()
             } finally {
                 _installProgress.value = null
             }
@@ -201,58 +236,32 @@ class WorkspaceDetailVM(
         _installError.value = null
     }
 
-    fun executeTerminalCommand(command: String) {
-        val trimmed = command.trim()
-        if (trimmed.isBlank()) return
-        // 原子地完成「检查 running」与「置 running=true」, 避免两次快速提交并发启动两条命令
-        val previous = _terminalState.getAndUpdate { state ->
-            if (state.running) {
-                state
-            } else {
-                state.copy(
-                    running = true,
-                    input = "",
-                    history = state.history + WorkspaceTerminalEntry.Command(trimmed),
-                )
-            }
-        }
-        if (previous.running) return
-        viewModelScope.launch {
-            runCatching {
-                repository.executeCommand(id, trimmed)
-            }.onSuccess { result ->
-                _terminalState.update {
-                    it.copy(
-                        running = false,
-                        history = it.history + WorkspaceTerminalEntry.Result(result),
-                    )
-                }
-            }.onFailure { error ->
-                _terminalState.update {
-                    it.copy(
-                        running = false,
-                        history = it.history + WorkspaceTerminalEntry.Error(error.message ?: "命令执行失败"),
-                    )
-                }
-            }
-        }
-    }
-
-    fun updateTerminalInput(input: String) {
-        _terminalState.update { it.copy(input = input) }
-    }
-
-    fun clearTerminal() {
-        _terminalState.update { it.copy(history = emptyList()) }
-    }
-
-    private fun loadWorkspace() {
-        viewModelScope.launch {
+    private suspend fun loadWorkspaceNow(): Boolean = try {
             val workspace = repository.getById(id)
             _state.update { it.copy(workspace = workspace) }
+            true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            _state.update {
+                it.copy(error = WorkspaceOperationError(WorkspaceOperation.LOAD_WORKSPACE, error.message))
+            }
+            false
         }
-    }
 }
+
+enum class WorkspaceOperation {
+    LOAD_WORKSPACE,
+    LOAD_FILES,
+    IMPORT,
+    EXPORT,
+    DELETE,
+}
+
+data class WorkspaceOperationError(
+    val operation: WorkspaceOperation,
+    val detail: String? = null,
+)
 
 data class WorkspaceDetailState(
     val workspace: WorkspaceEntity? = null,
@@ -260,17 +269,5 @@ data class WorkspaceDetailState(
     val path: String = "",
     val entries: List<WorkspaceFileEntry> = emptyList(),
     val loading: Boolean = false,
-    val error: String? = null,
+    val error: WorkspaceOperationError? = null,
 )
-
-data class WorkspaceTerminalState(
-    val input: String = "",
-    val running: Boolean = false,
-    val history: List<WorkspaceTerminalEntry> = emptyList(),
-)
-
-sealed interface WorkspaceTerminalEntry {
-    data class Command(val command: String) : WorkspaceTerminalEntry
-    data class Result(val result: WorkspaceCommandResult) : WorkspaceTerminalEntry
-    data class Error(val message: String) : WorkspaceTerminalEntry
-}

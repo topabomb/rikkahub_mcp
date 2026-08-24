@@ -2,26 +2,15 @@ package net.weero.measix.pilot.data.db.dao
 
 import androidx.paging.PagingSource
 import androidx.room.Dao
-import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.Query
-import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 import net.weero.measix.pilot.data.db.entity.ConversationEntity
 
 @Dao
 interface ConversationDAO {
-    @Query("SELECT * FROM conversationentity WHERE parent_conversation_id IS NULL ORDER BY is_pinned DESC, update_at DESC")
-    fun getAll(): Flow<List<ConversationEntity>>
-
-    @Query("SELECT * FROM conversationentity WHERE parent_conversation_id IS NULL ORDER BY is_pinned DESC, update_at DESC")
-    fun getAllPaging(): PagingSource<Int, ConversationEntity>
-
     @Query("SELECT * FROM conversationentity WHERE parent_conversation_id IS NULL AND assistant_id = :assistantId ORDER BY is_pinned DESC, update_at DESC")
     fun getConversationsOfAssistant(assistantId: String): Flow<List<ConversationEntity>>
-
-    @Query("SELECT id, assistant_id as assistantId, title, is_pinned as isPinned, create_at as createAt, update_at as updateAt, folder_id as folderId FROM conversationentity WHERE parent_conversation_id IS NULL AND assistant_id = :assistantId ORDER BY is_pinned DESC, update_at DESC")
-    fun getConversationsOfAssistantPaging(assistantId: String): PagingSource<Int, LightConversationEntity>
 
     @Query("SELECT id, assistant_id as assistantId, title, is_pinned as isPinned, create_at as createAt, update_at as updateAt, folder_id as folderId FROM conversationentity WHERE parent_conversation_id IS NULL AND assistant_id = :assistantId AND folder_id = '' ORDER BY is_pinned DESC, update_at DESC")
     fun getUnfiledConversationsOfAssistantPaging(assistantId: String): PagingSource<Int, LightConversationEntity>
@@ -32,17 +21,11 @@ interface ConversationDAO {
     @Query("SELECT * FROM conversationentity WHERE parent_conversation_id IS NULL AND assistant_id = :assistantId ORDER BY is_pinned DESC, update_at DESC LIMIT :limit")
     suspend fun getRecentConversationsOfAssistant(assistantId: String, limit: Int): List<ConversationEntity>
 
-    @Query("SELECT id, assistant_id as assistantId, title, is_pinned as isPinned, create_at as createAt, update_at as updateAt, folder_id as folderId FROM conversationentity WHERE parent_conversation_id IS NULL AND title LIKE '%' || :searchText || '%' ORDER BY is_pinned DESC, update_at DESC")
-    fun searchConversationsPaging(searchText: String): PagingSource<Int, LightConversationEntity>
-
-    @Query("SELECT id, assistant_id as assistantId, title, is_pinned as isPinned, create_at as createAt, update_at as updateAt, folder_id as folderId FROM conversationentity WHERE parent_conversation_id IS NULL AND assistant_id = :assistantId AND title LIKE '%' || :searchText || '%' ORDER BY is_pinned DESC, update_at DESC")
-    fun searchConversationsOfAssistantPaging(assistantId: String, searchText: String): PagingSource<Int, LightConversationEntity>
-
-    @Query("SELECT * FROM conversationentity WHERE id = :id")
-    fun getConversationFlowById(id: String): Flow<ConversationEntity?>
-
     @Query("SELECT id FROM conversationentity WHERE parent_conversation_id IS NULL")
     suspend fun getAllIds(): List<String>
+
+    @Query("SELECT id FROM conversationentity WHERE parent_conversation_id IS NULL AND folder_id = :folderId")
+    suspend fun getIdsByFolder(folderId: String): List<String>
 
     @Query("SELECT * FROM conversationentity WHERE id = :id")
     suspend fun getConversationById(id: String): ConversationEntity?
@@ -53,20 +36,11 @@ interface ConversationDAO {
     @Insert
     suspend fun insert(conversation: ConversationEntity)
 
-    @Update
-    suspend fun update(conversation: ConversationEntity)
-
     @Query("UPDATE conversationentity SET update_at = :updateAt WHERE id = :id")
-    suspend fun updateGenerationCheckpoint(id: String, updateAt: Long): Int
-
-    @Delete
-    suspend fun delete(conversation: ConversationEntity)
+    suspend fun updateTimestamp(id: String, updateAt: Long): Int
 
     @Query("DELETE FROM conversationentity WHERE id = :id")
     suspend fun deleteById(id: String)
-
-    @Query("DELETE FROM conversationentity")
-    suspend fun deleteAll()
 
     @Query("SELECT * FROM conversationentity WHERE parent_conversation_id IS NULL AND is_pinned = 1 ORDER BY update_at DESC")
     fun getPinnedConversations(): Flow<List<ConversationEntity>>
@@ -95,45 +69,20 @@ interface ConversationDAO {
     @Query("UPDATE conversationentity SET workspace_cwd = :cwd WHERE id = :id")
     suspend fun updateWorkspaceCwd(id: String, cwd: String)
 
-    @Query("UPDATE conversationentity SET folder_id = '' WHERE folder_id = :folderId")
-    suspend fun clearFolder(folderId: String)
-
     @Query("SELECT COUNT(*) FROM conversationentity WHERE parent_conversation_id IS NULL")
     suspend fun countAll(): Int
-
-    @Query(
-        "SELECT strftime('%Y-%m-%d', create_at/1000, 'unixepoch', 'localtime') AS day, " +
-            "COUNT(*) AS count " +
-            "FROM conversationentity " +
-            "WHERE parent_conversation_id IS NULL AND create_at >= :startMillis " +
-            "GROUP BY day"
-    )
-    suspend fun getConversationCountPerDay(startMillis: Long): List<ConversationDayCount>
 
     // ---- Child Conversation 查询 ----
 
     @Query("SELECT * FROM conversationentity WHERE parent_conversation_id = :parentConversationId")
     suspend fun getChildConversations(parentConversationId: String): List<ConversationEntity>
 
-    @Query("SELECT * FROM conversationentity WHERE parent_conversation_id = :parentConversationId")
-    fun getChildConversationsFlow(parentConversationId: String): Flow<List<ConversationEntity>>
-
-    @Query("DELETE FROM conversationentity WHERE parent_conversation_id = :parentConversationId")
-    suspend fun deleteChildConversations(parentConversationId: String)
-
-    /**
-     * 全库 Child 会话 id（核查保留）：消费方为 DelegationCoordinator（Master 恢复过滤）
-     * 与 AssistantBackgroundService（背景任务跳过 Child）——两者均非"旧 inspect/Recovery"路径，
-     * 不在删除清单内。
-     */
-    @Query("SELECT id FROM conversationentity WHERE parent_conversation_id IS NOT NULL")
-    suspend fun getAllChildConversationIds(): List<String>
+    @Query("SELECT id FROM conversationentity WHERE parent_conversation_id = :parentConversationId")
+    suspend fun getChildConversationIds(parentConversationId: String): List<String>
 
     @Query("SELECT * FROM conversationentity ORDER BY update_at DESC")
     suspend fun getAllConversations(): List<ConversationEntity>
 }
-
-data class ConversationDayCount(val day: String, val count: Int)
 
 /**
  * 轻量级的会话查询结果，不包含 nodes 和 suggestions 字段

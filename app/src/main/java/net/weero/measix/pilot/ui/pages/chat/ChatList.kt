@@ -95,7 +95,6 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.model.Assistant
-import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
@@ -127,8 +126,8 @@ private const val ScrollBottomKey = "ScrollBottomKey"
 @Composable
 internal fun ChatList(
     innerPadding: PaddingValues,
-    conversation: Conversation,
     snapshot: ConversationSnapshot,
+    favoriteNodeIds: Set<Uuid>,
     state: LazyListState,
     loading: Boolean,
     processingStatus: String? = null,
@@ -172,7 +171,7 @@ internal fun ChatList(
         if (target) {
             ChatListPreview(
                 innerPadding = innerPadding,
-                conversation = conversation,
+                snapshot = snapshot,
                 settings = settings,
                 hazeState = hazeState,
                 onJumpToMessage = onJumpToMessage,
@@ -181,8 +180,8 @@ internal fun ChatList(
         } else {
             ChatListNormal(
                 innerPadding = innerPadding,
-                conversation = conversation,
                 snapshot = snapshot,
+                favoriteNodeIds = favoriteNodeIds,
                 state = state,
                 loading = loading,
                 processingStatus = processingStatus,
@@ -221,8 +220,8 @@ internal fun ChatList(
 @Composable
 private fun ChatListNormal(
     innerPadding: PaddingValues,
-    conversation: Conversation,
     snapshot: ConversationSnapshot,
+    favoriteNodeIds: Set<Uuid>,
     state: LazyListState,
     loading: Boolean,
     processingStatus: String? = null,
@@ -257,7 +256,6 @@ private fun ChatListNormal(
     val scope = rememberCoroutineScope()
     val loadingState by rememberUpdatedState(loading)
     var isRecentScroll by remember { mutableStateOf(false) }
-    val conversationUpdated by rememberUpdatedState(conversation)
     val density = LocalDensity.current
     val activity = androidx.activity.compose.LocalActivity.current as? net.weero.measix.pilot.RouteActivity
 
@@ -297,8 +295,8 @@ private fun ChatListNormal(
     ImeLazyListAutoScroller(lazyListState = state)
 
     // 对话大小警告对话框
-    val sizeInfo = rememberConversationSizeInfo(conversation)
-    var showSizeWarningDialog by rememberSaveable(conversation.id) { mutableStateOf(true) }
+    val sizeInfo = rememberConversationSizeInfo(snapshot.nodes)
+    var showSizeWarningDialog by rememberSaveable(snapshot.conversationId) { mutableStateOf(true) }
     if (sizeInfo.showWarning && showSizeWarningDialog) {
         ConversationSizeWarningDialog(
             sizeInfo = sizeInfo,
@@ -306,8 +304,8 @@ private fun ChatListNormal(
         )
     }
 
-    val messageAssistant = remember(settings.assistants, conversation.assistantId) {
-        settings.getAssistantById(conversation.assistantId)
+    val messageAssistant = remember(settings.assistants, snapshot.header.assistantId) {
+        settings.getAssistantById(snapshot.header.assistantId)
     }
     val modelById = remember(settings.providers) {
         settings.providers
@@ -335,7 +333,6 @@ private fun ChatListNormal(
                     if (!state.isScrollInProgress && loadingState) {
                         if (visibleItemsInfo.isAtBottom()) {
                             state.requestScrollToItem(snapshotNodesUpdated.lastIndex + 10)
-                            // Log.i(TAG, "ChatList: scroll to ${conversationUpdated.messageNodes.lastIndex}")
                         }
                     }
                 }
@@ -354,11 +351,11 @@ private fun ChatListNormal(
             }
         }
 
-        // 会话级时序相册: 稳定的点击期求值 lambda——读取 rememberUpdatedState 的最新会话,
+        // 会话级时序相册：点击期读取 rememberUpdatedState 的最新节点，组合期零扫描。
         // 组合期零扫描(流式期间不随每帧重算), 点击图片时才按消息顺序展平
         val conversationAlbum = remember {
             {
-                conversationUpdated.messageNodes.flatMap { node ->
+                snapshotNodesUpdated.flatMap { node ->
                     collectMessageImageUrls(node.currentMessage.parts)
                 }
             }
@@ -366,7 +363,7 @@ private fun ChatListNormal(
         // 附件缩略图只读解析: stable ref → 本地 file url, 求值时读最新会话
         val attachmentPreview = remember {
             { ref: String ->
-                resolveAttachmentPreviewUrl(conversationUpdated.messageNodes.map { it.currentMessage }, ref)
+                resolveAttachmentPreviewUrl(snapshotNodesUpdated.map { it.currentMessage }, ref)
             }
         }
         val backgroundHost = rememberImageBackgroundHost(settings, assistant.id)
@@ -458,7 +455,7 @@ private fun ChatListNormal(
                             ) {
                                 ChatMessage(
                                     node = node,
-                                    masterConversationId = conversation.id,
+                                    masterConversationId = snapshot.conversationId,
                                     model = node.currentMessage.modelId?.let(modelById::get),
                                     assistant = messageAssistant,
                                     loading = loading && index == lastMessageIndex,
@@ -483,7 +480,7 @@ private fun ChatListNormal(
                                     onUpdate = {
                                         onUpdateMessage(it)
                                     },
-                                    isFavorite = node.isFavorite,
+                                    isFavorite = node.id in favoriteNodeIds,
                                     onToggleFavorite = {
                                         onToggleFavorite?.invoke(node)
                                     },
@@ -502,7 +499,7 @@ private fun ChatListNormal(
                     if (showsSystemPromptItem) {
                         item(key = "ConversationSystemPrompt") {
                             ConversationSystemPromptButton(
-                                customSystemPrompt = conversation.customSystemPrompt,
+                                customSystemPrompt = snapshot.header.customSystemPrompt,
                                 onSystemPromptChange = onConversationSystemPromptChange,
                             )
                         }
@@ -632,7 +629,7 @@ private fun ChatListNormal(
                     showExportSheet = false
                     selectedItems.clear()
                 },
-                conversation = conversation,
+                conversationTitle = snapshot.header.title,
                 selectedMessages = snapshotNodes.filter { it.id in selectedItems }
                     .map { it.currentMessage }
             )
@@ -648,9 +645,9 @@ private fun ChatListNormal(
             )
 
             // Suggestion
-            if (conversation.chatSuggestions.isNotEmpty() && !captureProgress) {
+            if (snapshot.header.chatSuggestions.isNotEmpty() && !captureProgress) {
                 ChatSuggestionsRow(
-                    conversation = conversation,
+                    suggestions = snapshot.header.chatSuggestions,
                     onClickSuggestion = onClickSuggestion,
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
@@ -728,7 +725,7 @@ private fun buildHighlightedText(
 @Composable
 private fun ChatListPreview(
     innerPadding: PaddingValues,
-    conversation: Conversation,
+    snapshot: ConversationSnapshot,
     settings: Settings,
     hazeState: HazeState,
     animatedVisibilityScope: AnimatedVisibilityScope,
@@ -737,11 +734,13 @@ private fun ChatListPreview(
     var searchQuery by remember { mutableStateOf("") }
 
     // 过滤消息，同时保留原始 index 避免后续 O(n) indexOf 查找
-    val filteredMessages = remember(conversation.messageNodes, searchQuery) {
+    val renderNodes = snapshot.renderNodes
+    val filteredMessages = remember(renderNodes, searchQuery) {
+        val nodes = renderNodes
         if (searchQuery.isBlank()) {
-            conversation.messageNodes.mapIndexed { index, node -> index to node }
+            nodes.mapIndexed { index, node -> index to node }
         } else {
-            conversation.messageNodes.mapIndexed { index, node -> index to node }
+            nodes.mapIndexed { index, node -> index to node }
                 .filter { (_, node) -> node.currentMessage.toText().contains(searchQuery, ignoreCase = true) }
         }
     }
@@ -856,7 +855,7 @@ private fun ChatListPreview(
 @Composable
 private fun ChatSuggestionsRow(
     modifier: Modifier = Modifier,
-    conversation: Conversation,
+    suggestions: List<String>,
     onClickSuggestion: (String) -> Unit
 ) {
     LazyRow(
@@ -866,7 +865,7 @@ private fun ChatSuggestionsRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        items(conversation.chatSuggestions) { suggestion ->
+        items(suggestions) { suggestion ->
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(50))

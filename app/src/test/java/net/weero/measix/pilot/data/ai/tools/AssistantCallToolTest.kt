@@ -14,6 +14,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.ui.UIMessagePart
@@ -45,7 +46,7 @@ class AssistantCallToolTest {
         description = "Target",
     )
 
-    private fun createTool(coordinator: DelegationCoordinator?): me.rerere.ai.core.Tool {
+    private fun createTool(coordinator: DelegationCoordinator): me.rerere.ai.core.Tool {
         val settingsFlow = MutableStateFlow(
             Settings(
                 assistants = listOf(caller, target),
@@ -60,6 +61,7 @@ class AssistantCallToolTest {
             assistantManagementService = mockk<AssistantManagementService>(relaxed = true),
             json = Json,
             delegationCoordinator = coordinator,
+            toolSetFactory = mockk(relaxed = true),
         ).buildTools(caller, masterConversationId).single { it.name == "assistant_call" }
     }
 
@@ -68,6 +70,9 @@ class AssistantCallToolTest {
         toolOrdinal = 0,
         toolCallId = "provider-call",
         reportMetadata = { _, _ -> },
+        resolveAttachments = { ToolAttachmentResolution(failureReason = "not_used") },
+        reportChildConversation = { },
+        registerUnpublishedResource = {},
     )
 
     @Test
@@ -100,22 +105,6 @@ class AssistantCallToolTest {
     }
 
     @Test
-    fun `missing coordinator returns runtime_error with detail`() = runTest {
-        val tool = createTool(null)
-        val result = tool.executeWithContext(
-            executionContext(),
-            buildJsonObject {
-                put("assistant_id", targetId.toString())
-                put("request", "Do the work")
-            },
-        )
-        val payload = Json.parseToJsonElement((result.single() as UIMessagePart.Text).text).jsonObject
-        assertEquals("failed", payload["status"]?.jsonPrimitive?.content)
-        assertEquals("runtime_error", payload["reason"]?.jsonPrimitive?.content)
-        assertTrue(payload["detail"]?.jsonPrimitive?.content?.contains("coordinator") == true)
-    }
-
-    @Test
     fun `blank request is rejected before coordinator starts a run`() = runTest {
         val coordinator = mockk<DelegationCoordinator>(relaxed = true)
         val tool = createTool(coordinator)
@@ -130,6 +119,24 @@ class AssistantCallToolTest {
 
         val payload = Json.parseToJsonElement((result.single() as UIMessagePart.Text).text).jsonObject
         assertEquals("unavailable", payload["status"]?.jsonPrimitive?.content)
+        assertEquals("request_required", payload["reason"]?.jsonPrimitive?.content)
+        coVerify(exactly = 0) { coordinator.executeCall(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `obsolete task argument is not accepted as request`() = runTest {
+        val coordinator = mockk<DelegationCoordinator>(relaxed = true)
+        val tool = createTool(coordinator)
+
+        val result = tool.executeWithContext(
+            executionContext(),
+            buildJsonObject {
+                put("assistant_id", targetId.toString())
+                put("task", "old protocol")
+            },
+        )
+
+        val payload = Json.parseToJsonElement((result.single() as UIMessagePart.Text).text).jsonObject
         assertEquals("request_required", payload["reason"]?.jsonPrimitive?.content)
         coVerify(exactly = 0) { coordinator.executeCall(any(), any(), any(), any(), any()) }
     }

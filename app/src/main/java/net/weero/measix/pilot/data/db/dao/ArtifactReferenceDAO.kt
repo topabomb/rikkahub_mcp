@@ -24,11 +24,11 @@ interface ArtifactReferenceDAO {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAll(references: List<ArtifactReferenceEntity>)
 
+    @Query("DELETE FROM artifact_reference")
+    suspend fun deleteAll()
+
     /** upserted 节点的引用替换语义第一步（第二步 insertAll） */
     @Query("DELETE FROM artifact_reference WHERE node_id IN (:nodeIds)")
     suspend fun deleteByNodeIds(nodeIds: List<String>)
 
-    /** 会话级兜底清理（node FK 级联已覆盖主路径，此为显式备份入口） */
-    @Query("DELETE FROM artifact_reference WHERE node_id IN (SELECT id FROM message_node WHERE conversation_id = :conversationId)")
-    suspend fun deleteByConversationId(conversationId: String)
 }

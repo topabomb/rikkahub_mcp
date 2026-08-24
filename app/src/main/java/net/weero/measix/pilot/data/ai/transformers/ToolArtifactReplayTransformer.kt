@@ -16,7 +16,7 @@ class ToolArtifactReplayTransformer(
         }
     }
 
-    private fun rematerializePart(part: UIMessagePart): UIMessagePart {
+    private suspend fun rematerializePart(part: UIMessagePart): UIMessagePart {
         return when (part) {
             is UIMessagePart.Tool -> part.copy(
                 output = rewriter.materializeToolOutput(part.output, part.metadata)

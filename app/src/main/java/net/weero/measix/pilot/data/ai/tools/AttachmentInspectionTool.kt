@@ -115,7 +115,7 @@ fun createAttachmentInspectionTool(
         )
     },
     execute = { _ ->
-        // Fallback: 无执行上下文（缺 locator/资源解析能力）时不能按 stable ref 定位附件。
+        // stable attachment ref 只能由提供解析能力的上下文执行器解析。
         inspectionFailure(AttachmentFailureReasons.ATTACHMENT_RESOLUTION_UNAVAILABLE)
     },
 )

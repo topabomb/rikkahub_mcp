@@ -1,7 +1,8 @@
 package net.weero.measix.pilot.service
 
 import android.util.Log
-import androidx.core.net.toUri
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantAccessPolicy
 import net.weero.measix.pilot.data.ai.subassistant.buildToolCreatedAssistant
@@ -9,11 +10,10 @@ import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.PendingAssistantDeletion
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getAssistantById
-import net.weero.measix.pilot.data.files.FilesManager
+import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.model.normalizeDescription
-import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.DelegationCoordinator
@@ -23,17 +23,17 @@ private const val TAG = "AssistantManagementService"
 private const val ASSISTANT_CLEANUP_STOP_TIMEOUT_MS = 5_000L
 
 /**
- * Assistant CRUD、校验、通过 Settings 原子更新、文件/Memory/普通会话清理。
- * UI 删除与 [AssistantToolFactory] 的 assistant_manage 共用此 Service，避免两套清理逻辑。
+ * Assistant CRUD、校验、Settings 原子更新以及文件、Memory 和普通会话清理的唯一 owner。
+ * UI 与 [AssistantToolFactory] 的 assistant_manage 都通过此 Service 执行。
  */
 class AssistantManagementService(
     private val settingsStore: SettingsStore,
     private val memoryRepository: MemoryRepository,
-    private val conversationRepo: ConversationRepository,
-    private val filesManager: FilesManager,
-    private val sessionRegistry: ConversationRuntimeRegistry,
+    private val artifactStore: ArtifactStore,
+    private val runtimeRegistry: ConversationRuntimeRegistry,
     private val delegationCoordinator: DelegationCoordinator,
-    private val recoveryGate: AssistantDataRecoveryGate = AssistantDataRecoveryGate.completed(),
+    private val recoveryGate: ApplicationRecoveryGate,
+    private val conversationApplicationService: ConversationApplicationService,
 ) {
     /**
      * 创建 Assistant，默认 Local Tools 与普通 Assistant 一致，其他扩展能力保持关闭。
@@ -62,14 +62,14 @@ class AssistantManagementService(
         )
 
         var createdAssistant: Assistant? = null
-        settingsStore.updateAtomic { settings ->
+        artifactStore.updateSettingsReferences { settings ->
             // 重新确认 caller 仍存在、AssistantManagement 仍启用
             val caller = callerAssistantId?.let { settings.getAssistantById(it) }
             if (callerAssistantId != null && caller == null) {
-                return@updateAtomic settings
+                return@updateSettingsReferences settings
             }
             if (callerAssistantId != null && LocalToolOption.AssistantManagement !in caller!!.localTools) {
-                return@updateAtomic settings
+                return@updateSettingsReferences settings
             }
 
             // 原子加入 caller 的 allowedSubAssistantIds
@@ -124,22 +124,22 @@ class AssistantManagementService(
 
         var updatedAssistant: Assistant? = null
         var failureReason: String? = null
-        settingsStore.updateAtomic { settings ->
+        artifactStore.updateSettingsReferences { settings ->
             val caller = callerAssistantId?.let(settings::getAssistantById)
             if (callerAssistantId != null &&
                 (caller == null || LocalToolOption.AssistantManagement !in caller.localTools)
             ) {
                 failureReason = "tool_not_permitted"
-                return@updateAtomic settings
+                return@updateSettingsReferences settings
             }
             val existing = settings.getAssistantById(assistantId)
             if (existing == null) {
                 failureReason = "assistant_not_found"
-                return@updateAtomic settings
+                return@updateSettingsReferences settings
             }
             if (caller != null && !SubAssistantAccessPolicy.canAccess(caller, existing)) {
                 failureReason = "target_not_allowed"
-                return@updateAtomic settings
+                return@updateSettingsReferences settings
             }
 
             val updated = existing.copy(
@@ -186,26 +186,26 @@ class AssistantManagementService(
         var assistantToDelete: Assistant? = null
         var tombstone: PendingAssistantDeletion? = null
         var failureReason: String? = null
-        settingsStore.updateAtomic { settings ->
+        artifactStore.updateSettingsReferences { settings ->
             if (settings.assistants.size <= 1) {
                 failureReason = "last_assistant"
-                return@updateAtomic settings
+                return@updateSettingsReferences settings
             }
             val target = settings.getAssistantById(assistantId)
             if (target == null) {
                 failureReason = "assistant_not_found"
-                return@updateAtomic settings
+                return@updateSettingsReferences settings
             }
             val caller = callerAssistantId?.let(settings::getAssistantById)
             if (callerAssistantId != null &&
                 (caller == null || LocalToolOption.AssistantManagement !in caller.localTools)
             ) {
                 failureReason = "tool_not_permitted"
-                return@updateAtomic settings
+                return@updateSettingsReferences settings
             }
             if (caller != null && !SubAssistantAccessPolicy.canAccess(caller, target)) {
                 failureReason = "target_not_allowed"
-                return@updateAtomic settings
+                return@updateSettingsReferences settings
             }
 
             assistantToDelete = target
@@ -268,9 +268,13 @@ class AssistantManagementService(
     }
 
     /** App 启动时幂等消费尚未完成的删除 tombstone。 */
-    suspend fun performPendingDeletionCleanup() {
+    internal suspend fun performPendingDeletionCleanupDuringRecovery() {
         val pending = settingsStore.settingsFlow.value.pendingAssistantDeletions
-        pending.forEach { cleanupPendingDeletion(it) }
+        pending.forEach { tombstone ->
+            if (!cleanupPendingDeletion(tombstone)) {
+                throw PendingAssistantCleanupException(tombstone.assistantId)
+            }
+        }
     }
 
     /**
@@ -315,7 +319,7 @@ class AssistantManagementService(
             return true
         }
 
-        val result = runCatching {
+        val failure = try {
             // A non-cooperative Provider or native tool must not leave deletion suspended forever.
             // On timeout the tombstone remains durable and startup will retry without deleting data
             // that an active run may still be using.
@@ -323,28 +327,32 @@ class AssistantManagementService(
                 delegationCoordinator.cancelRunsForAssistant(
                     assistantId = tombstone.assistantId,
                 )
-                sessionRegistry.cancelGenerationsForAssistant(
+                runtimeRegistry.cancelGenerationsForAssistant(
                     assistantId = tombstone.assistantId,
                     reason = "assistant_removed",
                 )
             }
             memoryRepository.deleteMemoriesOfAssistant(tombstone.assistantId.toString())
-            conversationRepo.deleteConversationOfAssistant(tombstone.assistantId)
-            check(cleanupAssistantFilesIfNotReferenced(tombstone)) {
-                "Unable to delete one or more managed assistant files"
-            }
+            conversationApplicationService.deleteOfAssistantFromPendingCleanup(tombstone.assistantId)
+            artifactStore.collectGarbage(protectionWindowMillis = 0)
+            null
+        } catch (timeout: TimeoutCancellationException) {
+            timeout
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            error
         }
-        result.onFailure { error ->
-            Log.e(TAG, "Pending cleanup failed for ${tombstone.assistantId}", error)
+        if (failure != null) {
+            Log.e(TAG, "Pending cleanup failed for ${tombstone.assistantId}", failure)
+            return false
         }
-        if (result.isSuccess) {
-            removePendingDeletion(tombstone.assistantId)
-        }
-        return result.isSuccess
+        removePendingDeletion(tombstone.assistantId)
+        return true
     }
 
     private suspend fun removePendingDeletion(assistantId: Uuid) {
-        settingsStore.updateAtomic { settings ->
+        artifactStore.updateSettingsReferences { settings ->
             settings.copy(
                 pendingAssistantDeletions = settings.pendingAssistantDeletions.filterNot {
                     it.assistantId == assistantId
@@ -353,29 +361,10 @@ class AssistantManagementService(
         }
     }
 
-    private fun cleanupAssistantFilesIfNotReferenced(tombstone: PendingAssistantDeletion): Boolean {
-        val settings = settingsStore.settingsFlow.value
-        // 用户头像与助手头像/背景同引用面（对齐 ArtifactStore.collectMutableReferenceUris 清单）
-        val userAvatarUrl = (settings.displaySetting.userAvatar as? Avatar.Image)?.url
-
-        // 只有在最新 Settings 中已无其他 Assistant 引用时才删除
-        val uris = buildList {
-            tombstone.avatarUri?.let { uri ->
-                val referenced = settings.assistants.any { other ->
-                    (other.avatar as? Avatar.Image)?.url == uri
-                } || uri == userAvatarUrl
-                if (!referenced) add(uri.toUri())
-            }
-            tombstone.backgroundUri?.let { uri ->
-                val referenced = settings.assistants.any { other ->
-                    other.background == uri
-                } || uri == userAvatarUrl
-                if (!referenced) add(uri.toUri())
-            }
-        }
-        return uris.isEmpty() || filesManager.deleteChatFiles(uris)
-    }
 }
+
+class PendingAssistantCleanupException(assistantId: Uuid) :
+    IllegalStateException("Pending assistant cleanup did not converge: $assistantId")
 
 data class AssistantDeletionResult(
     val assistant: Assistant,

@@ -9,6 +9,7 @@ import androidx.paging.PagingConfig
 import androidx.paging.PagingData
 import androidx.paging.cachedIn
 import androidx.paging.map
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,7 +24,6 @@ import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.common.android.appTempFolder
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.entity.GenMediaEntity
-import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.data.imggen.GeneratedMediaConsumerPlan
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.data.imggen.ImageGenerationCoordinator
@@ -46,14 +46,11 @@ data class GeneratedImage(
     val model: String
 )
 
-private fun GenMediaEntity.toGeneratedImage(filesManager: FilesManager): GeneratedImage {
-    val imagesDir = filesManager.getImagesDir()
-    val fullPath = File(imagesDir, this.path.removePrefix("images/")).absolutePath
-
+private fun GenMediaEntity.toGeneratedImage(store: GeneratedMediaStore): GeneratedImage {
     return GeneratedImage(
         id = this.id,
         prompt = this.prompt,
-        filePath = fullPath,
+        filePath = store.resolveCanonicalFile(this).absolutePath,
         timestamp = this.createAt,
         model = this.modelId
     )
@@ -64,7 +61,6 @@ class ImgGenVM(
     private val settingsStore: SettingsStore,
     val providerManager: ProviderManager,
     val genMediaRepository: GenMediaRepository,
-    private val filesManager: FilesManager,
     private val selectionResolver: ImageGenerationSelectionResolver,
     private val coordinator: ImageGenerationCoordinator,
     private val generatedMediaStore: GeneratedMediaStore,
@@ -107,13 +103,19 @@ class ImgGenVM(
     )
     val generatedImages: Flow<PagingData<GeneratedImage>> = pager.flow
         .map { pagingData ->
-            pagingData.map { entity -> entity.toGeneratedImage(filesManager) }
+            pagingData.map { entity -> entity.toGeneratedImage(generatedMediaStore) }
         }
         .cachedIn(viewModelScope)
 
     init {
         viewModelScope.launch {
-            runCatching { coordinator.reconcileMedia() }
+            try {
+                coordinator.reconcileMedia()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.e(TAG, "failed to reconcile generated media", error)
+            }
         }
     }
 
@@ -129,8 +131,12 @@ class ImgGenVM(
         _size.value = size
     }
 
-    fun addReferenceImages(paths: List<String>) {
-        _referenceImages.value = (_referenceImages.value + paths).distinct().take(MAX_REFERENCE_IMAGES)
+    fun addReferenceImages(paths: List<String>): Int {
+        val retained = (_referenceImages.value + paths).distinct().take(MAX_REFERENCE_IMAGES)
+        val rejected = paths.filterNot(retained::contains)
+        _referenceImages.value = retained
+        deleteReferenceFiles(rejected)
+        return rejected.size
     }
 
     fun removeReferenceImage(path: String) {
@@ -183,11 +189,7 @@ class ImgGenVM(
                     consumerPlan = GeneratedMediaConsumerPlan.NONE,
                     onPartial = { item ->
                         previewFile?.delete()
-                        val preview = saveImagePreview(
-                            item = item,
-                            modelName = selection.model.displayName,
-                            index = item.partialImageIndex ?: 0,
-                        )
+                        val preview = saveImagePreview(item)
                         previewFile = preview
                         _currentGeneratedImages.value = listOf(
                             GeneratedImage(
@@ -221,9 +223,10 @@ class ImgGenVM(
                         }
                     }
                 }
-            } catch (e: Exception) {
-                if(e is CancellationException) return@launch
-                Log.e(TAG, "Failed to generate image", e)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.e(TAG, "Failed to generate image", error)
                 _error.value = "unknown"
             } finally {
                 previewFile?.delete()
@@ -265,11 +268,7 @@ class ImgGenVM(
                     editImages = sourceImages,
                     onPartial = { item ->
                         previewFile?.delete()
-                        val preview = saveImagePreview(
-                            item = item,
-                            modelName = selection.model.displayName,
-                            index = item.partialImageIndex ?: 0,
-                        )
+                        val preview = saveImagePreview(item)
                         previewFile = preview
                         _currentGeneratedImages.value = listOf(
                             GeneratedImage(
@@ -303,9 +302,10 @@ class ImgGenVM(
                         }
                     }
                 }
-            } catch (e: Exception) {
-                if (e is CancellationException) return@launch
-                Log.e(TAG, "Failed to edit image", e)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.e(TAG, "Failed to edit image", error)
                 _error.value = "unknown"
             } finally {
                 previewFile?.delete()
@@ -324,36 +324,45 @@ class ImgGenVM(
         }
     }
 
-    private fun saveImagePreview(
-        item: ImageGenerationItem,
-        modelName: String,
-        index: Int,
-    ): File {
-        val timestamp = System.currentTimeMillis()
-        val imageFile = File(getApplication<Application>().appTempFolder, "imggen_${timestamp}_${modelName}_$index.png")
-        return filesManager.createImageFileFromBase64(item.data, imageFile.absolutePath)
+    private fun saveImagePreview(item: ImageGenerationItem): File {
+        val bytes = GeneratedMediaStore.decodeImageBytes(item.data)
+        val inspected = GeneratedMediaStore.inspectImagePayload(bytes, item.mimeType)
+        val imageFile = File(
+            getApplication<Application>().appTempFolder,
+            "imggen_preview_${Uuid.random()}.${inspected.extension}",
+        )
+        imageFile.writeBytes(bytes)
+        return imageFile
     }
 
-    fun deleteImage(image: GeneratedImage) {
-        viewModelScope.launch {
-            try {
-                if (!generatedMediaStore.delete(image.id)) {
-                    _error.value = "delete_failed"
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to delete image", e)
-                _error.value = "delete_failed"
-            }
-        }
+    suspend fun deleteImage(image: GeneratedImage): Boolean = try {
+        generatedMediaStore.delete(image.id)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        Log.e(TAG, "Failed to delete image", error)
+        false
     }
 
     private fun deleteReferenceFiles(paths: List<String>) {
-        viewModelScope.launch {
-            paths.forEach { path ->
-                val file = File(path)
-                if (file.exists()) {
-                    file.delete()
-                }
+        if (paths.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            deleteReferenceFilesNow(paths)
+        }
+    }
+
+    override fun onCleared() {
+        cancelJob?.cancel()
+        deleteReferenceFilesNow(_referenceImages.value)
+        _referenceImages.value = emptyList()
+        super.onCleared()
+    }
+
+    private fun deleteReferenceFilesNow(paths: List<String>) {
+        paths.forEach { path ->
+            val file = File(path)
+            if (file.exists() && !file.delete()) {
+                Log.w(TAG, "Failed to delete reference image: $file")
             }
         }
     }

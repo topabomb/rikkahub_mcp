@@ -1,6 +1,7 @@
-﻿package net.weero.measix.pilot.ui.pages.assistant.detail
+package net.weero.measix.pilot.ui.pages.assistant.detail
 
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -27,21 +28,24 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.dokar.sonner.ToastType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.files.FilesManager
 import net.weero.measix.pilot.ui.components.ui.FormItem
-import org.koin.compose.koinInject
+import net.weero.measix.pilot.ui.context.LocalToaster
 
 @Composable
 fun BackgroundPicker(
     modifier: Modifier = Modifier,
     background: String?,
     backgroundOpacity: Float = 1.0f,
-    onUpdate: (String?) -> Unit
+    onUpdate: (String?) -> Unit,
+    onImportImage: suspend (Uri) -> Unit,
 ) {
-    val filesManager: FilesManager = koinInject()
     val scope = rememberCoroutineScope()
+    val toaster = LocalToaster.current
+    val importFailedMessage = stringResource(R.string.image_import_failed)
     var showPickOption by remember { mutableStateOf(false) }
     var showUrlInput by remember { mutableStateOf(false) }
     var urlInput by remember { mutableStateOf("") }
@@ -51,9 +55,13 @@ fun BackgroundPicker(
     ) { uri: Uri? ->
         uri?.let {
             scope.launch {
-                val localUris = filesManager.createChatFilesByContents(listOf(it))
-                localUris.firstOrNull()?.let { localUri ->
-                    onUpdate(localUri.toString())
+                try {
+                    onImportImage(it)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    Log.e("BackgroundPicker", "Failed to import background image", error)
+                    toaster.show(importFailedMessage, type = ToastType.Error)
                 }
             }
         }

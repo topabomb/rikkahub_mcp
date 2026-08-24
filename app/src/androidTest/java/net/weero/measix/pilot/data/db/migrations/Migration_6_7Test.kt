@@ -16,7 +16,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Migration v6→v7 权威测试（V1 正式阶段·架构收敛，§11.2 / §12 L2）。
+ * Migration v6→v7 权威测试。
  *
  * 对齐 Migration_5_6Test 范式。用例：
  *  - M1  孤儿清理：parent 悬挂的 Child 被删除（含其消息节点），正常主/子全保留
@@ -404,7 +404,7 @@ class Migration_6_7Test {
                 cols.add("${c.getString(nameIdx)}:${c.getString(typeIdx)}:${c.getInt(notNullIdx)}:${c.getInt(pkIdx)}")
             }
         }
-        return cols
+        return cols.sorted()
     }
 
     private fun dumpIndices(db: SupportSQLiteDatabase): Map<String, String> {

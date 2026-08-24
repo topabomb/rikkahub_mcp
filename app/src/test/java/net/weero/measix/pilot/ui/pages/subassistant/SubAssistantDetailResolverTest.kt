@@ -10,6 +10,7 @@ import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.model.toMessageNode
+import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -158,14 +159,18 @@ class SubAssistantDetailResolverTest {
             resolveSubAssistantTimeline(
                 masterId,
                 link,
-                childWithNodes(task).copy(parentConversationId = Uuid.random()),
+                childWithNodes(task).let { child ->
+                    child.copy(header = child.header.copy(parentConversationId = Uuid.random()))
+                },
             )
         )
         assertNull(
             resolveSubAssistantTimeline(
                 masterId,
                 link,
-                childWithNodes(task).copy(assistantId = Uuid.random()),
+                childWithNodes(task).let { child ->
+                    child.copy(header = child.header.copy(assistantId = Uuid.random()))
+                },
             )
         )
     }
@@ -179,7 +184,7 @@ class SubAssistantDetailResolverTest {
             messages = listOf(task, selectedOtherTask),
             selectIndex = 1,
         )
-        val child = childWithNodes().copy(messageNodes = listOf(branchedNode))
+        val child = childWithNodes().copy(nodes = listOf(branchedNode))
 
         assertNull(resolveSubAssistantTimeline(masterId, link, child))
     }
@@ -229,12 +234,12 @@ class SubAssistantDetailResolverTest {
         id = masterId,
         assistantId = callerId,
         messageNodes = listOf(UIMessage(role = MessageRole.ASSISTANT, parts = tools).toMessageNode()),
-    )
+    ).toSnapshot()
 
     private fun childWithNodes(vararg messages: UIMessage) = Conversation(
         id = childId,
         assistantId = targetId,
         messageNodes = messages.map { it.toMessageNode() },
         parentConversationId = masterId,
-    )
+    ).toSnapshot()
 }

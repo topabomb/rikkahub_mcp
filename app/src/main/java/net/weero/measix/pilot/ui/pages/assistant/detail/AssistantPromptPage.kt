@@ -85,7 +85,6 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantAffectScope
 import net.weero.measix.pilot.data.model.AssistantRegex
-import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.ui.components.message.ChatMessage
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
@@ -367,20 +366,25 @@ private fun AssistantPromptContent(
                     UiState.Success(rawMessages),
                     assistant
                 ) {
-                    value = runCatching {
+                    value = try {
                         UiState.Success(
                             templateTransformer.transform(
                                 ctx = TransformerContext(
                                     context = context,
                                     model = Model(modelId = "gpt-4o", displayName = "GPT-4o"),
                                     assistant = assistant,
-                                    settings = settings
+                                    settings = settings,
+                                    registerUnpublishedResource = {
+                                        error("template preview cannot create output resources")
+                                    },
                                 ),
                                 messages = rawMessages
                             )
                         )
-                    }.getOrElse {
-                        UiState.Error(it)
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        UiState.Error(error)
                     }
                 }
                 val previewMessages = (preview as? UiState.Success)?.data

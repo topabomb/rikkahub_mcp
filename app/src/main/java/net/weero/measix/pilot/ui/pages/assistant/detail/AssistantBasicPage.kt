@@ -142,6 +142,7 @@ internal fun AssistantBasicContent(
                         )
                     )
                 },
+                onImportImage = vm::importAvatar,
                 modifier = Modifier
                     .size(80.dp)
                     .heroAnimation("assistant_${assistant.id}")
@@ -653,7 +654,8 @@ internal fun AssistantBasicContent(
                                 background = background
                             )
                         )
-                    }
+                    },
+                    onImportImage = vm::importBackground,
                 )
             }
 
