@@ -1,6 +1,6 @@
 # Architecture V1 重构方案：Runtime Core / Persistence / Projection
 
-> 状态：pre 阶段已落地（versionCode 18 / `0.0.18`，git 里程碑 **pre1**）。§0–§8 与附录为实施前方案原文；**§9 为 pre 落地后相对草图的约定变更（以代码为准）**；**§10–§12 为 V1 正式阶段（架构收敛）方案**；**§13 为 V1 实施落点记录（versionCode 18 保持不变，行数账本以实测为准）**。
+> 状态：pre 阶段已落地（versionCode 18 / `0.0.18`，git 里程碑 **pre1**）。§0–§8 与附录为实施前方案原文；**§9 为 pre 落地后相对草图的约定变更（以代码为准）**；**§10–§12 为 V1 正式阶段（架构收敛）方案**；**§13 为 V1 实施落点记录**；**§14 为落地后 UI 缺陷修复记录**；**§15 为 2026-08-24 面向当前实现的全量收敛审计**；**§16 为 V1 Completion（V1C，架构封板）阶段计划**。§15–§16 推翻与其冲突的“固定文件数、负代码、兼容白名单”约束。
 > 范围：`app` 模块（`service` / `data` / `ui`）。`ai` / `workspace` / `speech` / `search` 模块对外 API 不变更。
 > 配置持久化（SettingsStore / Settings）本轮零改动；企业下发走既定 `EnterprisePolicyStore` 路线。
 > 本轮为一次完整重构，不分发布阶段；工作流 A–J 为工程依赖序，同一版本交付。
@@ -1663,7 +1663,7 @@ N（任意时点，机械）
 
 ## 14. 已知问题：落地后 UI 链路复查与修复记录（2026-08-24）
 
-> 本节为 v1 落地后的缺陷记录与修复实录。两项缺陷均属"行为恢复"级修复，不改变 §10–§13 的架构契约；但根因揭示了两类系统性适配风险，记录于此供后续重构对照。
+> 本节为 v1 落地后的缺陷记录与修复实录。三项缺陷均属"行为恢复"级修复，不改变 §10–§13 的核心方向；但根因揭示了三类系统性适配风险，记录于此供后续重构对照。其后续全库审计见 §15。
 
 ### 14.1 缺陷 A：头像剪裁后静默不生效（文件生命周期竞态）
 
@@ -1699,7 +1699,7 @@ N（任意时点，机械）
 
 **测试锁定**：`ArtifactStoreTest` 补 GC 引用面矩阵——助手头像豁免、助手背景豁免、用户头像豁免、消息引用豁免与孤儿回收、显式删除重置用户头像、未回填跳过。
 
-**后续复查补充（同模式第 5 处）**：`AssistantManagementService.cleanupAssistantFilesIfNotReferenced`（删除助手的 tombstone 文件清理）同样只查其他 Assistant 引用、漏用户头像，已对齐修复。至此该引用面的全部消费点（GC 豁免、删除解除、影响检查、换背景清理、删助手清理）均已收敛一致。
+**后续复查补充（当时已知模式的第 5 处）**：`AssistantManagementService.cleanupAssistantFilesIfNotReferenced`（删除助手的 tombstone 文件清理）同样只查其他 Assistant 引用、漏用户头像，已对齐修复。当时已知的五处消费点（GC 豁免、删除解除、影响检查、换背景清理、删助手清理）已对齐；§15 的扩大范围审计进一步发现 UI 直删与 unchecked 删除入口仍未收口，不能据此宣称全域完成。
 
 **教训**：同一引用面（"哪些 Settings 字段持有受管文件 URI"）必须收敛为单一定义并被全部消费方（GC 豁免、删除解除、影响检查、独立清理服务）引用；语义从探测式放宽为扫荡式时，豁免面必须同步扩到与新候选集匹配。
 
@@ -1746,6 +1746,316 @@ N（任意时点，机械）
 
 "哪些 Settings 字段持有受管文件 URI"这一引用面事实，分散在 GC 豁免、删除解除（detach）、删除影响检查（inspect）、换背景清理（`AssistantBackgroundService.isReferenced`）、删助手清理（`AssistantManagementService.cleanupAssistantFilesIfNotReferenced`）五处手写。任何一处漏写/漏更新（如用户头像 `displaySetting.userAvatar`）即造成该消费点的数据丢失；且 GC 语义从探测式放宽为全库扫荡式时，候选集扩张但豁免面未同步——语义迁移放大了清单不一致的后果。
 
-排查结论：五处已全部对齐（含本轮补齐的两处），核心定义收敛于 `ArtifactStore.collectMutableReferenceUris`/`detachSettingsReferences`。守则：**引用面必须单一定义、多处引用；清理/回收语义放宽时，豁免面必须与候选集同步扩张。** 后续改进项：`AssistantBackgroundService` 与 `AssistantManagementService` 的引用检查应改为直接复用 `ArtifactStore` 的定义（或提取共享扩展函数），彻底消除手写清单。
+排查结论：当时已知的五处已对齐（含本轮补齐的两处），核心定义初步收敛于 `ArtifactStore.collectMutableReferenceUris`/`detachSettingsReferences`。守则：**引用面必须单一定义、多处引用；清理/回收语义放宽时，豁免面必须与候选集同步扩张。** §15 确认该收敛仍不完整：定义是 private，`AssistantBackgroundService`、`AssistantManagementService` 与 UI 清理路径仍有手写或绕过入口，必须在 V1C 物理删除。
 
 **共性教训**：三类模式的共同点是**重构保持编译兼容的适配方式（包协程、改派生写法、复制清单）让契约破损静默化**——编译通过、测试通过（测试矩阵本身按新契约写成）、仅真机特定交互序列暴露。后续同类规模重构应显式列出"隐式契约清单"（资源所有权、状态依赖体系、引用面事实）并逐项标注迁移方式，而非依赖调用点机械适配。
+
+---
+
+## 15. 当前实现全量收敛审计（2026-08-24）
+
+> 本章不是对 §14 三个现象的局部复盘，而是以 §2.1 分层、§2.2 不变式、§10 pre 缺口和 §11 V1 完成态为基准，对当前生产代码、调用链、失败路径与契约测试重新审计。结论以当前实现为准；本章列出的缺口全部进入 §16，禁止再标记为“可选优化”或“后续清理”。
+
+### 15.1 总体裁决
+
+V1 的核心方向成立，且不应回退：`ConversationSnapshot` 单事实流、纯 reducer、delta 持久化、Master/Target 共用 `TurnEngine`、执行事实驱动恢复、自引用 FK 与 Child 定点关系都为后续演进提供了正确地基。
+
+但“V1 已完成全部结构目标”的结论不再成立。当前实现仍混有三类未完成工作：
+
+1. **与目标直接冲突的实现偏离**：第二写入口、active/inactive 双写策略、unchecked 文件删除、恢复整对象白名单、UI 双状态形状。
+2. **原计划本身遗漏的正确性契约**：提交失败语义、流式并发与 stale turn 隔离、投影崩溃窗口、跨文件系统/数据库创建协议、GC 可达性原子判定。
+3. **为“固定文件数 / 负代码 / API 兼容”保留的结构债**：大类继续承担多个业务域、兼容转换扩散、旧命名与无效字段残留、契约测试只锁定符号而没有锁定语义。
+
+对 §14 三项问题的性质应明确区分：
+
+| 问题 | 直接性质 | 架构含义 |
+| --- | --- | --- |
+| A 剪裁后文件先删 | 实现/迁移 bug | suspend 化时没有把临时文件所有权写进接口和类型，原验收遗漏生命周期契约；不需要推翻 Runtime 方向，但必须以 OwnedArtifact 式所有权消除同类复发面 |
+| B GC 误删 Settings 引用 | 原方案缺口落成的实现缺陷 | GC 候选集扩大，却没有先建立全域可达性定义、唯一引用 owner 与原子 recheck；这是局部 Artifact 架构本身不完整，不是简单补一条 if 即可关闭 |
+| C 助手切换 UI 冻结 | 实现/迁移 bug | 错用 Compose/Flow 订阅语义是直接根因；同时 `Conversation` 兼容形状与 Snapshot 双消费让错误更容易发生，说明状态形状迁移仍未物理完成 |
+
+因此当前状态可作为继续收敛的基线，但不能作为架构封板状态。V1C 必须完成 §15.3 的全部关闭项后，才能重新声明“V1 完成”。
+
+### 15.2 已确认成立的地基
+
+| 能力 | 当前事实 | 裁决 |
+| --- | --- | --- |
+| Snapshot 唯一事实流 | `ConversationRuntime` 只暴露 `StateFlow<ConversationSnapshot>`，旧 `state/getConversationFlow` 已删除 | 保留 |
+| reducer 与 delta | `ConversationReducer` 为纯函数，未变节点引用稳定；`ConversationRepository.applyMutation` 按 dirty nodes 写入 | 保留 |
+| 生成提交协议 | Master/Target 都使用 `TurnEngine.start/onCheckpoint/bind` | 保留并加强事务与状态机 |
+| 恢复索引 | 非终态执行由 `turn_execution` 状态索引与关系列定点查询 | 保留 |
+| Child 关系 | v7 自引用 FK、`tool_execution.child_conversation_id` 已落地 | 保留并补强写入失败语义 |
+| 职责域拆出 | `GenerationSideEffects`、`SubAssistantRunGate`、`SubAssistantResultProjection` 已形成明确领域 | 保留，但移除门面穿透和重复基础设施 |
+
+### 15.3 未收敛项清单
+
+#### A. Runtime、状态与写入协议
+
+| ID | 当前实现 | 问题性质与后果 | V1C 关闭标准 |
+| --- | --- | --- | --- |
+| F-01 | `ConversationRuntimeRegistry.getOrCreateSession` 同步构造带默认 Assistant 的空 Conversation，随后 `initializeConversation` 再异步覆盖 | Snapshot 在初始化完成前不是事实，而是伪造占位；缺陷 C 的“首个 Assistant”现象即由此放大。不存在显式 Loading/Ready/Missing 状态 | Registry 只能发布已从 DB 装载或经显式 Create 创建的 Ready Runtime；加载期使用独立 readiness 状态，禁止伪造 Conversation |
+| F-02 | `ConversationRuntime.loadSnapshot(Conversation)` 是公开、无锁的整对象替换入口，并被初始化、附件 backfill、收藏投影、恢复和助手迁移共同调用 | 它是 `submit` 之外的第二写入口，可与 stream/command 竞态；还会无条件重置 `persistedState`。附件 backfill 调用后把未落库树误认作已持久化基线，违背“随 checkpoint 落库”的注释 | hydration 入口改为一次性、受 Registry 状态机约束的 `installLoadedSnapshot`；运行期结构变更一律走命令；附件 backfill 形成显式 durable command；收藏由独立 UI projection 合并 |
+| F-03 | `applyStreamingDelta` 使用 `_snapshot.value = _snapshot.value.copy(...)`，虽接收 turnId/messageId 却不校验当前 owner | read-modify-write 非原子，可与 `submit/loadSnapshot` 相互覆盖；旧 turn 的迟到 chunk 可重新占据 activeTurn | 由 `TurnHandle(epoch, turnId, assistantMessageId)` 独占更新；使用原子 `update` 并校验 handle；stale delta 必须是可观测的拒绝而非静默覆盖 |
+| F-04 | `submit` 对所有非流式命令统一清空 `activeTurn` | title/pin/folder/收藏等与生成正交的命令也会清空流式投影，下一 chunk 再重建，造成短暂数据面撕裂 | 只有匹配 TurnHandle 的 checkpoint/finalize 或明确冲突的树命令可以改变 activeTurn；Header 命令保持 activeTurn |
+| F-05 | `submit` 先发布 Snapshot，再 `runCatching` 持久化；失败仅置 `pendingPersist`，对调用方仍返回成功，重试依赖下一条命令 | “onCheckpoint 是 awaited durability boundary”实际不成立；无下一命令或进程退出时丢 durable state，UI 与上层副作用会基于未提交状态继续运行 | durable command 固定为 reduce → 同事务持久化 → publish；失败向调用方传播且不发布。允许先发布的仅有明确非 durable 的 streaming projection |
+| F-06 | ChatService 与 GenerationSideEffects 各有一份 `submitHeaderUpdate + fallback`；Runtime 不活跃时直接调用 Repository 窄列写 | 同一命令存在 active/inactive 两套实现，Registry 创建与 fallback 之间有竞态；updateAt、FTS、错误传播语义不一致 | 建立全局唯一 `ConversationCommandCoordinator`，按 conversationId 串行化 resident/non-resident 命令；Application/UI 不再判断 Runtime 是否存在，也不持有 fallback |
+| F-07 | 生产代码广泛调用 `ConversationSnapshot.toConversation()`；ChatList 同时接收 Conversation 与 Snapshot，ChatPage 对同一 flow 建立两次 collector | 兼容形状重新进入 Runtime、恢复、子助手和 UI；同屏可读到两个不同拍次，且流式期间重复 O(N) 投影 | 生产路径物理删除 `toConversation`；组件、selector、恢复纯函数直接使用 Snapshot/header/nodes；一个页面对同一 Snapshot 只订阅一次 |
+| F-08 | `ApplyStreamingDelta` 命令无调用方；`GenerationCommand/DomainCommand` 只作标签；`BeginTurn.fromNodeId/onStart` 未被 reducer 使用；Runtime Registry API 与大量局部变量仍使用 Session 命名 | 形成虚假语义和无意义兼容，违反产品词汇映射 | 无行为的命令/字段/标签删除或实现其不变式；`getSession/getOrCreateSession/...` 全部改为 Runtime 语义，契约测试禁止 Runtime 域出现旧 Session 命名 |
+
+#### B. Turn、执行事实与恢复
+
+| ID | 当前实现 | 问题性质与后果 | V1C 关闭标准 |
+| --- | --- | --- | --- |
+| F-09 | `TurnEngine.start` 先提交 `BeginTurn`，再提交空 `CommitCheckpoint(RUNNING)` | assistant 槽和 RUNNING 执行事实跨两个事务；进程死在中间会留下无执行事实的空槽，与原 `BeginTurn` 原子可见承诺冲突 | 合并为一个 `StartTurn` durable command，在同一事务写消息槽与 RUNNING turn fact，并一次发布 Snapshot |
+| F-10 | 每个 checkpoint 先查询旧 turn 以保留 createdAt，再以 `@Upsert` 覆盖整行；终态保护依赖 Runtime 内存集合 | 每 checkpoint 多一次读；迟到 RUNNING/STARTED 可覆盖 durable 终态；重启后内存保护消失 | DAO 使用 INSERT-ONCE + 合法状态 CAS；终态不可逆、重复终态幂等、非法回退返回明确冲突；删除 `finalizedTurns` 与 query-before-upsert |
+| F-11 | `DelegationCoordinator` 对 `reportChildConversation` 使用 `runCatching` 仅日志后继续运行 | 调用↔Child 的关键 durable 关系可能未写入，而 Target 已开始；崩溃恢复将失去定点链路 | Child 创建、tool execution STARTED 和 childConversationId 关系必须在 Target 启动前完成强制提交；失败则补偿 Child/附件并终止调用 |
+| F-12 | `FinishedReason?`、`TurnEvent.Finished(reason?, error?)`、`MasterTurnOutcome` 与 Target 自身映射并存 | null、error 与 reason 组合需要调用方二次解释，终态语义重复且可形成非法组合 | TurnEngine 输出非空 sealed `TurnOutcome`；Master/Target 只消费同一 outcome，状态/原因/异常映射只有一份 |
+| F-13 | `AssistantDataRecovery` 与 ChatService 分别触发 `recoverInterruptedRuns`/`recoverInterruptedTurns`，并维护 recoveryGate + turnRecoveryReady 两道门；异常多为记录日志后继续 Ready | 启动恢复不是单一入口且是 fail-open；恢复失败后仍允许写入，可把未收口事实继续复杂化 | 单一 `ApplicationRecoveryCoordinator` 按固定次序执行并暴露 Loading/Ready/Failed；写操作仅在 Ready 开放，Failed 可重试或进入安全模式 |
+| F-14 | `TurnRecovery` 同时承担启动恢复、被新 turn 取代时收口、普通 mutation 前清理、Child retention、工具行收口和大量纯投影 | “Recovery 唯一所有者”被扩大为杂项生命周期所有者；与 §11 原定 Child retention 属 Delegation 域的裁决偏离 | TurnRecovery 仅保留进程恢复；正常 supersede/finalize 归 TurnFinalization；Child retention/删除归 SubAssistantLifecycle；纯函数归对应 projection |
+| F-15 | `TurnRecovery.submitRecoveredTree` 在无 Runtime 时白名单调用 deprecated `updateConversation(Conversation)` | 整对象写白名单仍是第二协议；契约测试通过白名单固化了债务 | 恢复也走 `ConversationCommandCoordinator`/专用 recovery mutation；删除 deprecated API 与全部白名单 |
+| F-16 | `SubAssistantRunGate` 暴露 tryAcquire/release，正确性仍依赖 Coordinator 的手写 finally | 当前路径虽已集中，但所有权没有编码进 API，新调用方可再次漏 release | 提供 `withLease`/AutoCloseable 风格作用域 API，原始 release 私有化；取消、异常、materialize 失败全部由结构化作用域测试锁定 |
+
+#### C. Projection 与持久化一致性
+
+| ID | 当前实现 | 问题性质与后果 | V1C 关闭标准 |
+| --- | --- | --- | --- |
+| F-17 | `artifact_reference` 在 message/conversation 事务提交后执行 delete+insert | 进程可死在事实提交后、投影更新前，或死在投影 delete 后、insert 前；GC 会把 false-negative 当成无引用并删除事实文件 | 引用 token 在事务前计算，`message_node + artifact_reference + execution facts` 在同一 Room 事务提交；GC 只读取强一致引用 |
+| F-18 | `backfillReferences` 遇到 JSON 解析失败时跳过节点，最终仍写全局 backfill=true | 不完整投影被永久标记完成，随后 GC 可误删解析失败节点引用的文件 | 任一节点失败则整个 backfill 不置位并报告定位；采用事务或分片进度，完成后做全量一致性校验再开放 GC |
+| F-19 | FTS 在事实事务后 best-effort 更新；Runtime 的纯 title UpdateHeader 不调用 `updateConversationTitle`；FTS 更新自身吞异常 | 崩溃/异常产生永久 stale index；active 与 inactive title 路径结果不同 | node delta、delete、title/updateAt 投影与事实放进同一 DB 事务；若底层限制无法同事务，则使用 durable dirty journal 且恢复前完成，禁止裸 best-effort |
+| F-20 | Repository 仍公开整对象更新、header 窄列更新、执行事实直接更新等多种写原语；SingleWriterContractTest 只限制 DAO 所在文件 | “DAO 只有一个持有者”不等于“业务只有一个写协议”，Application 仍能选择任意语义 | Repository 写原语降为 internal 且只被 CommandCoordinator/Recovery/创建事务调用；契约测试检查调用图而非文件位置 |
+| F-21 | `updateChildRetention` 对 retained Child 删除整树再全量插入 | 长 Child 的 retention 成本随完整历史增长，重新引入整聚合写放大 | retention 产出 per-child delta，经同一 command/mutation 通道写入；复杂度与被裁剪节点数相关 |
+
+#### D. Artifact 所有权与生命周期
+
+| ID | 当前实现 | 问题性质与后果 | V1C 关闭标准 |
+| --- | --- | --- | --- |
+| F-22 | FilesManager 与 ArtifactStore 同时持有 ArtifactDAO；ManagedLocalArtifactStore 再包一层 FilesManager | “Artifact metadata 归 ArtifactStore”没有落实；所谓构造依赖成环被当成长期架构，而不是拆分低层 payload 能力 | 新设无 DAO 的 ArtifactPayloadStore；ArtifactStore 为 ArtifactDAO、创建、查询、引用、GC、删除的唯一所有者；FilesManager 只保留非托管 IO/导出 |
+| F-23 | `deleteChatFiles`、`deleteManagedFilePermanently`、`deleteManagedFolderPermanently` 为 unchecked 入口，UI、Coordinator、AttachmentResolver、ManagedLocalArtifactStore 可直接调用 | 绕过 CAS、Settings detach、引用检查与恢复协议；`deleteChatFiles` 还先删文件、异步删 DB | unchecked API 私有化到 ArtifactStore；调用方只能使用显式 `discardUnpublished`、`deleteUserRequested`、`collectGarbage` 三类有所有权语义的入口 |
+| F-24 | GC 直接筛选后调用 unchecked delete，不走 ACTIVE→DELETING；候选判断与新引用建立之间没有原子屏障 | 旧 artifact 可在检查后被新消息/Settings 引用，随后仍被删除；违反“所有破坏性操作 durable/幂等/可恢复” | GC 在统一生命周期锁/事务下重新验证全部 roots 并 CAS 到 DELETING；引用建立拒绝 DELETING artifact；删除恢复走同一状态机 |
+| F-25 | 文件先写最终路径、后插 artifact 行；进程死在中间会留下应用自己制造的 untracked 文件，启动只日志不处理 | “文件+记录原子、untracked 只来自外部”表述不成立 | 使用专用 staging 目录与 `CREATING→ACTIVE→DELETING` 状态；启动可判定地完成或回滚 CREATING，绝不产生无法归因的最终路径文件 |
+| F-26 | Settings 文件引用定义仍是 ArtifactStore private 函数；Background/Assistant 服务和多个 VM 继续手写引用判断或直接删除 | 第 14 节只对齐了当时已知清单，并未形成唯一 owner；新增字段仍会再次漏写 | 建立 ArtifactReferencePolicy/ArtifactSettingsCoordinator；所有头像/背景写入、替换、detach、inspect、GC、删助手共享同一实现与同一互斥边界；UI 不再清理文件 |
+| F-27 | 文件写入函数对单项失败多以 runCatching 返回空/部分列表；临时资源所有权靠注释和 finally 约定 | 缺陷 A 的静默失败模式仍可在新调用链复现；调用者无法区分空输入、部分成功和持久化失败 | 返回 typed per-item result/OwnedArtifact；所有权从 staging→created→published/rolledBack 由类型表达，禁止以空列表代表失败 |
+
+#### E. Application/UI 职责与效率
+
+| ID | 当前实现 | 问题性质与后果 | V1C 关闭标准 |
+| --- | --- | --- | --- |
+| F-28 | ChatService 仍持有生成、CRUD/fork、Runtime facade、错误总线、进程生命周期和二十项左右依赖，并在内部手工构造 GenerationSideEffects | 达到行数目标但没有达到“装配 + 副作用薄壳”；依赖和生命周期仍集中 | 拆为 MasterTurnCoordinator、ConversationApplicationService、GenerationSideEffects、ChatErrorStore；全部由 DI 注入；ChatService 删除或只保留无状态兼容期为零的 facade 后立即删除 |
+| F-29 | ChatVM/ChatDrawer/SubAssistantDetailVM 等直接依赖 ConversationRepository、FilesManager 或 ConversationRuntimeRegistry；ChatService 暴露 sideEffects/mcpManager 内部对象 | UI/Application 边界穿透，调用方可以绕开命令、生命周期和恢复门禁 | ViewModel 只依赖 Query/Command/Artifact use-case；Runtime Registry 与 Repository 不出 service/data 边界；禁止对象穿透式属性 |
+| F-30 | ChatPage 的 Conversation 派生、ChatList 的 Snapshot 渲染、SubAssistantDetail 的逐 chunk `toConversation` 同时存在 | 每个 chunk 可能发生多次 O(N) 浅投影/扫描，且不同 consumer 不保证同一拍次 | UI 以 Snapshot 或稳定 UiModel 为唯一输入；selector 对相关字段 `distinctUntilChanged`；每帧最多一次 renderNodes，无历史无关扫描 |
+
+#### F. 制度与验收
+
+| ID | 当前实现 | 问题性质与后果 | V1C 关闭标准 |
+| --- | --- | --- | --- |
+| F-31 | I1/I7 等 grep 契约只禁止少量旧符号，注释仍引用过期白名单；没有禁止 fallback、loadSnapshot、toConversation、unchecked delete 和 UI 直连 | 测试把“部分收敛”误认证为“完成”，甚至固化例外 | 重写架构契约测试，所有 §16.2 禁止项零命中；调用边界用编译可见性与依赖测试双重锁定 |
+| F-32 | 缺少 stream×command 竞态、stale turn、持久化失败、投影 crash point、GC×新引用、staging 恢复、recovery fail-closed 等测试 | 正常路径全绿无法证明生命周期与故障语义 | 增加确定性并发测试、每个事务边界 fault injection、process-death instrumentation 与恢复幂等测试 |
+| F-33 | Migration_6_7 仪器执行、§14 真机链路和 §6.3 性能基线仍没有完成证据 | 只能证明编译/JVM 结构，不能证明设备行为、迁移与量化效率 | V1C 交付前必须完成全量 JVM、Debug/Release、Lint、v5→最新 DB 仪器迁移、真机 UI 清单和固定数据集性能报告 |
+| F-34 | 固定“Runtime 5 文件”、主文件行数、净负代码被当作架构不变式 | 数量指标促使职责被塞进 TurnRecovery/ChatService，并为避免新增 owner 保留 DI 环和门面 | 废止数量型硬约束；允许为唯一职责新增对象。完成标准改为依赖方向、唯一 owner、无旁路、失败语义和验收证据 |
+
+### 15.4 根因归纳
+
+本轮未完成的根因不是“代码还不够少”，而是完成定义偏向静态形状：删除了旧类、减少了行数、grep 不到旧 API，就被视为切换完成；但资源所有权、事务原子性、并发 epoch、错误传播和跨存储恢复没有成为同等级验收项。
+
+V1C 必须采用相反的裁决顺序：
+
+1. 先确定事实 owner、事务边界和失败语义。
+2. 再确定调用方只能获得哪些能力，借助可见性和类型消灭旁路。
+3. 然后迁移所有消费方并物理删除旧符号。
+4. 最后以故障注入、进程死亡、真机和性能证据验收；行数只作观察值，不参与通过/失败裁决。
+
+---
+
+## 16. V1 Completion 阶段计划（V1C：架构封板）
+
+> 阶段定义：V1C 不是 V2 功能开发，而是把 pre/V1 已声明的架构目标真正完成。范围等于 §15.3 全部缺口；任何条目不得降级为 TODO、deprecated 转发、白名单、兼容 facade 或“后续优化”。如实施中发现同根因新路径，必须并入本阶段，不以原清单外为由排除。
+
+### 16.1 最终架构
+
+```text
+UI / ViewModel
+  ├─ ConversationQueryService / SubAssistantDetailReader
+  ├─ ConversationApplicationService（用户命令、创建、删除、fork）
+  └─ ArtifactUseCase（选择、发布、替换、显式删除）
+                    │
+Application Coordinators
+  ├─ ConversationCommandCoordinator（所有 resident/non-resident durable command 的唯一入口）
+  ├─ MasterTurnCoordinator
+  ├─ DelegationCoordinator（仅 active sub-assistant run）
+  ├─ SubAssistantLifecycle（lineage / retention / child delete）
+  ├─ TurnFinalization（正常 supersede/cancel）
+  ├─ TurnRecovery（仅进程恢复）
+  └─ ApplicationRecoveryCoordinator（唯一启动门禁）
+                    │
+Runtime / Domain
+  ├─ ConversationRuntime（Ready Snapshot + active TurnHandle + job/TTS runtime state）
+  ├─ ConversationReducer（Snapshot 纯函数）
+  ├─ TurnEngine（唯一生成提交与非空 TurnOutcome）
+  └─ ArtifactStore（artifact 与全部引用/生命周期的唯一 owner）
+                    │
+Data / Payload
+  ├─ ConversationRepository（internal persistence primitives）
+  ├─ Room transaction（message + execution facts + artifact refs + FTS）
+  ├─ ArtifactPayloadStore（纯磁盘，无 DAO）
+  └─ SettingsStore（artifact 字段经 ArtifactSettingsCoordinator 更新）
+```
+
+最终不变式：
+
+1. Ready Snapshot 才是事实；不存在默认 Assistant/空树伪造的可用 Conversation。
+2. 所有 durable Conversation 命令只经 `ConversationCommandCoordinator`；resident 与 non-resident 共享同一 reducer、事务和错误语义。
+3. durable command 必须持久化成功后发布；streaming 是唯一允许先发布且不落库的投影。
+4. 每个 turn 只有一个 TurnHandle；start/checkpoint/finalize 由 durable CAS 状态机约束，stale worker 无写权限。
+5. 会影响删除正确性的 projection 必须与事实同事务；不得让 eventually-consistent false-negative 驱动 GC。
+6. ArtifactStore 是 ArtifactDAO 与托管文件生命周期的唯一 owner；磁盘层不知道 metadata，UI 不知道删除协议。
+7. 启动恢复只有一个入口且 fail-closed；恢复失败时禁止继续 durable 写入。
+8. UI 只消费 Snapshot/UiModel 和 Application ports；不直连 Repository、Runtime Registry、FilesManager。
+9. 无 deprecated 转发、兼容白名单、双形状、unchecked destructive API、无意义旧命名或未使用协议字段。
+10. 完成由自动化故障测试、设备验收和性能证据共同证明，不由行数证明。
+
+### 16.2 必须物理消失的残留
+
+- 生产代码中的 `ConversationSnapshot.toConversation()`。
+- 运行期 `loadSnapshot(Conversation)`、`updateConversationState`、`updatePersistedConversation`。
+- `ConversationRepository.updateConversation` 及其恢复白名单。
+- ChatService/GenerationSideEffects 的 `submitHeaderUpdate(...fallback...)` 双实现。
+- Runtime Registry 的 `getSession/getOrCreateSession/getSessionsSnapshot` 等 Session 命名。
+- 无调用的 `ApplyStreamingDelta` command、无约束价值的 marker interface、未使用的 BeginTurn 字段。
+- `FilesManager` 对 ArtifactDAO 的依赖及 `deleteChatFiles/deleteManagedFilePermanently/deleteManagedFolderPermanently` 公共入口。
+- Assistant/Background/UI 中手写的 Settings artifact 引用清单和文件清理。
+- `TurnEvent.Finished(reason?, error?)`、独立 `MasterTurnOutcome` 与 null=某终态的约定。
+- UI/ViewModel 对 ConversationRepository、ConversationRuntimeRegistry、FilesManager 的架构域直连。
+- ChatList 的 Conversation + Snapshot 双参数及同页重复 Snapshot collector。
+- `finishInterruptedPendingTools` 等与实际语义不符的旧命名。
+- 架构测试中的任何白名单；导入/恢复改用显式专用 API，不借 deprecated 逃逸。
+
+### 16.3 工作流 Q：Runtime 权威与统一命令入口
+
+| # | 动作 | 交付 |
+| --- | --- | --- |
+| Q1 | 新建 | `ConversationCommandCoordinator`：conversationId keyed mutex；resident/non-resident 命令统一调度；HeaderCommand 可 O(1) 读取 header，TreeCommand 才加载 nodes |
+| Q2 | 重构 | Registry 引入 Loading/Ready/Missing/Failed 生命周期；只允许显式 create 或持久化 load 进入 Ready；全系 Session 命名改 Runtime |
+| Q3 | 改造 | durable 命令执行顺序固定为 reduce → 单事务 persist → publish；返回 typed success/conflict/failure，禁止吞异常 |
+| Q4 | 改造 | Runtime 只保留 committed Snapshot 和非 durable activeTurn；移除 repository nullable、pendingPersist 与“下一命令重试”协议 |
+| Q5 | 改造 | streaming 通过 TurnHandle + epoch 原子 update；Header 命令不清 activeTurn；树冲突命令显式取消/等待 active turn |
+| Q6 | 迁移 | attachment backfill 变为 durable `BackfillAttachmentRefs`；Favorite 通过 Favorite flow/UiProjection 合并，不改 durable Snapshot |
+| Q7 | 删除 | §16.2 中 Conversation 兼容转换、load/fallback/whole-write 残留 |
+
+### 16.4 工作流 R：Turn 原子协议与状态机
+
+| # | 动作 | 交付 |
+| --- | --- | --- |
+| R1 | 合并 | `StartTurn` 单命令、单事务写 assistant slot + RUNNING turn fact，返回唯一 TurnHandle |
+| R2 | 改造 | turn/tool DAO 使用 INSERT-ONCE + 合法状态 CAS；终态不可逆，重复请求幂等，非法回退可诊断 |
+| R3 | 删除 | 每 checkpoint 的 `getTurnExecution` 读与 Runtime `finalizedTurns` 集合 |
+| R4 | 强化 | Child 创建、tool STARTED、childConversationId 关系在 Target 启动前完成；失败执行附件/Child 补偿并返回 failed tool result |
+| R5 | 统一 | 非空 sealed `TurnOutcome` 作为 Master/Target/SideEffects 唯一终态；状态、reason、error 映射集中于 TurnEngine |
+| R6 | 结构化 | SubAssistantRunGate 提供 scoped lease；原始 release 私有化 |
+
+### 16.5 工作流 S：Projection 强一致
+
+| # | 动作 | 交付 |
+| --- | --- | --- |
+| S1 | 事务化 | 在进入 Room 事务前解析 changed node 的 artifact tokens；事务内同步 message_node 与 artifact_reference |
+| S2 | 事务化 | FTS node delta/delete/title/updateAt 与 Conversation mutation 同事务提交；删除吞异常的 best-effort 更新 |
+| S3 | 修复 | backfill 使用事务/分片进度；任一反序列化失败不置完成标记，并输出 conversationId/nodeId |
+| S4 | 校验 | 启动恢复包含 projection consistency check；支持全量重建后再开放 GC/search Ready |
+| S5 | 删除 | Repository 所有事务后 projection 手工调用和因此产生的 GC 空窗 |
+
+### 16.6 工作流 T：Artifact 唯一所有权与可恢复协议
+
+| # | 动作 | 交付 |
+| --- | --- | --- |
+| T1 | 拆底层 | `ArtifactPayloadStore` 只做 staging/write/rename/stat/delete，不持有 DAO；ArtifactStore 独占 ArtifactDAO |
+| T2 | Migration | 最新 schema 增加 CREATING 状态及必要索引；创建走 staging → CREATING row → atomic rename → ACTIVE，冷启动可完成或回滚 |
+| T3 | 统一删除 | 用户删除、GC、folder delete、创建补偿全部进入同一 CAS 状态机；仅 OwnedArtifact 可 discardUnpublished |
+| T4 | 收敛引用 | `ArtifactReferencePolicy` 定义 Settings roots；`ArtifactSettingsCoordinator` 串行化引用字段更新与 GC recheck |
+| T5 | 防竞态 | GC 在提交 DELETING 前重验消息/Settings roots；DELETING artifact 不允许建立新引用 |
+| T6 | 迁移调用方 | Avatar、Background、Attachment draft、Generated media、子助手附件与工具补偿全部改用 typed Artifact API |
+| T7 | 删除 | FilesManager metadata/unchecked delete、VM 文件清理、各服务手写引用清单、全库 Conversation 引用扫描 |
+
+### 16.7 工作流 U：Application 与 UI 边界
+
+| # | 动作 | 交付 |
+| --- | --- | --- |
+| U1 | 拆分 | ChatService 拆为 MasterTurnCoordinator、ConversationApplicationService、ChatErrorStore；GenerationSideEffects 由 DI 注入，不再作为属性穿透 |
+| U2 | 归位 | Child retention/lineage/delete 进入 SubAssistantLifecycle；正常 supersede/cancel 进入 TurnFinalization；TurnRecovery 只保留进程恢复 |
+| U3 | 查询门面 | 建立 ConversationQueryService/SubAssistantDetailReader，封装 persisted + resident 状态选择；ViewModel 不见 Registry/Repository |
+| U4 | UI 迁移 | ChatPage/ChatList/TTS/SubAssistantDetail 仅消费 Snapshot 或专用 UiModel；同一 flow 单订阅；相关字段 selector 使用 distinctUntilChanged |
+| U5 | 端口收口 | UI 文件选择、发布、替换、删除只调用 ArtifactUseCase；MCP 等依赖直接按领域接口注入，不经 ChatService 暴露内部对象 |
+| U6 | 命名清理 | 按产品语义统一 Runtime/Turn/Artifact/SubAssistantLifecycle 名称，删除旧注释和无行为兼容字段 |
+
+### 16.8 工作流 V：唯一启动恢复与失败可见
+
+| # | 动作 | 交付 |
+| --- | --- | --- |
+| V1 | 新建 | ApplicationRecoveryCoordinator：Settings ready → artifact staging/reconcile → projection backfill/check → turn/run recovery → pending assistant deletion |
+| V2 | 状态 | 暴露 Loading/Ready/Failed(error, retry)；所有 durable command 共享同一门禁，删除 recoveryGate + turnRecoveryReady 双门 |
+| V3 | 幂等 | 每个恢复步骤可重复；进程在任一步被杀后下次继续收敛，不覆盖更具体终态 |
+| V4 | 失败策略 | 数据完整性/投影/turn 恢复失败禁止进入 Ready；UI 显示可诊断状态，不以日志代替恢复 |
+
+### 16.9 工作流 W：效率封板
+
+| # | 目标 | 可执行判据 |
+| --- | --- | --- |
+| W1 | checkpoint 与历史解耦 | 每 checkpoint 零 turn 预读；DB 写入仅 changed nodes + 固定数量执行事实 |
+| W2 | 流式渲染 | Runtime delta O(1)；每个 UI frame 最多一次 renderNodes；无 `toConversation` 或历史全树 selector |
+| W3 | Header 命令 | non-resident title/pin/folder/assistant 更新 O(1)，不得为 Header 加载 message nodes |
+| W4 | 恢复 | 健康库零 Conversation 加载；恢复成本只与非终态 execution 数量相关 |
+| W5 | Artifact | GC 只扫描索引候选与明确 roots；无 Conversation JSON 全库扫描；创建/删除无 fire-and-forget DB 操作 |
+| W6 | Child retention | 写入量只与 retained/deleted delta 相关，不全量重写未变 Child 历史 |
+| W7 | 报告 | 固定 50/500/5000 会话与长会话数据集，提交前后 DB 操作数、字节数、p50/p95 和 Compose recomposition 结果；不得只给理论复杂度 |
+
+### 16.10 工作流 X：契约、故障与设备测试
+
+| # | 测试层 | 必须覆盖 |
+| --- | --- | --- |
+| X1 | 静态契约 | §16.2 禁止项零命中；UI→Repository/Registry/FilesManager、ArtifactDAO 多 owner、unchecked delete、fallback、deprecated 白名单均编译或测试失败 |
+| X2 | Runtime 并发 | stream×Header、stream×tree mutation、旧 turn×新 turn、load×submit、100 并发 command；无丢失、无 activeTurn 误清、stale 全拒绝 |
+| X3 | Durability fault injection | StartTurn、checkpoint、finalize、Child relation、message/ref/FTS 事务每个边界注入失败；失败不发布，重试幂等，终态不回退 |
+| X4 | Artifact fault injection | staging 各死亡点、Settings 引用并发、GC×新消息引用、GC×头像替换、folder delete 中断、backfill 单节点损坏 |
+| X5 | Recovery | 每个步骤 kill/restart；Recovery Failed 阻断写入；retry 后唯一收敛；Master/Child/tool 双侧无悬挂 |
+| X6 | Migration | v5→最新、v6→最新、v7→最新与 fresh schema 同构；FK/索引/state 数据保全；`foreign_key_check` 为空 |
+| X7 | UI 自动化 | Flow→Compose 订阅、助手切换、生成中 title/folder 更新、SubAssistantDetail 流式更新、裁剪成功/失败与错误提示 |
+| X8 | 真机 | 助手/用户头像、关闭跳过剪裁后的相册与拍照、后台/杀进程恢复、删除/GC、主/子生成与 ask_user、数据库迁移 |
+
+### 16.11 工作流 Y：删除、文档与最终验收
+
+执行顺序：禁止项清单先加入测试并临时记录命中基线；各工作流迁移后逐项降为零，最后物理删除测试白名单本身。不得以 deprecated、typealias、转发 facade 或“仅内部使用”保留旧协议。
+
+缺口到交付项的闭环映射如下；任何工作流调整都必须同步更新此表，禁止出现只有问题描述、没有 owner 和验收入口的条目：
+
+| 缺口 | 负责交付项 |
+| --- | --- |
+| F-01–F-08 Runtime/状态 | F-01→Q2；F-02→Q2/Q6/Q7；F-03/F-04→Q5；F-05→Q3/Q4；F-06→Q1；F-07→Q7/U4；F-08→Q2/U6/Y |
+| F-09–F-16 Turn/恢复 | F-09→R1；F-10→R2/R3；F-11→R4；F-12→R5；F-13→V1–V4；F-14→U2/V1；F-15→Q1/Q7/U2；F-16→R6 |
+| F-17–F-21 Projection | F-17→S1；F-18→S3/S4；F-19→S2；F-20→Q1/S5/X1；F-21→U2/W6 |
+| F-22–F-27 Artifact | F-22→T1；F-23→T3/T7；F-24→T4/T5；F-25→T2；F-26→T4/T6/T7；F-27→T2/T3/T6 |
+| F-28–F-30 Application/UI | F-28→U1；F-29→U3/U5；F-30→U4/W2 |
+| F-31–F-34 制度/验收 | F-31→X1/Y；F-32→X2–X5；F-33→W7/X6–X8/Y；F-34→§16 总体约束/Y |
+
+最终验收必须同时满足：
+
+1. §15.3 F-01–F-34 全部有对应实现提交、测试和证据，状态全部关闭。
+2. §16.1 十条不变式全部由测试或类型/可见性结构保证。
+3. §16.2 所有残留在生产代码零命中；无新增 TODO/FIXME/兼容白名单。
+4. 全量 JVM 测试通过；Debug/Release 构建、Lint、全部 migration instrumentation 与 connected device 测试通过。
+5. §16.9 性能报告齐全且不存在随历史规模增长的已禁止路径。
+6. §16.10 真机清单逐项记录设备、系统版本、步骤和结果；构建成功不得替代 UI/设备验收。
+7. `docs/references/`、AGENTS.md 与实际类名/调用链一致；本计划最终补写实施落点，不保留“待后续”。
+8. `git diff --check` 通过，工作区变更全集已审查；版本号与 changelog 仅在用户明确授权时变更。
+
+### 16.12 依赖与实施顺序
+
+```text
+Q Runtime/Command ─────► R Turn state machine ──┐
+        │                                        │
+        ├──────────────► S Projection ───────────┼──► V Recovery ──► X Tests ──► Y Final
+        │                                        │
+        └──────────────► U App/UI ───────────────┤
+T Artifact ──────────────────────────────────────┘
+
+W Performance：从 Q/T 开始记录基线，U/S 完成后封板
+```
+
+阶段内允许 Q/S/T 为正确 owner 新增必要组件和最新 schema migration；禁止再用固定文件数或净行数否决结构性必需对象。任何临时桥接必须与其删除在同一工作流、同一合并批次完成，主分支不得出现“新旧协议长期并存”的中间完成态。
