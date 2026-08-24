@@ -18,6 +18,7 @@ import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationReducer
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ReconcileOrphanedTurnExecution
 import net.weero.measix.pilot.service.runtime.RecoverInterruptedTurn
 import net.weero.measix.pilot.service.runtime.ReplaceMessageTree
 import net.weero.measix.pilot.service.runtime.toSnapshot
@@ -135,17 +136,19 @@ class TurnRecovery(
                 "master recovery query returned child conversation $conversationId"
             }
             val runtime = commandCoordinator.load(conversationId)
-            executions.forEach { execution ->
+            executions.forEach executionLoop@{ execution ->
                 val turnId = Uuid.parse(execution.turnId)
-                val assistantMessageId = Uuid.parse(
-                    requireNotNull(execution.assistantMessageId) {
-                        "non-terminal turn ${execution.turnId} has no assistant message id"
-                    }
-                )
+                val assistantMessageId = execution.assistantMessageId?.let(Uuid::parse)
                 // 后续 execution 复用 Runtime 状态（上一恢复命令已更新树）。
                 var snapshot = runtime.snapshot.value
-                val located = requireNotNull(snapshot.locateAssistant(assistantMessageId)) {
-                    "non-terminal turn ${execution.turnId} has no owning assistant message $assistantMessageId"
+                val located = assistantMessageId?.let(snapshot::locateAssistant)
+                if (located == null) {
+                    reconcileOrphanedTurnExecution(
+                        conversationId = conversationId,
+                        turnId = turnId,
+                        assistantMessageId = assistantMessageId,
+                    )
+                    return@executionLoop
                 }
                 val startedTools = conversationRepo.getToolExecutions(execution.turnId)
                     .filter { it.status == ToolExecutionStatus.STARTED }
@@ -219,16 +222,19 @@ class TurnRecovery(
                     it.status == TurnExecutionStatus.CREATED ||
                     it.status == TurnExecutionStatus.AWAITING_APPROVAL
             }
-            .forEach { execution ->
+            .forEach executionLoop@{ execution ->
                 val turnId = Uuid.parse(execution.turnId)
-                val assistantMessageId = Uuid.parse(
-                    requireNotNull(execution.assistantMessageId) {
-                        "non-terminal child turn ${execution.turnId} has no assistant message id"
-                    }
-                )
-                val (_, message) = requireNotNull(snapshot.locateAssistant(assistantMessageId)) {
-                    "non-terminal child turn ${execution.turnId} has no owning assistant message $assistantMessageId"
+                val assistantMessageId = execution.assistantMessageId?.let(Uuid::parse)
+                val located = assistantMessageId?.let(snapshot::locateAssistant)
+                if (located == null) {
+                    reconcileOrphanedTurnExecution(
+                        conversationId = childId,
+                        turnId = turnId,
+                        assistantMessageId = assistantMessageId,
+                    )
+                    return@executionLoop
                 }
+                val (_, message) = located
                 val startedTools = conversationRepo.getToolExecutions(execution.turnId)
                     .filter { it.status == ToolExecutionStatus.STARTED }
                 val messageTools = message.getTools()
@@ -261,6 +267,21 @@ class TurnRecovery(
                 )
                 snapshot = ConversationReducer.reduce(snapshot, recoverCommand)
             }
+    }
+
+    private suspend fun reconcileOrphanedTurnExecution(
+        conversationId: Uuid,
+        turnId: Uuid,
+        assistantMessageId: Uuid?,
+    ) {
+        commandCoordinator.executeRecovery(
+            conversationId,
+            ReconcileOrphanedTurnExecution(
+                turnId = turnId,
+                assistantMessageId = assistantMessageId,
+                terminalReason = TurnTerminalReasons.OWNER_MESSAGE_MISSING,
+            ),
+        )
     }
 
 }

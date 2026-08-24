@@ -301,6 +301,28 @@ class ConversationReducerTest {
     }
 
     @Test
+    fun `orphaned execution recovery refuses to close a turn whose assistant message still exists`() {
+        val conversationId = Uuid.random()
+        val assistantId = Uuid.random()
+        val snapshot = Conversation.ofId(conversationId).copy(
+            messageNodes = listOf(MessageNode.of(assistant(assistantId))),
+        ).toSnapshot()
+
+        val failure = runCatching {
+            ConversationReducer.reduce(
+                snapshot,
+                ReconcileOrphanedTurnExecution(
+                    turnId = Uuid.random(),
+                    assistantMessageId = assistantId,
+                    terminalReason = "owner_message_missing",
+                ),
+            )
+        }.exceptionOrNull()
+
+        assertTrue(failure is IllegalArgumentException)
+    }
+
+    @Test
     fun `updateToolApproval marks tool approval`() {
         val assistantId = Uuid.random()
         val tool = UIMessagePart.Tool(

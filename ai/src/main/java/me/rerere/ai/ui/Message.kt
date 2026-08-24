@@ -485,6 +485,7 @@ object TurnTerminalReasons {
     const val TOOL_LOOP_LIMIT = "tool_loop_limit"
     const val INTERACTION_LIMIT = "interaction_limit"
     const val PROCESS_RESTARTED = "process_restarted"
+    const val OWNER_MESSAGE_MISSING = "owner_message_missing"
 }
 
 fun partsContainBase64(parts: List<UIMessagePart>): Boolean = parts.any { part ->

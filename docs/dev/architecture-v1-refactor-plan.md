@@ -2121,7 +2121,7 @@ Room schema 升至 v8 只增加 Artifact 恢复协议所需的 `payload_token`�
 - Projection/装载：changed-node FTS 与 artifact refs 同事务，删除与 title/updateAt 同事务，backfill 节点损坏不置完成，健康库恢复不加载 Conversation aggregate。MessageNode payload 通过有界 Unicode slice 完整重组；缺片、长度不符或 JSON 损坏直接使 Runtime 进入 Failed，禁止跳页后发布不完整 Ready 聚合。
 - Artifact：staging/rename/row 各死亡点、创建补偿、删除状态回滚、Settings detach 失败、GC×发布锁、folder delete、20 路并发显式删除只执行一次 payload 删除、生成媒体提交点取消与 deletion tombstone 恢复、背景替换补偿、fork/Child/工具/MCP/Workspace/base64 产物所有权回传。UI/read port 只查询 ACTIVE；CREATING/DELETING 只对 lifecycle/recovery 可见。启动恢复遇到 ACTIVE 元数据有 durable root 但 payload 缺失时失败关闭并保留证据，只有确认无消息与 Settings root 的孤儿才可清理。
 - Child materialization：文本模型仍持久化已解析图片 parts，task message id 与 metadata link 一致；resolver 失败不创建 Child，Child 创建或关系 checkpoint 失败精确删除未关联 Child 并回滚本批 artifact。
-- Recovery：child-first、tool STARTED→UNKNOWN、损坏 turn UUID、仅 Child 非终态、重复恢复、Failed 门禁与 retry 收敛。
+- Recovery：child-first、tool STARTED→UNKNOWN、损坏 turn UUID、仅 Child 非终态、重复恢复、Failed 门禁与 retry 收敛；旧版本遗留的 owning message 缺失执行事实经专用 command 原子终结，不改写会话树，也不把可修复的执行索引残留升级为全应用恢复失败。
 - Migration：历史 migration 全链、v5/v6/v7→v8、fresh v8 schema 同构、数据保全、外键检查为空。
 - 静态契约：旧类与旧方法、UI→Repository/Registry/FilesManager、ArtifactDAO 多 owner、service locator、生产代码计划词汇、Runtime 装载旁路与可选工具资源所有权均以测试阻止回归；MCP OAuth 的 suspend `runCatching` 分支强制传播 cancellation。
 - 工具装配与查询：Assistant tool 构造不允许可空 Coordinator/Factory；Conversation tools 禁止 Repository import；最近会话查询测试锁定零 message-node 加载。
@@ -2150,7 +2150,7 @@ Android Compose instrumentation 使用 5,000-node snapshot 验证：生成中的
 
 | 验证 | 结果 |
 | --- | --- |
-| 全模块 JVM test | 通过；1,404 tests，0 failure，0 error；9 个 skipped case |
+| 全模块 JVM test | 通过；1,408 tests，0 failure，0 error；9 个 skipped case |
 | Android instrumentation | Pixel 10 Pro Fold AVD、Android 17/API 37；全模块 61 tests，0 skipped，0 failure，0 error；其中 app 架构/迁移/UI 套件 48 tests |
 | Debug APK | assembleDebug 通过；arm64-v8a、x86_64 与 universal artifact 生成 |
 | Android Lint | lintDebug 全模块通过；动态配色 API 守卫、附件检查 locale 缺失与查看器确认文案的配置感知资源读取均已从源头修复，无 baseline/suppress |
@@ -2160,3 +2160,5 @@ Android Compose instrumentation 使用 5,000-node snapshot 验证：生成中的
 | 版本边界 | app/build.gradle.kts 无版本 diff，changelog 未新增版本 |
 
 代码架构与自动化验证已收口，但 §16.10 的 X8 明确要求真机，不允许用 AVD 代替。本次环境的 ADB 只有 emulator-5554，没有物理设备，因此当前不能把“V1C 最终发布验收 100%”写成已完成。接入真机后必须按 X8 原清单逐项记录设备型号、系统版本、数据库来源和结果；该项是外部发布证据缺口，不对应任何兼容代码、临时实现或待偿还架构债。
+
+2026-08-25 的真实增量安装发现：旧 0.0.18 数据可能遗留一个非终态 turn，其 owning Assistant 消息已被旧流程删除或替换。严格恢复门禁原先将该执行索引残留判为全应用恢复失败。当前实现新增 `ReconcileOrphanedTurnExecution` 专用命令，在不改写会话树的前提下原子收口 turn/tool 事实；消息载荷损坏仍保持 fail-closed。修复包仍需在产生该现场数据的真机上完成覆盖安装复验。

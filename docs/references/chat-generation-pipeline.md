@@ -136,6 +136,7 @@ projection → Child run recovery → Master turn recovery → pending assistant
 durable command 继续被 `ApplicationRecoveryGate` 阻断；`retry()` 重新执行同一幂等顺序。
 
 恢复查询只读取非终态 execution 索引。Child/tool 先收口，再提交 owning turn 终态；健康数据库不加载 Conversation 树。
+旧版本遗留的非终态 execution 若已失去 owning Assistant 消息，则通过专用 recovery command 只收口 turn/tool 事实并保留会话树；真正的消息载荷损坏仍保持 fail-closed。
 正常 supersede/cancel 属于 `TurnFinalization`，Child lineage/retention/delete 属于 `SubAssistantLifecycle`，
 `TurnRecovery` 只负责进程恢复。
 

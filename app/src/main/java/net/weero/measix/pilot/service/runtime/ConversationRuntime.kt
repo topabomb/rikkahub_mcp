@@ -129,6 +129,7 @@ class ConversationRuntime(
                 -> reduced.copy(activeTurn = old.activeTurn)
                 is FinalizeTurn,
                 is RecoverInterruptedTurn,
+                is ReconcileOrphanedTurnExecution,
                 -> reduced.copy(activeTurn = null)
                 else -> reduced.copy(activeTurn = null)
             }
@@ -191,7 +192,9 @@ class ConversationRuntime(
             is MoveToAssistant -> Unit
             TogglePinned -> Unit
             is UpdateToolApproval -> Unit
-            is RecoverInterruptedTurn -> if (snapshot.activeTurn != null) {
+            is RecoverInterruptedTurn,
+            is ReconcileOrphanedTurnExecution,
+            -> if (snapshot.activeTurn != null) {
                 throw ConversationCommandConflictException("recovery cannot overwrite an active turn")
             }
             else -> if (snapshot.activeTurn != null) {

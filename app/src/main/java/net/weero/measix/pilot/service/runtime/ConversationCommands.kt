@@ -55,6 +55,16 @@ data class RecoverInterruptedTurn(
     val closeInterruptedTools: Boolean,
 ) : ConversationCommand
 
+/**
+ * Closes an execution fact left by an older release whose owning Assistant message no longer exists.
+ * The Conversation tree is deliberately unchanged; only the turn/tool facts advance to terminal states.
+ */
+data class ReconcileOrphanedTurnExecution(
+    val turnId: Uuid,
+    val assistantMessageId: Uuid?,
+    val terminalReason: String,
+) : ConversationCommand
+
 /** 追加用户消息（sendMessage 的 append 段） */
 data class AppendUserMessage(val message: UIMessage) : ConversationCommand
 
@@ -184,6 +194,7 @@ internal object ConversationMutationBuilder {
             is FinalizeTurn,
             is AppendUserMessage,
             -> listOf(maxOf(old.nodes.lastIndex, new.nodes.lastIndex)).filter { it >= 0 }
+            is ReconcileOrphanedTurnExecution,
             is UpdateHeader,
             is MoveToAssistant,
             TogglePinned,

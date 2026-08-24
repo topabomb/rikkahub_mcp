@@ -300,6 +300,17 @@ class ConversationCommandCoordinator(
                 toolExecution = null,
                 turnOperation = TurnExecutionOperation.RECOVER,
             )
+            is ReconcileOrphanedTurnExecution -> ExecutionFacts(
+                turn = buildTurn(
+                    old.conversationId,
+                    command.turnId,
+                    TurnExecutionStatus.INTERRUPTED,
+                    command.terminalReason,
+                    command.assistantMessageId,
+                ),
+                toolExecution = null,
+                turnOperation = TurnExecutionOperation.RECOVER,
+            )
             else -> null
         }
         if (mutation.hasChanges() || facts != null) repository.applyMutation(mutation, facts)
@@ -333,13 +344,13 @@ class ConversationCommandCoordinator(
         turnId: Uuid,
         status: TurnExecutionStatus,
         reason: String?,
-        assistantMessageId: Uuid,
+        assistantMessageId: Uuid?,
     ): TurnExecutionEntity {
         val now = nowMillis()
         return TurnExecutionEntity(
             turnId = turnId.toString(),
             conversationId = conversationId.toString(),
-            assistantMessageId = assistantMessageId.toString(),
+            assistantMessageId = assistantMessageId?.toString(),
             status = status,
             reason = reason,
             createdAt = now,

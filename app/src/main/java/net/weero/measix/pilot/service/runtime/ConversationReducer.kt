@@ -30,6 +30,7 @@ internal object ConversationReducer {
         is CommitCheckpoint -> replaceMessages(current, command.handle.assistantMessageId, command.messages)
         is FinalizeTurn -> finalizeTurn(current, command)
         is RecoverInterruptedTurn -> recoverInterruptedTurn(current, command)
+        is ReconcileOrphanedTurnExecution -> reconcileOrphanedTurnExecution(current, command)
         is AppendUserMessage -> appendUser(current, command.message)
         is EditMessageVariant -> editVariant(current, command)
         is DeleteMessage -> deleteMessage(current, command)
@@ -119,6 +120,20 @@ internal object ConversationReducer {
             result = result.closePendingTools(command.assistantMessageId, cancelledByUser = false)
         }
         return result
+    }
+
+    private fun reconcileOrphanedTurnExecution(
+        current: ConversationSnapshot,
+        command: ReconcileOrphanedTurnExecution,
+    ): ConversationSnapshot {
+        require(
+            command.assistantMessageId == null ||
+                current.findMessage(command.assistantMessageId) == null
+        ) {
+            "Orphan reconciliation cannot close an execution that still owns a message: " +
+                command.assistantMessageId
+        }
+        return current
     }
 
     private fun ConversationSnapshot.finishReasoning(messageId: Uuid): ConversationSnapshot {

@@ -194,7 +194,10 @@ Schema 见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and
 | 重启时状态 | 恢复动作 | 默认失败原因 |
 |-----------|----------|--------------|
 | Turn 为 `CREATED` / `RUNNING` | 置 `INTERRUPTED`，工具占位按中断渲染 | `process_restarted` |
+| 旧版本非终态 Turn 的 owning Assistant 消息已不存在 | 保留会话树，仅将 Turn 置 `INTERRUPTED`，其 `STARTED` 工具置 `UNKNOWN` | `owner_message_missing` |
 | Tool 为 `STARTED` | 置 `UNKNOWN`（副作用可能已发生，结果不可判定，禁止标记为成功或失败） | — |
+
+owning message 缺失只用于收口旧版本已失去 UI owner 的执行事实，不代表允许忽略消息载荷损坏。消息分片缺失、长度不符或 JSON 损坏仍使恢复进入 `Failed`，不得发布不完整会话。
 
 ### 7.2 回放安全
 
