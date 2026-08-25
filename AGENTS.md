@@ -1,6 +1,6 @@
 # Repository Guide
 
-本文件是仓库级执行规则和导航入口。代码与静态契约测试是实现事实，`docs/references/` 是当前架构参考。
+代码与静态契约测试是实现事实，`docs/references/` 是当前架构参考。
 发生冲突时先核对代码，并在同一变更中修正文档；禁止以兼容层掩盖不一致。
 
 ## Commands and Verification
@@ -100,12 +100,11 @@
 
 - `docs/references/` 只描述当前实现。行为、owner、协议或边界变化时同步修改对应参考；不用行号、行数或易失计数定位，
   使用类、函数、常量和真实工具注册名，代码片段必须忠实反映实际声明。
-- `docs/dev/changelog.md` 记录版本内容。只有用户明确要求发布版本时，才在顶部新增版本条目并同步修改
+- `docs/dev/changelog.md` 记录版本内容。只有用户明确要求发布版本时，才在顶部新增版本条目并同步修改。维护内容是用精简的人类友好的语言介绍变更，不要过多技术细节和冗长内容。
   `app/build.gradle.kts` 的 `versionCode`/`versionName`；默认保持不变。
-- `docs/dev/upstream-sync.md` 是上游同步总账。每次同步都先 fetch，按上一批冻结点续查，并追加本批摘要。
+- `docs/dev/upstream-sync.md` 是上游同步总账，其中包括了工作流说明和方法论，执行同步时注意架构的变迁，引入上游变更要合理整合到本项目架构。每次同步都先 fetch，按上一批冻结点续查，并追加本批摘要。
 
-`docs/dev/` 为开发过程文档：`original-architecture.md` 是冻结归档；其余调研、方案和历史记录按需查阅，
-不作为当前实现的权威依据。不要把阶段计划、临时审计结论或迁移过程术语写进生产代码注释。
+`docs/dev/` 为开发过程文档：`original-architecture.md`、`docs\dev\fork-simplification-plan.md`是冻结归档；其余调研、方案和历史记录按需查阅。不要把阶段计划、临时结论或迁移过程术语写进代码注释。
 
 ## Code and Localization Conventions
 
@@ -115,4 +114,4 @@
 - 正常用户可见字符串必须同步 `values`、`values-zh`、`values-ja`、`values-ko-rKR`、`values-ru`。
   底层英文诊断 reason/detail 可只放源语言。Compose 使用 `stringResource`，非 Composable 使用 `Context.getString`。
 - 变更必须完整、清晰、可验证。文件或概念命名不再符合唯一语义时直接改名；删除无调用代码、重复 owner、
-  临时桥和过期注释，不采用“最小改动”保留架构债。
+- 禁止“最小改动”或“影响面小”的理由以打补丁或者会造成歧义的方式实现，禁止保留架构债。
