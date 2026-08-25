@@ -6,45 +6,35 @@
 
 ---
 
-## 0.0.18（versionCode 18）— 2026-08-23
-
-### 收口（pre1）
-
-- `TurnEngine.bind` 自身提交 `FinalizeTurn`：删除 `handleMessageComplete` / `finalizeMasterTurn` 第二套终态落库；Master `launchRun` 与 Target `runTargetGeneration` 共用 chunk → `applyStreamingDelta` / checkpoint → `CommitCheckpoint` / 终态 → `FinalizeTurn`
-- `ConversationMutation.upsertedNodeIndices`：delta 按**新树** `node_index` 写入，禁止把变更子集下标写成 `0..k`
-- `FinalizeTurn` 只收口 `finishedAt == null` 的 reasoning，历史节点保持结构共享
-- Target 在 `bind` 前 `BeginTurn`，流式 overlay 落在 assistant 槽而不是 USER 任务节点
-- `finishInterruptedPendingTools` 仅在上一 turn 未终态且仍有未执行工具时提交 `FinalizeTurn(INTERRUPTED)`
-- 计划文档新增 §9，同步上述相对草图的约定变更
+## 0.0.18（versionCode 18）— 2026-08-23 ~ 2026-08-25
 
 ### 新增
 
-- Runtime Core：`ConversationRuntime`（原 `ConversationSession`）+ 单写 `submit` 命令通道 + `ConversationReducer` 纯函数（structural sharing），所有结构性修改经唯一入口落库
-- 数据库 v6（`Migration_5_6`）：`managed_files` 表改名 `artifact`（索引随表迁移），新增 `artifact_reference`（双 FK 级联）与 `system_meta`；`ArtifactState` 状态机（ACTIVE / DELETING）
-- `ArtifactStore`（合并 `ManagedFileDeletionService` + `FilesRepository`）：CAS 幂等删除、引用投影维护、启动 reconcile（无补录，修复"删除文件重启复活"）、孤儿 GC
-- 持久化收敛：`ConversationRepository.applyMutation` delta 写入（只写变更节点，消除写放大）+ `ExecutionFacts` 同事务落库 + FTS 增量 `reindexNodes`/`deleteNodesIndex`
-- `TurnEngine`（提交协议唯一实现）+ `TurnPipelineFactory`（Master/Target 共用管道装配）：Master 与 Target 生成 chunk → 流式投影（永不落库）、checkpoint → CommitCheckpoint（delta + turn/tool 事实同事务）、终态 → FinalizeTurn 命令收口，消除 ChatService/Coordinator 双轨 collect
-- `StreamingMessageTransformer` 单消息流式双通道（`transformStreaming` / `onStreamingFinish`）：流式期间只变换最后一条消息，历史消息 immutable（5000 chunk 零次进入，契约测试 I5）
-- 契约测试：I2 `CheckpointWriteAmplificationTest`（写放大守护）、I4 `DestructiveIdempotencyTest`（并发删除恰好一次）、I1 `SingleWriterContractTest`（message tree 单写）、I3 `FolderOwnershipTest`（folder 窄列不覆盖）、I6 `FtsDeltaScopeTest`（FTS 增量范围）、I5 `StreamingTransformScopeTest`（流式单消息通道）
-- 用例补全：ArtifactStore BF1~BF5（引用回填）/RS1~RS5（启动恢复）、`MessageFtsManagerIncrementalTest` F-1~F-4（FTS 增量投影）、`applyMutation` C-4~C-8（事务回滚/替换语义/fork 引用登记）
+- 会话 Runtime Core：`ConversationRuntime`、`ConversationReducer`、`ConversationCommandCoordinator` 与 `TurnEngine` 形成唯一命令、快照、流式投影和终态提交链；新聊天以非持久化 Draft 开始，首条消息单事务建库并晋升 Ready
+- Artifact 领域模型：数据库 v6 将 `managed_files` 收敛为 `artifact`，增加引用投影、来源和生命周期状态；`ArtifactStore` 统一负责登记、发布、引用、删除、恢复与孤儿 GC
+- typed 工具阶段：从调用参数流入、就绪、等待审批、执行到终态均有明确投影；工具卡从首个 delta 起可查看，文生图可显示排队、生成、保存和设置背景子阶段
+- `AttachmentReferenceLookup` 统一直接附件与子助手交付物索引；执行解析和 UI 缩略图共用同一 `attachment:<uuid>` 语义
+- `ConversationTitleCoordinator` 统一本地标题、模型生成、手动修改、去重、有限重试与 expected-title CAS
+- 单写、写放大、结构共享、FTS 增量、恢复、并发删除、Artifact 引用与审批继续等架构契约及回归测试
 
 ### 变更
 
-- `ManagedFileEntity`→`ArtifactEntity`、`ManagedFileDAO`→`ArtifactDAO`、`ConversationSessionRegistry`→`ConversationRuntimeRegistry`、`SubAssistantCoordinator`→`DelegationCoordinator`
-- 生成链路全面命令化：`sendMessage` → `AppendUserMessage`；turn 开始 → `BeginTurn` + RUNNING turn 事实；checkpoint → `CommitCheckpoint`（delta 落库）；终态 → `FinalizeTurn`（消息分发 + finishReasoning + markAssistantTerminal + turn 事实）；HITL 审批 → `UpdateToolApproval`；崩溃恢复 → `FinalizeTurn(INTERRUPTED)`
-- 外围写路径全面命令化（§4.1.6 矩阵收尾）：`editMessage`→`EditMessageVariant`、`selectMessageNode`→`SelectNodeVariant`、`deleteMessage`→`DeleteMessage`、`regenerateAtMessage`→`TruncateToNodeIndex`/`ReplaceMessageTree`、`compressConversation`→`ReplaceMessageTree`+GC、标题/建议/置顶/文件夹/助手迁移→`UpdateHeader`、ask_user 桥接→`CommitCheckpoint(AWAITING_APPROVAL)`+`UpdateToolApproval(Answered)`、reuseChild→`AppendUserMessage`
-- 删除 ChatService 全部整对象回写路径：`saveConversation`/`persistLoadedConversation`/`updateConversation`(私有)/`mergeSessionConversation`/`updateCurrentToolApproval`/`buildConversationAfterMessageDelete`；`updatePersistedConversation` 收敛为窄列写；`updateConversationState` 限缩为 @Transient 投影修正（isFavorite）
-- Runtime legacy 层移除（B3）：`persistMutex`/`stateRevision`/`persistedRevision`/`withPersistLock` 由 `commandMutex` 吸收；"内存领先于 DB"由持久化失败标记 `pendingPersist` 承载
-- ConversationRepository 删除旧路径（附录 A 第 2 组）：`updateConversationTree`/`checkpointConversation`/`checkpointTurn`/`finalizeTurn`/`deleteUnreferencedChatFiles`/`findUnshared*`/`fileReferenceTokensFor`/`persistGenerationCheckpoint`/`commitTurnCheckpoint`；新增 `updateChildRetention`（children 收缩事务）与 `finalizeRunningTurnsOfConversation`（Child turn 收口）
-- 引用投影覆盖 metadata 引用（§4.1.5）：`syncReferences`/`backfillReferences` 的 token 集合从 URL 扩展到 `collectFileReferenceTokens`（URL + Tool.metadata LocalArtifactRef 相对路径），metadata-only 引用（generate_image artifact）阻止 GC 回收
-- Master 全库恢复扫描过滤 Child 会话 turn（修订记录 6）；Child turn 由 `DelegationCoordinator` 全权收口
-- Target（子助手）执行段接入同一 `TurnEngine` 提交协议并写 turn 执行事实；transformer 装配统一走 `TurnPipelineFactory.targetInput()/targetOutput()`；`DelegationCoordinator` 移至 `service/runtime/`
-- ChatService 旧整对象写路径删除（`persistTurnCheckpoint` / `persistCheckpointViaApplyMutation` / `finalizeMasterTurn` 整对象提交 / `materializeMediaForPersistence`）；真实状态与流式投影分离（流式 delta 不再污染 reducer 输入）
-- `ChatVM` 新增 `snapshot` 订阅（单一事实源）与 `submit(command)` 命令入口；`ChatList` 消息列表数据源切换为 snapshot 投影（未变节点引用稳定，Compose skip 生效）
-- 文件管理页删除流程状态机（`UploadDeleteState`：Confirming → Executing，执行中防重入）+ Rejected 分级提示（IN_PROGRESS / ALREADY_DELETED）
-- 启动 `syncManagedFiles` 改为 `ArtifactStore.reconcileStartup()`（无 INSERT 补录）+ `backfillReferences()`；写入路径原子化（`registerTrackedFile` 登记失败回滚删文件，"文件 + 记录"要么都在要么都不在）；`syncFolder` 补录能力整体移除；磁盘缺失的 ACTIVE 行由 reconcile 直接清行（无 MISSING 态、无"重新扫描"入口——DB 是唯一事实源）
-- `artifact` 表新增 `origin` 列（`ArtifactOrigin`：USER 用户引入 / GENERATED 生成媒体副本 / SYSTEM 系统创建）：文件管理页条目显示来源徽标（全 locale），结构性复制（fork/克隆/子助手入站）继承源 origin，五类系统链路显式标注——"上传"列表中每个文件的来源从此明确
-- 删除 `ManagedFileDeletionService`、`FilesRepository`（职责并入 `ArtifactStore`）；`OutputMessageTransformer` 的 `visualTransform`/`onGenerationFinish` 通道移除（由 `StreamingMessageTransformer` 取代）
+- Master 与 Target 共用 `TurnEngine` 和 `TurnPipelineFactory`；durable 状态只在事务成功后发布，最后一次 checkpoint 后的流式增量也由原 Turn owner 收口
+- 会话结构操作全面改为 typed command 和窄列更新，删除整 Conversation 回写、并列持久化、旧 facade、fallback、deprecated 转发及无调用协议
+- 新 Turn 的 `START` 与审批后的 `CONTINUE_APPROVAL` 分离：继续审批保留原 `TurnHandle`，不再清理消息树、回填附件或创建第二 Turn
+- UI/ViewModel 改为依赖 application/query ports、UiModel 与 `ConversationTurnPresentation`；不直接持有 Runtime Job、DAO、ArtifactStore 或 payload 层
+- Artifact 未发布资源使用明确 owner/lease 交接，checkpoint 成功后发布，失败或取消精确回滚；Settings 图片恢复只按持久化 root 定点接管，不扫描目录
+- 删除旧 `AutoTitleGeneration`、旧附件预览扫描和两份无调用的本地 MCP transport 草稿；新增当前权威架构参考文档
+
+### 修复
+
+- 修复文生图设置助手背景时，批准和拒绝都会错误触发 `BackfillAttachmentRefs requires the active turn to finish first`
+- 修复从旧数据库升级后，Settings 仍引用的助手图片头像或背景因 Artifact metadata 缺失而丢失
+- 修复旧版本遗留的非终态 Turn 没有 owning assistant 时启动恢复失败；孤儿执行事实现在由显式恢复命令幂等收口
+- 修复取消或失败终态可能丢失最后一次 checkpoint 之后已经流出的文本或工具 delta
+- 修复 delta 节点下标、历史 reasoning 收口、Target assistant 槽归属和已终态消息被误判中断等一致性问题
+- 修复异步或强制模型标题覆盖后续手动标题，以及同值 CAS 成功被误判为失败
+- 修复附件缩略图重复扫描历史消息、子助手交付物与执行解析语义不一致的问题
 
 ---
 
