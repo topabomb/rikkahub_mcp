@@ -873,6 +873,13 @@
   <string name="setting_page_extensions">扩展管理</string>
   <string name="setting_page_extensions_desc">管理提示词注入、技能等扩展</string>
   <string name="setting_page_general_settings">通用设置</string>
+  <string name="setting_page_language">语言</string>
+  <string name="setting_page_language_system">跟随系统</string>
+  <string name="setting_page_language_english">English</string>
+  <string name="setting_page_language_chinese">中文</string>
+  <string name="setting_page_language_japanese">日本語</string>
+  <string name="setting_page_language_korean">한국어</string>
+  <string name="setting_page_language_russian">Русский</string>
   <string name="setting_page_interaction_notification_settings">互动与通知</string>
   <string name="setting_page_mcp">MCP</string>
   <string name="setting_page_mcp_desc">配置MCP服务器</string>

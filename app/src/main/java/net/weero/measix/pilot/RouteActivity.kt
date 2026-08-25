@@ -81,10 +81,12 @@ import net.weero.measix.pilot.ui.context.LocalSharedTransitionScope
 import net.weero.measix.pilot.ui.context.LocalTTSState
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.context.Navigator
+import net.weero.measix.pilot.ui.hooks.getCurrentAppLanguage
 import net.weero.measix.pilot.ui.hooks.readBooleanPreference
 import net.weero.measix.pilot.ui.hooks.readStringPreference
 import net.weero.measix.pilot.ui.hooks.rememberCustomAsrState
 import net.weero.measix.pilot.ui.hooks.rememberCustomTtsState
+import net.weero.measix.pilot.ui.hooks.wrapWithLocale
 import net.weero.measix.pilot.ui.pages.assistant.AssistantPage
 import net.weero.measix.pilot.ui.pages.assistant.detail.AssistantBasicPage
 import net.weero.measix.pilot.ui.pages.assistant.detail.AssistantDetailPage
@@ -149,6 +151,11 @@ class RouteActivity : ComponentActivity() {
 
     // Volume key listener registry — last registered handler wins
     internal val volumeKeyListeners = mutableListOf<(isVolumeUp: Boolean) -> Boolean>()
+
+    override fun attachBaseContext(newBase: android.content.Context) {
+        val language = newBase.getCurrentAppLanguage()
+        super.attachBaseContext(newBase.wrapWithLocale(language))
+    }
 
     @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

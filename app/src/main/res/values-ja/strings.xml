@@ -863,6 +863,13 @@
   <string name="setting_page_extensions">拡張機能</string>
   <string name="setting_page_extensions_desc">プロンプトインジェクション、スキルなどを管理</string>
   <string name="setting_page_general_settings">一般設定</string>
+  <string name="setting_page_language">言語</string>
+  <string name="setting_page_language_system">システムに従う</string>
+  <string name="setting_page_language_english">English</string>
+  <string name="setting_page_language_chinese">中文</string>
+  <string name="setting_page_language_japanese">日本語</string>
+  <string name="setting_page_language_korean">한국어</string>
+  <string name="setting_page_language_russian">Русский</string>
   <string name="setting_page_interaction_notification_settings">インタラクションと通知</string>
   <string name="setting_page_mcp">MCP</string>
   <string name="setting_page_mcp_desc">MCPサーバーを設定</string>

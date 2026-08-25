@@ -40,6 +40,7 @@ import me.rerere.hugeicons.stroke.Clapping01
 import me.rerere.hugeicons.stroke.Database02
 import me.rerere.hugeicons.stroke.GlobalSearch
 import me.rerere.hugeicons.stroke.ImageUpload
+import me.rerere.hugeicons.stroke.LanguageCircle
 import me.rerere.hugeicons.stroke.InLove
 import me.rerere.hugeicons.stroke.LookTop
 import me.rerere.hugeicons.stroke.McpServer
@@ -60,6 +61,8 @@ import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.ui.components.ui.ProviderConfigWarningCard
 import net.weero.measix.pilot.ui.components.ui.Select
 import net.weero.measix.pilot.ui.context.LocalNavController
+import net.weero.measix.pilot.ui.hooks.AppLanguage
+import net.weero.measix.pilot.ui.hooks.rememberAppLanguage
 import net.weero.measix.pilot.ui.hooks.rememberColorMode
 import net.weero.measix.pilot.ui.theme.ColorMode
 import net.weero.measix.pilot.ui.theme.CustomColors
@@ -108,11 +111,7 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
 
             item("generalSettings") {
                 var colorMode by rememberColorMode()
-                val selectedColorModeText = when (colorMode) {
-                    ColorMode.SYSTEM -> stringResource(R.string.setting_page_color_mode_system)
-                    ColorMode.LIGHT -> stringResource(R.string.setting_page_color_mode_light)
-                    ColorMode.DARK -> stringResource(R.string.setting_page_color_mode_dark)
-                }
+                var appLanguage by rememberAppLanguage()
                 CardGroup(
                     modifier = Modifier.padding(horizontal = 8.dp),
                     title = { Text(stringResource(R.string.setting_page_general_settings)) },
@@ -137,7 +136,37 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                             )
                         },
                         headlineContent = { Text(stringResource(R.string.setting_page_color_mode)) },
-                        supportingContent = { Text(selectedColorModeText) },
+                    )
+                    item(
+                        leadingContent = { Icon(HugeIcons.LanguageCircle, null) },
+                        trailingContent = {
+                            Select(
+                                options = AppLanguage.entries,
+                                selectedOption = appLanguage,
+                                onOptionSelected = {
+                                    appLanguage = it
+                                },
+                                optionToString = {
+                                    when (it) {
+                                        AppLanguage.SYSTEM -> stringResource(R.string.setting_page_language_system)
+                                        AppLanguage.ENGLISH -> stringResource(R.string.setting_page_language_english)
+                                        AppLanguage.CHINESE -> stringResource(R.string.setting_page_language_chinese)
+                                        AppLanguage.JAPANESE -> stringResource(R.string.setting_page_language_japanese)
+                                        AppLanguage.KOREAN -> stringResource(R.string.setting_page_language_korean)
+                                        AppLanguage.RUSSIAN -> stringResource(R.string.setting_page_language_russian)
+                                    }
+                                },
+                                modifier = Modifier.width(150.dp)
+                            )
+                        },
+                        // SYSTEM 时固定显示英文 "Language"，不跟随系统 locale；
+                        // 用户选了具体语言后才按对应 locale 渲染标签。
+                        headlineContent = {
+                            Text(
+                                if (appLanguage == AppLanguage.SYSTEM) "Language"
+                                else stringResource(R.string.setting_page_language)
+                            )
+                        },
                     )
                     item(
                         onClick = { navController.navigate(Screen.SettingPreferences) },
