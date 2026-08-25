@@ -37,6 +37,7 @@ class ConversationRuntimePersistenceTest {
         runtime.submit(
             CommitCheckpoint(
                 handle = handle,
+                kind = net.weero.measix.pilot.data.ai.CheckpointKind.STEP_COMPLETED,
                 messages = listOf(message),
                 turnStatus = TurnExecutionStatus.RUNNING,
                 turnReason = null,

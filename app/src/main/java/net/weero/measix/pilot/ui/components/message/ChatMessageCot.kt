@@ -4,7 +4,6 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.util.fastForEachIndexed
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.ai.tools.local.GENERATE_IMAGE_TOOL_NAME
 
 /**
@@ -131,15 +130,4 @@ private val NoAttachmentPreview: (String) -> String? = { null }
 
 val LocalAttachmentPreview = compositionLocalOf<(String) -> String?> {
     NoAttachmentPreview
-}
-
-internal fun resolveAttachmentPreviewUrl(messages: List<UIMessage>, ref: String): String? {
-    val normalized = AttachmentRefs.parse(ref)?.let { AttachmentRefs.format(it) } ?: return null
-    return AttachmentRefs.walkMessageParts(messages)
-        .firstOrNull { part ->
-            AttachmentRefs.getRef(part)?.let { AttachmentRefs.parse(it) }?.let { AttachmentRefs.format(it) } == normalized
-        }
-        ?.let { it as? UIMessagePart.Image }
-        ?.url
-        ?.takeIf { it.startsWith("file:", ignoreCase = true) }
 }

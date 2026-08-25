@@ -57,10 +57,10 @@ object AttachmentInspectionToolUI : ToolUIRenderer {
 
     @Composable
     override fun title(context: ToolUIContext): String = when {
+        context.busy -> stringResource(R.string.chat_message_tool_inspection_running)
+
         context.resultStatus() == "failed" ->
             stringResource(attachmentInspectionFailureStringRes(context.resultReason()))
-
-        context.loading -> stringResource(R.string.chat_message_tool_inspection_running)
 
         else -> stringResource(R.string.chat_message_tool_inspection)
     }

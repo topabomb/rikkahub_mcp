@@ -116,7 +116,7 @@ object MemoryToolUI : ToolUIRenderer {
                 text = memoryContent,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.shimmer(isLoading = context.loading),
+                modifier = Modifier.shimmer(isLoading = context.busy),
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -180,7 +180,7 @@ object SearchWebToolUI : ToolUIRenderer {
                 text = answer,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.shimmer(isLoading = context.loading),
+                modifier = Modifier.shimmer(isLoading = context.busy),
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -375,7 +375,7 @@ object RecentChatsToolUI : ToolUIRenderer {
             text = titles.joinToString(", "),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onPrimaryContainer,
-            modifier = Modifier.shimmer(isLoading = context.loading),
+            modifier = Modifier.shimmer(isLoading = context.busy),
             maxLines = 3,
             overflow = TextOverflow.Ellipsis,
         )
@@ -453,7 +453,7 @@ object GetScreenTimeToolUI : ToolUIRenderer {
             ?.jsonPrimitiveOrNull?.longOrNull ?: 0
         Column(
             verticalArrangement = Arrangement.spacedBy(2.dp),
-            modifier = Modifier.shimmer(isLoading = context.loading),
+            modifier = Modifier.shimmer(isLoading = context.busy),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -526,7 +526,7 @@ object CalendarQueryToolUI : ToolUIRenderer {
         if (events.isEmpty()) return
         Column(
             verticalArrangement = Arrangement.spacedBy(2.dp),
-            modifier = Modifier.shimmer(isLoading = context.loading),
+            modifier = Modifier.shimmer(isLoading = context.busy),
         ) {
             Text(
                 text = stringResource(R.string.chat_message_tool_search_results_count, events.size),

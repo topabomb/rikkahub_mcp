@@ -42,6 +42,7 @@ import net.weero.measix.pilot.service.ArtifactUseCase
 import net.weero.measix.pilot.service.ArtifactDraftScope
 import net.weero.measix.pilot.service.FavoriteService
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationTurnPresentation
 import net.weero.measix.pilot.ui.components.ai.SearchMode
 import net.weero.measix.pilot.ui.components.ai.searchModeEnablesBuiltIn
 import net.weero.measix.pilot.ui.components.ai.searchModeEnablesLocal
@@ -85,17 +86,20 @@ class ChatVM(
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
 
     fun currentSnapshot(): ConversationSnapshot = requireNotNull(snapshot.value)
+
+    fun attachmentPreviews(snapshot: ConversationSnapshot): Map<String, String> =
+        conversationQueryService.attachmentPreviews(snapshot)
     var chatListInitialized by mutableStateOf(false) // 聊天列表是否已经滚动到底部
 
     // 聊天输入状态 - 保存在 ViewModel 中避免 TransactionTooLargeException
     val inputState = ChatInputState()
     val artifactDraftScope: ArtifactDraftScope = artifactUseCase.openDraftScope()
 
-    // 当前会话的生成任务与处理状态。
-    val conversationJob: StateFlow<Job?> =
+    // UI consumes the runtime's typed turn projection; coroutine ownership remains inside Runtime.
+    val turnPresentation: StateFlow<ConversationTurnPresentation> =
         conversationQueryService
-            .generationJob(_conversationId)
-            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+            .turnPresentation(_conversationId)
+            .stateIn(viewModelScope, SharingStarted.Eagerly, ConversationTurnPresentation.IDLE)
 
     val processingStatus: StateFlow<String?> =
         conversationQueryService

@@ -55,7 +55,7 @@ class GenerationSideEffects(
     private val soundEffectPlayer: SoundEffectPlayer,
     private val json: Json,
     private val chatErrorStore: ChatErrorStore,
-    private val autoTitleGeneration: AutoTitleGenerationTracker,
+    private val titleCoordinator: ConversationTitleCoordinator,
 ) {
     // ---- 音效反馈 ----
 
@@ -85,9 +85,9 @@ class GenerationSideEffects(
         soundEffectPlayer.play(R.raw.loop_failed)
     }
 
-    /** 删除会话时清除标题自动生成的注意力跟踪。 */
+    /** 删除会话时清除标题阶段、候选所有权和重试状态。 */
     fun clearTitleTracking(conversationId: Uuid) {
-        autoTitleGeneration.clear(conversationId)
+        titleCoordinator.clear(conversationId)
     }
 
     /**
@@ -150,19 +150,27 @@ class GenerationSideEffects(
         force: Boolean = false,
     ) {
         val conversationId = snapshot.conversationId
-        val decision = autoTitleGeneration.begin(
+        if (titleCoordinator.phaseOf(conversationId) == null) {
+            // Without in-process provenance, a persisted nonblank title is authoritative. This
+            // protects manual titles after restart while a blank title remains auto-eligible.
+            titleCoordinator.synchronize(conversationId, snapshot.header.title, localFallbackTitle = null)
+        }
+        val initialPhase = requireNotNull(titleCoordinator.phaseOf(conversationId))
+        val beginResult = titleCoordinator.begin(
             conversationId = conversationId,
             force = force,
-            titleBlank = snapshot.header.title.isBlank(),
+            autoEligible = initialPhase == ConversationTitlePhase.EMPTY ||
+                initialPhase == ConversationTitlePhase.LOCAL_FALLBACK,
+            expectedTitle = snapshot.header.title,
         )
-        if (decision != AutoTitleGenerationDecision.Proceed) return
+        val token = (beginResult as? ConversationTitleBeginResult.Granted)?.token ?: return
 
         var cancelled = false
         try {
             val settings = settingsStore.settingsFlow.value
 
             if (!force) {
-                autoTitleGeneration.recordAttempt(conversationId)
+                titleCoordinator.recordAttempt(token)
             }
 
             val generatedTitle = runBackgroundGeneration(
@@ -175,14 +183,14 @@ class GenerationSideEffects(
                         .takeLast(4).joinToString("\n\n") { it.summaryAsText(maxLength = 500) },
                 ),
             ).orEmpty()
-            val latestTitle = runtimeRegistry.findRuntime(conversationId)?.snapshot?.value?.header?.title
-                ?: snapshot.header.title
-            val titleToWrite = resolveGeneratedTitleWrite(
-                force = force,
-                latestTitle = latestTitle,
-                generatedTitle = generatedTitle,
-            ) ?: return
-            commandCoordinator.executeOrThrow(conversationId, UpdateHeader(title = titleToWrite))
+            val titleToWrite = normalizeGeneratedTitle(generatedTitle) ?: return
+            titleCoordinator.commitGeneratedTitle(token, titleToWrite) { expectedTitle, newTitle ->
+                commandCoordinator.updateTitleIfCurrent(
+                    conversationId = conversationId,
+                    expectedTitle = expectedTitle,
+                    title = newTitle,
+                )
+            }
         } catch (error: CancellationException) {
             cancelled = true
             throw error
@@ -197,7 +205,7 @@ class GenerationSideEffects(
                 )
             )
         } finally {
-            val retry = autoTitleGeneration.end(conversationId)
+            val retry = titleCoordinator.end(token)
             if (!cancelled && retry != null) {
                 launchWithConversationReference(conversationId) {
                     val latest = commandCoordinator.load(conversationId).snapshot.value

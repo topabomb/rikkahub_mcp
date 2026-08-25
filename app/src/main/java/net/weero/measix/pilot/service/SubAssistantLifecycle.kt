@@ -24,7 +24,7 @@ class SubAssistantLifecycle(
             ?: conversationRepository.getConversationById(masterConversationId)?.toSnapshot()
             ?: return
         val children = conversationRepository.getChildConversations(master.conversationId).associateBy { it.id }
-        val plan = planSubAssistantRetention(master.conversationId, master.renderNodes, children, json)
+        val plan = planSubAssistantRetention(master.conversationId, master.nodes, children, json)
 
         plan.truncatedChildren.forEach { child ->
             commandCoordinator.executeOrThrow(child.id, ReplaceMessageTree(child.messageNodes))
@@ -40,7 +40,7 @@ class SubAssistantLifecycle(
         val result = reconcileMasterSubAssistantCalls(
             masterId = master.conversationId,
             masterAssistantId = master.header.assistantId,
-            masterNodes = master.renderNodes,
+            masterNodes = master.nodes,
             settings = settingsStore.settingsFlow.value,
             childrenById = children,
             json = json,

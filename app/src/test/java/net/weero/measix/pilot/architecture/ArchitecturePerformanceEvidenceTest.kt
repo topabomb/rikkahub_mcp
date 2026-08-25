@@ -47,6 +47,7 @@ class ArchitecturePerformanceEvidenceTest {
         val handle = TurnHandle(conversationId, 1L, Uuid.random(), assistantId)
         val command = CommitCheckpoint(
             handle = handle,
+            kind = net.weero.measix.pilot.data.ai.CheckpointKind.STEP_COMPLETED,
             messages = old.currentMessages().dropLast(1) + updated,
             turnStatus = TurnExecutionStatus.RUNNING,
             turnReason = null,

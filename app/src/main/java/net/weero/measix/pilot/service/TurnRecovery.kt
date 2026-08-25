@@ -169,7 +169,7 @@ class TurnRecovery(
                     }
                     val recoveredMessage = message.replaceToolsAtOrdinals(replacements)
                     snapshot = snapshot.copy(
-                        nodes = snapshot.renderNodes.mapIndexed { index, node ->
+                        nodes = snapshot.nodes.mapIndexed { index, node ->
                             if (index == nodeIndex) {
                                 node.copy(
                                     messages = node.messages.map { candidate ->
@@ -290,7 +290,7 @@ class TurnRecovery(
 
 private fun ConversationSnapshot.locateAssistant(messageId: Uuid?): Pair<Int, UIMessage>? {
     if (messageId == null) return null
-    renderNodes.forEachIndexed { index, node ->
+    nodes.forEachIndexed { index, node ->
         val message = node.messages.firstOrNull { it.id == messageId && it.role == MessageRole.ASSISTANT }
         if (message != null) return index to message
     }
@@ -306,7 +306,7 @@ private fun ConversationSnapshot.markAssistantTerminal(
     val (nodeIndex, targetMessage) = located
     val marked = targetMessage.copy(terminalStatus = status, terminalReason = reason)
     return copy(
-        nodes = renderNodes.mapIndexed { index, node ->
+        nodes = nodes.mapIndexed { index, node ->
             if (index != nodeIndex) {
                 node
             } else {

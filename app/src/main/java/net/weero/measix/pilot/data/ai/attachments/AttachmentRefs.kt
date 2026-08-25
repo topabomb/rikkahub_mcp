@@ -56,8 +56,10 @@ object AttachmentRefs {
     }
 
     /**
-     * Stamp [METADATA_KEY] when missing. Existing refs and non-media parts are unchanged
-     * (same instance), so callers can use identity to detect writes.
+     * Stamp [METADATA_KEY] when missing. Existing refs and non-media parts are returned unchanged
+     * as an allocation optimization. Durable write protocols must use an explicit typed patch;
+     * object identity is never a semantic change signal because projections may allocate
+     * equivalent message instances.
      *
      * 只有能被 [parse] 解析的 ref 才被视为已存在；导入/旧数据/异常 Provider metadata 里
      * 的非法值会被重建为合法 UUID，避免模型拿到永远无法解析的 handle。
@@ -88,59 +90,98 @@ object AttachmentRefs {
         }
     }
 
-    fun backfillParts(parts: List<UIMessagePart>): List<UIMessagePart> {
-        var changed = false
-        val mapped = parts.map { part ->
-            when (part) {
-                is UIMessagePart.Tool -> {
-                    val newOutput = backfillParts(part.output)
-                    if (newOutput !== part.output) {
-                        changed = true
-                        part.copy(output = newOutput)
-                    } else {
-                        part
-                    }
-                }
-                else -> {
-                    val stamped = ensureAttachmentRef(part)
-                    if (stamped !== part) {
-                        changed = true
-                        stamped
-                    } else {
-                        part
-                    }
-                }
+    /** Plans exact metadata-only writes; the command path never accepts a replacement tree. */
+    fun planBackfills(nodes: List<MessageNode>): List<AttachmentRefBackfill> = buildList {
+        nodes.forEach { node ->
+            node.messages.forEach { message ->
+                collectBackfills(
+                    nodeId = node.id,
+                    messageId = message.id,
+                    parts = message.parts,
+                    parentPath = emptyList(),
+                    destination = this,
+                )
             }
         }
-        return if (changed) mapped else parts
     }
 
-    fun backfillMessages(messages: List<UIMessage>): List<UIMessage> {
-        var changed = false
-        val mapped = messages.map { message ->
-            val newParts = backfillParts(message.parts)
-            if (newParts !== message.parts) {
-                changed = true
-                message.copy(parts = newParts)
-            } else {
-                message
+    fun applyBackfills(
+        nodes: List<MessageNode>,
+        backfills: List<AttachmentRefBackfill>,
+    ): List<MessageNode> = backfills.fold(nodes) { current, backfill ->
+        val nodeIndex = current.indexOfFirst { it.id == backfill.nodeId }
+        require(nodeIndex >= 0) { "attachment backfill node is missing: ${backfill.nodeId}" }
+        val node = current[nodeIndex]
+        val messageIndex = node.messages.indexOfFirst { it.id == backfill.messageId }
+        require(messageIndex >= 0) { "attachment backfill message is missing: ${backfill.messageId}" }
+        val message = node.messages[messageIndex]
+        val updatedParts = applyBackfill(message.parts, backfill.partPath, backfill.attachmentRef)
+        if (updatedParts === message.parts) {
+            current
+        } else {
+            current.toMutableList().apply {
+                set(
+                    nodeIndex,
+                    node.copy(
+                        messages = node.messages.toMutableList().apply {
+                            set(messageIndex, message.copy(parts = updatedParts))
+                        },
+                    ),
+                )
             }
         }
-        return if (changed) mapped else messages
     }
 
-    fun backfillNodes(nodes: List<MessageNode>): List<MessageNode> {
-        var changed = false
-        val newNodes = nodes.map { node ->
-            val newMessages = backfillMessages(node.messages)
-            if (newMessages !== node.messages) {
-                changed = true
-                node.copy(messages = newMessages)
-            } else {
-                node
+    private fun collectBackfills(
+        nodeId: Uuid,
+        messageId: Uuid,
+        parts: List<UIMessagePart>,
+        parentPath: List<Int>,
+        destination: MutableList<AttachmentRefBackfill>,
+    ) {
+        parts.forEachIndexed { index, part ->
+            val path = parentPath + index
+            if (part is UIMessagePart.Tool) {
+                collectBackfills(nodeId, messageId, part.output, path, destination)
+            } else if (isMultimedia(part) && getRef(part)?.let(::parse) == null) {
+                destination += AttachmentRefBackfill(
+                    nodeId = nodeId,
+                    messageId = messageId,
+                    partPath = path,
+                    attachmentRef = format(Uuid.random()),
+                )
             }
         }
-        return if (changed) newNodes else nodes
+    }
+
+    private fun applyBackfill(
+        parts: List<UIMessagePart>,
+        path: List<Int>,
+        attachmentRef: String,
+    ): List<UIMessagePart> {
+        require(path.isNotEmpty()) { "attachment backfill path is empty" }
+        require(parse(attachmentRef) != null) { "attachment backfill ref is invalid" }
+        val index = path.first()
+        require(index in parts.indices) { "attachment backfill part is missing at $path" }
+        val part = parts[index]
+        val updated = if (path.size == 1) {
+            require(isMultimedia(part)) { "attachment backfill target is not multimedia" }
+            val existing = getRef(part)
+            when {
+                existing == attachmentRef -> part
+                existing?.let(::parse) != null -> error("attachment backfill cannot overwrite a stable ref")
+                else -> withMetadata(
+                    part,
+                    mergeMetadata(part.metadata, mapOf(METADATA_KEY to JsonPrimitive(attachmentRef))),
+                )
+            }
+        } else {
+            require(part is UIMessagePart.Tool) { "attachment backfill path crosses a non-tool part" }
+            val output = applyBackfill(part.output, path.drop(1), attachmentRef)
+            if (output === part.output) part else part.copy(output = output)
+        }
+        if (updated === part) return parts
+        return parts.toMutableList().apply { set(index, updated) }
     }
 
     fun fileToFileUrl(file: File): String {
@@ -161,3 +202,10 @@ object AttachmentRefs {
         }.getOrNull()
     }
 }
+
+data class AttachmentRefBackfill(
+    val nodeId: Uuid,
+    val messageId: Uuid,
+    val partPath: List<Int>,
+    val attachmentRef: String,
+)

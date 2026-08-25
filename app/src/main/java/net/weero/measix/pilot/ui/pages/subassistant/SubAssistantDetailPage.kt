@@ -52,7 +52,6 @@ import net.weero.measix.pilot.ui.components.message.ChatMessage
 import net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
 import net.weero.measix.pilot.ui.components.message.collectMessageImageUrls
-import net.weero.measix.pilot.ui.components.message.resolveAttachmentPreviewUrl
 import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewActions
 import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewOverlay
 import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
@@ -142,6 +141,7 @@ fun SubAssistantDetailPage(
             is SubAssistantDetailUiState.Ready -> DetailContent(
                 state = state,
                 targetAssistant = targetAssistant,
+                attachmentPreviews = vm.attachmentPreviews(),
                 modifier = Modifier.padding(innerPadding),
             )
         }
@@ -152,6 +152,7 @@ fun SubAssistantDetailPage(
 private fun DetailContent(
     state: SubAssistantDetailUiState.Ready,
     targetAssistant: Assistant?,
+    attachmentPreviews: Map<String, String>,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -180,12 +181,6 @@ private fun DetailContent(
             timelineState.value.flatMap { node ->
                 collectMessageImageUrls(node.currentMessage.parts)
             }
-        }
-    }
-    // 附件缩略图只读解析: stable ref → 本地 file url, 求值时读最新时间线
-    val attachmentPreview = remember {
-        { ref: String ->
-            resolveAttachmentPreviewUrl(timelineState.value.map { it.currentMessage }, ref)
         }
     }
     val backgroundHost = rememberImageBackgroundHost(LocalSettings.current, targetAssistant?.id)
@@ -217,7 +212,9 @@ private fun DetailContent(
         // 相册 Provider 提升到列表外: 全部 item 共享同一稳定 lambda, 避免逐项 provider 节点
         CompositionLocalProvider(
             LocalConversationImages provides timelineAlbum,
-            LocalAttachmentPreview provides attachmentPreview,
+            LocalAttachmentPreview provides remember(attachmentPreviews) {
+                { ref: String -> attachmentPreviews[ref] }
+            },
             LocalImagePreviewActions provides previewActions,
             LocalImagePreviewOverlay provides if (targetAssistant?.id == null) null else backgroundHost.overlay,
         ) {

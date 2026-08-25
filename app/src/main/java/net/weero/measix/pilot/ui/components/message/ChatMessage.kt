@@ -79,6 +79,8 @@ import me.rerere.hugeicons.stroke.Video01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
+import net.weero.measix.pilot.service.runtime.ToolCallPhase
 import net.weero.measix.pilot.data.model.AssistantAffectScope
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.model.replaceRegexes
@@ -122,6 +124,7 @@ fun ChatMessage(
     onToolApproval: ((locator: ToolCallLocator, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((locator: ToolCallLocator, answer: String) -> Unit)? = null,
     onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
+    toolCallPhases: Map<ToolCallLocator, ToolCallPhase> = emptyMap(),
     readOnly: Boolean = false,
 ) {
     val message = node.messages[node.selectIndex]
@@ -182,6 +185,7 @@ fun ChatMessage(
                 onToolApproval = if (readOnly) null else onToolApproval,
                 onToolAnswer = if (readOnly) null else onToolAnswer,
                 onSubAssistantAnswer = if (readOnly) null else onSubAssistantAnswer,
+                toolCallPhases = toolCallPhases,
                 onUserMessageClick = if (!readOnly && message.role == MessageRole.USER) onEdit else null,
             )
         }
@@ -319,6 +323,7 @@ private fun MessagePartsBlock(
     onToolApproval: ((locator: ToolCallLocator, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((locator: ToolCallLocator, answer: String) -> Unit)? = null,
     onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
+    toolCallPhases: Map<ToolCallLocator, ToolCallPhase>,
     onUserMessageClick: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
@@ -395,10 +400,11 @@ private fun MessagePartsBlock(
 
                             is ThinkingStep.ToolStep -> {
                                 key(messageId, step.toolOrdinal) {
+                                    val locator = ToolCallLocator(messageId, step.toolOrdinal)
                                     ChatMessageToolStep(
                                         tool = step.tool,
-                                        locator = ToolCallLocator(messageId, step.toolOrdinal),
-                                        loading = loading && !step.tool.isExecuted,
+                                        locator = locator,
+                                        phase = toolCallPhases[locator],
                                         onToolApproval = onToolApproval,
                                         onToolAnswer = onToolAnswer,
                                     )
@@ -410,12 +416,28 @@ private fun MessagePartsBlock(
             }
 
             is MessagePartBlock.SubAssistantCallBlock -> key(messageId, block.toolOrdinal) {
-                SubAssistantCallCard(
-                    tool = block.tool,
-                    masterConversationId = masterConversationId,
-                    onAnswer = onSubAssistantAnswer,
-                    modifier = Modifier.animateContentSize(),
-                )
+                val locator = ToolCallLocator(messageId, block.toolOrdinal)
+                val phase = toolCallPhases[locator]
+                if (
+                    block.tool.getSubAssistantCallMetadata(JsonInstant) == null &&
+                    phase?.isPreExecutionOrRunning == true
+                ) {
+                    ChainOfThought(steps = listOf(block.tool)) { streamedTool ->
+                        ChatMessageToolStep(
+                            tool = streamedTool,
+                            locator = locator,
+                            phase = phase,
+                            onToolApproval = onToolApproval,
+                        )
+                    }
+                } else {
+                    SubAssistantCallCard(
+                        tool = block.tool,
+                        masterConversationId = masterConversationId,
+                        onAnswer = onSubAssistantAnswer,
+                        modifier = Modifier.animateContentSize(),
+                    )
+                }
             }
 
             is MessagePartBlock.ContentBlock -> key(block.index) {
@@ -694,3 +716,9 @@ private fun MessagePartsBlock(
         }
     }
 }
+
+private val ToolCallPhase.isPreExecutionOrRunning: Boolean
+    get() = this == ToolCallPhase.CALL_STREAMING ||
+        this == ToolCallPhase.READY ||
+        this == ToolCallPhase.AWAITING_APPROVAL ||
+        this == ToolCallPhase.EXECUTING

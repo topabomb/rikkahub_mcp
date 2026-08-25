@@ -102,7 +102,13 @@ sealed class UIMessagePart {
         val approvalState: ToolApprovalState = ToolApprovalState.Auto,
         override var metadata: JsonObject? = null
     ) : UIMessagePart() {
-        /** Whether the tool has been executed (has output) */
+        /**
+         * Whether a provider-replayable tool result exists.
+         *
+         * This is deliberately not the live execution state: a fully assembled tool call can be
+         * waiting for approval or executing remotely while [output] is still empty. Active
+         * lifecycle presentation is owned by the turn projection.
+         */
         val isExecuted: Boolean get() = output.isNotEmpty()
 
         /** Whether the tool is pending user approval */

@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.data.files
 
 import android.content.Context
+import androidx.core.net.toUri
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -33,6 +34,8 @@ import net.weero.measix.pilot.data.db.entity.ArtifactReferenceType
 import net.weero.measix.pilot.data.db.entity.ConversationEntity
 import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.data.model.Avatar
+import net.weero.measix.pilot.data.imggen.TINY_PNG
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -185,6 +188,60 @@ class ArtifactStoreLifecycleTest {
 
         assertNull(database.artifactDao().getById(owned.entity.id))
         assertFalse(store.file(owned.entity).exists())
+    }
+
+    @Test
+    fun `startup adopts an untracked legacy assistant avatar from its durable settings root`() = runTest {
+        folders += FileFolders.UPLOAD
+        val file = File(context.filesDir, "${FileFolders.UPLOAD}/legacy-avatar.png").apply {
+            parentFile?.mkdirs()
+            writeBytes(TINY_PNG)
+        }
+        val avatar = Avatar.Image(file.toUri().toString())
+        settingsFlow.value = Settings(assistants = listOf(Assistant(avatar = avatar)))
+
+        store.reconcileStartup()
+
+        val adopted = database.artifactDao().getByPathAndState(
+            "${FileFolders.UPLOAD}/legacy-avatar.png",
+            ArtifactState.ACTIVE.name,
+        )
+        assertEquals(ArtifactOrigin.USER.name, adopted?.origin)
+        assertEquals("image/png", adopted?.mimeType)
+        assertTrue(file.isFile)
+        assertEquals(avatar, settingsFlow.value.assistants.single().avatar)
+    }
+
+    @Test
+    fun `startup rejects a settings rooted legacy avatar whose extension lies about its content`() = runTest {
+        folders += FileFolders.UPLOAD
+        val relativePath = "${FileFolders.UPLOAD}/fake-avatar.png"
+        val file = File(context.filesDir, relativePath).apply {
+            parentFile?.mkdirs()
+            writeText("not an image")
+        }
+        settingsFlow.value = Settings(
+            assistants = listOf(Assistant(avatar = Avatar.Image(file.toUri().toString()))),
+        )
+
+        store.reconcileStartup()
+
+        assertNull(database.artifactDao().getByPathAndState(relativePath, ArtifactState.ACTIVE.name))
+        assertTrue(file.isFile)
+    }
+
+    @Test
+    fun `startup never adopts an untracked upload file without a durable root`() = runTest {
+        folders += FileFolders.UPLOAD
+        val relativePath = "${FileFolders.UPLOAD}/unrooted.png"
+        File(context.filesDir, relativePath).apply {
+            parentFile?.mkdirs()
+            writeBytes(byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 1, 2, 3))
+        }
+
+        store.reconcileStartup()
+
+        assertNull(database.artifactDao().getByPathAndState(relativePath, ArtifactState.ACTIVE.name))
     }
 
     @Test

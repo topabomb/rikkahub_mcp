@@ -70,6 +70,61 @@ class TurnFinalization(
             "assistant message $messageId is not present in the owned conversation snapshot"
         }
         val (nodeIndex, targetMessage) = located
+        val updatedMessage = closeOpenToolsInMessage(targetMessage, reason, cancelledByUser)
+        if (updatedMessage == targetMessage) return snapshot
+        return snapshot.copy(
+            nodes = snapshot.nodes.mapIndexed { index, node ->
+                if (index != nodeIndex) node else node.copy(
+                    messages = node.messages.map { message ->
+                        if (message.id == targetMessage.id) updatedMessage else message
+                    },
+                )
+            },
+            activeTurn = null,
+        )
+    }
+
+    /**
+     * Prepares the latest turn-owned projection for a failure/cancellation terminal commit.
+     * The provider may have emitted messages after the last durable checkpoint, so this path must
+     * use TurnEngine's accumulated messages instead of rereading the durable node as payload.
+     */
+    suspend fun prepareOwnedTurnMessagesForFailure(
+        snapshot: ConversationSnapshot,
+        handle: TurnHandle,
+        latestMessages: List<UIMessage>,
+        reason: String,
+        cancelledByUser: Boolean,
+    ): List<UIMessage> {
+        require(snapshot.conversationId == handle.conversationId) {
+            "turn handle belongs to another conversation: ${handle.conversationId}"
+        }
+        val active = requireNotNull(snapshot.activeTurn) {
+            "turn ${handle.turnId} has no active runtime owner"
+        }
+        require(
+            active.epoch == handle.epoch &&
+                active.turnId == handle.turnId &&
+                active.assistantMessageId == handle.assistantMessageId
+        ) { "turn handle no longer owns the active projection: ${handle.turnId}" }
+
+        val ownedMessages = latestMessages.ifEmpty { snapshot.currentMessages() }
+        val targetMessage = requireNotNull(ownedMessages.lastOrNull()) {
+            "turn ${handle.turnId} has no messages to finalize"
+        }
+        require(
+            targetMessage.id == handle.assistantMessageId && targetMessage.role == MessageRole.ASSISTANT
+        ) { "latest turn messages do not end with the owning assistant message" }
+        val updatedMessage = closeOpenToolsInMessage(targetMessage, reason, cancelledByUser)
+        if (updatedMessage == targetMessage) return ownedMessages
+        return ownedMessages.toMutableList().apply { set(lastIndex, updatedMessage) }
+    }
+
+    private suspend fun closeOpenToolsInMessage(
+        targetMessage: UIMessage,
+        reason: String,
+        cancelledByUser: Boolean,
+    ): UIMessage {
         var updatedMessage = targetMessage.finishPendingTools { tool ->
             if (cancelledByUser) cancelToolByUser(tool) else interruptPendingTool(tool)
         }
@@ -84,17 +139,7 @@ class TurnFinalization(
                 childMessages = childId?.let { childMessagesByConversation[it] }.orEmpty(),
             )
         }
-        if (updatedMessage == targetMessage) return snapshot
-        return snapshot.copy(
-            nodes = snapshot.renderNodes.mapIndexed { index, node ->
-                if (index != nodeIndex) node else node.copy(
-                    messages = node.messages.map { message ->
-                        if (message.id == targetMessage.id) updatedMessage else message
-                    },
-                )
-            },
-            activeTurn = null,
-        )
+        return updatedMessage
     }
 
     /** Finalizes a previous non-terminal turn before a replacement turn starts. */
@@ -347,7 +392,7 @@ internal suspend fun finalizeInterruptedRunSafely(
 }
 
 private fun ConversationSnapshot.locateAssistantMessage(messageId: Uuid): Pair<Int, UIMessage>? {
-    renderNodes.forEachIndexed { index, node ->
+    nodes.forEachIndexed { index, node ->
         node.messages.firstOrNull { message ->
             message.id == messageId && message.role == MessageRole.ASSISTANT
         }?.let { return index to it }

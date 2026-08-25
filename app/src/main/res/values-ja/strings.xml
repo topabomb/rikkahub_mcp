@@ -171,8 +171,8 @@
   <string name="backup_page_delete_success">削除成功</string>
   <string name="backup_page_export_desc">アプリデータをファイルにエクスポート</string>
   <string name="backup_page_exporting">エクスポート中...</string>
-    <string name="backup_page_files">ファイル</string>
-    <string name="backup_page_durable_aggregate">チャットと管理ファイル</string>
+  <string name="backup_page_files">ファイル</string>
+  <string name="backup_page_durable_aggregate">チャットと管理ファイル</string>
   <string name="backup_page_import_desc">ローカルバックアップファイルをインポート</string>
   <string name="backup_page_import_export">ローカル</string>
   <string name="backup_page_importing">インポート中...</string>
@@ -1481,5 +1481,16 @@
   <string name="workspace_detail_export_failed">ファイルのエクスポートに失敗しました</string>
   <string name="workspace_detail_delete_failed">ファイルの削除に失敗しました</string>
   <string name="chat_page_export_failed">エクスポートに失敗しました：%1$s</string>
+  <string name="chat_message_tool_phase_call_streaming">呼び出し構築中</string>
+  <string name="chat_message_tool_phase_ready">実行待ち</string>
+  <string name="chat_message_tool_phase_awaiting_approval">承認待ち</string>
+  <string name="chat_message_tool_phase_executing">実行中</string>
+  <string name="chat_message_tool_phase_completed">完了</string>
+  <string name="chat_message_tool_phase_failed">失敗</string>
+  <string name="chat_message_tool_phase_denied">拒否</string>
+  <string name="chat_message_tool_phase_answered">回答済み</string>
+  <string name="chat_message_tool_phase_cancelled">キャンセル</string>
+  <string name="chat_message_tool_phase_interrupted">中断</string>
+  <string name="conversation_turn_awaiting_approval">承認が必要です</string>
 </resources>
 

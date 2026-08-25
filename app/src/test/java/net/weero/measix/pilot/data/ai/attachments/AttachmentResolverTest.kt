@@ -20,9 +20,15 @@ import net.weero.measix.pilot.data.files.LocalArtifactRef
 import net.weero.measix.pilot.data.files.OwnedArtifact
 import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.data.imggen.TINY_PNG
+import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallArtifact
+import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata
+import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
+import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
+import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.uuid.Uuid
 
 class AttachmentResolverTest {
     @Test
@@ -52,6 +58,43 @@ class AttachmentResolverTest {
             listOf("/upload/source.png"),
         )
         assertTrue(present is AttachmentResolveResult.Success)
+        env.close()
+    }
+
+    @Test
+    fun `sub-assistant deliverable handle resolves through durable artifact metadata`() = runTest {
+        val env = Env()
+        val ref = AttachmentRefs.format(Uuid.random())
+        val managed = LocalArtifactRef(relativePath = "upload/generated.png", mimeType = "image/png")
+        val file = env.file(managed.relativePath)
+        every { env.store.file(managed) } returns file
+        val tool = UIMessagePart.Tool(
+            toolCallId = "assistant-call",
+            toolName = "assistant_call",
+            input = "{}",
+        ).mergeSubAssistantCallMetadata(
+            JsonInstant,
+            SubAssistantCallMetadata(
+                runId = Uuid.random().toString(),
+                targetAssistantId = Uuid.random().toString(),
+                targetNameSnapshot = "Image assistant",
+                state = SubAssistantCallState.COMPLETED,
+                artifacts = listOf(
+                    SubAssistantCallArtifact(
+                        ref = ref,
+                        type = "image",
+                        mime = "image/png",
+                        artifact = managed,
+                    ),
+                ),
+            ),
+        )
+        val messages = listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool)))
+
+        val result = env.resolver.resolveImages(messages, listOf(ref)) as AttachmentResolveResult.Success
+
+        assertEquals(1, result.parts.size)
+        assertEquals(ref, AttachmentRefs.getRef(result.parts.single()))
         env.close()
     }
 

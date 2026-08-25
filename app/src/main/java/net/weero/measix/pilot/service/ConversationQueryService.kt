@@ -2,7 +2,6 @@ package net.weero.measix.pilot.service
 
 import androidx.paging.PagingData
 import androidx.paging.map
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -17,6 +16,7 @@ import net.weero.measix.pilot.data.model.Folder
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeState
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationTurnPresentation
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import java.time.Instant
 import kotlin.uuid.Uuid
@@ -41,6 +41,7 @@ sealed interface ConversationReadState {
 
 enum class ConversationActivity {
     RESPONSE_GENERATION,
+    APPROVAL_REQUIRED,
     TITLE_GENERATION,
 }
 
@@ -59,7 +60,8 @@ class ConversationQueryService(
     private val repository: ConversationRepository,
     private val runtimeRegistry: ConversationRuntimeRegistry,
     private val folderRepository: FolderRepository,
-    private val titleGenerationTracker: AutoTitleGenerationTracker,
+    private val titleCoordinator: ConversationTitleCoordinator,
+    private val attachmentPreviewProjector: ConversationAttachmentPreviewProjector,
 ) {
     fun observeConversation(conversationId: Uuid): Flow<ConversationReadState> =
         runtimeRegistry.observeRuntimeState(conversationId).flatMapLatest { state ->
@@ -72,20 +74,25 @@ class ConversationQueryService(
             }
         }
 
-    fun generationJob(conversationId: Uuid): Flow<Job?> =
-        runtimeRegistry.getGenerationJobFlow(conversationId)
+    fun turnPresentation(conversationId: Uuid): Flow<ConversationTurnPresentation> =
+        runtimeRegistry.getTurnPresentationFlow(conversationId)
 
     fun processingStatus(conversationId: Uuid): Flow<String?> =
         runtimeRegistry.getProcessingStatusFlow(conversationId)
+
+    fun attachmentPreviews(snapshot: ConversationSnapshot): Map<String, String> =
+        attachmentPreviewProjector.project(snapshot)
 
     fun ttsQueueSessionId(conversationId: Uuid): String? =
         runtimeRegistry.findRuntime(conversationId)?.peekTtsQueueSessionId()
 
     fun conversationActivities(): Flow<Map<Uuid, Set<ConversationActivity>>> = combine(
-        runtimeRegistry.getConversationJobs(),
-        titleGenerationTracker.inFlightIds,
-    ) { generationJobs, titleGenerationIds ->
-        mergeConversationActivities(generationJobs.keys, titleGenerationIds)
+        runtimeRegistry.getConversationTurnPresentations(),
+        titleCoordinator.phases.map { phases ->
+            phases.filterValues { it == ConversationTitlePhase.MODEL_GENERATING }.keys
+        },
+    ) { turnPresentations, titleGenerationIds ->
+        mergeConversationActivities(turnPresentations, titleGenerationIds)
     }
 
     fun unfiledPaging(assistantId: Uuid): Flow<PagingData<ConversationSummary>> =
@@ -126,12 +133,18 @@ class ConversationQueryService(
 }
 
 internal fun mergeConversationActivities(
-    responseGenerationIds: Set<Uuid>,
+    turnPresentations: Map<Uuid, ConversationTurnPresentation>,
     titleGenerationIds: Set<Uuid>,
 ): Map<Uuid, Set<ConversationActivity>> =
-    (responseGenerationIds + titleGenerationIds).associateWith { conversationId ->
+    (turnPresentations.keys + titleGenerationIds).associateWith { conversationId ->
         buildSet {
-            if (conversationId in responseGenerationIds) add(ConversationActivity.RESPONSE_GENERATION)
+            when (turnPresentations[conversationId]) {
+                ConversationTurnPresentation.GENERATING -> add(ConversationActivity.RESPONSE_GENERATION)
+                ConversationTurnPresentation.AWAITING_APPROVAL -> add(ConversationActivity.APPROVAL_REQUIRED)
+                ConversationTurnPresentation.IDLE,
+                null,
+                -> Unit
+            }
             if (conversationId in titleGenerationIds) add(ConversationActivity.TITLE_GENERATION)
         }
     }
@@ -147,4 +160,7 @@ class SubAssistantDetailReader(private val queryService: ConversationQueryServic
         val initial = resident?.value ?: queryService.snapshot(conversationId) ?: return null
         return ConversationDetailRead(initial = initial, updates = resident)
     }
+
+    fun attachmentPreviews(snapshot: ConversationSnapshot): Map<String, String> =
+        queryService.attachmentPreviews(snapshot)
 }

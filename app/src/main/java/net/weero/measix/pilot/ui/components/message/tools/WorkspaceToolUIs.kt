@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.message.tools
+package net.weero.measix.pilot.ui.components.message.tools
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -179,7 +179,7 @@ object ReadFileToolUI : ToolUIRenderer {
         FileContentSummary(
             text = text,
             path = context.arguments.getStringContent("path"),
-            loading = context.loading,
+            loading = context.busy,
         )
     }
 
@@ -219,7 +219,7 @@ object WriteFileToolUI : ToolUIRenderer {
         FileContentSummary(
             text = text,
             path = context.arguments.getStringContent("path"),
-            loading = context.loading,
+            loading = context.busy,
         )
     }
 
@@ -324,7 +324,7 @@ object ShellToolUI : ToolUIRenderer {
                         .clip(MaterialTheme.shapes.small)
                         .background(MaterialTheme.colorScheme.surfaceContainer)
                         .padding(horizontal = 8.dp, vertical = 6.dp)
-                        .shimmer(isLoading = context.loading),
+                        .shimmer(isLoading = context.busy),
                 ) {
                     Text(
                         text = combined.lineSequence().take(SUMMARY_MAX_LINES).joinToString("\n"),

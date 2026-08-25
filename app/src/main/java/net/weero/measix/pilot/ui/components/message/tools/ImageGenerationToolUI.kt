@@ -42,6 +42,7 @@ import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.ArrowUp01
 import me.rerere.hugeicons.stroke.Copy01
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.service.runtime.ToolCallPhase
 import net.weero.measix.pilot.data.ai.tools.local.GENERATE_IMAGE_TOOL_NAME
 import net.weero.measix.pilot.data.ai.tools.local.ImageGenerationToolMetadata
 import net.weero.measix.pilot.data.imggen.imageGenerationFailureStringRes
@@ -92,6 +93,11 @@ internal fun truncatePromptSummary(prompt: String, maxCodePoints: Int = 160): St
  * - `Failed` 只表示执行失败，reason 只取执行层 reason，不被文件层 reason 遮蔽。
  */
 internal sealed interface ImageGenerationUiState {
+    data object CallStreaming : ImageGenerationUiState
+    data object AwaitingApproval : ImageGenerationUiState
+    data object Denied : ImageGenerationUiState
+    data object Cancelled : ImageGenerationUiState
+    data object Interrupted : ImageGenerationUiState
     data object Queued : ImageGenerationUiState
     data object Generating : ImageGenerationUiState
     data object Persisting : ImageGenerationUiState
@@ -104,17 +110,27 @@ internal sealed interface ImageGenerationUiState {
 internal fun resolveImageGenerationUiState(context: ToolUIContext): ImageGenerationUiState {
     val metadata = context.imageGenerationMetadata()
     val status = context.resultStatus()
-    return when {
-        status == "failed" || metadata?.status == "failed" ->
-            ImageGenerationUiState.Failed(context.resultReason() ?: metadata?.reason)
-        context.fileIsUnavailable() ->
-            ImageGenerationUiState.CompletedArtifactUnavailable(context.fileUnavailableReason())
-        status == "completed" || metadata?.phase == "completed" ->
-            ImageGenerationUiState.Completed
-        metadata?.phase == "setting_background" -> ImageGenerationUiState.SettingBackground
-        metadata?.phase == "persisting" -> ImageGenerationUiState.Persisting
-        metadata?.phase == "generating" -> ImageGenerationUiState.Generating
-        else -> ImageGenerationUiState.Queued
+    return when (context.phase) {
+        ToolCallPhase.CALL_STREAMING -> ImageGenerationUiState.CallStreaming
+        ToolCallPhase.AWAITING_APPROVAL -> ImageGenerationUiState.AwaitingApproval
+        ToolCallPhase.DENIED -> ImageGenerationUiState.Denied
+        ToolCallPhase.CANCELLED -> ImageGenerationUiState.Cancelled
+        ToolCallPhase.INTERRUPTED -> ImageGenerationUiState.Interrupted
+        ToolCallPhase.READY -> ImageGenerationUiState.Queued
+        ToolCallPhase.ANSWERED -> ImageGenerationUiState.Completed
+        ToolCallPhase.EXECUTING -> when (metadata?.phase) {
+            "setting_background" -> ImageGenerationUiState.SettingBackground
+            "persisting" -> ImageGenerationUiState.Persisting
+            else -> ImageGenerationUiState.Generating
+        }
+        ToolCallPhase.FAILED -> ImageGenerationUiState.Failed(context.resultReason() ?: metadata?.reason)
+        ToolCallPhase.COMPLETED -> when {
+            status == "failed" || metadata?.status == "failed" || metadata?.phase == "failed" ->
+                ImageGenerationUiState.Failed(context.resultReason() ?: metadata?.reason)
+            context.fileIsUnavailable() ->
+                ImageGenerationUiState.CompletedArtifactUnavailable(context.fileUnavailableReason())
+            else -> ImageGenerationUiState.Completed
+        }
     }
 }
 
@@ -126,6 +142,15 @@ object ImageGenerationToolUI : ToolUIRenderer {
     @Composable
     override fun title(context: ToolUIContext): String =
         when (val state = resolveImageGenerationUiState(context)) {
+            ImageGenerationUiState.CallStreaming ->
+                stringResource(R.string.chat_message_tool_phase_call_streaming)
+            ImageGenerationUiState.AwaitingApproval ->
+                stringResource(R.string.chat_message_tool_phase_awaiting_approval)
+            ImageGenerationUiState.Denied -> stringResource(R.string.chat_message_tool_denied)
+            ImageGenerationUiState.Cancelled ->
+                stringResource(R.string.chat_message_tool_phase_cancelled)
+            ImageGenerationUiState.Interrupted ->
+                stringResource(R.string.chat_message_tool_phase_interrupted)
             is ImageGenerationUiState.Failed -> stringResource(reasonString(state.reason))
             is ImageGenerationUiState.CompletedArtifactUnavailable -> stringResource(
                 R.string.chat_message_tool_generate_image_completed_artifact_unavailable
@@ -183,10 +208,19 @@ object ImageGenerationToolUI : ToolUIRenderer {
             ?.get("reason")
             ?.jsonPrimitiveOrNull
             ?.contentOrNull
-        if (requestedBackground || backgroundUpdated || backgroundReason != null) {
+        val backgroundPending = requestedBackground && context.resultStatus() == null && when (context.phase) {
+            ToolCallPhase.CALL_STREAMING,
+            ToolCallPhase.READY,
+            ToolCallPhase.AWAITING_APPROVAL,
+            ToolCallPhase.EXECUTING,
+            -> true
+
+            else -> false
+        }
+        if (backgroundPending || backgroundUpdated || backgroundReason != null) {
             Text(
                 text = when {
-                    context.loading && requestedBackground && context.resultStatus() == null ->
+                    backgroundPending ->
                         stringResource(R.string.chat_message_tool_generate_image_background_pending)
                     backgroundUpdated ->
                         stringResource(R.string.chat_message_tool_generate_image_background_updated)

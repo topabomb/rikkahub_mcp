@@ -166,7 +166,7 @@ class ChatDrawerVM(
      * 删除文件夹。若文件夹内有正在生成回复的会话，拒绝删除并返回 false（UI 层据此提示用户）。
      */
     fun deleteFolder(folderId: Uuid): Boolean {
-        if (conversationApplicationService.hasGeneratingConversationInFolder(folderId)) {
+        if (conversationApplicationService.hasActiveConversationTurnInFolder(folderId)) {
             return false
         }
         viewModelScope.launch {

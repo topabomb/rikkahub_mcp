@@ -81,7 +81,7 @@ class ConversationRuntime(
             val active = current.activeTurn
             if (active != null && active.matches(handle)) {
                 applied = true
-                current.copy(activeTurn = active.copy(messages = messages))
+                current.copy(activeTurn = active.withStreamingMessages(messages))
             } else {
                 applied = false
                 current
@@ -122,6 +122,7 @@ class ConversationRuntime(
             val reduced = ConversationReducer.reduce(old, command)
             val durable = when (command) {
                 is UpdateHeader,
+                is UpdateTitleIfCurrent,
                 is MoveToAssistant,
                 TogglePinned,
                 is CommitCheckpoint,
@@ -137,14 +138,29 @@ class ConversationRuntime(
             _snapshot.update { latest ->
                 when (command) {
                     is UpdateHeader,
+                    is UpdateTitleIfCurrent,
                     is MoveToAssistant,
                     TogglePinned,
                     is CommitCheckpoint,
                     is UpdateToolApproval,
                     -> {
-                        val next = committed.copy(
-                            activeTurn = latest.activeTurn?.takeIf { active -> old.activeTurn?.sameOwner(active) == true },
-                        )
+                        val latestActive = latest.activeTurn
+                            ?.takeIf { active -> old.activeTurn?.sameOwner(active) == true }
+                        // Approval decisions are durable first, but the resident projection must
+                        // carry the same narrow change. Reapplying the pure reducer to the latest
+                        // same-owner stream snapshot preserves deltas that arrived during IO.
+                        val publishedActive = if (
+                            (command is UpdateToolApproval ||
+                                command is CommitCheckpoint) && latestActive != null
+                        ) {
+                            ConversationReducer.reduce(
+                                committed.copy(activeTurn = latestActive),
+                                command,
+                            ).activeTurn
+                        } else {
+                            latestActive
+                        }
+                        val next = committed.copy(activeTurn = publishedActive)
                         if (next == latest) latest else next
                     }
                     else -> committed
@@ -189,6 +205,7 @@ class ConversationRuntime(
                 command.handle.conversationId != id || snapshot.activeTurn?.matches(command.handle) != true
             ) throw ConversationCommandConflictException("stale finalization for turn ${command.handle.turnId}")
             is UpdateHeader -> Unit
+            is UpdateTitleIfCurrent -> Unit
             is MoveToAssistant -> Unit
             TogglePinned -> Unit
             is UpdateToolApproval -> Unit

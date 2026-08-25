@@ -51,7 +51,8 @@ class ConversationQueryServiceTest {
             repository = mockk<ConversationRepository>(relaxed = true),
             runtimeRegistry = registry,
             folderRepository = mockk<FolderRepository>(relaxed = true),
-            titleGenerationTracker = mockk<AutoTitleGenerationTracker>(relaxed = true),
+            titleCoordinator = mockk<ConversationTitleCoordinator>(relaxed = true),
+            attachmentPreviewProjector = mockk(relaxed = true),
         )
     }
 }

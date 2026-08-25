@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='UTF-8'?>
 <resources>
   <string name="about_page_license">라이선스</string>
   <string name="about_page_documentation">문서</string>
@@ -171,8 +171,8 @@
   <string name="backup_page_delete_success">삭제 성공</string>
   <string name="backup_page_export_desc">앱 데이터를 파일로 내보내기</string>
   <string name="backup_page_exporting">내보내는 중...</string>
-    <string name="backup_page_files">파일</string>
-    <string name="backup_page_durable_aggregate">채팅 및 관리 파일</string>
+  <string name="backup_page_files">파일</string>
+  <string name="backup_page_durable_aggregate">채팅 및 관리 파일</string>
   <string name="backup_page_import_desc">로컬 백업 파일 가져오기</string>
   <string name="backup_page_import_export">로컬</string>
   <string name="backup_page_importing">가져오는 중...</string>
@@ -1481,5 +1481,16 @@
   <string name="workspace_detail_export_failed">파일을 내보내지 못했습니다</string>
   <string name="workspace_detail_delete_failed">파일을 삭제하지 못했습니다</string>
   <string name="chat_page_export_failed">내보내기에 실패했습니다: %1$s</string>
+  <string name="chat_message_tool_phase_call_streaming">호출 구성 중</string>
+  <string name="chat_message_tool_phase_ready">실행 대기</string>
+  <string name="chat_message_tool_phase_awaiting_approval">승인 대기</string>
+  <string name="chat_message_tool_phase_executing">실행 중</string>
+  <string name="chat_message_tool_phase_completed">완료</string>
+  <string name="chat_message_tool_phase_failed">실패</string>
+  <string name="chat_message_tool_phase_denied">거부됨</string>
+  <string name="chat_message_tool_phase_answered">답변됨</string>
+  <string name="chat_message_tool_phase_cancelled">취소됨</string>
+  <string name="chat_message_tool_phase_interrupted">중단됨</string>
+  <string name="conversation_turn_awaiting_approval">승인이 필요합니다</string>
 </resources>
 

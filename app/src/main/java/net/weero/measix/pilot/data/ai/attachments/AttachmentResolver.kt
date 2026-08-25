@@ -46,11 +46,12 @@ class AttachmentResolver(
         val createdArtifacts = mutableListOf<OwnedArtifact>()
         val resolved = ArrayList<UIMessagePart.Image>(refs.size)
         val seenFiles = LinkedHashSet<String>()
+        val referenceIndex = AttachmentReferenceLookup.index(masterMessages)
         // 同一远程 url 在本次批量解析内只 fetch/落盘一次；命中后按调用方 preferredRef 重打标记。
         val remoteResolved = HashMap<String, UIMessagePart.Image>()
         try {
             for (ref in refs) {
-                when (val one = resolveOne(masterMessages, ref, createdArtifacts, remoteResolved)) {
+                when (val one = resolveOne(masterMessages, referenceIndex, ref, createdArtifacts, remoteResolved)) {
                     is AttachmentResolveResult.Failure -> {
                         discardCreated(createdArtifacts)
                         return one
@@ -99,13 +100,20 @@ class AttachmentResolver(
 
     private suspend fun resolveOne(
         masterMessages: List<UIMessage>,
+        referenceIndex: AttachmentReferenceIndex,
         rawRef: String,
         createdArtifacts: MutableList<OwnedArtifact>,
         remoteResolved: MutableMap<String, UIMessagePart.Image>,
     ): AttachmentResolveResult {
         val ref = rawRef.trim()
         return when {
-            AttachmentRefs.parse(ref) != null -> resolveAttachmentHandle(masterMessages, ref, createdArtifacts, remoteResolved)
+            AttachmentRefs.parse(ref) != null -> resolveAttachmentHandle(
+                masterMessages,
+                referenceIndex,
+                ref,
+                createdArtifacts,
+                remoteResolved,
+            )
             LocalToolPath.parseUploadToolPath(ref) != null -> resolveUploadPath(masterMessages, ref)
             ref.startsWith("file:", ignoreCase = true) -> resolveFileUrl(masterMessages, ref)
             ref.startsWith("http://", ignoreCase = true) ||
@@ -116,28 +124,29 @@ class AttachmentResolver(
 
     private suspend fun resolveAttachmentHandle(
         masterMessages: List<UIMessage>,
+        referenceIndex: AttachmentReferenceIndex,
         ref: String,
         createdArtifacts: MutableList<OwnedArtifact>,
         remoteResolved: MutableMap<String, UIMessagePart.Image>,
     ): AttachmentResolveResult {
         val normalized = AttachmentRefs.format(AttachmentRefs.parse(ref) ?: return notFound())
-        val part = AttachmentRefs.walkMessageParts(masterMessages).firstOrNull { candidate ->
-            AttachmentRefs.getRef(candidate)?.let { AttachmentRefs.parse(it) }?.let { AttachmentRefs.format(it) } ==
-                normalized
-        }
-        if (part != null) {
-            return materializeExistingPart(
+        return when (val target = referenceIndex[normalized]) {
+            is AttachmentReferenceTarget.MessagePart -> materializeExistingPart(
                 masterMessages,
-                part,
+                target.part,
                 preferredRef = normalized,
                 createdArtifacts = createdArtifacts,
                 remoteResolved = remoteResolved,
             )
+
+            is AttachmentReferenceTarget.ManagedArtifact -> {
+                val file = runCatching { artifactStore.file(target.artifact) }.getOrNull() ?: return notFound()
+                if (!file.isFile || !isAllowedLocalFile(file)) return notFound()
+                wrapLocalImage(masterMessages, file, preferredRef = normalized)
+            }
+
+            null -> notFound()
         }
-        val metadataArtifact = findMetadataArtifact(masterMessages, normalized) ?: return notFound()
-        val file = metadataArtifact.file(context.filesDir)
-        if (!file.isFile || !isAllowedLocalFile(file)) return notFound()
-        return wrapLocalImage(masterMessages, file, preferredRef = normalized)
     }
 
     private suspend fun resolveUploadPath(
@@ -308,23 +317,6 @@ class AttachmentResolver(
             }
         }
         return false
-    }
-
-    private fun findMetadataArtifact(
-        messages: List<UIMessage>,
-        normalizedRef: String,
-    ): LocalArtifactRef? {
-        for (part in AttachmentRefs.walkMessageParts(messages)) {
-            if (part !is UIMessagePart.Tool) continue
-            val call = part.getSubAssistantCallMetadata(JsonInstant) ?: continue
-            for (item in call.artifacts) {
-                val itemRef = AttachmentRefs.parse(item.ref)?.let { AttachmentRefs.format(it) }
-                if (itemRef == normalizedRef) {
-                    return item.artifact
-                }
-            }
-        }
-        return null
     }
 
     private fun findRefForFile(messages: List<UIMessage>, file: File): String? {

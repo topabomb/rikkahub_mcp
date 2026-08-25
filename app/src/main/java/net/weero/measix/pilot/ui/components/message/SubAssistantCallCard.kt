@@ -49,6 +49,7 @@ import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallPhase
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.data.ai.subassistant.fallbackSubAssistantOutputText
+import net.weero.measix.pilot.service.runtime.ToolCallPhase
 import net.weero.measix.pilot.data.ai.subassistant.parseRuntimeErrorDetailFromToolOutput
 import net.weero.measix.pilot.data.ai.subassistant.parseSubAssistantToolResultFields
 import net.weero.measix.pilot.data.ai.subassistant.resolveSubAssistantErrorBody
@@ -409,7 +410,7 @@ fun SubAssistantCallCard(
                             ChainOfThought(steps = listOf(askTool)) { pendingTool ->
                                 AskUserToolStep(
                                     tool = pendingTool,
-                                    loading = false,
+                                    phase = ToolCallPhase.AWAITING_APPROVAL,
                                     onAnswer = onAnswer?.let { callback ->
                                         { answer ->
                                             callback(metadata.runId, interaction.interactionId, answer)

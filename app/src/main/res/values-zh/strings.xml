@@ -171,8 +171,8 @@
   <string name="backup_page_delete_success">删除成功</string>
   <string name="backup_page_export_desc">导出APP数据为文件</string>
   <string name="backup_page_exporting">正在导出...</string>
-    <string name="backup_page_files">文件</string>
-    <string name="backup_page_durable_aggregate">聊天记录与受管文件</string>
+  <string name="backup_page_files">文件</string>
+  <string name="backup_page_durable_aggregate">聊天记录与受管文件</string>
   <string name="backup_page_import_desc">导入本地备份文件</string>
   <string name="backup_page_import_export">本地</string>
   <string name="backup_page_importing">正在恢复...</string>
@@ -1481,5 +1481,16 @@
   <string name="workspace_detail_export_failed">导出文件失败</string>
   <string name="workspace_detail_delete_failed">删除文件失败</string>
   <string name="chat_page_export_failed">导出失败：%1$s</string>
+  <string name="chat_message_tool_phase_call_streaming">组装调用</string>
+  <string name="chat_message_tool_phase_ready">待执行</string>
+  <string name="chat_message_tool_phase_awaiting_approval">待授权</string>
+  <string name="chat_message_tool_phase_executing">执行中</string>
+  <string name="chat_message_tool_phase_completed">已完成</string>
+  <string name="chat_message_tool_phase_failed">失败</string>
+  <string name="chat_message_tool_phase_denied">已拒绝</string>
+  <string name="chat_message_tool_phase_answered">已回答</string>
+  <string name="chat_message_tool_phase_cancelled">已取消</string>
+  <string name="chat_message_tool_phase_interrupted">已中断</string>
+  <string name="conversation_turn_awaiting_approval">等待授权</string>
 </resources>
 

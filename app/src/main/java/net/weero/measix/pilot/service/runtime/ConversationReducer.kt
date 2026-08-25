@@ -1,9 +1,12 @@
 package net.weero.measix.pilot.service.runtime
 
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefBackfill
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import me.rerere.ai.ui.MessageTerminalStatus
 import me.rerere.ai.ui.finishReasoning
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
@@ -27,18 +30,23 @@ internal object ConversationReducer {
 
     fun reduce(current: ConversationSnapshot, command: ConversationCommand): ConversationSnapshot = when (command) {
         is StartTurn -> startTurn(current, command)
-        is CommitCheckpoint -> replaceMessages(current, command.handle.assistantMessageId, command.messages)
+        is CommitCheckpoint -> commitCheckpoint(current, command)
         is FinalizeTurn -> finalizeTurn(current, command)
         is RecoverInterruptedTurn -> recoverInterruptedTurn(current, command)
         is ReconcileOrphanedTurnExecution -> reconcileOrphanedTurnExecution(current, command)
-        is AppendUserMessage -> appendUser(current, command.message)
+        is AppendUserMessage -> appendUser(current, command)
         is EditMessageVariant -> editVariant(current, command)
         is DeleteMessage -> deleteMessage(current, command)
         is SelectNodeVariant -> selectNodeVariant(current, command)
         is TruncateToNodeIndex -> truncateTo(current, command.nodeIndexInclusive)
         is ReplaceMessageTree -> current.copy(nodes = command.nodes)
-        is BackfillAttachmentRefs -> backfillAttachmentRefs(current, command.nodes)
+        is BackfillAttachmentRefs -> backfillAttachmentRefs(current, command.backfills)
         is UpdateHeader -> current.copy(header = reduceHeader(current.header, command))
+        is UpdateTitleIfCurrent -> if (current.header.title == command.expectedTitle) {
+            current.copy(header = current.header.copy(title = command.title))
+        } else {
+            current
+        }
         is MoveToAssistant -> current.copy(header = reduceHeader(current.header, command))
         TogglePinned -> current.copy(header = reduceHeader(current.header, TogglePinned))
         is UpdateToolApproval -> updateToolApproval(current, command)
@@ -126,6 +134,8 @@ internal object ConversationReducer {
         current: ConversationSnapshot,
         command: ReconcileOrphanedTurnExecution,
     ): ConversationSnapshot {
+        // Recovery may observe an execution fact without its owning message. The fact is closed
+        // explicitly; recovery must not invent a message or weaken the live-turn owner invariant.
         require(
             command.assistantMessageId == null ||
                 current.findMessage(command.assistantMessageId) == null
@@ -154,11 +164,18 @@ internal object ConversationReducer {
 
     // ---- 树操作 ----
 
-    private fun appendUser(current: ConversationSnapshot, message: UIMessage): ConversationSnapshot {
+    private fun appendUser(current: ConversationSnapshot, command: AppendUserMessage): ConversationSnapshot {
         // append 用户消息意味着会话不再处于"新会话"运行态（@Transient 标记）
         return current.copy(
-            nodes = current.nodes + MessageNode.of(message),
-            header = current.header.copy(newConversation = false),
+            nodes = current.nodes + MessageNode.of(command.message),
+            header = current.header.copy(
+                title = if (current.header.title.isBlank()) {
+                    command.initialTitle ?: current.header.title
+                } else {
+                    current.header.title
+                },
+                newConversation = false,
+            ),
         )
     }
 
@@ -229,12 +246,10 @@ internal object ConversationReducer {
 
     private fun backfillAttachmentRefs(
         current: ConversationSnapshot,
-        nodes: List<MessageNode>,
+        backfills: List<AttachmentRefBackfill>,
     ): ConversationSnapshot {
-        require(nodes.size == current.nodes.size && nodes.indices.all { nodes[it].id == current.nodes[it].id }) {
-            "attachment reference backfill cannot change the message tree shape"
-        }
-        return if (nodes == current.nodes) current else current.copy(nodes = nodes)
+        val nodes = AttachmentRefs.applyBackfills(current.nodes, backfills)
+        return if (nodes === current.nodes) current else current.copy(nodes = nodes)
     }
 
     // ---- Header（只动 header，不触碰 nodes）----
@@ -273,38 +288,73 @@ internal object ConversationReducer {
         old.copy(isPinned = !old.isPinned)
 
     /**
-     * HITL 工具审批：仅作用于最后一条消息；按 toolOrdinal 定位；目标必须是未执行且
-     * Pending 的工具；只变更 approvalState（Denied 的 cancelled output 由终态取消路径
-     * 写入，此处不写——resume 生成会按 Denied 状态继续）。
+     * HITL 工具审批按稳定的 messageId + toolOrdinal 定位；目标必须是未执行且 Pending。
+     * durable node 与 active-turn projection 必须由同一次纯变换得到，否则提交后的旧投影会
+     * 遮住已持久化决定，使 UI 与 resume 仍看到 Pending。Runtime 只会在 durable commit 成功
+     * 后以同一命令重放到最新 projection，因此相同决定必须幂等。Denied 的输出由恢复生成/终态路径负责，
+     * 本命令只写决定。
      */
     private fun updateToolApproval(current: ConversationSnapshot, command: UpdateToolApproval): ConversationSnapshot {
-        val currentMessage = current.currentMessages().lastOrNull() ?: return current
-        if (currentMessage.id != command.messageId) return current
+        val durableMessage = current.findMessage(command.messageId) ?: return current
+        val updatedDurableMessage = updateToolApproval(durableMessage, command) ?: return current
+        val durable = current.replaceMessageById(
+            messageId = command.messageId,
+            replacement = updatedDurableMessage,
+            requireLastNode = true,
+        )
+        val updatedActiveTurn = current.activeTurn?.let { active ->
+            val messageIndex = active.messages.indexOfFirst { it.id == command.messageId }
+            if (messageIndex < 0) {
+                active
+            } else {
+                val updatedActiveMessage = requireNotNull(
+                    updateToolApproval(active.messages[messageIndex], command)
+                ) { "active approval projection disagrees with its durable owner" }
+                val committedPhase = when (command.approvalState) {
+                    ToolApprovalState.Approved -> ToolCallPhase.READY
+                    is ToolApprovalState.Denied -> ToolCallPhase.DENIED
+                    is ToolApprovalState.Answered -> ToolCallPhase.ANSWERED
+                    ToolApprovalState.Auto,
+                    ToolApprovalState.Pending,
+                    -> error("approval command contains a non-terminal decision")
+                }
+                active.copy(
+                    messages = active.messages.toMutableList().apply { set(messageIndex, updatedActiveMessage) },
+                    toolCallPhases = active.toolCallPhases + (
+                        ToolCallLocator(command.messageId, command.toolOrdinal) to committedPhase
+                    ),
+                )
+            }
+        }
+        return durable.copy(activeTurn = updatedActiveTurn)
+    }
+
+    private fun commitCheckpoint(current: ConversationSnapshot, command: CommitCheckpoint): ConversationSnapshot {
+        val replaced = replaceMessages(current, command.handle.assistantMessageId, command.messages)
+        val active = current.activeTurn ?: return replaced
+        return replaced.copy(activeTurn = active.afterCheckpoint(command))
+    }
+
+    private fun updateToolApproval(
+        message: UIMessage,
+        command: UpdateToolApproval,
+    ): UIMessage? {
         var ordinal = 0
         var matched = false
-        val updatedParts = currentMessage.parts.map { part ->
+        val updatedParts = message.parts.map { part ->
             if (part !is UIMessagePart.Tool) return@map part
             val currentOrdinal = ordinal++
             if (currentOrdinal != command.toolOrdinal) return@map part
-            if (part.isExecuted || part.approvalState !is ToolApprovalState.Pending) return current
+            if (part.isExecuted) return null
+            if (part.approvalState == command.approvalState) {
+                matched = true
+                return@map part
+            }
+            if (part.approvalState !is ToolApprovalState.Pending) return null
             matched = true
             part.copy(approvalState = command.approvalState)
         }
-        if (!matched) return current
-        val updatedMessage = currentMessage.copy(parts = updatedParts)
-        return current.copy(
-            nodes = current.nodes.map { node ->
-                if (node.currentMessage.id == currentMessage.id) {
-                    node.copy(
-                        messages = node.messages.mapIndexed { index, message ->
-                            if (index == node.selectIndex) updatedMessage else message
-                        }
-                    )
-                } else {
-                    node
-                }
-            }
-        )
+        return if (matched) message.copy(parts = updatedParts) else null
     }
 
     // ---- 私有纯工具 ----

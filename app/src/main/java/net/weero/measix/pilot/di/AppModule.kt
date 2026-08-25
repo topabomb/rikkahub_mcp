@@ -16,13 +16,14 @@ import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.service.AssistantManagementService
 import net.weero.measix.pilot.service.ArtifactUseCase
-import net.weero.measix.pilot.service.AutoTitleGenerationTracker
+import net.weero.measix.pilot.service.ConversationTitleCoordinator
 import net.weero.measix.pilot.service.MediaExportService
 import net.weero.measix.pilot.service.ApplicationRecoveryCoordinator
 import net.weero.measix.pilot.service.ApplicationRecoveryGate
 import net.weero.measix.pilot.service.ChatNotificationManager
 import net.weero.measix.pilot.service.MasterTurnCoordinator
 import net.weero.measix.pilot.service.ConversationApplicationService
+import net.weero.measix.pilot.service.ConversationAttachmentPreviewProjector
 import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.service.CustomChatFontService
 import net.weero.measix.pilot.service.SearchIndexMaintenanceService
@@ -302,7 +303,7 @@ val appModule = module {
         )
     }
 
-    single { AutoTitleGenerationTracker() }
+    single { ConversationTitleCoordinator() }
 
     single {
         GenerationSideEffects(
@@ -316,7 +317,7 @@ val appModule = module {
             soundEffectPlayer = get(),
             json = get(),
             chatErrorStore = get(),
-            autoTitleGeneration = get(),
+            titleCoordinator = get(),
         )
     }
 
@@ -344,6 +345,7 @@ val appModule = module {
             artifactStore = get(),
             artifactUseCase = get(),
             toolArtifactRewriter = get(),
+            titleCoordinator = get(),
         )
     }
 
@@ -362,10 +364,12 @@ val appModule = module {
             turnFinalization = get(),
             json = get(),
             toolArtifactRewriter = get(),
+            titleCoordinator = get(),
         )
     }
 
-    single { ConversationQueryService(get(), get(), get(), get()) }
+    single { ConversationAttachmentPreviewProjector(get()) }
+    single { ConversationQueryService(get(), get(), get(), get(), get()) }
     single { CustomChatFontService(get(), get()) }
     single { SearchIndexMaintenanceService(get(), get()) }
     single { FavoriteService(get(), get()) }

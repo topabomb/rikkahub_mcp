@@ -41,7 +41,9 @@ class TurnEngineTest {
         val engine: TurnEngine,
     )
 
-    private fun harness(): Harness {
+    private fun harness(
+        prepareFinalize: (suspend (TurnOutcome, List<UIMessage>) -> List<UIMessage>)? = null,
+    ): Harness {
         val id = Uuid.random()
         val runtime = mockk<ConversationRuntime>()
         every { runtime.id } returns id
@@ -50,7 +52,7 @@ class TurnEngineTest {
         val coordinator = mockk<ConversationCommandCoordinator>()
         coEvery { coordinator.executeOrThrow(any(), any()) } returns Unit
         val handle = TurnHandle(id, 1, Uuid.random(), Uuid.random())
-        return Harness(coordinator, runtime, handle, TurnEngine(coordinator, runtime, handle))
+        return Harness(coordinator, runtime, handle, TurnEngine(coordinator, runtime, handle, prepareFinalize))
     }
 
     @Test
@@ -100,12 +102,17 @@ class TurnEngineTest {
 
     @Test
     fun `provider failure submits failed outcome and retains the exception`() = runTest {
-        val harness = harness()
+        var preparedMessages: List<UIMessage>? = null
+        val harness = harness { _, messages ->
+            preparedMessages = messages
+            messages
+        }
         val failure = IllegalStateException("provider failed")
+        val partial = listOf(msg("partial after checkpoint"))
 
         val events = harness.engine.bind(
             flow {
-                emit(GenerationChunk.Messages(listOf(msg("partial"))))
+                emit(GenerationChunk.Messages(partial))
                 throw failure
             }
         ).toListSafe()
@@ -114,7 +121,10 @@ class TurnEngineTest {
         assertEquals(failure, outcome.error)
         val commands = mutableListOf<ConversationCommand>()
         coVerify { harness.coordinator.executeOrThrow(any(), capture(commands)) }
-        assertTrue(commands.any { it is FinalizeTurn && it.terminalStatus == TurnExecutionStatus.FAILED })
+        val finalize = commands.filterIsInstance<FinalizeTurn>().single()
+        assertEquals(TurnExecutionStatus.FAILED, finalize.terminalStatus)
+        assertEquals(partial, preparedMessages)
+        assertEquals(partial, finalize.messages)
     }
 
     @Test
@@ -137,12 +147,17 @@ class TurnEngineTest {
 
     @Test
     fun `cancellation submits cancelled once and rethrows`() = runTest {
-        val harness = harness()
+        var preparedMessages: List<UIMessage>? = null
+        val harness = harness { _, messages ->
+            preparedMessages = messages
+            messages
+        }
+        val partial = listOf(msg("partial after checkpoint"))
 
         val thrown = runCatching {
             harness.engine.bind(
                 flow {
-                    emit(GenerationChunk.Messages(listOf(msg("partial"))))
+                    emit(GenerationChunk.Messages(partial))
                     throw CancellationException("stop")
                 }
             ).collect { }
@@ -151,8 +166,10 @@ class TurnEngineTest {
         assertTrue(thrown is CancellationException)
         val commands = mutableListOf<ConversationCommand>()
         coVerify { harness.coordinator.executeOrThrow(any(), capture(commands)) }
-        assertEquals(1, commands.filterIsInstance<FinalizeTurn>().size)
-        assertEquals(TurnExecutionStatus.CANCELLED, commands.filterIsInstance<FinalizeTurn>().single().terminalStatus)
+        val finalize = commands.filterIsInstance<FinalizeTurn>().single()
+        assertEquals(TurnExecutionStatus.CANCELLED, finalize.terminalStatus)
+        assertEquals(partial, preparedMessages)
+        assertEquals(partial, finalize.messages)
     }
 
     @Test

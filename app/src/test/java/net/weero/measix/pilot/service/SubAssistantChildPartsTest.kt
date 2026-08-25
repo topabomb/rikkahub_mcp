@@ -41,7 +41,12 @@ class SubAssistantChildPartsTest {
             },
         )
         val artifactStore = mockk<ArtifactStore>(relaxed = true)
-        val copied = AttachmentCloner.clonePart(image, artifactStore, mutableListOf()) as UIMessagePart.Image
+        val copied = AttachmentCloner.clonePart(
+            image,
+            artifactStore,
+            mutableListOf(),
+            mockk(relaxed = true),
+        ) as UIMessagePart.Image
         assertEquals(ref, AttachmentRefs.getRef(copied))
         assertEquals("sig", (copied.metadata!!["thoughtSignature"] as JsonPrimitive).content)
         assertEquals(image.url, copied.url)
@@ -65,6 +70,7 @@ class SubAssistantChildPartsTest {
             tool,
             mockk(relaxed = true),
             mutableListOf<OwnedArtifact>(),
+            mockk(relaxed = true),
         ) as UIMessagePart.Tool
         assertEquals(ref, AttachmentRefs.getRef(copied.output.single()))
         assertTrue(copied.output.single() is UIMessagePart.Image)

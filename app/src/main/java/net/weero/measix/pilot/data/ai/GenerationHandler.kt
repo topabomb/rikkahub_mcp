@@ -239,6 +239,9 @@ enum class CheckpointKind {
 
     @Serializable
     TOOL_EXECUTION_STARTED,
+
+    @Serializable
+    AWAITING_APPROVAL,
 }
 
 @Serializable

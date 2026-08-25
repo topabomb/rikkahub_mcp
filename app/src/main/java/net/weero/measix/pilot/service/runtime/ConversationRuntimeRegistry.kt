@@ -1,7 +1,6 @@
 package net.weero.measix.pilot.service.runtime
 
 import android.util.Log
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
@@ -166,26 +165,33 @@ class ConversationRuntimeRegistry(
         expected.acquireLease()
     }
 
-    fun getGenerationJobFlow(conversationId: Uuid): Flow<Job?> =
-        observeRuntimeState(conversationId).flatMapLatest { state ->
-            state.runtimeOrNull()?.generationJob ?: flowOf(null)
-        }
-
     fun getProcessingStatusFlow(conversationId: Uuid): Flow<String?> =
         observeRuntimeState(conversationId).flatMapLatest { state ->
             state.runtimeOrNull()?.processingStatus ?: flowOf(null)
         }
 
-    fun getConversationJobs(): Flow<Map<Uuid, Job?>> = _runtimesVersion.flatMapLatest {
-        val current = activeRuntimes()
-        if (current.isEmpty()) {
-            flowOf(emptyMap())
-        } else {
-            combine(current.map { runtime ->
-                runtime.generationJob.map { job -> runtime.id to job }
-            }) { pairs -> pairs.filter { it.second != null }.toMap() }
+    fun getTurnPresentationFlow(conversationId: Uuid): Flow<ConversationTurnPresentation> =
+        observeRuntimeState(conversationId).flatMapLatest { state ->
+            state.runtimeOrNull()?.let { runtime ->
+                combine(runtime.generationJob, runtime.snapshot, ::resolveConversationTurnPresentation)
+            } ?: flowOf(ConversationTurnPresentation.IDLE)
         }
-    }
+
+    fun getConversationTurnPresentations(): Flow<Map<Uuid, ConversationTurnPresentation>> =
+        _runtimesVersion.flatMapLatest {
+            val current = activeRuntimes()
+            if (current.isEmpty()) {
+                flowOf(emptyMap())
+            } else {
+                combine(current.map { runtime ->
+                    combine(runtime.generationJob, runtime.snapshot) { job, snapshot ->
+                        runtime.id to resolveConversationTurnPresentation(job, snapshot)
+                    }
+                }) { pairs ->
+                    pairs.filter { (_, phase) -> phase != ConversationTurnPresentation.IDLE }.toMap()
+                }
+            }
+        }
 
     fun activeRuntimes(): List<ConversationRuntime> = entries.values.mapNotNull { entry ->
         entry.state.value.runtimeOrNull()

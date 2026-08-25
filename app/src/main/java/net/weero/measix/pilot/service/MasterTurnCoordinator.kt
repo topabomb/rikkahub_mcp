@@ -95,8 +95,10 @@ import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 import net.weero.measix.pilot.service.runtime.TurnPipelineFactory
 import net.weero.measix.pilot.service.runtime.TurnEngine
 import net.weero.measix.pilot.service.runtime.TurnEvent
+import net.weero.measix.pilot.service.runtime.TurnHandle
 import net.weero.measix.pilot.service.runtime.TurnOutcome
 import net.weero.measix.pilot.service.runtime.AppendUserMessage
+import net.weero.measix.pilot.service.runtime.ActiveTurnState
 import net.weero.measix.pilot.service.runtime.BackfillAttachmentRefs
 import net.weero.measix.pilot.service.runtime.CommitCheckpoint
 import net.weero.measix.pilot.service.runtime.DelegationCoordinator
@@ -111,6 +113,93 @@ import net.weero.measix.pilot.service.runtime.UpdateHeader
 import net.weero.measix.pilot.service.runtime.UpdateToolApproval
 
 private const val TAG = "MasterTurnCoordinator"
+
+/** Master generation has two non-interchangeable entry protocols. */
+internal enum class MasterTurnEntry {
+    /** Opens a new durable turn after structural preflight. */
+    START,
+
+    /** Continues the existing approval-paused owner without mutating the message tree. */
+    CONTINUE_APPROVAL,
+}
+
+internal data class MasterTurnLaunchPolicy(
+    val runStructuralPreflight: Boolean,
+    val reuseTtsQueue: Boolean,
+)
+
+/**
+ * Validates the entry against its owning snapshot before any command is submitted.
+ * Approval continuation must retain the current turn owner and cannot become a second start path.
+ */
+internal fun masterTurnLaunchPolicy(
+    entry: MasterTurnEntry,
+    snapshot: ConversationSnapshot,
+    turnId: Uuid,
+    messageRange: ClosedRange<Int>?,
+): MasterTurnLaunchPolicy = when (entry) {
+    MasterTurnEntry.START -> {
+        check(snapshot.activeTurn == null) { "a new master turn cannot start while another turn is active" }
+        MasterTurnLaunchPolicy(runStructuralPreflight = true, reuseTtsQueue = false)
+    }
+
+    MasterTurnEntry.CONTINUE_APPROVAL -> {
+        check(messageRange == null) { "an approval continuation cannot use a message range" }
+        val active = requireNotNull(snapshot.activeTurn) { "approval continuation has no active turn" }
+        check(active.turnId == turnId) {
+            "active turn ${active.turnId} does not match approval continuation $turnId"
+        }
+        MasterTurnLaunchPolicy(runStructuralPreflight = false, reuseTtsQueue = true)
+    }
+}
+
+/**
+ * Approval decisions are continuations of the active durable turn. This orchestration seam owns
+ * the exact approval command and makes it impossible for approve/deny to enter the new-turn
+ * structural preflight path.
+ */
+internal suspend fun applyToolApprovalDecision(
+    locator: ToolCallLocator,
+    approvalState: ToolApprovalState,
+    awaitPreviousGeneration: suspend () -> Unit,
+    currentSnapshot: () -> ConversationSnapshot,
+    submit: suspend (UpdateToolApproval) -> Unit,
+    onMoreApprovalsPending: suspend () -> Unit,
+    continueTurn: suspend (ActiveTurnState, MasterTurnEntry) -> Unit,
+) {
+    awaitPreviousGeneration()
+    val before = currentSnapshot()
+    val pending = before.currentMessages()
+        .firstOrNull { it.id == locator.messageId }
+        ?.getTools()
+        ?.getOrNull(locator.toolOrdinal)
+        ?.takeIf { it.approvalState == ToolApprovalState.Pending }
+        ?: return
+    check(!pending.isExecuted) { "executed tool cannot accept an approval decision" }
+
+    submit(
+        UpdateToolApproval(
+            messageId = locator.messageId,
+            toolOrdinal = locator.toolOrdinal,
+            approvalState = approvalState,
+        ),
+    )
+
+    val after = currentSnapshot()
+    val committed = after.currentMessages()
+        .firstOrNull { it.id == locator.messageId }
+        ?.getTools()
+        ?.getOrNull(locator.toolOrdinal)
+    check(committed?.approvalState == approvalState) { "tool approval command was not committed" }
+    if (after.currentMessages().lastOrNull()?.getTools()?.any { it.isPending } == true) {
+        onMoreApprovalsPending()
+        return
+    }
+    continueTurn(
+        requireNotNull(after.activeTurn) { "decided tool has no owning active turn" },
+        MasterTurnEntry.CONTINUE_APPROVAL,
+    )
+}
 
 /**
  * 主回合生成编排器。持久化命令、终态处理和边缘副作用分别委托给各自 owner。
@@ -185,11 +274,12 @@ class MasterTurnCoordinator(
     private val sideEffects: GenerationSideEffects,
     private val artifactStore: ArtifactStore,
     private val artifactUseCase: ArtifactUseCase,
-    private val toolArtifactRewriter: ToolArtifactRewriter? = null,
+    private val toolArtifactRewriter: ToolArtifactRewriter,
+    private val titleCoordinator: ConversationTitleCoordinator,
 ) {
     // workspace 系统提示注入 (依赖 workspaceRepository, 故在类内构造)
     private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
-    private val toolArtifactReplayTransformer = toolArtifactRewriter?.let(::ToolArtifactReplayTransformer)
+    private val toolArtifactReplayTransformer = ToolArtifactReplayTransformer(toolArtifactRewriter)
 
     // Master/Target 共用管道装配（取代顶层 inputTransformers/outputTransformers val）
     private val turnPipelineFactory = TurnPipelineFactory(
@@ -277,18 +367,29 @@ class MasterTurnCoordinator(
                 val assistant = settings.getAssistantById(currentSnapshot.header.assistantId)
                     ?: settings.getCurrentAssistant()
                 val processedContent = preprocessUserInputParts(content, assistant)
+                val userMessage = UIMessage(
+                    role = MessageRole.USER,
+                    parts = processedContent,
+                )
+                val localTitle = deriveLocalConversationTitle(userMessage)
 
                 // append 用户消息走命令协议（AppendUserMessage → reducer → delta 落库；
                 // reducer 同时清理 newConversation 运行态标记）
                 commandCoordinator.executeOrThrow(
                     conversationId,
                     AppendUserMessage(
-                        UIMessage(
-                            role = MessageRole.USER,
-                            parts = processedContent,
-                        )
+                        message = userMessage,
+                        initialTitle = localTitle,
                     ),
                 )
+                if (currentSnapshot.header.title.isBlank()) {
+                    val committedHeader = runtime.snapshot.value.header
+                    titleCoordinator.synchronize(
+                        conversationId = conversationId,
+                        title = committedHeader.title,
+                        localFallbackTitle = localTitle,
+                    )
+                }
                 artifactDraftScope?.publishCommittedReferences(processedContent)
 
                 // 开始补全
@@ -377,46 +478,34 @@ class MasterTurnCoordinator(
             try {
                 recoveryGate.awaitReady()
                 runtime.withToolApprovalLock {
-                    // Pending is emitted just before the generation Flow ends. Wait for its
-                    // final checkpoint/save instead of cancelling it. Rapid decisions for
-                    // several cards are serialized so one answer cannot cancel another.
-                    runtime.getJob()?.join()
-
-                    // 工具审批走 UpdateToolApproval 命令（reducer 纯变换 + delta 落库）
                     val newApprovalState = when {
                         answer != null -> ToolApprovalState.Answered(answer)
                         approved -> ToolApprovalState.Approved
                         else -> ToolApprovalState.Denied(reason)
                     }
-                    val before = runtime.snapshot.value
-                    commandCoordinator.executeOrThrow(
-                        conversationId,
-                        UpdateToolApproval(
-                            messageId = locator.messageId,
-                            toolOrdinal = locator.toolOrdinal,
-                            approvalState = newApprovalState,
-                        )
+                    applyToolApprovalDecision(
+                        locator = locator,
+                        approvalState = newApprovalState,
+                        // Pending is emitted immediately before the Flow terminates. Joining the
+                        // previous job guarantees its checkpoint is durable before the decision.
+                        awaitPreviousGeneration = { runtime.getJob()?.join() },
+                        currentSnapshot = { runtime.snapshot.value },
+                        submit = { command -> commandCoordinator.executeOrThrow(conversationId, command) },
+                        onMoreApprovalsPending = { _generationDoneFlow.emit(conversationId) },
+                        continueTurn = { owner, entry ->
+                            val turnId = owner.turnId
+                            runtime.trackGenerationTurn(turnId)
+                            val resumeJob = appScope.launch {
+                                launchRun(
+                                    conversationId = conversationId,
+                                    turnId = turnId,
+                                    entry = entry,
+                                )
+                                _generationDoneFlow.emit(conversationId)
+                            }
+                            runtime.setJob(resumeJob, turnId)
+                        },
                     )
-                    if (runtime.snapshot.value === before) return@withToolApprovalLock
-                    val hasPendingTools = runtime.snapshot.value.currentMessages().lastOrNull()
-                        ?.getTools()?.any { it.isPending } == true
-                    if (hasPendingTools) {
-                        _generationDoneFlow.emit(conversationId)
-                    } else {
-                        val turnId = requireNotNull(runtime.snapshot.value.activeTurn) {
-                            "approved tool has no owning turn: $conversationId"
-                        }.turnId
-                        runtime.trackGenerationTurn(turnId)
-                        val resumeJob = appScope.launch {
-                            launchRun(
-                                conversationId = conversationId,
-                                turnId = turnId,
-                                resumeExistingTtsTurn = true,
-                            )
-                            _generationDoneFlow.emit(conversationId)
-                        }
-                        runtime.setJob(resumeJob, turnId)
-                    }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -436,7 +525,7 @@ class MasterTurnCoordinator(
         conversationId: Uuid,
         turnId: Uuid,
         messageRange: ClosedRange<Int>? = null,
-        resumeExistingTtsTurn: Boolean = false,
+        entry: MasterTurnEntry = MasterTurnEntry.START,
     ) {
         var turnOutcome: TurnOutcome? = null
         var inFlightAssistantId: Uuid? = null
@@ -452,15 +541,20 @@ class MasterTurnCoordinator(
             val assistant = settings.getAssistantById(initialSnapshot.header.assistantId)
                 ?: settings.getCurrentAssistant()
             generationSoundEnabled = settings.displaySetting.enableMessageGenerationSoundEffect
+            val launchPolicy = masterTurnLaunchPolicy(entry, initialSnapshot, turnId, messageRange)
 
-            // reset suggestions
-            commandCoordinator.executeOrThrow(conversationId, UpdateHeader(suggestions = emptyList()))
-
-            checkInvalidMessages(conversationId)
-            val loadedSnapshot = liveSnapshot(conversationId)
-            val backfilledNodes = AttachmentRefs.backfillNodes(loadedSnapshot.renderNodes)
-            if (backfilledNodes !== loadedSnapshot.renderNodes) {
-                commandCoordinator.executeOrThrow(conversationId, BackfillAttachmentRefs(backfilledNodes))
+            if (launchPolicy.runStructuralPreflight) {
+                // Structural maintenance belongs exclusively to START. Approval and denial both
+                // continue the existing turn and must never submit tree commands while it is active.
+                commandCoordinator.executeOrThrow(conversationId, UpdateHeader(suggestions = emptyList()))
+                checkInvalidMessages(conversationId)
+                val attachmentRefBackfills = planDurableAttachmentRefBackfills(liveSnapshot(conversationId))
+                if (attachmentRefBackfills.isNotEmpty()) {
+                    commandCoordinator.executeOrThrow(
+                        conversationId,
+                        BackfillAttachmentRefs(attachmentRefBackfills),
+                    )
+                }
             }
 
             var snapshot = liveSnapshot(conversationId)
@@ -477,24 +571,32 @@ class MasterTurnCoordinator(
             val prepareFinalize: suspend (TurnOutcome, List<UIMessage>) -> List<UIMessage> =
                 { outcome, messages ->
                     if (outcome is TurnOutcome.Cancelled || outcome is TurnOutcome.Failed) {
-                        turnFinalization.closeOpenTools(
-                            snapshot = liveSnapshot(conversationId),
-                            messageId = requireNotNull(inFlightAssistantId) {
-                                "active master turn has no assistant message owner"
-                            },
+                        val latestSnapshot = liveSnapshot(conversationId)
+                        val active = requireNotNull(latestSnapshot.activeTurn) {
+                            "active master turn has no runtime owner"
+                        }
+                        val assistantMessageId = requireNotNull(inFlightAssistantId) {
+                            "active master turn has no assistant message owner"
+                        }
+                        turnFinalization.prepareOwnedTurnMessagesForFailure(
+                            snapshot = latestSnapshot,
+                            handle = TurnHandle(
+                                conversationId = conversationId,
+                                epoch = active.epoch,
+                                turnId = turnId,
+                                assistantMessageId = assistantMessageId,
+                            ),
+                            latestMessages = messages,
                             reason = requireNotNull(outcome.terminalReason),
                             cancelledByUser = outcome is TurnOutcome.Cancelled,
-                        ).currentMessages()
+                        )
                     } else {
                         val current = liveSnapshot(conversationId).currentMessages()
                         current.ifEmpty { messages }
                     }
                 }
-            // Approval continuation keeps the original TurnHandle/epoch. A new StartTurn is
-            // created only when no active approval-paused owner exists.
-            val activeTurn = snapshot.activeTurn
-            val started = if (activeTurn == null) {
-                TurnEngine.start(
+            val started = when (entry) {
+                MasterTurnEntry.START -> TurnEngine.start(
                     commandCoordinator = commandCoordinator,
                     runtime = runtime,
                     turnId = turnId,
@@ -502,18 +604,19 @@ class MasterTurnCoordinator(
                     resumeFilter = resumeFilter,
                     prepareFinalize = prepareFinalize,
                 )
-            } else {
-                check(messageRange == null) { "a ranged generation cannot continue an active turn" }
-                check(sourceMessages.lastOrNull()?.let(resumeFilter) == true) {
-                    "active turn does not point to a resumable approval message"
+
+                MasterTurnEntry.CONTINUE_APPROVAL -> {
+                    check(sourceMessages.lastOrNull()?.let(resumeFilter) == true) {
+                        "active turn does not point to a resumable approval message"
+                    }
+                    TurnEngine.continueActive(
+                        commandCoordinator = commandCoordinator,
+                        runtime = runtime,
+                        expectedTurnId = turnId,
+                        messages = sourceMessages,
+                        prepareFinalize = prepareFinalize,
+                    )
                 }
-                TurnEngine.continueActive(
-                    commandCoordinator = commandCoordinator,
-                    runtime = runtime,
-                    expectedTurnId = turnId,
-                    messages = sourceMessages,
-                    prepareFinalize = prepareFinalize,
-                )
             }
             val activeTurnEngine = started.engine
             turnEngine = activeTurnEngine
@@ -554,7 +657,7 @@ class MasterTurnCoordinator(
             // 在整轮 turn 内被 Master 和所有 Target 共享。播放器以 sessionId 独占队列：
             // 新 turn 替换旧队列；同一 turn 是否追加由顺序播放开关决定。
             val turnTtsContext = TtsToolPlaybackContext(
-                sessionId = runtime.getTtsQueueSessionId(resumeExistingTtsTurn),
+                sessionId = runtime.getTtsQueueSessionId(launchPolicy.reuseTtsQueue),
                 assistantId = assistant.id,
                 assistantName = assistant.name,
                 sourceType = TtsPlaybackSource.SourceType.NORMAL,
@@ -716,7 +819,7 @@ class MasterTurnCoordinator(
 
     private suspend fun checkInvalidMessages(conversationId: Uuid) {
         val snapshot = liveSnapshot(conversationId)
-        val messagesNodes = retainValidMessageNodes(snapshot.renderNodes)
+        val messagesNodes = retainValidMessageNodes(snapshot.nodes)
         if (messagesNodes == snapshot.nodes) return
         // 无效消息清理 = 树替换（命令通道 delta 落库）
         commandCoordinator.executeOrThrow(conversationId, ReplaceMessageTree(messagesNodes))
@@ -749,3 +852,8 @@ class MasterTurnCoordinator(
         }
     }
 }
+
+/** Backfill plans are derived from durable nodes, never from the per-read rendering overlay. */
+internal fun planDurableAttachmentRefBackfills(
+    snapshot: ConversationSnapshot,
+) = AttachmentRefs.planBackfills(snapshot.nodes)

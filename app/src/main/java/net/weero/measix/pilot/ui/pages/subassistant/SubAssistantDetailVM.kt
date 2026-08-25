@@ -151,6 +151,12 @@ class SubAssistantDetailVM(
     val uiState: StateFlow<SubAssistantDetailUiState> = _uiState.asStateFlow()
     val settings = settingsStore.settingsFlow
 
+    fun attachmentPreviews(): Map<String, String> =
+        (_uiState.value as? SubAssistantDetailUiState.Ready)
+            ?.child
+            ?.let(detailReader::attachmentPreviews)
+            .orEmpty()
+
     init {
         loadValidatedRun()
     }

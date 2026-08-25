@@ -64,7 +64,7 @@ class AttachmentRefsTest {
     }
 
     @Test
-    fun `backfill stamps tool output images and preserves unchanged node identity`() {
+    fun `planned backfill stamps only the addressed nested tool image`() {
         val image = UIMessagePart.Image(url = "file:///tmp/tool.png")
         val tool = UIMessagePart.Tool(
             toolCallId = "c1",
@@ -75,12 +75,16 @@ class AttachmentRefsTest {
         )
         val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool))
         val nodes = listOf(net.weero.measix.pilot.data.model.MessageNode.of(message))
-        val backfilled = AttachmentRefs.backfillNodes(nodes)
+        val plan = AttachmentRefs.planBackfills(nodes)
+        assertEquals(1, plan.size)
+        assertEquals(listOf(0, 0), plan.single().partPath)
+        val backfilled = AttachmentRefs.applyBackfills(nodes, plan)
         assertNotEquals(nodes, backfilled)
         val stampedTool = backfilled.single().currentMessage.parts.single() as UIMessagePart.Tool
         assertEquals("sig", (stampedTool.metadata!!["thoughtSignature"] as JsonPrimitive).content)
         val stampedImage = stampedTool.output.single() as UIMessagePart.Image
         assertNotNull(AttachmentRefs.getRef(stampedImage))
-        assertSame(backfilled, AttachmentRefs.backfillNodes(backfilled))
+        assertTrue(AttachmentRefs.planBackfills(backfilled).isEmpty())
+        assertSame(backfilled, AttachmentRefs.applyBackfills(backfilled, plan))
     }
 }

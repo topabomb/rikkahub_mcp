@@ -1,0 +1,172 @@
+# Application Architecture V1
+
+本文档是 Pilot 当前应用架构的总览与边界参考。它定义稳定语义、唯一所有者、写入协议和跨领域依赖方向；具体实现细节由文末专题文档补充。代码与静态架构契约必须符合本文，行为或边界变化必须在同一变更中同步更新参考文档。
+
+## 产品语义
+
+Pilot 是 Android 本地 Agent 工作台。核心对象使用以下唯一语义：
+
+```text
+Work（一个 Conversation）
+└─ Turn（一轮交互）
+   ├─ Step（模型运行步进）
+   ├─ Tool Execution（工具执行与审批）
+   ├─ Artifact（附件、生成媒体和工具产物）
+   └─ Sub-Agent Run（由 Child Conversation 承载）
+```
+
+| 语义 | 运行时对象 | Durable fact |
+| --- | --- | --- |
+| Conversation | `ConversationRuntime`、`ConversationSnapshot`、`ConversationCommand` | conversation header 与 message tree |
+| Turn | `TurnEngine`、`TurnHandle`、`TurnOutcome` | `turn_execution` |
+| Step | `GenerationChunk.Phase`、checkpoint | 只在 checkpoint 后形成执行事实 |
+| Tool Execution | `ToolExecutionContext`、`ToolCallPhase` | Tool message part 与 `tool_execution` |
+| Approval | `UpdateToolApproval` | Tool message part 与 execution status |
+| Artifact | `ArtifactStore`、`OwnedArtifact`、`ToolResourceLease` | artifact metadata、reference 与 payload |
+| Sub-Agent Run | `DelegationCoordinator`、`SubAssistantLifecycle` | Child Conversation 与 `sub_assistant_call` metadata |
+
+`Runtime`、`Turn`、`Artifact` 是当前会话架构命名。会话运行时领域不得再以 Session/SessionRegistry 指代 `ConversationRuntime`/`ConversationRuntimeRegistry`；除读取历史持久化结构的 migration/backup 边界外，Artifact 领域不得重新引入 ManagedFile 旧语义或兼容门面。TTS queue session、Terminal session 等其他领域的独立 session 语义不受此约束。
+
+## 分层与依赖方向
+
+```text
+Compose UI / ViewModel
+        │ commands + UiModel/query state
+        ▼
+Application services / coordinators / query ports
+        │ typed command, use case, projection
+        ▼
+Runtime and domain state machines
+        │ mutation + execution facts
+        ▼
+Repository / ArtifactStore / Settings coordinators
+        │ transaction or owned payload operation
+        ▼
+Room / DataStore / filesystem / Provider SDK
+```
+
+依赖只向下。UI 和 ViewModel 不得直接持有 DAO、`ConversationRepository`、Runtime Registry、`ArtifactStore`、payload store 或 Provider 容器。Android framework 入口通过 typed host contract 接收依赖，不使用全局服务定位器。
+
+Application 层负责编排，不建立第二套数据协议。Repository 只执行事务化持久化，不能成为 UI API。Projection 可重建，不能作为 durable fact 的替代来源。
+
+## 唯一所有者
+
+| 事实或流程 | 唯一 owner | 对外入口 |
+| --- | --- | --- |
+| Conversation durable command | `ConversationCommandCoordinator` | `ConversationApplicationService` 与领域 coordinator |
+| Resident snapshot 与 active turn | `ConversationRuntime` | `ConversationRuntimeRegistry` |
+| Conversation 事务持久化 | `ConversationRepository` | Coordinator 产生的 mutation 与 execution fact |
+| Turn start、checkpoint、terminal | `TurnEngine` | Master 与 Target coordinator |
+| 正常 stop、supersede、finalize | `TurnFinalization` | turn 编排层 |
+| 进程中断恢复 | `TurnRecovery` | `ApplicationRecoveryCoordinator` |
+| 子助手 lineage、retention、delete | `SubAssistantLifecycle` | `DelegationCoordinator` 与 application 层 |
+| Artifact metadata、引用、状态机 | `ArtifactStore` | `ArtifactUseCase` 与领域服务 |
+| Artifact payload IO | `ArtifactPayloadStore` | 仅由 `ArtifactStore` 调用 |
+| Settings 图片 roots | `ArtifactSettingsCoordinator` | 头像与背景 typed operation |
+| 会话读模型 | `ConversationQueryService` | UI、会话工具与只读详情 |
+| 稳定附件 handle 索引 | `AttachmentReferenceLookup` | 执行 resolver 与查询 projector |
+| 启动恢复顺序与写门禁 | `ApplicationRecoveryCoordinator` | Android 启动入口与 retry |
+| 标题阶段、异步 token 与提交仲裁 | `ConversationTitleCoordinator` | application 与生成副作用 |
+
+同一事实不得增加旁路 DAO/Repository 写入、整聚合回写、fallback、兼容白名单或第二状态源。新增能力应扩展现有 command、typed use case、projection 或状态机。
+
+## Conversation 与 Runtime 协议
+
+`ConversationRuntimeRegistry` 显式表示 `Loading`、`Draft`、`Ready`、`Missing` 和 `Failed`。它只能安装从数据库完整装载的 snapshot，或持有尚未持久化的新聊天 Draft；不得为加载期伪造默认 Assistant、空树或 Ready Conversation。
+
+空 Draft 不进入数据库、会话列表或 turn。首条 `AppendUserMessage` 在一个事务中创建 Conversation、写入用户消息与确定性本地标题，并把同一个 Runtime 原位晋升为 Ready。
+
+Durable command 的固定协议是：
+
+```text
+validate owner/epoch
+  → reducer 产生 next snapshot 与 mutation
+  → Room transaction 提交 mutation、execution fact 和相关 projection
+  → 发布 committed snapshot
+```
+
+持久化失败必须向调用方传播，并且不能发布 next snapshot。Streaming projection 是唯一允许先发布且不落库的会话状态；它必须携带 `TurnHandle` 并校验 epoch、turnId 与 assistantMessageId。旧 turn 的迟到 delta 必须被拒绝。
+
+Header command 不清除 active turn。与 active owner 冲突的结构命令必须显式拒绝或先由正常终态协议收口。Durable 领域逻辑只读取 `ConversationSnapshot.nodes`；`renderNodes` 只用于 UI 显示投影，其对象身份没有持久化语义。
+
+Non-resident command 仍经过同一个 `ConversationCommandCoordinator` 锁与语义，不得退回 Repository fallback。轻量 header command 不为写入装载完整 message tree。
+
+## Turn、工具与审批
+
+Master 与 Target 共用 `TurnEngine` 和同一套 chunk-to-checkpoint 协议。`StartTurn` 在一个事务中创建 assistant 槽和 RUNNING turn fact；checkpoint 只写 changed nodes；`FinalizeTurn` 同事务关闭遗留的 STARTED tools 并提交不可逆的 turn 终态。
+
+Turn 和 Tool execution 使用 insert-once 与合法状态 CAS。终态不可回退，重复同终态幂等，非法转换返回明确冲突。失败或取消的终态准备必须消费 TurnEngine 累积的最新 turn-owned messages；该投影可能包含最后一次 checkpoint 后的 delta，不能用 durable nodes 覆盖。准备阶段校验完整 `TurnHandle`，关闭未完成工具后由同一个 `FinalizeTurn` 原子提交。取消必须传播；`NonCancellable` 只用于已经取得所有权的终态提交或补偿收口，完成后仍重新抛出原始 `CancellationException`。
+
+工具调用按 typed phase 区分调用流、就绪、等待审批、执行和终态。`Tool.output` 只表示 Provider 可回放结果，不能作为执行中状态、完成状态或详情点击门禁。执行阶段只能随已提交 execution checkpoint 推进；metadata 只细化领域子阶段。
+
+新 turn 的 `START` 与审批后的 `CONTINUE_APPROVAL` 是不同入口：
+
+- `START` 只在没有 active owner 时做结构预检，并由 `TurnEngine.start` 建立新的 `TurnHandle`。
+- Approve、deny 与 answer 只提交一个 `UpdateToolApproval`，然后以 `CONTINUE_APPROVAL` 继续原 owner。
+- Continue 不得再次清理树、回填附件、建立第二 turn 或轮换该 turn 的 TTS session。
+
+审批屏障以 `messageId + toolOrdinal` 定位 ToolCall；Pending 全部解决后再按 ordinal 串行执行。Provider 的 toolCallId 只保留为协议数据，不作为本地唯一键。
+
+## Artifact 与附件
+
+`ArtifactStore` 是 metadata、reference 和生命周期的唯一 owner；`ArtifactPayloadStore` 只执行 staging、rename、stat 和物理删除，不持有 DAO。创建协议是 staging → CREATING row → 原子 rename → ACTIVE，启动恢复可幂等完成或回滚。
+
+未发布资源必须以 `OwnedArtifact` 或 `ToolResourceLease` 显式交接：durable checkpoint 成功后发布，失败或取消精确回滚。用户删除先 CAS 到 DELETING，再在 Settings roots 锁内 detach，最后删除 payload 与 row。GC 只从索引候选出发，并在同一生命周期锁内重验 message refs 与 Settings roots。
+
+Settings 图片导入先完成有界复制、结构魔数与实际 MIME 校验，再提交 root 并发布 artifact。启动恢复只可接管被持久化 Settings root 明确拥有、位于 upload root 且内容有效的本地图片；不得扫描目录补录任意文件。这个定点接管用于修复“durable root 已提交但旧流程未完成 artifact row”的持久化不一致，不是兼容路径或第二 owner。
+
+模型可见的稳定附件 handle 使用 `attachment:<uuid>`。`AttachmentReferenceLookup` 统一索引直接 message part 与 `assistant_call.artifacts`；执行侧每批建立一次索引，查询侧按 durable node 版本缓存并只叠加 owning active assistant message。UI 只消费 map 并做常数时间查找，不扫描消息 metadata、子助手 payload 或 ArtifactStore。
+
+## 子助手与恢复
+
+子助手不是第二套生成引擎。`DelegationCoordinator` 只编排 preflight → materialize Child → run → terminal；Child、Tool STARTED 与 childConversationId 关系必须在 Target 启动前强制提交，失败时补偿 Child 与未发布 Artifact。并发所有权使用 `SubAssistantRunGate.withLease` 的结构化作用域。
+
+`SubAssistantLifecycle` 拥有 lineage、retention、fork 与删除；`TurnFinalization` 拥有正常运行中的 stop 和 supersede；`TurnRecovery` 只处理进程恢复。三者不得互相吸收职责或通过整树兼容写入收口。
+
+启动恢复由 `ApplicationRecoveryCoordinator` 以固定顺序执行：Settings → Artifact → reference projection → FTS projection → Child/Master turn → Assistant cleanup。任一步失败进入 `Failed`，durable command 保持关闭；retry 重跑同一幂等顺序。
+
+恢复只查询非终态 execution 索引，健康会话不加载 message tree。失去 owning Assistant message 的旧 execution 通过专用 command 只终结 turn/tool facts，不凭空重写树；真正的消息 payload 损坏保持 fail-closed。
+
+## Query、UI 与标题
+
+会话 UI 只消费 `ConversationReadState`、`ConversationSnapshot`、`ConversationSummary`、`ConversationTurnPresentation` 或专用 UiModel。页面对同一 snapshot 建立一个权威订阅；UI 不从 Runtime Job、布尔值或 Tool output 推断活动状态。
+
+`ConversationTurnPresentation` 区分 idle、generating 与 awaiting approval。审批暂停仍属于 active turn，且必须有独立的可访问性语义。Tool 卡片从首个调用 delta 起可查看；不完整 JSON 显示原始片段，不能等 output 出现才开放详情。
+
+`ConversationTitleCoordinator` 统一确定性本地标题、模型标题 phase、token、重试与手动写入。模型请求携带 expected title，并以 `UpdateTitleIfCurrent` CAS 提交；CAS 的成功语义是 expected title 匹配，与新旧文本是否相同无关，相同值无需写库但仍收口为 resolved。手动标题和模型提交共享串行边界，手动提交会使活动和排队 token 失效。异步结果与 force 请求都不能覆盖请求发出后产生的手动标题。
+
+## 持久化与兼容边界
+
+当前 V1 架构不要求回滚已有数据库或 Settings 数据结构。Conversation、Message、Turn、Tool 与 Artifact 的 schema 变化只能通过显式 Room migration 演进，并以 fresh schema 同构、历史 migration、数据保全和外键检查验证。
+
+兼容只允许存在于稳定的持久化数据和外部协议解析边界，且必须被类型化、测试化。内部旧 facade、deprecated 转发、fallback、服务定位器、过渡命名、无调用协议和静态白名单必须物理删除。应用版本与 changelog 只有在发布需求明确要求时才修改。
+
+## 架构验证
+
+架构或跨模块变更至少验证：
+
+- Runtime/Coordinator 的并发、stale turn、持久化失败不发布与 active owner 冲突。
+- Start/checkpoint/finalize 的事务性、CAS、取消传播与 Master/Target 等价。
+- Approval approve/deny/answer 的实际编排入口、同一 owner 与无结构预检 continuation。
+- Artifact 创建、发布、删除、GC、Settings replacement、崩溃恢复与补偿。
+- Draft 晋升、non-resident command、恢复门禁和损坏数据 fail-closed。
+- UI/query 静态依赖、projection 一致性、标题竞态与附件索引唯一规则。
+- Room 历史 migration、fresh schema 和持久化数据保全。
+
+完整 JVM、Debug、Lint 与 Release 门禁不能代替真机或模拟器验收。涉及升级、系统授权、数据库 migration、Compose 交互或 Android 生命周期时，必须记录实际设备环境与结果；未执行必须明确标为未验证。
+
+## 专题参考
+
+| 领域 | 文档 |
+| --- | --- |
+| 会话、Runtime、生成、审批、工具与标题 | [`chat-generation-pipeline.md`](chat-generation-pipeline.md) |
+| 多模态、附件、Artifact 与 Turn durability | [`multimodal-context-and-turn-durability.md`](multimodal-context-and-turn-durability.md) |
+| 子助手 owner、lineage、retention 与恢复 | [`sub-assistant-architecture.md`](sub-assistant-architecture.md) |
+| 子助手多模态输入输出 | [`sub-assistant-multimodal.md`](sub-assistant-multimodal.md) |
+| Assistant 配置 | [`assistant-configuration.md`](assistant-configuration.md) |
+| Provider 线协议 | [`protocol-reference.md`](protocol-reference.md) |
+| 模型可见 prompts 与工具结果 | [`prompts-and-tools.md`](prompts-and-tools.md) |
+| Compose 导航、布局与主题 | [`ui-architecture.md`](ui-architecture.md) |
+| 消息渲染 | [`message-rendering-pipeline.md`](message-rendering-pipeline.md) |
+| Workspace/PRoot | [`workspace-architecture.md`](workspace-architecture.md) |
+| 更新与发布 | [`update-mechanism.md`](update-mechanism.md) |

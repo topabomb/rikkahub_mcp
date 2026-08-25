@@ -142,15 +142,26 @@ class ConversationCommandCoordinator(
         command: ConversationCommand,
     ) = execute(conversationId, command).getOrThrow()
 
+    /** Executes the typed title CAS without loading a non-resident message tree to inspect it. */
+    suspend fun updateTitleIfCurrent(
+        conversationId: Uuid,
+        expectedTitle: String,
+        title: String,
+    ): Boolean = gated {
+        executeLocked(conversationId, UpdateTitleIfCurrent(expectedTitle, title))
+    }
+
     internal suspend fun executeRecovery(
         conversationId: Uuid,
         command: ConversationCommand,
-    ) = executeLocked(conversationId, command)
+    ) {
+        executeLocked(conversationId, command)
+    }
 
     private suspend fun executeLocked(
         conversationId: Uuid,
         command: ConversationCommand,
-    ) = operationLocks.withLock(conversationId) {
+    ): Boolean = operationLocks.withLock(conversationId) {
         val resident = registry.findRuntime(conversationId)
         if (resident != null) {
             if (registry.isDraft(conversationId)) {
@@ -169,23 +180,39 @@ class ConversationCommandCoordinator(
                         "draft $conversationId only accepts header edits or its first user message",
                     )
                 }
+                true
             } else {
+                val before = resident.snapshot.value
+                val titleCasMatched = command !is UpdateTitleIfCurrent ||
+                    before.header.title == command.expectedTitle
                 resident.submit(command, ::persistCommand)
+                titleCasMatched
             }
-        } else if (command is UpdateHeader || command is MoveToAssistant || command === TogglePinned) {
+        } else if (
+            command is UpdateHeader ||
+            command is UpdateTitleIfCurrent ||
+            command is MoveToAssistant ||
+            command === TogglePinned
+        ) {
             val header = repository.getConversationHeader(conversationId)
                 ?: throw ConversationNotFoundException(conversationId)
             val updated = when (command) {
                 is UpdateHeader -> ConversationReducer.reduceHeader(header, command)
+                is UpdateTitleIfCurrent -> if (header.title == command.expectedTitle) {
+                    header.copy(title = command.title)
+                } else {
+                    header
+                }
                 is MoveToAssistant -> ConversationReducer.reduceHeader(header, command)
                 TogglePinned -> ConversationReducer.reduceHeader(header, TogglePinned)
             }
             val mutation = ConversationMutationBuilder.buildHeader(header, updated)
             if (mutation.hasChanges()) repository.applyMutation(mutation)
+            command !is UpdateTitleIfCurrent || header.title == command.expectedTitle
         } else {
             registry.loadRuntime(conversationId).submit(command, ::persistCommand)
+            true
         }
-        Unit
     }
 
     private suspend fun deleteLocked(conversationId: Uuid) {
@@ -392,6 +419,7 @@ private fun Conversation.lockIds(): List<Uuid> = buildList {
 
 private fun ConversationCommand.updatesConversationActivity(): Boolean = when (this) {
     is UpdateHeader,
+    is UpdateTitleIfCurrent,
     is MoveToAssistant,
     TogglePinned,
     -> false

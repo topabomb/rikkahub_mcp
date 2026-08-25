@@ -37,6 +37,7 @@ import net.weero.measix.pilot.service.runtime.OptionalUuidSet
 import net.weero.measix.pilot.service.runtime.SelectNodeVariant
 import net.weero.measix.pilot.service.runtime.TogglePinned
 import net.weero.measix.pilot.service.runtime.UpdateHeader
+import net.weero.measix.pilot.service.runtime.currentTurnPresentation
 import kotlinx.serialization.json.Json
 import kotlin.uuid.Uuid
 
@@ -62,6 +63,7 @@ class ConversationApplicationService(
     private val turnFinalization: TurnFinalization,
     private val json: Json,
     private val toolArtifactRewriter: ToolArtifactRewriter,
+    private val titleCoordinator: ConversationTitleCoordinator,
 ) {
     private enum class DeleteAuthority { APPLICATION, PENDING_CLEANUP }
 
@@ -95,7 +97,9 @@ class ConversationApplicationService(
     }
 
     suspend fun updateTitle(conversationId: Uuid, title: String) {
-        commandCoordinator.executeOrThrow(conversationId, UpdateHeader(title = title))
+        titleCoordinator.commitManualTitle(conversationId, title) {
+            commandCoordinator.executeOrThrow(conversationId, UpdateHeader(title = title))
+        }
     }
 
     suspend fun updateCustomSystemPrompt(conversationId: Uuid, prompt: String?) {
@@ -143,9 +147,9 @@ class ConversationApplicationService(
         )
     }
 
-    fun hasGeneratingConversationInFolder(folderId: Uuid): Boolean =
+    fun hasActiveConversationTurnInFolder(folderId: Uuid): Boolean =
         runtimeRegistry.activeRuntimes().any { runtime ->
-            runtime.isGenerating && runtime.snapshot.value.header.folderId == folderId
+            runtime.currentTurnPresentation().isActive && runtime.snapshot.value.header.folderId == folderId
         }
 
     suspend fun deleteFolder(folderId: Uuid) {

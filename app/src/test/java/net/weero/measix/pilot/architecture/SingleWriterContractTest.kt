@@ -57,6 +57,11 @@ class SingleWriterContractTest {
             "USER_TASK_WRITTEN",
             "INTERACTION_LIMIT_REACHED",
             "afterCommit",
+            "AutoTitleGenerationTracker",
+            "getGenerationJobFlow",
+            "getConversationJobs",
+            "conversationJob",
+            "loadingJob",
             "backward compat",
             "Phase A",
             "Phase B",
@@ -69,6 +74,8 @@ class SingleWriterContractTest {
         assertFalse(File(sourceRoot, "service/AssistantDataRecovery.kt").exists())
         assertFalse(File(sourceRoot, "data/files/FilesManager.kt").exists())
         assertFalse(File(sourceRoot, "data/files/ManagedLocalArtifactStore.kt").exists())
+        assertFalse(File(sourceRoot, "data/ai/mcp/transport/SseClientTransport.kt").exists())
+        assertFalse(File(sourceRoot, "data/ai/mcp/transport/StreamableHttpClientTransport.kt").exists())
     }
 
     @Test
@@ -142,6 +149,101 @@ class SingleWriterContractTest {
             val field = lease.substringAfter("val $operation:").substringBefore(",\n")
             assertFalse("resource lease $operation must be explicit", field.contains("="))
         }
+        val masterConstructor = File(sourceRoot, "service/MasterTurnCoordinator.kt").readText()
+            .substringAfter("class MasterTurnCoordinator(")
+            .substringBefore("\n) {")
+        val attachmentCloner = File(sourceRoot, "data/files/AttachmentCloner.kt").readText()
+        assertFalse(masterConstructor.contains("ToolArtifactRewriter?"))
+        assertFalse(attachmentCloner.contains("ToolArtifactRewriter?"))
+    }
+
+    @Test
+    fun `tool UI uses the typed lifecycle and never gates inspection on output`() {
+        val toolUi = File(sourceRoot, "ui/components/message/ChatMessageTools.kt").readText()
+        val context = File(sourceRoot, "ui/components/message/tools/ToolUI.kt").readText()
+        assertTrue(context.contains("val phase: ToolCallPhase"))
+        assertFalse(context.contains("val loading: Boolean"))
+        assertTrue(toolUi.contains("onClick = { showResult = true }"))
+        assertFalse(toolUi.contains("onClick = if (context.content"))
+        assertFalse(toolUi.contains("loading && !step.tool.isExecuted"))
+        assertTrue(toolUi.contains("resolvedPhase != ToolCallPhase.COMPLETED"))
+    }
+
+    @Test
+    fun `conversation UI consumes typed turn presentation instead of coroutine jobs`() {
+        val chatUi = sources.filter {
+            it.relativeTo(sourceRoot).invariantSeparatorsPath.startsWith("ui/pages/chat/")
+        }
+        assertNoHits("conversationJob", chatUi)
+        assertNoHits("loadingJob", chatUi)
+        assertTrue(hits("ConversationTurnPresentation", chatUi).isNotEmpty())
+    }
+
+    @Test
+    fun `attachment backfill is an exact metadata patch rather than a replacement tree`() {
+        val commands = File(sourceRoot, "service/runtime/ConversationCommands.kt").readText()
+        val coordinator = File(sourceRoot, "service/MasterTurnCoordinator.kt").readText()
+        val runtime = File(sourceRoot, "service/runtime/ConversationRuntime.kt").readText()
+        val declaration = commands
+            .substringAfter("data class BackfillAttachmentRefs(")
+            .substringBefore(") : ConversationCommand")
+        val launchRun = coordinator
+            .substringAfter("private suspend fun launchRun(")
+            .substringBefore("// ---- 检查无效消息 ----")
+        val guardedPreflight = launchRun
+            .substringAfter("if (launchPolicy.runStructuralPreflight)")
+            .substringBefore("var snapshot =")
+        val ownerValidation = runtime
+            .substringAfter("private fun validateCommandOwner(")
+            .substringBefore("private val commandWrites")
+        assertTrue(declaration.contains("List<AttachmentRefBackfill>"))
+        assertFalse(declaration.contains("List<MessageNode>"))
+        assertTrue(guardedPreflight.contains("checkInvalidMessages(conversationId)"))
+        assertTrue(guardedPreflight.contains("BackfillAttachmentRefs(attachmentRefBackfills)"))
+        assertFalse(launchRun.substringBefore("if (launchPolicy.runStructuralPreflight)").contains("BackfillAttachmentRefs"))
+        assertFalse(ownerValidation.contains("is BackfillAttachmentRefs -> Unit"))
+    }
+
+    @Test
+    fun `attachment execution and previews share one durable reference lookup`() {
+        val resolver = File(sourceRoot, "data/ai/attachments/AttachmentResolver.kt").readText()
+        val projector = File(sourceRoot, "service/ConversationAttachmentPreviewProjector.kt").readText()
+        val messageUi = sources.filter {
+            it.relativeTo(sourceRoot).invariantSeparatorsPath.startsWith("ui/components/message/")
+        }
+        assertTrue(resolver.contains("AttachmentReferenceLookup.index"))
+        assertTrue(projector.contains("AttachmentReferenceLookup.index"))
+        assertFalse(projector.contains("fun resolve("))
+        assertTrue(projector.contains("projectMessages(listOf(assistant))"))
+        assertFalse(projector.contains("projectMessages(active.messages)"))
+        assertNoHits("AttachmentRefs.walkMessageParts", messageUi)
+        assertNoHits("resolveAttachmentPreviewUrl")
+        val inspectionUi = File(sourceRoot, "ui/components/message/tools/AttachmentInspectionToolUI.kt").readText()
+        assertFalse(inspectionUi.contains("getSubAssistantCallMetadata"))
+    }
+
+    @Test
+    fun `durable recovery and lifecycle domains never consume render overlays`() {
+        listOf(
+            "service/TurnRecovery.kt",
+            "service/TurnFinalization.kt",
+            "service/SubAssistantLifecycle.kt",
+        ).forEach { path ->
+            assertFalse(
+                "$path must mutate durable nodes, not renderNodes",
+                File(sourceRoot, path).readText().contains("renderNodes"),
+            )
+        }
+    }
+
+    @Test
+    fun `manual and generated titles share coordinator serialization and generated writes use CAS`() {
+        val application = File(sourceRoot, "service/ConversationApplicationService.kt").readText()
+        val sideEffects = File(sourceRoot, "service/GenerationSideEffects.kt").readText()
+        assertTrue(application.contains("titleCoordinator.commitManualTitle"))
+        assertTrue(sideEffects.contains("titleCoordinator.commitGeneratedTitle"))
+        assertTrue(sideEffects.contains("commandCoordinator.updateTitleIfCurrent"))
+        assertFalse(sideEffects.contains("UpdateHeader(title ="))
     }
 
     @Test

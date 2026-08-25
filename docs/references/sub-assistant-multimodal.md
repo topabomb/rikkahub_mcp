@@ -52,7 +52,7 @@ Caller 模型需要读取交付物内容
 1. **User visibility ≠ Model visibility。** 用户看见缩略图，不等于 Caller 上下文里有像素。
 2. **Agent owns relevance，Runtime owns representation。** 不增加并列开关。Caller 只点名「传哪些附件」「要不要交付物内容」；怎么传、怎么投影由 Runtime 按**当次模型**决定。
 3. 用现有 `extras` 增加 `artifacts`，与 `tts` / `tool_calls` 同一语义：**内容**默认不给。轻量引用不是像素，completed 有交付物时 JSON **始终**带 `artifacts[]`。
-4. Child 是完整事实源；不新增 Artifact 消息协议，不新建 Store。复用 `LocalArtifactRef`、`managed_files`、`attachment_ref`。
+4. Child 是完整事实源；不新增 Artifact 消息协议，不新建 Store。复用 `LocalArtifactRef`、`artifact`、`attachment_ref`。
 5. 不把 Web Search / MCP 边角 / 中间文件 / 入站附件当成出站交付物。
 6. `ask_user` 不是 Artifact；`set_as_background=true` 仍是审批副作用。
 7. `SubAssistantCallState.UNAVAILABLE` 是运行态（撤权、模型不可用）。出站 Caller 看不懂图不影响 `completed`：native/引用行投影由统一 `AttachmentProjectionTransformer` 按当次 Caller 模型逐请求决定。
@@ -222,7 +222,9 @@ metadata.attachment_ref = "attachment:<uuid>"
 
 `AttachmentProjectionTransformer` 递归处理消息 parts（含 `Tool.output`）。Master 上的 `generate_image` 结果由统一投影按当次 Caller 模型呈现：可读图时保留原图 + 前插引用行，不可读时替换为引用行；Caller 要把生图交给 Target，应引用该 Image 的 `attachment_ref` 或 JSON 里的 `/upload/<file>`。
 
-历史消息没有 ref：`MasterTurnCoordinator` 在生成前调用 `AttachmentRefs.backfillNodes()`，并提交 durable `BackfillAttachmentRefs` 命令。它与普通命令一样先落库再发布，不借整 Conversation 回写。
+历史消息没有 ref：`MasterTurnCoordinator` 只在 `MasterTurnEntry.START` 的结构预检中，基于 durable
+`ConversationSnapshot.nodes` 调用 `AttachmentRefs.planBackfills()`，再提交仅包含 node/message/part path 与新 ref 的
+`BackfillAttachmentRefs`。它先落库再发布，不接受整树载荷；审批继续期间 active turn 未结束，既不计划回填也不允许该树命令进入 Runtime。
 
 Child clone / Master fork 已保留 metadata（`copyPartForChildClone()` / `copyForkedPart()`）。Resolver 以「当前消息树里带该 ref 的 part.url」为准，不把 ref 理解成全局文件主键。
 

@@ -1482,5 +1482,16 @@
   <string name="workspace_detail_export_failed">Failed to export file</string>
   <string name="workspace_detail_delete_failed">Failed to delete file</string>
   <string name="chat_page_export_failed">Export failed: %1$s</string>
+  <string name="chat_message_tool_phase_call_streaming">Building call</string>
+  <string name="chat_message_tool_phase_ready">Ready</string>
+  <string name="chat_message_tool_phase_awaiting_approval">Approval needed</string>
+  <string name="chat_message_tool_phase_executing">Running</string>
+  <string name="chat_message_tool_phase_completed">Completed</string>
+  <string name="chat_message_tool_phase_failed">Failed</string>
+  <string name="chat_message_tool_phase_denied">Denied</string>
+  <string name="chat_message_tool_phase_answered">Answered</string>
+  <string name="chat_message_tool_phase_cancelled">Cancelled</string>
+  <string name="chat_message_tool_phase_interrupted">Interrupted</string>
+  <string name="conversation_turn_awaiting_approval">Approval required</string>
 </resources>
 

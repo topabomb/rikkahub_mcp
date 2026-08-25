@@ -62,8 +62,11 @@ import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Tick01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.files.ToolArtifactRewriter
+import net.weero.measix.pilot.service.runtime.ToolCallPhase
+import net.weero.measix.pilot.service.runtime.isBusy
 import net.weero.measix.pilot.ui.components.message.tools.ToolUIContext
 import net.weero.measix.pilot.ui.components.message.tools.ToolUIRegistry
+import net.weero.measix.pilot.ui.components.message.tools.busy
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.ui.components.ui.ChainOfThoughtScope
 import net.weero.measix.pilot.ui.components.ui.DotLoading
@@ -79,7 +82,7 @@ private const val ASK_USER_TOOL_NAME = "ask_user"
 fun ChainOfThoughtScope.ChatMessageToolStep(
     tool: UIMessagePart.Tool,
     locator: ToolCallLocator,
-    loading: Boolean = false,
+    phase: ToolCallPhase? = null,
     onToolApproval: ((locator: ToolCallLocator, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((locator: ToolCallLocator, answer: String) -> Unit)? = null,
 ) {
@@ -87,7 +90,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     if (tool.toolName == ASK_USER_TOOL_NAME) {
         AskUserToolStep(
             tool = tool,
-            loading = loading,
+            phase = resolveToolCallPhase(tool, phase),
             onAnswer = onToolAnswer?.let { callback ->
                 { answer ->
                     callback(locator, answer)
@@ -109,10 +112,15 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             Log.e("ChatMessageToolStep", "Failed to materialize tool output", error)
         }
     }
-    val context = remember(displayTool, loading) {
+    val resolvedPhase = resolveToolCallPhase(displayTool, phase)
+    val parsedArguments = remember(displayTool.input) {
+        runCatching { JsonInstant.parseToJsonElement(displayTool.input.ifBlank { "{}" }) }
+    }
+    val context = remember(displayTool, resolvedPhase, parsedArguments) {
         ToolUIContext(
             tool = displayTool,
-            arguments = displayTool.inputAsJson(),
+            arguments = parsedArguments.getOrElse { JsonObject(emptyMap()) },
+            argumentsValid = parsedArguments.isSuccess,
             content = if (displayTool.isExecuted) {
                 runCatching {
                     JsonInstant.parseToJsonElement(
@@ -122,7 +130,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             } else {
                 null
             },
-            loading = loading,
+            phase = resolvedPhase,
         )
     }
 
@@ -140,7 +148,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
         expanded = expanded,
         onExpandedChange = { expanded = it },
         icon = {
-            if (loading) {
+            if (context.busy) {
                 DotLoading(
                     size = 10.dp
                 )
@@ -154,14 +162,23 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             }
         },
         label = {
-            Text(
-                text = renderer.title(context),
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.secondary,
-                modifier = Modifier.shimmer(isLoading = loading),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Column {
+                Text(
+                    text = renderer.title(context),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.shimmer(isLoading = resolvedPhase == ToolCallPhase.CALL_STREAMING),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (resolvedPhase != ToolCallPhase.COMPLETED) {
+                    Text(
+                        text = stringResource(toolCallPhaseString(resolvedPhase)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         },
         extra = if (isPending && onToolApproval != null) {
             {
@@ -202,11 +219,9 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
         } else {
             null
         },
-        onClick = if (context.content != null || isPending || images.isNotEmpty()) {
-            { showResult = true }
-        } else {
-            null
-        },
+        // A Tool part is inspectable from its first streamed delta. Gating the sheet on output
+        // made complete calls and long-running remote executions appear inert until completion.
+        onClick = { showResult = true },
         content = if (hasExtraContent) {
             {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -299,7 +314,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
 @Composable
 internal fun ChainOfThoughtScope.AskUserToolStep(
     tool: UIMessagePart.Tool,
-    loading: Boolean,
+    phase: ToolCallPhase,
     onAnswer: ((answer: String) -> Boolean)?,
 ) {
     val isPending = tool.approvalState is ToolApprovalState.Pending
@@ -335,7 +350,7 @@ internal fun ChainOfThoughtScope.AskUserToolStep(
         expanded = expanded,
         onExpandedChange = { expanded = it },
         icon = {
-            if (loading) {
+            if (phase.isBusy) {
                 DotLoading(size = 10.dp)
             } else {
                 Icon(
@@ -354,7 +369,7 @@ internal fun ChainOfThoughtScope.AskUserToolStep(
                 ),
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.secondary,
-                modifier = Modifier.shimmer(isLoading = loading),
+                modifier = Modifier.shimmer(isLoading = phase == ToolCallPhase.CALL_STREAMING),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -514,6 +529,49 @@ internal fun ChainOfThoughtScope.AskUserToolStep(
             }
         },
     )
+}
+
+internal fun resolveToolCallPhase(tool: UIMessagePart.Tool, activePhase: ToolCallPhase?): ToolCallPhase =
+    activePhase ?: when {
+        tool.approvalState is ToolApprovalState.Pending -> ToolCallPhase.AWAITING_APPROVAL
+        tool.approvalState is ToolApprovalState.Denied -> ToolCallPhase.DENIED
+        tool.approvalState is ToolApprovalState.Answered -> ToolCallPhase.ANSWERED
+        else -> tool.resultTerminalPhase() ?: if (tool.isExecuted) {
+            ToolCallPhase.COMPLETED
+        } else {
+            ToolCallPhase.READY
+        }
+    }
+
+private fun UIMessagePart.Tool.resultTerminalPhase(): ToolCallPhase? {
+    if (!isExecuted) return null
+    val result = runCatching {
+        JsonInstant.parseToJsonElement(
+            output.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text },
+        ).jsonObject
+    }.getOrNull() ?: return null
+    return when {
+        result["status"]?.jsonPrimitive?.contentOrNull == "cancelled" -> ToolCallPhase.CANCELLED
+        result["status"]?.jsonPrimitive?.contentOrNull == "interrupted" -> ToolCallPhase.INTERRUPTED
+        result["error"] != null && result["type"]?.jsonPrimitive?.contentOrNull == "error" ->
+            ToolCallPhase.FAILED
+        result["error"] != null && result["type"]?.jsonPrimitive?.contentOrNull == "timeout" ->
+            ToolCallPhase.FAILED
+        else -> null
+    }
+}
+
+private fun toolCallPhaseString(phase: ToolCallPhase): Int = when (phase) {
+    ToolCallPhase.CALL_STREAMING -> R.string.chat_message_tool_phase_call_streaming
+    ToolCallPhase.READY -> R.string.chat_message_tool_phase_ready
+    ToolCallPhase.AWAITING_APPROVAL -> R.string.chat_message_tool_phase_awaiting_approval
+    ToolCallPhase.EXECUTING -> R.string.chat_message_tool_phase_executing
+    ToolCallPhase.COMPLETED -> R.string.chat_message_tool_phase_completed
+    ToolCallPhase.FAILED -> R.string.chat_message_tool_phase_failed
+    ToolCallPhase.CANCELLED -> R.string.chat_message_tool_phase_cancelled
+    ToolCallPhase.INTERRUPTED -> R.string.chat_message_tool_phase_interrupted
+    ToolCallPhase.DENIED -> R.string.chat_message_tool_phase_denied
+    ToolCallPhase.ANSWERED -> R.string.chat_message_tool_phase_answered
 }
 
 private data class AskUserQuestion(

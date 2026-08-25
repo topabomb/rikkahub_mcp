@@ -1,5 +1,5 @@
 [versions]
-agp = "9.3.1"
+agp = "9.3.2"
 barcodeScanning = "17.3.0"
 cameraCore = "1.6.1"
 jlatexmath = "1.5"

@@ -1,7 +1,10 @@
 package net.weero.measix.pilot.service.runtime
 
+import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefBackfill
+import net.weero.measix.pilot.data.ai.CheckpointKind
 import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
@@ -31,6 +34,7 @@ internal data class StartTurn(
  */
 data class CommitCheckpoint(
     val handle: TurnHandle,
+    val kind: CheckpointKind,
     val messages: List<UIMessage>,        // checkpoint 时点完整 currentMessages
     val turnStatus: TurnExecutionStatus,
     val turnReason: String?,
@@ -56,7 +60,7 @@ data class RecoverInterruptedTurn(
 ) : ConversationCommand
 
 /**
- * Closes an execution fact left by an older release whose owning Assistant message no longer exists.
+ * Closes an execution fact whose owning Assistant message is absent at recovery time.
  * The Conversation tree is deliberately unchanged; only the turn/tool facts advance to terminal states.
  */
 data class ReconcileOrphanedTurnExecution(
@@ -65,8 +69,11 @@ data class ReconcileOrphanedTurnExecution(
     val terminalReason: String,
 ) : ConversationCommand
 
-/** 追加用户消息（sendMessage 的 append 段） */
-data class AppendUserMessage(val message: UIMessage) : ConversationCommand
+/** Appends the user message and, for the first user turn, its deterministic local title atomically. */
+data class AppendUserMessage(
+    val message: UIMessage,
+    val initialTitle: String? = null,
+) : ConversationCommand
 
 /** 编辑某节点的一个消息变体 */
 data class EditMessageVariant(val nodeId: Uuid, val variant: UIMessage) : ConversationCommand
@@ -83,8 +90,12 @@ data class TruncateToNodeIndex(val nodeIndexInclusive: Int) : ConversationComman
 /** 整树替换（压缩 / 恢复 / fork 载入 / 新会话初始化） */
 data class ReplaceMessageTree(val nodes: List<MessageNode>) : ConversationCommand
 
-/** Adds missing stable attachment handles without exposing a generic whole-tree write. */
-data class BackfillAttachmentRefs(val nodes: List<MessageNode>) : ConversationCommand
+/** Adds exact missing attachment handles without accepting a replacement tree. */
+data class BackfillAttachmentRefs(val backfills: List<AttachmentRefBackfill>) : ConversationCommand {
+    init {
+        require(backfills.isNotEmpty()) { "attachment backfill command is empty" }
+    }
+}
 
 /** 头部窄列更新 */
 data class UpdateHeader(
@@ -97,18 +108,33 @@ data class UpdateHeader(
     val workspaceCwd: OptionalString = OptionalString.Keep,
 ) : ConversationCommand
 
+/** Commits an asynchronous title only while the request's source title is still current. */
+data class UpdateTitleIfCurrent(
+    val expectedTitle: String,
+    val title: String,
+) : ConversationCommand
+
 /** Changes the conversation owner and clears its assistant-scoped folder only when the owner changes. */
 data class MoveToAssistant(val assistantId: Uuid) : ConversationCommand
 
 /** Atomically flips the committed pin state inside the coordinator's per-conversation lock. */
 data object TogglePinned : ConversationCommand
 
-/** 工具审批状态更新（拒绝路径 cancelToolByUser / interruptPendingTool 语义在 reducer） */
+/** A terminal HITL decision addressed by the owning message and stable tool ordinal. */
 data class UpdateToolApproval(
     val messageId: Uuid,
     val toolOrdinal: Int,
     val approvalState: ToolApprovalState,
-) : ConversationCommand
+) : ConversationCommand {
+    init {
+        require(toolOrdinal >= 0) { "tool approval ordinal must be non-negative" }
+        require(
+            approvalState is ToolApprovalState.Approved ||
+                approvalState is ToolApprovalState.Denied ||
+                approvalState is ToolApprovalState.Answered
+        ) { "tool approval command requires a terminal user decision" }
+    }
+}
 
 // ---- 三态包装（同文件） ----
 sealed interface OptionalFolderId {
@@ -196,6 +222,7 @@ internal object ConversationMutationBuilder {
             -> listOf(maxOf(old.nodes.lastIndex, new.nodes.lastIndex)).filter { it >= 0 }
             is ReconcileOrphanedTurnExecution,
             is UpdateHeader,
+            is UpdateTitleIfCurrent,
             is MoveToAssistant,
             TogglePinned,
             -> emptyList()
@@ -332,6 +359,7 @@ data class ActiveTurnState(
     val turnId: Uuid,
     val assistantMessageId: Uuid,
     val messages: List<UIMessage>,
+    val toolCallPhases: Map<ToolCallLocator, ToolCallPhase> = emptyMap(),
 )
 
 data class TurnHandle(

@@ -931,14 +931,22 @@ class DelegationCoordinator(
             messages = lastMessages,
             prepareFinalize = { terminalOutcome, messages ->
                 if (terminalOutcome is TurnOutcome.Cancelled || terminalOutcome is TurnOutcome.Failed) {
-                    turnFinalization.closeOpenTools(
-                        snapshot = runtime.snapshot.value,
-                        messageId = requireNotNull(runtime.snapshot.value.activeTurn?.assistantMessageId) {
-                            "active target turn has no assistant message owner"
-                        },
+                    val latestSnapshot = runtime.snapshot.value
+                    val active = requireNotNull(latestSnapshot.activeTurn) {
+                        "active target turn has no runtime owner"
+                    }
+                    turnFinalization.prepareOwnedTurnMessagesForFailure(
+                        snapshot = latestSnapshot,
+                        handle = TurnHandle(
+                            conversationId = childConversationId,
+                            epoch = active.epoch,
+                            turnId = active.turnId,
+                            assistantMessageId = active.assistantMessageId,
+                        ),
+                        latestMessages = messages,
                         reason = requireNotNull(terminalOutcome.terminalReason),
                         cancelledByUser = terminalOutcome is TurnOutcome.Cancelled,
-                    ).currentMessages()
+                    )
                 } else {
                     runtime.snapshot.value.currentMessages().ifEmpty { messages }
                 }

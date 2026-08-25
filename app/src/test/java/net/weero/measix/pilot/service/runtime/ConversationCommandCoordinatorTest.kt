@@ -54,6 +54,51 @@ class ConversationCommandCoordinatorTest {
     }
 
     @Test
+    fun `non-resident title CAS reports exact result without loading message nodes`() = runTest {
+        val id = Uuid.random()
+        val registry = mockk<ConversationRuntimeRegistry>()
+        val repository = mockk<ConversationRepository>()
+        every { registry.findRuntime(id) } returns null
+        coEvery { repository.getConversationHeader(id) } returns
+            Conversation.ofId(id).copy(title = "Manual").toSnapshot().header
+        val mutation = slot<ConversationMutation>()
+        coEvery { repository.applyMutation(capture(mutation), null) } returns true
+        val coordinator = coordinator(registry, repository)
+
+        assertFalse(coordinator.updateTitleIfCurrent(id, expectedTitle = "Local", title = "Model"))
+        assertTrue(coordinator.updateTitleIfCurrent(id, expectedTitle = "Manual", title = "Manual"))
+        assertTrue(coordinator.updateTitleIfCurrent(id, expectedTitle = "Manual", title = "Model"))
+
+        assertEquals("Model", mutation.captured.headerPatch?.title)
+        coVerify(exactly = 1) { repository.applyMutation(any(), null) }
+        coVerify(exactly = 0) { repository.getConversationById(any()) }
+        coVerify(exactly = 0) { registry.loadRuntime(any()) }
+    }
+
+    @Test
+    fun `resident title CAS reports a same-value match without a database write`() = runTest {
+        val id = Uuid.random()
+        val scope = CoroutineScope(Job())
+        val runtime = ConversationRuntime(
+            id,
+            Conversation.ofId(id).copy(title = "Local").toSnapshot(),
+            scope,
+            {},
+        )
+        val registry = mockk<ConversationRuntimeRegistry>()
+        val repository = mockk<ConversationRepository>()
+        every { registry.findRuntime(id) } returns runtime
+        every { registry.isDraft(id) } returns false
+        val coordinator = coordinator(registry, repository)
+
+        assertTrue(coordinator.updateTitleIfCurrent(id, expectedTitle = "Local", title = "Local"))
+
+        assertEquals("Local", runtime.snapshot.value.header.title)
+        coVerify(exactly = 0) { repository.applyMutation(any(), any()) }
+        scope.cancel()
+    }
+
+    @Test
     fun `resident persistence failure does not publish`() = runTest {
         val id = Uuid.random()
         val scope = CoroutineScope(Job())

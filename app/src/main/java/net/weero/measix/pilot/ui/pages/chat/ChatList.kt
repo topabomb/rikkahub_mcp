@@ -98,12 +98,13 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationTurnPresentation
+import net.weero.measix.pilot.ui.components.ai.ApprovalRequiredIndicator
 import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import net.weero.measix.pilot.ui.components.message.ChatMessage
 import net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
 import net.weero.measix.pilot.ui.components.message.collectMessageImageUrls
-import net.weero.measix.pilot.ui.components.message.resolveAttachmentPreviewUrl
 import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewActions
 import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewOverlay
 import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
@@ -129,7 +130,8 @@ internal fun ChatList(
     snapshot: ConversationSnapshot,
     favoriteNodeIds: Set<Uuid>,
     state: LazyListState,
-    loading: Boolean,
+    turnPresentation: ConversationTurnPresentation,
+    attachmentPreviews: Map<String, String>,
     processingStatus: String? = null,
     previewMode: Boolean,
     settings: Settings,
@@ -183,7 +185,8 @@ internal fun ChatList(
                 snapshot = snapshot,
                 favoriteNodeIds = favoriteNodeIds,
                 state = state,
-                loading = loading,
+                turnPresentation = turnPresentation,
+                attachmentPreviews = attachmentPreviews,
                 processingStatus = processingStatus,
                 settings = settings,
                 readiness = readiness,
@@ -223,7 +226,8 @@ private fun ChatListNormal(
     snapshot: ConversationSnapshot,
     favoriteNodeIds: Set<Uuid>,
     state: LazyListState,
-    loading: Boolean,
+    turnPresentation: ConversationTurnPresentation,
+    attachmentPreviews: Map<String, String>,
     processingStatus: String? = null,
     settings: Settings,
     readiness: ConversationReadiness,
@@ -254,6 +258,7 @@ private fun ChatListNormal(
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
+    val loading = turnPresentation.isActive
     val loadingState by rememberUpdatedState(loading)
     var isRecentScroll by remember { mutableStateOf(false) }
     val density = LocalDensity.current
@@ -360,18 +365,14 @@ private fun ChatListNormal(
                 }
             }
         }
-        // 附件缩略图只读解析: stable ref → 本地 file url, 求值时读最新会话
-        val attachmentPreview = remember {
-            { ref: String ->
-                resolveAttachmentPreviewUrl(snapshotNodesUpdated.map { it.currentMessage }, ref)
-            }
-        }
+        val currentAttachmentPreviews by rememberUpdatedState(attachmentPreviews)
+        val attachmentPreviewProvider = remember { { ref: String -> currentAttachmentPreviews[ref] } }
         val backgroundHost = rememberImageBackgroundHost(settings, assistant.id)
         val previewActions = remember(backgroundHost.action) { listOf(backgroundHost.action) }
 
         CompositionLocalProvider(
             LocalConversationImages provides conversationAlbum,
-            LocalAttachmentPreview provides attachmentPreview,
+            LocalAttachmentPreview provides attachmentPreviewProvider,
             LocalImagePreviewActions provides previewActions,
             LocalImagePreviewOverlay provides backgroundHost.overlay,
         ) {
@@ -487,6 +488,7 @@ private fun ChatListNormal(
                                     onToolApproval = onToolApproval,
                                     onToolAnswer = onToolAnswer,
                                     onSubAssistantAnswer = onSubAssistantAnswer,
+                                    toolCallPhases = snapshot.activeTurn?.toolCallPhases.orEmpty(),
                                     lastMessage = index == lastMessageIndex,
                                 )
                             }
@@ -512,11 +514,18 @@ private fun ChatListNormal(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                RabbitLoadingIndicator(
-                                    modifier = Modifier.size(28.dp)
-                                )
+                                if (turnPresentation == ConversationTurnPresentation.AWAITING_APPROVAL) {
+                                    ApprovalRequiredIndicator(
+                                        showLabel = true,
+                                    )
+                                } else {
+                                    RabbitLoadingIndicator(
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                }
                                 AnimatedVisibility(
-                                    visible = processingStatus != null,
+                                    visible = turnPresentation == ConversationTurnPresentation.GENERATING &&
+                                        processingStatus != null,
                                 ) {
                                     Text(
                                         text = processingStatus ?: "",

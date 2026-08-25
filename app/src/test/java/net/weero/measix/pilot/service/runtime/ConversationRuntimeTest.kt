@@ -15,12 +15,17 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.withContext
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
+import net.weero.measix.pilot.data.ai.CheckpointKind
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
+import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
+import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -223,9 +228,11 @@ class ConversationRuntimeTest {
                 )
             ),
         )
+        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, listOf(waiting)))
         rt.submit(
             CommitCheckpoint(
                 handle = handle,
+                kind = net.weero.measix.pilot.data.ai.CheckpointKind.AWAITING_APPROVAL,
                 messages = listOf(waiting),
                 turnStatus = TurnExecutionStatus.AWAITING_APPROVAL,
                 turnReason = null,
@@ -233,6 +240,7 @@ class ConversationRuntimeTest {
             ),
             ::persist,
         )
+        assertEquals(ConversationTurnPresentation.AWAITING_APPROVAL, rt.currentTurnPresentation())
 
         rt.submit(
             UpdateToolApproval(
@@ -248,6 +256,331 @@ class ConversationRuntimeTest {
             ToolApprovalState.Approved,
             rt.snapshot.value.currentMessages().last().getTools().single().approvalState,
         )
+        assertEquals(
+            ToolApprovalState.Approved,
+            rt.snapshot.value.nodes.last().currentMessage.getTools().single().approvalState,
+        )
+        assertEquals(
+            ToolCallPhase.READY,
+            rt.snapshot.value.activeTurn?.toolCallPhases?.get(ToolCallLocator(waiting.id, 0)),
+        )
+        assertEquals(ConversationTurnPresentation.GENERATING, rt.currentTurnPresentation())
+        scope.cancel()
+    }
+
+    @Test
+    fun `attachment ref backfill is rejected while an approval turn is active`() = runTest {
+        val scope = CoroutineScope(Job())
+        val rt = runtime(scope)
+        val user = UIMessage(
+            id = Uuid.random(),
+            role = MessageRole.USER,
+            parts = listOf(UIMessagePart.Image("file:///legacy.png")),
+        )
+        rt.submit(AppendUserMessage(user), ::persist)
+        val handle = rt.startTurn(Uuid.random(), Uuid.random(), false, ::persist)
+        val waiting = UIMessage(
+            id = handle.assistantMessageId,
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "image",
+                    toolName = "generate_image",
+                    input = "{}",
+                    approvalState = ToolApprovalState.Pending,
+                ),
+            ),
+        )
+        val streamed = listOf(user, waiting)
+        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, streamed))
+        rt.submit(
+            CommitCheckpoint(
+                handle = handle,
+                kind = CheckpointKind.AWAITING_APPROVAL,
+                messages = streamed,
+                turnStatus = TurnExecutionStatus.AWAITING_APPROVAL,
+                turnReason = null,
+                toolExecution = null,
+            ),
+            ::persist,
+        )
+
+        val backfills = AttachmentRefs.planBackfills(rt.snapshot.value.nodes)
+        assertEquals(1, backfills.size)
+        val failure = runCatching {
+            rt.submit(BackfillAttachmentRefs(backfills), ::persist)
+        }.exceptionOrNull()
+
+        assertTrue(failure is ConversationCommandConflictException)
+        assertTrue(failure?.message?.contains("requires the active turn to finish first") == true)
+        assertEquals(null, AttachmentRefs.getRef(rt.snapshot.value.nodes.first().currentMessage.parts.single()))
+        assertEquals(
+            ToolApprovalState.Pending,
+            rt.snapshot.value.activeTurn?.messages?.last()?.getTools()?.single()?.approvalState,
+        )
+        assertEquals(handle.turnId, rt.snapshot.value.activeTurn?.turnId)
+        scope.cancel()
+    }
+
+    @Test
+    fun `attachment ref backfill applies as an exact durable pre-start command`() = runTest {
+        val scope = CoroutineScope(Job())
+        val rt = runtime(scope)
+        val user = UIMessage(
+            id = Uuid.random(),
+            role = MessageRole.USER,
+            parts = listOf(UIMessagePart.Image("file:///legacy.png")),
+        )
+        rt.submit(AppendUserMessage(user), ::persist)
+        val backfills = AttachmentRefs.planBackfills(rt.snapshot.value.nodes)
+
+        rt.submit(BackfillAttachmentRefs(backfills), ::persist)
+
+        assertNotNull(AttachmentRefs.getRef(rt.snapshot.value.nodes.single().currentMessage.parts.single()))
+        assertEquals(null, rt.snapshot.value.activeTurn)
+        scope.cancel()
+    }
+
+    @Test
+    fun `tool call assembly and durable execution checkpoints have distinct phases`() = runTest {
+        val scope = CoroutineScope(Job())
+        val rt = runtime(scope)
+        val handle = rt.startTurn(Uuid.random(), Uuid.random(), false, ::persist)
+        val locator = ToolCallLocator(handle.assistantMessageId, 0)
+        val assembling = UIMessage(
+            id = handle.assistantMessageId,
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "call-1",
+                    toolName = "generate_image",
+                    input = "{\"prompt\":\"sky",
+                ),
+            ),
+        )
+
+        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, listOf(assembling)))
+        assertEquals(ToolCallPhase.CALL_STREAMING, rt.snapshot.value.activeTurn?.toolCallPhases?.get(locator))
+
+        val ready = assembling.copy(
+            parts = listOf((assembling.parts.single() as UIMessagePart.Tool).copy(input = "{\"prompt\":\"sky\"}")),
+        )
+        rt.submit(
+            CommitCheckpoint(
+                handle = handle,
+                kind = CheckpointKind.STEP_COMPLETED,
+                messages = listOf(ready),
+                turnStatus = TurnExecutionStatus.RUNNING,
+                turnReason = null,
+                toolExecution = null,
+            ),
+            ::persist,
+        )
+        assertEquals(ToolCallPhase.READY, rt.snapshot.value.activeTurn?.toolCallPhases?.get(locator))
+
+        val startedFact = ToolExecutionEntity(
+            executionId = "execution-1",
+            turnId = handle.turnId.toString(),
+            toolOrdinal = 0,
+            status = ToolExecutionStatus.STARTED,
+            reason = null,
+            createdAt = 1L,
+            updatedAt = 1L,
+        )
+        rt.submit(
+            CommitCheckpoint(
+                handle = handle,
+                kind = CheckpointKind.TOOL_EXECUTION_STARTED,
+                messages = listOf(ready),
+                turnStatus = TurnExecutionStatus.RUNNING,
+                turnReason = null,
+                toolExecution = startedFact,
+            ),
+            ::persist,
+        )
+        assertEquals(ToolCallPhase.EXECUTING, rt.snapshot.value.activeTurn?.toolCallPhases?.get(locator))
+
+        val result = ready.copy(
+            parts = listOf(
+                (ready.parts.single() as UIMessagePart.Tool).copy(
+                    output = listOf(UIMessagePart.Text("{\"status\":\"completed\"}")),
+                ),
+            ),
+        )
+        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, listOf(result)))
+        assertEquals(
+            ToolCallPhase.EXECUTING,
+            rt.snapshot.value.activeTurn?.toolCallPhases?.get(locator),
+        )
+
+        rt.submit(
+            CommitCheckpoint(
+                handle = handle,
+                kind = CheckpointKind.TOOL_RESULT_COMPLETED,
+                messages = listOf(result),
+                turnStatus = TurnExecutionStatus.RUNNING,
+                turnReason = null,
+                toolExecution = startedFact.copy(status = ToolExecutionStatus.COMPLETED),
+            ),
+            ::persist,
+        )
+        assertEquals(ToolCallPhase.COMPLETED, rt.snapshot.value.activeTurn?.toolCallPhases?.get(locator))
+        scope.cancel()
+    }
+
+    @Test
+    fun `streamed approval and output cannot advance lifecycle before a checkpoint`() {
+        val assistantId = Uuid.random()
+        val state = ActiveTurnState(
+            epoch = 1,
+            turnId = Uuid.random(),
+            assistantMessageId = assistantId,
+            messages = emptyList(),
+        )
+        val streamed = UIMessage(
+            id = assistantId,
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "call",
+                    toolName = "generate_image",
+                    input = "{}",
+                    output = listOf(UIMessagePart.Text("{\"status\":\"completed\"}")),
+                    approvalState = ToolApprovalState.Pending,
+                ),
+            ),
+        )
+
+        val projected = state.withStreamingMessages(listOf(streamed))
+
+        assertEquals(
+            ToolCallPhase.CALL_STREAMING,
+            projected.toolCallPhases[ToolCallLocator(assistantId, 0)],
+        )
+    }
+
+    @Test
+    fun `second tool failure checkpoint does not change the neighboring tool phase`() = runTest {
+        val scope = CoroutineScope(Job())
+        val rt = runtime(scope)
+        val handle = rt.startTurn(Uuid.random(), Uuid.random(), false, ::persist)
+        val message = UIMessage(
+            id = handle.assistantMessageId,
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(toolCallId = "call-1", toolName = "first", input = "{}"),
+                UIMessagePart.Tool(toolCallId = "call-2", toolName = "second", input = "{}"),
+            ),
+        )
+        val first = ToolCallLocator(message.id, 0)
+        val second = ToolCallLocator(message.id, 1)
+        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, listOf(message)))
+        rt.submit(
+            CommitCheckpoint(
+                handle = handle,
+                kind = CheckpointKind.STEP_COMPLETED,
+                messages = listOf(message),
+                turnStatus = TurnExecutionStatus.RUNNING,
+                turnReason = null,
+                toolExecution = null,
+            ),
+            ::persist,
+        )
+        val secondExecution = ToolExecutionEntity(
+            executionId = "execution-2",
+            turnId = handle.turnId.toString(),
+            toolOrdinal = 1,
+            status = ToolExecutionStatus.STARTED,
+            reason = null,
+            createdAt = 1L,
+            updatedAt = 1L,
+        )
+        rt.submit(
+            CommitCheckpoint(
+                handle = handle,
+                kind = CheckpointKind.TOOL_EXECUTION_STARTED,
+                messages = listOf(message),
+                turnStatus = TurnExecutionStatus.RUNNING,
+                turnReason = null,
+                toolExecution = secondExecution,
+            ),
+            ::persist,
+        )
+        assertEquals(ToolCallPhase.READY, rt.snapshot.value.activeTurn?.toolCallPhases?.get(first))
+        assertEquals(ToolCallPhase.EXECUTING, rt.snapshot.value.activeTurn?.toolCallPhases?.get(second))
+
+        rt.submit(
+            CommitCheckpoint(
+                handle = handle,
+                kind = CheckpointKind.TOOL_RESULT_COMPLETED,
+                messages = listOf(message),
+                turnStatus = TurnExecutionStatus.RUNNING,
+                turnReason = null,
+                toolExecution = secondExecution.copy(
+                    status = ToolExecutionStatus.FAILED,
+                    reason = "provider_error",
+                ),
+            ),
+            ::persist,
+        )
+        assertEquals(ToolCallPhase.READY, rt.snapshot.value.activeTurn?.toolCallPhases?.get(first))
+        assertEquals(ToolCallPhase.FAILED, rt.snapshot.value.activeTurn?.toolCallPhases?.get(second))
+        scope.cancel()
+    }
+
+    @Test
+    fun `multiple approval decisions remain unique across durable tree and active projection`() = runTest {
+        val scope = CoroutineScope(Job())
+        val rt = runtime(scope)
+        val handle = rt.startTurn(Uuid.random(), Uuid.random(), false, ::persist)
+        val waiting = UIMessage(
+            id = handle.assistantMessageId,
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "question",
+                    toolName = "ask_user",
+                    input = "{}",
+                    approvalState = ToolApprovalState.Pending,
+                ),
+                UIMessagePart.Tool(
+                    toolCallId = "image",
+                    toolName = "generate_image",
+                    input = "{}",
+                    approvalState = ToolApprovalState.Pending,
+                ),
+            ),
+        )
+        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, listOf(waiting)))
+        rt.submit(
+            CommitCheckpoint(
+                handle = handle,
+                kind = net.weero.measix.pilot.data.ai.CheckpointKind.AWAITING_APPROVAL,
+                messages = listOf(waiting),
+                turnStatus = TurnExecutionStatus.AWAITING_APPROVAL,
+                turnReason = null,
+                toolExecution = null,
+            ),
+            ::persist,
+        )
+
+        val answered = ToolApprovalState.Answered("keep the current assistant")
+        val denied = ToolApprovalState.Denied("background change rejected")
+        rt.submit(UpdateToolApproval(waiting.id, 0, answered), ::persist)
+        rt.submit(UpdateToolApproval(waiting.id, 1, denied), ::persist)
+
+        val projected = rt.snapshot.value.currentMessages().last().getTools().map { it.approvalState }
+        val durable = rt.snapshot.value.nodes.last().currentMessage.getTools().map { it.approvalState }
+        assertEquals(listOf(answered, denied), projected)
+        assertEquals(projected, durable)
+        assertEquals(
+            mapOf(
+                ToolCallLocator(waiting.id, 0) to ToolCallPhase.ANSWERED,
+                ToolCallLocator(waiting.id, 1) to ToolCallPhase.DENIED,
+            ),
+            rt.snapshot.value.activeTurn?.toolCallPhases,
+        )
+        assertEquals(handle.turnId, rt.snapshot.value.activeTurn?.turnId)
         scope.cancel()
     }
 

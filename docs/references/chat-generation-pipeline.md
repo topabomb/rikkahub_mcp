@@ -1,6 +1,7 @@
 # 消息生成链路
 
-> 本文档以当前实现为准，说明用户命令、生成流、持久化与恢复的唯一链路。附件与执行事实细节见
+> 本文档以当前实现为准，说明用户命令、生成流、持久化与恢复的唯一链路。总体 owner 与分层边界见
+> [`application-architecture-v1.md`](application-architecture-v1.md)，附件与执行事实细节见
 > [`multimodal-context-and-turn-durability.md`](multimodal-context-and-turn-durability.md)，子助手扩展见
 > [`sub-assistant-architecture.md`](sub-assistant-architecture.md)。
 
@@ -16,6 +17,7 @@
 | `ConversationRuntimeRegistry` | `Loading/Draft/Ready/Missing/Failed` 生命周期、引用与生成 Job；Draft 只服务未发送首条消息的新聊天，首消息事务后晋升 Ready；禁止伪造 durable 会话 |
 | `ConversationReducer` | Snapshot 纯函数变换；未变化节点保持引用，checkpoint/finalize 只替换活动节点 |
 | `TurnEngine` / `TurnPipelineFactory` | Master/Target 共用的 start、checkpoint、stream 与非空 `TurnOutcome` 协议；固定 Transformer 顺序 |
+| `ConversationTitleCoordinator` | 确定性本地标题、模型标题阶段、token/CAS、手动与异步提交串行化、进程内去重与有限重试；不增加持久化字段 |
 | `ConversationRepository` | CommandCoordinator 内部使用的 Room 持久化原语 |
 | `ApplicationRecoveryCoordinator` | 唯一启动恢复入口；失败时 durable write 保持关闭 |
 
@@ -32,7 +34,7 @@ ConversationApplicationService / MasterTurnCoordinator
   ├─ 等待 ApplicationRecoveryGate.Ready
   ├─ 结束上一 turn，并收口需要保留的工具/Child 结果
   ├─ 预处理用户消息与稳定附件引用
-  ├─ AppendUserMessage durable command
+  ├─ AppendUserMessage durable command：用户消息与首轮本地标题同事务
   └─ TurnEngine.start
        └─ StartTurn 单事务：assistant 槽 + RUNNING turn fact
             │
@@ -64,6 +66,8 @@ Runtime 不发布未提交状态。Streaming 是唯一先发布且不落库的�
 
 终态提交在同一事务中先把该 turn 遗留的 STARTED tool fact 收为 `CANCELLED` 或 `UNKNOWN`，再 CAS turn 终态；
 任一步失败则整体回滚。Turn 状态使用 insert-once + 合法 CAS，终态不可回退，重复同终态幂等。
+失败或取消时，Application 终态准备显式接收 TurnEngine 累积的最新 messages，校验同一 `TurnHandle` 后在该投影上
+关闭未完成工具；它不能改读 durable nodes，否则会丢失最后一次 checkpoint 之后已经流出的文本或工具 delta。
 
 ## 请求构建与 Transformer
 
@@ -99,7 +103,39 @@ Assistant、MCP 与按需附件识别工具；Memory Tool 在每个工具循环 
 `ConversationListRecord` 列表形状，不装载 `MessageNode` 树；全文检索仍由同一查询端口限定助手与顶层会话范围。
 
 同一 Assistant message 的 ToolCall 以 `messageId + toolOrdinal` 定位。审批是一批工具的屏障：Pending 全部解决后，
-按 ordinal 串行执行。工具输出内联在 `UIMessagePart.Tool.output`；Provider 序列化时再展开为各自协议。
+按 ordinal 串行执行。`UpdateToolApproval` 在同一次 reducer 变换中更新 durable node 与 active-turn projection，
+Runtime 仅在事务提交成功后发布该投影；因此 UI、Master resume 与 Child `ask_user` 只会观察到同一个终态决定。
+工具输出内联在 `UIMessagePart.Tool.output`；Provider 序列化时再展开为各自协议。
+
+Master 生成入口显式区分 `MasterTurnEntry.START` 与 `CONTINUE_APPROVAL`。START 在尚无 active turn 时完成建议清理、
+无效消息清理和附件引用精确回填，再由 `TurnEngine.start()` 建立 owner；批准、拒绝和回答都由
+`applyToolApprovalDecision` 提交唯一 `UpdateToolApproval` 后进入 CONTINUE_APPROVAL，只复用既有 `TurnHandle` 并调用
+`TurnEngine.continueActive()`，不得再次执行结构预检或提交树命令。
+结构预检只读取 durable `ConversationSnapshot.nodes`；`renderNodes` 是每次读取都可能新建的显示投影，不能作为持久化输入，
+也不能用列表引用身份判断是否需要写入。
+
+`ActiveTurnState.toolCallPhases` 是运行中工具卡片的唯一阶段投影，仍由同一 Runtime snapshot 发布。Provider 首次流出
+Tool part 时为 `CALL_STREAMING`；`STEP_COMPLETED` 提交后转为 `READY` 或 `AWAITING_APPROVAL`；`STARTED` execution fact
+与结果 checkpoint 提交后依次转为 `EXECUTING` 和终态。工具 output 只表示 Provider 可回放结果，不表示执行中状态。
+因此卡片从首次 Tool delta 起即可打开：参数 JSON 尚未闭合时显示原始片段，文生图执行期间显示其 metadata 提供的
+queued/generating/persisting/setting-background 子阶段。崩溃恢复、停止和抛异常/超时的标准结果封套分别投影为
+`INTERRUPTED`、`CANCELLED`、`FAILED`，不会因 output 非空被误报为完成。工具正常返回的领域失败仍是调用
+`COMPLETED`，其业务结果由对应 renderer（例如图片生成失败原因）独立呈现。
+
+会话页和 Drawer 不读取 Runtime 的 coroutine Job。`ConversationTurnPresentation` 从 active turn 与工具阶段派生
+`IDLE`、`GENERATING`、`AWAITING_APPROVAL`；审批暂停仍属于 active turn，底部使用不同颜色和问询图标保持明确的
+用户注意力提示，且文件夹/消息树结构操作继续受 active owner 保护。完成工具卡片保留 `COMPLETED` 事实，但隐藏常驻
+状态文字；失败、拒绝、回答、取消和中断仍显示简短终态。
+
+首条用户消息的纯文本会规范化空白并按 Unicode code point 截断为确定性本地标题，作为 `AppendUserMessage.initialTitle`
+与消息在同一事务提交，因此长 turn 不会让会话一直停留在“New Chat”。`ConversationTitlePhase` 明确区分 `EMPTY`、
+`LOCAL_FALLBACK`、`MODEL_GENERATING`、`RESOLVED`；`ConversationTitleCoordinator` 是阶段、去重和重试的唯一 owner。
+模型请求取得包含 expected title 的 generation token，提交时使用 `UpdateTitleIfCurrent` CAS；Coordinator 直接返回 CAS
+结果，非 resident 会话不会为确认标题加载消息树。手动标题与模型标题提交
+共享 Coordinator mutex；CAS 返回 expected title 是否匹配，匹配但新旧文本相同也视为成功并收口到 `RESOLVED`，只跳过
+不必要的数据库写入。手动提交成功后失效活动 token 与排队重试，因此包括 force 在内的异步结果都不能覆盖请求发出后
+产生的手动标题。进程重启后缺少候选 provenance 的非空持久化标题按 `RESOLVED` 保护。标题文本仍使用现有 header 字段，
+数据库 schema 不变。
 
 文本工具输出过大且 Workspace 可读时，消息只保留预览，完整内容写入 `/tool_outputs/{executionId}.txt`。
 模型不可读取 Workspace 时不生成虚假文件引用。
@@ -114,6 +150,7 @@ Assistant、MCP 与按需附件识别工具；Memory Tool 在每个工具循环 
 - 用户删除：`deleteUserRequested` 先 CAS DELETING，再在统一 Settings roots 锁下 detach，最后删除 payload 与 row。
 - GC：只读取索引候选，并在生命周期锁内重验 message refs 与 Settings roots；DELETING artifact 不能建立新引用。
 - 引用投影：message delta 与 `artifact_reference` 同事务；损坏节点不会把 backfill 标为完成。
+- 旧数据接管：启动只补录被持久化 Settings root 明确拥有、且仍位于 upload 内的本地图片；无 root 的磁盘文件绝不补录。
 
 显式删除后的历史引用保留，Replay 投影为 unavailable；系统不会从其他化身自动“复活”用户已删除的文件。
 
@@ -156,6 +193,7 @@ app/src/main/java/net/weero/measix/pilot/
 │  ├─ ConversationQueryService.kt
 │  ├─ MasterTurnCoordinator.kt
 │  ├─ GenerationSideEffects.kt
+│  ├─ ConversationTitleCoordinator.kt
 │  ├─ TurnFinalization.kt
 │  ├─ TurnRecovery.kt
 │  ├─ SubAssistantLifecycle.kt
@@ -165,6 +203,7 @@ app/src/main/java/net/weero/measix/pilot/
 │     ├─ ConversationReducer.kt
 │     ├─ ConversationRuntime.kt
 │     ├─ ConversationRuntimeRegistry.kt
+│     ├─ ConversationTurnPresentation.kt
 │     ├─ ConversationCommandCoordinator.kt
 │     ├─ TurnEngine.kt
 │     └─ DelegationCoordinator.kt

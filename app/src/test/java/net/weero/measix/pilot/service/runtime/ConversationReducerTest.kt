@@ -153,6 +153,46 @@ class ConversationReducerTest {
         assertEquals(3, r.nodes.size)
     }
 
+    @Test
+    fun `first user append commits local title in the same mutation`() {
+        val snapshot = Conversation.ofId(Uuid.random()).toSnapshot()
+        val result = ConversationReducer.reduce(
+            snapshot,
+            AppendUserMessage(user(Uuid.random()), initialTitle = "Immediate local title"),
+        )
+
+        assertEquals("Immediate local title", result.header.title)
+        assertEquals(1, result.nodes.size)
+        val mutation = ConversationMutationBuilder.build(snapshot, result)
+        assertEquals("Immediate local title", mutation.headerPatch?.title)
+        assertEquals(1, mutation.upsertedNodes.size)
+    }
+
+    @Test
+    fun `later append cannot replace an established title`() {
+        val snapshot = Conversation.ofId(Uuid.random())
+            .copy(title = "Established title")
+            .toSnapshot()
+        val result = ConversationReducer.reduce(
+            snapshot,
+            AppendUserMessage(user(Uuid.random()), initialTitle = "Another local title"),
+        )
+
+        assertEquals("Established title", result.header.title)
+    }
+
+    @Test
+    fun `model title CAS cannot overwrite a title changed after generation began`() {
+        val local = Conversation.ofId(Uuid.random()).copy(title = "Local").toSnapshot()
+        val accepted = ConversationReducer.reduce(local, UpdateTitleIfCurrent("Local", "Model"))
+        val manual = ConversationReducer.reduce(local, UpdateHeader(title = "Manual"))
+        val rejected = ConversationReducer.reduce(manual, UpdateTitleIfCurrent("Local", "Model"))
+
+        assertEquals("Model", accepted.header.title)
+        assertEquals("Manual", rejected.header.title)
+        assertSame(manual, rejected)
+    }
+
     // ---- FinalizeTurn terminalization ----
 
     @Test
@@ -336,5 +376,48 @@ class ConversationReducerTest {
         val r = ConversationReducer.reduce(c.toSnapshot(), UpdateToolApproval(assistantId, 0, ToolApprovalState.Denied("no")))
         val updated = r.nodes[0].messages.single().parts.filterIsInstance<UIMessagePart.Tool>().single()
         assertEquals(ToolApprovalState.Denied("no"), updated.approvalState)
+    }
+
+    @Test
+    fun `approval updates durable and active messages without copying the streaming overlay into nodes`() {
+        val assistantId = Uuid.random()
+        val turnId = Uuid.random()
+        val pending = UIMessagePart.Tool(
+            toolCallId = "t1",
+            toolName = "shell",
+            input = "{}",
+            approvalState = ToolApprovalState.Pending,
+        )
+        val durableMessage = assistant(assistantId, listOf(pending))
+        val activeMessage = durableMessage.copy(parts = listOf(UIMessagePart.Text("overlay-only"), pending))
+        val base = Conversation.ofId(Uuid.random()).copy(
+            messageNodes = listOf(MessageNode.of(durableMessage)),
+        ).toSnapshot().copy(
+            activeTurn = ActiveTurnState(
+                epoch = 1,
+                turnId = turnId,
+                assistantMessageId = assistantId,
+                messages = listOf(activeMessage),
+            ),
+        )
+
+        val reduced = ConversationReducer.reduce(
+            base,
+            UpdateToolApproval(assistantId, 0, ToolApprovalState.Approved),
+        )
+
+        assertEquals(1, reduced.nodes.single().currentMessage.parts.size)
+        assertEquals(2, reduced.activeTurn?.messages?.single()?.parts?.size)
+        assertEquals(
+            ToolApprovalState.Approved,
+            reduced.nodes.single().currentMessage.parts.filterIsInstance<UIMessagePart.Tool>().single().approvalState,
+        )
+        assertEquals(
+            ToolApprovalState.Approved,
+            reduced.activeTurn?.messages?.single()?.parts
+                ?.filterIsInstance<UIMessagePart.Tool>()
+                ?.single()
+                ?.approvalState,
+        )
     }
 }

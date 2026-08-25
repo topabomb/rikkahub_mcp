@@ -130,6 +130,7 @@ class TurnEngine(
             runtime.id,
             CommitCheckpoint(
                 handle = handle,
+                kind = checkpoint.kind,
                 messages = checkpoint.messages,
                 turnStatus = TurnExecutionStatus.RUNNING,
                 turnReason = null,
@@ -233,6 +234,7 @@ class TurnEngine(
                 runtime.id,
                 CommitCheckpoint(
                     handle = handle,
+                    kind = CheckpointKind.AWAITING_APPROVAL,
                     messages = checkpointMessages,
                     turnStatus = TurnExecutionStatus.AWAITING_APPROVAL,
                     turnReason = null,

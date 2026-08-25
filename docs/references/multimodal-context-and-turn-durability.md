@@ -1,8 +1,8 @@
 # 多模态上下文与 Turn 持久化
 
-> 定位：会话中的多媒体附件如何成为持久事实（stable attachment ref + managed file）、如何在每次生成请求中按模型能力投影（`AttachmentProjectionTransformer` / `inspect_attachments`）、以及一轮生成（Turn）如何以执行事实落库并在崩溃后恢复。
+> 定位：会话中的多媒体附件如何成为持久事实（stable attachment ref + Artifact）、如何在每次生成请求中按模型能力投影（`AttachmentProjectionTransformer` / `inspect_attachments`）、以及一轮生成（Turn）如何以执行事实落库并在崩溃后恢复。
 >
-> 分工：`inspect_attachments` 的模型可见描述与失败 reason 表见 [prompts-and-tools.md](prompts-and-tools.md)；Resolver 的 SSRF / 魔数 / 去重细节与子助手附件链路见 [sub-assistant-multimodal.md](sub-assistant-multimodal.md)；生成主链路与 Transformer 顺序见 [chat-generation-pipeline.md](chat-generation-pipeline.md)；数据层结构见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and-sync.md)。
+> 分工：总体 owner 与分层边界见 [application-architecture-v1.md](application-architecture-v1.md)；`inspect_attachments` 的模型可见描述与失败 reason 表见 [prompts-and-tools.md](prompts-and-tools.md)；Resolver 的 SSRF / 魔数 / 去重细节与子助手附件链路见 [sub-assistant-multimodal.md](sub-assistant-multimodal.md)；生成主链路与 Transformer 顺序见 [chat-generation-pipeline.md](chat-generation-pipeline.md)；数据层结构见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and-sync.md)。
 
 ## 1. 行为总览
 
@@ -11,7 +11,7 @@
     │  AttachmentRefs.ensureAttachmentRef() 盖章（持久事实，一次性）
     ▼
 durable Conversation
-    Image part（url + metadata.attachment_ref）+ managed file
+    Image part（url + metadata.attachment_ref）+ Artifact
     │  每次生成请求
     ▼
 AttachmentProjectionTransformer（按本次 resolved model 的 inputModalities）
@@ -35,6 +35,8 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 
 - 格式：`attachment:<uuid>`（`AttachmentRefs` 前缀常量）。
 - 存储：多媒体 part 的 `metadata` 中的 `attachment_ref` 键，merge 语义（保留其他 metadata 键）。
+- 子助手交付物：Master 的 `assistant_call` metadata 以 `SubAssistantCallArtifact(ref, artifact)` 保存同一种稳定
+  handle；不复制图片 part 来伪造第二份引用事实。
 - 唯一性：一个 ref 指向一个逻辑附件；不同 part 可指向同一文件（保持各自 ref）。
 - 幂等：`ensureAttachmentRef` 对已带**合法可解析** ref 的 part 恒等返回；仅对非多媒体 part 恒等。导入 / 旧数据 / 异常 Provider metadata 中的非法 ref 会被重建为合法 UUID，避免模型拿到永远无法解析的 handle。
 
@@ -49,7 +51,7 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 | MCP 图片内容 | `McpManager` 转本地文件时 |
 | 外部 HTTPS 图 | 入站时落地（`wrapLocalImage`），Child 只存 `file://` |
 | base64 图片 | `Base64ImageToLocalFileTransformer` 经 `ArtifactStore` 终态落盘并盖章 |
-| `assistant_call` 注入 Child | 复制源 ref（跨会话引用同一 managed file） |
+| `assistant_call` 注入 Child | 复制源 ref（跨会话引用同一 Artifact） |
 | 历史消息补章 | 会话加载 / 生成前的 backfill |
 
 所有字节型图片入口都在创建 durable artifact 前限制输入规模并校验实际内容：
@@ -58,6 +60,7 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 - `GeneratedMediaStore` 对 URL/base64 结果使用同一尺寸上限与结构检查，并以检测 MIME 决定扩展名；WebP 校验遍历 RIFF chunk、padding 与 VP8X 后续图像/动画 payload，不把扩展头误当完整图像。Gallery 只通过 `resolveCanonicalFile` 解析根目录内路径。
 - 编辑器导入返回 `ArtifactDraftItem(uri, displayName, mimeType)`；路由、分享、粘贴和裁剪调用方直接使用托管时已经确定的 metadata，不对托管 `file://` URI 再走外部 ContentResolver 分类。裁剪输出扩展名与 PNG 压缩格式一致。
 - 头像与助手背景经 `ArtifactUseCase.importSettingsImage` 执行有界复制与结构检查，Settings root 提交成功后才发布，失败或取消回滚未发布 artifact。
+- 历史版本可能留下 Settings 已引用但 metadata 异步登记未完成的本地图片；冷启动由 `ArtifactStore` 仅按 `ArtifactReferencePolicy.roots` 定点接管，禁止恢复目录扫描式补录。
 - 生成中预览与助手背景只接受经结构检查的图片，文件名与扩展名由实际内容生成，不信任模型名、索引或远程声明。
 
 ### 2.3 资源的两种身份
@@ -75,6 +78,10 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 
 - 文件被清理后，历史消息仍保留 Image part 与 ref；投影引用行照常回放，`inspect_attachments` 解析该 ref 时按 `attachment_not_found` 失败，不伪造内容。
 - 模型读到 `[Attachment ref=...]` 只代表引用存在，不代表文件可用——需要内容时显式调用工具验证。
+- `AttachmentReferenceLookup` 是 message part 与 `assistant_call` 交付物 metadata 的唯一 handle 索引规则；
+  `AttachmentResolver` 每批建立一次索引，`ConversationAttachmentPreviewProjector` 缓存 durable nodes 索引并只叠加
+  active assistant message。缩略图 Compose 只做 O(1) map lookup，不扫描消息 metadata，也不直接访问 `ArtifactStore`，因此执行可解析的 ref
+  与卡片缩略图不会形成两套语义。
 
 ## 3. 请求级投影（`AttachmentProjectionTransformer`）
 
@@ -134,6 +141,7 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 ```text
 attachment:<uuid>（1..4 个）
 → ToolExecutionContext.resolveAttachments(refs)
+→ AttachmentReferenceLookup（直接 part 或子助手交付物 metadata）
 → 统一 AttachmentResolver（Runtime 内部使用执行时刻的 durable 消息快照，含本 run 内已完成的 Tool Result）
 → Image parts
 → 识别模型（单次多图调用，[Image N ref=...] 内部标签 + request + 固定 system instruction）
@@ -175,12 +183,14 @@ Schema 见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and
 - `CommitCheckpoint` 命令（`TurnEngine.onCheckpoint` 提交）：工具循环内以 Room 事务提交 changed-node delta、执行事实、artifact reference 与 FTS delta。
 - `FinalizeTurn` 命令（`TurnEngine.bind` 在终态提交）：同一事务先收口 STARTED tool fact，再 CAS turn 终态；失败整体回滚。
 - 工具执行期间崩溃：从最近 checkpoint 恢复，丢失窗口 = 当前工具 step。
+- `ActiveTurnState.toolCallPhases` 只投影当前 turn 的调用装配、审批和执行阶段；`TOOL_EXECUTION_STARTED` 与结果终态必须在对应事实提交成功后推进，结束 turn 时随 active projection 一同释放，不形成第二张 durable 执行表。
 
 ### 6.3 定位与副作用顺序
 
 - `ToolExecutionContext` 以 `messageId + toolOrdinal` 作为工具执行在 Assistant 消息内的唯一 locator（`toolCallId` 只供 Provider 协议使用，重试后会变）。
 - 工具产生副作用（文件、数据库、外部调用）前必须先落 `STARTED`——副作用可观测时 DB 中必有记录。
 - 同一 Assistant 消息的多个 ToolCall 在审批屏障结束后按 Tool ordinal 串行处理。
+- Master 的新 turn 启动与审批继续使用不同 typed entry：只有 START 可在 active turn 建立前执行消息树清理和附件引用回填；批准、拒绝与回答由 `applyToolApprovalDecision` 提交决定后只继续原 owner，不执行结构维护。回填计划只从 durable nodes 生成精确 part-path assignment，显示用 `renderNodes` 不参与持久化判断。
 
 ### 6.4 终态收口
 

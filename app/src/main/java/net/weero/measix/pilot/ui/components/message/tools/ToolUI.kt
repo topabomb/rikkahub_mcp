@@ -31,6 +31,8 @@ import me.rerere.common.http.jsonObjectOrNull
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Tools
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.service.runtime.ToolCallPhase
+import net.weero.measix.pilot.service.runtime.isBusy
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
 import net.weero.measix.pilot.ui.components.message.isImagePartLoading
 import net.weero.measix.pilot.ui.components.richtext.HighlightCodeBlock
@@ -48,11 +50,16 @@ data class ToolUIContext(
     val tool: UIMessagePart.Tool,
     /** 工具入参 ([UIMessagePart.Tool.input] 的 JSON 解析结果) */
     val arguments: JsonElement,
+    /** False while a provider is still streaming an incomplete JSON argument document. */
+    val argumentsValid: Boolean,
     /** 输出文本部件解析出的 JSON, 工具未执行时为 null */
     val content: JsonElement?,
-    /** 该工具调用是否在生成中 */
-    val loading: Boolean,
+    /** Call assembly, approval and execution are deliberately distinct. */
+    val phase: ToolCallPhase,
 )
+
+internal val ToolUIContext.busy: Boolean
+    get() = phase.isBusy
 
 /**
  * 单个工具的 UI 渲染器
@@ -171,7 +178,11 @@ fun ToolCallJsonDetails(
         }
     ) {
         HighlightCodeBlock(
-            code = JsonInstantPretty.encodeToString(context.arguments),
+            code = if (context.argumentsValid) {
+                JsonInstantPretty.encodeToString(context.arguments)
+            } else {
+                context.tool.input
+            },
             language = "json",
             style = TextStyle(fontSize = 10.sp, lineHeight = 12.sp)
         )

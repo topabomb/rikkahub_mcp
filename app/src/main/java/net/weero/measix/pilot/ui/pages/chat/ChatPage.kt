@@ -65,7 +65,6 @@ import com.dokar.sonner.ToastType
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -92,6 +91,7 @@ import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.service.ConversationReadState
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationTurnPresentation
 import net.weero.measix.pilot.ui.theme.ProvideChatSurfacePolicy
 import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
@@ -167,7 +167,7 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
         }
         is ConversationReadState.Ready -> state.snapshot
     }
-    val loadingJob by vm.conversationJob.collectAsStateWithLifecycle()
+    val turnPresentation by vm.turnPresentation.collectAsStateWithLifecycle()
     val processingStatus by vm.processingStatus.collectAsStateWithLifecycle()
     val enableWebSearch by vm.enableWebSearch.collectAsStateWithLifecycle()
     val errors by vm.errors.collectAsStateWithLifecycle()
@@ -297,7 +297,7 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
                     Box(Modifier.weight(1f).fillMaxHeight()) {
                         ChatPageContent(
                             inputState = inputState,
-                            loadingJob = loadingJob,
+                            turnPresentation = turnPresentation,
                             processingStatus = processingStatus,
                             setting = setting,
                             snapshot = currentSnapshot,
@@ -341,7 +341,7 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
                 ) {
                     ChatPageContent(
                         inputState = inputState,
-                        loadingJob = loadingJob,
+                        turnPresentation = turnPresentation,
                         processingStatus = processingStatus,
                         setting = setting,
                         snapshot = currentSnapshot,
@@ -406,7 +406,7 @@ private fun ConversationUnavailable(
 @Composable
 private fun ChatPageContent(
     inputState: ChatInputState,
-    loadingJob: Job?,
+    turnPresentation: ConversationTurnPresentation,
     processingStatus: String? = null,
     setting: Settings,
     navigationAction: ChatNavigationAction,
@@ -504,7 +504,7 @@ private fun ChatPageContent(
                         scope.launch { drawerState.open() }
                         Unit
                     },
-                    loading = loadingJob != null,
+                    loading = turnPresentation.isActive,
                     previewMode = previewMode,
                     onNewChat = {
                         navigateToChatPage(navController)
@@ -528,7 +528,7 @@ private fun ChatPageContent(
                             .fillMaxWidth(),
                         state = inputState,
                         artifactDraftScope = vm.artifactDraftScope,
-                        loading = loadingJob != null,
+                        loading = turnPresentation.isActive,
                         settings = setting,
                         assistant = assistant,
                         modelListState = modelListState,
@@ -613,7 +613,8 @@ private fun ChatPageContent(
                 snapshot = snapshot,
                 favoriteNodeIds = favoriteNodeIds,
                 state = chatListState,
-                loading = loadingJob != null,
+                turnPresentation = turnPresentation,
+                attachmentPreviews = vm.attachmentPreviews(snapshot),
                 processingStatus = processingStatus,
                 previewMode = previewMode,
                 settings = setting,
@@ -637,7 +638,7 @@ private fun ChatPageContent(
                     }
                 },
                 onDelete = {
-                    if (loadingJob != null) {
+                    if (turnPresentation.isActive) {
                         vm.showDeleteBlockedWhileGeneratingError()
                     } else {
                         vm.deleteMessage(it)

@@ -21,11 +21,77 @@ import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.FinalizeTurn
+import net.weero.measix.pilot.service.runtime.TurnHandle
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TurnFinalizationTest {
+    @Test
+    fun `failure preparation retains messages emitted after the durable checkpoint`() = runTest {
+        val conversationId = Uuid.random()
+        val turnId = Uuid.random()
+        val durableAssistant = UIMessage.assistant("checkpoint").copy(id = Uuid.random())
+        val streamedAssistant = durableAssistant.copy(
+            parts = listOf(
+                UIMessagePart.Text("checkpoint + after checkpoint"),
+                UIMessagePart.Tool(
+                    toolCallId = "streamed-tool",
+                    toolName = "streamed_tool",
+                    input = "{}",
+                ),
+            ),
+        )
+        val base = Conversation.ofId(conversationId).copy(
+            messageNodes = listOf(
+                MessageNode.of(UIMessage.user("question")),
+                MessageNode.of(durableAssistant),
+            ),
+        ).toSnapshot()
+        val handle = TurnHandle(conversationId, 3, turnId, durableAssistant.id)
+        val snapshot = base.copy(
+            activeTurn = ActiveTurnState(
+                epoch = handle.epoch,
+                turnId = turnId,
+                assistantMessageId = durableAssistant.id,
+                messages = base.currentMessages().dropLast(1) + streamedAssistant,
+            ),
+        )
+        val finalization = TurnFinalization(
+            conversationRepository = mockk(relaxed = true),
+            runtimeRegistry = mockk(relaxed = true),
+            commandCoordinator = mockk(relaxed = true),
+            json = Json,
+        )
+
+        val prepared = finalization.prepareOwnedTurnMessagesForFailure(
+            snapshot = snapshot,
+            handle = handle,
+            latestMessages = base.currentMessages().dropLast(1) + streamedAssistant,
+            reason = "provider_error",
+            cancelledByUser = false,
+        )
+
+        val preparedAssistant = prepared.last()
+        assertEquals(
+            "checkpoint + after checkpoint",
+            (preparedAssistant.parts.first() as UIMessagePart.Text).text,
+        )
+        assertTrue(preparedAssistant.getTools().single().isExecuted)
+
+        val staleFailure = runCatching {
+            finalization.prepareOwnedTurnMessagesForFailure(
+                snapshot = snapshot,
+                handle = handle.copy(epoch = handle.epoch + 1),
+                latestMessages = base.currentMessages().dropLast(1) + streamedAssistant,
+                reason = "provider_error",
+                cancelledByUser = false,
+            )
+        }.exceptionOrNull()
+        assertTrue(staleFailure is IllegalArgumentException)
+    }
+
     @Test
     fun `late cancellation never overwrites a completed turn`() = runTest {
         val conversationId = Uuid.random()
