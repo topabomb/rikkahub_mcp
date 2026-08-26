@@ -81,6 +81,35 @@ class ChatCompletionsAPIMessageTest {
     }
 
     @Test
+    fun `attachment facts retain user assistant and tool protocol roles`() {
+        val userFact = "user attachment fact"
+        val assistantFact = "assistant attachment fact"
+        val toolFact = "tool attachment fact"
+        val messages = listOf(
+            UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text(userFact))),
+            UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(
+                    UIMessagePart.Text(assistantFact),
+                    UIMessagePart.Tool(
+                        toolCallId = "call_1",
+                        toolName = "generate_image",
+                        input = "{}",
+                        output = listOf(UIMessagePart.Text(toolFact)),
+                    ),
+                ),
+            ),
+        )
+
+        val result = invokeBuildMessages(messages).map { it.jsonObject }
+
+        assertEquals(listOf("user", "assistant", "tool"), result.map { it["role"]?.jsonPrimitive?.content })
+        assertEquals(userFact, result[0]["content"]?.jsonPrimitive?.content)
+        assertEquals(assistantFact, result[1]["content"]?.jsonPrimitive?.content)
+        assertEquals(toolFact, result[2]["content"]?.jsonPrimitive?.content)
+    }
+
+    @Test
     fun `multi-round reasoning and tool calls should be correctly ordered`() {
         // Scenario: Assistant message with multiple rounds of reasoning and tool calls
         // [Reasoning1, Text1, Tool1(executed), Reasoning2, Text2, Tool2(executed), Text3]

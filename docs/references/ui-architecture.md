@@ -367,6 +367,11 @@ ChatPageContent
 | ChatDrawer body padding | horizontal 8dp | 侧栏左右边距 |
 | ChatInput bottom padding | 8dp | 另由 `navigationBarsPadding()` 与 `imePadding()` 处理系统区域；IME 动画不切换这一本地间距 |
 
+发送后的到底部请求持有 command 返回的 user message id，并以会话分支和该 durable 节点追加为准，不把
+loading、配置提示等临时 LazyColumn item 数量变化当作消息提交。请求在目标分支出现目标消息、LazyColumn item
+结构与当前 snapshot 对齐且 IME 实际到达隐藏终态后滚动到底部 sentinel；新发送、会话切换或节点分支变化会
+取消旧请求，不使用固定时间延迟猜测布局完成。
+
 ---
 
 ## 6. 组件层次

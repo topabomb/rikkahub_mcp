@@ -94,9 +94,9 @@ class TurnPipelineFactoryTest {
                 PromptInjectionTransformer::class,
                 PlaceholderTransformer::class,
                 DocumentAsPromptTransformer::class,
-                AttachmentProjectionTransformer::class,
                 TemplateTransformer::class,
                 WorkspaceReminderTransformer::class,
+                AttachmentProjectionTransformer::class,
             ),
             classes,
         )

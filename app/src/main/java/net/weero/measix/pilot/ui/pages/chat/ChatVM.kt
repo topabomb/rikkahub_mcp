@@ -230,12 +230,10 @@ class ChatVM(
      *
      * @param content 消息内容
      * @param answer 是否触发消息生成，如果为false，则仅添加消息到消息列表中
+     * @return 已接受请求的稳定消息身份；空输入返回 null，receipt 不代表 durable 提交已经成功
      */
-    fun handleMessageSend(content: List<UIMessagePart>,answer: Boolean = true) {
-        if (content.isEmptyInputMessage()) return
-
+    fun handleMessageSend(content: List<UIMessagePart>, answer: Boolean = true) =
         masterTurnCoordinator.sendMessage(_conversationId, content, answer, artifactDraftScope)
-    }
 
     fun handleMessageEdit(parts: List<UIMessagePart>, messageId: Uuid) {
         if (parts.isEmptyInputMessage()) return

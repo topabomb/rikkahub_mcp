@@ -59,6 +59,7 @@ UIMessage
 | `GoogleThoughtMetadata` | Part | `thoughtSignature`、function call ID、thought 标记、草稿图原始数据 |
 | `OpenRouterReasoningMetadata` | Part | 仅 `openrouter.ai` 回传的有序 `reasoning_details`；旧会话无此字段时走可见 `reasoning_content` |
 | `OpenAIResponseMetadata` | Message | 无状态完整历史回放所需的有序 `response.output` 批次、wire format、来源 profile |
+| `AttachmentProjectionTextMetadata` | Part | 标识输入投影器生成的 request-only 附件事实文本；不持久化，不直接进入线协议 |
 | `DiffMetadata` | Part | 仅供 UI 展示的 unified diff，不发送给 Provider |
 
 不透明状态不能从可见 Text/Reasoning 无损重建，也不能跨来源随意复用。metadata 字段保持可空并向后兼容旧会话；更新工具 metadata 时必须 merge，不能覆盖 Provider 状态。
@@ -162,6 +163,8 @@ DeepSeek thinking + tools 要求后续请求保留工具步骤的 `reasoning_con
 ```
 
 `outputItemGroups` 保留每次 response 的批次边界。回放时先追加某一 response 的完整 output，再追加该批函数调用的本地 `function_call_output`；不能把多次工具续轮压平成一个无边界列表。
+
+`AttachmentProjectionTransformer` 生成的附件事实遵循来源容器：USER 图片仍在 user input，工具图片仍在 `function_call_output`，ASSISTANT 顶层图片及其事实仍使用 assistant role。Responses 命中原始 `outputItemGroups` 回放时不能修改不透明 output，也不能从可见 UI parts 重建整个消息；`ResponseAPI.addAssistantItems()` 因此在完整原始批次和本地函数结果之后，只选择带 `AttachmentProjectionTextMetadata` 的 request-only 文本追加为 assistant message。普通可见回答不会重复，前置 system/developer 内容也不变化。
 
 流式状态用 item ID 关联 reasoning、text 和 function arguments，并在终态把完整 output items 写回 metadata。连接在未收到协议终态时关闭视为异常，不能把半个 response 当作成功。
 

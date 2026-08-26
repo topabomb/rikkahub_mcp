@@ -33,8 +33,8 @@ System
   TemplateTransformer         ← 渲染 messageTemplate
   WorkspaceReminderTransformer
   ToolArtifactReplayTransformer ← 先按 artifact metadata 重写历史 Tool Result 路径与 Image URL
-  AttachmentProjectionTransformer ← 再按本次模型能力投影附件：可读 IMAGE 时保留图片并前插引用行；
-                                  不可读时只保留引用行 + 末尾一次 capability hint
+  AttachmentProjectionTransformer ← 最后按本次模型能力投影附件：可读 IMAGE 时保留图片并前插
+                                  input=native 事实；不可读时只保留 input=reference_only 事实
 ```
 
 Target 复用相同模型可见语义，但 Transformer 装配由 `DelegationCoordinator` 独立负责；完整顺序见
@@ -251,7 +251,8 @@ Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过�
 
 `file.path` 是 Tool Result 内唯一模型可见的文件访问标识，语义为本地工具可消费的
 `/upload/<safe-file-name>`。引用身份 `attachment:<uuid>` 锚定在 Image part metadata 上，
-由 `AttachmentProjectionTransformer` 在请求 Model View 中投影成 `[Attachment ref=...]` 引用行。
+由 `AttachmentProjectionTransformer` 在请求 Model View 中投影成带 `input=native` 或
+`input=reference_only` 的 `[Attachment ref=...]` 事实行。
 Android host path、file URI 和内部 relative path 不进入 Tool Result。
 会话 fork / 恢复按 metadata 中的 `LocalArtifactRef.relativePath` 重写该字段；文件缺失时不得
 伪造 completed + readable path。
@@ -559,7 +560,7 @@ caller 自身返回 `target_is_caller`。
 
 已跑过 Child 且调用过 `text_to_speech` 时，默认另带精简 `tts_stats`（`calls` 次数、`chars` 朗读字符合计）。体积较大或需 Caller 主动取回的段只在 `extras` 点名后返回：
 
-- `artifacts`：把本次可持久化 Image 交付物追加为带 stable `attachment_ref` 的 Image parts。它不在这里做能力判断或视觉识别；Caller 下一次请求统一由 `AttachmentProjectionTransformer` 按当次 resolved model 投影为原图 + 引用行，或仅引用行 + capability hint。需要视觉细节时由模型显式调用 `inspect_attachments`。没有 `DERIVED`、自动 observation 或 `artifact_delivery` 字段。
+- `artifacts`：把本次可持久化 Image 交付物追加为带 stable `attachment_ref` 的 Image parts。它不在这里做能力判断或视觉识别；Caller 下一次请求统一由 `AttachmentProjectionTransformer` 按当次 resolved model 投影为原图 + `input=native` 事实，或仅 `input=reference_only` 事实。需要视觉细节时由模型显式调用 `inspect_attachments`。没有 `DERIVED`、自动 observation 或 `artifact_delivery` 字段。
 - `tool_calls`：本次 run 范围内每个工具的发出次数（`header+rows`，首次出现序）
 - `tts`：按调用顺序的朗读文本表
 

@@ -252,6 +252,12 @@ internal fun beginSupersedingTurn(
     return SupersededTurnBarrier(previousJob, previousTurnId)
 }
 
+/** Stable identity for observing a requested user-message append; it is not a durable-success result. */
+data class SendMessageReceipt(
+    val conversationId: Uuid,
+    val userMessageId: Uuid,
+)
+
 class MasterTurnCoordinator(
     private val context: Application,
     private val appScope: AppScope,
@@ -343,8 +349,8 @@ class MasterTurnCoordinator(
         content: List<UIMessagePart>,
         answer: Boolean = true,
         artifactDraftScope: ArtifactDraftScope? = null,
-    ) {
-        if (content.isEmptyInputMessage()) return
+    ): SendMessageReceipt? {
+        if (content.isEmptyInputMessage()) return null
 
         val runtime = requireRuntime(conversationId)
         val previousJob = runtime.getJob()
@@ -354,6 +360,7 @@ class MasterTurnCoordinator(
         }
 
         val turnId = Uuid.random()
+        val userMessageId = Uuid.random()
         runtime.trackGenerationTurn(turnId)
         val job = appScope.launch {
             try {
@@ -368,6 +375,7 @@ class MasterTurnCoordinator(
                     ?: settings.getCurrentAssistant()
                 val processedContent = preprocessUserInputParts(content, assistant)
                 val userMessage = UIMessage(
+                    id = userMessageId,
                     role = MessageRole.USER,
                     parts = processedContent,
                 )
@@ -405,6 +413,7 @@ class MasterTurnCoordinator(
             }
         }
         runtime.setJob(job, turnId)
+        return SendMessageReceipt(conversationId = conversationId, userMessageId = userMessageId)
     }
 
     // ---- 重新生成消息 ----

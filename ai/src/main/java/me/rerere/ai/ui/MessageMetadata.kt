@@ -54,6 +54,19 @@ data class OpenAIReasoningMetadata(
 ) : PartMetadata
 
 /**
+ * Marks request-only attachment fact text produced by the input projection layer.
+ *
+ * Providers normally serialize this like ordinary text in its existing message or tool-result
+ * container. OpenAI Responses additionally uses the marker to retain this request-local text when
+ * an assistant message is otherwise replayed from opaque [OpenAIResponseMetadata.outputItemGroups].
+ */
+@Serializable
+data class AttachmentProjectionTextMetadata(
+    @SerialName("attachment_projection_text")
+    val attachmentProjectionText: Boolean? = null,
+) : PartMetadata
+
+/**
  * OpenAI Responses 在 `store=false` 时需要由客户端把上一轮完整的 `response.output`
  * 作为下一轮 input 回放。可见的 [UIMessagePart] 只是 UI 投影，无法无损表达 web_search_call、
  * image_generation_call、message.phase 以及未来新增的 output item，因此原始输出项单独保存在消息元数据中。

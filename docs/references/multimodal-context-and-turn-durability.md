@@ -15,8 +15,8 @@ durable Conversation
     │  每次生成请求
     ▼
 AttachmentProjectionTransformer（按本次 resolved model 的 inputModalities）
-    ├── 可读图（IMAGE in inputModalities）→ 引用行 + 原图
-    └── 不可读图 → 引用行 + capability hint（最后一条消息尾部，一次）
+    ├── 可读图（IMAGE in inputModalities）→ input=native 引用事实 + 原图
+    └── 不可读图 → input=reference_only 引用事实
            │  模型需要细节时显式调用
            ▼
     inspect_attachments(refs, request)
@@ -91,26 +91,28 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 
 | 模式 | 行为 |
 |------|------|
-| 可读图 | Image part 保留，前方插入引用行 |
-| 不可读图 | Image 替换为引用行；最后一条消息尾部追加一次 capability hint |
+| 可读图 | Image part 保留，前方插入 `input=native` 引用事实 |
+| 不可读图 | Image 替换为 `input=reference_only` 引用事实 |
 
 ### 3.2 投影规则
 
-引用行格式（A/B/C 三态均保留）：
+带 stable ref 的图片事实格式：
 
 ```text
-[Attachment ref=attachment:<uuid> type=image name="screenshot.png"]
+[Attachment ref=attachment:<uuid> type=image name="screenshot.png" input=native]
+[Attachment ref=attachment:<uuid> type=image name="screenshot.png" input=reference_only]
 ```
 
 | 对象 | 可读图模式 | 不可读图模式 |
 |------|-----------|-------------|
 | Image（带 ref） | 引用行 + 原图 | 替换为引用行 |
-| Image（无 ref，legacy） | 原图，不加引用行 | 替换为 `[Image]` 占位 |
+| Image（无 ref，legacy） | 原图，不发明引用 | 替换为 `[Attachment ref=unavailable type=image input=unavailable]` |
 | Document / Audio / Video | 引用行 + 原 part（始终保留，不分叉） | 同左 |
 | `Tool.output` 内媒体 | 递归同上（否则模型看不到生图结果上的 ref） | 递归同上 |
 
-- capability hint 固定文本：「附件图片本次运行不可直接可见，不要仅凭引用推断视觉细节」。模型可见，不进入持久化，也不在 UI 显示；不写 `use inspect_attachments`（何时调用由工具 description 表达）。
-- 引用行含 ref / type / name；不含 mime、host path。显示名优先 `ArtifactEntity.displayName`，否则磁盘文件名。
+- 图片事实只描述 `ref`、`type`、`name` 与本次输入形态 `input`，不包含能力判断、行为指令或工具调用建议。`native` 表示原 Image 同时进入该请求，`reference_only` 表示只有引用文本进入，`unavailable` 表示没有可用 stable ref。
+- 引用事实不含 mime、host path。显示名优先 `ArtifactEntity.displayName`，否则磁盘文件名。
+- 投影文本带 request-only `AttachmentProjectionTextMetadata`，仅供协议适配器识别；不进入持久化，也不在 UI 显示。
 
 ### 3.3 不变量
 
@@ -118,8 +120,18 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 |--------|------|
 | 非破坏 | 投影只产生请求副本，durable Conversation 原对象不变（含 `Tool.output`） |
 | 无状态 | 无跨请求缓存；同一消息按不同模型投影出不同请求，互不影响 |
-| 单次 hint | capability hint 只在最后一条消息出现一次 |
+| 来源稳定 | 事实文本只留在原 `UIMessage` 或原 `Tool.output`，不追加到别的消息，不改变 role |
 | 事实先行 | ref 在持久化时锚定；引用行只是 ref 的模型可见呈现 |
+
+### 3.4 三种来源与协议归属
+
+| 图片来源 | 通用消息归属 | Provider 线协议归属 |
+|----------|--------------|---------------------|
+| 用户上传 | 原 USER message 的 parts | Chat/Responses 的 user content、Claude user block、Gemini user part |
+| 工具产出 | 原 `UIMessagePart.Tool.output` | Chat `role=tool`、Responses `function_call_output`、Claude `tool_result`、Gemini `functionResponse` |
+| 助手原生产出 | 原 ASSISTANT message 的 parts | assistant/model content；Responses 有原始 `response.output` 时先无损回放，再追加 request-only assistant 事实 |
+
+`role` 只存在于消息层；`parts` 内没有第二层 role。投影器因此不创建伪造的 USER 消息，而是在已有来源容器内替换或前置对应 Image 的事实文本。工具结果在 Claude/Gemini 外层虽然使用 user role，但由 typed `tool_result` / `functionResponse` 明确标识，模型不会把它当普通用户输入。
 
 ## 4. `inspect_attachments`（按需识别）
 
@@ -164,7 +176,7 @@ attachment:<uuid>（1..4 个）
 |------|---------------------|
 | Master 聊天 | `DocumentAsPromptTransformer` → Template → Workspace → 可选 `ToolArtifactReplayTransformer` → `AttachmentProjectionTransformer` |
 | `generate_image` 产出 | 成功时 Image part 落入本次 Tool.output 并盖章；下一个 step 的请求由投影管线回放（原图或引用行）。识别这张图 = 把它的 ref 传给 `inspect_attachments` |
-| Target（`assistant_call`） | Child 拥有完整 Assistant 级 transformer 链 + 自己的 resolved model；入站只校验 ref / 资产，视觉能力由 Target run 自己的投影与工具集表达 |
+| Target（`assistant_call`） | Child 拥有完整 Assistant 级 transformer 链 + 自己的 resolved model；入站只校验 ref / 资产，视觉能力由 Target run 自己的投影与工具集表达；`AttachmentProjectionTransformer` 同样位于动态模板之后、Provider 序列化之前 |
 
 ## 6. Turn / Tool 执行事实
 

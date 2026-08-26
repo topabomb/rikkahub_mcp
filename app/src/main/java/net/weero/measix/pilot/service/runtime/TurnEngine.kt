@@ -384,15 +384,15 @@ class TurnPipelineFactory(
 
     fun masterOutput(): List<OutputMessageTransformer> = commonOutput
 
-    /** Target 输入管道（无 toolArtifactReplay；AttachmentProjection 在 template 之前）。 */
+    /** Target 输入管道（无 toolArtifactReplay；AttachmentProjection 最后生成协议投影）。 */
     fun targetInput(): List<InputMessageTransformer> = listOf(
         TimeReminderTransformer,
         PromptInjectionTransformer,
         PlaceholderTransformer,
         DocumentAsPromptTransformer,
-        attachmentProjectionTransformer,
         templateTransformer,
         workspaceReminderTransformer,
+        attachmentProjectionTransformer,
     )
 
     fun targetOutput(): List<OutputMessageTransformer> = commonOutput

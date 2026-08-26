@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.layout.width
@@ -56,6 +57,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -87,6 +89,7 @@ import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.datastore.findProvider
+import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.datastore.getConversationAssistant
 import net.weero.measix.pilot.service.ArtifactUseCase
@@ -429,6 +432,9 @@ private fun ChatPageContent(
 ) {
     val scope = rememberCoroutineScope()
     val latestSnapshot by rememberUpdatedState(snapshot)
+    val latestTurnPresentation by rememberUpdatedState(turnPresentation)
+    val imeInsets = WindowInsets.ime
+    val density = LocalDensity.current
     var appendScrollJob by remember(snapshot.conversationId) { mutableStateOf<Job?>(null) }
     DisposableEffect(snapshot.conversationId) {
         onDispose { appendScrollJob?.cancel() }
@@ -473,12 +479,35 @@ private fun ChatPageContent(
             imageGenerationAvailable = imageGenerationAvailable,
         )
     }
+    val latestReadiness by rememberUpdatedState(readiness)
+    val latestAllowConversationSystemPrompt by rememberUpdatedState(
+        setting.getAssistantById(snapshot.header.assistantId)?.allowConversationSystemPrompt == true,
+    )
     val modelListState = rememberModelListState(
         modelId = assistant.chatModelId ?: setting.chatModelId,
         providers = setting.providers,
         type = ModelType.CHAT,
     )
     val modelRequiredMessage = stringResource(R.string.chat_readiness_model_required_toast)
+
+    fun requestAppendScroll(requestContext: AppendScrollContext) {
+        appendScrollJob?.cancel()
+        appendScrollJob = scope.launch {
+            chatListState.scrollToAppendedItem(
+                requestContext = requestContext,
+                currentSnapshot = { latestSnapshot },
+                expectedItemCount = { current ->
+                    expectedChatListItemCount(
+                        snapshot = current,
+                        loading = latestTurnPresentation.isActive,
+                        readiness = latestReadiness,
+                        allowConversationSystemPrompt = latestAllowConversationSystemPrompt,
+                    )
+                },
+                currentImeBottom = { imeInsets.getBottom(density) },
+            )
+        }
+    }
 
     val completionProviders = remember(assistant.workspaceId, snapshot.header.workspaceCwd, workspaceQueryService) {
         assistant.workspaceId?.let { workspaceId ->
@@ -567,15 +596,9 @@ private fun ChatPageContent(
                                     messageId = inputState.editingMessage!!,
                                 )
                             } else {
-                                val itemCountBeforeSend = chatListState.layoutInfo.totalItemsCount
-                                val requestContext = AppendScrollContext.from(snapshot)
-                                vm.handleMessageSend(inputState.getContents())
-                                appendScrollJob?.cancel()
-                                appendScrollJob = scope.launch {
-                                    chatListState.scrollToAppendedItem(
-                                        previousItemCount = itemCountBeforeSend,
-                                        requestContext = requestContext,
-                                        currentSnapshot = { latestSnapshot },
+                                vm.handleMessageSend(inputState.getContents())?.let { receipt ->
+                                    requestAppendScroll(
+                                        AppendScrollContext.from(snapshot, receipt.userMessageId),
                                     )
                                 }
                             }
@@ -592,15 +615,9 @@ private fun ChatPageContent(
                                     messageId = inputState.editingMessage!!,
                                 )
                             } else {
-                                val itemCountBeforeSend = chatListState.layoutInfo.totalItemsCount
-                                val requestContext = AppendScrollContext.from(snapshot)
-                                vm.handleMessageSend(content = inputState.getContents(), answer = false)
-                                appendScrollJob?.cancel()
-                                appendScrollJob = scope.launch {
-                                    chatListState.scrollToAppendedItem(
-                                        previousItemCount = itemCountBeforeSend,
-                                        requestContext = requestContext,
-                                        currentSnapshot = { latestSnapshot },
+                                vm.handleMessageSend(content = inputState.getContents(), answer = false)?.let { receipt ->
+                                    requestAppendScroll(
+                                        AppendScrollContext.from(snapshot, receipt.userMessageId),
                                     )
                                 }
                             }
@@ -786,20 +803,75 @@ private fun ChatPageContent(
 }
 
 private suspend fun LazyListState.scrollToAppendedItem(
-    previousItemCount: Int,
     requestContext: AppendScrollContext,
     currentSnapshot: () -> ConversationSnapshot,
+    expectedItemCount: (ConversationSnapshot) -> Int,
+    currentImeBottom: () -> Int,
 ) {
-    val newItemCount = snapshotFlow {
+    val readyItemCount = snapshotFlow {
         val snapshot = currentSnapshot()
-        if (!requestContext.matches(snapshot)) throw CancellationException("Conversation branch changed")
-        layoutInfo.totalItemsCount
-    }.first { it > previousItemCount }
-    requestScrollToItem(newItemCount - 1)
+        val status = evaluateAppendScroll(
+            requestContext = requestContext,
+            snapshot = snapshot,
+            actualItemCount = layoutInfo.totalItemsCount,
+            expectedItemCount = expectedItemCount(snapshot),
+            imeBottom = currentImeBottom(),
+        )
+        if (status == AppendScrollStatus.INVALIDATED) {
+            throw CancellationException("Conversation branch changed")
+        }
+        status to layoutInfo.totalItemsCount
+    }.first { (status, _) -> status == AppendScrollStatus.READY }.second
+
+    requestScrollToItem(readyItemCount - 1)
+    snapshotFlow { !canScrollForward }.first { it }
+}
+
+internal enum class AppendScrollStatus {
+    WAITING_FOR_APPEND,
+    WAITING_FOR_LAYOUT,
+    WAITING_FOR_IME,
+    READY,
+    INVALIDATED,
+}
+
+internal fun evaluateAppendScroll(
+    requestContext: AppendScrollContext,
+    snapshot: ConversationSnapshot,
+    actualItemCount: Int,
+    expectedItemCount: Int,
+    imeBottom: Int,
+): AppendScrollStatus = when {
+    !requestContext.matches(snapshot) -> AppendScrollStatus.INVALIDATED
+    !requestContext.hasTargetMessage(snapshot) -> AppendScrollStatus.WAITING_FOR_APPEND
+    actualItemCount != expectedItemCount -> AppendScrollStatus.WAITING_FOR_LAYOUT
+    imeBottom != 0 -> AppendScrollStatus.WAITING_FOR_IME
+    else -> AppendScrollStatus.READY
+}
+
+internal fun expectedChatListItemCount(
+    snapshot: ConversationSnapshot,
+    loading: Boolean,
+    readiness: ConversationReadiness,
+    allowConversationSystemPrompt: Boolean,
+): Int {
+    val nodeCount = snapshot.renderNodes.size
+    val configurationItemCount = if (
+        nodeCount == 0 || readiness.requiresProviderConfiguration || !readiness.canSend
+    ) {
+        1
+    } else {
+        0
+    }
+    val systemPromptItemCount = if (!loading && allowConversationSystemPrompt) 1 else 0
+    val loadingItemCount = if (loading) 1 else 0
+    val bottomSentinelItemCount = 1
+    return configurationItemCount + nodeCount + systemPromptItemCount + loadingItemCount + bottomSentinelItemCount
 }
 
 internal data class AppendScrollContext(
     val conversationId: Uuid,
+    val targetMessageId: Uuid,
     val existingNodes: List<Pair<Uuid, Int>>,
 ) {
     fun matches(snapshot: ConversationSnapshot): Boolean =
@@ -807,9 +879,13 @@ internal data class AppendScrollContext(
                 snapshot.nodes.size >= existingNodes.size &&
                 snapshot.nodes.take(existingNodes.size).map { it.id to it.selectIndex } == existingNodes
 
+    fun hasTargetMessage(snapshot: ConversationSnapshot): Boolean =
+        snapshot.nodes.any { node -> node.messages.any { it.id == targetMessageId } }
+
     companion object {
-        fun from(snapshot: ConversationSnapshot) = AppendScrollContext(
+        fun from(snapshot: ConversationSnapshot, targetMessageId: Uuid) = AppendScrollContext(
             conversationId = snapshot.conversationId,
+            targetMessageId = targetMessageId,
             existingNodes = snapshot.nodes.map { it.id to it.selectIndex },
         )
     }

@@ -78,6 +78,42 @@ class GoogleProviderMessageTest {
     }
 
     @Test
+    fun `attachment facts retain user model and function response containers`() {
+        val userFact = "user attachment fact"
+        val assistantFact = "assistant attachment fact"
+        val toolFact = "tool attachment fact"
+        val messages = listOf(
+            UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text(userFact))),
+            UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(
+                    UIMessagePart.Text(assistantFact),
+                    UIMessagePart.Tool(
+                        toolCallId = "call_1",
+                        toolName = "generate_image",
+                        input = "{}",
+                        output = listOf(UIMessagePart.Text(toolFact)),
+                    ),
+                ),
+            ),
+        )
+
+        val result = invokeBuildContents(messages).map { it.jsonObject }
+
+        assertEquals(listOf("user", "model", "user"), result.map { it["role"]?.jsonPrimitive?.content })
+        assertEquals(userFact, result[0]["parts"]!!.jsonArray.single().jsonObject["text"]?.jsonPrimitive?.content)
+        assertEquals(
+            assistantFact,
+            result[1]["parts"]!!.jsonArray.first().jsonObject["text"]?.jsonPrimitive?.content,
+        )
+        val functionResponse = result[2]["parts"]!!.jsonArray.single().jsonObject["functionResponse"]!!.jsonObject
+        assertEquals(
+            toolFact,
+            functionResponse["response"]!!.jsonObject["result"]?.jsonPrimitive?.content,
+        )
+    }
+
+    @Test
     fun `multi-round tool calls should produce functionCall followed by functionResponse`() {
         // Scenario: Multiple rounds of tool calls
         val assistantMessage = UIMessage(

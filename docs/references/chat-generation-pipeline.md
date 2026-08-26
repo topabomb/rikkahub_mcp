@@ -54,6 +54,10 @@ ConversationApplicationService / MasterTurnCoordinator
          └─ Finished/异常/取消：FinalizeTurn durable command + sealed TurnOutcome
 ```
 
+`MasterTurnCoordinator.sendMessage` 在安装唯一 generation Job 时返回 `SendMessageReceipt`。receipt 中的
+`userMessageId` 是本次 `AppendUserMessage` 的稳定身份，不代表 durable 提交已经成功；UI 只可用它观察
+`ConversationSnapshot.nodes` 中的目标消息并协调滚动等临时表现，不能据此提前发布消息或持有 Runtime Job。
+
 `StartTurn`、`CommitCheckpoint` 与 `FinalizeTurn` 均执行：
 
 ```text
@@ -83,7 +87,8 @@ Runtime 不发布未提交状态。Streaming 是唯一先发布且不落库的�
 Master 的主要输入顺序是 `TimeReminderTransformer`、`PromptInjectionTransformer`、
 `PlaceholderTransformer`、`DocumentAsPromptTransformer`、`TemplateTransformer`、
 `WorkspaceReminderTransformer`、`ToolArtifactReplayTransformer`、`AttachmentProjectionTransformer`。
-Target 由同一工厂装配，共享附件投影语义，仅保留明确的 Target 差异。
+Target 由同一工厂装配，共享附件投影语义且同样把 `AttachmentProjectionTransformer` 放在
+Template / Workspace 之后；明确差异只有不装配 `ToolArtifactReplayTransformer`。
 
 Streaming Transformer 只改变显示投影；需要持久化的变化必须进入 checkpoint 的
 `OutputMessageTransformer.transform()` 或终态落盘 Transformer。

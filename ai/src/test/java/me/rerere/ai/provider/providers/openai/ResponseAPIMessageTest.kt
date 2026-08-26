@@ -17,6 +17,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.ui.AttachmentProjectionTextMetadata
 import me.rerere.ai.ui.OpenAIReasoningMetadata
 import me.rerere.ai.ui.OpenAIResponseMetadata
 import me.rerere.ai.ui.OpenAIResponseSourceProfile
@@ -754,6 +755,80 @@ class ResponseAPIMessageTest {
         assertEquals("final_answer", replay[2]["phase"]?.jsonPrimitive?.content)
         assertTrue(replay[3]["provider_field"]?.jsonObject?.get("kept")?.jsonPrimitive?.content == "true")
         assertEquals("call_1", replay[4]["call_id"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `raw response replay appends only request projection text in assistant role`() {
+        val toolMarker = "[Attachment ref=attachment:tool type=image name=\"tool.png\" input=reference_only]"
+        val assistantMarker =
+            "[Attachment ref=attachment:assistant type=image name=\"assistant.png\" input=reference_only]"
+        val rawImageItem = buildJsonObject {
+            put("id", "ig_1")
+            put("type", "image_generation_call")
+            put("status", "completed")
+            put("result", "opaque-image-data")
+        }
+        val rawFunctionCall = buildJsonObject {
+            put("id", "fc_1")
+            put("type", "function_call")
+            put("call_id", "call_1")
+            put("name", "generate_image")
+            put("arguments", "{}")
+        }
+        val projectionMetadata =
+            AttachmentProjectionTextMetadata(attachmentProjectionText = true).toMetadata()
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Text("visible response already represented by raw output"),
+                UIMessagePart.Tool(
+                    toolCallId = "call_1",
+                    toolName = "generate_image",
+                    input = "{}",
+                    output = listOf(UIMessagePart.Text(toolMarker, metadata = projectionMetadata)),
+                ),
+                UIMessagePart.Text(assistantMarker, metadata = projectionMetadata),
+            ),
+            providerMetadata = OpenAIResponseMetadata(
+                wireFormat = OpenAIResponseWireFormat.OPENAI,
+                outputItemGroups = listOf(listOf(rawImageItem, rawFunctionCall)),
+                sourceProfile = OpenAIResponseSourceProfile.OPENAI,
+            ).toMetadata(),
+        )
+
+        val replay = invokeBuildMessages(listOf(message)).map { it.jsonObject }
+
+        assertEquals(
+            listOf("image_generation_call", "function_call", "function_call_output", "message"),
+            replay.map { it["type"]?.jsonPrimitive?.content ?: "message" },
+        )
+        assertEquals(toolMarker, replay[2]["output"]?.jsonPrimitive?.content)
+        assertEquals("assistant", replay[3]["role"]?.jsonPrimitive?.content)
+        assertEquals(assistantMarker, replay[3]["content"]?.jsonPrimitive?.content)
+        assertTrue(replay.none { item ->
+            item["content"]?.jsonPrimitive?.content ==
+                "visible response already represented by raw output"
+        })
+    }
+
+    @Test
+    fun `rebuilt assistant image remains attributed to assistant`() {
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Text("assistant attachment fact"),
+                UIMessagePart.Image("data:image/png;base64,AA=="),
+            ),
+        )
+
+        val replay = invokeBuildMessages(listOf(message)).map { it.jsonObject }
+
+        assertEquals(listOf("assistant", "assistant"), replay.map { it["role"]?.jsonPrimitive?.content })
+        assertEquals("assistant attachment fact", replay[0]["content"]?.jsonPrimitive?.content)
+        assertEquals(
+            "input_image",
+            replay[1]["content"]?.jsonArray?.single()?.jsonObject?.get("type")?.jsonPrimitive?.content,
+        )
     }
 
     @Test
