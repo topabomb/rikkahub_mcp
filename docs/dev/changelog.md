@@ -10,6 +10,8 @@
 
 ### 新增
 
+- 新增 V2 减法重构方案 `docs/dev/application-architecture-v2-plan.md`：冻结目标架构、删除账本、行数硬门禁、UI 保真矩阵与 Phase A-F 实施计划，作为后续版本重构的依据
+- 发送链路引入 `SendMessageReceipt`：发送请求被 Runtime 接受即返回稳定身份（含目标消息 id），不冒充 durable 成功
 - 会话 Runtime Core：`ConversationRuntime`、`ConversationReducer`、`ConversationCommandCoordinator` 与 `TurnEngine` 形成唯一命令、快照、流式投影和终态提交链；新聊天以非持久化 Draft 开始，首条消息单事务建库并晋升 Ready
 - Artifact 领域模型：数据库 v6 将 `managed_files` 收敛为 `artifact`，增加引用投影、来源和生命周期状态；`ArtifactStore` 统一负责登记、发布、引用、删除、恢复与孤儿 GC
 - typed 工具阶段：从调用参数流入、就绪、等待审批、执行到终态均有明确投影；工具卡从首个 delta 起可查看，文生图可显示排队、生成、保存和设置背景子阶段
@@ -29,8 +31,12 @@
 - 删除旧 `AutoTitleGeneration`、旧附件预览扫描和两份无调用的本地 MCP transport 草稿；新增当前权威架构参考文档
 - Provider 设置、连接测试、余额查询以及 Workspace、备份恢复操作收敛到 typed application service；UI 不再直连持久化或运行时 owner
 - 同步 MiMo 推理参数、OpenRouter 会话标识、空工具 schema、DeepSeek V4 Flash Vision 识别、上下文消息限制输入及新版模型图标
+- 附件请求投影收口：`AttachmentProjectionTransformer` 固定在 Master/Target 输入链末，引用行增加 `input=native/reference_only` 标记并携带请求级 metadata；删除跨消息的全局 capability hint 与末条统一追加提示
+- 发送后到底部滚动改按目标消息身份、会话分支、列表结构与 IME 终态判定，不再用固定延时或列表长度猜测布局
 
 ### 修复
+
+- 修复输入法下发送后滚动定位不准确的问题：等待目标消息真正提交、布局对齐且键盘隐藏后才滚动到底部，新发送或会话切换会立即取消旧等待
 
 - 修复文生图设置助手背景时，批准和拒绝都会错误触发 `BackfillAttachmentRefs requires the active turn to finish first`
 - 修复从旧数据库升级后，Settings 仍引用的助手图片头像或背景因 Artifact metadata 缺失而丢失
