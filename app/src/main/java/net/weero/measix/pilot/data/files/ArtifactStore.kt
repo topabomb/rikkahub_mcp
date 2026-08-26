@@ -720,7 +720,7 @@ class ArtifactStore(
 
     // ---- 启动恢复 ----
 
-    /** 冷启动回滚已失去进程内 owner 的 CREATING，续跑 DELETING，并收口缺失 ACTIVE。 */
+    /** 冷启动回滚已失去进程内 owner 的 CREATING，续跑 DELETING，并持久化收口悬挂 Settings root。 */
     suspend fun reconcileStartup() = withLifecycleLock {
         val creating = artifactDAO.listByState(ArtifactState.CREATING.name)
         creating.forEach { entity ->
@@ -748,17 +748,34 @@ class ArtifactStore(
                 else -> Unit
             }
         }
-        val settingsOwnedPaths = settingsCoordinator.withRootsLock { settings ->
+        val settingsOwnedRoots = settingsCoordinator.withRootsLock { settings ->
             ArtifactReferencePolicy.roots(settings).mapNotNull { root ->
                 val uri = runCatching { Uri.parse(root) }.getOrNull() ?: return@mapNotNull null
-                payloadStore.relativePathForUri(uri)
+                payloadStore.relativePathForUri(uri)?.let { relativePath -> root to relativePath }
             }
         }
-        settingsOwnedPaths.forEach { relativePath ->
-            if (artifactDAO.getByPathAndState(relativePath, ArtifactState.ACTIVE.name) == null) {
-                throw ArtifactDataIntegrityException(
-                    "A Settings root references a payload without ACTIVE artifact metadata: $relativePath"
-                )
+        val settingsRootsToPersistAsDefaults = mutableSetOf<String>()
+        settingsOwnedRoots.forEach { (root, relativePath) ->
+            val hasActiveMetadata = artifactDAO.getByPathAndState(relativePath, ArtifactState.ACTIVE.name) != null
+            when {
+                !hasActiveMetadata -> {
+                    // A Settings background/avatar is a mutable display preference, not an
+                    // artifact owner. Without ACTIVE metadata its URI has no durable owner:
+                    // persist the defined Settings default and never adopt a leftover payload.
+                    settingsRootsToPersistAsDefaults += root
+                }
+
+                !payloadStore.finalExists(relativePath) -> {
+                    // ACTIVE metadata without its payload is an unavailable display resource.
+                    // Persist the Settings default before the recovery below removes that stale
+                    // metadata, so config reads never depend on a missing external file.
+                    settingsRootsToPersistAsDefaults += root
+                }
+            }
+        }
+        if (settingsRootsToPersistAsDefaults.isNotEmpty()) {
+            check(settingsCoordinator.detach(settingsRootsToPersistAsDefaults)) {
+                "Failed to persist fallback for Settings roots with unavailable artifacts"
             }
         }
         artifactDAO.listByState(ArtifactState.ACTIVE.name).forEach { entity ->

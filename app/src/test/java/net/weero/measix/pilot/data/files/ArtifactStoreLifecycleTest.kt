@@ -213,7 +213,7 @@ class ArtifactStoreLifecycleTest {
     }
 
     @Test
-    fun `startup fails closed when a settings root lacks artifact metadata`() = runTest {
+    fun `startup persists fallback when a settings root lacks artifact metadata`() = runTest {
         folders += FileFolders.UPLOAD
         val relativePath = "${FileFolders.UPLOAD}/untracked-settings-root.png"
         val file = File(context.filesDir, relativePath).apply {
@@ -225,15 +225,44 @@ class ArtifactStoreLifecycleTest {
         )
         effectiveSettings.value = settingsFlow.value.toEffectiveSnapshot()
 
-        val failure = runCatching { store.reconcileStartup() }.exceptionOrNull()
+        store.reconcileStartup()
 
-        assertTrue(failure is ArtifactDataIntegrityException)
         assertTrue(file.isFile)
+        assertNull(settingsFlow.value.assistants.single().background)
         assertNull(database.artifactDao().getByPathAndState(relativePath, ArtifactState.ACTIVE.name))
     }
 
     @Test
-    fun `legacy sub-assistant avatar and background roots are retained but rejected without metadata`() = runTest {
+    fun `startup persists defaults when every Settings image root lacks metadata and payload`() = runTest {
+        folders += FileFolders.UPLOAD
+        val missingRoot = File(context.filesDir, "${FileFolders.UPLOAD}/missing-settings-image.png").toUri().toString()
+        settingsFlow.value = Settings(
+            assistants = listOf(
+                Assistant(
+                    avatar = Avatar.Image(missingRoot),
+                    background = missingRoot,
+                ),
+            ),
+            displaySetting = Settings().displaySetting.copy(userAvatar = Avatar.Image(missingRoot)),
+        )
+        effectiveSettings.value = settingsFlow.value.toEffectiveSnapshot()
+
+        store.reconcileStartup()
+        store.reconcileStartup()
+
+        val recovered = settingsFlow.value
+        val assistant = recovered.assistants.single()
+        assertNull(assistant.background)
+        assertEquals(Avatar.Dummy, assistant.avatar)
+        assertEquals(Avatar.Dummy, recovered.displaySetting.userAvatar)
+        assertNull(database.artifactDao().getByPathAndState(
+            "${FileFolders.UPLOAD}/missing-settings-image.png",
+            ArtifactState.ACTIVE.name,
+        ))
+    }
+
+    @Test
+    fun `startup persists sub-assistant avatar and background fallback without metadata`() = runTest {
         folders += FileFolders.UPLOAD
         val avatar = File(context.filesDir, "${FileFolders.UPLOAD}/legacy-sub-avatar.png").apply {
             parentFile?.mkdirs()
@@ -254,11 +283,12 @@ class ArtifactStoreLifecycleTest {
         )
         effectiveSettings.value = settingsFlow.value.toEffectiveSnapshot()
 
-        val failure = runCatching { store.reconcileStartup() }.exceptionOrNull()
+        store.reconcileStartup()
 
-        assertTrue(failure is ArtifactDataIntegrityException)
         assertTrue(avatar.isFile)
         assertTrue(background.isFile)
+        assertEquals(Avatar.Dummy, settingsFlow.value.assistants.single().avatar)
+        assertNull(settingsFlow.value.assistants.single().background)
         assertNull(database.artifactDao().getByPathAndState("${FileFolders.UPLOAD}/legacy-sub-avatar.png", ArtifactState.ACTIVE.name))
         assertNull(database.artifactDao().getByPathAndState("${FileFolders.UPLOAD}/legacy-sub-background.png", ArtifactState.ACTIVE.name))
     }
@@ -326,7 +356,7 @@ class ArtifactStoreLifecycleTest {
     }
 
     @Test
-    fun `startup fails closed when a settings root points to missing active payload`() = runTest {
+    fun `startup persists fallback when a settings root points to missing active payload`() = runTest {
         val folder = folder()
         val assistant = Assistant()
         settingsFlow.value = Settings(assistants = listOf(assistant))
@@ -336,10 +366,10 @@ class ArtifactStoreLifecycleTest {
         }
         assertTrue(store.file(owned.entity).delete())
 
-        val failure = runCatching { store.reconcileStartup() }.exceptionOrNull()
+        store.reconcileStartup()
 
-        assertTrue(failure is ArtifactDataIntegrityException)
-        assertEquals(ArtifactState.ACTIVE.name, database.artifactDao().getById(owned.entity.id)?.state)
+        assertNull(settingsFlow.value.assistants.single().background)
+        assertNull(database.artifactDao().getById(owned.entity.id))
     }
 
     @Test

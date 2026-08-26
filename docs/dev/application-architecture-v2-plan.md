@@ -672,7 +672,7 @@ fingerprint 合并进 `McpManager.kt`，删除独立文件；用户手工刷新�
 
 `ArtifactStore` 的唯一 owner 地位不变。V2 删除的是旁支和重复引用解释，而不是状态机：
 
-- 删除 `adoptSettingsOwnedImages` 及其启动期调用；它只修复旧写路径制造的无 metadata 引用；
+- 删除 `adoptSettingsOwnedImages` 及其启动期调用；Settings 背景/头像引用缺 metadata 或 payload 时回退默认值，而不猜测补录；
 - Settings 引用集合、detach、impact inspection 和 GC root 继续复用一个 `ArtifactReferencePolicy`；
 - `ArtifactSettingsCoordinator` 继续承担跨 DataStore 与 Artifact 生命周期的明确交接，不允许 UI 自行删旧文件；
 - CREATING/ACTIVE/DELETING、lease、checkpoint 后 publish、失败补偿和 recovery 均保留；
@@ -742,9 +742,9 @@ Workspace 与命令输入生成相同 argv/env/bind/cwd 的纯值。
 | 当前实现 | 产生原因 | V2 处理 |
 | --- | --- | --- |
 | `ReconcileOrphanedTurnExecution` 及 `TurnRecovery.reconcileOrphanedTurnExecution` | 旧版本可能留下 owning message 缺失的 execution fact；V1C 用专用 command 原子终结 | 0.0.18 已完成恢复且当前 writer/事务协议不能再生成后，删除 command、Reducer/Runtime/Coordinator 分支和 legacy test |
-| `ArtifactStore.adoptSettingsOwnedImages` | 旧 Settings 图片写入曾绕过 Artifact metadata owner | 0.0.18 已完成 adoption 且所有当前入口经 typed ownership 后，删除启动扫描、adoption 分支和对应旧数据测试 |
+| `ArtifactStore.adoptSettingsOwnedImages` | 旧 Settings 图片写入曾绕过 Artifact metadata owner | 删除启动扫描、adoption 分支和对应旧数据测试；背景/头像任一 Artifact half 缺失时经唯一 Settings 写链回退默认值 |
 
-删除后如果再次出现这两种状态，应作为当前写协议破坏或数据损坏 fail-closed，而不是重新加 silent repair。
+删除后，Settings 背景/头像缺 metadata 或 payload 时均经唯一 Settings 写链清除悬挂引用并回退 UI，而不是重新加 metadata repair。消息和其他无默认展示语义的 durable root 仍按各自完整性规则 fail-closed。
 
 ### 10.3 其他分支的判定规则
 
@@ -790,7 +790,7 @@ V2 默认不改变 Room 结构。若实施中发现确需关系化新事实，�
 | `McpConnectionKey.kt` | `McpConnectionKeyTest` 的内部形状断言 | `McpManager.ConnectionSlot` private fingerprint；行为测试迁入 Manager reconcile 测试 |
 | MCP 并行状态容器 | `clients`、`connectedConfigs`、`reconnectJobs`、`dormantJobs`、`reconnectAttempts`、`serverLocks`、`authorizationJobs` 和可独立写 `_status` | 一个 `slots: Map<Uuid, ConnectionSlot>`，状态 Flow 只是 slots 的投影 |
 | MCP 重复重连决策 | `getServerLock` 及 `addClient/createAndConnect/reconnectClient/syncAll` 中重复的 create/update/remove 分支 | 一个 `reconcile(revision, desiredConfigs)`；连接、工具刷新、OAuth 均作为 slot transition |
-| `ArtifactStore.adoptSettingsOwnedImages` | 启动调用和 `ArtifactStoreLifecycleTest` 中 adoption 专用场景 | 当前 typed ownership；缺 metadata 视为损坏而非静默补写 |
+| `ArtifactStore.adoptSettingsOwnedImages` | 启动调用和 `ArtifactStoreLifecycleTest` 中 adoption 专用场景 | 当前 typed ownership；背景/头像缺 metadata 或 payload 时清除悬挂 Settings root |
 | 可替换的 `SettingsWritePolicy` 接口与 `AllowAll` 实现 | Store 构造参数、测试 fake policy、`ENTERPRISE_DELIVERY` 可伪造来源 | `SettingsWriteRules` 内唯一纯 lock/generation 校验；managed apply 是 internal 专用入口 |
 | 未读取的 `data_version` key 声明 | 不进入 `Settings`、无 migration 或 writer 的死声明；既有 DataStore 标量不删除 | `Preferences` 的未知 key 透传保留，不创建新的 version owner |
 | 运行时 Search 下标身份 | `Settings.searchServiceSelected: Int` 及 index fallback | `selectedSearchServiceId: Uuid?`；旧 key 只在一次性 DataStore migration 中读取 |
@@ -859,7 +859,7 @@ V2 默认不改变 Room 结构。若实施中发现确需关系化新事实，�
 | Settings 写入入口与设置 UiModel | LOCAL/market 命中 lock 时原子拒绝；restore 只替换 shadow；原页面显示 source/lock/blocked diagnostic | 只禁用 Compose 控件、为 managed 建第二套页面/ViewModel、写失败后发布假 effective 值 |
 | Search 设置与全部搜索消费者 | `selectedSearchServiceId` 一次迁移后只按稳定 id 读写；删除旧 key 与运行时 index fallback | 同时维护 id/index，或排序后靠位置猜选中项 |
 | `McpManager` | 每个 server 只有一个 `ConnectionSlot`；配置、网络、前台、手动刷新统一调用 revision-aware `reconcile` | 平行 map、每种触发源复制连接主链、stale job 覆盖新配置 |
-| `ArtifactStore` 启动恢复 | 删除 settings image adoption 后只恢复合法 Artifact 状态；缺 metadata 明确损坏 | 重新扫描 Settings 猜 owner 或补 DAO 行 |
+| `ArtifactStore` 启动恢复 | 删除 settings image adoption 后只恢复合法 Artifact 状态；背景/头像缺 metadata 或 payload 时持久化回退 Settings root | 重新扫描 Settings 猜 owner 或补 DAO 行 |
 | `SkillManager` | 三个单目录公开 API 复用 private `mutateSkillTree`，整包 import 仍走 root transaction | 抽取跨 Skill/Backup/Artifact 的通用文件事务 |
 | `WorkspaceQueryService` / shell 与 terminal adapter | 合并 terminal 只读 projection；两种启动都消费同一 `ProotLaunchSpec` | Query 获得写能力、合并 PTY owner、继续手写两套 argv/env/bind |
 | 架构/行为测试与 `docs/references/` | 删除内部形状断言，改测 owner、事务、状态迁移、用户行为；每阶段同步当前事实 | 允许旧 facade 的白名单、计划术语进入当前参考、只凭源码字符串验收 |
@@ -1009,7 +1009,7 @@ Phase 不得开始。
 - 删除 `ReconcileOrphanedTurnExecution` command、transition/reducer、Runtime、Coordinator、Repository 和 Recovery 路径；
 - 删除 `TurnRecoveryLegacyExecutionTest`，改以当前写事务不可产生孤儿 execution 的约束和故障测试覆盖；
 - 删除 `ArtifactStore.adoptSettingsOwnedImages` 及其启动调用和旧状态 adoption 测试；
-- 对再次出现的缺失 owner/missing metadata 走明确损坏诊断或恢复失败，不新增另一种补偿；
+- 对再次出现的缺失 owner/missing metadata：Settings 背景/头像任一 Artifact half 缺失时经唯一写链清除；不新增 metadata 补偿，其他 durable root 仍按明确损坏诊断或恢复失败；
 - 使用 0.0.18 真实数据库与 Settings/Artifact 样本证明两类错误状态已归零，不只使用新建 fixture；
 - 保持 `Migration_1_2`～`Migration_7_8`、OCR/DataStore migration、旧备份读取完全不变。
 

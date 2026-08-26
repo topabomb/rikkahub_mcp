@@ -111,7 +111,10 @@ class WorkspaceTerminalRuntimeTest {
         val context = mockk<Context>()
         every { context.applicationContext } returns context
         val host = mockk<WorkspaceTerminalHost>()
-        every { host.prepare(any(), any()) } returns false
+        val session = mockk<TerminalSession>()
+        every { session.finishIfRunning() } just Runs
+        every { host.prepare(any(), any()) } returns true
+        every { host.create(any(), any(), any()) } returns session
         val runtime = WorkspaceTerminalRuntime(context, AppScope(dispatcher), host)
 
         val results = (1..12).map { async { runtime.createForTest("workspace") } }.awaitAll()

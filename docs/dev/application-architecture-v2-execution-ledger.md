@@ -20,10 +20,10 @@ before asynchronously registering its Artifact metadata. A process death between
 could leave a Settings root whose file existed but had no `ACTIVE` Artifact row. The 0.0.18
 `adoptSettingsOwnedImages` startup repair covered that known gap.
 
-The V2 boundary does not recreate that repair. `ArtifactStore.reconcileStartup` requires every
-managed Settings root to already have an `ACTIVE` Artifact row. A missing row is an integrity
-failure: the root and payload are retained for diagnosis, but no metadata is guessed or inserted.
-The lifecycle test covers both avatar and background on a sub-assistant record.
+The V2 boundary does not recreate that repair. `ArtifactStore.reconcileStartup` never guesses or
+inserts missing metadata. A Settings background/avatar whose payload or `ACTIVE` metadata is absent
+cannot render, so recovery persists the existing `ArtifactReferencePolicy.detach` fallback before
+publishing Ready. The lifecycle tests cover background, assistant avatar, and user avatar.
 
 The migration lesson is explicit: a file payload, its metadata and its Settings root form one
 ownership handoff, not three eventually-consistent writes. The current writer stages through
@@ -62,19 +62,21 @@ background assignment, deletion and GC as required by the Phase B exit matrix.
 This proves the normal persisted 0.0.17 -> 0.0.18 path preserves Settings and Artifact facts, and
 that the released 0.0.18 repair closes the historical missing-metadata state. It does not
 reinterpret an interrupted pre-0.0.18 producer window as a legal persistent format. If such
-corruption is encountered after V2, recovery remains fail-closed rather than installing a new
-compatibility scanner.
+corruption is encountered after V2, background/avatar roots with either Artifact half missing are
+cleared through the normal Settings owner because retaining them has no recovery value. This is not
+a compatibility scanner: it never adopts a payload or creates metadata.
 
 ### Current Phase B Debug check
 
-The current-worktree `app-x86_64-debug.apk` was installed on `emulator-5554` and first started
-successfully with cleared test-only Debug data. Reinstalling it over the historical test fixture
-then displayed the recovery gate for a Settings root without `ACTIVE` Artifact metadata, proving
-the current binary does not invoke adoption. At that later check the named payload was no longer
-present, so this is evidence for the current fail-closed gate only, not a second proof that a
+The pre-fallback V2 worktree `app-x86_64-debug.apk` was installed on `emulator-5554` and first
+started successfully with cleared test-only Debug data. Reinstalling it over the historical test
+fixture then displayed the recovery gate for a Settings root without `ACTIVE` Artifact metadata,
+proving that snapshot did not invoke adoption. At that later check the named payload was no longer
+present, so this is evidence for the retired fail-closed behavior only, not a second proof that a
 payload-only missing-metadata state is retained. The historical proof above remains the adoption
-branch evidence. The subsequent normal-path checks record the current-binary avatar/background
-coverage; sent-message attachment preview, deletion and GC remain open.
+branch evidence. The current Settings fallback is covered by lifecycle tests; the subsequent
+normal-path checks record avatar/background coverage. Sent-message attachment preview, deletion
+and GC remain open.
 
 After clearing the synthetic Debug fixture, the same current APK completed the ordinary assistant
 avatar picker and crop flow. It created `files/upload/1cf9bb3e-70a1-4072-9edc-adbfae9a1eb5.png`
