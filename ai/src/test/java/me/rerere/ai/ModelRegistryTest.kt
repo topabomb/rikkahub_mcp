@@ -201,6 +201,7 @@ class ModelRegistryTest {
         assertTrue(ModelRegistry.DEEPSEEK_V4.match("opencode-go/deepseek-v4-flash"))
         assertTrue(ModelRegistry.DEEPSEEK_V4.match("Pro/deepseek-ai/DeepSeek-V4-Flash"))
         assertTrue(ModelRegistry.DEEPSEEK_V4.match("deepseek-v4-pro"))
+        assertTrue(ModelRegistry.DEEPSEEK_V4.match("deepseek-v4-flash-vision-exp"))
         assertFalse(ModelRegistry.DEEPSEEK_V4.match("deepseek-v3.2"))
         assertEquals(
             reasonerAbilities,
@@ -210,5 +211,34 @@ class ModelRegistryTest {
             reasonerAbilities,
             ModelRegistry.MODEL_ABILITIES.getData("deepseek-v4-pro")
         )
+    }
+
+    @Test
+    fun testDeepseekV4FlashVisionExp() {
+        val visionInput = listOf(Modality.TEXT, Modality.IMAGE)
+        val toolReasoning = listOf(ModelAbility.TOOL, ModelAbility.REASONING)
+
+        // 专用 Vision 规则命中
+        assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("deepseek-v4-flash-vision-exp"))
+        assertEquals(toolReasoning, ModelRegistry.MODEL_ABILITIES.getData("deepseek-v4-flash-vision-exp"))
+
+        // 大小写不敏感
+        assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("DeepSeek-V4-Flash-Vision-Exp"))
+
+        // provider/proxy 前缀
+        assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("Pro/deepseek-ai/DeepSeek-V4-Flash-Vision-Exp"))
+        assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("deepseek-ai/deepseek-v4-flash-vision-exp"))
+
+        // 通用 V4 Flash 仍为 text-only，不会因为一个型号把整个 family 误标为 vision
+        assertEquals(listOf(Modality.TEXT), ModelRegistry.MODEL_INPUT_MODALITIES.getData("deepseek-v4-flash"))
+        assertEquals(listOf(Modality.TEXT), ModelRegistry.MODEL_INPUT_MODALITIES.getData("deepseek-v4-flash-free"))
+        assertEquals(
+            listOf(Modality.TEXT),
+            ModelRegistry.MODEL_INPUT_MODALITIES.getData("Pro/deepseek-ai/DeepSeek-V4-Flash")
+        )
+
+        // 缺少 Exp 的相邻型号及未发布的 Experimental 别名不能继承尚未核实的 vision capability
+        assertEquals(listOf(Modality.TEXT), ModelRegistry.MODEL_INPUT_MODALITIES.getData("deepseek-v4-flash-vision"))
+        assertEquals(listOf(Modality.TEXT), ModelRegistry.MODEL_INPUT_MODALITIES.getData("deepseek-v4-flash-vision-experimental"))
     }
 }

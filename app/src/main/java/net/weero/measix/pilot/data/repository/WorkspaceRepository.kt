@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.repository
+package net.weero.measix.pilot.data.repository
 
 import android.util.Log
 import kotlinx.coroutines.CancellationException
@@ -286,11 +286,16 @@ class WorkspaceRepository(
 
     suspend fun delete(id: String): Boolean {
         val workspace = dao.getById(id) ?: return false
-        dao.deleteById(id)
-        withContext(Dispatchers.IO) {
+        // BROKEN is the durable fail-closed retry state for a destructive filesystem operation.
+        // If deletion fails or the process stops, the record remains visible and can be retried;
+        // the durable identity is removed only after the workspace tree is gone.
+        updateShellState(workspace, WorkspaceShellStatus.BROKEN.name)
+        val filesDeleted = withContext(Dispatchers.IO) {
             manager.deleteWorkspace(workspace.root)
         }
+        if (!filesDeleted) return false
         cleanupAssistantReferences(id)
+        dao.deleteById(id)
         return true
     }
 

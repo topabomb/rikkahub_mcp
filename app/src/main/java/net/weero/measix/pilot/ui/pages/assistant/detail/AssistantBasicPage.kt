@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
@@ -24,20 +25,23 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.ai.provider.ModelType
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
+import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.DEFAULT_CONTEXT_MESSAGE_LIMIT
 import net.weero.measix.pilot.data.model.MAX_CONTEXT_MESSAGE_LIMIT
@@ -110,7 +114,7 @@ internal fun AssistantBasicContent(
     providers: List<me.rerere.ai.provider.ProviderSetting>,
     hasValidChatModel: Boolean,
     tags: List<DataTag>,
-    workspaces: List<WorkspaceEntity>,
+    workspaces: List<WorkspaceUiModel>,
     onUpdate: (Assistant) -> Unit,
     vm: AssistantDetailVM
 ) {
@@ -224,7 +228,7 @@ internal fun AssistantBasicContent(
             ) {
                 val selectedWorkspace = workspaces.find { it.id == assistant.workspaceId?.toString() }
                 Select(
-                    options = listOf<WorkspaceEntity?>(null) + workspaces,
+                    options = listOf<WorkspaceUiModel?>(null) + workspaces,
                     selectedOption = selectedWorkspace,
                     onOptionSelected = { workspace ->
                         onUpdate(
@@ -427,6 +431,19 @@ internal fun AssistantBasicContent(
                 }
             }
             HorizontalDivider()
+            var limitEditState by remember(assistant.id) {
+                mutableStateOf(ContextMessageLimitEditState.initial(effectiveContextMessageLimit))
+            }
+
+            LaunchedEffect(effectiveContextMessageLimit) {
+                limitEditState = limitEditState.observe(effectiveContextMessageLimit)
+            }
+
+            fun applyLimitTransition(transition: ContextMessageLimitTransition) {
+                limitEditState = transition.state
+                transition.submission?.let { onUpdate(assistant.copy(contextMessageLimit = it)) }
+            }
+
             FormItem(
                 modifier = Modifier.padding(8.dp),
                 label = {
@@ -439,41 +456,53 @@ internal fun AssistantBasicContent(
                     Switch(
                         checked = effectiveContextMessageLimit > 0,
                         onCheckedChange = { enabled ->
-                            onUpdate(
-                                assistant.copy(
-                                    contextMessageLimit = if (enabled) {
-                                        DEFAULT_CONTEXT_MESSAGE_LIMIT
-                                    } else {
-                                        0
-                                    }
-                                )
-                            )
+                            applyLimitTransition(limitEditState.toggle(enabled))
                         }
                     )
                 }
             ) {
                 if (effectiveContextMessageLimit > 0) {
-                    Slider(
-                        value = effectiveContextMessageLimit.toFloat(),
-                        onValueChange = { value ->
-                            onUpdate(
-                                assistant.copy(
-                                    contextMessageLimit = value.roundToInt()
-                                        .coerceIn(MIN_CONTEXT_MESSAGE_LIMIT, MAX_CONTEXT_MESSAGE_LIMIT)
-                                )
-                            )
-                        },
-                        valueRange = MIN_CONTEXT_MESSAGE_LIMIT.toFloat()..MAX_CONTEXT_MESSAGE_LIMIT.toFloat(),
-                        steps = 0,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text(
-                        text = stringResource(
-                            R.string.assistant_page_context_message_limit_count,
-                            effectiveContextMessageLimit
+                    // Independent edit buffer: only commit on IME Done or focus loss.
+                    // Valid submission is 0 or 40..512; invalid input stays in the buffer.
+                    val parsedLimit = parseContextMessageLimitInput(limitEditState.input)
+                    val isLimitValid = parsedLimit != null
+
+                    OutlinedTextField(
+                        value = limitEditState.input,
+                        onValueChange = { limitEditState = limitEditState.edit(it) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onFocusChanged { state ->
+                                applyLimitTransition(limitEditState.focusChanged(state.hasFocus))
+                            },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            imeAction = ImeAction.Done
                         ),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.75f),
+                        keyboardActions = KeyboardActions(
+                            onDone = { applyLimitTransition(limitEditState.done()) }
+                        ),
+                        singleLine = true,
+                        isError = !isLimitValid,
+                        supportingText = {
+                            if (!isLimitValid) {
+                                Text(
+                                    stringResource(
+                                        R.string.assistant_page_context_message_limit_invalid,
+                                        MIN_CONTEXT_MESSAGE_LIMIT,
+                                        MAX_CONTEXT_MESSAGE_LIMIT
+                                    )
+                                )
+                            } else {
+                                Text(
+                                    stringResource(
+                                        R.string.assistant_page_context_message_limit_range,
+                                        MIN_CONTEXT_MESSAGE_LIMIT,
+                                        MAX_CONTEXT_MESSAGE_LIMIT
+                                    )
+                                )
+                            }
+                        }
                     )
                     Text(
                         text = stringResource(R.string.assistant_page_context_message_limit_warning),

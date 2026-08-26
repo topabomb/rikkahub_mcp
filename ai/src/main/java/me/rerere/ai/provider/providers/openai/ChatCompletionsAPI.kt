@@ -271,7 +271,7 @@ class ChatCompletionsAPI(
                     } else {
                         params.model.inputModalities
                     },
-                    requiresToolReasoningReplay = requiresDeepSeekToolReasoningReplay(
+                    requiresToolReasoningReplay = requiresToolReasoningReplay(
                         host = host,
                         modelId = params.model.modelId,
                     ),
@@ -282,14 +282,17 @@ class ChatCompletionsAPI(
                 )
             )
 
-            if (isModelAllowTemperature(params.model)) {
+            if (isModelAllowTemperature(params.model, endpointVendor, params.reasoningLevel)) {
                 if (params.temperature != null) put("temperature", params.temperature)
                 if (params.topP != null) put("top_p", params.topP)
             }
             if (params.maxTokens != null) {
                 // max_tokens 已被 OpenAI 官方弃用，且不兼容 o-series；兼容服务继续使用旧字段，
                 // 避免把官方协议升级扩散到尚未支持 max_completion_tokens 的第三方网关。
-                put(if (isOfficialOpenAI) "max_completion_tokens" else "max_tokens", params.maxTokens)
+                // MiMo 支持 max_completion_tokens，与官方 OpenAI 一致。
+                val isMaxCompletionTokensHost = isOfficialOpenAI ||
+                        endpointVendor == OpenAIEndpointVendor.MIMO
+                put(if (isMaxCompletionTokensHost) "max_completion_tokens" else "max_tokens", params.maxTokens)
             }
 
             put("stream", stream)
@@ -309,6 +312,10 @@ class ChatCompletionsAPI(
                         add("text")
                     })
                 }
+                // OpenRouter sticky routing / caching session_id (max 256 chars per contract).
+                params.providerSessionId
+                    ?.takeIf { it.isNotBlank() && it.length <= 256 }
+                    ?.let { put("session_id", it) }
             }
 
             if (params.model.abilities.contains(ModelAbility.REASONING)) {
@@ -408,6 +415,16 @@ class ChatCompletionsAPI(
                         mapDeepSeekChatReasoningEffort(level)?.let { put("reasoning_effort", it) }
                     }
 
+                    OpenAIEndpointVendor.MIMO -> {
+                        // MiMo Chat Completions uses thinking.type=enabled|disabled.
+                        // When thinking is enabled, temperature/top_p are ignored and must be omitted.
+                        // Token limit uses max_completion_tokens (handled in isModelAllowTemperature
+                        // and maxTokens below).
+                        put("thinking", buildJsonObject {
+                            put("type", mapMiMoChatThinkingType(level))
+                        })
+                    }
+
                     OpenAIEndpointVendor.NVIDIA -> {
                         if ("deepseek-v4" in params.model.modelId.lowercase()) {
                             if (level != ReasoningLevel.AUTO) {
@@ -455,7 +472,7 @@ class ChatCompletionsAPI(
                             put("function", buildJsonObject {
                                 put("name", tool.name)
                                 put("description", tool.description)
-                                tool.parameters()?.let { put("parameters", it) }
+                                put("parameters", normalizeToolParameters(tool.parameters()))
                             })
                         })
                     }
@@ -464,15 +481,23 @@ class ChatCompletionsAPI(
         }.mergeCustomBody(params.customBody)
     }
 
-    private fun isModelAllowTemperature(model: Model): Boolean {
+    private fun isModelAllowTemperature(
+        model: Model,
+        endpointVendor: OpenAIEndpointVendor = OpenAIEndpointVendor.COMPATIBLE,
+        reasoningLevel: ReasoningLevel = ReasoningLevel.AUTO,
+    ): Boolean {
         val isMoonshotRestricted = ModelRegistry.KIMI_K2_5.match(model.modelId) ||
                 ModelRegistry.KIMI_K3.match(model.modelId) ||
                 ModelRegistry.KIMI_K3_ALIAS.match(model.modelId)
         val isOpenAIReasoningModel = ModelRegistry.OPENAI_GPT_5_SERIES.match(model.modelId) &&
                 model.abilities.contains(ModelAbility.REASONING)
+        // MiMo ignores temperature/top_p when thinking is enabled.
+        val mimoThinkingEnabled = endpointVendor == OpenAIEndpointVendor.MIMO &&
+                isMiMoThinkingEnabled(model, reasoningLevel)
         return !ModelRegistry.OPENAI_O_MODELS.match(model.modelId) &&
                !isOpenAIReasoningModel &&
-               !isMoonshotRestricted
+               !isMoonshotRestricted &&
+               !mimoThinkingEnabled
     }
 
     internal fun buildMessages(
@@ -943,13 +968,16 @@ class ChatCompletionsAPI(
 }
 
 /**
- * 判断 Chat Completions 工具步骤是否必须回传 DeepSeek reasoning_content。
+ * 判断 Chat Completions 工具步骤是否必须回传 reasoning_content。
  *
- * 直连 DeepSeek 时 host 可以覆盖自定义模型别名；经过代理时只能依赖可识别的 DeepSeek V4 modelId。
- * 未知代理上的其他模型保持原行为，不会因为使用 OpenAI 兼容接口而被误判为 DeepSeek。
+ * DeepSeek 和 MiMo 都将工具调用前的 reasoning_content 视为后续请求必须携带的协议状态。
+ * 直连 DeepSeek/MiMo 时 host 可以覆盖自定义模型别名；经过代理时只能依赖可识别的 modelId。
+ * 未知代理上的其他模型保持原行为，不会因为使用 OpenAI 兼容接口而被误判。
  */
-internal fun requiresDeepSeekToolReasoningReplay(host: String, modelId: String): Boolean {
+internal fun requiresToolReasoningReplay(host: String, modelId: String): Boolean {
     val endpointVendor = resolveOpenAIEndpointVendor(host)
     if (endpointVendor == OpenAIEndpointVendor.OPENAI) return false
-    return endpointVendor == OpenAIEndpointVendor.DEEPSEEK || ModelRegistry.DEEPSEEK_V4.match(modelId)
+    return endpointVendor == OpenAIEndpointVendor.DEEPSEEK ||
+            endpointVendor == OpenAIEndpointVendor.MIMO ||
+            ModelRegistry.DEEPSEEK_V4.match(modelId)
 }

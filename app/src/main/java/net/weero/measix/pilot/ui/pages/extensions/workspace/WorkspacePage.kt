@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.extensions.workspace
+package net.weero.measix.pilot.ui.pages.extensions.workspace
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -45,12 +45,13 @@ import me.rerere.hugeicons.stroke.Edit01
 import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.MoreVertical
 import net.weero.measix.pilot.Screen
-import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
+import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
 import androidx.compose.ui.res.stringResource
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
 import net.weero.measix.pilot.ui.context.LocalNavController
+import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.utils.plus
 import org.koin.androidx.compose.koinViewModel
@@ -58,11 +59,23 @@ import org.koin.androidx.compose.koinViewModel
 @Composable
 fun WorkspacePage(vm: WorkspaceVM = koinViewModel()) {
     val navController = LocalNavController.current
+    val toaster = LocalToaster.current
     val workspaces by vm.workspaces.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
-    var editTarget by remember { mutableStateOf<WorkspaceEntity?>(null) }
-    var deleteTarget by remember { mutableStateOf<WorkspaceEntity?>(null) }
+    var editTarget by remember { mutableStateOf<WorkspaceUiModel?>(null) }
+    var deleteTarget by remember { mutableStateOf<WorkspaceUiModel?>(null) }
+    val mutationFailureMessages = mapOf(
+        WorkspaceMutationOperation.CREATE to stringResource(R.string.workspace_page_create_failed),
+        WorkspaceMutationOperation.RENAME to stringResource(R.string.workspace_page_rename_failed),
+        WorkspaceMutationOperation.DELETE to stringResource(R.string.workspace_page_delete_failed),
+    )
+    fun handleMutationResult(result: WorkspaceMutationResult, onSuccess: () -> Unit) {
+        when (result) {
+            WorkspaceMutationResult.Success -> onSuccess()
+            is WorkspaceMutationResult.Failure -> toaster.show(mutationFailureMessages.getValue(result.operation))
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -110,8 +123,7 @@ fun WorkspacePage(vm: WorkspaceVM = koinViewModel()) {
             existingNames = workspaces.map { it.name.trim() }.toSet(),
             onDismiss = { showAddDialog = false },
             onConfirm = { name ->
-                vm.create(name)
-                showAddDialog = false
+                vm.create(name) { result -> handleMutationResult(result) { showAddDialog = false } }
             },
         )
     }
@@ -123,8 +135,7 @@ fun WorkspacePage(vm: WorkspaceVM = koinViewModel()) {
             existingNames = workspaces.filter { it.id != workspace.id }.map { it.name.trim() }.toSet(),
             onDismiss = { editTarget = null },
             onConfirm = { name ->
-                vm.rename(workspace, name)
-                editTarget = null
+                vm.rename(workspace, name) { result -> handleMutationResult(result) { editTarget = null } }
             },
         )
     }
@@ -135,8 +146,9 @@ fun WorkspacePage(vm: WorkspaceVM = koinViewModel()) {
         confirmText = stringResource(R.string.common_delete),
         dismissText = stringResource(R.string.common_cancel),
         onConfirm = {
-            deleteTarget?.let { vm.delete(it) }
-            deleteTarget = null
+            deleteTarget?.let { workspace ->
+                vm.delete(workspace) { result -> handleMutationResult(result) { deleteTarget = null } }
+            }
         },
         onDismiss = { deleteTarget = null },
     ) {
@@ -174,7 +186,7 @@ private fun EmptyWorkspaceState() {
 
 @Composable
 private fun WorkspaceCard(
-    workspace: WorkspaceEntity,
+    workspace: WorkspaceUiModel,
     onRename: () -> Unit,
     onDelete: () -> Unit,
     onOpen: () -> Unit,

@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.extensions.skills
+package net.weero.measix.pilot.ui.pages.extensions.skills
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -47,6 +47,10 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastForEach
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.data.files.SkillFile
+import net.weero.measix.pilot.data.files.SkillFileDeleteResult
+import net.weero.measix.pilot.data.files.SkillFileNode
+import net.weero.measix.pilot.data.files.SkillFileSaveResult
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.ChevronDown
 import com.composables.icons.lucide.ChevronRight
@@ -73,10 +77,19 @@ fun SkillDetailPage(skillName: String) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val toaster = LocalToaster.current
 
-    var editingFile by remember { mutableStateOf<SkillFile?>(null) }
+    var editingFile by remember { mutableStateOf<SkillFileEditor?>(null) }
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<SkillFile?>(null) }
     val deleteFailedMsg = stringResource(R.string.skill_detail_page_delete_failed)
+    val deleteProtectedMsg = stringResource(R.string.skill_detail_page_delete_skill_file_forbidden)
+    val loadFailedMsg = stringResource(R.string.skill_detail_page_load_failed)
+    val saveErrorMessages = mapOf(
+        SkillFileSaveResult.NOT_FOUND to stringResource(R.string.skill_detail_page_skill_not_found),
+        SkillFileSaveResult.INVALID_PATH to stringResource(R.string.skill_detail_page_invalid_path),
+        SkillFileSaveResult.INVALID_SKILL to stringResource(R.string.skill_detail_page_invalid_skill),
+        SkillFileSaveResult.NAME_MISMATCH to stringResource(R.string.skill_detail_page_name_mismatch, skillName),
+        SkillFileSaveResult.IO_FAILURE to stringResource(R.string.skill_detail_page_save_failed),
+    )
 
     val scrollState = rememberScrollState()
     var previousScrollOffset by remember { mutableIntStateOf(0) }
@@ -120,21 +133,28 @@ fun SkillDetailPage(skillName: String) {
             FileTree(
                 nodes = tree,
                 depth = 0,
-                onEdit = { editingFile = it },
+                onEdit = { skillFile ->
+                    vm.readFile(skillFile) { result ->
+                        when (result) {
+                            is SkillFileLoadResult.Success -> editingFile = SkillFileEditor(skillFile, result.content)
+                            SkillFileLoadResult.Failure -> toaster.show(loadFailedMsg)
+                        }
+                    }
+                },
                 onDelete = { deleteTarget = it },
             )
         }
     }
 
-    editingFile?.let { skillFile ->
+    editingFile?.let { editor ->
         EditFileDialog(
-            skillFile = skillFile,
-            initialContent = remember(skillFile.relativePath) { vm.readFile(skillFile) },
+            skillFile = editor.skillFile,
+            initialContent = editor.content,
             onDismiss = { editingFile = null },
             onConfirm = { content ->
-                vm.saveFile(skillFile.relativePath, content) { error ->
-                    if (error == null) editingFile = null
-                    else toaster.show(error)
+                vm.saveFile(editor.skillFile.relativePath, content) { result ->
+                    if (result == SkillFileSaveResult.SUCCESS) editingFile = null
+                    else toaster.show(saveErrorMessages.getValue(result))
                 }
             },
         )
@@ -144,9 +164,9 @@ fun SkillDetailPage(skillName: String) {
         AddFileDialog(
             onDismiss = { showAddDialog = false },
             onConfirm = { fileName, content ->
-                vm.saveFile(fileName, content) { error ->
-                    if (error == null) showAddDialog = false
-                    else toaster.show(error)
+                vm.saveFile(fileName, content) { result ->
+                    if (result == SkillFileSaveResult.SUCCESS) showAddDialog = false
+                    else toaster.show(saveErrorMessages.getValue(result))
                 }
             },
         )
@@ -159,8 +179,12 @@ fun SkillDetailPage(skillName: String) {
         dismissText = stringResource(R.string.cancel),
         onConfirm = {
             deleteTarget?.let { skillFile ->
-                vm.deleteFile(skillFile) { success ->
-                    if (!success) toaster.show(deleteFailedMsg)
+                vm.deleteFile(skillFile) { result ->
+                    when (result) {
+                        SkillFileDeleteResult.SUCCESS -> Unit
+                        SkillFileDeleteResult.PROTECTED_SKILL_FILE -> toaster.show(deleteProtectedMsg)
+                        else -> toaster.show(deleteFailedMsg)
+                    }
                 }
             }
             deleteTarget = null
@@ -170,6 +194,11 @@ fun SkillDetailPage(skillName: String) {
         Text(stringResource(R.string.skill_detail_page_delete_confirm, deleteTarget?.relativePath ?: ""))
     }
 }
+
+private data class SkillFileEditor(
+    val skillFile: SkillFile,
+    val content: String,
+)
 
 @Composable
 private fun FileTree(
@@ -221,7 +250,7 @@ private fun FileItem(
                 tint = MaterialTheme.colorScheme.primary,
             )
             Text(
-                text = skillFile.file.name,
+                text = skillFile.name,
                 style = MaterialTheme.typography.bodyMedium,
                 fontFamily = FontFamily.Monospace,
                 modifier = Modifier
@@ -229,7 +258,7 @@ private fun FileItem(
                     .padding(start = 8.dp),
             )
             Text(
-                text = "${skillFile.file.length()} B",
+                text = "${skillFile.sizeBytes} B",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

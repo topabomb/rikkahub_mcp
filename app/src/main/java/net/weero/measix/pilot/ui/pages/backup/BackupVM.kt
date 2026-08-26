@@ -15,12 +15,15 @@ import net.weero.measix.pilot.data.sync.webdav.WebDavSync
 import net.weero.measix.pilot.data.sync.S3BackupItem
 import net.weero.measix.pilot.data.sync.S3Sync
 import net.weero.measix.pilot.utils.UiState
+import android.net.Uri
 import java.io.File
+import net.weero.measix.pilot.service.BackupRestoreApplicationService
 
 class BackupVM(
     private val settingsStore: SettingsStore,
     private val webDavSync: WebDavSync,
     private val s3Sync: S3Sync,
+    private val restoreApplicationService: BackupRestoreApplicationService,
 ) : ViewModel() {
     val settings = settingsStore.settingsFlow.stateIn(
         scope = viewModelScope,
@@ -71,7 +74,7 @@ class BackupVM(
     }
 
     suspend fun restore(item: WebDavBackupItem) {
-        webDavSync.restore(config = settings.value.webDavConfig, item = item)
+        restoreApplicationService.restoreWebDav(config = settings.value.webDavConfig, item = item)
     }
 
     suspend fun deleteWebDavBackupFile(item: WebDavBackupItem) {
@@ -86,9 +89,9 @@ class BackupVM(
         return file
     }
 
-    suspend fun restoreFromLocalFile(file: File) {
-        webDavSync.restoreFromLocalFile(
-            file,
+    suspend fun restoreFromLocalUri(uri: Uri) {
+        restoreApplicationService.restoreLocal(
+            uri,
             settings.value.webDavConfig.copy(items = WebDavConfig.BackupItem.entries),
         )
     }
@@ -123,7 +126,7 @@ class BackupVM(
     }
 
     suspend fun restoreFromS3(item: S3BackupItem) {
-        s3Sync.restoreFromS3(config = settings.value.s3Config, item = item)
+        restoreApplicationService.restoreS3(config = settings.value.s3Config, item = item)
     }
 
     suspend fun deleteS3BackupFile(item: S3BackupItem) {

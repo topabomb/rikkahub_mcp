@@ -46,6 +46,7 @@ import net.weero.measix.pilot.data.ai.transformers.InputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.MessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.OutputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.StreamingMessageTransformer
+import net.weero.measix.pilot.data.ai.transformers.ThinkTagTransformer
 import net.weero.measix.pilot.data.ai.transformers.TransformerContext
 import net.weero.measix.pilot.data.files.FileFolders
 import java.io.File
@@ -309,6 +310,15 @@ class GenerationHandler(
         memoryToolAllowed: suspend () -> Boolean = { true },
         assistantMessageId: Uuid? = null,
         onCheckpoint: suspend (GenerationCheckpoint) -> Unit = {},
+        /**
+         * Request-scoped Provider session identifier for sticky routing / caching.
+         *
+         * Derived from the conversation UUID by the turn owner (Master uses master conversation
+         * UUID, Target uses child conversation UUID). Same turn's multi-step and CONTINUE_APPROVAL
+         * reuse the same value. Fork gets a new conversation/session. Background requests without
+         * a conversation owner (title, suggestions, attachment checks) must pass null.
+         */
+        providerSessionId: String? = null,
     ): Flow<GenerationChunk> = channelFlow {
         val unpublishedResources = UnpublishedResourceScope()
         var generationFailure: Throwable? = null
@@ -361,6 +371,7 @@ class GenerationHandler(
             settings = settings,
             registerUnpublishedResource = unpublishedResources::register,
         )
+        var latestStreamingProjection: UIMessage? = null
 
         // 流式单消息通道：历史消息 immutable，仅最后一条（active assistant 消息）进入变换。
         // 流式契约：流式期间历史消息进入 transformStreaming 的次数为 0。
@@ -369,8 +380,11 @@ class GenerationHandler(
             val ctx = resourceTrackingTransformerContext()
             var last = current.last()
             for (transformer in outputTransformers) {
-                if (transformer is StreamingMessageTransformer) last = transformer.transformStreaming(ctx, last)
+                if (transformer is StreamingMessageTransformer) {
+                    last = transformer.transformStreaming(ctx, last, latestStreamingProjection)
+                }
             }
+            latestStreamingProjection = last
             if (last === current.last()) return current
             return current.dropLast(1) + last
         }
@@ -379,16 +393,19 @@ class GenerationHandler(
         suspend fun finishStreamingLast(current: List<UIMessage>): List<UIMessage> {
             if (current.isEmpty()) return current
             val ctx = resourceTrackingTransformerContext()
-            var last = current.last()
-            for (transformer in outputTransformers) {
-                if (transformer is StreamingMessageTransformer) last = transformer.onStreamingFinish(ctx, last)
-            }
+            val last = finishStreamingProjection(
+                raw = current.last(),
+                previousProjection = latestStreamingProjection,
+                ctx = ctx,
+                transformers = outputTransformers,
+            )
             if (last === current.last()) return current
             return current.dropLast(1) + last
         }
 
         for (stepIndex in 0 until maxSteps) {
             Log.i(TAG, "streamText: start step #$stepIndex (${model.id})")
+            latestStreamingProjection = null
 
             // 每个 step 重新解析工具
             val stepTools = toolProvider()
@@ -455,6 +472,7 @@ class GenerationHandler(
                     assistantMessageId = assistantMessageId,
                     registerUnpublishedResource = unpublishedResources::register,
                     onPhase = { phase -> send(GenerationChunk.Phase(phase)) },
+                    providerSessionId = providerSessionId,
                 )
                 messages = finishStreamingLast(messages)
                 messages = messages.slice(0 until messages.lastIndex) + messages.last().copy(
@@ -799,6 +817,7 @@ class GenerationHandler(
         assistantMessageId: Uuid? = null,
         registerUnpublishedResource: (ToolResourceLease) -> Unit,
         onPhase: (suspend (String) -> Unit)? = null,
+        providerSessionId: String? = null,
     ) {
         val contextMessages = messages
             .filterNot { message ->
@@ -861,7 +880,8 @@ class GenerationHandler(
             customBody = buildList {
                 addAll(assistant.customBodies)
                 addAll(model.customBodies)
-            }
+            },
+            providerSessionId = providerSessionId,
         )
         // 请求构建完成，进入等待模型响应阶段
         onPhase?.invoke("model_waiting")
@@ -887,19 +907,26 @@ class GenerationHandler(
                         }
                     }
                 }
-                // 精确 phase：首次收到 reasoning / text chunk 时通知 UI
+                // Phase uses the same accumulated-message semantics as the output projection.
+                // Text inside a leading <think> block is reasoning, not answer content.
+                val tagPhase = messages.lastOrNull()?.let(ThinkTagTransformer::classifyPhase)
                 if (!reasoningPhaseSent) {
                     val hasReasoning = it.choices.any { choice ->
                         choice.delta?.parts?.any { p -> p is UIMessagePart.Reasoning } == true
-                    }
+                    } || tagPhase?.hasReasoning == true
                     if (hasReasoning) {
                         reasoningPhaseSent = true
                         onPhase?.invoke("reasoning_streaming")
                     }
                 }
                 if (!answerPhaseSent) {
-                    val hasText = it.choices.any { choice ->
+                    val deltaHasText = it.choices.any { choice ->
                         choice.delta?.parts?.any { p -> p is UIMessagePart.Text && p.text.isNotEmpty() } == true
+                    }
+                    val hasText = when {
+                        tagPhase?.undecided == true -> false
+                        tagPhase != null -> tagPhase.hasAnswer
+                        else -> deltaHasText
                     }
                     if (hasText) {
                         answerPhaseSent = true
@@ -970,4 +997,17 @@ class GenerationHandler(
         ) + nonTextParts
     }
 
+}
+
+internal suspend fun finishStreamingProjection(
+    raw: UIMessage,
+    previousProjection: UIMessage?,
+    ctx: TransformerContext,
+    transformers: List<OutputMessageTransformer>,
+): UIMessage = transformers.fold(raw) { current, transformer ->
+    if (transformer is StreamingMessageTransformer) {
+        transformer.onStreamingFinish(ctx, current, previousProjection)
+    } else {
+        current
+    }
 }

@@ -30,6 +30,8 @@ Provider 类型决定原生协议族，`useResponseApi` 只选择 OpenAI 子协�
 
 OpenAI Chat Completions、Responses 和 Anthropic Messages 直接发送该文档。Gemini 使用官方的 `parametersJsonSchema` 字段，并移除该字段不接受的 `$schema` 方言声明；其余定义和引用保持原样。Provider 差异只能在对应协议 Adapter 处理，不能回写或降级通用缓存。
 
+OpenAI-compatible 端点要求 function tool 的 `parameters` 至少是 object schema。`normalizeToolParameters` 在 Chat Completions 与 Responses 共用的 wire conversion 边界把 `null` 规范化为 `{ "type": "object", "properties": {} }` 等价 object schema；非空原始 schema 逐字段原样保留，尤其是 `$defs`、`$ref`、`oneOf`、`additionalProperties` 和 provider 扩展。默认化只发生在 OpenAI wire 边界，不影响 Claude/Google 等 provider 的既有 schema 规则。
+
 ## 2. 统一消息模型
 
 `UIMessage` 是协议无关的持久化中间表示：
@@ -56,7 +58,7 @@ UIMessage
 | `OpenAIReasoningMetadata` | Part | reasoning item ID、`encrypted_content`、来源 profile |
 | `GoogleThoughtMetadata` | Part | `thoughtSignature`、function call ID、thought 标记、草稿图原始数据 |
 | `OpenRouterReasoningMetadata` | Part | 仅 `openrouter.ai` 回传的有序 `reasoning_details`；旧会话无此字段时走可见 `reasoning_content` |
-| `OpenAIResponseMetadata` | Message | `store=false` 所需的完整有序 `response.output` 批次、wire format、来源 profile |
+| `OpenAIResponseMetadata` | Message | 无状态完整历史回放所需的有序 `response.output` 批次、wire format、来源 profile |
 | `DiffMetadata` | Part | 仅供 UI 展示的 unified diff，不发送给 Provider |
 
 不透明状态不能从可见 Text/Reasoning 无损重建，也不能跨来源随意复用。metadata 字段保持可空并向后兼容旧会话；更新工具 metadata 时必须 merge，不能覆盖 Provider 状态。
@@ -115,16 +117,25 @@ OpenRouter 直连 host（`openrouter.ai`）若返回结构化 `reasoning_details
 
 ### DeepSeek reasoning 回放
 
-DeepSeek thinking + tools 要求后续请求保留工具步骤的 `reasoning_content`。`requiresDeepSeekToolReasoningReplay()` 在两类场景启用：
+DeepSeek thinking + tools 要求后续请求保留工具步骤的 `reasoning_content`。`requiresToolReasoningReplay()` 在以下场景启用：
 
 - host 是 `api.deepseek.com`；
-- 兼容代理上的 modelId 可由 `ModelRegistry.DEEPSEEK_V4` 明确识别。
+- 兼容代理上的 modelId 可由 `ModelRegistry.DEEPSEEK_V4` 明确识别；
+- host 是 MiMo 官方端点（`api.xiaomimimo.com` 或 `token-plan-cn.xiaomimimo.com`）。
 
 工具步骤强制回放 reasoning；普通无工具回答仍遵循 `includeHistoryReasoning`。Provider `toolCallId` 只用于线协议，不作为本地工具执行定位键。
 
+### MiMo 端点
+
+`OpenAIEndpointVendor.MIMO` 识别 MiMo 官方端点 `api.xiaomimimo.com` 与 `token-plan-cn.xiaomimimo.com`。模型声明 `REASONING` capability 时，Chat Completions 按本地 reasoning 开关发送 `thinking.type=enabled|disabled`；只有 wire 上实际启用 thinking 时才不发送 `temperature`/`top_p`，非 reasoning 模型保留 sampling，token 上限使用 `max_completion_tokens`。Responses 使用 `ResponseEndpointProfile.MIMO` 和 `OpenAIResponseSourceProfile.MIMO`：OFF 映射为 `reasoning.effort=none`，AUTO 省略，LOW/MEDIUM/HIGH 原样，XHIGH/MAX 降为 `high`；sampling 是否省略复用同一 capability + level 判定。MiMo Responses 不请求 unsupported reasoning summary/encrypted content，也不复用其他 endpoint 的 opaque item。
+
+### OpenRouter session_id
+
+`TextGenerationParams.providerSessionId` 是 request-scoped 的 nullable typed 字段，不进入 Settings、Conversation、Room 或 backup。Master 使用当前 master conversation UUID，Target 使用 child conversation UUID；同一 turn 的多 step 与 `CONTINUE_APPROVAL` 复用同一个值，fork 因新 conversation UUID 自然隔离。只有 `OpenAIEndpointVendor.OPENROUTER` 的 Chat Completions 和 Responses builder 把非空、长度不超过 256 的值写为顶层 `session_id`。标题生成、建议问题、附件检查、Provider 连接测试等无 conversation owner 的后台调用传 null。
+
 ## 5. Responses API
 
-`ResponseAPI` 始终使用本地无状态回放。即使 endpoint 支持 `previous_response_id`，当前实现也通过 `store=false` 和完整历史保证 Provider 切换、持久化与离线恢复的一致性。
+`ResponseAPI` 始终使用本地无状态完整历史回放，不使用 `previous_response_id`。默认端点显式发送 `store=false`；MiMo 不支持该字段，因此省略 `store`，但仍发送完整历史并保持同一无状态语义。这样 Provider 切换、持久化与离线恢复不依赖服务端会话。
 
 ### Endpoint profile
 
@@ -134,6 +145,7 @@ DeepSeek thinking + tools 要求后续请求保留工具步骤的 `reasoning_con
 | `OPENAI_COMPATIBLE` | OpenAI | 按 OpenAI 形状 | 按 OpenAI 形状 | 可多模态 |
 | `VOLC_ARK` | OpenAI | endpoint 默认 summary | 请求 `encrypted_content` | 字符串 |
 | `DEEPSEEK` | DeepSeek | `content[].reasoning_text` | 不使用 | 字符串 |
+| `MIMO` | MiMo | reasoning text item | 不使用 | 字符串 |
 
 相同 wire format 不表示不透明状态可跨来源复用。`sourceProfile` 进一步区分 OpenAI、通用兼容网关和方舟。
 

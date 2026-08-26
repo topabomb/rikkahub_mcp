@@ -195,8 +195,12 @@
   <string name="backup_page_restart_desc">設定を有効にするにはアプリを再起動する必要があります。</string>
   <string name="backup_page_restore">復元</string>
   <string name="backup_page_restore_failed">復元失敗: %s</string>
+  <string name="backup_page_restore_in_progress">別の復元処理が実行中です</string>
+  <string name="backup_page_restore_pending_restart">復元データはすでに準備済みです。アプリを再起動して適用してください。</string>
   <string name="backup_page_restore_now">復元</string>
   <string name="backup_page_restore_success">復元成功</string>
+  <string name="backup_page_restore_confirm_title">復元を確認</string>
+  <string name="backup_page_restore_confirm_message">確認後、アーカイブを検証して一時保存します。データベース、管理対象ファイル、設定は再起動後に上書きされます。現在のプロセスはまだ切り替わっていません。</string>
   <string name="backup_page_restoring">復元中...</string>
   <string name="backup_page_s3_access_key_id">アクセスキーID</string>
   <string name="backup_page_s3_backup">S3バックアップ</string>
@@ -945,6 +949,7 @@
   <string name="setting_provider_page_avaliable_models">利用可能なモデル</string>
   <string name="setting_provider_page_balance_api_path">残高APIパス</string>
   <string name="setting_provider_page_balance_info">アカウント残高を取得</string>
+  <string name="provider_balance_unavailable">残高を取得できません</string>
   <string name="setting_provider_page_balance_json_key">結果のJsonキー</string>
   <string name="setting_provider_page_basic_settings">基本設定</string>
   <string name="setting_provider_page_chat_model">チャット</string>
@@ -1004,6 +1009,11 @@
   <string name="setting_provider_page_service_account_email">サービスアカウントメール</string>
   <string name="setting_provider_page_test">テスト</string>
   <string name="setting_provider_page_test_connection">接続テスト</string>
+  <string name="setting_provider_page_test_non_streaming">非ストリーミング</string>
+  <string name="setting_provider_page_test_streaming">ストリーミング</string>
+  <string name="setting_provider_page_test_tool_call">ツール呼び出し</string>
+  <string name="setting_provider_page_test_tool_called">呼び出し: %1$s  入力: %2$s</string>
+  <string name="setting_provider_page_test_no_tool">ツール未呼び出し、応答: %s</string>
   <string name="setting_provider_page_text">テキスト</string>
   <string name="setting_provider_page_title">プロバイダー</string>
   <string name="setting_provider_page_tool">ツール</string>
@@ -1067,6 +1077,13 @@
   <string name="skill_detail_page_create">作成</string>
   <string name="skill_detail_page_delete_confirm">ファイル"%s"を削除してもよろしいですか？</string>
   <string name="skill_detail_page_delete_failed">削除に失敗しました</string>
+  <string name="skill_detail_page_delete_skill_file_forbidden">SKILL.md は削除できません</string>
+  <string name="skill_detail_page_load_failed">スキルファイルを読み取れませんでした</string>
+  <string name="skill_detail_page_skill_not_found">スキルが見つかりません</string>
+  <string name="skill_detail_page_invalid_path">ファイルパスが無効です</string>
+  <string name="skill_detail_page_invalid_skill">SKILL.md の frontmatter が無効です</string>
+  <string name="skill_detail_page_name_mismatch">SKILL.md の名前は「%1$s」のままにしてください</string>
+  <string name="skill_detail_page_save_failed">スキルファイルの保存に失敗しました</string>
   <string name="skill_detail_page_delete_file">ファイルを削除</string>
   <string name="skill_detail_page_file_name">ファイル名</string>
   <string name="skill_detail_page_file_name_invalid">無効なファイル名</string>
@@ -1090,6 +1107,16 @@
   <string name="skills_page_repo_url_label">リポジトリURL</string>
   <string name="skills_page_save">保存</string>
   <string name="skills_page_save_failed">保存に失敗しました。スキルの形式を確認してください</string>
+  <string name="skills_page_import_read_failed">選択したファイルを読み取れません</string>
+  <string name="skills_page_import_invalid_github_url">GitHub リポジトリ URL が無効です</string>
+  <string name="skills_page_import_github_list_failed">GitHub ディレクトリを読み取れません</string>
+  <string name="skills_page_import_skill_file_missing">SKILL.md が見つかりません</string>
+  <string name="skills_page_import_download_failed">スキルファイルをダウンロードできません</string>
+  <string name="skills_page_import_invalid_skill">SKILL.md の frontmatter が無効です</string>
+  <string name="skills_page_import_unknown_failed">スキルをインポートできません</string>
+  <string name="skills_page_invalid_frontmatter">SKILL.md の frontmatter が無効です</string>
+  <string name="skills_page_missing_frontmatter">SKILL.md は frontmatter で始める必要があります</string>
+  <string name="skills_page_content_placeholder">---\nname: my-skill\ndescription: "…"\n---\n\nスキルの指示…</string>
   <string name="skills_page_skill_content_label">SKILL.mdコンテンツ</string>
   <string name="skills_page_skill_name">スキル名: %s</string>
   <string name="skills_page_title">エージェントスキル</string>
@@ -1189,6 +1216,9 @@
   <string name="workspace_page_create">ワークスペースを作成</string>
   <string name="workspace_page_rename">ワークスペースの名前を変更</string>
   <string name="workspace_page_delete">ワークスペースを削除</string>
+  <string name="workspace_page_create_failed">ワークスペースを作成できませんでした</string>
+  <string name="workspace_page_rename_failed">ワークスペースの名前を変更できませんでした</string>
+  <string name="workspace_page_delete_failed">ワークスペースを削除できませんでした</string>
   <string name="workspace_page_delete_confirm">これにより、ワークスペースのメタデータとローカルファイルが削除され、それを参照するすべてのアシスタントバインディングがクリアされます。</string>
   <string name="workspace_page_empty">ワークスペースはまだありません</string>
   <string name="workspace_page_empty_desc">ファイルツールとサンドボックス環境を利用するには、ワークスペースを作成してください</string>
@@ -1236,6 +1266,9 @@
   <string name="workspace_terminal_not_installed">最初にRootfsをインストールしてください。</string>
   <string name="workspace_terminal_loading">ワークスペース読み込み中…</string>
   <string name="workspace_terminal_exited">ターミナル終了</string>
+  <string name="workspace_terminal_tab_title">ターミナル %1$d</string>
+  <string name="workspace_terminal_limit_reached">ターミナルタブは最大 %1$d 個までです</string>
+  <string name="workspace_terminal_create_failed">ターミナルの作成に失敗しました: %1$s</string>
   <string name="extensions_page_workspace">ワークスペース</string>
   <string name="extensions_page_workspace_desc">エージェントがアクセス可能なローカルの作業ディレクトリを管理します</string>
   <string name="workspace_select">ワークスペースを選択</string>
@@ -1329,6 +1362,8 @@
   <string name="assistant_page_context_message_limit_count">%d 件を超えると整理</string>
   <string name="assistant_page_context_message_limit_unlimited">コンテキストを自動整理しない</string>
   <string name="assistant_page_context_message_limit_warning">メッセージ数はトークン上限ではありません。整理時にはプロンプトキャッシュが無効になる場合があります。</string>
+  <string name="assistant_page_context_message_limit_range">%1$d – %2$d</string>
+  <string name="assistant_page_context_message_limit_invalid">0 または %1$d – %2$d を入力してください</string>
   <string name="setting_mcp_page_show_header_value">ヘッダー値を表示</string>
   <string name="setting_mcp_page_hide_header_value">ヘッダー値を非表示</string>
   <string name="setting_provider_type_openai">OpenAI</string>
@@ -1499,5 +1534,8 @@
   <string name="chat_message_tool_phase_cancelled">キャンセル</string>
   <string name="chat_message_tool_phase_interrupted">中断</string>
   <string name="conversation_turn_awaiting_approval">承認が必要です</string>
+  <string name="workspace_terminal_command_failed">ターミナル操作に失敗しました</string>
+  <string name="setting_provider_page_mutation_failed">プロバイダー設定の操作に失敗しました</string>
+  <string name="skills_page_import_resource_limit">Skill パッケージが安全なインポート上限を超えています</string>
 </resources>
 

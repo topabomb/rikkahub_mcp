@@ -60,7 +60,7 @@ class ChatCompletionsAPIMessageTest {
             messages = messages,
             includeHistoryReasoning = includeHistoryReasoning,
             supportToolResultModalities = listOf(Modality.TEXT, Modality.IMAGE),
-            requiresToolReasoningReplay = requiresDeepSeekToolReasoningReplay(host, modelId),
+            requiresToolReasoningReplay = requiresToolReasoningReplay(host, modelId),
             includeOpenRouterReasoningDetails = includeOpenRouterReasoningDetails,
         )
     }
@@ -620,6 +620,35 @@ class ChatCompletionsAPIMessageTest {
     }
 
     @Test
+    fun `compatible proxy replays tool reasoning for deepseek v4 flash vision exp`() {
+        val messages = listOf(
+            UIMessage.user("Use a tool"),
+            UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(
+                    UIMessagePart.Reasoning(reasoning = "Required vision thinking"),
+                    createExecutedTool("call_1", "inspect_image", "{}", "result"),
+                ),
+            ),
+        )
+
+        val result = invokeBuildMessages(
+            messages = messages,
+            includeHistoryReasoning = false,
+            modelId = "deepseek-v4-flash-vision-exp",
+            host = "proxy.example.com",
+        )
+        val toolAssistant = result.first {
+            it.jsonObject["role"]?.jsonPrimitive?.content == "assistant"
+        }.jsonObject
+
+        assertEquals(
+            "Required vision thinking",
+            toolAssistant["reasoning_content"]?.jsonPrimitive?.content,
+        )
+    }
+
+    @Test
     fun `official openai chat request should use official fields and suppress compatibility extensions`() {
         val messages = listOf(
             UIMessage.system("Follow the application instructions"),
@@ -662,7 +691,7 @@ class ChatCompletionsAPIMessageTest {
         assertFalse(assistant.containsKey("reasoning_content"))
         val toolResult = body["messages"]!!.jsonArray[2].jsonObject["content"] as JsonPrimitive
         assertTrue(toolResult.content.contains("Image output omitted"))
-        assertFalse(requiresDeepSeekToolReasoningReplay("api.openai.com", "deepseek-v4-flash"))
+        assertFalse(requiresToolReasoningReplay("api.openai.com", "deepseek-v4-flash"))
     }
 
     @Test

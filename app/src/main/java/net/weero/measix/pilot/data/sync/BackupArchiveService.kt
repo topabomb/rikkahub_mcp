@@ -144,7 +144,7 @@ class BackupArchiveService(
                     require(archive.isFile && archive.canRead()) { "Backup file is not readable" }
                     val staging = PendingBackupRestore.stagingDir(context)
                     val pending = PendingBackupRestore.pendingDir(context)
-                    check(!pending.exists()) { "A backup restore is already pending restart" }
+                    if (pending.exists()) throw BackupRestorePendingRestartException()
                     staging.deleteRecursively()
                     check(staging.mkdirs()) { "Unable to create restore staging directory" }
                     try {
@@ -452,3 +452,6 @@ class BackupArchiveService(
 }
 
 class BackupRestoreInProgressException : IllegalStateException("Another backup restore is already being staged")
+
+class BackupRestorePendingRestartException :
+    IllegalStateException("A backup restore is already pending restart")

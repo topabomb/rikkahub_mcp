@@ -351,8 +351,9 @@ ChatPageContent
   │         │    ├─ 滚动控制 (跳转底部 / 搜索消息)
   │         │    └─ 空会话引导卡片 (ConversationReadiness)
   │         └─ bottomBar: ChatInput
-  │              ├─ 紧凑模式 (useCompactChatInput): 单行排列所有操作
-  │              ├─ 正常模式: 附件预览 + 输入框 + 操作行
+  │              ├─ 紧凑模式 (useCompactChatInput): 收紧输入框与 action row 间距
+  │              ├─ 正常模式: 附件预览 + 输入框 + action row
+  │              ├─ IME 目标显示时隐藏 action row；正常态发送/取消、录音态 ASR 停止进入 TextField trailing
   │              └─ AdaptiveModal pickers (助手/模型/文件/MCP/搜索/推理/Workspace)
 ```
 
@@ -364,7 +365,7 @@ ChatPageContent
 | ChatList contentPadding top | 0dp；配置提示存在时 8dp | TopAppBar 已提供主要间距 |
 | ChatList contentPadding bottom | 24dp | 输入框上方滚动余量 |
 | ChatDrawer body padding | horizontal 8dp | 侧栏左右边距 |
-| ChatInput bottom padding | 键盘隐藏时 4dp，显示时 0dp | 另由 `navigationBarsPadding()` 与 `imePadding()` 处理系统区域 |
+| ChatInput bottom padding | 8dp | 另由 `navigationBarsPadding()` 与 `imePadding()` 处理系统区域；IME 动画不切换这一本地间距 |
 
 ---
 
@@ -503,8 +504,9 @@ stateInOnce(scope, initialValue) =
 
 ### 8.4 矮横屏（heightDp < 480dp）
 
-- `useCompactChatInput = true`：输入框各项（文本 + 模型 + 搜索 + 推理 + `+` + 语音 + 发送）排为同一行
-- 功能不删减，恢复正常高度后回到原版上下两行结构
+- `useCompactChatInput = true`：收紧附件、输入框和 action row 的垂直间距；IME 隐藏时能力操作仍在 action row
+- IME 动画目标为显示时隐藏 action row；正常态把发送/取消放入 TextField trailing，ASR 录音态则放置 ASR 停止动作，保证任一组合态都有唯一可达的终止操作；目标隐藏时恢复 action row，避免依据当前帧 inset 来回抖动
+- 功能不删减，恢复正常高度后回到普通间距
 - 聊天保持单栏（`heightDp < 480` → `SinglePane`）
 
 ### 8.5 各形态适配矩阵

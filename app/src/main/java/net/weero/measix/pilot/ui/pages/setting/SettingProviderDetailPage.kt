@@ -70,9 +70,9 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -96,11 +96,7 @@ import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
-import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
-import me.rerere.ai.provider.TextGenerationParams
-import me.rerere.ai.registry.ModelRegistry
-import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.ai.ModelAbilityTag
 import net.weero.measix.pilot.ui.components.ai.ModelModalityTag
@@ -130,38 +126,34 @@ import net.weero.measix.pilot.ui.theme.extendColors
 import net.weero.measix.pilot.utils.UiState
 import net.weero.measix.pilot.utils.plus
 import org.koin.androidx.compose.koinViewModel
-import org.koin.compose.koinInject
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import kotlin.uuid.Uuid
 
 @Composable
-fun SettingProviderDetailPage(id: Uuid, vm: SettingVM = koinViewModel()) {
-    val settings by vm.settings.collectAsStateWithLifecycle()
+fun SettingProviderDetailPage(
+    id: Uuid,
+    providerSettingsVM: ProviderSettingsVM = koinViewModel(parameters = { org.koin.core.parameter.parametersOf(id) }),
+) {
+    val providerSettingsState by providerSettingsVM.state.collectAsStateWithLifecycle()
     val navController = LocalNavController.current
-    val provider = settings.providers.find { it.id == id } ?: return
+    val provider = providerSettingsState.provider ?: return
     val pager = rememberPagerState { 2 }
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
     val context = LocalContext.current
 
-    val updateProvider = { transform: (ProviderSetting) -> ProviderSetting ->
-        vm.updateSettings { current ->
-            current.copy(
-                providers = current.providers.map { latest ->
-                    if (latest.id == id) transform(latest) else latest
-                }
-            )
-        }
-    }
-    val onEdit = { newProvider: ProviderSetting ->
-        updateProvider { latest -> applyProviderEditorSave(latest, newProvider) }
-    }
     val onDelete = {
-        vm.updateSettings { current ->
-            current.copy(providers = current.providers.filterNot { it.id == provider.id })
+        providerSettingsVM.deleteProvider {
+            navController.popBackStack()
         }
-        navController.popBackStack()
+    }
+
+    val mutationFailedText = stringResource(R.string.setting_provider_page_mutation_failed)
+    LaunchedEffect(providerSettingsState.mutationFailed) {
+        if (!providerSettingsState.mutationFailed) return@LaunchedEffect
+        toaster.show(mutationFailedText, type = ToastType.Error)
+        providerSettingsVM.consumeMutationFailure()
     }
 
     Scaffold(
@@ -232,12 +224,15 @@ fun SettingProviderDetailPage(id: Uuid, vm: SettingVM = koinViewModel()) {
                     val saveSuccessText = stringResource(R.string.setting_provider_page_save_success)
                     SettingProviderConfigPage(
                         provider = provider,
+                        providerSettingsState = providerSettingsState,
+                        onOpenConnectionTest = providerSettingsVM::openConnectionTest,
+                        onDismissConnectionTest = providerSettingsVM::dismissConnectionTest,
+                        onSelectConnectionModel = providerSettingsVM::selectConnectionModel,
+                        onRunConnectionTest = providerSettingsVM::runConnectionTest,
                         onEdit = {
-                            onEdit(it)
-                            toaster.show(
-                                saveSuccessText,
-                                type = ToastType.Success
-                            )
+                            providerSettingsVM.saveConfiguration(it) {
+                                toaster.show(saveSuccessText, type = ToastType.Success)
+                            }
                         },
                         onDelete = {
                             onDelete()
@@ -248,7 +243,15 @@ fun SettingProviderDetailPage(id: Uuid, vm: SettingVM = koinViewModel()) {
                 1 -> {
                     SettingProviderModelPage(
                         provider = provider,
-                        onUpdateProvider = updateProvider,
+                        modelCatalog = providerSettingsState.modelCatalog,
+                        onLoadModelCatalog = providerSettingsVM::loadModelCatalog,
+                        applyRegistryCapabilities = providerSettingsVM::applyRegistryCapabilities,
+                        onAddModel = providerSettingsVM::addModel,
+                        onRemoveModel = providerSettingsVM::removeModel,
+                        onEditModel = providerSettingsVM::editModel,
+                        onAddModels = providerSettingsVM::addModels,
+                        onRemoveModelsByModelIds = providerSettingsVM::removeModelsByModelIds,
+                        onMoveModel = providerSettingsVM::moveModel,
                     )
                 }
             }
@@ -259,6 +262,11 @@ fun SettingProviderDetailPage(id: Uuid, vm: SettingVM = koinViewModel()) {
 @Composable
 private fun SettingProviderConfigPage(
     provider: ProviderSetting,
+    providerSettingsState: ProviderSettingsUiState,
+    onOpenConnectionTest: (ProviderSetting) -> Unit,
+    onDismissConnectionTest: () -> Unit,
+    onSelectConnectionModel: (Uuid?) -> Unit,
+    onRunConnectionTest: () -> Unit,
     onEdit: (ProviderSetting) -> Unit,
     onDelete: () -> Unit
 ) {
@@ -286,7 +294,7 @@ private fun SettingProviderConfigPage(
                 balanceOption = internalProvider.balanceOption,
                 onEdit = { internalProvider = internalProvider.copyProvider(balanceOption = it) }
             )
-            ProviderBalanceText(providerSetting = provider, style = MaterialTheme.typography.labelSmall)
+            ProviderBalanceText(providerSetting = internalProvider, style = MaterialTheme.typography.labelSmall)
         }
 
         Row(
@@ -296,6 +304,11 @@ private fun SettingProviderConfigPage(
         ) {
             ProviderConnectionTester(
                 internalProvider = internalProvider,
+                state = providerSettingsState,
+                onOpen = { onOpenConnectionTest(internalProvider) },
+                onDismiss = onDismissConnectionTest,
+                onSelectModel = onSelectConnectionModel,
+                onRun = onRunConnectionTest,
             )
 
             Spacer(Modifier.weight(1f))
@@ -373,31 +386,45 @@ private fun SettingProviderConfigPage(
 @Composable
 private fun SettingProviderModelPage(
     provider: ProviderSetting,
-    onUpdateProvider: ((ProviderSetting) -> ProviderSetting) -> Unit
+    modelCatalog: UiState<List<Model>>,
+    onLoadModelCatalog: () -> Unit,
+    applyRegistryCapabilities: (Model) -> Model,
+    onAddModel: (Model) -> Unit,
+    onRemoveModel: (Uuid) -> Unit,
+    onEditModel: (Model) -> Unit,
+    onAddModels: (List<Model>) -> Unit,
+    onRemoveModelsByModelIds: (Set<String>) -> Unit,
+    onMoveModel: (Uuid, Uuid) -> Unit,
 ) {
+    LaunchedEffect(provider) {
+        onLoadModelCatalog()
+    }
     ModelList(
         providerSetting = provider,
-        onUpdateProvider = onUpdateProvider,
+        modelCatalog = modelCatalog,
+        applyRegistryCapabilities = applyRegistryCapabilities,
+        onAddModel = onAddModel,
+        onRemoveModel = onRemoveModel,
+        onEditModel = onEditModel,
+        onAddModels = onAddModels,
+        onRemoveModelsByModelIds = onRemoveModelsByModelIds,
+        onMoveModel = onMoveModel,
     )
 }
 
 @Composable
 private fun ModelList(
     providerSetting: ProviderSetting,
-    onUpdateProvider: ((ProviderSetting) -> ProviderSetting) -> Unit
+    modelCatalog: UiState<List<Model>>,
+    applyRegistryCapabilities: (Model) -> Model,
+    onAddModel: (Model) -> Unit,
+    onRemoveModel: (Uuid) -> Unit,
+    onEditModel: (Model) -> Unit,
+    onAddModels: (List<Model>) -> Unit,
+    onRemoveModelsByModelIds: (Set<String>) -> Unit,
+    onMoveModel: (Uuid, Uuid) -> Unit,
 ) {
-    val providerManager = koinInject<ProviderManager>()
-    val modelList by produceState(emptyList(), providerSetting) {
-        runCatching {
-            println("loading models...")
-            value = providerManager.getProviderByType(providerSetting)
-                .listModels(providerSetting)
-                .sortedBy { it.modelId }
-                .toList()
-        }.onFailure {
-            it.printStackTrace()
-        }
-    }
+    val modelList = (modelCatalog as? UiState.Success)?.data.orEmpty()
     var expanded by rememberSaveable { mutableStateOf(true) }
     val lazyListState = rememberLazyListState()
     val reorderableLazyListState = rememberReorderableLazyListState(lazyListState) { from, to ->
@@ -405,7 +432,7 @@ private fun ModelList(
             ?: return@rememberReorderableLazyListState
         val toId = providerSetting.models.getOrNull(to.index)?.id
             ?: return@rememberReorderableLazyListState
-        onUpdateProvider { latest -> moveProviderModelsById(latest, fromId, toId) }
+        onMoveModel(fromId, toId)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -453,12 +480,13 @@ private fun ModelList(
                         ModelCard(
                             model = item,
                             onDelete = {
-                                onUpdateProvider { latest -> latest.delModel(item) }
+                                onRemoveModel(item.id)
                             },
                             onEdit = { editedModel ->
-                                onUpdateProvider { latest -> latest.editModel(editedModel) }
+                                onEditModel(editedModel)
                             },
                             parentProvider = providerSetting,
+                            applyRegistryCapabilities = applyRegistryCapabilities,
                             modifier = Modifier
                                 .longPressDraggableHandle()
                                 .graphicsLayer {
@@ -485,14 +513,16 @@ private fun ModelList(
                 models = modelList,
                 selectedModels = providerSetting.models,
                 onAddModel = { model ->
-                    onUpdateProvider { latest -> latest.addModel(model) }
+                    onAddModel(model)
                 },
                 onRemoveModel = { model ->
-                    onUpdateProvider { latest -> latest.delModel(model) }
+                    onRemoveModel(model.id)
                 },
                 expanded = expanded,
                 parentProvider = providerSetting,
-                onUpdateProvider = onUpdateProvider,
+                onAddModels = onAddModels,
+                onRemoveModelsByModelIds = onRemoveModelsByModelIds,
+                applyRegistryCapabilities = applyRegistryCapabilities,
             )
         }
     }
@@ -503,24 +533,14 @@ private fun ModelSettingsForm(
     model: Model,
     onModelChange: (Model) -> Unit,
     isEdit: Boolean,
-    parentProvider: ProviderSetting? = null
+    parentProvider: ProviderSetting? = null,
+    applyRegistryCapabilities: (Model) -> Model,
 ) {
     val pagerState = rememberPagerState { 3 }
     val scope = rememberCoroutineScope()
 
     fun setModelId(id: String) {
-        val inputModality = ModelRegistry.MODEL_INPUT_MODALITIES.getData(id)
-        val outputModality = ModelRegistry.MODEL_OUTPUT_MODALITIES.getData(id)
-        val abilities = ModelRegistry.MODEL_ABILITIES.getData(id)
-        onModelChange(
-            model.copy(
-                modelId = id,
-                displayName = id,
-                inputModalities = inputModality,
-                outputModalities = outputModality,
-                abilities = abilities
-            )
-        )
+        onModelChange(applyRegistryCapabilities(model.copy(modelId = id, displayName = id)))
     }
 
     Column {
@@ -689,7 +709,9 @@ private fun AddModelButton(
     onAddModel: (Model) -> Unit,
     onRemoveModel: (Model) -> Unit,
     parentProvider: ProviderSetting,
-    onUpdateProvider: ((ProviderSetting) -> ProviderSetting) -> Unit
+    onAddModels: (List<Model>) -> Unit,
+    onRemoveModelsByModelIds: (Set<String>) -> Unit,
+    applyRegistryCapabilities: (Model) -> Model,
 ) {
     val dialogState = useEditState<Model> { onAddModel(it) }
     val scope = rememberCoroutineScope()
@@ -702,42 +724,16 @@ private fun AddModelButton(
             models = models,
             selectedModels = selectedModels,
             onModelSelected = { model ->
-                val inputModalities = ModelRegistry.MODEL_INPUT_MODALITIES.getData(model.modelId)
-                val outputModalities = ModelRegistry.MODEL_OUTPUT_MODALITIES.getData(model.modelId)
-                val abilities = ModelRegistry.MODEL_ABILITIES.getData(model.modelId)
-                onAddModel(
-                    model.copy(
-                        inputModalities = inputModalities,
-                        outputModalities = outputModalities,
-                        abilities = abilities
-                    )
-                )
+                onAddModel(applyRegistryCapabilities(model))
             },
             onModelDeselected = { model ->
                 onRemoveModel(model)
             },
             onAllModelSelected = { selected ->
-                onUpdateProvider { latest ->
-                    val additions = selected.filter { model ->
-                        latest.models.none { existing -> existing.modelId == model.modelId }
-                    }.map { model ->
-                        model.copy(
-                            inputModalities = ModelRegistry.MODEL_INPUT_MODALITIES.getData(model.modelId),
-                            outputModalities = ModelRegistry.MODEL_OUTPUT_MODALITIES.getData(model.modelId),
-                            abilities = ModelRegistry.MODEL_ABILITIES.getData(model.modelId),
-                        )
-                    }
-                    latest.copyProvider(models = latest.models + additions)
-                }
+                onAddModels(selected.map(applyRegistryCapabilities))
             },
             onAllModelDeselected = { filteredModels ->
-                onUpdateProvider { latest ->
-                    latest.copyProvider(
-                        models = latest.models.filter { model ->
-                            filteredModels.none { filtered -> filtered.modelId == model.modelId }
-                        }
-                    )
-                }
+                onRemoveModelsByModelIds(filteredModels.mapTo(linkedSetOf()) { it.modelId })
             }
         )
 
@@ -810,7 +806,8 @@ private fun AddModelButton(
                             model = modelState,
                             onModelChange = { dialogState.currentState = it },
                             isEdit = false,
-                            parentProvider = parentProvider
+                            parentProvider = parentProvider,
+                            applyRegistryCapabilities = applyRegistryCapabilities,
                         )
                     }
 
@@ -948,18 +945,11 @@ private fun ModelPicker(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(2.dp)
                                     ) {
-                                        val modelMeta = remember(it) {
-                                            it.copy(
-                                                inputModalities = ModelRegistry.MODEL_INPUT_MODALITIES.getData(it.modelId),
-                                                outputModalities = ModelRegistry.MODEL_OUTPUT_MODALITIES.getData(it.modelId),
-                                                abilities = ModelRegistry.MODEL_ABILITIES.getData(it.modelId),
-                                            )
-                                        }
                                         ModelModalityTag(
-                                            model = modelMeta,
+                                            model = it,
                                         )
                                         ModelAbilityTag(
-                                            model = modelMeta,
+                                            model = it,
                                         )
                                     }
                                 }
@@ -1168,7 +1158,8 @@ private fun ModelCard(
     modifier: Modifier = Modifier,
     onDelete: () -> Unit,
     onEdit: (Model) -> Unit,
-    parentProvider: ProviderSetting
+    parentProvider: ProviderSetting,
+    applyRegistryCapabilities: (Model) -> Model,
 ) {
     val dialogState = useEditState<Model> {
         onEdit(it)
@@ -1226,7 +1217,8 @@ private fun ModelCard(
                             model = editingModel,
                             onModelChange = { dialogState.currentState = it },
                             isEdit = true,
-                            parentProvider = parentProvider
+                            parentProvider = parentProvider,
+                            applyRegistryCapabilities = applyRegistryCapabilities,
                         )
                     }
 

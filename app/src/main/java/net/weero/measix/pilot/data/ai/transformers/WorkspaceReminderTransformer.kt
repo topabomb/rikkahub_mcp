@@ -23,7 +23,7 @@ class WorkspaceReminderTransformer(
         val workspaceId = ctx.assistant.workspaceId?.toString() ?: return messages
         val workspace = workspaceRepository.getById(workspaceId) ?: return messages
         // 仅在 shell 就绪时注入，保持提示与实际工具能力一致。
-        if (workspace.shellStatus != WorkspaceShellStatus.READY.name) return messages
+        if (workspace.resolvedShellStatus() != WorkspaceShellStatus.READY) return messages
 
         // 设计权衡：不注入 cwd（当前工作目录）。模型自己执行了 cd，结果已记录在对话历史中。
         // 注入 cwd 到 System 消息会导致任何目录切换都破坏整条请求的缓存前缀。

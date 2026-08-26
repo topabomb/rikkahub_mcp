@@ -21,7 +21,9 @@ import net.weero.measix.pilot.service.MediaExportService
 import net.weero.measix.pilot.service.ApplicationRecoveryCoordinator
 import net.weero.measix.pilot.service.ApplicationRecoveryGate
 import net.weero.measix.pilot.service.ChatNotificationManager
+import net.weero.measix.pilot.service.BackupRestoreApplicationService
 import net.weero.measix.pilot.service.MasterTurnCoordinator
+import net.weero.measix.pilot.service.ProviderSettingsApplicationService
 import net.weero.measix.pilot.service.ConversationApplicationService
 import net.weero.measix.pilot.service.ConversationAttachmentPreviewProjector
 import net.weero.measix.pilot.service.ConversationQueryService
@@ -39,6 +41,10 @@ import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.FavoriteModelService
 import net.weero.measix.pilot.service.FavoriteService
+import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
+import net.weero.measix.pilot.service.workspace.WorkspaceTerminalQueryService
+import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
+import net.weero.measix.pilot.service.workspace.WorkspaceTerminalRuntime
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher
 import net.weero.measix.pilot.service.runtime.DelegationCoordinator
@@ -58,6 +64,12 @@ val appModule = module {
     single { MediaExportService(get()) }
     single { StatsQueryService(get(), get(), get()) }
     single { ChatErrorStore() }
+    single { BackupRestoreApplicationService(get(), get(), get()) }
+    single { ProviderSettingsApplicationService(get(), get()) }
+    single { WorkspaceTerminalRuntime(get(), get()) }
+    single { WorkspaceApplicationService(get(), get()) }
+    single { WorkspaceTerminalQueryService(get(), get()) }
+    single { WorkspaceQueryService(get()) }
 
     single {
         AppEventBus()
@@ -189,7 +201,8 @@ val appModule = module {
             localTools = get(),
             conversationQueryService = get(),
             skillManager = get(),
-            workspaceRepository = get(),
+            workspaceApplicationService = get(),
+            workspaceQueryService = get(),
             mcpManager = get(),
             providerManager = get(),
             artifactStore = get(),

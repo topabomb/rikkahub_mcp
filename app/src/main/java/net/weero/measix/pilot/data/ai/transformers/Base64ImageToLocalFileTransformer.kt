@@ -10,11 +10,13 @@ class Base64ImageToLocalFileTransformer(
     override suspend fun transformStreaming(
         ctx: TransformerContext,
         message: UIMessage,
+        previousProjection: UIMessage?,
     ): UIMessage = message
 
     override suspend fun onStreamingFinish(
         ctx: TransformerContext,
         message: UIMessage,
+        previousProjection: UIMessage?,
     ): UIMessage {
         val persisted = artifactStore.persistBase64Images(message)
         persisted.ownedArtifacts.forEach { owned ->

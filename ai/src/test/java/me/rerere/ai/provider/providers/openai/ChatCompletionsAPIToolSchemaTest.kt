@@ -70,4 +70,143 @@ class ChatCompletionsAPIToolSchemaTest {
             sent["\$schema"]!!.jsonPrimitive.content,
         )
     }
+
+    @Test
+    fun `chat completions normalizes null parameters to empty object schema`() {
+        val api = ChatCompletionsAPI(OkHttpClient(), KeyRoulette.default())
+        val params = TextGenerationParams(
+            model = Model(modelId = "grok", abilities = listOf(ModelAbility.TOOL)),
+            tools = listOf(
+                Tool(
+                    name = "noParams",
+                    description = "no params",
+                    parameters = { null },
+                    execute = { emptyList() },
+                )
+            ),
+        )
+        val method = ChatCompletionsAPI::class.java.getDeclaredMethod(
+            "buildChatCompletionRequest",
+            List::class.java,
+            TextGenerationParams::class.java,
+            ProviderSetting.OpenAI::class.java,
+            Boolean::class.javaPrimitiveType,
+        ).apply { isAccessible = true }
+
+        val body = method.invoke(
+            api,
+            listOf(UIMessage.user("hello")),
+            params,
+            ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
+            false,
+        ) as JsonObject
+        val sent = body["tools"]!!.jsonArray.single().jsonObject["function"]!!
+            .jsonObject["parameters"]!!.jsonObject
+
+        assertEquals("object", sent["type"]!!.jsonPrimitive.content)
+        assertEquals(0, sent["properties"]!!.jsonObject.size)
+    }
+
+    @Test
+    fun `chat completions preserves explicit empty object schema`() {
+        val api = ChatCompletionsAPI(OkHttpClient(), KeyRoulette.default())
+        val emptyObject = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject { })
+        }
+        val params = TextGenerationParams(
+            model = Model(modelId = "grok", abilities = listOf(ModelAbility.TOOL)),
+            tools = listOf(
+                Tool(
+                    name = "empty",
+                    description = "empty",
+                    parameters = { emptyObject },
+                    execute = { emptyList() },
+                )
+            ),
+        )
+        val method = ChatCompletionsAPI::class.java.getDeclaredMethod(
+            "buildChatCompletionRequest",
+            List::class.java,
+            TextGenerationParams::class.java,
+            ProviderSetting.OpenAI::class.java,
+            Boolean::class.javaPrimitiveType,
+        ).apply { isAccessible = true }
+
+        val body = method.invoke(
+            api,
+            listOf(UIMessage.user("hello")),
+            params,
+            ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
+            false,
+        ) as JsonObject
+        val sent = body["tools"]!!.jsonArray.single().jsonObject["function"]!!
+            .jsonObject["parameters"]!!.jsonObject
+
+        assertEquals(emptyObject, sent)
+    }
+
+    @Test
+    fun `responses normalizes null parameters to empty object schema`() {
+        val api = ResponseAPI(OkHttpClient(), KeyRoulette.default())
+        val params = TextGenerationParams(
+            model = Model(modelId = "grok", abilities = listOf(ModelAbility.TOOL)),
+            tools = listOf(
+                Tool(
+                    name = "noParams",
+                    description = "no params",
+                    parameters = { null },
+                    execute = { emptyList() },
+                )
+            ),
+        )
+        val body = api.buildRequestBody(
+            ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
+            listOf(UIMessage.user("hello")),
+            params,
+            false,
+        )
+        val sent = body["tools"]!!.jsonArray.single().jsonObject["parameters"]!!.jsonObject
+
+        assertEquals("object", sent["type"]!!.jsonPrimitive.content)
+        assertEquals(0, sent["properties"]!!.jsonObject.size)
+    }
+
+    @Test
+    fun `responses preserves JSON Schema definitions and references`() {
+        val api = ResponseAPI(OkHttpClient(), KeyRoulette.default())
+        val schema = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("value", buildJsonObject { put("\$ref", "#/\$defs/value") })
+            })
+            put("\$defs", buildJsonObject {
+                put("value", buildJsonObject { put("type", "number") })
+            })
+        }
+        val params = TextGenerationParams(
+            model = Model(modelId = "grok", abilities = listOf(ModelAbility.TOOL)),
+            tools = listOf(
+                Tool(
+                    name = "calculate",
+                    description = "calculate",
+                    parameters = { schema },
+                    execute = { emptyList() },
+                )
+            ),
+        )
+        val body = api.buildRequestBody(
+            ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
+            listOf(UIMessage.user("hello")),
+            params,
+            false,
+        )
+        val sent = body["tools"]!!.jsonArray.single().jsonObject["parameters"]!!.jsonObject
+
+        assertEquals(
+            "#/\$defs/value",
+            sent["properties"]!!.jsonObject["value"]!!.jsonObject["\$ref"]!!.jsonPrimitive.content,
+        )
+        assertEquals("number", sent["\$defs"]!!.jsonObject["value"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+    }
 }

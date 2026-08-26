@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.backup.tabs
 
+import net.weero.measix.pilot.ui.pages.backup.RestoreConfirmDialog
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.File01
 import me.rerere.hugeicons.stroke.FileImport
@@ -10,9 +11,11 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularWavyProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -31,9 +34,10 @@ import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.ui.components.ui.StickyHeader
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.pages.backup.BackupVM
+import net.weero.measix.pilot.service.BackupRestoreOperationInProgressException
+import net.weero.measix.pilot.service.BackupRestorePendingRestartConflictException
 import java.io.File
 import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -47,11 +51,14 @@ fun ImportExportTab(
     val context = LocalContext.current
     var isExporting by remember { mutableStateOf(false) }
     var isRestoring by remember { mutableStateOf(false) }
+    var pendingRestoreUri by remember { mutableStateOf<android.net.Uri?>(null) }
 
     val backupSuccess = stringResource(R.string.backup_page_backup_success)
     val restoreSuccess = stringResource(R.string.backup_page_restore_success)
     val restoreFailedFmt = stringResource(R.string.backup_page_restore_failed)
     val unknownError = stringResource(R.string.backup_page_unknown_error)
+    val restoreInProgress = stringResource(R.string.backup_page_restore_in_progress)
+    val restorePendingRestart = stringResource(R.string.backup_page_restore_pending_restart)
 
     // 创建文件保存的launcher
     val createDocumentLauncher = rememberLauncherForActivityResult(
@@ -87,30 +94,9 @@ fun ImportExportTab(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         uri?.let { sourceUri ->
-            scope.launch {
-                isRestoring = true
-                val tempFile = File(context.cacheDir, "temp_restore_${System.currentTimeMillis()}.zip")
-                try {
-                    context.contentResolver.openInputStream(sourceUri)?.use { inputStream ->
-                        FileOutputStream(tempFile).use { outputStream ->
-                            inputStream.copyTo(outputStream)
-                        }
-                    } ?: error("Unable to open the selected backup archive")
-                    vm.restoreFromLocalFile(tempFile)
-                    toaster.show(restoreSuccess, type = ToastType.Success)
-                    onShowRestartDialog()
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (error: Exception) {
-                    toaster.show(
-                        restoreFailedFmt.format(error.message ?: ""),
-                        type = ToastType.Error,
-                    )
-                } finally {
-                    tempFile.delete()
-                    isRestoring = false
-                }
-            }
+            // Selection is allowed before confirmation, but staging/download
+            // only starts after the user confirms.
+            pendingRestoreUri = sourceUri
         }
     }
 
@@ -181,5 +167,40 @@ fun ImportExportTab(
             }
         }
 
+    }
+
+    pendingRestoreUri?.let { pendingUri ->
+        RestoreConfirmDialog(
+            onConfirm = {
+                val uriToRestore = pendingRestoreUri
+                pendingRestoreUri = null
+                if (uriToRestore != null) {
+                    scope.launch {
+                        isRestoring = true
+                        try {
+                            vm.restoreFromLocalUri(uriToRestore)
+                            toaster.show(restoreSuccess, type = ToastType.Success)
+                            onShowRestartDialog()
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
+                            toaster.show(
+                                when (error) {
+                                    is BackupRestoreOperationInProgressException -> restoreInProgress
+                                    is BackupRestorePendingRestartConflictException -> restorePendingRestart
+                                    else -> restoreFailedFmt.format(error.message ?: "")
+                                },
+                                type = ToastType.Error,
+                            )
+                        } finally {
+                            isRestoring = false
+                        }
+                    }
+                }
+            },
+            onDismiss = {
+                pendingRestoreUri = null
+            },
+        )
     }
 }

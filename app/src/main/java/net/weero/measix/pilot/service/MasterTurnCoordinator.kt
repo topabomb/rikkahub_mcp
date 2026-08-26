@@ -672,6 +672,7 @@ class MasterTurnCoordinator(
                 conversationSystemPrompt = snapshot.header.customSystemPrompt,
                 conversationModeInjectionIds = snapshot.header.modeInjectionIds,
                 workspaceCwd = snapshot.header.workspaceCwd,
+                providerSessionId = conversationId.toString(),
                 memories = if (assistant.useGlobalMemory) {
                     memoryRepository.getGlobalMemories()
                 } else {

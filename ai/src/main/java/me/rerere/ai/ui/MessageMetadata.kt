@@ -96,6 +96,9 @@ enum class OpenAIResponseSourceProfile {
 
     @SerialName("deepseek")
     DEEPSEEK,
+
+    @SerialName("mimo")
+    MIMO,
 }
 
 /**

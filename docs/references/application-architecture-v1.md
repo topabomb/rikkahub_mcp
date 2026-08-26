@@ -33,7 +33,7 @@ Work（一个 Conversation）
 Compose UI / ViewModel
         │ commands + UiModel/query state
         ▼
-Application services / coordinators / query ports
+Application services / coordinators / query ports / typed use cases
         │ typed command, use case, projection
         ▼
 Runtime and domain state machines
@@ -49,6 +49,17 @@ Room / DataStore / filesystem / Provider SDK
 
 Application 层负责编排，不建立第二套数据协议。Repository 只执行事务化持久化，不能成为 UI API。Projection 可重建，不能作为 durable fact 的替代来源。
 
+### 边界选择规则
+
+边界按事实所有权和操作语义选择，不按页面数量或包名机械增加层级：
+
+- 单一 owner 内的 typed operation 直接扩展该 owner/use case；只有当流程跨多个 owner、需要串行化、补偿或隔离外部 SDK 时，才增加 application service/coordinator。
+- Command 负责校验、串行化和提交；Query 只组合 durable/runtime projection，不能反向执行 mutation。两者生命周期或依赖不同就物理分开，不把多个 service、UiModel 和 host adapter 堆进同一文件。
+- 边界类型必须提供投影、身份、能力或状态约束。禁止只包一层同名字段的透传 UiModel/facade；稳定的可序列化配置对象可以直接作为页面编辑草稿，但 Provider 容器、Repository entity、Runtime handle 和线协议对象不能越过边界。
+- 页面局部输入、弹窗和 stale-run token 属于 ViewModel/presentation；进程级资源、并发 owner 和可供多个页面恢复的运行态属于 application runtime。不得为了配置变化把页面草稿提升为第二 durable source，也不得把进程资源降到 Composable remember 状态。
+
+`SettingsStore` 是配置 durable owner，`SkillManager` 是 Skill 文件与 typed parse owner；单 owner 的配置或文件命令可以由 ViewModel 通过其 typed contract 调用。Provider 探测、完整恢复、Workspace Rootfs/PTY 等会访问外部 SDK 或跨 owner 的流程必须经过本文列出的 application service。是否增加 service 取决于职责，不以“所有调用都再包一层”为目标。
+
 ## 唯一所有者
 
 | 事实或流程 | 唯一 owner | 对外入口 |
@@ -63,12 +74,22 @@ Application 层负责编排，不建立第二套数据协议。Repository 只执
 | Artifact metadata、引用、状态机 | `ArtifactStore` | `ArtifactUseCase` 与领域服务 |
 | Artifact payload IO | `ArtifactPayloadStore` | 仅由 `ArtifactStore` 调用 |
 | Settings 图片 roots | `ArtifactSettingsCoordinator` | 头像与背景 typed operation |
+| 应用配置 durable state 与提交顺序 | `SettingsStore` | `updateAtomic` → `SettingsWritePolicy` → `commitSettings` |
+| Skill 文件树、frontmatter 解释、bundle 事务与中断恢复 | `SkillManager` | typed DTO/result、cancellable import 与 root-swap recovery |
 | 会话读模型 | `ConversationQueryService` | UI、会话工具与只读详情 |
 | 稳定附件 handle 索引 | `AttachmentReferenceLookup` | 执行 resolver 与查询 projector |
 | 启动恢复顺序与写门禁 | `ApplicationRecoveryCoordinator` | Android 启动入口与 retry |
 | 标题阶段、异步 token 与提交仲裁 | `ConversationTitleCoordinator` | application 与生成副作用 |
+| Provider 设置写入、模型目录、余额与连接探测 | `ProviderSettingsApplicationService` | `ProviderSettingsVM` typed command/query |
+| Workspace 持久化命令、模型 Rootfs 操作与终端互斥 | `WorkspaceApplicationService` | Workspace ViewModel command 与 `executeTool` capability |
+| Workspace 管理读模型 | `WorkspaceQueryService` | Workspace 列表、详情与文件预览 |
+| Workspace 交互 PTY 与 Tab 生命周期 | `WorkspaceTerminalRuntime` | `WorkspaceApplicationService` / `WorkspaceTerminalQueryService` |
+| 恢复请求串行化与本地 archive 临时所有权 | `BackupRestoreApplicationService` | `BackupVM` confirmed restore command |
+| archive 校验、staging 与 pending 发布 | `BackupArchiveService` | WebDAV/S3 sync service |
 
 同一事实不得增加旁路 DAO/Repository 写入、整聚合回写、fallback、兼容白名单或第二状态源。新增能力应扩展现有 command、typed use case、projection 或状态机。
+
+Provider 设置页只通过 `ProviderSettingsApplicationService` 访问 Provider SDK 与 `SettingsStore`。连接测试使用用户当前编辑中的完整 Provider 草稿；保存成功、删除成功等 UI 事件只能在 `SettingsStore.updateAtomic` 返回后发布。所有 Workspace UI（含聊天补全、cwd 选择和文件导出）只依赖 `WorkspaceApplicationService`、`WorkspaceQueryService` 及其 UiModel；交互终端页面不持有 `TerminalSession`、创建 Job 或 Repository。模型的 `workspace_*` 工具同样不得直连 Repository；每次工具执行通过 `WorkspaceApplicationService.executeTool` 取得受限 `WorkspaceToolSession`，与安装、删除、UI 文件命令和终端 mutation 共享 per-workspace command gate。
 
 ## Conversation 与 Runtime 协议
 

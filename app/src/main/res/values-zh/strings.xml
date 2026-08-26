@@ -195,8 +195,12 @@
   <string name="backup_page_restart_desc">应用需要重启以使设置生效。</string>
   <string name="backup_page_restore">恢复</string>
   <string name="backup_page_restore_failed">恢复失败: %s</string>
+  <string name="backup_page_restore_in_progress">另一个恢复任务正在进行</string>
+  <string name="backup_page_restore_pending_restart">已有恢复内容完成暂存，请重启应用以应用恢复。</string>
   <string name="backup_page_restore_now">恢复</string>
   <string name="backup_page_restore_success">恢复成功</string>
+  <string name="backup_page_restore_confirm_title">确认恢复</string>
+  <string name="backup_page_restore_confirm_message">确认后会先校验并暂存备份，重启后覆盖数据库、托管文件与设置，当前进程此刻尚未切换。</string>
   <string name="backup_page_restoring">恢复中...</string>
   <string name="backup_page_s3_access_key_id">访问密钥 ID</string>
   <string name="backup_page_s3_backup">S3备份</string>
@@ -955,6 +959,7 @@
   <string name="setting_provider_page_avaliable_models">可用模型</string>
   <string name="setting_provider_page_balance_api_path">余额 API 路径</string>
   <string name="setting_provider_page_balance_info">获取账户余额</string>
+  <string name="provider_balance_unavailable">余额暂不可用</string>
   <string name="setting_provider_page_balance_json_key">结果 JSON 键</string>
   <string name="setting_provider_page_basic_settings">基本设置</string>
   <string name="setting_provider_page_chat_model">聊天</string>
@@ -1014,6 +1019,11 @@
   <string name="setting_provider_page_service_account_email">服务账户邮箱</string>
   <string name="setting_provider_page_test">测试</string>
   <string name="setting_provider_page_test_connection">测试连接</string>
+  <string name="setting_provider_page_test_non_streaming">非流式</string>
+  <string name="setting_provider_page_test_streaming">流式</string>
+  <string name="setting_provider_page_test_tool_call">工具调用</string>
+  <string name="setting_provider_page_test_tool_called">调用: %1$s  入参: %2$s</string>
+  <string name="setting_provider_page_test_no_tool">未调用工具，响应: %s</string>
   <string name="setting_provider_page_text">文本</string>
   <string name="setting_provider_page_title">提供商</string>
   <string name="setting_provider_page_tool">工具</string>
@@ -1077,6 +1087,13 @@
   <string name="skill_detail_page_create">创建</string>
   <string name="skill_detail_page_delete_confirm">确定要删除文件“%s”吗？</string>
   <string name="skill_detail_page_delete_failed">删除失败</string>
+  <string name="skill_detail_page_delete_skill_file_forbidden">不能删除 SKILL.md</string>
+  <string name="skill_detail_page_load_failed">读取技能文件失败</string>
+  <string name="skill_detail_page_skill_not_found">未找到技能</string>
+  <string name="skill_detail_page_invalid_path">文件路径无效</string>
+  <string name="skill_detail_page_invalid_skill">SKILL.md frontmatter 无效</string>
+  <string name="skill_detail_page_name_mismatch">SKILL.md 中的名称必须保持为“%1$s”</string>
+  <string name="skill_detail_page_save_failed">保存技能文件失败</string>
   <string name="skill_detail_page_delete_file">删除文件</string>
   <string name="skill_detail_page_file_name">文件名</string>
   <string name="skill_detail_page_file_name_invalid">无效的文件名</string>
@@ -1100,6 +1117,16 @@
   <string name="skills_page_repo_url_label">代码库网址</string>
   <string name="skills_page_save">保存</string>
   <string name="skills_page_save_failed">保存失败，请检查技能格式</string>
+  <string name="skills_page_import_read_failed">无法读取所选文件</string>
+  <string name="skills_page_import_invalid_github_url">GitHub 仓库链接无效</string>
+  <string name="skills_page_import_github_list_failed">无法读取 GitHub 目录</string>
+  <string name="skills_page_import_skill_file_missing">未找到 SKILL.md</string>
+  <string name="skills_page_import_download_failed">技能文件下载失败</string>
+  <string name="skills_page_import_invalid_skill">SKILL.md frontmatter 无效</string>
+  <string name="skills_page_import_unknown_failed">无法导入技能</string>
+  <string name="skills_page_invalid_frontmatter">SKILL.md frontmatter 无效</string>
+  <string name="skills_page_missing_frontmatter">SKILL.md 必须以 frontmatter 开头</string>
+  <string name="skills_page_content_placeholder">---\nname: my-skill\ndescription: "…"\n---\n\n技能说明…</string>
   <string name="skills_page_skill_content_label">SKILL.md内容</string>
   <string name="skills_page_skill_name">技能名称：%s</string>
   <string name="skills_page_title">代理技能</string>
@@ -1191,6 +1218,9 @@
   <string name="workspace_page_create">创建工作区</string>
   <string name="workspace_page_rename">重命名工作区</string>
   <string name="workspace_page_delete">删除工作区</string>
+  <string name="workspace_page_create_failed">创建工作区失败</string>
+  <string name="workspace_page_rename_failed">重命名工作区失败</string>
+  <string name="workspace_page_delete_failed">删除工作区失败</string>
   <string name="workspace_page_delete_confirm">这将删除工作区元数据和本地文件，并清除所有引用它的助手绑定。</string>
   <string name="workspace_page_empty">暂无工作区</string>
   <string name="workspace_page_empty_desc">创建一个以使用文件工具和沙箱环境</string>
@@ -1238,6 +1268,9 @@
   <string name="workspace_terminal_not_installed">请先安装 Rootfs</string>
   <string name="workspace_terminal_loading">正在加载工作区…</string>
   <string name="workspace_terminal_exited">终端已退出</string>
+  <string name="workspace_terminal_tab_title">终端 %1$d</string>
+  <string name="workspace_terminal_limit_reached">最多只能打开 %1$d 个终端标签页</string>
+  <string name="workspace_terminal_create_failed">创建终端失败：%1$s</string>
   <string name="extensions_page_workspace">工作区</string>
   <string name="extensions_page_workspace_desc">管理可由Agent访问的本地工作目录</string>
   <string name="workspace_select">选择工作区</string>
@@ -1329,6 +1362,8 @@
   <string name="assistant_page_context_message_limit_count">超过 %d 条消息后裁剪</string>
   <string name="assistant_page_context_message_limit_unlimited">不自动裁剪上下文</string>
   <string name="assistant_page_context_message_limit_warning">消息条数不等于 token 上限；每次裁剪仍可能使提示词缓存失效。</string>
+  <string name="assistant_page_context_message_limit_range">%1$d – %2$d</string>
+  <string name="assistant_page_context_message_limit_invalid">请输入 0 或 %1$d – %2$d</string>
   <string name="setting_mcp_page_show_header_value">显示请求头值</string>
   <string name="setting_mcp_page_hide_header_value">隐藏请求头值</string>
   <string name="setting_provider_type_openai">OpenAI</string>
@@ -1499,5 +1534,8 @@
   <string name="chat_message_tool_phase_cancelled">已取消</string>
   <string name="chat_message_tool_phase_interrupted">已中断</string>
   <string name="conversation_turn_awaiting_approval">等待授权</string>
+  <string name="workspace_terminal_command_failed">终端操作失败</string>
+  <string name="setting_provider_page_mutation_failed">Provider 设置操作失败</string>
+  <string name="skills_page_import_resource_limit">Skill 包超过安全导入上限</string>
 </resources>
 

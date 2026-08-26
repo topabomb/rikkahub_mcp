@@ -20,8 +20,9 @@ import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.model.Assistant
-import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import net.weero.measix.pilot.service.ConversationQueryService
+import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
+import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import me.rerere.workspace.WorkspaceShellStatus
 import kotlinx.serialization.json.jsonObject
 import kotlin.uuid.Uuid
@@ -36,7 +37,8 @@ class GenerationToolSetFactory(
     private val localTools: LocalTools,
     private val conversationQueryService: ConversationQueryService,
     private val skillManager: SkillManager,
-    private val workspaceRepository: WorkspaceRepository,
+    private val workspaceApplicationService: WorkspaceApplicationService,
+    private val workspaceQueryService: WorkspaceQueryService,
     private val mcpManager: McpManager,
     private val providerManager: ProviderManager,
     private val artifactStore: ArtifactStore,
@@ -107,6 +109,7 @@ class GenerationToolSetFactory(
                     createSkillTools(
                         enabledSkills = assistant.enabledSkills,
                         allSkills = skillManager.listSkills(),
+                        skillManager = skillManager,
                     )
                 )
             }
@@ -154,15 +157,21 @@ class GenerationToolSetFactory(
 
     private suspend fun createWorkspaceToolsIfReady(workspaceId: String?, cwd: String? = null): List<Tool> {
         if (workspaceId.isNullOrBlank()) return emptyList()
-        val workspace = workspaceRepository.getById(workspaceId) ?: return emptyList()
-        if (workspace.shellStatus != WorkspaceShellStatus.READY.name) {
+        val workspace = workspaceQueryService.getWorkspace(workspaceId) ?: return emptyList()
+        if (workspace.shellStatus != WorkspaceShellStatus.READY) {
             Log.d(
                 TAG,
                 "createWorkspaceToolsIfReady: skip workspace tools, workspace=$workspaceId, status=${workspace.shellStatus}"
             )
             return emptyList()
         }
-        return createWorkspaceTools(workspaceId, workspaceRepository, artifactStore, cwd)
+        return createWorkspaceTools(
+            workspaceId = workspaceId,
+            workspaceApplicationService = workspaceApplicationService,
+            approvalOverrides = workspace.toolApprovalOverrides,
+            artifactStore = artifactStore,
+            cwd = cwd,
+        )
     }
 }
 

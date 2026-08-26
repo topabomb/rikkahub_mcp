@@ -16,7 +16,6 @@ import kotlinx.coroutines.launch
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getChatModel
-import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
 import net.weero.measix.pilot.service.ArtifactUseCase
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.files.SkillMetadata
@@ -25,7 +24,8 @@ import net.weero.measix.pilot.data.model.AssistantMemory
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.model.Tag
 import net.weero.measix.pilot.data.repository.MemoryRepository
-import net.weero.measix.pilot.data.repository.WorkspaceRepository
+import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
+import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
 import kotlin.uuid.Uuid
 
 private const val TAG = "AssistantDetailVM"
@@ -36,7 +36,7 @@ class AssistantDetailVM(
     private val memoryRepository: MemoryRepository,
     private val artifactUseCase: ArtifactUseCase,
     private val skillManager: SkillManager,
-    private val workspaceRepository: WorkspaceRepository,
+    workspaceQueryService: WorkspaceQueryService,
 ) : ViewModel() {
     private val assistantId = Uuid.parse(id)
 
@@ -106,8 +106,8 @@ class AssistantDetailVM(
             scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList()
         )
 
-    val workspaces: StateFlow<List<WorkspaceEntity>> = workspaceRepository
-        .listFlow()
+    val workspaces: StateFlow<List<WorkspaceUiModel>> = workspaceQueryService
+        .observeWorkspaces()
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.Eagerly,

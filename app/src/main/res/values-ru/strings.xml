@@ -195,8 +195,12 @@
   <string name="backup_page_restart_desc">Приложение необходимо перезапустить, чтобы изменения вступили в силу.</string>
   <string name="backup_page_restore">Восстановить</string>
   <string name="backup_page_restore_failed">Ошибка восстановления: %s</string>
+  <string name="backup_page_restore_in_progress">Уже выполняется другое восстановление</string>
+  <string name="backup_page_restore_pending_restart">Восстановление уже подготовлено. Перезапустите приложение, чтобы применить его.</string>
   <string name="backup_page_restore_now">Восстановить</string>
   <string name="backup_page_restore_success">Восстановление выполнено успешно</string>
+  <string name="backup_page_restore_confirm_title">Подтвердить восстановление</string>
+  <string name="backup_page_restore_confirm_message">После подтверждения архив будет проверен и подготовлен. База данных, управляемые файлы и настройки будут перезаписаны после перезапуска. Текущий процесс ещё не переключён.</string>
   <string name="backup_page_restoring">Восстановление...</string>
   <string name="backup_page_s3_access_key_id">Идентификатор ключа доступа</string>
   <string name="backup_page_s3_backup">Резервное копирование S3</string>
@@ -945,6 +949,7 @@
   <string name="setting_provider_page_avaliable_models">Доступные модели</string>
   <string name="setting_provider_page_balance_api_path">Путь API баланса</string>
   <string name="setting_provider_page_balance_info">Получить баланс аккаунта</string>
+  <string name="provider_balance_unavailable">Баланс недоступен</string>
   <string name="setting_provider_page_balance_json_key">Ключ результата JSON</string>
   <string name="setting_provider_page_basic_settings">Основные настройки</string>
   <string name="setting_provider_page_chat_model">Чат</string>
@@ -1004,6 +1009,11 @@
   <string name="setting_provider_page_service_account_email">Электронная почта служебной учётной записи</string>
   <string name="setting_provider_page_test">Тест</string>
   <string name="setting_provider_page_test_connection">Проверить подключение</string>
+  <string name="setting_provider_page_test_non_streaming">Без потоковой передачи</string>
+  <string name="setting_provider_page_test_streaming">Потоковая передача</string>
+  <string name="setting_provider_page_test_tool_call">Вызов инструмента</string>
+  <string name="setting_provider_page_test_tool_called">Вызван: %1$s  Ввод: %2$s</string>
+  <string name="setting_provider_page_test_no_tool">Инструмент не вызван, ответ: %s</string>
   <string name="setting_provider_page_text">Текст</string>
   <string name="setting_provider_page_title">Провайдеры</string>
   <string name="setting_provider_page_tool">Инструмент</string>
@@ -1067,6 +1077,13 @@
   <string name="skill_detail_page_create">Создать</string>
   <string name="skill_detail_page_delete_confirm">Вы уверены, что хотите удалить файл "%s"?</string>
   <string name="skill_detail_page_delete_failed">Не удалось удалить</string>
+  <string name="skill_detail_page_delete_skill_file_forbidden">Файл SKILL.md нельзя удалить</string>
+  <string name="skill_detail_page_load_failed">Не удалось прочитать файл навыка</string>
+  <string name="skill_detail_page_skill_not_found">Навык не найден</string>
+  <string name="skill_detail_page_invalid_path">Недопустимый путь к файлу</string>
+  <string name="skill_detail_page_invalid_skill">Некорректный frontmatter в SKILL.md</string>
+  <string name="skill_detail_page_name_mismatch">Имя в SKILL.md должно оставаться «%1$s»</string>
+  <string name="skill_detail_page_save_failed">Не удалось сохранить файл навыка</string>
   <string name="skill_detail_page_delete_file">Удалить файл</string>
   <string name="skill_detail_page_file_name">Имя файла</string>
   <string name="skill_detail_page_file_name_invalid">Неверное имя файла</string>
@@ -1090,6 +1107,16 @@
   <string name="skills_page_repo_url_label">URL репозитория</string>
   <string name="skills_page_save">Сохранить</string>
   <string name="skills_page_save_failed">Не удалось сохранить, проверьте формат навыка</string>
+  <string name="skills_page_import_read_failed">Не удалось прочитать выбранный файл</string>
+  <string name="skills_page_import_invalid_github_url">Некорректная ссылка на репозиторий GitHub</string>
+  <string name="skills_page_import_github_list_failed">Не удалось прочитать каталог GitHub</string>
+  <string name="skills_page_import_skill_file_missing">Файл SKILL.md не найден</string>
+  <string name="skills_page_import_download_failed">Не удалось загрузить файл навыка</string>
+  <string name="skills_page_import_invalid_skill">Некорректный frontmatter в SKILL.md</string>
+  <string name="skills_page_import_unknown_failed">Не удалось импортировать навык</string>
+  <string name="skills_page_invalid_frontmatter">Некорректный frontmatter в SKILL.md</string>
+  <string name="skills_page_missing_frontmatter">SKILL.md должен начинаться с frontmatter</string>
+  <string name="skills_page_content_placeholder">---\nname: my-skill\ndescription: "…"\n---\n\nИнструкции навыка…</string>
   <string name="skills_page_skill_content_label">Содержимое SKILL.md</string>
   <string name="skills_page_skill_name">Название навыка: %s</string>
   <string name="skills_page_title">Навыки агента</string>
@@ -1189,6 +1216,9 @@
   <string name="workspace_page_create">Создать рабочее пространство</string>
   <string name="workspace_page_rename">Переименовать рабочее пространство</string>
   <string name="workspace_page_delete">Удалить рабочее пространство</string>
+  <string name="workspace_page_create_failed">Не удалось создать рабочее пространство</string>
+  <string name="workspace_page_rename_failed">Не удалось переименовать рабочее пространство</string>
+  <string name="workspace_page_delete_failed">Не удалось удалить рабочее пространство</string>
   <string name="workspace_page_delete_confirm">Это удалит метаданные рабочего пространства и локальные файлы, а также очистит все привязки Assistant, ссылающиеся на него.</string>
   <string name="workspace_page_empty">Пока нет рабочих пространств</string>
   <string name="workspace_page_empty_desc">Создайте рабочее пространство для использования файловых инструментов и сред песочницы.</string>
@@ -1236,6 +1266,9 @@
   <string name="workspace_terminal_not_installed">Пожалуйста, сначала установите Rootfs</string>
   <string name="workspace_terminal_loading">Загрузка рабочего пространства…</string>
   <string name="workspace_terminal_exited">Терминал завершен</string>
+  <string name="workspace_terminal_tab_title">Терминал %1$d</string>
+  <string name="workspace_terminal_limit_reached">Можно открыть не более %1$d вкладок терминала</string>
+  <string name="workspace_terminal_create_failed">Не удалось создать терминал: %1$s</string>
   <string name="extensions_page_workspace">Рабочее пространство</string>
   <string name="extensions_page_workspace_desc">Управление локальными рабочими каталогами, доступными для Agent</string>
   <string name="workspace_select">Выберите рабочее пространство</string>
@@ -1329,6 +1362,8 @@
   <string name="assistant_page_context_message_limit_count">Очищать после %d сообщений</string>
   <string name="assistant_page_context_message_limit_unlimited">Не очищать контекст автоматически</string>
   <string name="assistant_page_context_message_limit_warning">Число сообщений не является лимитом токенов. Каждая очистка всё равно может сбросить кеш промпта.</string>
+  <string name="assistant_page_context_message_limit_range">%1$d – %2$d</string>
+  <string name="assistant_page_context_message_limit_invalid">Введите 0 или %1$d – %2$d</string>
   <string name="setting_mcp_page_show_header_value">Показать значение заголовка</string>
   <string name="setting_mcp_page_hide_header_value">Скрыть значение заголовка</string>
   <string name="setting_provider_type_openai">OpenAI</string>
@@ -1499,5 +1534,8 @@
   <string name="chat_message_tool_phase_cancelled">Отменено</string>
   <string name="chat_message_tool_phase_interrupted">Прервано</string>
   <string name="conversation_turn_awaiting_approval">Требуется подтверждение</string>
+  <string name="workspace_terminal_command_failed">Не удалось выполнить операцию терминала</string>
+  <string name="setting_provider_page_mutation_failed">Не удалось изменить настройки провайдера</string>
+  <string name="skills_page_import_resource_limit">Пакет Skill превышает безопасный лимит импорта</string>
 </resources>
 

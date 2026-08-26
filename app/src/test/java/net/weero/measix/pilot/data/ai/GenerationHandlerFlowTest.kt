@@ -8,6 +8,7 @@ import io.mockk.slot
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
@@ -31,6 +32,7 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import net.weero.measix.pilot.data.ai.transformers.OutputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.StreamingMessageTransformer
+import net.weero.measix.pilot.data.ai.transformers.ThinkTagTransformer
 import net.weero.measix.pilot.data.ai.transformers.TransformerContext
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
@@ -41,6 +43,50 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GenerationHandlerFlowTest {
+    @Test
+    fun `split think opener does not publish answer phase or raw tag before reasoning`() = runTest {
+        val model = Model(modelId = "test-model", displayName = "Test Model")
+        val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
+        val providerManager = mockk<ProviderManager>()
+        val provider = mockk<Provider<ProviderSetting.OpenAI>>()
+        every { providerManager.getProviderByType(providerSetting) } returns provider
+        coEvery { provider.streamText(providerSetting, any(), any()) } returns flowOf(
+            textDelta("<thi"),
+            textDelta("nk>reason"),
+            textDelta("</think>answer", finishReason = "stop"),
+        )
+        val assistant = Assistant(enableMemory = false, streamOutput = true)
+        val inFlight = UIMessage(role = MessageRole.ASSISTANT, parts = emptyList())
+        val handler = GenerationHandler(
+            context = mockk<Context>(relaxed = true),
+            providerManager = providerManager,
+            json = Json,
+            memoryRepo = mockk<MemoryRepository>(relaxed = true),
+            attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+        )
+
+        val chunks = handler.generateText(
+            settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
+            model = model,
+            messages = listOf(UIMessage.user("hello"), inFlight),
+            outputTransformers = listOf(ThinkTagTransformer),
+            assistant = assistant,
+            assistantMessageId = inFlight.id,
+            maxSteps = 1,
+        ).toList()
+
+        val phases = chunks.filterIsInstance<GenerationChunk.Phase>().map { it.phase }
+        assertEquals(
+            listOf("preparing", "model_waiting", "reasoning_streaming", "answer_streaming"),
+            phases,
+        )
+        val firstProjection = chunks.filterIsInstance<GenerationChunk.Messages>().first().messages.last()
+        assertTrue(firstProjection.parts.none { it is UIMessagePart.Text })
+        val finalProjection = chunks.filterIsInstance<GenerationChunk.Messages>().last().messages.last()
+        assertEquals("reason", finalProjection.parts.filterIsInstance<UIMessagePart.Reasoning>().single().reasoning)
+        assertEquals("answer", finalProjection.parts.filterIsInstance<UIMessagePart.Text>().single().text)
+    }
+
     @Test
     fun `provider input excludes persisted empty in-flight assistant`() = runTest {
         val harness = createProviderHarness()
@@ -477,12 +523,26 @@ class GenerationHandlerFlowTest {
         )
     }
 
+    private fun textDelta(text: String, finishReason: String? = null) = MessageChunk(
+        id = "response",
+        model = "test-model",
+        choices = listOf(
+            UIMessageChoice(
+                index = 0,
+                delta = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text(text))),
+                message = null,
+                finishReason = finishReason,
+            ),
+        ),
+    )
+
     private fun terminalResourceTransformer(discarded: AtomicBoolean) = object :
         OutputMessageTransformer,
         StreamingMessageTransformer {
         override suspend fun onStreamingFinish(
             ctx: TransformerContext,
             message: UIMessage,
+            previousProjection: UIMessage?,
         ): UIMessage {
             ctx.registerUnpublishedResource(
                 ToolResourceLease(publish = {}, discard = { discarded.set(true) })

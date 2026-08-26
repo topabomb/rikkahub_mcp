@@ -122,6 +122,10 @@ Settings 重算访问范围。
 
 ### 3.3 技能 `use_skill.systemPrompt()`
 
+`SkillFrontmatterParser` 使用 SnakeYAML `SafeConstructor` 和 loader limits（禁止重复键、限制 alias/nesting depth/collection size/code points）解析 `SKILL.md` frontmatter，返回 typed `SkillDocument(frontmatter: SkillFrontmatter, body: String)` 或 typed parse error。`SkillFrontmatter` 只含 `name`、`description`、`compatibility`；`allowedTools` 已删除（无执行消费者，保留会形成假权限协议）。
+
+`SkillManager` 是 Skill 目录身份、文件树、读取、frontmatter 校验和发布的唯一 owner。UI 与 `use_skill` 只取得 `SkillMetadata`、`SkillFile`、`SkillFileNode` 和 typed result，不取得宿主 `File` 或目录路径。任何模型/UI 可读文本都在 owner 边界先做 4 MiB bounded byte read，再用 strict UTF-8 解码；超限、非法编码与 IO 分别返回 typed failure，不能先 `readText()` 整文件后才检查。任何主文档/支持文件写入和支持文件删除都先复制完整已发布目录到 staging，拒绝 symlink/path escape，重新校验 typed frontmatter 与预期 name，再通过 rename 发布；更新中断留下的 hidden backup 会在下一次 owner 访问时恢复旧目录或清理已过期 backup，歧义时 fail-closed。更新 `SKILL.md` 保留支持文件；ZIP bundle 先完整解析、拒绝重复 Skill name，再复制整个 Skill root 并通过一次 root swap 提交，第二项失败或取消不会留下部分更新，root backup 同样有重启恢复协议。文件导入固定限制为 16 MiB 输入、512 entries、单文件 4 MiB、累计解压 32 MiB；GitHub 下载以 bounded `ByteArray` 保存所有支持文件，只对 `SKILL.md` strict UTF-8 解码/typed parse，因此 PNG、PDF、字体和其他二进制资产按原字节发布。`SKILL.md` 不允许作为普通支持文件删除，整项删除只能走 `deleteSkill` 及其 enabled-skills 清理协议。
+
 `enabledSkills` 非空时：
 
 ```text

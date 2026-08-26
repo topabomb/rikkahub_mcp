@@ -1,39 +1,71 @@
-﻿package net.weero.measix.pilot.ui.pages.extensions.workspace
+package net.weero.measix.pilot.ui.pages.extensions.workspace
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
-import net.weero.measix.pilot.data.repository.WorkspaceRepository
-import me.rerere.workspace.RootfsInstallProgress
+import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
+import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
+import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
 
 class WorkspaceVM(
-    private val repository: WorkspaceRepository,
+    private val workspaceApplicationService: WorkspaceApplicationService,
+    workspaceQueryService: WorkspaceQueryService,
 ) : ViewModel() {
-    val workspaces = repository.listFlow()
+    val workspaces = workspaceQueryService.observeWorkspaces()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    fun create(name: String) {
+    fun create(name: String, onResult: (WorkspaceMutationResult) -> Unit) {
         viewModelScope.launch {
-            runCatching { repository.create(name) }
+            try {
+                workspaceApplicationService.createWorkspace(name)
+                onResult(WorkspaceMutationResult.Success)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                onResult(WorkspaceMutationResult.Failure(WorkspaceMutationOperation.CREATE))
+            }
         }
     }
 
-    fun rename(workspace: WorkspaceEntity, name: String) {
+    fun rename(workspace: WorkspaceUiModel, name: String, onResult: (WorkspaceMutationResult) -> Unit) {
         viewModelScope.launch {
-            runCatching { repository.rename(workspace.id, name) }
+            try {
+                val renamed = workspaceApplicationService.renameWorkspace(workspace.id, name)
+                onResult(
+                    if (renamed) WorkspaceMutationResult.Success
+                    else WorkspaceMutationResult.Failure(WorkspaceMutationOperation.RENAME)
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                onResult(WorkspaceMutationResult.Failure(WorkspaceMutationOperation.RENAME))
+            }
         }
     }
 
-    fun delete(workspace: WorkspaceEntity) {
+    fun delete(workspace: WorkspaceUiModel, onResult: (WorkspaceMutationResult) -> Unit) {
         viewModelScope.launch {
-            repository.delete(workspace.id)
+            try {
+                val deleted = workspaceApplicationService.deleteWorkspace(workspace.id)
+                onResult(
+                    if (deleted) WorkspaceMutationResult.Success
+                    else WorkspaceMutationResult.Failure(WorkspaceMutationOperation.DELETE)
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                onResult(WorkspaceMutationResult.Failure(WorkspaceMutationOperation.DELETE))
+            }
         }
     }
+}
+
+enum class WorkspaceMutationOperation { CREATE, RENAME, DELETE }
+
+sealed interface WorkspaceMutationResult {
+    data object Success : WorkspaceMutationResult
+    data class Failure(val operation: WorkspaceMutationOperation) : WorkspaceMutationResult
 }

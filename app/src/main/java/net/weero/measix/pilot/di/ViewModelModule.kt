@@ -18,7 +18,10 @@ import net.weero.measix.pilot.ui.pages.extensions.skills.SkillsVM
 import net.weero.measix.pilot.ui.pages.subassistant.SubAssistantDetailVM
 import net.weero.measix.pilot.ui.pages.extensions.workspace.WorkspaceDetailVM
 import net.weero.measix.pilot.ui.pages.extensions.workspace.WorkspaceVM
+import net.weero.measix.pilot.ui.pages.extensions.workspace.WorkspaceTerminalVM
 import net.weero.measix.pilot.ui.pages.setting.SettingVM
+import net.weero.measix.pilot.ui.pages.setting.ProviderSettingsVM
+import net.weero.measix.pilot.ui.components.ai.ProviderBalanceVM
 import net.weero.measix.pilot.ui.pages.share.handler.ShareHandlerVM
 import org.koin.core.module.dsl.viewModel
 import org.koin.core.module.dsl.viewModelOf
@@ -42,6 +45,10 @@ val viewModelModule = module {
     }
     viewModelOf(::ChatDrawerVM)
     viewModelOf(::SettingVM)
+    viewModelOf(::ProviderBalanceVM)
+    viewModel<ProviderSettingsVM> {
+        ProviderSettingsVM(providerId = it.get(), service = get())
+    }
     viewModelOf(::DebugVM)
     viewModelOf(::HistoryVM)
     viewModelOf(::AssistantVM)
@@ -52,7 +59,7 @@ val viewModelModule = module {
             memoryRepository = get(),
             artifactUseCase = get(),
             skillManager = get(),
-            workspaceRepository = get(),
+            workspaceQueryService = get(),
         )
     }
     viewModel<ShareHandlerVM> {
@@ -65,13 +72,21 @@ val viewModelModule = module {
     viewModelOf(::ImgGenVM)
     viewModelOf(::PromptVM)
     viewModelOf(::QuickMessagesVM)
-    viewModelOf(::SkillsVM)
+    viewModel { SkillsVM(get()) }
     viewModelOf(::SkillDetailVM)
     viewModelOf(::WorkspaceVM)
     viewModel<WorkspaceDetailVM> {
         WorkspaceDetailVM(
             id = it.get(),
-            repository = get(),
+            workspaceApplicationService = get(),
+            workspaceQueryService = get(),
+        )
+    }
+    viewModel<WorkspaceTerminalVM> {
+        WorkspaceTerminalVM(
+            workspaceId = it.get(),
+            applicationService = get(),
+            queryService = get(),
         )
     }
     viewModelOf(::FavoriteVM)

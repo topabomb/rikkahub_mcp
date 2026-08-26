@@ -455,7 +455,7 @@ flowchart LR
 | `SettingsWritePolicy` | 按最新状态与写入来源执行授权；未来企业锁的强制边界 |
 | `AssistantTemplateCacheInvalidator` | 观察模板指纹并失效 Pebble cache，不反向污染持久化层 |
 | `FavoriteModelService` | 收藏模型的记录级增删/排序命令；通用模型组件不直接写 Store |
-| `applySearchMode` / `applyProviderEditorSave` / `applyMcpEditorSave` | 聊天搜索、Provider 详情与 MCP 编辑表单在最新记录上合并，避免整份陈旧快照覆盖 |
+| `applySearchMode` / `ProviderSettingsApplicationService.saveConfiguration` / `applyMcpEditorSave` | 聊天搜索、Provider 详情与 MCP 编辑表单在最新记录上合并，避免整份陈旧快照覆盖 |
 | `SettingVM` / `ChatVM` / `BackupVM` 等 | 接收字段或记录 transform，不接收整份 UI Settings 快照 |
 | `DefaultProviders` | `DEFAULT_PROVIDERS`、`DEFAULT_AUTO_MODEL_ID` |
 | `Assistant.kt` | 助手、注入、快捷消息、正则 |

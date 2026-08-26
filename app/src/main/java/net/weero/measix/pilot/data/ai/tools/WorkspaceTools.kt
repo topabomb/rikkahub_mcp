@@ -13,7 +13,8 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.toMetadata
 import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.files.ArtifactStore
-import net.weero.measix.pilot.data.repository.WorkspaceRepository
+import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
+import net.weero.measix.pilot.service.workspace.WorkspaceToolSession
 import net.weero.measix.pilot.utils.generateUnifiedDiff
 import me.rerere.workspace.WorkspaceCommandResult
 import me.rerere.workspace.WorkspaceFileEntry
@@ -35,21 +36,21 @@ fun resolveWorkspaceToolApproval(name: String, overrides: Map<String, Boolean>):
 
 suspend fun createWorkspaceTools(
     workspaceId: String?,
-    workspaceRepository: WorkspaceRepository,
+    workspaceApplicationService: WorkspaceApplicationService,
+    approvalOverrides: Map<String, Boolean>,
     artifactStore: ArtifactStore,
     cwd: String? = null,
 ): List<Tool> {
     if (workspaceId.isNullOrBlank()) return emptyList()
-    val approvalOverrides = workspaceRepository.getById(workspaceId)?.toolApprovalOverrides().orEmpty()
     fun needsApproval(name: String) = resolveWorkspaceToolApproval(name, approvalOverrides)
 
     val shellCwd = cwd?.removePrefix("/workspace/")?.removePrefix("/workspace")
 
     return listOf(
-        createReadFileTool(workspaceId, ::needsApproval, workspaceRepository, artifactStore),
-        createWriteFileTool(workspaceId, ::needsApproval, workspaceRepository),
-        createEditFileTool(workspaceId, ::needsApproval, workspaceRepository),
-        createShellTool(workspaceId, ::needsApproval, workspaceRepository, shellCwd),
+        createReadFileTool(workspaceId, ::needsApproval, workspaceApplicationService, artifactStore),
+        createWriteFileTool(workspaceId, ::needsApproval, workspaceApplicationService),
+        createEditFileTool(workspaceId, ::needsApproval, workspaceApplicationService),
+        createShellTool(workspaceId, ::needsApproval, workspaceApplicationService, shellCwd),
     )
 }
 
@@ -63,7 +64,7 @@ private fun String.isImagePath(): Boolean =
 private fun createReadFileTool(
     workspaceId: String,
     needsApproval: (String) -> Boolean,
-    workspaceRepository: WorkspaceRepository,
+    workspaceApplicationService: WorkspaceApplicationService,
     artifactStore: ArtifactStore,
 ) = Tool(
     name = "workspace_read_file",
@@ -81,26 +82,29 @@ private fun createReadFileTool(
     needsApproval = { needsApproval("workspace_read_file") },
     execute = { error("workspace_read_file requires ToolExecutionContext") },
     contextualExecute = {
-        val path = it.jsonObject.absolutePath("path")
-        if (path.isImagePath()) {
-            workspaceRepository.readImageInRootfs(
-                workspaceId,
-                path,
-                artifactStore,
-                onArtifactCreated = { owned ->
-                    registerUnpublishedResource(artifactStore.unpublishedLease(owned))
-                },
-            )
-        } else {
-            val text = workspaceRepository.readTextInRootfs(workspaceId, path)
-            listOf(
-                UIMessagePart.Text(
-                    buildJsonObject {
-                        put("path", path)
-                        put("text", text)
-                    }.toString()
+        val execution = it
+        val path = execution.jsonObject.absolutePath("path")
+        val registerArtifact: (net.weero.measix.pilot.data.files.OwnedArtifact) -> Unit = { owned ->
+            registerUnpublishedResource(artifactStore.unpublishedLease(owned))
+        }
+        workspaceApplicationService.executeTool(workspaceId) {
+            if (path.isImagePath()) {
+                readImageInRootfs(
+                    path,
+                    artifactStore,
+                    onArtifactCreated = registerArtifact,
                 )
-            )
+            } else {
+                val text = readTextInRootfs(path)
+                listOf(
+                    UIMessagePart.Text(
+                        buildJsonObject {
+                            put("path", path)
+                            put("text", text)
+                        }.toString()
+                    )
+                )
+            }
         }
     },
 )
@@ -108,7 +112,7 @@ private fun createReadFileTool(
 private fun createWriteFileTool(
     workspaceId: String,
     needsApproval: (String) -> Boolean,
-    workspaceRepository: WorkspaceRepository,
+    workspaceApplicationService: WorkspaceApplicationService,
 ) = Tool(
     name = "workspace_write_file",
     description = """
@@ -136,7 +140,9 @@ private fun createWriteFileTool(
         val path = params.absolutePath("path")
         val text = params.string("text") ?: error("text is required")
         val overwrite = params["overwrite"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: true
-        val entry = workspaceRepository.writeTextInRootfs(workspaceId, path, text, overwrite)
+        val entry = workspaceApplicationService.executeTool(workspaceId) {
+            writeTextInRootfs(path, text, overwrite)
+        }
         listOf(UIMessagePart.Text(entry.toJson().toString()))
     },
 )
@@ -144,7 +150,7 @@ private fun createWriteFileTool(
 private fun createEditFileTool(
     workspaceId: String,
     needsApproval: (String) -> Boolean,
-    workspaceRepository: WorkspaceRepository,
+    workspaceApplicationService: WorkspaceApplicationService,
 ) = Tool(
     name = "workspace_edit_file",
     description = """
@@ -180,35 +186,37 @@ private fun createEditFileTool(
         val replaceAll = params["replace_all"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false
         require(oldText.isNotEmpty()) { "old_text must not be empty" }
 
-        val original = workspaceRepository.readTextInRootfs(workspaceId, path)
-        // 逐级尝试 exact -> line_trimmed -> block_anchor 替换器, 见 TextReplacers.kt
-        val result = try {
-            replaceText(original, oldText, newText, replaceAll)
-        } catch (e: IllegalArgumentException) {
-            error("${e.message} (path: $path)")
-        }
-        val entry = workspaceRepository.writeTextInRootfs(workspaceId, path, result.updated, overwrite = true)
-        val diff = generateUnifiedDiff(original, result.updated, entry.path)
-        listOf(
-            UIMessagePart.Text(
-                text = buildJsonObject {
-                    put("path", entry.path)
-                    put("replacements", result.replacements)
-                    if (result.strategy != ExactReplacer.name) put("matchStrategy", result.strategy)
-                    put("sizeBytes", entry.sizeBytes)
-                    put("updatedAt", entry.updatedAt)
-                }.toString(),
-                // diff 存入 metadata 供 UI 渲染 diff view, 不会随工具结果发送给 API
-                metadata = diff?.let { d -> DiffMetadata(diff = d).toMetadata() },
+        workspaceApplicationService.executeTool(workspaceId) {
+            val original = readTextInRootfs(path)
+            // 逐级尝试 exact -> line_trimmed -> block_anchor 替换器, 见 TextReplacers.kt
+            val result = try {
+                replaceText(original, oldText, newText, replaceAll)
+            } catch (e: IllegalArgumentException) {
+                error("${e.message} (path: $path)")
+            }
+            val entry = writeTextInRootfs(path, result.updated, overwrite = true)
+            val diff = generateUnifiedDiff(original, result.updated, entry.path)
+            listOf(
+                UIMessagePart.Text(
+                    text = buildJsonObject {
+                        put("path", entry.path)
+                        put("replacements", result.replacements)
+                        if (result.strategy != ExactReplacer.name) put("matchStrategy", result.strategy)
+                        put("sizeBytes", entry.sizeBytes)
+                        put("updatedAt", entry.updatedAt)
+                    }.toString(),
+                    // diff 存入 metadata 供 UI 渲染 diff view, 不会随工具结果发送给 API
+                    metadata = diff?.let { d -> DiffMetadata(diff = d).toMetadata() },
+                )
             )
-        )
+        }
     },
 )
 
 private fun createShellTool(
     workspaceId: String,
     needsApproval: (String) -> Boolean,
-    workspaceRepository: WorkspaceRepository,
+    workspaceApplicationService: WorkspaceApplicationService,
     defaultCwd: String? = null,
 ) = Tool(
     name = "workspace_shell",
@@ -258,7 +266,9 @@ private fun createShellTool(
             ?.coerceIn(1L, SHELL_TIMEOUT_MAX_SECONDS)
             ?.times(1_000L)
             ?: WorkspaceManager.DEFAULT_COMMAND_TIMEOUT_MS
-        val result = workspaceRepository.executeCommand(workspaceId, command, cwd, timeoutMillis)
+        val result = workspaceApplicationService.executeTool(workspaceId) {
+            executeCommand(command, cwd, timeoutMillis)
+        }
         listOf(
             UIMessagePart.Text(
                 buildJsonObject {
@@ -276,33 +286,30 @@ private fun createShellTool(
 private fun kotlinx.serialization.json.JsonObject.string(name: String): String? =
     this[name]?.jsonPrimitive?.contentOrNull
 
-private suspend fun WorkspaceRepository.readTextInRootfs(
-    workspaceId: String,
+private suspend fun WorkspaceToolSession.readTextInRootfs(
     path: String,
-): String = readRootfsBuffer(workspaceId, path).toString(Charsets.UTF_8.name())
+): String = readRootfsBuffer(path).toString(Charsets.UTF_8.name())
 
 /**
  * Reads an absolute rootfs path into memory. WorkspaceManager owns the mapping for /workspace,
  * bind mounts and paths inside the rootfs so file tools and shell execution share one mount table.
  */
-private suspend fun WorkspaceRepository.readRootfsBuffer(
-    workspaceId: String,
+private suspend fun WorkspaceToolSession.readRootfsBuffer(
     path: String,
 ): ByteArrayOutputStream {
-    val size = rootfsFileSize(workspaceId, path)
+    val size = rootfsFileSize(path)
     require(size <= MAX_READ_FILE_BYTES) {
         "File is too large to read: $path (${size / 1024 / 1024}MB, max ${MAX_READ_FILE_BYTES / 1024 / 1024}MB). Use shell commands like head, tail, or grep to read parts of it."
     }
-    return ByteArrayOutputStream(size.toInt()).also { exportRootfsFile(workspaceId, path, it) }
+    return ByteArrayOutputStream(size.toInt()).also { exportRootfsFile(path, it) }
 }
 
-private suspend fun WorkspaceRepository.readImageInRootfs(
-    workspaceId: String,
+private suspend fun WorkspaceToolSession.readImageInRootfs(
     path: String,
     artifactStore: ArtifactStore,
     onArtifactCreated: (net.weero.measix.pilot.data.files.OwnedArtifact) -> Unit,
 ): List<UIMessagePart> {
-    val bytes = readRootfsBuffer(workspaceId, path).toByteArray()
+    val bytes = readRootfsBuffer(path).toByteArray()
 
     // 工具读取沙箱文件产生的副本——系统产物
     val owned = artifactStore.createFromBytes(
@@ -323,15 +330,13 @@ private suspend fun WorkspaceRepository.readImageInRootfs(
     )
 }
 
-private suspend fun WorkspaceRepository.writeTextInRootfs(
-    workspaceId: String,
+private suspend fun WorkspaceToolSession.writeTextInRootfs(
     path: String,
     text: String,
     overwrite: Boolean,
 ): WorkspaceFileEntry {
     val pathArg = path.shellQuote()
     val result = runRootfsCommand(
-        workspaceId = workspaceId,
         action = "Write file",
         command = """
             if [ -e $pathArg ] && [ ${(!overwrite).shellFlag()} = 1 ]; then
@@ -352,14 +357,12 @@ private suspend fun WorkspaceRepository.writeTextInRootfs(
     return result.stdout.parseRootfsEntry()
 }
 
-private suspend fun WorkspaceRepository.runRootfsCommand(
-    workspaceId: String,
+private suspend fun WorkspaceToolSession.runRootfsCommand(
     action: String,
     command: String,
     stdin: ByteArray? = null,
 ): WorkspaceCommandResult {
     val result = executeCommand(
-        id = workspaceId,
         command = command,
         timeoutMillis = WorkspaceManager.DEFAULT_COMMAND_TIMEOUT_MS,
         stdin = stdin,

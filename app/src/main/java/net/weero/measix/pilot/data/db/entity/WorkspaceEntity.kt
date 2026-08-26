@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.db.entity
+package net.weero.measix.pilot.data.db.entity
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
@@ -38,12 +38,16 @@ data class WorkspaceEntity(
         JsonInstant.decodeFromString<Map<String, Boolean>>(toolApprovals)
     }.getOrDefault(emptyMap())
 
+    /** Converts the persisted enum name once; unknown values must never enable shell capabilities. */
+    fun resolvedShellStatus(): WorkspaceShellStatus =
+        runCatching { WorkspaceShellStatus.valueOf(shellStatus) }
+            .getOrDefault(WorkspaceShellStatus.BROKEN)
+
     fun toWorkspace(): Workspace = Workspace(
         id = id,
         name = name,
         root = root,
-        shellStatus = runCatching { WorkspaceShellStatus.valueOf(shellStatus) }
-            .getOrDefault(WorkspaceShellStatus.DISABLED),
+        shellStatus = resolvedShellStatus(),
         createdAt = createdAt,
         updatedAt = updatedAt,
         lastAccessAt = lastAccessAt,

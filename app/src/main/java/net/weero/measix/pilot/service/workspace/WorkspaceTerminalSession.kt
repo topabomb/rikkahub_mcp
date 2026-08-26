@@ -1,4 +1,4 @@
-package net.weero.measix.pilot.ui.pages.extensions.workspace
+package net.weero.measix.pilot.service.workspace
 
 import android.content.ClipData
 import android.content.ClipboardManager

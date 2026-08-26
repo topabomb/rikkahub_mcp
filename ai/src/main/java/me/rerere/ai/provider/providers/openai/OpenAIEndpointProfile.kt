@@ -1,6 +1,8 @@
 package me.rerere.ai.provider.providers.openai
 
 import me.rerere.ai.core.ReasoningLevel
+import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.OpenAIResponseSourceProfile
 import me.rerere.ai.ui.OpenAIResponseWireFormat
@@ -22,6 +24,7 @@ internal enum class OpenAIEndpointVendor {
     BIGMODEL,
     MOONSHOT,
     DEEPSEEK,
+    MIMO,
     NVIDIA,
     OPENCODE,
     COMPATIBLE,
@@ -39,6 +42,8 @@ internal fun resolveOpenAIEndpointVendor(host: String): OpenAIEndpointVendor {
         "open.bigmodel.cn" -> OpenAIEndpointVendor.BIGMODEL
         "api.moonshot.cn" -> OpenAIEndpointVendor.MOONSHOT
         "api.deepseek.com" -> OpenAIEndpointVendor.DEEPSEEK
+        "api.xiaomimimo.com" -> OpenAIEndpointVendor.MIMO
+        "token-plan-cn.xiaomimimo.com" -> OpenAIEndpointVendor.MIMO
         "integrate.api.nvidia.com" -> OpenAIEndpointVendor.NVIDIA
         "opencode.ai" -> OpenAIEndpointVendor.OPENCODE
         else -> OpenAIEndpointVendor.COMPATIBLE
@@ -57,6 +62,7 @@ internal fun isOfficialOpenAIHost(host: String): Boolean =
 internal enum class ResponseEndpointProfile(
     val wireFormat: OpenAIResponseWireFormat,
     val sourceProfile: OpenAIResponseSourceProfile,
+    val supportsStore: Boolean,
     val supportsReasoningSummary: Boolean,
     val supportsEncryptedContent: Boolean,
     val usesReasoningTextContent: Boolean,
@@ -65,6 +71,7 @@ internal enum class ResponseEndpointProfile(
     OPENAI(
         wireFormat = OpenAIResponseWireFormat.OPENAI,
         sourceProfile = OpenAIResponseSourceProfile.OPENAI,
+        supportsStore = true,
         supportsReasoningSummary = true,
         supportsEncryptedContent = true,
         usesReasoningTextContent = false,
@@ -73,6 +80,7 @@ internal enum class ResponseEndpointProfile(
     OPENAI_COMPATIBLE(
         wireFormat = OpenAIResponseWireFormat.OPENAI,
         sourceProfile = OpenAIResponseSourceProfile.OPENAI_COMPATIBLE,
+        supportsStore = true,
         supportsReasoningSummary = true,
         supportsEncryptedContent = true,
         usesReasoningTextContent = false,
@@ -81,6 +89,7 @@ internal enum class ResponseEndpointProfile(
     VOLC_ARK(
         wireFormat = OpenAIResponseWireFormat.OPENAI,
         sourceProfile = OpenAIResponseSourceProfile.VOLC_ARK,
+        supportsStore = true,
         supportsReasoningSummary = false,
         // Ark defaults to a thinking summary, while stateless tool continuation can manually replay
         // the complete encrypted_content requested through include.
@@ -92,10 +101,24 @@ internal enum class ResponseEndpointProfile(
     DEEPSEEK(
         wireFormat = OpenAIResponseWireFormat.DEEPSEEK,
         sourceProfile = OpenAIResponseSourceProfile.DEEPSEEK,
+        supportsStore = true,
         supportsReasoningSummary = false,
         supportsEncryptedContent = false,
         usesReasoningTextContent = true,
         // DeepSeek Responses accepts a string function_call_output.output.
+        supportsMultimodalFunctionOutput = false,
+    ),
+    MIMO(
+        wireFormat = OpenAIResponseWireFormat.OPENAI,
+        sourceProfile = OpenAIResponseSourceProfile.MIMO,
+        supportsStore = false,
+        // MiMo Responses does not support reasoning summary.
+        supportsReasoningSummary = false,
+        // MiMo Responses does not support encrypted reasoning content or opaque item replay.
+        supportsEncryptedContent = false,
+        // MiMo Responses uses reasoning_text content for tool continuation replay.
+        usesReasoningTextContent = true,
+        // MiMo Responses accepts a string function_call_output.output.
         supportsMultimodalFunctionOutput = false,
     ),
 }
@@ -105,6 +128,7 @@ internal fun resolveResponseEndpointProfile(host: String): ResponseEndpointProfi
         OpenAIEndpointVendor.OPENAI -> ResponseEndpointProfile.OPENAI
         OpenAIEndpointVendor.VOLC_ARK -> ResponseEndpointProfile.VOLC_ARK
         OpenAIEndpointVendor.DEEPSEEK -> ResponseEndpointProfile.DEEPSEEK
+        OpenAIEndpointVendor.MIMO -> ResponseEndpointProfile.MIMO
         else -> ResponseEndpointProfile.OPENAI_COMPATIBLE
     }
 }
@@ -221,3 +245,33 @@ private val OPENAI_GPT_5_1_STANDARD_PATTERN =
 
 private val OPENAI_GPT_5_XHIGH_STANDARD_PATTERN =
     Regex("^gpt-5\\.(?:2|4|5|6)(?:-|$).*")
+
+/**
+ * Maps app reasoning levels to MiMo Chat Completions `thinking.type` values.
+ *
+ * MiMo uses `thinking.type=enabled|disabled` for Chat Completions. OFF maps to `disabled`;
+ * all other levels map to `enabled`.
+ */
+internal fun mapMiMoChatThinkingType(level: ReasoningLevel): String {
+    return if (level.isEnabled) "enabled" else "disabled"
+}
+
+/** True only when the request will actually enable MiMo reasoning on the wire. */
+internal fun isMiMoThinkingEnabled(model: Model, level: ReasoningLevel): Boolean =
+    model.abilities.contains(ModelAbility.REASONING) && level.isEnabled
+
+/**
+ * Maps app reasoning levels to MiMo Responses `reasoning.effort` values.
+ *
+ * MiMo Responses supports `none`, `low`, `medium`, `high`. OFF maps to `none`; AUTO omits the
+ * field so the endpoint applies its default; XHIGH/MAX are capped to `high`.
+ */
+internal fun mapMiMoResponsesReasoningEffort(level: ReasoningLevel): String? {
+    return when (level) {
+        ReasoningLevel.OFF -> "none"
+        ReasoningLevel.AUTO -> null
+        ReasoningLevel.LOW -> "low"
+        ReasoningLevel.MEDIUM -> "medium"
+        ReasoningLevel.HIGH, ReasoningLevel.XHIGH, ReasoningLevel.MAX -> "high"
+    }
+}

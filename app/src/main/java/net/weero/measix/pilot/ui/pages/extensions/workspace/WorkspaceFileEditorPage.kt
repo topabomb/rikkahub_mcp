@@ -29,10 +29,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dokar.sonner.ToastType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.repository.FileTooLargeException
-import net.weero.measix.pilot.data.repository.WorkspaceRepository
+import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
+import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
+import net.weero.measix.pilot.service.workspace.WorkspaceTextPreviewResult
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.CustomColors
@@ -51,7 +53,8 @@ fun WorkspaceFileEditorPage(
     area: WorkspaceStorageArea,
     path: String,
 ) {
-    val repository = koinInject<WorkspaceRepository>()
+    val applicationService = koinInject<WorkspaceApplicationService>()
+    val queryService = koinInject<WorkspaceQueryService>()
     val toaster = LocalToaster.current
     val scope = rememberCoroutineScope()
     val editable = area == WorkspaceStorageArea.FILES
@@ -71,16 +74,17 @@ fun WorkspaceFileEditorPage(
     LaunchedEffect(id, area, path) {
         loading = true
         loadError = null
-        runCatching {
-            repository.readTextForPreview(id, area, path)
-        }.onSuccess { content ->
-            textState.setTextAndPlaceCursorAtEnd(content)
-            loading = false
-        }.onFailure {
-            loadError = when (it) {
-                is FileTooLargeException -> tooLargeText.format(it.size)
-                else -> it.message ?: readFailedText
+        try {
+            when (val result = queryService.readTextForPreview(id, area, path)) {
+                is WorkspaceTextPreviewResult.Success -> textState.setTextAndPlaceCursorAtEnd(result.content)
+                is WorkspaceTextPreviewResult.TooLarge -> loadError = tooLargeText.format(result.sizeBytes)
+                WorkspaceTextPreviewResult.Unavailable -> loadError = readFailedText
             }
+            loading = false
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            loadError = readFailedText
             loading = false
         }
     }
@@ -103,18 +107,18 @@ fun WorkspaceFileEditorPage(
                                 if (saving) return@TextButton
                                 saving = true
                                 scope.launch {
-                                    runCatching {
-                                        repository.writeText(
-                                            id = id,
+                                    try {
+                                        applicationService.writeText(
+                                            workspaceId = id,
                                             path = path,
                                             text = textState.text.toString(),
-                                            overwrite = true,
                                         )
-                                    }.onSuccess {
                                         toaster.show(savedText, type = ToastType.Success)
-                                    }.onFailure {
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (_: Exception) {
                                         toaster.show(
-                                            it.message ?: saveFailedText,
+                                            saveFailedText,
                                             type = ToastType.Error
                                         )
                                     }

@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.files
+package net.weero.measix.pilot.data.files
 
 import java.io.File
 import java.nio.file.Files
@@ -12,11 +12,12 @@ class SkillPathsTest {
     fun `parse supports CRLF frontmatter`() {
         val content = "---\r\nname: test-skill\r\ndescription: test\r\n---\r\n\r\nbody"
 
-        val frontmatter = SkillFrontmatterParser.parse(content)
+        val document = (SkillFrontmatterParser.parseDocument(content) as SkillParseResult.Success).document
+        val frontmatter = document.frontmatter
 
-        assertEquals("test-skill", frontmatter["name"])
-        assertEquals("test", frontmatter["description"])
-        assertEquals("body", SkillFrontmatterParser.extractBody(content))
+        assertEquals("test-skill", frontmatter.name)
+        assertEquals("test", frontmatter.description)
+        assertEquals("body", document.body)
     }
 
     @Test

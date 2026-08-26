@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.ai.tools
+package net.weero.measix.pilot.data.ai.tools
 
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -7,13 +7,14 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.files.SkillFrontmatterParser
+import net.weero.measix.pilot.data.files.SkillContentReadResult
+import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.files.SkillMetadata
-import net.weero.measix.pilot.data.files.SkillPaths
 
 fun createSkillTools(
     enabledSkills: Set<String>,
     allSkills: List<SkillMetadata>,
+    skillManager: SkillManager,
 ): List<Tool> {
     val available = allSkills.filter { it.name in enabledSkills }
     if (available.isEmpty()) return emptyList()
@@ -62,14 +63,14 @@ fun createSkillTools(
                 val skill = available.firstOrNull { skill -> skill.name == name }
                     ?: error("Skill '$name' is not available. Available skills: ${available.joinToString { it.name }}")
                 val path = it.jsonObject["path"]?.jsonPrimitive?.content
-                val content = if (path.isNullOrBlank()) {
-                    require(skill.skillFile.exists()) { "Skill '$name' not found" }
-                    SkillFrontmatterParser.extractBody(skill.skillFile.readText())
-                } else {
-                    val target = SkillPaths.resolveSkillFile(skill.skillDir, path)
-                        ?: error("Path '$path' is outside the skill directory")
-                    require(target.exists()) { "File '$path' not found in skill '$name'" }
-                    target.readText()
+                val content = when (val result = skillManager.readSkillContent(name, path)) {
+                    is SkillContentReadResult.Success -> result.content
+                    SkillContentReadResult.InvalidPath -> error("Path '$path' is outside the skill directory")
+                    SkillContentReadResult.InvalidSkill -> error("Skill '$name' is invalid")
+                    SkillContentReadResult.InvalidEncoding -> error("File '${path ?: "SKILL.md"}' is not valid UTF-8")
+                    SkillContentReadResult.ResourceLimit -> error("File '${path ?: "SKILL.md"}' exceeds the Skill text limit")
+                    SkillContentReadResult.NotFound -> error("File '${path ?: "SKILL.md"}' not found in skill '$name'")
+                    SkillContentReadResult.ReadFailure -> error("Failed to read '${path ?: "SKILL.md"}' from skill '$name'")
                 }
                 listOf(UIMessagePart.Text(content))
             }

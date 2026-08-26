@@ -48,13 +48,22 @@ interface OutputMessageTransformer : MessageTransformer
  *
  * 与请求级 [OutputMessageTransformer.transform] 的分工：
  *  - [transformStreaming]：每个流式 chunk 对最新累积消息的最后一条做视觉变换
- *    （think 标签 → reasoning、流式正则替换等），不落库、可重复调用；
+ *    （think 标签 → reasoning、流式正则替换等），不落库、可重复调用；[previousProjection]
+ *    是同一 active message 的上一次完整投影，只用于保留首次发生的投影事实；
  *  - [onStreamingFinish]：step 终态收口（reasoning 补 finishedAt、base64 → 本地文件等）。
  */
 interface StreamingMessageTransformer {
-    suspend fun transformStreaming(ctx: TransformerContext, message: UIMessage): UIMessage = message
+    suspend fun transformStreaming(
+        ctx: TransformerContext,
+        message: UIMessage,
+        previousProjection: UIMessage? = null,
+    ): UIMessage = message
 
-    suspend fun onStreamingFinish(ctx: TransformerContext, message: UIMessage): UIMessage = message
+    suspend fun onStreamingFinish(
+        ctx: TransformerContext,
+        message: UIMessage,
+        previousProjection: UIMessage? = null,
+    ): UIMessage = message
 }
 
 suspend fun List<UIMessage>.transforms(

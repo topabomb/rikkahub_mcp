@@ -195,8 +195,12 @@
   <string name="backup_page_restart_desc">The app needs to restart for the changes to take effect.</string>
   <string name="backup_page_restore">Restore</string>
   <string name="backup_page_restore_failed">Restore failed: %s</string>
+  <string name="backup_page_restore_in_progress">Another restore is already in progress</string>
+  <string name="backup_page_restore_pending_restart">A restore is already staged. Restart the app to apply it.</string>
   <string name="backup_page_restore_now">Restore</string>
   <string name="backup_page_restore_success">Restore successful</string>
+  <string name="backup_page_restore_confirm_title">Confirm restore</string>
+  <string name="backup_page_restore_confirm_message">After confirmation, the archive will be validated and staged. The database, managed payloads, and settings will be overwritten after restart. The current process has not switched yet.</string>
   <string name="backup_page_restoring">Restoring...</string>
   <string name="backup_page_s3_access_key_id">Access Key ID</string>
   <string name="backup_page_s3_backup">S3 Backup</string>
@@ -988,6 +992,7 @@
   <string name="setting_provider_page_avaliable_models">Avaliable Models</string>
   <string name="setting_provider_page_balance_api_path">Balance API Path</string>
   <string name="setting_provider_page_balance_info">"Get account balance "</string>
+  <string name="provider_balance_unavailable">Balance unavailable</string>
   <string name="setting_provider_page_balance_json_key">Result Json Key</string>
   <string name="setting_provider_page_basic_settings">Basic Settings</string>
   <string name="setting_provider_page_chat_model">Chat</string>
@@ -1047,6 +1052,11 @@
   <string name="setting_provider_page_service_account_email">Service Account Email</string>
   <string name="setting_provider_page_test">Test</string>
   <string name="setting_provider_page_test_connection">Test Connection</string>
+  <string name="setting_provider_page_test_non_streaming">Non-streaming</string>
+  <string name="setting_provider_page_test_streaming">Streaming</string>
+  <string name="setting_provider_page_test_tool_call">Tool call</string>
+  <string name="setting_provider_page_test_tool_called">Called: %1$s  Input: %2$s</string>
+  <string name="setting_provider_page_test_no_tool">No tool call, response: %s</string>
   <string name="setting_provider_page_text">Text</string>
   <string name="setting_provider_page_title">Providers</string>
   <string name="setting_provider_page_tool">Tool</string>
@@ -1110,6 +1120,13 @@
   <string name="skill_detail_page_create">Create</string>
   <string name="skill_detail_page_delete_confirm">Are you sure you want to delete file "%s"?</string>
   <string name="skill_detail_page_delete_failed">Delete failed</string>
+  <string name="skill_detail_page_delete_skill_file_forbidden">SKILL.md cannot be deleted</string>
+  <string name="skill_detail_page_load_failed">Failed to read the skill file</string>
+  <string name="skill_detail_page_skill_not_found">Skill not found</string>
+  <string name="skill_detail_page_invalid_path">The file path is invalid</string>
+  <string name="skill_detail_page_invalid_skill">SKILL.md frontmatter is invalid</string>
+  <string name="skill_detail_page_name_mismatch">The name in SKILL.md must remain “%1$s”</string>
+  <string name="skill_detail_page_save_failed">Failed to save the skill file</string>
   <string name="skill_detail_page_delete_file">Delete File</string>
   <string name="skill_detail_page_file_name">File Name</string>
   <string name="skill_detail_page_file_name_invalid">Invalid file name</string>
@@ -1133,6 +1150,16 @@
   <string name="skills_page_repo_url_label">Repository URL</string>
   <string name="skills_page_save">Save</string>
   <string name="skills_page_save_failed">Save failed, please check the Skill format</string>
+  <string name="skills_page_import_read_failed">Unable to read the selected file</string>
+  <string name="skills_page_import_invalid_github_url">Invalid GitHub repository URL</string>
+  <string name="skills_page_import_github_list_failed">Unable to read the GitHub directory</string>
+  <string name="skills_page_import_skill_file_missing">No SKILL.md was found</string>
+  <string name="skills_page_import_download_failed">A skill file could not be downloaded</string>
+  <string name="skills_page_import_invalid_skill">SKILL.md frontmatter is invalid</string>
+  <string name="skills_page_import_unknown_failed">The skill could not be imported</string>
+  <string name="skills_page_invalid_frontmatter">Invalid SKILL.md frontmatter</string>
+  <string name="skills_page_missing_frontmatter">SKILL.md must start with frontmatter</string>
+  <string name="skills_page_content_placeholder">---\nname: my-skill\ndescription: "…"\n---\n\nSkill instructions…</string>
   <string name="skills_page_skill_content_label">SKILL.md Content</string>
   <string name="skills_page_skill_name">Skill name: %s</string>
   <string name="skills_page_title">Agent Skills</string>
@@ -1208,6 +1235,9 @@
   <string name="workspace_page_create">Create Workspace</string>
   <string name="workspace_page_rename">Rename Workspace</string>
   <string name="workspace_page_delete">Delete Workspace</string>
+  <string name="workspace_page_create_failed">Failed to create the workspace</string>
+  <string name="workspace_page_rename_failed">Failed to rename the workspace</string>
+  <string name="workspace_page_delete_failed">Failed to delete the workspace</string>
   <string name="workspace_page_delete_confirm">This will delete workspace metadata and local files, and clear all Assistant bindings referencing it.</string>
   <string name="workspace_page_empty">No workspaces yet</string>
   <string name="workspace_page_empty_desc">Create one to use file tools and sandbox environments</string>
@@ -1255,6 +1285,9 @@
   <string name="workspace_terminal_not_installed">Please install Rootfs first</string>
   <string name="workspace_terminal_loading">Loading workspace…</string>
   <string name="workspace_terminal_exited">Terminal exited</string>
+  <string name="workspace_terminal_tab_title">Terminal %1$d</string>
+  <string name="workspace_terminal_limit_reached">At most %1$d terminal tabs are allowed</string>
+  <string name="workspace_terminal_create_failed">Failed to create terminal: %1$s</string>
   <string name="extensions_page_workspace">Workspace</string>
   <string name="extensions_page_workspace_desc">Manage local working directories accessible by Agent</string>
   <string name="workspace_select">Select Workspace</string>
@@ -1345,6 +1378,8 @@
   <string name="assistant_page_context_message_limit_count">Trim after %d messages</string>
   <string name="assistant_page_context_message_limit_unlimited">No automatic context trimming</string>
   <string name="assistant_page_context_message_limit_warning">Message count is not a token limit. Each trim can still invalidate the prompt cache.</string>
+  <string name="assistant_page_context_message_limit_range">%1$d – %2$d</string>
+  <string name="assistant_page_context_message_limit_invalid">Enter 0 or %1$d – %2$d</string>
   <string name="setting_mcp_page_show_header_value">Show header value</string>
   <string name="setting_mcp_page_hide_header_value">Hide header value</string>
   <string name="setting_provider_type_openai">OpenAI</string>
@@ -1500,5 +1535,8 @@
   <string name="chat_message_tool_phase_cancelled">Cancelled</string>
   <string name="chat_message_tool_phase_interrupted">Interrupted</string>
   <string name="conversation_turn_awaiting_approval">Approval required</string>
+  <string name="workspace_terminal_command_failed">Terminal operation failed</string>
+  <string name="setting_provider_page_mutation_failed">Provider settings operation failed</string>
+  <string name="skills_page_import_resource_limit">The Skill package exceeds the safe import limit</string>
 </resources>
 

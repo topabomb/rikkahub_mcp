@@ -26,12 +26,20 @@ Assistant.workspaceId 有效
 | `ProotShellRunner` | 构造 PRoot 命令并通过 `ProcessBuilder` 执行 |
 | `RootfsInstaller` | 下载、校验路径、解压和原子替换 Rootfs |
 | `RootfsPatcher` | 修补 DNS、hosts、hostname、locale、group 与临时目录 |
-| `WorkspaceRepository` | Room 实体、协程调度、安装状态和 Manager 调用 |
-| `WorkspaceTools` | 注册 `workspace_*` 工具、schema、审批与结果形状 |
+| `WorkspaceRepository` | Room 实体、协程调度、安装状态和 Manager 调用；不作为 Workspace UI API |
+| `WorkspaceApplicationService` | Workspace typed command 的唯一 owner；UI、模型 Rootfs 操作、安装/删除与终端 mutation 共用互斥协议 |
+| `WorkspaceQueryService` | 把 Workspace 列表/详情投影为 `WorkspaceUiModel`，并提供文件列表与文本预览读口；所有 UI Workspace 读取都走此 port |
+| `WorkspaceTerminalRuntime` | application-scoped PTY、创建 Job、Tab/选中项和 shell-exit 生命周期唯一 owner |
+| `WorkspaceTerminalQueryService` | 把持久化 Workspace 与进程内终端状态合成为 UI read model |
+| `WorkspaceTools` | 注册 `workspace_*` schema、审批与结果形状；执行只使用受限 `WorkspaceToolSession` capability |
 | `WorkspaceTerminalSession` | 通过 Termux PTY 提供用户交互终端 |
 
 `workspace` Gradle 模块不依赖应用 UI；`app` 模块负责 Room、Compose、文件上传、工具注册和 DI。
 Workspace 工具由 `GenerationToolSetFactory` 在 Master/Target 共用的 `TurnEngine` 管道中装配；工具执行事实经 `CommitCheckpoint` / `FinalizeTurn` 写入，不另开落库路径。
+
+`GenerationToolSetFactory` 只从 `WorkspaceQueryService` 取得 typed readiness 与审批投影。真正执行时，`WorkspaceApplicationService.executeTool` 在 per-workspace gate 内重新校验 Workspace 仍存在且为 `READY`，再交付只含 Rootfs size/export/command 的 `WorkspaceToolSession`；工具代码不能取得 Repository。这样从装配到执行之间发生删除、重装或状态变化时 fail-closed，且 `workspace_edit_file` 的 read/replace/write 整体不会与 UI 写入、安装或删除交错。
+
+Compose、ViewModel、聊天文件补全、cwd 选择和已编辑文件导出都只能依赖 `WorkspaceQueryService` / `WorkspaceApplicationService`；不得持有 `WorkspaceRepository` 或 Room `WorkspaceEntity`。`WorkspaceUiModel` 只公开 UI 所需的 id、名称、typed `WorkspaceShellStatus` 和工具审批投影，不把持久化实体或 `shell_status` 字符串编码当作页面协议。字符串只存在于 Room 边界，并由 `WorkspaceEntity.resolvedShellStatus` 一次解析；未知值按 `BROKEN` fail-closed，不能意外开放工具或终端。
 
 `WorkspaceDocumentsProvider.queryDocument` 在解析到具体文件后必须先确认 `File.exists()`，已删除路径不能再写入 SAF 游标。
 
@@ -61,6 +69,8 @@ Rootfs 内的主要映射：
 `WorkspaceStorageArea.FILES` 和 `LINUX` 用于管理页面的直接文件操作；AI 工具使用 Rootfs 绝对路径，以便与 shell 看到同一命名空间。
 
 ## 4. PRoot 执行契约
+
+PRoot 版本为 `v5.1.107.92`（Termux/PRoot 官方 tag），记录的候选构建参数为 NDK r29/API 24、`PROOT_WITH_LIBANDROID_SHMEM=true` 和静态链接。`workspace/proot-lock.json` 是唯一机器可读 manifest，固定 PRoot/Termux Packages URL、tag/commit、上游 App 二进制提交、三个源码 archive SHA-256、候选构建参数和每个 artifact 的 `abi`、仓库路径、SHA-256、ELF machine、interpreter 与精确 `DT_NEEDED`；exec 依赖 `[liblog.so,libc.so]`，freestanding loader 依赖为空。当前两个 exec 与上游 `f4508dfa` byte-identical，但固定 recipe 尚未在本地重建，因此不得写成已经 bit-for-bit 可复现。`workspace/PROOT.md` 记录来源与许可证；PRoot 对应源码/patch/build scripts、libandroid-shmem 完整 BSD notice、静态链接 libtalloc 的可重链接材料和适用安装信息共同构成独立 Release 合规门禁，provenance URL 不能代替该义务。
 
 `ProotShellRunner` 的关键参数：
 
@@ -128,7 +138,9 @@ Target Run 沿用同一工具定义，但非交互审批策略会拒绝除 `ask_
 ## 6. 进程、超时与取消
 
 ```text
-WorkspaceRepository.executeCommand()
+WorkspaceApplicationService.executeTool()
+  -> WorkspaceToolSession.executeCommand()
+  -> WorkspaceRepository.executeCommand()
   -> runInterruptible(Dispatchers.IO)
   -> WorkspaceManager.executeCommand()
   -> ProotShellRunner.execute()
@@ -140,7 +152,13 @@ stdout、stderr 和可选 stdin 使用独立 daemon 线程。超时会 `destroyF
 
 ## 7. 交互终端
 
-`WorkspaceTerminalSession` 使用同一 PRoot 二进制、Rootfs、内核伪装、核心 flags、显式环境和 seccomp 约束，但通过 Termux `TerminalSession` 提供 PTY 与 ANSI 交互。
+`WorkspaceTerminalRuntime` 是所有交互终端的 application-scoped owner。它通过 service 层的 `WorkspaceTerminalSession` helper 创建 Termux PTY，并独占 session、创建 Job、tab 顺序、选中项和 shell-exit 清理。UI/VM 只持有 `WorkspaceTerminalTabUiModel`；UI 自己拥有的 `TerminalView` 以 `WorkspaceTerminalViewport` capability 按 tab id bind/unbind，不能取得 runtime-owned `TerminalSession`。页面离开或应用进入后台不关闭 PTY，进程死亡后也不持久化虚假的运行态。
+
+Workspace command、持久化读投影和 terminal 聚合投影分别由 `WorkspaceApplicationService`、`WorkspaceQueryService`、`WorkspaceTerminalQueryService` 定义；三类契约物理分文件，避免把 writer、query join 和 UI model 混成一个隐式 service。`WorkspaceTerminalViewport` 只表达 UI viewport capability，不是 session facade 或第二生命周期 owner。
+
+创建中只发布 `PREPARING`，创建成功后发布 `READY`；Rootfs 未就绪、创建失败、取消或 shell exit 都走同一 remove 路径，失败 Tab 不留在 read model。Rootfs/PTY 异步创建失败由 runtime 在同一 Workspace projection 发布带唯一 id 的 typed `lastFailure`，VM 只把新 failure 映射为用户提示；主动关闭或取消不能伪造失败。单 Workspace 最多六个 Tab。rename/reorder/select/close 与创建保留都在 runtime mutex 内决定；资源 finish 在条目先从 read model 移除后执行。创建准备、模型工具执行和 `WorkspaceApplicationService` 的 UI 文件命令/install/delete 使用同一组固定条带 mutex，既阻止同一 Workspace 的 Rootfs/PTY/工具 TOCTOU，也不会按历史 Workspace id 无限保留锁对象。
+
+`WorkspaceApplicationService.installRootfs` 与 `deleteWorkspace` 必须在同一 Workspace command gate 内先 `closeWorkspace` 并等待全部创建 Job/PTY 收口，再调用 Repository。删除协议先把 durable shell 状态置为 `BROKEN` 作为 fail-closed 可重试状态，再删除 Workspace 文件树；只有文件树删除成功后才能先清理 Assistant 引用、再移除 Room 身份。任一步骤失败或进程中断时，尚未删除的 `BROKEN` 记录都作为重试身份保留；后续删除必须幂等，不能发布成功或留下无 durable 身份的孤儿 Rootfs。Workspace 管理页通过 `WorkspaceApplicationService`/`WorkspaceQueryService` 操作，不直连 Repository。
 
 两个入口必须同步关键兼容参数，但挂载集合有意不同：
 
@@ -178,7 +196,7 @@ ensureWorkspace
 
 Workspace shell 状态使用 `DISABLED`、`INSTALLING`、`READY` 和 `BROKEN`。只有 READY 注册工具和打开终端；安装失败进入 BROKEN，Rootfs 缺失可回到 DISABLED。
 
-删除 Workspace 时先删除 Room 实体和磁盘目录，再清理所有 Assistant 的 `workspaceId` 引用。删除或状态变化后，下一次工具装配不会继续暴露旧 Workspace。
+删除 Workspace 时先把 Room 状态持久化为 `BROKEN`，再删除磁盘目录；磁盘成功后先清理所有 Assistant 的 `workspaceId` 引用，最后删除 Room 实体。失败时保留尚存的 durable identity 供幂等重试。删除或状态变化后，下一次工具装配不会继续暴露旧 Workspace。
 
 ## 10. 维护与验证
 
@@ -189,5 +207,7 @@ Workspace shell 状态使用 `DISABLED`、`INSTALLING`、`READY` 和 `BROKEN`。
 - `ProotShellRunnerTest` / `WorkspaceShellRunnerTest`：命令参数、环境、超时、输出排空与中断；
 - `RootfsInstallerTest` / `RootfsPatcherTest`：归档逃逸、链接、取消与幂等修补；
 - 真实设备上的匹配架构 Rootfs、Android 14+ shell、交互终端和取消清理。
+
+PRoot `v5.1.107.92` 的 hash/ELF 静态契约由 `ProotArtifactContractTest` 检查；这不等同于设备验收。x86_64 Android 17/API 37 Pixel Fold AVD 已完成打包二进制 smoke：版本/accelerator、root-id、cwd、host bind+cat、`-k 4.14.0` 和 1,000 行 stdout 均通过，但没有安装匹配 Rootfs，也没有覆盖 PTY。arm64 Android 14/15/16 与完整 x86_64 Rootfs 的 cwd、文件操作、挂载、DNS/netlink、SysV shared memory、超时/取消、长输出和双 PTY 场景完成前，升级状态仍必须标记为设备待验证。
 
 关键兼容参数同时存在于 `ProotShellRunner` 与 `WorkspaceTerminalSession`。调整 `-k`、seccomp、环境或 PRoot flags 时必须核对两个入口；调整业务挂载时则按各入口的暴露边界分别评估。

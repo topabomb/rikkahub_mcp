@@ -1,0 +1,72 @@
+{
+  "proot": {
+    "tag": "v5.1.107.92",
+    "commit": "7266fb3e8516535682f5a9c8f3a7e70f6506eddb",
+    "sourceZipUrl": "https://github.com/termux/proot/archive/refs/tags/v5.1.107.92.zip",
+    "sourceZipSha256": "29385d1ddb619a9c4449ab512bfd55032034b22f724ddf98fc95ff300ea32135",
+    "upstreamBinaryCommit": "f4508dfac2255cf83e75859a8fe37dd7da6778a3",
+    "upstreamBinaryMatch": "byte-identical"
+  },
+  "termuxPackage": {
+    "recipeCommit": "08b49b3ce00b1e14a3a0365200f30e50f8dfafe1",
+    "recipeUrl": "https://github.com/termux/termux-packages/blob/08b49b3ce00b1e14a3a0365200f30e50f8dfafe1/packages/proot/build.sh"
+  },
+  "dependencies": {
+    "libandroidShmem": {
+      "version": "0.7",
+      "sourceUrl": "https://github.com/termux/libandroid-shmem/archive/refs/tags/v0.7.tar.gz",
+      "sha256": "1e5ff8459bc0a8c229dd8a94b27d119987e09ef3414331c2b5ebfff20b98e867"
+    },
+    "libtalloc": {
+      "version": "2.4.3",
+      "sourceUrl": "https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz",
+      "sha256": "dc46c40b9f46bb34dd97fe41f548b0e8b247b77a918576733c528e83abd854dd"
+    }
+  },
+  "build": {
+    "ndk": "r29",
+    "api": 24,
+    "prootWithLibandroidShmem": true,
+    "staticLinking": true,
+    "localRebuildStatus": "not-run",
+    "hashPolicy": "fail-if-output-differs-from-recorded-artifacts"
+  },
+  "artifacts": [
+    {
+      "abi": "arm64-v8a",
+      "repoPath": "workspace/src/main/jniLibs/arm64-v8a/libproot_exec.so",
+      "sha256": "06c4b8d620c960e2ae873786e81dc04d797b5af47967819b5ec4cbb7635590c9",
+      "elfMachine": "AArch64",
+      "interpreter": "/system/bin/linker64",
+      "androidApi": 24,
+      "dtNeeded": ["liblog.so", "libc.so"]
+    },
+    {
+      "abi": "x86_64",
+      "repoPath": "workspace/src/main/jniLibs/x86_64/libproot_exec.so",
+      "sha256": "29ad3f63f5a1a030d0db8a58c6f14124386ce4a2fc31c24003b8fac3febe5a02",
+      "elfMachine": "x86-64",
+      "interpreter": "/system/bin/linker64",
+      "androidApi": 24,
+      "dtNeeded": ["liblog.so", "libc.so"]
+    },
+    {
+      "abi": "arm64-v8a",
+      "repoPath": "workspace/src/main/jniLibs/arm64-v8a/libproot_loader.so",
+      "sha256": "44ef39c1e1a18c09f6e4c4b5d6f8bba82d30596598bd155ec162d05c5122ff04",
+      "elfMachine": "AArch64",
+      "interpreter": null,
+      "dtNeeded": [],
+      "companion": true
+    },
+    {
+      "abi": "x86_64",
+      "repoPath": "workspace/src/main/jniLibs/x86_64/libproot_loader.so",
+      "sha256": "914564ea1c66f50b38f18cac857fcf814c6b1ab027789178880fca1d530599b3",
+      "elfMachine": "x86-64",
+      "interpreter": null,
+      "dtNeeded": [],
+      "companion": true
+    }
+  ]
+}

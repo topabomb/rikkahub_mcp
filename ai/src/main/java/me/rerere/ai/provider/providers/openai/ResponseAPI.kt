@@ -271,9 +271,18 @@ class ResponseAPI(
         return buildJsonObject {
             put("model", params.model.modelId)
             put("stream", stream)
-            put("store", false)
+            if (endpointProfile.supportsStore) {
+                put("store", false)
+            }
 
-            if (isModelAllowTemperature(params.model)) {
+            // OpenRouter sticky routing / caching session_id (max 256 chars per contract).
+            if (resolveOpenAIEndpointVendor(host) == OpenAIEndpointVendor.OPENROUTER) {
+                params.providerSessionId
+                    ?.takeIf { it.isNotBlank() && it.length <= 256 }
+                    ?.let { put("session_id", it) }
+            }
+
+            if (isModelAllowTemperature(params.model, endpointProfile, params.reasoningLevel)) {
                 if (params.temperature != null) put("temperature", params.temperature)
                 if (params.topP != null) put("top_p", params.topP)
             }
@@ -298,12 +307,14 @@ class ResponseAPI(
             // reasoning
             if (params.model.abilities.contains(ModelAbility.REASONING)) {
                 val level = params.reasoningLevel
-                put("reasoning", buildJsonObject {
+                val reasoning = buildJsonObject {
                     if (endpointProfile.supportsReasoningSummary) {
                         put("summary", "auto")
                     }
                     if (endpointProfile == ResponseEndpointProfile.DEEPSEEK) {
                         mapDeepSeekResponsesReasoningEffort(level)?.let { put("effort", it) }
+                    } else if (endpointProfile == ResponseEndpointProfile.MIMO) {
+                        mapMiMoResponsesReasoningEffort(level)?.let { put("effort", it) }
                     } else if (level != ReasoningLevel.AUTO) {
                         val effort = if (isOfficialOpenAIHost(host)) {
                             mapOfficialOpenAIReasoningEffort(params.model.modelId, level)
@@ -312,7 +323,10 @@ class ResponseAPI(
                         }
                         effort?.let { put("effort", it) }
                     }
-                })
+                }
+                if (reasoning.isNotEmpty()) {
+                    put("reasoning", reasoning)
+                }
                 if (endpointProfile.supportsEncryptedContent) {
                     put("include", buildJsonArray {
                         add("reasoning.encrypted_content")
@@ -336,7 +350,7 @@ class ResponseAPI(
                                 // Responses 省略 strict 会尝试严格模式；显式 false 保持
                                 // Chat Completions 的非严格工具语义，避免已配置 JSON Schema 被隐式收紧。
                                 put("strict", false)
-                                tool.parameters()?.let { put("parameters", it) }
+                                put("parameters", normalizeToolParameters(tool.parameters()))
                             })
                         }
                     }
@@ -1171,11 +1185,19 @@ class ResponseAPI(
     }
 }
 
-private fun isModelAllowTemperature(model: Model): Boolean {
+private fun isModelAllowTemperature(
+    model: Model,
+    endpointProfile: ResponseEndpointProfile = ResponseEndpointProfile.OPENAI_COMPATIBLE,
+    reasoningLevel: ReasoningLevel = ReasoningLevel.AUTO,
+): Boolean {
     val isOpenAIReasoningModel = ModelRegistry.OPENAI_GPT_5_SERIES.match(model.modelId) &&
             model.abilities.contains(ModelAbility.REASONING)
+    // MiMo ignores temperature/top_p when thinking is enabled.
+    val mimoThinkingEnabled = endpointProfile == ResponseEndpointProfile.MIMO &&
+            isMiMoThinkingEnabled(model, reasoningLevel)
     return !ModelRegistry.OPENAI_O_MODELS.match(model.modelId) &&
-            !isOpenAIReasoningModel
+            !isOpenAIReasoningModel &&
+            !mimoThinkingEnabled
 }
 
 private fun List<UIMessagePart>.isOnlyTextPart(): Boolean {

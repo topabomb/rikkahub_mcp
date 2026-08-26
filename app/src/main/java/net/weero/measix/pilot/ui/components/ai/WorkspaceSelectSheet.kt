@@ -27,7 +27,7 @@ import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.hugeicons.stroke.Codesandbox
 import me.rerere.hugeicons.stroke.Tick02
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
+import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.pages.extensions.workspace.toShellStatusLabel
@@ -35,7 +35,7 @@ import net.weero.measix.pilot.ui.pages.extensions.workspace.toShellStatusLabel
 @Composable
 internal fun WorkspaceSelectSheet(
     assistant: Assistant,
-    workspaces: List<WorkspaceEntity>,
+    workspaces: List<WorkspaceUiModel>,
     onSelect: (String?) -> Unit,
     onManage: () -> Unit,
     onDismiss: () -> Unit,

@@ -72,7 +72,7 @@ import me.rerere.hugeicons.stroke.Settings03
 import me.rerere.hugeicons.stroke.Share08
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.ai.tools.resolveWorkspaceToolApproval
-import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
+import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
 import androidx.compose.ui.res.stringResource
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.nav.BackButton
@@ -157,7 +157,7 @@ fun WorkspaceDetailPage(id: String) {
                     IconButton(onClick = { vm.refresh() }) {
                         Icon(HugeIcons.Refresh01, contentDescription = null)
                     }
-                    if (state.workspace?.shellStatus != WorkspaceShellStatus.DISABLED.name) {
+                    if (state.workspace?.shellStatus != WorkspaceShellStatus.DISABLED) {
                         IconButton(onClick = { navController.navigate(Screen.WorkspaceTerminal(id)) }) {
                             Icon(HugeIcons.ComputerTerminal01, contentDescription = null)
                         }
@@ -276,14 +276,11 @@ fun WorkspaceDetailPage(id: String) {
         }
     }
 
-    installError?.let { message ->
-        val displayMessage = message.ifBlank {
-            stringResource(R.string.workspace_detail_rootfs_install_failed)
-        }
+    if (installError) {
         AlertDialog(
             onDismissRequest = vm::dismissInstallError,
             title = { Text(stringResource(R.string.workspace_detail_rootfs_install_failed)) },
-            text = { Text(displayMessage) },
+            text = { Text(stringResource(R.string.workspace_detail_rootfs_install_failed)) },
             confirmButton = {
                 TextButton(onClick = vm::dismissInstallError) {
                     Text(stringResource(R.string.common_confirm))
@@ -342,14 +339,14 @@ private data class WorkspaceImagePreview(
 
 @Composable
 private fun WorkspaceBasicPage(
-    workspace: WorkspaceEntity?,
+    workspace: WorkspaceUiModel?,
     installProgress: RootfsInstallProgress?,
     onInstallRootfs: () -> Unit,
     onToolApprovalChange: (String, Boolean) -> Unit,
 ) {
     val shellStatus = workspace?.shellStatus
-    val installing = installProgress != null || shellStatus == WorkspaceShellStatus.INSTALLING.name
-    val rootfsReady = shellStatus == WorkspaceShellStatus.READY.name
+    val installing = installProgress != null || shellStatus == WorkspaceShellStatus.INSTALLING
+    val rootfsReady = shellStatus == WorkspaceShellStatus.READY
     val installButtonText = when {
         installing -> stringResource(R.string.workspace_detail_installing)
         rootfsReady -> stringResource(R.string.workspace_detail_reinstall_rootfs)
@@ -433,10 +430,10 @@ private fun WorkspaceBasicPage(
 
 @Composable
 private fun WorkspaceToolApprovalCard(
-    workspace: WorkspaceEntity?,
+    workspace: WorkspaceUiModel?,
     onToolApprovalChange: (String, Boolean) -> Unit,
 ) {
-    val overrides = workspace?.toolApprovalOverrides().orEmpty()
+    val overrides = workspace?.toolApprovalOverrides.orEmpty()
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -570,7 +567,7 @@ private fun RootfsProgress(progress: RootfsInstallProgress) {
 
 @Composable
 private fun InstallRootfsDialog(
-    workspace: WorkspaceEntity,
+    workspace: WorkspaceUiModel,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
@@ -863,24 +860,23 @@ private fun ErrorCard(message: String) {
 }
 
 @Composable
-private fun workspaceErrorMessage(error: WorkspaceOperationError): String {
-    val fallback = when (error.operation) {
+private fun workspaceErrorMessage(error: WorkspaceOperation): String {
+    val fallback = when (error) {
         WorkspaceOperation.LOAD_WORKSPACE -> R.string.workspace_detail_load_failed
         WorkspaceOperation.LOAD_FILES -> R.string.workspace_detail_load_files_failed
         WorkspaceOperation.IMPORT -> R.string.workspace_detail_import_failed
         WorkspaceOperation.EXPORT -> R.string.workspace_detail_export_failed
         WorkspaceOperation.DELETE -> R.string.workspace_detail_delete_failed
     }
-    return error.detail?.takeIf(String::isNotBlank) ?: stringResource(fallback)
+    return stringResource(fallback)
 }
 
 @Composable
-internal fun String.toShellStatusLabel(): String = when (this) {
-    WorkspaceShellStatus.DISABLED.name -> stringResource(R.string.workspace_detail_shell_disabled)
-    WorkspaceShellStatus.INSTALLING.name -> stringResource(R.string.workspace_detail_shell_installing)
-    WorkspaceShellStatus.READY.name -> stringResource(R.string.workspace_detail_shell_ready)
-    WorkspaceShellStatus.BROKEN.name -> stringResource(R.string.workspace_detail_shell_broken)
-    else -> lowercase()
+internal fun WorkspaceShellStatus.toShellStatusLabel(): String = when (this) {
+    WorkspaceShellStatus.DISABLED -> stringResource(R.string.workspace_detail_shell_disabled)
+    WorkspaceShellStatus.INSTALLING -> stringResource(R.string.workspace_detail_shell_installing)
+    WorkspaceShellStatus.READY -> stringResource(R.string.workspace_detail_shell_ready)
+    WorkspaceShellStatus.BROKEN -> stringResource(R.string.workspace_detail_shell_broken)
 }
 
 private const val DEFAULT_ROOTFS_URL =

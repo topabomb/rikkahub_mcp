@@ -44,7 +44,11 @@ class StreamingTransformScopeTest {
     private class CountingStreamingTransformer : OutputMessageTransformer, StreamingMessageTransformer {
         val callsPerMessageId = ConcurrentHashMap<Uuid, AtomicLong>()
 
-        override suspend fun transformStreaming(ctx: TransformerContext, message: UIMessage): UIMessage {
+        override suspend fun transformStreaming(
+            ctx: TransformerContext,
+            message: UIMessage,
+            previousProjection: UIMessage?,
+        ): UIMessage {
             callsPerMessageId.getOrPut(message.id) { AtomicLong() }.incrementAndGet()
             return message
         }

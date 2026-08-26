@@ -332,6 +332,10 @@ class ConversationApplicationService(
                 messageNodes = tree.masterNodes,
                 customSystemPrompt = current.header.customSystemPrompt,
                 modeInjectionIds = current.header.modeInjectionIds,
+                // Fork inherits the master's organization (folderId) and Workspace context
+                // (workspaceCwd) from the committed header, not from renderNodes or page state.
+                folderId = current.header.folderId,
+                workspaceCwd = current.header.workspaceCwd,
             )
             val children = tree.children.map { child ->
                 child.copy(

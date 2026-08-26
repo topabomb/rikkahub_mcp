@@ -6,7 +6,7 @@
 
 ---
 
-## 0.0.18（versionCode 18）— 2026-08-23 ~ 2026-08-25
+## 0.0.18（versionCode 18）— 2026-08-23 ~ 2026-08-26
 
 ### 新增
 
@@ -16,6 +16,8 @@
 - `AttachmentReferenceLookup` 统一直接附件与子助手交付物索引；执行解析和 UI 缩略图共用同一 `attachment:<uuid>` 语义
 - `ConversationTitleCoordinator` 统一本地标题、模型生成、手动修改、去重、有限重试与 expected-title CAS
 - 单写、写放大、结构共享、FTS 增量、恢复、并发删除、Artifact 引用与审批继续等架构契约及回归测试
+- Workspace 支持由应用统一管理的多终端会话；PRoot 升级到双 ABI `v5.1.107.92`，补齐来源、产物校验和设备验证记录
+- Skills 支持安全解析以及本地文件、ZIP 和 GitHub 导入；整个 Skill 目录原子发布，二进制支持文件保持原样
 
 ### 变更
 
@@ -25,6 +27,8 @@
 - UI/ViewModel 改为依赖 application/query ports、UiModel 与 `ConversationTurnPresentation`；不直接持有 Runtime Job、DAO、ArtifactStore 或 payload 层
 - Artifact 未发布资源使用明确 owner/lease 交接，checkpoint 成功后发布，失败或取消精确回滚；Settings 图片恢复只按持久化 root 定点接管，不扫描目录
 - 删除旧 `AutoTitleGeneration`、旧附件预览扫描和两份无调用的本地 MCP transport 草稿；新增当前权威架构参考文档
+- Provider 设置、连接测试、余额查询以及 Workspace、备份恢复操作收敛到 typed application service；UI 不再直连持久化或运行时 owner
+- 同步 MiMo 推理参数、OpenRouter 会话标识、空工具 schema、DeepSeek V4 Flash Vision 识别、上下文消息限制输入及新版模型图标
 
 ### 修复
 
@@ -35,6 +39,7 @@
 - 修复 delta 节点下标、历史 reasoning 收口、Target assistant 槽归属和已终态消息被误判中断等一致性问题
 - 修复异步或强制模型标题覆盖后续手动标题，以及同值 CAS 成功被误判为失败
 - 修复附件缩略图重复扫描历史消息、子助手交付物与执行解析语义不一致的问题
+- 修复 fork 历史上下文继承、流式 ThinkTag 跨工具串扰、输入法下发送/录音操作不可达、通知栏图标及恢复确认与失败清理问题
 
 ---
 

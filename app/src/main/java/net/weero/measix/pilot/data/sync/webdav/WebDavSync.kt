@@ -8,6 +8,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.data.datastore.WebDavConfig
 import net.weero.measix.pilot.data.sync.BackupArchiveService
+import net.weero.measix.pilot.data.sync.BackupRestoreInProgressException
+import net.weero.measix.pilot.data.sync.BackupRestorePendingRestartException
 import net.weero.measix.pilot.data.sync.BackupSelection
 import net.weero.measix.pilot.utils.fileSizeToString
 import java.io.File
@@ -108,6 +110,10 @@ class WebDavSync(
             Log.i(TAG, "restoreFromLocalFile: Restore completed successfully")
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (conflict: BackupRestoreInProgressException) {
+            throw conflict
+        } catch (conflict: BackupRestorePendingRestartException) {
+            throw conflict
         } catch (error: Exception) {
             Log.e(TAG, "restoreFromLocalFile: Failed to restore from local file", error)
             throw IllegalStateException("Restore failed: ${error.message}", error)

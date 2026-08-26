@@ -1,18 +1,19 @@
-﻿package net.weero.measix.pilot.ui.components.ai.completion
+package net.weero.measix.pilot.ui.components.ai.completion
 
 import androidx.compose.ui.text.TextRange
 import kotlinx.coroutines.CancellationException
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.Folder01
-import net.weero.measix.pilot.data.repository.WorkspaceRepository
+import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
+import net.weero.measix.pilot.service.workspace.WorkspaceTextPreviewResult
 import me.rerere.workspace.WorkspaceFileEntry
 import me.rerere.workspace.WorkspaceStorageArea
 import kotlin.math.max
 
 class WorkspaceCompletionProvider(
     private val workspaceId: String?,
-    private val repository: WorkspaceRepository,
+    private val queryService: WorkspaceQueryService,
     private val currentCwd: String? = null,
 ) : ChatCompletionProvider {
     override val id: String = "workspace_files"
@@ -80,8 +81,8 @@ class WorkspaceCompletionProvider(
             visitedDirs++
             val ignoreMatcher = matcherForDirectory(path, matcherCache)
             val entries = try {
-                repository.listFiles(
-                    id = workspaceId ?: return emptyList(),
+                queryService.listFiles(
+                    workspaceId = workspaceId ?: return emptyList(),
                     area = WorkspaceStorageArea.FILES,
                     path = path,
                 )
@@ -132,12 +133,11 @@ class WorkspaceCompletionProvider(
     private suspend fun readGitignore(directory: String): String? {
         val id = workspaceId ?: return null
         val path = if (directory.isBlank()) ".gitignore" else "$directory/.gitignore"
-        return try {
-            repository.readText(id, path)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            null
+        return when (val result = queryService.readTextForPreview(id, WorkspaceStorageArea.FILES, path)) {
+            is WorkspaceTextPreviewResult.Success -> result.content
+            is WorkspaceTextPreviewResult.TooLarge,
+            WorkspaceTextPreviewResult.Unavailable,
+            -> null
         }
     }
 

@@ -69,9 +69,9 @@ import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.datastore.findProvider
-import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
 import net.weero.measix.pilot.data.model.Assistant
-import net.weero.measix.pilot.data.repository.WorkspaceRepository
+import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
+import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
 import net.weero.measix.pilot.ui.components.ui.ExtensionSelector
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionCamera
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionManager
@@ -110,8 +110,8 @@ internal fun FilesPicker(
     val settings = LocalSettings.current
     val provider = settings.getChatModel(assistant)?.findProvider(providers = settings.providers)
     val navController = LocalNavController.current
-    val workspaceRepository: WorkspaceRepository = koinInject()
-    val workspaces by workspaceRepository.listFlow().collectAsState(initial = emptyList())
+    val workspaceQueryService: WorkspaceQueryService = koinInject()
+    val workspaces by workspaceQueryService.observeWorkspaces().collectAsState(initial = emptyList())
 
     Column(
         modifier = Modifier
@@ -244,7 +244,7 @@ internal fun FilesPicker(
         val boundWorkspace = remember(workspaces, assistant.workspaceId) {
             workspaces.find { it.id == assistant.workspaceId?.toString() }
         }
-        if (boundWorkspace != null && boundWorkspace.shellStatus == WorkspaceShellStatus.READY.name) {
+        if (boundWorkspace != null && boundWorkspace.shellStatus == WorkspaceShellStatus.READY) {
             var showCwdSheet by remember { mutableStateOf(false) }
             TextButton(
                 onClick = { showCwdSheet = true },
@@ -304,7 +304,7 @@ internal fun FilesPicker(
 private fun WorkspacePickerListItem(
     assistant: Assistant,
     workspaceCwd: String?,
-    workspaces: List<WorkspaceEntity>,
+    workspaces: List<WorkspaceUiModel>,
     onUpdateAssistant: (Assistant) -> Unit,
     onUpdateWorkspaceCwd: (String?) -> Unit,
     onNavigateToDetail: (String) -> Unit,
@@ -341,7 +341,7 @@ private fun WorkspacePickerListItem(
                             contentDescription = stringResource(R.string.workspace_detail),
                         )
                     }
-                    if (boundWorkspace.shellStatus != WorkspaceShellStatus.DISABLED.name) {
+                    if (boundWorkspace.shellStatus != WorkspaceShellStatus.DISABLED) {
                         IconButton(onClick = { onNavigateToTerminal(boundWorkspace.id) }) {
                             Icon(
                                 imageVector = HugeIcons.ComputerTerminal01,

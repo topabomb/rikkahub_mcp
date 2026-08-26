@@ -357,6 +357,19 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
+    /**
+     * DeepSeek V4 Flash Vision Exp: the image-input variant's published model id.
+     *
+     * 专用规则使用更多 token（含 vision/exp），因此 [resolveModels] 的最高
+     * matchScore 会自然高于通用 V4 Flash 规则，无需依赖列表顺序。通用 V4 Flash 保持
+     * text-only，不为一个型号把整个 family 误标为 vision。
+     */
+    private val DEEPSEEK_V4_FLASH_VISION_EXP = defineModel {
+        tokens("deepseek", "v", "4", "flash", "vision", "exp")
+        visionInput()
+        toolReasoningAbility()
+    }
+
     private val DEEPSEEK_V4_PRO = defineModel {
         tokens("deepseek", "v", "4", "pro")
         toolReasoningAbility()
@@ -653,6 +666,7 @@ object ModelRegistry {
         DEEPSEEK_R1_MODEL,
         DEEPSEEK_REASONER,
         DEEPSEEK_V4_FLASH,
+        DEEPSEEK_V4_FLASH_VISION_EXP,
         DEEPSEEK_V4_PRO,
         DEEPSEEK_V3_1,
         DEEPSEEK_V3_2,

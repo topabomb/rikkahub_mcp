@@ -40,7 +40,7 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowTurnBackward
 import me.rerere.hugeicons.stroke.Folder01
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.repository.WorkspaceRepository
+import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import me.rerere.workspace.WorkspaceFileEntry
 import me.rerere.workspace.WorkspaceStorageArea
 import org.koin.compose.koinInject
@@ -52,7 +52,7 @@ fun WorkspaceCwdPickerSheet(
     onSelectCwd: (String?) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val workspaceRepository: WorkspaceRepository = koinInject()
+    val workspaceQueryService: WorkspaceQueryService = koinInject()
 
     var browsePath by remember { mutableStateOf(fromAbsolutePath(currentCwd)) }
     var entries by remember { mutableStateOf<List<WorkspaceFileEntry>>(emptyList()) }
@@ -62,7 +62,7 @@ fun WorkspaceCwdPickerSheet(
         loading = true
         try {
             val result = withContext(Dispatchers.IO) {
-                workspaceRepository.listFiles(workspaceId, WorkspaceStorageArea.FILES, browsePath)
+                workspaceQueryService.listFiles(workspaceId, WorkspaceStorageArea.FILES, browsePath)
             }
             entries = result.sortedWith(compareByDescending<WorkspaceFileEntry> { it.isDirectory }.thenBy { it.name })
             loading = false

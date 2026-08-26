@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.extensions.skills
+package net.weero.measix.pilot.ui.pages.extensions.skills
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -59,6 +59,7 @@ import me.rerere.hugeicons.stroke.FileImport
 import me.rerere.hugeicons.stroke.MoreVertical
 import me.rerere.hugeicons.stroke.Puzzle
 import net.weero.measix.pilot.data.files.SkillFrontmatterParser
+import net.weero.measix.pilot.data.files.SkillParseResult
 import net.weero.measix.pilot.data.files.SkillMetadata
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.ui.components.nav.BackButton
@@ -84,15 +85,27 @@ fun SkillsPage() {
     val importSuccessFmt = stringResource(R.string.skills_page_import_success)
     val importFailedFmt = stringResource(R.string.skills_page_import_failed)
     val saveFailedText = stringResource(R.string.skills_page_save_failed)
+    val importFailureMessages = mapOf(
+        SkillImportFailure.READ_SOURCE to stringResource(R.string.skills_page_import_read_failed),
+        SkillImportFailure.INVALID_GITHUB_URL to stringResource(R.string.skills_page_import_invalid_github_url),
+        SkillImportFailure.GITHUB_LIST_FAILED to stringResource(R.string.skills_page_import_github_list_failed),
+        SkillImportFailure.SKILL_FILE_MISSING to stringResource(R.string.skills_page_import_skill_file_missing),
+        SkillImportFailure.DOWNLOAD_FAILED to stringResource(R.string.skills_page_import_download_failed),
+        SkillImportFailure.INVALID_SKILL to stringResource(R.string.skills_page_import_invalid_skill),
+        SkillImportFailure.SAVE_FAILED to stringResource(R.string.skills_page_save_failed),
+        SkillImportFailure.RESOURCE_LIMIT to stringResource(R.string.skills_page_import_resource_limit),
+        SkillImportFailure.UNKNOWN to stringResource(R.string.skills_page_import_unknown_failed),
+    )
     val fileImportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         uri ?: return@rememberLauncherForActivityResult
-        vm.importSkillFromFile(context, uri) { success, message ->
-            if (success) {
-                toaster.show(importSuccessFmt.format(message))
-            } else {
-                toaster.show(importFailedFmt.format(message))
+        vm.importSkillFromFile(context, uri) { outcome ->
+            when (outcome) {
+                is SkillImportOutcome.Success -> toaster.show(importSuccessFmt.format(outcome.names))
+                is SkillImportOutcome.Failure -> {
+                    toaster.show(importFailedFmt.format(importFailureMessages.getValue(outcome.reason)))
+                }
             }
         }
     }
@@ -153,7 +166,7 @@ fun SkillsPage() {
                 }
             }
 
-            items(skills, key = { it.skillDir.absolutePath }) { skill ->
+            items(skills, key = SkillMetadata::name) { skill ->
                 SkillCard(
                     skill = skill,
                     onClick = { navController.navigate(Screen.SkillDetail(skill.name)) },
@@ -206,12 +219,13 @@ fun SkillsPage() {
         ImportSkillDialog(
             onDismiss = { showImportDialog = false },
             onConfirm = { repoUrl ->
-                vm.importSkillFromGitHub(repoUrl) { success, message ->
+                vm.importSkillFromGitHub(repoUrl) { outcome ->
                     showImportDialog = false
-                    if (success) {
-                        toaster.show(importSuccessFmt.format(message))
-                    } else {
-                        toaster.show(importFailedFmt.format(message))
+                    when (outcome) {
+                        is SkillImportOutcome.Success -> toaster.show(importSuccessFmt.format(outcome.names))
+                        is SkillImportOutcome.Failure -> {
+                            toaster.show(importFailedFmt.format(importFailureMessages.getValue(outcome.reason)))
+                        }
                     }
                 }
             },
@@ -377,8 +391,14 @@ private fun AddSkillDialog(
 ) {
     var content by rememberSaveable { mutableStateOf("") }
 
-    val name = remember(content) {
-        SkillFrontmatterParser.parse(content)["name"]?.trim() ?: ""
+    val parsed = remember(content) { SkillFrontmatterParser.parseDocument(content) }
+    val name = (parsed as? SkillParseResult.Success)?.document?.frontmatter?.name.orEmpty()
+    val invalidFrontmatter = stringResource(R.string.skills_page_invalid_frontmatter)
+    val missingFrontmatter = stringResource(R.string.skills_page_missing_frontmatter)
+    val parseError = when (parsed) {
+        is SkillParseResult.Error -> invalidFrontmatter
+        is SkillParseResult.NoFrontmatter -> if (content.isBlank()) null else missingFrontmatter
+        is SkillParseResult.Success -> null
     }
     val nameError = content.isNotBlank() && name.isBlank()
 
@@ -392,13 +412,13 @@ private fun AddSkillDialog(
                 label = { Text(stringResource(R.string.skills_page_skill_content_label)) },
                 placeholder = {
                     Text(
-                        "---\nname: my-skill\ndescription: \"...\"\n---\n\n指令内容...",
+                        stringResource(R.string.skills_page_content_placeholder),
                         fontFamily = FontFamily.Monospace,
                     )
                 },
                 supportingText = {
                     if (nameError) Text(
-                        stringResource(R.string.skills_page_name_error),
+                        parseError ?: stringResource(R.string.skills_page_name_error),
                         color = MaterialTheme.colorScheme.error
                     )
                     else if (name.isNotBlank()) Text(stringResource(R.string.skills_page_skill_name, name))

@@ -60,6 +60,9 @@ import net.weero.measix.pilot.data.sync.webdav.WebDavBackupItem
 import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.pages.backup.BackupVM
+import net.weero.measix.pilot.ui.pages.backup.RestoreConfirmDialog
+import net.weero.measix.pilot.service.BackupRestoreOperationInProgressException
+import net.weero.measix.pilot.service.BackupRestorePendingRestartConflictException
 import net.weero.measix.pilot.utils.UiState
 import net.weero.measix.pilot.utils.fileSizeToString
 import net.weero.measix.pilot.utils.onError
@@ -81,6 +84,7 @@ fun WebDavTab(
     var showBackupFiles by remember { mutableStateOf(false) }
     var restoringItemId by remember { mutableStateOf<String?>(null) }
     var isBackingUp by remember { mutableStateOf(false) }
+    var pendingWebDavRestore by remember { mutableStateOf<WebDavBackupItem?>(null) }
     val connectionSuccess = stringResource(R.string.backup_page_connection_success)
     val connectionFailedFmt = stringResource(R.string.backup_page_connection_failed)
     val backupSuccess = stringResource(R.string.backup_page_backup_success)
@@ -89,6 +93,8 @@ fun WebDavTab(
     val deleteFailedFmt = stringResource(R.string.backup_page_delete_failed)
     val restoreSuccess = stringResource(R.string.backup_page_restore_success)
     val restoreFailedFmt = stringResource(R.string.backup_page_restore_failed)
+    val restoreInProgress = stringResource(R.string.backup_page_restore_in_progress)
+    val restorePendingRestart = stringResource(R.string.backup_page_restore_pending_restart)
 
     fun updateWebDavConfig(transform: (WebDavConfig) -> WebDavConfig) {
         vm.updateSettings { current ->
@@ -347,27 +353,8 @@ fun WebDavTab(
                                     }
                                 },
                                 onRestore = { restoreItem ->
-                                    scope.launch {
-                                        restoringItemId = restoreItem.displayName
-                                        try {
-                                            vm.restore(item = restoreItem)
-                                            toaster.show(
-                                                restoreSuccess,
-                                                type = ToastType.Success
-                                            )
-                                            showBackupFiles = false
-                                            onShowRestartDialog()
-                                        } catch (cancelled: CancellationException) {
-                                            throw cancelled
-                                        } catch (error: Exception) {
-                                            toaster.show(
-                                                restoreFailedFmt.format(error.message ?: ""),
-                                                type = ToastType.Error
-                                            )
-                                        } finally {
-                                            restoringItemId = null
-                                        }
-                                    }
+                                    // Confirmation is required before download/staging
+                                    pendingWebDavRestore = restoreItem
                                 },
                             )
                         }
@@ -392,6 +379,45 @@ fun WebDavTab(
                 }
             }
         }
+    }
+
+    pendingWebDavRestore?.let { pendingItem ->
+        RestoreConfirmDialog(
+            onConfirm = {
+                val restoreItem = pendingWebDavRestore
+                pendingWebDavRestore = null
+                if (restoreItem != null) {
+                    scope.launch {
+                        restoringItemId = restoreItem.displayName
+                        try {
+                            vm.restore(item = restoreItem)
+                            toaster.show(
+                                restoreSuccess,
+                                type = ToastType.Success
+                            )
+                            showBackupFiles = false
+                            onShowRestartDialog()
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
+                            toaster.show(
+                                when (error) {
+                                    is BackupRestoreOperationInProgressException -> restoreInProgress
+                                    is BackupRestorePendingRestartConflictException -> restorePendingRestart
+                                    else -> restoreFailedFmt.format(error.message ?: "")
+                                },
+                                type = ToastType.Error
+                            )
+                        } finally {
+                            restoringItemId = null
+                        }
+                    }
+                }
+            },
+            onDismiss = {
+                pendingWebDavRestore = null
+            },
+        )
     }
 }
 

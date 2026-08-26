@@ -982,6 +982,7 @@ class DelegationCoordinator(
                 conversationModeInjectionIds = target.modeInjectionIds,
                 workspaceCwd = snapshot.header.workspaceCwd,
                 maxSteps = 256,
+                providerSessionId = childConversationId.toString(),
                 onCheckpoint = { checkpoint ->
                     // checkpoint→CommitCheckpoint（delta + turn/tool 事实同事务落库）
                     lastMessages = checkpoint.messages

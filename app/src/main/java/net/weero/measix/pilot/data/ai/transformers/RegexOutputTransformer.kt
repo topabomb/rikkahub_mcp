@@ -10,11 +10,13 @@ object RegexOutputTransformer : OutputMessageTransformer, StreamingMessageTransf
     override suspend fun transformStreaming(
         ctx: TransformerContext,
         message: UIMessage,
+        previousProjection: UIMessage?,
     ): UIMessage = applyRegexes(ctx, message)
 
     override suspend fun onStreamingFinish(
         ctx: TransformerContext,
         message: UIMessage,
+        previousProjection: UIMessage?,
     ): UIMessage = applyRegexes(ctx, message)
 
     private fun applyRegexes(ctx: TransformerContext, message: UIMessage): UIMessage {

@@ -1,10 +1,12 @@
 package net.weero.measix.pilot.ui.components.ai
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -23,8 +25,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
@@ -36,7 +38,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
@@ -69,6 +70,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
@@ -153,16 +155,11 @@ fun ChatInput(
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
 
-    // 键盘弹出时让底部两角变直角，贴合 IME
-    val imeVisible = WindowInsets.isImeVisible
-    val containerShape = if (imeVisible) {
-        MaterialTheme.shapes.largeIncreased.copy(
-            bottomStart = CornerSize(0.dp),
-            bottomEnd = CornerSize(0.dp),
-        )
-    } else {
-        MaterialTheme.shapes.largeIncreased
-    }
+    // Use imeAnimationTarget to drive the target state instead of the
+    // instantaneous isImeVisible value, avoiding two competing layout states.
+    val density = LocalDensity.current
+    val imeTargetVisible = WindowInsets.imeAnimationTarget.getBottom(density) > 0
+    val containerShape = MaterialTheme.shapes.largeIncreased
 
     fun sendMessage() {
         focusManager.clearFocus(force = true)
@@ -186,6 +183,28 @@ fun ChatInput(
     val asrPermission = rememberPermissionState(PermissionRecordAudio)
     PermissionManager(permissionState = asrPermission)
     var asrBaseText by remember { mutableStateOf("") }
+    val onAsrClick = {
+        when (asrState.status) {
+            ASRStatus.Listening -> asr.stop()
+            ASRStatus.Idle, ASRStatus.Error -> {
+                if (!asrPermission.allRequiredPermissionsGranted) {
+                    asrPermission.requestPermissions()
+                } else {
+                    asrBaseText = state.textContent.text.toString()
+                    asr.start { transcript ->
+                        val spacer = if (asrBaseText.isBlank() || transcript.isBlank()) "" else " "
+                        state.setMessageText(asrBaseText + spacer + transcript)
+                    }
+                }
+            }
+
+            ASRStatus.Connecting, ASRStatus.Stopping -> Unit
+        }
+    }
+    val actionVisibility = chatInputActionVisibility(
+        imeTargetVisible = imeTargetVisible,
+        isAsrRecording = asrState.isRecording,
+    )
     LaunchedEffect(asrState.status) {
         when (asrState.status) {
             ASRStatus.Listening -> {
@@ -215,7 +234,7 @@ fun ChatInput(
                 .imePadding()
                 .navigationBarsPadding()
                 .padding(horizontal = 8.dp)
-                .padding(bottom = if (imeVisible) 0.dp else 4.dp),
+                .padding(bottom = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Surface(
@@ -323,25 +342,7 @@ fun ChatInput(
                         if (asrState.isAvailable || asrState.isRecording) {
                             AsrButton(
                                 state = asrState,
-                                onClick = {
-                                    when (asrState.status) {
-                                        ASRStatus.Listening -> asr.stop()
-                                        ASRStatus.Idle, ASRStatus.Error -> {
-                                            if (!asrPermission.allRequiredPermissionsGranted) {
-                                                asrPermission.requestPermissions()
-                                            } else {
-                                                asrBaseText = state.textContent.text.toString()
-                                                asr.start { transcript ->
-                                                    val spacer =
-                                                        if (asrBaseText.isBlank() || transcript.isBlank()) "" else " "
-                                                    state.setMessageText(asrBaseText + spacer + transcript)
-                                                }
-                                            }
-                                        }
-
-                                        ASRStatus.Connecting, ASRStatus.Stopping -> {}
-                                    }
-                                }
+                                onClick = onAsrClick,
                             )
                         }
 
@@ -350,58 +351,32 @@ fun ChatInput(
                             enter = fadeIn() + scaleIn(),
                             exit = fadeOut() + scaleOut(),
                         ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .size(30.dp)
-                                    .testTag("chat_send_button")
-                                    .clip(CircleShape)
-                                    .combinedClickable(
-                                        enabled = loading || !state.isEmpty(),
-                                        onClick = {
-                                            sendMessage()
-                                        }, onLongClick = {
-                                            sendMessageWithoutAnswer()
-                                        }
-                                    )
-                            ) {
-                                val containerColor = when {
-                                    loading -> MaterialTheme.colorScheme.errorContainer
-                                    state.isEmpty() -> MaterialTheme.colorScheme.surfaceContainerHigh
-                                    else -> MaterialTheme.colorScheme.primary
-                                }
-                                val contentColor = when {
-                                    loading -> MaterialTheme.colorScheme.onErrorContainer
-                                    state.isEmpty() -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                    else -> MaterialTheme.colorScheme.onPrimary
-                                }
-                                Surface(
-                                    modifier = Modifier.fillMaxSize(),
-                                    shape = CircleShape,
-                                    color = containerColor,
-                                    content = {})
-                                if (loading) {
-                                    KeepScreenOn()
-                                    Icon(
-                                        imageVector = HugeIcons.Cancel01,
-                                        contentDescription = stringResource(R.string.stop),
-                                        tint = contentColor,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                } else {
-                                    Icon(
-                                        imageVector = HugeIcons.ArrowUp02,
-                                        contentDescription = stringResource(R.string.send),
-                                        tint = contentColor,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
+                            SendButton(
+                                loading = loading,
+                                empty = state.isEmpty(),
+                                onClick = ::sendMessage,
+                                onLongClick = ::sendMessageWithoutAnswer,
+                            )
                         }
                         }
                     }
 
-                    if (useCompactHeightLayout && state.messageContent.isEmpty()) {
+                    val trailingSendButton: @Composable () -> Unit = {
+                        when {
+                            actionVisibility.showTrailingAsr -> AsrButton(
+                                state = asrState,
+                                onClick = onAsrClick,
+                            )
+                            actionVisibility.showTrailingSend -> SendButton(
+                                loading = loading,
+                                empty = state.isEmpty(),
+                                onClick = ::sendMessage,
+                                onLongClick = ::sendMessageWithoutAnswer,
+                            )
+                        }
+                    }
+
+                    if (useCompactHeightLayout && state.messageContent.isEmpty() && !imeTargetVisible) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
@@ -415,6 +390,7 @@ fun ChatInput(
                                 onSendMessage = { sendMessage() },
                                 modifier = Modifier.weight(1f),
                                 maxHeightInLines = 2,
+                                trailingContent = trailingSendButton,
                             )
                             actionRow(Modifier.fillMaxWidth(0.42f))
                         }
@@ -425,12 +401,70 @@ fun ChatInput(
                             assistant = assistant,
                             completionProviders = completionProviders,
                             onSendMessage = { sendMessage() },
+                            trailingContent = trailingSendButton,
                         )
-                        actionRow(Modifier.fillMaxWidth())
+                        AnimatedVisibility(
+                            visible = actionVisibility.showActionRow,
+                            enter = EnterTransition.None,
+                            exit = shrinkVertically() + fadeOut(),
+                        ) {
+                            actionRow(Modifier.fillMaxWidth())
+                        }
                     }
                 }
             }
 
+        }
+    }
+}
+
+internal data class ChatInputActionVisibility(
+    val showActionRow: Boolean,
+    val showTrailingSend: Boolean,
+    val showTrailingAsr: Boolean,
+)
+
+internal fun chatInputActionVisibility(
+    imeTargetVisible: Boolean,
+    isAsrRecording: Boolean,
+): ChatInputActionVisibility = ChatInputActionVisibility(
+    showActionRow = !imeTargetVisible,
+    showTrailingSend = imeTargetVisible && !isAsrRecording,
+    showTrailingAsr = imeTargetVisible && isAsrRecording,
+)
+
+@Composable
+private fun SendButton(
+    loading: Boolean,
+    empty: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    val containerColor = when {
+        loading -> MaterialTheme.colorScheme.errorContainer
+        empty -> MaterialTheme.colorScheme.surfaceContainerHigh
+        else -> MaterialTheme.colorScheme.primary
+    }
+    val contentColor = when {
+        loading -> MaterialTheme.colorScheme.onErrorContainer
+        empty -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+        else -> MaterialTheme.colorScheme.onPrimary
+    }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier.size(30.dp).testTag("chat_send_button").clip(CircleShape)
+            .combinedClickable(
+                enabled = loading || !empty,
+                onClick = onClick,
+                onLongClick = onLongClick,
+            ),
+    ) {
+        Surface(Modifier.fillMaxSize(), shape = CircleShape, color = containerColor, content = {})
+        if (loading) {
+            KeepScreenOn()
+            Icon(HugeIcons.Cancel01, stringResource(R.string.stop), tint = contentColor, modifier = Modifier.size(18.dp))
+        } else {
+            Icon(HugeIcons.ArrowUp02, stringResource(R.string.send), tint = contentColor, modifier = Modifier.size(18.dp))
         }
     }
 }
@@ -464,6 +498,7 @@ private fun TextInputRow(
     onSendMessage: () -> Unit,
     modifier: Modifier = Modifier,
     maxHeightInLines: Int = 5,
+    trailingContent: @Composable () -> Unit = {},
 ) {
     val settings = LocalSettings.current
     val toaster = LocalToaster.current
@@ -634,13 +669,18 @@ private fun TextInputRow(
                 unfocusedContainerColor = Color.Transparent,
             ),
             trailingIcon = {
-                if (isFocused) {
-                    IconButton(
-                        onClick = {
-                            isFullScreen = !isFullScreen
-                        }) {
-                        Icon(HugeIcons.FullScreen, null)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    if (isFocused) {
+                        IconButton(
+                            onClick = { isFullScreen = !isFullScreen },
+                        ) {
+                            Icon(HugeIcons.FullScreen, null)
+                        }
                     }
+                    trailingContent()
                 }
             },
             leadingIcon = if (quickMessages.isNotEmpty()) {

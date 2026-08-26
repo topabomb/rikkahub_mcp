@@ -70,6 +70,15 @@ data class TextGenerationParams(
     val reasoningLevel: ReasoningLevel = ReasoningLevel.OFF,
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBody: List<CustomBody> = emptyList(),
+    /**
+     * Request-scoped Provider session identifier for sticky routing / caching.
+     *
+     * Derived from the conversation UUID by the turn owner; never enters Settings, Room, backup
+     * or is generated from titles/user text. Only OpenRouter Chat Completions and Responses
+     * builders write this as a top-level `session_id`; all other Providers ignore it.
+     * Max 256 characters per OpenRouter contract.
+     */
+    val providerSessionId: String? = null,
 )
 
 @Serializable

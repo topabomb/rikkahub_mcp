@@ -4,3 +4,6 @@ app/src/release/generated/baselineProfiles/*.txt text eol=lf
 # highlight 模块 golden fixture：源码和期望 token 文件统一使用 LF，避免跨平台测试失败
 highlight/src/test/resources/hljs/**/*.txt text eol=lf
 highlight/src/test/resources/hljs/**/*.tokens text eol=lf
+
+# POSIX rebuild scripts must keep an executable shebang and shell syntax on Linux/WSL.
+workspace/tools/*.sh text eol=lf
