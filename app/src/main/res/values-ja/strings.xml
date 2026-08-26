@@ -1537,5 +1537,12 @@
   <string name="workspace_terminal_command_failed">ターミナル操作に失敗しました</string>
   <string name="setting_provider_page_mutation_failed">プロバイダー設定の操作に失敗しました</string>
   <string name="skills_page_import_resource_limit">Skill パッケージが安全なインポート上限を超えています</string>
+  <string name="managed_configuration_active">管理対象の設定が有効です</string>
+  <string name="managed_configuration_degraded">管理対象の設定は期限切れです。最後に検証された設定を引き続き使用します</string>
+  <string name="managed_configuration_blocked">管理対象の設定を利用できません: %1$s</string>
+  <string name="managed_configuration_locked">管理対象の設定によりこの変更はロックされています: %1$s</string>
+  <string name="managed_configuration_source_builtin">組み込み</string>
+  <string name="managed_configuration_source_local">ローカル</string>
+  <string name="managed_configuration_source_managed">管理対象</string>
 </resources>
 

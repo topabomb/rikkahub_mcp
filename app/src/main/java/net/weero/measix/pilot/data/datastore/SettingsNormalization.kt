@@ -1,6 +1,8 @@
 package net.weero.measix.pilot.data.datastore
 
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.search.SearchServiceOptions
+import kotlin.uuid.Uuid
 
 /**
  * 把 DataStore 中的持久化快照物化为应用实际消费的 Settings。
@@ -10,38 +12,17 @@ import me.rerere.ai.provider.ProviderSetting
  * 随后的 DataStore 回读值不一致。
  */
 internal fun Settings.materializeForRead(): Settings {
-    var materializedProviders = providers.ifEmpty { DEFAULT_PROVIDERS }.toMutableList()
-    DEFAULT_PROVIDERS.forEach { defaultProvider ->
-        if (materializedProviders.none { it.id == defaultProvider.id }) {
-            materializedProviders.add(defaultProvider.copyProvider())
-        }
-    }
-    materializedProviders = materializedProviders.map { provider ->
-        val defaultProvider = DEFAULT_PROVIDERS.find { it.id == provider.id }
-        if (defaultProvider != null) {
+    val materializedProviders = providers.mergeDefaults(DEFAULT_PROVIDERS, ProviderSetting::id) { provider ->
+        DEFAULT_PROVIDERS.find { it.id == provider.id }?.let { default ->
             provider.copyProvider(
-                builtIn = defaultProvider.builtIn,
-                description = defaultProvider.description,
-                shortDescription = defaultProvider.shortDescription,
+                builtIn = default.builtIn,
+                description = default.description,
+                shortDescription = default.shortDescription,
             )
-        } else {
-            provider
-        }
-    }.toMutableList()
-
-    val materializedAssistants = assistants.ifEmpty { DEFAULT_ASSISTANTS }.toMutableList()
-    DEFAULT_ASSISTANTS.forEach { defaultAssistant ->
-        if (materializedAssistants.none { it.id == defaultAssistant.id }) {
-            materializedAssistants.add(defaultAssistant.copy())
-        }
+        } ?: provider
     }
-
-    val materializedTtsProviders = ttsProviders.ifEmpty { DEFAULT_TTS_PROVIDERS }.toMutableList()
-    DEFAULT_TTS_PROVIDERS.forEach { defaultTtsProvider ->
-        if (materializedTtsProviders.none { provider -> provider.id == defaultTtsProvider.id }) {
-            materializedTtsProviders.add(defaultTtsProvider.copyProvider())
-        }
-    }
+    val materializedAssistants = assistants.mergeDefaults(DEFAULT_ASSISTANTS, { it.id }) { it.copy() }
+    val materializedTtsProviders = ttsProviders.mergeDefaults(DEFAULT_TTS_PROVIDERS, { it.id }) { it.copyProvider() }
 
     val withDefaults = copy(
         providers = materializedProviders,
@@ -83,7 +64,14 @@ internal fun Settings.materializeForRead(): Settings {
             ?.takeIf { id -> distinctAsrProviders.any { provider -> provider.id == id } }
             ?: distinctAsrProviders.firstOrNull()?.id,
         favoriteModels = withDefaults.favoriteModels.filter { it in modelIds },
+        searchServices = withDefaults.searchServices.ifEmpty { listOf(SearchServiceOptions.DEFAULT) }.distinctBy { it.id },
         modeInjections = withDefaults.modeInjections.distinctBy { it.id },
         quickMessages = withDefaults.quickMessages.distinctBy { it.id },
     )
 }
+
+private fun <T> List<T>.mergeDefaults(
+    defaults: List<T>,
+    idOf: (T) -> Uuid,
+    materialize: (T) -> T,
+): List<T> = (ifEmpty { defaults } + defaults).distinctBy(idOf).map(materialize)

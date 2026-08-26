@@ -46,7 +46,7 @@ internal fun buildTextToSpeechTool(
             Provide natural speech text without markdown.
         """.trimIndent().replace("\n", " "),
         systemPrompt = { _, _ ->
-            settingsStore.settingsFlow.value.getSelectedTTSProvider()
+            settingsStore.effectiveSettings.value.settings.getSelectedTTSProvider()
                 ?.let { ttsManager.getPromptGuidance(it) }
                 .orEmpty()
         },
@@ -62,7 +62,7 @@ internal fun buildTextToSpeechTool(
             )
         },
         execute = {
-            val sequentialEnabled = settingsStore.settingsFlow.value
+            val sequentialEnabled = settingsStore.effectiveSettings.value.settings
                 .displaySetting.ttsToolSequentialPlayback
             val text = it.jsonObject["text"]?.jsonPrimitive?.contentOrNull
                 ?.takeIf { value -> value.isNotBlank() }

@@ -2,6 +2,7 @@ package net.weero.measix.pilot.data.ai.transformers
 
 import io.pebbletemplates.pebble.PebbleEngine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.filterNot
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -19,7 +20,7 @@ class AssistantTemplateCacheInvalidator(
 ) {
     init {
         appScope.launch {
-            settingsStore.settingsFlow
+            settingsStore.effectiveSettings.map { it.settings }
                 .filterNot { it.init }
                 .map(Settings::assistantTemplateFingerprint)
                 .distinctUntilChanged()

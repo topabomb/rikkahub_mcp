@@ -142,7 +142,7 @@ class AssistantToolFactory(
         },
         systemPrompt = { _, _ ->
             // management 存在时负责完整 Catalog
-            val settings = settingsStore.settingsFlow.value
+            val settings = settingsStore.effectiveSettings.value.settings
             val caller = settings.assistants.find { it.id == callerAssistantId } ?: return@Tool ""
             val mode = if (enableDelegation) CatalogMode.BOTH else CatalogMode.MANAGEMENT_ONLY
             buildCatalogPrompt(
@@ -166,7 +166,7 @@ class AssistantToolFactory(
         val action = obj["action"]?.let { (it as? JsonPrimitive)?.content } ?: return errorResult("invalid_arguments")
 
         // 执行时从最新 Settings 重新校验 caller 仍存在、AssistantManagement 仍启用
-        val settings = settingsStore.settingsFlow.value
+        val settings = settingsStore.effectiveSettings.value.settings
         val caller = settings.assistants.find { it.id == callerAssistantId }
             ?: return errorResult("tool_not_permitted")
         if (LocalToolOption.AssistantManagement !in caller.localTools) {
@@ -308,7 +308,7 @@ class AssistantToolFactory(
             return errorResult("target_is_caller")
         }
 
-        val settings = settingsStore.settingsFlow.value
+        val settings = settingsStore.effectiveSettings.value.settings
         val caller = settings.assistants.find { it.id == callerAssistantId }
             ?: return errorResult("tool_not_permitted")
         if (LocalToolOption.AssistantManagement !in caller.localTools) {
@@ -482,7 +482,7 @@ class AssistantToolFactory(
             // management 同时开启时由 assistant_manage 负责，这里不重复注入
             if (enableManagement) return@Tool ""
 
-            val settings = settingsStore.settingsFlow.value
+            val settings = settingsStore.effectiveSettings.value.settings
             val caller = settings.assistants.find { it.id == callerAssistantId } ?: return@Tool ""
             buildCatalogPrompt(
                 caller = caller,

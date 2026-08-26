@@ -29,6 +29,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -47,6 +48,7 @@ import com.dokar.sonner.ToastType
 import kotlinx.coroutines.launch
 import me.rerere.common.android.Logging
 import net.weero.measix.pilot.data.model.Avatar
+import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.richtext.MarkdownBlock
@@ -56,6 +58,7 @@ import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.JetbrainsMono
 import org.koin.androidx.compose.koinViewModel
+import androidx.compose.ui.res.stringResource
 import kotlin.random.Random
 import kotlin.random.nextInt
 import kotlin.uuid.Uuid
@@ -64,6 +67,13 @@ import kotlin.uuid.Uuid
 fun DebugPage(vm: DebugVM = koinViewModel()) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val toaster = LocalToaster.current
+    val lockedMessage = stringResource(R.string.managed_configuration_locked, "{reason}")
+    LaunchedEffect(vm, toaster, lockedMessage) {
+        vm.lockedChanges.collect { error ->
+            toaster.show(lockedMessage.replace("{reason}", error.reason), type = ToastType.Error)
+        }
+    }
     Scaffold(
         topBar = {
             TopAppBar(

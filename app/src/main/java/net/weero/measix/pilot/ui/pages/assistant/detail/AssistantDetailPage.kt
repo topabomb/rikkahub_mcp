@@ -24,6 +24,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,11 +40,13 @@ import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.context.LocalNavController
+import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.hooks.heroAnimation
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.utils.plus
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
+import com.dokar.sonner.ToastType
 
 @Composable
 fun AssistantDetailPage(id: String) {
@@ -144,6 +147,17 @@ fun AssistantDetailPage(id: String) {
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+internal fun AssistantLockedChangeEffect(vm: AssistantDetailVM) {
+    val toaster = LocalToaster.current
+    val message = stringResource(R.string.managed_configuration_locked, "{reason}")
+    LaunchedEffect(vm) {
+        vm.lockedSettingsChanges.collect { error ->
+            toaster.show(message.replace("{reason}", error.reason), type = ToastType.Error)
         }
     }
 }

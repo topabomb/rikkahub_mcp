@@ -639,8 +639,8 @@ private fun ChatPageContent(
                                 )
                             }
                         },
-                        onUpdateSearchService = { index ->
-                            vm.updateSettings { it.copy(searchServiceSelected = index) }
+                        onUpdateSearchService = { serviceId ->
+                            vm.updateSettings { it.copy(selectedSearchServiceId = serviceId) }
                         },
                         onMoreClick = {
                             showFilesSheet = true

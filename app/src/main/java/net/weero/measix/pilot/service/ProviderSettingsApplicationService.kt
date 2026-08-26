@@ -2,6 +2,7 @@ package net.weero.measix.pilot.service
 
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.map
 import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderManager
@@ -31,7 +32,7 @@ class ProviderSettingsApplicationService(
         .expireAfterWrite(2, TimeUnit.MINUTES)
         .build()
 
-    fun observeProvider(id: Uuid) = settingsStore.settingsFlow.map { settings ->
+    fun observeProvider(id: Uuid) = settingsStore.effectiveSettings.map { it.settings }.map { settings ->
         settings.providers.firstOrNull { it.id == id }
     }
 
@@ -46,7 +47,7 @@ class ProviderSettingsApplicationService(
     }
 
     suspend fun deleteProvider(id: Uuid) {
-        settingsStore.updateAtomic { current ->
+        settingsStore.updateLocal { current ->
             current.copy(providers = current.providers.filterNot { it.id == id })
         }
     }
@@ -158,7 +159,7 @@ class ProviderSettingsApplicationService(
         .orEmpty()
 
     private suspend fun updateProvider(id: Uuid, transform: (ProviderSetting) -> ProviderSetting) {
-        settingsStore.updateAtomic { current ->
+        settingsStore.updateLocal { current ->
             current.copy(
                 providers = current.providers.map { provider ->
                     if (provider.id == id) transform(provider) else provider

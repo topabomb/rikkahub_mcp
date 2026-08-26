@@ -40,7 +40,7 @@ class StatsQueryService(
             totalCompletionTokens = tokenStats.completionTokens,
             totalCachedTokens = tokenStats.cachedTokens,
             conversationsPerDay = conversationsPerDay,
-            launchCount = settingsStore.settingsFlow.value.launchCount,
+            launchCount = settingsStore.effectiveSettings.value.settings.launchCount,
         )
     }
 }

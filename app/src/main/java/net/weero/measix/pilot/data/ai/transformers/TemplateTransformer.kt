@@ -80,7 +80,7 @@ internal class AssistantTemplateLoader(
     }
 
     override fun createCacheKey(templateName: String?): AssistantTemplateCacheKey? {
-        val assistant = settingsStore.settingsFlow.value.assistants
+        val assistant = settingsStore.effectiveSettings.value.settings.assistants
             .find { it.id.toString() == templateName }
             ?: return null
         return AssistantTemplateCacheKey(
@@ -90,6 +90,6 @@ internal class AssistantTemplateLoader(
     }
 
     override fun resourceExists(templateName: String?): Boolean {
-        return settingsStore.settingsFlow.value.assistants.any { it.id.toString() == templateName }
+        return settingsStore.effectiveSettings.value.settings.assistants.any { it.id.toString() == templateName }
     }
 }

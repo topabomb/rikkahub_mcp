@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service.runtime
 
+import kotlinx.coroutines.flow.map
+
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CancellationException
@@ -164,7 +166,7 @@ class DelegationCoordinator(
         task: String,
         execContext: ToolExecutionContext,
     ): Preflight {
-        val settings = settingsStore.settingsFlow.value
+        val settings = settingsStore.effectiveSettings.value.settings
         val targetAssistant = settings.getAssistantById(targetAssistantId)
         val callerAssistant = settings.getAssistantById(callerAssistantId)
         val runSpecResolution = if (targetAssistant != null && callerAssistant != null) {
@@ -258,7 +260,7 @@ class DelegationCoordinator(
 
         // 写入 request 前复验（关闭 preflight 与持久化之间的撤权竞态窗口）
         val latestBlockReason = resolvePreWriteBlockReason(
-            settings = settingsStore.settingsFlow.value,
+            settings = settingsStore.effectiveSettings.value.settings,
             callerAssistantId = callerAssistantId,
             targetAssistantId = targetAssistantId,
             runSpec = runSpec,
@@ -535,7 +537,7 @@ class DelegationCoordinator(
             // 运行中 Settings 撤权监听器：重算 caller/Target 关系，变化即取消 Child Job
             runScope = CoroutineScope(coroutineContext + runJob)
             settingsWatcher = runScope.launch {
-                settingsStore.settingsFlow.collect { latestSettings ->
+                settingsStore.effectiveSettings.map { it.settings }.collect { latestSettings ->
                     resolveActiveRunStopReason(
                         settings = latestSettings,
                         callerAssistantId = callerAssistantId,
@@ -564,7 +566,7 @@ class DelegationCoordinator(
             // StateFlow watcher 与 final 可能同时到达；提交 completed 前同步重验，
             // 防止撤权或模型失效期间到达的迟到结果被误记为成功。
             resolveActiveRunStopReason(
-                settings = settingsStore.settingsFlow.value,
+                settings = settingsStore.effectiveSettings.value.settings,
                 callerAssistantId = callerAssistantId,
                 targetAssistantId = targetAssistantId,
                 runSpec = ready.runSpec,
@@ -870,7 +872,7 @@ class DelegationCoordinator(
         runState: SubAssistantRunStateReducer,
         turnTtsContext: TtsToolPlaybackContext? = null,
     ): TargetGenerationResult {
-        val settings = settingsStore.settingsFlow.value
+        val settings = settingsStore.effectiveSettings.value.settings
         val runtime = commandCoordinator.load(childConversationId)
         val snapshot = runtime.snapshot.value
 
@@ -899,7 +901,7 @@ class DelegationCoordinator(
         // 避免 inspect_attachments 在工具循环中途出现/消失；运行安全信号仍每 step 走 latest。
         val runStartSettings = settings
         val toolProvider: suspend () -> List<Tool> = {
-            val currentSettings = settingsStore.settingsFlow.value
+            val currentSettings = settingsStore.effectiveSettings.value.settings
             val latestTarget = currentSettings.getAssistantById(target.id)
             if (latestTarget == null) {
                 emptyList()
@@ -970,7 +972,7 @@ class DelegationCoordinator(
                 nonInteractive = true,
                 interactiveToolNames = setOf("ask_user"),
                 memoryToolAllowed = {
-                    val latestTarget = settingsStore.settingsFlow.value.getAssistantById(target.id)
+                    val latestTarget = settingsStore.effectiveSettings.value.settings.getAssistantById(target.id)
                     latestTarget?.enableMemory == true &&
                         latestTarget.useGlobalMemory == target.useGlobalMemory
                 },

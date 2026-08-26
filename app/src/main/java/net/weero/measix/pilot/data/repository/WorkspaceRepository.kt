@@ -7,6 +7,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.dao.WorkspaceDAO
 import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
@@ -34,6 +35,16 @@ class WorkspaceRepository(
     suspend fun checkIntegrity() = withContext(Dispatchers.IO) {
         val workspaces = dao.getAll()
         for (workspace in workspaces) {
+            when (recoverPendingWorkspaceDeletion(workspace)) {
+                WorkspaceDeletionRecovery.DELETED -> continue
+                WorkspaceDeletionRecovery.BLOCKED -> continue
+                WorkspaceDeletionRecovery.NONE,
+                WorkspaceDeletionRecovery.RESTORED,
+                -> Unit
+            }
+            withContext(Dispatchers.IO) {
+                manager.recoverStagedWorkspaceDeletion(workspace.root)
+            }
             val dir = manager.workspaceDir(workspace.root)
             if (!dir.exists()) {
                 // 目录缺失时不删除记录(例如恢复备份后工作区文件未随数据库一起恢复),
@@ -286,21 +297,75 @@ class WorkspaceRepository(
 
     suspend fun delete(id: String): Boolean {
         val workspace = dao.getById(id) ?: return false
-        // BROKEN is the durable fail-closed retry state for a destructive filesystem operation.
-        // If deletion fails or the process stops, the record remains visible and can be retried;
-        // the durable identity is removed only after the workspace tree is gone.
+        resumeDeletionIfRequired(workspace)?.let { return it }
+        // BROKEN is the durable fail-closed retry state for a destructive workspace operation.
         updateShellState(workspace, WorkspaceShellStatus.BROKEN.name)
-        val filesDeleted = withContext(Dispatchers.IO) {
-            manager.deleteWorkspace(workspace.root)
+        val staged = withContext(Dispatchers.IO) {
+            manager.stageWorkspaceDeletion(workspace.root)
         }
-        if (!filesDeleted) return false
-        cleanupAssistantReferences(id)
-        dao.deleteById(id)
-        return true
+        if (!staged) return false
+        val journal = try {
+            WorkspaceDeletionJournal(
+                shellStatus = workspace.shellStatus,
+                phase = WorkspaceDeletionPhase.PREPARED,
+                assistantWorkspaces = settingsStore.snapshotLocal().assistants.mapNotNull { assistant ->
+                    assistant.workspaceId
+                        ?.takeIf { it.toString() == id }
+                        ?.let { assistant.id.toString() to it.toString() }
+                }.toMap(),
+            )
+        } catch (error: Throwable) {
+            restoreStagedWorkspace(workspace)
+            throw error
+        }
+        val journalWritten = withContext(Dispatchers.IO) {
+            manager.writeWorkspaceDeletionJournal(workspace.root, JsonInstant.encodeToString(journal).encodeToByteArray())
+        }
+        if (!journalWritten) {
+            restoreStagedWorkspace(workspace)
+            return false
+        }
+        val detachedAssistantWorkspaces = try {
+            cleanupAssistantReferences(id)
+        } catch (error: Throwable) {
+            restoreStagedWorkspace(workspace)
+            withContext(Dispatchers.IO) { manager.clearWorkspaceDeletionJournal(workspace.root) }
+            throw error
+        }
+        return withContext(NonCancellable) {
+            val deletionStarted = journal.copy(phase = WorkspaceDeletionPhase.DELETE_STARTED)
+            val deletionJournalWritten = withContext(Dispatchers.IO) {
+                manager.writeWorkspaceDeletionJournal(
+                    workspace.root,
+                    JsonInstant.encodeToString(deletionStarted).encodeToByteArray(),
+                )
+            }
+            if (!deletionJournalWritten) {
+                rollbackPreparedWorkspaceDeletion(workspace, detachedAssistantWorkspaces)
+                return@withContext false
+            }
+            val filesDeleted = withContext(Dispatchers.IO) {
+                manager.deleteStagedWorkspace(workspace.root)
+            }
+            if (!filesDeleted) {
+                return@withContext false
+            }
+            if (dao.deleteById(id) != 1) {
+                return@withContext false
+            }
+            withContext(Dispatchers.IO) { manager.clearWorkspaceDeletionJournal(workspace.root) }
+            true
+        }
     }
 
-    private suspend fun cleanupAssistantReferences(workspaceId: String) {
-        settingsStore.update { settings ->
+    private suspend fun cleanupAssistantReferences(workspaceId: String): Map<Uuid, Uuid> {
+        var detachedWorkspaces = emptyMap<Uuid, Uuid>()
+        settingsStore.updateLocal { settings ->
+            detachedWorkspaces = settings.assistants.mapNotNull { assistant ->
+                assistant.workspaceId
+                    ?.takeIf { it.toString() == workspaceId }
+                    ?.let { assistant.id to it }
+            }.toMap()
             settings.copy(
                 assistants = settings.assistants.map { assistant ->
                     if (assistant.workspaceId?.toString() == workspaceId) {
@@ -311,10 +376,141 @@ class WorkspaceRepository(
                 }
             )
         }
+        return detachedWorkspaces
     }
 
     private suspend fun restoreShellState(workspace: WorkspaceEntity) {
         updateShellState(workspace.id, workspace.shellStatus)
+    }
+
+    /** Restores a staged destructive operation before its durable workspace record is retained. */
+    private suspend fun restoreStagedWorkspace(workspace: WorkspaceEntity): Boolean = withContext(NonCancellable) {
+        val restored = withContext(Dispatchers.IO) {
+            manager.restoreStagedWorkspaceDeletion(workspace.root)
+        }
+        if (restored) restoreShellState(workspace)
+        restored
+    }
+
+    /** Reverses both owners only while no physical deletion has started. */
+    private suspend fun rollbackPreparedWorkspaceDeletion(
+        workspace: WorkspaceEntity,
+        detachedAssistantWorkspaces: Map<Uuid, Uuid>,
+    ): Boolean = withContext(NonCancellable) {
+        val restored = withContext(Dispatchers.IO) {
+            manager.restoreStagedWorkspaceDeletion(workspace.root)
+        }
+        if (!restored) return@withContext false
+        if (detachedAssistantWorkspaces.isNotEmpty()) {
+            settingsStore.updateLocal { settings ->
+                settings.copy(
+                    assistants = settings.assistants.map { assistant ->
+                        detachedAssistantWorkspaces[assistant.id]
+                            ?.takeIf { assistant.workspaceId == null }
+                            ?.let { workspaceId -> assistant.copy(workspaceId = workspaceId) }
+                            ?: assistant
+                    }
+                )
+            }
+        }
+        restoreShellState(workspace)
+        withContext(Dispatchers.IO) { manager.clearWorkspaceDeletionJournal(workspace.root) }
+        true
+    }
+
+    private suspend fun resumeDeletionIfRequired(workspace: WorkspaceEntity): Boolean? {
+        val raw = withContext(Dispatchers.IO) { manager.readWorkspaceDeletionJournal(workspace.root) }
+            ?: return null
+        val journal = try {
+            JsonInstant.decodeFromString<WorkspaceDeletionJournal>(raw.decodeToString())
+        } catch (error: Throwable) {
+            Log.e(TAG, "Workspace deletion journal is invalid: ${workspace.id}", error)
+            return false
+        }
+        if (journal.phase != WorkspaceDeletionPhase.DELETE_STARTED) return null
+        return finishStartedWorkspaceDeletion(workspace)
+    }
+
+    private suspend fun finishStartedWorkspaceDeletion(workspace: WorkspaceEntity): Boolean = withContext(NonCancellable) {
+        val staged = withContext(Dispatchers.IO) { manager.hasStagedWorkspaceDeletion(workspace.root) }
+        if (staged) {
+            val deleted = withContext(Dispatchers.IO) { manager.deleteStagedWorkspace(workspace.root) }
+            if (!deleted) return@withContext false
+        } else if (manager.workspaceDir(workspace.root).exists()) {
+            return@withContext false
+        }
+        if (dao.deleteById(workspace.id) != 1) {
+            return@withContext false
+        }
+        withContext(Dispatchers.IO) { manager.clearWorkspaceDeletionJournal(workspace.root) }
+        true
+    }
+
+    private suspend fun recoverPendingWorkspaceDeletion(workspace: WorkspaceEntity): WorkspaceDeletionRecovery {
+        val raw = withContext(Dispatchers.IO) { manager.readWorkspaceDeletionJournal(workspace.root) }
+            ?: return WorkspaceDeletionRecovery.NONE
+        val journal = try {
+            JsonInstant.decodeFromString<WorkspaceDeletionJournal>(raw.decodeToString())
+        } catch (error: Throwable) {
+            Log.e(TAG, "Workspace deletion journal is invalid: ${workspace.id}", error)
+            updateShellState(workspace.id, WorkspaceShellStatus.BROKEN.name)
+            return WorkspaceDeletionRecovery.BLOCKED
+        }
+        val staged = withContext(Dispatchers.IO) { manager.hasStagedWorkspaceDeletion(workspace.root) }
+        val workspaceExists = manager.workspaceDir(workspace.root).isDirectory
+        if (!staged && !workspaceExists) {
+            if (dao.deleteById(workspace.id) != 1) {
+                updateShellState(workspace.id, WorkspaceShellStatus.BROKEN.name)
+                return WorkspaceDeletionRecovery.BLOCKED
+            }
+            withContext(Dispatchers.IO) { manager.clearWorkspaceDeletionJournal(workspace.root) }
+            return WorkspaceDeletionRecovery.DELETED
+        }
+        if (journal.phase == WorkspaceDeletionPhase.DELETE_STARTED) {
+            updateShellState(workspace.id, WorkspaceShellStatus.BROKEN.name)
+            return WorkspaceDeletionRecovery.BLOCKED
+        }
+        return try {
+            restoreAssistantWorkspaces(journal.assistantWorkspaces)
+            val restored = withContext(Dispatchers.IO) {
+                manager.recoverStagedWorkspaceDeletion(workspace.root)
+            }
+            if (!restored) {
+                updateShellState(workspace.id, WorkspaceShellStatus.BROKEN.name)
+                WorkspaceDeletionRecovery.BLOCKED
+            } else {
+                updateShellState(workspace.id, journal.shellStatus)
+                withContext(Dispatchers.IO) { manager.clearWorkspaceDeletionJournal(workspace.root) }
+                WorkspaceDeletionRecovery.RESTORED
+            }
+        } catch (error: Throwable) {
+            Log.e(TAG, "Workspace deletion compensation is pending: ${workspace.id}", error)
+            updateShellState(workspace.id, WorkspaceShellStatus.BROKEN.name)
+            WorkspaceDeletionRecovery.BLOCKED
+        }
+    }
+
+    private suspend fun restoreAssistantWorkspaces(assistantWorkspaces: Map<String, String>) {
+        if (assistantWorkspaces.isEmpty()) return
+        val bindings = buildMap {
+            assistantWorkspaces.forEach { (assistantId, workspaceId) ->
+                try {
+                    put(Uuid.parse(assistantId), Uuid.parse(workspaceId))
+                } catch (error: IllegalArgumentException) {
+                    throw IllegalArgumentException("Workspace deletion journal has invalid binding IDs", error)
+                }
+            }
+        }
+        settingsStore.updateLocal { settings ->
+            settings.copy(
+                assistants = settings.assistants.map { assistant ->
+                    bindings[assistant.id]
+                        ?.takeIf { assistant.workspaceId == null }
+                        ?.let { workspaceId -> assistant.copy(workspaceId = workspaceId) }
+                        ?: assistant
+                }
+            )
+        }
     }
 
     private suspend fun updateShellState(
@@ -338,6 +534,18 @@ class WorkspaceRepository(
         private const val MAX_PREVIEW_BYTES = 512L * 1024
     }
 }
+
+@Serializable
+private data class WorkspaceDeletionJournal(
+    val shellStatus: String,
+    val phase: WorkspaceDeletionPhase,
+    val assistantWorkspaces: Map<String, String>,
+)
+
+@Serializable
+private enum class WorkspaceDeletionPhase { PREPARED, DELETE_STARTED }
+
+private enum class WorkspaceDeletionRecovery { NONE, RESTORED, DELETED, BLOCKED }
 
 /**
  * 工作区预览文件过大时抛出, 由 UI 层捕获并展示本地化的提示信息.

@@ -249,7 +249,8 @@ class RouteActivity : ComponentActivity() {
     @Composable
     fun AppRoutes() {
         val toastState = rememberToasterState()
-        val settings by settingsStore.settingsFlow.collectAsStateWithLifecycle()
+        val effectiveSettings by settingsStore.effectiveSettings.collectAsStateWithLifecycle()
+        val settings = effectiveSettings.settings
         val tts = rememberCustomTtsState()
         val asr = rememberCustomAsrState()
         val eventBus = koinInject<AppEventBus>()

@@ -9,6 +9,7 @@ import kotlinx.coroutines.launch
 import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
 import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
+import net.weero.measix.pilot.data.datastore.SettingsLockedException
 
 class WorkspaceVM(
     private val workspaceApplicationService: WorkspaceApplicationService,
@@ -56,6 +57,8 @@ class WorkspaceVM(
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
+            } catch (error: SettingsLockedException) {
+                onResult(WorkspaceMutationResult.Locked(error.reason))
             } catch (_: Exception) {
                 onResult(WorkspaceMutationResult.Failure(WorkspaceMutationOperation.DELETE))
             }
@@ -68,4 +71,5 @@ enum class WorkspaceMutationOperation { CREATE, RENAME, DELETE }
 sealed interface WorkspaceMutationResult {
     data object Success : WorkspaceMutationResult
     data class Failure(val operation: WorkspaceMutationOperation) : WorkspaceMutationResult
+    data class Locked(val reason: String) : WorkspaceMutationResult
 }

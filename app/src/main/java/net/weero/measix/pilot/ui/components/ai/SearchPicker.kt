@@ -69,6 +69,7 @@ import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
 import net.weero.measix.pilot.ui.components.ui.ToggleSurface
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.pages.setting.SearchAbilityTagLine
+import kotlin.uuid.Uuid
 
 enum class SearchMode {
     OFF,
@@ -104,11 +105,11 @@ fun SearchPickerButton(
     settings: Settings,
     modifier: Modifier = Modifier,
     onUpdateSearchMode: (SearchMode) -> Unit,
-    onUpdateSearchService: (Int) -> Unit,
+    onUpdateSearchService: (Uuid) -> Unit,
     model: Model?,
 ) {
     var showSearchPicker by remember { mutableStateOf(false) }
-    val currentService = settings.searchServices.getOrNull(settings.searchServiceSelected)
+    val currentService = settings.searchServices.find { it.id == settings.selectedSearchServiceId }
 
     ToggleSurface(
         modifier = modifier,
@@ -168,8 +169,8 @@ fun SearchPickerButton(
                 if (selecting) {
                     SearchProviderPicker(
                         settings = settings,
-                        onUpdateSearchService = { index ->
-                            onUpdateSearchService(index)
+                        onUpdateSearchService = { serviceId ->
+                            onUpdateSearchService(serviceId)
                             selectingProvider = false
                         },
                         onBack = { selectingProvider = false }
@@ -278,7 +279,7 @@ private fun SearchPicker(
                 horizontalArrangement = Arrangement.Center
             ) {
                 if (isLocalSearchSelected) {
-                    val currentService = settings.searchServices.getOrNull(settings.searchServiceSelected)
+                    val currentService = settings.searchServices.find { it.id == settings.selectedSearchServiceId }
                     TextButton(onClick = onSelectProvider) {
                         Text(
                             text = buildString {
@@ -404,7 +405,7 @@ private fun SearchModeCard(
 @Composable
 private fun SearchProviderPicker(
     settings: Settings,
-    onUpdateSearchService: (Int) -> Unit,
+    onUpdateSearchService: (Uuid) -> Unit,
     onBack: () -> Unit,
 ) {
     Column(
@@ -436,16 +437,16 @@ private fun SearchProviderPicker(
             verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            itemsIndexed(settings.searchServices) { index, service ->
+            itemsIndexed(settings.searchServices) { _, service ->
                 val containerColor = animateColorAsState(
-                    if (settings.searchServiceSelected == index) {
+                    if (settings.selectedSearchServiceId == service.id) {
                         MaterialTheme.colorScheme.primaryContainer
                     } else {
                         MaterialTheme.colorScheme.surface
                     }
                 )
                 val textColor = animateColorAsState(
-                    if (settings.searchServiceSelected == index) {
+                    if (settings.selectedSearchServiceId == service.id) {
                         MaterialTheme.colorScheme.onPrimaryContainer
                     } else {
                         MaterialTheme.colorScheme.onSurface
@@ -457,7 +458,7 @@ private fun SearchProviderPicker(
                         contentColor = textColor.value,
                     ),
                     onClick = {
-                        onUpdateSearchService(index)
+                        onUpdateSearchService(service.id)
                     },
                     shape = MaterialTheme.shapes.large
                 ) {

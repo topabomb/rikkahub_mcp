@@ -139,7 +139,7 @@ fun ChatInput(
     completionProviders: List<ChatCompletionProvider> = emptyList(),
     onUpdateChatModel: (Model) -> Unit,
     onUpdateAssistant: (Assistant) -> Unit,
-    onUpdateSearchService: (Int) -> Unit,
+    onUpdateSearchService: (kotlin.uuid.Uuid) -> Unit,
     onMoreClick: () -> Unit,
     onCancelClick: () -> Unit,
     onSendClick: () -> Unit,

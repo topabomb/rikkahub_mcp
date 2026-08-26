@@ -35,6 +35,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -67,6 +68,7 @@ import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.CustomColors
+import com.dokar.sonner.ToastType
 import net.weero.measix.pilot.utils.plus
 import org.koin.androidx.compose.koinViewModel
 
@@ -85,6 +87,12 @@ fun SkillsPage() {
     val importSuccessFmt = stringResource(R.string.skills_page_import_success)
     val importFailedFmt = stringResource(R.string.skills_page_import_failed)
     val saveFailedText = stringResource(R.string.skills_page_save_failed)
+    val lockedMessage = stringResource(R.string.managed_configuration_locked, "{reason}")
+    LaunchedEffect(vm) {
+        vm.lockedChanges.collect { error ->
+            toaster.show(lockedMessage.replace("{reason}", error.reason), type = ToastType.Error)
+        }
+    }
     val importFailureMessages = mapOf(
         SkillImportFailure.READ_SOURCE to stringResource(R.string.skills_page_import_read_failed),
         SkillImportFailure.INVALID_GITHUB_URL to stringResource(R.string.skills_page_import_invalid_github_url),

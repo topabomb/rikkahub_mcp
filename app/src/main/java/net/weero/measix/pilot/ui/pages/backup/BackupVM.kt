@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -25,7 +26,7 @@ class BackupVM(
     private val s3Sync: S3Sync,
     private val restoreApplicationService: BackupRestoreApplicationService,
 ) : ViewModel() {
-    val settings = settingsStore.settingsFlow.stateIn(
+    val settings = settingsStore.effectiveSettings.map { it.settings }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.Eagerly,
         initialValue = Settings.dummy()
@@ -41,7 +42,7 @@ class BackupVM(
 
     fun updateSettings(transform: (Settings) -> Settings) {
         viewModelScope.launch {
-            settingsStore.updateAtomic(fn = transform)
+            settingsStore.updateLocal(transform = transform)
         }
     }
 
@@ -134,7 +135,7 @@ class BackupVM(
     }
 
     private suspend fun recordBackupTime() {
-        settingsStore.update { settings ->
+        settingsStore.updateLocal { settings ->
             settings.copy(
                 backupReminderConfig = settings.backupReminderConfig.copy(
                     lastBackupTime = System.currentTimeMillis()

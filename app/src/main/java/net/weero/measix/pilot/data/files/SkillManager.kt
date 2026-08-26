@@ -11,6 +11,7 @@ import java.nio.file.Files
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -68,7 +69,7 @@ class SkillManager(
     suspend fun pruneOrphanedEnabledSkills(): List<SkillMetadata> = withContext(Dispatchers.IO) {
         val skills = BackupSnapshotBarrier.withLock { listSkillsUnlocked() }
         val existing = skills.mapTo(HashSet()) { it.name }
-        settingsStore.update { settings ->
+        settingsStore.updateLocal { settings ->
             var changed = false
             val newAssistants = settings.assistants.map { assistant ->
                 val pruned = assistant.enabledSkills.filterTo(LinkedHashSet()) { it in existing }
@@ -117,10 +118,12 @@ class SkillManager(
 
     suspend fun deleteSkill(name: String): Boolean = withContext(Dispatchers.IO) {
         BackupSnapshotBarrier.withLock lock@{
+        val skillsDir = getSkillsDir()
         val skillDir = findPublishedSkillDir(name) ?: return@lock false
-        val deleted = skillDir.deleteRecursively()
-        if (deleted) {
-            settingsStore.update { settings ->
+        val backupDir = createTempSkillPath(skillsDir, name, "backup") ?: return@lock false
+        if (!skillDir.renameTo(backupDir)) return@lock false
+        try {
+            settingsStore.updateLocal { settings ->
                 settings.copy(
                     assistants = settings.assistants.map { assistant ->
                         if (assistant.enabledSkills.contains(name)) {
@@ -131,8 +134,17 @@ class SkillManager(
                     }
                 )
             }
+        } catch (error: Throwable) {
+            withContext(NonCancellable) {
+                if (!backupDir.renameTo(skillDir)) {
+                    error.addSuppressed(IllegalStateException("Unable to restore Skill after Settings rejection: $name"))
+                }
+            }
+            throw error
         }
-        deleted
+        withContext(NonCancellable) {
+            backupDir.deleteRecursively()
+        }
         }
     }
 

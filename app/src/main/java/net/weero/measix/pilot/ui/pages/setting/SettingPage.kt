@@ -16,6 +16,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -54,6 +55,7 @@ import me.rerere.hugeicons.stroke.WavingHand01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.isNotConfigured
+import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
 import net.weero.measix.pilot.service.ArtifactUseCase
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.ui.components.nav.BackButton
@@ -76,8 +78,25 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val navController = LocalNavController.current
     val settings by vm.settings.collectAsStateWithLifecycle()
+    val effectiveSettings by vm.effectiveSettings.collectAsStateWithLifecycle()
+    val lockedChange by vm.lockedChange.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val lockedMessage = lockedChange?.let {
+        stringResource(R.string.managed_configuration_locked, it.reason)
+    }
     val artifactUseCase: ArtifactUseCase = koinInject()
     val generatedMediaStore: GeneratedMediaStore = koinInject()
+
+    LaunchedEffect(lockedChange) {
+        lockedChange?.let {
+            Toast.makeText(
+                context,
+                lockedMessage,
+                Toast.LENGTH_LONG,
+            ).show()
+            vm.clearLockedChange()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -100,6 +119,32 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
             contentPadding = innerPadding + PaddingValues(8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            if (effectiveSettings.managedState != ManagedConfigurationState.ABSENT) {
+                item("managedConfiguration") {
+                    CardGroup(
+                        modifier = Modifier.padding(horizontal = 8.dp),
+                        title = { Text(stringResource(R.string.settings)) },
+                    ) {
+                        item(
+                            supportingContent = {
+                                Text(
+                                    when (effectiveSettings.managedState) {
+                                        ManagedConfigurationState.ACTIVE -> stringResource(R.string.managed_configuration_active)
+                                        ManagedConfigurationState.DEGRADED -> stringResource(R.string.managed_configuration_degraded)
+                                        ManagedConfigurationState.BLOCKED -> stringResource(
+                                            R.string.managed_configuration_blocked,
+                                            effectiveSettings.managedFailureReason.orEmpty(),
+                                        )
+                                        ManagedConfigurationState.ABSENT -> error("unreachable")
+                                    },
+                                )
+                            },
+                            headlineContent = { Text(stringResource(R.string.managed_configuration_active)) },
+                        )
+                    }
+                }
+            }
+
             if (settings.isNotConfigured()) {
                 item {
                     ProviderConfigWarningCard(

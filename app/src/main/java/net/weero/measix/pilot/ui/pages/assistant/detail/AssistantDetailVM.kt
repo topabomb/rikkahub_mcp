@@ -5,7 +5,10 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,6 +17,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.service.ArtifactUseCase
@@ -40,6 +44,9 @@ class AssistantDetailVM(
 ) : ViewModel() {
     private val assistantId = Uuid.parse(id)
 
+    private val _lockedSettingsChanges = MutableSharedFlow<SettingsLockedException>(extraBufferCapacity = 1)
+    val lockedSettingsChanges = _lockedSettingsChanges.asSharedFlow()
+
     private val _skills = MutableStateFlow<List<SkillMetadata>>(emptyList())
     val skills = _skills.asStateFlow()
 
@@ -50,17 +57,17 @@ class AssistantDetailVM(
     }
 
     val settings: StateFlow<Settings> =
-        settingsStore.settingsFlow.stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
+        settingsStore.effectiveSettings.map { it.settings }.stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
     val mcpServerConfigs = settingsStore
-        .settingsFlow.map { settings ->
+        .effectiveSettings.map { it.settings }.map { settings ->
             settings.mcpServers
         }.stateIn(
             scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList()
         )
 
     val assistant: StateFlow<Assistant> = settingsStore
-        .settingsFlow
+        .effectiveSettings.map { it.settings }
         .map { settings ->
             settings.assistants.find { it.id == assistantId } ?: Assistant()
         }.stateIn(
@@ -80,7 +87,7 @@ class AssistantDetailVM(
         )
 
     val providers = settingsStore
-        .settingsFlow
+        .effectiveSettings.map { it.settings }
         .map { settings ->
             settings.providers
         }.stateIn(
@@ -99,7 +106,7 @@ class AssistantDetailVM(
         )
 
     val tags = settingsStore
-        .settingsFlow
+        .effectiveSettings.map { it.settings }
         .map { settings ->
             settings.assistantTags
         }.stateIn(
@@ -116,26 +123,33 @@ class AssistantDetailVM(
 
     fun updateTags(tagIds: List<Uuid>, tags: List<Tag>) {
         viewModelScope.launch {
-            settingsStore.updateAtomic { currentSettings ->
-                currentSettings.copy(
-                    assistantTags = tags,
-                    assistants = currentSettings.assistants.map { currentAssistant ->
-                        if (currentAssistant.id == assistantId) {
-                            currentAssistant.copy(tags = tagIds.toList())
-                        } else {
-                            currentAssistant
-                        }
-                    },
-                )
+            runSettingsChange {
+                settingsStore.updateLocal { currentSettings ->
+                    currentSettings.copy(
+                        assistantTags = tags,
+                        assistants = currentSettings.assistants.map { currentAssistant ->
+                            if (currentAssistant.id == assistantId) {
+                                currentAssistant.copy(tags = tagIds.toList())
+                            } else {
+                                currentAssistant
+                            }
+                        },
+                    )
+                }
+                Log.d(TAG, "updateTags: ${tagIds.joinToString(",")}")
+                cleanupUnusedTagsAndAwait()
             }
-            Log.d(TAG, "updateTags: ${tagIds.joinToString(",")}")
-            cleanupUnusedTags()
         }
     }
 
     fun cleanupUnusedTags() {
         viewModelScope.launch {
-            settingsStore.updateAtomic { currentSettings ->
+            runSettingsChange { cleanupUnusedTagsAndAwait() }
+        }
+    }
+
+    private suspend fun cleanupUnusedTagsAndAwait() {
+        settingsStore.updateLocal { currentSettings ->
                 val validTagIds = currentSettings.assistantTags.map { it.id }.toSet()
 
                 // 清理 assistant 中的无效 tag id
@@ -170,14 +184,13 @@ class AssistantDetailVM(
                 } else {
                     currentSettings
                 }
-            }
         }
     }
 
     fun update(assistant: Assistant) {
         val pageSnapshot = this.assistant.value
         viewModelScope.launch {
-            updateAndAwait(pageSnapshot, assistant)
+            runSettingsChange { updateAndAwait(pageSnapshot, assistant) }
         }
     }
 
@@ -192,14 +205,16 @@ class AssistantDetailVM(
     }
 
     private suspend fun importAssistantImage(uri: Uri, edit: (Assistant, Uri) -> Assistant) {
-        val pageSnapshot = assistant.value
-        var committedChange: Pair<Assistant, Assistant>? = null
-        artifactUseCase.importSettingsImage(uri) { currentSettings, localUri ->
-            val update = buildAssistantSettingsUpdate(currentSettings, pageSnapshot, edit(pageSnapshot, localUri))
-            committedChange = update.change
-            update.settings
+        runSettingsChange {
+            val pageSnapshot = assistant.value
+            var committedChange: Pair<Assistant, Assistant>? = null
+            artifactUseCase.importSettingsImage(uri) { currentSettings, localUri ->
+                val update = buildAssistantSettingsUpdate(currentSettings, pageSnapshot, edit(pageSnapshot, localUri))
+                committedChange = update.change
+                update.settings
+            }
+            collectReplacedArtifacts(committedChange)
         }
-        collectReplacedArtifacts(committedChange)
     }
 
     private suspend fun updateAndAwait(pageSnapshot: Assistant, edited: Assistant) {
@@ -217,6 +232,14 @@ class AssistantDetailVM(
             if (oldAssistant.avatar != newAssistant.avatar || oldAssistant.background != newAssistant.background) {
                 artifactUseCase.maintainStorage()
             }
+        }
+    }
+
+    private suspend fun runSettingsChange(action: suspend () -> Unit) {
+        try {
+            action()
+        } catch (error: SettingsLockedException) {
+            _lockedSettingsChanges.emit(error)
         }
     }
 

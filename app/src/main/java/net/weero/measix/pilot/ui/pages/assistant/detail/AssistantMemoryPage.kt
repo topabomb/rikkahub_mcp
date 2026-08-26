@@ -61,6 +61,7 @@ fun AssistantMemoryPage(id: String) {
             parametersOf(id)
         }
     )
+    AssistantLockedChangeEffect(vm)
     val assistant by vm.assistant.collectAsStateWithLifecycle()
     val memories by vm.memories.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()

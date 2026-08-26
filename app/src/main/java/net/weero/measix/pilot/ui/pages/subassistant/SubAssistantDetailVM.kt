@@ -4,6 +4,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import net.weero.measix.pilot.data.datastore.Settings
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -149,7 +153,9 @@ class SubAssistantDetailVM(
 ) : ViewModel() {
     private val _uiState = MutableStateFlow<SubAssistantDetailUiState>(SubAssistantDetailUiState.Loading)
     val uiState: StateFlow<SubAssistantDetailUiState> = _uiState.asStateFlow()
-    val settings = settingsStore.settingsFlow
+    val settings: StateFlow<Settings> = settingsStore.effectiveSettings
+        .map { it.settings }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
     fun attachmentPreviews(): Map<String, String> =
         (_uiState.value as? SubAssistantDetailUiState.Ready)

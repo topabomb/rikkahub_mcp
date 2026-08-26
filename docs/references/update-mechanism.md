@@ -167,7 +167,7 @@ app/src/main/java/net/weero/measix/pilot/
 ├─ utils/PlayStoreUtil.kt
 ├─ ui/components/ui/UpdateCard.kt
 ├─ ui/hooks/PlayStore.kt
-└─ data/datastore/PreferencesStore.kt
+└─ data/datastore/SettingsStore.kt
 
 app/build.gradle.kts
 .github/workflows/release.yml

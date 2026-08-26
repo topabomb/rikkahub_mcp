@@ -370,7 +370,7 @@ class MasterTurnCoordinator(
                 }
 
                 val currentSnapshot = runtime.snapshot.value
-                val settings = settingsStore.settingsFlow.first()
+                val settings = settingsStore.effectiveSettings.first().settings
                 val assistant = settings.getAssistantById(currentSnapshot.header.assistantId)
                     ?: settings.getCurrentAssistant()
                 val processedContent = preprocessUserInputParts(content, assistant)
@@ -545,7 +545,7 @@ class MasterTurnCoordinator(
         try {
             val runtime = requireRuntime(conversationId)
             startedRuntime = runtime
-            val settings = settingsStore.settingsFlow.first()
+            val settings = settingsStore.effectiveSettings.first().settings
             val initialSnapshot = liveSnapshot(conversationId)
             val assistant = settings.getAssistantById(initialSnapshot.header.assistantId)
                 ?: settings.getCurrentAssistant()

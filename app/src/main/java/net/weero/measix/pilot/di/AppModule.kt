@@ -289,7 +289,7 @@ val appModule = module {
                 get<net.weero.measix.pilot.service.CustomChatFontService>().reconcile()
                 get<net.weero.measix.pilot.data.repository.WorkspaceRepository>().checkIntegrity()
                 get<net.weero.measix.pilot.data.files.ArtifactStore>().collectGarbage()
-                get<net.weero.measix.pilot.data.datastore.SettingsStore>().update { current ->
+                get<net.weero.measix.pilot.data.datastore.SettingsStore>().updateLocal { current ->
                     current.copy(launchCount = current.launchCount + 1)
                 }
             },

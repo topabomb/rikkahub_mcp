@@ -34,6 +34,7 @@ fun AssistantRequestPage(id: String) {
             parametersOf(id)
         }
     )
+    AssistantLockedChangeEffect(vm)
     val assistant by vm.assistant.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 

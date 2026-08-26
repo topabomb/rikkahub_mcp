@@ -2,6 +2,7 @@ package net.weero.measix.pilot.service
 
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.map
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import kotlin.uuid.Uuid
 
@@ -9,12 +10,12 @@ import kotlin.uuid.Uuid
 class FavoriteModelService(
     private val settingsStore: SettingsStore,
 ) {
-    val favoriteModelIds = settingsStore.settingsFlow
+    val favoriteModelIds = settingsStore.effectiveSettings.map { it.settings }
         .map { it.favoriteModels }
         .distinctUntilChanged()
 
     suspend fun setFavorite(modelId: Uuid, favorite: Boolean) {
-        settingsStore.update { current ->
+        settingsStore.updateLocal { current ->
             val updated = if (favorite) {
                 if (modelId in current.favoriteModels) current.favoriteModels else current.favoriteModels + modelId
             } else {
@@ -25,7 +26,7 @@ class FavoriteModelService(
     }
 
     suspend fun move(fromModelId: Uuid, toModelId: Uuid) {
-        settingsStore.update { current ->
+        settingsStore.updateLocal { current ->
             current.copy(
                 favoriteModels = moveFavoriteModel(
                     current = current.favoriteModels,

@@ -82,7 +82,7 @@ class BackupArchiveServiceTest {
 
         var restored: Settings? = null
         val settingsStore = mockk<SettingsStore>()
-        coEvery { settingsStore.restoreFromBackup(any()) } coAnswers { restored = firstArg() }
+        coEvery { settingsStore.restoreLocal(any()) } coAnswers { firstArg<Settings>().also { restored = it } }
         PendingBackupRestore.restoreSettingsIfPending(context, settingsStore, JsonInstant)
         assertEquals(Settings().assistantId, restored?.assistantId)
         PendingBackupRestore.complete(context)
@@ -173,7 +173,7 @@ class BackupArchiveServiceTest {
         PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
         var restored: Settings? = null
         val settingsStore = mockk<SettingsStore>()
-        coEvery { settingsStore.restoreFromBackup(any()) } coAnswers { restored = firstArg() }
+        coEvery { settingsStore.restoreLocal(any()) } coAnswers { firstArg<Settings>().also { restored = it } }
         PendingBackupRestore.restoreSettingsIfPending(context, settingsStore, JsonInstant)
 
         assertNull(restored?.assistants?.first()?.background)

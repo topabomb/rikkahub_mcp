@@ -78,7 +78,7 @@ class ConversationApplicationService(
 
     suspend fun initialize(conversationId: Uuid): ConversationViewLease {
         recoveryGate.awaitReady()
-        val settings = settingsStore.settingsFlow.first()
+        val settings = settingsStore.effectiveSettings.first().settings
         val assistant = settings.getCurrentAssistant()
         val conversation = Conversation.ofId(
             id = conversationId,
@@ -87,13 +87,7 @@ class ConversationApplicationService(
         ).updateCurrentMessages(assistant.presetMessages)
         val runtime = commandCoordinator.loadOrRegisterDraft(conversation)
         val lease = runtimeRegistry.acquireRegisteredRuntime(conversationId, runtime)
-        try {
-            settingsStore.updateAssistant(runtime.snapshot.value.header.assistantId)
-            return ConversationViewLease(lease::close)
-        } catch (error: Throwable) {
-            lease.close()
-            throw error
-        }
+        return ConversationViewLease(lease::close)
     }
 
     suspend fun updateTitle(conversationId: Uuid, title: String) {
@@ -279,7 +273,7 @@ class ConversationApplicationService(
         if (parts.isEmptyInputMessage()) return
         recoveryGate.awaitReady()
         val snapshot = liveSnapshot(conversationId)
-        val settings = settingsStore.settingsFlow.first()
+        val settings = settingsStore.effectiveSettings.first().settings
         val assistant = settings.getAssistantById(snapshot.header.assistantId) ?: settings.getCurrentAssistant()
         val target = snapshot.nodes.firstOrNull { node -> node.messages.any { it.id == messageId } } ?: return
         val processedParts = preprocessUserInputParts(parts, assistant)

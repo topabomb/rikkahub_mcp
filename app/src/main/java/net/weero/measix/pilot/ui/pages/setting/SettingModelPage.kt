@@ -43,12 +43,14 @@ import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.hugeicons.stroke.Cancel01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.DEFAULT_AUTO_MODEL_ID
+import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.ui.components.ai.ModelListSheet
 import net.weero.measix.pilot.ui.components.ai.rememberModelListState
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.CardGroup
+import net.weero.measix.pilot.ui.components.ui.ManagedDefaultStatus
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.utils.plus
 import org.koin.androidx.compose.koinViewModel
@@ -58,6 +60,7 @@ import kotlin.uuid.Uuid
 @Composable
 fun SettingModelPage(vm: SettingVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
+    val effectiveSettings by vm.effectiveSettings.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val pagerState = rememberPagerState { 2 }
     val scope = rememberCoroutineScope()
@@ -97,7 +100,12 @@ fun SettingModelPage(vm: SettingVM = koinViewModel()) {
             modifier = Modifier.fillMaxSize(),
         ) { page ->
             when (page) {
-                0 -> ModelSettingsPage(settings = settings, vm = vm, contentPadding = contentPadding)
+                0 -> ModelSettingsPage(
+                    settings = settings,
+                    effectiveSettings = effectiveSettings,
+                    vm = vm,
+                    contentPadding = contentPadding,
+                )
                 1 -> PromptSettingsPage(settings = settings, vm = vm, contentPadding = contentPadding)
             }
         }
@@ -105,7 +113,12 @@ fun SettingModelPage(vm: SettingVM = koinViewModel()) {
 }
 
 @Composable
-private fun ModelSettingsPage(settings: Settings, vm: SettingVM, contentPadding: PaddingValues) {
+private fun ModelSettingsPage(
+    settings: Settings,
+    effectiveSettings: EffectiveSettingsSnapshot,
+    vm: SettingVM,
+    contentPadding: PaddingValues,
+) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = contentPadding + PaddingValues(horizontal = 16.dp),
@@ -117,6 +130,8 @@ private fun ModelSettingsPage(settings: Settings, vm: SettingVM, contentPadding:
                 description = stringResource(R.string.setting_model_page_chat_model_desc),
                 modelId = settings.chatModelId,
                 providers = settings.providers,
+                effectiveSettings = effectiveSettings,
+                defaultPath = "defaults/chatModelId",
                 onSelect = { model -> vm.updateSettings { it.copy(chatModelId = model.id) } },
             )
         }
@@ -126,6 +141,8 @@ private fun ModelSettingsPage(settings: Settings, vm: SettingVM, contentPadding:
                 description = stringResource(R.string.setting_model_page_fast_model_desc),
                 modelId = settings.fastModelId,
                 providers = settings.providers,
+                effectiveSettings = effectiveSettings,
+                defaultPath = "defaults/fastModelId",
                 onSelect = { model -> vm.updateSettings { it.copy(fastModelId = model.id) } },
                 onClear = { vm.updateSettings { it.copy(fastModelId = DEFAULT_AUTO_MODEL_ID) } },
                 placeholder = stringResource(R.string.setting_model_page_follow_chat_model),
@@ -137,6 +154,8 @@ private fun ModelSettingsPage(settings: Settings, vm: SettingVM, contentPadding:
                 description = stringResource(R.string.setting_model_page_title_model_desc),
                 modelId = settings.titleModelId,
                 providers = settings.providers,
+                effectiveSettings = effectiveSettings,
+                defaultPath = "defaults/titleModelId",
                 onSelect = { model -> vm.updateSettings { it.copy(titleModelId = model.id) } },
                 onClear = { vm.updateSettings { it.copy(titleModelId = null) } },
             )
@@ -157,6 +176,8 @@ private fun ModelSettingsPage(settings: Settings, vm: SettingVM, contentPadding:
                 description = stringResource(R.string.setting_model_page_image_generation_model_desc),
                 modelId = settings.imageGenerationModelId,
                 providers = imageProviders,
+                effectiveSettings = effectiveSettings,
+                defaultPath = "defaults/imageGenerationModelId",
                 onSelect = { model -> vm.updateSettings { it.copy(imageGenerationModelId = model.id) } },
                 onClear = { vm.updateSettings { it.copy(imageGenerationModelId = DEFAULT_AUTO_MODEL_ID) } },
                 type = ModelType.IMAGE,
@@ -177,6 +198,8 @@ private fun ModelSettingsPage(settings: Settings, vm: SettingVM, contentPadding:
                 description = stringResource(R.string.setting_model_page_attachment_inspection_model_desc),
                 modelId = settings.attachmentInspectionModelId,
                 providers = inspectionProviders,
+                effectiveSettings = effectiveSettings,
+                defaultPath = "defaults/attachmentInspectionModelId",
                 onSelect = { model -> vm.updateSettings { it.copy(attachmentInspectionModelId = model.id) } },
                 onClear = { vm.updateSettings { it.copy(attachmentInspectionModelId = null) } },
             )
@@ -187,6 +210,8 @@ private fun ModelSettingsPage(settings: Settings, vm: SettingVM, contentPadding:
                 description = stringResource(R.string.setting_model_page_compress_model_desc),
                 modelId = settings.compressModelId,
                 providers = settings.providers,
+                effectiveSettings = effectiveSettings,
+                defaultPath = "defaults/compressModelId",
                 onSelect = { model -> vm.updateSettings { it.copy(compressModelId = model.id) } },
                 onClear = { vm.updateSettings { it.copy(compressModelId = DEFAULT_AUTO_MODEL_ID) } },
                 placeholder = stringResource(R.string.setting_model_page_follow_chat_model),
@@ -276,6 +301,8 @@ private fun ModelSettingItem(
     description: String,
     modelId: Uuid?,
     providers: List<ProviderSetting>,
+    effectiveSettings: EffectiveSettingsSnapshot,
+    defaultPath: String,
     onSelect: (Model) -> Unit,
     onClear: (() -> Unit)? = null,
     placeholder: String? = null,
@@ -326,6 +353,11 @@ private fun ModelSettingItem(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+        )
+        ManagedDefaultStatus(
+            snapshot = effectiveSettings,
+            path = defaultPath,
+            modifier = Modifier.padding(horizontal = 4.dp),
         )
     }
 

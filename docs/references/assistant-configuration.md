@@ -9,7 +9,7 @@
 
 `Assistant` 定义在
 `app/src/main/java/net/weero/measix/pilot/data/model/Assistant.kt`，作为
-`Settings.assistants` 的元素由 `PreferencesStore` 写入 DataStore。
+`Settings.assistants` 的本地 shadow 由 `SettingsStore` 写入既有 DataStore，并经同一 Store 的有效读模型提供给应用。
 
 - `Settings.assistantId` 只是全局当前选择。
 - 已创建会话以 `Conversation.assistantId` 为助手归属权威来源。
@@ -124,7 +124,7 @@ target.allowAsSubAssistant
 
 `description` 在开启 `allowAsSubAssistant` 时必须非空。持久化归一化会折叠空白并按 Unicode
 code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersistence()` 只强制关闭全局可见；
-从所有 Caller 的 `allowedSubAssistantIds` 移除该 ID 是编辑/管理服务在同一次 `updateAtomic` transform
+从所有 Caller 的 `allowedSubAssistantIds` 移除该 ID 是编辑/管理服务在同一次 `updateLocal` transform
 中显式完成的跨记录操作，不能误认为归一化会自动清理授权。
 
 ## 3. 关联类型
@@ -179,17 +179,22 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 
 ## 5. 更新与持久化边界
 
-`SettingsStore.updateAtomic()` 在互斥区内读取最新非 dummy Settings、执行 transform、写策略、
-持久化归一化与 DataStore 标量规范化，再写入 DataStore；写入成功后经 `materializeForRead()` 发布
-`settingsFlow`。跨助手的权限清理、选择项修正和删除 tombstone 必须在同一个 transform 中完成，
-不能先发布内存状态再补写磁盘。
+`SettingsStore.updateLocal()` 在互斥区内读取最新 Local shadow 的读取模型、执行 transform，并以有效快照中的 lock
+规则校验变化；随后统一执行持久化归一化、DataStore 标量规范化和 `commitSettings` 的“落盘后发布”顺序。发布的是
+Local shadow，`EffectiveSettingsResolver` 再把 Built-in、Local 与已验证 managed overlay 合并为唯一
+`effectiveSettings` 快照。跨助手的权限清理、选择项修正和删除 tombstone 必须在同一个 transform 中完成，不能先发布内存状态再补写磁盘。
+
+已验证 managed Assistant 以稳定 ID 覆盖同 ID 的 Local shadow；用户和备份不会改写 managed envelope。受管 Assistant 的模型、
+Tag、MCP、Mode Injection、Quick Message 和子助手引用只能解析到同一受管 generation 或 Built-in 记录，不能因为 Local shadow
+碰巧有同 ID 就绑定；未被受管协议表示的 Skill 引用会明确拒绝。头像和背景仅能通过同 generation 的签名 asset binding 附着。
+原助手页会显示 Built-in/Local/Managed 来源及 lock 原因；命中 lock 的整个本地提交会失败，撤回更高 generation 后才重新显示 Local shadow。
 
 `Settings.normalizeForPersistence()` 在每次写入前运行，只负责规范化
 `Assistant.description`、在未开启子助手类别时强制关闭全局可见、按 `assistantId` 去重
 `pendingAssistantDeletions`。失效的 MCP / 注入 / 快捷消息引用、重复 id、内置 Provider 补齐由
 `materializeForRead()` 负责，不在 `normalizeForPersistence` 里。
 
-跨助手的权限清理和删除 tombstone 仍必须放在同一次 `updateAtomic` transform 中，不能先发布内存状态再补写磁盘。市场导入若只调用 `normalizeForPersistence`，不会自动丢掉失效引用。
+跨助手的权限清理和删除 tombstone 仍必须放在同一次 `updateLocal` transform 中，不能先发布内存状态再补写磁盘。市场导入若只调用 `normalizeForPersistence`，不会自动丢掉失效引用。
 
 删除 Assistant 由 `AssistantManagementService` 协调：先写 tombstone，再取消相关生成和子助手运行，
 清理记忆与会话，最后提交 Settings 清理。中断后由 tombstone 恢复流程继续完成，不能把列表移除视为删除完成。
@@ -199,8 +204,8 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 | 责任 | 主要实现 |
 |------|----------|
 | 数据模型、正则、上下文阈值、默认提示 | `data/model/Assistant.kt` |
-| Settings 持久化与解析 | `data/datastore/PreferencesStore.kt` |
-| 读取物化、写策略与提交顺序 | `SettingsNormalization.kt`、`SettingsWritePolicy.kt`、`SettingsCommitCoordinator.kt` |
+| Settings Local shadow、有效读模型与受管快照 | `data/datastore/SettingsStore.kt`、`EffectiveSettings.kt`、`ManagedConfiguration.kt` |
+| 读取物化、写规则与提交顺序 | `SettingsNormalization.kt`、`SettingsWriteRules.kt`、`SettingsCommit.kt` |
 | UI 新建与编辑 | `ui/pages/assistant/` |
 | 会话助手归属与迁移 | `ConversationApplicationService.moveToAssistant()`、`UpdateHeader` |
 | 模型 readiness 与主生成工具装配 | `MasterTurnCoordinator`、`GenerationToolSetFactory` |

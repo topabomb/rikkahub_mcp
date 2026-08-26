@@ -11,7 +11,9 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import org.junit.Assert.assertEquals
@@ -96,6 +98,19 @@ class ApplicationRecoveryCoordinatorTest {
     }
 
     @Test
+    fun `blocked managed configuration keeps every recovery-dependent service closed`() = runTest {
+        val env = Env(this, managedState = ManagedConfigurationState.BLOCKED)
+
+        env.coordinator.recoverNow()
+
+        val failure = env.gate.state.value as ApplicationRecoveryState.Failed
+        assertTrue(failure.error is ManagedConfigurationBlockedException)
+        coVerify(exactly = 0) { env.artifactStore.reconcileStartup() }
+        coVerify(exactly = 0) { env.repository.ensureSearchProjection() }
+        coVerify(exactly = 0) { env.turnRecovery.recoverInterruptedRuns() }
+    }
+
+    @Test
     fun `concurrent retry requests share one recovery owner`() = runTest {
         val env = Env(this)
         val entered = CompletableDeferred<Unit>()
@@ -125,6 +140,7 @@ class ApplicationRecoveryCoordinatorTest {
         restorePendingBackup: suspend () -> Unit = {},
         completePendingBackup: () -> Unit = {},
         postRecoveryMaintenance: suspend () -> Unit = {},
+        managedState: ManagedConfigurationState = ManagedConfigurationState.ABSENT,
     ) {
         val gate = ApplicationRecoveryGate()
         val artifactStore = mockk<ArtifactStore>()
@@ -135,7 +151,8 @@ class ApplicationRecoveryCoordinatorTest {
         val coordinator: ApplicationRecoveryCoordinator
 
         init {
-            every { settingsStore.settingsFlow } returns MutableStateFlow(Settings(init = false))
+            every { settingsStore.effectiveSettings } returns
+                MutableStateFlow(Settings(init = false).toEffectiveSettingsSnapshot(managedState = managedState))
             coEvery { artifactStore.reconcileStartup() } returns Unit
             coEvery { artifactStore.ensureReferenceProjection() } returns Unit
             coEvery { repository.ensureSearchProjection() } returns Unit

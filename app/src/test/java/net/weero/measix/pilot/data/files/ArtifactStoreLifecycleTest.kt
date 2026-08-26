@@ -23,6 +23,9 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.Dispatchers
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
+import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
+import net.weero.measix.pilot.data.datastore.SettingsAccessIndex
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.RoomDatabaseTransactionRunner
@@ -53,6 +56,7 @@ class ArtifactStoreLifecycleTest {
     private lateinit var database: AppDatabase
     private lateinit var payloadStore: ArtifactPayloadStore
     private lateinit var settingsFlow: MutableStateFlow<Settings>
+    private lateinit var effectiveSettings: MutableStateFlow<EffectiveSettingsSnapshot>
     private lateinit var store: ArtifactStore
     private val folders = mutableSetOf<String>()
 
@@ -64,10 +68,14 @@ class ArtifactStoreLifecycleTest {
             .build()
         payloadStore = ArtifactPayloadStore(context)
         settingsFlow = MutableStateFlow(Settings())
+        effectiveSettings = MutableStateFlow(settingsFlow.value.toEffectiveSnapshot())
         val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.settingsFlow } returns settingsFlow
-        coEvery { settingsStore.updateAtomicAndGet(any()) } coAnswers {
-            firstArg<(Settings) -> Settings>()(settingsFlow.value).also { settingsFlow.value = it }
+        every { settingsStore.effectiveSettings } returns effectiveSettings
+        coEvery { settingsStore.updateLocal(any()) } coAnswers {
+            firstArg<(Settings) -> Settings>()(settingsFlow.value).also { updated ->
+                settingsFlow.value = updated
+                effectiveSettings.value = updated.toEffectiveSnapshot()
+            }
         }
         store = ArtifactStore(
             payloadStore = payloadStore,
@@ -191,29 +199,41 @@ class ArtifactStoreLifecycleTest {
     }
 
     @Test
+    fun `startup never adopts an untracked upload file without a durable root`() = runTest {
+        folders += FileFolders.UPLOAD
+        val relativePath = "${FileFolders.UPLOAD}/unrooted.png"
+        File(context.filesDir, relativePath).apply {
+            parentFile?.mkdirs()
+            writeBytes(byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 1, 2, 3))
+        }
+
+        store.reconcileStartup()
+
+        assertNull(database.artifactDao().getByPathAndState(relativePath, ArtifactState.ACTIVE.name))
+    }
+
+    @Test
     fun `startup fails closed when a settings root lacks artifact metadata`() = runTest {
         folders += FileFolders.UPLOAD
         val relativePath = "${FileFolders.UPLOAD}/untracked-settings-root.png"
         val file = File(context.filesDir, relativePath).apply {
             parentFile?.mkdirs()
-            writeBytes(TINY_PNG)
+            writeBytes(byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 1, 2, 3))
         }
         settingsFlow.value = Settings(
             assistants = listOf(Assistant(background = file.toUri().toString())),
         )
+        effectiveSettings.value = settingsFlow.value.toEffectiveSnapshot()
 
         val failure = runCatching { store.reconcileStartup() }.exceptionOrNull()
 
         assertTrue(failure is ArtifactDataIntegrityException)
         assertTrue(file.isFile)
-        assertNull(database.artifactDao().getByPathAndState(
-            relativePath,
-            ArtifactState.ACTIVE.name,
-        ))
+        assertNull(database.artifactDao().getByPathAndState(relativePath, ArtifactState.ACTIVE.name))
     }
 
     @Test
-    fun `sub-assistant avatar and background roots are retained but rejected without metadata`() = runTest {
+    fun `legacy sub-assistant avatar and background roots are retained but rejected without metadata`() = runTest {
         folders += FileFolders.UPLOAD
         val avatar = File(context.filesDir, "${FileFolders.UPLOAD}/legacy-sub-avatar.png").apply {
             parentFile?.mkdirs()
@@ -232,34 +252,15 @@ class ArtifactStoreLifecycleTest {
                 ),
             ),
         )
+        effectiveSettings.value = settingsFlow.value.toEffectiveSnapshot()
 
         val failure = runCatching { store.reconcileStartup() }.exceptionOrNull()
 
         assertTrue(failure is ArtifactDataIntegrityException)
         assertTrue(avatar.isFile)
         assertTrue(background.isFile)
-        assertNull(database.artifactDao().getByPathAndState(
-            "${FileFolders.UPLOAD}/legacy-sub-avatar.png",
-            ArtifactState.ACTIVE.name,
-        ))
-        assertNull(database.artifactDao().getByPathAndState(
-            "${FileFolders.UPLOAD}/legacy-sub-background.png",
-            ArtifactState.ACTIVE.name,
-        ))
-    }
-
-    @Test
-    fun `startup never adopts an untracked upload file without a durable root`() = runTest {
-        folders += FileFolders.UPLOAD
-        val relativePath = "${FileFolders.UPLOAD}/unrooted.png"
-        File(context.filesDir, relativePath).apply {
-            parentFile?.mkdirs()
-            writeBytes(byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 1, 2, 3))
-        }
-
-        store.reconcileStartup()
-
-        assertNull(database.artifactDao().getByPathAndState(relativePath, ArtifactState.ACTIVE.name))
+        assertNull(database.artifactDao().getByPathAndState("${FileFolders.UPLOAD}/legacy-sub-avatar.png", ArtifactState.ACTIVE.name))
+        assertNull(database.artifactDao().getByPathAndState("${FileFolders.UPLOAD}/legacy-sub-background.png", ArtifactState.ACTIVE.name))
     }
 
     @Test
@@ -580,10 +581,14 @@ class ArtifactStoreLifecycleTest {
             true
         }
         val localSettings = MutableStateFlow(Settings())
+        val localEffectiveSettings = MutableStateFlow(localSettings.value.toEffectiveSnapshot())
         val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.settingsFlow } returns localSettings
-        coEvery { settingsStore.updateAtomicAndGet(any()) } coAnswers {
-            firstArg<(Settings) -> Settings>()(localSettings.value).also { localSettings.value = it }
+        every { settingsStore.effectiveSettings } returns localEffectiveSettings
+        coEvery { settingsStore.updateLocal(any()) } coAnswers {
+            firstArg<(Settings) -> Settings>()(localSettings.value).also { updated ->
+                localSettings.value = updated
+                localEffectiveSettings.value = updated.toEffectiveSnapshot()
+            }
         }
         val countingStore = ArtifactStore(
             payloadStore = countingPayloadStore,
@@ -660,3 +665,10 @@ class ArtifactStoreLifecycleTest {
         origin = ArtifactOrigin.USER.name,
     )
 }
+
+private fun Settings.toEffectiveSnapshot(): EffectiveSettingsSnapshot = EffectiveSettingsSnapshot(
+    settings = this,
+    access = SettingsAccessIndex(),
+    revision = 0L,
+    managedState = ManagedConfigurationState.ABSENT,
+)

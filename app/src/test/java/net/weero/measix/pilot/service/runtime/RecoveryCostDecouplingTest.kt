@@ -13,6 +13,7 @@ import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
@@ -49,7 +50,7 @@ class RecoveryCostDecouplingTest {
         val settingsStore = mockk<SettingsStore>(relaxed = true)
         val runGate = mockk<SubAssistantRunGate>(relaxed = true)
         coEvery { repo.getNonTerminalTurnExecutionsWithScope() } returns emptyList()
-        every { settingsStore.settingsFlow } returns MutableStateFlow(mockk(relaxed = true))
+        every { settingsStore.effectiveSettings } returns MutableStateFlow(Settings().toEffectiveSettingsSnapshot())
 
         val recovery = turnRecovery(repo, settingsStore, runGate)
         recovery.recoverInterruptedRuns()
@@ -65,7 +66,7 @@ class RecoveryCostDecouplingTest {
         val settingsStore = mockk<SettingsStore>(relaxed = true)
         val runGate = mockk<SubAssistantRunGate>(relaxed = true)
         coEvery { repo.getNonTerminalTurnExecutionsWithScope() } returns emptyList()
-        every { settingsStore.settingsFlow } returns MutableStateFlow(mockk(relaxed = true))
+        every { settingsStore.effectiveSettings } returns MutableStateFlow(Settings().toEffectiveSettingsSnapshot())
 
         val recovery = turnRecovery(repo, settingsStore, runGate)
         recovery.recoverInterruptedRuns()
@@ -115,7 +116,7 @@ class RecoveryCostDecouplingTest {
         coEvery { repo.getConversationById(childId) } returns child
         coEvery { repo.getTurnExecutions(childId) } returns listOf(turn)
         coEvery { repo.getToolExecutions(turn.turnId) } returns emptyList()
-        every { settingsStore.settingsFlow } returns MutableStateFlow(Settings())
+        every { settingsStore.effectiveSettings } returns MutableStateFlow(Settings().toEffectiveSettingsSnapshot())
 
         turnRecovery(repo, settingsStore, runGate, commandCoordinator).recoverInterruptedRuns()
 

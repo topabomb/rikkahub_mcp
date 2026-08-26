@@ -39,6 +39,7 @@ import org.koin.core.parameter.parametersOf
 @Composable
 fun AssistantExtensionsPage(id: String) {
     val vm: AssistantDetailVM = koinViewModel(parameters = { parametersOf(id) })
+    AssistantLockedChangeEffect(vm)
     val assistant by vm.assistant.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val skills by vm.skills.collectAsStateWithLifecycle()

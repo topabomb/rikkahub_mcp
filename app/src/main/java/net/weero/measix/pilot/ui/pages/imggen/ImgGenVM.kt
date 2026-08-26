@@ -12,10 +12,14 @@ import androidx.paging.map
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import me.rerere.ai.provider.ProviderManager
@@ -65,11 +69,17 @@ class ImgGenVM(
     private val coordinator: ImageGenerationCoordinator,
     private val generatedMediaStore: GeneratedMediaStore,
 ) : AndroidViewModel(context) {
-    val settings = settingsStore.settingsFlow
+    val settings: StateFlow<Settings> = settingsStore.effectiveSettings
+        .map { it.settings }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
     fun selectImageGenerationModel(modelId: Uuid) {
         viewModelScope.launch {
-            settingsStore.update { it.copy(imageGenerationModelId = modelId) }
+            try {
+                settingsStore.updateLocal { it.copy(imageGenerationModelId = modelId) }
+            } catch (error: SettingsLockedException) {
+                _error.value = "managed_configuration_locked:${error.reason}"
+            }
         }
     }
 
@@ -172,7 +182,7 @@ class ImgGenVM(
                 _currentGeneratedImages.value = emptyList()
                 coordinator.cancelPageSession(pageSessionId)
 
-                val settings = settingsStore.settingsFlow.first()
+                val settings = settingsStore.effectiveSettings.first().settings
                 val selection = selectionResolver.resolve(settings)
                 if (selection !is ImageGenerationSelection.Available) {
                     _error.value = "image_model_unavailable"
@@ -247,7 +257,7 @@ class ImgGenVM(
                 _currentGeneratedImages.value = emptyList()
                 coordinator.cancelPageSession(pageSessionId)
 
-                val settings = settingsStore.settingsFlow.first()
+                val settings = settingsStore.effectiveSettings.first().settings
                 val selection = selectionResolver.resolve(settings)
                 if (selection !is ImageGenerationSelection.Available) {
                     _error.value = "image_model_unavailable"

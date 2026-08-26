@@ -70,9 +70,11 @@ fun WorkspacePage(vm: WorkspaceVM = koinViewModel()) {
         WorkspaceMutationOperation.RENAME to stringResource(R.string.workspace_page_rename_failed),
         WorkspaceMutationOperation.DELETE to stringResource(R.string.workspace_page_delete_failed),
     )
+    val lockedMessage = stringResource(R.string.managed_configuration_locked, "{reason}")
     fun handleMutationResult(result: WorkspaceMutationResult, onSuccess: () -> Unit) {
         when (result) {
             WorkspaceMutationResult.Success -> onSuccess()
+            is WorkspaceMutationResult.Locked -> toaster.show(lockedMessage.replace("{reason}", result.reason))
             is WorkspaceMutationResult.Failure -> toaster.show(mutationFailureMessages.getValue(result.operation))
         }
     }

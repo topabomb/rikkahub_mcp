@@ -893,5 +893,9 @@ private fun imageGenerationErrorMessage(error: String?): String = when (error) {
     null -> ""
     "image_model_unavailable" -> stringResource(R.string.imggen_page_error_no_model)
     "unknown" -> stringResource(R.string.imggen_page_error_generic)
+    else if error.startsWith("managed_configuration_locked:") -> stringResource(
+        R.string.managed_configuration_locked,
+        error.substringAfter(':').ifBlank { "managed" },
+    )
     else -> stringResource(imageGenerationFailureStringRes(error))
 }

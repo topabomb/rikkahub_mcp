@@ -1537,5 +1537,12 @@
   <string name="workspace_terminal_command_failed">터미널 작업에 실패했습니다</string>
   <string name="setting_provider_page_mutation_failed">제공자 설정 작업에 실패했습니다</string>
   <string name="skills_page_import_resource_limit">Skill 패키지가 안전한 가져오기 한도를 초과했습니다</string>
+  <string name="managed_configuration_active">관리 구성 사용 중</string>
+  <string name="managed_configuration_degraded">관리 구성이 만료되었습니다. 마지막으로 검증된 구성을 계속 사용합니다</string>
+  <string name="managed_configuration_blocked">관리 구성을 사용할 수 없습니다: %1$s</string>
+  <string name="managed_configuration_locked">관리 구성에서 이 변경을 잠갔습니다: %1$s</string>
+  <string name="managed_configuration_source_builtin">기본 제공</string>
+  <string name="managed_configuration_source_local">로컬</string>
+  <string name="managed_configuration_source_managed">관리됨</string>
 </resources>
 

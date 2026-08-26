@@ -25,7 +25,6 @@ class SingleWriterContractTest {
     fun `removed compatibility surfaces cannot return`() {
         listOf(
             "ConversationSnapshot.toConversation(",
-            "loadSnapshot(",
             "updateConversationState",
             "updatePersistedConversation",
             "submitHeaderUpdate",

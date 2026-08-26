@@ -40,7 +40,7 @@ Target.allowAsSubAssistant
     || Target.isSubAssistantGloballyVisible)
 ```
 
-关闭 `allowAsSubAssistant` 时，`AssistantDetailVM` 通过 `SettingsStore.updateAtomic` 同时关闭全局可见，并从所有 Assistant 的允许列表移除该 ID。配置写入成功后才发布新的 `settingsFlow`，避免内存状态领先于持久化状态。
+关闭 `allowAsSubAssistant` 时，`AssistantDetailVM` 通过 `SettingsStore.updateLocal` 同时关闭全局可见，并从所有 Assistant 的允许列表移除该 ID。Local shadow 落盘成功后才由 `SettingsStore` 发布新的有效配置快照，避免内存状态领先于持久化状态。
 
 ### Catalog
 

@@ -544,8 +544,9 @@ Verified managed ──┘                              ├─ settings
 
 - 现有 DataStore 继续只保存本地 `Settings`；
 - 已验证受管快照作为不可变、签名的文档 aggregate 保存到 app-private 原子文件；
-- 受管公开记录只保存 secret reference，generation 专属密钥材料放入 Android Keystore 支持的存储；
-- `settingsFlowRaw` 变为 Store 私有实现，业务消费者统一订阅唯一有效快照；
+- 企业分发的密钥材料与设备定向协议尚未定稿；本轮受管记录沿用既有 `Settings` 的明文配置字段，
+  不引入 `secretRef`、generation 专属密钥文件、Android Keystore owner 或未经定义的 `deviceId` target；
+- Local shadow 的原始 DataStore 流变为 Store 私有实现，业务消费者统一订阅唯一有效快照；
 - 同 id 的受管记录覆盖运行时有效值，本地记录作为 shadow 保留，不被受管载荷反写或删除；
 - UI 从有效快照读取来源和 lock reason，但授权仍在 Store 写入边界重新验证。
 
@@ -559,8 +560,8 @@ Verified managed ──┘                              ├─ settings
 #### 7.2.1 受管 envelope 不是远端 `Settings` JSON
 
 服务端完整下发使用独立、版本化的 `ManagedConfigurationEnvelope`，不能直接序列化当前 `Settings` 数据类。envelope 的
-逻辑结构固定为：签名元数据（schema、tenant/device、generation、有效期）+ 按稳定 id 归一化的公开记录 + 引用边 +
-lock index + secret/asset 引用。即使物理上是一个文档，记录也不能内嵌另一份可独立寻址记录或用显示名/下标建立关系。
+逻辑结构固定为：签名元数据（schema、tenant、generation、有效期）+ 按稳定 id 归一化的记录 + 引用边 +
+lock index + asset 引用。即使物理上是一个文档，记录也不能内嵌另一份可独立寻址记录或用显示名/下标建立关系。
 验签 trust anchor 来自应用内置 keyset 或已由旧可信 key 签名的轮换包，envelope 不能自带一个未经信任的公钥证明自己；
 已接受的 tenant/device/generation 与 active envelope 同一原子提交，防止重放旧包。
 
@@ -569,13 +570,13 @@ lock index + secret/asset 引用。即使物理上是一个文档，记录也不
 | 字段类别 | 受管 envelope | 有效读模型规则 |
 | --- | --- | --- |
 | Provider/Model/Assistant/MCP/TTS/ASR/Search 的公开配置 | 按稳定 id 与引用边下发 | 同 id 受管记录覆盖 local shadow；引用图必须在同 generation、Built-in 或协议明确允许的本地能力内闭合 |
-| API key、OAuth token、密码和设备凭据 | 只允许 `secretRef`，禁止明文进入公开记录 | 验证阶段绑定 generation 专属 Keystore material；缺失即整包拒绝 |
+| API key、密码和 MCP headers | 当前与本地 `Settings` 一样随所属记录明文保存 | 企业密钥分发协议定稿前不增加第二个密钥 owner；OAuth token 始终是设备本地状态 |
 | 头像、背景、Skill 等受管资源 | 只允许同 generation 的签名 asset/ref | 发布前全部落入 generation staging；禁止服务端传主机绝对路径或任意 `file://` URI |
 | `Assistant.workspaceId`、Workspace root/content、terminal 状态 | 不允许下发，managed Assistant 中该字段必须为空 | Workspace 是设备/用户数据；V2 不增加象征性 workspace binding 或把本地 id 猜成服务端引用 |
 | 设备 UI 偏好、缓存、诊断、备份端点 | 不允许下发 | 始终取本地值，不进入 lock index |
 | 默认选择、策略和能力开关 | 使用稳定 id/具名字段下发，可单独锁定 | 不用列表位置，不复制为 UI 本地状态 |
 
-启动顺序固定为 local DataStore materialize → 读取并重新验签当前受管 envelope → 校验 secret/assets/引用图 → 生成一个
+启动顺序固定为 local DataStore materialize → 读取并重新验签当前受管 envelope → 校验 assets/引用图 → 生成一个
 `EffectiveSettingsSnapshot` → 发布后开放配置依赖的恢复门禁。`managedState` 只取 `ABSENT/ACTIVE/DEGRADED/BLOCKED`：无
 受管包为 `ABSENT`；已验证且未过期为 `ACTIVE`；过期或传输中断但仍有 LKG 为 `DEGRADED`；启动时存在受管包却无法验签、
 解密或闭合引用且没有可用 LKG 为 `BLOCKED`。`BLOCKED` 不得回退 local shadow 继续执行 AI/MCP，只允许 UI 展示诊断和接收
@@ -587,21 +588,17 @@ lock index + secret/asset 引用。即使物理上是一个文档，记录也不
 
 ```kotlin
 val effectiveSettings: StateFlow<EffectiveSettingsSnapshot>
-suspend fun updateLocal(
-    source: LocalSettingsWriteSource,
-    transform: (Settings) -> Settings,
-): Settings
+suspend fun updateLocal(transform: (Settings) -> Settings): Settings
 suspend fun restoreLocal(snapshot: Settings): Settings
 internal suspend fun applyManagedSnapshot(envelope: ByteArray): ManagedApplyResult
 ```
 
-普通 UI、市场导入和备份恢复不能获得 `applyManagedSnapshot`。来源仍作为写入上下文保留，但不再通过一个可替换的
-`SettingsWritePolicy.AllowAll` 占位接口表达。V2 将真实 lock/generation 校验作为 Store 内的纯函数，在同一个 mutex 内
-针对最新 local 与 managed generation 执行。`LocalSettingsWriteSource` 只包含 `LOCAL` 与 `MARKETPLACE_IMPORT`；备份使用
-专用 `restoreLocal`，服务端来源只能进入 internal managed apply，因此 `BACKUP_RESTORE` 与 `ENTERPRISE_DELIVERY` 都不再是
-普通更新入口可传入的枚举值。
+普通 UI、市场导入和备份恢复不能获得 `applyManagedSnapshot`。来源是有效读模型的事实，不是调用方可伪造的写入参数；
+V2 将真实 lock/generation 校验作为 Store 内的纯函数，在同一个 mutex 内针对最新 local 与 managed generation 执行。
+备份使用专用 `restoreLocal`，服务端来源只能进入 internal managed apply；普通更新入口没有 `BACKUP_RESTORE`、
+`ENTERPRISE_DELIVERY` 或其他可伪造的来源枚举。
 
-锁定记录的写语义也不留给 UI 猜测：`LOCAL`/`MARKETPLACE_IMPORT` 命中受管锁时整次更新失败且不改 local shadow；
+锁定记录的写语义也不留给 UI 猜测：普通本地更新命中受管锁时整次更新失败且不改 local shadow；
 `restoreLocal` 可以原子替换完整本地快照，但当前 effective 值仍由 managed 覆盖，只有签名撤回后新 shadow 才可见。未命中
 lock 的本地记录继续可编辑，禁止为受管状态建立另一套 update API。
 
@@ -613,12 +610,12 @@ lock 的本地记录继续可编辑，禁止为受管状态建立另一套 updat
 受管快照应用固定为：
 
 1. 有界读取和解析 staging envelope；
-2. 验证签名、tenant/device 约束、schema 和单调 generation；
+2. 验证签名、tenant 约束、schema 和单调 generation；
 3. 验证稳定 id 唯一、引用图闭合、默认选择存在、策略合法；
-4. 写入 generation 专属 secrets/assets，任何失败都不改变有效 generation；
+4. 写入 generation 专属 assets，任何失败都不改变有效 generation；
 5. 原子替换受管 envelope；
 6. 在持久化成功后一次发布新的 `EffectiveSettingsSnapshot`；
-7. 异步清理不再被现 generation 引用的旧 secret/assets。
+7. 异步清理不再被现 generation 引用的旧 assets。
 
 验签失败、版本倒退、依赖缺失或资源不完整时继续使用上一份 last-known-good，不能发布半包。快照过期只把
 `managedState` 标记为 expired/degraded 并提示用户，不能自动暴露本地 shadow 绕过策略；只有更高 generation 的已签名
@@ -661,7 +658,7 @@ ConnectionSlot(serverId)
 - job 只能修改拥有它的 slot，revision/fingerprint 变化后旧 job 的结果被拒绝；
 - `callTool` 在 slot mutex 内确认 client 与最新 fingerprint 匹配，取消继续传播；
 - 对外状态是 slots 的只读投影，不再另有可独立修改的 `_status` 权威；
-- managed MCP secret 通过 secret reference 解析，OAuth token 仍为设备本地状态，不进入服务端快照。
+- managed MCP headers 仍作为既有配置记录字段解析；OAuth token 始终为设备本地状态，不进入服务端快照。
 
 实施后删除上述并行 map、`getServerLock`、重复 `createAndConnect/reconnect/syncAll` 决策分支；保留一个 Manager 是因为
 它确实拥有多连接进程资源，不能为了删类把 client 生命周期塞入 SettingsStore。`McpConnectionKey` 作为 slot 的 private
@@ -795,6 +792,7 @@ V2 默认不改变 Room 结构。若实施中发现确需关系化新事实，�
 | MCP 重复重连决策 | `getServerLock` 及 `addClient/createAndConnect/reconnectClient/syncAll` 中重复的 create/update/remove 分支 | 一个 `reconcile(revision, desiredConfigs)`；连接、工具刷新、OAuth 均作为 slot transition |
 | `ArtifactStore.adoptSettingsOwnedImages` | 启动调用和 `ArtifactStoreLifecycleTest` 中 adoption 专用场景 | 当前 typed ownership；缺 metadata 视为损坏而非静默补写 |
 | 可替换的 `SettingsWritePolicy` 接口与 `AllowAll` 实现 | Store 构造参数、测试 fake policy、`ENTERPRISE_DELIVERY` 可伪造来源 | `SettingsWriteRules` 内唯一纯 lock/generation 校验；managed apply 是 internal 专用入口 |
+| 未读取的 `data_version` key 声明 | 不进入 `Settings`、无 migration 或 writer 的死声明；既有 DataStore 标量不删除 | `Preferences` 的未知 key 透传保留，不创建新的 version owner |
 | 运行时 Search 下标身份 | `Settings.searchServiceSelected: Int` 及 index fallback | `selectedSearchServiceId: Uuid?`；旧 key 只在一次性 DataStore migration 中读取 |
 | `WorkspaceTerminalQueryService.kt` | DI 注册、VM import 和该 service mock | `WorkspaceQueryService.observeTerminal` |
 | 重复 Skill 单目录事务骨架 | 三个 API 内各自的 copy/stage/validate/publish/finally 流程 | `SkillManager.mutateSkillTree` private 模板；公开 API 不变 |
@@ -812,7 +810,6 @@ V2 默认不改变 Room 结构。若实施中发现确需关系化新事实，�
 | `generateText(...)` | `GenerationLoop.run(GenerationRequest)` | 删除超长参数表；请求模型定义在同文件，不新增 `TurnSpec`/handler 层 |
 | `PreferencesStore.kt` | `SettingsStore.kt` | 文件中的真实 owner 已是 `SettingsStore`，旧文件名失真 |
 | `SettingsWritePolicy.kt` | `SettingsWriteRules.kt` | 不再存在可替换 policy 接口，只保存来源和值规则 |
-| `SettingsWriteSource` | `LocalSettingsWriteSource` | 枚举只保留 `LOCAL`、`MARKETPLACE_IMPORT`；备份改走 `restoreLocal`，managed 改走 internal apply |
 | `SettingsCommitCoordinator.kt` | `SettingsCommit.kt` | 保留纯 `commitSettings` 顺序，但不把单函数称为 Coordinator |
 | `settingsFlow` | `effectiveSettings` | 所有业务消费者明确读取 Local + Managed + Built-in 的有效快照 |
 | `searchServiceSelected` | `selectedSearchServiceId` | 选择身份从列表位置改为稳定 id |
@@ -833,7 +830,7 @@ V2 默认不改变 Room 结构。若实施中发现确需关系化新事实，�
 | Workspace persisted + terminal read projection | `WorkspaceQueryService.kt` | `WorkspaceTerminalRuntime` 继续独占 PTY 生命周期 |
 | shell 与 terminal 的 PRoot 参数装配 | `workspace/.../ProotLaunchSpec.kt` | `ProotShellRunner` 与 Termux session adapter 继续分开 |
 | Skill 单目录 save/import/delete staging | `SkillManager.mutateSkillTree` | bundle root transaction 与 Backup restore 不合并 |
-| Local/Managed/Built-in 配置读模型 | `SettingsStore.effectiveSettings` | Local DataStore、managed 原子文件、Keystore 仍是不同基础设施 |
+| Local/Managed/Built-in 配置读模型 | `SettingsStore.effectiveSettings` | Local DataStore 与 managed 原子文件仍是不同基础设施 |
 | model modality、endpoint/profile 与各 serializer 的图片判断 | `Provider.requestMediaCapabilities(...)` 返回一个请求级值对象 | Provider serializer 保留各自 wire 结构；Transformer 仍独占来源内投影 |
 
 ### 11.4 必须修改
@@ -858,7 +855,7 @@ V2 默认不改变 Room 结构。若实施中发现确需关系化新事实，�
 | Chat/Responses/Claude/Gemini serializer | 只编码 capability 允许的 media container；native 编码失败 fail-fast；保留协议要求的外层 role 和 tool call 顺序 | 静默丢图片、补空文本或把 tool/assistant 图片伪装成用户图片 |
 | `ResponseAPI` raw replay | 原 `response.output` group/call 顺序不变；只把请求投影 marker 在对应 assistant replay 后追加一次 | 重建 opaque output、重复可见文本或 marker 进入 durable metadata |
 | `SettingsStore` 与全部 `settingsFlow` 生产消费者 | Store 发布 `effectiveSettings`；消费者改读同一 `EffectiveSettingsSnapshot.settings/source/lock/revision`，raw Flow 降为 Store 私有 | Local/Managed 双读、consumer 自行补默认或按来源合并 |
-| `ManagedConfiguration.kt` / `EffectiveSettings.kt` | 按 §7.2.1 实现 envelope、验签、LKG、四态 managed state、原子资源与唯一纯 resolver | 直接反序列化远端 `Settings`、第二个公开 Store/Flow、无 LKG 时静默回退 local |
+| `ManagedConfiguration.kt` / `EffectiveSettings.kt` | 按 §7.2.1 实现 envelope、验签、LKG、四态 managed state、原子 asset 与唯一纯 resolver | 直接反序列化远端 `Settings`、第二个公开 Store/Flow、无 LKG 时静默回退 local |
 | Settings 写入入口与设置 UiModel | LOCAL/market 命中 lock 时原子拒绝；restore 只替换 shadow；原页面显示 source/lock/blocked diagnostic | 只禁用 Compose 控件、为 managed 建第二套页面/ViewModel、写失败后发布假 effective 值 |
 | Search 设置与全部搜索消费者 | `selectedSearchServiceId` 一次迁移后只按稳定 id 读写；删除旧 key 与运行时 index fallback | 同时维护 id/index，或排序后靠位置猜选中项 |
 | `McpManager` | 每个 server 只有一个 `ConnectionSlot`；配置、网络、前台、手动刷新统一调用 revision-aware `reconcile` | 平行 map、每种触发源复制连接主链、stale job 覆盖新配置 |
@@ -918,7 +915,7 @@ V2 只允许新增四个生产文件，其他新文件必须先修改本方案�
 | 范围 | 基线文件/行数 | V2 上限 | 约束来源 |
 | --- | ---: | ---: | --- |
 | Conversation/Turn：`service/runtime/*.kt` + Master/Finalization/Recovery/SideEffects/SubAssistant Gate/Lease + `GenerationHandler.kt` | 18 / 6,867 | 5,800 | 删除双 planner、Runtime 写协议、多 turn 状态、无用事件和重复终态逻辑 |
-| Settings：`data/datastore/*.kt`，包含两个新增 managed 文件 | 6 / 1,017 | 1,500 | 新能力有 483 行净预算；超过即说明协议或文件拆分过度 |
+| Settings 本地/有效读模型：`data/datastore/*.kt`，不含 `ManagedConfiguration.kt` | 6 / 1,017 | 1,250 | 本地持久化、默认物化和有效读模型只能净增加 233 行；超过即说明旧链路删除或职责收敛不足 |
 | MCP：`data/ai/mcp/*.kt` | 7 / 1,890 | 1,450 | 八组 parallel map 和多条 reconnect 决策收成 slot/reconcile |
 | Artifact/Skill：`data/files/*.kt` | 14 / 2,681 | 2,450 | 删除 adoption 与重复单目录事务，不删状态机 |
 | Workspace：app workspace service + `workspace/src/main` | 13 / 2,402 | 2,170 | 合并 query 和 PRoot 装配 |
@@ -932,10 +929,15 @@ model-only 判断、全局 hint/fallback 和重复 serializer 分支抵消；不
 仓库全部 `src/main/**/*.kt` 同一基线为 610 个文件、125,713 行；V2 最终不得超过 124,713 行。UI/Application 消费者的
 必要适配也包含在这个仓库总上限内，不能把核心代码搬到其他包规避核心预算。
 
+`ManagedConfiguration.kt` 是 §11.6 白名单中的未来受管配置 document aggregate，不设单独的行数上限；企业分发协议尚未冻结时，
+不得为了凑 Settings 子预算删除验签、图校验、原子 generation 资源发布或失败关闭。它必须维持为 `SettingsStore` 的同包 internal
+协作者，不能借此拆出公开 Store、Flow 或额外生产文件。该文件仍计入核心和全仓总量，并在每阶段账本中单独报告物理行数；全局
+13,370 行核心上限不因这个例外提高，其他域须共同吸收其预留成本。
+
 执行规则：
 
 1. Phase B、D、E 每个纯重构阶段的生产代码必须独立净减少；
-2. Phase C 可以净增加，但 Settings 总量不得超过 1,500 行，新增文件不得超出 §11.6；
+2. Phase C 可以净增加，但 Settings 本地/有效读模型不得超过 1,250 行；`ManagedConfiguration.kt` 单独报告且新增文件不得超出 §11.6；
 3. 测试与文档单独统计，行为测试允许增加；删除源码形状测试不能抵扣生产代码预算；
 4. 每阶段记录 `git diff --numstat`、核心范围总量、全仓生产总量和删除账本完成项；
 5. 删除空行、长期有效注释、错误处理、日志诊断或把多语句压成一行不计入架构减法；
@@ -1028,7 +1030,7 @@ Phase 不得开始。
 - 不实现未定义的服务器 endpoint，只完成 transport adapter 能调用的核心原子 apply contract。
 
 退出条件：本地提交失败不发布；受管坏包/旧 generation/缺依赖不发布；撤回必须由新签名 generation 驱动；所有消费者
-只看到同一 effective revision；Settings 核心不超过 1,500 行；§11.8 的全部设置、Search、MCP 配置输入和 managed UI
+只看到同一 effective revision；Settings 本地/有效读模型不超过 1,250 行，`ManagedConfiguration.kt` 单独报告；§11.8 的全部设置、Search、MCP 配置输入和 managed UI
 路径完成自动化与设备复验。
 
 ### Phase D：Conversation 与 Turn 主链收敛
@@ -1128,9 +1130,9 @@ Artifact/Skill、Workspace 分别不超过 §11.7 上限；对应设置页、Pic
 - local、backup、market 写入在最新 managed lock 下重验；UI disabled 不是授权依据；
 - LOCAL/market 命中 lock 时整次失败且 shadow 不变；restore 可以替换 shadow，但 effective revision 仍保持 managed 值；
 - local shadow 被 managed 同 id 覆盖但不丢失，签名撤回后按协议恢复；
-- 签名失败、未授权自带公钥、tenant/device 不符、generation 重放/倒退、重复 id、悬空引用、缺 secret/asset 均保持 LKG；
+- 签名失败、未授权自带公钥、tenant 不符、generation 重放/倒退、重复 id、悬空引用、缺 asset 均保持 LKG；
 - 启动时 active envelope 损坏且无可用 LKG 时进入 `BLOCKED`，AI/MCP 不启动；不存在受管包时为 `ABSENT` 且本地行为不变；
-- 写 secrets/assets 后、envelope rename 前杀进程不会发布半包；重启能清理未引用 generation；
+- 写 assets 后、envelope rename 前杀进程不会发布半包；重启能清理未引用 generation；
 - expired 快照不自动解除 lock；明确撤回 generation 才改变有效图；
 - Search index→id 一次迁移后旧 key 删除，排序/删除/managed overlay 不会改变选择身份；
 - MCP 只消费完整 effective revision，不观察半新半旧配置。

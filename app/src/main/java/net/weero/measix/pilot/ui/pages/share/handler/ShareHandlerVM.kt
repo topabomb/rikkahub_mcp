@@ -1,8 +1,9 @@
-﻿package net.weero.measix.pilot.ui.pages.share.handler
+package net.weero.measix.pilot.ui.pages.share.handler
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
@@ -13,10 +14,10 @@ class ShareHandlerVM(
     private val settingsStore: SettingsStore
 ) : ViewModel() {
     val shareText = checkNotNull(text)
-    val settings = settingsStore.settingsFlow
+    val settings = settingsStore.effectiveSettings.map { it.settings }
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
     suspend fun updateAssistant(assistantId: Uuid) {
-        settingsStore.updateAssistant(assistantId)
+        settingsStore.updateLocal { settings -> settings.copy(assistantId = assistantId) }
     }
 }

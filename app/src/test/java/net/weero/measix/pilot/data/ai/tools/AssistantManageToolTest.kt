@@ -16,6 +16,7 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.AssistantDeletionResult
 import net.weero.measix.pilot.service.AssistantManagementService
@@ -39,10 +40,9 @@ class AssistantManageToolTest {
         deleted: AssistantDeletionResult? = null,
     ): AssistantToolFactory {
         val settings = Settings(assistants = assistants, assistantId = callerId)
-        val settingsFlow = MutableStateFlow(settings)
+        val effectiveSettings = MutableStateFlow(settings.toEffectiveSettingsSnapshot())
         val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.settingsFlow } returns settingsFlow
-        every { settingsStore.settingsFlow.value } returns settingsFlow.value
+        every { settingsStore.effectiveSettings } returns effectiveSettings
 
         val managementService = mockk<AssistantManagementService>()
         if (created != null) {

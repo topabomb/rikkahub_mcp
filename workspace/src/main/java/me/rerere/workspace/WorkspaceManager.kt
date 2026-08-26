@@ -5,6 +5,9 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 
 class WorkspaceManager(
     private val baseDir: File,
@@ -43,6 +46,55 @@ class WorkspaceManager(
     fun hasRootfs(root: String): Boolean = File(linuxDir(root), "bin/sh").isFile
 
     fun deleteWorkspace(root: String): Boolean = workspaceDir(root).deleteRecursively()
+
+    /** Keeps a workspace recoverable while its external Settings references are committed. */
+    fun stageWorkspaceDeletion(root: String): Boolean {
+        val workspace = workspaceDir(root)
+        val staging = workspaceDeletionStagingDir(root)
+        return workspace.isDirectory && !staging.exists() && workspace.renameTo(staging)
+    }
+
+    fun restoreStagedWorkspaceDeletion(root: String): Boolean {
+        val workspace = workspaceDir(root)
+        val staging = workspaceDeletionStagingDir(root)
+        return staging.isDirectory && !workspace.exists() && staging.renameTo(workspace)
+    }
+
+    fun deleteStagedWorkspace(root: String): Boolean = workspaceDeletionStagingDir(root).deleteRecursively()
+
+    /** Stores only a pending deletion's recovery payload next to the staged tree. */
+    fun writeWorkspaceDeletionJournal(root: String, payload: ByteArray): Boolean {
+        val staging = workspaceDeletionStagingDir(root)
+        if (!staging.isDirectory) return false
+        val journal = workspaceDeletionJournal(root)
+        val temporary = File(journal.parentFile, ".${journal.name}.${System.nanoTime()}")
+        return try {
+            temporary.writeBytes(payload)
+            Files.move(temporary.toPath(), journal.toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
+            true
+        } catch (_: Exception) {
+            if (temporary.exists()) temporary.delete()
+            false
+        }
+    }
+
+    fun readWorkspaceDeletionJournal(root: String): ByteArray? = workspaceDeletionJournal(root)
+        .takeIf(File::isFile)
+        ?.readBytes()
+
+    fun clearWorkspaceDeletionJournal(root: String): Boolean {
+        val journal = workspaceDeletionJournal(root)
+        return !journal.exists() || journal.delete()
+    }
+
+    fun hasStagedWorkspaceDeletion(root: String): Boolean = workspaceDeletionStagingDir(root).isDirectory
+
+    /** A process that died before deleting the staged tree preserves user data by restoring it. */
+    fun recoverStagedWorkspaceDeletion(root: String): Boolean {
+        val workspace = workspaceDir(root)
+        val staging = workspaceDeletionStagingDir(root)
+        return !staging.exists() || (workspace.isDirectory || staging.renameTo(workspace))
+    }
 
     fun listFiles(
         root: String,
@@ -239,6 +291,12 @@ class WorkspaceManager(
 
         private val ROOT_NAME_REGEX = Regex("[A-Za-z0-9._-]+")
     }
+
+    private fun workspaceDeletionStagingDir(root: String): File =
+        File(workspaceDir(root).parentFile, ".workspace-delete-$root")
+
+    private fun workspaceDeletionJournal(root: String): File =
+        File(workspaceDir(root).parentFile, ".workspace-delete-$root.journal")
 }
 
 data class RootfsLocation(

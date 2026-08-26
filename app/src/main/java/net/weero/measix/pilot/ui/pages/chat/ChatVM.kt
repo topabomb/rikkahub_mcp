@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -24,6 +25,7 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.isEmptyInputMessage
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getConversationAssistant
 import net.weero.measix.pilot.data.model.Assistant
@@ -140,7 +142,7 @@ class ChatVM(
 
     // 用户设置
     val settings: StateFlow<Settings> =
-        settingsStore.settingsFlow.stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
+        settingsStore.effectiveSettings.map { it.settings }.stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
     // 网络搜索(每个助手独立)
     val enableWebSearch = combine(settings, snapshot) { currentSettings, currentSnapshot ->
@@ -165,14 +167,18 @@ class ChatVM(
     // 更新设置
     fun updateSettings(transform: (Settings) -> Settings): Job {
         return viewModelScope.launch {
-            var previousAvatar: Avatar? = null
-            val committed = artifactUseCase.updateSettingsReferences { current ->
-                val updated = transform(current)
-                previousAvatar = current.displaySetting.userAvatar
-                updated
-            }
-            previousAvatar?.let { oldAvatar ->
-                if (oldAvatar != committed.displaySetting.userAvatar) artifactUseCase.maintainStorage()
+            try {
+                var previousAvatar: Avatar? = null
+                val committed = artifactUseCase.updateSettingsReferences { current ->
+                    val updated = transform(current)
+                    previousAvatar = current.displaySetting.userAvatar
+                    updated
+                }
+                previousAvatar?.let { oldAvatar ->
+                    if (oldAvatar != committed.displaySetting.userAvatar) artifactUseCase.maintainStorage()
+                }
+            } catch (error: SettingsLockedException) {
+                reportLockedSettingsChange(error)
             }
         }
     }
@@ -192,14 +198,18 @@ class ChatVM(
         viewModelScope.launch {
             val enableWebSearch = searchModeEnablesLocal(mode)
             val enableBuiltIn = searchModeEnablesBuiltIn(mode)
-            settingsStore.update { settings ->
-                applySearchMode(
-                    settings = settings,
-                    assistantId = assistantId,
-                    modelId = model?.id,
-                    enableWebSearch = enableWebSearch,
-                    enableBuiltIn = enableBuiltIn,
-                )
+            try {
+                settingsStore.updateLocal { settings ->
+                    applySearchMode(
+                        settings = settings,
+                        assistantId = assistantId,
+                        modelId = model?.id,
+                        enableWebSearch = enableWebSearch,
+                        enableBuiltIn = enableBuiltIn,
+                    )
+                }
+            } catch (error: SettingsLockedException) {
+                reportLockedSettingsChange(error)
             }
         }
     }
@@ -207,19 +217,26 @@ class ChatVM(
     // 设置聊天模型
     fun setChatModel(assistant: Assistant, model: Model) {
         viewModelScope.launch {
-            settingsStore.update { settings ->
-                settings.copy(
-                    assistants = settings.assistants.map {
-                        if (it.id == assistant.id) {
-                            it.copy(
-                                chatModelId = model.id
-                            )
-                        } else {
-                            it
-                        }
-                    })
+            try {
+                settingsStore.updateLocal { settings ->
+                    settings.copy(
+                        assistants = settings.assistants.map {
+                            if (it.id == assistant.id) it.copy(chatModelId = model.id) else it
+                        },
+                    )
+                }
+            } catch (error: SettingsLockedException) {
+                reportLockedSettingsChange(error)
             }
         }
+    }
+
+    private fun reportLockedSettingsChange(error: SettingsLockedException) {
+        chatErrorStore.add(
+            error = error,
+            conversationId = _conversationId,
+            title = context.getString(R.string.error_title_operation),
+        )
     }
 
     // Update checker — 共享 UpdateChecker 的缓存 StateFlow，App 生命周期内只请求一次
@@ -329,7 +346,11 @@ class ChatVM(
         viewModelScope.launch {
             conversationApplicationService.moveToAssistant(conversationId, targetAssistantId)
             if (conversationId == _conversationId) {
-                settingsStore.updateAssistant(targetAssistantId)
+                try {
+                    settingsStore.updateLocal { settings -> settings.copy(assistantId = targetAssistantId) }
+                } catch (error: SettingsLockedException) {
+                    reportLockedSettingsChange(error)
+                }
             }
         }
     }

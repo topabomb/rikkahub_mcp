@@ -86,7 +86,7 @@ class BackupArchiveService(
                                 File(context.cacheDir, "backup_database_$unique.sqlite").also(::createDatabaseSnapshot)
                             } else null
                             try {
-                                val liveSettings = settingsStore.settingsFlow.first { !it.init }
+                                val liveSettings = settingsStore.snapshotLocal()
                                 val archiveSettings = if (selection.includeDurableAggregate) {
                                     liveSettings
                                 } else {

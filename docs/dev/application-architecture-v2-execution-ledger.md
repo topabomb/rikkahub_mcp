@@ -25,6 +25,13 @@ managed Settings root to already have an `ACTIVE` Artifact row. A missing row is
 failure: the root and payload are retained for diagnosis, but no metadata is guessed or inserted.
 The lifecycle test covers both avatar and background on a sub-assistant record.
 
+The migration lesson is explicit: a file payload, its metadata and its Settings root form one
+ownership handoff, not three eventually-consistent writes. The current writer stages through
+`ArtifactUseCase` and publishes only after the Settings root is committed. Historical repair was
+appropriate only at the released 0.0.18 boundary that could still encounter the old writer's
+interruption window; after that coverage was verified, retaining a general startup scanner would
+turn corruption into a second owner and conceal future writer defects.
+
 `CheckpointWriteAmplificationTest` also injects a `TurnExecutionDAO.insert` failure after the
 assistant slot write in a real in-memory Room transaction and verifies that no message node remains.
 This keeps the current writer's “slot and running turn fact are one atomic commit” invariant under
@@ -66,7 +73,8 @@ then displayed the recovery gate for a Settings root without `ACTIVE` Artifact m
 the current binary does not invoke adoption. At that later check the named payload was no longer
 present, so this is evidence for the current fail-closed gate only, not a second proof that a
 payload-only missing-metadata state is retained. The historical proof above remains the adoption
-branch evidence.
+branch evidence. The subsequent normal-path checks record the current-binary avatar/background
+coverage; sent-message attachment preview, deletion and GC remain open.
 
 After clearing the synthetic Debug fixture, the same current APK completed the ordinary assistant
 avatar picker and crop flow. It created `files/upload/1cf9bb3e-70a1-4072-9edc-adbfae9a1eb5.png`
@@ -75,12 +83,13 @@ screen. From File Management, the current APK then previewed a user image, selec
 assistant, and confirmed “set as background.” That transaction created
 `upload/9b744313-cd6c-42ed-893b-fd5d558f38da.png`; after force-stop/restart the persisted assistant
 still referenced it and each of the three upload rows was `ACTIVE`, `USER`. This proves the current
-binary avatar/background ownership and restart paths.
+binary avatar/background ownership and restart paths. Sent-message attachment preview, deletion
+and GC remain open device cases.
 
 The current APK's chat overflow photo action also copied a selected image into a second upload
 payload and displayed its `41.png` attachment chip in the new-chat composer. No model was
-configured, so this records the attachment selection/copy presentation path, not a sent-message
-preview.
+configured, so this records only the attachment selection/copy presentation path, not sent-message
+preview, deletion or GC behavior.
 
 File Management's delete action was then invoked for a background-referenced payload. The current
 APK presented the exact impact (“used as one assistant background”) and warned that removed
@@ -104,3 +113,40 @@ GC, root-protection, image-preview action, and restart paths without touching us
 Room migrations 1 through 8, their schemas, `SettingsOcrMigration`, search-selection DataStore
 migration, and legacy backup JSON decoding remain intact. None of these are historical-error
 repairs; they are published persistence or import contracts.
+
+## Phase C: configuration aggregate and managed snapshot
+
+`PreferencesStore.kt`, `SettingsCommitCoordinator.kt`, and the replaceable
+`SettingsWritePolicy`/`AllowAll` path are removed. Their responsibilities now have one public
+owner: `SettingsStore`. It publishes only `effectiveSettings`; its same-package internal
+collaborators have non-overlapping duties: `EffectiveSettingsResolver` merges Built-in, Local shadow
+and verified managed data, `SettingsWriteRules` rejects locked Local changes, `commitSettings`
+normalizes, persists, materializes and only then publishes, and `ManagedConfigurationStorage`
+owns the signed envelope, LKG and atomic generation files. No consumer reads a raw Local flow or
+merges configuration itself.
+
+The DataStore name, existing keys, Room schemas and backup format are unchanged. The one allowed
+DataStore migration reads the historical `search_selected` index once, writes
+`selectedSearchServiceId`, and removes the old key; runtime index fallback and dual-read code are
+absent. Local writes continue to change only the Local shadow. A managed overlay may lock a path,
+but it neither overwrites the Local shadow nor creates another writer; expiry retains the active
+overlay and locks until a newer signed generation explicitly changes them.
+
+The Settings local/effective group is 1,249 physical Kotlin lines (limit 1,250):
+`DefaultProviders.kt` 49, `EffectiveSettings.kt` 168, `SettingsCommit.kt` 17,
+`SettingsNormalization.kt` 77, `SettingsOcrMigration.kt` 96, `SettingsStore.kt` 778 and
+`SettingsWriteRules.kt` 64. `ManagedConfiguration.kt` is reported separately at 558 lines, as the
+plan permits for the future managed document aggregate; it remains an internal collaborator, not a
+second Store or Flow.
+
+The automated Phase C evidence covers normalized local persistence and no publish-on-failure,
+lock rejection without shadow mutation, managed signature/tenant/generation/graph validation, LKG
+retention, managed-state publication, search identity migration, all affected Settings consumers,
+and user-visible managed-lock feedback. The cross-owner Workspace deletion path also uses the same
+`SettingsStore.updateLocal` contract: before physical deletion it can compensate a journaled
+Assistant binding; after physical deletion starts it remains `BROKEN` and retains its journal until
+both filesystem cleanup and a one-row Room deletion are confirmed. Its failure tests cover normal,
+retry and startup recovery paths.
+
+The required device matrix for Settings, Search, MCP configuration input and managed UI has not
+been rerun for this Phase C commit. JVM tests and builds do not constitute device acceptance.

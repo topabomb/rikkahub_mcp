@@ -31,7 +31,7 @@ class CustomChatFontService(
     /** Recovers interrupted imports and removes file roots that no longer have a Settings owner. */
     suspend fun reconcile() = BackupSnapshotBarrier.withLock {
         withContext(NonCancellable) {
-            val committed = settingsStore.updateAtomicAndGet { current ->
+            val committed = settingsStore.updateLocal { current ->
                 val display = current.displaySetting
                 val retained = resolveManagedFont(display.chatCustomFontPath)?.takeIf(File::isFile)
                 val hasBrokenReference = display.chatCustomFontPath.isNotBlank() && retained == null
@@ -67,7 +67,7 @@ class CustomChatFontService(
                 }
 
                 withContext(NonCancellable) {
-                    val committed = settingsStore.updateAtomicAndGet { current ->
+                    val committed = settingsStore.updateLocal { current ->
                         current.copy(
                             displaySetting = current.displaySetting.copy(
                                 chatFontFamily = ChatFontFamily.CUSTOM,
@@ -98,7 +98,7 @@ class CustomChatFontService(
      */
     suspend fun remove(expectedRelativePath: String): DisplaySetting = BackupSnapshotBarrier.withLock {
         withContext(NonCancellable) {
-            val committed = settingsStore.updateAtomicAndGet { current ->
+            val committed = settingsStore.updateLocal { current ->
                 val display = current.displaySetting
                 if (display.chatCustomFontPath != expectedRelativePath) {
                     current

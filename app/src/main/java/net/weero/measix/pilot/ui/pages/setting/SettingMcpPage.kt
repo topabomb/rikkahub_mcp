@@ -115,6 +115,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import me.rerere.hugeicons.stroke.McpServer
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
+import net.weero.measix.pilot.data.datastore.ManagedConfigurationRecordKind
 import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.data.ai.mcp.McpParseResult
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
@@ -127,6 +129,7 @@ import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.utils.ImageUtils
 import net.weero.measix.pilot.ui.components.ui.FormItem
+import net.weero.measix.pilot.ui.components.ui.ManagedRecordStatus
 import net.weero.measix.pilot.ui.components.ui.QRCode
 import net.weero.measix.pilot.ui.components.ui.Tag
 import net.weero.measix.pilot.ui.components.ui.TagType
@@ -143,6 +146,7 @@ import org.koin.compose.koinInject
 @Composable
 fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
+    val effectiveSettings by vm.effectiveSettings.collectAsStateWithLifecycle()
     val mcpConfigs = settings.mcpServers
     val creationState = useEditState<McpServerConfig> { newConfig ->
         vm.updateSettings { current ->
@@ -269,6 +273,7 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
                 items(mcpConfigs, key = { it.id }) { mcpConfig ->
                     McpServerItem(
                         item = mcpConfig,
+                        effectiveSettings = effectiveSettings,
                         onEdit = {
                             editState.open(mcpConfig)
                         },
@@ -358,6 +363,7 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
 @Composable
 private fun McpServerItem(
     item: McpServerConfig,
+    effectiveSettings: EffectiveSettingsSnapshot,
     modifier: Modifier = Modifier,
     onDelete: () -> Unit,
     onEdit: (McpServerConfig) -> Unit,
@@ -474,6 +480,11 @@ private fun McpServerItem(
                         Text(
                             text = item.commonOptions.name,
                             style = MaterialTheme.typography.titleLarge,
+                        )
+                        ManagedRecordStatus(
+                            snapshot = effectiveSettings,
+                            kind = ManagedConfigurationRecordKind.MCP_SERVER,
+                            id = item.id,
                         )
                         val dotColor =
                             if (item.commonOptions.enable) MaterialTheme.extendColors.green6 else MaterialTheme.extendColors.red6

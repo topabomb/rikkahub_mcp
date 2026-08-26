@@ -16,6 +16,7 @@ import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
 import net.weero.measix.pilot.service.workspace.WorkspaceCreated
 import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
+import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -65,6 +66,20 @@ class WorkspaceVMTest {
             ),
             results,
         )
+    }
+
+    @Test
+    fun `locked workspace cleanup reports its managed reason`() = runTest(dispatcher) {
+        val application = mockk<WorkspaceApplicationService>()
+        val workspace = WorkspaceUiModel("id", "Old", WorkspaceShellStatus.READY)
+        coEvery { application.deleteWorkspace("id") } throws SettingsLockedException("records/assistants", "Managed")
+        val vm = WorkspaceVM(application, query())
+        var result: WorkspaceMutationResult? = null
+
+        vm.delete(workspace) { result = it }
+        advanceUntilIdle()
+
+        assertEquals(WorkspaceMutationResult.Locked("Managed"), result)
     }
 
     private fun query(): WorkspaceQueryService = mockk<WorkspaceQueryService>().also {

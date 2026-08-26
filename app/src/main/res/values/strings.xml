@@ -1538,5 +1538,12 @@
   <string name="workspace_terminal_command_failed">Terminal operation failed</string>
   <string name="setting_provider_page_mutation_failed">Provider settings operation failed</string>
   <string name="skills_page_import_resource_limit">The Skill package exceeds the safe import limit</string>
+  <string name="managed_configuration_active">Managed configuration active</string>
+  <string name="managed_configuration_degraded">Managed configuration has expired; the last verified configuration remains active</string>
+  <string name="managed_configuration_blocked">Managed configuration is unavailable: %1$s</string>
+  <string name="managed_configuration_locked">Managed configuration locks this change: %1$s</string>
+  <string name="managed_configuration_source_builtin">Built-in</string>
+  <string name="managed_configuration_source_local">Local</string>
+  <string name="managed_configuration_source_managed">Managed</string>
 </resources>
 

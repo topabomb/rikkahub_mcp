@@ -71,6 +71,7 @@ fun AssistantBasicPage(id: String) {
             parametersOf(id)
         }
     )
+    AssistantLockedChangeEffect(vm)
     val assistant by vm.assistant.collectAsStateWithLifecycle()
     val providers by vm.providers.collectAsStateWithLifecycle()
     val hasValidChatModel by vm.hasValidChatModel.collectAsStateWithLifecycle()

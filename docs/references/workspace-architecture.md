@@ -158,7 +158,7 @@ Workspace command、持久化读投影和 terminal 聚合投影分别由 `Worksp
 
 创建中只发布 `PREPARING`，创建成功后发布 `READY`；Rootfs 未就绪、创建失败、取消或 shell exit 都走同一 remove 路径，失败 Tab 不留在 read model。Rootfs/PTY 异步创建失败由 runtime 在同一 Workspace projection 发布带唯一 id 的 typed `lastFailure`，VM 只把新 failure 映射为用户提示；主动关闭或取消不能伪造失败。单 Workspace 最多六个 Tab。rename/reorder/select/close 与创建保留都在 runtime mutex 内决定；资源 finish 在条目先从 read model 移除后执行。创建准备、模型工具执行和 `WorkspaceApplicationService` 的 UI 文件命令/install/delete 使用同一组固定条带 mutex，既阻止同一 Workspace 的 Rootfs/PTY/工具 TOCTOU，也不会按历史 Workspace id 无限保留锁对象。
 
-`WorkspaceApplicationService.installRootfs` 与 `deleteWorkspace` 必须在同一 Workspace command gate 内先 `closeWorkspace` 并等待全部创建 Job/PTY 收口，再调用 Repository。删除协议先把 durable shell 状态置为 `BROKEN` 作为 fail-closed 可重试状态，再删除 Workspace 文件树；只有文件树删除成功后才能先清理 Assistant 引用、再移除 Room 身份。任一步骤失败或进程中断时，尚未删除的 `BROKEN` 记录都作为重试身份保留；后续删除必须幂等，不能发布成功或留下无 durable 身份的孤儿 Rootfs。Workspace 管理页通过 `WorkspaceApplicationService`/`WorkspaceQueryService` 操作，不直连 Repository。
+`WorkspaceApplicationService.installRootfs` 与 `deleteWorkspace` 必须在同一 Workspace command gate 内先 `closeWorkspace` 并等待全部创建 Job/PTY 收口，再调用 Repository。删除协议先把 durable shell 状态置为 `BROKEN`，再由 `WorkspaceManager` 将文件树移入可恢复暂存位置；Repository 在暂存目录同级写入仅含原 shell 状态与 Assistant→Workspace binding 的删除 journal，随后才清理 Assistant 引用。物理删除开始前，Settings 拒绝或进程中断会由 journal 回填仍为空的原 binding 并恢复暂存树；开始删除后 journal 进入终态删除阶段，递归删除失败也保持 `BROKEN`，因为失败可能已删除部分树，绝不将残余目录伪装为 READY。后续删除继续清理暂存树，或者在目录已删除后由 `WorkspaceDAO.deleteById` 确认删除一条 durable identity；只有这项确认后才能清 journal。任一步骤失败时 `BROKEN` 记录与 journal 都作为重试身份保留；后续删除必须幂等，不能发布成功或留下无 durable 身份的孤儿 Rootfs。Workspace 管理页通过 `WorkspaceApplicationService`/`WorkspaceQueryService` 操作，不直连 Repository。
 
 两个入口必须同步关键兼容参数，但挂载集合有意不同：
 
@@ -196,7 +196,7 @@ ensureWorkspace
 
 Workspace shell 状态使用 `DISABLED`、`INSTALLING`、`READY` 和 `BROKEN`。只有 READY 注册工具和打开终端；安装失败进入 BROKEN，Rootfs 缺失可回到 DISABLED。
 
-删除 Workspace 时先把 Room 状态持久化为 `BROKEN`，再删除磁盘目录；磁盘成功后先清理所有 Assistant 的 `workspaceId` 引用，最后删除 Room 实体。失败时保留尚存的 durable identity 供幂等重试。删除或状态变化后，下一次工具装配不会继续暴露旧 Workspace。
+删除 Workspace 时先把 Room 状态持久化为 `BROKEN`，再将磁盘目录移到 Manager-owned 暂存位置并写入删除 journal；Settings 成功清理所有 Assistant 的 `workspaceId` 引用后才标记并删除暂存树，最后由 `WorkspaceDAO.deleteById` 确认删除 Room 实体。Settings 拒绝或删除尚未开始时中断，完整性检查按 journal 恢复目录、原引用和原 shell 状态。标记物理删除后，递归删除失败或中断都不能假定目录完整：journal 与 `BROKEN` 状态保留，后续删除继续清理，只有树已不存在且 DAO 确认删到一行才清 journal。失败时保留 durable identity 供幂等重试。删除或状态变化后，下一次工具装配不会继续暴露旧 Workspace。
 
 ## 10. 维护与验证
 

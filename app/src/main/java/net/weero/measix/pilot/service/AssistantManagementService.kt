@@ -269,7 +269,7 @@ class AssistantManagementService(
 
     /** App 启动时幂等消费尚未完成的删除 tombstone。 */
     internal suspend fun performPendingDeletionCleanupDuringRecovery() {
-        val pending = settingsStore.settingsFlow.value.pendingAssistantDeletions
+        val pending = settingsStore.effectiveSettings.value.settings.pendingAssistantDeletions
         pending.forEach { tombstone ->
             if (!cleanupPendingDeletion(tombstone)) {
                 throw PendingAssistantCleanupException(tombstone.assistantId)
@@ -284,7 +284,7 @@ class AssistantManagementService(
      * 也不把当前不会生效的旧局部记录误报为该角色正在使用的记忆。
      */
     suspend fun listAssistantMemory(assistantId: Uuid): Result<MemoryListResult> {
-        val settings = settingsStore.settingsFlow.value
+        val settings = settingsStore.effectiveSettings.value.settings
         val assistant = settings.getAssistantById(assistantId)
             ?: return Result.failure(NoSuchElementException("assistant_not_found"))
 
@@ -312,7 +312,7 @@ class AssistantManagementService(
     }
 
     private suspend fun cleanupPendingDeletion(tombstone: PendingAssistantDeletion): Boolean {
-        val latestSettings = settingsStore.settingsFlow.value
+        val latestSettings = settingsStore.effectiveSettings.value.settings
         if (latestSettings.assistants.any { it.id == tombstone.assistantId }) {
             // 备份恢复或其他显式恢复重新带回了同 ID Assistant：旧 tombstone 不得删除新数据。
             removePendingDeletion(tombstone.assistantId)

@@ -81,7 +81,7 @@ object PendingBackupRestore {
         } else {
             BackupSettingsPolicy.withoutLocalPayloadReferences(decoded)
         }
-        store.restoreFromBackup(settings)
+        store.restoreLocal(settings)
     }
 
     fun complete(context: Context) {

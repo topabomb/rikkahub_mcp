@@ -50,9 +50,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
+import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
+import net.weero.measix.pilot.data.datastore.ManagedConfigurationRecordKind
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
 import net.weero.measix.pilot.ui.components.ui.FormItem
+import net.weero.measix.pilot.ui.components.ui.ManagedDefaultStatus
+import net.weero.measix.pilot.ui.components.ui.ManagedRecordStatus
 import net.weero.measix.pilot.ui.components.ui.OutlinedNumberInput
 import net.weero.measix.pilot.ui.components.ui.Tag
 import net.weero.measix.pilot.ui.components.ui.TagType
@@ -70,6 +74,7 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 @Composable
 fun SettingSearchPage(vm: SettingVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
+    val effectiveSettings by vm.effectiveSettings.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val lazyListState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -141,6 +146,7 @@ fun SettingSearchPage(vm: SettingVM = koinViewModel()) {
                 ) { isDragging ->
                     SearchProviderCard(
                         service = service,
+                        effectiveSettings = effectiveSettings,
                         onEdit = {
                             nav.navigate(Screen.SettingSearchDetail(service.id.toString()))
                         },
@@ -272,6 +278,7 @@ private fun AddProviderDialog(
 @Composable
 private fun SearchProviderCard(
     service: SearchServiceOptions,
+    effectiveSettings: EffectiveSettingsSnapshot,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     canDelete: Boolean,
@@ -306,6 +313,17 @@ private fun SearchProviderCard(
                     style = MaterialTheme.typography.titleMedium
                 )
                 SearchAbilityTagLine(options = service)
+                ManagedRecordStatus(
+                    snapshot = effectiveSettings,
+                    kind = ManagedConfigurationRecordKind.SEARCH_SERVICE,
+                    id = service.id,
+                )
+                if (effectiveSettings.settings.selectedSearchServiceId == service.id) {
+                    ManagedDefaultStatus(
+                        snapshot = effectiveSettings,
+                        path = "defaults/selectedSearchServiceId",
+                    )
+                }
             }
 
             IconButton(onClick = { showMenu = true }) {

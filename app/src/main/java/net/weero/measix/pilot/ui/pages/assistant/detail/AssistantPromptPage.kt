@@ -115,6 +115,7 @@ fun AssistantPromptPage(id: String) {
             parametersOf(id)
         }
     )
+    AssistantLockedChangeEffect(vm)
     val assistant by vm.assistant.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()

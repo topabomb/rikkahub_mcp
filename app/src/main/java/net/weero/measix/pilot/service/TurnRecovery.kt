@@ -65,7 +65,7 @@ class TurnRecovery(
                 Uuid.parse(rawId)
             }
             .toSet()
-        val settings = settingsStore.settingsFlow.value
+        val settings = settingsStore.effectiveSettings.value.settings
         // 定点加载候选 Master（每会话一次）
         val masters = masterIds.map { masterId ->
             requireNotNull(conversationRepo.getConversationById(masterId)) {

@@ -74,8 +74,8 @@ Application 层负责编排，不建立第二套数据协议。Repository 只执
 | Artifact metadata、引用、状态机 | `ArtifactStore` | `ArtifactUseCase` 与领域服务 |
 | Artifact payload IO | `ArtifactPayloadStore` | 仅由 `ArtifactStore` 调用 |
 | Settings 图片 roots | `ArtifactSettingsCoordinator` | 头像与背景 typed operation |
-| 应用配置 durable state 与提交顺序 | `SettingsStore` | `updateAtomic` → `SettingsWritePolicy` → `commitSettings` |
-| Skill 文件树、frontmatter 解释、bundle 事务与中断恢复 | `SkillManager` | typed DTO/result、cancellable import 与 root-swap recovery |
+| 应用配置 durable state、有效读模型与提交顺序 | `SettingsStore` | `updateLocal` → `SettingsWriteRules` → `commitSettings` → `effectiveSettings` |
+| Skill 文件树、frontmatter 解释、bundle 事务与中断恢复 | `SkillManager` | typed DTO/result、cancellable import、root-swap 与删除暂存恢复 |
 | 会话读模型 | `ConversationQueryService` | UI、会话工具与只读详情 |
 | 稳定附件 handle 索引 | `AttachmentReferenceLookup` | 执行 resolver 与查询 projector |
 | 启动恢复顺序与写门禁 | `ApplicationRecoveryCoordinator` | Android 启动入口与 retry |
@@ -89,7 +89,17 @@ Application 层负责编排，不建立第二套数据协议。Repository 只执
 
 同一事实不得增加旁路 DAO/Repository 写入、整聚合回写、fallback、兼容白名单或第二状态源。新增能力应扩展现有 command、typed use case、projection 或状态机。
 
-Provider 设置页只通过 `ProviderSettingsApplicationService` 访问 Provider SDK 与 `SettingsStore`。连接测试使用用户当前编辑中的完整 Provider 草稿；保存成功、删除成功等 UI 事件只能在 `SettingsStore.updateAtomic` 返回后发布。所有 Workspace UI（含聊天补全、cwd 选择和文件导出）只依赖 `WorkspaceApplicationService`、`WorkspaceQueryService` 及其 UiModel；交互终端页面不持有 `TerminalSession`、创建 Job 或 Repository。模型的 `workspace_*` 工具同样不得直连 Repository；每次工具执行通过 `WorkspaceApplicationService.executeTool` 取得受限 `WorkspaceToolSession`，与安装、删除、UI 文件命令和终端 mutation 共享 per-workspace command gate。
+`SettingsStore` 对外只发布 `effectiveSettings`，并提供本地更新和恢复命令。`ManagedConfigurationStorage`、
+`EffectiveSettingsResolver`、`SettingsWriteRules` 与 `commitSettings` 都是同包 internal 协作者：前者只验证并原子保存受管
+document/资源，resolver 只合成 Built-in、Local shadow 与受管覆盖，写规则只依据当前 managed generation 拒绝锁定路径。
+受管包或本地提交都不能自行发布第二个 Flow；持久化成功后才由 `SettingsStore` 发布同一 revision 的有效快照。UI 只从该
+快照显示来源和锁定理由；实际写入仍在 Store 内复核，拒绝时 Local shadow 不变并沿原页面错误反馈通道返回。
+
+删除仍需跨 Settings 与文件 owner 时，文件 owner 先把树移到其可恢复暂存位置，再提交同一个 `updateLocal` transform；锁定或
+提交失败必须恢复原树，提交成功后才物理删除暂存树。`SkillManager` 和 `WorkspaceManager` 各自恢复自己的未完成暂存，不以
+旁路 Settings 写入或隐藏引用解决跨 owner 失败。
+
+Provider 设置页只通过 `ProviderSettingsApplicationService` 访问 Provider SDK 与 `SettingsStore`。连接测试使用用户当前编辑中的完整 Provider 草稿；保存成功、删除成功等 UI 事件只能在 `SettingsStore.updateLocal` 返回后发布。所有 Workspace UI（含聊天补全、cwd 选择和文件导出）只依赖 `WorkspaceApplicationService`、`WorkspaceQueryService` 及其 UiModel；交互终端页面不持有 `TerminalSession`、创建 Job 或 Repository。模型的 `workspace_*` 工具同样不得直连 Repository；每次工具执行通过 `WorkspaceApplicationService.executeTool` 取得受限 `WorkspaceToolSession`，与安装、删除、UI 文件命令和终端 mutation 共享 per-workspace command gate。
 
 ## Conversation 与 Runtime 协议
 

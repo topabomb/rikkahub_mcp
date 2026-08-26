@@ -2,9 +2,12 @@ package net.weero.measix.pilot.ui.pages.debug
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -13,6 +16,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ConversationApplicationService
@@ -28,7 +32,10 @@ class DebugVM(
     private val conversationQueryService: ConversationQueryService,
     private val conversationApplicationService: ConversationApplicationService,
 ) : ViewModel() {
-    val settings: StateFlow<Settings> = settingsStore.settingsFlow
+    private val _lockedChanges = MutableSharedFlow<SettingsLockedException>(extraBufferCapacity = 1)
+    val lockedChanges = _lockedChanges.asSharedFlow()
+
+    val settings: StateFlow<Settings> = settingsStore.effectiveSettings.map { it.settings }
         .stateIn(viewModelScope, SharingStarted.Lazily, Settings.dummy())
 
     private val _conversationCount = MutableStateFlow<Int?>(null)
@@ -46,7 +53,11 @@ class DebugVM(
 
     fun updateSettings(transform: (Settings) -> Settings) {
         viewModelScope.launch {
-            settingsStore.updateAtomic(fn = transform)
+            try {
+                settingsStore.updateLocal(transform = transform)
+            } catch (error: SettingsLockedException) {
+                _lockedChanges.emit(error)
+            }
         }
     }
 

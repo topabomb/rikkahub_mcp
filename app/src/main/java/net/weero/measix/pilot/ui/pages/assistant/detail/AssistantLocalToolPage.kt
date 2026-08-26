@@ -77,6 +77,7 @@ fun AssistantLocalToolPage(id: String) {
             parametersOf(id)
         }
     )
+    AssistantLockedChangeEffect(vm)
     val assistant by vm.assistant.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
@@ -114,7 +115,8 @@ private fun AssistantLocalToolContent(
     val toaster = LocalToaster.current
     val navController = LocalNavController.current
     val settingsStore: net.weero.measix.pilot.data.datastore.SettingsStore = koinInject()
-    val settings by settingsStore.settingsFlow.collectAsStateWithLifecycle()
+    val effectiveSettings by settingsStore.effectiveSettings.collectAsStateWithLifecycle()
+    val settings = effectiveSettings.settings
     val imageSelectionResolver: ImageGenerationSelectionResolver = koinInject()
     val imageGenerationAvailable = remember(settings) { imageSelectionResolver.isAvailable(settings) }
     val textToImageEnabled = assistant.localTools.contains(LocalToolOption.TextToImage)

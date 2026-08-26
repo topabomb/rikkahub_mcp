@@ -20,6 +20,8 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
@@ -30,6 +32,7 @@ import net.weero.measix.pilot.data.files.SkillBundleImportResult
 import net.weero.measix.pilot.data.files.SkillImportBundleEntry
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.files.SkillMetadata
+import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import net.weero.measix.pilot.data.files.SkillParseResult
 import org.json.JSONArray
 import kotlin.collections.iterator
@@ -41,6 +44,8 @@ class SkillsVM internal constructor(
 ) : ViewModel() {
     private val _skills = MutableStateFlow<List<SkillMetadata>>(emptyList())
     val skills = _skills.asStateFlow()
+    private val _lockedChanges = MutableSharedFlow<SettingsLockedException>(extraBufferCapacity = 1)
+    val lockedChanges = _lockedChanges.asSharedFlow()
 
     init {
         loadSkills()
@@ -64,8 +69,12 @@ class SkillsVM internal constructor(
 
     fun deleteSkill(name: String) {
         viewModelScope.launch(ioDispatcher) {
-            skillManager.deleteSkill(name)
-            _skills.value = skillManager.listSkills()
+            try {
+                skillManager.deleteSkill(name)
+                _skills.value = skillManager.listSkills()
+            } catch (error: SettingsLockedException) {
+                _lockedChanges.emit(error)
+            }
         }
     }
 

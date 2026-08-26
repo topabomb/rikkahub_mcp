@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -51,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getCurrentAssistant
 import net.weero.measix.pilot.ui.hooks.writeStringPreference
@@ -71,10 +73,12 @@ class SafeModeActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MeasixTheme {
-                val settings by settingsStore.settingsFlow.collectAsStateWithLifecycle()
+                val effectiveSettings by settingsStore.effectiveSettings.collectAsStateWithLifecycle()
+                val settings = effectiveSettings.settings
                 var showAssistantPicker by remember { mutableStateOf(false) }
                 val scope = rememberCoroutineScope()
                 val context = LocalContext.current
+                val lockedMessage = stringResource(R.string.managed_configuration_locked, "{reason}")
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
@@ -165,9 +169,20 @@ class SafeModeActivity : ComponentActivity() {
                     AssistantPickerSheet(
                         settings = settings,
                         onAssistantSelected = { assistantId ->
-                            scope.launch { settingsStore.updateAssistant(assistantId) }
-                            context.writeStringPreference("lastConversationId", null)
-                            showAssistantPicker = false
+                            scope.launch {
+                                try {
+                                    settingsStore.updateLocal { settings -> settings.copy(assistantId = assistantId) }
+                                } catch (error: SettingsLockedException) {
+                                    Toast.makeText(
+                                        context,
+                                        lockedMessage.replace("{reason}", error.reason),
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                    return@launch
+                                }
+                                context.writeStringPreference("lastConversationId", null)
+                                showAssistantPicker = false
+                            }
                         },
                         onDismiss = { showAssistantPicker = false }
                     )

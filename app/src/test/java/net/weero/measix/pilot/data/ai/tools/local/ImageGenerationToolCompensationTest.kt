@@ -21,6 +21,7 @@ import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.files.LocalArtifactRef
 import net.weero.measix.pilot.data.files.ArtifactDeleteResult
 import net.weero.measix.pilot.data.files.ArtifactStore
@@ -76,7 +77,7 @@ class ImageGenerationToolCompensationTest {
             assistants = listOf(Assistant(id = ownerId, localTools = listOf(LocalToolOption.TextToImage))),
         )
         val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.settingsFlow } returns MutableStateFlow(settings)
+        every { settingsStore.effectiveSettings } returns MutableStateFlow(settings.toEffectiveSettingsSnapshot())
         val resolver = mockk<ImageGenerationSelectionResolver>()
         every { resolver.resolve(any()) } returns available()
         val coordinator = mockk<ImageGenerationCoordinator>()
@@ -147,7 +148,7 @@ class ImageGenerationToolCompensationTest {
             assistants = listOf(Assistant(id = ownerId, localTools = listOf(LocalToolOption.TextToImage))),
         )
         val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.settingsFlow } returns MutableStateFlow(settings)
+        every { settingsStore.effectiveSettings } returns MutableStateFlow(settings.toEffectiveSettingsSnapshot())
         val resolver = mockk<ImageGenerationSelectionResolver>()
         every { resolver.resolve(any()) } returns available()
         val coordinator = mockk<ImageGenerationCoordinator>()

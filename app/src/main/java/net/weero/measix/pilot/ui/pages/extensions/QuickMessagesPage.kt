@@ -26,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +39,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.dokar.sonner.ToastType
+import kotlinx.coroutines.flow.collect
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.Delete01
@@ -45,9 +48,13 @@ import me.rerere.hugeicons.stroke.Edit01
 import me.rerere.hugeicons.stroke.MoreVertical
 import me.rerere.hugeicons.stroke.Zap
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
+import net.weero.measix.pilot.data.datastore.ManagedConfigurationRecordKind
 import net.weero.measix.pilot.data.model.QuickMessage
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
+import net.weero.measix.pilot.ui.components.ui.ManagedRecordStatus
+import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.utils.plus
 import org.koin.androidx.compose.koinViewModel
@@ -55,10 +62,19 @@ import org.koin.androidx.compose.koinViewModel
 @Composable
 fun QuickMessagesPage(vm: QuickMessagesVM = koinViewModel()) {
     val settings = vm.settings.collectAsStateWithLifecycle().value
+    val effectiveSettings = vm.effectiveSettings.collectAsStateWithLifecycle().value
+    val toaster = LocalToaster.current
+    val lockedMessage = stringResource(R.string.managed_configuration_locked, "{reason}")
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
     var editTarget by remember { mutableStateOf<QuickMessage?>(null) }
     var deleteTarget by remember { mutableStateOf<QuickMessage?>(null) }
+
+    LaunchedEffect(vm, toaster, lockedMessage) {
+        vm.lockedChanges.collect { error ->
+            toaster.show(lockedMessage.replace("{reason}", error.reason), type = ToastType.Error)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -114,6 +130,7 @@ fun QuickMessagesPage(vm: QuickMessagesVM = koinViewModel()) {
             items(settings.quickMessages, key = { it.id }) { quickMessage ->
                 QuickMessageCard(
                     quickMessage = quickMessage,
+                    effectiveSettings = effectiveSettings,
                     onEdit = { editTarget = quickMessage },
                     onDelete = { deleteTarget = quickMessage },
                 )
@@ -168,6 +185,7 @@ fun QuickMessagesPage(vm: QuickMessagesVM = koinViewModel()) {
 @Composable
 private fun QuickMessageCard(
     quickMessage: QuickMessage,
+    effectiveSettings: EffectiveSettingsSnapshot,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -207,6 +225,11 @@ private fun QuickMessageCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
+                )
+                ManagedRecordStatus(
+                    snapshot = effectiveSettings,
+                    kind = ManagedConfigurationRecordKind.QUICK_MESSAGE,
+                    id = quickMessage.id,
                 )
             }
             Box {

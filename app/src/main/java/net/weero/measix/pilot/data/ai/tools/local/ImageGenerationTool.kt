@@ -195,7 +195,7 @@ private suspend fun executeGenerateImage(
     val parsed = parseGenerateImageArguments(args).getOrElse {
         return failedResult("invalid_arguments")
     }
-    val latest = settingsStore.settingsFlow.value
+    val latest = settingsStore.effectiveSettings.value.settings
     val preflight = revalidateGenerateImage(
         settings = latest,
         ownerAssistantId = ownerAssistantId,
@@ -221,7 +221,7 @@ private suspend fun executeGenerateImage(
             ownerAssistantId = ownerAssistantId,
             revalidate = { frozen ->
                 revalidateGenerateImage(
-                    settings = settingsStore.settingsFlow.value,
+                    settings = settingsStore.effectiveSettings.value.settings,
                     ownerAssistantId = ownerAssistantId,
                     capturedSelection = frozen,
                     resolver = resolver,

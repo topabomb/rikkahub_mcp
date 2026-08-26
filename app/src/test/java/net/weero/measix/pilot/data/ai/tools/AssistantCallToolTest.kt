@@ -21,6 +21,7 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.AssistantManagementService
 import net.weero.measix.pilot.service.runtime.DelegationCoordinator
@@ -47,15 +48,14 @@ class AssistantCallToolTest {
     )
 
     private fun createTool(coordinator: DelegationCoordinator): me.rerere.ai.core.Tool {
-        val settingsFlow = MutableStateFlow(
+        val effectiveSettings = MutableStateFlow(
             Settings(
                 assistants = listOf(caller, target),
                 assistantId = callerId,
-            )
+            ).toEffectiveSettingsSnapshot(),
         )
         val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.settingsFlow } returns settingsFlow
-        every { settingsStore.settingsFlow.value } returns settingsFlow.value
+        every { settingsStore.effectiveSettings } returns effectiveSettings
         return AssistantToolFactory(
             settingsStore = settingsStore,
             assistantManagementService = mockk<AssistantManagementService>(relaxed = true),

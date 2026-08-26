@@ -47,7 +47,7 @@ import java.util.concurrent.TimeUnit
 
 val dataSourceModule = module {
     single {
-        SettingsStore(context = get(), scope = get())
+        SettingsStore(appContext = get(), scope = get())
     }
 
     single {

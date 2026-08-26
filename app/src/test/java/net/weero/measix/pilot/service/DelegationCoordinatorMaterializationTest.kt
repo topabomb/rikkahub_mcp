@@ -29,6 +29,7 @@ import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.files.ArtifactDeleteResult
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.OwnedArtifact
@@ -162,13 +163,13 @@ class DelegationCoordinatorMaterializationTest {
             chatModelId = modelId,
         )
         val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.settingsFlow } returns MutableStateFlow(
+        every { settingsStore.effectiveSettings } returns MutableStateFlow(
             Settings(
                 assistants = listOf(caller, target),
                 assistantId = callerId,
                 chatModelId = modelId,
                 providers = listOf(ProviderSetting.OpenAI(models = listOf(model))),
-            )
+            ).toEffectiveSettingsSnapshot(),
         )
         val resolver = mockk<AttachmentResolver>()
         coEvery { resolver.resolve(any(), any()) } returns resolveResult

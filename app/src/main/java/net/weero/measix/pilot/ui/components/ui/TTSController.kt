@@ -155,7 +155,8 @@ private fun TtsSourceAvatar(
     }
 
     val settingsStore = koinInject<SettingsStore>()
-    val settings by settingsStore.settingsFlow.collectAsState()
+    val effectiveSettings by settingsStore.effectiveSettings.collectAsState()
+    val settings = effectiveSettings.settings
     val assistant = remember(source.assistantId, settings.assistants) {
         source.assistantId?.let { id ->
             settings.assistants.find { it.id == id }

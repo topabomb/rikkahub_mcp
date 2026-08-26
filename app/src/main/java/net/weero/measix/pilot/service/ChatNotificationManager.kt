@@ -70,7 +70,7 @@ class ChatNotificationManager(
 
     private fun handleGenerationUpdate(event: AppEvent.ChatGenerationUpdate) {
         if (isForeground.value) return
-        val displaySetting = settingsStore.settingsFlow.value.displaySetting
+        val displaySetting = settingsStore.effectiveSettings.value.settings.displaySetting
         if (!displaySetting.enableNotificationOnMessageGeneration) return
         if (!displaySetting.enableLiveUpdateNotification) return
 
@@ -87,7 +87,7 @@ class ChatNotificationManager(
 
         val contentPreview = event.contentPreview ?: return
         if (isForeground.value) return
-        if (!settingsStore.settingsFlow.value.displaySetting.enableNotificationOnMessageGeneration) return
+        if (!settingsStore.effectiveSettings.value.settings.displaySetting.enableNotificationOnMessageGeneration) return
         sendGenerationDoneNotification(event.conversationId, event.senderName, contentPreview)
     }
 

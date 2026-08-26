@@ -43,7 +43,7 @@ class CustomChatFontServiceTest {
         context = TestContext(ApplicationProvider.getApplicationContext(), root)
         settingsStore = mockk()
         settings = Settings()
-        coEvery { settingsStore.updateAtomicAndGet(any()) } coAnswers {
+        coEvery { settingsStore.updateLocal(any()) } coAnswers {
             firstArg<(Settings) -> Settings>()(settings).also { settings = it }
         }
         service = CustomChatFontService(context, settingsStore)
@@ -107,7 +107,7 @@ class CustomChatFontServiceTest {
             )
         )
         val caller = CompletableDeferred<Job>()
-        coEvery { settingsStore.updateAtomicAndGet(any()) } coAnswers {
+        coEvery { settingsStore.updateLocal(any()) } coAnswers {
             firstArg<(Settings) -> Settings>()(settings).also { committed ->
                 settings = committed
                 caller.await().cancel()
@@ -142,7 +142,7 @@ class CustomChatFontServiceTest {
         }
 
         assertTrue(failure != null)
-        coVerify(exactly = 0) { settingsStore.updateAtomicAndGet(any()) }
+        coVerify(exactly = 0) { settingsStore.updateLocal(any()) }
         assertTrue(File(root, "fonts").listFiles().isNullOrEmpty())
     }
 

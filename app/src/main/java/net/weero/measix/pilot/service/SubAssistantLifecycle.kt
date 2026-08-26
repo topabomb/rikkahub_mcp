@@ -41,7 +41,7 @@ class SubAssistantLifecycle(
             masterId = master.conversationId,
             masterAssistantId = master.header.assistantId,
             masterNodes = master.nodes,
-            settings = settingsStore.settingsFlow.value,
+            settings = settingsStore.effectiveSettings.value.settings,
             childrenById = children,
             json = json,
         )

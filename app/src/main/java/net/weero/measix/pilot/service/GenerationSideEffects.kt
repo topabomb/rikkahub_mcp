@@ -167,7 +167,7 @@ class GenerationSideEffects(
 
         var cancelled = false
         try {
-            val settings = settingsStore.settingsFlow.value
+            val settings = settingsStore.effectiveSettings.value.settings
 
             if (!force) {
                 titleCoordinator.recordAttempt(token)
@@ -220,7 +220,7 @@ class GenerationSideEffects(
     suspend fun generateSuggestion(snapshot: ConversationSnapshot) {
         val conversationId = snapshot.conversationId
         try {
-            val settings = settingsStore.settingsFlow.value
+            val settings = settingsStore.effectiveSettings.value.settings
             if (!settings.enableSuggestion) return
 
             commandCoordinator.executeOrThrow(conversationId, UpdateHeader(suggestions = emptyList()))
@@ -256,7 +256,7 @@ class GenerationSideEffects(
         targetTokens: Int,
         keepRecentMessages: Int = 32
     ): Result<Unit> = runCatchingPreservingCancellation {
-        val settings = settingsStore.settingsFlow.value
+        val settings = settingsStore.effectiveSettings.value.settings
         val maxMessagesPerChunk = 256
         val conversationId = snapshot.conversationId
         val allMessages = snapshot.currentMessages()

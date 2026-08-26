@@ -1537,5 +1537,12 @@
   <string name="workspace_terminal_command_failed">Не удалось выполнить операцию терминала</string>
   <string name="setting_provider_page_mutation_failed">Не удалось изменить настройки провайдера</string>
   <string name="skills_page_import_resource_limit">Пакет Skill превышает безопасный лимит импорта</string>
+  <string name="managed_configuration_active">Управляемая конфигурация активна</string>
+  <string name="managed_configuration_degraded">Срок действия управляемой конфигурации истёк; используется последняя проверенная конфигурация</string>
+  <string name="managed_configuration_blocked">Управляемая конфигурация недоступна: %1$s</string>
+  <string name="managed_configuration_locked">Управляемая конфигурация блокирует это изменение: %1$s</string>
+  <string name="managed_configuration_source_builtin">Встроенное</string>
+  <string name="managed_configuration_source_local">Локальное</string>
+  <string name="managed_configuration_source_managed">Управляемое</string>
 </resources>
 

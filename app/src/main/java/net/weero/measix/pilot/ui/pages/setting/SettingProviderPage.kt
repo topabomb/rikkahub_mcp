@@ -68,8 +68,11 @@ import io.github.g00fy2.quickie.ScanQRCode
 import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
+import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
+import net.weero.measix.pilot.data.datastore.ManagedConfigurationRecordKind
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
+import net.weero.measix.pilot.ui.components.ui.ManagedRecordStatus
 import net.weero.measix.pilot.ui.components.ui.Tag
 import net.weero.measix.pilot.ui.components.ui.TagType
 import net.weero.measix.pilot.ui.components.ui.decodeProviderSetting
@@ -90,6 +93,7 @@ import kotlin.uuid.Uuid
 @Composable
 fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
+    val effectiveSettings by vm.effectiveSettings.collectAsStateWithLifecycle()
     val navController = LocalNavController.current
     val scope = rememberCoroutineScope()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -206,6 +210,7 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
                                 .scale(if (isDragging) 0.95f else 1f)
                                 .fillMaxWidth(),
                             provider = provider,
+                            effectiveSettings = effectiveSettings,
                             dragHandle = {
                                 val haptic = LocalHapticFeedback.current
                                 IconButton(
@@ -552,6 +557,7 @@ private fun AddButton(onAdd: (ProviderSetting) -> Unit) {
 @Composable
 private fun ProviderItem(
     provider: ProviderSetting,
+    effectiveSettings: EffectiveSettingsSnapshot,
     modifier: Modifier = Modifier,
     dragHandle: @Composable () -> Unit,
     onClick: () -> Unit
@@ -606,6 +612,11 @@ private fun ProviderItem(
                             )
                         )
                     }
+                    ManagedRecordStatus(
+                        snapshot = effectiveSettings,
+                        kind = ManagedConfigurationRecordKind.PROVIDER,
+                        id = provider.id,
+                    )
                 }
             }
             dragHandle()

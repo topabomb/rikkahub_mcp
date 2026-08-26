@@ -2,12 +2,17 @@ package net.weero.measix.pilot.ui.pages.assistant
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.repository.MemoryRepository
@@ -21,11 +26,14 @@ class AssistantVM(
     private val assistantManagementService: AssistantManagementService,
     private val artifactUseCase: ArtifactUseCase,
 ) : ViewModel() {
-    val settings: StateFlow<Settings> = settingsStore.settingsFlow
+    private val _lockedChanges = MutableSharedFlow<SettingsLockedException>(extraBufferCapacity = 1)
+    val lockedChanges = _lockedChanges.asSharedFlow()
+    internal val effectiveSettings: StateFlow<EffectiveSettingsSnapshot> = settingsStore.effectiveSettings
+    val settings: StateFlow<Settings> = settingsStore.effectiveSettings.map { it.settings }
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
     fun reorderAssistants(orderedIds: List<Uuid>) {
-        viewModelScope.launch {
+        updateSettings {
             artifactUseCase.updateSettingsReferences { current ->
                 val requestedIds = orderedIds.toSet()
                 val assistantsById = current.assistants.associateBy { it.id }
@@ -38,7 +46,7 @@ class AssistantVM(
     }
 
     fun reorderAssistantTags(orderedIds: List<Uuid>) {
-        viewModelScope.launch {
+        updateSettings {
             artifactUseCase.updateSettingsReferences { current ->
                 val requestedIds = orderedIds.toSet()
                 val tagsById = current.assistantTags.associateBy { it.id }
@@ -51,7 +59,7 @@ class AssistantVM(
     }
 
     fun addAssistant(assistant: Assistant) {
-        viewModelScope.launch {
+        updateSettings {
             artifactUseCase.updateSettingsReferences { current ->
                 current.copy(
                     assistants = current.assistants.plus(assistant),
@@ -61,13 +69,11 @@ class AssistantVM(
     }
 
     fun removeAssistant(assistant: Assistant) {
-        viewModelScope.launch {
-            assistantManagementService.deleteAssistant(assistant.id)
-        }
+        updateSettings { assistantManagementService.deleteAssistant(assistant.id) }
     }
 
     fun copyAssistant(assistant: Assistant) {
-        viewModelScope.launch {
+        updateSettings {
             val copiedAssistant = assistant.copy(
                 id = Uuid.random(),
                 name = "${assistant.name} (Clone)",
@@ -80,6 +86,16 @@ class AssistantVM(
                 current.copy(
                     assistants = current.assistants.plus(copiedAssistant),
                 )
+            }
+        }
+    }
+
+    private fun updateSettings(update: suspend () -> Unit) {
+        viewModelScope.launch {
+            try {
+                update()
+            } catch (error: SettingsLockedException) {
+                _lockedChanges.emit(error)
             }
         }
     }

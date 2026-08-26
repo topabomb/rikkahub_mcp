@@ -41,6 +41,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -179,7 +180,7 @@ class McpManager(
         // 注意: 授权流程中 persistOAuthState 会触发此 collect，需排除
         //       NeedsAuthorization/Authorizing 状态的 server，避免与授权流程竞争
         appScope.launch {
-            settingsStore.settingsFlow
+            settingsStore.effectiveSettings.map { it.settings }
                 .map { it.mcpServers }
                 .distinctUntilChanged()
                 .collect { configs ->
@@ -234,7 +235,7 @@ class McpManager(
     fun getClient(serverId: Uuid): Client? = clients[serverId]
 
     fun getAllAvailableTools(assistant: Assistant): List<Triple<Uuid, String, McpTool>> {
-        val settings = settingsStore.settingsFlow.value
+        val settings = settingsStore.effectiveSettings.value.settings
         return settings.mcpServers
             .filter { it.commonOptions.enable && it.id in assistant.mcpServers }
             .flatMap { server ->
@@ -253,7 +254,7 @@ class McpManager(
         return getServerLock(serverId).withLock {
             var client = clients[serverId]
                 ?: return@withLock listOf(UIMessagePart.Text("MCP server not connected"))
-            var config = settingsStore.settingsFlow.value.mcpServers.find { it.id == serverId }
+            var config = settingsStore.effectiveSettings.value.settings.mcpServers.find { it.id == serverId }
                 ?: return@withLock listOf(UIMessagePart.Text("MCP server config not found"))
 
             // 调用前确保 OAuth 令牌新鲜。若连接参数变化（token 刷新 / URL / headers 变更），需重建连接
@@ -406,7 +407,7 @@ class McpManager(
             // Re-read from settingsStore to avoid stale config.
             // configInput may come from a delayed coroutine that was queued before a config change;
             // using it directly could connect with an outdated URL/headers.
-            val desiredConfig = settingsStore.settingsFlow.value.mcpServers
+            val desiredConfig = settingsStore.effectiveSettings.value.settings.mcpServers
                 .find { it.id == configInput.id }
             if (desiredConfig == null ||
                 !desiredConfig.commonOptions.enable ||
@@ -428,7 +429,7 @@ class McpManager(
 
     suspend fun removeClient(serverId: Uuid) = withContext(Dispatchers.IO) {
         getServerLock(serverId).withLock {
-            val name = settingsStore.settingsFlow.value.mcpServers
+            val name = settingsStore.effectiveSettings.value.settings.mcpServers
                 .find { it.id == serverId }?.commonOptions?.name ?: serverId.toString()
             cancelAllJobs(serverId)
             closeClient(serverId)
@@ -447,7 +448,7 @@ class McpManager(
      * - Client 不存在或 transport 已断开 → addClient 完全重建
      */
     suspend fun syncAll() = withContext(Dispatchers.IO) {
-        val configs = settingsStore.settingsFlow.value.mcpServers
+        val configs = settingsStore.effectiveSettings.value.settings.mcpServers
             .filter { it.commonOptions.enable && it.commonOptions.name.isNotBlank() }
         configs.forEach { config ->
             // 跳过授权流程中的 server，避免与授权竞争
@@ -530,7 +531,7 @@ class McpManager(
                 logMcp(serverName, "Reconnecting (attempt $attempt/$MAX_RECONNECT_ATTEMPTS, ${delayMs}ms delay)")
                 delay(delayMs)
 
-                val currentConfig = settingsStore.settingsFlow.value.mcpServers
+                val currentConfig = settingsStore.effectiveSettings.value.settings.mcpServers
                     .find { it.id == configId && it.commonOptions.enable }
                 if (currentConfig == null) {
                     cancelAllJobs(configId)
@@ -563,7 +564,7 @@ class McpManager(
                 delay(DORMANT_RETRY_INTERVAL_MS)
                 retries++
 
-                val currentConfig = settingsStore.settingsFlow.value.mcpServers
+                val currentConfig = settingsStore.effectiveSettings.value.settings.mcpServers
                     .find { it.id == configId && it.commonOptions.enable }
                 if (currentConfig == null) {
                     cancelAllJobs(configId)
@@ -672,7 +673,7 @@ class McpManager(
         val serverTools = client.listTools().tools
 
         var mergedSize = 0
-        settingsStore.update { old ->
+        settingsStore.updateLocal { old ->
             old.copy(
                 mcpServers = old.mcpServers.map { currentConfig ->
                     if (currentConfig.id != configId) {
@@ -710,7 +711,7 @@ class McpManager(
     }
 
     private fun getServerName(configId: Uuid): String {
-        return settingsStore.settingsFlow.value.mcpServers
+        return settingsStore.effectiveSettings.value.settings.mcpServers
             .find { it.id == configId }?.commonOptions?.name ?: configId.toString()
     }
 
@@ -904,7 +905,7 @@ class McpManager(
             // 9. 使用最新配置重新连接
             // 先从 authorizationJobs 移除自己，防止 addClient 内部的 cancelAllJobs 取消当前 job
             authorizationJobs.remove(config.id)
-            val freshConfig = settingsStore.settingsFlow.value.mcpServers.find { it.id == config.id }
+            val freshConfig = settingsStore.effectiveSettings.value.settings.mcpServers.find { it.id == config.id }
                 ?: config
             addClient(freshConfig)
         }
@@ -948,7 +949,7 @@ class McpManager(
     private suspend fun ensureFreshToken(configInput: McpServerConfig): McpServerConfig {
         // Re-read from settingsStore to avoid overwriting concurrent user config changes.
         // If the user modified URL/headers while a coroutine was queued, we must use the latest config.
-        val config = settingsStore.settingsFlow.value.mcpServers.find { it.id == configInput.id }
+        val config = settingsStore.effectiveSettings.value.settings.mcpServers.find { it.id == configInput.id }
             ?: configInput
         val oauth = config.commonOptions.oauth ?: return config
         if (!oauth.enabled || oauth.refreshToken.isNullOrBlank()) return config
@@ -987,7 +988,7 @@ class McpManager(
     }
 
     private suspend fun persistOAuthState(configId: Uuid, oauth: McpOAuthState?) {
-        settingsStore.update { old ->
+        settingsStore.updateLocal { old ->
             old.copy(
                 mcpServers = old.mcpServers.map { server ->
                     if (server.id != configId) server

@@ -13,18 +13,18 @@ class ArtifactSettingsCoordinator(private val settingsStore: SettingsStore) {
     private val mutex = Mutex()
 
     suspend fun <T> withRootsLock(block: suspend (Settings) -> T): T = mutex.withLock {
-        block(settingsStore.settingsFlow.value)
+        block(settingsStore.effectiveSettings.value.settings)
     }
 
     suspend fun update(transform: (Settings) -> Settings): Settings = mutex.withLock {
-        settingsStore.updateAtomicAndGet(transform)
+        settingsStore.updateLocal(transform = transform)
     }
 
     suspend fun updateChecked(
         transform: (Settings) -> Settings,
         validate: (before: Settings, after: Settings) -> Unit,
     ): Settings = mutex.withLock {
-        settingsStore.updateAtomicAndGet { before ->
+        settingsStore.updateLocal { before ->
             val after = transform(before)
             validate(before, after)
             after
@@ -32,7 +32,7 @@ class ArtifactSettingsCoordinator(private val settingsStore: SettingsStore) {
     }
 
     suspend fun detach(fileUris: Set<String>): Boolean = mutex.withLock {
-        val committed = settingsStore.updateAtomicAndGet { current ->
+        val committed = settingsStore.updateLocal { current ->
             ArtifactReferencePolicy.detach(current, fileUris)
         }
         ArtifactReferencePolicy.roots(committed).none(fileUris::contains)

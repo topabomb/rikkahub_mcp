@@ -1537,5 +1537,12 @@
   <string name="workspace_terminal_command_failed">终端操作失败</string>
   <string name="setting_provider_page_mutation_failed">Provider 设置操作失败</string>
   <string name="skills_page_import_resource_limit">Skill 包超过安全导入上限</string>
+  <string name="managed_configuration_active">受管配置已启用</string>
+  <string name="managed_configuration_degraded">受管配置已过期；仍使用上次验证的配置</string>
+  <string name="managed_configuration_blocked">受管配置不可用：%1$s</string>
+  <string name="managed_configuration_locked">受管配置锁定了此更改：%1$s</string>
+  <string name="managed_configuration_source_builtin">内置</string>
+  <string name="managed_configuration_source_local">本地</string>
+  <string name="managed_configuration_source_managed">受管</string>
 </resources>
 

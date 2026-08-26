@@ -9,6 +9,7 @@ import androidx.paging.cachedIn
 import androidx.paging.insertSeparators
 import androidx.paging.map
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -40,7 +41,7 @@ class ChatDrawerVM(
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
-    private val assistantIdFlow = settingsStore.settingsFlow
+    private val assistantIdFlow = settingsStore.effectiveSettings.map { it.settings }
         .map { it.assistantId }
         .distinctUntilChanged()
 

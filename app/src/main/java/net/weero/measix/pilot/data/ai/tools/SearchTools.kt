@@ -17,10 +17,9 @@ import java.time.LocalDate
 import kotlin.uuid.Uuid
 
 fun createSearchTools(settings: Settings): Set<Tool> {
-    val options = settings.searchServices.getOrElse(
-        index = settings.searchServiceSelected,
-        defaultValue = { SearchServiceOptions.DEFAULT },
-    )
+    val options = settings.searchServices.find { it.id == settings.selectedSearchServiceId }
+        ?: settings.searchServices.firstOrNull()
+        ?: SearchServiceOptions.DEFAULT
     val service = SearchService.getService(options)
 
     return buildSet {

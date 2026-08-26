@@ -29,7 +29,8 @@ fun rememberCustomTtsState(): CustomTtsState {
     val context = LocalContext.current
     val settingsStore = koinInject<SettingsStore>()
     val ttsManager = koinInject<TTSManager>()
-    val settings by settingsStore.settingsFlow.collectAsStateWithLifecycle()
+    val effectiveSettings by settingsStore.effectiveSettings.collectAsStateWithLifecycle()
+    val settings = effectiveSettings.settings
 
     // Remember the CustomTtsState instance across recompositions
     val ttsState = remember {

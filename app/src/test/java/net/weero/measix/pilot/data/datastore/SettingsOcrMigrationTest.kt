@@ -3,10 +3,15 @@ package net.weero.measix.pilot.data.datastore
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.intPreferencesKey
+import kotlinx.coroutines.test.runTest
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.search.SearchServiceOptions
+import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -130,6 +135,53 @@ class SettingsOcrMigrationTest {
     fun `invalid json is returned as is`() {
         val raw = "not json"
         assertEquals(raw, migrateLegacySettingsJson(raw))
+    }
+
+    @Test
+    fun `pre 0 0 18 assistant media fields survive the settings JSON boundary`() {
+        val original = Assistant(
+            name = "delegated visual assistant",
+            avatar = Avatar.Image("file:///data/user/0/app/files/upload/avatar.png"),
+            background = "file:///data/user/0/app/files/upload/background.png",
+            allowAsSubAssistant = true,
+            isSubAssistantGloballyVisible = true,
+        )
+
+        val restored = JsonInstant.decodeFromString<List<Assistant>>(
+            JsonInstant.encodeToString(listOf(original)),
+        ).single()
+
+        assertEquals(original.avatar, restored.avatar)
+        assertEquals(original.background, restored.background)
+        assertTrue(restored.allowAsSubAssistant)
+        assertTrue(restored.isSubAssistantGloballyVisible)
+    }
+
+    @Test
+    fun `search selection migration preserves the selected service identity across reordering`() = runTest {
+        val first = SearchServiceOptions.BingLocalOptions(Uuid.parse("11111111-1111-1111-1111-111111111111"))
+        val second = SearchServiceOptions.TavilyOptions(Uuid.parse("22222222-2222-2222-2222-222222222222"))
+        val prefs = prefsOf(
+            kotlin.Pair(SettingsStore.SEARCH_SERVICES, JsonInstant.encodeToString(listOf(first, second))),
+        ).also { it[SettingsStore.LEGACY_SEARCH_SELECTED] = 1 }
+
+        val migrated = SearchSelectionMigration().migrate(prefs.toPreferences())
+
+        assertEquals(second.id.toString(), migrated[SettingsStore.SELECTED_SEARCH_SERVICE_ID])
+        assertFalse(migrated.contains(SettingsStore.LEGACY_SEARCH_SELECTED))
+    }
+
+    @Test
+    fun `search selection migration preserves the retired data version preference`() = runTest {
+        val dataVersion = intPreferencesKey("data_version")
+        val prefs = emptyPreferences().toMutablePreferences().also {
+            it[dataVersion] = 4
+            it[SettingsStore.LEGACY_SEARCH_SELECTED] = 0
+        }
+
+        val migrated = SearchSelectionMigration().migrate(prefs.toPreferences())
+
+        assertEquals(4, migrated[dataVersion])
     }
 
     private fun providersWith(vararg models: Model): List<ProviderSetting> =

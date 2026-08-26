@@ -2,25 +2,33 @@ package net.weero.measix.pilot.data.datastore
 
 import android.content.Context
 import android.util.Log
+import androidx.datastore.core.DataMigration
 import androidx.datastore.core.IOException
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
-import me.rerere.ai.core.MessageRole
-import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderSetting
@@ -50,21 +58,116 @@ import me.rerere.search.SearchServiceOptions
 import me.rerere.tts.provider.TTSProviderSetting
 import kotlin.uuid.Uuid
 
-private const val TAG = "PreferencesStore"
+private const val TAG = "SettingsStore"
 
 private val Context.settingsStore by preferencesDataStore(
     name = "settings",
-    produceMigrations = { context -> listOf(OcrSettingsMigration(context)) },
+    produceMigrations = { context ->
+        listOf(
+            OcrSettingsMigration(context),
+            SearchSelectionMigration(),
+        )
+    },
 )
 
-class SettingsStore(
-    context: Context,
-    scope: AppScope,
-    private val writePolicy: SettingsWritePolicy = SettingsWritePolicy.AllowAll,
+private inline fun <reified T> Preferences.json(key: Preferences.Key<String>, default: T): T =
+    this[key]?.let(JsonInstant::decodeFromString) ?: default
+
+private inline fun <reified T> Preferences.lenientList(key: Preferences.Key<String>): List<T> =
+    this[key]?.let(JsonInstant::decodeListLenient) ?: emptyList()
+
+private fun Preferences.uuid(key: Preferences.Key<String>): Uuid? =
+    this[key]?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+
+private inline fun <reified T> androidx.datastore.preferences.core.MutablePreferences.writeJson(
+    key: Preferences.Key<String>,
+    value: T,
 ) {
+    this[key] = JsonInstant.encodeToString(value)
+}
+
+private fun androidx.datastore.preferences.core.MutablePreferences.writeUuid(
+    key: Preferences.Key<String>,
+    value: Uuid?,
+) {
+    value?.let { this[key] = it.toString() } ?: remove(key)
+}
+
+private data class SettingsDefaultPath(
+    val path: String,
+    val key: Preferences.Key<String>,
+    val isPersisted: (Settings) -> Boolean,
+)
+
+private val SETTINGS_DEFAULT_PATHS = listOf(
+    SettingsDefaultPath("defaults/chatModelId", SettingsStore.SELECT_MODEL) { true },
+    SettingsDefaultPath("defaults/fastModelId", SettingsStore.FAST_MODEL) { true },
+    SettingsDefaultPath("defaults/titleModelId", SettingsStore.TITLE_MODEL) { it.titleModelId != null },
+    SettingsDefaultPath("defaults/imageGenerationModelId", SettingsStore.IMAGE_GENERATION_MODEL) { true },
+    SettingsDefaultPath("defaults/attachmentInspectionModelId", SettingsStore.ATTACHMENT_INSPECTION_MODEL) { it.attachmentInspectionModelId != null },
+    SettingsDefaultPath("defaults/compressModelId", SettingsStore.COMPRESS_MODEL) { true },
+    SettingsDefaultPath("defaults/assistantId", SettingsStore.SELECT_ASSISTANT) { true },
+    SettingsDefaultPath("defaults/selectedSearchServiceId", SettingsStore.SELECTED_SEARCH_SERVICE_ID) { it.selectedSearchServiceId != null },
+    SettingsDefaultPath("defaults/selectedTTSProviderId", SettingsStore.SELECTED_TTS_PROVIDER) { true },
+    SettingsDefaultPath("defaults/selectedASRProviderId", SettingsStore.SELECTED_ASR_PROVIDER) { it.selectedASRProviderId != null },
+)
+
+private fun Preferences.explicitDefaultPaths(): Set<String> =
+    SETTINGS_DEFAULT_PATHS.filterTo(linkedSetOf()) { contains(it.key) }.mapTo(linkedSetOf()) { it.path }
+
+private data class LocalSettingsSnapshot(
+    val settings: Settings,
+    val explicitDefaultPaths: Set<String>,
+)
+
+private fun Settings.persistedDefaultPaths(): Set<String> =
+    SETTINGS_DEFAULT_PATHS.filterTo(linkedSetOf()) { it.isPersisted(this) }.mapTo(linkedSetOf()) { it.path }
+
+/**
+ * `search_selected` was a UI list index. Persisting the selected service identity makes a
+ * reorder, deletion, or managed overlay unable to select a different search backend.
+ */
+internal class SearchSelectionMigration : DataMigration<Preferences> {
+    override suspend fun shouldMigrate(currentData: Preferences): Boolean =
+        currentData.contains(SettingsStore.LEGACY_SEARCH_SELECTED)
+
+    override suspend fun migrate(currentData: Preferences): Preferences {
+        val services = currentData[SettingsStore.SEARCH_SERVICES]
+            ?.let { raw -> runCatching { JsonInstant.decodeFromString<List<SearchServiceOptions>>(raw) }.getOrNull() }
+            .orEmpty()
+            .ifEmpty { listOf(SearchServiceOptions.DEFAULT) }
+        val mutable = currentData.toMutablePreferences()
+        if (!mutable.contains(SettingsStore.SELECTED_SEARCH_SERVICE_ID)) {
+            val index = mutable[SettingsStore.LEGACY_SEARCH_SELECTED] ?: 0
+            mutable[SettingsStore.SELECTED_SEARCH_SERVICE_ID] =
+                services.getOrElse(index) { services.first() }.id.toString()
+        }
+        mutable.remove(SettingsStore.LEGACY_SEARCH_SELECTED)
+        return mutable.toPreferences()
+    }
+
+    override suspend fun cleanUp() = Unit
+}
+
+class SettingsStore private constructor(
+    private val appContext: Context,
+    private val scope: AppScope,
+    runtime: ManagedConfigurationRuntime,
+) {
+    private val nowMillis = runtime.nowMillis
+
+    constructor(appContext: Context, scope: AppScope) : this(
+        appContext = appContext,
+        scope = scope,
+        runtime = managedConfigurationRuntime(),
+    )
+
     companion object {
-        // 版本号
-        val VERSION = intPreferencesKey("data_version")
+        internal fun forManagedStateTest(
+            appContext: Context,
+            scope: AppScope,
+            runtime: ManagedConfigurationRuntime,
+        ): SettingsStore = SettingsStore(appContext, scope, runtime)
 
         // UI设置
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
@@ -98,7 +201,8 @@ class SettingsStore(
         // 搜索
         val SEARCH_SERVICES = stringPreferencesKey("search_services")
         val SEARCH_COMMON = stringPreferencesKey("search_common")
-        val SEARCH_SELECTED = intPreferencesKey("search_selected")
+        val SELECTED_SEARCH_SERVICE_ID = stringPreferencesKey("selected_search_service_id")
+        internal val LEGACY_SEARCH_SELECTED = intPreferencesKey("search_selected")
 
         // MCP
         val MCP_SERVERS = stringPreferencesKey("mcp_servers")
@@ -135,7 +239,7 @@ class SettingsStore(
         val PENDING_ASSISTANT_DELETIONS = stringPreferencesKey("pending_assistant_deletions")
     }
 
-    private val dataStore = context.settingsStore
+    private val dataStore = appContext.settingsStore
 
     /**
      * 串行化“读取最新值 → 修改 → DataStore 提交”，避免工具操作与用户设置并发时
@@ -143,7 +247,7 @@ class SettingsStore(
      */
     private val updateMutex = Mutex()
 
-    val settingsFlowRaw = dataStore.data
+    private val localSettingsRaw = dataStore.data
         .catch { exception ->
             if (exception is IOException) {
                 emit(emptyPreferences())
@@ -151,10 +255,9 @@ class SettingsStore(
                 throw exception
             }
         }.map { preferences ->
-            Settings(
-                favoriteModels = preferences[FAVORITE_MODELS]?.let {
-                    JsonInstant.decodeFromString(it)
-                } ?: emptyList(),
+            LocalSettingsSnapshot(
+                settings = Settings(
+                favoriteModels = preferences.json(FAVORITE_MODELS, emptyList()),
                 chatModelId = preferences[SELECT_MODEL]?.let { Uuid.parse(it) }
                     ?: DEFAULT_AUTO_MODEL_ID,
                 fastModelId = preferences[FAST_MODEL]?.let { Uuid.parse(it) }
@@ -171,53 +274,29 @@ class SettingsStore(
                 compressPrompt = preferences[COMPRESS_PROMPT] ?: DEFAULT_COMPRESS_PROMPT,
                 assistantId = preferences[SELECT_ASSISTANT]?.let { Uuid.parse(it) }
                     ?: DEFAULT_ASSISTANT_ID,
-                assistantTags = preferences[ASSISTANT_TAGS]?.let {
-                    JsonInstant.decodeFromString(it)
-                } ?: emptyList(),
-                providers = JsonInstant.decodeFromString(preferences[PROVIDERS] ?: "[]"),
-                assistants = JsonInstant.decodeFromString(preferences[ASSISTANTS] ?: "[]"),
+                assistantTags = preferences.json(ASSISTANT_TAGS, emptyList()),
+                providers = preferences.json(PROVIDERS, emptyList()),
+                assistants = preferences.json(ASSISTANTS, emptyList()),
                 dynamicColor = preferences[DYNAMIC_COLOR] != false,
                 themeId = preferences[THEME_ID] ?: PresetThemes[0].id,
-                customThemes = preferences[CUSTOM_THEMES]?.let {
-                    JsonInstant.decodeFromString(it)
-                } ?: emptyList(),
+                customThemes = preferences.json(CUSTOM_THEMES, emptyList()),
                 developerMode = preferences[DEVELOPER_MODE] == true,
-                displaySetting = JsonInstant.decodeFromString(preferences[DISPLAY_SETTING] ?: "{}"),
-                searchServices = preferences[SEARCH_SERVICES]?.let {
-                    JsonInstant.decodeListLenient<SearchServiceOptions>(it)
-                }?.ifEmpty { listOf(SearchServiceOptions.DEFAULT) } ?: listOf(SearchServiceOptions.DEFAULT),
-                searchCommonOptions = preferences[SEARCH_COMMON]?.let {
-                    JsonInstant.decodeFromString(it)
-                } ?: SearchCommonOptions(),
-                searchServiceSelected = preferences[SEARCH_SELECTED] ?: 0,
-                mcpServers = preferences[MCP_SERVERS]?.let {
-                    JsonInstant.decodeFromString(it)
-                } ?: emptyList(),
-                webDavConfig = preferences[WEBDAV_CONFIG]?.let {
-                    JsonInstant.decodeFromString(it)
-                } ?: WebDavConfig(),
-                s3Config = preferences[S3_CONFIG]?.let {
-                    JsonInstant.decodeFromString(it)
-                } ?: S3Config(),
-                ttsProviders = preferences[TTS_PROVIDERS]?.let {
-                    JsonInstant.decodeListLenient<TTSProviderSetting>(it)
-                } ?: emptyList(),
+                displaySetting = preferences.json(DISPLAY_SETTING, DisplaySetting()),
+                searchServices = preferences.lenientList(SEARCH_SERVICES),
+                searchCommonOptions = preferences.json(SEARCH_COMMON, SearchCommonOptions()),
+                selectedSearchServiceId = preferences.uuid(SELECTED_SEARCH_SERVICE_ID),
+                mcpServers = preferences.json(MCP_SERVERS, emptyList()),
+                webDavConfig = preferences.json(WEBDAV_CONFIG, WebDavConfig()),
+                s3Config = preferences.json(S3_CONFIG, S3Config()),
+                ttsProviders = preferences.lenientList(TTS_PROVIDERS),
                 selectedTTSProviderId = preferences[SELECTED_TTS_PROVIDER]?.let { Uuid.parse(it) }
                     ?: DEFAULT_SYSTEM_TTS_ID,
                 defaultTTSPlaybackSpeed = preferences[DEFAULT_TTS_PLAYBACK_SPEED]?.coerceIn(0.5f, 2.0f) ?: 1.0f,
-                asrProviders = preferences[ASR_PROVIDERS]?.let {
-                    JsonInstant.decodeListLenient<ASRProviderSetting>(it)
-                } ?: emptyList(),
+                asrProviders = preferences.lenientList(ASR_PROVIDERS),
                 selectedASRProviderId = preferences[SELECTED_ASR_PROVIDER]?.let { Uuid.parse(it) },
-                modeInjections = preferences[MODE_INJECTIONS]?.let {
-                    JsonInstant.decodeFromString(it)
-                } ?: emptyList(),
-                quickMessages = preferences[QUICK_MESSAGES]?.let {
-                    JsonInstant.decodeFromString(it)
-                } ?: emptyList(),
-                backupReminderConfig = preferences[BACKUP_REMINDER_CONFIG]?.let {
-                    JsonInstant.decodeFromString(it)
-                } ?: BackupReminderConfig(),
+                modeInjections = preferences.json(MODE_INJECTIONS, emptyList()),
+                quickMessages = preferences.json(QUICK_MESSAGES, emptyList()),
+                backupReminderConfig = preferences.json(BACKUP_REMINDER_CONFIG, BackupReminderConfig()),
                 launchCount = preferences[LAUNCH_COUNT] ?: 0,
                 ignoredUpdateVersion = preferences[IGNORED_UPDATE_VERSION] ?: "",
                 pendingAssistantDeletions = preferences[PENDING_ASSISTANT_DELETIONS]?.let { encoded ->
@@ -228,207 +307,201 @@ class SettingsStore(
                         emptyList()
                     }
                 } ?: emptyList(),
+                ),
+                explicitDefaultPaths = preferences.explicitDefaultPaths(),
             )
         }
-        .map { it.materializeForRead() }
 
-    val settingsFlow = settingsFlowRaw
+    private val localSettings = localSettingsRaw
         .distinctUntilChanged()
-        .toMutableStateFlow(scope, Settings.dummy())
+        .toMutableStateFlow(scope, LocalSettingsSnapshot(Settings.dummy(), emptySet()))
 
-    /** 备份恢复是完整外部快照，但不得清空未完成的内部删除 tombstone。 */
-    suspend fun restoreFromBackup(settings: Settings) {
+    private val managedConfiguration = ManagedConfigurationStorage(appContext, runtime)
+    private val managedSnapshot = MutableStateFlow<ManagedConfigurationSnapshot?>(null)
+    private var managedExpiryJob: Job? = null
+    private var effectiveRevision = 0L
+    private var publishedEffectiveInputs: Pair<LocalSettingsSnapshot, ManagedConfigurationSnapshot>? = null
+    private val _effectiveSettings = MutableStateFlow(
+        EffectiveSettingsSnapshot(
+            settings = Settings.dummy(),
+            access = SettingsAccessIndex(),
+            revision = 0,
+            managedState = ManagedConfigurationState.ABSENT,
+        ),
+    )
+
+    /** The aggregate's only externally visible configuration read model. */
+    internal val effectiveSettings: StateFlow<EffectiveSettingsSnapshot> = _effectiveSettings.asStateFlow()
+
+    init {
+        scope.launch {
+            updateMutex.withLock {
+                publishManagedSnapshot(managedConfiguration.loadSnapshot())
+            }
+        }
+        scope.launch {
+            combine(localSettings, managedSnapshot.filterNotNull()) { local, managed -> local to managed }
+                .collect { (local, managed) ->
+                    updateMutex.withLock {
+                        publishEffectiveSnapshot(local, managed)
+                    }
+                }
+        }
+    }
+
+    /** 备份恢复替换 Local shadow，但不得清空未完成的内部删除 tombstone。 */
+    suspend fun restoreLocal(settings: Settings): Settings =
         updateMutex.withLock {
-            val current = settingsFlow.first { !it.init }
+            val current = localSettings.first { !it.settings.init }.settings
             updateInternal(
                 current = current,
                 proposed = settings.withInternalStateFrom(current),
-                source = SettingsWriteSource.BACKUP_RESTORE,
             )
+        }
+
+    suspend fun updateLocal(transform: (Settings) -> Settings): Settings = updateMutex.withLock {
+        val localSnapshot = localSettings.first { !it.settings.init }
+        val local = localSnapshot.settings
+        val localReadModel = local.materializeForRead()
+        val effective = EffectiveSettingsResolver.resolve(
+            local = localReadModel,
+            managed = managedSnapshot.filterNotNull().first(),
+            revision = effectiveSettings.value.revision,
+            explicitLocalDefaults = localSnapshot.explicitDefaultPaths,
+        )
+        val proposed = transform(localReadModel)
+        requireLocalSettingsWriteAllowed(
+            currentLocal = localReadModel,
+            currentEffective = effective,
+            proposedLocal = proposed,
+        )
+        updateInternal(
+            current = local,
+            proposed = proposed,
+        )
+    }
+
+    /** Backup is a durable format boundary and exports only the Local shadow. */
+    internal suspend fun snapshotLocal(): Settings = localSettings.first { !it.settings.init }.settings.materializeForRead()
+
+    /** Applies one verified managed aggregate without exposing a second configuration owner. */
+    internal suspend fun applyManagedSnapshot(envelope: ByteArray): ManagedApplyResult = updateMutex.withLock {
+        val previous = managedSnapshot.filterNotNull().first()
+        when (val prepared = managedConfiguration.prepare(envelope, previous)) {
+            is ManagedConfigurationPreparation.Rejected -> ManagedApplyResult.Rejected(prepared.reason)
+            is ManagedConfigurationPreparation.Accepted -> {
+                publishManagedSnapshot(prepared.snapshot)
+                scope.launch { managedConfiguration.cleanupRetired(envelope, prepared.generation) }
+                ManagedApplyResult.Applied(prepared.generation)
+            }
         }
     }
 
-    suspend fun update(fn: (Settings) -> Settings) {
-        updateAtomic(fn = fn)
+    /** Serializes time-driven degradation with local writes and managed generation changes. */
+    private suspend fun publishManagedSnapshot(snapshot: ManagedConfigurationSnapshot) {
+        managedSnapshot.value = snapshot
+        publishEffectiveSnapshot(localSettings.first { !it.settings.init }, snapshot)
+        managedExpiryJob?.cancel()
+        val expiresAt = snapshot.expiresAtEpochMillis ?: return
+        if (snapshot.state != ManagedConfigurationState.ACTIVE) return
+        managedExpiryJob = scope.launch {
+            val now = nowMillis()
+            delay(if (expiresAt <= now) 0L else expiresAt - now)
+            updateMutex.withLock {
+                val current = managedSnapshot.filterNotNull().first()
+                if (
+                    current.generation == snapshot.generation &&
+                    current.state == ManagedConfigurationState.ACTIVE &&
+                    current.expiresAtEpochMillis != null &&
+                    current.expiresAtEpochMillis <= nowMillis()
+                ) {
+                    publishManagedSnapshot(current.copy(state = ManagedConfigurationState.DEGRADED))
+                }
+            }
+        }
     }
 
-    /**
-     * 原子 transform：由内部 Mutex 串行化“读取最新值 → 修改 → DataStore 提交”。
-     * AssistantManagementService、Assistant 编辑页和 UI 删除均使用该入口。
-     */
-    suspend fun updateAtomic(fn: (Settings) -> Settings) {
-        updateAtomicAndGet(source = SettingsWriteSource.LOCAL, fn = fn)
-    }
-
-    /** 仅供需要在提交成功后执行文件补偿的领域服务取得策略处理后的实际提交值。 */
-    internal suspend fun updateAtomicAndGet(fn: (Settings) -> Settings): Settings =
-        updateAtomicAndGet(source = SettingsWriteSource.LOCAL, fn = fn)
-
-    private suspend fun updateAtomicAndGet(
-        source: SettingsWriteSource,
-        fn: (Settings) -> Settings,
-    ): Settings = updateMutex.withLock {
-        // StateFlow 的初始值是不可持久化的 dummy；启动早期的原子操作必须等待真实 DataStore 快照。
-        val current = settingsFlow.first { !it.init }
-        val updated = fn(current)
-        updateInternal(current = current, proposed = updated, source = source)
+    /** Publishes only the latest Local/Managed pair after its durable owner has committed. */
+    private fun publishEffectiveSnapshot(
+        local: LocalSettingsSnapshot,
+        managed: ManagedConfigurationSnapshot,
+    ) {
+        if (local.settings.init || local != localSettings.value || managed != managedSnapshot.value) return
+        val inputs = local to managed
+        if (inputs == publishedEffectiveInputs) return
+        _effectiveSettings.value = EffectiveSettingsResolver.resolve(
+            local = local.settings,
+            managed = managed,
+            revision = ++effectiveRevision,
+            explicitLocalDefaults = local.explicitDefaultPaths,
+        )
+        publishedEffectiveInputs = inputs
     }
 
     private suspend fun updateInternal(
         current: Settings,
         proposed: Settings,
-        source: SettingsWriteSource,
     ): Settings {
         if (proposed.init) {
             Log.w(TAG, "Cannot update dummy settings")
             return current
         }
         return commitSettings(
-            current = current,
             proposed = proposed,
-            source = source,
-            policy = writePolicy,
             persist = { normalizedSettings ->
                 dataStore.edit { preferences ->
                     preferences[DYNAMIC_COLOR] = normalizedSettings.dynamicColor
                     preferences[THEME_ID] = normalizedSettings.themeId
-                    preferences[CUSTOM_THEMES] = JsonInstant.encodeToString(normalizedSettings.customThemes)
+                    preferences.writeJson(CUSTOM_THEMES, normalizedSettings.customThemes)
                     preferences[DEVELOPER_MODE] = normalizedSettings.developerMode
-                    preferences[DISPLAY_SETTING] = JsonInstant.encodeToString(normalizedSettings.displaySetting)
-                    preferences[FAVORITE_MODELS] = JsonInstant.encodeToString(normalizedSettings.favoriteModels)
+                    preferences.writeJson(DISPLAY_SETTING, normalizedSettings.displaySetting)
+                    preferences.writeJson(FAVORITE_MODELS, normalizedSettings.favoriteModels)
                     preferences[SELECT_MODEL] = normalizedSettings.chatModelId.toString()
                     preferences[FAST_MODEL] = normalizedSettings.fastModelId.toString()
-                    normalizedSettings.titleModelId?.let {
-                        preferences[TITLE_MODEL] = it.toString()
-                    } ?: preferences.remove(TITLE_MODEL)
+                    preferences.writeUuid(TITLE_MODEL, normalizedSettings.titleModelId)
                     preferences[ENABLE_SUGGESTION] = normalizedSettings.enableSuggestion
-                    normalizedSettings.suggestionModelId?.let {
-                        preferences[SUGGESTION_MODEL] = it.toString()
-                    } ?: preferences.remove(SUGGESTION_MODEL)
+                    preferences.writeUuid(SUGGESTION_MODEL, normalizedSettings.suggestionModelId)
                     preferences[IMAGE_GENERATION_MODEL] = normalizedSettings.imageGenerationModelId.toString()
                     preferences[TITLE_PROMPT] = normalizedSettings.titlePrompt
                     preferences[SUGGESTION_PROMPT] = normalizedSettings.suggestionPrompt
-                    normalizedSettings.attachmentInspectionModelId?.let {
-                        preferences[ATTACHMENT_INSPECTION_MODEL] = it.toString()
-                    } ?: preferences.remove(ATTACHMENT_INSPECTION_MODEL)
+                    preferences.writeUuid(ATTACHMENT_INSPECTION_MODEL, normalizedSettings.attachmentInspectionModelId)
                     preferences[COMPRESS_MODEL] = normalizedSettings.compressModelId.toString()
                     preferences[COMPRESS_PROMPT] = normalizedSettings.compressPrompt
-                    preferences[PROVIDERS] = JsonInstant.encodeToString(normalizedSettings.providers)
-                    preferences[ASSISTANTS] = JsonInstant.encodeToString(normalizedSettings.assistants)
+                    preferences.writeJson(PROVIDERS, normalizedSettings.providers)
+                    preferences.writeJson(ASSISTANTS, normalizedSettings.assistants)
                     preferences[SELECT_ASSISTANT] = normalizedSettings.assistantId.toString()
-                    preferences[ASSISTANT_TAGS] = JsonInstant.encodeToString(normalizedSettings.assistantTags)
-                    preferences[SEARCH_SERVICES] = JsonInstant.encodeToString(normalizedSettings.searchServices)
-                    preferences[SEARCH_COMMON] = JsonInstant.encodeToString(normalizedSettings.searchCommonOptions)
-                    preferences[SEARCH_SELECTED] = normalizedSettings.searchServiceSelected
-                    preferences[MCP_SERVERS] = JsonInstant.encodeToString(normalizedSettings.mcpServers)
-                    preferences[WEBDAV_CONFIG] = JsonInstant.encodeToString(normalizedSettings.webDavConfig)
-                    preferences[S3_CONFIG] = JsonInstant.encodeToString(normalizedSettings.s3Config)
-                    preferences[TTS_PROVIDERS] = JsonInstant.encodeToString(normalizedSettings.ttsProviders)
-                    normalizedSettings.selectedTTSProviderId.let {
-                        preferences[SELECTED_TTS_PROVIDER] = it.toString()
-                    }
+                    preferences.writeJson(ASSISTANT_TAGS, normalizedSettings.assistantTags)
+                    preferences.writeJson(SEARCH_SERVICES, normalizedSettings.searchServices)
+                    preferences.writeJson(SEARCH_COMMON, normalizedSettings.searchCommonOptions)
+                    preferences.writeUuid(SELECTED_SEARCH_SERVICE_ID, normalizedSettings.selectedSearchServiceId)
+                    preferences.writeJson(MCP_SERVERS, normalizedSettings.mcpServers)
+                    preferences.writeJson(WEBDAV_CONFIG, normalizedSettings.webDavConfig)
+                    preferences.writeJson(S3_CONFIG, normalizedSettings.s3Config)
+                    preferences.writeJson(TTS_PROVIDERS, normalizedSettings.ttsProviders)
+                    preferences.writeUuid(SELECTED_TTS_PROVIDER, normalizedSettings.selectedTTSProviderId)
                     preferences[DEFAULT_TTS_PLAYBACK_SPEED] = normalizedSettings.defaultTTSPlaybackSpeed
-                    preferences[ASR_PROVIDERS] = JsonInstant.encodeToString(normalizedSettings.asrProviders)
-                    normalizedSettings.selectedASRProviderId?.let {
-                        preferences[SELECTED_ASR_PROVIDER] = it.toString()
-                    } ?: preferences.remove(SELECTED_ASR_PROVIDER)
-                    preferences[MODE_INJECTIONS] = JsonInstant.encodeToString(normalizedSettings.modeInjections)
-                    preferences[QUICK_MESSAGES] = JsonInstant.encodeToString(normalizedSettings.quickMessages)
-                    preferences[BACKUP_REMINDER_CONFIG] =
-                        JsonInstant.encodeToString(normalizedSettings.backupReminderConfig)
+                    preferences.writeJson(ASR_PROVIDERS, normalizedSettings.asrProviders)
+                    preferences.writeUuid(SELECTED_ASR_PROVIDER, normalizedSettings.selectedASRProviderId)
+                    preferences.writeJson(MODE_INJECTIONS, normalizedSettings.modeInjections)
+                    preferences.writeJson(QUICK_MESSAGES, normalizedSettings.quickMessages)
+                    preferences.writeJson(BACKUP_REMINDER_CONFIG, normalizedSettings.backupReminderConfig)
                     preferences[LAUNCH_COUNT] = normalizedSettings.launchCount
                     preferences[IGNORED_UPDATE_VERSION] = normalizedSettings.ignoredUpdateVersion
-                    preferences[PENDING_ASSISTANT_DELETIONS] =
-                        JsonInstant.encodeToString(normalizedSettings.pendingAssistantDeletions)
+                    preferences.writeJson(PENDING_ASSISTANT_DELETIONS, normalizedSettings.pendingAssistantDeletions)
                 }
             },
             // persist 正常返回后才发布，避免写盘失败时内存状态领先于持久化状态。
-            publish = { settingsFlow.value = it },
-        )
+            publish = { committed ->
+                val localSnapshot = LocalSettingsSnapshot(committed, committed.persistedDefaultPaths())
+                localSettings.value = localSnapshot
+                publishEffectiveSnapshot(
+                    localSnapshot,
+                    managedSnapshot.filterNotNull().first(),
+                )
+            },
+        ).materializeForRead()
     }
 
-    suspend fun updateAssistant(assistantId: Uuid) {
-        updateAtomic { settings ->
-            settings.copy(assistantId = assistantId)
-        }
-    }
-
-    suspend fun updateAssistantModel(assistantId: Uuid, modelId: Uuid) {
-        update { settings ->
-            settings.copy(
-                assistants = settings.assistants.map { assistant ->
-                    if (assistant.id == assistantId) {
-                        assistant.copy(chatModelId = modelId)
-                    } else {
-                        assistant
-                    }
-                }
-            )
-        }
-    }
-
-    suspend fun updateAssistantReasoningLevel(assistantId: Uuid, reasoningLevel: ReasoningLevel) {
-        update { settings ->
-            settings.copy(
-                assistants = settings.assistants.map { assistant ->
-                    if (assistant.id == assistantId) {
-                        assistant.copy(reasoningLevel = reasoningLevel)
-                    } else {
-                        assistant
-                    }
-                }
-            )
-        }
-    }
-
-    suspend fun updateAssistantWebSearch(assistantId: Uuid, enabled: Boolean) {
-        update { settings ->
-            settings.copy(
-                assistants = settings.assistants.map { assistant ->
-                    if (assistant.id == assistantId) {
-                        assistant.copy(enableWebSearch = enabled)
-                    } else {
-                        assistant
-                    }
-                }
-            )
-        }
-    }
-
-    suspend fun updateAssistantMcpServers(assistantId: Uuid, mcpServers: Set<Uuid>) {
-        update { settings ->
-            settings.copy(
-                assistants = settings.assistants.map { assistant ->
-                    if (assistant.id == assistantId) {
-                        assistant.copy(mcpServers = mcpServers)
-                    } else {
-                        assistant
-                    }
-                }
-            )
-        }
-    }
-
-    suspend fun updateAssistantInjections(
-        assistantId: Uuid,
-        modeInjectionIds: Set<Uuid>,
-        quickMessageIds: Set<Uuid> = emptySet(),
-    ) {
-        update { settings ->
-            settings.copy(
-                assistants = settings.assistants.map { assistant ->
-                    if (assistant.id == assistantId) {
-                        assistant.copy(
-                            modeInjectionIds = modeInjectionIds,
-                            quickMessageIds = quickMessageIds,
-                        )
-                    } else {
-                        assistant
-                    }
-                }
-            )
-        }
-    }
 }
 
 /**
@@ -470,7 +543,7 @@ data class Settings(
     val assistantTags: List<Tag> = emptyList(),
     val searchServices: List<SearchServiceOptions> = listOf(SearchServiceOptions.DEFAULT),
     val searchCommonOptions: SearchCommonOptions = SearchCommonOptions(),
-    val searchServiceSelected: Int = 0,
+    val selectedSearchServiceId: Uuid? = null,
     val mcpServers: List<McpServerConfig> = emptyList(),
     val webDavConfig: WebDavConfig = WebDavConfig(),
     val s3Config: S3Config = S3Config(),

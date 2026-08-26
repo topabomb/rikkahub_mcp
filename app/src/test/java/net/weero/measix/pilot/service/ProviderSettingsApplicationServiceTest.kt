@@ -84,8 +84,8 @@ class ProviderSettingsApplicationServiceTest {
         val edited = latest.copy(name = "Edited", apiKey = "new-key", models = emptyList())
         val store = mockk<SettingsStore>()
         var persisted: Settings? = null
-        coEvery { store.updateAtomic(any()) } coAnswers {
-            persisted = firstArg<(Settings) -> Settings>()(Settings(providers = listOf(latest)))
+        coEvery { store.updateLocal(any()) } coAnswers {
+            firstArg<(Settings) -> Settings>()(Settings(providers = listOf(latest))).also { persisted = it }
         }
 
         ProviderSettingsApplicationService(mockk(), store).saveConfiguration(providerId, edited)
@@ -104,8 +104,8 @@ class ProviderSettingsApplicationServiceTest {
         val latest = ProviderSetting.OpenAI(models = listOf(first, concurrent, last))
         val store = mockk<SettingsStore>()
         var current = Settings(providers = listOf(latest))
-        coEvery { store.updateAtomic(any()) } coAnswers {
-            current = firstArg<(Settings) -> Settings>()(current)
+        coEvery { store.updateLocal(any()) } coAnswers {
+            firstArg<(Settings) -> Settings>()(current).also { current = it }
         }
         val service = ProviderSettingsApplicationService(mockk(), store)
 
@@ -124,8 +124,8 @@ class ProviderSettingsApplicationServiceTest {
         val latest = ProviderSetting.OpenAI(models = listOf(retained, removed))
         val store = mockk<SettingsStore>()
         var current = Settings(providers = listOf(latest))
-        coEvery { store.updateAtomic(any()) } coAnswers {
-            current = firstArg<(Settings) -> Settings>()(current)
+        coEvery { store.updateLocal(any()) } coAnswers {
+            firstArg<(Settings) -> Settings>()(current).also { current = it }
         }
         val service = ProviderSettingsApplicationService(mockk(), store)
 

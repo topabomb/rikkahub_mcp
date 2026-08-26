@@ -26,9 +26,12 @@ import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.dokar.sonner.ToastType
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import net.weero.measix.pilot.ui.context.LocalNavController
+import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.utils.base64Encode
 import net.weero.measix.pilot.utils.navigateToChatPage
 import net.weero.measix.pilot.utils.plus
@@ -41,6 +44,8 @@ fun ShareHandlerPage(text: String, image: String?) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val navController = LocalNavController.current
+    val toaster = LocalToaster.current
+    val lockedMessage = stringResource(R.string.managed_configuration_locked, "{reason}")
     Scaffold(
         topBar = {
             TopAppBar(
@@ -84,7 +89,15 @@ fun ShareHandlerPage(text: String, image: String?) {
                 Surface(
                     onClick = {
                         scope.launch {
-                            vm.updateAssistant(assistant.id)
+                            try {
+                                vm.updateAssistant(assistant.id)
+                            } catch (error: SettingsLockedException) {
+                                toaster.show(
+                                    message = lockedMessage.replace("{reason}", error.reason),
+                                    type = ToastType.Error,
+                                )
+                                return@launch
+                            }
                             navigateToChatPage(
                                 navigator = navController,
                                 initText = vm.shareText.base64Encode(),

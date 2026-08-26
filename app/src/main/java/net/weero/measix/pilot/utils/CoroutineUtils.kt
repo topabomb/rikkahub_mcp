@@ -1,6 +1,7 @@
 ﻿package net.weero.measix.pilot.utils
 
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,9 +19,10 @@ fun <T> Flow<T>.toMutableStateFlow(
             this@toMutableStateFlow.collect { value ->
                 stateFlow.value = value
             }
-        }.onFailure {
-            it.printStackTrace()
-            Log.e(TAG, "Error while collecting flow: ${it.message}", it)
+        }.onFailure { error ->
+            if (error is CancellationException) throw error
+            error.printStackTrace()
+            Log.e(TAG, "Error while collecting flow: ${error.message}", error)
 
             Runtime.getRuntime().halt(1)
         }

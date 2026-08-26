@@ -27,7 +27,8 @@ fun rememberCustomAsrState(): CustomAsrState {
     val context = LocalContext.current
     val settingsStore = koinInject<SettingsStore>()
     val httpClient = koinInject<OkHttpClient>()
-    val settings by settingsStore.settingsFlow.collectAsStateWithLifecycle()
+    val effectiveSettings by settingsStore.effectiveSettings.collectAsStateWithLifecycle()
+    val settings = effectiveSettings.settings
 
     val asrState = remember {
         CustomAsrStateImpl(context.applicationContext, httpClient)

@@ -66,9 +66,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import net.weero.measix.pilot.R
 import me.rerere.asr.ASRProviderSetting
 import net.weero.measix.pilot.data.datastore.DEFAULT_SYSTEM_TTS_ID
+import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
+import net.weero.measix.pilot.data.datastore.ManagedConfigurationRecordKind
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
+import net.weero.measix.pilot.ui.components.ui.ManagedDefaultStatus
+import net.weero.measix.pilot.ui.components.ui.ManagedRecordStatus
 import net.weero.measix.pilot.ui.components.ui.Tag
 import net.weero.measix.pilot.ui.components.ui.TagType
 import net.weero.measix.pilot.ui.context.LocalTTSState
@@ -85,6 +89,7 @@ import kotlin.math.roundToInt
 @Composable
 fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
+    val effectiveSettings by vm.effectiveSettings.collectAsStateWithLifecycle()
     var editingTTSProvider by remember { mutableStateOf<TTSProviderSetting?>(null) }
     var editingASRProvider by remember { mutableStateOf<ASRProviderSetting?>(null) }
     var selectedPage by remember { mutableIntStateOf(0) }
@@ -153,6 +158,7 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
                 )
                 TTSProviderList(
                     settings = settings,
+                    effectiveSettings = effectiveSettings,
                     onUpdateSettings = vm::updateSettings,
                     onEdit = { editingTTSProvider = it },
                     modifier = Modifier.weight(1f),
@@ -161,6 +167,7 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
 
             1 -> ASRProviderList(
                 settings = settings,
+                effectiveSettings = effectiveSettings,
                 onUpdateSettings = vm::updateSettings,
                 onEdit = { editingASRProvider = it },
                 modifier = Modifier.padding(innerPadding)
@@ -305,6 +312,7 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
 @Composable
 private fun TTSProviderList(
     settings: Settings,
+    effectiveSettings: EffectiveSettingsSnapshot,
     onUpdateSettings: ((Settings) -> Settings) -> Unit,
     onEdit: (TTSProviderSetting) -> Unit,
     modifier: Modifier = Modifier
@@ -332,6 +340,12 @@ private fun TTSProviderList(
         verticalArrangement = Arrangement.spacedBy(8.dp),
         state = lazyListState
     ) {
+        item("selected_tts_provider") {
+            ManagedDefaultStatus(
+                snapshot = effectiveSettings,
+                path = "defaults/selectedTTSProviderId",
+            )
+        }
         items(settings.ttsProviders, key = { it.id }) { provider ->
             ReorderableItem(
                 state = reorderableState,
@@ -342,6 +356,7 @@ private fun TTSProviderList(
                         .scale(if (isDragging) 0.95f else 1f)
                         .fillMaxWidth(),
                     provider = provider,
+                    effectiveSettings = effectiveSettings,
                     dragHandle = {
                         val haptic = LocalHapticFeedback.current
                         IconButton(
@@ -439,6 +454,7 @@ private fun TTSPlaybackSpeedSetting(
 @Composable
 private fun ASRProviderList(
     settings: Settings,
+    effectiveSettings: EffectiveSettingsSnapshot,
     onUpdateSettings: ((Settings) -> Settings) -> Unit,
     onEdit: (ASRProviderSetting) -> Unit,
     modifier: Modifier = Modifier
@@ -466,6 +482,12 @@ private fun ASRProviderList(
         verticalArrangement = Arrangement.spacedBy(8.dp),
         state = lazyListState
     ) {
+        item("selected_asr_provider") {
+            ManagedDefaultStatus(
+                snapshot = effectiveSettings,
+                path = "defaults/selectedASRProviderId",
+            )
+        }
         items(settings.asrProviders, key = { it.id }) { provider ->
             ReorderableItem(
                 state = reorderableState,
@@ -476,6 +498,7 @@ private fun ASRProviderList(
                         .scale(if (isDragging) 0.95f else 1f)
                         .fillMaxWidth(),
                     provider = provider,
+                    effectiveSettings = effectiveSettings,
                     dragHandle = {
                         val haptic = LocalHapticFeedback.current
                         IconButton(
@@ -694,6 +717,7 @@ private fun AddASRProviderButton(onAdd: (ASRProviderSetting) -> Unit) {
 @Composable
 private fun TTSProviderItem(
     provider: TTSProviderSetting,
+    effectiveSettings: EffectiveSettingsSnapshot,
     modifier: Modifier = Modifier,
     isSelected: Boolean = false,
     dragHandle: @Composable () -> Unit,
@@ -772,6 +796,11 @@ private fun TTSProviderItem(
                         Text(stringResource(R.string.setting_tts_page_selected))
                     }
                 }
+                ManagedRecordStatus(
+                    snapshot = effectiveSettings,
+                    kind = ManagedConfigurationRecordKind.TTS_PROVIDER,
+                    id = provider.id,
+                )
 
                 Spacer(modifier = Modifier.weight(1f))
 
@@ -837,6 +866,7 @@ private fun TTSProviderItem(
 @Composable
 private fun ASRProviderItem(
     provider: ASRProviderSetting,
+    effectiveSettings: EffectiveSettingsSnapshot,
     modifier: Modifier = Modifier,
     isSelected: Boolean = false,
     dragHandle: @Composable () -> Unit,
@@ -909,6 +939,11 @@ private fun ASRProviderItem(
                         Text(stringResource(R.string.setting_tts_page_selected))
                     }
                 }
+                ManagedRecordStatus(
+                    snapshot = effectiveSettings,
+                    kind = ManagedConfigurationRecordKind.ASR_PROVIDER,
+                    id = provider.id,
+                )
 
                 Spacer(modifier = Modifier.weight(1f))
 

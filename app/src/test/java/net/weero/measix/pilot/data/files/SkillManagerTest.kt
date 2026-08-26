@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.data.files
 
 import android.content.Context
+import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import java.io.File
@@ -14,6 +15,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.datastore.SettingsLockedException
 
 class SkillManagerTest {
     @get:Rule
@@ -156,6 +158,20 @@ class SkillManagerTest {
     }
 
     @Test
+    fun `locked Settings rejection restores the published skill`() = runTest {
+        val settingsStore = mockk<SettingsStore>()
+        coEvery { settingsStore.updateLocal(any()) } throws SettingsLockedException("records/assistants", "Managed")
+        val manager = manager(settingsStore)
+        assertNotNull(manager.saveSkill("stable", document("stable", "original")))
+
+        val error = runCatching { manager.deleteSkill("stable") }.exceptionOrNull()
+
+        assertTrue(error is SettingsLockedException)
+        assertTrue(skillsRoot().resolve("stable/SKILL.md").isFile)
+        assertTrue(skillsRoot().listFiles().orEmpty().none { ".backup." in it.name })
+    }
+
+    @Test
     fun `orphan bundle backup restores the complete previous root`() {
         val manager = manager()
         assertNotNull(manager.saveSkill("first", document("first", "original")))
@@ -237,10 +253,10 @@ class SkillManagerTest {
         )
     }
 
-    private fun manager(): SkillManager {
+    private fun manager(settingsStore: SettingsStore = mockk(relaxed = true)): SkillManager {
         val context = mockk<Context>()
         every { context.filesDir } returns temporaryFolder.root
-        return SkillManager(context, mockk<SettingsStore>(relaxed = true))
+        return SkillManager(context, settingsStore)
     }
 
     private fun skillsRoot(): File = temporaryFolder.root.resolve(FileFolders.SKILLS).apply { mkdirs() }

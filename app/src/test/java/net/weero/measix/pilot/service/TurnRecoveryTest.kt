@@ -12,6 +12,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.db.dao.ScopedTurnExecution
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
@@ -96,7 +97,7 @@ class TurnRecoveryTest {
         coordinator: ConversationCommandCoordinator,
     ): TurnRecovery {
         val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.settingsFlow } returns MutableStateFlow(Settings())
+        every { settingsStore.effectiveSettings } returns MutableStateFlow(Settings().toEffectiveSettingsSnapshot())
         return TurnRecovery(
             conversationRepo = repository,
             commandCoordinator = coordinator,
