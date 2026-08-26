@@ -155,7 +155,7 @@ queued/generating/persisting/setting-background 子阶段。崩溃恢复、停�
 - 用户删除：`deleteUserRequested` 先 CAS DELETING，再在统一 Settings roots 锁下 detach，最后删除 payload 与 row。
 - GC：只读取索引候选，并在生命周期锁内重验 message refs 与 Settings roots；DELETING artifact 不能建立新引用。
 - 引用投影：message delta 与 `artifact_reference` 同事务；损坏节点不会把 backfill 标为完成。
-- 旧数据接管：启动只补录被持久化 Settings root 明确拥有、且仍位于 upload 内的本地图片；无 root 的磁盘文件绝不补录。
+- Settings 完整性：当前写协议不会提交缺少 ACTIVE artifact metadata 的本地 root；启动发现这种根时 fail-closed，不补录、不清除 root 或 payload。
 
 显式删除后的历史引用保留，Replay 投影为 unavailable；系统不会从其他化身自动“复活”用户已删除的文件。
 
@@ -180,7 +180,7 @@ projection → Child run recovery → Master turn recovery → pending assistant
 durable command 继续被 `ApplicationRecoveryGate` 阻断；`retry()` 重新执行同一幂等顺序。
 
 恢复查询只读取非终态 execution 索引。Child/tool 先收口，再提交 owning turn 终态；健康数据库不加载 Conversation 树。
-旧版本遗留的非终态 execution 若已失去 owning Assistant 消息，则通过专用 recovery command 只收口 turn/tool 事实并保留会话树；真正的消息载荷损坏仍保持 fail-closed。
+非终态 execution 若已失去 owning Assistant 消息，恢复进入 `Failed`，不发布会话、也不补偿写入 turn/tool 事实；消息载荷损坏同样保持 fail-closed。
 正常 supersede/cancel 属于 `TurnFinalization`，Child lineage/retention/delete 属于 `SubAssistantLifecycle`，
 `TurnRecovery` 只负责进程恢复。
 

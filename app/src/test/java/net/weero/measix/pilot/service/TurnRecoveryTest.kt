@@ -10,8 +10,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
-import me.rerere.ai.ui.TurnTerminalReasons
-import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.dao.ScopedTurnExecution
@@ -22,54 +20,52 @@ import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
-import net.weero.measix.pilot.service.runtime.ReconcileOrphanedTurnExecution
 import net.weero.measix.pilot.service.runtime.toSnapshot
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
 
-class TurnRecoveryLegacyExecutionTest {
+class TurnRecoveryTest {
     @Test
-    fun `master execution with deleted owner is terminalized without touching messages`() = runTest {
+    fun `master recovery fails closed when a non-terminal turn has no owning assistant message`() = runTest {
         val conversationId = Uuid.random()
-        val missingAssistantId = Uuid.random()
-        val execution = execution(conversationId, missingAssistantId.toString())
+        val execution = execution(conversationId, Uuid.random().toString())
         val conversation = Conversation.ofId(conversationId).copy(
-            messageNodes = listOf(MessageNode.of(UIMessage.user("preserve me"))),
+            messageNodes = listOf(MessageNode.of(me.rerere.ai.ui.UIMessage.user("preserve me"))),
         )
-        val scope = CoroutineScope(Job())
-        val runtime = ConversationRuntime(conversationId, conversation.toSnapshot(), scope, {})
         val repository = mockk<ConversationRepository>()
         val coordinator = mockk<ConversationCommandCoordinator>(relaxed = true)
         coEvery { repository.getRecoverableTurnExecutionsByConversation() } returns
             mapOf(conversationId to listOf(execution))
         coEvery { repository.getConversationById(conversationId) } returns conversation
-        coEvery { coordinator.load(conversationId) } returns runtime
+        val scope = CoroutineScope(Job())
+        coEvery { coordinator.load(conversationId) } returns
+            ConversationRuntime(conversationId, conversation.toSnapshot(), scope, {})
 
-        recovery(repository, coordinator).recoverInterruptedTurns()
+        try {
+            val error = try {
+                recovery(repository, coordinator).recoverInterruptedTurns()
+                null
+            } catch (error: IllegalArgumentException) {
+                error
+            }
 
-        coVerify(exactly = 1) {
-            coordinator.executeRecovery(
-                conversationId,
-                match<ReconcileOrphanedTurnExecution> {
-                    it.turnId.toString() == execution.turnId &&
-                        it.assistantMessageId == missingAssistantId &&
-                        it.terminalReason == TurnTerminalReasons.OWNER_MESSAGE_MISSING
-                },
-            )
+            assertTrue(error?.message.orEmpty().contains("missing owning assistant message"))
+            coVerify(exactly = 0) { coordinator.executeRecovery(any(), any()) }
+        } finally {
+            scope.cancel()
         }
-        coVerify(exactly = 0) { repository.getToolExecutions(execution.turnId) }
-        scope.cancel()
     }
 
     @Test
-    fun `child execution without recorded owner is terminalized through the same command`() = runTest {
+    fun `child recovery fails closed when a non-terminal turn has no owning assistant message`() = runTest {
         val masterId = Uuid.random()
         val childId = Uuid.random()
         val execution = execution(childId, assistantMessageId = null)
         val master = Conversation.ofId(masterId)
         val child = Conversation.ofId(childId).copy(
             parentConversationId = masterId,
-            messageNodes = listOf(MessageNode.of(UIMessage.user("preserve child"))),
+            messageNodes = listOf(MessageNode.of(me.rerere.ai.ui.UIMessage.user("preserve child"))),
         )
         val repository = mockk<ConversationRepository>(relaxed = true)
         val coordinator = mockk<ConversationCommandCoordinator>(relaxed = true)
@@ -84,19 +80,15 @@ class TurnRecoveryLegacyExecutionTest {
         coEvery { repository.getConversationById(childId) } returns child
         coEvery { repository.getTurnExecutions(childId) } returns listOf(execution)
 
-        recovery(repository, coordinator).recoverInterruptedRuns()
-
-        coVerify(exactly = 1) {
-            coordinator.executeRecovery(
-                childId,
-                match<ReconcileOrphanedTurnExecution> {
-                    it.turnId.toString() == execution.turnId &&
-                        it.assistantMessageId == null &&
-                        it.terminalReason == TurnTerminalReasons.OWNER_MESSAGE_MISSING
-                },
-            )
+        val error = try {
+            recovery(repository, coordinator).recoverInterruptedRuns()
+            null
+        } catch (error: IllegalArgumentException) {
+            error
         }
-        coVerify(exactly = 0) { repository.getToolExecutions(execution.turnId) }
+
+        assertTrue(error?.message.orEmpty().contains("missing owning assistant message"))
+        coVerify(exactly = 0) { coordinator.executeRecovery(any(), any()) }
     }
 
     private fun recovery(

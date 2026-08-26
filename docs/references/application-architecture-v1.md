@@ -134,7 +134,7 @@ Turn 和 Tool execution 使用 insert-once 与合法状态 CAS。终态不可回
 
 未发布资源必须以 `OwnedArtifact` 或 `ToolResourceLease` 显式交接：durable checkpoint 成功后发布，失败或取消精确回滚。用户删除先 CAS 到 DELETING，再在 Settings roots 锁内 detach，最后删除 payload 与 row。GC 只从索引候选出发，并在同一生命周期锁内重验 message refs 与 Settings roots。
 
-Settings 图片导入先完成有界复制、结构魔数与实际 MIME 校验，再提交 root 并发布 artifact。启动恢复只可接管被持久化 Settings root 明确拥有、位于 upload root 且内容有效的本地图片；不得扫描目录补录任意文件。这个定点接管用于修复“durable root 已提交但旧流程未完成 artifact row”的持久化不一致，不是兼容路径或第二 owner。
+Settings 图片导入先完成有界复制、结构魔数与实际 MIME 校验，再提交 root 并发布 artifact。当前写协议不会提交缺少 ACTIVE artifact metadata 的本地 Settings root；启动遇到这类根即以完整性错误 fail-closed，既不扫描目录补录，也不丢弃 root 或 payload。
 
 模型可见的稳定附件 handle 使用 `attachment:<uuid>`。`AttachmentReferenceLookup` 统一索引直接 message part 与 `assistant_call.artifacts`；执行侧每批建立一次索引，查询侧按 durable node 版本缓存并只叠加 owning active assistant message。UI 只消费 map 并做常数时间查找，不扫描消息 metadata、子助手 payload 或 ArtifactStore。
 
@@ -146,7 +146,7 @@ Settings 图片导入先完成有界复制、结构魔数与实际 MIME 校验�
 
 启动恢复由 `ApplicationRecoveryCoordinator` 以固定顺序执行：Settings → Artifact → reference projection → FTS projection → Child/Master turn → Assistant cleanup。任一步失败进入 `Failed`，durable command 保持关闭；retry 重跑同一幂等顺序。
 
-恢复只查询非终态 execution 索引，健康会话不加载 message tree。失去 owning Assistant message 的旧 execution 通过专用 command 只终结 turn/tool facts，不凭空重写树；真正的消息 payload 损坏保持 fail-closed。
+恢复只查询非终态 execution 索引，健康会话不加载 message tree。非终态 execution 缺少 owning Assistant message 是持久化完整性错误；恢复进入 `Failed`，不发布会话、也不补偿写入 turn/tool facts。消息 payload 损坏同样保持 fail-closed。
 
 ## Query、UI 与标题
 

@@ -59,16 +59,6 @@ data class RecoverInterruptedTurn(
     val closeInterruptedTools: Boolean,
 ) : ConversationCommand
 
-/**
- * Closes an execution fact whose owning Assistant message is absent at recovery time.
- * The Conversation tree is deliberately unchanged; only the turn/tool facts advance to terminal states.
- */
-data class ReconcileOrphanedTurnExecution(
-    val turnId: Uuid,
-    val assistantMessageId: Uuid?,
-    val terminalReason: String,
-) : ConversationCommand
-
 /** Appends the user message and, for the first user turn, its deterministic local title atomically. */
 data class AppendUserMessage(
     val message: UIMessage,
@@ -220,7 +210,6 @@ internal object ConversationMutationBuilder {
             is FinalizeTurn,
             is AppendUserMessage,
             -> listOf(maxOf(old.nodes.lastIndex, new.nodes.lastIndex)).filter { it >= 0 }
-            is ReconcileOrphanedTurnExecution,
             is UpdateHeader,
             is UpdateTitleIfCurrent,
             is MoveToAssistant,

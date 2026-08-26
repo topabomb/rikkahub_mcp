@@ -191,43 +191,61 @@ class ArtifactStoreLifecycleTest {
     }
 
     @Test
-    fun `startup adopts an untracked legacy assistant avatar from its durable settings root`() = runTest {
+    fun `startup fails closed when a settings root lacks artifact metadata`() = runTest {
         folders += FileFolders.UPLOAD
-        val file = File(context.filesDir, "${FileFolders.UPLOAD}/legacy-avatar.png").apply {
+        val relativePath = "${FileFolders.UPLOAD}/untracked-settings-root.png"
+        val file = File(context.filesDir, relativePath).apply {
             parentFile?.mkdirs()
             writeBytes(TINY_PNG)
         }
-        val avatar = Avatar.Image(file.toUri().toString())
-        settingsFlow.value = Settings(assistants = listOf(Assistant(avatar = avatar)))
-
-        store.reconcileStartup()
-
-        val adopted = database.artifactDao().getByPathAndState(
-            "${FileFolders.UPLOAD}/legacy-avatar.png",
-            ArtifactState.ACTIVE.name,
+        settingsFlow.value = Settings(
+            assistants = listOf(Assistant(background = file.toUri().toString())),
         )
-        assertEquals(ArtifactOrigin.USER.name, adopted?.origin)
-        assertEquals("image/png", adopted?.mimeType)
+
+        val failure = runCatching { store.reconcileStartup() }.exceptionOrNull()
+
+        assertTrue(failure is ArtifactDataIntegrityException)
         assertTrue(file.isFile)
-        assertEquals(avatar, settingsFlow.value.assistants.single().avatar)
+        assertNull(database.artifactDao().getByPathAndState(
+            relativePath,
+            ArtifactState.ACTIVE.name,
+        ))
     }
 
     @Test
-    fun `startup rejects a settings rooted legacy avatar whose extension lies about its content`() = runTest {
+    fun `sub-assistant avatar and background roots are retained but rejected without metadata`() = runTest {
         folders += FileFolders.UPLOAD
-        val relativePath = "${FileFolders.UPLOAD}/fake-avatar.png"
-        val file = File(context.filesDir, relativePath).apply {
+        val avatar = File(context.filesDir, "${FileFolders.UPLOAD}/legacy-sub-avatar.png").apply {
             parentFile?.mkdirs()
-            writeText("not an image")
+            writeBytes(TINY_PNG)
+        }
+        val background = File(context.filesDir, "${FileFolders.UPLOAD}/legacy-sub-background.png").apply {
+            parentFile?.mkdirs()
+            writeBytes(TINY_PNG)
         }
         settingsFlow.value = Settings(
-            assistants = listOf(Assistant(avatar = Avatar.Image(file.toUri().toString()))),
+            assistants = listOf(
+                Assistant(
+                    avatar = Avatar.Image(avatar.toUri().toString()),
+                    background = background.toUri().toString(),
+                    allowAsSubAssistant = true,
+                ),
+            ),
         )
 
-        store.reconcileStartup()
+        val failure = runCatching { store.reconcileStartup() }.exceptionOrNull()
 
-        assertNull(database.artifactDao().getByPathAndState(relativePath, ArtifactState.ACTIVE.name))
-        assertTrue(file.isFile)
+        assertTrue(failure is ArtifactDataIntegrityException)
+        assertTrue(avatar.isFile)
+        assertTrue(background.isFile)
+        assertNull(database.artifactDao().getByPathAndState(
+            "${FileFolders.UPLOAD}/legacy-sub-avatar.png",
+            ArtifactState.ACTIVE.name,
+        ))
+        assertNull(database.artifactDao().getByPathAndState(
+            "${FileFolders.UPLOAD}/legacy-sub-background.png",
+            ArtifactState.ACTIVE.name,
+        ))
     }
 
     @Test

@@ -341,20 +341,22 @@ class ConversationReducerTest {
     }
 
     @Test
-    fun `orphaned execution recovery refuses to close a turn whose assistant message still exists`() {
+    fun `recovery refuses a turn whose owning assistant message is missing`() {
         val conversationId = Uuid.random()
         val assistantId = Uuid.random()
         val snapshot = Conversation.ofId(conversationId).copy(
-            messageNodes = listOf(MessageNode.of(assistant(assistantId))),
+            messageNodes = listOf(MessageNode.of(UIMessage.user("preserved"))),
         ).toSnapshot()
 
         val failure = runCatching {
             ConversationReducer.reduce(
                 snapshot,
-                ReconcileOrphanedTurnExecution(
+                RecoverInterruptedTurn(
                     turnId = Uuid.random(),
                     assistantMessageId = assistantId,
-                    terminalReason = "owner_message_missing",
+                    messages = null,
+                    terminalReason = "process_restarted",
+                    closeInterruptedTools = true,
                 ),
             )
         }.exceptionOrNull()

@@ -33,7 +33,6 @@ internal object ConversationReducer {
         is CommitCheckpoint -> commitCheckpoint(current, command)
         is FinalizeTurn -> finalizeTurn(current, command)
         is RecoverInterruptedTurn -> recoverInterruptedTurn(current, command)
-        is ReconcileOrphanedTurnExecution -> reconcileOrphanedTurnExecution(current, command)
         is AppendUserMessage -> appendUser(current, command)
         is EditMessageVariant -> editVariant(current, command)
         is DeleteMessage -> deleteMessage(current, command)
@@ -128,22 +127,6 @@ internal object ConversationReducer {
             result = result.closePendingTools(command.assistantMessageId, cancelledByUser = false)
         }
         return result
-    }
-
-    private fun reconcileOrphanedTurnExecution(
-        current: ConversationSnapshot,
-        command: ReconcileOrphanedTurnExecution,
-    ): ConversationSnapshot {
-        // Recovery may observe an execution fact without its owning message. The fact is closed
-        // explicitly; recovery must not invent a message or weaken the live-turn owner invariant.
-        require(
-            command.assistantMessageId == null ||
-                current.findMessage(command.assistantMessageId) == null
-        ) {
-            "Orphan reconciliation cannot close an execution that still owns a message: " +
-                command.assistantMessageId
-        }
-        return current
     }
 
     private fun ConversationSnapshot.finishReasoning(messageId: Uuid): ConversationSnapshot {

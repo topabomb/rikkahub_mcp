@@ -376,49 +376,10 @@ class ConversationCommandCoordinatorTest {
 
         assertEquals(turnId, handle.turnId)
         assertEquals(1, mutation.captured.upsertedNodes.size)
+        assertEquals(assistantId, mutation.captured.upsertedNodes.single().currentMessage.id)
         assertEquals(TurnExecutionStatus.RUNNING, facts.captured.turn?.status)
+        assertEquals(assistantId.toString(), facts.captured.turn?.assistantMessageId)
         assertEquals(123L, facts.captured.turn?.createdAt)
-        coVerify(exactly = 1) { repository.applyMutation(any(), any()) }
-        scope.cancel()
-    }
-
-    @Test
-    fun `orphaned execution recovery closes facts without changing conversation tree`() = runTest {
-        val id = Uuid.random()
-        val missingAssistantId = Uuid.random()
-        val turnId = Uuid.random()
-        val conversation = Conversation.ofId(id).copy(
-            messageNodes = listOf(MessageNode.of(UIMessage.user("preserved"))),
-        )
-        val scope = CoroutineScope(Job())
-        val runtime = ConversationRuntime(id, conversation.toSnapshot(), scope, {})
-        val registry = mockk<ConversationRuntimeRegistry>()
-        val repository = mockk<ConversationRepository>()
-        every { registry.findRuntime(id) } returns runtime
-        every { registry.isDraft(id) } returns false
-        val mutation = slot<ConversationMutation>()
-        val facts = slot<ExecutionFacts>()
-        coEvery { repository.applyMutation(capture(mutation), capture(facts)) } returns true
-        val coordinator = coordinator(registry, repository, now = 123L)
-        val before = runtime.snapshot.value
-
-        coordinator.executeRecovery(
-            id,
-            ReconcileOrphanedTurnExecution(
-                turnId = turnId,
-                assistantMessageId = missingAssistantId,
-                terminalReason = TurnTerminalReasons.OWNER_MESSAGE_MISSING,
-            ),
-        )
-
-        assertSame(before, runtime.snapshot.value)
-        assertTrue(mutation.captured.upsertedNodes.isEmpty())
-        assertTrue(mutation.captured.deletedNodeIds.isEmpty())
-        assertEquals(turnId.toString(), facts.captured.turn?.turnId)
-        assertEquals(missingAssistantId.toString(), facts.captured.turn?.assistantMessageId)
-        assertEquals(TurnExecutionStatus.INTERRUPTED, facts.captured.turn?.status)
-        assertEquals(TurnTerminalReasons.OWNER_MESSAGE_MISSING, facts.captured.turn?.reason)
-        assertEquals(TurnExecutionOperation.RECOVER, facts.captured.turnOperation)
         coVerify(exactly = 1) { repository.applyMutation(any(), any()) }
         scope.cancel()
     }

@@ -23,12 +23,16 @@ import net.weero.measix.pilot.data.db.dao.MessageNodeDAO
 import net.weero.measix.pilot.data.db.dao.ToolExecutionDAO
 import net.weero.measix.pilot.data.db.dao.TurnExecutionDAO
 import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
+import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
+import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.db.fts.MessageFtsManager
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.service.runtime.ConversationMutation
+import net.weero.measix.pilot.service.runtime.ExecutionFacts
+import net.weero.measix.pilot.service.runtime.TurnExecutionOperation
 import net.weero.measix.pilot.data.files.ArtifactReferenceDelta
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -140,5 +144,79 @@ class CheckpointWriteAmplificationTest {
             upsertCalls.drop(1).all { it.single().nodeIndex == 500 },
         )
         coVerify(exactly = 51) { nodeDAO.upsertAll(any()) }
+    }
+
+    @Test
+    fun `start turn fact failure rolls back its assistant slot`() = runTest {
+        val conversationId = Uuid.random()
+        val assistantMessageId = Uuid.random()
+        database.conversationDao().insert(
+            ConversationRepository(
+                conversationDAO = database.conversationDao(),
+                messageNodeDAO = database.messageNodeDao(),
+                favoriteDAO = database.favoriteDao(),
+                database = database,
+                messageFtsManager = mockk(relaxed = true),
+                turnExecutionDAO = database.turnExecutionDao(),
+                toolExecutionDAO = database.toolExecutionDao(),
+                artifactStore = mockk(relaxed = true),
+            ).conversationToConversationEntity(Conversation.ofId(conversationId)),
+        )
+        val artifactStore = mockk<ArtifactStore>()
+        coEvery { artifactStore.prepareReferenceDelta(any(), any()) } returns
+            ArtifactReferenceDelta(emptyList(), emptyList(), emptyList())
+        coEvery { artifactStore.withLifecycleLock<Any>(any()) } coAnswers {
+            firstArg<suspend () -> Any>().invoke()
+        }
+        coEvery { artifactStore.applyReferenceDeltaInTransaction(any()) } just runs
+        val failingTurns = mockk<TurnExecutionDAO>()
+        coEvery { failingTurns.insert(any()) } throws IllegalStateException("turn fact insert failed")
+        val repository = ConversationRepository(
+            conversationDAO = database.conversationDao(),
+            messageNodeDAO = database.messageNodeDao(),
+            favoriteDAO = database.favoriteDao(),
+            database = database,
+            messageFtsManager = mockk(relaxed = true),
+            turnExecutionDAO = failingTurns,
+            toolExecutionDAO = database.toolExecutionDao(),
+            artifactStore = artifactStore,
+        )
+        val assistantNode = MessageNode.of(
+            UIMessage(
+                id = assistantMessageId,
+                role = MessageRole.ASSISTANT,
+                parts = listOf(UIMessagePart.Text("pending")),
+            ),
+        )
+        val facts = ExecutionFacts(
+            turn = TurnExecutionEntity(
+                turnId = Uuid.random().toString(),
+                conversationId = conversationId.toString(),
+                assistantMessageId = assistantMessageId.toString(),
+                status = TurnExecutionStatus.RUNNING,
+                reason = null,
+                createdAt = 1L,
+                updatedAt = 1L,
+            ),
+            toolExecution = null,
+            turnOperation = TurnExecutionOperation.START,
+        )
+
+        val failure = runCatching {
+            repository.applyMutation(
+                mutation = ConversationMutation(
+                    conversationId = conversationId,
+                    headerPatch = null,
+                    upsertedNodes = listOf(assistantNode),
+                    deletedNodeIds = emptyList(),
+                    updateAt = 1L,
+                    upsertedNodeIndices = listOf(0),
+                ),
+                executionFacts = facts,
+            )
+        }.exceptionOrNull()
+
+        assertTrue(failure is IllegalStateException)
+        assertTrue(database.messageNodeDao().getNodesOfConversation(conversationId.toString()).isEmpty())
     }
 }

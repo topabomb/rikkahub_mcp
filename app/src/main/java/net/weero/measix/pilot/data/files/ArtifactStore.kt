@@ -748,7 +748,19 @@ class ArtifactStore(
                 else -> Unit
             }
         }
-        adoptSettingsOwnedImages()
+        val settingsOwnedPaths = settingsCoordinator.withRootsLock { settings ->
+            ArtifactReferencePolicy.roots(settings).mapNotNull { root ->
+                val uri = runCatching { Uri.parse(root) }.getOrNull() ?: return@mapNotNull null
+                payloadStore.relativePathForUri(uri)
+            }
+        }
+        settingsOwnedPaths.forEach { relativePath ->
+            if (artifactDAO.getByPathAndState(relativePath, ArtifactState.ACTIVE.name) == null) {
+                throw ArtifactDataIntegrityException(
+                    "A Settings root references a payload without ACTIVE artifact metadata: $relativePath"
+                )
+            }
+        }
         artifactDAO.listByState(ArtifactState.ACTIVE.name).forEach { entity ->
             if (!payloadStore.finalExists(entity.relativePath)) {
                 val messageRooted = artifactReferenceDAO.existsByArtifactId(entity.id) ||
@@ -773,51 +785,6 @@ class ArtifactStore(
             }
         }
         logUntrackedFinalFiles(FileFolders.UPLOAD)
-    }
-
-    /**
-     * A previous asynchronous write ordered the Settings image copy before its artifact-row insert,
-     * so process interruption could commit the Settings root without committing metadata. The root
-     * is still a durable ownership fact: recovery adopts only that exact local upload image after
-     * content validation, and never scans or registers unrooted files.
-     */
-    private suspend fun adoptSettingsOwnedImages() {
-        val roots = settingsCoordinator.withRootsLock(ArtifactReferencePolicy::roots)
-        roots.forEach { root ->
-            val uri = runCatching { root.toUri() }.getOrNull() ?: return@forEach
-            val relativePath = payloadStore.relativePathForUri(uri) ?: return@forEach
-            if (!relativePath.startsWith("${FileFolders.UPLOAD}/")) return@forEach
-            if (artifactDAO.getByPathAndState(relativePath, ArtifactState.ACTIVE.name) != null) return@forEach
-
-            val file = payloadStore.file(relativePath)
-            if (!file.isFile || file.length() <= 0L) return@forEach
-            if (file.length() > GeneratedMediaStore.MAX_IMAGE_BYTES) return@forEach
-            val bytes = runCatching(file::readBytes).getOrNull() ?: return@forEach
-            if (!ImageMime.isAcceptedImage(bytes)) return@forEach
-            val mimeType = ImageMime.sniff(bytes) ?: return@forEach
-            val now = System.currentTimeMillis()
-            val insertedId = artifactDAO.insert(
-                ArtifactEntity(
-                    folder = FileFolders.UPLOAD,
-                    relativePath = relativePath,
-                    displayName = file.name,
-                    mimeType = mimeType,
-                    sizeBytes = file.length(),
-                    createdAt = file.lastModified().takeIf { it > 0L } ?: now,
-                    updatedAt = now,
-                    state = ArtifactState.ACTIVE.name,
-                    payloadToken = null,
-                    origin = ArtifactOrigin.USER.name,
-                )
-            )
-            if (insertedId <= 0L &&
-                artifactDAO.getByPathAndState(relativePath, ArtifactState.ACTIVE.name) == null
-            ) {
-                throw ArtifactDataIntegrityException(
-                    "A Settings-owned image conflicts with a non-active artifact: $relativePath"
-                )
-            }
-        }
     }
 
     // ---- GC ----

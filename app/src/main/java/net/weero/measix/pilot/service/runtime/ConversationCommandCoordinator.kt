@@ -327,17 +327,6 @@ class ConversationCommandCoordinator(
                 toolExecution = null,
                 turnOperation = TurnExecutionOperation.RECOVER,
             )
-            is ReconcileOrphanedTurnExecution -> ExecutionFacts(
-                turn = buildTurn(
-                    old.conversationId,
-                    command.turnId,
-                    TurnExecutionStatus.INTERRUPTED,
-                    command.terminalReason,
-                    command.assistantMessageId,
-                ),
-                toolExecution = null,
-                turnOperation = TurnExecutionOperation.RECOVER,
-            )
             else -> null
         }
         if (mutation.hasChanges() || facts != null) repository.applyMutation(mutation, facts)

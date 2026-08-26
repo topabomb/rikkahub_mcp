@@ -60,7 +60,7 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 - `GeneratedMediaStore` 对 URL/base64 结果使用同一尺寸上限与结构检查，并以检测 MIME 决定扩展名；WebP 校验遍历 RIFF chunk、padding 与 VP8X 后续图像/动画 payload，不把扩展头误当完整图像。Gallery 只通过 `resolveCanonicalFile` 解析根目录内路径。
 - 编辑器导入返回 `ArtifactDraftItem(uri, displayName, mimeType)`；路由、分享、粘贴和裁剪调用方直接使用托管时已经确定的 metadata，不对托管 `file://` URI 再走外部 ContentResolver 分类。裁剪输出扩展名与 PNG 压缩格式一致。
 - 头像与助手背景经 `ArtifactUseCase.importSettingsImage` 执行有界复制与结构检查，Settings root 提交成功后才发布，失败或取消回滚未发布 artifact。
-- 历史版本可能留下 Settings 已引用但 metadata 异步登记未完成的本地图片；冷启动由 `ArtifactStore` 仅按 `ArtifactReferencePolicy.roots` 定点接管，禁止恢复目录扫描式补录。
+- 本地 Settings root 与 ACTIVE artifact metadata 必须共同存在；冷启动发现 root 缺少 metadata 时以完整性错误 fail-closed，禁止目录扫描补录或静默解除引用。
 - 生成中预览与助手背景只接受经结构检查的图片，文件名与扩展名由实际内容生成，不信任模型名、索引或远程声明。
 
 ### 2.3 资源的两种身份
@@ -216,10 +216,10 @@ Schema 见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and
 | 重启时状态 | 恢复动作 | 默认失败原因 |
 |-----------|----------|--------------|
 | Turn 为 `CREATED` / `RUNNING` | 置 `INTERRUPTED`，工具占位按中断渲染 | `process_restarted` |
-| 旧版本非终态 Turn 的 owning Assistant 消息已不存在 | 保留会话树，仅将 Turn 置 `INTERRUPTED`，其 `STARTED` 工具置 `UNKNOWN` | `owner_message_missing` |
+| 非终态 Turn 的 owning Assistant 消息已不存在 | 恢复进入 `Failed`，不发布不完整会话 | 完整性错误 |
 | Tool 为 `STARTED` | 置 `UNKNOWN`（副作用可能已发生，结果不可判定，禁止标记为成功或失败） | — |
 
-owning message 缺失只用于收口旧版本已失去 UI owner 的执行事实，不代表允许忽略消息载荷损坏。消息分片缺失、长度不符或 JSON 损坏仍使恢复进入 `Failed`，不得发布不完整会话。
+non-terminal execution 的 owning message 缺失是持久化完整性错误，恢复进入 `Failed`，不伪造 owner 或改写终态。消息分片缺失、长度不符或 JSON 损坏同样使恢复进入 `Failed`，不得发布不完整会话。
 
 ### 7.2 回放安全
 
