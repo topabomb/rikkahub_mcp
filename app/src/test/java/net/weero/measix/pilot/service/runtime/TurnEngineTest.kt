@@ -195,6 +195,26 @@ class TurnEngineTest {
     }
 
     @Test
+    fun `wrapped provider incomplete keeps incomplete terminal status`() = runTest {
+        val harness = harness()
+        val providerFailure = HttpException(
+            message = "Response incomplete: max_output_tokens",
+            terminalStatus = ProviderTerminalStatus.INCOMPLETE,
+        )
+
+        val event = harness.engine.bind(
+            flow { throw IllegalStateException("provider wrapper", providerFailure) },
+        ).toListSafe().single() as TurnEvent.Finished
+        val outcome = event.outcome as TurnOutcome.Incomplete
+
+        assertEquals(TurnTerminalReasons.PROVIDER_INCOMPLETE, outcome.terminalReason)
+        assertEquals("Response incomplete: max_output_tokens", outcome.terminalDetail)
+        val command = slot<ConversationCommand>()
+        coVerify { harness.coordinator.executeOrThrow(any(), capture(command)) }
+        assertEquals(TurnExecutionStatus.INCOMPLETE, (command.captured as FinalizeTurn).terminalStatus)
+    }
+
+    @Test
     fun `finalization failure propagates without rewriting the outcome`() = runTest {
         val harness = harness()
         val failure = IllegalStateException("commit failed")

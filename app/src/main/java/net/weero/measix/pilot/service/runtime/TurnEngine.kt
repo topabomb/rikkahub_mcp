@@ -370,11 +370,19 @@ sealed interface TurnOutcome {
         }
 
         fun fromFailure(error: Throwable): TurnOutcome {
+            val causeChain = errorCauseChain(error).toList()
+            val incompleteProviderFailure = causeChain
+                .filterIsInstance<HttpException>()
+                .firstOrNull { it.terminalStatus == ProviderTerminalStatus.INCOMPLETE }
             val classified = classifyProviderFailure(error)
-            return if (error is HttpException && error.terminalStatus == ProviderTerminalStatus.INCOMPLETE) {
+            return if (incompleteProviderFailure != null) {
+                // A wrapper can describe the transport/runtime boundary while the nested
+                // HttpException owns the protocol terminal detail. Preserve that provider
+                // diagnostic instead of letting the wrapper hide why the response was incomplete.
+                val incompleteDetail = classifyProviderFailure(incompleteProviderFailure).detail
                 Incomplete(
                     terminalReason = TurnTerminalReasons.PROVIDER_INCOMPLETE,
-                    terminalDetail = classified.detail,
+                    terminalDetail = incompleteDetail.ifBlank { classified.detail },
                 )
             } else {
                 Failed(
@@ -384,6 +392,19 @@ sealed interface TurnOutcome {
                 )
             }
         }
+
+        private fun errorCauseChain(error: Throwable): Sequence<Throwable> = sequence {
+            val seen = HashSet<Throwable>()
+            var current: Throwable? = error
+            repeat(MAX_CAUSE_DEPTH) {
+                val next = current ?: return@sequence
+                if (!seen.add(next)) return@sequence
+                yield(next)
+                current = next.cause
+            }
+        }
+
+        private const val MAX_CAUSE_DEPTH = 6
     }
 }
 
