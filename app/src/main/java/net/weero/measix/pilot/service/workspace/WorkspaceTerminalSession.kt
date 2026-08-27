@@ -16,6 +16,7 @@ import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
 import net.weero.measix.pilot.data.files.FileFolders
+import me.rerere.workspace.ProotLaunchSpec
 import me.rerere.workspace.RootfsPatchOptions
 import me.rerere.workspace.RootfsPatcher
 import java.io.File
@@ -30,68 +31,19 @@ internal fun createWorkspaceTerminalSession(
     val filesDir = File(workspaceDir, "files")
     val linuxDir = File(workspaceDir, "linux")
     val tempDir = File(workspaceDir, "tmp")
-    val skillsDir = File(appContext.filesDir, FileFolders.SKILLS).apply { mkdirs() }
-    val nativeLibraryDir = File(appContext.applicationInfo.nativeLibraryDir)
-    val proot = File(nativeLibraryDir, "libproot_exec.so")
-    val loader = File(nativeLibraryDir, "libproot_loader.so")
-
-    val args = mutableListOf(
-        "--root-id",
-        "--link2symlink",
-        "--kill-on-exit",
-        // Spoof kernel version: modern glibc (2.33+) uses newer syscalls like
-        // faccessat2 (added in kernel 5.8) that proot's ptrace interception cannot
-        // handle, causing getcwd() and other calls to return ENOSYS ("Function not
-        // implemented"). Reporting kernel 4.14.0 makes glibc fall back to older,
-        // well-supported syscalls that proot intercepts correctly.
-        "-k", KERNEL_RELEASE,
-        "-r",
-        linuxDir.absolutePath,
-        "-w",
-        WORKSPACE_DIR,
-        "-b",
-        "${filesDir.absolutePath}:$WORKSPACE_DIR",
-        "-b",
-        "${skillsDir.absolutePath}:$SKILLS_DIR",
-    )
-    listOf("/dev", "/proc", "/sys").forEach { path ->
-        if (File(path).exists()) {
-            args += "-b"
-            args += path
-        }
-    }
-    args += listOf(
-        "/usr/bin/env",
-        "-i",
-        "HOME=/root",
-        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        "TERM=xterm-256color",
-        "LANG=C.UTF-8",
-        "LC_ALL=C.UTF-8",
-        "USER=root",
-        "SHELL=/bin/bash",
-        // Defense-in-depth: even with -k kernel spoofing, some edge-case devices may
-        // still have getcwd() issues. PWD gives bash a reliable CWD fallback that
-        // matches proot's -w flag, avoiding the "shell-init: error retrieving current
-        // directory" warning.
-        "PWD=$WORKSPACE_DIR",
-        "/bin/bash",
-    )
-
-    val env = arrayOf(
-        "PROOT_LOADER=${loader.absolutePath}",
-        "PROOT_TMP_DIR=${tempDir.absolutePath}",
-        "TMPDIR=${tempDir.absolutePath}",
-        // Do NOT set PROOT_NO_SECCOMP=1: see ProotShellRunner for detailed rationale.
-        // In short, proot's seccomp filter is required for reliable syscall interception
-        // (mkdir, stat, etc.) on Android 14+.
+    val spec = ProotLaunchSpec.from(
+        nativeLibraryDir = File(appContext.applicationInfo.nativeLibraryDir),
+        filesDir = filesDir,
+        linuxDir = linuxDir,
+        tempDir = tempDir,
+        bindMounts = ProotLaunchSpec.appBindMounts(appContext.filesDir),
     )
 
     return TerminalSession(
-        proot.absolutePath,
-        filesDir.absolutePath,
-        args.toTypedArray(),
-        env,
+        spec.executable.absolutePath,
+        spec.workingDirectory.absolutePath,
+        spec.arguments.toTypedArray(),
+        spec.environment.map { (key, value) -> "$key=$value" }.toTypedArray(),
         2_000,
         client,
     ).apply {
@@ -327,12 +279,6 @@ internal class WorkspaceTerminalViewClient(
         Log.e(tag, "Terminal view error", e)
     }
 }
-
-private const val WORKSPACE_DIR = "/workspace"
-private const val SKILLS_DIR = "/skills"
-// 4.14.0 is the LTS kernel used by Android 8-9; old enough to avoid newer syscalls
-// (faccessat2 etc.) that proot can't intercept, new enough for all modern glibc.
-private const val KERNEL_RELEASE = "4.14.0"
 
 // 一个 URL 最多还原跨越的软换行行数(向上/向下各算), 足够覆盖任意真实 URL
 private const val URL_MAX_WRAP_ROWS = 50

@@ -253,7 +253,7 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
             isRefreshing = loading,
             onRefresh = {
                 scope.launch {
-                    mcpManager.syncAll()
+                    mcpManager.refreshConnections()
                 }
             },
             state = state,

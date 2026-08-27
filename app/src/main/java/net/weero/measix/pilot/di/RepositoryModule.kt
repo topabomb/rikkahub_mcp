@@ -7,7 +7,6 @@ import net.weero.measix.pilot.data.db.RoomDatabaseTransactionRunner
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.ArtifactPayloadStore
 import net.weero.measix.pilot.data.files.ArtifactSettingsCoordinator
-import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.FavoriteRepository
@@ -15,9 +14,9 @@ import net.weero.measix.pilot.data.repository.FolderRepository
 import net.weero.measix.pilot.data.repository.GenMediaRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
+import me.rerere.workspace.ProotLaunchSpec
 import me.rerere.workspace.ProotShellRunner
 import me.rerere.workspace.RootfsInstaller
-import me.rerere.workspace.WorkspaceBindMount
 import me.rerere.workspace.WorkspaceManager
 import org.koin.dsl.module
 import java.io.File
@@ -52,20 +51,7 @@ val repositoryModule = module {
             shellRunner = ProotShellRunner(
                 nativeLibraryDir = File(context.applicationInfo.nativeLibraryDir),
             ),
-            bindMounts = listOf(
-                WorkspaceBindMount(
-                    source = File(context.filesDir, FileFolders.SKILLS).apply { mkdirs() },
-                    target = "/skills",
-                ),
-                WorkspaceBindMount(
-                    source = File(context.filesDir, FileFolders.TOOL_OUTPUTS).apply { mkdirs() },
-                    target = "/tool_outputs",
-                ),
-                WorkspaceBindMount(
-                    source = File(context.filesDir, FileFolders.UPLOAD).apply { mkdirs() },
-                    target = "/upload",
-                ),
-            ),
+            bindMounts = ProotLaunchSpec.appBindMounts(context.filesDir),
         )
     }
 

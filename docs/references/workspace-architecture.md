@@ -23,14 +23,14 @@ Assistant.workspaceId 有效
 | `WorkspaceManager` | 目录布局、路径解析、文件操作、命令执行上下文与 bind mount 表 |
 | `WorkspaceFileSystem` | `FILES` / `LINUX` 存储区内的安全相对路径操作 |
 | `WorkspaceShellRunner` | 阻塞式命令执行接口与进程 I/O 收集 |
-| `ProotShellRunner` | 构造 PRoot 命令并通过 `ProcessBuilder` 执行 |
+| `ProotLaunchSpec` | 两类 PRoot 启动共用的 executable、bind、cwd、env 与 argv |
+| `ProotShellRunner` | 把 `ProotLaunchSpec` 交给 `ProcessBuilder` 执行 |
 | `RootfsInstaller` | 下载、校验路径、解压和原子替换 Rootfs |
 | `RootfsPatcher` | 修补 DNS、hosts、hostname、locale、group 与临时目录 |
 | `WorkspaceRepository` | Room 实体、协程调度、安装状态和 Manager 调用；不作为 Workspace UI API |
 | `WorkspaceApplicationService` | Workspace typed command 的唯一 owner；UI、模型 Rootfs 操作、安装/删除与终端 mutation 共用互斥协议 |
-| `WorkspaceQueryService` | 把 Workspace 列表/详情投影为 `WorkspaceUiModel`，并提供文件列表与文本预览读口；所有 UI Workspace 读取都走此 port |
+| `WorkspaceQueryService` | 把 Workspace 列表/详情投影为 `WorkspaceUiModel`，并提供文件列表、文本预览和 `observeTerminal` 读口；所有 UI Workspace 读取都走此 port |
 | `WorkspaceTerminalRuntime` | application-scoped PTY、创建 Job、Tab/选中项和 shell-exit 生命周期唯一 owner |
-| `WorkspaceTerminalQueryService` | 把持久化 Workspace 与进程内终端状态合成为 UI read model |
 | `WorkspaceTools` | 注册 `workspace_*` schema、审批与结果形状；执行只使用受限 `WorkspaceToolSession` capability |
 | `WorkspaceTerminalSession` | 通过 Termux PTY 提供用户交互终端 |
 
@@ -72,7 +72,7 @@ Rootfs 内的主要映射：
 
 PRoot 版本为 `v5.1.107.92`（Termux/PRoot 官方 tag），记录的候选构建参数为 NDK r29/API 24、`PROOT_WITH_LIBANDROID_SHMEM=true` 和静态链接。`workspace/proot-lock.json` 是唯一机器可读 manifest，固定 PRoot/Termux Packages URL、tag/commit、上游 App 二进制提交、三个源码 archive SHA-256、候选构建参数和每个 artifact 的 `abi`、仓库路径、SHA-256、ELF machine、interpreter 与精确 `DT_NEEDED`；exec 依赖 `[liblog.so,libc.so]`，freestanding loader 依赖为空。当前两个 exec 与上游 `f4508dfa` byte-identical，但固定 recipe 尚未在本地重建，因此不得写成已经 bit-for-bit 可复现。`workspace/PROOT.md` 记录来源与许可证；PRoot 对应源码/patch/build scripts、libandroid-shmem 完整 BSD notice、静态链接 libtalloc 的可重链接材料和适用安装信息共同构成独立 Release 合规门禁，provenance URL 不能代替该义务。
 
-`ProotShellRunner` 的关键参数：
+`ProotLaunchSpec` 的关键参数：
 
 ```text
 --root-id --link2symlink --kill-on-exit
@@ -144,6 +144,7 @@ WorkspaceApplicationService.executeTool()
   -> runInterruptible(Dispatchers.IO)
   -> WorkspaceManager.executeCommand()
   -> ProotShellRunner.execute()
+  -> ProotLaunchSpec.from(...)
   -> ProcessBuilder.start()
   -> readResult(timeout, stdin)
 ```
@@ -154,18 +155,13 @@ stdout、stderr 和可选 stdin 使用独立 daemon 线程。超时会 `destroyF
 
 `WorkspaceTerminalRuntime` 是所有交互终端的 application-scoped owner。它通过 service 层的 `WorkspaceTerminalSession` helper 创建 Termux PTY，并独占 session、创建 Job、tab 顺序、选中项和 shell-exit 清理。UI/VM 只持有 `WorkspaceTerminalTabUiModel`；UI 自己拥有的 `TerminalView` 以 `WorkspaceTerminalViewport` capability 按 tab id bind/unbind，不能取得 runtime-owned `TerminalSession`。页面离开或应用进入后台不关闭 PTY，进程死亡后也不持久化虚假的运行态。
 
-Workspace command、持久化读投影和 terminal 聚合投影分别由 `WorkspaceApplicationService`、`WorkspaceQueryService`、`WorkspaceTerminalQueryService` 定义；三类契约物理分文件，避免把 writer、query join 和 UI model 混成一个隐式 service。`WorkspaceTerminalViewport` 只表达 UI viewport capability，不是 session facade 或第二生命周期 owner。
+Workspace command 仍由 `WorkspaceApplicationService` 拥有；持久化列表/文件预览和 terminal 聚合投影都由 `WorkspaceQueryService` 提供，其中 terminal 读口是 `observeTerminal(workspaceId)`。Query 不获得写能力，也不反向调用 ApplicationService。`WorkspaceTerminalViewport` 只表达 UI viewport capability，不是 session facade 或第二生命周期 owner。
 
 创建中只发布 `PREPARING`，创建成功后发布 `READY`；Rootfs 未就绪、创建失败、取消或 shell exit 都走同一 remove 路径，失败 Tab 不留在 read model。Rootfs/PTY 异步创建失败由 runtime 在同一 Workspace projection 发布带唯一 id 的 typed `lastFailure`，VM 只把新 failure 映射为用户提示；主动关闭或取消不能伪造失败。单 Workspace 最多六个 Tab。rename/reorder/select/close 与创建保留都在 runtime mutex 内决定；资源 finish 在条目先从 read model 移除后执行。创建准备、模型工具执行和 `WorkspaceApplicationService` 的 UI 文件命令/install/delete 使用同一组固定条带 mutex，既阻止同一 Workspace 的 Rootfs/PTY/工具 TOCTOU，也不会按历史 Workspace id 无限保留锁对象。
 
 `WorkspaceApplicationService.installRootfs` 与 `deleteWorkspace` 必须在同一 Workspace command gate 内先 `closeWorkspace` 并等待全部创建 Job/PTY 收口，再调用 Repository。删除协议先把 durable shell 状态置为 `BROKEN`，再由 `WorkspaceManager` 将文件树移入可恢复暂存位置；Repository 在暂存目录同级写入仅含原 shell 状态与 Assistant→Workspace binding 的删除 journal，随后才清理 Assistant 引用。物理删除开始前，Settings 拒绝或进程中断会由 journal 回填仍为空的原 binding 并恢复暂存树；开始删除后 journal 进入终态删除阶段，递归删除失败也保持 `BROKEN`，因为失败可能已删除部分树，绝不将残余目录伪装为 READY。后续删除继续清理暂存树，或者在目录已删除后由 `WorkspaceDAO.deleteById` 确认删除一条 durable identity；只有这项确认后才能清 journal。任一步骤失败时 `BROKEN` 记录与 journal 都作为重试身份保留；后续删除必须幂等，不能发布成功或留下无 durable 身份的孤儿 Rootfs。Workspace 管理页通过 `WorkspaceApplicationService`/`WorkspaceQueryService` 操作，不直连 Repository。
 
-两个入口必须同步关键兼容参数，但挂载集合有意不同：
-
-- 工具入口使用 `WorkspaceManager` 的完整 bind mount 表，包括 `/skills`、`/tool_outputs` 和 `/upload`；
-- 交互终端当前只额外挂载 `/skills`，不自动暴露工具输出和上传目录。
-
-因此维护时应同步 PRoot 运行语义，不应假设两个入口的所有业务挂载完全相同。
+shell 工具与交互终端都消费同一份 `ProotLaunchSpec`：executable、loader、kernel spoof、`/workspace` bind、应用级 `/skills` `/tool_outputs` `/upload`、内核文件系统以及 `PWD` 都来自该值对象。二者只把 spec 交给各自进程 adapter，不再手写第二套 argv/env/bind。
 
 ## 8. Rootfs 安装与修补
 
@@ -210,4 +206,6 @@ Workspace shell 状态使用 `DISABLED`、`INSTALLING`、`READY` 和 `BROKEN`。
 
 PRoot `v5.1.107.92` 的 hash/ELF 静态契约由 `ProotArtifactContractTest` 检查；这不等同于设备验收。x86_64 Android 17/API 37 Pixel Fold AVD 已完成打包二进制 smoke：版本/accelerator、root-id、cwd、host bind+cat、`-k 4.14.0` 和 1,000 行 stdout 均通过，但没有安装匹配 Rootfs，也没有覆盖 PTY。arm64 Android 14/15/16 与完整 x86_64 Rootfs 的 cwd、文件操作、挂载、DNS/netlink、SysV shared memory、超时/取消、长输出和双 PTY 场景完成前，升级状态仍必须标记为设备待验证。
 
-关键兼容参数同时存在于 `ProotShellRunner` 与 `WorkspaceTerminalSession`。调整 `-k`、seccomp、环境或 PRoot flags 时必须核对两个入口；调整业务挂载时则按各入口的暴露边界分别评估。
+PRoot 兼容参数（`-k` kernel spoof、seccomp 策略、环境变量与 flags）的唯一 owner 是 `ProotLaunchSpec`；
+两个入口只把它交给各自的进程 adapter（`ProcessBuilder` 与 Termux PTY）。调整兼容参数只需修改并验证
+`ProotLaunchSpec`；调整业务挂载时按 `ProotLaunchSpec.appBindMounts` 的暴露边界评估。

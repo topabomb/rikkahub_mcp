@@ -1,5 +1,9 @@
 # 助手配置参考
 
+> 企业边界：本文的 Managed Assistant 只描述 Android 当前内部签名 overlay 原型，不属于 MEASIX S0.2
+> `ManagedSnapshot` required profile，也没有生产下发入口。S0.2 的完整范围与原型处置见
+> [Android 配置架构与企业下发清单](android-configuration-architecture.md)。
+
 本文说明 `Assistant` 的持久化字段、默认值、解析规则和配置消费边界。完整生成过程见
 [消息生成链路](chat-generation-pipeline.md)，模型可见提示与工具契约见
 [提示词、上下文注入与工具描述](prompts-and-tools.md)，子助手运行语义见

@@ -17,7 +17,7 @@ private const val TAG = "NetworkMonitor"
  * 职责:
  * - 实时感知网络变化（WiFi ↔ 蜂窝切换、网络断开/恢复）
  * - 暴露 [isOnline] StateFlow 供重连策略查询
- * - 网络恢复时触发回调，让 McpManager 主动 syncAll
+ * - 网络恢复时触发回调，让 McpManager 主动 refreshConnections
  *
  * 移动端 MCP 连接的关键问题:
  * - WiFi→蜂窝切换时 TCP 连接半开（OS 认为活着，实际已废），transport 回调 30s+ 才触发

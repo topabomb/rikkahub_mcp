@@ -198,33 +198,15 @@ class SkillManager(
     ): SkillFileSaveResult {
         if (content.toByteArray().size > MAX_SKILL_TEXT_BYTES) return SkillFileSaveResult.INVALID_SKILL
         val targetDir = findPublishedSkillDir(skillName) ?: return SkillFileSaveResult.NOT_FOUND
-        val skillsDir = getSkillsDir()
-        val stagingDir = createTempSkillDir(skillsDir, skillName, "staging")
-            ?: return SkillFileSaveResult.IO_FAILURE
-        try {
-            if (!copySkillTree(targetDir, stagingDir)) return SkillFileSaveResult.IO_FAILURE
+        return mutateSkillTree(skillName, targetDir, copyPublished = true, beforePublish) { stagingDir ->
             val target = SkillPaths.resolveSkillFile(stagingDir, relativePath)
-                ?: return SkillFileSaveResult.INVALID_PATH
+                ?: return@mutateSkillTree SkillFileSaveResult.INVALID_PATH
             val parent = target.parentFile
             if (parent != null && !parent.isDirectory && !parent.mkdirs()) {
-                return SkillFileSaveResult.IO_FAILURE
+                return@mutateSkillTree SkillFileSaveResult.IO_FAILURE
             }
             target.writeText(content)
-            val validation = validateStagedSkill(stagingDir, skillName)
-            if (validation != SkillFileSaveResult.SUCCESS) return validation
-            beforePublish()
-            return if (publishStagedSkill(targetDir, stagingDir, skillsDir, skillName)) {
-                SkillFileSaveResult.SUCCESS
-            } else {
-                SkillFileSaveResult.IO_FAILURE
-            }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (e: Exception) {
-            Log.w(TAG, "saveSkillFile: Failed to save $skillName/$relativePath", e)
-            return SkillFileSaveResult.IO_FAILURE
-        } finally {
-            if (stagingDir.exists()) stagingDir.deleteRecursively()
+            null
         }
     }
 
@@ -309,63 +291,94 @@ class SkillManager(
         beforePublish: () -> Unit = {},
     ): Boolean {
         if (!isWithinFilePayloadLimits(files.values)) return false
-        val skillsDir = getSkillsDir()
-        val targetDir = findPublishedSkillDir(skillName)
-            ?: resolveSkillTargetDir(skillName)
-            ?: return false
-        val stagingDir = createTempSkillDir(skillsDir, skillName, "staging") ?: return false
-        try {
+        val targetDir = findPublishedSkillDir(skillName) ?: resolveSkillTargetDir(skillName) ?: return false
+        return mutateSkillTree(skillName, targetDir, copyPublished = false, beforePublish) { stagingDir ->
             for ((relativePath, content) in files) {
-                val target = SkillPaths.resolveSkillFile(stagingDir, relativePath) ?: return false
+                val target = SkillPaths.resolveSkillFile(stagingDir, relativePath)
+                    ?: return@mutateSkillTree SkillFileSaveResult.INVALID_PATH
                 val parent = target.parentFile
-                if (parent != null && !parent.isDirectory && !parent.mkdirs()) return false
+                if (parent != null && !parent.isDirectory && !parent.mkdirs()) {
+                    return@mutateSkillTree SkillFileSaveResult.IO_FAILURE
+                }
                 target.writeBytes(content)
             }
+            null
+        } == SkillFileSaveResult.SUCCESS
+    }
 
-            if (validateStagedSkill(stagingDir, skillName) != SkillFileSaveResult.SUCCESS) return false
-            beforePublish()
-            return publishStagedSkill(targetDir, stagingDir, skillsDir, skillName)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (e: Exception) {
-            Log.w(TAG, "saveSkillFileBytesAtomically: Failed to save $skillName", e)
-            return false
-        } finally {
-            if (stagingDir.exists()) {
-                stagingDir.deleteRecursively()
+    fun deleteSkillFile(skillName: String, relativePath: String): SkillFileDeleteResult {
+        return BackupSnapshotBarrier.withBlockingLock {
+            if (relativePath.replace('\\', '/').equals("SKILL.md", ignoreCase = true)) {
+                return@withBlockingLock SkillFileDeleteResult.PROTECTED_SKILL_FILE
+            }
+            val targetDir = findPublishedSkillDir(skillName)
+                ?: return@withBlockingLock SkillFileDeleteResult.NOT_FOUND
+            when (
+                mutateSkillTree(skillName, targetDir, copyPublished = true) { stagingDir ->
+                    val target = SkillPaths.resolveSkillFile(stagingDir, relativePath)
+                        ?: return@mutateSkillTree SkillFileSaveResult.INVALID_PATH
+                    if (!target.isFile) {
+                        return@mutateSkillTree SkillFileSaveResult.NOT_FOUND
+                    }
+                    if (!target.delete()) {
+                        return@mutateSkillTree SkillFileSaveResult.IO_FAILURE
+                    }
+                    null
+                }
+            ) {
+                SkillFileSaveResult.SUCCESS -> SkillFileDeleteResult.SUCCESS
+                SkillFileSaveResult.NOT_FOUND -> SkillFileDeleteResult.NOT_FOUND
+                SkillFileSaveResult.INVALID_PATH -> SkillFileDeleteResult.INVALID_PATH
+                SkillFileSaveResult.INVALID_SKILL, SkillFileSaveResult.NAME_MISMATCH ->
+                    SkillFileDeleteResult.INVALID_SKILL
+                else -> SkillFileDeleteResult.IO_FAILURE
             }
         }
     }
 
-    fun deleteSkillFile(skillName: String, relativePath: String): SkillFileDeleteResult {
-        return BackupSnapshotBarrier.withBlockingLock lock@{
-        if (relativePath.replace('\\', '/').equals("SKILL.md", ignoreCase = true)) {
-            return@lock SkillFileDeleteResult.PROTECTED_SKILL_FILE
-        }
-        val targetDir = findPublishedSkillDir(skillName) ?: return@lock SkillFileDeleteResult.NOT_FOUND
+    /**
+     * 单个 Skill 目录的唯一原子修改协议：staging 复制或重建 → 修改 → 校验 → 原子发布。
+     * 修改闭包返回 null 表示继续校验并发布；返回其他值表示该结果直接中止且不发布。
+     */
+    private fun mutateSkillTree(
+        skillName: String,
+        targetDir: File,
+        copyPublished: Boolean,
+        beforePublish: () -> Unit = {},
+        mutate: (File) -> SkillFileSaveResult?,
+    ): SkillFileSaveResult {
         val skillsDir = getSkillsDir()
         val stagingDir = createTempSkillDir(skillsDir, skillName, "staging")
-            ?: return@lock SkillFileDeleteResult.IO_FAILURE
-        try {
-            if (!copySkillTree(targetDir, stagingDir)) return@lock SkillFileDeleteResult.IO_FAILURE
-            val target = SkillPaths.resolveSkillFile(stagingDir, relativePath)
-                ?: return@lock SkillFileDeleteResult.INVALID_PATH
-            if (!target.isFile) return@lock SkillFileDeleteResult.NOT_FOUND
-            if (!target.delete()) return@lock SkillFileDeleteResult.IO_FAILURE
-            if (validateStagedSkill(stagingDir, skillName) != SkillFileSaveResult.SUCCESS) {
-                return@lock SkillFileDeleteResult.INVALID_SKILL
+            ?: return SkillFileSaveResult.IO_FAILURE
+        return try {
+            if (copyPublished && !copySkillTree(targetDir, stagingDir)) {
+                return SkillFileSaveResult.IO_FAILURE
             }
-            if (publishStagedSkill(targetDir, stagingDir, skillsDir, skillName)) {
-                SkillFileDeleteResult.SUCCESS
-            } else {
-                SkillFileDeleteResult.IO_FAILURE
-            }
+            mutate(stagingDir) ?: validateAndPublish(stagingDir, targetDir, skillsDir, skillName, beforePublish)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (error: Exception) {
-            Log.w(TAG, "deleteSkillFile: Failed to delete $skillName/$relativePath", error)
-            SkillFileDeleteResult.IO_FAILURE
+            Log.w(TAG, "mutateSkillTree: Failed to update $skillName", error)
+            return SkillFileSaveResult.IO_FAILURE
         } finally {
             if (stagingDir.exists()) stagingDir.deleteRecursively()
         }
+    }
+
+    private fun validateAndPublish(
+        stagingDir: File,
+        targetDir: File,
+        skillsDir: File,
+        skillName: String,
+        beforePublish: () -> Unit,
+    ): SkillFileSaveResult {
+        val validation = validateStagedSkill(stagingDir, skillName)
+        if (validation != SkillFileSaveResult.SUCCESS) return validation
+        beforePublish()
+        return if (publishStagedSkill(targetDir, stagingDir, skillsDir, skillName)) {
+            SkillFileSaveResult.SUCCESS
+        } else {
+            SkillFileSaveResult.IO_FAILURE
         }
     }
 

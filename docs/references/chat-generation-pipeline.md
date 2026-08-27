@@ -97,7 +97,8 @@ Streaming Transformer 只改变显示投影；需要持久化的变化必须进�
 
 `MasterTurnCoordinator` 通过 `GenerationToolSetFactory` 装配 Search、Local、Conversation、Workspace、Skill、
 Assistant、MCP 与按需附件识别工具；Memory Tool 在每个工具循环 step 按最新状态加入。MCP 连接生命周期仍由
-`McpManager` 独立持有。
+`McpManager` 独立持有：每个 server 一个 `ConnectionSlot`，配置、前台、网络和手动刷新都只触发同一个
+`reconcile`。
 
 工具能力判定必须显式传入本次 run 的 `capabilityModel`；主/子生成传入实际 resolved model，
 `assistant_inspect` 这类非运行时检查显式解析目标助手的配置模型，不存在“未传模型则启用兼容集”。

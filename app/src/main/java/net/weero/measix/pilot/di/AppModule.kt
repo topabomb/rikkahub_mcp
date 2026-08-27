@@ -42,7 +42,6 @@ import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.FavoriteModelService
 import net.weero.measix.pilot.service.FavoriteService
 import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
-import net.weero.measix.pilot.service.workspace.WorkspaceTerminalQueryService
 import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import net.weero.measix.pilot.service.workspace.WorkspaceTerminalRuntime
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
@@ -68,8 +67,7 @@ val appModule = module {
     single { ProviderSettingsApplicationService(get(), get()) }
     single { WorkspaceTerminalRuntime(get(), get()) }
     single { WorkspaceApplicationService(get(), get()) }
-    single { WorkspaceTerminalQueryService(get(), get()) }
-    single { WorkspaceQueryService(get()) }
+    single { WorkspaceQueryService(get(), get()) }
 
     single {
         AppEventBus()

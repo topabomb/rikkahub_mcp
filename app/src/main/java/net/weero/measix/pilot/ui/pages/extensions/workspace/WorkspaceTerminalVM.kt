@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
 import net.weero.measix.pilot.service.workspace.WorkspaceTerminalViewport
-import net.weero.measix.pilot.service.workspace.WorkspaceTerminalQueryService
+import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import net.weero.measix.pilot.service.workspace.WorkspaceTerminalScreenUiModel
 import net.weero.measix.pilot.service.workspace.WorkspaceTerminalCreateResult
 import net.weero.measix.pilot.service.workspace.WorkspaceTerminalFailureReason
@@ -19,9 +19,9 @@ import net.weero.measix.pilot.service.workspace.WorkspaceTerminalFailureReason
 class WorkspaceTerminalVM(
     private val workspaceId: String,
     private val applicationService: WorkspaceApplicationService,
-    queryService: WorkspaceTerminalQueryService,
+    queryService: WorkspaceQueryService,
 ) : ViewModel() {
-    val state = queryService.observe(workspaceId).stateIn(
+    val state = queryService.observeTerminal(workspaceId).stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
         WorkspaceTerminalScreenUiModel(workspaceId),

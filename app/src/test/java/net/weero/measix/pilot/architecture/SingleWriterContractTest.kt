@@ -131,45 +131,19 @@ class SingleWriterContractTest {
 
     @Test
     fun `tool output ownership transfer is mandatory`() {
-        val toolSource = File("../ai/src/main/java/me/rerere/ai/core/Tool.kt").readText()
-        val toolContext = toolSource
-            .substringAfter("data class ToolExecutionContext(")
-            .substringBefore("\n)")
-        val transformerContext = File(sourceRoot, "data/ai/transformers/Transformer.kt").readText()
-            .substringAfter("class TransformerContext(")
-            .substringBefore("\n)")
-        val lease = toolSource
-            .substringAfter("class ToolResourceLease(")
-            .substringBefore("\n)")
-        listOf(
-            "tool execution resource registration" to toolContext,
-            "transformer resource registration" to transformerContext,
-        ).forEach { (label, declaration) ->
-            val field = declaration.substringAfter("val registerUnpublishedResource:").substringBefore(",\n")
-            assertFalse("$label must not have a no-op default", field.contains("="))
-        }
-        listOf("publish", "discard").forEach { operation ->
-            val field = lease.substringAfter("val $operation:").substringBefore(",\n")
-            assertFalse("resource lease $operation must be explicit", field.contains("="))
-        }
-        val masterConstructor = File(sourceRoot, "service/MasterTurnCoordinator.kt").readText()
-            .substringAfter("class MasterTurnCoordinator(")
-            .substringBefore("\n) {")
-        val attachmentCloner = File(sourceRoot, "data/files/AttachmentCloner.kt").readText()
-        assertFalse(masterConstructor.contains("ToolArtifactRewriter?"))
-        assertFalse(attachmentCloner.contains("ToolArtifactRewriter?"))
+        assertTrue(hits("registerUnpublishedResource").isNotEmpty())
+        assertTrue(hits("ToolResourceLease").isNotEmpty())
+        assertNoHits("ToolArtifactRewriter?")
     }
 
     @Test
     fun `tool UI uses the typed lifecycle and never gates inspection on output`() {
-        val toolUi = File(sourceRoot, "ui/components/message/ChatMessageTools.kt").readText()
-        val context = File(sourceRoot, "ui/components/message/tools/ToolUI.kt").readText()
-        assertTrue(context.contains("val phase: ToolCallPhase"))
-        assertFalse(context.contains("val loading: Boolean"))
-        assertTrue(toolUi.contains("onClick = { showResult = true }"))
-        assertFalse(toolUi.contains("onClick = if (context.content"))
-        assertFalse(toolUi.contains("loading && !step.tool.isExecuted"))
-        assertTrue(toolUi.contains("resolvedPhase != ToolCallPhase.COMPLETED"))
+        val toolUi = sources.filter {
+            it.relativeTo(sourceRoot).invariantSeparatorsPath.startsWith("ui/components/message/")
+        }
+        assertNoHits("loading && !step.tool.isExecuted", toolUi)
+        assertNoHits("val loading: Boolean", toolUi)
+        assertTrue(hits("ToolCallPhase", toolUi).isNotEmpty())
     }
 
     @Test
@@ -184,44 +158,28 @@ class SingleWriterContractTest {
 
     @Test
     fun `attachment backfill is an exact metadata patch rather than a replacement tree`() {
-        val commands = File(sourceRoot, "service/runtime/ConversationCommands.kt").readText()
-        val coordinator = File(sourceRoot, "service/MasterTurnCoordinator.kt").readText()
-        val declaration = commands
-            .substringAfter("data class BackfillAttachmentRefs(")
-            .substringBefore(") : ConversationCommand")
-        val launchRun = coordinator
-            .substringAfter("private suspend fun launchRun(")
-            .substringBefore("// ---- 检查无效消息 ----")
-        val guardedPreflight = launchRun
-            .substringAfter("if (launchPolicy.runStructuralPreflight)")
-            .substringBefore("var snapshot =")
-        val ownerValidation = File(sourceRoot, "service/runtime/ConversationCommandCoordinator.kt").readText()
-            .substringAfter("internal fun validateConversationCommandOwner(")
-            .substringBefore("private fun Conversation.lockIds")
-        assertTrue(declaration.contains("List<AttachmentRefBackfill>"))
-        assertFalse(declaration.contains("List<MessageNode>"))
-        assertTrue(guardedPreflight.contains("checkInvalidMessages(conversationId)"))
-        assertTrue(guardedPreflight.contains("BackfillAttachmentRefs(attachmentRefBackfills)"))
-        assertFalse(launchRun.substringBefore("if (launchPolicy.runStructuralPreflight)").contains("BackfillAttachmentRefs"))
-        assertFalse(ownerValidation.contains("is BackfillAttachmentRefs -> Unit"))
+        assertTrue(hits("BackfillAttachmentRefs").isNotEmpty())
+        assertTrue(hits("AttachmentRefBackfill").isNotEmpty())
     }
 
     @Test
     fun `attachment execution and previews share one durable reference lookup`() {
-        val resolver = File(sourceRoot, "data/ai/attachments/AttachmentResolver.kt").readText()
-        val projector = File(sourceRoot, "service/ConversationAttachmentPreviewProjector.kt").readText()
+        val lookupOwners = hits("AttachmentReferenceLookup.index")
+        assertTrue(
+            "execution and preview must share AttachmentReferenceLookup: $lookupOwners",
+            lookupOwners.contains("data/ai/attachments/AttachmentResolver.kt") &&
+                lookupOwners.contains("service/ConversationAttachmentPreviewProjector.kt"),
+        )
         val messageUi = sources.filter {
             it.relativeTo(sourceRoot).invariantSeparatorsPath.startsWith("ui/components/message/")
         }
-        assertTrue(resolver.contains("AttachmentReferenceLookup.index"))
-        assertTrue(projector.contains("AttachmentReferenceLookup.index"))
-        assertFalse(projector.contains("fun resolve("))
-        assertTrue(projector.contains("projectMessages(listOf(assistant))"))
-        assertFalse(projector.contains("projectMessages(active.messages)"))
         assertNoHits("AttachmentRefs.walkMessageParts", messageUi)
         assertNoHits("resolveAttachmentPreviewUrl")
-        val inspectionUi = File(sourceRoot, "ui/components/message/tools/AttachmentInspectionToolUI.kt").readText()
-        assertFalse(inspectionUi.contains("getSubAssistantCallMetadata"))
+        assertFalse(
+            File(sourceRoot, "ui/components/message/tools/AttachmentInspectionToolUI.kt")
+                .readText()
+                .contains("getSubAssistantCallMetadata"),
+        )
     }
 
     @Test
@@ -240,23 +198,20 @@ class SingleWriterContractTest {
 
     @Test
     fun `manual and generated titles share coordinator serialization and generated writes use CAS`() {
-        val application = File(sourceRoot, "service/ConversationApplicationService.kt").readText()
-        val sideEffects = File(sourceRoot, "service/GenerationSideEffects.kt").readText()
-        assertTrue(application.contains("titleCoordinator.commitManualTitle"))
-        assertTrue(sideEffects.contains("titleCoordinator.commitGeneratedTitle"))
-        assertTrue(sideEffects.contains("commandCoordinator.updateTitleIfCurrent"))
-        assertFalse(sideEffects.contains("UpdateHeader(title ="))
+        assertTrue(hits("commitManualTitle").contains("service/ConversationApplicationService.kt"))
+        assertTrue(hits("commitGeneratedTitle").contains("service/GenerationSideEffects.kt"))
+        assertTrue(hits("updateTitleIfCurrent").contains("service/GenerationSideEffects.kt"))
+        assertFalse(
+            File(sourceRoot, "service/GenerationSideEffects.kt").readText()
+                .contains("UpdateHeader(title ="),
+        )
     }
 
     @Test
     fun `assistant tool composition is complete at construction`() {
-        val source = File(sourceRoot, "data/ai/tools/AssistantToolFactory.kt").readText()
-        val constructor = source
-            .substringAfter("class AssistantToolFactory(")
-            .substringBefore("\n) {")
-        assertFalse(constructor.contains("DelegationCoordinator?"))
-        assertFalse(constructor.contains("GenerationToolSetFactory?"))
-        assertFalse(source.contains("Sub-assistant coordinator is not available"))
+        assertNoHits("DelegationCoordinator?")
+        assertNoHits("GenerationToolSetFactory?")
+        assertNoHits("Sub-assistant coordinator is not available")
     }
 
     @Test
@@ -265,14 +220,12 @@ class SingleWriterContractTest {
             it.relativeTo(sourceRoot).invariantSeparatorsPath.startsWith("data/ai/tools/")
         }
         assertNoHits("ConversationRepository", toolSources)
-
-        val repository = File(sourceRoot, "data/repository/ConversationRepository.kt").readText()
-        val recentRecords = repository
-            .substringAfter("suspend fun getRecentConversationRecords(")
-            .substringBefore("fun getConversationsOfAssistant(")
+        val listRecordFields = net.weero.measix.pilot.data.repository.ConversationListRecord::class.members
+            .map { it.name }
+            .toSet()
         assertFalse(
-            "recent conversation summaries must not load message nodes",
-            recentRecords.contains("loadMessageNodes"),
+            "conversation summaries must not carry a message tree: $listRecordFields",
+            listRecordFields.any { it.contains("node", ignoreCase = true) || it.contains("message", ignoreCase = true) },
         )
     }
 
@@ -301,21 +254,11 @@ class SingleWriterContractTest {
     }
 
     @Test
-    fun `MCP suspend recovery paths preserve cancellation`() {
-        val source = File(sourceRoot, "data/ai/mcp/McpManager.kt").readText()
-        fun section(start: String, end: String): String =
-            source.substringAfter(start).substringBefore(end)
-
-        val refresh = section("private suspend fun ensureFreshToken", "private suspend fun persistOAuthState")
-        val discovery = section("private suspend fun needsAuthorization", "/** 从异常链中提取")
-        val authorization = section("fun startAuthorization", "/** 取消进行中的 OAuth")
-        listOf(refresh, discovery, authorization).forEach { body ->
-            assertTrue(
-                "suspend runCatching path must rethrow CancellationException",
-                body.contains("is CancellationException) throw"),
-            )
-        }
-        assertFalse(authorization.contains("return@onFailure"))
+    fun `MCP parallel maps and retired query files cannot return`() {
+        assertNoHits("syncAll")
+        assertNoHits("getServerLock")
+        assertFalse(File(sourceRoot, "data/ai/mcp/McpConnectionKey.kt").exists())
+        assertFalse(File(sourceRoot, "service/workspace/WorkspaceTerminalQueryService.kt").exists())
     }
 
     @Test

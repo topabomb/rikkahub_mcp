@@ -33,6 +33,8 @@
 - 同步 MiMo 推理参数、OpenRouter 会话标识、空工具 schema、DeepSeek V4 Flash Vision 识别、上下文消息限制输入及新版模型图标
 - 附件请求投影收口：`AttachmentProjectionTransformer` 固定在 Master/Target 输入链末，引用行增加 `input=native/reference_only` 标记并携带请求级 metadata；删除跨消息的全局 capability hint 与末条统一追加提示
 - 发送后到底部滚动改按目标消息身份、会话分支、列表结构与 IME 终态判定，不再用固定延时或列表长度猜测布局
+- V2 减法重构落地（待用户设备确认）：会话命令只走一条 Transition；MCP 每个服务器一条连接槽，配置、前台、网络和手动刷新共用同一套同步；Skills 单目录增删改共用同一发布协议；工作区终端读口并入查询服务，Shell 与终端共用同一套 PRoot 启动参数
+- 新增 Android 配置架构与企业下发清单，标明当前内部受管原型与企业下发边界
 
 ### 修复
 

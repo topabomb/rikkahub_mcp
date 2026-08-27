@@ -13,7 +13,7 @@ import kotlinx.coroutines.test.setMain
 import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
 import net.weero.measix.pilot.service.workspace.WorkspaceTerminalFailure
 import net.weero.measix.pilot.service.workspace.WorkspaceTerminalFailureReason
-import net.weero.measix.pilot.service.workspace.WorkspaceTerminalQueryService
+import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import net.weero.measix.pilot.service.workspace.WorkspaceTerminalScreenUiModel
 import net.weero.measix.pilot.service.workspace.WorkspaceTerminalWorkspaceState
 import org.junit.After
@@ -34,8 +34,8 @@ class WorkspaceTerminalVMTest {
     @Test
     fun `asynchronous runtime failure is projected to the terminal command error`() = runTest(dispatcher) {
         val source = MutableStateFlow(WorkspaceTerminalScreenUiModel(workspaceId = "workspace"))
-        val query = mockk<WorkspaceTerminalQueryService>()
-        every { query.observe("workspace") } returns source
+        val query = mockk<WorkspaceQueryService>()
+        every { query.observeTerminal("workspace") } returns source
         val vm = WorkspaceTerminalVM(
             workspaceId = "workspace",
             applicationService = mockk<WorkspaceApplicationService>(),

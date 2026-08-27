@@ -93,6 +93,7 @@ Keep delegated tasks focused and non-overlapping, skip delegation when its coord
 | 子助手 owner、lineage、retention、恢复 | `docs/references/sub-assistant-architecture.md` |
 | 子助手多模态输入输出 | `docs/references/sub-assistant-multimodal.md` |
 | Assistant 配置模型 | `docs/references/assistant-configuration.md` |
+| Android 配置目录与企业下发边界 | `docs/references/android-configuration-architecture.md` |
 | Provider 线协议 | `docs/references/protocol-reference.md` |
 | 模型可见 prompts 与工具结果 | `docs/references/prompts-and-tools.md` |
 | Compose 导航、布局与主题 | `docs/references/ui-architecture.md` |

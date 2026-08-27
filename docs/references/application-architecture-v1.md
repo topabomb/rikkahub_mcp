@@ -82,8 +82,8 @@ Application 层负责编排，不建立第二套数据协议。Repository 只执
 | 标题阶段、异步 token 与提交仲裁 | `ConversationTitleCoordinator` | application 与生成副作用 |
 | Provider 设置写入、模型目录、余额与连接探测 | `ProviderSettingsApplicationService` | `ProviderSettingsVM` typed command/query |
 | Workspace 持久化命令、模型 Rootfs 操作与终端互斥 | `WorkspaceApplicationService` | Workspace ViewModel command 与 `executeTool` capability |
-| Workspace 管理读模型 | `WorkspaceQueryService` | Workspace 列表、详情与文件预览 |
-| Workspace 交互 PTY 与 Tab 生命周期 | `WorkspaceTerminalRuntime` | `WorkspaceApplicationService` / `WorkspaceTerminalQueryService` |
+| Workspace 管理读模型 | `WorkspaceQueryService` | Workspace 列表、详情、文件预览与 `observeTerminal` |
+| Workspace 交互 PTY 与 Tab 生命周期 | `WorkspaceTerminalRuntime` | `WorkspaceApplicationService` / `WorkspaceQueryService` |
 | 恢复请求串行化与本地 archive 临时所有权 | `BackupRestoreApplicationService` | `BackupVM` confirmed restore command |
 | archive 校验、staging 与 pending 发布 | `BackupArchiveService` | WebDAV/S3 sync service |
 
@@ -111,7 +111,7 @@ Durable command 的固定协议是：
 
 ```text
 validate owner/epoch
-  → reducer 产生 next snapshot 与 mutation
+  → ConversationTransition.plan 产生 next snapshot 与 mutation
   → Room transaction 提交 mutation、execution fact 和相关 projection
   → 发布 committed snapshot
 ```

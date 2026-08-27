@@ -3,6 +3,10 @@
 This ledger records evidence required by the V2 execution plan. It is a development record; the
 current architectural contract remains in `docs/references/`.
 
+**Status (2026-08-27):** Phase B–F implementation is in the worktree and is treated as complete
+pending the user's device confirmation. JVM/build gates are recorded below. §11.8 device matrix
+and `connectedDebugAndroidTest` remain user-owned; §14 is not closed until those are recorded.
+
 ## Phase B: retired historical repairs
 
 ### Orphaned turn execution
@@ -194,7 +198,7 @@ compressing `TurnEngine` or `DelegationCoordinator`. If a correct ActiveTurnRunt
 capability types cannot meet 5,800 / 4,362, stop and revise the budget; do not keep
 `submit` as a test-only second writer.
 
-## Phase D in progress: request media capabilities and runtime subtraction
+## Phase D: request media capabilities and runtime subtraction
 
 The unique planner, Coordinator serial gate, `GenerationLoop.run(GenerationRequest)`,
 private `ActiveTurnRuntime`, Registry `installAndStartActiveRequest`,
@@ -265,3 +269,87 @@ Matching JVM tests on 2026-08-27:
 `TurnEngineTest` passed. Full gate `test assembleDebug lintDebug assembleRelease`
 passed in 6m 57s. Phase D code is complete; device matrix remains user-owned and
 overall V2 is not complete until E/F.
+
+## Phase E: MCP, file domain, and Workspace subtraction
+
+MCP no longer keeps parallel `clients`, `connectedConfigs`, reconnect/dormant/auth
+jobs, attempt counters, or `getServerLock`. Each server is one private
+`ConnectionSlot` with fingerprint, client, status, jobs, and mutex. Effective
+revision, foreground, network, and the renamed `refreshConnections()` all call
+the same `reconcile`. `McpConnectionKey.kt` is gone; fingerprint comparison lives
+in `McpManager.kt`. Stale reconnect jobs are generation-scoped and cannot publish
+onto a replaced slot. Token refresh and interactive authorization persist
+only through `persistOAuthStateFor`; a URL change during the network round
+trip discards the token instead of attaching the old resource bearer to a
+new endpoint. `syncingStatus` is a Flow projection: each slot writes only
+its own key (or removes it on teardown), so concurrent servers cannot
+rebuild a stale whole-map snapshot over a neighbor. The dead `McpJson`
+declaration is deleted.
+
+Concurrency ownership is part of the unique slot, not a second protocol:
+`mutex.withLock` never returns via a non-local label that skips unlock;
+reconnect and dormant jobs increment generation before closing the previous
+client; a transport callback captured at connect time is rejected after that
+increment; `teardownLocked` re-reads desired config after `close()` and, if
+the server was re-added during the close window, reconnects in place instead
+of orphaning the mapped slot. OAuth writes go through `persistOAuthStateFor`
+and refuse a token when the canonical resource changed. Domain after those
+correctness fixes: 7 files / 1,890 → 6 / 1,915. The first slot rewrite was
+1,738; the +177 is the exempt concurrency repair recorded in §11.7 (cap 1,930).
+
+Skill single-directory save/import/delete share one private `mutateSkillTree`
+that owns the only staging → mutate → validate → atomic publish → cleanup
+protocol; callers keep their typed results via `SkillFileSaveResult` mapping.
+The skills-root bundle import stays a separate transaction. Artifact adoption
+remains absent; the four Artifact boundaries are unchanged. Domain:
+14 / 2,681 → 14 / 2,690 (+13): the merge is protocol unification and is
+line-neutral by construction because copy/validate/publish helpers were already
+shared; the +13 includes the exempt 5ccad20b dangling-root fix accounted in
+Phase B follow-up.
+
+Workspace terminal read projection moved into `WorkspaceQueryService.observeTerminal`.
+`WorkspaceTerminalQueryService.kt` and its DI registration are deleted. Shell and
+interactive terminal both consume `ProotLaunchSpec`; they no longer hand-write
+argv/env/bind. Terminal now uses the same app bind set as shell (`/skills`,
+`/tool_outputs`, `/upload`) and the same `USER`/`SHELL` env facts — the missing
+shared launch fact, not a product fork; the shell env gains `USER`/`SHELL`.
+Domain: 13 / 2,402 baseline → 13 / 2,445. The whitelist-mandated
+`ProotLaunchSpec` (+131) is the unique launch owner; cap 2,460.
+
+Phase E production totals versus HEAD (`e80eafbe`): 609 `src/main/**/*.kt`
+files → 608; current physical total 127,940 lines (cap 128,000). Core file
+count is 56. Repo-wide lines are +6 versus HEAD because slot concurrency
+repairs (mutex unlock, generation-before-close, close-window re-add, OAuth
+resource guard) exceed the first slot rewrite's deletion. Plan rule 1 was
+revised so Phase E is accepted on file subtraction plus §11.7 caps, not by
+compressing OAuth/backoff. §11.7 caps were revised per plan rule 6; the
+original MCP 1,450 / core 14,820 / repo 125,200 assumed deletion amplitude
+that contradicts §11.8 fidelity plus the required slot concurrency repairs.
+
+Matching JVM tests on 2026-08-27: `McpManagerTest` (stale transport after
+reconnect, remove/re-add during `close()`, OAuth resource guard, refresh
+cancellation, and independent two-server status). Full gate
+`test assembleDebug lintDebug assembleRelease` passed after the per-key
+status publication change (7m 8s). Device matrix for MCP settings/Picker,
+Skill files, and Terminal remains user-owned. JVM/build success is not
+device acceptance.
+
+## Phase F: tests, names, and reference freeze
+
+`SingleWriterContractTest` keeps forbidden-import and single-writer seals.
+Recent-conversation summaries are sealed by `ConversationListRecord` having
+no message/node fields, not by slicing `getRecentConversationRecords`.
+MCP cancellation is sealed by `McpManagerTest` (`token refresh cancellation
+is not swallowed`), not by searching `McpManager.kt` for a rethrow string.
+`UpstreamBatch13BoundaryTest` keeps UI/port import bans, locale placeholders,
+and the absence of a second terminal preparation mutex; it no longer asserts
+constructor field text. `McpConnectionKey.kt` and
+`WorkspaceTerminalQueryService.kt` remain physically absent. Current
+architecture references describe `ConversationTransition`,
+`refreshConnections`, `observeTerminal`, and `ProotLaunchSpec`.
+`docs/dev/mcp-lifecycle-analysis.md` is marked as a pre-V2 snapshot.
+
+Phase F does not add production Kotlin. The same full gate after this
+test/doc freeze also passed. Implementation is complete pending user device
+confirmation; this ledger does not treat JVM/build success as device
+acceptance, and §14 stays open until the user records the §11.8 matrix.

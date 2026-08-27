@@ -86,6 +86,7 @@ common/       通用工具
 | [界面架构参考](docs/references/ui-architecture.md) | UI 架构层次、导航体系、自适应布局策略、折叠屏适配方案 |
 | [消息渲染管线](docs/references/message-rendering-pipeline.md) | UIMessage.parts 到像素的完整渲染管线、Markdown 双路径、WebView 封装 |
 | [助手配置参考](docs/references/assistant-configuration.md) | Assistant 字段、默认模板、解析/持久化规则与配置消费边界 |
+| [Android 配置架构与企业下发清单](docs/references/android-configuration-architecture.md) | Android 完整配置目录、持久化/引用架构、企业下发边界与 S0.2 Snapshot 映射 |
 | [消息生成链路](docs/references/chat-generation-pipeline.md) | 从用户发送到模型回复落盘的完整数据流 |
 | [AI 协议参考](docs/references/protocol-reference.md) | 四类基础协议规范、Provider 差异映射、模型级适配 |
 | [工作区架构](docs/references/workspace-architecture.md) | Rootfs/挂载边界、PRoot 执行、文件工具、终端与安装生命周期 |

@@ -1,7 +1,7 @@
 # MCP 生命周期调研报告
 
-> **文档定位**：McpManager 及被管理的 MCP 服务器的完整生命周期分析。
-> **状态**：调研完成，基于代码实证。
+> **文档定位**：V2 Phase E 之前的 McpManager 调研快照，不是当前实现。
+> **状态**：历史归档。当前 owner 是 `McpManager.ConnectionSlot` + `reconcile`/`refreshConnections`，见 `docs/references/`。
 > **创建日期**：2026-06-27
 > **代码版本**：包名 `net.weero.measix.pilot`
 

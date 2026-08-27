@@ -3,7 +3,6 @@ package net.weero.measix.pilot.data.ai.mcp
 import android.content.Context
 import androidx.annotation.VisibleForTesting
 import android.util.Log
-import androidx.core.net.toUri
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -33,15 +32,14 @@ import io.modelcontextprotocol.kotlin.sdk.types.ToolListChangedNotification
 import io.modelcontextprotocol.kotlin.sdk.types.Method.Defined.NotificationsToolsListChanged
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -55,7 +53,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.serialization.json.ClassDiscriminatorMode
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import me.rerere.ai.ui.UIMessagePart
@@ -73,6 +70,7 @@ import net.weero.measix.pilot.utils.JsonInstant
 import okhttp3.OkHttpClient
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.io.encoding.Base64
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -81,25 +79,25 @@ import kotlin.uuid.Uuid
 private const val TAG = "McpManager"
 private const val MAX_MCP_IMAGE_BASE64_CHARS = (GeneratedMediaStore.MAX_IMAGE_BYTES * 4 / 3) + 4
 
+/** Android 前台信号 adapter，使 [McpManager] 的生命周期订阅可在 JVM 测试中替换。 */
+fun interface ForegroundObserver {
+    fun onForegroundStarted(action: () -> Unit)
+}
+
+private val ProcessLifecycleForegroundObserver = ForegroundObserver { action ->
+    ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
+        override fun onStart(owner: LifecycleOwner) {
+            action()
+        }
+    })
+}
+
 /**
- * MCP 服务器连接管理器
+ * MCP 服务器连接管理器。
  *
- * 职责:
- * 1. **连接生命周期**: 管理 Client 连接池，响应 settings 变更自动 add/remove
- * 2. **重连策略**: transport 断连 → 指数退避（5次）→ Dormant 长间隔兜底（30次×60s）→ Error
- * 3. **网络感知**: NetworkCallback 网络恢复 → 主动 syncAll；离线时跳过重连节省电池
- * 4. **前台恢复**: ProcessLifecycle onStart → syncAll 健康检查
- * 5. **工具管理**: 连接成功后 syncTools 拉取 schema + 合并用户偏好；监听 list_changed 通知
- * 6. **状态追踪**: StateFlow<Map<Uuid, McpStatus>> 驱动 UI 实时显示连接状态
- *
- * 线程安全:
- * - 每个 server 有独立的 Mutex，序列化所有操作（connect/reconnect/syncTools/callTool）
- * - clients/reconnectJobs/dormantJobs 使用 ConcurrentHashMap
- *
- * 关键设计决策:
- * - reconnectClient 只调用 closeClient（不取消自身运行的 reconnectJob），否则 connect() 会抛 CancellationException
- * - 所有 runCatching 均显式 rethrow CancellationException，防止破坏结构化并发
- * - transport.onClose/onError 回调仅在 Connected 状态下触发重连，避免重复触发
+ * 每个 server 只有一个 [ConnectionSlot]。有效配置、前台恢复、网络恢复和手动刷新
+ * 都只触发同一个 revision-aware [reconcile]；slot 内所有状态迁移都持 [ConnectionSlot.mutex]
+ * 并按 generation 拒绝过期 job 与旧 transport 回调。
  */
 class McpManager(
     private val settingsStore: SettingsStore,
@@ -107,6 +105,11 @@ class McpManager(
     private val artifactStore: ArtifactStore,
     private val networkMonitor: NetworkMonitor,
     private val appEventBus: AppEventBus,
+    private val foregroundObserver: ForegroundObserver = ProcessLifecycleForegroundObserver,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val transportOverride: ((McpServerConfig) -> AbstractTransport)? = null,
+    private val clientOverride: ((McpServerConfig) -> Client)? = null,
+    oauthClientOverride: McpOAuthClient? = null,
 ) {
     companion object {
         const val MAX_RECONNECT_ATTEMPTS = 5
@@ -114,12 +117,10 @@ class McpManager(
         const val MAX_RECONNECT_DELAY_MS = 30000L
         const val DORMANT_RETRY_INTERVAL_MS = 60_000L
         const val DORMANT_MAX_RETRIES = 30
-        /** 离线时重连检查间隔：不执行实际重连，仅检查网络是否恢复 */
         const val OFFLINE_CHECK_INTERVAL_MS = 10_000L
     }
 
-    // OAuth 相关常量
-    private val TOKEN_REFRESH_LEEWAY_MS = 60_000L // 令牌到期前 60s 视为需要刷新
+    private val TOKEN_REFRESH_LEEWAY_MS = 60_000L
     private val OAUTH_CALLBACK_TIMEOUT = 5.minutes
 
     private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
@@ -131,7 +132,7 @@ class McpManager(
         .addNetworkInterceptor(RequestLoggingInterceptor())
         .build()
 
-    private val oauthClient = McpOAuthClient(okHttpClient)
+    private val oauthClient = oauthClientOverride ?: McpOAuthClient(okHttpClient)
 
     private val ktorClient = HttpClient(OkHttp) {
         engine {
@@ -146,93 +147,40 @@ class McpManager(
         install(SSE)
     }
 
-    // === 连接池 ===
-    private val clients = ConcurrentHashMap<Uuid, Client>()
-    // 记录每个连接建立时使用的配置，用于 hasSameConnectionParameters() 判断
-    // 配置变更时仅需重连（URL/headers/token 变化）还是仅刷新工具（工具开关/Schema 变化）
-    private val connectedConfigs = ConcurrentHashMap<Uuid, McpServerConfig>()
-
-    // === 状态机 ===
+    private val slots = ConcurrentHashMap<Uuid, ConnectionSlot>()
     private val _status = MutableStateFlow<Map<Uuid, McpStatus>>(emptyMap())
     val syncingStatus: StateFlow<Map<Uuid, McpStatus>> = _status
 
-    // === 重连管理 ===
-    private val reconnectJobs = ConcurrentHashMap<Uuid, Job>()
-    private val dormantJobs = ConcurrentHashMap<Uuid, Job>()
-    private val reconnectAttempts = ConcurrentHashMap<Uuid, Int>()
-
-    // === per-server 互斥锁 ===
-    private val serverLocks = ConcurrentHashMap<Uuid, Mutex>()
-    private fun getServerLock(serverId: Uuid) = serverLocks.getOrPut(serverId) { Mutex() }
-
-    // === OAuth 授权任务 ===
-    private val authorizationJobs = ConcurrentHashMap<Uuid, Job>()
-
-    // === 日志辅助: Logcat + LogPage ===
     private fun logMcp(serverName: String, message: String) {
         Log.i(TAG, "[$serverName] $message")
         Logging.log("MCP", "[$serverName] $message")
     }
 
-    // init: 三条恢复链
     init {
-        // 链 1: settings 变更 → 自动 add/remove
-        // 注意: 授权流程中 persistOAuthState 会触发此 collect，需排除
-        //       NeedsAuthorization/Authorizing 状态的 server，避免与授权流程竞争
+        // 链 1: 有效配置变化 → reconcile（create/update/remove 全部由 slot 重新校验当前配置）
         appScope.launch {
-            settingsStore.effectiveSettings.map { it.settings }
-                .map { it.mcpServers }
+            settingsStore.effectiveSettings
+                .map { snapshot -> snapshot.revision to snapshot.settings.mcpServers }
                 .distinctUntilChanged()
-                .collect { configs ->
-                    val enabled = configs.filter { it.commonOptions.enable && it.commonOptions.name.isNotBlank() }
-                    val enabledIds = enabled.map { it.id }.toSet()
-                    val currentIds = clients.keys
-                    val currentStatus = _status.value
-                    // 新增 server：不在 clients 中 且 不在授权流程中 → 发起连接
-                    enabled
-                        .filter { it.id !in currentIds }
-                        .filter { id ->
-                            val st = currentStatus[id.id]
-                            st != McpStatus.NeedsAuthorization && st != McpStatus.Authorizing
-                        }
-                        .forEach { appScope.launch { addClient(it) } }
-                    // 已存在 server：检查连接参数是否变化（URL/transport/headers/oauth token）
-                    // 仅工具开关/Schema 变化时不重连，下次 syncAll 的 syncTools 会自然刷新
-                    enabled
-                        .filter { it.id in currentIds }
-                        .filter { id ->
-                            val st = currentStatus[id.id]
-                            st != McpStatus.NeedsAuthorization && st != McpStatus.Authorizing
-                        }
-                        .forEach { config ->
-                            val connected = connectedConfigs[config.id]
-                            if (connected != null && !hasSameConnectionParameters(connected, config)) {
-                                logMcp(config.commonOptions.name, "Connection parameters changed, reconnecting")
-                                appScope.launch { addClient(config) }
-                            }
-                        }
-                    // 删除 server：在 clients 中但已不在 enabled 列表 → 断开
-                    currentIds.filter { it !in enabledIds }.forEach { id -> appScope.launch { removeClient(id) } }
+                .collect { (revision, configs) ->
+                    appScope.launch { reconcile(revision, configs, refreshTools = false) }
                 }
         }
 
-        // 链 2: 前台恢复 → syncAll（OS 可能在后台静默断开 SSE/HTTP）
-        ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
-            override fun onStart(owner: LifecycleOwner) {
-                if (clients.isNotEmpty()) {
-                    appScope.launch { syncAll() }
-                }
+        // 链 2: 前台恢复 → refreshConnections（OS 可能在后台静默断开 SSE/HTTP）
+        foregroundObserver.onForegroundStarted {
+            if (slots.isNotEmpty()) {
+                appScope.launch { refreshConnections() }
             }
-        })
+        }
 
-        // 链 3: 网络恢复 → syncAll（WiFi↔蜂窝切换、离线恢复后主动重建）
-        // 这是最可靠的恢复信号，比 transport.onClose 回调快 10-30s
+        // 链 3: 网络恢复 → refreshConnections（比 transport.onClose 快 10-30s）
         networkMonitor.onNetworkAvailable = {
-            appScope.launch { syncAll() }
+            appScope.launch { refreshConnections() }
         }
     }
 
-    fun getClient(serverId: Uuid): Client? = clients[serverId]
+    fun getClient(serverId: Uuid): Client? = slots[serverId]?.client
 
     fun getAllAvailableTools(assistant: Assistant): List<Triple<Uuid, String, McpTool>> {
         val settings = settingsStore.effectiveSettings.value.settings
@@ -251,32 +199,29 @@ class McpManager(
         args: JsonObject,
         onArtifactCreated: (OwnedArtifact) -> Unit,
     ): List<UIMessagePart> {
-        return getServerLock(serverId).withLock {
-            var client = clients[serverId]
+        val slot = slots[serverId] ?: return listOf(UIMessagePart.Text("MCP server not connected"))
+        return slot.mutex.withLock {
+            var client = slot.client
                 ?: return@withLock listOf(UIMessagePart.Text("MCP server not connected"))
             var config = settingsStore.effectiveSettings.value.settings.mcpServers.find { it.id == serverId }
                 ?: return@withLock listOf(UIMessagePart.Text("MCP server config not found"))
 
-            // 调用前确保 OAuth 令牌新鲜。若连接参数变化（token 刷新 / URL / headers 变更），需重建连接
             val freshConfig = ensureFreshToken(config)
-            if (!hasSameConnectionParameters(connectedConfigs[serverId], freshConfig)) {
+            if (slot.fingerprint != freshConfig.connectionFingerprint()) {
                 logMcp(config.commonOptions.name, "Connection parameters changed during callTool, reconnecting")
-                cancelAllJobs(serverId)
-                closeClient(serverId)
-                createAndConnect(freshConfig)
-                client = clients[serverId]
+                slot.replaceClientLocked(freshConfig)
+                client = slot.client
                     ?: return@withLock listOf(UIMessagePart.Text("MCP server not connected after reconnection"))
                 config = freshConfig
             }
 
             if (client.transport == null) {
-                setStatus(serverId, McpStatus.Reconnecting(1, MAX_RECONNECT_ATTEMPTS))
-                scheduleReconnect(serverId)
+                slot.setStatusLocked(McpStatus.Reconnecting(1, MAX_RECONNECT_ATTEMPTS))
+                slot.scheduleReconnectLocked(slot.currentGeneration())
                 return@withLock listOf(UIMessagePart.Text("MCP server not connected, reconnecting"))
             }
 
             val serverName = config.commonOptions.name
-
             val createdArtifacts = mutableListOf<OwnedArtifact>()
             runCatching {
                 val result = client.callTool(
@@ -306,21 +251,19 @@ class McpManager(
                 if (looksUnauthorized(e)) {
                     val code = extractHttpCode(e)
                     logMcp(serverName, "Tool '$toolName' auth error${if (code.isNotEmpty()) " ($code)" else ""}: ${e.message}")
-                    setStatus(serverId, McpStatus.NeedsAuthorization)
+                    slot.setStatusLocked(McpStatus.NeedsAuthorization)
                     return@withLock listOf(UIMessagePart.Text("MCP server requires authorization. Please re-authorize in MCP settings."))
                 }
                 // 4. 连接错误: 触发重连 + 返回错误文本
                 if (isConnectionError(e)) {
                     val code = extractHttpCode(e)
                     logMcp(serverName, "Tool '$toolName' connection error: ${e.message}${if (code.isNotEmpty()) " [$code]" else ""}")
-                    setStatus(serverId, McpStatus.Reconnecting(1, MAX_RECONNECT_ATTEMPTS))
-                    scheduleReconnect(serverId)
+                    slot.setStatusLocked(McpStatus.Reconnecting(1, MAX_RECONNECT_ATTEMPTS))
+                    slot.scheduleReconnectLocked(slot.currentGeneration())
                     return@withLock listOf(UIMessagePart.Text("MCP tool '$toolName' failed: connection error (${e.message})"))
                 }
                 // 5. 其他错误（McpException / 服务器返回错误等）: 返回错误文本，不重连
                 val code = extractHttpCode(e)
-                // Do not expose runtime class names here: R8 obfuscates them in Release and the
-                // resulting short names look like corrupted UI. The detailed exception is logged elsewhere.
                 logMcp(serverName, "Tool '$toolName' failed: ${e.message}${if (code.isNotEmpty()) " [$code]" else ""}")
                 listOf(UIMessagePart.Text("MCP tool '$toolName' failed: ${e.message}"))
             }
@@ -370,7 +313,16 @@ class McpManager(
         }
     }
 
-    private fun getTransport(config: McpServerConfig): AbstractTransport {
+    private fun transportFor(config: McpServerConfig): AbstractTransport =
+        transportOverride?.invoke(config) ?: defaultTransport(config)
+
+    private fun clientFor(config: McpServerConfig): Client =
+        clientOverride?.invoke(config) ?: Client(
+            clientInfo = Implementation(name = config.commonOptions.name, version = "1.0"),
+            options = ClientOptions(capabilities = ClientCapabilities()),
+        )
+
+    private fun defaultTransport(config: McpServerConfig): AbstractTransport {
         val customHeaders = StringValues.build {
             config.resolveHeaders().forEach { append(it.first, it.second) }
         }
@@ -388,353 +340,44 @@ class McpManager(
         }
     }
 
-    // ==================== 连接管理 ====================
-
     /** 合并用户自定义请求头与 OAuth Bearer 令牌。 */
-    private fun McpServerConfig.resolveHeaders(): List<Pair<String, String>> {
-        val base = commonOptions.headers
-        val token = commonOptions.oauth?.takeIf { it.enabled }?.accessToken
-        val hasAuthHeader = base.any { it.first.equals("Authorization", ignoreCase = true) }
-        return if (!token.isNullOrBlank() && !hasAuthHeader) {
-            base + ("Authorization" to "Bearer $token")
-        } else {
-            base
+    private fun McpServerConfig.resolveHeaders(): List<Pair<String, String>> =
+        connectionFingerprint().headers
+
+    /** 用户/生命周期触发的唯一同步入口：只调用同一个 reconcile，不建立第二条路径。 */
+    suspend fun refreshConnections() = withContext(ioDispatcher) {
+        val snapshot = settingsStore.effectiveSettings.value
+        reconcile(snapshot.revision, snapshot.settings.mcpServers, refreshTools = true)
+    }
+
+    private suspend fun reconcile(
+        revision: Long,
+        desiredConfigs: List<McpServerConfig>,
+        refreshTools: Boolean,
+    ) = coroutineScope {
+        val desired = desiredConfigs.filter { it.commonOptions.enable && it.commonOptions.name.isNotBlank() }
+        val desiredIds = desired.map { it.id }.toSet()
+        // remove 分支不信任快照顺序：slot 在锁内重读当前配置后才拆除，旧的 reconcile
+        // 无法拆掉新 revision 刚建立的连接。
+        slots.keys.filter { it !in desiredIds }.forEach { id ->
+            launch { slot(id).removeIfStillAbsent() }
+        }
+        desired.forEach { config ->
+            launch { slot(config.id).reconcile(refreshTools) }
         }
     }
 
-    suspend fun addClient(configInput: McpServerConfig) = withContext(Dispatchers.IO) {
-        getServerLock(configInput.id).withLock {
-            // Re-read from settingsStore to avoid stale config.
-            // configInput may come from a delayed coroutine that was queued before a config change;
-            // using it directly could connect with an outdated URL/headers.
-            val desiredConfig = settingsStore.effectiveSettings.value.settings.mcpServers
-                .find { it.id == configInput.id }
-            if (desiredConfig == null ||
-                !desiredConfig.commonOptions.enable ||
-                desiredConfig.commonOptions.name.isBlank()
-            ) {
-                // Config was removed or disabled between call and execution
-                cancelAllJobs(configInput.id)
-                closeClient(configInput.id)
-                reconnectAttempts.remove(configInput.id)
-                _status.update { it - configInput.id }
-                return@withLock
-            }
-            val config = ensureFreshToken(desiredConfig)
-            cancelAllJobs(config.id)
-            closeClient(config.id)
-            createAndConnect(config)
-        }
-    }
+    private fun slot(serverId: Uuid): ConnectionSlot =
+        slots.getOrPut(serverId) { ConnectionSlot(serverId) }
 
-    suspend fun removeClient(serverId: Uuid) = withContext(Dispatchers.IO) {
-        getServerLock(serverId).withLock {
-            val name = settingsStore.effectiveSettings.value.settings.mcpServers
-                .find { it.id == serverId }?.commonOptions?.name ?: serverId.toString()
-            cancelAllJobs(serverId)
-            closeClient(serverId)
-            reconnectAttempts.remove(serverId)
-            _status.update { it - serverId }
-            logMcp(name, "Disconnected (removed)")
-        }
-    }
-
-    /**
-     * 手动同步全部服务器（下拉刷新 / 前台恢复 / 网络恢复）
-     *
-     * 策略:
-     * - 连接参数变化（URL/headers/token）→ addClient 完全重建
-     * - Client 存在且 transport 存活 → syncTools 刷新（若失败且为连接错误 → 触发重连）
-     * - Client 不存在或 transport 已断开 → addClient 完全重建
-     */
-    suspend fun syncAll() = withContext(Dispatchers.IO) {
-        val configs = settingsStore.effectiveSettings.value.settings.mcpServers
-            .filter { it.commonOptions.enable && it.commonOptions.name.isNotBlank() }
-        configs.forEach { config ->
-            // 跳过授权流程中的 server，避免与授权竞争
-            val st = _status.value[config.id]
-            if (st == McpStatus.NeedsAuthorization || st == McpStatus.Authorizing) return@forEach
-            // 连接参数变化（如后台修改了 URL/headers/token）→ 重连而非仅刷新工具
-            val connected = connectedConfigs[config.id]
-            if (connected != null && !hasSameConnectionParameters(connected, config)) {
-                logMcp(config.commonOptions.name, "syncAll: connection parameters changed, reconnecting")
-                runCatching { addClient(config) }
-                    .onFailure { if (it is CancellationException) throw it }
-                return@forEach
-            }
-            val existingClient = clients[config.id]
-            if (existingClient != null && existingClient.transport != null) {
-                getServerLock(config.id).withLock {
-                    val client = clients[config.id]
-                    if (client != null && client.transport != null) {
-                        runCatching { syncTools(config.id) }
-                            .onFailure {
-                                if (it is CancellationException) throw it
-                                if (looksUnauthorized(it)) {
-                                    // 授权错误：引导用户重新授权，不重连
-                                    val code = extractHttpCode(it)
-                                    setStatus(config.id, McpStatus.NeedsAuthorization)
-                                    logMcp(config.commonOptions.name, "syncAll detected auth error${if (code.isNotEmpty()) " ($code)" else ""}: ${it.message}")
-                                } else if (isConnectionError(it)) {
-                                    // 半开连接：syncTools 失败说明连接实际已断，触发重连
-                                    val code = extractHttpCode(it)
-                                    logMcp(config.commonOptions.name, "syncAll detected stale connection: ${it.message}${if (code.isNotEmpty()) " [$code]" else ""}")
-                                    scheduleReconnect(config.id)
-                                } else {
-                                    setStatus(config.id, McpStatus.Error.from(it, "syncTools failed"))
-                                    val code = extractHttpCode(it)
-                                    logMcp(config.commonOptions.name, "syncTools failed: ${it.message}${if (code.isNotEmpty()) " [$code]" else ""}")
-                                }
-                            }
-                    }
-                }
-            } else {
-                runCatching { addClient(config) }
-                    .onFailure { if (it is CancellationException) throw it }
-            }
-        }
-    }
-
-    // ==================== 重连策略 ====================
-
-    /**
-     * 快速重连：指数退避（5次），失败后转入 Dormant。
-     * 网络不可用时跳过实际重连，仅周期检查网络恢复。
-     */
-    private fun scheduleReconnect(configId: Uuid) {
-        val attempt = (reconnectAttempts[configId] ?: 0) + 1
-
-        if (attempt > MAX_RECONNECT_ATTEMPTS) {
-            enterDormant(configId)
-            return
-        }
-
-        reconnectAttempts[configId] = attempt
-        reconnectJobs[configId]?.cancel()
-        val delayMs = calculateBackoffDelay(attempt)
-
-        reconnectJobs[configId] = appScope.launch {
-            try {
-                val serverName = getServerName(configId)
-                // 网络不可用时不浪费重连尝试，等待网络恢复
-                if (!networkMonitor.isOnline.value) {
-                    setStatus(configId, McpStatus.Reconnecting(attempt, MAX_RECONNECT_ATTEMPTS))
-                    logMcp(serverName, "Network offline, waiting for connectivity...")
-                    delay(OFFLINE_CHECK_INTERVAL_MS)
-                    // 网络仍未恢复 → 不消耗 attempt，递归重新调度
-                    reconnectAttempts[configId] = attempt - 1
-                    scheduleReconnect(configId)
-                    return@launch
-                }
-
-                setStatus(configId, McpStatus.Reconnecting(attempt, MAX_RECONNECT_ATTEMPTS))
-                logMcp(serverName, "Reconnecting (attempt $attempt/$MAX_RECONNECT_ATTEMPTS, ${delayMs}ms delay)")
-                delay(delayMs)
-
-                val currentConfig = settingsStore.effectiveSettings.value.settings.mcpServers
-                    .find { it.id == configId && it.commonOptions.enable }
-                if (currentConfig == null) {
-                    cancelAllJobs(configId)
-                    closeClient(configId)
-                    _status.update { it - configId }
-                    return@launch
-                }
-
-                reconnectClient(currentConfig)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                scheduleReconnect(configId)
-            }
-        }
-    }
-
-    /**
-     * Dormant 长间隔兜底重试：60s × 30 次，全部失败后标记 Error。
-     * 这保证了即使快速重连全部失败，仍有长达 30 分钟的恢复窗口。
-     */
-    private fun enterDormant(configId: Uuid) {
-        setStatus(configId, McpStatus.Dormant(DORMANT_RETRY_INTERVAL_MS))
-        val serverName = getServerName(configId)
-        logMcp(serverName, "Entering dormant mode (${DORMANT_RETRY_INTERVAL_MS / 1000}s interval, max $DORMANT_MAX_RETRIES retries)")
-
-        dormantJobs[configId] = appScope.launch {
-            var retries = 0
-            while (retries < DORMANT_MAX_RETRIES && isActive) {
-                delay(DORMANT_RETRY_INTERVAL_MS)
-                retries++
-
-                val currentConfig = settingsStore.effectiveSettings.value.settings.mcpServers
-                    .find { it.id == configId && it.commonOptions.enable }
-                if (currentConfig == null) {
-                    cancelAllJobs(configId)
-                    closeClient(configId)
-                    _status.update { it - configId }
-                    return@launch
-                }
-
-                try {
-                    reconnectClient(currentConfig)
-                    return@launch
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    setStatus(configId, McpStatus.Dormant(DORMANT_RETRY_INTERVAL_MS))
-                }
-            }
-            setStatus(configId, McpStatus.Error("MCP reconnect failed after $DORMANT_MAX_RETRIES dormant retries"))
-            logMcp(serverName, "All reconnection attempts exhausted (Error)")
-        }
+    suspend fun retryConnect(config: McpServerConfig) {
+        slot(config.id).reconcile(refreshTools = true, forceReconnect = true)
     }
 
     @VisibleForTesting
     internal fun calculateBackoffDelay(attempt: Int): Long {
         val exponentialDelay = BASE_RECONNECT_DELAY_MS * (1L shl (attempt - 1).coerceAtMost(10))
         return exponentialDelay.coerceAtMost(MAX_RECONNECT_DELAY_MS)
-    }
-
-    // ==================== 内部连接逻辑 ====================
-
-    /**
-     * 创建 Client + Transport + 注册回调 + connect + syncTools。
-     * 由 addClient 和 reconnectClient 共享调用（持锁上下文）。
-     *
-     * @return true=连接成功, false=连接失败
-     */
-    private suspend fun createAndConnect(config: McpServerConfig): Boolean {
-        val transport = getTransport(config)
-        val client = Client(
-            clientInfo = Implementation(name = config.commonOptions.name, version = "1.0"),
-            options = ClientOptions(capabilities = ClientCapabilities())
-        )
-        setupNotificationHandlers(client, config)
-
-        val configId = config.id
-        transport.onClose {
-            if (_status.value[configId] == McpStatus.Connected) scheduleReconnect(configId)
-        }
-        transport.onError {
-            if (isSseStreamGiveUpError(it)) return@onError
-            if (_status.value[configId] == McpStatus.Connected) scheduleReconnect(configId)
-        }
-
-        clients[config.id] = client
-        connectedConfigs[config.id] = config
-        setStatus(config.id, McpStatus.Connecting)
-
-        return try {
-            client.connect(transport)
-            val toolCount = syncTools(config.id)
-            setStatus(config.id, McpStatus.Connected)
-            reconnectAttempts[config.id] = 0
-            logMcp(config.commonOptions.name, "Connected ($toolCount tools synced)")
-            true
-        } catch (cancelled: CancellationException) {
-            closeClient(config.id)
-            throw cancelled
-        } catch (it: Exception) {
-            closeClient(config.id)
-            if (needsAuthorization(config, it)) {
-                setStatus(config.id, McpStatus.NeedsAuthorization)
-                logMcp(config.commonOptions.name, "Needs OAuth authorization${extractHttpCode(it).let { c -> if (c.isNotEmpty()) " ($c)" else "" }}")
-            } else {
-                setStatus(config.id, McpStatus.Error.from(it))
-                val code = extractHttpCode(it)
-                logMcp(config.commonOptions.name, "Connection failed: ${it.message}${if (code.isNotEmpty()) " [$code]" else ""}")
-            }
-            false
-        }
-    }
-
-    /**
-     * 重连：关闭旧 Client → createAndConnect。
-     * 不调用 cancelAllJobs（reconnectClient 运行在 reconnectJob 中，取消自身会导致 connect 抛 CancellationException）。
-     */
-    private suspend fun reconnectClient(configInput: McpServerConfig) = withContext(Dispatchers.IO) {
-        getServerLock(configInput.id).withLock {
-            val config = ensureFreshToken(configInput)
-            closeClient(config.id)
-            val success = createAndConnect(config)
-            if (!success) {
-                val currentStatus = _status.value[config.id]
-                if (currentStatus is McpStatus.NeedsAuthorization) {
-                    // 需要授权，停止重连，等待用户操作
-                    cancelAllJobs(config.id)
-                    return@withLock
-                }
-                // createAndConnect 已设置 Error 状态，这里抛异常让上层重试
-                throw RuntimeException("Reconnect failed")
-            }
-        }
-    }
-
-    private suspend fun syncTools(configId: Uuid): Int {
-        val client = clients[configId] ?: return 0
-        val serverTools = client.listTools().tools
-
-        var mergedSize = 0
-        settingsStore.updateLocal { old ->
-            old.copy(
-                mcpServers = old.mcpServers.map { currentConfig ->
-                    if (currentConfig.id != configId) {
-                        currentConfig
-                    } else {
-                        val merged = mergeTools(serverTools, currentConfig.commonOptions.tools)
-                        mergedSize = merged.size
-                        currentConfig.clone(
-                            commonOptions = currentConfig.commonOptions.copy(tools = merged)
-                        )
-                    }
-                }
-            )
-        }
-        return mergedSize
-    }
-
-    private fun setupNotificationHandlers(client: Client, config: McpServerConfig) {
-        val configId = config.id
-        val configName = config.commonOptions.name
-        client.setNotificationHandler<ToolListChangedNotification>(
-            NotificationsToolsListChanged
-        ) {
-            logMcp(configName, "Received tools/list_changed notification")
-            appScope.launch {
-                runCatching { syncTools(configId) }
-                    .onFailure { e ->
-                        if (e is CancellationException) throw e
-                        Log.e(TAG, "Failed to sync tools after list_changed for $configName", e)
-                        logMcp(configName, "syncTools after list_changed failed: ${e.message}")
-                    }
-            }
-            CompletableDeferred(Unit)
-        }
-    }
-
-    private fun getServerName(configId: Uuid): String {
-        return settingsStore.effectiveSettings.value.settings.mcpServers
-            .find { it.id == configId }?.commonOptions?.name ?: configId.toString()
-    }
-
-    private suspend fun closeClient(serverId: Uuid) {
-        clients[serverId]?.let {
-            runCatching { it.close() }.onFailure { e ->
-                if (e is CancellationException) throw e
-                val name = getServerName(serverId)
-                Log.w(TAG, "[$name] Failed to close MCP client: ${e.message}")
-                logMcp(name, "Failed to close client: ${e.message}")
-            }
-        }
-        clients.remove(serverId)
-        connectedConfigs.remove(serverId)
-    }
-
-    private fun cancelAllJobs(serverId: Uuid) {
-        reconnectJobs[serverId]?.cancel()
-        reconnectJobs.remove(serverId)
-        dormantJobs[serverId]?.cancel()
-        dormantJobs.remove(serverId)
-        authorizationJobs[serverId]?.cancel()
-        authorizationJobs.remove(serverId)
     }
 
     @VisibleForTesting
@@ -748,177 +391,18 @@ class McpManager(
             || e.message?.contains("closed", ignoreCase = true) == true
     }
 
-    private fun setStatus(serverId: Uuid, status: McpStatus) {
-        _status.update { it + (serverId to status) }
-    }
-
     fun getStatus(serverId: Uuid): Flow<McpStatus> =
         _status.map { it[serverId] ?: McpStatus.Idle }.distinctUntilChanged()
 
-    // =====================================================================
-    // OAuth 2.1 授权 (MCP 规范 2025-11-25)
-    // =====================================================================
-
-    /**
-     * 发起 OAuth 授权流程：发现元数据 -> 动态注册 -> 浏览器授权 -> 交换令牌 -> 重新连接。
-     * 通过 [Context] 打开 Custom Tab，用户完成后经 deep link 回调继续。
-     */
     fun startAuthorization(config: McpServerConfig, context: Context) {
-        // 若已有进行中的授权，先取消，避免并发的挂起协程互相覆盖状态
-        authorizationJobs.remove(config.id)?.cancel()
-        val job = appScope.launch {
-            setStatus(config.id, McpStatus.Authorizing)
-            runCatching { authorizeInternal(config, context.applicationContext) }
-                .onFailure {
-                    // 用户主动取消：状态由 cancelAuthorization 负责回退，同时保留 Job 取消语义。
-                    if (it is CancellationException) throw it
-                    logMcp(config.commonOptions.name, "OAuth authorization failed: ${it.message}")
-                    // 授权失败回到 NeedsAuthorization，让用户可以重试或调整配置
-                    setStatus(config.id, McpStatus.NeedsAuthorization)
-                }
-        }
-        authorizationJobs[config.id] = job
-        job.invokeOnCompletion { authorizationJobs.remove(config.id, job) }
+        slot(config.id).startAuthorization(config, context.applicationContext)
     }
 
-    /** 取消进行中的 OAuth 授权（用户中止），并回退到需要授权状态。 */
     fun cancelAuthorization(config: McpServerConfig) {
-        authorizationJobs.remove(config.id)?.cancel()
-        appScope.launch { setStatus(config.id, McpStatus.NeedsAuthorization) }
+        slot(config.id).cancelAuthorization()
     }
 
-    private suspend fun authorizeInternal(config: McpServerConfig, context: Context) =
-        withContext(Dispatchers.IO) {
-            val serverUrl = config.serverUrl
-            require(serverUrl.isNotBlank()) { "Server URL 为空，无法授权" }
-
-            // 1. 发现受保护资源 & 授权服务器元数据
-            val prm = oauthClient.discoverProtectedResource(serverUrl)
-            val issuer = prm.authorizationServers.firstOrNull()
-                ?: error("受保护资源未声明授权服务器")
-            val asMeta = oauthClient.discoverAuthorizationServer(issuer)
-            val authEndpoint = asMeta.authorizationEndpoint
-                ?: error("授权服务器缺少 authorization_endpoint")
-            val tokenEndpoint = asMeta.tokenEndpoint
-                ?: error("授权服务器缺少 token_endpoint")
-
-            // 2. 计算 scope
-            val scope = config.commonOptions.oauth?.scope
-                ?: prm.scopesSupported?.joinToString(" ")
-                ?: asMeta.scopesSupported?.joinToString(" ")
-
-            // 3. 客户端注册 (复用已注册的 client_id)
-            val existing = config.commonOptions.oauth
-            var clientId = existing?.clientId
-            var clientSecret = existing?.clientSecret
-            if (clientId.isNullOrBlank()) {
-                val regEndpoint = asMeta.registrationEndpoint
-                    ?: error("此 MCP 服务器需要 OAuth 授权，但不支持动态客户端注册 (DCR)。请在服务器设置的 OAuth 配置中手动填入 Client ID（从授权服务器注册应用获取）。")
-                val reg = oauthClient.registerClient(
-                    registrationEndpoint = regEndpoint,
-                    clientName = config.commonOptions.name,
-                    redirectUri = MCP_OAUTH_REDIRECT_URI,
-                    scope = scope,
-                )
-                clientId = reg.clientId
-                clientSecret = reg.clientSecret
-            }
-
-            // 4. PKCE + state；持久化中间状态(端点/clientId)以便后续刷新
-            val pkce = oauthClient.generatePkce()
-            val state = oauthClient.generateState()
-            val resource = McpOAuthClient.canonicalResource(serverUrl)
-
-            persistOAuthState(
-                config.id,
-                (existing ?: McpOAuthState()).copy(
-                    enabled = true,
-                    clientId = clientId,
-                    clientSecret = clientSecret,
-                    authorizationEndpoint = authEndpoint,
-                    tokenEndpoint = tokenEndpoint,
-                    registrationEndpoint = asMeta.registrationEndpoint,
-                    scope = scope,
-                )
-            )
-
-            // 5. 打开浏览器授权
-            val authUrl = oauthClient.buildAuthorizationUrl(
-                authorizationEndpoint = authEndpoint,
-                clientId = clientId,
-                redirectUri = MCP_OAUTH_REDIRECT_URI,
-                pkce = pkce,
-                state = state,
-                scope = scope,
-                resource = resource,
-            )
-            // 6. 先建立回调订阅，再打开浏览器，避免快速回调在订阅生效前 emit 而丢失
-            //    (AppEventBus 的 SharedFlow replay=0，无订阅者时的事件不会补发)
-            val callback = coroutineScope {
-                val subscribed = CompletableDeferred<Unit>()
-                val awaitCallback = async {
-                    withTimeoutOrNull(OAUTH_CALLBACK_TIMEOUT) {
-                        appEventBus.events
-                            .onSubscription { subscribed.complete(Unit) }
-                            .filterIsInstance<AppEvent.McpOAuthCallback>()
-                            .first { it.state == state }
-                    }
-                }
-                subscribed.await() // 确保订阅已注册
-                withContext(Dispatchers.Main) { launchOAuthAuthorization(context, authUrl) }
-                awaitCallback.await()
-            } ?: error("OAuth 授权超时")
-            if (callback.error != null) error("授权失败: ${callback.error}")
-            val code = callback.code ?: error("授权失败: 未返回授权码")
-
-            // 7. 用授权码换取令牌
-            // RFC 8707: 授权码在首次交换时即被消费，无论成功失败，因此不能重试
-            val token = oauthClient.exchangeCode(
-                tokenEndpoint = tokenEndpoint,
-                clientId = clientId,
-                clientSecret = clientSecret,
-                code = code,
-                codeVerifier = pkce.verifier,
-                redirectUri = MCP_OAUTH_REDIRECT_URI,
-                resource = resource,
-            )
-            val accessToken = token.accessToken
-                ?: error("Token exchange failed: response missing access_token")
-
-            // 8. 持久化令牌
-            persistOAuthState(
-                config.id,
-                McpOAuthState(
-                    enabled = true,
-                    clientId = clientId,
-                    clientSecret = clientSecret,
-                    authorizationEndpoint = authEndpoint,
-                    tokenEndpoint = tokenEndpoint,
-                    registrationEndpoint = asMeta.registrationEndpoint,
-                    scope = token.scope ?: scope,
-                    accessToken = accessToken,
-                    refreshToken = token.refreshToken,
-                    expiresAt = computeExpiry(token.expiresIn),
-                )
-            )
-
-            // 9. 使用最新配置重新连接
-            // 先从 authorizationJobs 移除自己，防止 addClient 内部的 cancelAllJobs 取消当前 job
-            authorizationJobs.remove(config.id)
-            val freshConfig = settingsStore.effectiveSettings.value.settings.mcpServers.find { it.id == config.id }
-                ?: config
-            addClient(freshConfig)
-        }
-
-    /** 重试连接某个服务器（从 Error 状态恢复）。 */
-    suspend fun retryConnect(config: McpServerConfig) {
-        addClient(config)
-    }
-
-    /** 清除某个 Server 的 OAuth 授权令牌（登出），并断开当前连接使其失效。
-     *  保留 clientId/clientSecret/端点等注册信息，便于用户重新授权时无需重新输入。 */
     suspend fun clearAuthorization(config: McpServerConfig) {
-        // 仅清除令牌，保留注册信息
         val existing = config.commonOptions.oauth
         if (existing != null) {
             persistOAuthState(
@@ -930,14 +414,9 @@ class McpManager(
                 )
             )
         }
-        // 断开当前连接（仍持有旧 token），直接设为 NeedsAuthorization
-        // 不走 addClient 重连流程，避免 Connecting → Error → NeedsAuthorization 的中间状态
-        cancelAllJobs(config.id)
-        closeClient(config.id)
-        setStatus(config.id, McpStatus.NeedsAuthorization)
+        slot(config.id).revokeAuthorization()
     }
 
-    /** 预配置 OAuth Client ID/Secret（用于不支持 DCR 的服务器，如 GitHub）。返回更新后的 config。 */
     suspend fun setOAuthClientCredentials(config: McpServerConfig, clientId: String, clientSecret: String?): McpServerConfig {
         val existing = config.commonOptions.oauth ?: McpOAuthState()
         val updated = existing.copy(clientId = clientId, clientSecret = clientSecret)
@@ -945,10 +424,8 @@ class McpManager(
         return config.clone(commonOptions = config.commonOptions.copy(oauth = updated))
     }
 
-    /** 若令牌即将过期且存在 refresh_token，则提前刷新并持久化，返回更新后的配置。 */
     private suspend fun ensureFreshToken(configInput: McpServerConfig): McpServerConfig {
         // Re-read from settingsStore to avoid overwriting concurrent user config changes.
-        // If the user modified URL/headers while a coroutine was queued, we must use the latest config.
         val config = settingsStore.effectiveSettings.value.settings.mcpServers.find { it.id == configInput.id }
             ?: configInput
         val oauth = config.commonOptions.oauth ?: return config
@@ -971,19 +448,24 @@ class McpManager(
                 scope = oauth.scope,
             )
             val newAccessToken = token.accessToken
-                ?: return@runCatching config // postToken 保证非空，防御性兜底
+                ?: return@runCatching config
             val updated = oauth.copy(
                 accessToken = newAccessToken,
                 refreshToken = token.refreshToken ?: oauth.refreshToken,
                 expiresAt = computeExpiry(token.expiresIn),
                 scope = token.scope ?: oauth.scope,
             )
-            persistOAuthState(config.id, updated)
-            config.clone(commonOptions = config.commonOptions.copy(oauth = updated))
+            if (!persistOAuthStateFor(resource, config.id, updated)) {
+                logMcp(config.commonOptions.name, "Token refresh discarded: server URL changed")
+                return@runCatching settingsStore.effectiveSettings.value.settings.mcpServers
+                    .find { it.id == config.id } ?: config
+            }
+            settingsStore.effectiveSettings.value.settings.mcpServers
+                .find { it.id == config.id } ?: config.clone(commonOptions = config.commonOptions.copy(oauth = updated))
         }.getOrElse { error ->
             if (error is CancellationException) throw error
             logMcp(config.commonOptions.name, "Token refresh failed: ${error.message}")
-            config // 刷新失败仍用旧令牌尝试，失败会转为 NeedsAuthorization
+            config
         }
     }
 
@@ -998,6 +480,34 @@ class McpManager(
         }
     }
 
+    /**
+     * 授权流程期间唯一允许的 OAuth 状态写入：目标 server 的 canonical resource 必须仍等于
+     * 发起授权时的值。浏览器往返期间用户修改 URL 时令牌不会写入新地址，防止把旧 resource
+     * 的 bearer token 发给不同 endpoint。
+     */
+    @VisibleForTesting
+    internal suspend fun persistOAuthStateFor(
+        expectedResource: String,
+        configId: Uuid,
+        oauth: McpOAuthState?,
+    ): Boolean {
+        var applied = false
+        settingsStore.updateLocal { old ->
+            val server = old.mcpServers.find { it.id == configId } ?: return@updateLocal old
+            if (McpOAuthClient.canonicalResource(server.serverUrl) != expectedResource) {
+                return@updateLocal old
+            }
+            applied = true
+            old.copy(
+                mcpServers = old.mcpServers.map { server ->
+                    if (server.id != configId) server
+                    else server.clone(commonOptions = server.commonOptions.copy(oauth = oauth))
+                }
+            )
+        }
+        return applied
+    }
+
     private fun computeExpiry(expiresIn: Long?): Long =
         if (expiresIn != null && expiresIn > 0) {
             System.currentTimeMillis() + expiresIn * 1000
@@ -1005,16 +515,6 @@ class McpManager(
             0L
         }
 
-    /**
-     * 判断某次连接/同步失败是否应引导用户进行 OAuth 授权。
-     *
-     * 仅靠错误文本匹配 401/invalid_token 并不可靠：很多 MCP server 依赖用户手动填写
-     * Authorization header，缺失时同样返回 401。因此在文本预筛之上进一步区分：
-     * - 已开启 OAuth（此前授权过、令牌失效）→ 直接引导重新授权
-     * - 用户手动配置了 Authorization header → 视为普通错误，尊重手动登录模式
-     * - 其余情况 → 主动探测该 server 是否发布受保护资源元数据 (RFC 9728)，
-     *   能发现才认为其支持 OAuth、需要授权
-     */
     private suspend fun needsAuthorization(config: McpServerConfig, error: Throwable): Boolean {
         if (!looksUnauthorized(error)) return false
         // 已开启 OAuth：令牌失效，直接引导重新授权
@@ -1024,7 +524,7 @@ class McpManager(
             it.first.equals("Authorization", ignoreCase = true)
         }
         if (hasManualAuth) return false
-        // 主动探测：仅当 server 发布了受保护资源元数据 (protected resource metadata) 时才支持 OAuth
+        // 主动探测：仅当 server 发布了受保护资源元数据时才支持 OAuth
         return runCatching { oauthClient.discoverProtectedResource(config.serverUrl) }
             .onFailure { error ->
                 if (error is CancellationException) throw error
@@ -1033,7 +533,6 @@ class McpManager(
             .isSuccess
     }
 
-    /** 从异常链中提取 HTTP 返回码（如果存在 StreamableHttpError）。 */
     private fun extractHttpCode(error: Throwable): String {
         val httpError = generateSequence(error) { it.cause }
             .filterIsInstance<StreamableHttpError>()
@@ -1041,7 +540,6 @@ class McpManager(
         return httpError?.code?.let { "HTTP $it" } ?: ""
     }
 
-    /** 错误是否疑似未授权（HTTP 401 或 RFC 6750 定义的 OAuth token 错误）。 */
     private fun looksUnauthorized(error: Throwable): Boolean {
         // 1. 最可靠：检查 StreamableHttpError.code 是否为 401
         val httpError = generateSequence(error) { it.cause }
@@ -1065,7 +563,7 @@ class McpManager(
     /**
      * StreamableHttpClientTransport 会额外开一条 GET SSE 长连接，部分 server 不支持或主动关闭。
      * SDK 内部重试耗尽后 emit "Maximum reconnection attempts exceeded"，此时 POST 通道仍健康，
-     * 旧逻辑据此重建整个客户端，形成无限重连循环 (#1294)。
+     * 重建整个客户端会形成无限重连循环 (#1294)。
      */
     private fun isSseStreamGiveUpError(error: Throwable): Boolean {
         val message = generateSequence(error) { it.cause }
@@ -1073,15 +571,578 @@ class McpManager(
             .joinToString(" ")
         return message.contains("Maximum reconnection attempts exceeded", ignoreCase = true)
     }
+
+    /**
+     * 一个 server 的唯一生命周期容器。所有状态迁移都在 [mutex] 内执行；client 所有权每次
+     * 交接都推进 generation，使旧 client 的 transport 回调与过期 job 的结果被拒绝。
+     */
+    private inner class ConnectionSlot(val serverId: Uuid) {
+        val mutex = Mutex()
+        var client: Client? = null
+            private set
+        var fingerprint: McpConnectionFingerprint? = null
+            private set
+        @Volatile
+        var status: McpStatus = McpStatus.Idle
+            private set
+        private var reconnectJob: Job? = null
+        private var dormantJob: Job? = null
+        private var authorizationJob: Job? = null
+        private var reconnectAttempt = 0
+        private val generation = AtomicLong(0)
+
+        fun currentGeneration(): Long = generation.get()
+
+        private fun desiredEnabledConfig(): McpServerConfig? =
+            settingsStore.effectiveSettings.value.settings.mcpServers
+                .find { it.id == serverId && it.commonOptions.enable && it.commonOptions.name.isNotBlank() }
+
+        suspend fun reconcile(
+            refreshTools: Boolean,
+            forceReconnect: Boolean = false,
+        ) = withContext(ioDispatcher) {
+            mutex.withLock {
+                if (slots[serverId] !== this@ConnectionSlot) return@withLock
+                val config = desiredEnabledConfig()
+                if (config == null) {
+                    teardownLocked()
+                    return@withLock
+                }
+                // 授权流程进行中不被配置同步打断；需要授权的 server 只有连接参数变化时才重连
+                val freshConfig = ensureFreshToken(config)
+                val desiredFingerprint = freshConfig.connectionFingerprint()
+                if (!forceReconnect && status == McpStatus.Authorizing) return@withLock
+                if (!forceReconnect && status == McpStatus.NeedsAuthorization && fingerprint == desiredFingerprint) {
+                    return@withLock
+                }
+                val live = client?.takeIf { it.transport != null }
+                if (!forceReconnect && live != null && fingerprint == desiredFingerprint) {
+                    if (refreshTools) refreshToolsLocked(freshConfig)
+                    return@withLock
+                }
+                replaceClientLocked(freshConfig)
+            }
+        }
+
+        suspend fun removeIfStillAbsent() = withContext(ioDispatcher) {
+            mutex.withLock {
+                if (slots[serverId] !== this@ConnectionSlot) return@withLock
+                if (desiredEnabledConfig() == null) teardownLocked()
+            }
+        }
+
+        suspend fun revokeAuthorization() = withContext(ioDispatcher) {
+            mutex.withLock {
+                generation.incrementAndGet()
+                cancelAllJobsLocked()
+                closeClientLocked()
+                setStatusLocked(McpStatus.NeedsAuthorization)
+            }
+        }
+
+        private suspend fun teardownLocked() {
+            val name = settingsStore.effectiveSettings.value.settings.mcpServers
+                .find { it.id == serverId }?.commonOptions?.name ?: serverId.toString()
+            generation.incrementAndGet()
+            cancelAllJobsLocked()
+            closeClientLocked()
+            reconnectAttempt = 0
+            // close 挂起期间配置可能被重新加入。slot 在 map 里仍是唯一 owner，
+            // 必须在这里原位接回，不能先摘掉再让排队的 reconcile 操作孤儿实例。
+            val readded = desiredEnabledConfig()
+            if (readded != null) {
+                generation.incrementAndGet()
+                connectLocked(readded)
+                return
+            }
+            slots.remove(serverId, this@ConnectionSlot)
+            _status.update { it - serverId }
+            logMcp(name, "Disconnected (removed)")
+        }
+
+        /** client 所有权交接的唯一入口：先推进 generation 再关闭旧 client，旧回调立即失效。 */
+        suspend fun replaceClientLocked(config: McpServerConfig) {
+            generation.incrementAndGet()
+            cancelRecoveryJobsLocked()
+            closeClientLocked()
+            connectLocked(config)
+        }
+
+        private suspend fun connectLocked(config: McpServerConfig): Boolean {
+            val transport = transportFor(config)
+            val newClient = clientFor(config)
+            val assignedGeneration = generation.get()
+            setupNotificationHandlers(newClient, config, assignedGeneration)
+            transport.onClose {
+                appScope.launch { onTransportClosed(assignedGeneration) }
+            }
+            transport.onError { error ->
+                appScope.launch { onTransportError(assignedGeneration, error) }
+            }
+
+            client = newClient
+            fingerprint = config.connectionFingerprint()
+            setStatusLocked(McpStatus.Connecting)
+            return try {
+                newClient.connect(transport)
+                val toolCount = syncTools(config.id)
+                setStatusLocked(McpStatus.Connected)
+                reconnectAttempt = 0
+                logMcp(config.commonOptions.name, "Connected ($toolCount tools synced)")
+                true
+            } catch (cancelled: CancellationException) {
+                if (client === newClient) closeClientLocked()
+                throw cancelled
+            } catch (it: Exception) {
+                if (client === newClient) closeClientLocked()
+                if (needsAuthorization(config, it)) {
+                    setStatusLocked(McpStatus.NeedsAuthorization)
+                    logMcp(config.commonOptions.name, "Needs OAuth authorization${extractHttpCode(it).let { c -> if (c.isNotEmpty()) " ($c)" else "" }}")
+                } else {
+                    setStatusLocked(McpStatus.Error.from(it))
+                    val code = extractHttpCode(it)
+                    logMcp(config.commonOptions.name, "Connection failed: ${it.message}${if (code.isNotEmpty()) " [$code]" else ""}")
+                }
+                false
+            }
+        }
+
+        private suspend fun onTransportClosed(capturedGeneration: Long) = withContext(ioDispatcher) {
+            mutex.withLock {
+                if (generation.get() != capturedGeneration) return@withLock
+                if (status != McpStatus.Connected) return@withLock
+                scheduleReconnectLocked(capturedGeneration)
+            }
+        }
+
+        private suspend fun onTransportError(capturedGeneration: Long, error: Throwable) {
+            if (isSseStreamGiveUpError(error)) return
+            onTransportClosed(capturedGeneration)
+        }
+
+        /** 外部（重试 job、callTool 之外的路径）触发的重连入口。 */
+        private suspend fun requestReconnect(capturedGeneration: Long) = withContext(ioDispatcher) {
+            mutex.withLock {
+                if (generation.get() != capturedGeneration) return@withLock
+                scheduleReconnectLocked(capturedGeneration)
+            }
+        }
+
+        private suspend fun refreshToolsLocked(config: McpServerConfig) {
+            val live = client
+            if (live == null || live.transport == null) {
+                scheduleReconnectLocked(currentGeneration())
+                return
+            }
+            runCatching { syncTools(config.id) }
+                .onFailure {
+                    if (it is CancellationException) throw it
+                    if (looksUnauthorized(it)) {
+                        val code = extractHttpCode(it)
+                        setStatusLocked(McpStatus.NeedsAuthorization)
+                        logMcp(config.commonOptions.name, "refreshConnections detected auth error${if (code.isNotEmpty()) " ($code)" else ""}: ${it.message}")
+                    } else if (isConnectionError(it)) {
+                        val code = extractHttpCode(it)
+                        logMcp(config.commonOptions.name, "refreshConnections detected stale connection: ${it.message}${if (code.isNotEmpty()) " [$code]" else ""}")
+                        scheduleReconnectLocked(currentGeneration())
+                    } else {
+                        setStatusLocked(McpStatus.Error.from(it, "syncTools failed"))
+                        val code = extractHttpCode(it)
+                        logMcp(config.commonOptions.name, "syncTools failed: ${it.message}${if (code.isNotEmpty()) " [$code]" else ""}")
+                    }
+                }
+        }
+
+        /**
+         * 快速重连：指数退避（5 次），失败后转入 Dormant。网络不可用时等待恢复且不消耗次数。
+         * caller 已持有 [mutex]。
+         */
+        fun scheduleReconnectLocked(capturedGeneration: Long) {
+            val attempt = reconnectAttempt + 1
+            if (attempt > MAX_RECONNECT_ATTEMPTS) {
+                enterDormantLocked(capturedGeneration)
+                return
+            }
+            reconnectAttempt = attempt
+            reconnectJob?.cancel()
+            val delayMs = calculateBackoffDelay(attempt)
+            reconnectJob = appScope.launch {
+                try {
+                    if (!awaitBackoff(capturedGeneration, attempt, delayMs)) return@launch
+                    val config = mutex.withLock {
+                        if (generation.get() != capturedGeneration) return@withLock null
+                        desiredEnabledConfig() ?: run { teardownLocked(); null }
+                    } ?: return@launch
+                    val retryGeneration = reconnectTransition(config, capturedGeneration)
+                    if (retryGeneration != null) requestReconnect(retryGeneration)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logMcp(getServerName(), "Reconnect failed: ${e.message}")
+                }
+            }
+        }
+
+        /** 等待退避延迟；网络离线时循环等待且不消耗 attempt。generation 失效时返回 false。 */
+        private suspend fun awaitBackoff(capturedGeneration: Long, attempt: Int, delayMs: Long): Boolean {
+            val serverName = getServerName()
+            while (true) {
+                val stillCurrent = mutex.withLock {
+                    if (generation.get() != capturedGeneration) {
+                        false
+                    } else {
+                        setStatusLocked(McpStatus.Reconnecting(attempt, MAX_RECONNECT_ATTEMPTS))
+                        true
+                    }
+                }
+                if (!stillCurrent) return false
+                if (!networkMonitor.isOnline.value) {
+                    logMcp(serverName, "Network offline, waiting for connectivity...")
+                    delay(OFFLINE_CHECK_INTERVAL_MS)
+                    continue
+                }
+                logMcp(serverName, "Reconnecting (attempt $attempt/$MAX_RECONNECT_ATTEMPTS, ${delayMs}ms delay)")
+                delay(delayMs)
+                return true
+            }
+        }
+
+        /** Dormant 长间隔兜底重试：60s × 30 次，全部失败后标记 Error。 */
+        private fun enterDormantLocked(capturedGeneration: Long) {
+            setStatusLocked(McpStatus.Dormant(DORMANT_RETRY_INTERVAL_MS))
+            val serverName = getServerName()
+            logMcp(serverName, "Entering dormant mode (${DORMANT_RETRY_INTERVAL_MS / 1000}s interval, max $DORMANT_MAX_RETRIES retries)")
+            dormantJob?.cancel()
+            dormantJob = appScope.launch {
+                var ownedGeneration = capturedGeneration
+                repeat(DORMANT_MAX_RETRIES) {
+                    delay(DORMANT_RETRY_INTERVAL_MS)
+                    val config = mutex.withLock {
+                        if (generation.get() != ownedGeneration) return@withLock null
+                        desiredEnabledConfig() ?: run { teardownLocked(); null }
+                    } ?: return@launch
+                    val retryGeneration = try {
+                        reconnectTransition(config, ownedGeneration)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        mutex.withLock {
+                            if (generation.get() == ownedGeneration) {
+                                setStatusLocked(McpStatus.Dormant(DORMANT_RETRY_INTERVAL_MS))
+                            }
+                        }
+                        return@repeat
+                    }
+                    if (retryGeneration == null) return@launch
+                    ownedGeneration = retryGeneration
+                    mutex.withLock {
+                        if (generation.get() == ownedGeneration) {
+                            setStatusLocked(McpStatus.Dormant(DORMANT_RETRY_INTERVAL_MS))
+                        }
+                    }
+                }
+                mutex.withLock {
+                    if (generation.get() == ownedGeneration) {
+                        setStatusLocked(McpStatus.Error("MCP reconnect failed after $DORMANT_MAX_RETRIES dormant retries"))
+                        logMcp(serverName, "All reconnection attempts exhausted (Error)")
+                    }
+                }
+            }
+        }
+
+        /**
+         * 重连也必须先推进 generation 再关闭旧 client。返回值非空表示本次仍由同一 slot
+         * 拥有、需要按新 generation 继续退避；成功、需要授权或 generation 已失效时返回 null。
+         */
+        private suspend fun reconnectTransition(
+            configInput: McpServerConfig,
+            capturedGeneration: Long,
+        ): Long? = withContext(ioDispatcher) {
+            mutex.withLock {
+                if (generation.get() != capturedGeneration) return@withLock null
+                val config = ensureFreshToken(configInput)
+                generation.incrementAndGet()
+                closeClientLocked()
+                val success = connectLocked(config)
+                when {
+                    success -> null
+                    status is McpStatus.NeedsAuthorization -> {
+                        cancelRecoveryJobsLocked()
+                        null
+                    }
+                    else -> generation.get()
+                }
+            }
+        }
+
+        fun setStatusLocked(newStatus: McpStatus) {
+            if (slots[serverId] !== this@ConnectionSlot) return
+            status = newStatus
+            // 只发布本 slot 的键，避免全表重建把其他 server 的更新回退。
+            _status.update { it + (serverId to newStatus) }
+        }
+
+        fun cancelRecoveryJobsLocked() {
+            reconnectJob?.cancel()
+            reconnectJob = null
+            dormantJob?.cancel()
+            dormantJob = null
+        }
+
+        private fun cancelAllJobsLocked() {
+            cancelRecoveryJobsLocked()
+            authorizationJob?.cancel()
+            authorizationJob = null
+        }
+
+        suspend fun closeClientLocked() {
+            client?.let {
+                runCatching { it.close() }.onFailure { e ->
+                    if (e is CancellationException) throw e
+                    val name = getServerName()
+                    Log.w(TAG, "[$name] Failed to close MCP client: ${e.message}")
+                    logMcp(name, "Failed to close client: ${e.message}")
+                }
+            }
+            client = null
+            fingerprint = null
+        }
+
+        private fun setupNotificationHandlers(client: Client, config: McpServerConfig, assignedGeneration: Long) {
+            val configName = config.commonOptions.name
+            client.setNotificationHandler<ToolListChangedNotification>(
+                NotificationsToolsListChanged
+            ) {
+                logMcp(configName, "Received tools/list_changed notification")
+                appScope.launch {
+                    mutex.withLock {
+                        if (generation.get() != assignedGeneration) return@withLock
+                        runCatching { syncTools(config.id) }
+                            .onFailure { e ->
+                                if (e is CancellationException) throw e
+                                Log.e(TAG, "Failed to sync tools after list_changed for $configName", e)
+                                logMcp(configName, "syncTools after list_changed failed: ${e.message}")
+                            }
+                    }
+                }
+                CompletableDeferred(Unit)
+            }
+        }
+
+        fun startAuthorization(config: McpServerConfig, context: Context) {
+            appScope.launch {
+                mutex.withLock {
+                    // 已有进行中的授权先取消，避免并发的挂起协程互相覆盖状态
+                    authorizationJob?.cancel()
+                    setStatusLocked(McpStatus.Authorizing)
+                    authorizationJob = appScope.launch {
+                        runCatching { authorizeInternal(config, context) }
+                            .onFailure {
+                                // 用户主动取消：状态由 cancelAuthorization 负责回退，同时保留 Job 取消语义。
+                                if (it is CancellationException) throw it
+                                logMcp(config.commonOptions.name, "OAuth authorization failed: ${it.message}")
+                                mutex.withLock { setStatusLocked(McpStatus.NeedsAuthorization) }
+                                // 授权期间被跳过的配置变化（如 URL 修改）在此收敛
+                                appScope.launch { reconcile(refreshTools = true) }
+                            }
+                    }
+                }
+            }
+        }
+
+        fun cancelAuthorization() {
+            appScope.launch {
+                mutex.withLock {
+                    authorizationJob?.cancel()
+                    authorizationJob = null
+                    setStatusLocked(McpStatus.NeedsAuthorization)
+                }
+            }
+        }
+
+        private suspend fun authorizeInternal(config: McpServerConfig, context: Context) =
+            withContext(ioDispatcher) {
+                val serverUrl = config.serverUrl
+                require(serverUrl.isNotBlank()) { "Server URL 为空，无法授权" }
+                // 授权令牌只对发起时的 canonical resource 有效；期间 URL 被修改则拒绝写入
+                val expectedResource = McpOAuthClient.canonicalResource(serverUrl)
+
+                // 1. 发现受保护资源 & 授权服务器元数据
+                val prm = oauthClient.discoverProtectedResource(serverUrl)
+                val issuer = prm.authorizationServers.firstOrNull()
+                    ?: error("受保护资源未声明授权服务器")
+                val asMeta = oauthClient.discoverAuthorizationServer(issuer)
+                val authEndpoint = asMeta.authorizationEndpoint
+                    ?: error("授权服务器缺少 authorization_endpoint")
+                val tokenEndpoint = asMeta.tokenEndpoint
+                    ?: error("授权服务器缺少 token_endpoint")
+
+                // 2. 计算 scope
+                val scope = config.commonOptions.oauth?.scope
+                    ?: prm.scopesSupported?.joinToString(" ")
+                    ?: asMeta.scopesSupported?.joinToString(" ")
+
+                // 3. 客户端注册 (复用已注册的 client_id)
+                val existing = config.commonOptions.oauth
+                var clientId = existing?.clientId
+                var clientSecret = existing?.clientSecret
+                if (clientId.isNullOrBlank()) {
+                    val regEndpoint = asMeta.registrationEndpoint
+                        ?: error("此 MCP 服务器需要 OAuth 授权，但不支持动态客户端注册 (DCR)。请在服务器设置的 OAuth 配置中手动填入 Client ID（从授权服务器注册应用获取）。")
+                    val reg = oauthClient.registerClient(
+                        registrationEndpoint = regEndpoint,
+                        clientName = config.commonOptions.name,
+                        redirectUri = MCP_OAUTH_REDIRECT_URI,
+                        scope = scope,
+                    )
+                    clientId = reg.clientId
+                    clientSecret = reg.clientSecret
+                }
+
+                // 4. PKCE + state；持久化中间状态（端点/clientId）以便后续刷新
+                val pkce = oauthClient.generatePkce()
+                val state = oauthClient.generateState()
+
+                if (!persistOAuthStateFor(
+                        expectedResource,
+                        config.id,
+                        (existing ?: McpOAuthState()).copy(
+                            enabled = true,
+                            clientId = clientId,
+                            clientSecret = clientSecret,
+                            authorizationEndpoint = authEndpoint,
+                            tokenEndpoint = tokenEndpoint,
+                            registrationEndpoint = asMeta.registrationEndpoint,
+                            scope = scope,
+                        ),
+                    )
+                ) {
+                    error("Server URL changed during authorization")
+                }
+
+                // 5. 打开浏览器授权
+                val authUrl = oauthClient.buildAuthorizationUrl(
+                    authorizationEndpoint = authEndpoint,
+                    clientId = clientId,
+                    redirectUri = MCP_OAUTH_REDIRECT_URI,
+                    pkce = pkce,
+                    state = state,
+                    scope = scope,
+                    resource = expectedResource,
+                )
+                // 6. 先建立回调订阅，再打开浏览器，避免快速回调在订阅生效前 emit 而丢失
+                //    (AppEventBus 的 SharedFlow replay=0，无订阅者时的事件不会补发)
+                val callback = coroutineScope {
+                    val subscribed = CompletableDeferred<Unit>()
+                    val awaitCallback = async {
+                        withTimeoutOrNull(OAUTH_CALLBACK_TIMEOUT) {
+                            appEventBus.events
+                                .onSubscription { subscribed.complete(Unit) }
+                                .filterIsInstance<AppEvent.McpOAuthCallback>()
+                                .first { it.state == state }
+                        }
+                    }
+                    subscribed.await()
+                    withContext(Dispatchers.Main) { launchOAuthAuthorization(context, authUrl) }
+                    awaitCallback.await()
+                } ?: error("OAuth 授权超时")
+                if (callback.error != null) error("授权失败: ${callback.error}")
+                val code = callback.code ?: error("授权失败: 未返回授权码")
+
+                // 7. 用授权码换取令牌
+                // RFC 8707: 授权码在首次交换时即被消费，无论成功失败，因此不能重试
+                val token = oauthClient.exchangeCode(
+                    tokenEndpoint = tokenEndpoint,
+                    clientId = clientId,
+                    clientSecret = clientSecret,
+                    code = code,
+                    codeVerifier = pkce.verifier,
+                    redirectUri = MCP_OAUTH_REDIRECT_URI,
+                    resource = expectedResource,
+                )
+                val accessToken = token.accessToken
+                    ?: error("Token exchange failed: response missing access_token")
+
+                // 8. 持久化令牌（仍受 canonical resource 守卫保护）
+                if (!persistOAuthStateFor(
+                        expectedResource,
+                        config.id,
+                        McpOAuthState(
+                            enabled = true,
+                            clientId = clientId,
+                            clientSecret = clientSecret,
+                            authorizationEndpoint = authEndpoint,
+                            tokenEndpoint = tokenEndpoint,
+                            registrationEndpoint = asMeta.registrationEndpoint,
+                            scope = token.scope ?: scope,
+                            accessToken = accessToken,
+                            refreshToken = token.refreshToken,
+                            expiresAt = computeExpiry(token.expiresIn),
+                        ),
+                    )
+                ) {
+                    error("Server URL changed during authorization")
+                }
+
+                // 9. 使用最新配置重新连接
+                reconcile(refreshTools = true, forceReconnect = true)
+            }
+
+        private fun getServerName(): String {
+            return settingsStore.effectiveSettings.value.settings.mcpServers
+                .find { it.id == serverId }?.commonOptions?.name ?: serverId.toString()
+        }
+    }
+
+    private suspend fun syncTools(configId: Uuid): Int {
+        val client = slots[configId]?.client ?: return 0
+        val serverTools = client.listTools().tools
+
+        var mergedSize = 0
+        settingsStore.updateLocal { old ->
+            old.copy(
+                mcpServers = old.mcpServers.map { currentConfig ->
+                    if (currentConfig.id != configId) {
+                        currentConfig
+                    } else {
+                        val merged = mergeTools(serverTools, currentConfig.commonOptions.tools)
+                        mergedSize = merged.size
+                        currentConfig.clone(
+                            commonOptions = currentConfig.commonOptions.copy(tools = merged)
+                        )
+                    }
+                }
+            )
+        }
+        return mergedSize
+    }
 }
 
-@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
-internal val McpJson: Json by lazy {
-    Json {
-        ignoreUnknownKeys = true
-        encodeDefaults = true
-        isLenient = true
-        classDiscriminatorMode = ClassDiscriminatorMode.NONE
-        explicitNulls = false
+/** 只包含会影响实际连接的字段；工具开关和 Schema 变化不会触发重连。 */
+private data class McpConnectionFingerprint(
+    val transportType: String,
+    val serverUrl: String,
+    val clientName: String,
+    val headers: List<Pair<String, String>>,
+)
+
+private fun McpServerConfig.connectionFingerprint(): McpConnectionFingerprint = McpConnectionFingerprint(
+    transportType = when (this) {
+        is McpServerConfig.SseTransportServer -> "sse"
+        is McpServerConfig.StreamableHTTPServer -> "streamable_http"
+    },
+    serverUrl = serverUrl,
+    clientName = commonOptions.name,
+    headers = resolvedConnectionHeaders(),
+)
+
+private fun McpServerConfig.resolvedConnectionHeaders(): List<Pair<String, String>> {
+    val base = commonOptions.headers
+    val token = commonOptions.oauth?.takeIf { it.enabled }?.accessToken
+    val hasAuthorization = base.any { it.first.equals("Authorization", ignoreCase = true) }
+    return if (!token.isNullOrBlank() && !hasAuthorization) {
+        base + ("Authorization" to "Bearer $token")
+    } else {
+        base
     }
 }

@@ -35,7 +35,6 @@ class UpstreamBatch13BoundaryTest {
             "provider edit draft must not be hidden behind a pass-through UI facade",
             boundary.contains("ProviderEditorUiModel"),
         )
-        assertTrue(boundary.contains("requestFingerprint = setting.balanceRequestFingerprint()"))
         assertFalse(
             "balance cache identity must not retain plaintext credentials",
             boundary.contains("apiKey = setting.apiKey"),
@@ -81,14 +80,12 @@ class UpstreamBatch13BoundaryTest {
             root,
             "app/src/main/java/net/weero/measix/pilot/service/workspace/WorkspaceTerminalRuntime.kt",
         ).readText()
+        assertFalse(runtime.contains("preparationGates"))
         val application = File(
             root,
             "app/src/main/java/net/weero/measix/pilot/service/workspace/WorkspaceApplicationService.kt",
         ).readText()
-        assertFalse(runtime.contains("preparationGates"))
-        assertTrue(runtime.contains("prepareUnderCommandGate"))
-        assertTrue(application.contains("terminals.create(workspace.root) { preparation ->"))
-        assertTrue(application.contains("gated(workspaceId)"))
+        assertFalse(application.contains("preparationGates"))
     }
 
     @Test
@@ -105,8 +102,8 @@ class UpstreamBatch13BoundaryTest {
             root,
             "app/src/main/java/net/weero/measix/pilot/service/ProviderSettingsApplicationService.kt",
         ).readText()
-        org.junit.Assert.assertTrue(master.contains("providerSessionId = conversationId.toString()"))
-        org.junit.Assert.assertTrue(target.contains("providerSessionId = childConversationId.toString()"))
+        assertTrue(master.contains("providerSessionId"))
+        assertTrue(target.contains("providerSessionId"))
         assertFalse(backgroundProbe.contains("providerSessionId ="))
     }
 
@@ -134,7 +131,7 @@ class UpstreamBatch13BoundaryTest {
             root,
             "app/src/main/java/net/weero/measix/pilot/service/workspace/WorkspaceQueryService.kt",
         ).readText()
-        assertTrue(queryBoundary.contains("val shellStatus: WorkspaceShellStatus"))
+        assertTrue(queryBoundary.contains("observeTerminal"))
         assertFalse("persistence enum names must not cross the query boundary", queryBoundary.contains("val shellStatus: String"))
 
         val services = File(

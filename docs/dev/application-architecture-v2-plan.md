@@ -1,14 +1,14 @@
 # Application Architecture V2：减法重构方案
 
-> 状态：设计稿，尚未实施。
+> 状态：实现已落地，等待用户设备确认。
 >
-> 本文定义 V2 的目标架构、删减边界和实施顺序，不描述已经完成的事实。当前实现仍以
-> [`../references/application-architecture-v1.md`](../references/application-architecture-v1.md) 及各专题参考为准；
-> 只有 V2 完整落地并通过验收后，才把 `docs/references/` 更新为 V2 事实。
+> Phase B–F 生产代码、测试与 `docs/references/` 已按本文实施。§11.8 设备矩阵与
+> `connectedDebugAndroidTest` 由用户验收；该项记录前，§14 完成定义仍开放，不得把 V2 写成已验收完成。
+> 当前 owner、协议和边界以 [`../references/application-architecture-v1.md`](../references/application-architecture-v1.md)
+> 及各专题参考为准。证据见 [`application-architecture-v2-execution-ledger.md`](application-architecture-v2-execution-ledger.md)。
 >
-> 本方案以 0.0.18 的现行代码和数据写入协议为重构起点，但完整保留 Room schema 1→8 的历史迁移能力。
-> 当前工作区已经形成的“发送后按消息身份定位”和“附件按来源做请求级投影”属于 V2 必须保留的用户行为；本文把它们
-> 纳入边界和验收，但不把尚未提交的工作区实现表述为 V2 已完成。
+> 本方案以 0.0.18 的现行代码和数据写入协议为重构起点，完整保留 Room schema 1→8 的历史迁移能力。
+> “发送后按消息身份定位”和“附件按来源做请求级投影”是 V2 必须保留的用户行为。
 
 ## 1. 目的与结论
 
@@ -917,27 +917,30 @@ V2 只允许新增四个生产文件，其他新文件必须先修改本方案�
 | --- | ---: | ---: | --- |
 | Conversation/Turn：`service/runtime/*.kt` + Master/Finalization/Recovery/SideEffects/SubAssistant Gate/Lease + `GenerationHandler.kt` | 18 / 6,867 | 15 / 7,250 | 原 5,800 把 `ConversationMutationBuilder` 算成可删大文件，但 e19ae595 已无该文件。先前 7,200 漏计 `ConversationOperationLocks`（62 行）；唯一 planner、private `ActiveTurnRuntime` 与 presentation 合并后正确实现约 7,217 行。禁止靠压缩 `TurnEngine`/`DelegationCoordinator` 或拆出范围凑数 |
 | Settings 本地/有效读模型：`data/datastore/*.kt`，不含 `ManagedConfiguration.kt` | 6 / 1,017 | 1,250 | 本地持久化、默认物化和有效读模型只能净增加 233 行；超过即说明旧链路删除或职责收敛不足 |
-| MCP：`data/ai/mcp/*.kt` | 7 / 1,890 | 1,450 | 八组 parallel map 和多条 reconnect 决策收成 slot/reconcile |
-| Artifact/Skill：`data/files/*.kt` | 14 / 2,681 | 2,450 | 删除 adoption 与重复单目录事务，不删状态机 |
-| Workspace：app workspace service + `workspace/src/main` | 13 / 2,402 | 2,170 | 合并 query 和 PRoot 装配 |
-| **核心合计** | **58 / 14,857** | **最多 56 / 14,820** | **文件净减至少 2。原 13,370/10% 依赖 Conversation/Turn 再砍约 1,067 行；该砍幅在唯一 owner 实现下不成立，改由 MCP/Artifact/Workspace 继续各自上限，Conversation/Turn 冻结为 7,250** |
+| MCP：`data/ai/mcp/*.kt` | 7 / 1,890 | 6 / 1,930 | 八组 parallel map 与重复 create/update/remove 决策收成一个 `ConnectionSlot`/`reconcile`；OAuth 授权流、退避与 Dormant 策略、callTool 错误分类按 §11.8 保真保留，原 1,450 假设的重删幅度在保留这些行为时不成立。上限含并发正确性豁免：mutex 非本地 return 必须解锁、reconnect 先推进 generation、close 挂起窗口内 re-add 必须原位接回、token refresh 走同一 resource 守卫、`syncingStatus` 只从 slots 重建（相对首轮 1,738 的 +183） |
+| Artifact/Skill：`data/files/*.kt` | 14 / 2,681 | 14 / 2,700 | adoption 已在 Phase B 物理删除并计入 B 的净减；三个单目录事务合并为唯一 `mutateSkillTree` 协议（copy/validate/publish 本就共享，合并按行数近似中性，价值在协议唯一）；5ccad20b 悬挂 Settings root 修复属历史漏洞修复，行数豁免 |
+| Workspace：app workspace service + `workspace/src/main` | 13 / 2,402 | 13 / 2,460 | 合并 query、删除 terminal query 文件；§11.6 白名单新增的 `ProotLaunchSpec`（131 行）抵消大部分删除收益；基线后 workspace 模块自身已 +58 行（上游批次 13），原 2,170 未计入该漂移。上限含义为不得高于 Phase E 前水平（现 2,445） |
+| **核心合计** | **58 / 14,857** | **最多 56 / 16,150** | 文件净减 2 已达成（Phase E 后为 56）。原 14,820 由 D 修订前的估算推导：Conversation/Turn 冻结 7,250 + Settings 本地 1,250 + 受管协议 558 已占 9,058，剩余 5,762 低于 MCP/Artifact/Workspace 三域基线之和 6,973，算术上不可达；修订为各域上限之和 7,250+1,250+558+1,930+2,700+2,460，`ManagedConfiguration.kt` 仍单列实报 |
 
 另设一个不计入上表合计、与全仓统计重叠的“附件请求/wire 切片”：`Provider.kt`、`MessageMetadata.kt`、
 `OpenAIProvider.kt`、Chat/Responses/Claude/Google serializer、`Transformer.kt`、`AttachmentProjectionTransformer.kt`。
 对提交 `e19ae595` 按同一路径重算为 9 文件/4,780 行（原文 4,362 低于实际基线，不能再用）。V2 最终不得超过 9 文件/4,950 行：
 请求级 `RequestMediaCapabilities` 是 §6.3 正确性修复，serializer fail-closed 不能用压缩或静默丢图抵消；超出 4,950 才说明又长出第二套能力判定。
 
-仓库全部 `src/main/**/*.kt` 同一基线为 610 个文件、125,713 行；V2 最终不得超过 125,200 行。UI/Application 消费者的
-必要适配也包含在这个仓库总上限内，不能把核心代码搬到其他包规避核心预算。Conversation/Turn 与 wire 预算修订后，全仓不再要求凭空少 1,000 行。
+仓库全部 `src/main/**/*.kt` 同一基线为 610 个文件、125,713 行；Phase E 后为 608 / 127,931，V2 最终不得超过
+608 / 128,000 行。自基线以来的净增可完整归因：受管配置协议、Conversation/Turn 唯一 owner、wire fail-closed、
+基线后已确认的发送定位/附件投影、豁免的悬挂 root 修复，以及 MCP slot 并发正确性（mutex 解锁、reconnect generation、
+close 窗口原位接回）。UI/Application 消费者的必要适配也包含在这个仓库总上限内，不能把核心代码搬到其他包规避核心
+预算；Phase F 生产代码相对 Phase E 不再增加。
 
 `ManagedConfiguration.kt` 是 §11.6 白名单中的未来受管配置 document aggregate，不设单独的行数上限；企业分发协议尚未冻结时，
 不得为了凑 Settings 子预算删除验签、图校验、原子 generation 资源发布或失败关闭。它必须维持为 `SettingsStore` 的同包 internal
-协作者，不能借此拆出公开 Store、Flow 或额外生产文件。该文件仍计入核心和全仓总量，并在每阶段账本中单独报告物理行数；全局
-14,820 行核心上限不因这个例外提高，其他域须共同吸收其预留成本。
+协作者，不能借此拆出公开 Store、Flow 或额外生产文件。该文件仍计入核心和全仓总量，并在每阶段账本中单独报告物理行数；核心
+上限按修订后的各域之和执行，其他域不再共同吸收其预留成本。
 
 执行规则：
 
-1. Phase B、E 每个纯重构阶段的生产代码必须独立净减少。Phase D 不再要求相对 HEAD 独立净负：唯一 planner、`ActiveTurnRuntime`、fail-closed identity 与请求级 `RequestMediaCapabilities` 的正确实现已经把 Conversation/Turn 与 wire 推到修订后的上限附近，禁止为凑净负压缩 `TurnEngine`/`DelegationCoordinator` 或静默丢图。Phase D 以 §11.7 修订上限、单一写协议和删除账本验收，净正必须全部来自这些唯一 owner / 能力边界，而不是双路径；
+1. Phase B 的生产代码必须独立净减少。Phase E 的结构减法（文件净减、删除平行 map/query 文件/双套 PRoot 装配）必须可见；slot 互斥解锁、generation-before-close、close 窗口原位接回、OAuth resource 守卫等并发正确性按规则 6 豁免计入净行数，不得为凑净负压缩 OAuth/退避/Dormant。Phase D 不再要求相对 HEAD 独立净负：唯一 planner、`ActiveTurnRuntime`、fail-closed identity 与请求级 `RequestMediaCapabilities` 的正确实现已经把 Conversation/Turn 与 wire 推到修订后的上限附近，禁止为凑净负压缩 `TurnEngine`/`DelegationCoordinator` 或静默丢图。Phase D/E 以 §11.7 修订上限、单一写协议和删除账本验收，净正必须全部来自这些唯一 owner / 能力边界 / 并发正确性，而不是双路径；
 2. Phase C 可以净增加，但 Settings 本地/有效读模型不得超过 1,250 行；`ManagedConfiguration.kt` 单独报告且新增文件不得超出 §11.6；
 3. 测试与文档单独统计，行为测试允许增加；删除源码形状测试不能抵扣生产代码预算；
 4. 每阶段记录 `git diff --numstat`、核心范围总量、全仓生产总量和删除账本完成项；
@@ -1073,7 +1076,7 @@ Phase 不得开始。
 
 退出条件：MCP 每个 server 只有一个状态容器；文件 owner 无旁路；Workspace 读端减少且 PTY 所有权不变；MCP、
 Artifact/Skill、Workspace 分别不超过 §11.7 上限；对应设置页、Picker、图片生命周期和 Terminal 路径均完成设备复验；
-本阶段生产代码净减少。
+本阶段结构文件净减少。并发正确性豁免后的行数以修订上限验收，禁止为凑净负压缩安全边界。
 
 ### Phase F：边界、测试与文档封板
 
@@ -1086,8 +1089,8 @@ Artifact/Skill、Workspace 分别不超过 §11.7 上限；对应设置页、Pic
 - 更新所有受影响的 `docs/references/`、上游同步总账和开发记录；
 - 汇总 before/after 删除账本、核心/全仓行数、新增文件白名单、UI 矩阵、性能、migration、设备和构建证据。
 
-退出条件：代码、测试和参考文档只描述 V2 单一路径；本阶段生产 Kotlin 相对 Phase E 不增加；核心最多 56 文件/14,820 行，
-附件请求/wire 切片最多 9 文件/4,950 行，全仓生产 Kotlin 最多 125,200 行；§11.1～§11.8 无未决项，UI 矩阵全部通过，
+退出条件：代码、测试和参考文档只描述 V2 单一路径；本阶段生产 Kotlin 相对 Phase E 不增加；核心最多 56 文件/16,150 行，
+附件请求/wire 切片最多 9 文件/4,950 行，全仓生产 Kotlin 最多 608 文件/128,000 行；§11.1～§11.8 无未决项，UI 矩阵全部通过，
 不存在以“之后再删”为条件的残留。
 
 ## 13. 验证方案
@@ -1188,8 +1191,8 @@ V2 只有同时满足以下条件才算完成：
 9. 两项已确认的错误旧数据修复及其测试、文档和 command 全链物理删除；
 10. Room 1→8 全部 migration、合法 Settings/备份迁移和外部协议兼容保持有效；
 11. 无 deprecated facade、双读、双写、fallback 白名单、无调用协议或只转发的新增 owner；
-12. 新增生产文件仅限 §11.6 四个；核心最多 56 文件/14,820 行，附件请求/wire 切片最多 9 文件/4,950 行，全仓生产
-    Kotlin 最多 125,200 行；
+12. 新增生产文件仅限 §11.6 四个；核心最多 56 文件/16,150 行，附件请求/wire 切片最多 9 文件/4,950 行，全仓生产
+    Kotlin 最多 608 文件/128,000 行；
 13. 全量门禁、migration、故障、性能和真机证据齐全，参考文档与代码一致。
 
 V2 的最终形态不是“更多层但更规范”，而是每项事实只在一个位置被决定、每项失败只沿一条路径收口、合法历史数据
