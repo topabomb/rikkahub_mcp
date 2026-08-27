@@ -33,7 +33,9 @@ import me.rerere.hugeicons.stroke.Tools
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.service.runtime.ToolCallPhase
 import net.weero.measix.pilot.service.runtime.isBusy
+import net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
+import net.weero.measix.pilot.ui.components.message.resolveAttachmentImageUrl
 import net.weero.measix.pilot.ui.components.message.isImagePartLoading
 import net.weero.measix.pilot.ui.components.richtext.HighlightCodeBlock
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
@@ -192,6 +194,7 @@ fun ToolCallJsonDetails(
     }
     if (resultParts.isNotEmpty()) {
         val conversationAlbum = LocalConversationImages.current
+        val attachmentPreview = LocalAttachmentPreview.current
         FormItem(
             label = {
                 Text(stringResource(R.string.chat_message_tool_call_result))
@@ -221,12 +224,14 @@ fun ToolCallJsonDetails(
                                         .shimmer(isLoading = true)
                                 )
                             } else {
-                                ZoomableAsyncImage(
-                                    model = part.url,
-                                    contentDescription = null,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    albumProvider = conversationAlbum,
-                                )
+                                resolveAttachmentImageUrl(part, attachmentPreview)?.let { imageUrl ->
+                                    ZoomableAsyncImage(
+                                        model = imageUrl,
+                                        contentDescription = null,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        albumProvider = conversationAlbum,
+                                    )
+                                }
                             }
                         }
 

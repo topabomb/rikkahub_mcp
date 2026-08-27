@@ -91,6 +91,19 @@ class SubAssistantDetailResolverTest {
     }
 
     @Test
+    fun `attachment preview update rejects a newer child snapshot with the same id`() {
+        val link = (resolveSubAssistantDetailLink(masterWithTools(listOf(callTool("run-1"))), "run-1", json)
+            as SubAssistantDetailLinkResult.Ready).link
+        val firstChild = childWithNodes(task)
+        val newerChild = childWithNodes(task, UIMessage.assistant("new output"))
+        val ready = SubAssistantDetailUiState.Ready(link, firstChild, emptyList())
+
+        assertTrue(isCurrentChildSnapshot(ready, firstChild))
+        assertTrue(firstChild.conversationId == newerChild.conversationId)
+        assertTrue(!isCurrentChildSnapshot(ready, newerChild))
+    }
+
+    @Test
     fun `duplicate run id in master is rejected`() {
         val master = masterWithTools(listOf(callTool("run-1"), callTool("run-1")))
 

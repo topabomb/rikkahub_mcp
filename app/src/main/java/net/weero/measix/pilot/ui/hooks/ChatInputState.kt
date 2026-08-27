@@ -125,7 +125,7 @@ class ChatInputState {
      */
     fun shouldDeleteFileOnRemove(part: UIMessagePart): Boolean {
         val url = part.attachmentUrlOrNull() ?: return false
-        if (!url.startsWith("file:")) return false
+        if (!url.startsWith("file:", ignoreCase = true)) return false
         return !isEditing() || url !in editingAttachmentUrls
     }
 

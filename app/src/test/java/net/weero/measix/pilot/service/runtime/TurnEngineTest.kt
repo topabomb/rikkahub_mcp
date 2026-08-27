@@ -45,6 +45,7 @@ class TurnEngineTest {
         val coordinator: ConversationCommandCoordinator,
         val runtime: ConversationRuntime,
         val handle: TurnHandle,
+        val finalization: TurnFinalization,
         val engine: TurnEngine,
     )
 
@@ -68,6 +69,7 @@ class TurnEngineTest {
             coordinator,
             runtime,
             handle,
+            finalization,
             TurnEngine(coordinator, runtime, handle, finalization),
         )
     }
@@ -174,6 +176,9 @@ class TurnEngineTest {
         val command = slot<ConversationCommand>()
         coVerify { harness.coordinator.executeOrThrow(any(), capture(command)) }
         assertEquals(TurnExecutionStatus.INCOMPLETE, (command.captured as FinalizeTurn).terminalStatus)
+        coVerify(exactly = 1) {
+            harness.finalization.prepareOwnedTurnMessagesForFailure(any(), any(), any(), any(), any())
+        }
     }
 
     @Test

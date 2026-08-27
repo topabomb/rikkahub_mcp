@@ -123,6 +123,32 @@ class AttachmentProjectionTransformerTest {
     }
 
     @Test
+    fun `malformed image ref is treated as unavailable rather than exposed to the provider`() = runTest {
+        val image = stampedImage(ref = "attachment:not-a-uuid")
+        val message = UIMessage(role = MessageRole.USER, parts = listOf(image))
+
+        val projected = transformer.transform(ctxFor(textModel), listOf(message)).single()
+
+        assertEquals(
+            "[Attachment ref=unavailable type=image input=unavailable]",
+            (projected.parts.single() as UIMessagePart.Text).text,
+        )
+    }
+
+    @Test
+    fun `marker display names escape grammar delimiters`() = runTest {
+        val image = stampedImage(fileName = "quote\"line\n.png")
+        val message = UIMessage(role = MessageRole.USER, parts = listOf(image))
+
+        val projected = transformer.transform(ctxFor(textModel), listOf(message)).single()
+
+        assertEquals(
+            "[Attachment ref=${AttachmentRefs.getStableRef(image)} type=image name=\"quote\\\"line\\n.png\" input=reference_only]",
+            (projected.parts.single() as UIMessagePart.Text).text,
+        )
+    }
+
+    @Test
     fun `historical image fact stays with historical message and current user text is unchanged`() = runTest {
         val ref = AttachmentRefs.format(Uuid.random())
         val historical = UIMessage(role = MessageRole.USER, parts = listOf(stampedImage(ref)))

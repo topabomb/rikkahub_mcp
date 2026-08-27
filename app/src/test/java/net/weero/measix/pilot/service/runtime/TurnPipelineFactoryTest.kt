@@ -29,6 +29,7 @@ class TurnPipelineFactoryTest {
         toolArtifactReplayTransformer = if (toolArtifactReplay) mockk<ToolArtifactReplayTransformer>(relaxed = true) else null,
         attachmentProjectionTransformer = AttachmentProjectionTransformer(mockk<ArtifactStore>(relaxed = true)),
         base64ImageToLocalFileTransformer = Base64ImageToLocalFileTransformer(mockk<ArtifactStore>(relaxed = true)),
+        documentAsPromptTransformer = DocumentAsPromptTransformer(mockk<ArtifactStore>(relaxed = true)),
     )
 
     @Test
@@ -40,7 +41,7 @@ class TurnPipelineFactoryTest {
                 PlaceholderTransformer::class,
                 DocumentAsPromptTransformer::class,
             ),
-            TurnPipelineFactory.BASE_INPUT.map { it::class },
+            factory().baseInput().map { it::class },
         )
     }
 

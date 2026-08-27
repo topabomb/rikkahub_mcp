@@ -163,7 +163,11 @@ data class SubAssistantTtsStats(
 internal fun parseAssistantCallExtras(raw: kotlinx.serialization.json.JsonElement?): Set<String> {
     val array = raw as? JsonArray ?: return emptySet()
     return array.mapNotNull { element ->
-        (element as? JsonPrimitive)?.contentOrNull?.trim()?.lowercase()
+        (element as? JsonPrimitive)
+            ?.takeIf { it.isString }
+            ?.contentOrNull
+            ?.trim()
+            ?.lowercase()
     }.filter { it in ASSISTANT_CALL_EXTRAS }.toSet()
 }
 
@@ -186,8 +190,9 @@ internal fun parseAssistantCallAttachments(raw: kotlinx.serialization.json.JsonE
     if (array.isEmpty()) return AttachmentParseResult.Ok(emptyList())
     val normalized = LinkedHashSet<String>()
     for (element in array) {
-        val value = (element as? JsonPrimitive)?.contentOrNull?.trim()
-            ?: return AttachmentParseResult.Invalid
+        val primitive = element as? JsonPrimitive
+        if (primitive?.isString != true) return AttachmentParseResult.Invalid
+        val value = primitive.content.trim()
         if (value.isEmpty()) return AttachmentParseResult.Invalid
         normalized.add(value)
     }

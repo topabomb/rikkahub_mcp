@@ -119,8 +119,11 @@ class ArtifactPayloadStore(private val context: Context) {
     fun relativePathForUri(uri: Uri): String? {
         if (!uri.toString().startsWith("file:", ignoreCase = true)) return null
         val source = runCatching { uri.toFile() }.getOrNull() ?: return null
-        return FileUtils.getRelativePathInFilesDir(context.filesDir, source)
+        return relativePathForFile(source)
     }
+
+    fun relativePathForFile(file: File): String? =
+        FileUtils.getRelativePathInFilesDir(context.filesDir, file)
 
     fun displayName(uri: Uri): String? = FileUtils.getFileNameFromUri(context, uri)
 

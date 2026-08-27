@@ -65,6 +65,7 @@ import net.weero.measix.pilot.data.ai.tools.GenerationToolSetFactory
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.ai.transformers.AttachmentProjectionTransformer
 import net.weero.measix.pilot.data.ai.transformers.Base64ImageToLocalFileTransformer
+import net.weero.measix.pilot.data.ai.transformers.DocumentAsPromptTransformer
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.data.ai.transformers.ToolArtifactReplayTransformer
 import net.weero.measix.pilot.data.ai.transformers.WorkspaceReminderTransformer
@@ -284,6 +285,7 @@ class MasterTurnCoordinator(
         toolArtifactReplayTransformer = toolArtifactReplayTransformer,
         attachmentProjectionTransformer = AttachmentProjectionTransformer(artifactStore),
         base64ImageToLocalFileTransformer = Base64ImageToLocalFileTransformer(artifactStore),
+        documentAsPromptTransformer = DocumentAsPromptTransformer(artifactStore),
     )
 
     // 生成完成流

@@ -78,7 +78,6 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.isEmptyUIMessage
-import me.rerere.ai.util.encodeBase64
 import me.rerere.common.android.appTempFolder
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
@@ -86,6 +85,8 @@ import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.ui.components.message.MessagePartBlock
 import net.weero.measix.pilot.ui.components.message.ThinkingStep
 import net.weero.measix.pilot.ui.components.message.groupMessageParts
+import net.weero.measix.pilot.ui.components.message.resolveAttachmentImageUrl
+import net.weero.measix.pilot.ui.components.message.resolveAttachmentMediaUrl
 import net.weero.measix.pilot.ui.components.richtext.MarkdownBlock
 import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
 import net.weero.measix.pilot.ui.components.ui.BitmapComposer
@@ -111,7 +112,8 @@ fun ChatExportSheet(
     visible: Boolean,
     onDismissRequest: () -> Unit,
     conversationTitle: String,
-    selectedMessages: List<UIMessage>
+    selectedMessages: List<UIMessage>,
+    attachmentPreviews: Map<String, String> = emptyMap(),
 ) {
     val context = LocalContext.current
     val toaster = LocalToaster.current
@@ -119,6 +121,9 @@ fun ChatExportSheet(
     val density = LocalDensity.current
     val settings = LocalSettings.current
     val mediaExportService: MediaExportService = org.koin.compose.koinInject()
+    val attachmentPreview = remember(attachmentPreviews) {
+        { ref: String -> attachmentPreviews[ref] }
+    }
     var imageExportOptions by remember { mutableStateOf(ImageExportOptions()) }
     var exporting by remember { mutableStateOf(false) }
     val exportFailedFormat = stringResource(R.string.chat_page_export_failed)
@@ -145,7 +150,7 @@ fun ChatExportSheet(
                         exporting = true
                         scope.launch {
                             try {
-                                exportToMarkdown(context, conversationTitle, selectedMessages)
+                                exportToMarkdown(context, conversationTitle, selectedMessages, attachmentPreview)
                                 toaster.show(markdownSuccessMessage, type = ToastType.Success)
                                 onDismissRequest()
                             } catch (cancelled: CancellationException) {
@@ -227,6 +232,7 @@ fun ChatExportSheet(
                                                 messages = selectedMessages,
                                                 settings = settings,
                                                 mediaExportService = mediaExportService,
+                                                attachmentPreview = attachmentPreview,
                                                 options = imageExportOptions
                                             )
                                             toaster.show(imageSuccessMessage, type = ToastType.Success)
@@ -258,7 +264,8 @@ fun ChatExportSheet(
 private suspend fun exportToMarkdown(
     context: Context,
     conversationTitle: String,
-    messages: List<UIMessage>
+    messages: List<UIMessage>,
+    attachmentPreview: (String) -> String?,
 ) {
     val filename = "chat-export-${LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))}.md"
 
@@ -277,8 +284,10 @@ private suspend fun exportToMarkdown(
                     }
 
                     is UIMessagePart.Image -> {
-                        append("![Image](${part.encodeBase64().getOrNull()?.base64})")
-                        appendLine()
+                        resolveAttachmentImageUrl(part, attachmentPreview)?.let { url ->
+                            append("![Image]($url)")
+                            appendLine()
+                        }
                     }
 
                     is UIMessagePart.Reasoning -> {
@@ -333,22 +342,30 @@ private suspend fun exportToMarkdown(
                                     }
 
                                     is UIMessagePart.Image -> {
-                                        append("![Tool Image](${outputPart.encodeBase64().getOrNull()?.base64})")
-                                        appendLine()
+                                        resolveAttachmentImageUrl(outputPart, attachmentPreview)?.let { url ->
+                                            append("![Tool Image]($url)")
+                                            appendLine()
+                                        }
                                     }
 
                                     is UIMessagePart.Document -> {
-                                        append("[Document: ${outputPart.fileName}](${outputPart.url})")
+                                        append("[Document: ${outputPart.fileName}]")
+                                        resolveAttachmentMediaUrl(outputPart.url, outputPart, attachmentPreview)
+                                            ?.let { append("($it)") }
                                         appendLine()
                                     }
 
                                     is UIMessagePart.Video -> {
-                                        append("[Video](${outputPart.url})")
+                                        append("[Video]")
+                                        resolveAttachmentMediaUrl(outputPart.url, outputPart, attachmentPreview)
+                                            ?.let { append("($it)") }
                                         appendLine()
                                     }
 
                                     is UIMessagePart.Audio -> {
-                                        append("[Audio](${outputPart.url})")
+                                        append("[Audio]")
+                                        resolveAttachmentMediaUrl(outputPart.url, outputPart, attachmentPreview)
+                                            ?.let { append("($it)") }
                                         appendLine()
                                     }
 
@@ -394,6 +411,7 @@ private suspend fun exportToImage(
     messages: List<UIMessage>,
     settings: Settings,
     mediaExportService: MediaExportService,
+    attachmentPreview: (String) -> String?,
     options: ImageExportOptions = ImageExportOptions()
 ) {
     val filename = "chat-export-${LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))}.png"
@@ -409,6 +427,7 @@ private suspend fun exportToImage(
                 ExportedChatImage(
                     conversationTitle = conversationTitle,
                     messages = messages,
+                    attachmentPreview = attachmentPreview,
                     options = options
                 )
             }
@@ -449,6 +468,7 @@ data class ImageExportOptions(val expandReasoning: Boolean = false)
 private fun ExportedChatImage(
     conversationTitle: String,
     messages: List<UIMessage>,
+    attachmentPreview: (String) -> String?,
     options: ImageExportOptions = ImageExportOptions()
 ) {
     val navBackStack = remember { mutableStateListOf<NavKey>() }
@@ -499,6 +519,7 @@ private fun ExportedChatImage(
                     messages.forEach { message ->
                         ExportedChatMessage(
                             message = message,
+                            attachmentPreview = attachmentPreview,
                             options = options,
                             prevMessage = messages.getOrNull(messages.indexOf(message) - 1)
                         )
@@ -522,6 +543,7 @@ private fun ExportedChatImage(
 @Composable
 private fun ExportedChatMessage(
     message: UIMessage,
+    attachmentPreview: (String) -> String?,
     prevMessage: UIMessage? = null,
     options: ImageExportOptions = ImageExportOptions()
 ) {
@@ -632,17 +654,19 @@ private fun ExportedChatMessage(
                             }
 
                             is UIMessagePart.Image -> {
-                                AsyncImage(
-                                    model = ImageRequest.Builder(context)
-                                        .data(part.url)
-                                        .allowHardware(false)
-                                        .crossfade(false)
-                                        .build(),
-                                    contentDescription = "Image",
-                                    modifier = Modifier
-                                        .sizeIn(maxHeight = 300.dp)
-                                        .clip(RoundedCornerShape(12.dp)),
-                                )
+                                resolveAttachmentImageUrl(part, attachmentPreview)?.let { imageUrl ->
+                                    AsyncImage(
+                                        model = ImageRequest.Builder(context)
+                                            .data(imageUrl)
+                                            .allowHardware(false)
+                                            .crossfade(false)
+                                            .build(),
+                                        contentDescription = "Image",
+                                        modifier = Modifier
+                                            .sizeIn(maxHeight = 300.dp)
+                                            .clip(RoundedCornerShape(12.dp)),
+                                    )
+                                }
                             }
 
                             else -> {

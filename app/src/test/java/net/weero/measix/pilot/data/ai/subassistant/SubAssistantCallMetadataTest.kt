@@ -207,6 +207,21 @@ class SubAssistantCallMetadataTest {
         ) is AttachmentParseResult.Invalid)
     }
 
+    @Test
+    fun `attachments reject non string json primitives`() {
+        assertTrue(parseAssistantCallAttachments(
+            buildJsonArray {
+                add(JsonPrimitive("attachment:11111111-1111-1111-1111-111111111111"))
+                add(JsonPrimitive(42))
+            },
+        ) is AttachmentParseResult.Invalid)
+        assertTrue(parseAssistantCallAttachments(
+            buildJsonArray {
+                add(JsonPrimitive(true))
+            },
+        ) is AttachmentParseResult.Invalid)
+    }
+
     // ---- buildSubAssistantCallResult ----
 
     @Test

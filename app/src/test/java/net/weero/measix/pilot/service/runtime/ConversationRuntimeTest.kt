@@ -759,4 +759,30 @@ class ConversationRuntimeTest {
         replacementJob.cancel()
     }
 
+    @Test
+    fun `presentation retains the released receipt identity for UI wait termination`() = runTest {
+        val rt = runtime(this)
+        val turnId = Uuid.random()
+        val worker = Job()
+        rt.installActiveRequest(turnId, worker)
+
+        rt.releaseActiveRequest(turnId, worker)
+
+        val presentation = rt.currentTurnPresentation()
+        assertEquals(ConversationTurnPhase.IDLE, presentation.phase)
+        assertEquals(turnId, presentation.lastTerminatedRequestTurnId)
+    }
+
+    @Test
+    fun `superseding request marks the replaced receipt as terminated`() = runTest {
+        val rt = runtime(this)
+        val firstTurn = Uuid.random()
+        val secondTurn = Uuid.random()
+        rt.installActiveRequest(firstTurn, Job())
+        rt.installActiveRequest(secondTurn, Job())
+
+        assertEquals(firstTurn, rt.currentTurnPresentation().lastTerminatedRequestTurnId)
+        assertEquals(secondTurn, rt.currentTurnPresentation().activeRequestTurnId)
+    }
+
 }

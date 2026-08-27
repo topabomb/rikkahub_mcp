@@ -144,10 +144,10 @@ private fun List<UIMessagePart>.collectAllParts(): List<UIMessagePart> =
  * 提取 part 中引用的本地文件 URL。比较与探测用字符串，避免 JVM 单测依赖 Android Uri。
  */
 private fun UIMessagePart.fileUrlString(): String? = when (this) {
-    is UIMessagePart.Image -> url.takeIf { it.startsWith("file://") }
-    is UIMessagePart.Document -> url.takeIf { it.startsWith("file://") }
-    is UIMessagePart.Video -> url.takeIf { it.startsWith("file://") }
-    is UIMessagePart.Audio -> url.takeIf { it.startsWith("file://") }
+    is UIMessagePart.Image -> url.takeIf { it.startsWith("file://", ignoreCase = true) }
+    is UIMessagePart.Document -> url.takeIf { it.startsWith("file://", ignoreCase = true) }
+    is UIMessagePart.Video -> url.takeIf { it.startsWith("file://", ignoreCase = true) }
+    is UIMessagePart.Audio -> url.takeIf { it.startsWith("file://", ignoreCase = true) }
     else -> null
 }
 

@@ -84,6 +84,7 @@ import me.rerere.hugeicons.stroke.Download01
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.InformationCircle
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.service.ArtifactUseCase
 import net.weero.measix.pilot.service.MediaExportService
 import net.weero.measix.pilot.service.IMAGE_SAVE_PERMISSION_REQUIRED
@@ -697,7 +698,7 @@ internal fun classifyImageSource(
 ): ImageInfoSource {
     if (url.startsWith("data:", ignoreCase = true)) return ImageInfoSource.Inline
     if (url.startsWith("http", ignoreCase = true)) return ImageInfoSource.Network
-    val file = File(url.removePrefix("file://"))
+    val file = localImageFile(url)
     val generatedDir = File(filesDir, GeneratedMediaStore.IMAGES_DIR).absoluteFile.normalize()
     val normalized = file.absoluteFile.normalize()
     return when {
@@ -769,7 +770,7 @@ internal fun resolveImageInfo(
         )
 
         else -> {
-            val file = File(url.removePrefix("file://"))
+            val file = localImageFile(url)
             val exists = file.exists()
             val bounds = if (exists) decodeBounds(file) else null
             ImageInfo(
@@ -784,6 +785,10 @@ internal fun resolveImageInfo(
         }
     }
 }
+
+/** Parses file URLs through the shared case-insensitive attachment boundary. */
+private fun localImageFile(url: String): File =
+    AttachmentRefs.parseFileUrl(url) ?: File(url)
 
 @Composable
 private fun ImageInfoPanel(

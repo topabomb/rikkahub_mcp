@@ -146,7 +146,7 @@ Turn 和 Tool execution 使用 insert-once 与合法状态 CAS。终态不可回
 
 Settings 图片导入先完成有界复制、结构魔数与实际 MIME 校验，再提交 root 并发布 artifact。当前写协议不会提交缺少 ACTIVE artifact metadata 的本地 Settings root；启动遇到这类根即以完整性错误 fail-closed，既不扫描目录补录，也不丢弃 root 或 payload。
 
-模型可见的稳定附件 handle 使用 `attachment:<uuid>`。`AttachmentReferenceLookup` 统一索引直接 message part 与 `assistant_call.artifacts`；执行侧每批建立一次索引，查询侧按 durable node 版本缓存并只叠加 owning active assistant message。UI 只消费 map 并做常数时间查找，不扫描消息 metadata、子助手 payload 或 ArtifactStore。
+模型可见的稳定附件 handle 使用 `attachment:<uuid>`。`AttachmentReferenceLookup` 统一索引直接 message part 与 `assistant_call.artifacts`；执行侧每批建立一次索引，查询侧每次从 durable nodes 与 owning active assistant message 重建索引，并经 ArtifactStore 生命周期校验。UI 只消费 map 并做常数时间查找，不扫描消息 metadata、子助手 payload 或 ArtifactStore。
 
 ## 子助手与恢复
 

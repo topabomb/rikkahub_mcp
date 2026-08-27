@@ -33,6 +33,7 @@ import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.util.KeyRoulette
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -112,6 +113,22 @@ class ChatCompletionsAPIMessageTest {
         assertEquals(userFact, result[0]["content"]?.jsonPrimitive?.content)
         assertEquals(assistantFact, result[1]["content"]?.jsonPrimitive?.content)
         assertEquals(toolFact, result[2]["content"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `chat completions rejects native tool images under closed capability matrix`() {
+        val tool = UIMessagePart.Tool(
+            toolCallId = "image",
+            toolName = "generate_image",
+            input = "{}",
+            output = listOf(UIMessagePart.Image("file:///tmp/generated.png")),
+        )
+        val error = assertThrows(IllegalStateException::class.java) {
+            invokeBuildMessages(
+                listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool))),
+            )
+        }
+        assertTrue(error.message.orEmpty().contains("native tool image"))
     }
 
     @Test
@@ -751,6 +768,7 @@ class ChatCompletionsAPIMessageTest {
             ProviderSetting.OpenAI(baseUrl = "https://proxy.example.com/v1"),
             vision,
         )
+        assertEquals(RequestImageSupport.NONE, chatCompatible.userImages)
         assertEquals(RequestImageSupport.NONE, chatCompatible.assistantImages)
         assertEquals(RequestImageSupport.NONE, chatCompatible.toolOutputImages)
 
@@ -765,6 +783,8 @@ class ChatCompletionsAPIMessageTest {
             ProviderSetting.OpenAI(baseUrl = "https://proxy.example.com/v1", useResponseApi = true),
             vision,
         )
+        assertEquals(RequestImageSupport.NONE, responsesCompatible.userImages)
+        assertEquals(RequestImageSupport.NONE, responsesCompatible.assistantImages)
         assertEquals(RequestImageSupport.NONE, responsesCompatible.toolOutputImages)
 
         val claude = ClaudeProvider(OkHttpClient()).requestMediaCapabilities(ProviderSetting.Claude(), vision)

@@ -143,7 +143,7 @@ DeepSeek thinking + tools 要求后续请求保留工具步骤的 `reasoning_con
 | Profile | Wire format | Reasoning 表示 | 加密状态 | Function output |
 |---------|-------------|----------------|----------|-----------------|
 | `OPENAI` | OpenAI | summary items | `encrypted_content` | 可多模态 |
-| `OPENAI_COMPATIBLE` | OpenAI | 按 OpenAI 形状 | 按 OpenAI 形状 | 可多模态 |
+| `OPENAI_COMPATIBLE` | OpenAI | 按 OpenAI 形状 | 按 OpenAI 形状 | 未验证，媒体能力为 `NONE` |
 | `VOLC_ARK` | OpenAI | endpoint 默认 summary | 请求 `encrypted_content` | 字符串 |
 | `DEEPSEEK` | DeepSeek | `content[].reasoning_text` | 不使用 | 字符串 |
 | `MIMO` | MiMo | reasoning text item | 不使用 | 字符串 |

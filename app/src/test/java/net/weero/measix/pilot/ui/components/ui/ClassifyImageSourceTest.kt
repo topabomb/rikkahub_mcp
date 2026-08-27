@@ -42,4 +42,13 @@ class ClassifyImageSourceTest {
 
         assertEquals(ImageInfoSource.Local, classifyImageSource("file://$sibling", filesDir))
     }
+
+    @Test
+    fun `uppercase file scheme uses the same local path`() {
+        val filesDir = temp.newFolder()
+        val generated = File(filesDir, "images/x.png").absoluteFile
+        val uppercase = "FILE://" + generated.absolutePath.replace('\\', '/')
+
+        assertEquals(ImageInfoSource.Generated, classifyImageSource(uppercase, filesDir))
+    }
 }

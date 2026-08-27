@@ -30,6 +30,18 @@ object AttachmentRefs {
     fun getRef(part: UIMessagePart): String? =
         part.metadata?.get(METADATA_KEY)?.jsonPrimitiveOrNull?.content?.trim()?.takeIf { it.isNotEmpty() }
 
+    /** Returns the canonical stable handle, ignoring malformed provider/legacy metadata. */
+    fun getStableRef(part: UIMessagePart): String? =
+        getRef(part)?.let { raw -> parse(raw)?.let(::format) }
+
+    /** Escapes values embedded in the model-visible attachment marker grammar. */
+    fun escapeMarkerValue(value: String): String = value
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+
     fun isMultimedia(part: UIMessagePart): Boolean = when (part) {
         is UIMessagePart.Image,
         is UIMessagePart.Document,
@@ -193,12 +205,34 @@ object AttachmentRefs {
         val trimmed = url.trim()
         if (!trimmed.startsWith("file:", ignoreCase = true)) return null
         return runCatching {
-            val uri = URI(trimmed)
-            val path = uri.path
-            when {
-                !path.isNullOrBlank() -> File(path)
-                else -> File(trimmed.removePrefix("file://").removePrefix("file:"))
+            val withoutScheme = trimmed.substring("file:".length)
+            val rawPath = when {
+                withoutScheme.startsWith("//") -> withoutScheme.removePrefix("//")
+                else -> withoutScheme
             }
+            // Android uses absolute Unix paths; JVM/imported data may use file://C:/... or
+            // file:///C:/.... Keep the drive letter instead of treating it as a root segment.
+            val normalizedRawPath = if (
+                rawPath.length >= 3 && rawPath[0] == '/' && rawPath[2] == ':'
+            ) {
+                rawPath.removePrefix("/")
+            } else {
+                rawPath
+            }
+            val parsedUri = runCatching { URI(trimmed) }.getOrNull()
+            // URI.path is decoded (unlike the raw fallback) and therefore preserves spaces
+            // and other escaped characters in imported cross-platform file URLs. A Windows
+            // drive may be parsed as the URI authority (`file://C:/...`), so put it back.
+            val uriPath = parsedUri?.path.orEmpty()
+            val authority = parsedUri?.rawAuthority.orEmpty()
+            val path = when {
+                authority.length == 2 && authority[1] == ':' -> authority + uriPath
+                uriPath.length >= 3 && uriPath[0] == '/' && uriPath[2] == ':' ->
+                    uriPath.substring(1)
+                uriPath.isNotBlank() -> uriPath
+                else -> normalizedRawPath
+            }
+            File(path)
         }.getOrNull()
     }
 }

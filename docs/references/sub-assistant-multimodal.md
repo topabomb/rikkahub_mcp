@@ -97,7 +97,14 @@ Target → Main     extras=artifacts  弱契约；看不懂也不推翻 complete
 | 把「Caller 看不懂图」当成失败 | 那既不是运行态也不是错误。出站仍 `completed`；投影方式（native Image / 引用行）由 Caller 当次模型决定。 |
 | 为卡片描述未点名也跑识别 | 禁止。识别只有模型显式调用 `inspect_attachments` 这一条路径。 |
 
-当前能力判定只看当次模型的 `inputModalities`（native / reference-only 两态；按需识别看 `attachmentInspectionModelId` 是否解析出可用视觉模型、`inspect_attachments` 是否注入）。完整「模型 ∩ Provider ∩ 协议」矩阵不存在；用户把不支持视觉的兼容端点标成 IMAGE 时，native 投影仍会把图发出去，由 Provider/网关报错，现有 `provider_error` / `content_blocked` 收口。
+当前请求能力由 Provider 的 `requestMediaCapabilities()` 解析为 `STRUCTURED`、
+`OPAQUE_REPLAY_ONLY` 或 `NONE`，并与当次模型的 `inputModalities` 一起决定 native /
+reference-only 投影；未知或兼容端点未声明时保持 `NONE` 并 fail-closed。能力按来源容器
+分别判定：USER 使用 `userImages`，ASSISTANT 使用 `assistantImages`，`Tool.output` 使用
+`toolOutputImages`。按需识别还要求 `attachmentInspectionModelId` 解析到视觉模型且其
+Provider 返回 `userImages == STRUCTURED`，否则不注入 `inspect_attachments`。当前模型只有在
+`userImages` 与 `toolOutputImages` 均为 `STRUCTURED` 时才跳过注入；因此不会仅因
+模型元数据标成 IMAGE 就把原图发送给不声明对应容器能力的端点。
 
 ---
 
@@ -129,7 +136,7 @@ extractDeliverableArtifacts          只提取，不做能力判断
 |-----------------|------------------|-------------|-------------|-------------------|
 | 否 | 任意 | 任意 | 无缩略图 | 仅文本 |
 | 是 | 否 | 任意 | 显示图 | 文本 + 轻量 artifacts[] |
-| 是 | 是 | 可读图（IMAGE in inputModalities） | 显示图 | JSON + Image parts（引用行由投影管线附加） |
+| 是 | 是 | 可读图（对应来源容器能力为 STRUCTURED） | 显示图 | JSON + Image parts（引用行由投影管线附加） |
 | 是 | 是 | 不可读图 | 显示图 | JSON + `input=reference_only` 引用事实；可显式调 `inspect_attachments` |
 
 ```text
@@ -226,16 +233,17 @@ metadata.attachment_ref = "attachment:<uuid>"
 `ConversationSnapshot.nodes` 调用 `AttachmentRefs.planBackfills()`，再提交仅包含 node/message/part path 与新 ref 的
 `BackfillAttachmentRefs`。它先落库再发布，不接受整树载荷；审批继续期间 active turn 未结束，既不计划回填也不允许该树命令进入 Runtime。
 
-Child clone / Master fork 已保留 metadata（`copyPartForChildClone()` / `copyForkedPart()`）。Resolver 以「当前消息树里带该 ref 的 part.url」为准，不把 ref 理解成全局文件主键。
+Child clone / Master fork 已保留 metadata（由 `AttachmentCloner.cloneParts()` 递归复制）。Resolver 以「当前消息树里带该 ref 的 part.url」为准，不把 ref 理解成全局文件主键；fork/clone 若复制本地文件，也会同步复制并改写 `sub_assistant_call.artifacts[].artifact`，使 manifest 与 `Tool.output` 指向同一份新副本。
 
 ### 5.2 统一投影：`AttachmentProjectionTransformer`
 
-普通聊天、Master 与 Target 共用同一个请求级无状态投影器。按**本次请求的 resolved model** 的 `inputModalities` 判定：
+普通聊天、Master 与 Target 共用同一个请求级无状态投影器。按**本次请求的 resolved model** 与
+Provider `requestMediaCapabilities()` 判定：
 
 | 模式 | 条件 | 行为 |
 |------|------|------|
-| native | 模型 `inputModalities` 含 `Modality.IMAGE` | Image part 保留，前方插入 `[Attachment ref=... type=image name="..." input=native]` |
-| reference-only | 不含 IMAGE | Image 替换为 `[Attachment ref=... type=image name="..." input=reference_only]` |
+| native | 模型 `inputModalities` 含 `Modality.IMAGE` 且该来源容器的 Provider 能力为 `STRUCTURED`（USER=`userImages`、ASSISTANT=`assistantImages`、`Tool.output`=`toolOutputImages`） | Image part 保留，前方插入 `[Attachment ref=... type=image name="..." input=native]` |
+| reference-only | Provider 返回 `NONE` 或模型不含 IMAGE | Image 替换为 `[Attachment ref=... type=image name="..." input=reference_only]` |
 
 关键性质：
 
@@ -249,7 +257,7 @@ Child clone / Master fork 已保留 metadata（`copyPartForChildClone()` / `copy
 
 | 项 | 说明 |
 |------|------|
-| `inspect_attachments` 工具 | 当前模型不可读图、且 `attachmentInspectionModelId` 解析出 Provider 可用的视觉模型时注入；模型显式调用才识别 |
+| `inspect_attachments` 工具 | 当前模型的 USER 或 `Tool.output` 容器不同时具备 STRUCTURED 能力、且 `attachmentInspectionModelId` 解析出视觉模型并由其 Provider 返回 `userImages == STRUCTURED` 时注入；模型显式调用才识别 |
 | 注入判定 | `shouldInjectAttachmentInspection()`（`GenerationToolSetFactory`）；不根据当前消息是否含图决定 schema |
 | 附件解析 | `ToolExecutionContext.resolveAttachments`（Runtime 注入，走统一 `AttachmentResolver`，工具不接触会话状态） |
 | 识别调用 | 单次多图调用（`[Image N ref=...]` 内部标签 + request + 固定 system instruction），结果为普通 Text Tool Result |
@@ -401,11 +409,15 @@ artifact_omitted: Int = 0
 
 ### 7.3 文件寿命与 fork
 
-当前与 Child **共享**已落地文件，写入 metadata 时不再复制。
+Child clone / Master fork 对本地 `file:` 附件执行内容级复制；复制产生的 `OwnedArtifact`
+在新聚合提交成功后发布，避免源会话清理影响新树。
 
 - 删除 Master 会级联 Child；Child 消息里的 `file://` 继续喂 `ConversationFileReferences`。
 - 仅收缩/删除 Child、Master 仍在：`ConversationFileReferences` 把 `sub_assistant_call.artifacts[].artifact`（含 `generate_image` 的顶层 `"artifact"` 键）的 `relativePath` 也视为引用；`findUnsharedFileUris` 同时按完整 URL 与 filesDir 相对路径探测，收缩时保留树的 metadata 引用阻止删除。卡片不再因 Child 单独收缩而缺图。
-- `forkSubAssistantTree()` 共享 Child 文件 URL：`LocalArtifactRef.relativePath` 仍然有效。
+- `forkSubAssistantTree()` 先复制消息与子树，再由 `AttachmentCloner.cloneParts()` 在整个 fork/clone
+  操作内共享 source-canonical 缓存复制本地文件；
+  `sub_assistant_call.artifacts[].artifact`、递归 `Tool.output` Image URL 以及结果 JSON
+  `artifacts[].path` 会在同一克隆步骤指向新副本。源文件删除后，fork 仍可回放。
 - 恢复：不重放 running；completed 的引用保留。文件没了就显示缺失，不伪造路径。
 
 ### 7.4 Caller 投影
@@ -419,7 +431,7 @@ artifact_omitted: Int = 0
     → 不追加媒体 part
 
 点名 extras=artifacts
-    → 对可持久化 Image 交付物追加 native Image parts（共享 Child 的 file://，
+    → 对可持久化 Image 交付物追加 native Image parts（使用已校验 artifact 的 file://，
       复制 stable attachment_ref）
     → 投影 part 追加在 Text JSON 之后
     → Caller 后续请求由 AttachmentProjectionTransformer 按当次 Caller 模型
@@ -517,9 +529,21 @@ AttachmentProjectionTransformer
 
 文档类应复用 `DocumentAsPromptTransformer`，不要再写一套 PDF 抽文本。
 
-### 9.2 能力判定矩阵
+### 9.2 能力判定矩阵（当前约束）
 
-补齐「模型 ∩ Provider ∩ 协议 Adapter」。避免把不支持视觉的兼容端点标成 IMAGE 后，NATIVE 仍把图发出去、只靠网关报错。
+能力判定已由 `Provider.requestMediaCapabilities()` 与模型 `inputModalities` 共同实现，
+并由 `AttachmentProjectionTransformer` 和协议 Adapter 复用：
+
+| 来源容器 | 使用的能力字段 | `STRUCTURED` 时 | 其他值时 |
+|----------|----------------|-----------------|----------|
+| USER | `userImages` | 保留 Image + `input=native` 事实 | `input=reference_only` |
+| ASSISTANT | `assistantImages` | 保留 Image + `input=native` 事实 | `input=reference_only`（`OPAQUE_REPLAY_ONLY` 仅允许匹配的 Responses 原始回放） |
+| `Tool.output` | `toolOutputImages` | 保留 Image + `input=native` 事实 | `input=reference_only` |
+
+能力未知或兼容端点未声明时为 `NONE`，不因模型元数据标注 IMAGE 而发送原图。当前矩阵由
+Provider/Transformer/Chat/Responses 相关测试覆盖；按需 `inspect_attachments` 还要求当前模型
+的 `userImages` 与 `toolOutputImages` 均为 `STRUCTURED` 才跳过注入，识别模型自身要求
+`userImages == STRUCTURED`。
 
 ### 9.3 Provider File Cache
 
@@ -535,9 +559,8 @@ Child 仍无 `ToolArtifactReplayTransformer`。本 run 刚生成的图在当前 
 
 ### 9.6 文件寿命
 
-当前与 Child 共享文件，不另做第二套引用计数。`ConversationFileReferences` 已把 `sub_assistant_call.artifacts[].artifact` 与 `generate_image` 顶层 `"artifact"` 键视为引用（按完整 URL 与 filesDir 相对路径双探测），仅收缩/删除 Child、Master 仍在时卡片不会再缺图。
-
-若以后 `forkSubAssistantTree()` 改为 `copyPartForChildClone` 式复制 Child 文件，**必须同时改写** `sub_assistant_call.artifacts[].artifact`。`copyForkedPart()` 不会自动做这件事。
+Child clone / Master fork 对本地 `file:` 附件执行内容级复制，复制产生的 `OwnedArtifact` 在新聚合提交成功后发布；`ConversationFileReferences` 仍把
+`sub_assistant_call.artifacts[].artifact` 与 `generate_image` 顶层 `"artifact"` 键视为引用（按完整 URL 与 filesDir 相对路径双探测）。复制 assistant_call 交付物时，metadata manifest 与 `Tool.output` 会在同一克隆步骤同步改写，避免源文件删除或 GC 后留下旧相对路径。
 
 ### 9.7 明确不做（除非需求改口）
 

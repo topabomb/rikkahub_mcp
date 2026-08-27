@@ -357,17 +357,17 @@ private fun ChatListNormal(
             }
         }
 
-        // 会话级时序相册：点击期读取 rememberUpdatedState 的最新节点，组合期零扫描。
-        // 组合期零扫描(流式期间不随每帧重算), 点击图片时才按消息顺序展平
-        val conversationAlbum = remember {
+        val attachmentPreviewProvider = remember(attachmentPreviews) {
+            { ref: String -> attachmentPreviews[ref] }
+        }
+        // 会话级时序相册：点击期读取最新节点，并只使用查询端口已校验的本地图片 URL。
+        val conversationAlbum = remember(attachmentPreviewProvider) {
             {
                 snapshotNodesUpdated.flatMap { node ->
-                    collectMessageImageUrls(node.currentMessage.parts)
+                    collectMessageImageUrls(node.currentMessage.parts, attachmentPreviewProvider)
                 }
             }
         }
-        val currentAttachmentPreviews by rememberUpdatedState(attachmentPreviews)
-        val attachmentPreviewProvider = remember { { ref: String -> currentAttachmentPreviews[ref] } }
         val backgroundHost = rememberImageBackgroundHost(settings, assistant.id)
         val previewActions = remember(backgroundHost.action) { listOf(backgroundHost.action) }
 
@@ -642,7 +642,8 @@ private fun ChatListNormal(
                 },
                 conversationTitle = snapshot.header.title,
                 selectedMessages = snapshotNodes.filter { it.id in selectedItems }
-                    .map { it.currentMessage }
+                    .map { it.currentMessage },
+                attachmentPreviews = attachmentPreviews,
             )
 
             val captureProgress = LocalScrollCaptureInProgress.current

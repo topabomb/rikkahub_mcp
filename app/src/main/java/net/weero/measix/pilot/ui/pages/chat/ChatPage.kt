@@ -73,6 +73,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import me.rerere.ai.provider.ModelType
@@ -98,6 +99,7 @@ import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.service.ConversationReadState
+import net.weero.measix.pilot.service.ConversationUiModel
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 import net.weero.measix.pilot.ui.theme.ProvideChatSurfacePolicy
@@ -149,7 +151,7 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
 
     val setting by vm.settings.collectAsStateWithLifecycle()
     val conversationState by vm.conversationState.collectAsStateWithLifecycle()
-    val currentSnapshot = when (val state = conversationState) {
+    val stateSnapshot = when (val state = conversationState) {
         ConversationReadState.Loading -> {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
@@ -176,6 +178,12 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
         is ConversationReadState.Ready -> state.snapshot
     }
     val turnPresentation by vm.turnPresentation.collectAsStateWithLifecycle()
+    val conversationUiModel by vm.conversationUiModel.collectAsStateWithLifecycle()
+    // The joined application model is the authoritative snapshot/presentation pair. The
+    // individual flows remain only as the initial loading fallback; rendering and append
+    // coordination must never combine revisions from separate runtime streams.
+    val currentSnapshot = conversationUiModel?.snapshot ?: stateSnapshot
+    val currentTurnPresentation = conversationUiModel?.presentation ?: turnPresentation
     val enableWebSearch by vm.enableWebSearch.collectAsStateWithLifecycle()
     val errors by vm.errors.collectAsStateWithLifecycle()
     val favoriteNodeIds by vm.favoriteNodeIds.collectAsStateWithLifecycle()
@@ -245,17 +253,21 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
     }
 
     val chatListState = rememberLazyListState()
+    var initializedChatListKey by remember { mutableStateOf<ChatListInitializationKey?>(null) }
     LaunchedEffect(nodeId, currentSnapshot.nodes.size) {
-        if (!vm.chatListInitialized && currentSnapshot.nodes.isNotEmpty()) {
+        val key = ChatListInitializationKey(currentSnapshot.conversationId, nodeId)
+        if (initializedChatListKey != key && currentSnapshot.nodes.isNotEmpty()) {
             if (nodeId != null) {
                 val index = currentSnapshot.nodes.indexOfFirst { it.id == nodeId }
                 if (index >= 0) {
                     chatListState.scrollToItem(index)
+                } else {
+                    chatListState.requestScrollToItem(currentSnapshot.currentMessages().size + 5)
                 }
             } else {
                 chatListState.requestScrollToItem(currentSnapshot.currentMessages().size + 5)
             }
-            vm.chatListInitialized = true
+            initializedChatListKey = key
         }
     }
 
@@ -304,7 +316,8 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
                     Box(Modifier.weight(1f).fillMaxHeight()) {
                         ChatPageContent(
                             inputState = inputState,
-                            turnPresentation = turnPresentation,
+                            turnPresentation = currentTurnPresentation,
+                            conversationUiModel = conversationUiModel,
                             setting = setting,
                             snapshot = currentSnapshot,
                             favoriteNodeIds = favoriteNodeIds,
@@ -347,7 +360,8 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
                 ) {
                     ChatPageContent(
                         inputState = inputState,
-                        turnPresentation = turnPresentation,
+                        turnPresentation = currentTurnPresentation,
+                        conversationUiModel = conversationUiModel,
                         setting = setting,
                         snapshot = currentSnapshot,
                         favoriteNodeIds = favoriteNodeIds,
@@ -383,6 +397,11 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
     }
 }
 
+private data class ChatListInitializationKey(
+    val conversationId: Uuid,
+    val nodeId: Uuid?,
+)
+
 @Composable
 private fun ConversationUnavailable(
     title: String,
@@ -412,6 +431,7 @@ private fun ConversationUnavailable(
 private fun ChatPageContent(
     inputState: ChatInputState,
     turnPresentation: ConversationPresentation,
+    conversationUiModel: ConversationUiModel?,
     setting: Settings,
     navigationAction: ChatNavigationAction,
     snapshot: ConversationSnapshot,
@@ -427,8 +447,7 @@ private fun ChatPageContent(
     onClearAllErrors: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val latestSnapshot by rememberUpdatedState(snapshot)
-    val latestTurnPresentation by rememberUpdatedState(turnPresentation)
+    val latestConversationUiModel by rememberUpdatedState(conversationUiModel)
     val imeInsets = WindowInsets.ime
     val density = LocalDensity.current
     var appendScrollJob by remember(snapshot.conversationId) { mutableStateOf<Job?>(null) }
@@ -491,12 +510,11 @@ private fun ChatPageContent(
         appendScrollJob = scope.launch {
             chatListState.scrollToAppendedItem(
                 requestContext = requestContext,
-                currentSnapshot = { latestSnapshot },
-                currentPresentation = { latestTurnPresentation },
-                expectedItemCount = { current ->
+                currentUiModel = { latestConversationUiModel },
+                expectedItemCount = { current, presentation ->
                     expectedChatListItemCount(
                         snapshot = current,
-                        loading = latestTurnPresentation.isActive,
+                        loading = presentation.isActive,
                         readiness = latestReadiness,
                         allowConversationSystemPrompt = latestAllowConversationSystemPrompt,
                     )
@@ -671,7 +689,7 @@ private fun ChatPageContent(
                 favoriteNodeIds = favoriteNodeIds,
                 state = chatListState,
                 turnPresentation = turnPresentation,
-                attachmentPreviews = vm.attachmentPreviews(snapshot),
+                attachmentPreviews = conversationUiModel?.attachmentPreviews.orEmpty(),
                 previewMode = previewMode,
                 settings = setting,
                 readiness = readiness,
@@ -819,29 +837,26 @@ private fun ChatPageContent(
 
 private suspend fun LazyListState.scrollToAppendedItem(
     requestContext: AppendScrollContext,
-    currentSnapshot: () -> ConversationSnapshot,
-    currentPresentation: () -> ConversationPresentation,
-    expectedItemCount: (ConversationSnapshot) -> Int,
+    currentUiModel: () -> ConversationUiModel?,
+    expectedItemCount: (ConversationSnapshot, ConversationPresentation) -> Int,
     currentImeBottom: () -> Int,
 ) {
-    var activeRequestObserved = false
     val readyItemCount = snapshotFlow {
-        val snapshot = currentSnapshot()
-        AppendScrollObservation(
-            snapshot = snapshot,
-            presentation = currentPresentation(),
-            actualItemCount = layoutInfo.totalItemsCount,
-            expectedItemCount = expectedItemCount(snapshot),
-            imeBottom = currentImeBottom(),
-        )
-    }.map { observation ->
-        activeRequestObserved = activeRequestObserved ||
-            observation.presentation.activeRequestTurnId == requestContext.turnId
+        currentUiModel()?.let { model ->
+            val snapshot = model.snapshot
+            AppendScrollObservation(
+                snapshot = snapshot,
+                presentation = model.presentation,
+                actualItemCount = layoutInfo.totalItemsCount,
+                expectedItemCount = expectedItemCount(snapshot, model.presentation),
+                imeBottom = currentImeBottom(),
+            )
+        }
+    }.filterNotNull().map { observation ->
         val status = evaluateAppendScroll(
             requestContext = requestContext,
             snapshot = observation.snapshot,
             presentation = observation.presentation,
-            activeRequestObserved = activeRequestObserved,
             actualItemCount = observation.actualItemCount,
             expectedItemCount = observation.expectedItemCount,
             imeBottom = observation.imeBottom,
@@ -879,11 +894,11 @@ internal fun evaluateAppendScroll(
     actualItemCount: Int,
     expectedItemCount: Int,
     imeBottom: Int,
-    activeRequestObserved: Boolean = false,
 ): AppendScrollStatus = when {
     !requestContext.matches(snapshot) -> AppendScrollStatus.INVALIDATED
-    activeRequestObserved && !requestContext.ownsActiveRequest(presentation) &&
-        !requestContext.hasTargetMessage(snapshot) -> AppendScrollStatus.INVALIDATED
+    !requestContext.hasTargetMessage(snapshot) &&
+        presentation.lastTerminatedRequestTurnId == requestContext.turnId ->
+        AppendScrollStatus.INVALIDATED
     !requestContext.hasTargetMessage(snapshot) -> AppendScrollStatus.WAITING_FOR_APPEND
     actualItemCount != expectedItemCount -> AppendScrollStatus.WAITING_FOR_LAYOUT
     imeBottom != 0 -> AppendScrollStatus.WAITING_FOR_IME
@@ -920,9 +935,6 @@ internal data class AppendScrollContext(
         snapshot.conversationId == conversationId &&
                 snapshot.nodes.size >= existingNodes.size &&
                 snapshot.nodes.take(existingNodes.size).map { it.id to it.selectIndex } == existingNodes
-
-    fun ownsActiveRequest(presentation: ConversationPresentation): Boolean =
-        presentation.activeRequestTurnId == turnId
 
     fun hasTargetMessage(snapshot: ConversationSnapshot): Boolean =
         snapshot.nodes.any { node -> node.messages.any { it.id == targetMessageId } }

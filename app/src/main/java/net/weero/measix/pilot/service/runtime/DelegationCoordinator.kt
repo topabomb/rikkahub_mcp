@@ -34,6 +34,7 @@ import net.weero.measix.pilot.data.ai.subassistant.buildChildUserParts
 import net.weero.measix.pilot.data.ai.subassistant.buildSubAssistantCallResultParts
 import net.weero.measix.pilot.data.ai.subassistant.extractFinalAnswerInternal
 import net.weero.measix.pilot.data.ai.subassistant.extractDeliverableArtifacts
+import net.weero.measix.pilot.data.ai.subassistant.validateDeliverableArtifacts
 import net.weero.measix.pilot.data.ai.subassistant.projectArtifactsForCaller
 import net.weero.measix.pilot.data.ai.subassistant.computeSubAssistantPreview
 import net.weero.measix.pilot.data.ai.subassistant.computeTerminalPreview
@@ -65,6 +66,7 @@ import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.data.ai.transformers.AttachmentProjectionTransformer
 import net.weero.measix.pilot.data.ai.transformers.Base64ImageToLocalFileTransformer
+import net.weero.measix.pilot.data.ai.transformers.DocumentAsPromptTransformer
 import net.weero.measix.pilot.data.ai.transformers.WorkspaceReminderTransformer
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getAssistantById
@@ -132,6 +134,7 @@ class DelegationCoordinator(
         toolArtifactReplayTransformer = null,
         attachmentProjectionTransformer = AttachmentProjectionTransformer(artifactStore),
         base64ImageToLocalFileTransformer = Base64ImageToLocalFileTransformer(artifactStore),
+        documentAsPromptTransformer = DocumentAsPromptTransformer(artifactStore),
     )
 
     /** 删除 Target 前取消并等待其所有正在执行的 Target Run 停止写回。 */
@@ -690,10 +693,13 @@ class DelegationCoordinator(
             failedTerminal("approval_blocked", target, genResult, childTaskNodeId, runState, execContext, extras)
         TurnOutcome.Completed -> {
             val finalText = extractFinalAnswerInternal(genResult.messages, childTaskNodeId)
-            val extracted = extractDeliverableArtifacts(
-                messages = genResult.messages,
-                childTaskNodeId = childTaskNodeId,
-                filesDir = context.filesDir,
+            val extracted = validateDeliverableArtifacts(
+                extracted = extractDeliverableArtifacts(
+                    messages = genResult.messages,
+                    childTaskNodeId = childTaskNodeId,
+                    filesDir = context.filesDir,
+                ),
+                artifactStore = artifactStore,
             )
             val artifacts = extracted.artifacts.map { it.toMetadata() }
             // Caller native/reference 投影统一交给 AttachmentProjectionTransformer
@@ -817,6 +823,7 @@ class DelegationCoordinator(
         val newChildId = Uuid.random()
         val sourcePrefix = cloneLineagePrefix(sourceConversation, throughTaskMessageId)
             ?: throw IllegalStateException("Source child lineage endpoint is invalid: $throughTaskMessageId")
+        val copiedArtifacts = linkedMapOf<String, OwnedArtifact>()
         val clonedNodes = sourcePrefix.map { node ->
             node.copy(
                 id = Uuid.random(),
@@ -827,6 +834,7 @@ class DelegationCoordinator(
                             artifactStore,
                             createdArtifacts = createdArtifacts,
                             toolArtifactRewriter = toolArtifactRewriter,
+                            copiedArtifacts = copiedArtifacts,
                         )
                     )
                 },
@@ -903,9 +911,17 @@ class DelegationCoordinator(
         )
 
         // 每个 step 重新解析资源并应用“运行快照 ∩ 当前配置”，但复用 TTS 播放上下文。
-        // 工具能力依据本次 run 的 resolved model；run 内 inspection 能力冻结在 run 开始值，
-        // 避免 inspect_attachments 在工具循环中途出现/消失；运行安全信号仍每 step 走 latest。
+        // inspection 的完整 Provider/model 快照在 run 开始冻结；运行安全信号仍每 step 走 latest。
         val runStartSettings = settings
+        val frozenInspectionModelId = runStartSettings.attachmentInspectionModelId
+        val frozenInspectionProviderIds = frozenInspectionModelId
+            ?.let { modelId ->
+                runStartSettings.providers
+                    .filter { provider -> provider.models.any { it.id == modelId } }
+                    .map { it.id }
+                    .toSet()
+            }
+            .orEmpty()
         val toolProvider: suspend () -> List<Tool> = {
             val currentSettings = settingsStore.effectiveSettings.value.settings
             val latestTarget = currentSettings.getAssistantById(target.id)
@@ -913,7 +929,10 @@ class DelegationCoordinator(
                 emptyList()
             } else {
                 val effectiveSettings = currentSettings.copy(
-                    attachmentInspectionModelId = runStartSettings.attachmentInspectionModelId,
+                    attachmentInspectionModelId = frozenInspectionModelId,
+                    providers = currentSettings.providers
+                        .filterNot { it.id in frozenInspectionProviderIds } +
+                        runStartSettings.providers.filter { it.id in frozenInspectionProviderIds },
                 )
                 toolSetFactory.buildTools(
                     assistant = intersectTargetToolCapabilities(target, latestTarget),

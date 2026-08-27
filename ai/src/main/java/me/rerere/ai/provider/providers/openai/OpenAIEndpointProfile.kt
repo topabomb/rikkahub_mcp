@@ -62,6 +62,13 @@ internal fun openAIRequestMediaCapabilities(
     providerSetting: ProviderSetting.OpenAI,
     model: Model,
 ): RequestMediaCapabilities {
+    // A user-supplied OpenAI-compatible gateway has no verified media contract. Keep every
+    // container opaque until a concrete endpoint profile proves the wire shape; model metadata
+    // alone must never opt an unknown server into native image requests.
+    val endpointVendor = resolveOpenAIEndpointVendor(providerSetting.baseUrl.toHttpUrl().host)
+    if (endpointVendor == OpenAIEndpointVendor.COMPATIBLE) {
+        return RequestMediaCapabilities.NONE
+    }
     val userImages = if (Modality.IMAGE in model.inputModalities) {
         RequestImageSupport.STRUCTURED
     } else {

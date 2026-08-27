@@ -3,9 +3,6 @@ package net.weero.measix.pilot.ui.pages.chat
 import android.app.Application
 import android.net.Uri
 import android.util.Log
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
@@ -38,6 +35,7 @@ import net.weero.measix.pilot.service.ConversationApplicationService
 import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.service.ConversationReadState
 import net.weero.measix.pilot.service.ConversationSummary
+import net.weero.measix.pilot.service.ConversationUiModel
 import net.weero.measix.pilot.service.ConversationViewLease
 import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.service.ArtifactUseCase
@@ -89,10 +87,6 @@ class ChatVM(
 
     fun currentSnapshot(): ConversationSnapshot = requireNotNull(snapshot.value)
 
-    fun attachmentPreviews(snapshot: ConversationSnapshot): Map<String, String> =
-        conversationQueryService.attachmentPreviews(snapshot)
-    var chatListInitialized by mutableStateOf(false) // 聊天列表是否已经滚动到底部
-
     // 聊天输入状态 - 保存在 ViewModel 中避免 TransactionTooLargeException
     val inputState = ChatInputState()
     val artifactDraftScope: ArtifactDraftScope = artifactUseCase.openDraftScope()
@@ -102,6 +96,11 @@ class ChatVM(
         conversationQueryService
             .turnPresentation(_conversationId)
             .stateIn(viewModelScope, SharingStarted.Eagerly, ConversationPresentation.IDLE)
+
+    /** Correlated snapshot/presentation read model for receipt-bound UI effects. */
+    val conversationUiModel: StateFlow<ConversationUiModel?> = conversationQueryService
+        .conversationUiModel(_conversationId)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     init {
         acquireViewLease()

@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import net.weero.measix.pilot.data.db.fts.MessageSearchSort
 import net.weero.measix.pilot.data.repository.ConversationListRecord
 import net.weero.measix.pilot.data.repository.ConversationRepository
@@ -31,6 +32,13 @@ data class ConversationSummary(
     val isPinned: Boolean,
     val createAt: Instant,
     val updateAt: Instant,
+)
+
+/** Snapshot and process-local presentation observed from one Runtime projection. */
+data class ConversationUiModel(
+    val snapshot: ConversationSnapshot,
+    val presentation: ConversationPresentation,
+    val attachmentPreviews: Map<String, String> = emptyMap(),
 )
 
 sealed interface ConversationReadState {
@@ -78,8 +86,22 @@ class ConversationQueryService(
     fun turnPresentation(conversationId: Uuid): Flow<ConversationPresentation> =
         runtimeRegistry.getTurnPresentationFlow(conversationId)
 
-    fun attachmentPreviews(snapshot: ConversationSnapshot): Map<String, String> =
+    fun conversationUiModel(conversationId: Uuid): Flow<ConversationUiModel> =
+        runtimeRegistry.getConversationUiFlow(conversationId)
+            .combine(attachmentPreviewProjector.lifecycleChanges()) { joined, _ -> joined }
+            .mapLatest { (snapshot, presentation) ->
+                ConversationUiModel(
+                    snapshot = snapshot,
+                    presentation = presentation,
+                    attachmentPreviews = attachmentPreviewProjector.project(snapshot),
+                )
+            }
+
+    suspend fun attachmentPreviews(snapshot: ConversationSnapshot): Map<String, String> =
         attachmentPreviewProjector.project(snapshot)
+
+    /** Re-emits query models when ArtifactStore invalidates or removes a referenced payload. */
+    fun attachmentPreviewChanges(): Flow<Unit> = attachmentPreviewProjector.lifecycleChanges()
 
     fun ttsQueueSessionId(conversationId: Uuid): String? =
         runtimeRegistry.findRuntime(conversationId)?.peekTtsQueueSessionId()
@@ -162,6 +184,8 @@ class SubAssistantDetailReader(private val queryService: ConversationQueryServic
         return ConversationDetailRead(initial = initial, updates = resident)
     }
 
-    fun attachmentPreviews(snapshot: ConversationSnapshot): Map<String, String> =
+    suspend fun attachmentPreviews(snapshot: ConversationSnapshot): Map<String, String> =
         queryService.attachmentPreviews(snapshot)
+
+    fun attachmentPreviewChanges(): Flow<Unit> = queryService.attachmentPreviewChanges()
 }

@@ -16,6 +16,7 @@ import net.weero.measix.pilot.data.model.AssistantAffectScope
 import net.weero.measix.pilot.data.model.replaceRegexes
 import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.files.FileUtils
+import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.LocalArtifactRef
 import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.utils.JsonInstant
@@ -72,8 +73,9 @@ internal fun messagesInRunRange(
 }
 
 /**
- * Extract user-visible deliverables from a Child run. Capability judgment belongs
- * in [projectArtifactsForCaller], not here.
+ * Extract user-visible deliverables from a Child run. This is shape extraction only; the
+ * coordinator must pass the result through [validateDeliverableArtifacts] before persisting or
+ * projecting it. ArtifactStore remains the sole metadata/lifecycle owner.
  */
 fun extractDeliverableArtifacts(
     messages: List<UIMessage>,
@@ -119,6 +121,46 @@ fun extractDeliverableArtifacts(
         artifacts = persistable.take(MAX_ASSISTANT_CALL_ATTACHMENTS),
         omitted = omitted,
         hasNonTextOutput = collected.isNotEmpty(),
+    )
+}
+
+/**
+ * Validates extracted deliverables at the coordinator boundary before they become durable
+ * sub-assistant metadata. Stale/unregistered refs and output URLs that disagree with the managed
+ * artifact are rejected, so metadata and direct Tool.output cannot describe different files.
+ */
+suspend fun validateDeliverableArtifacts(
+    extracted: SubAssistantExtractedArtifacts,
+    artifactStore: ArtifactStore,
+): SubAssistantExtractedArtifacts {
+    val valid = extracted.artifacts.mapNotNull { candidate ->
+        val canonicalRef = AttachmentRefs.parse(candidate.ref)?.let(AttachmentRefs::format)
+            ?: return@mapNotNull null
+        val artifact = candidate.artifact ?: return@mapNotNull null
+        val materialized = artifactStore.materialize(artifact) ?: return@mapNotNull null
+        val managedFile = runCatching { artifactStore.file(materialized).canonicalFile }.getOrNull()
+            ?: return@mapNotNull null
+        val outputFile = candidate.fileUrl?.let { rawUrl ->
+            val parsed = AttachmentRefs.parseFileUrl(rawUrl) ?: return@mapNotNull null
+            runCatching { parsed.canonicalFile }.getOrNull() ?: return@mapNotNull null
+        }
+        if (outputFile != null && outputFile != managedFile) return@mapNotNull null
+        if (candidate.type == ARTIFACT_TYPE_IMAGE &&
+            artifactStore.resolveImagePreviewForArtifact(materialized) == null
+        ) return@mapNotNull null
+        candidate.copy(
+            ref = canonicalRef,
+            artifact = materialized,
+            mime = materialized.mimeType,
+            fileUrl = outputFile?.let { AttachmentRefs.fileToFileUrl(managedFile) },
+        )
+    }
+    return extracted.copy(
+        artifacts = valid,
+        // Extraction already applied the cap and recorded the omitted tail. Validation may
+        // reject entries from that bounded prefix, but it must not erase the original truncation
+        // fact reported to the caller.
+        omitted = extracted.omitted,
     )
 }
 

@@ -122,8 +122,13 @@ class AppendScrollContextTest {
             evaluateAppendScroll(
                 requestContext = context,
                 snapshot = before,
-                presentation = ConversationPresentation.IDLE,
-                activeRequestObserved = true,
+                presentation = ConversationPresentation(
+                    activeRequestTurnId = null,
+                    phase = ConversationTurnPhase.IDLE,
+                    processingText = null,
+                    toolCallPhases = emptyMap(),
+                    lastTerminatedRequestTurnId = turnId,
+                ),
                 actualItemCount = 4,
                 expectedItemCount = 4,
                 imeBottom = 0,
@@ -132,7 +137,7 @@ class AppendScrollContextTest {
     }
 
     @Test
-    fun `stale idle presentation waits until append or owner is observed`() {
+    fun `stale idle presentation waits until append or matching termination is observed`() {
         val before = snapshot(nodes = listOf(MessageNode.of(UIMessage.user("first"))))
         val turnId = Uuid.random()
         val context = AppendScrollContext.from(before, Uuid.random(), turnId)
@@ -143,6 +148,32 @@ class AppendScrollContextTest {
                 requestContext = context,
                 snapshot = before,
                 presentation = ConversationPresentation.IDLE,
+                actualItemCount = 4,
+                expectedItemCount = 4,
+                imeBottom = 0,
+            ),
+        )
+    }
+
+    @Test
+    fun `receipt whose request ended before first observation invalidates without a delay`() {
+        val before = snapshot(nodes = listOf(MessageNode.of(UIMessage.user("first"))))
+        val turnId = Uuid.random()
+        val context = AppendScrollContext.from(before, Uuid.random(), turnId)
+        val ended = ConversationPresentation(
+            activeRequestTurnId = null,
+            phase = ConversationTurnPhase.IDLE,
+            processingText = null,
+            toolCallPhases = emptyMap(),
+            lastTerminatedRequestTurnId = turnId,
+        )
+
+        assertEquals(
+            AppendScrollStatus.INVALIDATED,
+            evaluateAppendScroll(
+                requestContext = context,
+                snapshot = before,
+                presentation = ended,
                 actualItemCount = 4,
                 expectedItemCount = 4,
                 imeBottom = 0,

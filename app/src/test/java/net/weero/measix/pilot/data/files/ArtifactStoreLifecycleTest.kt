@@ -23,6 +23,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.Dispatchers
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
 import net.weero.measix.pilot.data.datastore.SettingsAccessIndex
@@ -112,6 +113,24 @@ class ArtifactStoreLifecycleTest {
         assertNull(persisted.payloadToken)
         assertTrue(store.file(persisted).isFile)
         assertTrue(payloadStore.listStagingTokens().isEmpty())
+    }
+
+    @Test
+    fun `image preview port rejects artifact after lifecycle deletion`() = runTest {
+        val owned = store.createFromBytes(
+            bytes = TINY_PNG,
+            displayName = "preview.png",
+            mimeType = "image/png",
+            origin = ArtifactOrigin.USER,
+        )
+
+        assertEquals(
+            AttachmentRefs.fileToFileUrl(store.file(owned.entity)),
+            store.resolveImagePreviewForArtifact(owned.localRef),
+        )
+        store.abandonUnpublished(owned)
+        assertTrue(store.deleteUserRequested(owned.entity.id) is ArtifactDeleteResult.Completed)
+        assertNull(store.resolveImagePreviewForArtifact(owned.localRef))
     }
 
     @Test

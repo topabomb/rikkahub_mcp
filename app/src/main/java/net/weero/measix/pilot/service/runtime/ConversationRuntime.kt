@@ -117,12 +117,19 @@ class ConversationRuntime(
     private val _activeRequest = MutableStateFlow<ActiveTurnRuntime?>(null)
     private val _activeRequestRevision = MutableStateFlow(0L)
     /**
+     * Last request identity that was released or superseded. This is a read-only
+     * lifecycle marker for receipt consumers; it is not a second turn state.
+     */
+    private val _lastTerminatedRequestTurnId = AtomicReference<Uuid?>(null)
+    /**
      * Requests stay keyed by turnId until their worker completes so a superseded
      * owner can still read its own cancel reason. Removing on replace would make
      * TurnEngine fall back to `user_stop`. A completed turnId is a no-op target.
      */
     private val ownedRequests = ConcurrentHashMap<Uuid, ActiveTurnRuntime>()
     internal val activeRequestRevision: StateFlow<Long> = _activeRequestRevision.asStateFlow()
+
+    internal fun lastTerminatedRequestTurnId(): Uuid? = _lastTerminatedRequestTurnId.get()
 
     private val toolApprovalMutex = Mutex()
     private var ttsQueueSessionId: String? = null
@@ -275,6 +282,7 @@ class ConversationRuntime(
         val previous = _activeRequest.value
         if (previous != null && previous.turnId != turnId) {
             previous.requestCancel(supersedeReason ?: "superseded_by_new_turn")
+            _lastTerminatedRequestTurnId.set(previous.turnId)
         }
         val installed = ActiveTurnRuntime(
             turnId = turnId,
@@ -365,6 +373,7 @@ class ConversationRuntime(
         ) return
         if (_activeRequest.compareAndSet(current, null)) {
             ownedRequests.remove(turnId, current)
+            _lastTerminatedRequestTurnId.set(turnId)
             _activeRequestRevision.value++
             if (!isInUse) scheduleIdleCheck()
         }

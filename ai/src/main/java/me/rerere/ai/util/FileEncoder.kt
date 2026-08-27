@@ -56,7 +56,7 @@ fun UIMessagePart.Image.encodeNativeImage(withPrefix: Boolean = true): EncodedIm
 
 fun UIMessagePart.Image.encodeBase64(withPrefix: Boolean = true): Result<EncodedImage> = runCatching {
     when {
-        this.url.startsWith("file://") -> {
+        this.url.startsWith("file://", ignoreCase = true) -> {
             val filePath =
                 this.url.toUri().path ?: throw IllegalArgumentException("Invalid file URI: ${this.url}")
             val file = File(filePath)
@@ -90,7 +90,7 @@ fun UIMessagePart.Image.encodeBase64(withPrefix: Boolean = true): Result<Encoded
 
 fun UIMessagePart.Video.encodeBase64(withPrefix: Boolean = true): Result<String> = runCatching {
     when {
-        this.url.startsWith("file://") -> {
+        this.url.startsWith("file://", ignoreCase = true) -> {
             val filePath =
                 this.url.toUri().path ?: throw IllegalArgumentException("Invalid file URI: ${this.url}")
             val file = File(filePath)
@@ -107,7 +107,7 @@ fun UIMessagePart.Video.encodeBase64(withPrefix: Boolean = true): Result<String>
 
 fun UIMessagePart.Audio.encodeBase64(withPrefix: Boolean = true): Result<String> = runCatching {
     when {
-        this.url.startsWith("file://") -> {
+        this.url.startsWith("file://", ignoreCase = true) -> {
             val filePath =
                 this.url.toUri().path ?: throw IllegalArgumentException("Invalid file URI: ${this.url}")
             val file = File(filePath)

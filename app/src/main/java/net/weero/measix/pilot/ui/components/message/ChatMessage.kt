@@ -57,8 +57,6 @@ import androidx.compose.ui.util.fastAll
 import androidx.compose.ui.util.fastForEach
 import androidx.compose.ui.util.fastForEachIndexed
 import androidx.core.content.FileProvider
-import androidx.core.net.toFile
-import androidx.core.net.toUri
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.serialization.json.jsonArray
@@ -85,6 +83,7 @@ import net.weero.measix.pilot.service.runtime.ToolCallPhase
 import net.weero.measix.pilot.data.model.AssistantAffectScope
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.model.replaceRegexes
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.service.terminalMessagePresentation
 import net.weero.measix.pilot.ui.components.richtext.MarkdownBlock
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
@@ -361,6 +360,7 @@ private fun MessagePartsBlock(
 ) {
     val context = LocalContext.current
     val contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
+    val attachmentPreview = LocalAttachmentPreview.current
 
     // 消息输出HapticFeedback
     val hapticFeedback = LocalHapticFeedback.current
@@ -549,12 +549,13 @@ private fun MessagePartsBlock(
                         Surface(
                             tonalElevation = 2.dp,
                             onClick = {
+                                val file = resolveManagedMediaFile(part, attachmentPreview) ?: return@Surface
                                 val intent = Intent(Intent.ACTION_VIEW)
                                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 intent.data = FileProvider.getUriForFile(
                                     context,
                                     "${context.packageName}.fileprovider",
-                                    part.url.toUri().toFile()
+                                    file,
                                 )
                                 val chooserIndent = Intent.createChooser(intent, null)
                                 context.startActivity(chooserIndent)
@@ -572,12 +573,13 @@ private fun MessagePartsBlock(
                         Surface(
                             tonalElevation = 2.dp,
                             onClick = {
+                                val file = resolveManagedMediaFile(part, attachmentPreview) ?: return@Surface
                                 val intent = Intent(Intent.ACTION_VIEW)
                                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 intent.data = FileProvider.getUriForFile(
                                     context,
                                     "${context.packageName}.fileprovider",
-                                    part.url.toUri().toFile()
+                                    file,
                                 )
                                 val chooserIndent = Intent.createChooser(intent, null)
                                 context.startActivity(chooserIndent)
@@ -612,14 +614,24 @@ private fun MessagePartsBlock(
                                     .shimmer(isLoading = true)
                             )
                         } else {
-                            ZoomableAsyncImage(
-                                model = part.url,
-                                contentDescription = null,
-                                modifier = Modifier
-                                    .clip(MaterialTheme.shapes.medium)
-                                    .height(72.dp),
-                                albumProvider = conversationAlbum,
-                            )
+                            val imageUrl = resolveRenderableImageUrl(part, attachmentPreview)
+                            if (imageUrl == null) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(72.dp)
+                                        .clip(MaterialTheme.shapes.medium)
+                                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                                )
+                            } else {
+                                ZoomableAsyncImage(
+                                    model = imageUrl,
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .clip(MaterialTheme.shapes.medium)
+                                        .height(72.dp),
+                                    albumProvider = conversationAlbum,
+                                )
+                            }
                         }
                     }
 
@@ -627,12 +639,13 @@ private fun MessagePartsBlock(
                         Surface(
                             tonalElevation = 2.dp,
                             onClick = {
+                                val file = resolveManagedMediaFile(part, attachmentPreview) ?: return@Surface
                                 val intent = Intent(Intent.ACTION_VIEW)
                                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 intent.data = FileProvider.getUriForFile(
                                     context,
                                     "${context.packageName}.fileprovider",
-                                    part.url.toUri().toFile()
+                                    file,
                                 )
                                 val chooserIndent = Intent.createChooser(intent, null)
                                 context.startActivity(chooserIndent)
@@ -748,6 +761,29 @@ private fun MessagePartsBlock(
             }
         }
     }
+}
+
+/** UI media must use the query-projected, ArtifactStore-validated local URL. */
+private fun resolveRenderableImageUrl(
+    part: UIMessagePart.Image,
+    attachmentPreview: (String) -> String?,
+): String? {
+    return resolveAttachmentImageUrl(part, attachmentPreview)
+}
+
+private fun resolveManagedMediaFile(
+    part: UIMessagePart,
+    attachmentPreview: (String) -> String?,
+): java.io.File? {
+    val rawUrl = when (part) {
+        is UIMessagePart.Document -> part.url
+        is UIMessagePart.Audio -> part.url
+        is UIMessagePart.Video -> part.url
+        else -> return null
+    }
+    if (!rawUrl.startsWith("file:", ignoreCase = true)) return null
+    val ref = AttachmentRefs.getStableRef(part) ?: return null
+    return attachmentPreview(ref)?.let(AttachmentRefs::parseFileUrl)
 }
 
 private val ToolCallPhase.isPreExecutionOrRunning: Boolean

@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.data.ai.attachments
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runInterruptible
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import java.net.HttpURLConnection
 import java.net.IDN
@@ -51,13 +54,17 @@ class SafeRemoteMediaFetcher(
         defaultTransport(url, addresses, connectTimeoutMs, readTimeoutMs, maxBytes)
     },
 ) {
-    fun fetch(rawUrl: String): RemoteMediaFetchResult {
-        return runCatching { fetchInternal(rawUrl) }.getOrElse {
+    suspend fun fetch(rawUrl: String): RemoteMediaFetchResult {
+        return try {
+            fetchInternal(rawUrl)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
             RemoteMediaFetchResult.Failure(AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED)
         }
     }
 
-    private fun fetchInternal(rawUrl: String): RemoteMediaFetchResult {
+    private suspend fun fetchInternal(rawUrl: String): RemoteMediaFetchResult {
         var current = parseHttpUrl(rawUrl)
             ?: return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL)
 
@@ -65,14 +72,22 @@ class SafeRemoteMediaFetcher(
             val hostCheck = inspectHost(current.host)
             if (hostCheck != null) return hostCheck
 
-            val addresses = runCatching { dnsLookup(current.host) }.getOrElse {
+            val addresses = try {
+                runInterruptible(Dispatchers.IO) { dnsLookup(current.host) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
                 return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED)
             }
             if (addresses.isEmpty() || addresses.any(::isBlockedAddress)) {
                 return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL)
             }
 
-            val response = runCatching { transport.execute(current, addresses) }.getOrElse {
+            val response = try {
+                runInterruptible(Dispatchers.IO) { transport.execute(current, addresses) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
                 return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED)
             }
 

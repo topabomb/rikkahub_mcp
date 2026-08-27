@@ -200,7 +200,7 @@ Target 每个模型 step 都重新构建工具集。有效工具能力是“调�
 
 Master 分支切换或历史裁剪后，`SubAssistantLifecycle` 只保留仍被有效 metadata 引用的 Child，并把共享 Child 收缩到最长仍被引用的 lineage 前缀。未变化 Child 不重写，写入量只与裁剪 delta 相关。
 
-Fork 顶层会话时，`forkSubAssistantTree` 同时复制有效 Child，重建 `MessageNode.id`、`UIMessage.id`、`run_id`、`previous_run_id` 和 Child link。新 Child 改绑新 Master，Provider metadata 与选中消息内容保持不变。
+Fork 顶层会话时，`forkSubAssistantTree` 同时复制有效 Child，重建 `MessageNode.id`、`UIMessage.id`、`run_id`、`previous_run_id` 和 Child link。新 Child 改绑新 Master；随后 `AttachmentCloner.cloneParts()` 对本地附件做内容级复制，并同步改写 `assistant_call` 的 artifact manifest、递归 `Tool.output` Image URL 及结果 JSON `artifacts[].path`。除这些文件归属字段外，Provider metadata 与选中消息内容保持不变；失效 artifact 的输出图片与旧路径会被移除或降级为无路径的不可用描述。
 
 ### 删除
 

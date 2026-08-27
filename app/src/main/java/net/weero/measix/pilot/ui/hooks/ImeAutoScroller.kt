@@ -6,10 +6,6 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.platform.LocalDensity
 
@@ -19,19 +15,30 @@ fun ImeLazyListAutoScroller(
 ) {
     val ime = WindowInsets.ime
     val localDensity = LocalDensity.current
-    var imeHeigh by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
+        var previousImeBottom = 0
         snapshotFlow {
             ime.getBottom(localDensity)
-        }.collect { keyboardHeight ->
-            if (keyboardHeight > 0) {
-                if (imeHeigh < keyboardHeight) {
-                    lazyListState.scrollBy((keyboardHeight - imeHeigh).toFloat())
-                } else {
-                    lazyListState.scrollBy((keyboardHeight - imeHeigh).toFloat())
-                }
-                imeHeigh = keyboardHeight
-            }
+        }.collect { currentImeBottom ->
+            imeScrollDelta(previousImeBottom, currentImeBottom)
+                .takeIf { it > 0 }
+                ?.let { delta -> lazyListState.scrollBy(delta.toFloat()) }
+            // Keep the baseline in sync while the IME hides as well. Otherwise the
+            // next open at the same height produces a zero delta and misses the
+            // viewport change entirely.
+            previousImeBottom = currentImeBottom
         }
     }
 }
+
+/**
+ * The chat viewport only needs to follow IME expansion. IME dismissal is already
+ * represented by imePadding changing the viewport and must not issue a reverse
+ * list scroll; it still updates the baseline for the next opening.
+ */
+internal fun imeScrollDelta(previousImeBottom: Int, currentImeBottom: Int): Int =
+    if (currentImeBottom > previousImeBottom && currentImeBottom > 0) {
+        currentImeBottom - previousImeBottom
+    } else {
+        0
+    }

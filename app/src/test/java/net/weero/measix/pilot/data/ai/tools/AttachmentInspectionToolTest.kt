@@ -28,6 +28,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.attachments.AttachmentFailureReasons
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
@@ -131,9 +132,73 @@ class AttachmentInspectionToolTest {
             args = args(listOf("https://example.com/a.png")),
             settings = settingsFor(visionModel),
             providerManager = providerManager,
-            resolveAttachments = { ToolAttachmentResolution() },
+            resolveAttachments = { error("resolver must not run") },
         )
         assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(result))
+    }
+
+    @Test
+    fun `mixed or blank attachment array elements are invalid instead of being dropped`() = runTest {
+        val malformed = buildJsonObject {
+            put(
+                "attachments",
+                JsonArray(
+                    listOf(
+                        JsonPrimitive("attachment:11111111-1111-1111-1111-111111111111"),
+                        JsonPrimitive(42),
+                    ),
+                ),
+            )
+            put("request", "describe")
+        }
+        val blank = buildJsonObject {
+            put("attachments", JsonArray(listOf(JsonPrimitive(" "))))
+            put("request", "describe")
+        }
+
+        val malformedResult = executeInspection(
+            args = malformed,
+            settings = settingsFor(visionModel),
+            providerManager = providerManager,
+            resolveAttachments = { error("resolver must not run") },
+        )
+        val blankResult = executeInspection(
+            args = blank,
+            settings = settingsFor(visionModel),
+            providerManager = providerManager,
+            resolveAttachments = { error("resolver must not run") },
+        )
+
+        assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(malformedResult))
+        assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(blankResult))
+    }
+
+    @Test
+    fun `non string request is invalid`() = runTest {
+        val objectRequest = buildJsonObject {
+            put("attachments", JsonArray(listOf(JsonPrimitive("attachment:11111111-1111-1111-1111-111111111111"))))
+            put("request", buildJsonObject { put("text", "describe") })
+        }
+        val booleanRequest = buildJsonObject {
+            put("attachments", JsonArray(listOf(JsonPrimitive("attachment:11111111-1111-1111-1111-111111111111"))))
+            put("request", true)
+        }
+
+        val objectResult = executeInspection(
+            args = objectRequest,
+            settings = settingsFor(visionModel),
+            providerManager = providerManager,
+            resolveAttachments = { error("resolver must not run") },
+        )
+        val booleanResult = executeInspection(
+            args = booleanRequest,
+            settings = settingsFor(visionModel),
+            providerManager = providerManager,
+            resolveAttachments = { error("resolver must not run") },
+        )
+
+        assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(objectResult))
+        assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(booleanResult))
     }
 
     @Test
@@ -214,6 +279,35 @@ class AttachmentInspectionToolTest {
         assertTrue(userTexts.any { it.startsWith("[Image 1") && it.contains("name=") })
         assertEquals("what is in the image", userTexts.last())
         assertTrue(user.parts.any { it is UIMessagePart.Image })
+    }
+
+    @Test
+    fun `inspection preserves the resolved stable ref in the image fact label`() = runTest {
+        val ref = "attachment:11111111-1111-1111-1111-111111111111"
+        val image = AttachmentRefs.withMetadata(
+            UIMessagePart.Image("file:///upload/shared.png"),
+            kotlinx.serialization.json.buildJsonObject {
+                put(AttachmentRefs.METADATA_KEY, ref)
+            },
+        ) as UIMessagePart.Image
+        every { providerManager.getProviderByType(any()) } returns provider
+        var sent: List<UIMessage>? = null
+        coEvery {
+            provider.generateText(any(), any(), any<TextGenerationParams>())
+        } answers {
+            sent = secondArg()
+            successChunk("same image")
+        }
+
+        executeInspection(
+            args = args(listOf(ref)),
+            settings = settingsFor(visionModel),
+            providerManager = providerManager,
+            resolveAttachments = { ToolAttachmentResolution(parts = listOf(image)) },
+        )
+
+        val label = sent!![1].parts.filterIsInstance<UIMessagePart.Text>().first()
+        assertTrue(label.text.contains(ref))
     }
 
     @Test

@@ -2,6 +2,10 @@ package net.weero.measix.pilot.data.ai.subassistant
 
 import java.io.File
 import kotlin.io.path.createTempDirectory
+import io.mockk.coEvery
+import io.mockk.every
+import io.mockk.mockk
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -12,6 +16,7 @@ import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.ai.attachments.MAX_ASSISTANT_CALL_ATTACHMENTS
 import net.weero.measix.pilot.data.ai.tools.local.GENERATE_IMAGE_TOOL_NAME
 import net.weero.measix.pilot.data.files.LocalArtifactRef
+import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
@@ -239,6 +244,127 @@ class SubAssistantResultProjectionTest {
         )
         assertEquals(listOf(ARTIFACT_TYPE_IMAGE, ARTIFACT_TYPE_DOCUMENT), extracted.artifacts.map { it.type })
         env.cleanup()
+    }
+
+    @Test
+    fun `stale extracted artifact is rejected before durable projection`() = runTest {
+        val ref = AttachmentRefs.format(Uuid.random())
+        val local = LocalArtifactRef(relativePath = "upload/image.png", mimeType = "image/png")
+        val extracted = SubAssistantExtractedArtifacts(
+            artifacts = listOf(
+                SubAssistantDeliverableArtifact(
+                    ref = ref,
+                    type = ARTIFACT_TYPE_IMAGE,
+                    mime = "image/png",
+                    artifact = local,
+                    fileUrl = "file:///managed/image.png",
+                ),
+            ),
+            omitted = 0,
+            hasNonTextOutput = true,
+        )
+        val store = mockk<ArtifactStore>()
+        coEvery { store.materialize(local) } returns null
+
+        assertTrue(validateDeliverableArtifacts(extracted, store).artifacts.isEmpty())
+    }
+
+    @Test
+    fun `output URL that disagrees with managed artifact is rejected`() = runTest {
+        val ref = AttachmentRefs.format(Uuid.random())
+        val local = LocalArtifactRef(relativePath = "upload/image.png", mimeType = "image/png")
+        val managedFile = File.createTempFile("managed", ".png").apply { deleteOnExit() }
+        val outputFile = File.createTempFile("output", ".png").apply { deleteOnExit() }
+        val extracted = SubAssistantExtractedArtifacts(
+            artifacts = listOf(
+                SubAssistantDeliverableArtifact(
+                    ref = ref,
+                    type = ARTIFACT_TYPE_IMAGE,
+                    mime = "image/png",
+                    artifact = local,
+                    fileUrl = AttachmentRefs.fileToFileUrl(outputFile),
+                ),
+            ),
+            omitted = 0,
+            hasNonTextOutput = true,
+        )
+        val store = mockk<ArtifactStore>()
+        coEvery { store.materialize(local) } returns local
+        every { store.file(local) } returns managedFile
+
+        assertTrue(validateDeliverableArtifacts(extracted, store).artifacts.isEmpty())
+    }
+
+    @Test
+    fun `malformed output URL is rejected even when managed artifact is active`() = runTest {
+        val ref = AttachmentRefs.format(Uuid.random())
+        val local = LocalArtifactRef(relativePath = "upload/image.png", mimeType = "image/png")
+        val extracted = SubAssistantExtractedArtifacts(
+            artifacts = listOf(
+                SubAssistantDeliverableArtifact(
+                    ref = ref,
+                    type = ARTIFACT_TYPE_IMAGE,
+                    mime = "image/png",
+                    artifact = local,
+                    fileUrl = "not-a-file-url",
+                ),
+            ),
+            omitted = 0,
+            hasNonTextOutput = true,
+        )
+        val store = mockk<ArtifactStore>()
+        coEvery { store.materialize(local) } returns local
+        every { store.file(local) } returns File.createTempFile("managed", ".png")
+
+        assertTrue(validateDeliverableArtifacts(extracted, store).artifacts.isEmpty())
+    }
+
+    @Test
+    fun `malformed extracted stable ref is rejected at validation boundary`() = runTest {
+        val local = LocalArtifactRef(relativePath = "upload/image.png", mimeType = "image/png")
+        val extracted = SubAssistantExtractedArtifacts(
+            artifacts = listOf(
+                SubAssistantDeliverableArtifact(
+                    ref = "not-an-attachment-ref",
+                    type = ARTIFACT_TYPE_DOCUMENT,
+                    mime = "application/pdf",
+                    artifact = local,
+                ),
+            ),
+            omitted = 0,
+            hasNonTextOutput = true,
+        )
+        val store = mockk<ArtifactStore>()
+        coEvery { store.materialize(local) } returns local
+        every { store.file(local) } returns File.createTempFile("managed", ".pdf")
+
+        assertTrue(validateDeliverableArtifacts(extracted, store).artifacts.isEmpty())
+    }
+
+    @Test
+    fun `validation preserves omitted count from capped extraction`() = runTest {
+        val refs = (1..4).map { AttachmentRefs.format(Uuid.random()) }
+        val local = LocalArtifactRef(relativePath = "upload/document.pdf", mimeType = "application/pdf")
+        val extracted = SubAssistantExtractedArtifacts(
+            artifacts = refs.mapIndexed { index, ref ->
+                SubAssistantDeliverableArtifact(
+                    ref = ref,
+                    type = ARTIFACT_TYPE_DOCUMENT,
+                    mime = "application/pdf",
+                    artifact = if (index == 0) null else local,
+                )
+            },
+            omitted = 2,
+            hasNonTextOutput = true,
+        )
+        val store = mockk<ArtifactStore>()
+        coEvery { store.materialize(local) } returns local
+        every { store.file(local) } returns File.createTempFile("managed", ".pdf")
+
+        val validated = validateDeliverableArtifacts(extracted, store)
+
+        assertEquals(3, validated.artifacts.size)
+        assertEquals(2, validated.omitted)
     }
 
     private fun task(text: String) = UIMessage(

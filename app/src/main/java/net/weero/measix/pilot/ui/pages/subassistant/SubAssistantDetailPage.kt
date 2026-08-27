@@ -176,10 +176,13 @@ private fun DetailContent(
     // 用时间线长度和最后一条可见文本长度作为跟随键，才能在最后一项长高时继续贴底。
     // 会话级时序相册: 稳定的点击期求值 lambda, 组合期零扫描
     val timelineState = rememberUpdatedState(state.timeline)
-    val timelineAlbum = remember {
+    val attachmentPreviewProvider = remember(attachmentPreviews) {
+        { ref: String -> attachmentPreviews[ref] }
+    }
+    val timelineAlbum = remember(attachmentPreviewProvider) {
         {
             timelineState.value.flatMap { node ->
-                collectMessageImageUrls(node.currentMessage.parts)
+                collectMessageImageUrls(node.currentMessage.parts, attachmentPreviewProvider)
             }
         }
     }
@@ -212,9 +215,7 @@ private fun DetailContent(
         // 相册 Provider 提升到列表外: 全部 item 共享同一稳定 lambda, 避免逐项 provider 节点
         CompositionLocalProvider(
             LocalConversationImages provides timelineAlbum,
-            LocalAttachmentPreview provides remember(attachmentPreviews) {
-                { ref: String -> attachmentPreviews[ref] }
-            },
+            LocalAttachmentPreview provides attachmentPreviewProvider,
             LocalImagePreviewActions provides previewActions,
             LocalImagePreviewOverlay provides if (targetAssistant?.id == null) null else backgroundHost.overlay,
         ) {

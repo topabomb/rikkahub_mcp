@@ -64,6 +64,19 @@ class AttachmentRefsTest {
     }
 
     @Test
+    fun `file URL parsing decodes escaped Windows drive paths and scheme case`() {
+        val expected = "C:/A B.png"
+        listOf(
+            "file:///C:/A%20B.png",
+            "file://C:/A%20B.png",
+            "FILE:///C:/A%20B.png",
+        ).forEach { raw ->
+            val parsed = requireNotNull(AttachmentRefs.parseFileUrl(raw))
+            assertEquals(expected, parsed.path.replace('\\', '/'))
+        }
+    }
+
+    @Test
     fun `planned backfill stamps only the addressed nested tool image`() {
         val image = UIMessagePart.Image(url = "file:///tmp/tool.png")
         val tool = UIMessagePart.Tool(

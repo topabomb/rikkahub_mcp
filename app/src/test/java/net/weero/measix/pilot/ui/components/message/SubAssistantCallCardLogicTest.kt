@@ -54,28 +54,47 @@ class SubAssistantCallCardLogicTest {
     }
 
     @Test
-    fun `missing artifact file is reported as a preview without a url`() {
-        val dir = kotlin.io.path.createTempDirectory("card-artifacts").toFile()
-        try {
-            val previews = resolveSubAssistantCardImagePreviews(
-                artifacts = listOf(
-                    net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallArtifact(
-                        ref = "attachment:11111111-1111-1111-1111-111111111111",
-                        type = "image",
-                        mime = "image/png",
-                        artifact = net.weero.measix.pilot.data.files.LocalArtifactRef(
-                            relativePath = "upload/missing.png",
-                            mimeType = "image/png",
-                        ),
+    fun `missing artifact is reported as a preview without a url`() {
+        val ref = "attachment:11111111-1111-1111-1111-111111111111"
+        val previews = resolveSubAssistantCardImagePreviews(
+            artifacts = listOf(
+                net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallArtifact(
+                    ref = ref,
+                    type = "image",
+                    mime = "image/png",
+                    artifact = net.weero.measix.pilot.data.files.LocalArtifactRef(
+                        relativePath = "upload/missing.png",
+                        mimeType = "image/png",
                     ),
                 ),
-                filesDir = dir,
-            )
-            assertEquals(1, previews.size)
-            assertEquals(null, previews.single().url)
-        } finally {
-            dir.deleteRecursively()
-        }
+            ),
+            previewResolver = { null },
+        )
+        assertEquals(1, previews.size)
+        assertEquals(ref, previews.single().ref)
+        assertEquals(null, previews.single().url)
+    }
+
+    @Test
+    fun `preview resolver receives canonical stable ref`() {
+        val previews = resolveSubAssistantCardImagePreviews(
+            artifacts = listOf(
+                net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallArtifact(
+                    ref = "ATTACHMENT:11111111-1111-1111-1111-111111111111",
+                    type = "image",
+                    mime = "image/png",
+                ),
+            ),
+            previewResolver = { ref -> "preview:$ref" },
+        )
+        assertEquals(
+            "attachment:11111111-1111-1111-1111-111111111111",
+            previews.single().ref,
+        )
+        assertEquals(
+            "preview:attachment:11111111-1111-1111-1111-111111111111",
+            previews.single().url,
+        )
     }
 
     @Test

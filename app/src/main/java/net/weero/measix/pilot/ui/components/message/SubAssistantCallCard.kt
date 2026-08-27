@@ -16,7 +16,6 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,6 +46,7 @@ import net.weero.measix.pilot.data.ai.subassistant.ARTIFACT_TYPE_IMAGE
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallArtifact
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallPhase
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.data.ai.subassistant.fallbackSubAssistantOutputText
 import net.weero.measix.pilot.service.runtime.ToolCallPhase
@@ -248,9 +248,9 @@ fun SubAssistantCallCard(
                     )
                 }
 
-                val filesDir = LocalContext.current.filesDir
-                val imagePreviews = remember(metadata.artifacts, filesDir) {
-                    resolveSubAssistantCardImagePreviews(metadata.artifacts, filesDir)
+                val attachmentPreview = LocalAttachmentPreview.current
+                val imagePreviews = remember(metadata.artifacts, attachmentPreview) {
+                    resolveSubAssistantCardImagePreviews(metadata.artifacts, attachmentPreview)
                 }
                 if (imagePreviews.isNotEmpty() || metadata.artifactOmitted > 0) {
                     val interactionSource = remember { MutableInteractionSource() }
@@ -499,16 +499,11 @@ internal data class SubAssistantCardImagePreview(
 
 internal fun resolveSubAssistantCardImagePreviews(
     artifacts: List<SubAssistantCallArtifact>,
-    filesDir: java.io.File,
+    previewResolver: (String) -> String?,
 ): List<SubAssistantCardImagePreview> {
     return artifacts.filter { it.type == ARTIFACT_TYPE_IMAGE }.map { item ->
-        val file = item.artifact?.file(filesDir)
-        val url = if (file != null && file.isFile) {
-            item.artifact.fileUri(filesDir)
-        } else {
-            null
-        }
-        SubAssistantCardImagePreview(ref = item.ref, url = url)
+        val ref = AttachmentRefs.parse(item.ref)?.let(AttachmentRefs::format) ?: item.ref
+        SubAssistantCardImagePreview(ref = ref, url = previewResolver(ref))
     }
 }
 

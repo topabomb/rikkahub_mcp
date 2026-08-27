@@ -6,6 +6,7 @@ import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderManager
+import me.rerere.ai.provider.RequestImageSupport
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.data.ai.subassistant.filterTargetLocalTools
@@ -67,7 +68,7 @@ class GenerationToolSetFactory(
                 addAll(createSearchTools(settings))
             }
 
-            if (shouldInjectAttachmentInspection(capabilityModel, settings)) {
+            if (shouldInjectAttachmentInspection(capabilityModel, settings, providerManager)) {
                 add(createAttachmentInspectionTool(settings, providerManager))
             }
 
@@ -184,16 +185,38 @@ fun shouldUseExternalWebSearch(assistant: Assistant, model: Model?): Boolean {
 }
 
 /**
- * 识别模型场景注入 `inspect_attachments`：当前模型不原生接收 IMAGE，
- * 且配置了存在、Provider 可用且自身支持 IMAGE 输入的附件识别模型。
- * 不根据当前消息是否包含 Image 决定 tool schema。
+ * 识别模型场景注入 `inspect_attachments`：当前模型没有被其实际 Provider 证明可原生接收
+ * 所有可能的附件容器（用户输入与 Tool.output）中的 IMAGE，且配置了存在、Provider 可用且
+ * 自身支持 IMAGE 输入的附件识别模型。不根据当前消息是否包含 Image 决定 tool schema。
+ * 能力由具体 Provider adapter 计算，兼容/自定义端点默认 `NONE`，因此按不可读处理。
  */
-fun shouldInjectAttachmentInspection(resolvedModel: Model?, settings: Settings): Boolean {
+fun shouldInjectAttachmentInspection(
+    resolvedModel: Model?,
+    settings: Settings,
+    providerManager: ProviderManager,
+): Boolean {
     if (resolvedModel == null) return false
-    if (resolvedModel.inputModalities.contains(Modality.IMAGE)) return false
+    val resolvedModelReadsImages = resolvedModel.inputModalities.contains(Modality.IMAGE) &&
+        resolvedModel.findProvider(settings.providers)?.let { providerSetting ->
+            runCatching {
+                providerManager.getProviderByType(providerSetting).requestMediaCapabilities(
+                    providerSetting,
+                    resolvedModel,
+                ).let { capabilities ->
+                    capabilities.userImages == RequestImageSupport.STRUCTURED &&
+                        capabilities.toolOutputImages == RequestImageSupport.STRUCTURED
+                }
+            }.getOrDefault(false)
+        } == true
+    if (resolvedModelReadsImages) return false
     val inspectionModel = settings.findModelById(settings.attachmentInspectionModelId) ?: return false
-    if (inspectionModel.findProvider(settings.providers) == null) return false
-    return inspectionModel.inputModalities.contains(Modality.IMAGE)
+    val providerSetting = inspectionModel.findProvider(settings.providers) ?: return false
+    if (!inspectionModel.inputModalities.contains(Modality.IMAGE)) return false
+    val capabilities = runCatching {
+        providerManager.getProviderByType(providerSetting)
+            .requestMediaCapabilities(providerSetting, inspectionModel)
+    }.getOrNull() ?: return false
+    return capabilities.userImages == RequestImageSupport.STRUCTURED
 }
 
 enum class ToolSetRunMode {

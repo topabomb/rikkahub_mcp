@@ -304,7 +304,11 @@ class TurnEngine(
         outcome: TurnOutcome,
         lastMessages: List<UIMessage>,
     ): List<UIMessage> {
-        if (outcome !is TurnOutcome.Cancelled && outcome !is TurnOutcome.Failed) {
+        if (
+            outcome !is TurnOutcome.Cancelled &&
+            outcome !is TurnOutcome.Failed &&
+            outcome !is TurnOutcome.Incomplete
+        ) {
             return lastMessages
         }
         return turnFinalization.prepareOwnedTurnMessagesForFailure(
@@ -420,16 +424,16 @@ class TurnPipelineFactory(
     private val toolArtifactReplayTransformer: ToolArtifactReplayTransformer?,
     private val attachmentProjectionTransformer: AttachmentProjectionTransformer,
     private val base64ImageToLocalFileTransformer: Base64ImageToLocalFileTransformer,
+    private val documentAsPromptTransformer: DocumentAsPromptTransformer,
 ) {
-    companion object {
-        val BASE_INPUT: List<InputMessageTransformer> = listOf(
-            TimeReminderTransformer,
-            PromptInjectionTransformer,
-            PlaceholderTransformer,
-            DocumentAsPromptTransformer,
-        )
+    private val baseInput: List<InputMessageTransformer> = listOf(
+        TimeReminderTransformer,
+        PromptInjectionTransformer,
+        PlaceholderTransformer,
+        documentAsPromptTransformer,
+    )
 
-    }
+    internal fun baseInput(): List<InputMessageTransformer> = baseInput
 
     private val commonOutput: List<OutputMessageTransformer> = listOf(
         ThinkTagTransformer,
@@ -439,7 +443,7 @@ class TurnPipelineFactory(
 
     /** Master 输入管道。 */
     fun masterInput(): List<InputMessageTransformer> = buildList {
-        addAll(BASE_INPUT)
+        addAll(baseInput)
         add(templateTransformer)
         add(workspaceReminderTransformer)
         toolArtifactReplayTransformer?.let(::add)
@@ -450,7 +454,7 @@ class TurnPipelineFactory(
 
     /** Target 输入管道（无 toolArtifactReplay；AttachmentProjection 最后生成协议投影）。 */
     fun targetInput(): List<InputMessageTransformer> = buildList {
-        addAll(BASE_INPUT)
+        addAll(baseInput)
         add(templateTransformer)
         add(workspaceReminderTransformer)
         add(attachmentProjectionTransformer)

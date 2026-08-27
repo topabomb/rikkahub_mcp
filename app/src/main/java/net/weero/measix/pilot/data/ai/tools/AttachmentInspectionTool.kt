@@ -6,8 +6,6 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.MessageRole
@@ -129,10 +127,26 @@ internal suspend fun executeInspection(
 ): List<UIMessagePart> {
     val obj = args as? JsonObject
         ?: return inspectionFailure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
-    val refs = (obj["attachments"] as? JsonArray)
-        ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotEmpty) }
+    val refs = (obj["attachments"] as? JsonArray)?.let { array ->
+        if (array.any { element ->
+                val primitive = element as? JsonPrimitive
+                primitive?.isString != true || primitive.content.trim().isEmpty()
+            }
+        ) {
+            null
+        } else {
+            array.map { (it as JsonPrimitive).content.trim() }
+        }
+    }
         ?: return inspectionFailure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
-    val request = obj["request"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+    if (refs.any { AttachmentRefs.parse(it) == null }) {
+        return inspectionFailure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
+    }
+    val request = (obj["request"] as? JsonPrimitive)
+        ?.takeIf(JsonPrimitive::isString)
+        ?.content
+        ?.trim()
+        .orEmpty()
     if (refs.isEmpty() || refs.size > MAX_INSPECTION_ATTACHMENTS || request.isEmpty()) {
         return inspectionFailure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
     }
@@ -214,10 +228,11 @@ internal suspend fun executeInspection(
 
 /** 多图输入的内部标签，保证跨图比较无歧义。 */
 internal fun imageLabel(index: Int, image: UIMessagePart.Image): String {
-    val ref = AttachmentRefs.getRef(image)
+    val ref = AttachmentRefs.getStableRef(image)
     val name = image.url.substringAfterLast('/').substringBefore('?').ifBlank { "image" }
+    val safeName = AttachmentRefs.escapeMarkerValue(name)
     val refAttr = ref?.let { " ref=$it" }.orEmpty()
-    return "[Image ${index + 1}$refAttr name=\"$name\"]"
+    return "[Image ${index + 1}$refAttr name=\"$safeName\"]"
 }
 
 internal fun inspectionFailure(reason: String, detail: String? = null): List<UIMessagePart> = listOf(

@@ -53,6 +53,8 @@ data class ConversationPresentation(
     val phase: ConversationTurnPhase,
     val processingText: String?,
     val toolCallPhases: Map<ToolCallLocator, ToolCallPhase>,
+    /** Latest terminated request identity, used to close a receipt wait without timing guesses. */
+    val lastTerminatedRequestTurnId: Uuid? = null,
 ) {
     val isActive: Boolean get() = phase != ConversationTurnPhase.IDLE
 
@@ -69,6 +71,7 @@ data class ConversationPresentation(
 internal fun resolveConversationPresentation(
     active: ActiveRequestPresentationFacts?,
     snapshot: ConversationSnapshot,
+    lastTerminatedRequestTurnId: Uuid? = null,
 ): ConversationPresentation {
     val requestPhase = active?.phase
     val durable = snapshot.activeTurn
@@ -96,11 +99,16 @@ internal fun resolveConversationPresentation(
         phase = phase,
         processingText = active?.processingText,
         toolCallPhases = toolCallPhases,
+        lastTerminatedRequestTurnId = lastTerminatedRequestTurnId,
     )
 }
 
 internal fun ConversationRuntime.currentTurnPresentation(): ConversationPresentation =
-    resolveConversationPresentation(activeRequestPresentationFacts(), snapshot.value)
+    resolveConversationPresentation(
+        activeRequestPresentationFacts(),
+        snapshot.value,
+        lastTerminatedRequestTurnId(),
+    )
 
 /**
  * Streaming may expose a partial Tool part before the provider has finished its call. Existing

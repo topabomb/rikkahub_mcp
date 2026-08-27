@@ -4,6 +4,7 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.util.fastForEachIndexed
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.ai.tools.local.GENERATE_IMAGE_TOOL_NAME
 
 /**
@@ -93,20 +94,36 @@ internal fun isImagePartLoading(url: String): Boolean =
  * 收集一条消息内的全部「明确图片」：顶层 Image part 与 Tool.output 中的 Image，
  * 按 part 位置顺序（过滤流式 loading 占位）。会话级时序相册按消息顺序展平本函数结果
  */
-internal fun collectMessageImageUrls(parts: List<UIMessagePart>): List<String> = buildList {
+internal fun collectMessageImageUrls(
+    parts: List<UIMessagePart>,
+    attachmentPreview: ((String) -> String?)? = null,
+): List<String> = buildList {
     parts.fastForEachIndexed { _, part ->
         when (part) {
-            is UIMessagePart.Image -> if (!isImagePartLoading(part.url)) add(part.url)
+            is UIMessagePart.Image -> resolveAttachmentImageUrl(part, attachmentPreview)
+                ?.takeUnless(::isImagePartLoading)
+                ?.let(::add)
 
-            is UIMessagePart.Tool -> part.output.forEach { output ->
-                if (output is UIMessagePart.Image && !isImagePartLoading(output.url)) {
-                    add(output.url)
-                }
-            }
+            is UIMessagePart.Tool -> addAll(collectMessageImageUrls(part.output, attachmentPreview))
 
             else -> {}
         }
     }
+}
+
+internal fun resolveAttachmentImageUrl(
+    image: UIMessagePart.Image,
+    attachmentPreview: ((String) -> String?)?,
+): String? = resolveAttachmentMediaUrl(image.url, image, attachmentPreview)
+
+/** Local media is only renderable after the query owner validates its stable reference. */
+internal fun resolveAttachmentMediaUrl(
+    url: String,
+    part: UIMessagePart,
+    attachmentPreview: ((String) -> String?)?,
+): String? {
+    if (!url.startsWith("file:", ignoreCase = true)) return url
+    return AttachmentRefs.getStableRef(part)?.let { ref -> attachmentPreview?.invoke(ref) }
 }
 
 /**

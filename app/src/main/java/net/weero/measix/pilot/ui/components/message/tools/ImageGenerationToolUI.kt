@@ -46,7 +46,9 @@ import net.weero.measix.pilot.service.runtime.ToolCallPhase
 import net.weero.measix.pilot.data.ai.tools.local.GENERATE_IMAGE_TOOL_NAME
 import net.weero.measix.pilot.data.ai.tools.local.ImageGenerationToolMetadata
 import net.weero.measix.pilot.data.imggen.imageGenerationFailureStringRes
+import net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
+import net.weero.measix.pilot.ui.components.message.resolveAttachmentImageUrl
 import net.weero.measix.pilot.ui.components.message.isImagePartLoading
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.ui.components.ui.FormItem
@@ -255,6 +257,7 @@ object ImageGenerationToolUI : ToolUIRenderer {
         val pathCopiedToast = stringResource(R.string.chat_message_tool_generate_image_path_copied)
         // 会话级时序相册: 稳定 provider, 点击期由 ZoomableAsyncImage 求值
         val conversationAlbum = LocalConversationImages.current
+        val attachmentPreview = LocalAttachmentPreview.current
         Column(
             modifier = Modifier
                 .fillMaxHeight(0.8f)
@@ -280,12 +283,14 @@ object ImageGenerationToolUI : ToolUIRenderer {
                             .shimmer(isLoading = true)
                     )
                 } else {
-                    ZoomableAsyncImage(
-                        model = image.url,
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxWidth(),
-                        albumProvider = conversationAlbum,
-                    )
+                    resolveAttachmentImageUrl(image, attachmentPreview)?.let { imageUrl ->
+                        ZoomableAsyncImage(
+                            model = imageUrl,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxWidth(),
+                            albumProvider = conversationAlbum,
+                        )
+                    }
                 }
             }
             metadata.providerName?.takeIf { it.isNotBlank() }?.let { providerName ->

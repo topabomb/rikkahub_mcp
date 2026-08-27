@@ -46,6 +46,14 @@ internal fun mergeLiveSubAssistantDetailLink(
     failureDetail = incoming.failureDetail ?: previous.failureDetail,
 )
 
+internal fun isCurrentChildSnapshot(
+    state: SubAssistantDetailUiState,
+    requestedChild: ConversationSnapshot,
+): Boolean {
+    val ready = state as? SubAssistantDetailUiState.Ready ?: return false
+    return ready.child.conversationId == requestedChild.conversationId && ready.child == requestedChild
+}
+
 internal sealed interface SubAssistantDetailLinkResult {
     data class Ready(val link: SubAssistantDetailLink) : SubAssistantDetailLinkResult
     data object Pending : SubAssistantDetailLinkResult
@@ -141,6 +149,7 @@ sealed interface SubAssistantDetailUiState {
         val link: SubAssistantDetailLink,
         val child: ConversationSnapshot,
         val timeline: List<MessageNode>,
+        val attachmentPreviews: Map<String, String> = emptyMap(),
     ) : SubAssistantDetailUiState
 }
 
@@ -158,10 +167,7 @@ class SubAssistantDetailVM(
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
     fun attachmentPreviews(): Map<String, String> =
-        (_uiState.value as? SubAssistantDetailUiState.Ready)
-            ?.child
-            ?.let(detailReader::attachmentPreviews)
-            .orEmpty()
+        (_uiState.value as? SubAssistantDetailUiState.Ready)?.attachmentPreviews.orEmpty()
 
     init {
         loadValidatedRun()
@@ -181,6 +187,24 @@ class SubAssistantDetailVM(
 
             val link = resolveLinkOnce(masterRead)
                 ?: return@launch // resolveLinkOnce 已经设置了 Unavailable 或仍在 Loading
+
+            // ArtifactStore lifecycle changes are independent of the child snapshot. Re-project
+            // the current child through the query port so a deleted/replaced payload cannot leave
+            // a stale preview URL in this screen.
+            launch {
+                detailReader.attachmentPreviewChanges().collect {
+                    val ready = _uiState.value as? SubAssistantDetailUiState.Ready ?: return@collect
+                    val previews = detailReader.attachmentPreviews(ready.child)
+                    _uiState.update { current ->
+                        val currentReady = current as? SubAssistantDetailUiState.Ready
+                        if (currentReady != null && isCurrentChildSnapshot(currentReady, ready.child)) {
+                            currentReady.copy(attachmentPreviews = previews)
+                        } else {
+                            current
+                        }
+                    }
+                }
+            }
 
             // Child content and Master metadata are independent projections after linkage resolves.
             //
@@ -263,9 +287,10 @@ class SubAssistantDetailVM(
         }
     }
 
-    private fun updateReady(masterId: Uuid, link: SubAssistantDetailLink, child: ConversationSnapshot) {
+    private suspend fun updateReady(masterId: Uuid, link: SubAssistantDetailLink, child: ConversationSnapshot) {
         val timeline = resolveSubAssistantTimeline(masterId, link, child)
             ?: return markUnavailable()
+        val previews = detailReader.attachmentPreviews(child)
         // 使用 update 而非直接赋值，避免覆盖 metadata collector 在
         // Dispatchers.Default 上并行写入的最新 metadata。
         _uiState.update { current ->
@@ -279,6 +304,7 @@ class SubAssistantDetailVM(
                 ),
                 child = child,
                 timeline = timeline,
+                attachmentPreviews = previews,
             )
         }
     }

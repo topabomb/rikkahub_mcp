@@ -44,7 +44,7 @@ class MediaExportService(
                 }
             }
 
-            image.startsWith("file:") ->
+            image.startsWith("file:", ignoreCase = true) ->
                 requireExportSuccess(context.exportImageFile(activity, image.toUri().toFile(), fileName))
 
             image.startsWith("/") ->
@@ -62,7 +62,7 @@ class MediaExportService(
         requireExportSuccess(context.exportImage(activity, bitmap, fileName))
     }
 
-    private fun exportRemoteImage(
+    private suspend fun exportRemoteImage(
         context: Context,
         activity: android.app.Activity,
         image: String,

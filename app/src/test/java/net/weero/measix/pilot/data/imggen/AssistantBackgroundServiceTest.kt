@@ -27,6 +27,15 @@ import org.junit.Test
 
 class AssistantBackgroundServiceTest {
     @Test
+    fun `uppercase file scheme resolves the same local path`() {
+        val file = File.createTempFile("background", ".png")
+        val uppercase = fileUri(file).replaceFirst("file:", "FILE:")
+
+        assertEquals(file.canonicalFile, localFileFromUri(uppercase)?.canonicalFile)
+        file.delete()
+    }
+
+    @Test
     fun `successful replacement publishes settings before reporting success`() = runTest {
         val env = Env()
         env.settingsUpdateSucceeds()
@@ -93,7 +102,7 @@ class AssistantBackgroundServiceTest {
     @Test
     fun `rejected remote image never enters artifact storage`() = runTest {
         val env = Env()
-        every { env.fetcher.fetch(any()) } returns RemoteMediaFetchResult.Failure("unsafe")
+        coEvery { env.fetcher.fetch(any()) } returns RemoteMediaFetchResult.Failure("unsafe")
 
         val result = env.service.replaceUserSelectedBackground(env.assistant.id, "https://example.com/image.png")
 

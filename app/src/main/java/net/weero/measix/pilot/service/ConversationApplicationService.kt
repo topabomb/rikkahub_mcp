@@ -301,12 +301,13 @@ class ConversationApplicationService(
         var createAttempted = false
         var forkIdForCleanup: Uuid? = null
         var primaryFailure: Throwable? = null
+        val copiedArtifacts = linkedMapOf<String, OwnedArtifact>()
         try {
             val copiedNodes = current.nodes.subList(0, targetIndex + 1).map { node ->
                 node.copy(
                     id = Uuid.random(),
                     messages = node.messages.map { message ->
-                        message.copy(parts = cloneParts(message.parts, owned))
+                        message.copy(parts = cloneParts(message.parts, owned, copiedArtifacts))
                     },
                 )
             }
@@ -335,7 +336,7 @@ class ConversationApplicationService(
                 child.copy(
                     messageNodes = child.messageNodes.map { node ->
                         node.copy(messages = node.messages.map { message ->
-                            message.copy(parts = cloneParts(message.parts, owned))
+                            message.copy(parts = cloneParts(message.parts, owned, copiedArtifacts))
                         })
                     },
                 )
@@ -398,11 +399,13 @@ class ConversationApplicationService(
     private suspend fun cloneParts(
         parts: List<UIMessagePart>,
         owned: MutableList<OwnedArtifact>,
+        copiedArtifacts: MutableMap<String, OwnedArtifact>,
     ): List<UIMessagePart> = AttachmentCloner.cloneParts(
         parts,
         artifactStore,
         owned,
         toolArtifactRewriter,
+        copiedArtifacts,
     )
 
     private suspend fun liveSnapshot(conversationId: Uuid): ConversationSnapshot =

@@ -7,6 +7,8 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.URL
 import javax.net.ssl.SSLSocketFactory
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.test.runTest
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -15,7 +17,7 @@ import org.junit.Test
 
 class SafeRemoteMediaFetcherTest {
     @Test
-    fun `loopback literal is rejected before download`() {
+    fun `loopback literal is rejected before download`() = runTest {
         val fetcher = SafeRemoteMediaFetcher(
             dnsLookup = { error("dns should not run") },
             transport = { _, _ -> error("transport should not run") },
@@ -28,7 +30,7 @@ class SafeRemoteMediaFetcherTest {
     }
 
     @Test
-    fun `dns that resolves to private address is rejected`() {
+    fun `dns that resolves to private address is rejected`() = runTest {
         val fetcher = SafeRemoteMediaFetcher(
             dnsLookup = { listOf(InetAddress.getByName("10.0.0.5")) },
             transport = { _, _ -> error("transport should not run") },
@@ -41,7 +43,7 @@ class SafeRemoteMediaFetcherTest {
     }
 
     @Test
-    fun `redirect onto loopback is rejected`() {
+    fun `redirect onto loopback is rejected`() = runTest {
         val fetcher = SafeRemoteMediaFetcher(
             dnsLookup = { host ->
                 if (host == "cdn.example") listOf(InetAddress.getByName("1.2.3.4"))
@@ -73,7 +75,7 @@ class SafeRemoteMediaFetcherTest {
     }
 
     @Test
-    fun `successful png download returns bytes`() {
+    fun `successful png download returns bytes`() = runTest {
         val fetcher = SafeRemoteMediaFetcher(
             dnsLookup = { listOf(InetAddress.getByName("1.2.3.4")) },
             transport = { _, _ ->
@@ -90,7 +92,39 @@ class SafeRemoteMediaFetcherTest {
     }
 
     @Test
-    fun `transport is given the already-checked addresses`() {
+    fun `cancellation from dns is propagated instead of becoming a fetch failure`() = runTest {
+        val cancelled = CancellationException("cancelled")
+        val fetcher = SafeRemoteMediaFetcher(
+            dnsLookup = { throw cancelled },
+            transport = { _, _ -> error("transport should not run") },
+        )
+
+        try {
+            fetcher.fetch("https://cdn.example/a.png")
+            throw AssertionError("expected cancellation")
+        } catch (actual: CancellationException) {
+            assertEquals(cancelled.message, actual.message)
+        }
+    }
+
+    @Test
+    fun `cancellation from transport is propagated`() = runTest {
+        val cancelled = CancellationException("cancelled")
+        val fetcher = SafeRemoteMediaFetcher(
+            dnsLookup = { listOf(InetAddress.getByName("1.2.3.4")) },
+            transport = { _, _ -> throw cancelled },
+        )
+
+        try {
+            fetcher.fetch("https://cdn.example/a.png")
+            throw AssertionError("expected cancellation")
+        } catch (actual: CancellationException) {
+            assertEquals(cancelled.message, actual.message)
+        }
+    }
+
+    @Test
+    fun `transport is given the already-checked addresses`() = runTest {
         val checked = InetAddress.getByName("1.2.3.4")
         var seen: List<InetAddress>? = null
         val fetcher = SafeRemoteMediaFetcher(

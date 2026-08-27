@@ -8,6 +8,7 @@ import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -164,6 +165,81 @@ class ArtifactStore(
     fun file(entity: ArtifactEntity): File = payloadStore.file(entity.relativePath)
 
     fun file(ref: LocalArtifactRef): File = payloadStore.file(ref.relativePath)
+
+    /**
+     * Resolves a local file only when its payload is an ACTIVE managed artifact. Callers that
+     * clone or otherwise copy files must use this port instead of reading arbitrary file paths.
+     */
+    suspend fun resolveManagedReference(file: File): LocalArtifactRef? {
+        val relativePath = payloadStore.relativePathForFile(file)?.replace('\\', '/') ?: return null
+        val entity = getByRelativePath(relativePath) ?: return null
+        return materialize(
+            LocalArtifactRef(
+                relativePath = entity.relativePath,
+                mimeType = entity.mimeType,
+            ),
+        )
+    }
+
+    /**
+     * Read-only image preview port for query projections.  The caller never receives a payload
+     * path until the ACTIVE metadata, allowed root, declared MIME and image signature all agree.
+     * This keeps previews on the same ArtifactStore lifecycle boundary as attachment execution.
+     */
+    suspend fun resolveImagePreviewForUri(uri: Uri): String? = withContext(Dispatchers.IO) {
+        val relativePath = payloadStore.relativePathForUri(uri)?.replace('\\', '/') ?: return@withContext null
+        resolveActiveImagePreview(relativePath)
+    }
+
+    suspend fun resolveImagePreviewForFile(file: File): String? = withContext(Dispatchers.IO) {
+        val relativePath = payloadStore.relativePathForFile(file)?.replace('\\', '/')
+            ?: return@withContext null
+        resolveActiveImagePreview(relativePath)
+    }
+
+    /** Resolves a managed image reference for query/UI display through the lifecycle owner. */
+    suspend fun resolveImagePreviewForArtifact(ref: LocalArtifactRef): String? = withContext(Dispatchers.IO) {
+        val materialized = materialize(ref) ?: return@withContext null
+        resolveActiveImagePreview(materialized.relativePath)
+    }
+
+    /** Resolves any active managed media for query/UI sharing without exposing a raw path. */
+    suspend fun resolveMediaPreviewForFile(file: File, expectedMime: String? = null): String? =
+        withContext(Dispatchers.IO) {
+            val relativePath = payloadStore.relativePathForFile(file)?.replace('\\', '/')
+                ?: return@withContext null
+            val entity = getByRelativePath(relativePath) ?: return@withContext null
+            if (expectedMime != null && !entity.mimeType.equals(expectedMime, ignoreCase = true)) {
+                return@withContext null
+            }
+            val materialized = materialize(
+                LocalArtifactRef(relativePath = entity.relativePath, mimeType = entity.mimeType),
+            ) ?: return@withContext null
+            AttachmentRefs.fileToFileUrl(payloadStore.file(materialized.relativePath))
+        }
+
+    /** Resolves a non-image media artifact through the same ACTIVE/root/version owner. */
+    suspend fun resolveMediaPreviewForArtifact(ref: LocalArtifactRef): String? =
+        withContext(Dispatchers.IO) {
+            val materialized = materialize(ref) ?: return@withContext null
+            AttachmentRefs.fileToFileUrl(payloadStore.file(materialized.relativePath))
+        }
+
+    private suspend fun resolveActiveImagePreview(relativePath: String): String? {
+        val normalized = relativePath.replace('\\', '/')
+        if (!normalized.startsWith("${FileFolders.UPLOAD}/") &&
+            !normalized.startsWith("images/")
+        ) return null
+        val entity = getByRelativePath(normalized) ?: return null
+        if (!entity.mimeType.substringBefore(';').trim().lowercase().startsWith("image/")) return null
+        val file = payloadStore.file(entity.relativePath)
+        if (!file.isFile || file.length() > GeneratedMediaStore.MAX_IMAGE_BYTES) return null
+        val bytes = runCatching { file.readBytes() }.getOrNull() ?: return null
+        if (ImageMime.isUnsupportedNonImage(bytes, entity.mimeType) || !ImageMime.isAcceptedImage(bytes)) {
+            return null
+        }
+        return AttachmentRefs.fileToFileUrl(file)
+    }
 
     fun displayName(uri: Uri): String? = payloadStore.displayName(uri)
 
@@ -877,7 +953,7 @@ class ArtifactStore(
         val refs = mutableListOf<ArtifactReferenceEntity>()
         val seenArtifacts = mutableSetOf<Long>()
         messages.collectFileReferenceTokens().forEach { token ->
-            val relativePath = if (token.startsWith("file:")) {
+            val relativePath = if (token.startsWith("file:", ignoreCase = true)) {
                 payloadStore.relativePathForUri(Uri.parse(token)) ?: return@forEach
             } else {
                 token

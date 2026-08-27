@@ -166,6 +166,27 @@ class AssistantCallToolTest {
     }
 
     @Test
+    fun `mixed non string attachments are rejected before coordinator starts a run`() = runTest {
+        val coordinator = mockk<DelegationCoordinator>(relaxed = true)
+        val tool = createTool(coordinator)
+        val result = tool.executeWithContext(
+            executionContext(),
+            buildJsonObject {
+                put("assistant_id", targetId.toString())
+                put("request", "Look at these")
+                put("attachments", buildJsonArray {
+                    add(JsonPrimitive("attachment:11111111-1111-1111-1111-111111111111"))
+                    add(JsonPrimitive(42))
+                })
+            },
+        )
+        val payload = Json.parseToJsonElement((result.single() as UIMessagePart.Text).text).jsonObject
+        assertEquals("unavailable", payload["status"]?.jsonPrimitive?.content)
+        assertEquals("invalid_attachments", payload["reason"]?.jsonPrimitive?.content)
+        coVerify(exactly = 0) { coordinator.executeCall(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
     fun `attachments are forwarded after dedup`() = runTest {
         val coordinator = mockk<DelegationCoordinator>()
         val tool = createTool(coordinator)

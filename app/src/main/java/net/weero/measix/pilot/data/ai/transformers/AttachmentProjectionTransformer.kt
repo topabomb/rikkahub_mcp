@@ -68,7 +68,7 @@ class AttachmentProjectionTransformer(
                 is UIMessagePart.Image -> {
                     val support = capabilities.supportFor(role, insideToolOutput)
                     val native = support == RequestImageSupport.STRUCTURED
-                    val ref = AttachmentRefs.getRef(part)
+                    val ref = AttachmentRefs.getStableRef(part)
                     if (native) {
                         result += if (ref != null) {
                             attachmentProjectionText(
@@ -104,7 +104,7 @@ class AttachmentProjectionTransformer(
                 }
 
                 is UIMessagePart.Document -> {
-                    AttachmentRefs.getRef(part)?.let { ref ->
+                    AttachmentRefs.getStableRef(part)?.let { ref ->
                         result += attachmentProjectionText(
                             attachmentRefLine(ref, "document", displayNameOf(part, artifactStore, filesDir)),
                         )
@@ -113,7 +113,7 @@ class AttachmentProjectionTransformer(
                 }
 
                 is UIMessagePart.Audio -> {
-                    AttachmentRefs.getRef(part)?.let { ref ->
+                    AttachmentRefs.getStableRef(part)?.let { ref ->
                         result += attachmentProjectionText(
                             attachmentRefLine(ref, "audio", displayNameOf(part, artifactStore, filesDir)),
                         )
@@ -122,7 +122,7 @@ class AttachmentProjectionTransformer(
                 }
 
                 is UIMessagePart.Video -> {
-                    AttachmentRefs.getRef(part)?.let { ref ->
+                    AttachmentRefs.getStableRef(part)?.let { ref ->
                         result += attachmentProjectionText(
                             attachmentRefLine(ref, "video", displayNameOf(part, artifactStore, filesDir)),
                         )
@@ -151,7 +151,9 @@ internal fun attachmentRefLine(
     imageInput: AttachmentInputMode? = null,
 ): String {
     val input = imageInput?.let { " input=${it.markerValue}" }.orEmpty()
-    return "[Attachment ref=$refValue type=$type name=\"$displayName\"$input]"
+    return "[Attachment ref=${AttachmentRefs.escapeMarkerValue(refValue)} " +
+        "type=${AttachmentRefs.escapeMarkerValue(type)} " +
+        "name=\"${AttachmentRefs.escapeMarkerValue(displayName)}\"$input]"
 }
 
 private fun attachmentProjectionText(text: String): UIMessagePart.Text = UIMessagePart.Text(
@@ -174,7 +176,7 @@ private suspend fun displayNameOf(
     if (part is UIMessagePart.Document && part.fileName.isNotBlank()) {
         return part.fileName
     }
-    if (url.startsWith("file:")) {
+    if (url.startsWith("file:", ignoreCase = true)) {
         val file = AttachmentRefs.parseFileUrl(url)
         if (file != null) {
             val relative = FileUtils.getRelativePathInFilesDir(filesDir, file)

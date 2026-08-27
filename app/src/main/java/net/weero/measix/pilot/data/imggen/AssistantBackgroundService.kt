@@ -280,8 +280,10 @@ private data class MaterializedBackground(
 
 internal fun localFileFromUri(value: String): File? {
     val trimmed = value.trim()
-    if (!trimmed.startsWith("file:")) return null
-    val withoutScheme = trimmed.removePrefix("file:")
+    if (!trimmed.startsWith("file:", ignoreCase = true)) return null
+    // The scheme check is case-insensitive; strip exactly five characters so FILE://
+    // follows the same path normalization as the canonical lowercase form.
+    val withoutScheme = trimmed.substring("file:".length)
     val path = when {
         withoutScheme.startsWith("///") -> {
             val rest = withoutScheme.removePrefix("//")

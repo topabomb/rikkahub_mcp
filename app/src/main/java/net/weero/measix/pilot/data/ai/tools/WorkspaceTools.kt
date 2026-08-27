@@ -11,6 +11,7 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.DiffMetadata
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.toMetadata
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
@@ -320,7 +321,7 @@ private suspend fun WorkspaceToolSession.readImageInRootfs(
     )
     onArtifactCreated(owned)
     return listOf(
-        UIMessagePart.Image(url = owned.uri.toString()),
+        workspaceImagePart(owned.uri.toString()),
         UIMessagePart.Text(
             buildJsonObject {
                 put("path", path)
@@ -329,6 +330,10 @@ private suspend fun WorkspaceToolSession.readImageInRootfs(
         ),
     )
 }
+
+/** Workspace image results are durable Tool.output media and therefore always carry a handle. */
+internal fun workspaceImagePart(uri: String): UIMessagePart.Image =
+    AttachmentRefs.ensureAttachmentRef(UIMessagePart.Image(url = uri)) as UIMessagePart.Image
 
 private suspend fun WorkspaceToolSession.writeTextInRootfs(
     path: String,

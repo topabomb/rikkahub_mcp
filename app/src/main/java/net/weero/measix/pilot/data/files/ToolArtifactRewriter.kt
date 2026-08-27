@@ -25,6 +25,7 @@ class ToolArtifactRewriter(
     suspend fun rewriteToolOutput(
         output: List<UIMessagePart>,
         metadata: JsonObject?,
+        copiedArtifacts: MutableMap<String, OwnedArtifact>,
     ): ToolArtifactRewriteResult {
         val sourceRef = metadata?.let { decodeArtifactRef(it) }
         if (sourceRef == null) {
@@ -35,8 +36,12 @@ class ToolArtifactRewriter(
             Log.w(TAG, "rewrite skipped: source artifact missing or outside sandbox ${sourceRef.relativePath}")
             return ToolArtifactRewriteResult(unreadableOutput(output), removeArtifactRef(metadata), null)
         }
-        val sourceFile = materialized.file(filesDir)
-        val copied = artifactStore.copyFilePreservingOrigin(
+        val sourceFile = artifactStore.file(materialized)
+        val sourceKey = runCatching { sourceFile.canonicalPath }
+            .getOrElse { sourceFile.absolutePath }
+        val existing = copiedArtifacts[sourceKey]
+        val createdHere = existing == null
+        val copied = existing ?: artifactStore.copyFilePreservingOrigin(
             source = sourceFile,
             mimeType = materialized.mimeType,
             displayName = sourceFile.name,
@@ -50,17 +55,20 @@ class ToolArtifactRewriter(
                     else -> part
                 }
             }
+            if (createdHere) copiedArtifacts[sourceKey] = copied
             return ToolArtifactRewriteResult(
                 output = rewrittenOutput,
                 metadata = encodeArtifactRef(metadata, copiedRef),
-                ownedArtifact = copied,
+                ownedArtifact = if (createdHere) copied else null,
             )
         } catch (error: Throwable) {
-            withContext(NonCancellable) {
-                try {
-                    artifactStore.discardUnpublished(copied).requireDiscarded("tool artifact rewrite rollback")
-                } catch (cleanupFailure: Throwable) {
-                    error.addSuppressed(cleanupFailure)
+            if (createdHere) {
+                withContext(NonCancellable) {
+                    try {
+                        artifactStore.discardUnpublished(copied).requireDiscarded("tool artifact rewrite rollback")
+                    } catch (cleanupFailure: Throwable) {
+                        error.addSuppressed(cleanupFailure)
+                    }
                 }
             }
             throw error

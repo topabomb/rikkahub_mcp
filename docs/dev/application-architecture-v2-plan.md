@@ -283,7 +283,8 @@ receipt 返回时目标消息可以尚未提交，因此不能清空错误、宣
 在安装 active runtime 后才能返回 receipt。每个 worker 的 `finally` 必须按 identity 完成且只完成一种转换：
 `TurnOutcome.AwaitingApproval` 保留同一 active runtime 并进入 `AWAITING_APPROVAL(handle)`；START 前失败、`answer=false` 完成或 durable
 terminal 完成才释放整个 active runtime。释放必须让 `ConversationPresentation.activeRequestTurnId` 从该 receipt 的 `turnId`
-变为其他值或 `null`，UI 不依赖可能被合并的瞬时 terminal event。失败详情继续由 `ChatErrorStore`/durable turn 终态提供。
+变为其他值或 `null`，并保留最近一次已释放/被替代的 `lastTerminatedRequestTurnId`，UI 不依赖可能被合并的瞬时 terminal event。
+失败详情继续由 `ChatErrorStore`/durable turn 终态提供。
 `answer=false` 也走同一协议：目标消息 commit 并 publish 后才释放 active runtime。
 
 LAZY worker 用于消除“协程已经执行/失败，但 Runtime 尚未取得所有权”的窗口，不是第二条调度路径。`install` 在 Runtime
@@ -366,9 +367,10 @@ processing text 的写能力也必须收窄：`ActiveTurnRuntime` 为当前 work
 `MutableStateFlow`，Runtime 仅在 identity 仍匹配时更新私有 active state。旧 worker 的 late report 被忽略，释放 active runtime
 自动清空文字；Query/UI 只能从 `ConversationPresentation.processingText` 读取。
 
-合并后的 `ConversationPresentation` 是 UI 唯一 turn 运行态读模型。V2 对外字段固定为 `activeRequestTurnId: Uuid?`、
+合并后的 `ConversationPresentation` 是 UI 唯一 turn 运行态读模型。V2 对外字段为 `activeRequestTurnId: Uuid?`、
 `phase: ConversationTurnPhase`、`processingText: String?` 和
-`toolCallPhases: Map<ToolCallLocator, ToolCallPhase>`；`ConversationTurnPhase` 固定为 `IDLE/PREPARING/GENERATING/`
+`toolCallPhases: Map<ToolCallLocator, ToolCallPhase>`，以及只读的 `lastTerminatedRequestTurnId: Uuid?`；
+`ConversationTurnPhase` 固定为 `IDLE/PREPARING/GENERATING/`
 `AWAITING_APPROVAL/STOPPING`。它由 `ActiveTurnRuntime`、durable `activeTurn` 和 streaming/tool projection 一次组合；不暴露
 Job，不保存另一份可写状态。“Job 是否为空”不再成为第二份生成事实。工具阶段的映射只保留一个纯函数，Runtime 与 UI
 共用；删除 UI 中独立的 `resolveToolCallPhase` 及重复的 approval/output 推断。
@@ -389,7 +391,7 @@ approval 和 tool projection。
 
 发送后滚动只消费 receipt、durable snapshot、`ConversationPresentation` 和 Compose layout/IME 状态：目标
 `userMessageId` 已出现在同一分支、实际 item count 等于期望值且 IME 已关闭时才滚到底部；若分支/会话改变、新 receipt
-替代旧 receipt，或 `activeRequestTurnId` 已不再等于 receipt.turnId 且目标消息仍未出现，则立即终止等待。字段名特意带
+替代旧 receipt，或 `activeRequestTurnId` 已不再等于 receipt.turnId 且 `lastTerminatedRequestTurnId` 等于该 receipt.turnId、目标消息仍未出现，则立即终止等待。字段名特意带
 `Request`：PREPARING 阶段还没有 durable active turn，不能把预分配 id 误称为已提交事实。不得用固定 delay、列表
 长度猜测 append 完成，也不得因发送失败留下存活到下次发送或页面销毁的等待协程。
 
@@ -783,7 +785,7 @@ V2 默认不改变 Room 结构。若实施中发现确需关系化新事实，�
 | Runtime 多份 turn 状态 | `_generationJob/generationJob`、`activeTurnId`、`cancelReasons` 及 track/get/set/request/peek/consume API | Runtime 内唯一 private `ActiveTurnRuntime`；Query 只读 presentation，不读 Job |
 | Master 私有 supersede helper | `beginSupersedingTurn`、`SupersededTurnBarrier` 及只适用于 Master 的 previous Job/turn 拼装 | `ActiveTurnRuntime` 在安装时接管前任 worker/turn barrier；Master/Child 共用 Registry 安装协议 |
 | 独立 processing 状态读链 | Runtime 公开 `processingStatus`、Registry/Query 转发和 `ChatVM.processingStatus` | `ConversationPresentation.processingText`；与 active runtime 同生命周期发布 |
-| 无请求终止条件的 append-scroll 等待 | 只等待目标 message/layout/IME、只能等到下次发送或页面销毁才取消的路径 | receipt.turnId + `ConversationPresentation.activeRequestTurnId`；目标未出现且该 active runtime 已终止时立即取消 |
+| 无请求终止条件的 append-scroll 等待 | 只等待目标 message/layout/IME、只能等到下次发送或页面销毁才取消的路径 | receipt.turnId + `ConversationPresentation.activeRequestTurnId/lastTerminatedRequestTurnId`；目标未出现且该 active runtime 已终止时立即取消 |
 | 无消费者的 checkpoint 事件 | `GenerationChunk.Checkpoint`、`TurnEvent.Checkpoint` 及只验证这些事件的断言 | `GenerationCheckpoint` awaited callback 仍是唯一 durable checkpoint 边界 |
 | `SubAssistantRunLeaseRegistry.kt` | `SubAssistantRunLeaseRegistryTest` 和对该内部类型的直接测试 | lease map/handle 变为 `SubAssistantRunGate` private 实现，测试 Gate 行为 |
 | 三个 presentation 原文件 | `ConversationTurnPresentation.kt`、`ToolCallPhase.kt`、`ToolCallProjection.kt` | 合并后的 `ConversationPresentation.kt` |
@@ -847,7 +849,7 @@ V2 默认不改变 Room 结构。若实施中发现确需关系化新事实，�
 | `ConversationCommandCoordinator` 非终态授权 | START/checkpoint/approval 在 operation lock 内同时校验 current active identity；Finalize 只校验 durable handle 并允许 superseded owner 收口 | check-then-act、stale checkpoint，或拒绝旧 handle 做幂等 terminal CAS |
 | `UpdateToolApproval` | 增加 owning `TurnHandle`，并校验 locator message 与 handle 的 assistant slot；审批继续沿原 handle | 仅凭 message/ordinal 修改，或审批期间创建第二 handle/turn |
 | `TurnHandle` | 保持四个稳定字段的不可变 CAS token，只在 START 成功后进入 running/approval 状态并传给 Engine/command | 把 Job、Flow、gate 或 UI state 塞进 durable command token |
-| `ConversationPresentation` | 合并后公开 `activeRequestTurnId`、turn phase、processing text 和 tool projections；只读、不可提交 | UI 读取 Job、把 preparing id 当 durable turn，或 presentation 成为第二 writer |
+| `ConversationPresentation` | 合并后公开 active request、最近终止 request、turn phase、processing text 和 tool projections；只读、不可提交 | UI 读取 Job、把 preparing id 当 durable turn，或 presentation 成为第二 writer |
 | `GenerationRequest` / `TransformerContext` processing 上报 | 改用 ActiveTurnRuntime 生成的 request-scoped `reportProcessingText`；每次上报校验 turn+worker identity | 向 Generation 暴露可写 Flow、旧 worker 覆盖新文字、保留 Registry→Query→VM 转发链 |
 | `ChatPage` 发送与 append scroll | 在 UI scope 等待 suspend receipt；非空请求被接受后沿现有时机清空输入；以 message/turn identity、分支、layout count、IME 和 presentation 决定 READY/INVALIDATED | UI 持有 Runtime Job、固定延时、只按列表长度滚动、失败后永久等待 |
 | `TurnPipelineFactory` | Master/Target 的 `AttachmentProjectionTransformer` 都固定为最后一个 input transformer；Master 仅在它之前保留 tool artifact replay | 调用方自行拼 transformer，或投影后再改 media |

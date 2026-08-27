@@ -1,7 +1,6 @@
 ﻿package net.weero.measix.pilot.data.ai.transformers
 
-import androidx.core.net.toFile
-import androidx.core.net.toUri
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import me.rerere.ai.ui.UIMessage
@@ -10,36 +9,41 @@ import me.rerere.document.DocxParser
 import me.rerere.document.EpubParser
 import me.rerere.document.PdfParser
 import me.rerere.document.PptxParser
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
+import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.LocalArtifactRef
 import java.io.File
 
-object DocumentAsPromptTransformer : InputMessageTransformer {
+/** Converts managed document artifacts into model-visible text without reading arbitrary paths. */
+class DocumentAsPromptTransformer(
+    private val artifactStore: ArtifactStore,
+) : InputMessageTransformer {
     override suspend fun transform(
         ctx: TransformerContext,
         messages: List<UIMessage>,
     ): List<UIMessage> {
         return withContext(Dispatchers.IO) {
-            messages.map { message ->
-                message.copy(
-                    parts = message.parts.toMutableList().apply {
-                        val documents = filterIsInstance<UIMessagePart.Document>()
-                        if (documents.isNotEmpty()) {
-                            documents.forEach { document ->
-                                val content = readDocumentContent(document)
-                                val path = resolveWorkspacePath(document)
-                                val pathAttr = path?.let { " path=\"$it\"" } ?: ""
-                                val prompt = """
-                                  <UploadFile name="${document.fileName}"$pathAttr>
-                                  ```
-                                  $content
-                                  ```
-                                  </UploadFile>
-                                  """.trimMargin()
-                                add(0, UIMessagePart.Text(prompt))
-                            }
-                        }
-                    }
-                )
+            val transformed = ArrayList<UIMessage>(messages.size)
+            for (message in messages) {
+                val parts = message.parts.toMutableList()
+                val documents = parts.filterIsInstance<UIMessagePart.Document>()
+                for (document in documents) {
+                    val managed = resolveManagedDocument(document)
+                    val content = readDocumentContent(document, managed?.let(artifactStore::file))
+                    val path = resolveWorkspacePath(managed)
+                    val pathAttr = path?.let { " path=\"$it\"" } ?: ""
+                    val prompt = """
+                      <UploadFile name="${document.fileName}"$pathAttr>
+                      ```
+                      $content
+                      ```
+                      </UploadFile>
+                      """.trimMargin()
+                    parts.add(0, UIMessagePart.Text(prompt))
+                }
+                transformed += message.copy(parts = parts)
             }
+            transformed
         }
     }
 
@@ -59,21 +63,21 @@ object DocumentAsPromptTransformer : InputMessageTransformer {
         return EpubParser.parse(file)
     }
 
-    // 上传文件保存在 filesDir/upload 下, 该目录通过 proot 挂载到 workspace 的 /upload
-    // 返回文件在 workspace 内的绝对路径, 便于 AI 用 workspace 工具直接读取原始文件
-    private fun resolveWorkspacePath(document: UIMessagePart.Document): String? {
-        val file = runCatching { document.url.toUri().toFile() }.getOrNull() ?: return null
-        if (file.parentFile?.name != "upload") return null
-        return "/upload/${file.name}"
+    // 只有已由 ArtifactStore materialize 的 upload artifact 才能映射到 workspace /upload。
+    private fun resolveWorkspacePath(artifact: LocalArtifactRef?): String? = artifact?.toolPath()
+
+    private suspend fun resolveManagedDocument(document: UIMessagePart.Document): LocalArtifactRef? {
+        val source = AttachmentRefs.parseFileUrl(document.url) ?: return null
+        val managed = artifactStore.resolveManagedReference(source) ?: return null
+        if (!managed.mimeType.equals(document.mime, ignoreCase = true)) return null
+        return artifactStore.materialize(managed)
     }
 
-    private fun readDocumentContent(document: UIMessagePart.Document): String {
-        val file = runCatching { document.url.toUri().toFile() }.getOrNull()
-            ?: return "[ERROR, invalid file uri: ${document.fileName}]"
-        if (!file.exists() || !file.isFile) {
+    private fun readDocumentContent(document: UIMessagePart.Document, file: File?): String {
+        if (file == null || !file.isFile) {
             return "[ERROR, file not found: ${document.fileName}]"
         }
-        return runCatching {
+        return try {
             when (document.mime) {
                 "application/pdf" -> parsePdfAsText(file)
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> parseDocxAsText(file)
@@ -81,7 +85,9 @@ object DocumentAsPromptTransformer : InputMessageTransformer {
                 "application/epub+zip" -> parseEpubAsText(file)
                 else -> file.readText()
             }
-        }.getOrElse {
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
             "[ERROR, failed to read file: ${document.fileName}]"
         }
     }

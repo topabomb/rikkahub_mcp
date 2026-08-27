@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.joinAll
@@ -209,9 +210,32 @@ class ConversationRuntimeRegistry(
         observeRuntimeState(conversationId).flatMapLatest { state ->
             state.runtimeOrNull()?.let { runtime ->
                 combine(runtime.activeRequestRevision, runtime.snapshot) { _, snapshot ->
-                    resolveConversationPresentation(runtime.activeRequestPresentationFacts(), snapshot)
+                    resolveConversationPresentation(
+                        runtime.activeRequestPresentationFacts(),
+                        snapshot,
+                        runtime.lastTerminatedRequestTurnId(),
+                    )
                 }
             } ?: flowOf(ConversationPresentation.IDLE)
+        }
+
+    /**
+     * Snapshot and turn presentation joined at the Runtime owner. Consumers that need to
+     * correlate a receipt with its durable target must not combine two independent UI flows.
+     */
+    fun getConversationUiFlow(
+        conversationId: Uuid,
+    ): Flow<Pair<ConversationSnapshot, ConversationPresentation>> =
+        observeRuntimeState(conversationId).flatMapLatest { state ->
+            state.runtimeOrNull()?.let { runtime ->
+                combine(runtime.snapshot, runtime.activeRequestRevision) { snapshot, _ ->
+                    snapshot to resolveConversationPresentation(
+                        runtime.activeRequestPresentationFacts(),
+                        snapshot,
+                        runtime.lastTerminatedRequestTurnId(),
+                    )
+                }
+            } ?: emptyFlow()
         }
 
     fun getConversationTurnPresentations(): Flow<Map<Uuid, ConversationPresentation>> =
@@ -222,7 +246,11 @@ class ConversationRuntimeRegistry(
             } else {
                 combine(current.map { runtime ->
                     combine(runtime.activeRequestRevision, runtime.snapshot) { _, snapshot ->
-                        runtime.id to resolveConversationPresentation(runtime.activeRequestPresentationFacts(), snapshot)
+                        runtime.id to resolveConversationPresentation(
+                            runtime.activeRequestPresentationFacts(),
+                            snapshot,
+                            runtime.lastTerminatedRequestTurnId(),
+                        )
                     }
                 }) { pairs ->
                     pairs.filter { (_, presentation) -> presentation != ConversationPresentation.IDLE }.toMap()

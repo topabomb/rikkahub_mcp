@@ -1,6 +1,10 @@
 package net.weero.measix.pilot.ui.components.message
 
 import me.rerere.ai.ui.UIMessagePart
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
+import kotlin.uuid.Uuid
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -11,12 +15,15 @@ class CollectMessageImageUrlsTest {
     fun `collects top level image urls in original order`() {
         val parts = listOf(
             UIMessagePart.Text("hi"),
-            UIMessagePart.Image("file:///a.png"),
+            UIMessagePart.Image("https://example.test/a.png"),
             UIMessagePart.Text("mid"),
-            UIMessagePart.Image("file:///b.png"),
+            UIMessagePart.Image("https://example.test/b.png"),
         )
 
-        assertEquals(listOf("file:///a.png", "file:///b.png"), collectMessageImageUrls(parts))
+        assertEquals(
+            listOf("https://example.test/a.png", "https://example.test/b.png"),
+            collectMessageImageUrls(parts),
+        )
     }
 
     @Test
@@ -26,11 +33,11 @@ class CollectMessageImageUrlsTest {
             UIMessagePart.Image("data:image/png;base64,"),
             UIMessagePart.Image("data:image/png;base64,   "),
             UIMessagePart.Image("data:image/png;base64,iVBOR..."),
-            UIMessagePart.Image("file:///ok.png"),
+            UIMessagePart.Image("https://example.test/ok.png"),
         )
 
         assertEquals(
-            listOf("data:image/png;base64,iVBOR...", "file:///ok.png"),
+            listOf("data:image/png;base64,iVBOR...", "https://example.test/ok.png"),
             collectMessageImageUrls(parts),
         )
     }
@@ -54,7 +61,6 @@ class CollectMessageImageUrlsTest {
         assertTrue(isImagePartLoading("   "))
         assertTrue(isImagePartLoading("data:image/jpeg;base64,"))
         assertFalse(isImagePartLoading("data:image/jpeg;base64,QUJD"))
-        assertFalse(isImagePartLoading("file:///x.png"))
         assertFalse(isImagePartLoading("https://example.com/x.png"))
     }
 
@@ -69,23 +75,23 @@ class CollectMessageImageUrlsTest {
     fun `interleaved loading placeholders keep stable ordering for survivors`() {
         val parts = listOf(
             UIMessagePart.Image("data:image/png;base64,"),
-            UIMessagePart.Image("file:///a.png"),
+            UIMessagePart.Image("https://example.test/a.png"),
             UIMessagePart.Image(""),
-            UIMessagePart.Image("file:///b.png"),
+            UIMessagePart.Image("https://example.test/b.png"),
         )
 
-        assertEquals(listOf("file:///a.png", "file:///b.png"), collectMessageImageUrls(parts))
+        assertEquals(listOf("https://example.test/a.png", "https://example.test/b.png"), collectMessageImageUrls(parts))
     }
 
     @Test
     fun `duplicate urls are all kept`() {
         val parts = listOf(
-            UIMessagePart.Image("file:///same.png"),
-            UIMessagePart.Image("file:///same.png"),
+            UIMessagePart.Image("https://example.test/same.png"),
+            UIMessagePart.Image("https://example.test/same.png"),
         )
 
         assertEquals(
-            listOf("file:///same.png", "file:///same.png"),
+            listOf("https://example.test/same.png", "https://example.test/same.png"),
             collectMessageImageUrls(parts),
         )
     }
@@ -103,25 +109,25 @@ class CollectMessageImageUrlsTest {
     @Test
     fun `message images include tool output images in part order`() {
         val parts = listOf(
-            UIMessagePart.Image("file:///a.png"),
+            UIMessagePart.Image("https://example.test/a.png"),
             imageTool(
                 "t1",
                 UIMessagePart.Text("{}"),
-                UIMessagePart.Image("file:///gen1.png"),
-                UIMessagePart.Image("file:///gen2.png"),
+                UIMessagePart.Image("https://example.test/gen1.png"),
+                UIMessagePart.Image("https://example.test/gen2.png"),
             ),
             UIMessagePart.Text("done"),
-            imageTool("t2", UIMessagePart.Image("file:///gen3.png")),
-            UIMessagePart.Image("file:///b.png"),
+            imageTool("t2", UIMessagePart.Image("https://example.test/gen3.png")),
+            UIMessagePart.Image("https://example.test/b.png"),
         )
 
         assertEquals(
             listOf(
-                "file:///a.png",
-                "file:///gen1.png",
-                "file:///gen2.png",
-                "file:///gen3.png",
-                "file:///b.png",
+                "https://example.test/a.png",
+                "https://example.test/gen1.png",
+                "https://example.test/gen2.png",
+                "https://example.test/gen3.png",
+                "https://example.test/b.png",
             ),
             collectMessageImageUrls(parts),
         )
@@ -134,11 +140,11 @@ class CollectMessageImageUrlsTest {
             imageTool(
                 "t1",
                 UIMessagePart.Image(""),
-                UIMessagePart.Image("file:///gen.png"),
+                UIMessagePart.Image("https://example.test/gen.png"),
             ),
         )
 
-        assertEquals(listOf("file:///gen.png"), collectMessageImageUrls(parts))
+        assertEquals(listOf("https://example.test/gen.png"), collectMessageImageUrls(parts))
     }
 
     @Test
@@ -150,5 +156,22 @@ class CollectMessageImageUrlsTest {
         )
 
         assertTrue(collectMessageImageUrls(parts).isEmpty())
+    }
+
+    @Test
+    fun `local image requires a projected stable reference`() {
+        val ref = AttachmentRefs.format(Uuid.random())
+        val image = UIMessagePart.Image(
+            url = "file:///data/data/app/files/upload/image.png",
+            metadata = buildJsonObject { put(AttachmentRefs.METADATA_KEY, ref) },
+        )
+
+        assertTrue(collectMessageImageUrls(listOf(image)).isEmpty())
+        assertEquals(
+            listOf("file:///safe/upload/image.png"),
+            collectMessageImageUrls(listOf(image)) { candidate ->
+                "file:///safe/upload/image.png".takeIf { candidate == ref }
+            },
+        )
     }
 }

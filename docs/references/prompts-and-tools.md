@@ -286,8 +286,11 @@ Android host path、file URI 和内部 relative path 不进入 Tool Result。
 
 ### `inspect_attachments`
 
-启用条件（工具不注入时模型看不到它）：当前对话模型不接收 IMAGE，且设置中配置了
-Provider 可用、自身声明 IMAGE 输入的附件识别模型（`attachmentInspectionModelId`）。
+启用条件（工具不注入时模型看不到它）：当前对话模型的模型元数据声明 IMAGE 且其实际
+Provider `requestMediaCapabilities()` 同时返回 `userImages == STRUCTURED` 与
+`toolOutputImages == STRUCTURED` 时无需注入；否则设置中
+必须配置 Provider 可用且实际返回 `userImages == STRUCTURED` 的附件识别模型
+（`attachmentInspectionModelId`）。兼容端点或能力未知时按不可读处理并 fail-closed。
 
 > Inspect attachment content on demand when the task depends on it — for example,
 > text or other visual details in an image. Returns the findings for the request.

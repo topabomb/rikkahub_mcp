@@ -1,8 +1,12 @@
 package net.weero.measix.pilot.data.ai.attachments
 
 import android.content.Context
+import android.util.Log
 import androidx.core.net.toFile
 import androidx.core.net.toUri
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
@@ -53,13 +57,16 @@ class AttachmentResolver(
             for (ref in refs) {
                 when (val one = resolveOne(masterMessages, referenceIndex, ref, createdArtifacts, remoteResolved)) {
                     is AttachmentResolveResult.Failure -> {
-                        discardCreated(createdArtifacts)
+                        discardCreatedPreservingFailure(createdArtifacts, one.reason)
                         return one
                     }
                     is AttachmentResolveResult.Success -> {
                         val image = one.parts.singleOrNull()
                             ?: run {
-                                discardCreated(createdArtifacts)
+                                discardCreatedPreservingFailure(
+                                    createdArtifacts,
+                                    AttachmentFailureReasons.ATTACHMENT_NOT_FOUND,
+                                )
                                 return AttachmentResolveResult.Failure(AttachmentFailureReasons.ATTACHMENT_NOT_FOUND)
                             }
                         if (deduplicate) {
@@ -71,8 +78,11 @@ class AttachmentResolver(
                 }
             }
             return AttachmentResolveResult.Success(resolved, createdArtifacts.toList())
+        } catch (cancelled: CancellationException) {
+            discardCreated(createdArtifacts, cause = cancelled)
+            throw cancelled
         } catch (error: Exception) {
-            discardCreated(createdArtifacts)
+            discardCreated(createdArtifacts, cause = error)
             throw error
         }
     }
@@ -140,10 +150,13 @@ class AttachmentResolver(
             )
 
             is AttachmentReferenceTarget.ManagedArtifact -> {
-                val file = runCatching { artifactStore.file(target.artifact) }.getOrNull() ?: return notFound()
+                val materialized = artifactStore.materialize(target.artifact) ?: return notFound()
+                val file = runCatching { artifactStore.file(materialized) }.getOrNull() ?: return notFound()
                 if (!file.isFile || !isAllowedLocalFile(file)) return notFound()
                 wrapLocalImage(masterMessages, file, preferredRef = normalized)
             }
+
+            AttachmentReferenceTarget.Conflict -> notFound()
 
             null -> notFound()
         }
@@ -239,7 +252,7 @@ class AttachmentResolver(
                 }
             }
         }
-        if (!url.startsWith("file:")) return notFound()
+        if (!url.startsWith("file:", ignoreCase = true)) return notFound()
         val file = parseExistingLocalFile(url) ?: return notFound()
         if (!isAllowedLocalFile(file)) return notFound()
         return wrapLocalImage(masterMessages, file, preferredRef = preferredRef, sourcePart = part)
@@ -268,15 +281,18 @@ class AttachmentResolver(
         val bytes = runCatching { file.readBytes() }.getOrElse {
             return AttachmentResolveResult.Failure(AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED)
         }
-        val declared = artifactStore.getByRelativePath(
-            net.weero.measix.pilot.data.files.FileUtils.getRelativePathInFilesDir(context.filesDir, file).orEmpty(),
-        )?.mimeType
+        val relativePath = net.weero.measix.pilot.data.files.FileUtils
+            .getRelativePathInFilesDir(context.filesDir, file)
+            ?.replace('\\', '/')
+            ?: return notFound()
+        val entity = artifactStore.getByRelativePath(relativePath) ?: return notFound()
+        val declared = entity.mimeType
         if (ImageMime.isUnsupportedNonImage(bytes, declared)) return unsupported()
         if (!ImageMime.isAcceptedImage(bytes)) return unsupported()
 
         val url = AttachmentRefs.fileToFileUrl(file)
         val existingRef = preferredRef
-            ?: sourcePart?.let { AttachmentRefs.getRef(it) }
+            ?: sourcePart?.let { AttachmentRefs.getStableRef(it) }
             ?: findRefForFile(masterMessages, file)
         val baseMetadata = sourcePart?.metadata
         val withRef = if (existingRef != null) {
@@ -293,24 +309,28 @@ class AttachmentResolver(
         return AttachmentResolveResult.Success(listOf(withRef as UIMessagePart.Image))
     }
 
-    private fun isReferencedByMaster(messages: List<UIMessage>, file: File): Boolean {
+    private suspend fun isReferencedByMaster(messages: List<UIMessage>, file: File): Boolean {
         val target = runCatching { file.canonicalFile }.getOrNull() ?: return false
         for (part in AttachmentRefs.walkMessageParts(messages)) {
             val url = partUrl(part)
-            if (url != null && url.startsWith("file:")) {
+            if (url != null && url.startsWith("file:", ignoreCase = true)) {
                 val partFile = parseExistingLocalFile(url)
                 if (partFile != null && sameFile(partFile, target)) return true
             }
             if (part is UIMessagePart.Tool) {
                 val artifact = part.metadata?.let { artifactRewriter.decodeArtifactRef(it) }
-                if (artifact != null) {
-                    val artifactFile = artifact.file(context.filesDir)
+                val materializedArtifact = artifact?.let { artifactStore.materialize(it) }
+                if (materializedArtifact != null) {
+                    val artifactFile = artifactStore.file(materializedArtifact)
                     if (sameFile(artifactFile, target)) return true
                 }
                 val call = part.getSubAssistantCallMetadata(JsonInstant)
                 if (call != null) {
                     for (item in call.artifacts) {
-                        val callFile = item.artifact?.file(context.filesDir) ?: continue
+                        if (AttachmentRefs.parse(item.ref) == null) continue
+                        val artifact = item.artifact ?: continue
+                        val materialized = artifactStore.materialize(artifact) ?: continue
+                        val callFile = artifactStore.file(materialized)
                         if (sameFile(callFile, target)) return true
                     }
                 }
@@ -319,22 +339,26 @@ class AttachmentResolver(
         return false
     }
 
-    private fun findRefForFile(messages: List<UIMessage>, file: File): String? {
+    private suspend fun findRefForFile(messages: List<UIMessage>, file: File): String? {
         val target = runCatching { file.canonicalFile }.getOrNull() ?: return null
         AttachmentRefs.walkMessageParts(messages).forEach { part ->
             val url = partUrl(part)
             if (url != null) {
                 val partFile = parseExistingLocalFile(url)
                 if (partFile != null && sameFile(partFile, target)) {
-                    AttachmentRefs.getRef(part)?.let { return it }
+                    AttachmentRefs.getStableRef(part)?.let { return it }
                 }
             }
             if (part is UIMessagePart.Tool) {
                 val call = part.getSubAssistantCallMetadata(JsonInstant)
                 if (call != null) {
                     for (item in call.artifacts) {
-                        val callFile = item.artifact?.file(context.filesDir) ?: continue
-                        if (sameFile(callFile, target)) return item.ref
+                        val artifact = item.artifact ?: continue
+                        val materialized = artifactStore.materialize(artifact) ?: continue
+                        val callFile = artifactStore.file(materialized)
+                        if (sameFile(callFile, target)) {
+                            AttachmentRefs.parse(item.ref)?.let(AttachmentRefs::format)?.let { return it }
+                        }
                     }
                 }
             }
@@ -380,13 +404,49 @@ class AttachmentResolver(
         discard = { discardCreated(listOf(owned)) },
     )
 
-    private suspend fun discardCreated(artifacts: List<OwnedArtifact>) {
-        artifacts.forEach { owned ->
-            artifactStore.discardUnpublished(owned).requireDiscarded("attachment batch rollback")
+    private suspend fun discardCreated(artifacts: List<OwnedArtifact>, cause: Throwable? = null) {
+        if (artifacts.isEmpty()) return
+        var cleanupFailure: Throwable? = null
+        withContext(NonCancellable) {
+            artifacts.forEach { owned ->
+                try {
+                    artifactStore.discardUnpublished(owned).requireDiscarded("attachment batch rollback")
+                } catch (failure: Throwable) {
+                    cleanupFailure = cleanupFailure?.also { it.addSuppressed(failure) } ?: failure
+                }
+            }
+        }
+        cleanupFailure?.let { failure ->
+            if (cause != null) {
+                cause.addSuppressed(failure)
+            } else {
+                throw failure
+            }
+        }
+    }
+
+    /**
+     * A domain failure is already the authoritative result. Cleanup is still attempted, but a
+     * secondary discard problem must not replace the reason the caller needs to diagnose.
+     */
+    private suspend fun discardCreatedPreservingFailure(
+        artifacts: List<OwnedArtifact>,
+        reason: String,
+    ) {
+        try {
+            discardCreated(artifacts)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (cleanupFailure: Throwable) {
+            Log.w(TAG, "Attachment rollback failed after $reason", cleanupFailure)
         }
     }
 
     private fun notFound() = AttachmentResolveResult.Failure(AttachmentFailureReasons.ATTACHMENT_NOT_FOUND)
 
     private fun unsupported() = AttachmentResolveResult.Failure(AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE)
+
+    private companion object {
+        const val TAG = "AttachmentResolver"
+    }
 }

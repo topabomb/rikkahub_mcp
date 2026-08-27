@@ -39,6 +39,8 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
   handle；不复制图片 part 来伪造第二份引用事实。
 - 唯一性：一个 ref 指向一个逻辑附件；不同 part 可指向同一文件（保持各自 ref）。
 - 幂等：`ensureAttachmentRef` 对已带**合法可解析** ref 的 part 恒等返回；仅对非多媒体 part 恒等。导入 / 旧数据 / 异常 Provider metadata 中的非法 ref 会被重建为合法 UUID，避免模型拿到永远无法解析的 handle。
+- `AttachmentReferenceLookup` 只索引多媒体 part 的合法 ref；同一 ref 同时出现在 `Tool.output` 直接媒体与
+  `sub_assistant_call.artifacts[]` manifest 是正常双表示，直接媒体优先、manifest 作为回退。等价资源的重复声明复用同一逻辑附件；多个不同 direct 资源或仅 manifest 间的不一致声明 fail-closed，不按遍历顺序选取。
 
 ### 2.2 盖章位置
 
@@ -52,7 +54,7 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 | 外部 HTTPS 图 | 入站时落地（`wrapLocalImage`），Child 只存 `file://` |
 | base64 图片 | `Base64ImageToLocalFileTransformer` 经 `ArtifactStore` 终态落盘并盖章 |
 | `assistant_call` 注入 Child | 复制源 ref（跨会话引用同一 Artifact） |
-| 历史消息补章 | 会话加载 / 生成前的 backfill |
+| 历史消息补章 | 仅在 `MasterTurnCoordinator` 的 START structural preflight 由 `planDurableAttachmentRefBackfills` / `BackfillAttachmentRefs` 执行；会话加载与恢复只做校验，不由 UI/query 旁路补章 |
 
 所有字节型图片入口都在创建 durable artifact 前限制输入规模并校验实际内容：
 
@@ -79,9 +81,13 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 - 文件被清理后，历史消息仍保留 Image part 与 ref；投影引用行照常回放，`inspect_attachments` 解析该 ref 时按 `attachment_not_found` 失败，不伪造内容。
 - 模型读到 `[Attachment ref=...]` 只代表引用存在，不代表文件可用——需要内容时显式调用工具验证。
 - `AttachmentReferenceLookup` 是 message part 与 `assistant_call` 交付物 metadata 的唯一 handle 索引规则；
-  `AttachmentResolver` 每批建立一次索引，`ConversationAttachmentPreviewProjector` 缓存 durable nodes 索引并只叠加
-  active assistant message。缩略图 Compose 只做 O(1) map lookup，不扫描消息 metadata，也不直接访问 `ArtifactStore`，因此执行可解析的 ref
-  与卡片缩略图不会形成两套语义。
+  `AttachmentResolver` 每批建立一次索引，`ConversationAttachmentPreviewProjector` 每次查询都从 durable nodes
+  与 active assistant message 重建索引，并经 `ArtifactStore` 生命周期校验，不缓存 payload/索引。缩略图 Compose
+  只做 O(1) map lookup，不扫描消息 metadata；查询投影器通过 `ArtifactStore` 只读文件端口解析 managed fallback，
+  因此执行可解析的 ref 与卡片缩略图不会形成两套索引语义。
+- `ChatMessage`、会话相册与聊天导出只消费查询投影返回的本地媒体 URL；没有投影 map 时，
+  `file:` 图片/媒体保持不可见，不回退为原始路径。助手配置页的合成消息预览同样不读取本地附件。
+- Resolver 对 managed manifest 与本地 file URL 都必须先通过 `ArtifactStore` 校验 ACTIVE、version、mime 与受管根目录；仅 payload 文件存在不能使已失效的附件重新可用。
 
 ## 3. 请求级投影（`AttachmentProjectionTransformer`）
 
@@ -139,10 +145,13 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 
 工具注入判定 `shouldInjectAttachmentInspection()`（`GenerationToolSetFactory`），全部满足才注入：
 
-1. 本次 resolved model 不接收 IMAGE；
+1. 本次 resolved model 的 USER 与 `Tool.output` 容器未同时具备 IMAGE 的 STRUCTURED 能力；
 2. `Settings.attachmentInspectionModelId` 能解析到模型；
 3. 该模型 Provider 可用；
-4. 该模型自身 `inputModalities` 含 IMAGE。
+4. 该模型 `inputModalities` 含 IMAGE，且该 Provider 对本次请求返回
+   `RequestMediaCapabilities.userImages == STRUCTURED`；能力未知或兼容端点未声明时 fail-closed。
+   视觉 Chat Completions 等不支持 multimodal function output 的端点即使 USER 可读，
+   `toolOutputImages` 仍为 `NONE`，因此继续注入识别工具。
 
 不根据当前消息是否包含图片决定 schema。注入时机遵循「配置变更在下一次构建时生效」：主链路 = 下一轮 turn；Target = 下一次 `assistant_call`；run 内 tool schema 稳定（Target 删除 / 撤权等安全信号除外，仍每 step 走 latest）。
 
