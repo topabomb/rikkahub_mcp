@@ -824,20 +824,32 @@ private suspend fun LazyListState.scrollToAppendedItem(
     expectedItemCount: (ConversationSnapshot) -> Int,
     currentImeBottom: () -> Int,
 ) {
+    var activeRequestObserved = false
     val readyItemCount = snapshotFlow {
         val snapshot = currentSnapshot()
-        val status = evaluateAppendScroll(
-            requestContext = requestContext,
+        AppendScrollObservation(
             snapshot = snapshot,
             presentation = currentPresentation(),
             actualItemCount = layoutInfo.totalItemsCount,
             expectedItemCount = expectedItemCount(snapshot),
             imeBottom = currentImeBottom(),
         )
+    }.map { observation ->
+        activeRequestObserved = activeRequestObserved ||
+            observation.presentation.activeRequestTurnId == requestContext.turnId
+        val status = evaluateAppendScroll(
+            requestContext = requestContext,
+            snapshot = observation.snapshot,
+            presentation = observation.presentation,
+            activeRequestObserved = activeRequestObserved,
+            actualItemCount = observation.actualItemCount,
+            expectedItemCount = observation.expectedItemCount,
+            imeBottom = observation.imeBottom,
+        )
         if (status == AppendScrollStatus.INVALIDATED) {
             throw CancellationException("Conversation branch changed")
         }
-        status to layoutInfo.totalItemsCount
+        status to observation.actualItemCount
     }.first { (status, _) -> status == AppendScrollStatus.READY }.second
 
     requestScrollToItem(readyItemCount - 1)
@@ -852,6 +864,14 @@ internal enum class AppendScrollStatus {
     INVALIDATED,
 }
 
+private data class AppendScrollObservation(
+    val snapshot: ConversationSnapshot,
+    val presentation: ConversationPresentation,
+    val actualItemCount: Int,
+    val expectedItemCount: Int,
+    val imeBottom: Int,
+)
+
 internal fun evaluateAppendScroll(
     requestContext: AppendScrollContext,
     snapshot: ConversationSnapshot,
@@ -859,9 +879,10 @@ internal fun evaluateAppendScroll(
     actualItemCount: Int,
     expectedItemCount: Int,
     imeBottom: Int,
+    activeRequestObserved: Boolean = false,
 ): AppendScrollStatus = when {
     !requestContext.matches(snapshot) -> AppendScrollStatus.INVALIDATED
-    !requestContext.ownsActiveRequest(presentation) &&
+    activeRequestObserved && !requestContext.ownsActiveRequest(presentation) &&
         !requestContext.hasTargetMessage(snapshot) -> AppendScrollStatus.INVALIDATED
     !requestContext.hasTargetMessage(snapshot) -> AppendScrollStatus.WAITING_FOR_APPEND
     actualItemCount != expectedItemCount -> AppendScrollStatus.WAITING_FOR_LAYOUT

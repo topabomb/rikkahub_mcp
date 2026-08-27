@@ -123,6 +123,26 @@ class AppendScrollContextTest {
                 requestContext = context,
                 snapshot = before,
                 presentation = ConversationPresentation.IDLE,
+                activeRequestObserved = true,
+                actualItemCount = 4,
+                expectedItemCount = 4,
+                imeBottom = 0,
+            ),
+        )
+    }
+
+    @Test
+    fun `stale idle presentation waits until append or owner is observed`() {
+        val before = snapshot(nodes = listOf(MessageNode.of(UIMessage.user("first"))))
+        val turnId = Uuid.random()
+        val context = AppendScrollContext.from(before, Uuid.random(), turnId)
+
+        assertEquals(
+            AppendScrollStatus.WAITING_FOR_APPEND,
+            evaluateAppendScroll(
+                requestContext = context,
+                snapshot = before,
+                presentation = ConversationPresentation.IDLE,
                 actualItemCount = 4,
                 expectedItemCount = 4,
                 imeBottom = 0,
