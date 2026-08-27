@@ -372,6 +372,11 @@ loading、配置提示等临时 LazyColumn item 数量变化当作消息提交�
 结构与当前 snapshot 对齐且 IME 实际到达隐藏终态后滚动到底部 sentinel；新发送、会话切换或节点分支变化会
 取消旧请求，不使用固定时间延迟猜测布局完成。
 
+会话底部 `ErrorCardsDisplay` 是需要展示明确诊断原文的主通道。普通命令和标题/建议/压缩等边缘失败维持 5 秒自动关闭；
+本轮 Master 回复 `FAILED` / `INCOMPLETE` 使用手动关闭卡片，并按当前 `conversationId` 过滤。消息终态条只显示 durable
+reason 对应的短状态，取消使用中性色而不冒充错误；失败或未完成条可再次打开消息 `terminalDetail`。工具与子助手卡片
+自行显示其领域失败，不向主会话重复投递卡片。
+
 ---
 
 ## 6. 组件层次

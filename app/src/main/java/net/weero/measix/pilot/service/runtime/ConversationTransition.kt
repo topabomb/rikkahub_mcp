@@ -486,6 +486,7 @@ internal object ConversationTransition {
                 command.handle.assistantMessageId,
                 status,
                 command.terminalReason,
+                command.terminalDetail,
             )
         }
         if (command.closeInterruptedTools) {
@@ -725,12 +726,17 @@ internal object ConversationTransition {
         messageId: Uuid?,
         status: MessageTerminalStatus,
         reason: String?,
+        detail: String? = null,
     ): ConversationSnapshot {
         if (messageId == null) return this
         val message = findMessage(messageId)?.takeIf { it.role == MessageRole.ASSISTANT } ?: return this
         return replaceMessageById(
             messageId,
-            message.copy(terminalStatus = status, terminalReason = reason),
+            message.copy(
+                terminalStatus = status,
+                terminalReason = reason,
+                terminalDetail = detail,
+            ),
             requireLastNode = false,
         )
     }

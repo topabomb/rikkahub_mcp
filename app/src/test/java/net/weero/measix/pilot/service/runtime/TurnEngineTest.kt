@@ -12,11 +12,16 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.TurnTerminalReasons
+import me.rerere.ai.util.HttpException
+import me.rerere.ai.util.ProviderFailureKind
+import me.rerere.ai.util.ProviderTerminalStatus
 import net.weero.measix.pilot.data.ai.CheckpointKind
 import net.weero.measix.pilot.data.ai.FinishedReason
 import net.weero.measix.pilot.data.ai.GenerationCheckpoint
@@ -86,14 +91,15 @@ class TurnEngineTest {
     }
 
     @Test
-    fun `streaming chunks update only the owned projection`() = runTest {
+    fun `streaming chunks update the owned projection before incomplete close`() = runTest {
         val harness = harness()
         val messages = listOf(msg("hi"))
 
         val events = harness.engine.bind(flowOf(GenerationChunk.Messages(messages))).toListSafe()
 
-        assertTrue(events.single() is TurnEvent.Streaming)
-        coVerify(exactly = 0) { harness.coordinator.executeOrThrow(any(), any()) }
+        assertTrue(events.first() is TurnEvent.Streaming)
+        assertTrue((events.last() as TurnEvent.Finished).outcome is TurnOutcome.Incomplete)
+        coVerify(exactly = 1) { harness.coordinator.executeOrThrow(any(), any()) }
         io.mockk.verify(exactly = 1) { harness.runtime.applyStreamingDelta(harness.handle, messages) }
     }
 
@@ -113,7 +119,7 @@ class TurnEngineTest {
     }
 
     @Test
-    fun `provider failure submits failed outcome and retains the exception`() = runTest {
+    fun `runtime failure submits classified detail and retains the exception`() = runTest {
         val harness = harness()
         val failure = IllegalStateException("provider failed")
         val partial = listOf(msg("partial after checkpoint"))
@@ -127,11 +133,65 @@ class TurnEngineTest {
 
         val outcome = (events.last() as TurnEvent.Finished).outcome as TurnOutcome.Failed
         assertEquals(failure, outcome.error)
+        assertEquals(ProviderFailureKind.RUNTIME_ERROR.reason, outcome.terminalReason)
+        assertEquals("provider failed", outcome.terminalDetail)
         val commands = mutableListOf<ConversationCommand>()
         coVerify { harness.coordinator.executeOrThrow(any(), capture(commands)) }
         val finalize = commands.filterIsInstance<FinalizeTurn>().single()
         assertEquals(TurnExecutionStatus.FAILED, finalize.terminalStatus)
         assertEquals(partial, finalize.messages)
+        assertEquals(ProviderFailureKind.RUNTIME_ERROR.reason, finalize.terminalReason)
+        assertEquals("provider failed", finalize.terminalDetail)
+    }
+
+    @Test
+    fun `provider rate limit persists fine grained reason and sanitized detail`() = runTest {
+        val harness = harness()
+        val failure = HttpException(
+            message = "Please retry after 2 seconds. secret sk-abcdefghijklmnop",
+            statusCode = 429,
+        )
+
+        val outcome = (harness.engine.bind(flow { throw failure }).toListSafe().single() as TurnEvent.Finished)
+            .outcome as TurnOutcome.Failed
+
+        assertEquals(ProviderFailureKind.RATE_LIMITED.reason, outcome.terminalReason)
+        assertEquals("Please retry after 2 seconds. secret …", outcome.terminalDetail)
+        val command = slot<ConversationCommand>()
+        coVerify { harness.coordinator.executeOrThrow(any(), capture(command)) }
+        assertEquals(outcome.terminalDetail, (command.captured as FinalizeTurn).terminalDetail)
+    }
+
+    @Test
+    fun `stream close without terminal event is finalized as incomplete`() = runTest {
+        val harness = harness()
+
+        val event = harness.engine.bind(emptyFlow()).toListSafe().single() as TurnEvent.Finished
+        val outcome = event.outcome as TurnOutcome.Incomplete
+
+        assertEquals(TurnTerminalReasons.PROVIDER_INCOMPLETE, outcome.terminalReason)
+        assertEquals("Response stream ended without a terminal event.", outcome.terminalDetail)
+        val command = slot<ConversationCommand>()
+        coVerify { harness.coordinator.executeOrThrow(any(), capture(command)) }
+        assertEquals(TurnExecutionStatus.INCOMPLETE, (command.captured as FinalizeTurn).terminalStatus)
+    }
+
+    @Test
+    fun `provider incomplete keeps protocol detail separate from failed`() = runTest {
+        val harness = harness()
+        val failure = HttpException(
+            message = "Response incomplete: max_output_tokens",
+            terminalStatus = ProviderTerminalStatus.INCOMPLETE,
+        )
+
+        val event = harness.engine.bind(flow { throw failure }).toListSafe().single() as TurnEvent.Finished
+        val outcome = event.outcome as TurnOutcome.Incomplete
+
+        assertEquals(TurnTerminalReasons.PROVIDER_INCOMPLETE, outcome.terminalReason)
+        assertEquals("Response incomplete: max_output_tokens", outcome.terminalDetail)
+        val command = slot<ConversationCommand>()
+        coVerify { harness.coordinator.executeOrThrow(any(), capture(command)) }
+        assertEquals(TurnExecutionStatus.INCOMPLETE, (command.captured as FinalizeTurn).terminalStatus)
     }
 
     @Test

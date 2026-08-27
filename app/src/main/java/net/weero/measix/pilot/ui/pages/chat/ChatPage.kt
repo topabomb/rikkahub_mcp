@@ -700,6 +700,7 @@ private fun ChatPageContent(
                         vm.deleteMessage(it)
                     }
                 },
+                onShowTerminalError = vm::showTerminalError,
                 onUpdateMessage = { newNode ->
                     vm.selectNode(newNode.id, newNode.selectIndex)
                 },

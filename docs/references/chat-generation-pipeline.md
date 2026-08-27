@@ -72,6 +72,10 @@ Runtime 不发布未提交状态。Streaming 是唯一先发布且不落库的�
 任一步失败则整体回滚。Turn 状态使用 insert-once + 合法 CAS，终态不可回退，重复同终态幂等。
 失败或取消时，Application 终态准备显式接收 TurnEngine 累积的最新 messages，校验同一 `TurnHandle` 后在该投影上
 关闭未完成工具；它不能改读 durable nodes，否则会丢失最后一次 checkpoint 之后已经流出的文本或工具 delta。
+`TurnOutcome.fromFailure` 是 Master/Target 共用的失败分类点：Provider 失败使用 `ProviderFailureKind.reason` 作为细分稳定码，
+并把 `classifyProviderFailure().detail` 的脱敏诊断随 `FinalizeTurn.terminalDetail` 写入 owning Assistant 消息 JSON；
+`INCOMPLETE` 保留独立状态与 `provider_incomplete` / limit reason。Turn execution 与消息仍共享同一终态提交，不增加
+UI 状态表或第二写入口。没有终态事件便关闭的流同样收口为 `INCOMPLETE`，不能遗留 RUNNING execution。
 
 ## 请求构建与 Transformer
 
@@ -132,6 +136,13 @@ queued/generating/persisting/setting-background 子阶段。崩溃恢复、停�
 snapshot 派生 `IDLE`、`PREPARING`、`GENERATING`、`AWAITING_APPROVAL`、`STOPPING`；审批暂停仍属于同一 turn owner，底部使用不同颜色和问询图标保持明确的
 用户注意力提示，且文件夹/消息树结构操作继续受 active owner 保护。完成工具卡片保留 `COMPLETED` 事实，但隐藏常驻
 状态文字；失败、拒绝、回答、取消和中断仍显示简短终态。
+
+Master 的 `FAILED` / `INCOMPLETE` 由 `ChatErrorStore` 投影为当前会话底部诊断卡，卡片只允许用户关闭，不自动超时；
+卡片标题由 durable reason 映射为限流、额度、鉴权、权限、政策、无效请求、服务不可用、Provider、本地运行或未完成，
+正文读取消息上的脱敏 `terminalDetail`。关闭卡片后，消息终态短标签仍可点击并从同一消息事实重新打开；Store 只按
+`conversationId` 展示当前会话，不能把别的会话错误串入。标题、建议、压缩和发送/重生成/审批等边缘或命令失败仍是
+5 秒短暂卡片。取消与 supersede 不进入错误卡片；无可见内容的 CANCELLED Assistant 槽在 UI 投影中隐藏，部分输出则保留
+并显示“已停止”或“已被新回复替换”。工具和子助手的领域失败继续由各自卡片展示，不重复抬成 Master 错误卡。
 
 首条用户消息的纯文本会规范化空白并按 Unicode code point 截断为确定性本地标题，作为 `AppendUserMessage.initialTitle`
 与消息在同一事务提交，因此长 turn 不会让会话一直停留在“New Chat”。`ConversationTitlePhase` 明确区分 `EMPTY`、

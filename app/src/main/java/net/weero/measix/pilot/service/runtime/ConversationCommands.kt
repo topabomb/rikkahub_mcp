@@ -53,6 +53,7 @@ data class FinalizeTurn(
     val terminalStatus: TurnExecutionStatus,   // COMPLETED / CANCELLED / FAILED / INCOMPLETE / INTERRUPTED
     val terminalReason: String?,
     val closeInterruptedTools: Boolean,   // 崩溃恢复场景：关闭未完工具
+    val terminalDetail: String? = null,
 ) : ConversationCommand
 
 /** Process-recovery-only command. Normal turn owners must use [FinalizeTurn] with their handle. */

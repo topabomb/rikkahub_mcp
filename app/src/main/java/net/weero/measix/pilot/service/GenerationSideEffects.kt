@@ -197,12 +197,10 @@ class GenerationSideEffects(
         } catch (error: Exception) {
             error.printStackTrace()
             chatErrorStore.add(
-                ChatError(
-                    error = error,
-                    conversationId = conversationId,
-                    title = context.getString(R.string.error_title_generate_title),
-                    solution = ChatErrorSolution.CheckTitleModelSettings,
-                )
+                error = error,
+                conversationId = conversationId,
+                title = context.getString(R.string.error_title_generate_title),
+                solution = ChatErrorSolution.CheckTitleModelSettings,
             )
         } finally {
             val retry = titleCoordinator.end(token)
@@ -245,6 +243,11 @@ class GenerationSideEffects(
             throw error
         } catch (error: Exception) {
             error.printStackTrace()
+            chatErrorStore.add(
+                error = error,
+                conversationId = conversationId,
+                title = context.getString(R.string.error_title_generate_suggestion),
+            )
         }
     }
 

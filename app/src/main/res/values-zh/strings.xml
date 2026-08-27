@@ -1544,5 +1544,27 @@
   <string name="managed_configuration_source_builtin">内置</string>
   <string name="managed_configuration_source_local">本地</string>
   <string name="managed_configuration_source_managed">受管</string>
+  <string name="chat_page_check_provider_settings">检查 Provider 设置</string>
+  <string name="chat_page_copy_error">复制错误信息</string>
+  <string name="error_title_generate_suggestion">建议生成失败</string>
+  <string name="error_title_rate_limited">请求过于频繁</string>
+  <string name="error_title_quota_exhausted">额度或余额不足</string>
+  <string name="error_title_auth_failed">API 密钥无效</string>
+  <string name="error_title_permission_denied">无权使用该模型</string>
+  <string name="error_title_content_blocked">因使用政策被拦截</string>
+  <string name="error_title_invalid_request">请求被拒绝</string>
+  <string name="error_title_provider_unavailable">服务暂时不可用</string>
+  <string name="error_title_provider_error">模型服务返回错误</string>
+  <string name="error_title_runtime_error">本地运行出错</string>
+  <string name="error_title_response_incomplete">回复未完成</string>
+  <string name="error_title_tool_loop_limit">达到工具步数上限</string>
+  <string name="error_title_interaction_limit">达到交互次数上限</string>
+  <string name="chat_error_detail_unavailable">此回复未保存详细诊断信息。</string>
+  <string name="chat_error_detail_response_incomplete">Provider 在回复完成前结束了响应。</string>
+  <string name="chat_error_detail_tool_loop_limit">达到配置的工具步数上限后，回复已停止。</string>
+  <string name="chat_error_detail_interaction_limit">达到交互次数上限后，回复已停止。</string>
+  <string name="chat_message_terminal_user_stopped">已停止</string>
+  <string name="chat_message_terminal_superseded">已被新回复替换</string>
+  <string name="chat_message_terminal_process_restarted">应用重启后中断</string>
 </resources>
 

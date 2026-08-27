@@ -1545,5 +1545,27 @@
   <string name="managed_configuration_source_builtin">Built-in</string>
   <string name="managed_configuration_source_local">Local</string>
   <string name="managed_configuration_source_managed">Managed</string>
+  <string name="chat_page_check_provider_settings">Check provider settings</string>
+  <string name="chat_page_copy_error">Copy error message</string>
+  <string name="error_title_generate_suggestion">Suggestion generation failed</string>
+  <string name="error_title_rate_limited">Request too frequent</string>
+  <string name="error_title_quota_exhausted">Quota or balance exhausted</string>
+  <string name="error_title_auth_failed">API key invalid</string>
+  <string name="error_title_permission_denied">Model access denied</string>
+  <string name="error_title_content_blocked">Blocked by usage policy</string>
+  <string name="error_title_invalid_request">Request rejected</string>
+  <string name="error_title_provider_unavailable">Service temporarily unavailable</string>
+  <string name="error_title_provider_error">Model service returned an error</string>
+  <string name="error_title_runtime_error">Local runtime error</string>
+  <string name="error_title_response_incomplete">Reply incomplete</string>
+  <string name="error_title_tool_loop_limit">Tool step limit reached</string>
+  <string name="error_title_interaction_limit">Interaction limit reached</string>
+  <string name="chat_error_detail_unavailable">Detailed diagnostics were not saved for this response.</string>
+  <string name="chat_error_detail_response_incomplete">The provider ended the response before it was complete.</string>
+  <string name="chat_error_detail_tool_loop_limit">The response stopped after reaching the configured tool step limit.</string>
+  <string name="chat_error_detail_interaction_limit">The response stopped after reaching the interaction limit.</string>
+  <string name="chat_message_terminal_user_stopped">Stopped</string>
+  <string name="chat_message_terminal_superseded">Replaced by a newer reply</string>
+  <string name="chat_message_terminal_process_restarted">Interrupted after app restart</string>
 </resources>
 

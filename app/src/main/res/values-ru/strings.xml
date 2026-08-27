@@ -1544,5 +1544,27 @@
   <string name="managed_configuration_source_builtin">Встроенное</string>
   <string name="managed_configuration_source_local">Локальное</string>
   <string name="managed_configuration_source_managed">Управляемое</string>
+  <string name="chat_page_check_provider_settings">Проверить настройки провайдера</string>
+  <string name="chat_page_copy_error">Копировать сообщение об ошибке</string>
+  <string name="error_title_generate_suggestion">Не удалось создать подсказки</string>
+  <string name="error_title_rate_limited">Слишком много запросов</string>
+  <string name="error_title_quota_exhausted">Квота или баланс исчерпаны</string>
+  <string name="error_title_auth_failed">Недействительный API-ключ</string>
+  <string name="error_title_permission_denied">Нет доступа к модели</string>
+  <string name="error_title_content_blocked">Заблокировано политикой использования</string>
+  <string name="error_title_invalid_request">Запрос отклонён</string>
+  <string name="error_title_provider_unavailable">Сервис временно недоступен</string>
+  <string name="error_title_provider_error">Сервис модели вернул ошибку</string>
+  <string name="error_title_runtime_error">Локальная ошибка выполнения</string>
+  <string name="error_title_response_incomplete">Ответ не завершён</string>
+  <string name="error_title_tool_loop_limit">Достигнут лимит шагов инструментов</string>
+  <string name="error_title_interaction_limit">Достигнут лимит взаимодействий</string>
+  <string name="chat_error_detail_unavailable">Подробная диагностика для этого ответа не сохранена.</string>
+  <string name="chat_error_detail_response_incomplete">Провайдер завершил ответ до его окончания.</string>
+  <string name="chat_error_detail_tool_loop_limit">Ответ остановлен после достижения заданного лимита шагов инструментов.</string>
+  <string name="chat_error_detail_interaction_limit">Ответ остановлен после достижения лимита взаимодействий.</string>
+  <string name="chat_message_terminal_user_stopped">Остановлено</string>
+  <string name="chat_message_terminal_superseded">Заменено более новым ответом</string>
+  <string name="chat_message_terminal_process_restarted">Прервано после перезапуска приложения</string>
 </resources>
 

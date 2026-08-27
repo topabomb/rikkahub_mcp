@@ -1544,5 +1544,27 @@
   <string name="managed_configuration_source_builtin">기본 제공</string>
   <string name="managed_configuration_source_local">로컬</string>
   <string name="managed_configuration_source_managed">관리됨</string>
+  <string name="chat_page_check_provider_settings">프로바이더 설정 확인</string>
+  <string name="chat_page_copy_error">오류 메시지 복사</string>
+  <string name="error_title_generate_suggestion">추천 생성 실패</string>
+  <string name="error_title_rate_limited">요청이 너무 빈번합니다</string>
+  <string name="error_title_quota_exhausted">할당량 또는 잔액이 부족합니다</string>
+  <string name="error_title_auth_failed">API 키가 유효하지 않습니다</string>
+  <string name="error_title_permission_denied">모델 사용 권한이 없습니다</string>
+  <string name="error_title_content_blocked">사용 정책에 의해 차단되었습니다</string>
+  <string name="error_title_invalid_request">요청이 거부되었습니다</string>
+  <string name="error_title_provider_unavailable">서비스를 일시적으로 사용할 수 없습니다</string>
+  <string name="error_title_provider_error">모델 서비스에서 오류를 반환했습니다</string>
+  <string name="error_title_runtime_error">로컬 실행 오류</string>
+  <string name="error_title_response_incomplete">답변이 완료되지 않았습니다</string>
+  <string name="error_title_tool_loop_limit">도구 단계 한도에 도달했습니다</string>
+  <string name="error_title_interaction_limit">상호작용 횟수 한도에 도달했습니다</string>
+  <string name="chat_error_detail_unavailable">이 답변의 상세 진단 정보가 저장되지 않았습니다.</string>
+  <string name="chat_error_detail_response_incomplete">프로바이더가 답변이 완료되기 전에 응답을 종료했습니다.</string>
+  <string name="chat_error_detail_tool_loop_limit">설정된 도구 단계 한도에 도달하여 답변이 중단되었습니다.</string>
+  <string name="chat_error_detail_interaction_limit">상호작용 횟수 한도에 도달하여 답변이 중단되었습니다.</string>
+  <string name="chat_message_terminal_user_stopped">중지됨</string>
+  <string name="chat_message_terminal_superseded">새 답변으로 대체됨</string>
+  <string name="chat_message_terminal_process_restarted">앱 재시작 후 중단됨</string>
 </resources>
 

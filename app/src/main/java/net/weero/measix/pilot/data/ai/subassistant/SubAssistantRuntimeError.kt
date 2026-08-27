@@ -13,10 +13,6 @@ import me.rerere.ai.util.looksLikeContentPolicy
 /** `assistant_call` 的 `detail` 字符上限，避免撑满 Caller 上下文。 */
 internal const val RUNTIME_ERROR_DETAIL_MAX_CHARS = 8 * 1024
 
-internal const val SUB_ASSISTANT_REASON_CONTENT_BLOCKED = "content_blocked"
-internal const val SUB_ASSISTANT_REASON_PROVIDER_ERROR = "provider_error"
-internal const val SUB_ASSISTANT_REASON_RUNTIME_ERROR = "runtime_error"
-
 internal const val USER_FACING_ERROR_SUMMARY_MAX_CHARS = 240
 internal const val CONTENT_BLOCKED_MODEL_DETAIL =
     me.rerere.ai.util.CONTENT_BLOCKED_MODEL_DETAIL
@@ -59,29 +55,20 @@ internal fun clipRuntimeErrorDetail(
 }
 
 internal fun classifySubAssistantFailure(error: Throwable): String {
-    return when (classifyProviderFailure(error).kind) {
-        ProviderFailureKind.CONTENT_BLOCKED -> SUB_ASSISTANT_REASON_CONTENT_BLOCKED
-        ProviderFailureKind.RUNTIME_ERROR -> SUB_ASSISTANT_REASON_RUNTIME_ERROR
-        else -> SUB_ASSISTANT_REASON_PROVIDER_ERROR
-    }
+    return classifyProviderFailure(error).kind.reason
 }
 
 internal fun modelVisibleFailureDetail(
     reason: String,
     error: Throwable,
-): String = if (reason == SUB_ASSISTANT_REASON_CONTENT_BLOCKED) {
+): String = if (reason == ProviderFailureKind.CONTENT_BLOCKED.reason) {
     CONTENT_BLOCKED_MODEL_DETAIL
 } else {
-    formatRuntimeErrorDetail(error)
+    classifyProviderFailure(error).detail
 }
 
-internal fun shouldAttachFailureDetail(reason: String?): Boolean = when (reason) {
-    SUB_ASSISTANT_REASON_CONTENT_BLOCKED,
-    SUB_ASSISTANT_REASON_PROVIDER_ERROR,
-    SUB_ASSISTANT_REASON_RUNTIME_ERROR,
-    -> true
-    else -> false
-}
+internal fun shouldAttachFailureDetail(reason: String?): Boolean =
+    ProviderFailureKind.entries.any { it.reason == reason }
 
 internal data class SubAssistantToolResultFields(
     val status: String? = null,
@@ -155,7 +142,7 @@ internal fun resolveSubAssistantErrorBody(
     detail: String?,
     localizedContentBlocked: String,
 ): String? {
-    if (reason == SUB_ASSISTANT_REASON_CONTENT_BLOCKED || looksLikeContentPolicy(detail.orEmpty())) {
+    if (reason == ProviderFailureKind.CONTENT_BLOCKED.reason || looksLikeContentPolicy(detail.orEmpty())) {
         return localizedContentBlocked
     }
     return userFacingRuntimeErrorSummary(detail)

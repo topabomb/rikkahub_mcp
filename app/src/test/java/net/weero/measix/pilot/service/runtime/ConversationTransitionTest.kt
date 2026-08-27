@@ -202,11 +202,19 @@ class ConversationTransitionTest {
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
         val r = ConversationTransition.apply(
             c.toSnapshot(),
-            FinalizeTurn(handle(c.id, assistantId), null, TurnExecutionStatus.FAILED, "boom", closeInterruptedTools = false),
+            FinalizeTurn(
+                handle = handle(c.id, assistantId),
+                messages = null,
+                terminalStatus = TurnExecutionStatus.FAILED,
+                terminalReason = "provider_error",
+                closeInterruptedTools = false,
+                terminalDetail = "sanitized provider detail",
+            ),
         )
         val msg = r.nodes[0].messages.single()
         assertEquals(MessageTerminalStatus.FAILED, msg.terminalStatus)
-        assertEquals("boom", msg.terminalReason)
+        assertEquals("provider_error", msg.terminalReason)
+        assertEquals("sanitized provider detail", msg.terminalDetail)
     }
 
     @Test

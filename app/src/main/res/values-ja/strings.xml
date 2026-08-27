@@ -1544,5 +1544,27 @@
   <string name="managed_configuration_source_builtin">組み込み</string>
   <string name="managed_configuration_source_local">ローカル</string>
   <string name="managed_configuration_source_managed">管理対象</string>
+  <string name="chat_page_check_provider_settings">プロバイダー設定を確認</string>
+  <string name="chat_page_copy_error">エラーメッセージをコピー</string>
+  <string name="error_title_generate_suggestion">候補の生成に失敗しました</string>
+  <string name="error_title_rate_limited">リクエストが多すぎます</string>
+  <string name="error_title_quota_exhausted">クォータまたは残高が不足しています</string>
+  <string name="error_title_auth_failed">API キーが無効です</string>
+  <string name="error_title_permission_denied">モデルを使用する権限がありません</string>
+  <string name="error_title_content_blocked">利用ポリシーによりブロックされました</string>
+  <string name="error_title_invalid_request">リクエストが拒否されました</string>
+  <string name="error_title_provider_unavailable">サービスは一時的に利用できません</string>
+  <string name="error_title_provider_error">モデルサービスがエラーを返しました</string>
+  <string name="error_title_runtime_error">ローカル実行エラー</string>
+  <string name="error_title_response_incomplete">返信が完了していません</string>
+  <string name="error_title_tool_loop_limit">ツールステップの上限に達しました</string>
+  <string name="error_title_interaction_limit">対話回数の上限に達しました</string>
+  <string name="chat_error_detail_unavailable">この返信の詳細な診断情報は保存されていません。</string>
+  <string name="chat_error_detail_response_incomplete">プロバイダーが返信の完了前に応答を終了しました。</string>
+  <string name="chat_error_detail_tool_loop_limit">設定されたツールステップの上限に達したため、返信を停止しました。</string>
+  <string name="chat_error_detail_interaction_limit">対話回数の上限に達したため、返信を停止しました。</string>
+  <string name="chat_message_terminal_user_stopped">停止しました</string>
+  <string name="chat_message_terminal_superseded">新しい返信に置き換えられました</string>
+  <string name="chat_message_terminal_process_restarted">アプリの再起動により中断されました</string>
 </resources>
 

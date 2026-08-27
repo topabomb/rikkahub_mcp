@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ui
+package net.weero.measix.pilot.ui.components.ui
 
 import android.content.ClipData
 import androidx.compose.animation.AnimatedVisibility
@@ -43,6 +43,7 @@ import me.rerere.hugeicons.stroke.Delete01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.service.ChatError
+import net.weero.measix.pilot.service.ChatErrorRetention
 import net.weero.measix.pilot.service.ChatErrorSolution
 import net.weero.measix.pilot.ui.context.LocalNavController
 import kotlin.uuid.Uuid
@@ -112,12 +113,16 @@ fun ErrorCard(
     val navController = LocalNavController.current
     val scope = rememberCoroutineScope()
     val checkTitleModelSettings = stringResource(R.string.chat_page_check_title_model_settings)
+    val checkProviderSettings = stringResource(R.string.chat_page_check_provider_settings)
     val linkColor = MaterialTheme.colorScheme.primary
 
-    // 5 秒后自动消失
-    LaunchedEffect(error.id) {
-        delay(5000)
-        onDismiss()
+    LaunchedEffect(error.id, error.retention) {
+        if (error.retention == ChatErrorRetention.TRANSIENT) {
+            val remainingMillis = (TRANSIENT_ERROR_DURATION_MILLIS -
+                (System.currentTimeMillis() - error.timestamp)).coerceAtLeast(0L)
+            delay(remainingMillis)
+            onDismiss()
+        }
     }
 
     Surface(
@@ -147,7 +152,7 @@ fun ErrorCard(
                     )
                 }
                 Text(
-                    text = error.error.message ?: "Unknown error",
+                    text = error.detail,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.8f),
                     overflow = TextOverflow.Ellipsis,
@@ -177,22 +182,48 @@ fun ErrorCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                if (error.solution == ChatErrorSolution.CheckProviderSettings) {
+                    Text(
+                        text = buildAnnotatedString {
+                            withLink(
+                                LinkAnnotation.Clickable(
+                                    tag = "check_provider_settings",
+                                    styles = TextLinkStyles(
+                                        style = SpanStyle(
+                                            color = linkColor,
+                                            textDecoration = TextDecoration.Underline,
+                                        )
+                                    ),
+                                    linkInteractionListener = {
+                                        navController.navigate(Screen.SettingProvider)
+                                    },
+                                )
+                            ) {
+                                append(checkProviderSettings)
+                            }
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             IconButton(
                 onClick = {
                     scope.launch {
                         clipboard.setClipEntry(
                             ClipEntry(
-                                clipData = ClipData.newPlainText("Error", error.error.message ?: "Unknown error")
+                                clipData = ClipData.newPlainText("Error", error.detail)
                             )
                         )
+                        onDismiss()
                     }
                 },
                 modifier = Modifier.size(32.dp),
             ) {
                 Icon(
                     imageVector = HugeIcons.Copy01,
-                    contentDescription = "Copy error message",
+                    contentDescription = stringResource(R.string.chat_page_copy_error),
                     tint = MaterialTheme.colorScheme.onErrorContainer,
                     modifier = Modifier.size(18.dp),
                 )
@@ -211,3 +242,5 @@ fun ErrorCard(
         }
     }
 }
+
+private const val TRANSIENT_ERROR_DURATION_MILLIS = 5_000L

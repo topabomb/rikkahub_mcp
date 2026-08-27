@@ -1,9 +1,12 @@
 package net.weero.measix.pilot.ui.components.message
 
 import me.rerere.ai.ui.MessageTerminalStatus
+import me.rerere.ai.ui.TurnTerminalReasons
+import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.mediaPersistenceFailurePart
+import me.rerere.ai.util.ProviderFailureKind
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.ai.tools.local.GENERATE_IMAGE_TOOL_NAME
 import net.weero.measix.pilot.ui.components.ui.selectCollapsedSteps
@@ -114,5 +117,36 @@ class ChatMessageCotTest {
             R.string.chat_message_terminal_interrupted,
             terminalStatusTextResource(MessageTerminalStatus.INTERRUPTED),
         )
+    }
+
+    @Test
+    fun `terminal reason selects a specific short label`() {
+        assertEquals(
+            R.string.error_title_rate_limited,
+            terminalStatusTextResource(MessageTerminalStatus.FAILED, ProviderFailureKind.RATE_LIMITED.reason),
+        )
+        assertEquals(
+            R.string.error_title_tool_loop_limit,
+            terminalStatusTextResource(MessageTerminalStatus.INCOMPLETE, TurnTerminalReasons.TOOL_LOOP_LIMIT),
+        )
+        assertEquals(
+            R.string.chat_message_terminal_superseded,
+            terminalStatusTextResource(
+                MessageTerminalStatus.CANCELLED,
+                TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN,
+            ),
+        )
+    }
+
+    @Test
+    fun `empty cancelled assistant slot is hidden but partial content remains visible`() {
+        val empty = UIMessage.assistant("").copy(
+            terminalStatus = MessageTerminalStatus.CANCELLED,
+            terminalReason = TurnTerminalReasons.USER_STOP,
+        )
+        val partial = empty.copy(parts = listOf(UIMessagePart.Text("partial")))
+
+        assertTrue(shouldHideEmptyCancelledMessage(empty))
+        assertFalse(shouldHideEmptyCancelledMessage(partial))
     }
 }

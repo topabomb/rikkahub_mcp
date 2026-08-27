@@ -401,6 +401,7 @@ class MessageTest {
             providerMetadata = buildJsonObject { put("opaque", "draft") },
             terminalStatus = MessageTerminalStatus.FAILED,
             terminalReason = TurnTerminalReasons.PROVIDER_FAILED,
+            terminalDetail = "sanitized provider detail",
         )
 
         val projected = listOf(terminal).replaySafeProjection().single()
@@ -408,6 +409,7 @@ class MessageTest {
         assertEquals(null, projected.providerMetadata)
         assertEquals(null, projected.terminalStatus)
         assertEquals(null, projected.terminalReason)
+        assertEquals(null, projected.terminalDetail)
         assertTrue(projected.parts.none { it is UIMessagePart.Reasoning })
         assertTrue(projected.parts.none { it === openTool })
         assertTrue(projected.toText().contains("partial answer"))

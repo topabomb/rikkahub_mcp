@@ -36,6 +36,8 @@ data class UIMessage(
     val terminalStatus: MessageTerminalStatus? = null,
     /** Stable English reason for [terminalStatus], e.g. `user_stop`. */
     val terminalReason: String? = null,
+    /** Sanitized human-readable diagnostic for reopening a terminal error after restart. */
+    val terminalDetail: String? = null,
 ) {
     private fun appendChunk(chunk: MessageChunk): UIMessage {
         val choice = chunk.choices.getOrNull(0)
@@ -562,6 +564,7 @@ fun UIMessage.replaySafeProjection(): UIMessage? {
         providerMetadata = if (isTerminalAssistant) null else providerMetadata,
         terminalStatus = if (isTerminalAssistant) null else terminalStatus,
         terminalReason = if (isTerminalAssistant) null else terminalReason,
+        terminalDetail = if (isTerminalAssistant) null else terminalDetail,
     )
     return projected.takeIf { it.isValidToUpload() }
 }

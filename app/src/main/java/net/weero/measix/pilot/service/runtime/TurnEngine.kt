@@ -11,6 +11,7 @@ import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.util.HttpException
 import me.rerere.ai.util.ProviderTerminalStatus
+import me.rerere.ai.util.classifyProviderFailure
 import net.weero.measix.pilot.data.ai.CheckpointKind
 import net.weero.measix.pilot.data.ai.FinishedReason
 import net.weero.measix.pilot.data.ai.GenerationChunk
@@ -146,6 +147,7 @@ class TurnEngine(
     /** 把 GenerationChunk 流绑定到提交协议（冷流，collect 触发执行）。 */
     fun bind(source: Flow<GenerationChunk>): Flow<TurnEvent> = flow {
         var lastMessages: List<UIMessage> = emptyList()
+        var terminalSeen = false
         val sourceEvents = source.transform<GenerationChunk, TurnSourceEvent> { chunk ->
             emit(TurnSourceEvent.Chunk(chunk))
         }.catch { error ->
@@ -161,6 +163,7 @@ class TurnEngine(
                         lastMessages = lastMessages,
                         closeInterruptedTools = false,
                     )
+                    terminalSeen = true
                     emit(TurnEvent.Finished(outcome))
                     return@collect
                 }
@@ -182,9 +185,22 @@ class TurnEngine(
                             lastMessages = lastMessages,
                             closeInterruptedTools = false,
                         )
+                        terminalSeen = true
                         emit(TurnEvent.Finished(outcome))
                     }
                 }
+            }
+            if (!terminalSeen) {
+                val outcome = TurnOutcome.Incomplete(
+                    terminalReason = TurnTerminalReasons.PROVIDER_INCOMPLETE,
+                    terminalDetail = "Response stream ended without a terminal event.",
+                )
+                submitStreamFinalize(
+                    outcome = outcome,
+                    lastMessages = lastMessages,
+                    closeInterruptedTools = false,
+                )
+                emit(TurnEvent.Finished(outcome))
             }
         } catch (error: CancellationException) {
             // first()/take() abort the collector with AbortFlowException; that is not a user cancel.
@@ -259,6 +275,7 @@ class TurnEngine(
                 terminalStatus = outcome.status,
                 terminalReason = outcome.terminalReason,
                 closeInterruptedTools = closeInterruptedTools,
+                terminalDetail = outcome.terminalDetail,
             ),
         )
         submittedTerminalStatus = outcome.status
@@ -311,28 +328,36 @@ sealed interface TurnEvent {
 sealed interface TurnOutcome {
     val status: TurnExecutionStatus
     val terminalReason: String?
+    val terminalDetail: String?
 
     data object Completed : TurnOutcome {
         override val status = TurnExecutionStatus.COMPLETED
         override val terminalReason: String? = null
+        override val terminalDetail: String? = null
     }
 
     data object AwaitingApproval : TurnOutcome {
         override val status = TurnExecutionStatus.AWAITING_APPROVAL
         override val terminalReason: String? = null
+        override val terminalDetail: String? = null
     }
 
-    data class Incomplete(override val terminalReason: String) : TurnOutcome {
+    data class Incomplete(
+        override val terminalReason: String,
+        override val terminalDetail: String? = null,
+    ) : TurnOutcome {
         override val status = TurnExecutionStatus.INCOMPLETE
     }
 
     data class Cancelled(override val terminalReason: String) : TurnOutcome {
         override val status = TurnExecutionStatus.CANCELLED
+        override val terminalDetail: String? = null
     }
 
     data class Failed(
         val error: Throwable,
         override val terminalReason: String,
+        override val terminalDetail: String? = null,
     ) : TurnOutcome {
         override val status = TurnExecutionStatus.FAILED
     }
@@ -344,19 +369,21 @@ sealed interface TurnOutcome {
             FinishedReason.STEP_LIMIT_REACHED -> Incomplete(TurnTerminalReasons.TOOL_LOOP_LIMIT)
         }
 
-        fun fromFailure(error: Throwable): TurnOutcome =
-            if (error is HttpException && error.terminalStatus == ProviderTerminalStatus.INCOMPLETE) {
-                Incomplete(TurnTerminalReasons.PROVIDER_INCOMPLETE)
+        fun fromFailure(error: Throwable): TurnOutcome {
+            val classified = classifyProviderFailure(error)
+            return if (error is HttpException && error.terminalStatus == ProviderTerminalStatus.INCOMPLETE) {
+                Incomplete(
+                    terminalReason = TurnTerminalReasons.PROVIDER_INCOMPLETE,
+                    terminalDetail = classified.detail,
+                )
             } else {
                 Failed(
                     error = error,
-                    terminalReason = if (error is HttpException) {
-                        TurnTerminalReasons.PROVIDER_FAILED
-                    } else {
-                        TurnTerminalReasons.RUNTIME_ERROR
-                    },
+                    terminalReason = classified.kind.reason,
+                    terminalDetail = classified.detail,
                 )
             }
+        }
     }
 }
 

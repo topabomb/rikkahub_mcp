@@ -3,6 +3,7 @@ package net.weero.measix.pilot.data.ai.subassistant
 import kotlinx.serialization.json.Json
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.HttpException
+import me.rerere.ai.util.ProviderFailureKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -35,14 +36,14 @@ class SubAssistantRuntimeErrorTest {
         val error = RuntimeException(
             "kn4: Content violates usage guidelines. Failed check: SAFETY_CHECK_TYPE_CSAM",
         )
-        assertEquals(SUB_ASSISTANT_REASON_CONTENT_BLOCKED, classifySubAssistantFailure(error))
+        assertEquals(ProviderFailureKind.CONTENT_BLOCKED.reason, classifySubAssistantFailure(error))
         assertEquals(
             CONTENT_BLOCKED_MODEL_DETAIL,
-            modelVisibleFailureDetail(SUB_ASSISTANT_REASON_CONTENT_BLOCKED, error),
+            modelVisibleFailureDetail(ProviderFailureKind.CONTENT_BLOCKED.reason, error),
         )
-        assertFalse(modelVisibleFailureDetail(SUB_ASSISTANT_REASON_CONTENT_BLOCKED, error).contains("CSAM"))
+        assertFalse(modelVisibleFailureDetail(ProviderFailureKind.CONTENT_BLOCKED.reason, error).contains("CSAM"))
         val gemini = RuntimeException("Prompt feedback: SAFETY")
-        assertEquals(SUB_ASSISTANT_REASON_CONTENT_BLOCKED, classifySubAssistantFailure(gemini))
+        assertEquals(ProviderFailureKind.CONTENT_BLOCKED.reason, classifySubAssistantFailure(gemini))
         assertEquals(
             "The model refused this request because it violates the usage policy. Rephrase and try again.",
             resolveSubAssistantErrorBody(
@@ -56,7 +57,7 @@ class SubAssistantRuntimeErrorTest {
     @Test
     fun `classifies OpenAI content_filter as content_blocked`() {
         val error = HttpException("Response incomplete: content_filter")
-        assertEquals(SUB_ASSISTANT_REASON_CONTENT_BLOCKED, classifySubAssistantFailure(error))
+        assertEquals(ProviderFailureKind.CONTENT_BLOCKED.reason, classifySubAssistantFailure(error))
         assertEquals(
             CONTENT_BLOCKED_MODEL_DETAIL,
             modelVisibleFailureDetail(classifySubAssistantFailure(error), error),
@@ -67,15 +68,15 @@ class SubAssistantRuntimeErrorTest {
     }
 
     @Test
-    fun `classifies HttpException as provider_error`() {
+    fun `classifies provider failures with the shared fine grained reasons`() {
         val error = RuntimeException("wrap", HttpException("Failed to get response: 429"))
-        assertEquals(SUB_ASSISTANT_REASON_PROVIDER_ERROR, classifySubAssistantFailure(error))
+        assertEquals(ProviderFailureKind.RATE_LIMITED.reason, classifySubAssistantFailure(error))
         assertEquals(
-            SUB_ASSISTANT_REASON_PROVIDER_ERROR,
+            ProviderFailureKind.PERMISSION_DENIED.reason,
             classifySubAssistantFailure(Exception("Unknown error: 403")),
         )
         assertEquals(
-            SUB_ASSISTANT_REASON_PROVIDER_ERROR,
+            ProviderFailureKind.RATE_LIMITED.reason,
             classifySubAssistantFailure(HttpException("Resource has been exhausted")),
         )
     }
@@ -128,15 +129,15 @@ class SubAssistantRuntimeErrorTest {
     @Test
     fun `classifies unknown exceptions as runtime_error`() {
         assertEquals(
-            SUB_ASSISTANT_REASON_RUNTIME_ERROR,
+            ProviderFailureKind.RUNTIME_ERROR.reason,
             classifySubAssistantFailure(IllegalStateException("Child conversation not found")),
         )
         assertEquals(
-            SUB_ASSISTANT_REASON_RUNTIME_ERROR,
+            ProviderFailureKind.RUNTIME_ERROR.reason,
             classifySubAssistantFailure(IllegalStateException("There are 429 items in the queue")),
         )
         assertEquals(
-            SUB_ASSISTANT_REASON_RUNTIME_ERROR,
+            ProviderFailureKind.RUNTIME_ERROR.reason,
             classifySubAssistantFailure(IllegalStateException("Master Conversation abc does not exist")),
         )
     }
@@ -155,7 +156,7 @@ class SubAssistantRuntimeErrorTest {
         assertEquals(
             "The model refused this request because it violates the usage policy. Rephrase and try again.",
             resolveSubAssistantErrorBody(
-                reason = SUB_ASSISTANT_REASON_CONTENT_BLOCKED,
+                reason = ProviderFailureKind.CONTENT_BLOCKED.reason,
                 detail = "SAFETY_CHECK_TYPE_CSAM",
                 localizedContentBlocked = "The model refused this request because it violates the usage policy. Rephrase and try again.",
             ),
@@ -212,7 +213,7 @@ class SubAssistantRuntimeErrorTest {
     @Test
     fun `policy errors still hide check types after collapsing whitespace`() {
         val error = HttpException("Content violates usage guidelines.\nFailed check: SAFETY_CHECK_TYPE_CSAM")
-        assertEquals(SUB_ASSISTANT_REASON_CONTENT_BLOCKED, classifySubAssistantFailure(error))
+        assertEquals(ProviderFailureKind.CONTENT_BLOCKED.reason, classifySubAssistantFailure(error))
         assertEquals(
             CONTENT_BLOCKED_MODEL_DETAIL,
             modelVisibleFailureDetail(classifySubAssistantFailure(error), error),

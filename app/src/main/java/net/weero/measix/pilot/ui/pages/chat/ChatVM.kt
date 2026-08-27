@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import me.rerere.ai.core.ToolCallLocator
@@ -33,6 +32,7 @@ import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.service.ChatErrorStore
+import net.weero.measix.pilot.service.terminalChatError
 import net.weero.measix.pilot.service.MasterTurnCoordinator
 import net.weero.measix.pilot.service.ConversationApplicationService
 import net.weero.measix.pilot.service.ConversationQueryService
@@ -147,11 +147,24 @@ class ChatVM(
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // 错误状态
-    val errors: StateFlow<List<ChatError>> = chatErrorStore.errors
+    val errors: StateFlow<List<ChatError>> = chatErrorStore.errorsFor(_conversationId)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     fun dismissError(id: Uuid) = chatErrorStore.dismiss(id)
 
-    fun clearAllErrors() = chatErrorStore.clear()
+    fun clearAllErrors() = chatErrorStore.clear(_conversationId)
+
+    fun showTerminalError(message: UIMessage) {
+        val status = message.terminalStatus ?: return
+        terminalChatError(
+            context = context,
+            conversationId = _conversationId,
+            messageId = message.id,
+            status = status,
+            reason = message.terminalReason,
+            detail = message.terminalDetail,
+        )?.let(chatErrorStore::add)
+    }
 
     // 生成完成
     val generationDoneFlow: SharedFlow<Uuid> = masterTurnCoordinator.generationDoneFlow
@@ -263,7 +276,11 @@ class ChatVM(
                 targetTokens,
                 keepRecentMessages
             ).onFailure {
-                chatErrorStore.add(it, title = context.getString(R.string.error_title_compress_conversation))
+                chatErrorStore.add(
+                    error = it,
+                    conversationId = _conversationId,
+                    title = context.getString(R.string.error_title_compress_conversation),
+                )
             }
         }
     }

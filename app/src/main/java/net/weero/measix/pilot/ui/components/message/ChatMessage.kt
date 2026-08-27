@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -84,6 +85,7 @@ import net.weero.measix.pilot.service.runtime.ToolCallPhase
 import net.weero.measix.pilot.data.model.AssistantAffectScope
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.model.replaceRegexes
+import net.weero.measix.pilot.service.terminalMessagePresentation
 import net.weero.measix.pilot.ui.components.richtext.MarkdownBlock
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.ui.components.richtext.buildMarkdownPreviewHtml
@@ -125,6 +127,7 @@ fun ChatMessage(
     onToolAnswer: ((locator: ToolCallLocator, answer: String) -> Unit)? = null,
     onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
     toolCallPhases: Map<ToolCallLocator, ToolCallPhase> = emptyMap(),
+    onShowTerminalError: ((UIMessage) -> Unit)? = null,
     readOnly: Boolean = false,
 ) {
     val message = node.messages[node.selectIndex]
@@ -143,6 +146,9 @@ fun ChatMessage(
     val mediaFailureText = stringResource(R.string.chat_message_media_persistence_failed)
     val renderableParts = remember(message.parts, mediaFailureText) {
         message.parts.withMediaFailurePlaceholders(mediaFailureText)
+    }
+    if (shouldHideEmptyCancelledMessage(message, renderableParts)) {
+        return
     }
     val hasVisibleMessage = !renderableParts.isEmptyUIMessage() || message.terminalStatus != null
     Column(
@@ -191,7 +197,11 @@ fun ChatMessage(
         }
 
         message.terminalStatus?.let { terminalStatus ->
-            MessageTerminalStatusNotice(terminalStatus)
+            MessageTerminalStatusNotice(
+                message = message,
+                status = terminalStatus,
+                onShowTerminalError = onShowTerminalError,
+            )
         }
 
         val showActions = if (readOnly) {
@@ -287,22 +297,45 @@ internal fun List<UIMessagePart>.withMediaFailurePlaceholders(
     }
 }
 
-internal fun terminalStatusTextResource(status: MessageTerminalStatus): Int = when (status) {
-    MessageTerminalStatus.CANCELLED -> R.string.chat_message_terminal_cancelled
-    MessageTerminalStatus.FAILED -> R.string.chat_message_terminal_failed
-    MessageTerminalStatus.INCOMPLETE -> R.string.chat_message_terminal_incomplete
-    MessageTerminalStatus.INTERRUPTED -> R.string.chat_message_terminal_interrupted
-}
+internal fun shouldHideEmptyCancelledMessage(
+    message: UIMessage,
+    renderableParts: List<UIMessagePart> = message.parts,
+): Boolean = message.terminalStatus == MessageTerminalStatus.CANCELLED &&
+    renderableParts.isEmptyUIMessage()
+
+internal fun terminalStatusTextResource(status: MessageTerminalStatus, reason: String? = null): Int =
+    terminalMessagePresentation(status, reason).statusResource
 
 @Composable
-private fun MessageTerminalStatusNotice(status: MessageTerminalStatus) {
+private fun MessageTerminalStatusNotice(
+    message: UIMessage,
+    status: MessageTerminalStatus,
+    onShowTerminalError: ((UIMessage) -> Unit)?,
+) {
+    val canShowDetail = status == MessageTerminalStatus.FAILED || status == MessageTerminalStatus.INCOMPLETE
+    val containerColor = when (status) {
+        MessageTerminalStatus.FAILED -> MaterialTheme.colorScheme.errorContainer
+        MessageTerminalStatus.INCOMPLETE -> MaterialTheme.colorScheme.tertiaryContainer
+        MessageTerminalStatus.CANCELLED -> MaterialTheme.colorScheme.surfaceVariant
+        MessageTerminalStatus.INTERRUPTED -> MaterialTheme.colorScheme.secondaryContainer
+    }
+    val contentColor = when (status) {
+        MessageTerminalStatus.FAILED -> MaterialTheme.colorScheme.onErrorContainer
+        MessageTerminalStatus.INCOMPLETE -> MaterialTheme.colorScheme.onTertiaryContainer
+        MessageTerminalStatus.CANCELLED -> MaterialTheme.colorScheme.onSurfaceVariant
+        MessageTerminalStatus.INTERRUPTED -> MaterialTheme.colorScheme.onSecondaryContainer
+    }
     Surface(
+        modifier = Modifier.clickable(
+            enabled = canShowDetail && onShowTerminalError != null,
+            onClick = { onShowTerminalError?.invoke(message) },
+        ),
         shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.errorContainer,
+        color = containerColor,
     ) {
         Text(
-            text = stringResource(terminalStatusTextResource(status)),
-            color = MaterialTheme.colorScheme.onErrorContainer,
+            text = stringResource(terminalStatusTextResource(status, message.terminalReason)),
+            color = contentColor,
             style = MaterialTheme.typography.labelMedium,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
         )

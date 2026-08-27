@@ -145,6 +145,7 @@ internal fun ChatList(
     onEdit: (UIMessage) -> Unit = {},
     onForkMessage: (UIMessage) -> Unit = {},
     onDelete: (UIMessage) -> Unit = {},
+    onShowTerminalError: (UIMessage) -> Unit = {},
     onUpdateMessage: (MessageNode) -> Unit = {},
     onClickSuggestion: (String) -> Unit = {},
     onJumpToMessage: (Int) -> Unit = {},
@@ -198,6 +199,7 @@ internal fun ChatList(
                 onEdit = onEdit,
                 onForkMessage = onForkMessage,
                 onDelete = onDelete,
+                onShowTerminalError = onShowTerminalError,
                 onUpdateMessage = onUpdateMessage,
                 onClickSuggestion = onClickSuggestion,
                 onProviderConfigClick = onProviderConfigClick,
@@ -238,6 +240,7 @@ private fun ChatListNormal(
     onEdit: (UIMessage) -> Unit,
     onForkMessage: (UIMessage) -> Unit,
     onDelete: (UIMessage) -> Unit,
+    onShowTerminalError: (UIMessage) -> Unit,
     onUpdateMessage: (MessageNode) -> Unit,
     onClickSuggestion: (String) -> Unit,
     onProviderConfigClick: () -> Unit,
@@ -470,6 +473,7 @@ private fun ChatListNormal(
                                     onDelete = {
                                         onDelete(node.currentMessage)
                                     },
+                                    onShowTerminalError = onShowTerminalError,
                                     onShare = {
                                         selecting = true  // 使用 CoroutineScope 延迟状态更新
                                         selectedItems.clear()

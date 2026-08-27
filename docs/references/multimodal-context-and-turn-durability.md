@@ -194,6 +194,8 @@ Schema 见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and
 - `StartTurn` 单事务写 assistant 槽与 RUNNING turn fact，返回唯一 `TurnHandle`。
 - `CommitCheckpoint` 命令（`TurnEngine.onCheckpoint` 提交）：工具循环内以 Room 事务提交 changed-node delta、执行事实、artifact reference 与 FTS delta。
 - `FinalizeTurn` 命令（`TurnEngine.bind` 在终态提交）：同一事务先收口 STARTED tool fact，再 CAS turn 终态；失败整体回滚。
+- 非成功 Master/Child 消息在同一 `FinalizeTurn` 中写入 `terminalStatus`、细分稳定 `terminalReason` 与可空的脱敏
+  `terminalDetail`。详情属于消息 JSON，不改变 Room 表结构；它用于进程重启后重新打开诊断，不参与状态机或 Provider 回放。
 - 工具执行期间崩溃：从最近 checkpoint 恢复，丢失窗口 = 当前工具 step。
 - `ActiveTurnState.toolCallPhases` 只投影当前 turn 的调用装配、审批和执行阶段；`TOOL_EXECUTION_STARTED` 与结果终态必须在对应事实提交成功后推进，结束 turn 时随 active projection 一同释放，不形成第二张 durable 执行表。
 
@@ -223,7 +225,7 @@ non-terminal execution 的 owning message 缺失是持久化完整性错误，�
 
 ### 7.2 回放安全
 
-- 非成功 Assistant 历史在再次发给 Provider 前经过 `replaySafeProjection()`（`me.rerere.ai.ui` 扩展）：保留有效 Text / Image / 已执行且安全封套的 Tool；剔除 media-failure 文本、`data:` 图（Tool.output 内降级为失败 JSON 文本）、终态下未完成的 Reasoning 与未执行 / 无安全封套的 Tool；对非成功终态追加 `[Previous assistant response did not complete.]` 标记并清空 `terminalStatus`。不修改持久化会话。
+- 非成功 Assistant 历史在再次发给 Provider 前经过 `replaySafeProjection()`（`me.rerere.ai.ui` 扩展）：保留有效 Text / Image / 已执行且安全封套的 Tool；剔除 media-failure 文本、`data:` 图（Tool.output 内降级为失败 JSON 文本）、终态下未完成的 Reasoning 与未执行 / 无安全封套的 Tool；对非成功终态追加 `[Previous assistant response did not complete.]` 标记并清空 `terminalStatus`、`terminalReason` 与 `terminalDetail`。不修改持久化会话，也不把用户诊断发送给 Provider。
 - 模型切换后的历史回放由统一投影负责（§3），无迁移逻辑。
 - `ToolArtifactReplayTransformer` 按 metadata 恢复历史 Tool Result 的路径与 Image URL（会话 fork / 恢复 / 文件迁移后仍指向有效文件）。
 

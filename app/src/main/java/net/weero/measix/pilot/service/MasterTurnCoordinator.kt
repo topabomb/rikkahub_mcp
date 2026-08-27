@@ -858,15 +858,29 @@ class MasterTurnCoordinator(
         senderName: String,
     ) {
         withContext(NonCancellable) {
-            if (outcome is TurnOutcome.Failed) {
+            val finalMessage = liveSnapshot(conversationId).currentMessages()
+                .firstOrNull { it.id == inFlightAssistantId }
+            val terminalStatus = when (outcome) {
+                is TurnOutcome.Failed -> MessageTerminalStatus.FAILED
+                is TurnOutcome.Incomplete -> MessageTerminalStatus.INCOMPLETE
+                else -> null
+            }
+            if (terminalStatus != null && inFlightAssistantId != null) {
+                terminalChatError(
+                    context = context,
+                    conversationId = conversationId,
+                    messageId = inFlightAssistantId,
+                    status = finalMessage?.terminalStatus ?: terminalStatus,
+                    reason = finalMessage?.terminalReason ?: outcome.terminalReason,
+                    detail = finalMessage?.terminalDetail ?: outcome.terminalDetail,
+                )?.let(chatErrorStore::add)
+            } else if (outcome is TurnOutcome.Failed) {
                 chatErrorStore.add(
-                    outcome.error,
-                    conversationId,
+                    error = outcome.error,
+                    conversationId = conversationId,
                     title = context.getString(R.string.error_title_generation),
                 )
             }
-            val finalMessage = liveSnapshot(conversationId).currentMessages()
-                .firstOrNull { it.id == inFlightAssistantId }
             appEventBus.tryEmit(
                 AppEvent.ChatGenerationEnded(
                     conversationId = conversationId,

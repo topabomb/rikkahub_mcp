@@ -151,7 +151,7 @@ Target 复用通用 `GenerationLoop`，不是独立的简化模型循环。它�
 
 完成态优先取最终 ASSISTANT step 中最后一个工作工具之后的顶层 Text。`text_to_speech` 等副作用工具不切断答案；最终 step 没有可见文本时向更早 step 回退。`extractDeliverableArtifacts()` 收集本次 run 的明确交付物：成功的 `generate_image` Tool.output Image，以及最终 ASSISTANT 顶层媒体。`has_non_text_output` 由该清单派生。completed 且存在可持久化交付物时，JSON 始终带轻量 `artifacts[]`；`extras=["artifacts"]` 才按 Caller 的 `ImageInputAdapter` 能力把原图或 observation 追加进 Tool.output。
 
-只有 `completed` 返回 `assistant_name` 和 `content`。其他终态只返回状态与稳定 reason，避免让 Caller 把半成品当作成功结果。未分类异常、Provider HTTP 失败和内容政策拒绝分别使用 `runtime_error`、`provider_error` 与 `content_blocked`，并带回提炼后的 `detail`。前两者是单行的类型与消息（按字符上限裁剪，不含因果链和堆栈）；`content_blocked` 使用稳定英文说明，不回传检查类型或原始政策字符串。用户卡片和详情用本地化原因加同一条消息摘要，不再另附因果链。分类先匹配政策标记（含 OpenAI `content_filter` / `content_policy` 与 Gemini prompt feedback），再把 `HttpException` 和其他 HTTP 层失败记为 `provider_error`。调用过 `text_to_speech` 时默认带 `tts_stats`（次数与朗读字符合计）；完整 `tool_calls` 计数表、朗读文本表 `tts` 以及交付物内容只在 Caller 通过 `extras` 点名后返回。Recovery 与 Master 停止只重建文本 extras，不加媒体。
+只有 `completed` 返回 `assistant_name` 和 `content`。其他终态只返回状态与稳定 reason，避免让 Caller 把半成品当作成功结果。Provider 与本地异常统一由 `classifyProviderFailure` 分类，reason 与 `ProviderFailureKind.reason` 完全一致：`rate_limited`、`quota_exhausted`、`auth_failed`、`permission_denied`、`invalid_request`、`provider_unavailable`、`provider_error`、`content_blocked` 或 `runtime_error`，并带回同一分类器生成的脱敏 `detail`。`content_blocked` 使用稳定英文说明，不回传检查类型或原始政策字符串；其他详情为有界单行诊断，不含因果链和堆栈。用户卡片和详情使用细分本地化原因加同一条消息摘要，不再把 429、额度、鉴权和 5xx 压成一档 `provider_error`。调用过 `text_to_speech` 时默认带 `tts_stats`（次数与朗读字符合计）；完整 `tool_calls` 计数表、朗读文本表 `tts` 以及交付物内容只在 Caller 通过 `extras` 点名后返回。Recovery 与 Master 停止只重建文本 extras，不加媒体。
 
 ## 6. Target 工具与运行中撤权
 
