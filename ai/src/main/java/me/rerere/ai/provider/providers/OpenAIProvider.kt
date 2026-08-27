@@ -22,9 +22,11 @@ import me.rerere.ai.provider.ImageGenerationParams
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.openai.ChatCompletionsAPI
 import me.rerere.ai.provider.providers.openai.ResponseAPI
+import me.rerere.ai.provider.providers.openai.openAIRequestMediaCapabilities
 import me.rerere.ai.provider.images.ParsedImageGenerationItem
 import me.rerere.ai.provider.images.moderationBlockedImageException
 import me.rerere.ai.provider.images.parseImageGenerationResponseBody
@@ -56,6 +58,11 @@ class OpenAIProvider(
     context: Context? = null
 ) : Provider<ProviderSetting.OpenAI> {
     override val supportsImageGeneration: Boolean = true
+
+    override fun requestMediaCapabilities(
+        providerSetting: ProviderSetting.OpenAI,
+        model: Model,
+    ): RequestMediaCapabilities = openAIRequestMediaCapabilities(providerSetting, model)
 
     private val keyRoulette = if (context != null) KeyRoulette.lru(context) else KeyRoulette.default()
 

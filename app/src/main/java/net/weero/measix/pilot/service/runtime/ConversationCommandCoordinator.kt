@@ -2,20 +2,18 @@ package net.weero.measix.pilot.service.runtime
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
-import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.ExecutionStateConflictException
 import net.weero.measix.pilot.service.ApplicationRecoveryGate
-import java.time.Instant
+import kotlin.coroutines.coroutineContext
 import kotlin.uuid.Uuid
 
 /**
  * Single application entry for durable conversation commands. Resident and non-resident writes
- * share the reducer, mutation builder, transaction and failure semantics; callers never choose a
- * storage route.
+ * share one [ConversationTransition], one repository commit and the same failure semantics.
  */
 class ConversationCommandCoordinator(
     private val registry: ConversationRuntimeRegistry,
@@ -164,54 +162,20 @@ class ConversationCommandCoordinator(
     ): Boolean = operationLocks.withLock(conversationId) {
         val resident = registry.findRuntime(conversationId)
         if (resident != null) {
-            if (registry.isDraft(conversationId)) {
-                when (command) {
-                    is UpdateHeader,
-                    is MoveToAssistant,
-                    -> resident.updateDraftHeader(command)
-                    is AppendUserMessage -> withContext(NonCancellable) {
-                        resident.submit(
-                            command = command,
-                            persist = ::materializeDraft,
-                        )
-                        registry.promoteDraft(conversationId, resident)
-                    }
-                    else -> throw ConversationCommandConflictException(
-                        "draft $conversationId only accepts header edits or its first user message",
-                    )
-                }
-                true
-            } else {
-                val before = resident.snapshot.value
-                val titleCasMatched = command !is UpdateTitleIfCurrent ||
-                    before.header.title == command.expectedTitle
-                resident.submit(command, ::persistCommand)
-                titleCasMatched
+            resident.acquireLease().use {
+                applyResidentCommand(resident, command, draft = registry.isDraft(conversationId))
             }
-        } else if (
-            command is UpdateHeader ||
-            command is UpdateTitleIfCurrent ||
-            command is MoveToAssistant ||
-            command === TogglePinned
-        ) {
+        } else if (command is HeaderConversationCommand) {
             val header = repository.getConversationHeader(conversationId)
                 ?: throw ConversationNotFoundException(conversationId)
-            val updated = when (command) {
-                is UpdateHeader -> ConversationReducer.reduceHeader(header, command)
-                is UpdateTitleIfCurrent -> if (header.title == command.expectedTitle) {
-                    header.copy(title = command.title)
-                } else {
-                    header
-                }
-                is MoveToAssistant -> ConversationReducer.reduceHeader(header, command)
-                TogglePinned -> ConversationReducer.reduceHeader(header, TogglePinned)
-            }
-            val mutation = ConversationMutationBuilder.buildHeader(header, updated)
-            if (mutation.hasChanges()) repository.applyMutation(mutation)
+            val change = ConversationTransition.planHeader(header, command, nowMillis())
+            commitDurable(change.write)
             command !is UpdateTitleIfCurrent || header.title == command.expectedTitle
         } else {
-            registry.loadRuntime(conversationId).submit(command, ::persistCommand)
-            true
+            val runtime = registry.loadRuntime(conversationId)
+            runtime.acquireLease().use {
+                applyResidentCommand(runtime, command, draft = false)
+            }
         }
     }
 
@@ -269,109 +233,80 @@ class ConversationCommandCoordinator(
         check(!registry.isDraft(conversationId)) {
             "a turn cannot start before the first user message materializes the draft"
         }
-        registry.loadRuntime(conversationId).startTurn(
-            turnId,
-            assistantMessageId,
-            resume,
-            ::persistCommand,
-        )
+        val runtime = registry.loadRuntime(conversationId)
+        runtime.acquireLease().use {
+            val current = runtime.snapshot.value
+            // Identity check does not consume epoch; a rejected START must not advance it.
+            validateConversationCommandOwner(
+                runtime.id,
+                current,
+                StartTurn(turnId, assistantMessageId, resume),
+                runtime.currentGenerationTurnId(),
+            )
+            val command = StartTurn(
+                turnId = turnId,
+                assistantMessageId = assistantMessageId,
+                resume = resume,
+                epoch = runtime.nextTurnEpoch(),
+            )
+            val change = ConversationTransition.plan(current, command, nowMillis())
+            commitAndPublish(runtime, current, command, change)
+            TurnHandle(runtime.id, command.epoch, turnId, assistantMessageId)
+        }
     } }
 
-    private suspend fun persistCommand(
-        old: ConversationSnapshot,
-        new: ConversationSnapshot,
+    private suspend fun applyResidentCommand(
+        runtime: ConversationRuntime,
         command: ConversationCommand,
-    ): ConversationSnapshot {
-        val committed = committedSnapshot(old, new, command)
-        val mutation = ConversationMutationBuilder.build(old, committed, command)
-        val facts = when (command) {
-            is StartTurn -> ExecutionFacts(
-                turn = buildTurn(
-                    old.conversationId,
-                    command.turnId,
-                    TurnExecutionStatus.RUNNING,
-                    null,
-                    command.assistantMessageId,
-                ),
-                toolExecution = null,
-                turnOperation = TurnExecutionOperation.START,
-            )
-            is CommitCheckpoint -> ExecutionFacts(
-                turn = buildTurn(
-                    old.conversationId,
-                    command.handle.turnId,
-                    command.turnStatus,
-                    command.turnReason,
-                    command.handle.assistantMessageId,
-                ),
-                toolExecution = command.toolExecution,
-            )
-            is FinalizeTurn -> ExecutionFacts(
-                turn = buildTurn(
-                    old.conversationId,
-                    command.handle.turnId,
-                    command.terminalStatus,
-                    command.terminalReason,
-                    command.handle.assistantMessageId,
-                ),
-                toolExecution = null,
-            )
-            is RecoverInterruptedTurn -> ExecutionFacts(
-                turn = buildTurn(
-                    old.conversationId,
-                    command.turnId,
-                    TurnExecutionStatus.INTERRUPTED,
-                    command.terminalReason,
-                    command.assistantMessageId,
-                ),
-                toolExecution = null,
-                turnOperation = TurnExecutionOperation.RECOVER,
-            )
-            else -> null
+        draft: Boolean,
+    ): Boolean {
+        require(command !is StartTurn) { "use startTurn so the caller receives the TurnHandle" }
+        val current = runtime.snapshot.value
+        if (!draft) {
+            validateConversationCommandOwner(runtime.id, current, command, runtime.currentGenerationTurnId())
         }
-        if (mutation.hasChanges() || facts != null) repository.applyMutation(mutation, facts)
-        return committed
+        val titleCasMatched = command !is UpdateTitleIfCurrent ||
+            current.header.title == command.expectedTitle
+        val change = ConversationTransition.plan(current, command, nowMillis())
+        when (change) {
+            is ConversationChange.DraftOnly -> runtime.publishDraft(change.snapshot)
+            is ConversationChange.Durable -> commitAndPublish(
+                runtime = runtime,
+                old = current,
+                command = command,
+                change = change,
+                promoteDraft = change.write is ConversationWrite.MaterializeDraft,
+            )
+        }
+        return titleCasMatched
     }
 
-    private suspend fun materializeDraft(
+    private suspend fun commitAndPublish(
+        runtime: ConversationRuntime,
         old: ConversationSnapshot,
-        new: ConversationSnapshot,
         command: ConversationCommand,
-    ): ConversationSnapshot {
-        require(command is AppendUserMessage) { "only the first user message can materialize a draft" }
-        require(old.conversationId == new.conversationId) { "draft materialization changed aggregate identity" }
-        val committed = committedSnapshot(old, new, command)
-        repository.insertConversation(committed.materializeConversation())
-        return committed
+        change: ConversationChange,
+        promoteDraft: Boolean = false,
+    ) {
+        val durable = change as? ConversationChange.Durable
+            ?: error("draft-only changes cannot enter the durable commit path")
+        coroutineContext.ensureActive()
+        withContext(NonCancellable) {
+            commitDurable(durable.write)
+            runtime.publishCommitted(old, command, durable.snapshot)
+            if (promoteDraft) registry.promoteDraft(runtime.id, runtime)
+        }
     }
 
-    private fun committedSnapshot(
-        old: ConversationSnapshot,
-        snapshot: ConversationSnapshot,
-        command: ConversationCommand,
-    ): ConversationSnapshot = if (snapshot != old && command.updatesConversationActivity()) {
-        snapshot.copy(header = snapshot.header.copy(updateAt = nowMillis()))
-    } else {
-        snapshot
-    }
-
-    private fun buildTurn(
-        conversationId: Uuid,
-        turnId: Uuid,
-        status: TurnExecutionStatus,
-        reason: String?,
-        assistantMessageId: Uuid?,
-    ): TurnExecutionEntity {
-        val now = nowMillis()
-        return TurnExecutionEntity(
-            turnId = turnId.toString(),
-            conversationId = conversationId.toString(),
-            assistantMessageId = assistantMessageId?.toString(),
-            status = status,
-            reason = reason,
-            createdAt = now,
-            updatedAt = now,
-        )
+    private suspend fun commitDurable(write: ConversationWrite) {
+        when (write) {
+            is ConversationWrite.MaterializeDraft -> repository.commit(write)
+            is ConversationWrite.Mutate -> {
+                if (write.mutation.hasChanges() || write.executionFacts != null) {
+                    repository.commit(write)
+                }
+            }
+        }
     }
 
     private suspend fun <T> gated(block: suspend () -> T): T {
@@ -381,38 +316,68 @@ class ConversationCommandCoordinator(
 
 }
 
-private fun ConversationMutation.hasChanges(): Boolean =
-    headerPatch != null || upsertedNodes.isNotEmpty() || deletedNodeIds.isNotEmpty()
-
-private fun ConversationSnapshot.materializeConversation(): Conversation = Conversation(
-    id = conversationId,
-    assistantId = header.assistantId,
-    title = header.title,
-    messageNodes = nodes,
-    chatSuggestions = header.chatSuggestions,
-    isPinned = header.isPinned,
-    createAt = Instant.ofEpochMilli(header.createAt),
-    updateAt = Instant.ofEpochMilli(header.updateAt),
-    customSystemPrompt = header.customSystemPrompt,
-    modeInjectionIds = header.modeInjectionIds,
-    workspaceCwd = header.workspaceCwd,
-    folderId = header.folderId,
-    parentConversationId = header.parentConversationId,
-    newConversation = header.newConversation,
-)
+internal fun validateConversationCommandOwner(
+    conversationId: Uuid,
+    snapshot: ConversationSnapshot,
+    command: ConversationCommand,
+    activeRequestTurnId: Uuid? = null,
+) {
+    fun requireActiveIdentity(turnId: Uuid) {
+        if (activeRequestTurnId == null || activeRequestTurnId != turnId) {
+            throw ConversationCommandConflictException(
+                "active request $activeRequestTurnId does not own command $turnId",
+            )
+        }
+    }
+    when (command) {
+        is StartTurn -> {
+            requireActiveIdentity(command.turnId)
+            if (snapshot.activeTurn != null) {
+                throw ConversationCommandConflictException(
+                    "conversation $conversationId already has an active turn",
+                )
+            }
+        }
+        is CommitCheckpoint -> {
+            requireActiveIdentity(command.handle.turnId)
+            if (
+                command.handle.conversationId != conversationId ||
+                snapshot.activeTurn?.matches(command.handle) != true
+            ) {
+                throw ConversationCommandConflictException("stale checkpoint for turn ${command.handle.turnId}")
+            }
+        }
+        is FinalizeTurn -> if (
+            command.handle.conversationId != conversationId ||
+            snapshot.activeTurn?.matches(command.handle) != true
+        ) {
+            throw ConversationCommandConflictException("stale finalization for turn ${command.handle.turnId}")
+        }
+        is HeaderConversationCommand -> Unit
+        is UpdateToolApproval -> {
+            val handle = command.handle
+            requireActiveIdentity(handle.turnId)
+            if (
+                handle.conversationId != conversationId ||
+                snapshot.activeTurn?.matches(handle) != true
+            ) {
+                throw ConversationCommandConflictException("stale tool approval for turn ${handle.turnId}")
+            }
+        }
+        is RecoverInterruptedTurn -> if (snapshot.activeTurn != null) {
+            throw ConversationCommandConflictException("recovery cannot overwrite an active turn")
+        }
+        else -> if (snapshot.activeTurn != null) {
+            throw ConversationCommandConflictException(
+                "tree command ${command::class.simpleName} requires the active turn to finish first",
+            )
+        }
+    }
+}
 
 private fun Conversation.lockIds(): List<Uuid> = buildList {
     add(id)
     parentConversationId?.let(::add)
-}
-
-private fun ConversationCommand.updatesConversationActivity(): Boolean = when (this) {
-    is UpdateHeader,
-    is UpdateTitleIfCurrent,
-    is MoveToAssistant,
-    TogglePinned,
-    -> false
-    else -> true
 }
 
 sealed interface ConversationCommandResult {

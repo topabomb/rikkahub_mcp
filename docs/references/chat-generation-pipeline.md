@@ -12,10 +12,10 @@
 | `ConversationApplicationService` | 用户会话命令、创建、删除、fork、压缩入口；不直接实现 Runtime 或 Room 写协议 |
 | `ConversationQueryService` | UI 读端口；活动会话返回显式 Loading/Ready/Missing/Failed 的 `ConversationReadState`，Ready 携带 `ConversationSnapshot`；列表返回不含消息树的 `ConversationSummary` |
 | `MasterTurnCoordinator` | Master turn 输入、工具与副作用编排；不实现第二套持久化协议 |
-| `ConversationCommandCoordinator` | resident/non-resident durable command 唯一入口；按 conversationId 串行化，并受恢复门禁保护 |
-| `ConversationRuntime` | 已提交 `ConversationSnapshot` 的唯一事实流、当前 `TurnHandle` 与纯内存 streaming projection |
+| `ConversationCommandCoordinator` | resident/non-resident durable command 唯一入口；按 conversationId 串行化，并受恢复门禁保护。`execute()` 把身份/缺失冲突映射为 `Conflict`，事务失败映射为 `Failure` |
+| `ConversationRuntime` | 已提交 `ConversationSnapshot` 的唯一事实流、私有 `ActiveTurnRuntime` 请求状态机与纯内存 streaming projection。durable CAS 仍只用 `TurnHandle` |
 | `ConversationRuntimeRegistry` | `Loading/Draft/Ready/Missing/Failed` 生命周期、引用与生成 Job；Draft 只服务未发送首条消息的新聊天，首消息事务后晋升 Ready；禁止伪造 durable 会话 |
-| `ConversationReducer` | Snapshot 纯函数变换；未变化节点保持引用，checkpoint/finalize 只替换活动节点 |
+| `ConversationTransition` | 唯一 command planner：同时产生 snapshot、delta mutation 与 execution facts；未变化节点保持引用 |
 | `TurnEngine` / `TurnPipelineFactory` | Master/Target 共用的 start、checkpoint、stream 与非空 `TurnOutcome` 协议；固定 Transformer 顺序 |
 | `ConversationTitleCoordinator` | 确定性本地标题、模型标题阶段、token/CAS、手动与异步提交串行化、进程内去重与有限重试；不增加持久化字段 |
 | `ConversationRepository` | CommandCoordinator 内部使用的 Room 持久化原语 |
@@ -39,7 +39,7 @@ ConversationApplicationService / MasterTurnCoordinator
        └─ StartTurn 单事务：assistant 槽 + RUNNING turn fact
             │
             ▼
-       GenerationHandler.generateText
+       GenerationLoop.run
          ├─ limitContext：只改变本次请求
          ├─ System / Memory / Tool prompt
          ├─ Input Transformers
@@ -75,7 +75,7 @@ Runtime 不发布未提交状态。Streaming 是唯一先发布且不落库的�
 
 ## 请求构建与 Transformer
 
-`GenerationHandler.generateInternal()` 固定执行：
+`GenerationLoop.generateInternal()` 固定执行：
 
 1. 对非成功历史建立 replay-safe projection，再按配置执行请求级裁剪；完整历史不变。
 2. 从同一份上下文构建 Tool system prompt。
@@ -127,8 +127,8 @@ queued/generating/persisting/setting-background 子阶段。崩溃恢复、停�
 `INTERRUPTED`、`CANCELLED`、`FAILED`，不会因 output 非空被误报为完成。工具正常返回的领域失败仍是调用
 `COMPLETED`，其业务结果由对应 renderer（例如图片生成失败原因）独立呈现。
 
-会话页和 Drawer 不读取 Runtime 的 coroutine Job。`ConversationTurnPresentation` 从 active turn 与工具阶段派生
-`IDLE`、`GENERATING`、`AWAITING_APPROVAL`；审批暂停仍属于 active turn，底部使用不同颜色和问询图标保持明确的
+会话页和 Drawer 不读取 Runtime 的 coroutine Job。`ConversationPresentation` 从私有 active request 与 durable
+snapshot 派生 `IDLE`、`PREPARING`、`GENERATING`、`AWAITING_APPROVAL`、`STOPPING`；审批暂停仍属于同一 turn owner，底部使用不同颜色和问询图标保持明确的
 用户注意力提示，且文件夹/消息树结构操作继续受 active owner 保护。完成工具卡片保留 `COMPLETED` 事实，但隐藏常驻
 状态文字；失败、拒绝、回答、取消和中断仍显示简短终态。
 
@@ -163,7 +163,7 @@ queued/generating/persisting/setting-background 子阶段。崩溃恢复、停�
 
 `Assistant.contextMessageLimit` 只控制本次 Provider 请求。裁剪从完整 USER 轮次边界开始，不改 durable history。
 
-Provider 只返回开头 `<think>` 文本时，`ThinkTagTransformer` 在 Master/Target 共用 output pipeline 以最后一个已执行 Tool 为边界，只把当前 assistant→tool step 的首个非空 `Text` 拆成 `Reasoning` 与回答正文。只有当前 step 已有 Provider 原生 Reasoning 时才禁用该 fallback；已完成 step 的 Reasoning 不得抑制后续 step。闭合标签到达时立即冻结当前 step reasoning 的 `finishedAt`，后续累计正文 chunk 只从上一投影的同一 step 复用首次闭合时间；流结束只为当前 step 未闭合标签补时间。`GenerationHandler` 的 phase 判定同样基于累计 raw message 的当前 step，同一标签内文本只发布 `reasoning_streaming`，标签后的正文出现后才发布 `answer_streaming`；终态提交保留各 step 闭合标签首次投影的完成时间。
+Provider 只返回开头 `<think>` 文本时，`ThinkTagTransformer` 在 Master/Target 共用 output pipeline 以最后一个已执行 Tool 为边界，只把当前 assistant→tool step 的首个非空 `Text` 拆成 `Reasoning` 与回答正文。只有当前 step 已有 Provider 原生 Reasoning 时才禁用该 fallback；已完成 step 的 Reasoning 不得抑制后续 step。闭合标签到达时立即冻结当前 step reasoning 的 `finishedAt`，后续累计正文 chunk 只从上一投影的同一 step 复用首次闭合时间；流结束只为当前 step 未闭合标签补时间。`GenerationLoop` 的 phase 判定同样基于累计 raw message 的当前 step，同一标签内文本只发布 `reasoning_streaming`，标签后的正文出现后才发布 `answer_streaming`；终态提交保留各 step 闭合标签首次投影的完成时间。
 消息条数不等于 token 数，长文档、图片、工具 schema 与 System prompt 仍可能占据大量上下文。
 
 显式压缩由 `ConversationApplicationService.compress()` 进入 `GenerationSideEffects.compressConversation()`：生成摘要，
@@ -189,7 +189,7 @@ durable command 继续被 `ApplicationRecoveryGate` 阻断；`retry()` 重新执
 子助手不是第二套生成引擎。`DelegationCoordinator` 只增加 preflight → materialize Child → run → terminal 四阶段：
 Child、tool STARTED 与 childConversationId 关系在 Target 启动前强制提交；失败会补偿 Child 与未发布附件。
 `SubAssistantRunGate.withLease` 编码并发所有权，`SubAssistantResultProjection` 负责纯结果形状，Target 仍使用相同的
-`TurnEngine`、`GenerationHandler` 与 checkpoint 协议。
+`TurnEngine`、`GenerationLoop` 与 checkpoint 协议。
 
 ## 关键文件
 
@@ -207,10 +207,10 @@ app/src/main/java/net/weero/measix/pilot/
 │  ├─ ApplicationRecoveryCoordinator.kt
 │  └─ runtime/
 │     ├─ ConversationCommands.kt
-│     ├─ ConversationReducer.kt
+│     ├─ ConversationTransition.kt
 │     ├─ ConversationRuntime.kt
 │     ├─ ConversationRuntimeRegistry.kt
-│     ├─ ConversationTurnPresentation.kt
+│     ├─ ConversationPresentation.kt
 │     ├─ ConversationCommandCoordinator.kt
 │     ├─ TurnEngine.kt
 │     └─ DelegationCoordinator.kt
@@ -218,5 +218,5 @@ app/src/main/java/net/weero/measix/pilot/
    ├─ repository/ConversationRepository.kt
    ├─ files/ArtifactStore.kt
    ├─ files/ArtifactPayloadStore.kt
-   └─ ai/GenerationHandler.kt
+   └─ ai/GenerationLoop.kt
 ```

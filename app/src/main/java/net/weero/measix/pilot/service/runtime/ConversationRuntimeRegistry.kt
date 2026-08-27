@@ -2,6 +2,7 @@ package net.weero.measix.pilot.service.runtime
 
 import android.util.Log
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,7 +11,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -165,30 +165,67 @@ class ConversationRuntimeRegistry(
         expected.acquireLease()
     }
 
-    fun getProcessingStatusFlow(conversationId: Uuid): Flow<String?> =
-        observeRuntimeState(conversationId).flatMapLatest { state ->
-            state.runtimeOrNull()?.processingStatus ?: flowOf(null)
-        }
+    internal suspend fun installAndStartActiveRequest(
+        conversationId: Uuid,
+        turnId: Uuid,
+        worker: Job,
+        handle: TurnHandle? = null,
+        phase: ConversationTurnPhase = ConversationTurnPhase.PREPARING,
+        supersedeReason: String? = null,
+    ): InstalledActiveRequest = operationLocks.withLock(conversationId) {
+        val runtime = findRuntime(conversationId)
+            ?: error("conversation runtime is not resident: $conversationId")
+        val installed = runtime.installActiveRequest(
+            turnId = turnId,
+            worker = worker,
+            handle = handle,
+            phase = phase,
+            supersedeReason = supersedeReason,
+        )
+        worker.start()
+        installed
+    }
 
-    fun getTurnPresentationFlow(conversationId: Uuid): Flow<ConversationTurnPresentation> =
+    /**
+     * Continues an approval-paused request under the conversation operation lock.
+     * A newer START that already replaced the owner is rejected without cancelling it.
+     */
+    internal suspend fun installAndStartApprovalContinuation(
+        conversationId: Uuid,
+        handle: TurnHandle,
+        worker: Job,
+    ): InstalledActiveRequest = operationLocks.withLock(conversationId) {
+        check(handle.conversationId == conversationId) {
+            "approval continuation ${handle.turnId} belongs to ${handle.conversationId}"
+        }
+        val runtime = findRuntime(conversationId)
+            ?: error("conversation runtime is not resident: $conversationId")
+        val installed = runtime.continueAwaitingApproval(handle, worker)
+        worker.start()
+        installed
+    }
+
+    fun getTurnPresentationFlow(conversationId: Uuid): Flow<ConversationPresentation> =
         observeRuntimeState(conversationId).flatMapLatest { state ->
             state.runtimeOrNull()?.let { runtime ->
-                combine(runtime.generationJob, runtime.snapshot, ::resolveConversationTurnPresentation)
-            } ?: flowOf(ConversationTurnPresentation.IDLE)
+                combine(runtime.activeRequestRevision, runtime.snapshot) { _, snapshot ->
+                    resolveConversationPresentation(runtime.activeRequestPresentationFacts(), snapshot)
+                }
+            } ?: flowOf(ConversationPresentation.IDLE)
         }
 
-    fun getConversationTurnPresentations(): Flow<Map<Uuid, ConversationTurnPresentation>> =
+    fun getConversationTurnPresentations(): Flow<Map<Uuid, ConversationPresentation>> =
         _runtimesVersion.flatMapLatest {
             val current = activeRuntimes()
             if (current.isEmpty()) {
                 flowOf(emptyMap())
             } else {
                 combine(current.map { runtime ->
-                    combine(runtime.generationJob, runtime.snapshot) { job, snapshot ->
-                        runtime.id to resolveConversationTurnPresentation(job, snapshot)
+                    combine(runtime.activeRequestRevision, runtime.snapshot) { _, snapshot ->
+                        runtime.id to resolveConversationPresentation(runtime.activeRequestPresentationFacts(), snapshot)
                     }
                 }) { pairs ->
-                    pairs.filter { (_, phase) -> phase != ConversationTurnPresentation.IDLE }.toMap()
+                    pairs.filter { (_, presentation) -> presentation != ConversationPresentation.IDLE }.toMap()
                 }
             }
         }
@@ -208,9 +245,10 @@ class ConversationRuntimeRegistry(
     suspend fun cancelGenerationsForAssistant(assistantId: Uuid, reason: String) {
         val jobs = activeRuntimes()
             .filter { it.snapshot.value.header.assistantId == assistantId }
-            .mapNotNull { it.generationJob.value }
+            .mapNotNull { runtime ->
+                runtime.cancelActiveGeneration(reason)
+            }
             .distinct()
-        jobs.forEach { it.cancel(reason) }
         jobs.joinAll()
     }
 

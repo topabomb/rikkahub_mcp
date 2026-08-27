@@ -3,6 +3,7 @@ package net.weero.measix.pilot.ui.components.message
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.service.runtime.ToolCallPhase
+import net.weero.measix.pilot.service.runtime.resolveToolCallPhase
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

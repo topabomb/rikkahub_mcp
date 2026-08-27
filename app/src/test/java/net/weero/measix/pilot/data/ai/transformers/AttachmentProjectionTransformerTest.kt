@@ -9,10 +9,16 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
+import me.rerere.ai.provider.RequestImageSupport
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.ui.AttachmentProjectionTextMetadata
+import me.rerere.ai.ui.OpenAIResponseMetadata
+import me.rerere.ai.ui.OpenAIResponseSourceProfile
+import me.rerere.ai.ui.OpenAIResponseWireFormat
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
+import me.rerere.ai.ui.toMetadata
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.files.ArtifactStore
@@ -48,11 +54,22 @@ class AttachmentProjectionTransformerTest {
         every { context.filesDir } returns java.io.File(requireNotNull(System.getProperty("java.io.tmpdir")))
     }
 
+    private fun capabilitiesFor(model: Model) = if (Modality.IMAGE in model.inputModalities) {
+        RequestMediaCapabilities(
+            userImages = RequestImageSupport.STRUCTURED,
+            assistantImages = RequestImageSupport.STRUCTURED,
+            toolOutputImages = RequestImageSupport.STRUCTURED,
+        )
+    } else {
+        RequestMediaCapabilities.NONE
+    }
+
     private fun ctxFor(model: Model) = TransformerContext(
         context = context,
         model = model,
         assistant = assistant,
         settings = settings,
+        mediaCapabilities = capabilitiesFor(model),
         registerUnpublishedResource = { error("projection transformer must not create resources") },
     )
 
@@ -133,14 +150,17 @@ class AttachmentProjectionTransformerTest {
     }
 
     @Test
-    fun `native image without stable ref remains an image without invented reference`() = runTest {
+    fun `native image without stable ref keeps the image and records unavailable native fact`() = runTest {
         val image = UIMessagePart.Image(url = "file:///tmp/legacy.png")
         val message = UIMessage(role = MessageRole.USER, parts = listOf(image))
 
         val projected = transformer.transform(ctxFor(visionModel), listOf(message)).single()
 
-        assertEquals(1, projected.parts.size)
-        assertTrue(projected.parts.single() is UIMessagePart.Image)
+        assertEquals(2, projected.parts.size)
+        val marker = projected.parts.first() as UIMessagePart.Text
+        assertEquals("[Attachment ref=unavailable type=image input=native]", marker.text)
+        assertTrue(marker.isProjectionText())
+        assertTrue(projected.parts.last() is UIMessagePart.Image)
     }
 
     @Test
@@ -179,6 +199,42 @@ class AttachmentProjectionTransformerTest {
             "[Attachment ref=$ref type=image name=\"shot.png\" input=reference_only]",
             (projected.parts.single() as UIMessagePart.Text).text,
         )
+    }
+
+    @Test
+    fun `opaque replay eligibility does not mark a rebuilt assistant image native`() = runTest {
+        val ref = AttachmentRefs.format(Uuid.random())
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(stampedImage(ref)),
+            providerMetadata = OpenAIResponseMetadata(
+                wireFormat = OpenAIResponseWireFormat.OPENAI,
+                outputItemGroups = listOf(listOf(buildJsonObject { put("type", "message") })),
+                sourceProfile = OpenAIResponseSourceProfile.OPENAI,
+            ).toMetadata(),
+        )
+        val ctx = TransformerContext(
+            context = context,
+            model = visionModel,
+            assistant = assistant,
+            settings = settings,
+            mediaCapabilities = RequestMediaCapabilities(
+                userImages = RequestImageSupport.STRUCTURED,
+                assistantImages = RequestImageSupport.OPAQUE_REPLAY_ONLY,
+                toolOutputImages = RequestImageSupport.NONE,
+                opaqueReplayWireFormat = OpenAIResponseWireFormat.OPENAI,
+                opaqueReplaySourceProfile = OpenAIResponseSourceProfile.OPENAI,
+            ),
+            registerUnpublishedResource = { error("projection transformer must not create resources") },
+        )
+
+        val projected = transformer.transform(ctx, listOf(message)).single()
+
+        assertEquals(
+            "[Attachment ref=$ref type=image name=\"shot.png\" input=reference_only]",
+            (projected.parts.single() as UIMessagePart.Text).text,
+        )
+        assertFalse(projected.parts.any { it is UIMessagePart.Image })
     }
 
     @Test

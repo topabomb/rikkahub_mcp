@@ -29,6 +29,7 @@ import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 import net.weero.measix.pilot.service.runtime.FinalizeTurn
 import net.weero.measix.pilot.service.runtime.TurnHandle
+import net.weero.measix.pilot.service.runtime.interruptPendingTool
 import kotlin.uuid.Uuid
 
 /** Owns normal turn supersede, cancellation and terminal tool cleanup. */
@@ -43,20 +44,20 @@ class TurnFinalization(
         reason: String = TurnTerminalReasons.USER_STOP,
     ) {
         val runtime = runtimeRegistry.findRuntime(conversationId) ?: return
-        val job = runtime.getJob()
-        val turnId = runtime.currentGenerationTurnId() ?: runtime.snapshot.value.activeTurn?.turnId ?: return
+        val captured = runtime.captureAndRequestStop(reason) ?: return
+        val job = captured.worker
         if (job?.isCompleted == false) {
-            runtime.requestCancel(turnId, reason)
             job.cancel()
         }
         withContext(NonCancellable) {
             job?.join()
             finalizeNonTerminalTurn(
                 conversationId = conversationId,
-                turnId = turnId,
+                turnId = captured.turnId,
                 reason = reason,
-                cancelledByUser = true,
+                cancelledByUser = reason == TurnTerminalReasons.USER_STOP,
             )
+            runtime.releaseActiveRequest(captured.turnId, retainAwaitingOwner = false)
         }
     }
 
@@ -126,7 +127,11 @@ class TurnFinalization(
         cancelledByUser: Boolean,
     ): UIMessage {
         var updatedMessage = targetMessage.finishPendingTools { tool ->
-            if (cancelledByUser) cancelToolByUser(tool) else interruptPendingTool(tool)
+            if (cancelledByUser) {
+                net.weero.measix.pilot.service.runtime.cancelPendingToolByUser(tool)
+            } else {
+                net.weero.measix.pilot.service.runtime.interruptPendingTool(tool)
+            }
         }
         val childMessagesByConversation = loadChildMessagesForInterruptedCalls(updatedMessage)
         updatedMessage = updatedMessage.finishInterruptedTools { tool ->
@@ -284,23 +289,6 @@ class TurnFinalization(
         }
     }
 
-    private fun cancelToolByUser(tool: UIMessagePart.Tool): UIMessagePart.Tool = tool.copy(
-        output = listOf(
-            UIMessagePart.Text(
-                """{"status":"cancelled","error":"Generation cancelled by user before tool execution completed."}"""
-            )
-        ),
-        approvalState = ToolApprovalState.Denied("Generation cancelled by user"),
-    )
-
-    private fun interruptPendingTool(tool: UIMessagePart.Tool): UIMessagePart.Tool = tool.copy(
-        output = listOf(
-            UIMessagePart.Text(
-                """{"status":"interrupted","error":"Tool execution was interrupted before completion."}"""
-            )
-        ),
-    )
-
     private companion object {
         const val TAG = "TurnFinalization"
         const val FINALIZATION_TIMEOUT_MS = 5_000L
@@ -351,13 +339,7 @@ internal fun finishInterruptedToolAfterGenerationStop(
             )
         )
     }
-    return tool.copy(
-        output = listOf(
-            UIMessagePart.Text(
-                """{"status":"interrupted","error":"Tool execution was interrupted before completion."}"""
-            )
-        )
-    )
+    return interruptPendingTool(tool)
 }
 
 internal data class InterruptedRunFinalizationFailures(

@@ -2,9 +2,23 @@ package net.weero.measix.pilot.service
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.uuid.Uuid
+
+internal data class SubAssistantRunKey(
+    val masterConversationId: Uuid,
+    val targetAssistantId: Uuid,
+)
+
+private data class SubAssistantRunLease(
+    val runId: String,
+    val callerAssistantId: Uuid,
+    val targetAssistantId: Uuid,
+    val job: Job,
+    val completion: CompletableDeferred<Unit> = CompletableDeferred(),
+)
 
 /**
  * 子助手 run 门禁（并发控制域）。
@@ -33,12 +47,10 @@ class SubAssistantRunGate {
         val answer: CompletableDeferred<String> = CompletableDeferred(),
     )
 
-    private val runLeases = SubAssistantRunLeaseRegistry()
+    private val leases = ConcurrentHashMap<SubAssistantRunKey, SubAssistantRunLease>()
     private val pendingUserInteractions = ConcurrentHashMap<String, PendingUserInteraction>()
 
-    // ---- 运行 lease ----
-
-    internal fun isBusy(key: SubAssistantRunKey): Boolean = runLeases.isBusy(key)
+    internal fun isBusy(key: SubAssistantRunKey): Boolean = leases.containsKey(key)
 
     internal fun acquireLease(
         key: SubAssistantRunKey,
@@ -46,16 +58,39 @@ class SubAssistantRunGate {
         callerAssistantId: Uuid,
         parentJob: Job?,
     ): LeaseHandle? {
-        val lease = runLeases.tryAcquire(key, runId, callerAssistantId, parentJob) ?: return null
-        return LeaseHandle(job = lease.job) { runLeases.release(key, lease) }
+        val job = Job(parentJob)
+        val lease = SubAssistantRunLease(runId, callerAssistantId, key.targetAssistantId, job)
+        if (leases.putIfAbsent(key, lease) != null) {
+            job.cancel()
+            lease.completion.complete(Unit)
+            return null
+        }
+        return LeaseHandle(job = lease.job) {
+            leases.remove(key, lease)
+            lease.job.cancel()
+            lease.completion.complete(Unit)
+        }
     }
 
     suspend fun cancelRunsForAssistant(assistantId: Uuid) {
-        runLeases.cancelForAssistant(assistantId)
+        val matching = leases.values
+            .filter { it.targetAssistantId == assistantId || it.callerAssistantId == assistantId }
+            .distinct()
+        matching.forEach { lease ->
+            val reason = if (lease.targetAssistantId == assistantId) {
+                "target_removed"
+            } else {
+                "target_access_revoked"
+            }
+            lease.job.cancel(reason)
+        }
+        matching.forEach { it.completion.await() }
     }
 
     suspend fun cancelAllRuns(reason: String) {
-        runLeases.cancelAll(reason)
+        val active = leases.values.distinct()
+        active.forEach { lease -> lease.job.cancel(reason) }
+        active.forEach { it.completion.await() }
     }
 
     // ---- pending ask_user ----

@@ -236,7 +236,7 @@ val appModule = module {
 
     single {
         DelegationCoordinator(
-            generationHandler = get(),
+            generationLoop = get(),
             conversationRepo = get(),
             runtimeRegistry = get(),
             commandCoordinator = get(),
@@ -341,7 +341,7 @@ val appModule = module {
             appEventBus = get(),
             settingsStore = get(),
             memoryRepository = get(),
-            generationHandler = get(),
+            generationLoop = get(),
             templateTransformer = get(),
             mcpManager = get(),
             toolSetFactory = get(),

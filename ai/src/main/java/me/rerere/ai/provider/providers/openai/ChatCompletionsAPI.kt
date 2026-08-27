@@ -34,6 +34,8 @@ import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.RequestImageSupport
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.PartGroup
 import me.rerere.ai.provider.providers.groupPartsByToolBoundary
@@ -49,7 +51,7 @@ import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.util.HttpException
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.configureReferHeaders
-import me.rerere.ai.util.encodeBase64
+import me.rerere.ai.util.encodeNativeImage
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.parseErrorDetail
@@ -262,15 +264,8 @@ class ChatCompletionsAPI(
                 "messages",
                 buildMessages(
                     messages = messages,
-                    // OpenAI 官方 Chat Completions 不定义 reasoning_content，且 tool 消息只接受文本。
-                    // 兼容网关可提供 reasoning_content 和多模态 tool result 扩展；
-                    // 官方 OpenAI host 使用标准 Chat Completions 形状。
                     includeHistoryReasoning = providerSetting.includeHistoryReasoning && !isOfficialOpenAI,
-                    supportToolResultModalities = if (isOfficialOpenAI) {
-                        listOf(Modality.TEXT)
-                    } else {
-                        params.model.inputModalities
-                    },
+                    mediaCapabilities = params.mediaCapabilities,
                     requiresToolReasoningReplay = requiresToolReasoningReplay(
                         host = host,
                         modelId = params.model.modelId,
@@ -503,7 +498,7 @@ class ChatCompletionsAPI(
     internal fun buildMessages(
         messages: List<UIMessage>,
         includeHistoryReasoning: Boolean = true,
-        supportToolResultModalities: List<Modality> = listOf(Modality.TEXT, Modality.IMAGE),
+        mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
         requiresToolReasoningReplay: Boolean = false,
         includeOpenRouterReasoningDetails: Boolean = false,
         useDeveloperRoleForSystemMessages: Boolean = false,
@@ -515,12 +510,12 @@ class ChatCompletionsAPI(
                 addAssistantMessages(
                     message = message,
                     includeHistoryReasoning = includeHistoryReasoning,
-                    supportToolResultModalities = supportToolResultModalities,
+                    mediaCapabilities = mediaCapabilities,
                     requiresToolReasoningReplay = requiresToolReasoningReplay,
                     includeOpenRouterReasoningDetails = includeOpenRouterReasoningDetails,
                 )
             } else {
-                addNonAssistantMessage(message, useDeveloperRoleForSystemMessages)
+                addNonAssistantMessage(message, useDeveloperRoleForSystemMessages, mediaCapabilities)
             }
         }
     }
@@ -528,7 +523,7 @@ class ChatCompletionsAPI(
     private fun JsonArrayBuilder.addAssistantMessages(
         message: UIMessage,
         includeHistoryReasoning: Boolean,
-        supportToolResultModalities: List<Modality>,
+        mediaCapabilities: RequestMediaCapabilities,
         requiresToolReasoningReplay: Boolean,
         includeOpenRouterReasoningDetails: Boolean,
     ) {
@@ -554,6 +549,7 @@ class ChatCompletionsAPI(
                     buildAssistantMessageJson(
                         contentParts = contentBuffer,
                         tools = group.tools,
+                        mediaCapabilities = mediaCapabilities,
                         reasoningContent = reasoningParts
                             .takeIf { replayReasoning }
                             ?.joinToString(separator = "") { it.reasoning },
@@ -573,7 +569,7 @@ class ChatCompletionsAPI(
                             put("role", "tool")
                             put("name", tool.toolName)
                             put("tool_call_id", tool.toolCallId)
-                            put("content", tool.toToolResultContent(supportToolResultModalities))
+                            put("content", tool.toToolResultContent(mediaCapabilities))
                         })
                     }
                 }
@@ -592,6 +588,7 @@ class ChatCompletionsAPI(
             buildAssistantMessageJson(
                 contentParts = contentBuffer,
                 tools = emptyList(),
+                mediaCapabilities = mediaCapabilities,
                 reasoningContent = reasoningParts
                     .takeIf { includeHistoryReasoning }
                     ?.joinToString(separator = "") { it.reasoning },
@@ -616,6 +613,7 @@ class ChatCompletionsAPI(
     private fun buildAssistantMessageJson(
         contentParts: List<UIMessagePart>,
         tools: List<UIMessagePart.Tool>,
+        mediaCapabilities: RequestMediaCapabilities,
         reasoningContent: String?,
         reasoningDetails: JsonArray? = null,
     ): JsonObject? {
@@ -658,18 +656,7 @@ class ChatCompletionsAPI(
                             }
 
                             is UIMessagePart.Image -> {
-                                add(buildJsonObject {
-                                    part.encodeBase64().onSuccess { encodedImage ->
-                                        put("type", "image_url")
-                                        put("image_url", buildJsonObject {
-                                            put("url", encodedImage.base64)
-                                        })
-                                    }.onFailure {
-                                        it.printStackTrace()
-                                        put("type", "text")
-                                        put("text", "")
-                                    }
-                                })
+                                add(encodeChatImage(part, mediaCapabilities.assistantImages))
                             }
 
                             else -> {}
@@ -700,6 +687,7 @@ class ChatCompletionsAPI(
     private fun JsonArrayBuilder.addNonAssistantMessage(
         message: UIMessage,
         useDeveloperRoleForSystemMessages: Boolean,
+        mediaCapabilities: RequestMediaCapabilities,
     ) {
         add(buildJsonObject {
             val role = if (message.role == MessageRole.SYSTEM && useDeveloperRoleForSystemMessages) {
@@ -724,18 +712,7 @@ class ChatCompletionsAPI(
                             }
 
                             is UIMessagePart.Image -> {
-                                add(buildJsonObject {
-                                    part.encodeBase64().onSuccess { encodedImage ->
-                                        put("type", "image_url")
-                                        put("image_url", buildJsonObject {
-                                            put("url", encodedImage.base64)
-                                        })
-                                    }.onFailure {
-                                        it.printStackTrace()
-                                        put("type", "text")
-                                        put("text", "")
-                                    }
-                                })
+                                add(encodeChatImage(part, mediaCapabilities.userImages))
                             }
 
                             else -> {}
@@ -746,51 +723,48 @@ class ChatCompletionsAPI(
         })
     }
 
-    private fun UIMessagePart.Tool.toToolResultContent(supportInputModalities: List<Modality>): JsonElement {
-        // 只考虑文字和图片;只有模型支持图片输入时,图片才作为多模态内容回传,否则以文本占位,避免发给不支持的模型报错
-        val supportsImageInput = Modality.IMAGE in supportInputModalities
-        val hasImageToSend = output.any { it is UIMessagePart.Image && supportsImageInput }
-        return if (!hasImageToSend) {
-            JsonPrimitive(output.mapNotNull { part ->
+    private fun UIMessagePart.Tool.toToolResultContent(
+        mediaCapabilities: RequestMediaCapabilities,
+    ): JsonElement {
+        val images = output.filterIsInstance<UIMessagePart.Image>()
+        if (images.isEmpty()) {
+            return JsonPrimitive(output.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text })
+        }
+        check(mediaCapabilities.toolOutputImages == RequestImageSupport.STRUCTURED) {
+            "Chat Completions received a native tool image after request projection"
+        }
+        return buildJsonArray {
+            output.forEach { part ->
                 when (part) {
-                    is UIMessagePart.Text -> part.text
-                    is UIMessagePart.Image -> "[Image output omitted: current model does not support image input]"
-                    else -> null
-                }
-            }.joinToString("\n"))
-        } else {
-            buildJsonArray {
-                output.forEach { part ->
-                    when (part) {
-                        is UIMessagePart.Text -> {
-                            if (part.text.isNotBlank()) {
-                                add(buildJsonObject {
-                                    put("type", "text")
-                                    put("text", part.text)
-                                })
-                            }
-                        }
-
-                        is UIMessagePart.Image -> {
+                    is UIMessagePart.Text -> {
+                        if (part.text.isNotBlank()) {
                             add(buildJsonObject {
-                                part.encodeBase64().onSuccess { encodedImage ->
-                                    put("type", "image_url")
-                                    put("image_url", buildJsonObject {
-                                        put("url", encodedImage.base64)
-                                    })
-                                }.onFailure {
-                                    Log.w(TAG, "encode tool result image failed: ${part.url}", it)
-                                    put("type", "text")
-                                    put("text", "Error: Failed to encode image to base64")
-                                }
+                                put("type", "text")
+                                put("text", part.text)
                             })
                         }
-
-                        else -> {}
                     }
+
+                    is UIMessagePart.Image -> add(encodeChatImage(part, RequestImageSupport.STRUCTURED))
+
+                    else -> {}
                 }
             }
         }
+    }
+
+    private fun encodeChatImage(
+        part: UIMessagePart.Image,
+        support: RequestImageSupport,
+    ) = buildJsonObject {
+        check(support == RequestImageSupport.STRUCTURED) {
+            "Chat Completions received a native image after request projection"
+        }
+        val encoded = part.encodeNativeImage()
+        put("type", "image_url")
+        put("image_url", buildJsonObject {
+            put("url", encoded.base64)
+        })
     }
 
     /**

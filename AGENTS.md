@@ -3,6 +3,14 @@
 代码与静态契约测试是实现事实，`docs/references/` 是当前架构参考。
 发生冲突时先核对代码，并在同一变更中修正文档；禁止以兼容层掩盖不一致。
 
+## Subagent Collaboration
+
+For non-trivial work, prefer available subagents based on their declared capabilities and permissions rather than relying on fixed names. Delegate focused codebase exploration when existing behavior, ownership, data flow, or prior implementations are unclear, and consolidate the evidence before choosing a design.
+
+At high-leverage points—especially before substantial refactors, cross-module or data-contract changes, and before declaring completion—seek an independent review in a separate context and, when practical, with a different model. The review may focus on architecture drift, duplicate mechanisms or sources of truth, unclear ownership, unstable contracts, unnecessary complexity, and material correctness or test gaps.
+
+Keep delegated tasks focused and non-overlapping, skip delegation when its coordination cost exceeds its value, and treat review findings as evidence to evaluate rather than automatic directives. The primary agent remains responsible for the final design, implementation, and verification.
+
 ## Commands and Verification
 
 - Windows 使用 `gradlew.bat`，macOS/Linux 使用 `./gradlew`。
@@ -42,7 +50,7 @@
 - 每类 durable 事实只有一个 owner 和一个写协议。扩展既有 command、typed use case、projection 或状态机；
   禁止旁路 DAO/Repository 写入、服务定位器、整聚合回写和第二状态源。
 - `ConversationCommandCoordinator`、`ConversationRuntimeRegistry`、`ConversationRuntime`、
-  `ConversationReducer` 与 `TurnEngine` 构成唯一会话命令、snapshot 与 turn 链。事务成功后才发布 durable 状态；
+  `ConversationTransition` 与 `TurnEngine` 构成唯一会话命令、snapshot 与 turn 链。事务成功后才发布 durable 状态；
   streaming projection 是唯一允许先发布且不落库的会话态。
 - 取消必须传播。`NonCancellable` 只用于已经取得明确所有权的终态提交或补偿收口；不得用 `runCatching`
   吞掉 `CancellationException`。
@@ -53,7 +61,7 @@
 - 工具装配、调用拼接、就绪、审批、执行和终态使用 typed phase。`Tool.output` 只表示 Provider 可回放结果，
   不能充当运行状态或详情门禁；执行阶段只随已提交 checkpoint 推进，metadata 只细化领域子阶段。
 - UI/ViewModel 只依赖 application/query ports 与 UiModel，不得直连 DAO、ConversationRepository、Runtime
-  Registry、ArtifactStore 或 payload 层。UI 使用 `ConversationTurnPresentation`，不持有 Runtime Job。
+  Registry、ArtifactStore 或 payload 层。UI 使用 `ConversationPresentation`，不持有 Runtime Job。
 - 标题由 `ConversationTitleCoordinator` 管理。模型结果使用 token + expected-title CAS，并与手动标题写入串行；
   异步或 force 结果不得覆盖请求发出后产生的手动标题。
 - Artifact metadata、引用和生命周期只归 `ArtifactStore`；`ArtifactPayloadStore` 只做磁盘 IO 且无 DAO。

@@ -17,6 +17,8 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
+import me.rerere.ai.provider.RequestImageSupport
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.GoogleThoughtMetadata
 import me.rerere.ai.ui.UIMessage
@@ -49,13 +51,17 @@ class GoogleProviderMessageTest {
     }
 
     // Helper to invoke private buildContents method via reflection
-    private fun invokeBuildContents(messages: List<UIMessage>): JsonArray {
+    private fun invokeBuildContents(
+        messages: List<UIMessage>,
+        mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
+    ): JsonArray {
         val method = GoogleProvider::class.java.getDeclaredMethod(
             "buildContents",
-            List::class.java
+            List::class.java,
+            RequestMediaCapabilities::class.java,
         )
         method.isAccessible = true
-        return method.invoke(provider, messages) as JsonArray
+        return method.invoke(provider, messages, mediaCapabilities) as JsonArray
     }
 
     private fun invokeBuildRequest(
@@ -720,7 +726,8 @@ class GoogleProviderMessageTest {
         assertEquals("data:image/jpeg;base64,abc123", image.url)
 
         val contents = invokeBuildContents(
-            listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(image)))
+            listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(image))),
+            RequestMediaCapabilities(assistantImages = RequestImageSupport.STRUCTURED),
         )
         val inlineData = contents.single().jsonObject["parts"]!!.jsonArray
             .single().jsonObject["inlineData"]!!.jsonObject

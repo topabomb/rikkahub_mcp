@@ -16,7 +16,7 @@ import me.rerere.common.http.AcceptLanguageBuilder
 import net.weero.measix.pilot.BuildConfig
 import net.weero.measix.pilot.data.ai.RequestLoggingInterceptor
 import net.weero.measix.pilot.data.ai.transformers.AssistantTemplateLoader
-import net.weero.measix.pilot.data.ai.GenerationHandler
+import net.weero.measix.pilot.data.ai.GenerationLoop
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.data.ai.transformers.AssistantTemplateCacheInvalidator
 
@@ -202,7 +202,7 @@ val dataSourceModule = module {
     single { NetworkMonitor(get()) }
 
     single {
-        GenerationHandler(
+        GenerationLoop(
             context = get(),
             providerManager = get(),
             json = get(),

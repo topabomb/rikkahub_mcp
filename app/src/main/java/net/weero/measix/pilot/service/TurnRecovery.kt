@@ -16,8 +16,8 @@ import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
-import net.weero.measix.pilot.service.runtime.ConversationReducer
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationTransition
 import net.weero.measix.pilot.service.runtime.RecoverInterruptedTurn
 import net.weero.measix.pilot.service.runtime.ReplaceMessageTree
 import net.weero.measix.pilot.service.runtime.toSnapshot
@@ -254,7 +254,7 @@ class TurnRecovery(
                     childId,
                     recoverCommand,
                 )
-                snapshot = ConversationReducer.reduce(snapshot, recoverCommand)
+                snapshot = ConversationTransition.apply(snapshot, recoverCommand)
             }
     }
 

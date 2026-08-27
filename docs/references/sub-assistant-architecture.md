@@ -75,7 +75,7 @@ Target.allowAsSubAssistant
 | `SubAssistantLineageResolver` | 在 Master 当前分支上决定新建、复用或克隆 Child |
 | `SubAssistantRunStateReducer` | 串行维护单次 Run 的完整 metadata 快照和单向状态转换 |
 | `ConversationRuntimeRegistry` | 为 Master 与 Child 提供同一套 Runtime、Job 和状态流生命周期 |
-| `GenerationHandler` | 通用模型循环、Tool locator、审批策略、phase/checkpoint/finished 事件 |
+| `GenerationLoop` | 通用模型循环、Tool locator、审批策略、phase/checkpoint/finished 事件 |
 | `GenerationToolSetFactory` | 按 Assistant、资源和 Run Mode 统一装配工具 |
 
 ## 4. 持久化模型
@@ -117,10 +117,10 @@ Master ToolCall
   -> 解析当前分支 lineage
   -> 获取 Master + Target lease
   -> 用最新 Settings 做写入前重验
-  -> 解析 attachments 并做 Image 能力 preflight；无法消费则不写 Child
+  -> 解析 attachments 为本地资产；能力判定留给 Target 请求级投影
   -> 新建 / 复用 / 克隆 Child，并追加 USER（Text(request) + 原始 Image parts）
   -> 强制提交 Child、tool STARTED 与 childConversationId 关系
-  -> Target GenerationHandler 循环
+  -> Target GenerationLoop 循环
   -> 持久化 Child、更新 phase/preview、桥接 ask_user
   -> 提取 final result，写入终态 metadata 与 Tool Result
   -> 释放 lease，Master 继续 Tool Loop
@@ -130,7 +130,7 @@ Master ToolCall
 
 调用开始依次验证 Caller 的委托权限、Target 存在且不是 Caller、Target 可作为子助手、访问公式成立、模型来源可解析、同一 lineage 没有活跃 Run。失败在创建 Child 前返回稳定 reason。
 
-Lineage 决策完成后先获取 `(masterConversationId, targetAssistantId)` lease，再从最新 Settings 重验身份、访问与模型可用性。写入 Child 之前再解析 `attachments` 并做 Image 能力 preflight：无法 NATIVE 且无法 DERIVED 时返回 `attachment_input_unavailable`，不创建或追加 USER。这样同一 Master/Target 串行执行，而不同 Master 可以独立运行；并发竞态不会创建重复 Child，也不会留下只有 USER、没有 Run 的脏 Child。
+Lineage 决策完成后先获取 `(masterConversationId, targetAssistantId)` lease，再从最新 Settings 重验身份、访问与模型可用性。写入 Child 之前解析 `attachments` 为本地资产，但不做 Image 能力 preflight：无法解析的 ref 才阻断创建；模型能否 native 由 Target `RequestMediaCapabilities` 在请求投影中决定。这样同一 Master/Target 串行执行，而不同 Master 可以独立运行；并发竞态不会创建重复 Child，也不会留下只有 USER、没有 Run 的脏 Child。
 
 ### Lineage
 
@@ -143,9 +143,9 @@ Lineage 决策完成后先获取 `(masterConversationId, targetAssistantId)` lea
 
 ### Target 生成
 
-Target 复用通用 `GenerationHandler`，不是独立的简化模型循环。它应用 Target 的 System Prompt、记忆、输入/输出 Transformer、模式注入、上下文裁剪、Provider 协议和 checkpoint 机制。Child 不继承 Master 的会话级 System Prompt、模式选择或聊天历史。
+Target 复用通用 `GenerationLoop`，不是独立的简化模型循环。它应用 Target 的 System Prompt、记忆、输入/输出 Transformer、模式注入、上下文裁剪、Provider 协议和 checkpoint 机制。Child 不继承 Master 的会话级 System Prompt、模式选择或聊天历史。
 
-`GenerationHandler` 通过 `GenerationChunk.Messages`、`Phase`、`Checkpoint` 与 `Finished` 向 Coordinator 报告可持久化状态。工具执行使用 `ToolExecutionContext(messageId, toolOrdinal)`；Provider 的 `toolCallId` 只作为协议数据保留，不能作为本地唯一键。
+`GenerationLoop` 通过 `GenerationChunk.Messages`、`Phase` 与 `Finished` 向 Coordinator 报告流式状态；durability 走 awaited `onCheckpoint`。工具执行使用 `ToolExecutionContext(messageId, toolOrdinal)`；Provider 的 `toolCallId` 只作为协议数据保留，不能作为本地唯一键。
 
 ### 结果提取
 

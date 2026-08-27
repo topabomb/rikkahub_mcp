@@ -4,7 +4,7 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getConversationAssistant
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
-import net.weero.measix.pilot.service.runtime.ConversationReducer
+import net.weero.measix.pilot.service.runtime.ConversationTransition
 import net.weero.measix.pilot.service.runtime.MoveToAssistant
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.Assert.assertEquals
@@ -49,7 +49,7 @@ class ConversationAssistantSwitchTest {
             messageNodes = emptyList(),
         )
 
-        val updated = ConversationReducer.reduce(
+        val updated = ConversationTransition.apply(
             conversation.toSnapshot(),
             MoveToAssistant(targetAssistantId),
         )
@@ -67,7 +67,7 @@ class ConversationAssistantSwitchTest {
             messageNodes = emptyList(),
         )
 
-        val updated = ConversationReducer.reduce(
+        val updated = ConversationTransition.apply(
             conversation.toSnapshot(),
             MoveToAssistant(assistantId),
         )

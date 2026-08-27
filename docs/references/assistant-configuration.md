@@ -89,7 +89,7 @@
 | `quickMessageIds` | 空集合 | UI 快捷消息引用 |
 
 主会话的工具装配顺序是：搜索、本地工具、历史引用、Workspace、Skill、Assistant Tools、MCP。
-`GenerationHandler` 在每个工具循环 step 再按当前记忆状态加入记忆工具。Target Run 会进一步过滤子助手管理/委托工具，并在 step 边界重验权限。
+`GenerationLoop` 在每个工具循环 step 再按当前记忆状态加入记忆工具。Target Run 会进一步过滤子助手管理/委托工具，并在 step 边界重验权限。
 `generate_image` 在 Assistant 已开启 `TextToImage`、且默认文生图模型当前有效时注册；Master 与 Target Run 同一规则。
 
 ### 文本变换与请求覆盖
@@ -209,7 +209,7 @@ Tag、MCP、Mode Injection、Quick Message 和子助手引用只能解析到同�
 | UI 新建与编辑 | `ui/pages/assistant/` |
 | 会话助手归属与迁移 | `ConversationApplicationService.moveToAssistant()`、`UpdateHeader` |
 | 模型 readiness 与主生成工具装配 | `MasterTurnCoordinator`、`GenerationToolSetFactory` |
-| 请求构建、工具循环与 Transformer | `GenerationHandler` |
+| 请求构建、工具循环与 Transformer | `GenerationLoop` |
 | 工具创建/修改/删除助手 | `AssistantManagementService`、`AssistantToolFactory` |
 | Target 默认模板和运行过滤 | `SubAssistantRunPolicy` |
 | 子助手执行与恢复 | `DelegationCoordinator`、`TurnRecovery`、`ApplicationRecoveryCoordinator` |

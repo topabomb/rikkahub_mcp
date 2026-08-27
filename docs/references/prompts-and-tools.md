@@ -6,7 +6,7 @@
 > 附件身份、请求投影与 Turn/Tool 持久化不变量见
 > [`multimodal-context-and-turn-durability.md`](multimodal-context-and-turn-durability.md)。
 
-相关实现：`GenerationHandler.generateInternal()`、`PlaceholderTransformer`、
+相关实现：`GenerationLoop.generateInternal()`、`PlaceholderTransformer`、
 `TemplateTransformer`、`AssistantCatalogBuilder`、`AssistantToolFactory`、
 `WorkspaceReminderTransformer`、`ToolArtifactReplayTransformer`、
 `TimeReminderTransformer`、`AttachmentProjectionTransformer`、
@@ -181,7 +181,7 @@ Settings 重算访问范围。
 ## 5. 工具描述与参数
 
 主会话的基础工具装配顺序见 `MasterTurnCoordinator` / `GenerationToolSetFactory`：搜索、Local Tools、最近会话、Workspace、技能、
-Assistant Tools、MCP；运行时 `inspect_attachments` 由 `GenerationToolSetFactory` 按 resolved model 与设置条件加入；记忆工具由 `GenerationHandler` 在每个 step 按当前记忆状态加入。
+Assistant Tools、MCP；运行时 `inspect_attachments` 由 `GenerationToolSetFactory` 按 resolved model 与设置条件加入；记忆工具由 `GenerationLoop` 在每个 step 按当前记忆状态加入。
 主/子 run 必须显式传入实际 resolved model；`assistant_inspect` 显式解析目标助手的配置模型。
 不允许用缺省或可空模型开启更宽的工具集。`AssistantToolFactory` 的委派与工具集依赖均为必填构造参数。
 Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过滤 `assistant_manage`、
@@ -424,7 +424,7 @@ read：`{"text":"..."}`。write：`{"success":true}`。
 
 ### `memory_tool`
 
-启用：`assistant.enableMemory`。由 `GenerationHandler` 按 owner namespace 构建。
+启用：`assistant.enableMemory`。由 `GenerationLoop` 按 owner namespace 构建。
 
 > Store long-term notes across conversations (create/edit/delete).
 > Merge similar records; prefer edit over create.
@@ -578,7 +578,7 @@ caller 自身返回 `target_is_caller`。
 
 ## 6. 工具输出截断
 
-`GenerationHandler.maybeTruncateToolOutput()`：采用 `TRUNCATABLE_TEXT` 的工具在文本总长超过 `MAX_TOOL_OUTPUT_CHARS` 且助手有 Shell 时，全文写入 `/tool_outputs/<executionId>.txt`，只把 `TOOL_OUTPUT_PREVIEW_CHARS` 控制的预览与读取指引回给模型。无 Shell 时不截断。`assistant_call` 与 `generate_image` 使用 `PRESERVE`。前者的结构化 JSON（如 `status`、`assistant_name`、`content`、`reason`、`detail`、`tts_stats`、`artifacts`、`tool_calls`、`tts`）及点名 extras 后追加的 Image parts 不被通用文本截断器破坏；后者保留 bounded JSON 与 Image part。
+`GenerationLoop.maybeTruncateToolOutput()`：采用 `TRUNCATABLE_TEXT` 的工具在文本总长超过 `MAX_TOOL_OUTPUT_CHARS` 且助手有 Shell 时，全文写入 `/tool_outputs/<executionId>.txt`，只把 `TOOL_OUTPUT_PREVIEW_CHARS` 控制的预览与读取指引回给模型。无 Shell 时不截断。`assistant_call` 与 `generate_image` 使用 `PRESERVE`。前者的结构化 JSON（如 `status`、`assistant_name`、`content`、`reason`、`detail`、`tts_stats`、`artifacts`、`tool_calls`、`tts`）及点名 extras 后追加的 Image parts 不被通用文本截断器破坏；后者保留 bounded JSON 与 Image part。
 
 ---
 

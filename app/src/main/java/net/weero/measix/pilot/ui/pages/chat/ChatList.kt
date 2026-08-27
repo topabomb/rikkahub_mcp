@@ -98,7 +98,8 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
-import net.weero.measix.pilot.service.runtime.ConversationTurnPresentation
+import net.weero.measix.pilot.service.runtime.ConversationPresentation
+import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
 import net.weero.measix.pilot.ui.components.ai.ApprovalRequiredIndicator
 import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import net.weero.measix.pilot.ui.components.message.ChatMessage
@@ -130,9 +131,8 @@ internal fun ChatList(
     snapshot: ConversationSnapshot,
     favoriteNodeIds: Set<Uuid>,
     state: LazyListState,
-    turnPresentation: ConversationTurnPresentation,
+    turnPresentation: ConversationPresentation,
     attachmentPreviews: Map<String, String>,
-    processingStatus: String? = null,
     previewMode: Boolean,
     settings: Settings,
     readiness: ConversationReadiness,
@@ -187,7 +187,6 @@ internal fun ChatList(
                 state = state,
                 turnPresentation = turnPresentation,
                 attachmentPreviews = attachmentPreviews,
-                processingStatus = processingStatus,
                 settings = settings,
                 readiness = readiness,
                 assistant = assistant,
@@ -226,9 +225,8 @@ private fun ChatListNormal(
     snapshot: ConversationSnapshot,
     favoriteNodeIds: Set<Uuid>,
     state: LazyListState,
-    turnPresentation: ConversationTurnPresentation,
+    turnPresentation: ConversationPresentation,
     attachmentPreviews: Map<String, String>,
-    processingStatus: String? = null,
     settings: Settings,
     readiness: ConversationReadiness,
     assistant: Assistant,
@@ -488,7 +486,7 @@ private fun ChatListNormal(
                                     onToolApproval = onToolApproval,
                                     onToolAnswer = onToolAnswer,
                                     onSubAssistantAnswer = onSubAssistantAnswer,
-                                    toolCallPhases = snapshot.activeTurn?.toolCallPhases.orEmpty(),
+                                    toolCallPhases = turnPresentation.toolCallPhases,
                                     lastMessage = index == lastMessageIndex,
                                 )
                             }
@@ -514,7 +512,7 @@ private fun ChatListNormal(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                if (turnPresentation == ConversationTurnPresentation.AWAITING_APPROVAL) {
+                                if (turnPresentation.phase == ConversationTurnPhase.AWAITING_APPROVAL) {
                                     ApprovalRequiredIndicator(
                                         showLabel = true,
                                     )
@@ -524,11 +522,11 @@ private fun ChatListNormal(
                                     )
                                 }
                                 AnimatedVisibility(
-                                    visible = turnPresentation == ConversationTurnPresentation.GENERATING &&
-                                        processingStatus != null,
+                                    visible = turnPresentation.phase == ConversationTurnPhase.GENERATING &&
+                                        turnPresentation.processingText != null,
                                 ) {
                                     Text(
-                                        text = processingStatus ?: "",
+                                        text = turnPresentation.processingText ?: "",
                                         style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )

@@ -24,6 +24,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.MessageTerminalStatus
 import me.rerere.ai.ui.UIMessage
@@ -42,7 +43,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class GenerationHandlerFlowTest {
+class GenerationLoopFlowTest {
     @Test
     fun `split think opener does not publish answer phase or raw tag before reasoning`() = runTest {
         val model = Model(modelId = "test-model", displayName = "Test Model")
@@ -50,6 +51,7 @@ class GenerationHandlerFlowTest {
         val providerManager = mockk<ProviderManager>()
         val provider = mockk<Provider<ProviderSetting.OpenAI>>()
         every { providerManager.getProviderByType(providerSetting) } returns provider
+        every { provider.requestMediaCapabilities(providerSetting, model) } returns RequestMediaCapabilities.NONE
         coEvery { provider.streamText(providerSetting, any(), any()) } returns flowOf(
             textDelta("<thi"),
             textDelta("nk>reason"),
@@ -57,7 +59,7 @@ class GenerationHandlerFlowTest {
         )
         val assistant = Assistant(enableMemory = false, streamOutput = true)
         val inFlight = UIMessage(role = MessageRole.ASSISTANT, parts = emptyList())
-        val handler = GenerationHandler(
+        val handler = GenerationLoop(
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
@@ -65,7 +67,8 @@ class GenerationHandlerFlowTest {
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
         )
 
-        val chunks = handler.generateText(
+        val chunks = handler.run(
+            GenerationRequest(
             settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
             model = model,
             messages = listOf(UIMessage.user("hello"), inFlight),
@@ -73,6 +76,7 @@ class GenerationHandlerFlowTest {
             assistant = assistant,
             assistantMessageId = inFlight.id,
             maxSteps = 1,
+            )
         ).toList()
 
         val phases = chunks.filterIsInstance<GenerationChunk.Phase>().map { it.phase }
@@ -93,13 +97,15 @@ class GenerationHandlerFlowTest {
         val user = UIMessage.user("hello")
         val inFlight = UIMessage(role = MessageRole.ASSISTANT, parts = emptyList())
 
-        harness.handler.generateText(
+        harness.handler.run(
+            GenerationRequest(
             settings = harness.settings,
             model = harness.model,
             messages = listOf(user, inFlight),
             assistant = harness.assistant,
             assistantMessageId = inFlight.id,
             maxSteps = 1,
+            )
         ).toList()
 
         assertEquals(listOf(user.id), harness.providerMessages.captured.map { it.id })
@@ -129,18 +135,20 @@ class GenerationHandlerFlowTest {
         val latestUser = UIMessage.user("continue")
         val inFlight = UIMessage(role = MessageRole.ASSISTANT, parts = emptyList())
 
-        harness.handler.generateText(
-            settings = harness.settings,
-            model = harness.model,
-            messages = listOf(
-                UIMessage.user("first request"),
-                terminalDraft,
-                latestUser,
-                inFlight,
-            ),
-            assistant = harness.assistant,
-            assistantMessageId = inFlight.id,
-            maxSteps = 1,
+        harness.handler.run(
+            GenerationRequest(
+                settings = harness.settings,
+                model = harness.model,
+                messages = listOf(
+                    UIMessage.user("first request"),
+                    terminalDraft,
+                    latestUser,
+                    inFlight,
+                ),
+                assistant = harness.assistant,
+                assistantMessageId = inFlight.id,
+                maxSteps = 1,
+            )
         ).toList()
 
         val projected = harness.providerMessages.captured.single { it.id == terminalDraft.id }
@@ -163,7 +171,7 @@ class GenerationHandlerFlowTest {
         every {
             providerManager.getProviderByType(any<ProviderSetting.OpenAI>())
         } returns provider
-        val handler = GenerationHandler(
+        val handler = GenerationLoop(
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
@@ -205,7 +213,8 @@ class GenerationHandlerFlowTest {
             execute = { emptyList() },
         )
 
-        val chunks = handler.generateText(
+        val chunks = handler.run(
+            GenerationRequest(
             settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
             model = model,
             messages = listOf(message),
@@ -219,18 +228,11 @@ class GenerationHandlerFlowTest {
                     assertEquals(ToolExecutionEventStatus.STARTED, checkpoint.toolExecution?.status)
                 }
             },
+            )
         ).toList()
 
         assertTrue(chunks.any { it == GenerationChunk.Phase("tool_executing", "metadata_tool") })
-        val startedIndex = chunks.indexOfFirst {
-            it == GenerationChunk.Checkpoint(CheckpointKind.TOOL_EXECUTION_STARTED)
-        }
-        val changedIndex = chunks.indexOfFirst {
-            it == GenerationChunk.Checkpoint(CheckpointKind.TOOL_STATE_CHANGED)
-        }
-        assertTrue(startedIndex >= 0)
-        assertTrue(changedIndex > startedIndex)
-        assertTrue(chunks.any { it == GenerationChunk.Checkpoint(CheckpointKind.TOOL_STATE_CHANGED) })
+        assertTrue(persistedBeforeExecute.get())
         val finalTool = chunks.filterIsInstance<GenerationChunk.Messages>()
             .last().messages.last().getTools().single()
         assertEquals("running", finalTool.metadata?.get("phase")?.jsonPrimitive?.content)
@@ -244,7 +246,7 @@ class GenerationHandlerFlowTest {
         val providerManager = mockk<ProviderManager>()
         val provider = mockk<Provider<ProviderSetting.OpenAI>>(relaxed = true)
         every { providerManager.getProviderByType(any<ProviderSetting.OpenAI>()) } returns provider
-        val handler = GenerationHandler(
+        val handler = GenerationLoop(
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
@@ -273,7 +275,8 @@ class GenerationHandlerFlowTest {
         )
 
         val failure = runCatching {
-            handler.generateText(
+            handler.run(
+                GenerationRequest(
                 settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
                 model = model,
                 messages = listOf(message),
@@ -285,6 +288,7 @@ class GenerationHandlerFlowTest {
                         error("checkpoint storage unavailable")
                     }
                 },
+                )
             ).toList()
         }.exceptionOrNull()
 
@@ -299,7 +303,7 @@ class GenerationHandlerFlowTest {
         val providerManager = mockk<ProviderManager>()
         every { providerManager.getProviderByType(any<ProviderSetting.OpenAI>()) } returns
             mockk<Provider<ProviderSetting.OpenAI>>(relaxed = true)
-        val handler = GenerationHandler(
+        val handler = GenerationLoop(
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
@@ -325,7 +329,8 @@ class GenerationHandlerFlowTest {
         )
 
         val failure = runCatching {
-            handler.generateText(
+            handler.run(
+                GenerationRequest(
                 settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
                 model = model,
                 messages = listOf(message),
@@ -337,6 +342,7 @@ class GenerationHandlerFlowTest {
                         error("durable checkpoint failed")
                     }
                 },
+                )
             ).toList()
         }.exceptionOrNull()
 
@@ -351,7 +357,8 @@ class GenerationHandlerFlowTest {
         val transformer = terminalResourceTransformer(discarded)
 
         val failure = runCatching {
-            harness.handler.generateText(
+            harness.handler.run(
+                GenerationRequest(
                 settings = harness.settings,
                 model = harness.model,
                 messages = listOf(UIMessage.user("create image")),
@@ -363,6 +370,7 @@ class GenerationHandlerFlowTest {
                         error("step checkpoint failed")
                     }
                 },
+                )
             ).toList()
         }.exceptionOrNull()
 
@@ -377,7 +385,8 @@ class GenerationHandlerFlowTest {
         val transformer = terminalResourceTransformer(discarded)
 
         val failure = runCatching {
-            harness.handler.generateText(
+            harness.handler.run(
+                GenerationRequest(
                 settings = harness.settings,
                 model = harness.model,
                 messages = listOf(UIMessage.user("create image")),
@@ -389,6 +398,7 @@ class GenerationHandlerFlowTest {
                         throw kotlinx.coroutines.CancellationException("collector cancelled")
                     }
                 },
+                )
             ).toList()
         }.exceptionOrNull()
 
@@ -403,7 +413,7 @@ class GenerationHandlerFlowTest {
         val providerManager = mockk<ProviderManager>()
         val provider = mockk<Provider<ProviderSetting.OpenAI>>(relaxed = true)
         every { providerManager.getProviderByType(any<ProviderSetting.OpenAI>()) } returns provider
-        val handler = GenerationHandler(
+        val handler = GenerationLoop(
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
@@ -437,7 +447,8 @@ class GenerationHandlerFlowTest {
         )
         val toolEvents = mutableListOf<ToolExecutionEvent>()
 
-        handler.generateText(
+        handler.run(
+            GenerationRequest(
             settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
             model = model,
             messages = listOf(message),
@@ -453,6 +464,7 @@ class GenerationHandlerFlowTest {
                     }
                 }
             },
+            )
         ).toList()
 
         assertEquals(
@@ -485,6 +497,7 @@ class GenerationHandlerFlowTest {
         every {
             providerManager.getProviderByType(any<ProviderSetting.OpenAI>())
         } returns provider
+        every { provider.requestMediaCapabilities(any(), any()) } returns RequestMediaCapabilities.NONE
         val providerMessages = slot<List<UIMessage>>()
         coEvery {
             provider.generateText(
@@ -506,7 +519,7 @@ class GenerationHandlerFlowTest {
         )
         val assistant = Assistant(enableMemory = false, streamOutput = false)
         return ProviderHarness(
-            handler = GenerationHandler(
+            handler = GenerationLoop(
                 context = mockk<Context>(relaxed = true),
                 providerManager = providerManager,
                 json = Json,
@@ -552,7 +565,7 @@ class GenerationHandlerFlowTest {
     }
 
     private data class ProviderHarness(
-        val handler: GenerationHandler,
+        val handler: GenerationLoop,
         val settings: Settings,
         val model: Model,
         val assistant: Assistant,

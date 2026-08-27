@@ -49,6 +49,11 @@ internal fun mapExifOrientationToTransform(orientation: Int): ExifTransformType 
     else -> ExifTransformType.NONE
 }
 
+fun UIMessagePart.Image.encodeNativeImage(withPrefix: Boolean = true): EncodedImage =
+    encodeBase64(withPrefix).getOrElse { cause ->
+        throw IllegalStateException("native image encoding failed for $url", cause)
+    }
+
 fun UIMessagePart.Image.encodeBase64(withPrefix: Boolean = true): Result<EncodedImage> = runCatching {
     when {
         this.url.startsWith("file://") -> {

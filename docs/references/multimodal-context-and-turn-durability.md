@@ -14,15 +14,15 @@ durable Conversation
     Image part（url + metadata.attachment_ref）+ Artifact
     │  每次生成请求
     ▼
-AttachmentProjectionTransformer（按本次 resolved model 的 inputModalities）
-    ├── 可读图（IMAGE in inputModalities）→ input=native 引用事实 + 原图
-    └── 不可读图 → input=reference_only 引用事实
+AttachmentProjectionTransformer（按本次 RequestMediaCapabilities）
+    ├── STRUCTURED → input=native 引用事实 + 原图
+    └── NONE / OPAQUE_REPLAY_ONLY 的普通 Image part → input=reference_only 引用事实
            │  模型需要细节时显式调用
            ▼
     inspect_attachments(refs, request)
         → ToolExecutionContext.resolveAttachments → 识别模型（单次多图调用）→ Text
     ▼
-Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → ConversationRepository.applyMutation，Room 事务）
+Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → ConversationRepository.commit(ConversationWrite)，Room 事务）
     ▼
 崩溃恢复（INTERRUPTED / UNKNOWN）与 replay-safe 回放
 ```
@@ -87,12 +87,12 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 
 ### 3.1 两态
 
-判定输入：本次请求 resolved model 的 `inputModalities` 是否包含 `Modality.IMAGE`。无 Provider 维度矩阵——声明错误的兼容端点由 Provider / 网关报错收口（`provider_error` / `content_blocked`）。
+判定输入：本次请求的 `RequestMediaCapabilities`（模型 IMAGE 声明 + 具名 Provider endpoint/profile）。`OPAQUE_REPLAY_ONLY` 只允许 Responses raw `response.output` 回放历史媒体，不能让普通 `UIMessagePart.Image` 借消息级 metadata 变成 native。
 
 | 模式 | 行为 |
 |------|------|
-| 可读图 | Image part 保留，前方插入 `input=native` 引用事实 |
-| 不可读图 | Image 替换为 `input=reference_only` 引用事实 |
+| STRUCTURED | Image part 保留，前方插入 `input=native` 引用事实 |
+| NONE 或 OPAQUE_REPLAY_ONLY 的直接 Image | Image 替换为 `input=reference_only`（无稳定 ref 时 `unavailable`） |
 
 ### 3.2 投影规则
 
@@ -236,11 +236,11 @@ non-terminal execution 的 owning message 缺失是持久化完整性错误，�
 | `AttachmentProjectionTransformer` | 请求级投影（本文件 §3） |
 | `AttachmentInspectionTool` / `shouldInjectAttachmentInspection` | `inspect_attachments` 工具与注入判定 |
 | `ToolExecutionContext` / `ToolAttachmentResolution` | ai 模块最小只读附件能力接口 |
-| `GenerationHandler` | 工具循环、checkpoint、`resolveAttachments` 注入 |
+| `GenerationLoop` | 工具循环、checkpoint、`resolveAttachments` 注入 |
 | `ConversationApplicationService` / `MasterTurnCoordinator` / `DelegationCoordinator` | 盖章时机、Master/Target 工具集 |
 | `TurnFinalization` | 正常 stop/supersede 与中断结果终态 |
 | `TurnRecovery` | 仅重启恢复（Master/Child/tool 定点链路） |
-| `ConversationCommandCoordinator` / `ConversationRepository.applyMutation` | durable command 唯一入口与 Room 事务 |
+| `ConversationCommandCoordinator` / `ConversationRepository.commit(ConversationWrite)` | durable command 唯一入口与 Room 事务 |
 | `TurnExecutionStatus` / `ToolExecutionStatus` | 执行事实状态枚举 |
 | `SettingsOcrMigration` / `migrateLegacySettingsJson` | 旧 OCR 设置迁移边界 |
 

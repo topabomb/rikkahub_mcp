@@ -152,3 +152,116 @@ retry and startup recovery paths.
 
 The required device matrix for Settings, Search, MCP configuration input and managed UI has not
 been rerun for this Phase C commit. JVM tests and builds do not constitute device acceptance.
+
+## Architecture review after Phase B and C
+
+V2 is still the right design. V1 failed at subtraction because it kept dual planners, dual
+runtimes, and historical repair as permanent branches. Phase B and C already prove the
+correct order: retire dead repair first, then give one owner a complete protocol. They do
+not yet prove the 10% line-count gate; that gate lives in Phase D and E.
+
+Phase B is architecturally complete. Orphan-turn repair and Settings-image adoption are
+gone from the writer, recovery, and tests. Room 1→8 and legal Settings/backup migrations
+remain. The follow-up `5ccad20b` is a boundary clarification, not a second owner: a
+Settings avatar/background with a missing Artifact half is cleared through the existing
+Settings write chain. Device evidence covers avatar/background ownership, delete, GC and
+restart; sent-message attachment preview remains an open Phase D/F matrix item, not a
+Phase B writer defect.
+
+Phase C is the right aggregate and the wrong place to hunt Conversation-line subtraction.
+One `SettingsStore`, one `effectiveSettings` snapshot, internal envelope/resolver files,
+search index→id migration, and deletion of `AllowAll` all match the plan. The local
+Settings group sits at 1,249 / 1,250 lines. `ManagedConfiguration.kt` at 558 lines is the
+planned exception and is why Phase C is allowed to grow. The remaining Phase C gap is
+operational, not structural: the Settings/Search/MCP/managed UI device matrix has not been
+rerun.
+
+The remaining subtraction is still where V1 left it. Conversation/Turn started Phase D at
+18 files / 6,811 lines against a 5,800 cap. MCP is unchanged at 1,890 / 1,450. Workspace is
+unchanged, including a separate terminal query type. The first D cut replaced
+`ConversationReducer` + `ConversationMutationBuilder` + Runtime persist callbacks with one
+`ConversationTransition` and `ConversationRepository.commit`. The multi-map turn runtime
+(`generationJob`, `activeTurnId`, `cancelReasons`, public `processingStatus`) is still the
+next D cut. Splitting D into “planner this week, runtime next week” would recreate the V1
+dual-path window, so ActiveTurnRuntime, GenerationLoop and presentation merge stay in the
+same phase.
+
+Feasibility holds if D does not grow a compatibility facade. `ConversationRuntimeTest`
+must move off `submit`/`startTurn` persist callbacks in the same delivery. Line-count
+recovery is expected from deleting MutationBuilder, Runtime command mutex/classification,
+checkpoint events, the three presentation files, and the lease registry — not from
+compressing `TurnEngine` or `DelegationCoordinator`. If a correct ActiveTurnRuntime plus
+capability types cannot meet 5,800 / 4,362, stop and revise the budget; do not keep
+`submit` as a test-only second writer.
+
+## Phase D in progress: request media capabilities and runtime subtraction
+
+The unique planner, Coordinator serial gate, `GenerationLoop.run(GenerationRequest)`,
+private `ActiveTurnRuntime`, Registry `installAndStartActiveRequest`,
+`SendMessageReceipt.turnId`, and merged `ConversationPresentation` are in the current
+worktree. Processing text is request-scoped; Chat UI reads
+`ConversationPresentation.processingText` instead of a second Query Flow.
+
+Request media capability is now a closed Provider fact:
+`RequestMediaCapabilities` / `RequestImageSupport` live in `Provider.kt`,
+`GenerationLoop` resolves them once, and `AttachmentProjectionTransformer` uses that
+value instead of `model.inputModalities` alone. Official OpenAI Chat never natives
+ASSISTANT/TOOL_OUTPUT images. Responses unknown compatible hosts stay
+`OPAQUE_REPLAY_ONLY` for assistant replay and `NONE` for tool-output images. Serializer
+paths fail closed on leftover native images; `Image output omitted` and empty-text
+encode fallbacks are gone. `SubAssistantRunLeaseRegistry` is private Gate state.
+`GenerationChunk.Checkpoint` / `TurnEvent.Checkpoint` no longer exist as UI events;
+durability remains `onCheckpoint`.
+
+Line-count status against the original §11.7 numbers could not be met by a correct
+unique-owner implementation. Current physical counts: Conversation/Turn 15 files /
+7,217 lines (the earlier 7,157 omitted `ConversationOperationLocks`); attachment/wire
+slice 9 files / 4,934 lines. Production `src/main/**/*.kt` versus HEAD is +372 tracked
+plus untracked `ConversationPresentation.kt` (202) = +574. `e19ae595` already lacked
+`ConversationMutationBuilder`; Transition absorbed planner + mutation + facts, so
+file count fell while lines rose. Request-level `RequestMediaCapabilities` plus
+serializer fail-closed also grew the wire slice above the original 4,362 (that number
+was already below the true 4,780 baseline).
+
+The duplicated Master/Delegation `prepareFinalize` lambdas are now one
+`TurnEngine` path that always calls `TurnFinalization.prepareOwnedTurnMessagesForFailure`
+for Cancelled/Failed. Mutation is command-semantic: last-node, node-id, truncate,
+delete-with-reindex, and `ReplaceMessageTree` full-tree only for whole-tree
+commands. Header patches come from the command, not old/new field enumeration.
+
+Approval continuation now has a Registry operation
+`installAndStartApprovalContinuation` that revalidates awaiting identity under the
+conversation lock and refuses a stale handle without cancelling a newer START.
+Master no longer uses the generic install path for CONTINUE_APPROVAL. Child
+`ask_user` wait uses the same `AWAITING_APPROVAL` request phase and resumes with
+`markRunning` on the same worker. Unused `SupersededTurnBarrier`,
+`beginSupersedingTurn`, `installContinuation`, `markPreparingContinuation` and
+`appendTargetMessageId` are deleted.
+
+Superseded workers keep their cancel reason after replacement; `TurnEngine`
+treats only `user_stop` as cancelled-by-user. `stopTurn` captures one request
+identity via `captureAndRequestStop`. Ordinary `UIMessagePart.Image` parts no
+longer inherit Responses opaque-replay native markers.
+
+§11.7 was revised rather than compressing `TurnEngine`/`DelegationCoordinator` or
+keeping a second writer: Conversation/Turn ≤15/7,250; wire ≤9/4,950; core ≤56/14,820;
+full `src/main/**/*.kt` ≤125,200. Independent Phase D net-reduction versus HEAD was
+also revised: unique-owner plus fail-closed media cannot net-reduce without
+compression. Device matrix for New Chat through TTS is user-owned; this ledger does
+not treat launch-only emulator evidence as device acceptance.
+
+`ActiveTurnRuntime` is a private inner class of `ConversationRuntime`. Callers receive
+intent APIs and `ActiveRequestPresentationFacts`; they never hold the request object.
+`execute()` maps identity/not-found conflicts to `ConversationCommandResult.Conflict`
+and transaction errors to `Failure`. `ownedRequests` retains a superseded request until
+its worker completes so cancel reason cannot fall back to `user_stop`; a completed
+turnId is a no-op cancel target. Request identity APIs are `internal`. START validates
+turnId identity first, then consumes `nextTurnEpoch()` only for the committed command.
+`planHeader` and `plan` share `headerPatchFromCommand`; they are not a second header
+protocol.
+
+Matching JVM tests on 2026-08-27:
+`ConversationCommandCoordinatorTest`, `ConversationRuntimeTest`, `TurnFinalizationTest`,
+`TurnEngineTest` passed. Full gate `test assembleDebug lintDebug assembleRelease`
+passed in 6m 57s. Phase D code is complete; device matrix remains user-owned and
+overall V2 is not complete until E/F.

@@ -10,6 +10,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.ClaudePromptCacheTtl
+import me.rerere.ai.provider.RequestImageSupport
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.ui.ClaudeReasoningMetadata
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -42,15 +44,29 @@ class ClaudeProviderMessageTest {
     }
 
     // Helper to invoke private buildMessages method via reflection
-    private fun invokeBuildMessages(messages: List<UIMessage>): JsonArray {
+    private fun invokeBuildMessages(
+        messages: List<UIMessage>,
+        mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities(
+            userImages = RequestImageSupport.STRUCTURED,
+            assistantImages = RequestImageSupport.NONE,
+            toolOutputImages = RequestImageSupport.STRUCTURED,
+        ),
+    ): JsonArray {
         val method = ClaudeProvider::class.java.getDeclaredMethod(
             "buildMessages",
             List::class.java,
             Boolean::class.javaPrimitiveType,
-            ClaudePromptCacheTtl::class.java
+            ClaudePromptCacheTtl::class.java,
+            RequestMediaCapabilities::class.java,
         )
         method.isAccessible = true
-        return method.invoke(provider, messages, false, ClaudePromptCacheTtl.FIVE_MINUTES) as JsonArray
+        return method.invoke(
+            provider,
+            messages,
+            false,
+            ClaudePromptCacheTtl.FIVE_MINUTES,
+            mediaCapabilities,
+        ) as JsonArray
     }
 
     private fun invokeParseMessage(content: JsonArray): UIMessage {

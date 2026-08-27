@@ -44,7 +44,7 @@ class GenerationToolSetFactory(
     private val artifactStore: ArtifactStore,
 ) {
     /**
-     * 构建指定 Assistant 的工具集（不含 Memory Tools，那些由 GenerationHandler 内部添加）。
+     * 构建指定 Assistant 的工具集（不含 Memory Tools，那些由 GenerationLoop 内部添加）。
      *
      * @param assistant 目标助手
      * @param settings 当前设置（本 run 的 snapshot）

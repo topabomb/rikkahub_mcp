@@ -34,7 +34,9 @@ import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.runtime.ConversationHeaderPatch
 import net.weero.measix.pilot.service.runtime.ConversationHeader
 import net.weero.measix.pilot.service.runtime.ConversationMutation
+import net.weero.measix.pilot.service.runtime.ConversationWrite
 import net.weero.measix.pilot.service.runtime.ExecutionFacts
+import net.weero.measix.pilot.service.runtime.hasChanges
 import net.weero.measix.pilot.service.runtime.OptionalFolderId
 import net.weero.measix.pilot.service.runtime.OptionalString
 import net.weero.measix.pilot.service.runtime.OptionalUuidSet
@@ -184,6 +186,21 @@ class ConversationRepository(
                 }
                 messageFtsManager.indexConversationInTransaction(master)
             }
+        }
+    }
+
+    /**
+     * Unique durable conversation write. One Room transaction either materializes a Draft or
+     * applies a delta mutation and execution facts.
+     */
+    internal suspend fun commit(write: ConversationWrite): Boolean = when (write) {
+        is ConversationWrite.MaterializeDraft -> {
+            insertConversation(write.conversation)
+            true
+        }
+        is ConversationWrite.Mutate -> {
+            if (!write.mutation.hasChanges() && write.executionFacts == null) false
+            else applyMutation(write.mutation, write.executionFacts)
         }
     }
 

@@ -2,7 +2,8 @@ package net.weero.measix.pilot.service
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
-import net.weero.measix.pilot.service.runtime.ConversationTurnPresentation
+import net.weero.measix.pilot.service.runtime.ConversationPresentation
+import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
 import kotlin.uuid.Uuid
 
 class ConversationActivityProjectionTest {
@@ -25,9 +26,24 @@ class ConversationActivityProjectionTest {
             ),
             mergeConversationActivities(
                 turnPresentations = mapOf(
-                    responseOnly to ConversationTurnPresentation.GENERATING,
-                    approvalOnly to ConversationTurnPresentation.AWAITING_APPROVAL,
-                    both to ConversationTurnPresentation.AWAITING_APPROVAL,
+                    responseOnly to ConversationPresentation(
+                        activeRequestTurnId = responseOnly,
+                        phase = ConversationTurnPhase.GENERATING,
+                        processingText = null,
+                        toolCallPhases = emptyMap(),
+                    ),
+                    approvalOnly to ConversationPresentation(
+                        activeRequestTurnId = approvalOnly,
+                        phase = ConversationTurnPhase.AWAITING_APPROVAL,
+                        processingText = null,
+                        toolCallPhases = emptyMap(),
+                    ),
+                    both to ConversationPresentation(
+                        activeRequestTurnId = both,
+                        phase = ConversationTurnPhase.AWAITING_APPROVAL,
+                        processingText = null,
+                        toolCallPhases = emptyMap(),
+                    ),
                 ),
                 titleGenerationIds = setOf(both, titleOnly),
             ),

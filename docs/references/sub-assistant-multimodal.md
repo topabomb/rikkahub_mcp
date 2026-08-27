@@ -8,7 +8,7 @@
 
 ## 1. 背景与要解决的问题
 
-`assistant_call` 是同步委托：Target 在独立 Child Conversation 中跑完，Master 等终态后再继续当前 Tool Loop。Child 用正常 `UIMessage` / `UIMessagePart` 持久化；Target 复用 `GenerationHandler`、Transformer 与 Provider。Target **不读取** Master 历史。
+`assistant_call` 是同步委托：Target 在独立 Child Conversation 中跑完，Master 等终态后再继续当前 Tool Loop。Child 用正常 `UIMessage` / `UIMessagePart` 持久化；Target 复用 `GenerationLoop`、Transformer 与 Provider。Target **不读取** Master 历史。
 
 因此会出现两条必须分开、又共用同一套文件与适配层的链路：
 
@@ -111,7 +111,7 @@ AssistantToolFactory                 形状校验；统一 unavailable 信封
     ▼
 DelegationCoordinator
     │  AttachmentResolver → Child USER = Text + 原始 Image（只校验 ref/资产，不判视觉能力）
-    │  Target GenerationHandler（用自己的 resolved model）
+    │  Target GenerationLoop（用自己的 resolved model）
     │      AttachmentProjectionTransformer   ← 统一投影：可读图保留原图+native 事实；不可读替换为 reference_only 事实
     │      inspect_attachments?              ← Target 模型不可读图且配置了识别模型时注入
     ▼
@@ -478,7 +478,7 @@ Resolver 顺序：
 | `ConversationApplicationService` / `MasterTurnCoordinator` | 发送/编辑盖章，生成前 durable backfill |
 | `SubAssistantRunPolicy` / `filterTargetTools` | 不再永久过滤 `TextToImage` / `generate_image` |
 
-不改：`GenerationHandler` 主循环语义、Provider 编码、lineage / lease。
+不改：`GenerationLoop` 主循环语义、Provider 编码、lineage / lease。
 
 主要测试：`AssistantCallToolTest`、`AttachmentRefsTest`、`AttachmentResolverTest`、`SafeRemoteMediaFetcherTest`、`AttachmentProjectionTransformerTest`、`AttachmentInspectionToolTest`、`ShouldInjectAttachmentInspectionTest`、`SubAssistantAttachmentCoordinatorTest`、`SubAssistantChildPartsTest`、`SubAssistantResultProjectionTest`、`SubAssistantArtifactProjectionTest`、`SubAssistantRunPolicyTest`、`SubAssistantCallMetadataTest` 与恢复/终态测试。
 
@@ -527,7 +527,7 @@ OpenAI / Claude / Gemini 远端文件缓存。同一张图多轮反复发给同�
 
 ### 9.4 历史视觉 token
 
-点名 `extras=["artifacts"]` 后，native Image 会留在 Master 历史并在后续 turn 回放（可读图模型持续消耗视觉 token；不可读模型只回放引用行）。若要「只让本轮看见」，需另做历史 `assistant_call` 媒体折叠，并可能改 `GenerationHandler`。不要在未点名时发明「只发给本轮、不落盘」的通道。
+点名 `extras=["artifacts"]` 后，native Image 会留在 Master 历史并在后续 turn 回放（可读图模型持续消耗视觉 token；不可读模型只回放引用行）。若要「只让本轮看见」，需另做历史 `assistant_call` 媒体折叠，并可能改 `GenerationLoop`。不要在未点名时发明「只发给本轮、不落盘」的通道。
 
 ### 9.5 Target 跨 step 回放 `/upload`
 

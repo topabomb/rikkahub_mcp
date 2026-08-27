@@ -13,105 +13,105 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
 
-class SubAssistantRunLeaseRegistryTest {
+class SubAssistantRunGateTest {
     @Test
     fun `same master and target is busy until lease cleanup then can run again`() = runTest {
-        val registry = SubAssistantRunLeaseRegistry()
+        val gate = SubAssistantRunGate()
         val key = SubAssistantRunKey(Uuid.random(), Uuid.random())
         val masterJob = Job()
         val callerId = Uuid.random()
-        val first = registry.tryAcquire(key, "run-1", callerId, masterJob)
+        val first = gate.acquireLease(key, "run-1", callerId, masterJob)
 
         assertNotNull(first)
-        assertTrue(registry.isBusy(key))
-        assertNull(registry.tryAcquire(key, "run-2", callerId, masterJob))
+        assertTrue(gate.isBusy(key))
+        assertNull(gate.acquireLease(key, "run-2", callerId, masterJob))
 
         masterJob.cancel()
         first!!.job.join()
         assertTrue(first.job.isCancelled)
 
-        registry.release(key, first)
-        assertFalse(registry.isBusy(key))
-        val retry = registry.tryAcquire(key, "run-3", callerId, Job())
+        first.close()
+        assertFalse(gate.isBusy(key))
+        val retry = gate.acquireLease(key, "run-3", callerId, Job())
         assertNotNull(retry)
-        registry.release(key, retry!!)
+        retry!!.close()
     }
 
     @Test
     fun `different masters may call the same target concurrently`() {
-        val registry = SubAssistantRunLeaseRegistry()
+        val gate = SubAssistantRunGate()
         val targetId = Uuid.random()
         val firstKey = SubAssistantRunKey(Uuid.random(), targetId)
         val secondKey = SubAssistantRunKey(Uuid.random(), targetId)
 
-        val first = registry.tryAcquire(firstKey, "run-1", Uuid.random(), Job())
-        val second = registry.tryAcquire(secondKey, "run-2", Uuid.random(), Job())
+        val first = gate.acquireLease(firstKey, "run-1", Uuid.random(), Job())
+        val second = gate.acquireLease(secondKey, "run-2", Uuid.random(), Job())
 
         assertNotNull(first)
         assertNotNull(second)
-        registry.release(firstKey, first!!)
-        registry.release(secondKey, second!!)
+        first!!.close()
+        second!!.close()
     }
 
     @Test
     fun `deleting caller cancels its lease and waits for structured cleanup`() = runTest {
-        val registry = SubAssistantRunLeaseRegistry()
+        val gate = SubAssistantRunGate()
         val callerId = Uuid.random()
         val key = SubAssistantRunKey(Uuid.random(), Uuid.random())
-        val lease = registry.tryAcquire(key, "run-1", callerId, Job())!!
+        val lease = gate.acquireLease(key, "run-1", callerId, Job())!!
         val cancellation = CompletableDeferred<Throwable?>()
         lease.job.invokeOnCompletion { cancellation.complete(it) }
 
-        val deleteWaiter = launch { registry.cancelForAssistant(callerId) }
+        val deleteWaiter = launch { gate.cancelRunsForAssistant(callerId) }
         runCurrent()
 
         assertTrue(lease.job.isCancelled)
         assertEquals("target_access_revoked", cancellation.await()?.message)
         assertTrue(deleteWaiter.isActive)
 
-        registry.release(key, lease)
+        lease.close()
         runCurrent()
         assertTrue(deleteWaiter.isCompleted)
-        assertFalse(registry.isBusy(key))
+        assertFalse(gate.isBusy(key))
     }
 
     @Test
     fun `deleting target cancels only leases that use that target`() = runTest {
-        val registry = SubAssistantRunLeaseRegistry()
+        val gate = SubAssistantRunGate()
         val targetId = Uuid.random()
         val targetKey = SubAssistantRunKey(Uuid.random(), targetId)
         val unrelatedKey = SubAssistantRunKey(Uuid.random(), Uuid.random())
-        val targetLease = registry.tryAcquire(targetKey, "run-target", Uuid.random(), Job())!!
-        val unrelatedLease = registry.tryAcquire(unrelatedKey, "run-other", Uuid.random(), Job())!!
+        val targetLease = gate.acquireLease(targetKey, "run-target", Uuid.random(), Job())!!
+        val unrelatedLease = gate.acquireLease(unrelatedKey, "run-other", Uuid.random(), Job())!!
 
-        val deleteWaiter = launch { registry.cancelForAssistant(targetId) }
+        val deleteWaiter = launch { gate.cancelRunsForAssistant(targetId) }
         runCurrent()
 
         assertTrue(targetLease.job.isCancelled)
         assertTrue(unrelatedLease.job.isActive)
 
-        registry.release(targetKey, targetLease)
+        targetLease.close()
         runCurrent()
         assertTrue(deleteWaiter.isCompleted)
-        registry.release(unrelatedKey, unrelatedLease)
+        unrelatedLease.close()
     }
 
     @Test
     fun `startup cancellation waits for lease owner cleanup`() = runTest {
-        val registry = SubAssistantRunLeaseRegistry()
+        val gate = SubAssistantRunGate()
         val key = SubAssistantRunKey(Uuid.random(), Uuid.random())
-        val lease = registry.tryAcquire(key, "run", Uuid.random(), Job())!!
+        val lease = gate.acquireLease(key, "run", Uuid.random(), Job())!!
 
-        val recovery = launch { registry.cancelAll("app_restarted") }
+        val recovery = launch { gate.cancelAllRuns("app_restarted") }
         runCurrent()
 
         assertTrue(lease.job.isCancelled)
         assertTrue(recovery.isActive)
-        assertTrue(registry.isBusy(key))
+        assertTrue(gate.isBusy(key))
 
-        registry.release(key, lease)
+        lease.close()
         runCurrent()
         assertTrue(recovery.isCompleted)
-        assertFalse(registry.isBusy(key))
+        assertFalse(gate.isBusy(key))
     }
 }

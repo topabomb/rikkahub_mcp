@@ -1,11 +1,16 @@
 package me.rerere.ai.provider.providers.openai
 
 import me.rerere.ai.core.ReasoningLevel
+import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
+import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.RequestImageSupport
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.OpenAIResponseSourceProfile
 import me.rerere.ai.ui.OpenAIResponseWireFormat
+import okhttp3.HttpUrl.Companion.toHttpUrl
 
 /**
  * OpenAI-compatible endpoint identity derived from the actual request host.
@@ -53,6 +58,32 @@ internal fun resolveOpenAIEndpointVendor(host: String): OpenAIEndpointVendor {
 internal fun isOfficialOpenAIHost(host: String): Boolean =
     resolveOpenAIEndpointVendor(host) == OpenAIEndpointVendor.OPENAI
 
+internal fun openAIRequestMediaCapabilities(
+    providerSetting: ProviderSetting.OpenAI,
+    model: Model,
+): RequestMediaCapabilities {
+    val userImages = if (Modality.IMAGE in model.inputModalities) {
+        RequestImageSupport.STRUCTURED
+    } else {
+        RequestImageSupport.NONE
+    }
+    if (!providerSetting.useResponseApi) {
+        return RequestMediaCapabilities(userImages = userImages)
+    }
+    val profile = resolveResponseEndpointProfile(providerSetting.baseUrl.toHttpUrl().host)
+    return RequestMediaCapabilities(
+        userImages = userImages,
+        assistantImages = RequestImageSupport.OPAQUE_REPLAY_ONLY,
+        toolOutputImages = if (userImages == RequestImageSupport.STRUCTURED && profile.supportsMultimodalFunctionOutput) {
+            RequestImageSupport.STRUCTURED
+        } else {
+            RequestImageSupport.NONE
+        },
+        opaqueReplayWireFormat = profile.wireFormat,
+        opaqueReplaySourceProfile = profile.sourceProfile,
+    )
+}
+
 /**
  * Closed set of verified Responses wire profiles.
  *
@@ -84,7 +115,7 @@ internal enum class ResponseEndpointProfile(
         supportsReasoningSummary = true,
         supportsEncryptedContent = true,
         usesReasoningTextContent = false,
-        supportsMultimodalFunctionOutput = true,
+        supportsMultimodalFunctionOutput = false,
     ),
     VOLC_ARK(
         wireFormat = OpenAIResponseWireFormat.OPENAI,

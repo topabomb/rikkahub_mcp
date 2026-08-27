@@ -65,7 +65,7 @@ Application 层负责编排，不建立第二套数据协议。Repository 只执
 | 事实或流程 | 唯一 owner | 对外入口 |
 | --- | --- | --- |
 | Conversation durable command | `ConversationCommandCoordinator` | `ConversationApplicationService` 与领域 coordinator |
-| Resident snapshot 与 active turn | `ConversationRuntime` | `ConversationRuntimeRegistry` |
+| Resident snapshot 与私有 active request | `ConversationRuntime` | `ConversationRuntimeRegistry`；UI 只读 `ConversationPresentation` |
 | Conversation 事务持久化 | `ConversationRepository` | Coordinator 产生的 mutation 与 execution fact |
 | Turn start、checkpoint、terminal | `TurnEngine` | Master 与 Target coordinator |
 | 正常 stop、supersede、finalize | `TurnFinalization` | turn 编排层 |
@@ -160,9 +160,9 @@ Settings 图片导入先完成有界复制、结构魔数与实际 MIME 校验�
 
 ## Query、UI 与标题
 
-会话 UI 只消费 `ConversationReadState`、`ConversationSnapshot`、`ConversationSummary`、`ConversationTurnPresentation` 或专用 UiModel。页面对同一 snapshot 建立一个权威订阅；UI 不从 Runtime Job、布尔值或 Tool output 推断活动状态。
+会话 UI 只消费 `ConversationReadState`、`ConversationSnapshot`、`ConversationSummary`、`ConversationPresentation` 或专用 UiModel。页面对同一 snapshot 建立一个权威订阅；UI 不从 Runtime Job、布尔值或 Tool output 推断活动状态。
 
-`ConversationTurnPresentation` 区分 idle、generating 与 awaiting approval。审批暂停仍属于 active turn，且必须有独立的可访问性语义。Tool 卡片从首个调用 delta 起可查看；不完整 JSON 显示原始片段，不能等 output 出现才开放详情。
+`ConversationPresentation` 区分 idle、generating 与 awaiting approval。审批暂停仍属于 active turn，且必须有独立的可访问性语义。Tool 卡片从首个调用 delta 起可查看；不完整 JSON 显示原始片段，不能等 output 出现才开放详情。
 
 `ConversationTitleCoordinator` 统一确定性本地标题、模型标题 phase、token、重试与手动写入。模型请求携带 expected title，并以 `UpdateTitleIfCurrent` CAS 提交；CAS 的成功语义是 expected title 匹配，与新旧文本是否相同无关，相同值无需写库但仍收口为 resolved。手动标题和模型提交共享串行边界，手动提交会使活动和排队 token 失效。异步结果与 force 请求都不能覆盖请求发出后产生的手动标题。
 

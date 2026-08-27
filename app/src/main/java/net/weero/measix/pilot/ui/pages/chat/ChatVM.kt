@@ -44,7 +44,7 @@ import net.weero.measix.pilot.service.ArtifactUseCase
 import net.weero.measix.pilot.service.ArtifactDraftScope
 import net.weero.measix.pilot.service.FavoriteService
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
-import net.weero.measix.pilot.service.runtime.ConversationTurnPresentation
+import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.ui.components.ai.SearchMode
 import net.weero.measix.pilot.ui.components.ai.searchModeEnablesBuiltIn
 import net.weero.measix.pilot.ui.components.ai.searchModeEnablesLocal
@@ -98,15 +98,10 @@ class ChatVM(
     val artifactDraftScope: ArtifactDraftScope = artifactUseCase.openDraftScope()
 
     // UI consumes the runtime's typed turn projection; coroutine ownership remains inside Runtime.
-    val turnPresentation: StateFlow<ConversationTurnPresentation> =
+    val turnPresentation: StateFlow<ConversationPresentation> =
         conversationQueryService
             .turnPresentation(_conversationId)
-            .stateIn(viewModelScope, SharingStarted.Eagerly, ConversationTurnPresentation.IDLE)
-
-    val processingStatus: StateFlow<String?> =
-        conversationQueryService
-            .processingStatus(_conversationId)
-            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+            .stateIn(viewModelScope, SharingStarted.Eagerly, ConversationPresentation.IDLE)
 
     init {
         acquireViewLease()
@@ -249,7 +244,7 @@ class ChatVM(
      * @param answer 是否触发消息生成，如果为false，则仅添加消息到消息列表中
      * @return 已接受请求的稳定消息身份；空输入返回 null，receipt 不代表 durable 提交已经成功
      */
-    fun handleMessageSend(content: List<UIMessagePart>, answer: Boolean = true) =
+    suspend fun handleMessageSend(content: List<UIMessagePart>, answer: Boolean = true) =
         masterTurnCoordinator.sendMessage(_conversationId, content, answer, artifactDraftScope)
 
     fun handleMessageEdit(parts: List<UIMessagePart>, messageId: Uuid) {

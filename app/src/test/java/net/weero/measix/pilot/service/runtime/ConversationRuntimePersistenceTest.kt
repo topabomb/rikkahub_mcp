@@ -22,19 +22,16 @@ class ConversationRuntimePersistenceTest {
         val scope = CoroutineScope(Job())
         val runtime = runtime(conversationId, scope)
         val persistedCommands = mutableListOf<ConversationCommand>()
-        val persist: suspend (
-            ConversationSnapshot,
-            ConversationSnapshot,
-            ConversationCommand,
-        ) -> ConversationSnapshot = { _, new, command ->
-            persistedCommands += command
-            new
-        }
         val assistantMessageId = Uuid.random()
-        val handle = runtime.startTurn(Uuid.random(), assistantMessageId, false, persist)
+        applyCommand(runtime, StartTurn(Uuid.random(), assistantMessageId, false), persistedCommands)
+        val handle = runtime.snapshot.value.activeTurn.let { active ->
+            requireNotNull(active)
+            TurnHandle(runtime.id, active.epoch, active.turnId, active.assistantMessageId)
+        }
         val message = UIMessage.assistant("checkpoint").copy(id = assistantMessageId)
 
-        runtime.submit(
+        applyCommand(
+            runtime,
             CommitCheckpoint(
                 handle = handle,
                 kind = net.weero.measix.pilot.data.ai.CheckpointKind.STEP_COMPLETED,
@@ -43,7 +40,7 @@ class ConversationRuntimePersistenceTest {
                 turnReason = null,
                 toolExecution = null,
             ),
-            persist,
+            persistedCommands,
         )
 
         assertEquals(listOf(StartTurn::class, CommitCheckpoint::class), persistedCommands.map { it::class })
@@ -57,11 +54,12 @@ class ConversationRuntimePersistenceTest {
         val scope = CoroutineScope(Job())
         val runtime = runtime(conversationId, scope)
         val before = runtime.snapshot.value
+        val command = AppendUserMessage(UIMessage.user("must not publish"))
 
         try {
-            runtime.submit(AppendUserMessage(UIMessage.user("must not publish"))) { _, _, _ ->
-                error("disk unavailable")
-            }
+            val change = ConversationTransition.plan(before, command, before.header.updateAt)
+            error("disk unavailable")
+            runtime.publishCommitted(before, command, (change as ConversationChange.Durable).snapshot)
             fail("persistence failure must propagate")
         } catch (expected: IllegalStateException) {
             assertEquals("disk unavailable", expected.message)
@@ -86,26 +84,22 @@ class ConversationRuntimePersistenceTest {
             scope = scope,
             onIdle = {},
         )
-        var previous = runtime.snapshot.value
         val mutations = mutableListOf<ConversationMutation>()
-        val persist: suspend (
-            ConversationSnapshot,
-            ConversationSnapshot,
-            ConversationCommand,
-        ) -> ConversationSnapshot = { old, new, _ ->
-            mutations += ConversationMutationBuilder.build(old, new)
-            previous = new
-            new
-        }
         val assistantMessageId = Uuid.random()
-        val handle = runtime.startTurn(Uuid.random(), assistantMessageId, false, persist)
+        val start = StartTurn(Uuid.random(), assistantMessageId, false)
+        applyCommand(runtime, start, mutations = mutations)
+        val handle = runtime.snapshot.value.activeTurn.let { active ->
+            requireNotNull(active)
+            TurnHandle(runtime.id, active.epoch, active.turnId, active.assistantMessageId)
+        }
         val completedMessages = runtime.snapshot.value.currentMessages().dropLast(1) +
             UIMessage(
                 id = assistantMessageId,
                 role = MessageRole.ASSISTANT,
                 parts = listOf(UIMessagePart.Text("new answer")),
             )
-        runtime.submit(
+        applyCommand(
+            runtime,
             FinalizeTurn(
                 handle = handle,
                 messages = completedMessages,
@@ -113,14 +107,13 @@ class ConversationRuntimePersistenceTest {
                 terminalReason = null,
                 closeInterruptedTools = false,
             ),
-            persist,
+            mutations = mutations,
         )
 
         val finalMutation = mutations.last()
         assertEquals(1, finalMutation.upsertedNodes.size)
         assertEquals(assistantMessageId, finalMutation.upsertedNodes.single().messages.single().id)
         assertEquals(listOf(3), finalMutation.upsertedNodeIndices)
-        assertEquals(previous, runtime.snapshot.value)
         scope.cancel()
     }
 
@@ -134,13 +127,36 @@ class ConversationRuntimePersistenceTest {
             messageNodes = listOf(first, removed, moved),
         ).toSnapshot()
         val command = DeleteMessage(removed.currentMessage.id)
-        val updated = ConversationReducer.reduce(old, command)
+        val mutate = (
+            ConversationTransition.plan(old, command, old.header.updateAt) as ConversationChange.Durable
+            ).write as ConversationWrite.Mutate
 
-        val mutation = ConversationMutationBuilder.build(old, updated, command)
+        assertEquals(listOf(removed.id), mutate.mutation.deletedNodeIds)
+        assertEquals(listOf(moved.id), mutate.mutation.upsertedNodes.map(MessageNode::id))
+        assertEquals(listOf(1), mutate.mutation.upsertedNodeIndices)
+    }
 
-        assertEquals(listOf(removed.id), mutation.deletedNodeIds)
-        assertEquals(listOf(moved.id), mutation.upsertedNodes.map(MessageNode::id))
-        assertEquals(listOf(1), mutation.upsertedNodeIndices)
+    private fun applyCommand(
+        runtime: ConversationRuntime,
+        command: ConversationCommand,
+        persistedCommands: MutableList<ConversationCommand>? = null,
+        mutations: MutableList<ConversationMutation>? = null,
+    ): ConversationSnapshot {
+        val old = runtime.snapshot.value
+        val planned = if (command is StartTurn) {
+            command.copy(epoch = runtime.nextTurnEpoch())
+        } else {
+            command
+        }
+        if (planned is StartTurn && runtime.currentGenerationTurnId() != planned.turnId) {
+            runtime.installActiveRequest(planned.turnId, Job())
+        }
+        validateConversationCommandOwner(runtime.id, old, planned, runtime.currentGenerationTurnId())
+        val change = ConversationTransition.plan(old, planned, old.header.updateAt) as ConversationChange.Durable
+        persistedCommands?.add(planned)
+        (change.write as? ConversationWrite.Mutate)?.let { mutations?.add(it.mutation) }
+        runtime.publishCommitted(old, planned, change.snapshot)
+        return change.snapshot
     }
 
     private fun runtime(id: Uuid, scope: CoroutineScope) = ConversationRuntime(

@@ -17,10 +17,10 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 /**
- * ConversationReducer 权威测试。
+ * ConversationTransition 权威测试。
  * 核心：reducer 零 IO、纯函数、未被触及节点保持同一实例引用（structural sharing）。
  */
-class ConversationReducerTest {
+class ConversationTransitionTest {
     private fun handle(conversationId: Uuid, assistantMessageId: Uuid) = TurnHandle(
         conversationId = conversationId,
         epoch = 1,
@@ -40,7 +40,7 @@ class ConversationReducerTest {
     fun `empty conversation appends single assistant node`() {
         val c = Conversation.ofId(Uuid.random())
         val assistantId = Uuid.random()
-        val r = ConversationReducer.reduce(c.toSnapshot(), StartTurn(Uuid.random(), assistantId, resume = false))
+        val r = ConversationTransition.apply(c.toSnapshot(), StartTurn(Uuid.random(), assistantId, resume = false))
         assertEquals(1, r.nodes.size)
         assertEquals(assistantId, r.nodes[0].messages.single().id)
         assertEquals(MessageRole.ASSISTANT, r.nodes[0].messages.single().role)
@@ -51,7 +51,7 @@ class ConversationReducerTest {
         val assistantId = Uuid.random()
         val node = MessageNode.of(assistant(assistantId))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
-        val r = ConversationReducer.reduce(c.toSnapshot(), StartTurn(Uuid.random(), assistantId, resume = true))
+        val r = ConversationTransition.apply(c.toSnapshot(), StartTurn(Uuid.random(), assistantId, resume = true))
         // 幂等：不新增节点，节点数不变
         assertEquals(1, r.nodes.size)
         assertEquals(1, r.nodes[0].messages.size)
@@ -68,7 +68,7 @@ class ConversationReducerTest {
         )
         val conversation = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
 
-        val reduced = ConversationReducer.reduce(
+        val reduced = ConversationTransition.apply(
             conversation.toSnapshot(),
             StartTurn(Uuid.random(), selectedId, resume = true),
         )
@@ -85,7 +85,7 @@ class ConversationReducerTest {
             terminalReason = "user_stop",
         )
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(MessageNode.of(finished)))
-        val r = ConversationReducer.reduce(c.toSnapshot(), StartTurn(Uuid.random(), assistantId, resume = false))
+        val r = ConversationTransition.apply(c.toSnapshot(), StartTurn(Uuid.random(), assistantId, resume = false))
         // 旧节点已终态 → 追加新节点
         assertEquals(2, r.nodes.size)
         assertEquals(assistantId, r.nodes[1].messages.single().id)
@@ -94,8 +94,8 @@ class ConversationReducerTest {
     @Test
     fun `pin toggle does not invalidate search metadata`() {
         val old = Conversation.ofId(Uuid.random()).toSnapshot().header
-        val updated = ConversationReducer.reduceHeader(old, TogglePinned)
-        val mutation = ConversationMutationBuilder.buildHeader(old, updated)
+        val updated = ConversationTransition.applyHeader(old, TogglePinned)
+        val mutation = (ConversationTransition.planHeader(old, TogglePinned, old.updateAt).write).mutation
 
         assertTrue(updated.isPinned)
         assertEquals(false, mutation.searchMetadataChanged)
@@ -111,7 +111,7 @@ class ConversationReducerTest {
         val n2 = MessageNode.of(user(Uuid.random()))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(n0, n1, n2))
         // 只更新 header（title），不触碰节点
-        val r = ConversationReducer.reduce(c.toSnapshot(), UpdateHeader(title = "New Title"))
+        val r = ConversationTransition.apply(c.toSnapshot(), UpdateHeader(title = "New Title"))
         assertEquals(3, r.nodes.size)
         assertSame(n0, r.nodes[0])
         assertSame(n1, r.nodes[1])
@@ -130,7 +130,7 @@ class ConversationReducerTest {
         val node = MessageNode.of(assistant(Uuid.random(), listOf(completedTool)))
         val snapshot = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node)).toSnapshot()
 
-        val updated = ConversationReducer.reduce(
+        val updated = ConversationTransition.apply(
             snapshot,
             UpdateHeader(title = "Generated title", suggestions = listOf("Next")),
         )
@@ -146,7 +146,7 @@ class ConversationReducerTest {
         val n0 = MessageNode.of(user(Uuid.random()))
         val n1 = MessageNode.of(assistant(Uuid.random()))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(n0, n1))
-        val r = ConversationReducer.reduce(c.toSnapshot(), AppendUserMessage(user(Uuid.random())))
+        val r = ConversationTransition.apply(c.toSnapshot(), AppendUserMessage(user(Uuid.random())))
         // 原节点引用不变，仅末尾追加
         assertSame(n0, r.nodes[0])
         assertSame(n1, r.nodes[1])
@@ -156,16 +156,16 @@ class ConversationReducerTest {
     @Test
     fun `first user append commits local title in the same mutation`() {
         val snapshot = Conversation.ofId(Uuid.random()).toSnapshot()
-        val result = ConversationReducer.reduce(
-            snapshot,
-            AppendUserMessage(user(Uuid.random()), initialTitle = "Immediate local title"),
-        )
+        val command = AppendUserMessage(user(Uuid.random()), initialTitle = "Immediate local title")
+        val result = ConversationTransition.apply(snapshot, command)
 
         assertEquals("Immediate local title", result.header.title)
         assertEquals(1, result.nodes.size)
-        val mutation = ConversationMutationBuilder.build(snapshot, result)
-        assertEquals("Immediate local title", mutation.headerPatch?.title)
-        assertEquals(1, mutation.upsertedNodes.size)
+        val mutate = (
+            ConversationTransition.plan(snapshot, command, snapshot.header.updateAt) as ConversationChange.Durable
+            ).write as ConversationWrite.Mutate
+        assertEquals("Immediate local title", mutate.mutation.headerPatch?.title)
+        assertEquals(1, mutate.mutation.upsertedNodes.size)
     }
 
     @Test
@@ -173,7 +173,7 @@ class ConversationReducerTest {
         val snapshot = Conversation.ofId(Uuid.random())
             .copy(title = "Established title")
             .toSnapshot()
-        val result = ConversationReducer.reduce(
+        val result = ConversationTransition.apply(
             snapshot,
             AppendUserMessage(user(Uuid.random()), initialTitle = "Another local title"),
         )
@@ -184,9 +184,9 @@ class ConversationReducerTest {
     @Test
     fun `model title CAS cannot overwrite a title changed after generation began`() {
         val local = Conversation.ofId(Uuid.random()).copy(title = "Local").toSnapshot()
-        val accepted = ConversationReducer.reduce(local, UpdateTitleIfCurrent("Local", "Model"))
-        val manual = ConversationReducer.reduce(local, UpdateHeader(title = "Manual"))
-        val rejected = ConversationReducer.reduce(manual, UpdateTitleIfCurrent("Local", "Model"))
+        val accepted = ConversationTransition.apply(local, UpdateTitleIfCurrent("Local", "Model"))
+        val manual = ConversationTransition.apply(local, UpdateHeader(title = "Manual"))
+        val rejected = ConversationTransition.apply(manual, UpdateTitleIfCurrent("Local", "Model"))
 
         assertEquals("Model", accepted.header.title)
         assertEquals("Manual", rejected.header.title)
@@ -200,7 +200,7 @@ class ConversationReducerTest {
         val assistantId = Uuid.random()
         val node = MessageNode.of(assistant(assistantId))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
-        val r = ConversationReducer.reduce(
+        val r = ConversationTransition.apply(
             c.toSnapshot(),
             FinalizeTurn(handle(c.id, assistantId), null, TurnExecutionStatus.FAILED, "boom", closeInterruptedTools = false),
         )
@@ -214,7 +214,7 @@ class ConversationReducerTest {
         val assistantId = Uuid.random()
         val node = MessageNode.of(assistant(assistantId))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
-        val r = ConversationReducer.reduce(
+        val r = ConversationTransition.apply(
             c.toSnapshot(),
             FinalizeTurn(handle(c.id, assistantId), null, TurnExecutionStatus.COMPLETED, null, closeInterruptedTools = false),
         )
@@ -228,9 +228,9 @@ class ConversationReducerTest {
         val node = MessageNode.of(original)
         val base = Conversation.ofId(conversationId).copy(messageNodes = listOf(node)).toSnapshot()
         val replacementId = Uuid.random()
-        val started = ConversationReducer.reduce(base, StartTurn(Uuid.random(), replacementId, resume = false))
+        val started = ConversationTransition.apply(base, StartTurn(Uuid.random(), replacementId, resume = false))
 
-        val failed = ConversationReducer.reduce(
+        val failed = ConversationTransition.apply(
             started,
             FinalizeTurn(
                 handle(conversationId, replacementId),
@@ -258,7 +258,7 @@ class ConversationReducerTest {
         )
         val node = MessageNode.of(assistant(assistantId, listOf(UIMessagePart.Text("pre"), tool)))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
-        val r = ConversationReducer.reduce(
+        val r = ConversationTransition.apply(
             c.toSnapshot(),
             FinalizeTurn(handle(c.id, assistantId), null, TurnExecutionStatus.INTERRUPTED, null, closeInterruptedTools = true),
         )
@@ -291,7 +291,7 @@ class ConversationReducerTest {
             ),
         )
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(histUser, histAssistant, active))
-        val r = ConversationReducer.reduce(
+        val r = ConversationTransition.apply(
             c.toSnapshot(),
             FinalizeTurn(handle(c.id, activeId), null, TurnExecutionStatus.COMPLETED, null, closeInterruptedTools = false),
         )
@@ -311,7 +311,7 @@ class ConversationReducerTest {
             MessageNode.of(target),
             MessageNode.of(assistant(Uuid.random())),
         ))
-        val r = ConversationReducer.reduce(c.toSnapshot(), DeleteMessage(target.id))
+        val r = ConversationTransition.apply(c.toSnapshot(), DeleteMessage(target.id))
         assertEquals(1, r.nodes.size)
     }
 
@@ -322,7 +322,7 @@ class ConversationReducerTest {
         val v1 = user(Uuid.random())
         val node = MessageNode(id = nodeId, messages = listOf(v0, v1), selectIndex = 0)
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
-        val r = ConversationReducer.reduce(c.toSnapshot(), SelectNodeVariant(nodeId, 1))
+        val r = ConversationTransition.apply(c.toSnapshot(), SelectNodeVariant(nodeId, 1))
         assertEquals(1, r.nodes[0].selectIndex)
         assertSame(v0, r.nodes[0].messages[0])
         assertSame(v1, r.nodes[0].messages[1])
@@ -334,7 +334,7 @@ class ConversationReducerTest {
         val n1 = MessageNode.of(assistant(Uuid.random()))
         val n2 = MessageNode.of(user(Uuid.random()))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(n0, n1, n2))
-        val r = ConversationReducer.reduce(c.toSnapshot(), TruncateToNodeIndex(1))
+        val r = ConversationTransition.apply(c.toSnapshot(), TruncateToNodeIndex(1))
         assertEquals(2, r.nodes.size)
         assertSame(n0, r.nodes[0])
         assertSame(n1, r.nodes[1])
@@ -349,7 +349,7 @@ class ConversationReducerTest {
         ).toSnapshot()
 
         val failure = runCatching {
-            ConversationReducer.reduce(
+            ConversationTransition.apply(
                 snapshot,
                 RecoverInterruptedTurn(
                     turnId = Uuid.random(),
@@ -375,7 +375,10 @@ class ConversationReducerTest {
         )
         val node = MessageNode.of(assistant(assistantId, listOf(tool)))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
-        val r = ConversationReducer.reduce(c.toSnapshot(), UpdateToolApproval(assistantId, 0, ToolApprovalState.Denied("no")))
+        val r = ConversationTransition.apply(
+            c.toSnapshot(),
+            UpdateToolApproval(assistantId, 0, ToolApprovalState.Denied("no"), handle(c.id, assistantId)),
+        )
         val updated = r.nodes[0].messages.single().parts.filterIsInstance<UIMessagePart.Tool>().single()
         assertEquals(ToolApprovalState.Denied("no"), updated.approvalState)
     }
@@ -403,9 +406,9 @@ class ConversationReducerTest {
             ),
         )
 
-        val reduced = ConversationReducer.reduce(
+        val reduced = ConversationTransition.apply(
             base,
-            UpdateToolApproval(assistantId, 0, ToolApprovalState.Approved),
+            UpdateToolApproval(assistantId, 0, ToolApprovalState.Approved, handle(base.conversationId, assistantId)),
         )
 
         assertEquals(1, reduced.nodes.single().currentMessage.parts.size)

@@ -10,15 +10,21 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.ToolApprovalState
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
@@ -41,14 +47,15 @@ class ConversationCommandCoordinatorTest {
         every { registry.findRuntime(id) } returns null
         coEvery { repository.getConversationHeader(id) } returns
             Conversation.ofId(id).copy(title = "old").toSnapshot().header
-        val mutation = slot<ConversationMutation>()
-        coEvery { repository.applyMutation(capture(mutation), null) } returns true
+        val write = slot<ConversationWrite>()
+        coEvery { repository.commit(capture(write)) } returns true
         val coordinator = coordinator(registry, repository, now = 42L)
 
         coordinator.executeOrThrow(id, UpdateHeader(title = "new"))
 
-        assertEquals("new", mutation.captured.headerPatch?.title)
-        assertTrue(mutation.captured.upsertedNodes.isEmpty())
+        val mutation = (write.captured as ConversationWrite.Mutate).mutation
+        assertEquals("new", mutation.headerPatch?.title)
+        assertTrue(mutation.upsertedNodes.isEmpty())
         coVerify(exactly = 0) { repository.getConversationById(any()) }
         coVerify(exactly = 0) { registry.loadRuntime(any()) }
     }
@@ -61,16 +68,16 @@ class ConversationCommandCoordinatorTest {
         every { registry.findRuntime(id) } returns null
         coEvery { repository.getConversationHeader(id) } returns
             Conversation.ofId(id).copy(title = "Manual").toSnapshot().header
-        val mutation = slot<ConversationMutation>()
-        coEvery { repository.applyMutation(capture(mutation), null) } returns true
+        val write = slot<ConversationWrite>()
+        coEvery { repository.commit(capture(write)) } returns true
         val coordinator = coordinator(registry, repository)
 
         assertFalse(coordinator.updateTitleIfCurrent(id, expectedTitle = "Local", title = "Model"))
         assertTrue(coordinator.updateTitleIfCurrent(id, expectedTitle = "Manual", title = "Manual"))
         assertTrue(coordinator.updateTitleIfCurrent(id, expectedTitle = "Manual", title = "Model"))
 
-        assertEquals("Model", mutation.captured.headerPatch?.title)
-        coVerify(exactly = 1) { repository.applyMutation(any(), null) }
+        assertEquals("Model", (write.captured as ConversationWrite.Mutate).mutation.headerPatch?.title)
+        coVerify(exactly = 1) { repository.commit(any()) }
         coVerify(exactly = 0) { repository.getConversationById(any()) }
         coVerify(exactly = 0) { registry.loadRuntime(any()) }
     }
@@ -94,7 +101,7 @@ class ConversationCommandCoordinatorTest {
         assertTrue(coordinator.updateTitleIfCurrent(id, expectedTitle = "Local", title = "Local"))
 
         assertEquals("Local", runtime.snapshot.value.header.title)
-        coVerify(exactly = 0) { repository.applyMutation(any(), any()) }
+        coVerify(exactly = 0) { repository.commit(any()) }
         scope.cancel()
     }
 
@@ -107,7 +114,7 @@ class ConversationCommandCoordinatorTest {
         val repository = mockk<ConversationRepository>()
         every { registry.findRuntime(id) } returns runtime
         every { registry.isDraft(id) } returns false
-        coEvery { repository.applyMutation(any(), any()) } throws IllegalStateException("transaction failed")
+        coEvery { repository.commit(any()) } throws IllegalStateException("transaction failed")
         val coordinator = coordinator(registry, repository)
         val before = runtime.snapshot.value
 
@@ -115,6 +122,37 @@ class ConversationCommandCoordinatorTest {
 
         assertTrue(result is ConversationCommandResult.Failure)
         assertEquals(before, runtime.snapshot.value)
+        scope.cancel()
+    }
+
+    @Test
+    fun `identity conflict is Conflict not Failure`() = runTest {
+        val conversation = Conversation.ofId(Uuid.random())
+        val scope = CoroutineScope(Job())
+        val runtime = ConversationRuntime(conversation.id, conversation.toSnapshot(), scope, {})
+        val registry = mockk<ConversationRuntimeRegistry>()
+        val repository = mockk<ConversationRepository>()
+        every { registry.findRuntime(conversation.id) } returns runtime
+        every { registry.isDraft(conversation.id) } returns false
+        val coordinator = coordinator(registry, repository)
+        val before = runtime.snapshot.value
+        runtime.publishCommitted(
+            before,
+            StartTurn(Uuid.random(), Uuid.random(), resume = false, epoch = 1L),
+            before.copy(
+                activeTurn = ActiveTurnState(
+                    epoch = 1L,
+                    turnId = Uuid.random(),
+                    assistantMessageId = Uuid.random(),
+                    messages = emptyList(),
+                ),
+            ),
+        )
+
+        val result = coordinator.execute(conversation.id, AppendUserMessage(UIMessage.user("blocked")))
+
+        assertTrue(result is ConversationCommandResult.Conflict)
+        coVerify(exactly = 0) { repository.commit(any()) }
         scope.cancel()
     }
 
@@ -129,14 +167,21 @@ class ConversationCommandCoordinatorTest {
         every { registry.isDraft(id) } returns false
         val coordinator = coordinator(registry, repository)
         val before = runtime.snapshot.value
+        val failure = runCatching {
+            coordinator.executeOrThrow(
+                id,
+                UpdateToolApproval(
+                    Uuid.random(),
+                    0,
+                    me.rerere.ai.ui.ToolApprovalState.Approved,
+                    TurnHandle(id, 1, Uuid.random(), Uuid.random()),
+                ),
+            )
+        }.exceptionOrNull()
 
-        coordinator.executeOrThrow(
-            id,
-            UpdateToolApproval(Uuid.random(), 0, me.rerere.ai.ui.ToolApprovalState.Approved),
-        )
-
+        assertTrue(failure is ConversationCommandConflictException)
         assertSame(before, runtime.snapshot.value)
-        coVerify(exactly = 0) { repository.applyMutation(any(), any()) }
+        coVerify(exactly = 0) { repository.commit(any()) }
         scope.cancel()
     }
 
@@ -148,8 +193,8 @@ class ConversationCommandCoordinatorTest {
         val header = AtomicReference(Conversation.ofId(id).toSnapshot().header)
         every { registry.findRuntime(id) } returns null
         coEvery { repository.getConversationHeader(id) } coAnswers { header.get() }
-        coEvery { repository.applyMutation(any(), null) } coAnswers {
-            val patch = firstArg<ConversationMutation>().headerPatch
+        coEvery { repository.commit(any()) } coAnswers {
+            val patch = (args.first() as ConversationWrite.Mutate).mutation.headerPatch
             header.updateAndGet { current -> current.copy(isPinned = requireNotNull(patch?.isPinned)) }
             true
         }
@@ -176,8 +221,8 @@ class ConversationCommandCoordinatorTest {
             releaseLoad.await()
             captured
         }
-        coEvery { repository.applyMutation(any(), any()) } coAnswers {
-            val patch = firstArg<ConversationMutation>().headerPatch
+        coEvery { repository.commit(any()) } coAnswers {
+            val patch = (args.first() as ConversationWrite.Mutate).mutation.headerPatch
             if (patch?.title != null) durable.updateAndGet { current -> current.copy(title = patch.title) }
             true
         }
@@ -206,9 +251,9 @@ class ConversationCommandCoordinatorTest {
         val id = Uuid.random()
         val updatedAssistantId = Uuid.random()
         val repository = mockk<ConversationRepository>()
-        val inserted = slot<Conversation>()
+        val write = slot<ConversationWrite>()
         coEvery { repository.existsConversationById(id) } returns false
-        coEvery { repository.insertConversation(capture(inserted)) } returns Unit
+        coEvery { repository.commit(capture(write)) } returns true
         val locks = ConversationOperationLocks()
         val appScope = AppScope(Dispatchers.Default)
         val registry = ConversationRuntimeRegistry(appScope, repository, locks)
@@ -232,11 +277,12 @@ class ConversationCommandCoordinatorTest {
 
         coordinator.executeOrThrow(id, AppendUserMessage(UIMessage.user("first")))
 
-        coVerify(exactly = 1) { repository.insertConversation(any()) }
+        coVerify(exactly = 1) { repository.commit(any()) }
         assertFalse(registry.isDraft(id))
-        assertEquals("configured draft", inserted.captured.title)
-        assertEquals(updatedAssistantId, inserted.captured.assistantId)
-        assertEquals("first", inserted.captured.messageNodes.single().currentMessage.toText())
+        val inserted = (write.captured as ConversationWrite.MaterializeDraft).conversation
+        assertEquals("configured draft", inserted.title)
+        assertEquals(updatedAssistantId, inserted.assistantId)
+        assertEquals("first", inserted.messageNodes.single().currentMessage.toText())
         assertEquals("first", draft.snapshot.value.nodes.single().currentMessage.toText())
         appScope.cancel()
     }
@@ -262,7 +308,7 @@ class ConversationCommandCoordinatorTest {
         assertTrue(result is ConversationCommandResult.Conflict)
         assertTrue(registry.isDraft(id))
         coVerify(exactly = 0) { repository.insertConversation(any()) }
-        coVerify(exactly = 0) { repository.applyMutation(any(), any()) }
+        coVerify(exactly = 0) { repository.commit(any()) }
         appScope.cancel()
     }
 
@@ -365,22 +411,51 @@ class ConversationCommandCoordinatorTest {
         val repository = mockk<ConversationRepository>()
         coEvery { registry.loadRuntime(id) } returns runtime
         every { registry.isDraft(id) } returns false
-        val mutation = slot<ConversationMutation>()
-        val facts = slot<ExecutionFacts>()
-        coEvery { repository.applyMutation(capture(mutation), capture(facts)) } returns true
+        val write = slot<ConversationWrite>()
+        coEvery { repository.commit(capture(write)) } returns true
         val coordinator = coordinator(registry, repository, now = 123L)
         val turnId = Uuid.random()
         val assistantId = Uuid.random()
+        runtime.installActiveRequest(turnId, Job())
 
         val handle = coordinator.startTurn(id, turnId, assistantId, resume = false)
 
         assertEquals(turnId, handle.turnId)
-        assertEquals(1, mutation.captured.upsertedNodes.size)
-        assertEquals(assistantId, mutation.captured.upsertedNodes.single().currentMessage.id)
-        assertEquals(TurnExecutionStatus.RUNNING, facts.captured.turn?.status)
-        assertEquals(assistantId.toString(), facts.captured.turn?.assistantMessageId)
-        assertEquals(123L, facts.captured.turn?.createdAt)
-        coVerify(exactly = 1) { repository.applyMutation(any(), any()) }
+        val mutate = write.captured as ConversationWrite.Mutate
+        assertEquals(1, mutate.mutation.upsertedNodes.size)
+        assertEquals(assistantId, mutate.mutation.upsertedNodes.single().currentMessage.id)
+        assertEquals(TurnExecutionStatus.RUNNING, mutate.executionFacts?.turn?.status)
+        assertEquals(assistantId.toString(), mutate.executionFacts?.turn?.assistantMessageId)
+        assertEquals(123L, mutate.executionFacts?.turn?.createdAt)
+        coVerify(exactly = 1) { repository.commit(any()) }
+        scope.cancel()
+    }
+
+    @Test
+    fun `rejected start turn does not consume epoch`() = runTest {
+        val id = Uuid.random()
+        val scope = CoroutineScope(Job())
+        val runtime = ConversationRuntime(id, Conversation.ofId(id).toSnapshot(), scope, {})
+        val registry = mockk<ConversationRuntimeRegistry>()
+        val repository = mockk<ConversationRepository>()
+        coEvery { registry.loadRuntime(id) } returns runtime
+        every { registry.isDraft(id) } returns false
+        coEvery { repository.commit(any()) } returns true
+        val coordinator = coordinator(registry, repository)
+        val turnId = Uuid.random()
+        val assistantId = Uuid.random()
+
+        val rejected = runCatching {
+            coordinator.startTurn(id, turnId, assistantId, resume = false)
+        }.exceptionOrNull()
+
+        assertTrue(rejected is ConversationCommandConflictException)
+        coVerify(exactly = 0) { repository.commit(any()) }
+
+        runtime.installActiveRequest(turnId, Job())
+        val handle = coordinator.startTurn(id, turnId, assistantId, resume = false)
+
+        assertEquals(1L, handle.epoch)
         scope.cancel()
     }
 
@@ -438,7 +513,7 @@ class ConversationCommandCoordinatorTest {
         every { registry.isDraft(id) } returns false
         val inFlight = AtomicInteger()
         val maximum = AtomicInteger()
-        coEvery { repository.applyMutation(any(), any()) } coAnswers {
+        coEvery { repository.commit(any()) } coAnswers {
             val current = inFlight.incrementAndGet()
             maximum.updateAndGet { maxOf(it, current) }
             delay(1)
@@ -458,6 +533,69 @@ class ConversationCommandCoordinatorTest {
         val text = runtime.snapshot.value.nodes.map { it.currentMessage.toText() }.toSet()
         assertFalse((0 until 100).any { "message-$it" !in text })
         scope.cancel()
+    }
+
+    @Test
+    fun `stale approval continuation cannot cancel a newer active request`() = runTest {
+        val conversation = Conversation.ofId(Uuid.random())
+        val assistant = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "approval",
+                    toolName = "approval_tool",
+                    input = "{}",
+                    approvalState = ToolApprovalState.Pending,
+                ),
+            ),
+        )
+        val snapshot = conversation.copy(messageNodes = listOf(MessageNode.of(assistant))).toSnapshot()
+        val repository = mockk<ConversationRepository>(relaxed = true)
+        val locks = ConversationOperationLocks()
+        val appScope = AppScope(Dispatchers.Unconfined)
+        val registry = ConversationRuntimeRegistry(appScope, repository, locks)
+        val runtime = registry.registerRuntime(conversation.copy(messageNodes = snapshot.nodes))
+        val oldTurnId = Uuid.random()
+        val oldJob = appScope.launch(start = CoroutineStart.LAZY) { awaitCancellation() }
+        registry.installAndStartActiveRequest(runtime.id, oldTurnId, oldJob)
+        val handle = TurnHandle(runtime.id, 1L, oldTurnId, assistant.id)
+        runtime.publishCommitted(
+            runtime.snapshot.value,
+            StartTurn(oldTurnId, assistant.id, resume = false, epoch = 1L),
+            runtime.snapshot.value.copy(
+                activeTurn = ActiveTurnState(
+                    epoch = 1L,
+                    turnId = oldTurnId,
+                    assistantMessageId = assistant.id,
+                    messages = listOf(assistant),
+                ),
+            ),
+        )
+        runtime.retainAwaitingApproval(handle)
+
+        val newTurnId = Uuid.random()
+        val newJob = appScope.launch(start = CoroutineStart.LAZY) { awaitCancellation() }
+        registry.installAndStartActiveRequest(
+            conversationId = runtime.id,
+            turnId = newTurnId,
+            worker = newJob,
+            supersedeReason = TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN,
+        )
+        assertEquals(newTurnId, runtime.currentGenerationTurnId())
+        assertTrue(newJob.isActive)
+
+        val staleJob = appScope.launch(start = CoroutineStart.LAZY) { awaitCancellation() }
+        val rejected = runCatching {
+            registry.installAndStartApprovalContinuation(runtime.id, handle, staleJob)
+        }.exceptionOrNull()
+
+        assertTrue(rejected is ConversationCommandConflictException)
+        assertFalse(staleJob.isActive)
+        staleJob.cancel()
+        assertEquals(newTurnId, runtime.currentGenerationTurnId())
+        assertTrue(newJob.isActive)
+        assertFalse(newJob.isCancelled)
+        appScope.cancel()
     }
 
     private fun coordinator(

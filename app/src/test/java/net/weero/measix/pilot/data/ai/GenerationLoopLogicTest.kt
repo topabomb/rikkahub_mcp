@@ -21,7 +21,7 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class GenerationHandlerLogicTest {
+class GenerationLoopLogicTest {
 
     private val json = Json { encodeDefaults = true }
 
@@ -76,7 +76,7 @@ class GenerationHandlerLogicTest {
             approvalState = ToolApprovalState.Denied("Security concern")
         )
 
-        // Simulate the denied handler in GenerationHandler
+        // Simulate the denied handler in GenerationLoop
         val output = when (tool.approvalState) {
             is ToolApprovalState.Denied -> {
                 val reason = (tool.approvalState as ToolApprovalState.Denied).reason

@@ -30,6 +30,8 @@ import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.RequestImageSupport
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.PartGroup
 import me.rerere.ai.provider.providers.groupPartsByToolBoundary
@@ -48,7 +50,7 @@ import me.rerere.ai.util.HttpException
 import me.rerere.ai.util.ProviderTerminalStatus
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.configureReferHeaders
-import me.rerere.ai.util.encodeBase64
+import me.rerere.ai.util.encodeNativeImage
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.parseErrorDetail
@@ -303,7 +305,7 @@ class ResponseAPI(
             }
 
             // messages
-            put("input", buildMessages(messages, endpointProfile))
+            put("input", buildMessages(messages, endpointProfile, params.mediaCapabilities))
 
             // reasoning
             if (params.model.abilities.contains(ModelAbility.REASONING)) {
@@ -382,6 +384,7 @@ class ResponseAPI(
     internal fun buildMessages(
         messages: List<UIMessage>,
         endpointProfile: ResponseEndpointProfile = ResponseEndpointProfile.OPENAI,
+        mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
     ) = buildJsonArray {
         messages
             .filter { message ->
@@ -390,9 +393,9 @@ class ResponseAPI(
             }
             .forEach { message ->
                 if (message.role == MessageRole.ASSISTANT) {
-                    addAssistantItems(message, endpointProfile)
+                    addAssistantItems(message, endpointProfile, mediaCapabilities)
                 } else {
-                    addUserItems(message)
+                    addUserItems(message, mediaCapabilities)
                 }
             }
     }
@@ -400,6 +403,7 @@ class ResponseAPI(
     private fun JsonArrayBuilder.addAssistantItems(
         message: UIMessage,
         endpointProfile: ResponseEndpointProfile,
+        mediaCapabilities: RequestMediaCapabilities,
     ) {
         val responseMetadata = message.metadataAs<OpenAIResponseMetadata>()
         if (responseMetadata != null &&
@@ -408,14 +412,14 @@ class ResponseAPI(
                     responseMetadata.sourceProfile == endpointProfile.sourceProfile) &&
             responseMetadata.outputItemGroups.any { it.isNotEmpty() }
         ) {
-            addPreservedResponseItems(message, responseMetadata.outputItemGroups, endpointProfile)
+            addPreservedResponseItems(message, responseMetadata.outputItemGroups, endpointProfile, mediaCapabilities)
             val projectionTexts = message.parts
                 .filterIsInstance<UIMessagePart.Text>()
                 .filter { part ->
                     part.metadataAs<AttachmentProjectionTextMetadata>()?.attachmentProjectionText == true
                 }
             if (projectionTexts.isNotEmpty()) {
-                addContentItem(MessageRole.ASSISTANT, projectionTexts)
+                addContentItem(MessageRole.ASSISTANT, projectionTexts, mediaCapabilities)
             }
             return
         }
@@ -431,7 +435,7 @@ class ResponseAPI(
                             is UIMessagePart.Reasoning -> {
                                 // 先输出累积的文本/图片内容
                                 if (contentBuffer.isNotEmpty()) {
-                                    addContentItem(MessageRole.ASSISTANT, contentBuffer)
+                                    addContentItem(MessageRole.ASSISTANT, contentBuffer, mediaCapabilities)
                                     contentBuffer.clear()
                                 }
                                 // 输出 reasoning item
@@ -475,10 +479,10 @@ class ResponseAPI(
 
                             is UIMessagePart.Image -> {
                                 if (contentBuffer.isNotEmpty()) {
-                                    addContentItem(MessageRole.ASSISTANT, contentBuffer)
+                                    addContentItem(MessageRole.ASSISTANT, contentBuffer, mediaCapabilities)
                                     contentBuffer.clear()
                                 }
-                                addContentItem(MessageRole.ASSISTANT, listOf(part))
+                                addContentItem(MessageRole.ASSISTANT, listOf(part), mediaCapabilities)
                             }
 
                             is UIMessagePart.Text -> {
@@ -493,7 +497,7 @@ class ResponseAPI(
                 is PartGroup.Tools -> {
                     // 先输出累积的内容
                     if (contentBuffer.isNotEmpty()) {
-                        addContentItem(MessageRole.ASSISTANT, contentBuffer)
+                        addContentItem(MessageRole.ASSISTANT, contentBuffer, mediaCapabilities)
                         contentBuffer.clear()
                     }
 
@@ -508,7 +512,7 @@ class ResponseAPI(
                         })
                     }
                     group.tools.forEach { tool ->
-                        if (tool.isExecuted) addFunctionCallOutput(tool, endpointProfile)
+                        if (tool.isExecuted) addFunctionCallOutput(tool, endpointProfile, mediaCapabilities)
                     }
                 }
             }
@@ -516,7 +520,7 @@ class ResponseAPI(
 
         // 输出剩余内容
         if (contentBuffer.isNotEmpty()) {
-            addContentItem(MessageRole.ASSISTANT, contentBuffer)
+            addContentItem(MessageRole.ASSISTANT, contentBuffer, mediaCapabilities)
         }
     }
 
@@ -529,6 +533,7 @@ class ResponseAPI(
         message: UIMessage,
         outputItemGroups: List<List<JsonObject>>,
         endpointProfile: ResponseEndpointProfile,
+        mediaCapabilities: RequestMediaCapabilities,
     ) {
         val toolsByCallId = message.parts
             .filterIsInstance<UIMessagePart.Tool>()
@@ -544,7 +549,7 @@ class ResponseAPI(
                         consumedToolsByCallId[id] = index + 1
                         toolsByCallId[id]?.getOrNull(index)
                     }
-                    if (tool?.isExecuted == true) addFunctionCallOutput(tool, endpointProfile)
+                    if (tool?.isExecuted == true) addFunctionCallOutput(tool, endpointProfile, mediaCapabilities)
                 }
             }
         }
@@ -553,56 +558,54 @@ class ResponseAPI(
     private fun JsonArrayBuilder.addFunctionCallOutput(
         tool: UIMessagePart.Tool,
         endpointProfile: ResponseEndpointProfile,
+        mediaCapabilities: RequestMediaCapabilities,
     ) {
         add(buildJsonObject {
             put("type", "function_call_output")
             put("call_id", tool.toolCallId)
-            val hasImage = tool.output.any { it is UIMessagePart.Image }
-            if (hasImage && endpointProfile.supportsMultimodalFunctionOutput) {
+            val images = tool.output.filterIsInstance<UIMessagePart.Image>()
+            if (images.isEmpty()) {
+                val textOutput = tool.output.filterIsInstance<UIMessagePart.Text>()
+                    .joinToString("\n") { it.text }
+                put("output", textOutput)
+            } else {
+                check(
+                    mediaCapabilities.toolOutputImages == RequestImageSupport.STRUCTURED &&
+                        endpointProfile.supportsMultimodalFunctionOutput,
+                ) {
+                    "Responses received a native tool image after request projection"
+                }
                 putJsonArray("output") {
                     tool.output.forEach { part ->
                         when (part) {
-                            is UIMessagePart.Image -> add(buildJsonObject {
-                                part.encodeBase64().onSuccess { encoded ->
-                                    put("type", "input_image")
-                                    put("image_url", encoded.base64)
-                                }.onFailure {
-                                    it.printStackTrace()
-                                    put("type", "input_text")
-                                    put("text", "Error: Failed to encode image to base64")
-                                }
-                            })
-
+                            is UIMessagePart.Image -> add(encodeResponseImage(part))
                             is UIMessagePart.Text -> add(buildJsonObject {
                                 put("type", "input_text")
                                 put("text", part.text)
                             })
-
                             else -> Unit
                         }
                     }
                 }
-            } else {
-                val textOutput = tool.output.filterIsInstance<UIMessagePart.Text>()
-                    .joinToString("\n") { it.text }
-                put(
-                    "output",
-                    textOutput.ifEmpty {
-                        if (tool.output.isEmpty()) "" else "Tool returned non-text output"
-                    }
-                )
             }
         })
     }
 
-    private fun JsonArrayBuilder.addUserItems(message: UIMessage) {
+    private fun JsonArrayBuilder.addUserItems(
+        message: UIMessage,
+        mediaCapabilities: RequestMediaCapabilities,
+    ) {
         val contentParts = message.parts.filter { it is UIMessagePart.Text || it is UIMessagePart.Image }
         if (contentParts.isNotEmpty()) {
-            addContentItem(message.role, contentParts)
+            addContentItem(message.role, contentParts, mediaCapabilities)
         }
     }
 
-    private fun JsonArrayBuilder.addContentItem(role: MessageRole, parts: List<UIMessagePart>) {
+    private fun JsonArrayBuilder.addContentItem(
+        role: MessageRole,
+        parts: List<UIMessagePart>,
+        mediaCapabilities: RequestMediaCapabilities,
+    ) {
         if (parts.isEmpty()) return
 
         add(buildJsonObject {
@@ -622,16 +625,11 @@ class ResponseAPI(
                             }
 
                             is UIMessagePart.Image -> {
-                                add(buildJsonObject {
-                                    part.encodeBase64().onSuccess { encodedImage ->
-                                        put("type", "input_image")
-                                        put("image_url", encodedImage.base64)
-                                    }.onFailure {
-                                        it.printStackTrace()
-                                        put("type", "input_text")
-                                        put("text", "Error: Failed to encode image to base64")
-                                    }
-                                })
+                                val support = mediaCapabilities.supportFor(role, insideToolOutput = false)
+                                check(support == RequestImageSupport.STRUCTURED) {
+                                    "Responses received a native $role image after request projection"
+                                }
+                                add(encodeResponseImage(part))
                             }
 
                             else -> {}
@@ -640,6 +638,12 @@ class ResponseAPI(
                 }
             }
         })
+    }
+
+    private fun encodeResponseImage(part: UIMessagePart.Image) = buildJsonObject {
+        val encoded = part.encodeNativeImage()
+        put("type", "input_image")
+        put("image_url", encoded.base64)
     }
 
     internal fun parseResponseDelta(

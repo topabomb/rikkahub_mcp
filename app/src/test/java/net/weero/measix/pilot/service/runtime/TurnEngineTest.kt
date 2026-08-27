@@ -9,6 +9,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -22,6 +23,7 @@ import net.weero.measix.pilot.data.ai.GenerationCheckpoint
 import net.weero.measix.pilot.data.ai.GenerationChunk
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.service.TurnFinalization
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -41,18 +43,28 @@ class TurnEngineTest {
         val engine: TurnEngine,
     )
 
-    private fun harness(
-        prepareFinalize: (suspend (TurnOutcome, List<UIMessage>) -> List<UIMessage>)? = null,
-    ): Harness {
+    private fun harness(): Harness {
         val id = Uuid.random()
         val runtime = mockk<ConversationRuntime>()
         every { runtime.id } returns id
         every { runtime.applyStreamingDelta(any(), any()) } returns StreamingDeltaResult.APPLIED
         every { runtime.peekCancelReason(any()) } returns "user_stop"
+        every { runtime.snapshot } returns MutableStateFlow(Conversation.ofId(id).toSnapshot())
         val coordinator = mockk<ConversationCommandCoordinator>()
         coEvery { coordinator.executeOrThrow(any(), any()) } returns Unit
         val handle = TurnHandle(id, 1, Uuid.random(), Uuid.random())
-        return Harness(coordinator, runtime, handle, TurnEngine(coordinator, runtime, handle, prepareFinalize))
+        val finalization = mockk<TurnFinalization>()
+        coEvery {
+            finalization.prepareOwnedTurnMessagesForFailure(any(), any(), any(), any(), any())
+        } coAnswers {
+            thirdArg<List<UIMessage>>()
+        }
+        return Harness(
+            coordinator,
+            runtime,
+            handle,
+            TurnEngine(coordinator, runtime, handle, finalization),
+        )
     }
 
     @Test
@@ -102,11 +114,7 @@ class TurnEngineTest {
 
     @Test
     fun `provider failure submits failed outcome and retains the exception`() = runTest {
-        var preparedMessages: List<UIMessage>? = null
-        val harness = harness { _, messages ->
-            preparedMessages = messages
-            messages
-        }
+        val harness = harness()
         val failure = IllegalStateException("provider failed")
         val partial = listOf(msg("partial after checkpoint"))
 
@@ -123,7 +131,6 @@ class TurnEngineTest {
         coVerify { harness.coordinator.executeOrThrow(any(), capture(commands)) }
         val finalize = commands.filterIsInstance<FinalizeTurn>().single()
         assertEquals(TurnExecutionStatus.FAILED, finalize.terminalStatus)
-        assertEquals(partial, preparedMessages)
         assertEquals(partial, finalize.messages)
     }
 
@@ -147,11 +154,7 @@ class TurnEngineTest {
 
     @Test
     fun `cancellation submits cancelled once and rethrows`() = runTest {
-        var preparedMessages: List<UIMessage>? = null
-        val harness = harness { _, messages ->
-            preparedMessages = messages
-            messages
-        }
+        val harness = harness()
         val partial = listOf(msg("partial after checkpoint"))
 
         val thrown = runCatching {
@@ -168,7 +171,6 @@ class TurnEngineTest {
         coVerify { harness.coordinator.executeOrThrow(any(), capture(commands)) }
         val finalize = commands.filterIsInstance<FinalizeTurn>().single()
         assertEquals(TurnExecutionStatus.CANCELLED, finalize.terminalStatus)
-        assertEquals(partial, preparedMessages)
         assertEquals(partial, finalize.messages)
     }
 

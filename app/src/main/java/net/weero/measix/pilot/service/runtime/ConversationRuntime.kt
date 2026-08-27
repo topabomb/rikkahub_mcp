@@ -3,9 +3,7 @@ package net.weero.measix.pilot.service.runtime
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,25 +13,38 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.model.Conversation
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.uuid.Uuid
 
 private const val TAG = "ConversationRuntime"
 private const val IDLE_TIMEOUT_MS = 5_000L
 
+internal data class InstalledActiveRequest(
+    val turnId: Uuid,
+    val previousTurnId: Uuid?,
+    val previousWorker: Job?,
+)
+
+internal data class CapturedActiveRequest(
+    val turnId: Uuid,
+    val worker: Job?,
+)
+
+internal data class ActiveRequestPresentationFacts(
+    val turnId: Uuid?,
+    val phase: ConversationTurnPhase?,
+    val handle: TurnHandle?,
+    val processingText: String?,
+)
+
 /**
- * 会话运行时主体：单写命令通道、流式投影与持久化提交边界。
- *
- *  - [snapshot] 唯一事实流（UI 与内部读取的唯一订阅源）
- *  - [submit] Ready 会话的结构命令入口（commandMutex 单写互斥，持久化成功后发布）
- *  - [updateDraftHeader] Draft 唯一的非持久化编辑入口
- *  - [applyStreamingDelta] 流式高频更新（无锁、conflated、永不落库；只动 activeTurn）
- *  - [isCommandWriteInFlight] 命令通道占用（Registry idle 守卫）
- *
+ * Resident conversation projection. Durable commands are planned and committed by
+ * [ConversationCommandCoordinator]; this runtime only publishes snapshots, streaming
+ * deltas and one private active request.
  */
 class ConversationRuntime(
     val id: Uuid,
@@ -48,22 +59,77 @@ class ConversationRuntime(
     // 原子引用计数
     private val refCount = AtomicInteger(0)
 
-    // 处理状态（如 OCR 识别中）
-    val processingStatus = MutableStateFlow<String?>(null)
+    /**
+     * Process-local owner of one Conversation request. Durable CAS still uses [TurnHandle];
+     * this machine never becomes a second write protocol.
+     */
+    private class ActiveTurnRuntime(
+        val turnId: Uuid,
+        val worker: Job,
+        val previousWorker: Job? = null,
+        val previousTurnId: Uuid? = null,
+        handle: TurnHandle? = null,
+        phase: ConversationTurnPhase = ConversationTurnPhase.PREPARING,
+    ) {
+        private val _phase = AtomicReference(phase)
+        private val _handle = AtomicReference(handle)
+        private val _cancelReason = AtomicReference<String?>(null)
+        private val _processingText = AtomicReference<String?>(null)
 
-    // 生成任务由本 ConversationRuntime 持有。
-    private val _generationJob = MutableStateFlow<Job?>(null)
+        val handle: TurnHandle? get() = _handle.get()
+        val processingText: String? get() = _processingText.get()
+        val workerIdentity: Int get() = System.identityHashCode(worker)
+
+        fun presentationPhase(): ConversationTurnPhase = _phase.get()
+
+        fun peekCancelReason(): String? = _cancelReason.get()
+
+        fun consumeCancelReason(): String? = _cancelReason.getAndSet(null)
+
+        fun requestCancel(reason: String) {
+            _cancelReason.compareAndSet(null, reason)
+            val current = _phase.get()
+            _phase.compareAndSet(current, ConversationTurnPhase.STOPPING)
+            worker.cancel()
+        }
+
+        fun markRunning(handle: TurnHandle) {
+            check(handle.turnId == turnId) { "running handle ${handle.turnId} does not match request $turnId" }
+            _handle.set(handle)
+            _phase.set(ConversationTurnPhase.GENERATING)
+        }
+
+        fun markAwaitingApproval(handle: TurnHandle) {
+            check(handle.turnId == turnId) { "approval handle ${handle.turnId} does not match request $turnId" }
+            _handle.set(handle)
+            _phase.set(ConversationTurnPhase.AWAITING_APPROVAL)
+        }
+
+        fun reportProcessingText(text: String?) {
+            _processingText.set(text)
+        }
+
+        suspend fun awaitPreviousWorker() {
+            previousWorker?.join()
+        }
+    }
+
+    private val _activeRequest = MutableStateFlow<ActiveTurnRuntime?>(null)
+    private val _activeRequestRevision = MutableStateFlow(0L)
+    /**
+     * Requests stay keyed by turnId until their worker completes so a superseded
+     * owner can still read its own cancel reason. Removing on replace would make
+     * TurnEngine fall back to `user_stop`. A completed turnId is a no-op target.
+     */
+    private val ownedRequests = ConcurrentHashMap<Uuid, ActiveTurnRuntime>()
+    internal val activeRequestRevision: StateFlow<Long> = _activeRequestRevision.asStateFlow()
+
     private val toolApprovalMutex = Mutex()
     private var ttsQueueSessionId: String? = null
-    val generationJob: StateFlow<Job?> = _generationJob.asStateFlow()
-    val isGenerating: Boolean get() = _generationJob.value?.isActive == true
+    internal val isGenerating: Boolean get() = _activeRequest.value?.worker?.isActive == true
     val isInUse: Boolean
-        get() = refCount.get() > 0 || isGenerating || snapshot.value.activeTurn != null || isCommandWriteInFlight()
+        get() = refCount.get() > 0 || _activeRequest.value != null || snapshot.value.activeTurn != null
 
-    // All durable conversation commands are serialized through this mutex.
-    private val commandMutex = Mutex()
-    private val activeTurnId = AtomicReference<Uuid?>(null)
-    private val cancelReasons = ConcurrentHashMap<Uuid, String>()
     private val turnEpoch = AtomicLong(0)
 
     // ---- snapshot 事实源 ----
@@ -90,156 +156,238 @@ class ConversationRuntime(
         return if (applied) StreamingDeltaResult.APPLIED else StreamingDeltaResult.STALE_TURN
     }
 
-    internal suspend fun startTurn(
-        turnId: Uuid,
-        assistantMessageId: Uuid,
-        resume: Boolean,
-        persist: suspend (ConversationSnapshot, ConversationSnapshot, ConversationCommand) -> ConversationSnapshot,
-    ): TurnHandle = withCommandWrite {
-        val old = _snapshot.value
-        if (old.activeTurn != null) {
-            throw ConversationCommandConflictException("conversation $id already has an active turn")
-        }
-        val handle = TurnHandle(id, turnEpoch.incrementAndGet(), turnId, assistantMessageId)
-        val command = StartTurn(turnId, assistantMessageId, resume)
-        val reduced = ConversationReducer.reduce(old, command).copy(
-            activeTurn = ActiveTurnState(handle.epoch, turnId, assistantMessageId, emptyList()),
-        )
-        val committed = persist(old, reduced, command)
-        _snapshot.value = committed
-        handle
+    internal fun nextTurnEpoch(): Long = turnEpoch.incrementAndGet()
+
+    internal fun publishDraft(snapshot: ConversationSnapshot) {
+        check(snapshot.header.newConversation) { "publishDraft requires a Draft snapshot" }
+        check(_snapshot.value.header.newConversation) { "a Ready runtime cannot accept a Draft publish" }
+        _snapshot.value = snapshot
     }
 
-    /** Ready 会话所有结构性修改的唯一 Runtime 入口。 */
-    internal suspend fun submit(
+    internal fun publishCommitted(
+        old: ConversationSnapshot,
         command: ConversationCommand,
-        persist: suspend (ConversationSnapshot, ConversationSnapshot, ConversationCommand) -> ConversationSnapshot,
-    ): ConversationSnapshot {
-        require(command !is StartTurn) { "use startTurn so the caller receives the TurnHandle" }
-        return withCommandWrite {
-            val old = _snapshot.value
-            validateCommandOwner(old, command)
-            val reduced = ConversationReducer.reduce(old, command)
-            val durable = when (command) {
-                is UpdateHeader,
-                is UpdateTitleIfCurrent,
-                is MoveToAssistant,
-                TogglePinned,
+        committed: ConversationSnapshot,
+    ) {
+        _snapshot.update { latest ->
+            when (command) {
+                is HeaderConversationCommand,
                 is CommitCheckpoint,
                 is UpdateToolApproval,
-                -> reduced.copy(activeTurn = old.activeTurn)
-                is FinalizeTurn,
-                is RecoverInterruptedTurn,
-                -> reduced.copy(activeTurn = null)
-                else -> reduced.copy(activeTurn = null)
-            }
-            val committed = persist(old, durable, command)
-            _snapshot.update { latest ->
-                when (command) {
-                    is UpdateHeader,
-                    is UpdateTitleIfCurrent,
-                    is MoveToAssistant,
-                    TogglePinned,
-                    is CommitCheckpoint,
-                    is UpdateToolApproval,
-                    -> {
-                        val latestActive = latest.activeTurn
-                            ?.takeIf { active -> old.activeTurn?.sameOwner(active) == true }
-                        // Approval decisions are durable first, but the resident projection must
-                        // carry the same narrow change. Reapplying the pure reducer to the latest
-                        // same-owner stream snapshot preserves deltas that arrived during IO.
-                        val publishedActive = if (
-                            (command is UpdateToolApproval ||
-                                command is CommitCheckpoint) && latestActive != null
-                        ) {
-                            ConversationReducer.reduce(
-                                committed.copy(activeTurn = latestActive),
-                                command,
-                            ).activeTurn
-                        } else {
-                            latestActive
-                        }
-                        val next = committed.copy(activeTurn = publishedActive)
-                        if (next == latest) latest else next
+                -> {
+                    val latestActive = latest.activeTurn
+                        ?.takeIf { active -> old.activeTurn?.sameOwner(active) == true }
+                    val publishedActive = if (
+                        (command is UpdateToolApproval || command is CommitCheckpoint) &&
+                        latestActive != null
+                    ) {
+                        ConversationTransition.apply(
+                            committed.copy(activeTurn = latestActive),
+                            command,
+                        ).activeTurn
+                    } else {
+                        latestActive
                     }
-                    else -> committed
+                    val next = committed.copy(activeTurn = publishedActive)
+                    if (next == latest) latest else next
                 }
+                else -> committed
             }
-            _snapshot.value
         }
     }
 
-    private suspend fun <T> withCommandWrite(block: suspend () -> T): T {
+    // ---- Active request ownership ----
+
+    internal fun currentGenerationTurnId(): Uuid? = _activeRequest.value?.turnId
+
+    internal fun previousTurnId(turnId: Uuid): Uuid? {
+        val current = requireNotNull(_activeRequest.value) { "worker lost its active request $turnId" }
+        check(current.turnId == turnId) { "worker lost its active request $turnId" }
+        return current.previousTurnId
+    }
+
+    internal suspend fun awaitPreviousWorker(turnId: Uuid) {
+        val current = requireNotNull(_activeRequest.value) { "worker lost its active request $turnId" }
+        check(current.turnId == turnId) { "worker lost its active request $turnId" }
+        current.awaitPreviousWorker()
+    }
+
+    internal fun isAwaitingApproval(turnId: Uuid): Boolean {
+        val current = _activeRequest.value ?: return false
+        return current.turnId == turnId &&
+            current.presentationPhase() == ConversationTurnPhase.AWAITING_APPROVAL
+    }
+
+    internal suspend fun awaitCurrentWorker() {
+        _activeRequest.value?.worker?.join()
+    }
+
+    internal fun cancelActiveGeneration(reason: String): Job? {
+        val current = _activeRequest.value ?: return null
+        current.requestCancel(reason)
+        return current.worker
+    }
+
+    internal fun currentWorker(): Job? = _activeRequest.value?.worker
+
+    internal fun activeRequestPresentationFacts(): ActiveRequestPresentationFacts? {
+        val current = _activeRequest.value ?: return null
+        return ActiveRequestPresentationFacts(
+            turnId = current.turnId,
+            phase = current.presentationPhase(),
+            handle = current.handle,
+            processingText = current.processingText,
+        )
+    }
+
+    internal fun requestCancel(turnId: Uuid, reason: String) {
+        ownedRequests[turnId]?.requestCancel(reason)
+    }
+
+    internal fun consumeCancelReason(turnId: Uuid): String? =
+        ownedRequests[turnId]?.consumeCancelReason()
+
+    internal fun peekCancelReason(turnId: Uuid): String? =
+        ownedRequests[turnId]?.peekCancelReason()
+
+    /**
+     * Captures one active-request identity and requests its stop.
+     * Job and turnId come from the same object so a concurrent START cannot mix them.
+     */
+    internal fun captureAndRequestStop(reason: String): CapturedActiveRequest? {
+        val current = _activeRequest.value
+        if (current != null) {
+            current.requestCancel(reason)
+            return CapturedActiveRequest(current.turnId, current.worker)
+        }
+        val durableTurnId = snapshot.value.activeTurn?.turnId ?: return null
+        return CapturedActiveRequest(durableTurnId, null)
+    }
+
+    internal fun installActiveRequest(
+        turnId: Uuid,
+        worker: Job,
+        handle: TurnHandle? = null,
+        phase: ConversationTurnPhase = ConversationTurnPhase.PREPARING,
+        supersedeReason: String? = null,
+    ): InstalledActiveRequest {
         cancelIdleCheck()
-        commandWrites.incrementAndGet()
-        return try {
-            // Mutex acquisition remains cancellable. Once this coroutine owns the single-writer
-            // boundary, reduce -> durable commit -> resident publish is one indivisible unit.
-            commandMutex.withLock {
-                // Cancellation cannot interrupt an owned commit, but it may still be delivered
-                // when control returns to the caller. Callers that own provisional resources must
-                // therefore publish by durable roots or compensate with exact idempotent identity.
-                withContext(NonCancellable) { block() }
-            }
-        } finally {
-            check(commandWrites.decrementAndGet() >= 0) { "command writer count underflow: $id" }
+        val previous = _activeRequest.value
+        if (previous != null && previous.turnId != turnId) {
+            previous.requestCancel(supersedeReason ?: "superseded_by_new_turn")
+        }
+        val installed = ActiveTurnRuntime(
+            turnId = turnId,
+            worker = worker,
+            previousWorker = previous?.worker,
+            previousTurnId = previous?.turnId,
+            handle = handle,
+            phase = phase,
+        )
+        ownedRequests[turnId] = installed
+        publishActive(installed)
+        worker.invokeOnCompletion {
+            completeActiveWorker(installed)
+        }
+        return InstalledActiveRequest(turnId, previous?.turnId, previous?.worker)
+    }
+
+    internal fun markRunning(handle: TurnHandle) {
+        val current = requireNotNull(_activeRequest.value) { "no active request to mark running" }
+        check(current.turnId == handle.turnId) {
+            "running handle ${handle.turnId} does not match active request ${current.turnId}"
+        }
+        current.markRunning(handle)
+        publishActive(current)
+    }
+
+    internal fun retainAwaitingApproval(handle: TurnHandle) {
+        val current = _activeRequest.value ?: return
+        if (current.turnId != handle.turnId) return
+        current.markAwaitingApproval(handle)
+        publishActive(current)
+    }
+
+    /**
+     * Replaces the completed approval-paused worker with the continuation worker.
+     * A mismatched owner, phase or handle is rejected without cancelling the current request.
+     */
+    internal fun continueAwaitingApproval(handle: TurnHandle, worker: Job): InstalledActiveRequest {
+        val current = _activeRequest.value
+        val durable = snapshot.value.activeTurn
+        if (
+            current == null ||
+            current.turnId != handle.turnId ||
+            current.presentationPhase() != ConversationTurnPhase.AWAITING_APPROVAL ||
+            current.handle != handle ||
+            durable == null ||
+            !durable.matches(handle)
+        ) {
+            throw ConversationCommandConflictException(
+                "approval continuation ${handle.turnId} is not the current awaiting owner",
+            )
+        }
+        return installActiveRequest(
+            turnId = handle.turnId,
+            worker = worker,
+            handle = handle,
+            phase = ConversationTurnPhase.PREPARING,
+        )
+    }
+
+    internal fun processingReporter(): (String?) -> Unit {
+        val current = _activeRequest.value ?: return {}
+        val turnId = current.turnId
+        val workerIdentity = current.workerIdentity
+        return { text -> reportProcessingText(turnId, workerIdentity, text) }
+    }
+
+    internal fun reportProcessingText(turnId: Uuid, workerIdentity: Int, text: String?) {
+        val current = _activeRequest.value ?: return
+        if (current.turnId != turnId || current.workerIdentity != workerIdentity) return
+        current.reportProcessingText(text)
+        publishActive(current)
+    }
+
+    internal fun releaseActiveRequest(
+        turnId: Uuid,
+        worker: Job? = null,
+        retainAwaitingOwner: Boolean = true,
+    ) {
+        val current = _activeRequest.value ?: return
+        if (current.turnId != turnId) return
+        if (worker != null && current.worker !== worker) return
+        if (
+            retainAwaitingOwner &&
+            current.presentationPhase() == ConversationTurnPhase.AWAITING_APPROVAL &&
+            worker == null &&
+            snapshot.value.activeTurn?.turnId == turnId
+        ) return
+        if (_activeRequest.compareAndSet(current, null)) {
+            ownedRequests.remove(turnId, current)
+            _activeRequestRevision.value++
             if (!isInUse) scheduleIdleCheck()
         }
     }
 
-    /** Draft 尚无 durable aggregate；只允许编辑其内存 header，且绝不晋升 Ready。 */
-    internal suspend fun updateDraftHeader(command: ConversationCommand): ConversationSnapshot = withCommandWrite {
-        require(command is UpdateHeader || command is MoveToAssistant) { "command is not a draft header edit" }
-        val old = _snapshot.value
-        check(old.activeTurn == null) { "a draft cannot own an active turn" }
-        ConversationReducer.reduce(old, command).also { updated -> _snapshot.value = updated }
+    private fun publishActive(request: ActiveTurnRuntime?) {
+        _activeRequest.value = request
+        _activeRequestRevision.value++
     }
 
-    private fun validateCommandOwner(snapshot: ConversationSnapshot, command: ConversationCommand) {
-        when (command) {
-            is CommitCheckpoint -> if (
-                command.handle.conversationId != id || snapshot.activeTurn?.matches(command.handle) != true
-            ) throw ConversationCommandConflictException("stale checkpoint for turn ${command.handle.turnId}")
-            is FinalizeTurn -> if (
-                command.handle.conversationId != id || snapshot.activeTurn?.matches(command.handle) != true
-            ) throw ConversationCommandConflictException("stale finalization for turn ${command.handle.turnId}")
-            is UpdateHeader -> Unit
-            is UpdateTitleIfCurrent -> Unit
-            is MoveToAssistant -> Unit
-            TogglePinned -> Unit
-            is UpdateToolApproval -> Unit
-            is RecoverInterruptedTurn,
-            -> if (snapshot.activeTurn != null) {
-                throw ConversationCommandConflictException("recovery cannot overwrite an active turn")
+    private fun completeActiveWorker(request: ActiveTurnRuntime) {
+        val current = _activeRequest.value
+        if (current === request) {
+            when (current.presentationPhase()) {
+                ConversationTurnPhase.AWAITING_APPROVAL,
+                ConversationTurnPhase.STOPPING,
+                -> publishActive(current)
+                else -> releaseActiveRequest(current.turnId, current.worker)
             }
-            else -> if (snapshot.activeTurn != null) {
-                throw ConversationCommandConflictException(
-                    "tree command ${command::class.simpleName} requires the active turn to finish first",
-                )
-            }
+            return
         }
+        ownedRequests.remove(request.turnId, request)
     }
-
-    private val commandWrites = AtomicInteger(0)
-
-    /** 写通道占用中（submit 进行时），Registry 据此阻止 idle 回收 */
-    fun isCommandWriteInFlight(): Boolean = commandWrites.get() > 0
-
-    // ---- Generation job ownership and cancellation ----
-
-    fun trackGenerationTurn(turnId: Uuid) {
-        activeTurnId.set(turnId)
-    }
-
-    fun currentGenerationTurnId(): Uuid? = activeTurnId.get()
-
-    fun requestCancel(turnId: Uuid, reason: String) {
-        cancelReasons[turnId] = reason
-    }
-
-    fun consumeCancelReason(turnId: Uuid): String? = cancelReasons.remove(turnId)
-
-    fun peekCancelReason(turnId: Uuid): String? = cancelReasons[turnId]
 
     // 空闲检查任务
     private var idleCheckJob: Job? = null
@@ -276,28 +424,6 @@ class ConversationRuntime(
             lease.close()
         }
     }
-
-    fun setJob(job: Job?, turnId: Uuid? = null) {
-        if (job != null) cancelIdleCheck()
-        _generationJob.value?.cancel()
-        _generationJob.value = job
-        if (job != null && turnId != null) {
-            activeTurnId.set(turnId)
-        }
-        job?.invokeOnCompletion {
-            // A cancelled previous job may finish after its replacement was installed.
-            // Only the job that is still current may clear the slot or schedule eviction.
-            if (_generationJob.compareAndSet(job, null)) {
-                if (turnId != null) {
-                    activeTurnId.compareAndSet(turnId, null)
-                    cancelReasons.remove(turnId)
-                }
-                if (!isInUse) scheduleIdleCheck()
-            }
-        }
-    }
-
-    fun getJob(): Job? = _generationJob.value
 
     /**
      * 返回主代理 turn 独占的 TTS 队列 ID。
@@ -337,10 +463,9 @@ class ConversationRuntime(
     }
 
     fun cleanup() {
-        _generationJob.value?.cancel()
-        _generationJob.value = null
-        activeTurnId.set(null)
-        cancelReasons.clear()
+        _activeRequest.value?.worker?.cancel()
+        _activeRequest.value = null
+        ownedRequests.clear()
         ttsQueueSessionId = null
         idleCheckJob?.cancel()
         idleCheckJob = null
@@ -359,7 +484,7 @@ internal class ConversationRuntimeLease internal constructor(
     }
 }
 
-private fun ActiveTurnState.matches(handle: TurnHandle): Boolean =
+internal fun ActiveTurnState.matches(handle: TurnHandle): Boolean =
     epoch == handle.epoch &&
         turnId == handle.turnId &&
         assistantMessageId == handle.assistantMessageId

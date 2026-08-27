@@ -1,8 +1,8 @@
 package net.weero.measix.pilot.data.ai.transformers
 
 import android.content.Context
-import kotlinx.coroutines.flow.MutableStateFlow
 import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.core.ToolResourceLease
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.datastore.Settings
@@ -15,8 +15,9 @@ class TransformerContext(
     val assistant: Assistant,
     val settings: Settings,
     val conversationModeInjectionIds: Set<Uuid> = emptySet(),
-    val processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
+    val reportProcessingText: (String?) -> Unit = {},
     val workspaceCwd: String? = null,
+    val mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
     val registerUnpublishedResource: (ToolResourceLease) -> Unit,
 )
 
@@ -43,7 +44,7 @@ interface OutputMessageTransformer : MessageTransformer
 /**
  * 流式变换器：只处理 active assistant 消息（流式期间最后一条）。
  *
- * 历史消息在流式期间 immutable——由 GenerationHandler 保证 `dropLast(1)` 部分逐 chunk
+ * 历史消息在流式期间 immutable——由 GenerationLoop 保证 `dropLast(1)` 部分逐 chunk
  * 零次进入本接口（由 StreamingTransformScopeTest 锁定）。
  *
  * 与请求级 [OutputMessageTransformer.transform] 的分工：
@@ -73,8 +74,9 @@ suspend fun List<UIMessage>.transforms(
     assistant: Assistant,
     settings: Settings,
     conversationModeInjectionIds: Set<Uuid> = emptySet(),
-    processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
+    reportProcessingText: (String?) -> Unit = {},
     workspaceCwd: String? = null,
+    mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
     registerUnpublishedResource: (ToolResourceLease) -> Unit,
 ): List<UIMessage> {
     val ctx = TransformerContext(
@@ -83,8 +85,9 @@ suspend fun List<UIMessage>.transforms(
         assistant = assistant,
         settings = settings,
         conversationModeInjectionIds = conversationModeInjectionIds,
-        processingStatus = processingStatus,
+        reportProcessingText = reportProcessingText,
         workspaceCwd = workspaceCwd,
+        mediaCapabilities = mediaCapabilities,
         registerUnpublishedResource = registerUnpublishedResource,
     )
     return transformers.fold(this) { acc, transformer ->

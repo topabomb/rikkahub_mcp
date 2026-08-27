@@ -16,12 +16,14 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.GenerationChunk
-import net.weero.measix.pilot.data.ai.GenerationHandler
+import net.weero.measix.pilot.data.ai.GenerationLoop
+import net.weero.measix.pilot.data.ai.GenerationRequest
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import net.weero.measix.pilot.data.ai.transformers.OutputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.StreamingMessageTransformer
@@ -64,6 +66,7 @@ class StreamingTransformScopeTest {
         val providerManager = mockk<ProviderManager>()
         val provider = mockk<Provider<ProviderSetting.OpenAI>>()
         every { providerManager.getProviderByType(any<ProviderSetting.OpenAI>()) } returns provider
+        every { provider.requestMediaCapabilities(any(), any()) } returns RequestMediaCapabilities.NONE
 
         val assistantMessage = UIMessage(role = MessageRole.ASSISTANT, parts = emptyList())
         coEvery {
@@ -106,7 +109,7 @@ class StreamingTransformScopeTest {
             }
         }
 
-        val handler = GenerationHandler(
+        val handler = GenerationLoop(
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
@@ -116,7 +119,8 @@ class StreamingTransformScopeTest {
         val assistant = Assistant(enableMemory = false, streamOutput = true)
         val userMessage = UIMessage.user("hello")
 
-        val chunks = handler.generateText(
+        val chunks = handler.run(
+            GenerationRequest(
             settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
             model = model,
             messages = listOf(userMessage, assistantMessage),
@@ -125,6 +129,7 @@ class StreamingTransformScopeTest {
             assistant = assistant,
             assistantMessageId = assistantMessage.id,
             maxSteps = 1,
+            )
         ).toList()
 
         // 流式期间仅 active assistant 消息进入 transformStreaming

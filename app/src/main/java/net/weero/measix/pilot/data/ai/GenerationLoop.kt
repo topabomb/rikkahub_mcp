@@ -34,6 +34,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.UIMessage
@@ -66,7 +67,7 @@ import java.util.Locale
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
-private const val TAG = "GenerationHandler"
+private const val TAG = "GenerationLoop"
 private const val MAX_TOOL_OUTPUT_CHARS = 32 * 1024
 private const val TOOL_OUTPUT_PREVIEW_CHARS = 4 * 1024
 
@@ -205,13 +206,6 @@ sealed interface GenerationChunk {
     ) : GenerationChunk
 
     /**
-     * 持久化检查点事件。Collector 在明确边界保存，不对每个 token 写库。
-     */
-    data class Checkpoint(
-        val kind: CheckpointKind,
-    ) : GenerationChunk
-
-    /**
      * 生成结束事件。Collector 必须区分正常完成、待审批和 step 上限。
      * 达到最大 step 时不能让 Flow 静默正常结束，否则 Coordinator 会把未完成运行误记为 completed。
      */
@@ -274,59 +268,65 @@ data class GenerationCheckpoint(
     val toolExecution: ToolExecutionEvent? = null,
 )
 
-class GenerationHandler(
+data class GenerationRequest(
+    val settings: Settings,
+    val model: Model,
+    val messages: List<UIMessage>,
+    val assistant: Assistant,
+    val inputTransformers: List<InputMessageTransformer> = emptyList(),
+    val outputTransformers: List<OutputMessageTransformer> = emptyList(),
+    val memories: List<AssistantMemory>? = null,
+    val tools: List<Tool> = emptyList(),
+    val maxSteps: Int = 256,
+    val reportProcessingText: (String?) -> Unit = {},
+    val conversationSystemPrompt: String? = null,
+    val conversationModeInjectionIds: Set<Uuid> = emptySet(),
+    val workspaceCwd: String? = null,
+    val toolProvider: (suspend () -> List<Tool>)? = null,
+    val nonInteractive: Boolean = false,
+    val interactiveToolNames: Set<String> = emptySet(),
+    val memoryToolAllowed: suspend () -> Boolean = { true },
+    val assistantMessageId: Uuid? = null,
+    val onCheckpoint: suspend (GenerationCheckpoint) -> Unit = {},
+    val providerSessionId: String? = null,
+)
+
+class GenerationLoop(
     private val context: Context,
     private val providerManager: ProviderManager,
     private val json: Json,
     private val memoryRepo: MemoryRepository,
     private val attachmentResolver: AttachmentResolver,
 ) {
-    fun generateText(
-        settings: Settings,
-        model: Model,
-        messages: List<UIMessage>,
-        inputTransformers: List<InputMessageTransformer> = emptyList(),
-        outputTransformers: List<OutputMessageTransformer> = emptyList(),
-        assistant: Assistant,
-        memories: List<AssistantMemory>? = null,
-        tools: List<Tool> = emptyList(),
-        maxSteps: Int = 256,
-        processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
-        conversationSystemPrompt: String? = null,
-        conversationModeInjectionIds: Set<Uuid> = emptySet(),
-        workspaceCwd: String? = null,
-        /**
-         * 工具提供者：每个 LLM step 重新调用以获取最新工具列表。
-         * 默认返回固定 [tools]，普通 Master 保持不变；Target 每个 step 重新解析资源。
-         */
-        toolProvider: (suspend () -> List<Tool>) = { tools },
-        /**
-         * 非交互模式：需审批工具直接返回 tool_not_permitted 错误，不进入 Pending。
-         * [interactiveToolNames] 中显式允许传导到宿主界面的交互工具除外。
-         */
-        nonInteractive: Boolean = false,
-        interactiveToolNames: Set<String> = emptySet(),
-        /** Revalidates the snapshotted Memory namespace immediately before each Memory ToolCall. */
-        memoryToolAllowed: suspend () -> Boolean = { true },
-        assistantMessageId: Uuid? = null,
-        onCheckpoint: suspend (GenerationCheckpoint) -> Unit = {},
-        /**
-         * Request-scoped Provider session identifier for sticky routing / caching.
-         *
-         * Derived from the conversation UUID by the turn owner (Master uses master conversation
-         * UUID, Target uses child conversation UUID). Same turn's multi-step and CONTINUE_APPROVAL
-         * reuse the same value. Fork gets a new conversation/session. Background requests without
-         * a conversation owner (title, suggestions, attachment checks) must pass null.
-         */
-        providerSessionId: String? = null,
-    ): Flow<GenerationChunk> = channelFlow {
+    fun run(request: GenerationRequest): Flow<GenerationChunk> {
+        val tools = request.tools
+        val toolProvider = request.toolProvider ?: { tools }
+        val settings = request.settings
+        val model = request.model
+        val inputTransformers = request.inputTransformers
+        val outputTransformers = request.outputTransformers
+        val assistant = request.assistant
+        val memories = request.memories
+        val maxSteps = request.maxSteps
+        val reportProcessingText = request.reportProcessingText
+        val conversationSystemPrompt = request.conversationSystemPrompt
+        val conversationModeInjectionIds = request.conversationModeInjectionIds
+        val workspaceCwd = request.workspaceCwd
+        val nonInteractive = request.nonInteractive
+        val interactiveToolNames = request.interactiveToolNames
+        val memoryToolAllowed = request.memoryToolAllowed
+        val assistantMessageId = request.assistantMessageId
+        val onCheckpoint = request.onCheckpoint
+        val providerSessionId = request.providerSessionId
+        return channelFlow {
         val unpublishedResources = UnpublishedResourceScope()
         var generationFailure: Throwable? = null
         try {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
+        val mediaCapabilities = providerImpl.requestMediaCapabilities(provider, model)
 
-        var messages: List<UIMessage> = messages
+        var messages: List<UIMessage> = request.messages
 
         suspend fun commitCheckpoint(
             kind: CheckpointKind,
@@ -346,19 +346,7 @@ class GenerationHandler(
             } catch (e: Exception) {
                 throw CheckpointCommitException(e)
             }
-            if (publishResources) {
-                // The durable message/reference transaction is already committed. Resource
-                // publication is a separate ownership acknowledgement, never part of the
-                // checkpoint commit result.
-                unpublishedResources.publishAll()
-            }
-            // The durable callback already returned a committed receipt. A cancelled projection
-            // send must not turn that success into a tool-level failure that triggers compensation.
-            try {
-                send(GenerationChunk.Checkpoint(kind))
-            } catch (_: CancellationException) {
-                // Cancellation remains active and will be observed at the next safe boundary.
-            }
+            if (publishResources) unpublishedResources.publishAll()
         }
 
         // 跟踪循环退出原因，默认 step_limit_reached
@@ -369,6 +357,7 @@ class GenerationHandler(
             model = model,
             assistant = assistant,
             settings = settings,
+            mediaCapabilities = mediaCapabilities,
             registerUnpublishedResource = unpublishedResources::register,
         )
         var latestStreamingProjection: UIMessage? = null
@@ -465,12 +454,13 @@ class GenerationHandler(
                     tools = toolsInternal,
                     memories = memories ?: emptyList(),
                     stream = assistant.streamOutput,
-                    processingStatus = processingStatus,
+                    reportProcessingText = reportProcessingText,
                     conversationSystemPrompt = conversationSystemPrompt,
                     conversationModeInjectionIds = conversationModeInjectionIds,
                     workspaceCwd = workspaceCwd,
                     assistantMessageId = assistantMessageId,
                     registerUnpublishedResource = unpublishedResources::register,
+                    mediaCapabilities = mediaCapabilities,
                     onPhase = { phase -> send(GenerationChunk.Phase(phase)) },
                     providerSessionId = providerSessionId,
                 )
@@ -797,6 +787,7 @@ class GenerationHandler(
         }
 
     }.flowOn(Dispatchers.IO)
+    }
 
     private suspend fun generateInternal(
         assistant: Assistant,
@@ -810,12 +801,13 @@ class GenerationHandler(
         tools: List<Tool>,
         memories: List<AssistantMemory>,
         stream: Boolean,
-        processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
+        reportProcessingText: (String?) -> Unit = {},
         conversationSystemPrompt: String? = null,
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
         assistantMessageId: Uuid? = null,
         registerUnpublishedResource: (ToolResourceLease) -> Unit,
+        mediaCapabilities: RequestMediaCapabilities,
         onPhase: (suspend (String) -> Unit)? = null,
         providerSessionId: String? = null,
     ) {
@@ -860,8 +852,9 @@ class GenerationHandler(
             assistant = assistant,
             settings = settings,
             conversationModeInjectionIds = conversationModeInjectionIds,
-            processingStatus = processingStatus,
+            reportProcessingText = reportProcessingText,
             workspaceCwd = workspaceCwd,
+            mediaCapabilities = mediaCapabilities,
             registerUnpublishedResource = registerUnpublishedResource,
         )
 
@@ -882,6 +875,7 @@ class GenerationHandler(
                 addAll(model.customBodies)
             },
             providerSessionId = providerSessionId,
+            mediaCapabilities = mediaCapabilities,
         )
         // 请求构建完成，进入等待模型响应阶段
         onPhase?.invoke("model_waiting")

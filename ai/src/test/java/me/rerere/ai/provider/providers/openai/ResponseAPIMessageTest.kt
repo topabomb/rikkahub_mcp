@@ -559,7 +559,7 @@ class ResponseAPIMessageTest {
                     input = "{}",
                     output = listOf(
                         UIMessagePart.Text("Captured image"),
-                        UIMessagePart.Image("data:image/png;base64,AA=="),
+                        UIMessagePart.Text("[Attachment ref=attachment:1 type=image input=reference_only]"),
                     ),
                 )
             ),
@@ -570,7 +570,10 @@ class ResponseAPIMessageTest {
             host = "api.deepseek.com",
         ).single { it.jsonObject["type"]?.jsonPrimitive?.content == "function_call_output" }.jsonObject
 
-        assertEquals("Captured image", output["output"]?.jsonPrimitive?.content)
+        assertEquals(
+            "Captured image\n[Attachment ref=attachment:1 type=image input=reference_only]",
+            output["output"]?.jsonPrimitive?.content,
+        )
     }
 
     @Test
@@ -817,18 +820,21 @@ class ResponseAPIMessageTest {
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Text("assistant attachment fact"),
-                UIMessagePart.Image("data:image/png;base64,AA=="),
+                UIMessagePart.Text("[Attachment ref=attachment:1 type=image input=reference_only]"),
             ),
         )
 
         val replay = invokeBuildMessages(listOf(message)).map { it.jsonObject }
 
-        assertEquals(listOf("assistant", "assistant"), replay.map { it["role"]?.jsonPrimitive?.content })
-        assertEquals("assistant attachment fact", replay[0]["content"]?.jsonPrimitive?.content)
+        assertEquals(listOf("assistant"), replay.map { it["role"]?.jsonPrimitive?.content })
+        val content = replay.single()["content"]!!.jsonArray
+        assertEquals("output_text", content[0].jsonObject["type"]?.jsonPrimitive?.content)
+        assertEquals("assistant attachment fact", content[0].jsonObject["text"]?.jsonPrimitive?.content)
         assertEquals(
-            "input_image",
-            replay[1]["content"]?.jsonArray?.single()?.jsonObject?.get("type")?.jsonPrimitive?.content,
+            "[Attachment ref=attachment:1 type=image input=reference_only]",
+            content[1].jsonObject["text"]?.jsonPrimitive?.content,
         )
+        assertTrue(content.none { it.jsonObject["type"]?.jsonPrimitive?.content == "input_image" })
     }
 
     @Test

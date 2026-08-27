@@ -17,7 +17,12 @@ import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.RequestImageSupport
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.provider.providers.ClaudeProvider
+import me.rerere.ai.provider.providers.GoogleProvider
+import me.rerere.ai.provider.providers.OpenAIProvider
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
@@ -59,7 +64,7 @@ class ChatCompletionsAPIMessageTest {
         return api.buildMessages(
             messages = messages,
             includeHistoryReasoning = includeHistoryReasoning,
-            supportToolResultModalities = listOf(Modality.TEXT, Modality.IMAGE),
+            mediaCapabilities = RequestMediaCapabilities.NONE,
             requiresToolReasoningReplay = requiresToolReasoningReplay(host, modelId),
             includeOpenRouterReasoningDetails = includeOpenRouterReasoningDetails,
         )
@@ -689,7 +694,9 @@ class ChatCompletionsAPIMessageTest {
                         toolCallId = "call_1",
                         toolName = "lookup",
                         input = "{}",
-                        output = listOf(UIMessagePart.Image(url = "data:image/png;base64,iVBORw0KGgo=")),
+                        output = listOf(
+                            UIMessagePart.Text("[Attachment ref=attachment:1 type=image input=reference_only]"),
+                        ),
                     )
                 )
             )
@@ -719,8 +726,56 @@ class ChatCompletionsAPIMessageTest {
         val assistant = body["messages"]!!.jsonArray[1].jsonObject
         assertFalse(assistant.containsKey("reasoning_content"))
         val toolResult = body["messages"]!!.jsonArray[2].jsonObject["content"] as JsonPrimitive
-        assertTrue(toolResult.content.contains("Image output omitted"))
+        assertEquals("[Attachment ref=attachment:1 type=image input=reference_only]", toolResult.content)
+        assertFalse(toolResult.content.contains("Image output omitted"))
         assertFalse(requiresToolReasoningReplay("api.openai.com", "deepseek-v4-flash"))
+    }
+
+    @Test
+    fun `request media capabilities stay closed unless the adapter proves a container`() {
+        val vision = Model(
+            modelId = "vision",
+            displayName = "vision",
+            inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
+        )
+        val openai = OpenAIProvider(OkHttpClient())
+        val chatOfficial = openai.requestMediaCapabilities(
+            ProviderSetting.OpenAI(baseUrl = "https://api.openai.com/v1"),
+            vision,
+        )
+        assertEquals(RequestImageSupport.STRUCTURED, chatOfficial.userImages)
+        assertEquals(RequestImageSupport.NONE, chatOfficial.assistantImages)
+        assertEquals(RequestImageSupport.NONE, chatOfficial.toolOutputImages)
+
+        val chatCompatible = openai.requestMediaCapabilities(
+            ProviderSetting.OpenAI(baseUrl = "https://proxy.example.com/v1"),
+            vision,
+        )
+        assertEquals(RequestImageSupport.NONE, chatCompatible.assistantImages)
+        assertEquals(RequestImageSupport.NONE, chatCompatible.toolOutputImages)
+
+        val responsesOfficial = openai.requestMediaCapabilities(
+            ProviderSetting.OpenAI(baseUrl = "https://api.openai.com/v1", useResponseApi = true),
+            vision,
+        )
+        assertEquals(RequestImageSupport.OPAQUE_REPLAY_ONLY, responsesOfficial.assistantImages)
+        assertEquals(RequestImageSupport.STRUCTURED, responsesOfficial.toolOutputImages)
+
+        val responsesCompatible = openai.requestMediaCapabilities(
+            ProviderSetting.OpenAI(baseUrl = "https://proxy.example.com/v1", useResponseApi = true),
+            vision,
+        )
+        assertEquals(RequestImageSupport.NONE, responsesCompatible.toolOutputImages)
+
+        val claude = ClaudeProvider(OkHttpClient()).requestMediaCapabilities(ProviderSetting.Claude(), vision)
+        assertEquals(RequestImageSupport.STRUCTURED, claude.userImages)
+        assertEquals(RequestImageSupport.NONE, claude.assistantImages)
+        assertEquals(RequestImageSupport.STRUCTURED, claude.toolOutputImages)
+
+        val gemini = GoogleProvider(OkHttpClient()).requestMediaCapabilities(ProviderSetting.Google(), vision)
+        assertEquals(RequestImageSupport.STRUCTURED, gemini.userImages)
+        assertEquals(RequestImageSupport.STRUCTURED, gemini.assistantImages)
+        assertEquals(RequestImageSupport.STRUCTURED, gemini.toolOutputImages)
     }
 
     @Test

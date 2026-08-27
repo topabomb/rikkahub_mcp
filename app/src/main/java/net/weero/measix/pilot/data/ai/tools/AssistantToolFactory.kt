@@ -68,7 +68,7 @@ class AssistantToolFactory(
     private val json: Json,
     /** 子助手调用的唯一执行协调器。 */
     private val delegationCoordinator: DelegationCoordinator,
-    /** 提供 Target Run 可注册工具名；memory_tool 由 GenerationHandler 另加，listing 时需补上。 */
+    /** 提供 Target Run 可注册工具名；memory_tool 由 GenerationLoop 另加，listing 时需补上。 */
     private val toolSetFactory: GenerationToolSetFactory,
 ) {
     /**

@@ -20,7 +20,8 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.TurnTerminalReasons
-import net.weero.measix.pilot.data.ai.GenerationHandler
+import net.weero.measix.pilot.data.ai.GenerationLoop
+import net.weero.measix.pilot.data.ai.GenerationRequest
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallPhase
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
@@ -106,7 +107,7 @@ private data class TargetGenerationResult(
  * [SubAssistantRunGate]。
  */
 class DelegationCoordinator(
-    private val generationHandler: GenerationHandler,
+    private val generationLoop: GenerationLoop,
     private val conversationRepo: ConversationRepository,
     private val runtimeRegistry: ConversationRuntimeRegistry,
     private val commandCoordinator: ConversationCommandCoordinator,
@@ -532,7 +533,12 @@ class DelegationCoordinator(
 
             // Durable link 成功后才把 lease Job 安装进 Child Runtime；否则失败补偿会被
             // active runtime 自己阻断，留下未关联 Child 与克隆 artifact。
-            commandCoordinator.load(childConversationId).setJob(runJob)
+            val childTurnId = Uuid.random()
+            runtimeRegistry.installAndStartActiveRequest(
+                conversationId = childConversationId,
+                turnId = childTurnId,
+                worker = runJob,
+            )
 
             // 运行中 Settings 撤权监听器：重算 caller/Target 关系，变化即取消 Child Job
             runScope = CoroutineScope(coroutineContext + runJob)
@@ -929,67 +935,50 @@ class DelegationCoordinator(
         val started = TurnEngine.start(
             commandCoordinator = commandCoordinator,
             runtime = runtime,
-            turnId = Uuid.random(),
-            messages = lastMessages,
-            prepareFinalize = { terminalOutcome, messages ->
-                if (terminalOutcome is TurnOutcome.Cancelled || terminalOutcome is TurnOutcome.Failed) {
-                    val latestSnapshot = runtime.snapshot.value
-                    val active = requireNotNull(latestSnapshot.activeTurn) {
-                        "active target turn has no runtime owner"
-                    }
-                    turnFinalization.prepareOwnedTurnMessagesForFailure(
-                        snapshot = latestSnapshot,
-                        handle = TurnHandle(
-                            conversationId = childConversationId,
-                            epoch = active.epoch,
-                            turnId = active.turnId,
-                            assistantMessageId = active.assistantMessageId,
-                        ),
-                        latestMessages = messages,
-                        reason = requireNotNull(terminalOutcome.terminalReason),
-                        cancelledByUser = terminalOutcome is TurnOutcome.Cancelled,
-                    )
-                } else {
-                    runtime.snapshot.value.currentMessages().ifEmpty { messages }
-                }
+            turnId = requireNotNull(runtime.currentGenerationTurnId()) {
+                "target generation has no installed active request"
             },
+            messages = lastMessages,
+            turnFinalization = turnFinalization,
         )
         val turnEngine = started.engine
         lastMessages = runtime.snapshot.value.currentMessages()
 
         while (true) {
             outcome = null
-            generationHandler.generateText(
-                settings = settings,
-                model = model,
-                messages = lastMessages,
-                inputTransformers = turnPipelineFactory.targetInput(),
-                outputTransformers = turnPipelineFactory.targetOutput(),
-                assistant = target,
-                memories = memories,
-                tools = toolProvider(), // 初始工具列表
-                toolProvider = toolProvider,
-                nonInteractive = true,
-                interactiveToolNames = setOf("ask_user"),
-                memoryToolAllowed = {
-                    val latestTarget = settingsStore.effectiveSettings.value.settings.getAssistantById(target.id)
-                    latestTarget?.enableMemory == true &&
-                        latestTarget.useGlobalMemory == target.useGlobalMemory
-                },
-                assistantMessageId = started.assistantMessageId,
-                processingStatus = runtime.processingStatus,
-                conversationSystemPrompt = null, // Child 不设置对话级 System Prompt
-                // Child does not inherit the Master's mode injection. Passing the Target IDs also
-                // keeps Target injections active when allowConversationPromptInjection is enabled.
-                conversationModeInjectionIds = target.modeInjectionIds,
-                workspaceCwd = snapshot.header.workspaceCwd,
-                maxSteps = 256,
-                providerSessionId = childConversationId.toString(),
-                onCheckpoint = { checkpoint ->
-                    // checkpoint→CommitCheckpoint（delta + turn/tool 事实同事务落库）
-                    lastMessages = checkpoint.messages
-                    turnEngine.onCheckpoint(checkpoint)
-                },
+            generationLoop.run(
+                GenerationRequest(
+                    settings = settings,
+                    model = model,
+                    messages = lastMessages,
+                    inputTransformers = turnPipelineFactory.targetInput(),
+                    outputTransformers = turnPipelineFactory.targetOutput(),
+                    assistant = target,
+                    memories = memories,
+                    tools = toolProvider(), // 初始工具列表
+                    toolProvider = toolProvider,
+                    nonInteractive = true,
+                    interactiveToolNames = setOf("ask_user"),
+                    memoryToolAllowed = {
+                        val latestTarget = settingsStore.effectiveSettings.value.settings.getAssistantById(target.id)
+                        latestTarget?.enableMemory == true &&
+                            latestTarget.useGlobalMemory == target.useGlobalMemory
+                    },
+                    assistantMessageId = started.assistantMessageId,
+                    reportProcessingText = runtime.processingReporter(),
+                    conversationSystemPrompt = null, // Child 不设置对话级 System Prompt
+                    // Child does not inherit the Master's mode injection. Passing the Target IDs also
+                    // keeps Target injections active when allowConversationPromptInjection is enabled.
+                    conversationModeInjectionIds = target.modeInjectionIds,
+                    workspaceCwd = snapshot.header.workspaceCwd,
+                    maxSteps = 256,
+                    providerSessionId = childConversationId.toString(),
+                    onCheckpoint = { checkpoint ->
+                        // checkpoint→CommitCheckpoint（delta + turn/tool 事实同事务落库）
+                        lastMessages = checkpoint.messages
+                        turnEngine.onCheckpoint(checkpoint)
+                    },
+                )
             ).let { source ->
                 turnEngine.bind(source).collect { event ->
                     when (event) {
@@ -1019,10 +1008,6 @@ class DelegationCoordinator(
                                     reportSubAssistantMetadataPatch(json, execContext, meta, checkpoint = false)
                                 }
                             }
-                        }
-
-                        is TurnEvent.Checkpoint -> {
-                            // Durability is awaited by onCheckpoint before generation may continue.
                         }
 
                         is TurnEvent.Finished -> {
@@ -1096,6 +1081,11 @@ class DelegationCoordinator(
             preview = computeSubAssistantPreview(messages, childTaskNodeId).ifEmpty { null },
         )
         reportSubAssistantMetadataPatch(json, execContext, waitingMetadata, checkpoint = true)
+        val owner = requireNotNull(runtime.snapshot.value.activeTurn) {
+            "ask_user wait has no active turn owner"
+        }
+        val handle = TurnHandle(runtime.id, owner.epoch, owner.turnId, owner.assistantMessageId)
+        runtime.retainAwaitingApproval(handle)
 
         return try {
             val answered = answer.await()
@@ -1107,6 +1097,15 @@ class DelegationCoordinator(
                     messageId = message.id,
                     toolOrdinal = toolOrdinal,
                     approvalState = ToolApprovalState.Answered(answered),
+                    handle = before.activeTurn.let { owner ->
+                        requireNotNull(owner) { "ask_user approval has no active turn owner" }
+                        TurnHandle(
+                            conversationId = runtime.id,
+                            epoch = owner.epoch,
+                            turnId = owner.turnId,
+                            assistantMessageId = owner.assistantMessageId,
+                        )
+                    },
                 )
             )
             if (runtime.snapshot.value === before) {
@@ -1118,6 +1117,7 @@ class DelegationCoordinator(
                 meta = runState.clearUserInteraction(),
                 checkpoint = true,
             )
+            runtime.markRunning(handle)
             runtime.snapshot.value.currentMessages()
         } finally {
             runGate.unregisterPendingInteraction(runId)

@@ -1,8 +1,5 @@
 package net.weero.measix.pilot.service
 
-import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ToolCallLocator
@@ -15,7 +12,8 @@ import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.service.runtime.ActiveTurnState
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
-import net.weero.measix.pilot.service.runtime.ConversationReducer
+import net.weero.measix.pilot.service.runtime.ConversationTransition
+import net.weero.measix.pilot.service.runtime.TurnHandle
 import net.weero.measix.pilot.service.runtime.UpdateToolApproval
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.Assert.assertEquals
@@ -103,13 +101,28 @@ class MasterTurnCoordinatorTest {
                 currentSnapshot = { current },
                 submit = { command ->
                     submitted += command
-                    current = ConversationReducer.reduce(current, command)
+                    current = ConversationTransition.apply(current, command)
                 },
                 onMoreApprovalsPending = { error("single approval must continue its turn") },
                 continueTurn = { active, entry -> continuation = active.turnId to entry },
             )
 
-            assertEquals(listOf(UpdateToolApproval(locator.messageId, locator.toolOrdinal, decision)), submitted)
+            assertEquals(
+                listOf(
+                    UpdateToolApproval(
+                        messageId = locator.messageId,
+                        toolOrdinal = locator.toolOrdinal,
+                        approvalState = decision,
+                        handle = TurnHandle(
+                            conversationId = current.conversationId,
+                            epoch = owner.epoch,
+                            turnId = owner.turnId,
+                            assistantMessageId = owner.assistantMessageId,
+                        ),
+                    )
+                ),
+                submitted,
+            )
             assertEquals(turnId to MasterTurnEntry.CONTINUE_APPROVAL, continuation)
             assertFalse(
                 masterTurnLaunchPolicy(
@@ -148,35 +161,5 @@ class MasterTurnCoordinatorTest {
         val retained = retainValidMessageNodes(listOf(cancelled, resumable, pending, illegal))
 
         assertEquals(listOf(cancelled.id, resumable.id, pending.id), retained.map { it.id })
-    }
-
-    @Test
-    fun `superseded turn is cancelled and durably finalized before the next mutation`() = runTest {
-        val events = mutableListOf<String>()
-        val previousTurnId = Uuid.random()
-        val previousJob = launch {
-            try {
-                awaitCancellation()
-            } finally {
-                events += "previous-finished"
-            }
-        }
-        runCurrent()
-
-        val barrier = beginSupersedingTurn(previousJob, previousTurnId) { turnId ->
-            assertEquals(previousTurnId, turnId)
-            events += "cancel-requested"
-        }
-        barrier.awaitDurableFinalization { turnId ->
-            assertEquals(previousTurnId, turnId)
-            events += "durable-cancelled"
-        }
-        events += "append-user"
-
-        assertTrue(previousJob.isCancelled)
-        assertEquals(
-            listOf("cancel-requested", "previous-finished", "durable-cancelled", "append-user"),
-            events,
-        )
     }
 }

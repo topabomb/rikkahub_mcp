@@ -1,10 +1,13 @@
 package net.weero.measix.pilot.data.ai.transformers
 
 import java.io.File
-import me.rerere.ai.provider.Modality
+import me.rerere.ai.core.MessageRole
+import me.rerere.ai.provider.RequestImageSupport
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.ui.AttachmentProjectionTextMetadata
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.files.FileUtils
@@ -14,8 +17,8 @@ import net.weero.measix.pilot.data.files.ArtifactStore
  * Request-only 附件投影（见 multimodal-context-and-turn-durability.md）：
  *
  * 1. 递归遍历顶层消息与 `Tool.output` 中的 media part，在原来源容器内加入短稳定事实行；
- * 2. 当前 resolved model 原生支持 IMAGE 输入时保留 Image part（native），否则只保留引用事实
- *    （reference_only）；
+ * 2. 按请求级 [RequestMediaCapabilities] 决定 native / reference_only / unavailable，
+ *    不单独使用 model.inputModalities；
  * 3. 不跨消息追加提示，不改变消息 role，也不把请求级投影写回 durable Conversation。
  *
  * 禁止：调用附件识别模型、读写分析缓存、写回 Conversation、因模型不能看图抛 turn-level failure。
@@ -27,12 +30,12 @@ class AttachmentProjectionTransformer(
         ctx: TransformerContext,
         messages: List<UIMessage>,
     ): List<UIMessage> {
-        val nativeImageSupported = ctx.model.inputModalities.contains(Modality.IMAGE)
         return messages.map { message ->
             message.copy(
                 parts = projectParts(
                     parts = message.parts,
-                    nativeImageSupported = nativeImageSupported,
+                    role = message.role,
+                    capabilities = ctx.mediaCapabilities,
                     artifactStore = artifactStore,
                     filesDir = ctx.context.filesDir,
                 ),
@@ -42,9 +45,11 @@ class AttachmentProjectionTransformer(
 
     private suspend fun projectParts(
         parts: List<UIMessagePart>,
-        nativeImageSupported: Boolean,
+        role: MessageRole,
+        capabilities: RequestMediaCapabilities,
         artifactStore: ArtifactStore,
         filesDir: File,
+        insideToolOutput: Boolean = false,
     ): List<UIMessagePart> {
         val result = ArrayList<UIMessagePart>(parts.size + 2)
         for (part in parts) {
@@ -52,23 +57,31 @@ class AttachmentProjectionTransformer(
                 is UIMessagePart.Tool -> result += part.copy(
                     output = projectParts(
                         parts = part.output,
-                        nativeImageSupported = nativeImageSupported,
+                        role = role,
+                        capabilities = capabilities,
                         artifactStore = artifactStore,
                         filesDir = filesDir,
+                        insideToolOutput = true,
                     ),
                 )
 
                 is UIMessagePart.Image -> {
+                    val support = capabilities.supportFor(role, insideToolOutput)
+                    val native = support == RequestImageSupport.STRUCTURED
                     val ref = AttachmentRefs.getRef(part)
-                    if (nativeImageSupported) {
-                        ref?.let { refValue ->
-                            result += attachmentProjectionText(
+                    if (native) {
+                        result += if (ref != null) {
+                            attachmentProjectionText(
                                 attachmentRefLine(
-                                    refValue = refValue,
+                                    refValue = ref,
                                     type = "image",
                                     displayName = displayNameOf(part, artifactStore, filesDir),
-                                    imageInput = ImageInputProjection.NATIVE,
+                                    imageInput = AttachmentInputMode.NATIVE,
                                 ),
+                            )
+                        } else {
+                            attachmentProjectionText(
+                                "[Attachment ref=unavailable type=image input=native]",
                             )
                         }
                         result += part
@@ -79,7 +92,7 @@ class AttachmentProjectionTransformer(
                                     refValue = ref,
                                     type = "image",
                                     displayName = displayNameOf(part, artifactStore, filesDir),
-                                    imageInput = ImageInputProjection.REFERENCE_ONLY,
+                                    imageInput = AttachmentInputMode.REFERENCE_ONLY,
                                 ),
                             )
                         } else {
@@ -124,9 +137,10 @@ class AttachmentProjectionTransformer(
     }
 }
 
-internal enum class ImageInputProjection(val markerValue: String) {
+internal enum class AttachmentInputMode(val markerValue: String) {
     NATIVE("native"),
     REFERENCE_ONLY("reference_only"),
+    UNAVAILABLE("unavailable"),
 }
 
 /** `[Attachment ref=attachment:8f2... type=image name="screenshot.png" input=native]`。 */
@@ -134,7 +148,7 @@ internal fun attachmentRefLine(
     refValue: String,
     type: String,
     displayName: String,
-    imageInput: ImageInputProjection? = null,
+    imageInput: AttachmentInputMode? = null,
 ): String {
     val input = imageInput?.let { " input=${it.markerValue}" }.orEmpty()
     return "[Attachment ref=$refValue type=$type name=\"$displayName\"$input]"

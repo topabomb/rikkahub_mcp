@@ -61,6 +61,10 @@ class SingleWriterContractTest {
             "getConversationJobs",
             "conversationJob",
             "loadingJob",
+            "SubAssistantRunLeaseRegistry",
+            "getProcessingStatusFlow",
+            "Image output omitted",
+            "CAPABILITY_HINT",
             "backward compat",
             "Phase A",
             "Phase B",
@@ -104,7 +108,7 @@ class SingleWriterContractTest {
     fun `conversation persistence writes have one caller graph`() {
         val coordinator = "service/runtime/ConversationCommandCoordinator.kt"
         val allowed = mapOf(
-            "repository.applyMutation(" to setOf(coordinator),
+            "repository.commit(" to setOf(coordinator),
             "repository.insertConversation(" to setOf(coordinator),
             "repository.insertConversationTree(" to setOf(coordinator),
             "repository.deleteConversation(" to setOf(coordinator),
@@ -175,14 +179,13 @@ class SingleWriterContractTest {
         }
         assertNoHits("conversationJob", chatUi)
         assertNoHits("loadingJob", chatUi)
-        assertTrue(hits("ConversationTurnPresentation", chatUi).isNotEmpty())
+        assertTrue(hits("ConversationPresentation", chatUi).isNotEmpty())
     }
 
     @Test
     fun `attachment backfill is an exact metadata patch rather than a replacement tree`() {
         val commands = File(sourceRoot, "service/runtime/ConversationCommands.kt").readText()
         val coordinator = File(sourceRoot, "service/MasterTurnCoordinator.kt").readText()
-        val runtime = File(sourceRoot, "service/runtime/ConversationRuntime.kt").readText()
         val declaration = commands
             .substringAfter("data class BackfillAttachmentRefs(")
             .substringBefore(") : ConversationCommand")
@@ -192,9 +195,9 @@ class SingleWriterContractTest {
         val guardedPreflight = launchRun
             .substringAfter("if (launchPolicy.runStructuralPreflight)")
             .substringBefore("var snapshot =")
-        val ownerValidation = runtime
-            .substringAfter("private fun validateCommandOwner(")
-            .substringBefore("private val commandWrites")
+        val ownerValidation = File(sourceRoot, "service/runtime/ConversationCommandCoordinator.kt").readText()
+            .substringAfter("internal fun validateConversationCommandOwner(")
+            .substringBefore("private fun Conversation.lockIds")
         assertTrue(declaration.contains("List<AttachmentRefBackfill>"))
         assertFalse(declaration.contains("List<MessageNode>"))
         assertTrue(guardedPreflight.contains("checkInvalidMessages(conversationId)"))

@@ -64,6 +64,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.service.runtime.ToolCallPhase
 import net.weero.measix.pilot.service.runtime.isBusy
+import net.weero.measix.pilot.service.runtime.resolveToolCallPhase
 import net.weero.measix.pilot.ui.components.message.tools.ToolUIContext
 import net.weero.measix.pilot.ui.components.message.tools.ToolUIRegistry
 import net.weero.measix.pilot.ui.components.message.tools.busy
@@ -529,36 +530,6 @@ internal fun ChainOfThoughtScope.AskUserToolStep(
             }
         },
     )
-}
-
-internal fun resolveToolCallPhase(tool: UIMessagePart.Tool, activePhase: ToolCallPhase?): ToolCallPhase =
-    activePhase ?: when {
-        tool.approvalState is ToolApprovalState.Pending -> ToolCallPhase.AWAITING_APPROVAL
-        tool.approvalState is ToolApprovalState.Denied -> ToolCallPhase.DENIED
-        tool.approvalState is ToolApprovalState.Answered -> ToolCallPhase.ANSWERED
-        else -> tool.resultTerminalPhase() ?: if (tool.isExecuted) {
-            ToolCallPhase.COMPLETED
-        } else {
-            ToolCallPhase.READY
-        }
-    }
-
-private fun UIMessagePart.Tool.resultTerminalPhase(): ToolCallPhase? {
-    if (!isExecuted) return null
-    val result = runCatching {
-        JsonInstant.parseToJsonElement(
-            output.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text },
-        ).jsonObject
-    }.getOrNull() ?: return null
-    return when {
-        result["status"]?.jsonPrimitive?.contentOrNull == "cancelled" -> ToolCallPhase.CANCELLED
-        result["status"]?.jsonPrimitive?.contentOrNull == "interrupted" -> ToolCallPhase.INTERRUPTED
-        result["error"] != null && result["type"]?.jsonPrimitive?.contentOrNull == "error" ->
-            ToolCallPhase.FAILED
-        result["error"] != null && result["type"]?.jsonPrimitive?.contentOrNull == "timeout" ->
-            ToolCallPhase.FAILED
-        else -> null
-    }
 }
 
 private fun toolCallPhaseString(phase: ToolCallPhase): Int = when (phase) {

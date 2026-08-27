@@ -37,6 +37,8 @@ import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.RequestImageSupport
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.vertex.ServiceAccountTokenProvider
 import me.rerere.ai.registry.ModelRegistry
@@ -54,6 +56,7 @@ import me.rerere.ai.util.formatProviderHttpError
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeBase64
+import me.rerere.ai.util.encodeNativeImage
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.removeElements
@@ -79,6 +82,22 @@ private const val TAG = "GoogleProvider"
 
 class GoogleProvider(private val client: OkHttpClient, context: Context? = null) : Provider<ProviderSetting.Google> {
     private val keyRoulette = if (context != null) KeyRoulette.lru(context) else KeyRoulette.default()
+
+    override fun requestMediaCapabilities(
+        providerSetting: ProviderSetting.Google,
+        model: Model,
+    ): RequestMediaCapabilities {
+        val structured = if (Modality.IMAGE in model.inputModalities) {
+            RequestImageSupport.STRUCTURED
+        } else {
+            RequestImageSupport.NONE
+        }
+        return RequestMediaCapabilities(
+            userImages = structured,
+            assistantImages = structured,
+            toolOutputImages = structured,
+        )
+    }
     private val serviceAccountTokenProvider by lazy {
         ServiceAccountTokenProvider(client)
     }
@@ -427,7 +446,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         // Contents (user messages)
         put(
             "contents",
-            buildContents(messages)
+            buildContents(messages, params.mediaCapabilities)
         )
 
         // Function declarations and model built-in tools share one tools array. Writing this key
@@ -624,28 +643,36 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private fun buildContents(messages: List<UIMessage>): JsonArray {
+    private fun buildContents(
+        messages: List<UIMessage>,
+        mediaCapabilities: RequestMediaCapabilities,
+    ): JsonArray {
         return buildJsonArray {
             messages
                 .filter { it.role != MessageRole.SYSTEM && it.isValidToUpload() }
                 .forEach { message ->
                     if (message.role == MessageRole.ASSISTANT) {
-                        addModelMessage(message)
+                        addModelMessage(message, mediaCapabilities)
                     } else {
-                        addUserMessage(message)
+                        addUserMessage(message, mediaCapabilities)
                     }
                 }
         }
     }
 
-    private fun JsonArrayBuilder.addModelMessage(message: UIMessage) {
+    private fun JsonArrayBuilder.addModelMessage(
+        message: UIMessage,
+        mediaCapabilities: RequestMediaCapabilities,
+    ) {
         val groups = groupPartsByToolBoundary(message.parts)
         val partsBuffer = mutableListOf<JsonObject>()
 
         for (group in groups) {
             when (group) {
                 is PartGroup.Content -> {
-                    group.parts.mapNotNull { it.toGooglePart() }.forEach { partsBuffer.add(it) }
+                    group.parts.mapNotNull {
+                        it.toGooglePart(mediaCapabilities.assistantImages)
+                    }.forEach { partsBuffer.add(it) }
                 }
 
                 is PartGroup.Tools -> {
@@ -663,7 +690,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     add(buildJsonObject {
                         put("role", "user")
                         putJsonArray("parts") {
-                            group.tools.forEach { add(it.toFunctionResponsePart()) }
+                            group.tools.forEach { add(it.toFunctionResponsePart(mediaCapabilities)) }
                         }
                     })
                 }
@@ -679,16 +706,21 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private fun JsonArrayBuilder.addUserMessage(message: UIMessage) {
+    private fun JsonArrayBuilder.addUserMessage(
+        message: UIMessage,
+        mediaCapabilities: RequestMediaCapabilities,
+    ) {
         add(buildJsonObject {
             put("role", commonRoleToGoogleRole(message.role))
             putJsonArray("parts") {
-                message.parts.mapNotNull { it.toGooglePart() }.forEach { add(it) }
+                message.parts.mapNotNull {
+                    it.toGooglePart(mediaCapabilities.userImages)
+                }.forEach { add(it) }
             }
         })
     }
 
-    private fun UIMessagePart.toGooglePart(): JsonObject? = when (this) {
+    private fun UIMessagePart.toGooglePart(imageSupport: RequestImageSupport): JsonObject? = when (this) {
         is UIMessagePart.Text -> buildJsonObject {
             put("text", text)
             metadataAs<GoogleThoughtMetadata>()?.thoughtSignature?.let {
@@ -697,15 +729,17 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
 
         is UIMessagePart.Image -> {
-            encodeBase64(false).getOrNull()?.let { encoded ->
-                buildJsonObject {
-                    put("inlineData", buildJsonObject {
-                        put("mimeType", encoded.mimeType)
-                        put("data", encoded.base64)
-                    })
-                    metadataAs<GoogleThoughtMetadata>()?.thoughtSignature?.let {
-                        put("thoughtSignature", it)
-                    }
+            check(imageSupport == RequestImageSupport.STRUCTURED) {
+                "Gemini received a native image after request projection"
+            }
+            val encoded = encodeNativeImage(false)
+            buildJsonObject {
+                put("inlineData", buildJsonObject {
+                    put("mimeType", encoded.mimeType)
+                    put("data", encoded.base64)
+                })
+                metadataAs<GoogleThoughtMetadata>()?.thoughtSignature?.let {
+                    put("thoughtSignature", it)
                 }
             }
         }
@@ -766,7 +800,9 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private fun UIMessagePart.Tool.toFunctionResponsePart() = buildJsonObject {
+    private fun UIMessagePart.Tool.toFunctionResponsePart(
+        mediaCapabilities: RequestMediaCapabilities,
+    ) = buildJsonObject {
         val thoughtMetadata = metadataAs<GoogleThoughtMetadata>()
         put("functionResponse", buildJsonObject {
             put("name", toolName)
@@ -779,7 +815,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             // 过滤出最终包含 inlineData 的数据块
             val mediaGoogleParts = output
                 .filter { it !is UIMessagePart.Text }
-                .mapNotNull { it.toGooglePart() }
+                .mapNotNull { it.toGooglePart(mediaCapabilities.toolOutputImages) }
                 .filter { it.containsKey("inlineData") }
 
             // 3. 构建给模型看的结构化 response 节点

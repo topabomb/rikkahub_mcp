@@ -3,11 +3,15 @@ package me.rerere.ai.provider
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.ImageGenSize
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
+import me.rerere.ai.ui.OpenAIResponseMetadata
+import me.rerere.ai.ui.OpenAIResponseSourceProfile
+import me.rerere.ai.ui.OpenAIResponseWireFormat
 import me.rerere.ai.ui.UIMessage
 
 // 提供商实现
@@ -25,6 +29,15 @@ interface Provider<T : ProviderSetting> {
     suspend fun getBalance(providerSetting: T): String {
         error("Balance lookup is not supported")
     }
+
+    /**
+     * Closed request-level media capability. Unknown endpoints stay [RequestMediaCapabilities.NONE];
+     * adapters must not infer native image support from a model name or a successful prior request.
+     */
+    fun requestMediaCapabilities(
+        providerSetting: T,
+        model: Model,
+    ): RequestMediaCapabilities = RequestMediaCapabilities.NONE
 
     suspend fun generateText(
         providerSetting: T,
@@ -61,6 +74,43 @@ interface Provider<T : ProviderSetting> {
 }
 
 @Serializable
+enum class RequestImageSupport {
+    NONE,
+    STRUCTURED,
+    OPAQUE_REPLAY_ONLY,
+}
+
+@Serializable
+data class RequestMediaCapabilities(
+    val userImages: RequestImageSupport = RequestImageSupport.NONE,
+    val assistantImages: RequestImageSupport = RequestImageSupport.NONE,
+    val toolOutputImages: RequestImageSupport = RequestImageSupport.NONE,
+    val opaqueReplayWireFormat: OpenAIResponseWireFormat? = null,
+    val opaqueReplaySourceProfile: OpenAIResponseSourceProfile? = null,
+) {
+    companion object {
+        val NONE = RequestMediaCapabilities()
+    }
+
+    fun supportFor(role: MessageRole, insideToolOutput: Boolean): RequestImageSupport =
+        when {
+            insideToolOutput -> toolOutputImages
+            role == MessageRole.ASSISTANT -> assistantImages
+            else -> userImages
+        }
+
+    fun opaqueReplayEligible(metadata: OpenAIResponseMetadata?): Boolean {
+        if (assistantImages != RequestImageSupport.OPAQUE_REPLAY_ONLY) return false
+        val metadata = metadata ?: return false
+        val expectedWire = opaqueReplayWireFormat ?: return false
+        val expectedSource = opaqueReplaySourceProfile ?: return false
+        if (metadata.wireFormat != expectedWire) return false
+        if (metadata.outputItemGroups.none { it.isNotEmpty() }) return false
+        return metadata.sourceProfile == null || metadata.sourceProfile == expectedSource
+    }
+}
+
+@Serializable
 data class TextGenerationParams(
     val model: Model,
     val temperature: Float? = null,
@@ -70,6 +120,7 @@ data class TextGenerationParams(
     val reasoningLevel: ReasoningLevel = ReasoningLevel.OFF,
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBody: List<CustomBody> = emptyList(),
+    val mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
     /**
      * Request-scoped Provider session identifier for sticky routing / caching.
      *

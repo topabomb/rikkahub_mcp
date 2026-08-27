@@ -19,7 +19,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.ai.GenerationHandler
+import net.weero.measix.pilot.data.ai.GenerationLoop
 import net.weero.measix.pilot.data.ai.attachments.AttachmentFailureReasons
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolveResult
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
@@ -179,7 +179,7 @@ class DelegationCoordinatorMaterializationTest {
         val artifactStore = mockk<ArtifactStore>(relaxed = true)
         every { artifactStore.unpublishedLease(any()) } returns ToolResourceLease({}, {})
         val coordinator = DelegationCoordinator(
-            generationHandler = mockk<GenerationHandler>(relaxed = true),
+            generationLoop = mockk<GenerationLoop>(relaxed = true),
             conversationRepo = mockk<ConversationRepository>(relaxed = true),
             runtimeRegistry = runtimeRegistry,
             commandCoordinator = commandCoordinator,

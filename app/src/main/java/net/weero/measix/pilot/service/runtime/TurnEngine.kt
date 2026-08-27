@@ -31,6 +31,7 @@ import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
+import net.weero.measix.pilot.service.TurnFinalization
 import kotlin.uuid.Uuid
 
 /**
@@ -39,18 +40,18 @@ import kotlin.uuid.Uuid
  * Master 与 Target 共用同一 [onCheckpoint] 回调（awaited durability boundary）与
  * [bind]（流式投影 + 终态 FinalizeTurn）。Application 层只装配请求并消费副作用事件。
  *
- * [onCheckpoint] 作为 `generateText(onCheckpoint=…)` 参数传入；[bind] 消费
+ * [onCheckpoint] 作为 `GenerationRequest.onCheckpoint` 传入；[bind] 消费
  * GenerationChunk 流：Messages → applyStreamingDelta（永不落库），Finished / 异常 /
  * 取消 → FinalizeTurn。
  *
- * [prepareFinalize] 仅用于命令构造前的 Application IO（例如取消时并入 Child 消息）；
- * reducer 保持零 IO。
+ * 取消/失败终态在提交 FinalizeTurn 前只经 [TurnFinalization.prepareOwnedTurnMessagesForFailure]
+ * 做 Application IO（并入未完成工具与 Child 消息）；transition 保持零 IO。
  */
 class TurnEngine(
     private val commandCoordinator: ConversationCommandCoordinator,
     private val runtime: ConversationRuntime,
     private val handle: TurnHandle,
-    private val prepareFinalize: (suspend (TurnOutcome, List<UIMessage>) -> List<UIMessage>)? = null,
+    private val turnFinalization: TurnFinalization,
 ) {
     /** turn 骨架启动结果：槽位 id + 可复用的既有 assistant 消息（null = 新建槽）。 */
     data class StartedTurn(
@@ -67,7 +68,7 @@ class TurnEngine(
      * @param messages 生成输入（resumable 探测基于其末条消息）
      * @param resumeFilter 末条 assistant 消息可复用判定（Master 含审批恢复语义；
      *   默认为 Target 语义：存在未执行工具即可复用）
-     * @param prepareFinalize 命令构造前的 Application IO（取消时并入 Child 消息等）
+     * @param turnFinalization 取消/失败终态在提交前的唯一 Application IO
      */
     companion object {
         suspend fun start(
@@ -79,13 +80,14 @@ class TurnEngine(
                 message.role == me.rerere.ai.core.MessageRole.ASSISTANT &&
                     message.getTools().any { !it.isExecuted }
             },
-            prepareFinalize: (suspend (TurnOutcome, List<UIMessage>) -> List<UIMessage>)? = null,
+            turnFinalization: TurnFinalization,
         ): StartedTurn {
             val resumable = messages.lastOrNull()?.takeIf(resumeFilter)
             val slotId = resumable?.id ?: Uuid.random()
             val handle = commandCoordinator.startTurn(runtime.id, turnId, slotId, resume = resumable != null)
+            runtime.markRunning(handle)
             return StartedTurn(
-                engine = TurnEngine(commandCoordinator, runtime, handle, prepareFinalize),
+                engine = TurnEngine(commandCoordinator, runtime, handle, turnFinalization),
                 assistantMessageId = slotId,
                 resumableMessage = resumable,
             )
@@ -97,7 +99,7 @@ class TurnEngine(
             runtime: ConversationRuntime,
             expectedTurnId: Uuid,
             messages: List<UIMessage>,
-            prepareFinalize: (suspend (TurnOutcome, List<UIMessage>) -> List<UIMessage>)? = null,
+            turnFinalization: TurnFinalization,
         ): StartedTurn {
             val active = requireNotNull(runtime.snapshot.value.activeTurn) {
                 "conversation ${runtime.id} has no approval-paused turn"
@@ -109,12 +111,14 @@ class TurnEngine(
             check(resumable?.id == active.assistantMessageId) {
                 "active turn assistant slot ${active.assistantMessageId} is not the current message"
             }
+            val handle = TurnHandle(runtime.id, active.epoch, active.turnId, active.assistantMessageId)
+            runtime.markRunning(handle)
             return StartedTurn(
                 engine = TurnEngine(
                     commandCoordinator = commandCoordinator,
                     runtime = runtime,
-                    handle = TurnHandle(runtime.id, active.epoch, active.turnId, active.assistantMessageId),
-                    prepareFinalize = prepareFinalize,
+                    handle = handle,
+                    turnFinalization = turnFinalization,
                 ),
                 assistantMessageId = active.assistantMessageId,
                 resumableMessage = resumable,
@@ -124,7 +128,7 @@ class TurnEngine(
 
     private var submittedTerminalStatus: TurnExecutionStatus? = null
 
-    /** 交给 generateText(onCheckpoint=…) 的回调：将 GenerationCheckpoint 落为 CommitCheckpoint 命令。 */
+    /** 交给 GenerationRequest.onCheckpoint 的回调：将 GenerationCheckpoint 落为 CommitCheckpoint 命令。 */
     suspend fun onCheckpoint(checkpoint: net.weero.measix.pilot.data.ai.GenerationCheckpoint) {
         commandCoordinator.executeOrThrow(
             runtime.id,
@@ -155,7 +159,7 @@ class TurnEngine(
                     submitStreamFinalize(
                         outcome = outcome,
                         lastMessages = lastMessages,
-                        closeInterruptedTools = prepareFinalize == null && outcome is TurnOutcome.Failed,
+                        closeInterruptedTools = false,
                     )
                     emit(TurnEvent.Finished(outcome))
                     return@collect
@@ -170,9 +174,6 @@ class TurnEngine(
                     }
                     is GenerationChunk.Phase -> {
                         emit(TurnEvent.Phase(chunk.phase, chunk.toolName))
-                    }
-                    is GenerationChunk.Checkpoint -> {
-                        emit(TurnEvent.Checkpoint(chunk.kind))
                     }
                     is GenerationChunk.Finished -> {
                         val outcome = TurnOutcome.fromFinishedReason(chunk.reason)
@@ -196,7 +197,7 @@ class TurnEngine(
                         submitStreamFinalize(
                             outcome = outcome,
                             lastMessages = lastMessages,
-                            closeInterruptedTools = prepareFinalize == null,
+                            closeInterruptedTools = false,
                         )
                     }
                 } catch (finalizationError: Exception) {
@@ -211,7 +212,7 @@ class TurnEngine(
     suspend fun finalizeOwnerFailure(
         outcome: TurnOutcome,
         messages: List<UIMessage>,
-        closeInterruptedTools: Boolean = prepareFinalize == null,
+        closeInterruptedTools: Boolean = false,
     ) {
         require(outcome !is TurnOutcome.AwaitingApproval) { "an approval checkpoint is not an owner failure" }
         submitStreamFinalize(outcome, messages, closeInterruptedTools)
@@ -272,13 +273,29 @@ class TurnEngine(
             submitOutcome(messages = null, outcome = outcome, closeInterruptedTools = closeInterruptedTools)
             return
         }
-        val prepared = prepareFinalize?.invoke(outcome, lastMessages)
-        val messages = prepared?.takeIf { it.isNotEmpty() }
+        val prepared = messagesForFinalize(outcome, lastMessages)
+        val messages = prepared.takeIf { it.isNotEmpty() }
             ?: lastMessages.takeIf { it.isNotEmpty() }
         submitOutcome(
             messages = messages,
             outcome = outcome,
             closeInterruptedTools = closeInterruptedTools,
+        )
+    }
+
+    private suspend fun messagesForFinalize(
+        outcome: TurnOutcome,
+        lastMessages: List<UIMessage>,
+    ): List<UIMessage> {
+        if (outcome !is TurnOutcome.Cancelled && outcome !is TurnOutcome.Failed) {
+            return lastMessages
+        }
+        return turnFinalization.prepareOwnedTurnMessagesForFailure(
+            snapshot = runtime.snapshot.value,
+            handle = handle,
+            latestMessages = lastMessages,
+            reason = requireNotNull(outcome.terminalReason),
+            cancelledByUser = outcome.terminalReason == TurnTerminalReasons.USER_STOP,
         )
     }
 }
@@ -288,7 +305,6 @@ sealed interface TurnEvent {
     /** 流式 delta：messages 为最新累积消息（只动 activeTurn，不落库）；lastMessage 为末条。 */
     data class Streaming(val lastMessage: UIMessage?, val messages: List<UIMessage> = emptyList()) : TurnEvent
     data class Phase(val phase: String, val toolName: String?) : TurnEvent
-    data class Checkpoint(val kind: CheckpointKind) : TurnEvent
     data class Finished(val outcome: TurnOutcome) : TurnEvent
 }
 
@@ -385,15 +401,12 @@ class TurnPipelineFactory(
     fun masterOutput(): List<OutputMessageTransformer> = commonOutput
 
     /** Target 输入管道（无 toolArtifactReplay；AttachmentProjection 最后生成协议投影）。 */
-    fun targetInput(): List<InputMessageTransformer> = listOf(
-        TimeReminderTransformer,
-        PromptInjectionTransformer,
-        PlaceholderTransformer,
-        DocumentAsPromptTransformer,
-        templateTransformer,
-        workspaceReminderTransformer,
-        attachmentProjectionTransformer,
-    )
+    fun targetInput(): List<InputMessageTransformer> = buildList {
+        addAll(BASE_INPUT)
+        add(templateTransformer)
+        add(workspaceReminderTransformer)
+        add(attachmentProjectionTransformer)
+    }
 
     fun targetOutput(): List<OutputMessageTransformer> = commonOutput
 }

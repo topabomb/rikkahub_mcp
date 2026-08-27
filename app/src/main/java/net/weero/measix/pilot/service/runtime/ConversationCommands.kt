@@ -6,18 +6,22 @@ import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefBackfill
 import net.weero.measix.pilot.data.ai.CheckpointKind
 import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
-import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
+import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.model.MessageNode
 import kotlin.uuid.Uuid
 
 /**
  * Conversation 结构性修改的原子命令集。
- * 所有命令经 [ConversationCommandCoordinator] 应用：reducer 零 IO 纯变换 → delta 事务持久化 → 发布快照。
+ * 所有命令经 [ConversationCommandCoordinator] 应用：唯一 [ConversationTransition] 产生
+ * snapshot/mutation/facts，事务成功后再发布 resident 快照。
  */
 
 /** 所有命令的统一密封接口 */
 sealed interface ConversationCommand
+
+/** Header-only commands share one [ConversationTransition.applyHeader] implementation. */
+internal sealed interface HeaderConversationCommand : ConversationCommand
 
 /**
  * 创建/推进一个 turn（新消息开始时提交；resume 幂等——已存在同 turn 不重复）。
@@ -27,6 +31,7 @@ internal data class StartTurn(
     val turnId: Uuid,
     val assistantMessageId: Uuid,
     val resume: Boolean,
+    val epoch: Long = 0L,
 ) : ConversationCommand
 
 /**
@@ -96,25 +101,26 @@ data class UpdateHeader(
     val customSystemPrompt: OptionalString = OptionalString.Keep,
     val modeInjectionIds: OptionalUuidSet = OptionalUuidSet.Keep,
     val workspaceCwd: OptionalString = OptionalString.Keep,
-) : ConversationCommand
+) : HeaderConversationCommand
 
 /** Commits an asynchronous title only while the request's source title is still current. */
 data class UpdateTitleIfCurrent(
     val expectedTitle: String,
     val title: String,
-) : ConversationCommand
+) : HeaderConversationCommand
 
 /** Changes the conversation owner and clears its assistant-scoped folder only when the owner changes. */
-data class MoveToAssistant(val assistantId: Uuid) : ConversationCommand
+data class MoveToAssistant(val assistantId: Uuid) : HeaderConversationCommand
 
 /** Atomically flips the committed pin state inside the coordinator's per-conversation lock. */
-data object TogglePinned : ConversationCommand
+data object TogglePinned : HeaderConversationCommand
 
 /** A terminal HITL decision addressed by the owning message and stable tool ordinal. */
 data class UpdateToolApproval(
     val messageId: Uuid,
     val toolOrdinal: Int,
     val approvalState: ToolApprovalState,
+    val handle: TurnHandle,
 ) : ConversationCommand {
     init {
         require(toolOrdinal >= 0) { "tool approval ordinal must be non-negative" }
@@ -195,135 +201,8 @@ enum class TurnExecutionOperation {
     RECOVER,
 }
 
-internal object ConversationMutationBuilder {
-    fun build(
-        old: ConversationSnapshot,
-        new: ConversationSnapshot,
-        command: ConversationCommand? = null,
-    ): ConversationMutation {
-        val changedNodes = mutableListOf<MessageNode>()
-        val changedIndices = mutableListOf<Int>()
-        val deletedNodeIds = mutableListOf<Uuid>()
-        val narrowIndices = when (command) {
-            is StartTurn,
-            is CommitCheckpoint,
-            is FinalizeTurn,
-            is AppendUserMessage,
-            -> listOf(maxOf(old.nodes.lastIndex, new.nodes.lastIndex)).filter { it >= 0 }
-            is UpdateHeader,
-            is UpdateTitleIfCurrent,
-            is MoveToAssistant,
-            TogglePinned,
-            -> emptyList()
-            else -> null
-        }
-        if (narrowIndices != null) {
-            for (index in narrowIndices) {
-                val oldNode = old.nodes.getOrNull(index)
-                val newNode = new.nodes.getOrNull(index)
-                when {
-                    newNode == null -> oldNode?.let { deletedNodeIds.add(it.id) }
-                    oldNode === newNode -> Unit
-                    oldNode == null -> {
-                        changedNodes.add(newNode)
-                        changedIndices.add(index)
-                    }
-                    oldNode.id != newNode.id -> {
-                        deletedNodeIds.add(oldNode.id)
-                        changedNodes.add(newNode)
-                        changedIndices.add(index)
-                    }
-                    else -> {
-                        changedNodes.add(newNode)
-                        changedIndices.add(index)
-                    }
-                }
-            }
-        } else {
-            val oldIndices = old.nodes.withIndex().associate { (index, node) -> node.id to index }
-            val oldById = old.nodes.associateBy(MessageNode::id)
-            val newIds = new.nodes.mapTo(hashSetOf(), MessageNode::id)
-            old.nodes.filter { it.id !in newIds }.forEach { deletedNodeIds += it.id }
-            new.nodes.forEachIndexed { index, newNode ->
-                val oldNode = oldById[newNode.id]
-                if (oldNode != newNode || oldIndices[newNode.id] != index) {
-                    changedNodes.add(newNode)
-                    changedIndices.add(index)
-                }
-            }
-        }
-        val newHeader = new.header
-        return buildMutation(
-            oldHeader = old.header,
-            newHeader = newHeader,
-            changedNodes = changedNodes,
-            deletedNodeIds = deletedNodeIds,
-            changedIndices = changedIndices,
-        )
-    }
-
-    fun buildHeader(old: ConversationHeader, new: ConversationHeader): ConversationMutation =
-        buildMutation(old, new, emptyList(), emptyList(), emptyList())
-
-    private fun buildMutation(
-        oldHeader: ConversationHeader,
-        newHeader: ConversationHeader,
-        changedNodes: List<MessageNode>,
-        deletedNodeIds: List<Uuid>,
-        changedIndices: List<Int>,
-    ): ConversationMutation {
-        val headerChanged = newHeader.title != oldHeader.title ||
-            newHeader.updateAt != oldHeader.updateAt ||
-            newHeader.chatSuggestions != oldHeader.chatSuggestions ||
-            newHeader.isPinned != oldHeader.isPinned ||
-            newHeader.folderId != oldHeader.folderId ||
-            newHeader.assistantId != oldHeader.assistantId ||
-            newHeader.customSystemPrompt != oldHeader.customSystemPrompt ||
-            newHeader.modeInjectionIds != oldHeader.modeInjectionIds ||
-            newHeader.workspaceCwd != oldHeader.workspaceCwd
-        val headerPatch = if (headerChanged) {
-            ConversationHeaderPatch(
-                title = if (newHeader.title != oldHeader.title) newHeader.title else null,
-                chatSuggestions = if (newHeader.chatSuggestions != oldHeader.chatSuggestions) newHeader.chatSuggestions else null,
-                isPinned = if (newHeader.isPinned != oldHeader.isPinned) newHeader.isPinned else null,
-                folderId = when {
-                    newHeader.folderId == oldHeader.folderId -> OptionalFolderId.Keep
-                    newHeader.folderId == null -> OptionalFolderId.Clear
-                    else -> OptionalFolderId.SetTo(newHeader.folderId)
-                },
-                assistantId = if (newHeader.assistantId != oldHeader.assistantId) newHeader.assistantId else null,
-                customSystemPrompt = if (newHeader.customSystemPrompt != oldHeader.customSystemPrompt) {
-                    OptionalString.Set(newHeader.customSystemPrompt)
-                } else {
-                    OptionalString.Keep
-                },
-                modeInjectionIds = if (newHeader.modeInjectionIds != oldHeader.modeInjectionIds) {
-                    OptionalUuidSet.Set(newHeader.modeInjectionIds)
-                } else {
-                    OptionalUuidSet.Keep
-                },
-                workspaceCwd = if (newHeader.workspaceCwd != oldHeader.workspaceCwd) {
-                    OptionalString.Set(newHeader.workspaceCwd)
-                } else {
-                    OptionalString.Keep
-                },
-            )
-        } else {
-            null
-        }
-        return ConversationMutation(
-            conversationId = newHeader.id,
-            headerPatch = headerPatch,
-            upsertedNodes = changedNodes,
-            deletedNodeIds = deletedNodeIds,
-            updateAt = newHeader.updateAt,
-            upsertedNodeIndices = changedIndices,
-            indexForSearch = newHeader.parentConversationId == null,
-            searchMetadataChanged = newHeader.title != oldHeader.title || newHeader.updateAt != oldHeader.updateAt,
-            titleForIndex = newHeader.title,
-        )
-    }
-}
+fun ConversationMutation.hasChanges(): Boolean =
+    headerPatch != null || upsertedNodes.isNotEmpty() || deletedNodeIds.isNotEmpty()
 
 /** 会话头（snapshot 的一部分；header 变更不触碰 nodes） */
 data class ConversationHeader(

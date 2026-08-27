@@ -7,9 +7,10 @@ import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.runtime.CommitCheckpoint
-import net.weero.measix.pilot.service.runtime.ConversationMutationBuilder
-import net.weero.measix.pilot.service.runtime.ConversationReducer
+import net.weero.measix.pilot.service.runtime.ConversationChange
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationTransition
+import net.weero.measix.pilot.service.runtime.ConversationWrite
 import net.weero.measix.pilot.service.runtime.TurnHandle
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import net.weero.measix.pilot.utils.JsonInstant
@@ -53,18 +54,22 @@ class ArchitecturePerformanceEvidenceTest {
             turnReason = null,
             toolExecution = null,
         )
-        val currentNew = ConversationReducer.reduce(old, command)
+        val currentNew = ConversationTransition.apply(old, command)
+        fun currentMutationOf() = (
+            (ConversationTransition.plan(old, command, old.header.updateAt) as ConversationChange.Durable)
+                .write as ConversationWrite.Mutate
+            ).mutation
         repeat(30) {
             buildLegacyCheckpointNodes(old, updated)
-            ConversationMutationBuilder.build(old, currentNew, command)
+            currentMutationOf()
         }
         val baselineNanos = samples(200) { buildLegacyCheckpointNodes(old, updated) }
-        val currentNanos = samples(200) { ConversationMutationBuilder.build(old, currentNew, command) }
+        val currentNanos = samples(200) { currentMutationOf() }
         // The pre-seal path handed every copied node to persistence. Reusing the current
         // equality-based builder here would measure today's implementation twice and erase the
         // legacy write amplification the evidence is intended to reproduce.
         val baselineNodes = buildLegacyCheckpointNodes(old, updated)
-        val currentMutation = ConversationMutationBuilder.build(old, currentNew, command)
+        val currentMutation = currentMutationOf()
         val baselineBytes = JsonInstant.encodeToString(baselineNodes).toByteArray().size
         val currentBytes = JsonInstant.encodeToString(currentMutation.upsertedNodes).toByteArray().size
         val baselineInvalidations = old.nodes.indices.count { old.nodes[it] !== baselineNodes[it] }

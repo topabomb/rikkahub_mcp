@@ -12,7 +12,8 @@ import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
-import net.weero.measix.pilot.service.runtime.ConversationReducer
+import net.weero.measix.pilot.service.runtime.ConversationTransition
+import net.weero.measix.pilot.service.runtime.TurnHandle
 import net.weero.measix.pilot.service.runtime.UpdateToolApproval
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.Assert.assertEquals
@@ -21,6 +22,18 @@ import kotlin.uuid.Uuid
 
 class ToolApprovalReducerTest {
     private val json = Json { encodeDefaults = true }
+
+    private fun approval(
+        messageId: Uuid,
+        ordinal: Int,
+        state: ToolApprovalState,
+        conversationId: Uuid = Uuid.random(),
+    ) = UpdateToolApproval(
+        messageId = messageId,
+        toolOrdinal = ordinal,
+        approvalState = state,
+        handle = TurnHandle(conversationId, 1, Uuid.random(), messageId),
+    )
 
     @Test
     fun `approval locator updates only selected ordinal when provider ids repeat`() {
@@ -37,9 +50,9 @@ class ToolApprovalReducerTest {
         )
 
         // HITL 审批走 UpdateToolApproval 命令（reducer 唯一路径）
-        val updated = ConversationReducer.reduce(
+        val updated = ConversationTransition.apply(
             conversation.toSnapshot(),
-            UpdateToolApproval(message.id, 1, ToolApprovalState.Answered("answer")),
+            approval(message.id, 1, ToolApprovalState.Answered("answer")),
         )
 
         val tools = updated.currentMessages().last().getTools()
@@ -101,9 +114,9 @@ class ToolApprovalReducerTest {
 
         // locator 指向不存在的消息 → reducer 返回原引用（无变更、不落库）
         val snapshot = conversation.toSnapshot()
-        val updated = ConversationReducer.reduce(
+        val updated = ConversationTransition.apply(
             snapshot,
-            UpdateToolApproval(Uuid.random(), 0, ToolApprovalState.Approved),
+            approval(Uuid.random(), 0, ToolApprovalState.Approved),
         )
         assertEquals(snapshot, updated)
     }
@@ -119,13 +132,13 @@ class ToolApprovalReducerTest {
             messageNodes = listOf(message.toMessageNode()),
         )
 
-        val afterFirst = ConversationReducer.reduce(
+        val afterFirst = ConversationTransition.apply(
             conversation.toSnapshot(),
-            UpdateToolApproval(message.id, 0, ToolApprovalState.Answered("first")),
+            approval(message.id, 0, ToolApprovalState.Answered("first"), conversation.id),
         )
-        val afterSecond = ConversationReducer.reduce(
+        val afterSecond = ConversationTransition.apply(
             afterFirst,
-            UpdateToolApproval(message.id, 1, ToolApprovalState.Answered("second")),
+            approval(message.id, 1, ToolApprovalState.Answered("second"), conversation.id),
         )
 
         assertEquals(

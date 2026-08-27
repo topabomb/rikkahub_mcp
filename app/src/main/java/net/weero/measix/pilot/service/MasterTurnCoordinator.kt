@@ -6,6 +6,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -45,7 +46,8 @@ import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.event.AppEvent
 import net.weero.measix.pilot.data.event.AppEventBus
-import net.weero.measix.pilot.data.ai.GenerationHandler
+import net.weero.measix.pilot.data.ai.GenerationLoop
+import net.weero.measix.pilot.data.ai.GenerationRequest
 import net.weero.measix.pilot.data.ai.ToolExecutionEventStatus
 import net.weero.measix.pilot.data.ai.replaceToolsAtOrdinals
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
@@ -182,6 +184,15 @@ internal suspend fun applyToolApprovalDecision(
             messageId = locator.messageId,
             toolOrdinal = locator.toolOrdinal,
             approvalState = approvalState,
+            handle = before.activeTurn.let { owner ->
+                requireNotNull(owner) { "tool approval has no active turn owner" }
+                TurnHandle(
+                    conversationId = before.conversationId,
+                    epoch = owner.epoch,
+                    turnId = owner.turnId,
+                    assistantMessageId = owner.assistantMessageId,
+                )
+            },
         ),
     )
 
@@ -229,32 +240,11 @@ internal fun retainValidMessageNodes(nodes: List<MessageNode>): List<MessageNode
     }
     return messagesNodes.filter { it.messages.isNotEmpty() }
 }
-/** Captures the previous turn and guarantees its durable terminal write precedes the next tree mutation. */
-internal class SupersededTurnBarrier(
-    private val previousJob: Job?,
-    val previousTurnId: Uuid?,
-) {
-    suspend fun awaitDurableFinalization(finalize: suspend (Uuid?) -> Unit) {
-        previousJob?.join()
-        finalize(previousTurnId)
-    }
-}
-
-internal fun beginSupersedingTurn(
-    previousJob: Job?,
-    previousTurnId: Uuid?,
-    requestCancellation: (Uuid) -> Unit,
-): SupersededTurnBarrier {
-    if (previousJob != null && previousTurnId != null) {
-        requestCancellation(previousTurnId)
-        previousJob.cancel()
-    }
-    return SupersededTurnBarrier(previousJob, previousTurnId)
-}
 
 /** Stable identity for observing a requested user-message append; it is not a durable-success result. */
 data class SendMessageReceipt(
     val conversationId: Uuid,
+    val turnId: Uuid,
     val userMessageId: Uuid,
 )
 
@@ -264,7 +254,7 @@ class MasterTurnCoordinator(
     private val appEventBus: AppEventBus,
     private val settingsStore: SettingsStore,
     private val memoryRepository: MemoryRepository,
-    private val generationHandler: GenerationHandler,
+    private val generationLoop: GenerationLoop,
     private val templateTransformer: TemplateTransformer,
     private val mcpManager: McpManager,
     private val toolSetFactory: GenerationToolSetFactory,
@@ -344,7 +334,7 @@ class MasterTurnCoordinator(
 
     // ---- 发送消息 ----
 
-    fun sendMessage(
+    suspend fun sendMessage(
         conversationId: Uuid,
         content: List<UIMessagePart>,
         answer: Boolean = true,
@@ -353,21 +343,13 @@ class MasterTurnCoordinator(
         if (content.isEmptyInputMessage()) return null
 
         val runtime = requireRuntime(conversationId)
-        val previousJob = runtime.getJob()
-        val previousTurnId = runtime.currentGenerationTurnId() ?: runtime.snapshot.value.activeTurn?.turnId
-        val superseded = beginSupersedingTurn(previousJob, previousTurnId) { turnId ->
-            runtime.requestCancel(turnId, TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN)
-        }
-
         val turnId = Uuid.random()
         val userMessageId = Uuid.random()
-        runtime.trackGenerationTurn(turnId)
-        val job = appScope.launch {
+        val job = appScope.launch(start = CoroutineStart.LAZY) {
             try {
                 recoveryGate.awaitReady()
-                superseded.awaitDurableFinalization { turnId ->
-                    turnFinalization.finalizeSupersededTurn(conversationId, turnId)
-                }
+                runtime.awaitPreviousWorker(turnId)
+                turnFinalization.finalizeSupersededTurn(conversationId, runtime.previousTurnId(turnId))
 
                 val currentSnapshot = runtime.snapshot.value
                 val settings = settingsStore.effectiveSettings.first().settings
@@ -410,10 +392,31 @@ class MasterTurnCoordinator(
                 throw e
             } catch (e: Exception) {
                 chatErrorStore.add(e, conversationId, title = context.getString(R.string.error_title_send_message))
+            } finally {
+                if (!answer || !runtime.isAwaitingApproval(turnId)) {
+                    runtime.releaseActiveRequest(turnId, coroutineContext[Job])
+                }
             }
         }
-        runtime.setJob(job, turnId)
-        return SendMessageReceipt(conversationId = conversationId, userMessageId = userMessageId)
+        try {
+            runtimeRegistry.installAndStartActiveRequest(
+                conversationId = conversationId,
+                turnId = turnId,
+                worker = job,
+                supersedeReason = TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN,
+            )
+        } catch (e: CancellationException) {
+            job.cancel()
+            throw e
+        } catch (e: Exception) {
+            job.cancel()
+            throw e
+        }
+        return SendMessageReceipt(
+            conversationId = conversationId,
+            turnId = turnId,
+            userMessageId = userMessageId,
+        )
     }
 
     // ---- 重新生成消息 ----
@@ -424,20 +427,12 @@ class MasterTurnCoordinator(
         regenerateAssistantMsg: Boolean = true
     ) {
         val runtime = requireRuntime(conversationId)
-        val previousJob = runtime.getJob()
-        val previousTurnId = runtime.currentGenerationTurnId() ?: runtime.snapshot.value.activeTurn?.turnId
-        val superseded = beginSupersedingTurn(previousJob, previousTurnId) { turnId ->
-            runtime.requestCancel(turnId, TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN)
-        }
-
         val turnId = Uuid.random()
-        runtime.trackGenerationTurn(turnId)
-        val job = appScope.launch {
+        val job = appScope.launch(start = CoroutineStart.LAZY) {
             try {
                 recoveryGate.awaitReady()
-                superseded.awaitDurableFinalization { turnId ->
-                    turnFinalization.finalizeSupersededTurn(conversationId, turnId)
-                }
+                runtime.awaitPreviousWorker(turnId)
+                turnFinalization.finalizeSupersededTurn(conversationId, runtime.previousTurnId(turnId))
                 val snapshot = subAssistantLifecycle.finalizeRunsBeforeTreeMutation(runtime.snapshot.value)
 
                 if (message.role == MessageRole.USER) {
@@ -467,10 +462,28 @@ class MasterTurnCoordinator(
                 throw e
             } catch (e: Exception) {
                 chatErrorStore.add(e, conversationId, title = context.getString(R.string.error_title_regenerate_message))
+            } finally {
+                if (!runtime.isAwaitingApproval(turnId)) {
+                    runtime.releaseActiveRequest(turnId, coroutineContext[Job])
+                }
             }
         }
-
-        runtime.setJob(job, turnId)
+        appScope.launch {
+            try {
+                runtimeRegistry.installAndStartActiveRequest(
+                    conversationId = conversationId,
+                    turnId = turnId,
+                    worker = job,
+                    supersedeReason = TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN,
+                )
+            } catch (e: CancellationException) {
+                job.cancel()
+                throw e
+            } catch (e: Exception) {
+                job.cancel()
+                chatErrorStore.add(e, conversationId, title = context.getString(R.string.error_title_regenerate_message))
+            }
+        }
     }
 
     // ---- 处理工具调用审批 ----
@@ -497,22 +510,42 @@ class MasterTurnCoordinator(
                         approvalState = newApprovalState,
                         // Pending is emitted immediately before the Flow terminates. Joining the
                         // previous job guarantees its checkpoint is durable before the decision.
-                        awaitPreviousGeneration = { runtime.getJob()?.join() },
+                        awaitPreviousGeneration = { runtime.awaitCurrentWorker() },
                         currentSnapshot = { runtime.snapshot.value },
                         submit = { command -> commandCoordinator.executeOrThrow(conversationId, command) },
                         onMoreApprovalsPending = { _generationDoneFlow.emit(conversationId) },
                         continueTurn = { owner, entry ->
                             val turnId = owner.turnId
-                            runtime.trackGenerationTurn(turnId)
-                            val resumeJob = appScope.launch {
-                                launchRun(
-                                    conversationId = conversationId,
-                                    turnId = turnId,
-                                    entry = entry,
-                                )
-                                _generationDoneFlow.emit(conversationId)
+                            val handle = TurnHandle(
+                                conversationId = conversationId,
+                                epoch = owner.epoch,
+                                turnId = owner.turnId,
+                                assistantMessageId = owner.assistantMessageId,
+                            )
+                            val resumeJob = appScope.launch(start = CoroutineStart.LAZY) {
+                                try {
+                                    launchRun(
+                                        conversationId = conversationId,
+                                        turnId = turnId,
+                                        entry = entry,
+                                    )
+                                    _generationDoneFlow.emit(conversationId)
+                                } finally {
+                                    if (!runtime.isAwaitingApproval(turnId)) {
+                                        runtime.releaseActiveRequest(turnId, coroutineContext[Job])
+                                    }
+                                }
                             }
-                            runtime.setJob(resumeJob, turnId)
+                            try {
+                                runtimeRegistry.installAndStartApprovalContinuation(
+                                    conversationId = conversationId,
+                                    handle = handle,
+                                    worker = resumeJob,
+                                )
+                            } catch (error: Throwable) {
+                                resumeJob.cancel()
+                                throw error
+                            }
                         },
                     )
                 }
@@ -577,33 +610,6 @@ class MasterTurnCoordinator(
                 message.role == MessageRole.ASSISTANT &&
                     message.getTools().any { !it.isExecuted && it.approvalState.canResumeToolExecution() }
             }
-            val prepareFinalize: suspend (TurnOutcome, List<UIMessage>) -> List<UIMessage> =
-                { outcome, messages ->
-                    if (outcome is TurnOutcome.Cancelled || outcome is TurnOutcome.Failed) {
-                        val latestSnapshot = liveSnapshot(conversationId)
-                        val active = requireNotNull(latestSnapshot.activeTurn) {
-                            "active master turn has no runtime owner"
-                        }
-                        val assistantMessageId = requireNotNull(inFlightAssistantId) {
-                            "active master turn has no assistant message owner"
-                        }
-                        turnFinalization.prepareOwnedTurnMessagesForFailure(
-                            snapshot = latestSnapshot,
-                            handle = TurnHandle(
-                                conversationId = conversationId,
-                                epoch = active.epoch,
-                                turnId = turnId,
-                                assistantMessageId = assistantMessageId,
-                            ),
-                            latestMessages = messages,
-                            reason = requireNotNull(outcome.terminalReason),
-                            cancelledByUser = outcome is TurnOutcome.Cancelled,
-                        )
-                    } else {
-                        val current = liveSnapshot(conversationId).currentMessages()
-                        current.ifEmpty { messages }
-                    }
-                }
             val started = when (entry) {
                 MasterTurnEntry.START -> TurnEngine.start(
                     commandCoordinator = commandCoordinator,
@@ -611,7 +617,7 @@ class MasterTurnCoordinator(
                     turnId = turnId,
                     messages = sourceMessages,
                     resumeFilter = resumeFilter,
-                    prepareFinalize = prepareFinalize,
+                    turnFinalization = turnFinalization,
                 )
 
                 MasterTurnEntry.CONTINUE_APPROVAL -> {
@@ -623,7 +629,7 @@ class MasterTurnCoordinator(
                         runtime = runtime,
                         expectedTurnId = turnId,
                         messages = sourceMessages,
-                        prepareFinalize = prepareFinalize,
+                        turnFinalization = turnFinalization,
                     )
                 }
             }
@@ -671,48 +677,50 @@ class MasterTurnCoordinator(
                 assistantName = assistant.name,
                 sourceType = TtsPlaybackSource.SourceType.NORMAL,
             )
-            generationHandler.generateText(
-                settings = settings,
-                model = model,
-                processingStatus = runtime.processingStatus,
-                messages = generationMessages,
-                assistantMessageId = assistantSlot.id,
-                assistant = assistant,
-                conversationSystemPrompt = snapshot.header.customSystemPrompt,
-                conversationModeInjectionIds = snapshot.header.modeInjectionIds,
-                workspaceCwd = snapshot.header.workspaceCwd,
-                providerSessionId = conversationId.toString(),
-                memories = if (assistant.useGlobalMemory) {
-                    memoryRepository.getGlobalMemories()
-                } else {
-                    memoryRepository.getMemoriesOfAssistant(assistant.id.toString())
-                },
-                inputTransformers = turnPipelineFactory.masterInput(),
-                outputTransformers = turnPipelineFactory.masterOutput(),
-                tools = toolSetFactory.buildTools(
-                    assistant = assistant,
+            generationLoop.run(
+                GenerationRequest(
                     settings = settings,
-                    capabilityModel = model,
+                    model = model,
+                    reportProcessingText = runtime.processingReporter(),
+                    messages = generationMessages,
+                    assistantMessageId = assistantSlot.id,
+                    assistant = assistant,
+                    conversationSystemPrompt = snapshot.header.customSystemPrompt,
+                    conversationModeInjectionIds = snapshot.header.modeInjectionIds,
                     workspaceCwd = snapshot.header.workspaceCwd,
-                    ttsPlaybackContext = turnTtsContext,
-                    additionalToolsBeforeMcp = assistantToolFactory.buildTools(
-                        callerAssistant = assistant,
-                        masterConversationId = conversationId,
-                        ttsPlaybackContext = turnTtsContext,
-                    ),
-                    onInvalidMcpServerNames = { invalidNames ->
-                        chatErrorStore.add(
-                            error = IllegalStateException(
-                                context.getString(
-                                    R.string.error_mcp_invalid_server_name,
-                                    invalidNames.joinToString(", ")
-                                )
-                            ),
-                            conversationId = conversationId,
-                        )
+                    providerSessionId = conversationId.toString(),
+                    memories = if (assistant.useGlobalMemory) {
+                        memoryRepository.getGlobalMemories()
+                    } else {
+                        memoryRepository.getMemoriesOfAssistant(assistant.id.toString())
                     },
-                ),
-                onCheckpoint = activeTurnEngine::onCheckpoint,
+                    inputTransformers = turnPipelineFactory.masterInput(),
+                    outputTransformers = turnPipelineFactory.masterOutput(),
+                    tools = toolSetFactory.buildTools(
+                        assistant = assistant,
+                        settings = settings,
+                        capabilityModel = model,
+                        workspaceCwd = snapshot.header.workspaceCwd,
+                        ttsPlaybackContext = turnTtsContext,
+                        additionalToolsBeforeMcp = assistantToolFactory.buildTools(
+                            callerAssistant = assistant,
+                            masterConversationId = conversationId,
+                            ttsPlaybackContext = turnTtsContext,
+                        ),
+                        onInvalidMcpServerNames = { invalidNames ->
+                            chatErrorStore.add(
+                                error = IllegalStateException(
+                                    context.getString(
+                                        R.string.error_mcp_invalid_server_name,
+                                        invalidNames.joinToString(", ")
+                                    )
+                                ),
+                                conversationId = conversationId,
+                            )
+                        },
+                    ),
+                    onCheckpoint = activeTurnEngine::onCheckpoint,
+                )
             ).let { source ->
                 // 提交协议唯一实现——chunk→applyStreamingDelta（永不落库）、
                 // checkpoint→CommitCheckpoint、Finished/异常/取消→FinalizeTurn
@@ -737,7 +745,6 @@ class MasterTurnCoordinator(
                         }
 
                         is TurnEvent.Phase -> { }
-                        is TurnEvent.Checkpoint -> { }
                         is TurnEvent.Finished -> {
                             turnOutcome = event.outcome
                         }
@@ -747,6 +754,14 @@ class MasterTurnCoordinator(
 
             if (turnOutcome is TurnOutcome.Failed && isForeground.value && generationSoundEnabled) {
                 sideEffects.playTurnFailedSound()
+            }
+            if (turnOutcome is TurnOutcome.AwaitingApproval) {
+                val active = requireNotNull(runtime.snapshot.value.activeTurn) {
+                    "approval checkpoint has no durable turn owner"
+                }
+                runtime.retainAwaitingApproval(
+                    TurnHandle(conversationId, active.epoch, active.turnId, active.assistantMessageId),
+                )
             }
             applyMasterTurnSideEffects(
                 conversationId = conversationId,

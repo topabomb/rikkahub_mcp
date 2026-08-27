@@ -16,14 +16,19 @@ import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.service.runtime.ActiveTurnState
+import net.weero.measix.pilot.service.runtime.ConversationChange
 import net.weero.measix.pilot.service.runtime.ConversationCommand
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
+import net.weero.measix.pilot.service.runtime.ConversationTransition
+import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
+import net.weero.measix.pilot.service.runtime.currentTurnPresentation
 import net.weero.measix.pilot.service.runtime.FinalizeTurn
 import net.weero.measix.pilot.service.runtime.TurnHandle
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -167,20 +172,33 @@ class TurnFinalizationTest {
             createdAt = 1,
             updatedAt = 2,
         )
-        coEvery { coordinator.executeOrThrow(conversationId, capture(command)) } returns Unit
+        coEvery { coordinator.executeOrThrow(conversationId, capture(command)) } coAnswers {
+            val captured = command.captured
+            val old = runtime.snapshot.value
+            val change = ConversationTransition.plan(old, captured, old.header.updateAt)
+            runtime.publishCommitted(old, captured, (change as ConversationChange.Durable).snapshot)
+        }
 
+        runtime.installActiveRequest(turnId, kotlinx.coroutines.Job())
+        runtime.retainAwaitingApproval(TurnHandle(conversationId, 7, turnId, assistant.id))
+        assertEquals(ConversationTurnPhase.AWAITING_APPROVAL, runtime.currentTurnPresentation().phase)
+
+        val registry = mockk<ConversationRuntimeRegistry>()
+        io.mockk.every { registry.findRuntime(conversationId) } returns runtime
         TurnFinalization(
             conversationRepository = repository,
-            runtimeRegistry = mockk<ConversationRuntimeRegistry>(relaxed = true),
+            runtimeRegistry = registry,
             commandCoordinator = coordinator,
             json = Json,
-        ).finalizeSupersededTurn(conversationId, turnId)
+        ).stopTurn(conversationId)
 
         coVerify(exactly = 1) { coordinator.executeOrThrow(conversationId, any()) }
         val finalize = command.captured as FinalizeTurn
         assertEquals(TurnExecutionStatus.CANCELLED, finalize.terminalStatus)
         assertEquals(turnId, finalize.handle.turnId)
         assertEquals(7, finalize.handle.epoch)
+        assertEquals(ConversationTurnPhase.IDLE, runtime.currentTurnPresentation().phase)
+        assertNull(runtime.currentGenerationTurnId())
     }
 
     @Test

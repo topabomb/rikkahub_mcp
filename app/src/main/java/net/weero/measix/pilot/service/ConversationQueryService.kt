@@ -16,7 +16,8 @@ import net.weero.measix.pilot.data.model.Folder
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeState
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
-import net.weero.measix.pilot.service.runtime.ConversationTurnPresentation
+import net.weero.measix.pilot.service.runtime.ConversationPresentation
+import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import java.time.Instant
 import kotlin.uuid.Uuid
@@ -74,11 +75,8 @@ class ConversationQueryService(
             }
         }
 
-    fun turnPresentation(conversationId: Uuid): Flow<ConversationTurnPresentation> =
+    fun turnPresentation(conversationId: Uuid): Flow<ConversationPresentation> =
         runtimeRegistry.getTurnPresentationFlow(conversationId)
-
-    fun processingStatus(conversationId: Uuid): Flow<String?> =
-        runtimeRegistry.getProcessingStatusFlow(conversationId)
 
     fun attachmentPreviews(snapshot: ConversationSnapshot): Map<String, String> =
         attachmentPreviewProjector.project(snapshot)
@@ -133,15 +131,18 @@ class ConversationQueryService(
 }
 
 internal fun mergeConversationActivities(
-    turnPresentations: Map<Uuid, ConversationTurnPresentation>,
+    turnPresentations: Map<Uuid, ConversationPresentation>,
     titleGenerationIds: Set<Uuid>,
 ): Map<Uuid, Set<ConversationActivity>> =
     (turnPresentations.keys + titleGenerationIds).associateWith { conversationId ->
         buildSet {
-            when (turnPresentations[conversationId]) {
-                ConversationTurnPresentation.GENERATING -> add(ConversationActivity.RESPONSE_GENERATION)
-                ConversationTurnPresentation.AWAITING_APPROVAL -> add(ConversationActivity.APPROVAL_REQUIRED)
-                ConversationTurnPresentation.IDLE,
+            when (turnPresentations[conversationId]?.phase) {
+                ConversationTurnPhase.GENERATING,
+                ConversationTurnPhase.PREPARING,
+                ConversationTurnPhase.STOPPING,
+                -> add(ConversationActivity.RESPONSE_GENERATION)
+                ConversationTurnPhase.AWAITING_APPROVAL -> add(ConversationActivity.APPROVAL_REQUIRED)
+                ConversationTurnPhase.IDLE,
                 null,
                 -> Unit
             }

@@ -28,7 +28,7 @@ V2 不是在 V1 外再包一层 service，也不是为了追求某种架构名�
 
 正确性优先于行数，但行数仍是证明“确实做了减法”的硬门禁。本文不采用“每阶段统一减少 20%”这种脱离职责的指标，
 而是在 §11 冻结现有范围、逐域预算、允许新增文件和最终仓库上限：纯重构阶段必须净减少，受管配置只能使用预留预算，
-最终核心范围至少减少 10%。任何行数达标都不能抵消 UI 行为、事务、迁移或恢复门禁失败。
+最终核心范围按修订后的 §11.7 上限验收（Conversation/Turn 冻结为 7,250，不再要求凭空 10%）。任何行数达标都不能抵消 UI 行为、事务、迁移或恢复门禁失败。
 
 ## 2. V1 提供的教训，而不是 V2 的模板
 
@@ -338,19 +338,20 @@ command-scope lease 从读取 current state 持有到 commit 后 publish/promote
 ### 5.3 运行态收敛
 
 当前 `generationJob`、`activeTurnId`、`cancelReasons` 和 approval mutex 分散表达一个活跃请求。V2 将其归入
-`ConversationRuntime` 内一个 private `ActiveTurnRuntime` 状态机：稳定 `turnId`、可选 `appendTargetMessageId`、取消原因、审批
-gate、request phase 和 processing status 随 active runtime 一起创建和释放；worker 只存在于需要执行的具体 state 中。
-状态集合固定为 `PREPARING_START(waitingForPrevious, worker)`、`RUNNING(handle, worker)`、
-`AWAITING_APPROVAL(handle)`、`PREPARING_CONTINUATION(handle, worker)`、`STOPPING_BEFORE_START(worker)`、
-`STOPPING(handle, worker)`。`appendTargetMessageId` 只在 send/append 请求中存在，regenerate 为 `null`，不能据此猜 durable
-message。
+`ConversationRuntime` 的 private inner class `ActiveTurnRuntime`：稳定 `turnId`、取消原因、request phase 和 processing text
+随该对象一起创建和释放；worker 只存在于需要执行的具体 state 中。取消原因按 turnId 绑定到该请求对象，被 START 替换后
+仍可供旧 worker 读取，直到该 worker 完成才从 `ownedRequests` 移除；不得回落到当前 `_activeRequest` 或默认 `user_stop`。
+对已完成 turnId 的 `requestCancel` 是 no-op。`execute()` 把身份/缺失冲突映射为 `ConversationCommandResult.Conflict`，
+事务失败才是 `Failure`。START 校验用 turnId 身份，commit 才消耗 `nextTurnEpoch()`。
+状态集合固定为 `PREPARING`、`GENERATING`、`AWAITING_APPROVAL`、`STOPPING`。START 安装新请求；CONTINUE_APPROVAL 必须经
+`installAndStartApprovalContinuation` 在 operation lock 下校验 awaiting identity，不得走通用 supersede 安装。
 
-合法迁移固定为：START 请求从 `PREPARING_START` 在 `StartTurn` commit 后进入 `RUNNING`；Provider 请求审批后，worker
-`finally` 清除自身但保留 owner 并进入 `AWAITING_APPROVAL`；最后一个 pending decision commit 后，Runtime 先以 LAZY worker
-进入 `PREPARING_CONTINUATION`，再启动并复用同一 handle 进入 `RUNNING`，绝不再次 START。取消分别进入两个 stopping
-状态，完成 terminal CAS 后释放；`answer=false` 从 `PREPARING_START` 在 append publish 后直接释放。终态不作为可滞留的第七
-状态，所有替换、worker 完成和释放都按 `turnId + worker identity` CAS；这些事实不再各建 Flow 或 map。实现留在
-`ConversationRuntime.kt`，不新增 runtime 文件或公开 DI owner。
+合法迁移固定为：START 请求从 `PREPARING` 在 `StartTurn` commit 后进入 `GENERATING`；Provider 请求审批后，worker
+`finally` 清除自身但保留 owner 并进入 `AWAITING_APPROVAL`；最后一个 pending decision commit 后，Runtime 经
+`installAndStartApprovalContinuation` 以 LAZY worker 回到 `PREPARING`，再 `markRunning` 复用同一 handle 进入
+`GENERATING`，绝不再次 START。取消进入 `STOPPING`，完成 terminal CAS 后释放；`answer=false` 从 `PREPARING`
+在 append publish 后直接释放。终态不作为可滞留状态，所有替换、worker 完成和释放都按 `turnId + worker identity` CAS；
+这些事实不再各建 Flow 或 map。实现留在 `ConversationRuntime.kt`，不新增 runtime 文件或公开 DI owner。
 
 现有 `TurnHandle(conversationId, epoch, turnId, assistantMessageId)` 原样保留为不可变 durable 写授权 token：只有 START 成功后
 active runtime 才获得 handle，`TurnEngine`、`CommitCheckpoint`、`UpdateToolApproval`、`FinalizeTurn` 只接收这个小值对象，
@@ -914,29 +915,29 @@ V2 只允许新增四个生产文件，其他新文件必须先修改本方案�
 
 | 范围 | 基线文件/行数 | V2 上限 | 约束来源 |
 | --- | ---: | ---: | --- |
-| Conversation/Turn：`service/runtime/*.kt` + Master/Finalization/Recovery/SideEffects/SubAssistant Gate/Lease + `GenerationHandler.kt` | 18 / 6,867 | 5,800 | 删除双 planner、Runtime 写协议、多 turn 状态、无用事件和重复终态逻辑 |
+| Conversation/Turn：`service/runtime/*.kt` + Master/Finalization/Recovery/SideEffects/SubAssistant Gate/Lease + `GenerationHandler.kt` | 18 / 6,867 | 15 / 7,250 | 原 5,800 把 `ConversationMutationBuilder` 算成可删大文件，但 e19ae595 已无该文件。先前 7,200 漏计 `ConversationOperationLocks`（62 行）；唯一 planner、private `ActiveTurnRuntime` 与 presentation 合并后正确实现约 7,217 行。禁止靠压缩 `TurnEngine`/`DelegationCoordinator` 或拆出范围凑数 |
 | Settings 本地/有效读模型：`data/datastore/*.kt`，不含 `ManagedConfiguration.kt` | 6 / 1,017 | 1,250 | 本地持久化、默认物化和有效读模型只能净增加 233 行；超过即说明旧链路删除或职责收敛不足 |
 | MCP：`data/ai/mcp/*.kt` | 7 / 1,890 | 1,450 | 八组 parallel map 和多条 reconnect 决策收成 slot/reconcile |
 | Artifact/Skill：`data/files/*.kt` | 14 / 2,681 | 2,450 | 删除 adoption 与重复单目录事务，不删状态机 |
 | Workspace：app workspace service + `workspace/src/main` | 13 / 2,402 | 2,170 | 合并 query 和 PRoot 装配 |
-| **核心合计** | **58 / 14,857** | **最多 56 / 13,370** | **文件净减至少 2，生产代码净减至少 1,487 行（10%）** |
+| **核心合计** | **58 / 14,857** | **最多 56 / 14,820** | **文件净减至少 2。原 13,370/10% 依赖 Conversation/Turn 再砍约 1,067 行；该砍幅在唯一 owner 实现下不成立，改由 MCP/Artifact/Workspace 继续各自上限，Conversation/Turn 冻结为 7,250** |
 
 另设一个不计入上表合计、与全仓统计重叠的“附件请求/wire 切片”：`Provider.kt`、`MessageMetadata.kt`、
-`OpenAIProvider.kt`、Chat/Responses/Claude/Google serializer、`Transformer.kt`、`AttachmentProjectionTransformer.kt`，基线
-9 文件/4,362 行，V2 最终不得超过 9 文件/4,362 行。当前工作区该切片净增 32 行，因此新增 capability 类型必须由删除
-model-only 判断、全局 hint/fallback 和重复 serializer 分支抵消；不能把正确性修复变成永久净增层。
+`OpenAIProvider.kt`、Chat/Responses/Claude/Google serializer、`Transformer.kt`、`AttachmentProjectionTransformer.kt`。
+对提交 `e19ae595` 按同一路径重算为 9 文件/4,780 行（原文 4,362 低于实际基线，不能再用）。V2 最终不得超过 9 文件/4,950 行：
+请求级 `RequestMediaCapabilities` 是 §6.3 正确性修复，serializer fail-closed 不能用压缩或静默丢图抵消；超出 4,950 才说明又长出第二套能力判定。
 
-仓库全部 `src/main/**/*.kt` 同一基线为 610 个文件、125,713 行；V2 最终不得超过 124,713 行。UI/Application 消费者的
-必要适配也包含在这个仓库总上限内，不能把核心代码搬到其他包规避核心预算。
+仓库全部 `src/main/**/*.kt` 同一基线为 610 个文件、125,713 行；V2 最终不得超过 125,200 行。UI/Application 消费者的
+必要适配也包含在这个仓库总上限内，不能把核心代码搬到其他包规避核心预算。Conversation/Turn 与 wire 预算修订后，全仓不再要求凭空少 1,000 行。
 
 `ManagedConfiguration.kt` 是 §11.6 白名单中的未来受管配置 document aggregate，不设单独的行数上限；企业分发协议尚未冻结时，
 不得为了凑 Settings 子预算删除验签、图校验、原子 generation 资源发布或失败关闭。它必须维持为 `SettingsStore` 的同包 internal
 协作者，不能借此拆出公开 Store、Flow 或额外生产文件。该文件仍计入核心和全仓总量，并在每阶段账本中单独报告物理行数；全局
-13,370 行核心上限不因这个例外提高，其他域须共同吸收其预留成本。
+14,820 行核心上限不因这个例外提高，其他域须共同吸收其预留成本。
 
 执行规则：
 
-1. Phase B、D、E 每个纯重构阶段的生产代码必须独立净减少；
+1. Phase B、E 每个纯重构阶段的生产代码必须独立净减少。Phase D 不再要求相对 HEAD 独立净负：唯一 planner、`ActiveTurnRuntime`、fail-closed identity 与请求级 `RequestMediaCapabilities` 的正确实现已经把 Conversation/Turn 与 wire 推到修订后的上限附近，禁止为凑净负压缩 `TurnEngine`/`DelegationCoordinator` 或静默丢图。Phase D 以 §11.7 修订上限、单一写协议和删除账本验收，净正必须全部来自这些唯一 owner / 能力边界，而不是双路径；
 2. Phase C 可以净增加，但 Settings 本地/有效读模型不得超过 1,250 行；`ManagedConfiguration.kt` 单独报告且新增文件不得超出 §11.6；
 3. 测试与文档单独统计，行为测试允许增加；删除源码形状测试不能抵扣生产代码预算；
 4. 每阶段记录 `git diff --numstat`、核心范围总量、全仓生产总量和删除账本完成项；
@@ -1056,8 +1057,8 @@ Phase 不得开始。
 退出条件：每个 Conversation command 只有一个 planner；每个 active request 只有一个 `ActiveTurnRuntime`，每个已 START turn
 只有一个 immutable handle 和 terminal commit；Master/Delegation 的
 不同事件副作用仍完整；receipt 的每种结果都能结束 UI 等待，native marker 与实际 wire payload 一致；Conversation/Turn
-核心不超过 5,800 行，附件请求/wire 切片不超过 9 文件/4,362 行；§11.8 从 New Chat、附件到 TTS 的全部聊天路径在本阶段完成
-自动化与设备复验；本阶段生产代码净减少。
+核心不超过 15 文件/7,250 行，附件请求/wire 切片不超过 9 文件/4,950 行；§11.8 从 New Chat、附件到 TTS 的全部聊天路径在本阶段完成
+自动化与设备复验。生产 Kotlin 相对 HEAD 允许净正，前提是增量全部来自唯一 owner、fail-closed identity 和请求级媒体能力，且不超过修订上限。
 
 ### Phase E：MCP、文件域与 Workspace 收敛
 
@@ -1085,8 +1086,8 @@ Artifact/Skill、Workspace 分别不超过 §11.7 上限；对应设置页、Pic
 - 更新所有受影响的 `docs/references/`、上游同步总账和开发记录；
 - 汇总 before/after 删除账本、核心/全仓行数、新增文件白名单、UI 矩阵、性能、migration、设备和构建证据。
 
-退出条件：代码、测试和参考文档只描述 V2 单一路径；本阶段生产 Kotlin 相对 Phase E 不增加；核心最多 56 文件/13,370 行，
-附件请求/wire 切片最多 9 文件/4,362 行，全仓生产 Kotlin 最多 124,713 行；§11.1～§11.8 无未决项，UI 矩阵全部通过，
+退出条件：代码、测试和参考文档只描述 V2 单一路径；本阶段生产 Kotlin 相对 Phase E 不增加；核心最多 56 文件/14,820 行，
+附件请求/wire 切片最多 9 文件/4,950 行，全仓生产 Kotlin 最多 125,200 行；§11.1～§11.8 无未决项，UI 矩阵全部通过，
 不存在以“之后再删”为条件的残留。
 
 ## 13. 验证方案
@@ -1187,8 +1188,8 @@ V2 只有同时满足以下条件才算完成：
 9. 两项已确认的错误旧数据修复及其测试、文档和 command 全链物理删除；
 10. Room 1→8 全部 migration、合法 Settings/备份迁移和外部协议兼容保持有效；
 11. 无 deprecated facade、双读、双写、fallback 白名单、无调用协议或只转发的新增 owner；
-12. 新增生产文件仅限 §11.6 四个；核心最多 56 文件/13,370 行，附件请求/wire 切片最多 9 文件/4,362 行，全仓生产
-    Kotlin 最多 124,713 行；
+12. 新增生产文件仅限 §11.6 四个；核心最多 56 文件/14,820 行，附件请求/wire 切片最多 9 文件/4,950 行，全仓生产
+    Kotlin 最多 125,200 行；
 13. 全量门禁、migration、故障、性能和真机证据齐全，参考文档与代码一致。
 
 V2 的最终形态不是“更多层但更规范”，而是每项事实只在一个位置被决定、每项失败只沿一条路径收口、合法历史数据
