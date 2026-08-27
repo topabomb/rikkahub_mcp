@@ -17,6 +17,7 @@ import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.ProviderManager
+import me.rerere.ai.provider.RequestImageSupport
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -162,6 +163,14 @@ internal suspend fun executeInspection(
 
     return try {
         val provider = providerManager.getProviderByType(providerSetting)
+        // This tool is a deliberate native-image request, outside GenerationLoop's regular
+        // capability negotiation. Derive the request contract at this owner boundary instead of
+        // relying on TextGenerationParams' NONE default (which makes Chat Completions reject the
+        // image after the request projection refactor).
+        val mediaCapabilities = provider.requestMediaCapabilities(providerSetting, inspectionModel)
+        if (mediaCapabilities.userImages != RequestImageSupport.STRUCTURED) {
+            return inspectionFailure(AttachmentFailureReasons.INSPECTION_MODEL_UNAVAILABLE)
+        }
         val result = provider.generateText(
             providerSetting = providerSetting,
             messages = listOf(
@@ -175,6 +184,7 @@ internal suspend fun executeInspection(
                 reasoningLevel = ReasoningLevel.AUTO,
                 customHeaders = inspectionModel.customHeaders,
                 customBody = inspectionModel.customBodies,
+                mediaCapabilities = mediaCapabilities,
             ),
         )
         val text = result.choices.firstOrNull()?.message?.toText()?.trim().orEmpty()

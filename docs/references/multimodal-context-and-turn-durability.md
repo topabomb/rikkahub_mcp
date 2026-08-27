@@ -160,6 +160,10 @@ attachment:<uuid>（1..4 个）
 → Text Tool Result
 ```
 
+- 识别调用由 `AttachmentInspectionTool` 直接持有 Provider 请求边界，不经过 `GenerationLoop`；
+  因此必须在该边界以 `Provider.requestMediaCapabilities()` 协商，并把结果写入
+  `TextGenerationParams.mediaCapabilities`。只有 `userImages = STRUCTURED` 才发送原生 Image，
+  其他能力结果 fail-closed 为 `inspection_model_unavailable`，不得依赖参数默认值或把引用行当作识别输入。
 - refs 与产出 1:1、顺序稳定（`resolveImages()` 禁用去重）；同一远程 url 在单次批量解析内只 fetch / 落盘一次。
 - 未注入 resolver 的执行环境统一返回 `attachment_resolution_unavailable`，不静默成功。
 - 识别无缓存；结果作为显式 Tool Result 已是正确的历史记录。

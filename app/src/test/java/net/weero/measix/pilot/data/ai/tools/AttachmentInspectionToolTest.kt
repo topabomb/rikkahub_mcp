@@ -19,6 +19,8 @@ import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.RequestImageSupport
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.util.HttpException
 import me.rerere.ai.ui.MessageChunk
@@ -31,6 +33,7 @@ import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import kotlin.uuid.Uuid
 
@@ -52,6 +55,13 @@ class AttachmentInspectionToolTest {
         type = ModelType.CHAT,
         inputModalities = listOf(Modality.TEXT),
     )
+
+    @Before
+    fun configureProviderCapabilities() {
+        every {
+            provider.requestMediaCapabilities(any(), any())
+        } returns RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED)
+    }
 
     private fun args(
         refs: List<String>,
@@ -204,6 +214,55 @@ class AttachmentInspectionToolTest {
         assertTrue(userTexts.any { it.startsWith("[Image 1") && it.contains("name=") })
         assertEquals("what is in the image", userTexts.last())
         assertTrue(user.parts.any { it is UIMessagePart.Image })
+    }
+
+    @Test
+    fun `inspection call negotiates native user image capability`() = runTest {
+        every { providerManager.getProviderByType(any()) } returns provider
+        var sentParams: TextGenerationParams? = null
+        coEvery {
+            provider.generateText(any(), any(), any<TextGenerationParams>())
+        } answers {
+            sentParams = thirdArg()
+            successChunk("ok")
+        }
+
+        val result = executeInspection(
+            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+            settings = settingsFor(visionModel),
+            providerManager = providerManager,
+            resolveAttachments = {
+                ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
+            },
+        )
+
+        assertEquals("ok", (result.single() as UIMessagePart.Text).text)
+        assertEquals(RequestImageSupport.STRUCTURED, sentParams?.mediaCapabilities?.userImages)
+    }
+
+    @Test
+    fun `inspection fails closed when provider cannot encode native user images`() = runTest {
+        every { providerManager.getProviderByType(any()) } returns provider
+        every {
+            provider.requestMediaCapabilities(any(), any())
+        } returns RequestMediaCapabilities.NONE
+        coEvery {
+            provider.generateText(any(), any(), any<TextGenerationParams>())
+        } answers { successChunk("must not run") }
+
+        val result = executeInspection(
+            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+            settings = settingsFor(visionModel),
+            providerManager = providerManager,
+            resolveAttachments = {
+                ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
+            },
+        )
+
+        assertEquals(AttachmentFailureReasons.INSPECTION_MODEL_UNAVAILABLE, resultReason(result))
+        io.mockk.coVerify(exactly = 0) {
+            provider.generateText(any(), any(), any<TextGenerationParams>())
+        }
     }
 
     @Test

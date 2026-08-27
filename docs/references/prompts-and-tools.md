@@ -308,6 +308,11 @@ Provider 可用、自身声明 IMAGE 输入的附件识别模型（`attachmentIn
 映射为细分 `reason` 并附 sanitized `detail` 诊断文本（与 `generate_image` / `assistant_call`
 的失败契约一致）；原始异常写入 logcat。
 
+识别调用由工具自身持有 Provider 请求边界，不经过 `GenerationLoop`，因此先用
+`Provider.requestMediaCapabilities()` 协商并将结果写入 `TextGenerationParams.mediaCapabilities`。
+只有 `userImages = STRUCTURED` 才发送原生图片；否则 fail-closed 为
+`inspection_model_unavailable`，避免依赖参数默认值造成 Provider 序列化错误。
+
 成功结果为普通 Text part（识别模型输出），不携带附件数据。失败结果为带稳定 `reason` 的
 JSON：
 
