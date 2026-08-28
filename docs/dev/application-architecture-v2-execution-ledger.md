@@ -25,10 +25,19 @@ of (model capability × selected provider protocol × serializer container mappi
 | `app/.../ai/GenerationLoop.kt` | Requires the Coordinator-owned media contract; one step Memory context controls prompt/schema/owner with a write-time guard; `buildToolIndex()` rejects blank/duplicate names and missing tools durably return `tool_not_available` |
 
 Tests: `ChatCompletionsAPIMessageTest`, `ResponseAPIMessageTest`, `ShouldInjectAttachmentInspectionTest`,
-`AttachmentInspectionToolTest`, `GenerationLoopFlowTest`, `MemoryToolsTest`, `TurnEngineTest`, and
-`SubAssistantRunPolicyTest` cover serializer shape, media ownership, Memory revocation/owner policy,
-Target name ceiling, and durable missing-tool failure. Final verification evidence is
-recorded only after the gates complete; no precomputed pass count is authoritative.
+`AttachmentInspectionToolTest`, `GenerationLoopFlowTest`, `MemoryToolsTest`, `TurnEngineTest`,
+`SubAssistantRunPolicyTest`, and `ApprovalContinuationMissingToolIntegrationTest` cover serializer
+shape, media ownership, Memory revocation/owner policy, Target name ceiling, same-handle approval
+continuation, and the real Room `STARTED -> FAILED` tool-execution transition. The Android integration
+test drives `TurnEngine.start`, the production `applyToolApprovalDecision`/`UpdateToolApproval`
+command, continuation-worker installation, `TurnEngine.continueActive`, and `GenerationLoop` with a
+tool removed between approval and continuation. It verifies that no side effect runs and that one
+original turn owns one durable failed execution. On the final test implementation, the filtered
+`:app:connectedDebugAndroidTest` run passed this class, then the unfiltered repository
+`connectedDebugAndroidTest` gate passed 62 tests with no failures, errors, or skips on the Android
+17 `Pixel_10_Pro_Fold` emulator. The final repository
+`test assembleDebug lintDebug assembleRelease` gate also passed after this test implementation;
+no precomputed pass count is authoritative.
 
 ## Phase B: retired historical repairs
 
