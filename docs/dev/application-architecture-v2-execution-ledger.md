@@ -3,9 +3,10 @@
 This ledger records evidence required by the V2 execution plan. It is a development record; the
 current architectural contract remains in `docs/references/`.
 
-**Status (2026-08-28):** Phase B–F implementation is in the worktree and is treated as complete
-pending the user's device confirmation. JVM/build gates are recorded below. §11.8 device matrix
-and `connectedDebugAndroidTest` remain user-owned; §14 is not closed until those are recorded.
+**Status (2026-08-28):** Phase B–F are re-frozen. The MCP scope reopened after catalog ownership and
+publication defects were found outside the original slot tests. The final
+catalog/session/turn-snapshot implementation, independent review and complete Gradle gate are recorded
+below. Device evidence remains separate from JVM/build evidence.
 
 ## Media Capability Authority Fix (2026-08-28)
 
@@ -366,22 +367,135 @@ status publication change (7m 8s). Device matrix for MCP settings/Picker,
 Skill files, and Terminal remains user-owned. JVM/build success is not
 device acceptance.
 
+### MCP Catalog Commit follow-up (reopened 2026-08-28)
+
+The follow-up audit found that Phase E unified connection ownership but did not separate four
+facts: Server definition, user tool policy, remote catalog, and current-turn model exposure.
+`syncTools()` still writes remote schema through `SettingsStore.updateLocal`; this serializes
+multi-server discovery behind the global Settings mutex, emits revisions that fan out to every
+slot, and cannot correctly update a managed-only MCP record. The Manager reads only the first
+`tools/list` page. Its public `Connected` status does not prove a non-empty, complete catalog was
+committed. Generation and UI read Settings tools without checking runtime availability.
+
+The original `McpManagerTest` seam hid the defect: fake `listTools()` returned an empty list as a
+successful connection, and fake `updateLocal` transformed the effective snapshot as if it were the
+Local shadow. It did not cover non-empty discovery, real Local/Managed separation, pagination,
+catalog commit failure, context stability or atomic catalog visibility.
+
+Phase E/F are reopened with these required results:
+
+- Settings owns only `McpServerDefinition` and policy-only `McpToolPolicy`; remote schema is removed;
+- `McpCatalogStore` atomically owns last-known-good non-empty catalog revisions and digest;
+- a per-server `McpServerRuntime` publishes Available only after full pagination, validation and catalog
+  commit for the same generation/definition/client lease;
+- empty, partial, failed or cancelled discovery preserves LKG but never enters a new turn;
+- notification refresh is conflated, unchanged digest is a no-op, and stale generation cannot commit;
+- Master/Target use one immutable `TurnMcpCapabilitySnapshot`; execution revalidates local explicit
+  revocation before side effects, while disconnect preserves schema and fails through the tool result;
+- UI consumes one `McpServerPresentation`; no Composable/ViewModel owns Coordinator, Client or connection
+  Job, and RetryScheduled/WaitingNetwork are not loading;
+- Android observes the default validated network; enabled is distinct from activated/session,
+  startup does not connect every registered server, and fixed 60-second × 30 Dormant polling is removed.
+
+Completion evidence must include the 20-tool fixture, Local/Managed separation,
+same-name import preservation, pagination, empty rejection, notification/coalescing, cancellation,
+two-server parallel activation, turn snapshot stability, execution-time revocation, UI state mapping,
+full Gradle gates and an independent subagent review. Real-device validation remains a distinct
+acceptance gate and cannot be inferred from the fixture or build.
+
+### 2026-08-28 implementation checkpoint
+
+Implemented in the reopened MCP scope: policy-only Settings data, `McpCatalogStore`, complete cursor
+pagination, non-empty catalog activation, digest/revision commits, same-definition durable LKG,
+conflated list-change refresh, bounded four-server connection concurrency, validated default-network
+observation, immutable Master/Target run-start snapshots, application/query UI ports, effective
+Managed presentation, import preservation and Assistant-reference cleanup. Connect/discover/refresh/
+call I/O runs outside the server-runtime mutex under AppScope ownership; generation/client/definition/catalog
+leases reject stale operation completion, while caller cancellation only cancels its waiter. All MCP
+UI writes use the typed application service, and tool counts come from Catalog plus policy rather than
+transport status.
+
+The final MCP production slice replaces the monolithic Manager with named single-owner components and
+dedicated application/query ports. It does not
+retain a facade, Settings schema cache, dormant poller, duplicate registry, or UI write path. The V2
+budget table records this actual topology instead of treating file consolidation as an architecture goal.
+
+The final determinism follow-up adds a Catalog head token across commit/no-op/rejection and rollback,
+preserves the pre-refresh status plus active catalog as one lease, and freezes each turn from one slot
+capability view. OAuth writes use transport/canonical-resource/static-headers plus revision CAS; matching refreshes are AppScope
+single-flight while a changed trust boundary/revision owns a distinct lease. Replacement authorization waits for the previous Job
+and seals its revision before starting. Settings read/write share first-wins
+MCP id/name/policy normalization. Provider-visible tool-name collisions fail closed at assembly. Setting,
+Assistant picker, Files picker and conversation readiness consume the joined `McpServerPresentation`;
+authorization, reconnect and discovery remain distinct states rather than one loading state.
+Background refresh and all connection-health changes now keep an existing LKG active; only first
+discovery without LKG is busy. Durable Catalog snapshots hydrate runtime after process restart without
+eagerly connecting all configured servers. New conversations activate only Assistant-selected runtimes;
+foreground/network recovery touches only previously activated runtimes. A server does not publish
+Connecting until it owns one of four I/O permits, preventing the 20-server loading queue seen in the
+incident. Call admission, turn capture and UI query consume one atomic runtime capability rather
+than independently reading the Catalog DataStore flow. Managed source/lock metadata is part of the
+typed MCP presentation, so the settings page no longer reaches through `SettingVM` for Settings state.
+
+Explicit catalog changes and incidental failures have separate rules. User refresh waits a real
+operation receipt; `notifications/tools/list_changed` is debounced and single-flight, then performs a
+full discovery and atomically changes only future run snapshots. The current run retains its catalog
+revision and may still call an old server tool; server protocol output decides that call. User disable/
+remove/definition/policy tightening is revalidated before invocation commitment. Disconnect, timeout, 5xx,
+background and retry state never withdraw the LKG. Tool failure is represented by
+`ToolExecutionFailure` with only `status + reason + necessary message`: remote `isError` preserves content
+and structured content, missing session is `unavailable/server_unavailable`, missing tools capability is
+rejected before commitment as `failed/protocol_incompatible`, and post-commit timeout/transport failure is
+`unknown/outcome_unknown`. Transport internals and retry flags do not enter Agent context. A received
+success remains authoritative even when session/configuration changes afterward.
+
+The independent architecture review first found an admission/dispatch gap, then correctly rejected
+an `UNDISPATCHED` follow-up because coroutine entry cannot prove that the first HTTP byte was sent.
+The final contract uses an observable irrevocable invocation commitment instead. Typed local
+definition/policy mutations and that commitment share one short
+`configurationInvocationCommitMutex` order. If the mutation wins, final admission rejects; if the
+call wins, it is in-flight and later configuration affects only subsequent calls. Because the SDK
+does not expose the exact network-send boundary, any post-commit transport/timeout failure is
+conservatively unknown and never replayed. Neither remote I/O nor a server-runtime mutex is held by this gate,
+so it does not serialize server connections or tool-call duration. Deterministic tests cover both
+orderings, including a call suspended inside the SDK seam before its remote responder runs.
+
+Recovery uses three fast equal-jitter attempts followed by five foreground-only maintenance attempts,
+with delays capped at five minutes. Offline/background waits are event-driven and consume no attempt;
+exhaustion enters `Error` while retaining the catalog. Tool call, foreground, validated-network event,
+single-server retry and user refresh reset recovery. The current MCP Kotlin SDK does not expose
+`Retry-After` headers on `StreamableHttpError`; when it does, that server minimum delay belongs in this
+same scheduler rather than a second timer.
+
+Targeted tests now include legacy Settings/v3-backup catalog migration, migration-versus-restore ordering, a 20-tool catalog, 20 startup definitions without eager connection, durable
+LKG process restart, empty rejection, pagination, manual-refresh receipt and future-snapshot update,
+list-change serialization, disconnect/recovery with stable disclosure, remote `isError`, post-commit
+unknown outcome, waiter cancellation, definition replacement, duplicate callbacks, OAuth CAS/replacement ordering and UI
+mapping. Real-device foreground/background, Wi-Fi/mobile, Doze, OAuth and MCP UI acceptance remain
+separate from JVM/build evidence.
+
+After the final independent-review fixes, the complete gate
+`gradlew.bat test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1` passed in 7m 24s
+with 831 actionable tasks. `git diff --check` is run again after the final documentation freeze. This is
+build/JVM evidence, not device acceptance.
+
 ## Phase F: tests, names, and reference freeze
 
 `SingleWriterContractTest` keeps forbidden-import and single-writer seals.
 Recent-conversation summaries are sealed by `ConversationListRecord` having
 no message/node fields, not by slicing `getRecentConversationRecords`.
-MCP cancellation is sealed by `McpManagerTest` (`token refresh cancellation
-is not swallowed`), not by searching `McpManager.kt` for a rethrow string.
+MCP cancellation is sealed by `McpRuntimeCoordinatorTest` (`token refresh cancellation
+is not swallowed`), not by searching production source for a rethrow string.
 `UpstreamBatch13BoundaryTest` keeps UI/port import bans, locale placeholders,
 and the absence of a second terminal preparation mutex; it no longer asserts
 constructor field text. `McpConnectionKey.kt` and
 `WorkspaceTerminalQueryService.kt` remain physically absent. Current
 architecture references describe `ConversationTransition`,
-`refreshConnections`, `observeTerminal`, and `ProotLaunchSpec`.
-`docs/dev/mcp-lifecycle-analysis.md` is marked as a pre-V2 snapshot.
+`refreshAllRegisteredServers`, `observeTerminal`, and `ProotLaunchSpec`.
+`docs/dev/mcp-lifecycle-analysis.md` records the lifecycle analysis, final owner split and completion gates;
+current implementation contracts remain in `docs/references/mcp-architecture.md`.
 
-Phase F does not add production Kotlin. The same full gate after this
-test/doc freeze also passed. Implementation is complete pending user device
-confirmation; this ledger does not treat JVM/build success as device
-acceptance, and §14 stays open until the user records the §11.8 matrix.
+The original Phase F freeze added no production Kotlin and its recorded full gate passed. The MCP
+catalog follow-up has now removed the old Settings schema path, passed its complete gate and completed
+independent review, so Phase F is re-frozen on the current implementation. This ledger still does not
+treat JVM/build success as device acceptance.

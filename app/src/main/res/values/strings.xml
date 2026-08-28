@@ -919,9 +919,8 @@
   <string name="setting_page_mcp_desc">Configure MCP Servers</string>
   <string name="mcp_status_idle">Idle</string>
   <string name="mcp_status_connecting">Connecting</string>
-  <string name="mcp_status_connected">Connected</string>
   <string name="mcp_status_reconnecting">Reconnecting (%1$d/%2$d)</string>
-  <string name="mcp_status_dormant">Dormant, retrying in %1$d seconds</string>
+  <string name="mcp_status_maintenance_reconnecting">Checking whether the MCP service has recovered</string>
   <string name="mcp_status_error">Error: %1$s</string>
   <string name="mcp_status_needs_authorization">Needs authorization</string>
   <string name="mcp_status_authorizing">Authorizing</string>
@@ -1352,7 +1351,12 @@
   <string name="chat_readiness_mcp_not_configured">Not configured</string>
   <string name="chat_readiness_mcp_all_disabled">Disabled</string>
   <string name="chat_readiness_mcp_none_selected">Not enabled</string>
+  <string name="chat_readiness_mcp_connecting">Discovering tools</string>
+  <string name="chat_readiness_mcp_authorization_required">Authorization required</string>
+  <string name="chat_readiness_mcp_reconnecting">Waiting to reconnect</string>
+  <string name="chat_readiness_mcp_unavailable">No verified tools</string>
   <string name="chat_readiness_mcp_ready">%1$d enabled</string>
+  <string name="chat_readiness_mcp_partial">%1$d/%2$d ready</string>
   <string name="chat_readiness_mcp_description">Add MCP capabilities and switch %1$s devices.</string>
   <string name="chat_readiness_mcp_highlight_term">Measix Device Remote Control</string>
   <string name="chat_readiness_local_tools_title">Local capabilities</string>
@@ -1567,5 +1571,16 @@
   <string name="chat_message_terminal_user_stopped">Stopped</string>
   <string name="chat_message_terminal_superseded">Replaced by a newer reply</string>
   <string name="chat_message_terminal_process_restarted">Interrupted after app restart</string>
+  <string name="mcp_status_discovering">Discovering tools</string>
+  <string name="mcp_status_ready">%1$d tools available</string>
+  <string name="mcp_status_retry_scheduled">Retry scheduled (%1$d/%2$d) in %3$d seconds</string>
+  <string name="mcp_status_maintenance_retry">MCP service temporarily unavailable; next recovery check in %1$d seconds</string>
+  <string name="mcp_status_waiting_network">Waiting for network</string>
+  <string name="mcp_status_catalog_rejected_empty">Server returned no tools; the previous verified catalog was not replaced</string>
+  <string name="mcp_status_catalog_stale">Using the last verified catalog (%1$d tools); refresh failed</string>
+  <string name="error_mcp_turn_capability_unavailable">Some MCP servers were unavailable for this turn: %1$s</string>
+  <string name="mcp_picker_manage_servers">Manage MCP servers</string>
+  <string name="mcp_refresh_continuing">%1$d MCP servers are still refreshing in the background</string>
+  <string name="mcp_enabled_tools_count">%1$d/%2$d tools</string>
 </resources>
 

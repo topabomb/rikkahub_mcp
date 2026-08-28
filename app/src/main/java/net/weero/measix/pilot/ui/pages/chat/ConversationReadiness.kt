@@ -39,6 +39,7 @@ import me.rerere.hugeicons.stroke.Settings03
 import me.rerere.hugeicons.stroke.Wrench01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
+import net.weero.measix.pilot.data.ai.mcp.McpStatus
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.model.Assistant
@@ -47,6 +48,7 @@ import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.theme.LocalChatFontSizeRatio
 import net.weero.measix.pilot.ui.theme.asChatChrome
+import net.weero.measix.pilot.service.McpServerPresentation
 import kotlin.uuid.Uuid
 
 internal enum class ModelReadiness {
@@ -59,6 +61,11 @@ internal enum class McpReadiness {
     NOT_CONFIGURED,
     ALL_DISABLED,
     NONE_SELECTED,
+    CONNECTING,
+    AUTHORIZATION_REQUIRED,
+    RECONNECTING,
+    UNAVAILABLE,
+    PARTIAL,
     READY,
 }
 
@@ -78,6 +85,7 @@ internal data class ConversationReadiness(
     val modelName: String?,
     val mcpState: McpReadiness,
     val selectedMcpCount: Int,
+    val readyMcpCount: Int,
     val enabledMcpCount: Int,
     val localToolCount: Int,
     val persistedLocalToolCount: Int = localToolCount,
@@ -105,6 +113,7 @@ internal fun Settings.buildConversationReadiness(
     workspaceNamesById: Map<Uuid, String>,
     memoryCount: Int,
     imageGenerationAvailable: Boolean = false,
+    mcpServers: List<McpServerPresentation> = emptyList(),
 ): ConversationReadiness {
     val hasAvailableChatModel = providers.any { provider ->
         provider.enabled && provider.models.any { it.type == ModelType.CHAT }
@@ -116,12 +125,26 @@ internal fun Settings.buildConversationReadiness(
         else -> ModelReadiness.READY
     }
 
-    val enabledMcpServers = mcpServers.filter { it.commonOptions.enable }
-    val selectedMcpCount = enabledMcpServers.count { it.id in assistant.mcpServers }
+    val enabledMcpServers = mcpServers.filter { it.enabled }
+    val selectedMcpServers = enabledMcpServers.filter { it.serverId in assistant.mcpServers }
+    val selectedMcpCount = selectedMcpServers.size
+    val readyMcpCount = selectedMcpServers.count { it.isReady }
+    val selectedStatuses = selectedMcpServers.map { it.status }
     val mcpState = when {
         mcpServers.isEmpty() -> McpReadiness.NOT_CONFIGURED
         enabledMcpServers.isEmpty() -> McpReadiness.ALL_DISABLED
         selectedMcpCount == 0 -> McpReadiness.NONE_SELECTED
+        readyMcpCount > 0 && readyMcpCount < selectedMcpCount -> McpReadiness.PARTIAL
+        readyMcpCount == 0 && selectedStatuses.any {
+            it == McpStatus.NeedsAuthorization || it == McpStatus.Authorizing
+        } -> McpReadiness.AUTHORIZATION_REQUIRED
+        readyMcpCount == 0 && selectedStatuses.any {
+            it is McpStatus.Reconnecting || it is McpStatus.RetryScheduled || it == McpStatus.WaitingNetwork
+        } -> McpReadiness.RECONNECTING
+        readyMcpCount == 0 && selectedStatuses.any {
+            it == McpStatus.Connecting || it == McpStatus.Discovering
+        } -> McpReadiness.CONNECTING
+        readyMcpCount == 0 -> McpReadiness.UNAVAILABLE
         else -> McpReadiness.READY
     }
 
@@ -139,6 +162,7 @@ internal fun Settings.buildConversationReadiness(
         modelName = selectedModel?.displayName?.ifBlank { selectedModel.modelId },
         mcpState = mcpState,
         selectedMcpCount = selectedMcpCount,
+        readyMcpCount = readyMcpCount,
         enabledMcpCount = enabledMcpServers.size,
         localToolCount = effectiveLocalToolCount(assistant, imageGenerationAvailable),
         persistedLocalToolCount = assistant.localTools.distinct().size,
@@ -217,9 +241,27 @@ internal fun ConversationReadinessCard(
                         McpReadiness.NONE_SELECTED ->
                             stringResource(R.string.chat_readiness_mcp_none_selected)
 
+                        McpReadiness.CONNECTING ->
+                            stringResource(R.string.chat_readiness_mcp_connecting)
+
+                        McpReadiness.AUTHORIZATION_REQUIRED ->
+                            stringResource(R.string.chat_readiness_mcp_authorization_required)
+
+                        McpReadiness.RECONNECTING ->
+                            stringResource(R.string.chat_readiness_mcp_reconnecting)
+
+                        McpReadiness.UNAVAILABLE ->
+                            stringResource(R.string.chat_readiness_mcp_unavailable)
+
+                        McpReadiness.PARTIAL -> stringResource(
+                            R.string.chat_readiness_mcp_partial,
+                            readiness.readyMcpCount,
+                            readiness.selectedMcpCount,
+                        )
+
                         McpReadiness.READY -> stringResource(
                             R.string.chat_readiness_mcp_ready,
-                            readiness.selectedMcpCount,
+                            readiness.readyMcpCount,
                         )
                     },
                     description = stringResource(

@@ -50,7 +50,7 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 |------|------|
 | 用户上传 / 编辑消息 | `ConversationApplicationService` / `MasterTurnCoordinator` 提交前 |
 | `generate_image` 产出 | 工具成功时对 Image part 盖章 |
-| MCP 图片内容 | `McpManager` 转本地文件时 |
+| MCP 图片内容 | `McpToolCallExecutor` 转本地文件时 |
 | 外部 HTTPS 图 | 入站时落地（`wrapLocalImage`），Child 只存 `file://` |
 | base64 图片 | `Base64ImageToLocalFileTransformer` 经 `ArtifactStore` 终态落盘并盖章 |
 | `assistant_call` 注入 Child | 复制源 ref（跨会话引用同一 Artifact） |

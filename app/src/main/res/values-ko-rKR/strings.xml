@@ -879,12 +879,18 @@
   <string name="setting_page_mcp_desc">MCP 서버 구성</string>
   <string name="mcp_status_idle">대기 중</string>
   <string name="mcp_status_connecting">연결 중</string>
-  <string name="mcp_status_connected">연결됨</string>
   <string name="mcp_status_reconnecting">재연결 중 (%1$d/%2$d)</string>
-  <string name="mcp_status_dormant">휴면 중, %1$d초 후 재시도</string>
+  <string name="mcp_status_maintenance_reconnecting">MCP 서비스 복구 여부를 확인하는 중</string>
   <string name="mcp_status_error">오류: %1$s</string>
   <string name="mcp_status_needs_authorization">인증이 필요합니다</string>
   <string name="mcp_status_authorizing">인증 중</string>
+  <string name="mcp_status_discovering">도구 검색 중</string>
+  <string name="mcp_status_ready">도구 %1$d개 사용 가능</string>
+  <string name="mcp_status_retry_scheduled">재시도 예약됨(%1$d/%2$d), %3$d초 후</string>
+  <string name="mcp_status_maintenance_retry">MCP 서비스를 일시적으로 사용할 수 없습니다. %1$d초 후 다시 확인합니다</string>
+  <string name="mcp_status_waiting_network">네트워크 대기 중</string>
+  <string name="mcp_status_catalog_rejected_empty">서버가 도구를 반환하지 않아 마지막 검증 카탈로그를 유지합니다</string>
+  <string name="mcp_status_catalog_stale">마지막 검증 카탈로그(도구 %1$d개)를 사용 중이며 새로 고침에 실패했습니다</string>
   <string name="mcp_oauth_authorize">인증</string>
   <string name="mcp_oauth_authorizing_hint">인증 중, 브라우저에서 완료하세요…</string>
   <string name="mcp_oauth_cancel_authorization">인증 취소</string>
@@ -1336,7 +1342,12 @@
   <string name="chat_readiness_mcp_not_configured">미설정</string>
   <string name="chat_readiness_mcp_all_disabled">비활성</string>
   <string name="chat_readiness_mcp_none_selected">사용 안 함</string>
+  <string name="chat_readiness_mcp_connecting">도구 검색 중</string>
+  <string name="chat_readiness_mcp_authorization_required">인증 필요</string>
+  <string name="chat_readiness_mcp_reconnecting">재연결 대기 중</string>
+  <string name="chat_readiness_mcp_unavailable">검증된 도구 없음</string>
   <string name="chat_readiness_mcp_ready">%1$d개 사용</string>
+  <string name="chat_readiness_mcp_partial">%1$d/%2$d 준비됨</string>
   <string name="chat_readiness_mcp_description">MCP 기능을 추가하고 %1$s 기기를 전환합니다.</string>
   <string name="chat_readiness_mcp_highlight_term">Measix Device Remote Control</string>
   <string name="chat_readiness_local_tools_title">로컬 기능</string>
@@ -1566,5 +1577,8 @@
   <string name="chat_message_terminal_user_stopped">중지됨</string>
   <string name="chat_message_terminal_superseded">새 답변으로 대체됨</string>
   <string name="chat_message_terminal_process_restarted">앱 재시작 후 중단됨</string>
+  <string name="error_mcp_turn_capability_unavailable">이 턴에서는 다음 MCP 서버를 사용할 수 없습니다: %1$s</string>
+  <string name="mcp_picker_manage_servers">MCP 서버 관리</string>
+  <string name="mcp_refresh_continuing">MCP 서버 %1$d개를 백그라운드에서 계속 새로고침하고 있습니다</string>
+  <string name="mcp_enabled_tools_count">%1$d/%2$d개 도구</string>
 </resources>
-

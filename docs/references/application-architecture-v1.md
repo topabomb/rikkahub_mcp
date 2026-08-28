@@ -81,6 +81,10 @@ Application 层负责编排，不建立第二套数据协议。Repository 只执
 | 启动恢复顺序与写门禁 | `ApplicationRecoveryCoordinator` | Android 启动入口与 retry |
 | 标题阶段、异步 token 与提交仲裁 | `ConversationTitleCoordinator` | application 与生成副作用 |
 | Provider 设置写入、模型目录、余额与连接探测 | `ProviderSettingsApplicationService` | `ProviderSettingsVM` typed command/query |
+| MCP server definition 与用户工具策略 | `SettingsStore` | `McpApplicationService` typed command |
+| MCP 已验证工具目录 | `McpCatalogStore` | `McpServerRuntime` candidate commit、`McpQueryService` query |
+| MCP 单 server 连接、通知与重连状态 | `McpServerRuntime` | `McpRuntimeCoordinator`、turn capability snapshot |
+| MCP OAuth 凭据刷新与授权流程 | `McpOAuthCoordinator` | `McpApplicationService`、`McpServerRuntime` |
 | Workspace 持久化命令、模型 Rootfs 操作与终端互斥 | `WorkspaceApplicationService` | Workspace ViewModel command 与 `executeTool` capability |
 | Workspace 管理读模型 | `WorkspaceQueryService` | Workspace 列表、详情、文件预览与 `observeTerminal` |
 | Workspace 交互 PTY 与 Tab 生命周期 | `WorkspaceTerminalRuntime` | `WorkspaceApplicationService` / `WorkspaceQueryService` |
@@ -195,6 +199,7 @@ Settings 图片导入先完成有界复制、结构魔数与实际 MIME 校验�
 | 子助手 owner、lineage、retention 与恢复 | [`sub-assistant-architecture.md`](sub-assistant-architecture.md) |
 | 子助手多模态输入输出 | [`sub-assistant-multimodal.md`](sub-assistant-multimodal.md) |
 | Assistant 配置 | [`assistant-configuration.md`](assistant-configuration.md) |
+| MCP 生命周期、目录与 UI 投影 | [`mcp-architecture.md`](mcp-architecture.md) |
 | Provider 线协议 | [`protocol-reference.md`](protocol-reference.md) |
 | 模型可见 prompts 与工具结果 | [`prompts-and-tools.md`](prompts-and-tools.md) |
 | Compose 导航、布局与主题 | [`ui-architecture.md`](ui-architecture.md) |

@@ -41,6 +41,16 @@ class ToolResourceLease(
 )
 
 /**
+ * A domain tool failure whose model-visible result is already projected by the tool owner.
+ * Generation records a FAILED terminal fact and preserves [output] verbatim.
+ */
+class ToolExecutionFailure(
+    val output: List<UIMessagePart>,
+    message: String,
+    cause: Throwable? = null,
+) : RuntimeException(message, cause)
+
+/**
  * 通用工具执行上下文，提供 metadata 回写能力。
  * 不引入 App 的 Conversation 类型，保持 ai 模块的平台无关性。
  *

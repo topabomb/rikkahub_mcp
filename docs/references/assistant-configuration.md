@@ -113,12 +113,14 @@ S0.2 不下发 `localTools`、Skill、Workspace、custom headers/body、Regex、
 |------|--------|------|
 | `localTools` | `DEFAULT_ASSISTANT_LOCAL_TOOLS` | 内置本地工具选项；当前默认是 `TimeInfo`、`Tts`、`AskUser`。`TextToImage` 不在默认集中 |
 | `enableWebSearch` | `false` | 装配外挂搜索工具；若当前模型已带 `BuiltInTools.Search` 则不再装配 |
-| `mcpServers` | 空集合 | 允许该助手使用的 MCP Server ID |
+| `mcpServers` | 空集合 | 允许该助手使用的 MCP Server ID；选择不等于运行时已发现工具 |
 | `workspaceId` | `null` | 绑定工作区；仅工作区 shell ready 时装配工具并注入提醒 |
 | `enabledSkills` | 空集合 | 允许 `use_skill` 访问的技能名 |
 | `quickMessageIds` | 空集合 | UI 快捷消息引用 |
 
 主会话的工具装配顺序是：搜索、本地工具、历史引用、Workspace、Skill、Assistant Tools、MCP。
+MCP 还必须与 definition 匹配的完整非空 LKG Catalog 和用户工具策略求交，连接健康不参与 schema 注入；Master/Target 在 run 开始时冻结
+`TurnMcpCapabilitySnapshot`，同一 run 不跟随远端目录通知漂移。
 `GenerationLoop` 在每个工具循环 step 再按当前记忆状态加入记忆工具。Target Run 会进一步过滤子助手管理/委托工具，并在 step 边界重验权限。
 `generate_image` 在 Assistant 已开启 `TextToImage`、且默认文生图模型当前有效时注册；Master 与 Target Run 同一规则。
 

@@ -6,6 +6,9 @@ import me.rerere.asr.ASRProviderSetting
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.PromptInjection
 import net.weero.measix.pilot.data.model.QuickMessage
+import net.weero.measix.pilot.data.ai.mcp.McpCommonOptions
+import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
+import net.weero.measix.pilot.data.ai.mcp.McpToolPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -81,5 +84,41 @@ class SettingsNormalizationTest {
 
         assertEquals("User-visible name", restored.name)
         assertTrue(restored.builtIn)
+    }
+
+    @Test
+    fun `MCP identity and policy normalization use the same first-wins rule for write and read`() {
+        val firstId = Uuid.random()
+        val secondId = Uuid.random()
+        val first = McpServerConfig.StreamableHTTPServer(
+            id = firstId,
+            commonOptions = McpCommonOptions(
+                name = " Device ",
+                toolPolicies = listOf(
+                    McpToolPolicy(name = "measure", enable = false),
+                    McpToolPolicy(name = "measure", enable = true),
+                ),
+            ),
+            url = "https://first.example/mcp",
+        )
+        val duplicateId = McpServerConfig.StreamableHTTPServer(
+            id = firstId,
+            commonOptions = McpCommonOptions(name = "other"),
+            url = "https://duplicate-id.example/mcp",
+        )
+        val duplicateName = McpServerConfig.StreamableHTTPServer(
+            id = secondId,
+            commonOptions = McpCommonOptions(name = "device"),
+            url = "https://duplicate-name.example/mcp",
+        )
+        val source = Settings(mcpServers = listOf(first, duplicateId, duplicateName))
+
+        val persisted = source.normalizeForPersistence()
+        val materialized = source.materializeForRead()
+
+        assertEquals(listOf(firstId), persisted.mcpServers.map { it.id })
+        assertEquals(listOf(firstId), materialized.mcpServers.map { it.id })
+        assertEquals(false, persisted.mcpServers.single().commonOptions.toolPolicies.single().enable)
+        assertEquals(false, materialized.mcpServers.single().commonOptions.toolPolicies.single().enable)
     }
 }

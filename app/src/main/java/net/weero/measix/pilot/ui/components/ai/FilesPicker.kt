@@ -65,12 +65,12 @@ import me.rerere.hugeicons.stroke.Settings02
 import me.rerere.hugeicons.stroke.Video01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
-import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
+import net.weero.measix.pilot.service.McpQueryService
 import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
 import net.weero.measix.pilot.ui.components.ui.ExtensionSelector
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionCamera
@@ -91,7 +91,6 @@ internal fun FilesPicker(
     workspaceCwd: String?,
     assistant: Assistant,
     state: ChatInputState,
-    mcpManager: McpManager,
     onCompressContext: (additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int) -> Job,
     onUpdateAssistant: (Assistant) -> Unit,
     onUpdateConversationModeInjectionIds: (Set<Uuid>) -> Unit,
@@ -112,6 +111,8 @@ internal fun FilesPicker(
     val navController = LocalNavController.current
     val workspaceQueryService: WorkspaceQueryService = koinInject()
     val workspaces by workspaceQueryService.observeWorkspaces().collectAsState(initial = emptyList())
+    val mcpQueryService: McpQueryService = koinInject()
+    val mcpServers by mcpQueryService.servers.collectAsState()
 
     Column(
         modifier = Modifier
@@ -163,14 +164,15 @@ internal fun FilesPicker(
             )
         }
 
-        if (settings.mcpServers.isNotEmpty()) {
-            McpPickerListItem(
-                assistant = assistant,
-                servers = settings.mcpServers,
-                mcpManager = mcpManager,
-                onUpdateAssistant = onUpdateAssistant,
-            )
-        }
+        McpPickerListItem(
+            assistant = assistant,
+            servers = mcpServers,
+            onNavigateToSettings = {
+                onDismiss()
+                navController.navigate(Screen.SettingMcp)
+            },
+            onUpdateAssistant = onUpdateAssistant,
+        )
 
         // Extensions (Quick Messages + Prompt Injections + Skills)
         val modeInjectionCount =

@@ -3,6 +3,8 @@ package net.weero.measix.pilot.data.sync
 import android.content.Context
 import java.io.File
 import kotlinx.serialization.json.Json
+import net.weero.measix.pilot.data.ai.mcp.McpCatalogSnapshot
+import net.weero.measix.pilot.data.ai.mcp.McpCatalogStore
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.migrateLegacySettingsJson
@@ -65,7 +67,12 @@ object PendingBackupRestore {
         }
     }
 
-    suspend fun restoreSettingsIfPending(context: Context, store: SettingsStore, json: Json) {
+    suspend fun restoreSettingsIfPending(
+        context: Context,
+        store: SettingsStore,
+        catalogStore: McpCatalogStore,
+        json: Json,
+    ) {
         val bootstrapFailure = File(rootDir(context), BOOTSTRAP_FAILURE)
         if (bootstrapFailure.isFile) {
             throw BackupRestoreBootstrapException(bootstrapFailure.readText(Charsets.UTF_8))
@@ -82,6 +89,10 @@ object PendingBackupRestore {
             BackupSettingsPolicy.withoutLocalPayloadReferences(decoded)
         }
         store.restoreLocal(settings)
+        val catalogs = json.decodeFromString<List<McpCatalogSnapshot>>(
+            File(pending, BackupArchiveService.MCP_CATALOGS_ENTRY).readText(Charsets.UTF_8)
+        )
+        catalogStore.restoreCatalogs(catalogs, settings.mcpServers)
     }
 
     fun complete(context: Context) {

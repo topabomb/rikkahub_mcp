@@ -889,12 +889,18 @@
   <string name="setting_page_mcp_desc">配置MCP服务器</string>
   <string name="mcp_status_idle">空闲</string>
   <string name="mcp_status_connecting">连接中</string>
-  <string name="mcp_status_connected">已连接</string>
   <string name="mcp_status_reconnecting">重连中 (%1$d/%2$d)</string>
-  <string name="mcp_status_dormant">休眠中，%1$d 秒后重试</string>
+  <string name="mcp_status_maintenance_reconnecting">正在检查 MCP 服务是否恢复</string>
   <string name="mcp_status_error">错误: %1$s</string>
   <string name="mcp_status_needs_authorization">需要授权</string>
   <string name="mcp_status_authorizing">授权中</string>
+  <string name="mcp_status_discovering">正在发现工具</string>
+  <string name="mcp_status_ready">%1$d 个工具可用</string>
+  <string name="mcp_status_retry_scheduled">已安排重试（%1$d/%2$d），%3$d 秒后执行</string>
+  <string name="mcp_status_maintenance_retry">MCP 服务暂时不可用；%1$d 秒后再次检查</string>
+  <string name="mcp_status_waiting_network">等待网络恢复</string>
+  <string name="mcp_status_catalog_rejected_empty">服务端返回零工具；未替换上次验证通过的目录</string>
+  <string name="mcp_status_catalog_stale">正在沿用上次验证通过的目录（%1$d 个工具）；刷新失败</string>
   <string name="mcp_oauth_authorize">授权</string>
   <string name="mcp_oauth_authorizing_hint">正在授权，请在浏览器中完成…</string>
   <string name="mcp_oauth_cancel_authorization">取消授权</string>
@@ -1336,7 +1342,12 @@
   <string name="chat_readiness_mcp_not_configured">未配置</string>
   <string name="chat_readiness_mcp_all_disabled">已停用</string>
   <string name="chat_readiness_mcp_none_selected">未启用</string>
+  <string name="chat_readiness_mcp_connecting">正在发现工具</string>
+  <string name="chat_readiness_mcp_authorization_required">需要授权</string>
+  <string name="chat_readiness_mcp_reconnecting">等待重新连接</string>
+  <string name="chat_readiness_mcp_unavailable">没有已验证工具</string>
   <string name="chat_readiness_mcp_ready">启用 %1$d 项</string>
+  <string name="chat_readiness_mcp_partial">%1$d/%2$d 已就绪</string>
   <string name="chat_readiness_mcp_description">扩展助手能力，也可在此切换%1$s设备。</string>
   <string name="chat_readiness_mcp_highlight_term">小睿远控</string>
   <string name="chat_readiness_local_tools_title">本地能力</string>
@@ -1566,5 +1577,8 @@
   <string name="chat_message_terminal_user_stopped">已停止</string>
   <string name="chat_message_terminal_superseded">已被新回复替换</string>
   <string name="chat_message_terminal_process_restarted">应用重启后中断</string>
+  <string name="error_mcp_turn_capability_unavailable">以下 MCP 服务器本轮不可用：%1$s</string>
+  <string name="mcp_picker_manage_servers">管理 MCP 服务器</string>
+  <string name="mcp_refresh_continuing">仍有 %1$d 个 MCP 服务器在后台刷新</string>
+  <string name="mcp_enabled_tools_count">%1$d/%2$d 个工具</string>
 </resources>
-

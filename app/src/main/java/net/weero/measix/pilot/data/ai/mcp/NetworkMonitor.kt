@@ -4,7 +4,6 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,7 +16,7 @@ private const val TAG = "NetworkMonitor"
  * 职责:
  * - 实时感知网络变化（WiFi ↔ 蜂窝切换、网络断开/恢复）
  * - 暴露 [isOnline] StateFlow 供重连策略查询
- * - 网络恢复时触发回调，让 McpManager 主动 refreshConnections
+ * - 网络恢复通过 [isOnline] 的 false→true 事件驱动 McpRuntimeCoordinator reconcile
  *
  * 移动端 MCP 连接的关键问题:
  * - WiFi→蜂窝切换时 TCP 连接半开（OS 认为活着，实际已废），transport 回调 30s+ 才触发
@@ -31,36 +30,37 @@ class NetworkMonitor(context: Context) {
 
     private val _isOnline = MutableStateFlow(checkCurrentNetwork())
     val isOnline: StateFlow<Boolean> = _isOnline
-
-    var onNetworkAvailable: (() -> Unit)? = null
+    @Volatile
+    private var defaultNetwork: Network? = connectivityManager?.activeNetwork
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            Log.i(TAG, "Network available")
-            _isOnline.value = true
-            onNetworkAvailable?.invoke()
+            // Android guarantees a well-ordered onCapabilitiesChanged callback for the new
+            // default network. Do not synchronously query capabilities here: that races the callback.
+            Log.i(TAG, "Default network available; awaiting validated capabilities")
+            defaultNetwork = network
+            _isOnline.value = false
         }
 
         override fun onLost(network: Network) {
-            Log.i(TAG, "Network lost")
-            // 检查是否还有其他可用网络（WiFi 断开但蜂窝可用的情况）
-            _isOnline.value = checkCurrentNetwork()
+            if (defaultNetwork == network) {
+                Log.i(TAG, "Default network lost")
+                defaultNetwork = null
+                _isOnline.value = false
+            }
         }
 
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            if (defaultNetwork != network) return
             val hasInternet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             val isValidated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-            _isOnline.value = hasInternet && isValidated
+            val online = hasInternet && isValidated
+            _isOnline.value = online
         }
     }
 
     init {
-        connectivityManager?.registerNetworkCallback(
-            NetworkRequest.Builder()
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                .build(),
-            callback
-        )
+        connectivityManager?.registerDefaultNetworkCallback(callback)
     }
 
     /**

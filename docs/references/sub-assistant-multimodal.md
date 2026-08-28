@@ -223,7 +223,7 @@ metadata.attachment_ref = "attachment:<uuid>"
 
 - 用户发送与编辑重发：`ConversationApplicationService` / `MasterTurnCoordinator` 共用的 `preprocessUserInputParts()`。
 - `generate_image` 产出的 Tool.output Image：构造时盖章；权威文件仍是 Tool.metadata 的 `LocalArtifactRef`。
-- MCP `ImageContent`：`McpManager.convertImageContentToFilePart()` 落盘后盖章。
+- MCP `ImageContent`：`McpToolCallExecutor.convertImageContentToFilePart()` 落盘后盖章。
 - `assistant_call` 为外部 URL 新落地的 Image：新 ref。
 - Target 模型原生出图（`data:image`）：显式注入 `ArtifactStore` 的 `Base64ImageToLocalFileTransformer` 在终态落盘并盖章。
 - 从 Master 注入 Child 的 part：**复制源 `attachment_ref`**。

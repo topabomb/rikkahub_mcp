@@ -1,24 +1,86 @@
 package net.weero.measix.pilot.data.ai.mcp
 
-import io.modelcontextprotocol.kotlin.sdk.types.Tool
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlin.uuid.Uuid
+
+/** Canonical identity of fields that require replacing a live MCP transport. */
+internal data class McpConnectionFingerprint(
+    val transportType: String,
+    val serverUrl: String,
+    val clientName: String,
+    val headers: List<Pair<String, String>>,
+)
+
+/** Stable identity of the remote principal to which OAuth credentials may be persisted. */
+internal data class McpOAuthTrustBoundary(
+    val transportType: String,
+    val canonicalResource: String,
+    val headers: List<Pair<String, String>>,
+)
+
+internal fun McpServerConfig.connectionFingerprint(): McpConnectionFingerprint = McpConnectionFingerprint(
+    transportType = when (this) {
+        is McpServerConfig.SseTransportServer -> "sse"
+        is McpServerConfig.StreamableHTTPServer -> "streamable_http"
+    },
+    serverUrl = serverUrl,
+    clientName = commonOptions.name,
+    headers = resolvedConnectionHeaders(),
+)
+
+/** Stable definition identity; bearer-token rotation does not invalidate a durable catalog. */
+internal fun McpServerConfig.mcpDefinitionDigest(): String = connectionFingerprint().let { fingerprint ->
+    sha256(
+        buildString {
+            append(fingerprint.transportType).append('\u0000')
+            append(fingerprint.serverUrl).append('\u0000')
+            append(fingerprint.clientName).append('\u0000')
+            commonOptions.headers
+                .sortedWith(compareBy<Pair<String, String>> { it.first.lowercase() }.thenBy { it.second })
+                .forEach { (name, value) ->
+                    append(name.lowercase()).append(':').append(value).append('\u0000')
+                }
+        }
+    )
+}
+
+internal fun McpServerConfig.resolvedConnectionHeaders(): List<Pair<String, String>> {
+    val base = commonOptions.headers
+    val token = commonOptions.oauth?.takeIf { it.enabled }?.accessToken
+    val hasAuthorization = base.any { it.first.equals("Authorization", ignoreCase = true) }
+    return if (!token.isNullOrBlank() && !hasAuthorization) {
+        base + ("Authorization" to "Bearer $token")
+    } else {
+        base
+    }
+}
+
+internal fun McpServerConfig.oauthTrustBoundary(): McpOAuthTrustBoundary = McpOAuthTrustBoundary(
+    transportType = when (this) {
+        is McpServerConfig.SseTransportServer -> "sse"
+        is McpServerConfig.StreamableHTTPServer -> "streamable_http"
+    },
+    canonicalResource = McpOAuthClient.canonicalResource(serverUrl),
+    headers = commonOptions.headers
+        .map { (name, value) -> name.lowercase() to value }
+        .sortedWith(compareBy<Pair<String, String>> { it.first }.thenBy { it.second }),
+)
 
 @Serializable
 data class McpCommonOptions(
     val enable: Boolean = true,
     val name: String = "",
     val headers: List<Pair<String, String>> = emptyList(),
-    val tools: List<McpTool> = emptyList(),
+    @SerialName("tools")
+    val toolPolicies: List<McpToolPolicy> = emptyList(),
     val oauth: McpOAuthState? = null,
 )
 
@@ -30,6 +92,7 @@ data class McpCommonOptions(
  */
 @Serializable
 data class McpOAuthState(
+    val revision: Long = 0L,
     val enabled: Boolean = false,
     val clientId: String? = null,
     val clientSecret: String? = null,
@@ -45,7 +108,7 @@ data class McpOAuthState(
 
     // 脱敏 toString，避免 client_secret / token 随 config 打印到日志
     override fun toString(): String =
-        "McpOAuthState(enabled=$enabled, clientId=$clientId, clientSecret=${clientSecret.masked()}, " +
+        "McpOAuthState(revision=$revision, enabled=$enabled, clientId=$clientId, clientSecret=${clientSecret.masked()}, " +
             "authorizationEndpoint=$authorizationEndpoint, tokenEndpoint=$tokenEndpoint, " +
             "registrationEndpoint=$registrationEndpoint, scope=$scope, " +
             "accessToken=${accessToken.masked()}, refreshToken=${refreshToken.masked()}, expiresAt=$expiresAt)"
@@ -58,13 +121,32 @@ data class McpOAuthState(
 }
 
 @Serializable
-data class McpTool(
+data class McpToolPolicy(
     val enable: Boolean = true,
     val name: String = "",
-    val description: String? = null,
-    val inputSchema: JsonObject? = null,
     val needsApproval: Boolean = false
 )
+
+/**
+ * MCP 配置身份的唯一规范化协议。按持久化顺序保留第一个 server id、规范化名称和工具策略，
+ * 使读取投影、写入以及运行时策略解析不会对同一份损坏数据采用不同胜者。
+ */
+internal fun List<McpServerConfig>.normalizeMcpDefinitions(): List<McpServerConfig> {
+    val seenIds = hashSetOf<Uuid>()
+    val seenNames = hashSetOf<String>()
+    return mapNotNull { server ->
+        val normalizedName = server.commonOptions.name.trim().lowercase()
+        if (!seenIds.add(server.id) || !seenNames.add(normalizedName)) return@mapNotNull null
+        server.clone(
+            commonOptions = server.commonOptions.copy(
+                toolPolicies = server.commonOptions.toolPolicies.distinctBy { it.name },
+            )
+        )
+    }
+}
+
+internal fun McpCommonOptions.toolPolicyByName(): Map<String, McpToolPolicy> =
+    toolPolicies.distinctBy { it.name }.associateBy { it.name }
 
 @Serializable
 sealed class McpServerConfig {
@@ -108,48 +190,9 @@ val McpServerConfig.serverUrl: String
         is McpServerConfig.StreamableHTTPServer -> url
     }
 
-/**
- * 将服务器端返回的工具列表与本地缓存的工具列表合并：
- * - 新工具添加（默认 enable=true）
- * - 已有工具更新 description/inputSchema，保留 enable/needsApproval
- * - 服务器已删除的工具从列表移除
- */
-fun mergeTools(
-    serverTools: List<Tool>,
-    localTools: List<McpTool>,
-): List<McpTool> {
-    val result = mutableListOf<McpTool>()
-    val localByName = localTools.associateBy { it.name }
-
-    serverTools.forEach { serverTool ->
-        val existing = localByName[serverTool.name]
-        if (existing == null) {
-            result.add(
-                McpTool(
-                    name = serverTool.name,
-                    description = serverTool.description,
-                    enable = true,
-                    inputSchema = serverTool.inputSchema.toSchema(),
-                )
-            )
-        } else {
-            result.add(
-                existing.copy(
-                    description = serverTool.description,
-                    inputSchema = serverTool.inputSchema.toSchema(),
-                )
-            )
-        }
-    }
-
-    return result
-}
-
-private fun io.modelcontextprotocol.kotlin.sdk.types.ToolSchema.toSchema(): JsonObject =
-    Json.encodeToJsonElement(
-        io.modelcontextprotocol.kotlin.sdk.types.ToolSchema.serializer(),
-        this,
-    ).jsonObject
+/** OAuth secrets may survive an editor/import merge only inside the same transport trust boundary. */
+internal fun McpServerConfig.hasSameOAuthTrustBoundary(other: McpServerConfig): Boolean =
+    oauthTrustBoundary() == other.oauthTrustBoundary()
 
 /**
  * JSON 解析结果。

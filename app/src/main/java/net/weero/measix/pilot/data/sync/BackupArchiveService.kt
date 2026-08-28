@@ -25,6 +25,13 @@ import kotlinx.serialization.json.Json
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.migrateLegacySettingsJson
+import net.weero.measix.pilot.data.ai.mcp.McpCatalogSnapshot
+import net.weero.measix.pilot.data.ai.mcp.McpCatalogStore
+import net.weero.measix.pilot.data.ai.mcp.McpLegacyCatalogMigrationPayload
+import net.weero.measix.pilot.data.ai.mcp.initialSnapshot
+import net.weero.measix.pilot.data.ai.mcp.mcpDefinitionDigest
+import net.weero.measix.pilot.data.ai.mcp.migrateLegacyMcpSettingsDocument
+import net.weero.measix.pilot.data.ai.mcp.validated
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.files.ArtifactStore
@@ -65,6 +72,7 @@ data class BackupSelection(
 class BackupArchiveService(
     private val context: Context,
     private val settingsStore: SettingsStore,
+    private val mcpCatalogStore: McpCatalogStore,
     private val json: Json,
     private val database: AppDatabase,
     private val artifactStore: ArtifactStore,
@@ -94,6 +102,9 @@ class BackupArchiveService(
                                 }
                                 val settingsBytes = json.encodeToString(archiveSettings)
                                     .toByteArray(Charsets.UTF_8)
+                                val catalogBytes = json.encodeToString(
+                                    mcpCatalogStore.snapshotForBackup(liveSettings.mcpServers)
+                                ).toByteArray(Charsets.UTF_8)
                                 val durableFiles = if (snapshot != null) buildList {
                                     add(DATABASE_ENTRY to snapshot)
                                     DURABLE_DIRECTORIES.forEach { folder ->
@@ -105,6 +116,7 @@ class BackupArchiveService(
                                 }.sortedBy { it.first } else emptyList()
                                 ZipOutputStream(FileOutputStream(archive)).use { output ->
                                     addBytes(output, SETTINGS_ENTRY, settingsBytes)
+                                    addBytes(output, MCP_CATALOGS_ENTRY, catalogBytes)
                                     if (snapshot != null) {
                                         durableFiles.forEach { (path, file) ->
                                             currentCoroutineContext().ensureActive()
@@ -112,6 +124,7 @@ class BackupArchiveService(
                                         }
                                         val manifestEntries = buildList {
                                             add(DurableBackupEntry(SETTINGS_ENTRY, settingsBytes.size.toLong(), sha256(settingsBytes)))
+                                            add(DurableBackupEntry(MCP_CATALOGS_ENTRY, catalogBytes.size.toLong(), sha256(catalogBytes)))
                                             durableFiles.forEach { (path, file) ->
                                                 currentCoroutineContext().ensureActive()
                                                 add(DurableBackupEntry(path, file.length(), sha256(file)))
@@ -165,6 +178,7 @@ class BackupArchiveService(
                                 }
                                 val accepted = when {
                                     normalized == SETTINGS_ENTRY -> true
+                                    normalized == MCP_CATALOGS_ENTRY -> true
                                     selection.includeDurableAggregate && normalized == MANIFEST_ENTRY -> true
                                     selection.includeDurableAggregate && normalized in LEGACY_DATABASE_ENTRIES -> true
                                     selection.includeDurableAggregate && DURABLE_DIRECTORIES.any { directory ->
@@ -191,10 +205,11 @@ class BackupArchiveService(
                             if (modern) validateModernManifest(staging, archiveFiles)
                             normalizeAndValidateDatabase(staging)
                             if (modern) validateModernAggregate(staging) else validateLegacyAggregate(staging)
-                            validateSettingsPayloadRoots(staging, restoredSettings)
+                            validateSettingsPayloadRoots(staging, restoredSettings.settings)
                             DURABLE_DIRECTORIES.forEach { File(staging, it).mkdirs() }
                             File(staging, AGGREGATE_MARKER).writeText("1", Charsets.UTF_8)
                         }
+                        prepareMcpCatalogRestore(staging, restoredSettings)
                         currentCoroutineContext().ensureActive()
                         withContext(NonCancellable) {
                             File(staging, PREPARED_MARKER).writeText("1", Charsets.UTF_8)
@@ -224,10 +239,42 @@ class BackupArchiveService(
         validateDatabase(target)
     }
 
-    private fun validateSettings(staging: File): Settings {
+    private fun validateSettings(staging: File): ValidatedBackupSettings {
         val file = File(staging, SETTINGS_ENTRY)
         require(file.isFile) { "Backup archive is missing settings.json" }
-        return json.decodeFromString<Settings>(migrateLegacySettingsJson(file.readText(Charsets.UTF_8)))
+        val migrated = migrateLegacySettingsJson(file.readText(Charsets.UTF_8))
+        val mcpMigration = migrateLegacyMcpSettingsDocument(migrated)
+        val normalized = mcpMigration?.normalizedSettingsJson ?: migrated
+        return ValidatedBackupSettings(
+            settings = json.decodeFromString<Settings>(normalized),
+            normalizedJson = normalized,
+            legacyCatalogs = mcpMigration?.payload,
+        )
+    }
+
+    private fun prepareMcpCatalogRestore(staging: File, validated: ValidatedBackupSettings) {
+        val catalogFile = File(staging, MCP_CATALOGS_ENTRY)
+        val snapshots = if (catalogFile.isFile) {
+            json.decodeFromString<List<McpCatalogSnapshot>>(catalogFile.readText(Charsets.UTF_8))
+        } else {
+            validated.legacyCatalogs?.candidates.orEmpty().map { it.initialSnapshot() }
+        }
+        validateCatalogsAgainstSettings(snapshots, validated.settings)
+        File(staging, SETTINGS_ENTRY).writeText(validated.normalizedJson, Charsets.UTF_8)
+        catalogFile.writeText(json.encodeToString(snapshots.sortedBy { it.serverId.toString() }), Charsets.UTF_8)
+    }
+
+    private fun validateCatalogsAgainstSettings(catalogs: List<McpCatalogSnapshot>, settings: Settings) {
+        val definitions = settings.mcpServers.associateBy { it.id }
+        require(catalogs.map { it.serverId }.toSet().size == catalogs.size) {
+            "Backup contains duplicate MCP catalogs"
+        }
+        catalogs.forEach { catalog ->
+            require(catalog.validated() != null) { "Backup contains an invalid MCP catalog" }
+            require(definitions[catalog.serverId]?.mcpDefinitionDigest() == catalog.definitionDigest) {
+                "Backup MCP catalog does not match its server definition"
+            }
+        }
     }
 
     private fun validateSettingsPayloadRoots(staging: File, settings: Settings) {
@@ -319,11 +366,16 @@ class BackupArchiveService(
         } catch (error: Exception) {
             throw IllegalArgumentException("Backup manifest is not valid", error)
         }
-        require(manifest.version == MANIFEST_VERSION) { "Unsupported backup manifest: ${manifest.version}" }
+        require(manifest.version in SUPPORTED_MANIFEST_VERSIONS) {
+            "Unsupported backup manifest: ${manifest.version}"
+        }
         val declared = manifest.entries.associateBy(DurableBackupEntry::path)
         require(declared.size == manifest.entries.size) { "Backup manifest contains duplicate entries" }
         require(SETTINGS_ENTRY in declared && DATABASE_ENTRY in declared) {
             "Backup manifest is missing the durable roots"
+        }
+        if (manifest.version == MANIFEST_VERSION) {
+            require(MCP_CATALOGS_ENTRY in declared) { "Backup manifest is missing MCP catalogs" }
         }
         require(archiveFiles == declared.keys + MANIFEST_ENTRY) {
             "Backup archive entries do not exactly match the manifest"
@@ -431,8 +483,10 @@ class BackupArchiveService(
 
     companion object {
         internal const val SETTINGS_ENTRY = "settings.json"
+        internal const val MCP_CATALOGS_ENTRY = "mcp_catalogs.json"
         internal const val MANIFEST_ENTRY = "backup_manifest"
-        internal const val MANIFEST_VERSION = "rikkahub-durable-v3"
+        internal const val MANIFEST_VERSION = "rikkahub-durable-v4"
+        internal val SUPPORTED_MANIFEST_VERSIONS = setOf("rikkahub-durable-v3", MANIFEST_VERSION)
         internal const val DATABASE_ENTRY = "measix_pilot.db"
         internal const val LEGACY_WAL_ENTRY = "measix_pilot-wal"
         internal const val LEGACY_SHM_ENTRY = "measix_pilot-shm"
@@ -450,6 +504,12 @@ class BackupArchiveService(
         private const val MAX_TOTAL_BYTES = 8L * 1024 * 1024 * 1024
     }
 }
+
+private data class ValidatedBackupSettings(
+    val settings: Settings,
+    val normalizedJson: String,
+    val legacyCatalogs: McpLegacyCatalogMigrationPayload?,
+)
 
 class BackupRestoreInProgressException : IllegalStateException("Another backup restore is already being staged")
 

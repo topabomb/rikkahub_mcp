@@ -175,7 +175,7 @@ updateLocal(latest Local shadow transform)
 | `searchServices` | `List<SearchServiceOptions>` | `search_services` | 至少物化 `SearchServiceOptions.DEFAULT` | Local Search provider 目录 |
 | `searchCommonOptions` | `SearchCommonOptions` | `search_common` | `resultSize=10` | 公共搜索参数 |
 | `selectedSearchServiceId` | `Uuid?` | `selected_search_service_id` | 缺失时由选择规范化/消费者回退 | 稳定 ID 选择；旧 index key 已迁移 |
-| `mcpServers` | `List<McpServerConfig>` | `mcp_servers` | `[]` | Local MCP server、headers、OAuth、工具快照 |
+| `mcpServers` | `List<McpServerConfig>` | `mcp_servers` | `[]` | Local MCP definition、headers、OAuth、工具策略；远端目录独立持久化 |
 | `ttsProviders` | `List<TTSProviderSetting>` | `tts_providers` | 读取后补齐 System TTS | Local TTS 目录 |
 | `selectedTTSProviderId` | `Uuid` | `selected_tts_provider` | `DEFAULT_SYSTEM_TTS_ID` | 当前 TTS 选择 |
 | `defaultTTSPlaybackSpeed` | `Float` | `default_tts_playback_speed` | `1.0`，持久化限制 `0.5..2.0` | 公共播放速度 |
@@ -371,16 +371,23 @@ McpCommonOptions
   enable
   name
   headers[]                     # Local credential/header
-  tools[]                       # discovery 后的可用工具和审批覆盖
+  toolPolicies[]                # name/enable/needsApproval；不含远端 schema
   oauth?                        # Local OAuth state
 
 McpOAuthState
-  enabled, clientId, clientSecret,
+  revision, enabled, clientId, clientSecret,
   authorizationEndpoint, tokenEndpoint, registrationEndpoint, scope,
   accessToken, refreshToken, expiresAt
 
-McpTool
-  enable, name, description?, inputSchema?, needsApproval
+McpToolPolicy
+  enable, name, needsApproval
+
+McpCatalogStore                 # 独立 mcp_catalog DataStore
+  McpCatalogSnapshot
+    serverId, revision, definitionDigest, catalogDigest,
+    tools[]
+  McpCatalogTool
+    name, description?, inputSchema
 ```
 
 Local OAuth/headers 保持 Local。Managed MCP 只能携带平台 `runtimePath` 和 `authOwnership`，不能把 enterprise access token
@@ -398,9 +405,11 @@ BackupReminderConfig { enabled=false, intervalDays=7, lastBackupTime=0 }
 普通备份的 `settings.json` 是 Local shadow，当前会序列化 Local Provider/Search/TTS/ASR/MCP/WebDAV/S3 中的本地凭据。
 这再次说明 Enterprise credential 不能进入 `Settings`。Managed Snapshot/Binding/credential 也不属于普通备份域。
 
-当前手工备份格式是 `rikkahub-durable-v3`：包含 `settings.json`、`VACUUM INTO` 得到的 Room snapshot、manifest，以及
-`upload/images/skills/fonts` 四个 durable 目录；不包含 `workspaces/tool_outputs/managed_configuration`。ZIP 未加密、未签名，
-manifest 的 SHA-256 只提供完整性。Manifest 仍声明 `allowBackup=true`，所以企业 credential 设计还必须单独审计 Android
+当前手工备份格式是 `rikkahub-durable-v4`：包含 `settings.json`、独立的 `mcp_catalogs.json`、`VACUUM INTO` 得到的 Room
+snapshot、manifest，以及 `upload/images/skills/fonts` 四个 durable 目录；不包含
+`workspaces/tool_outputs/managed_configuration`。恢复仍接受 v3，并从旧 Settings 中一次性提取完整 MCP schema 后写入独立
+Catalog；空或不完整目录不迁移。ZIP 未加密、未签名，manifest 的 SHA-256 只提供完整性。Manifest 仍声明
+`allowBackup=true`，所以企业 credential 设计还必须单独审计 Android
 Auto Backup/设备迁移规则，不能只验证手工 ZIP。
 
 ## 5. Settings 之外的 Android 配置
@@ -808,8 +817,9 @@ trust anchor 固定为 `keyId=rikkahub-managed-v1`、`tenantId=rikkahub`。运�
 - `SettingsStore.restoreLocal()` 当前只替换 Local shadow，允许其在 overlay 遮挡期间继续变化、并在 Managed remove/disconnect
   后重新显现；这符合 S0 Local-shadow 原则。它绕过当前旧原型的自定义 `locks`，是否要约束整份备份恢复只是旧原型
   语义，不能外推为 S0.2 Managed mutation 规则。
-- `McpManager.syncTools()` 和 OAuth 刷新会写 `updateLocal()`；Managed MCP 的 discovery cache、用户审批偏好和
-  credential 不能继续共用整条 Managed Definition 的写协议。
+- MCP discovery 只向 `McpCatalogStore` 提交完整非空 candidate；OAuth 与用户审批策略仍属于 Local Settings。
+  Managed MCP 的 credential partition 和用户是否能覆盖受管工具策略仍必须由冻结协议明确，不能把目录 schema
+  或 enterprise token 回写到 Managed Definition。
 
 S0.2 实施时不应给该原型再套一层兼容 adapter 或保留双 transport/source of truth。应在有效 Freeze 后以 frozen generated types
 和 canonical fixtures 重建唯一 Managed ingestion path；能复用的仅是已验证的原子持久化、Local shadow、effective projection、

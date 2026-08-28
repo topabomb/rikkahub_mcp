@@ -5,9 +5,12 @@ import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.data.ai.mcp.McpCommonOptions
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
+import net.weero.measix.pilot.data.ai.mcp.McpStatus
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.service.McpServerPresentation
+import net.weero.measix.pilot.service.McpToolPresentation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -112,11 +115,14 @@ class ConversationReadinessTest {
         val readiness = Settings(
             providers = listOf(ProviderSetting.OpenAI(models = listOf(model))),
             assistants = listOf(assistant),
-            mcpServers = listOf(selectedServer, otherServer),
         ).buildConversationReadiness(
             assistant = assistant,
             workspaceNamesById = mapOf(workspaceId to "Factory project"),
             memoryCount = 3,
+            mcpServers = listOf(
+                selectedServer.presentation(McpStatus.Ready(toolCount = 1, catalogRevision = 1)),
+                otherServer.presentation(),
+            ),
         )
 
         assertEquals(ModelReadiness.READY, readiness.modelState)
@@ -141,16 +147,120 @@ class ConversationReadinessTest {
         val readiness = Settings(
             providers = emptyList(),
             assistants = listOf(assistant),
-            mcpServers = listOf(disabledServer),
         ).buildConversationReadiness(
             assistant = assistant,
             workspaceNamesById = emptyMap(),
             memoryCount = 0,
+            mcpServers = listOf(disabledServer.presentation()),
         )
 
         assertEquals(McpReadiness.ALL_DISABLED, readiness.mcpState)
         assertEquals(0, readiness.enabledMcpCount)
         assertEquals(0, readiness.selectedMcpCount)
+    }
+
+    @Test
+    fun `selected mcp is not reported ready while catalog discovery is running`() {
+        val server = McpServerConfig.StreamableHTTPServer()
+        val assistant = Assistant(mcpServers = setOf(server.id))
+        val readiness = Settings(
+            assistants = listOf(assistant),
+        ).buildConversationReadiness(
+            assistant = assistant,
+            workspaceNamesById = emptyMap(),
+            memoryCount = 0,
+            mcpServers = listOf(server.presentation(McpStatus.Discovering)),
+        )
+
+        assertEquals(McpReadiness.CONNECTING, readiness.mcpState)
+        assertEquals(1, readiness.selectedMcpCount)
+        assertEquals(0, readiness.readyMcpCount)
+    }
+
+    @Test
+    fun `selected mcp is ready only with an active verified catalog`() {
+        val server = McpServerConfig.StreamableHTTPServer()
+        val assistant = Assistant(mcpServers = setOf(server.id))
+        val readiness = Settings(
+            assistants = listOf(assistant),
+        ).buildConversationReadiness(
+            assistant = assistant,
+            workspaceNamesById = emptyMap(),
+            memoryCount = 0,
+            mcpServers = listOf(
+                server.presentation(McpStatus.Ready(toolCount = 20, catalogRevision = 1))
+            ),
+        )
+
+        assertEquals(McpReadiness.READY, readiness.mcpState)
+        assertEquals(1, readiness.selectedMcpCount)
+        assertEquals(1, readiness.readyMcpCount)
+    }
+
+    @Test
+    fun `selected mcp remains ready from its catalog while transport is unavailable`() {
+        val server = McpServerConfig.StreamableHTTPServer()
+        val assistant = Assistant(mcpServers = setOf(server.id))
+        val readiness = Settings(assistants = listOf(assistant)).buildConversationReadiness(
+            assistant = assistant,
+            workspaceNamesById = emptyMap(),
+            memoryCount = 0,
+            mcpServers = listOf(
+                server.presentation(
+                    status = McpStatus.Error("transport unavailable"),
+                    hasCatalog = true,
+                )
+            ),
+        )
+
+        assertEquals(McpReadiness.READY, readiness.mcpState)
+        assertEquals(1, readiness.readyMcpCount)
+    }
+
+    @Test
+    fun `authorization and reconnect states are not collapsed into discovery`() {
+        val authorizationServer = McpServerConfig.StreamableHTTPServer()
+        val reconnectingServer = McpServerConfig.SseTransportServer()
+
+        val authorizationReadiness = Settings().buildConversationReadiness(
+            assistant = Assistant(mcpServers = setOf(authorizationServer.id)),
+            workspaceNamesById = emptyMap(),
+            memoryCount = 0,
+            mcpServers = listOf(authorizationServer.presentation(McpStatus.NeedsAuthorization)),
+        )
+        val reconnectingReadiness = Settings().buildConversationReadiness(
+            assistant = Assistant(mcpServers = setOf(reconnectingServer.id)),
+            workspaceNamesById = emptyMap(),
+            memoryCount = 0,
+            mcpServers = listOf(
+                reconnectingServer.presentation(McpStatus.Reconnecting(attempt = 1, maxAttempts = 5))
+            ),
+        )
+
+        assertEquals(McpReadiness.AUTHORIZATION_REQUIRED, authorizationReadiness.mcpState)
+        assertEquals(McpReadiness.RECONNECTING, reconnectingReadiness.mcpState)
+    }
+
+    @Test
+    fun `partially available mcp selection preserves selected and ready counts`() {
+        val readyServer = McpServerConfig.StreamableHTTPServer()
+        val unavailableServer = McpServerConfig.SseTransportServer()
+        val assistant = Assistant(mcpServers = setOf(readyServer.id, unavailableServer.id))
+        val readiness = Settings(
+            assistants = listOf(assistant),
+        ).buildConversationReadiness(
+            assistant = assistant,
+            workspaceNamesById = emptyMap(),
+            memoryCount = 0,
+            mcpServers = listOf(
+                readyServer.presentation(McpStatus.Ready(toolCount = 20, catalogRevision = 1)),
+                unavailableServer.presentation(McpStatus.Error("unavailable")),
+            ),
+        )
+
+        assertEquals(McpReadiness.PARTIAL, readiness.mcpState)
+        assertEquals(2, readiness.selectedMcpCount)
+        assertEquals(1, readiness.readyMcpCount)
     }
 
     @Test
@@ -201,4 +311,28 @@ class ConversationReadinessTest {
         assertEquals(1, readiness.localToolCount)
         assertEquals(2, readiness.persistedLocalToolCount)
     }
+
+    private fun McpServerConfig.presentation(
+        status: McpStatus = McpStatus.Idle,
+        hasCatalog: Boolean = status is McpStatus.Ready || status is McpStatus.CatalogStale,
+    ): McpServerPresentation = McpServerPresentation(
+        serverId = id,
+        name = commonOptions.name,
+        enabled = commonOptions.enable,
+        definition = this,
+        status = status,
+        tools = if (hasCatalog) {
+            listOf(
+                McpToolPresentation(
+                    name = "tool",
+                    description = null,
+                    inputSchema = kotlinx.serialization.json.JsonObject(emptyMap()),
+                    enabled = true,
+                    needsApproval = false,
+                )
+            )
+        } else {
+            emptyList()
+        },
+    )
 }

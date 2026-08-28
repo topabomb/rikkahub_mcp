@@ -100,9 +100,13 @@ Streaming Transformer 只改变显示投影；需要持久化的变化必须进�
 ## 工具装配与执行
 
 `MasterTurnCoordinator` 通过 `GenerationToolSetFactory` 装配 Search、Local、Conversation、Workspace、Skill、
-Assistant、MCP 与按需附件识别工具；Memory Tool 在每个工具循环 step 按最新状态加入。MCP 连接生命周期仍由
-`McpManager` 独立持有：每个 server 一个 `ConnectionSlot`，配置、前台、网络和手动刷新都只触发同一个
-`reconcile`。
+Assistant、MCP 与按需附件识别工具；Memory Tool 在每个工具循环 step 按最新状态加入。MCP 连接生命周期由
+`McpRuntimeCoordinator` 编排的 per-server `McpServerRuntime` 持有，已验证目录由 `McpCatalogStore` 持久化。Master 与每个 Target
+在 run 开始时只为所选 server 做有界并行 preflight；匹配的 durable LKG 可立即捕获，只有缺少目录的 server 才等待
+连接。随后固定一次 `TurnMcpCapabilitySnapshot`，后续 step 复用同一 catalog revision。用户手工刷新与远端
+`notifications/tools/list_changed` 成功提交后更新后续 turn，当前 run 不漂移；断网、timeout、后台和重试等健康变化
+只在调用结果中体现，不撤下 LKG schema。用户禁用/删除/definition 或 policy 明确撤销则在调用发送前 fail-closed。
+完整协议见 `mcp-architecture.md`。
 
 工具能力判定必须显式传入本次 run 的 `capabilityModel`；主/子生成传入实际 resolved model，
 `assistant_inspect` 这类非运行时检查显式解析目标助手的配置模型，不存在“未传模型则启用兼容集”。

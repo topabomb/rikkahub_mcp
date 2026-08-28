@@ -21,7 +21,9 @@ import net.weero.measix.pilot.ui.components.ai.McpPicker
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.theme.CustomColors
 import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.koinInject
 import org.koin.core.parameter.parametersOf
+import net.weero.measix.pilot.service.McpQueryService
 
 @Composable
 fun AssistantMcpPage(id: String) {
@@ -32,7 +34,8 @@ fun AssistantMcpPage(id: String) {
     )
     AssistantLockedChangeEffect(vm)
     val assistant by vm.assistant.collectAsStateWithLifecycle()
-    val mcpServerConfigs by vm.mcpServerConfigs.collectAsStateWithLifecycle()
+    val mcpQueryService = koinInject<McpQueryService>()
+    val mcpServers by mcpQueryService.servers.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     Scaffold(
@@ -61,7 +64,7 @@ fun AssistantMcpPage(id: String) {
                 bottom = innerPadding.calculateBottomPadding() + 16.dp,
             ),
             assistant = assistant,
-            servers = mcpServerConfigs,
+            servers = mcpServers,
             onUpdateAssistant = { vm.update(it) }
         )
     }

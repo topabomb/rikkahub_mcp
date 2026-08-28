@@ -4,6 +4,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import java.io.File
 import java.io.FileOutputStream
@@ -14,10 +15,23 @@ import kotlinx.coroutines.test.runTest
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.ChatFontFamily
+import net.weero.measix.pilot.data.ai.mcp.McpCatalogCandidate
+import net.weero.measix.pilot.data.ai.mcp.McpCatalogSnapshot
+import net.weero.measix.pilot.data.ai.mcp.McpCatalogStore
+import net.weero.measix.pilot.data.ai.mcp.McpCatalogTool
+import net.weero.measix.pilot.data.ai.mcp.McpCommonOptions
+import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
+import net.weero.measix.pilot.data.ai.mcp.initialSnapshot
+import net.weero.measix.pilot.data.ai.mcp.mcpDefinitionDigest
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.utils.JsonInstant
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -34,6 +48,7 @@ import org.robolectric.annotation.Config
 class BackupArchiveServiceTest {
     private lateinit var context: Context
     private lateinit var service: BackupArchiveService
+    private lateinit var catalogStore: McpCatalogStore
     private lateinit var work: File
 
     @Before
@@ -42,9 +57,12 @@ class BackupArchiveServiceTest {
         work = File(System.getProperty("java.io.tmpdir"), "backup-test-${System.nanoTime()}").apply { mkdirs() }
         File(context.noBackupFilesDir, "backup_restore").deleteRecursively()
         deleteLiveRestoreComponents()
+        catalogStore = mockk(relaxed = true)
+        coEvery { catalogStore.snapshotForBackup(any()) } returns emptyList()
         service = BackupArchiveService(
             context = context,
             settingsStore = mockk(),
+            mcpCatalogStore = catalogStore,
             json = JsonInstant,
             database = mockk<AppDatabase>(),
             artifactStore = mockk<ArtifactStore>(),
@@ -83,8 +101,9 @@ class BackupArchiveServiceTest {
         var restored: Settings? = null
         val settingsStore = mockk<SettingsStore>()
         coEvery { settingsStore.restoreLocal(any()) } coAnswers { firstArg<Settings>().also { restored = it } }
-        PendingBackupRestore.restoreSettingsIfPending(context, settingsStore, JsonInstant)
+        PendingBackupRestore.restoreSettingsIfPending(context, settingsStore, catalogStore, JsonInstant)
         assertEquals(Settings().assistantId, restored?.assistantId)
+        coVerify { catalogStore.restoreCatalogs(emptyList(), any()) }
         PendingBackupRestore.complete(context)
         assertFalse(File(context.noBackupFilesDir, "backup_restore/pending").exists())
         assertFalse(File(context.noBackupFilesDir, "backup_restore/rollback").exists())
@@ -174,7 +193,7 @@ class BackupArchiveServiceTest {
         var restored: Settings? = null
         val settingsStore = mockk<SettingsStore>()
         coEvery { settingsStore.restoreLocal(any()) } coAnswers { firstArg<Settings>().also { restored = it } }
-        PendingBackupRestore.restoreSettingsIfPending(context, settingsStore, JsonInstant)
+        PendingBackupRestore.restoreSettingsIfPending(context, settingsStore, catalogStore, JsonInstant)
 
         assertNull(restored?.assistants?.first()?.background)
         assertEquals(ChatFontFamily.DEFAULT, restored?.displaySetting?.chatFontFamily)
@@ -240,13 +259,113 @@ class BackupArchiveServiceTest {
         assertFalse(File(context.noBackupFilesDir, "backup_restore/pending").exists())
     }
 
+    @Test
+    fun `MCP catalogs round trip as an independent backup entry`() = runTest {
+        val server = McpServerConfig.StreamableHTTPServer(
+            commonOptions = McpCommonOptions(name = "Remote tools"),
+            url = "https://example.test/mcp",
+        )
+        val settings = Settings(mcpServers = listOf(server))
+        val catalog = McpCatalogCandidate(
+            serverId = server.id,
+            definitionDigest = server.mcpDefinitionDigest(),
+            tools = listOf(
+                McpCatalogTool(
+                    name = "measure",
+                    description = "Measure a value",
+                    inputSchema = buildJsonObject { put("type", "object") },
+                )
+            ),
+        ).initialSnapshot()
+        val stagedDb = File(work, "catalog.sqlite")
+        createDatabase(stagedDb, "new")
+        val archive = modernArchive(stagedDb, emptyMap(), settings, listOf(catalog))
+
+        service.stageRestore(archive, BackupSelection(true, true))
+        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+        val settingsStore = mockk<SettingsStore>()
+        coEvery { settingsStore.restoreLocal(any()) } returns settings
+
+        PendingBackupRestore.restoreSettingsIfPending(context, settingsStore, catalogStore, JsonInstant)
+
+        coVerify(exactly = 1) { catalogStore.restoreCatalogs(listOf(catalog), settings.mcpServers) }
+    }
+
+    @Test
+    fun `v3 backup migrates complete legacy MCP schema into the catalog entry`() = runTest {
+        val server = McpServerConfig.StreamableHTTPServer(
+            commonOptions = McpCommonOptions(name = "Legacy remote tools"),
+            url = "https://legacy.example/mcp",
+        )
+        val settingsRoot = JsonInstant.parseToJsonElement(
+            JsonInstant.encodeToString(Settings(mcpServers = listOf(server)))
+        ).jsonObject
+        val serverRoot = settingsRoot.getValue("mcpServers").jsonArray.single().jsonObject
+        val commonRoot = serverRoot.getValue("commonOptions").jsonObject
+        val legacyTool = buildJsonObject {
+            put("enable", false)
+            put("name", "legacy_measure")
+            put("description", "Legacy measure schema")
+            put("inputSchema", buildJsonObject { put("type", "object") })
+            put("needsApproval", true)
+        }
+        val legacyServer = buildJsonObject {
+            serverRoot.forEach { (key, value) -> put(key, value) }
+            put("commonOptions", buildJsonObject {
+                commonRoot.forEach { (key, value) -> put(key, value) }
+                put("tools", JsonArray(listOf(legacyTool)))
+            })
+        }
+        val legacySettings = buildJsonObject {
+            settingsRoot.forEach { (key, value) -> put(key, value) }
+            put("mcpServers", JsonArray(listOf(legacyServer)))
+        }
+        val stagedDb = File(work, "legacy-catalog.sqlite")
+        createDatabase(stagedDb, "legacy")
+        val payloads = linkedMapOf(
+            "settings.json" to JsonInstant.encodeToString(legacySettings).toByteArray(),
+            "measix_pilot.db" to stagedDb.readBytes(),
+        )
+        val manifest = DurableBackupManifest(
+            version = "rikkahub-durable-v3",
+            entries = payloads.map { (path, bytes) ->
+                DurableBackupEntry(path, bytes.size.toLong(), sha256(bytes))
+            }.sortedBy(DurableBackupEntry::path),
+        )
+        val archive = archive(payloads + ("backup_manifest" to JsonInstant.encodeToString(manifest).toByteArray()))
+
+        service.stageRestore(archive, BackupSelection(true, true))
+        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+        val settingsStore = mockk<SettingsStore>()
+        var restoredSettings: Settings? = null
+        var restoredCatalogs: List<McpCatalogSnapshot>? = null
+        coEvery { settingsStore.restoreLocal(any()) } coAnswers {
+            firstArg<Settings>().also { restoredSettings = it }
+        }
+        coEvery { catalogStore.restoreCatalogs(any(), any()) } coAnswers {
+            firstArg<List<McpCatalogSnapshot>>().also { restoredCatalogs = it }
+        }
+
+        PendingBackupRestore.restoreSettingsIfPending(context, settingsStore, catalogStore, JsonInstant)
+
+        val restoredPolicy = requireNotNull(restoredSettings).mcpServers.single().commonOptions.toolPolicies.single()
+        assertFalse(restoredPolicy.enable)
+        assertTrue(restoredPolicy.needsApproval)
+        val restoredCatalog = requireNotNull(restoredCatalogs).single()
+        assertEquals(server.id, restoredCatalog.serverId)
+        assertEquals(listOf("legacy_measure"), restoredCatalog.tools.map { it.name })
+        assertEquals("Legacy measure schema", restoredCatalog.tools.single().description)
+    }
+
     private fun modernArchive(
         database: File,
         files: Map<String, ByteArray>,
         settings: Settings = Settings(),
+        catalogs: List<McpCatalogSnapshot> = emptyList(),
     ): File {
         val payloads = linkedMapOf(
             "settings.json" to JsonInstant.encodeToString(settings).toByteArray(),
+            "mcp_catalogs.json" to JsonInstant.encodeToString(catalogs).toByteArray(),
             "measix_pilot.db" to database.readBytes(),
         ).apply { putAll(files) }
         val manifest = DurableBackupManifest(

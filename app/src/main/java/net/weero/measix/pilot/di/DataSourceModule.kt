@@ -31,8 +31,11 @@ import net.weero.measix.pilot.data.db.migrations.Migration_4_5
 import net.weero.measix.pilot.data.db.migrations.Migration_5_6
 import net.weero.measix.pilot.data.db.migrations.Migration_6_7
 import net.weero.measix.pilot.data.db.migrations.Migration_7_8
-import net.weero.measix.pilot.data.ai.mcp.McpManager
+import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
+import net.weero.measix.pilot.data.ai.mcp.McpCatalogStore
 import net.weero.measix.pilot.data.ai.mcp.NetworkMonitor
+import net.weero.measix.pilot.service.McpApplicationService
+import net.weero.measix.pilot.service.McpQueryService
 import net.weero.measix.pilot.data.sync.webdav.WebDavSync
 import me.rerere.search.SearchService
 import net.weero.measix.pilot.data.sync.S3Sync
@@ -190,8 +193,13 @@ val dataSourceModule = module {
     }
 
     single {
-        McpManager(
+        McpCatalogStore(context = get(), scope = get(), settingsStore = get())
+    }
+
+    single {
+        McpRuntimeCoordinator(
             settingsStore = get(),
+            catalogStore = get(),
             appScope = get(),
             artifactStore = get(),
             networkMonitor = get(),
@@ -200,6 +208,10 @@ val dataSourceModule = module {
     }
 
     single { NetworkMonitor(get()) }
+
+    single { McpApplicationService(coordinator = get(), settingsStore = get()) }
+
+    single { McpQueryService(settingsStore = get(), coordinator = get(), scope = get()) }
 
     single {
         GenerationLoop(
@@ -264,6 +276,7 @@ val dataSourceModule = module {
         BackupArchiveService(
             context = get(),
             settingsStore = get(),
+            mcpCatalogStore = get(),
             json = get(),
             database = get(),
             artifactStore = get(),

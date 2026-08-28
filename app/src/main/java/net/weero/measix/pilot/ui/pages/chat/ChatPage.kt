@@ -111,6 +111,7 @@ import net.weero.measix.pilot.ui.components.ai.AssistantPickerSheet
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.components.ai.ChatInput
 import net.weero.measix.pilot.ui.components.ai.FilesPicker
+import net.weero.measix.pilot.ui.components.ai.McpPickerSheet
 import net.weero.measix.pilot.ui.components.ai.WorkspaceSelectSheet
 import net.weero.measix.pilot.ui.components.ai.rememberModelListState
 import net.weero.measix.pilot.ui.components.ai.completion.WorkspaceCompletionProvider
@@ -132,6 +133,7 @@ import net.weero.measix.pilot.utils.isAllowedFileType
 import net.weero.measix.pilot.utils.navigateToChatPage
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
+import net.weero.measix.pilot.service.McpQueryService
 import org.koin.core.parameter.parametersOf
 import java.io.File
 import kotlin.uuid.Uuid
@@ -456,12 +458,28 @@ private fun ChatPageContent(
     }
     val toaster = LocalToaster.current
     val workspaceQueryService: WorkspaceQueryService = koinInject()
+    val mcpQueryService: McpQueryService = koinInject()
+    val mcpPresentations by mcpQueryService.servers.collectAsStateWithLifecycle()
     val workspaces by workspaceQueryService.observeWorkspaces()
         .collectAsStateWithLifecycle(initialValue = emptyList())
     var previewMode by rememberSaveable { mutableStateOf(false) }
     val hazeState = rememberHazeState()
     val assistant = setting.getConversationAssistant(snapshot.header.assistantId)
+    val updateAssistantConfiguration: (Assistant) -> Unit = { updatedAssistant ->
+        vm.updateSettings { current ->
+            current.copy(
+                assistants = current.assistants.map { latestAssistant ->
+                    if (latestAssistant.id == updatedAssistant.id) {
+                        mergeAssistantDelta(assistant, updatedAssistant, latestAssistant)
+                    } else {
+                        latestAssistant
+                    }
+                }
+            )
+        }
+    }
     var showFilesSheet by remember { mutableStateOf(false) }
+    var showMcpPicker by remember { mutableStateOf(false) }
     var showWorkspaceSheet by remember { mutableStateOf(false) }
     var showAssistantPicker by remember { mutableStateOf(false) }
     val workspaceNamesById = remember(workspaces) {
@@ -486,12 +504,20 @@ private fun ChatPageContent(
     val memoryCount by memoryCountFlow.collectAsStateWithLifecycle(initialValue = 0)
     val imageSelectionResolver: ImageGenerationSelectionResolver = koinInject()
     val imageGenerationAvailable = remember(setting) { imageSelectionResolver.isAvailable(setting) }
-    val readiness = remember(setting, assistant, workspaceNamesById, memoryCount, imageGenerationAvailable) {
+    val readiness = remember(
+        setting,
+        assistant,
+        workspaceNamesById,
+        memoryCount,
+        imageGenerationAvailable,
+        mcpPresentations,
+    ) {
         setting.buildConversationReadiness(
             assistant = assistant,
             workspaceNamesById = workspaceNamesById,
             memoryCount = memoryCount,
             imageGenerationAvailable = imageGenerationAvailable,
+            mcpServers = mcpPresentations,
         )
     }
     val latestReadiness by rememberUpdatedState(readiness)
@@ -754,14 +780,7 @@ private fun ChatPageContent(
                     modelListState.open()
                 },
                 onReadinessMcpClick = {
-                    if (
-                        readiness.mcpState == McpReadiness.NOT_CONFIGURED ||
-                        readiness.mcpState == McpReadiness.ALL_DISABLED
-                    ) {
-                        navController.navigate(Screen.SettingMcp)
-                    } else {
-                        navController.navigate(Screen.AssistantMcp(assistant.id.toString()))
-                    }
+                    showMcpPicker = true
                 },
                 onReadinessLocalToolsClick = {
                     navController.navigate(Screen.AssistantLocalTool(assistant.id.toString()))
@@ -786,7 +805,21 @@ private fun ChatPageContent(
                 snapshot = snapshot,
                 assistant = assistant,
                 vm = vm,
+                onUpdateAssistant = updateAssistantConfiguration,
                 onDismiss = { showFilesSheet = false },
+            )
+        }
+
+        if (showMcpPicker) {
+            McpPickerSheet(
+                assistant = assistant,
+                servers = mcpPresentations,
+                onUpdateAssistant = updateAssistantConfiguration,
+                onNavigateToSettings = {
+                    showMcpPicker = false
+                    navController.navigate(Screen.SettingMcp)
+                },
+                onDismiss = { showMcpPicker = false },
             )
         }
 
@@ -960,6 +993,7 @@ private fun ChatFilesPickerSheet(
     snapshot: ConversationSnapshot,
     assistant: Assistant,
     vm: ChatVM,
+    onUpdateAssistant: (Assistant) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -1200,23 +1234,10 @@ private fun ChatFilesPickerSheet(
             workspaceCwd = snapshot.header.workspaceCwd,
             state = inputState,
             assistant = assistant,
-            mcpManager = vm.mcpManager,
             onCompressContext = { additionalPrompt, targetTokens, keepRecentMessages ->
                 vm.handleCompressContext(additionalPrompt, targetTokens, keepRecentMessages)
             },
-            onUpdateAssistant = { updatedAssistant ->
-                vm.updateSettings { current ->
-                    current.copy(
-                        assistants = current.assistants.map { latestAssistant ->
-                            if (latestAssistant.id == updatedAssistant.id) {
-                                mergeAssistantDelta(assistant, updatedAssistant, latestAssistant)
-                            } else {
-                                latestAssistant
-                            }
-                        }
-                    )
-                }
-            },
+            onUpdateAssistant = onUpdateAssistant,
             onUpdateConversationModeInjectionIds = { ids ->
                 vm.updateModeInjectionIds(ids)
             },

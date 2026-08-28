@@ -9,7 +9,8 @@ import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.RequestImageSupport
 import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.ai.mcp.McpManager
+import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
+import net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot
 import net.weero.measix.pilot.data.ai.subassistant.filterTargetLocalTools
 import net.weero.measix.pilot.data.ai.subassistant.filterTargetTools
 import net.weero.measix.pilot.data.ai.tools.local.AssistantToolBuildContext
@@ -41,10 +42,16 @@ class GenerationToolSetFactory(
     private val skillManager: SkillManager,
     private val workspaceApplicationService: WorkspaceApplicationService,
     private val workspaceQueryService: WorkspaceQueryService,
-    private val mcpManager: McpManager,
+    private val mcpManager: McpRuntimeCoordinator,
     private val providerManager: ProviderManager,
     private val artifactStore: ArtifactStore,
 ) {
+    fun captureMcpCapabilities(assistant: Assistant): TurnMcpCapabilitySnapshot =
+        mcpManager.captureTurnCapabilities(assistant)
+
+    suspend fun prepareMcpCapabilities(assistant: Assistant): TurnMcpCapabilitySnapshot =
+        mcpManager.prepareTurnCapabilities(assistant)
+
     /**
      * 构建指定 Assistant 的工具集（不含 Memory Tools，那些由 GenerationLoop 内部添加）。
      *
@@ -64,6 +71,7 @@ class GenerationToolSetFactory(
         runMode: ToolSetRunMode = ToolSetRunMode.NORMAL,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
         additionalToolsBeforeMcp: List<Tool> = emptyList(),
+        mcpCapabilities: TurnMcpCapabilitySnapshot,
         onInvalidMcpServerNames: (List<String>) -> Unit = {},
     ): List<Tool> {
         return buildList {
@@ -126,36 +134,58 @@ class GenerationToolSetFactory(
 
             addAll(additionalToolsBeforeMcp)
 
-            val allMcpTools = mcpManager.getAllAvailableTools(assistant)
-            val invalidNames = allMcpTools
-                .map { it.second }
+            val invalidNames = mcpCapabilities.tools
+                .map { it.serverName }
                 .distinct()
                 .filter { name ->
                     name.isEmpty() || !name.all {
                         it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' || it == '_'
                     }
-                }
+                }.toSet()
             if (invalidNames.isNotEmpty()) {
                 Log.w(TAG, "Invalid MCP tool names: $invalidNames")
-                onInvalidMcpServerNames(invalidNames)
-            } else {
-                allMcpTools.forEach { (serverId, serverName, tool) ->
+                onInvalidMcpServerNames(invalidNames.sorted())
+            }
+            val invalidToolBindings = mcpCapabilities.tools
+                .filterNot { tool -> validProviderToolBinding(tool.serverName, tool.name) }
+                .map { "${it.serverName}/${it.name}" }
+            if (invalidToolBindings.isNotEmpty()) {
+                Log.w(TAG, "Ignoring invalid MCP tool bindings: $invalidToolBindings")
+            }
+            val validBindings = mcpCapabilities.tools.filterNot { tool ->
+                    tool.serverName in invalidNames || !validProviderToolBinding(tool.serverName, tool.name)
+                }
+            val collidedProviderNames = validBindings
+                .groupBy { tool -> providerToolName(tool.serverName, tool.name) }
+                .filterValues { tools -> tools.size > 1 }
+                .keys
+            if (collidedProviderNames.isNotEmpty()) {
+                Log.w(TAG, "Ignoring colliding MCP provider tool names: $collidedProviderNames")
+            }
+            validBindings
+                .filterNot { tool -> providerToolName(tool.serverName, tool.name) in collidedProviderNames }
+                .forEach { tool ->
                     add(
                         Tool(
-                            name = "mcp__${serverName}__${tool.name}",
+                            name = providerToolName(tool.serverName, tool.name),
                             description = tool.description ?: "",
                             parameters = { tool.inputSchema },
                             needsApproval = { tool.needsApproval },
                             execute = { error("MCP tools require ToolExecutionContext") },
                             contextualExecute = {
-                                mcpManager.callTool(serverId, tool.name, it.jsonObject) { owned ->
+                                mcpManager.callTool(
+                                    serverId = tool.serverId,
+                                    toolName = tool.name,
+                                    expectedDefinitionDigest = tool.definitionDigest,
+                                    expectedNeedsApproval = tool.needsApproval,
+                                    args = it.jsonObject,
+                                ) { owned ->
                                     registerUnpublishedResource(artifactStore.unpublishedLease(owned))
                                 }
                             },
                         )
                     )
                 }
-            }
         }.let { tools ->
             if (runMode == ToolSetRunMode.TARGET) {
                 filterTargetTools(tools)
@@ -163,6 +193,16 @@ class GenerationToolSetFactory(
                 tools
             }
         }
+    }
+
+    private companion object {
+        val MCP_PROVIDER_TOOL_NAME = Regex("[A-Za-z0-9_-]{1,64}")
+
+        fun providerToolName(serverName: String, toolName: String): String =
+            "mcp__${serverName}__${toolName}"
+
+        fun validProviderToolBinding(serverName: String, toolName: String): Boolean =
+            MCP_PROVIDER_TOOL_NAME.matches(providerToolName(serverName, toolName))
     }
 
     private suspend fun createWorkspaceToolsIfReady(workspaceId: String?, cwd: String? = null): List<Tool> {

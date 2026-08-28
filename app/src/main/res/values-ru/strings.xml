@@ -879,12 +879,18 @@
   <string name="setting_page_mcp_desc">Настроить серверы MCP</string>
   <string name="mcp_status_idle">Простой</string>
   <string name="mcp_status_connecting">Подключение</string>
-  <string name="mcp_status_connected">Подключено</string>
   <string name="mcp_status_reconnecting">Переподключение (%1$d/%2$d)</string>
-  <string name="mcp_status_dormant">Спящий режим, повтор через %1$d сек.</string>
+  <string name="mcp_status_maintenance_reconnecting">Проверка восстановления сервиса MCP</string>
   <string name="mcp_status_error">Ошибка: %1$s</string>
   <string name="mcp_status_needs_authorization">Требуется авторизация</string>
   <string name="mcp_status_authorizing">Авторизация</string>
+  <string name="mcp_status_discovering">Поиск инструментов</string>
+  <string name="mcp_status_ready">Доступно инструментов: %1$d</string>
+  <string name="mcp_status_retry_scheduled">Повтор запланирован (%1$d/%2$d) через %3$d сек.</string>
+  <string name="mcp_status_maintenance_retry">Сервис MCP временно недоступен; следующая проверка через %1$d сек.</string>
+  <string name="mcp_status_waiting_network">Ожидание сети</string>
+  <string name="mcp_status_catalog_rejected_empty">Сервер не вернул инструменты; последний проверенный каталог сохранён</string>
+  <string name="mcp_status_catalog_stale">Используется последний проверенный каталог (%1$d инструментов); обновление не удалось</string>
   <string name="mcp_oauth_authorize">Авторизоваться</string>
   <string name="mcp_oauth_authorizing_hint">Авторизация, завершите в браузере…</string>
   <string name="mcp_oauth_cancel_authorization">Отменить авторизацию</string>
@@ -1336,7 +1342,12 @@
   <string name="chat_readiness_mcp_not_configured">Не настроено</string>
   <string name="chat_readiness_mcp_all_disabled">Отключено</string>
   <string name="chat_readiness_mcp_none_selected">Не включено</string>
+  <string name="chat_readiness_mcp_connecting">Поиск инструментов</string>
+  <string name="chat_readiness_mcp_authorization_required">Требуется авторизация</string>
+  <string name="chat_readiness_mcp_reconnecting">Ожидание переподключения</string>
+  <string name="chat_readiness_mcp_unavailable">Нет проверенных инструментов</string>
   <string name="chat_readiness_mcp_ready">Включено: %1$d</string>
+  <string name="chat_readiness_mcp_partial">Готово: %1$d из %2$d</string>
   <string name="chat_readiness_mcp_description">Добавляйте возможности MCP и переключайте устройства %1$s.</string>
   <string name="chat_readiness_mcp_highlight_term">Measix Device Remote Control</string>
   <string name="chat_readiness_local_tools_title">Локальные возможности</string>
@@ -1566,5 +1577,8 @@
   <string name="chat_message_terminal_user_stopped">Остановлено</string>
   <string name="chat_message_terminal_superseded">Заменено более новым ответом</string>
   <string name="chat_message_terminal_process_restarted">Прервано после перезапуска приложения</string>
+  <string name="error_mcp_turn_capability_unavailable">В этом ходе недоступны следующие серверы MCP: %1$s</string>
+  <string name="mcp_picker_manage_servers">Управление серверами MCP</string>
+  <string name="mcp_refresh_continuing">Серверы MCP (%1$d) продолжают обновляться в фоновом режиме</string>
+  <string name="mcp_enabled_tools_count">%1$d/%2$d инструментов</string>
 </resources>
-

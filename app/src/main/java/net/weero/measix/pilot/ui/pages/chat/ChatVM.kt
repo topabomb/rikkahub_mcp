@@ -37,7 +37,6 @@ import net.weero.measix.pilot.service.ConversationReadState
 import net.weero.measix.pilot.service.ConversationSummary
 import net.weero.measix.pilot.service.ConversationUiModel
 import net.weero.measix.pilot.service.ConversationViewLease
-import net.weero.measix.pilot.data.ai.mcp.McpManager
 import net.weero.measix.pilot.service.ArtifactUseCase
 import net.weero.measix.pilot.service.ArtifactDraftScope
 import net.weero.measix.pilot.service.FavoriteService
@@ -64,7 +63,6 @@ class ChatVM(
     private val artifactUseCase: ArtifactUseCase,
     private val favoriteService: FavoriteService,
     private val chatErrorStore: ChatErrorStore,
-    val mcpManager: McpManager,
 ) : ViewModel() {
     private val _conversationId: Uuid = Uuid.parse(id)
     private val cleared = AtomicBoolean(false)

@@ -2,6 +2,7 @@ package net.weero.measix.pilot.data.ai.mcp
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -117,7 +118,13 @@ class McpOAuthClient(
                 addAll(wellKnownPrmUrls(serverUrl))
             }.distinct()
             for (url in candidates) {
-                val meta = runCatching { getJson<ProtectedResourceMetadata>(url) }.getOrNull()
+                val meta = try {
+                    getJson<ProtectedResourceMetadata>(url)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) {
+                    null
+                }
                 if (meta != null && meta.authorizationServers.isNotEmpty()) {
                     Log.i(TAG, "discoverProtectedResource: found via $url -> ${meta.authorizationServers}")
                     return@withContext meta
@@ -133,7 +140,13 @@ class McpOAuthClient(
     suspend fun discoverAuthorizationServer(issuer: String): AuthorizationServerMetadata =
         withContext(Dispatchers.IO) {
             for (url in wellKnownAsUrls(issuer)) {
-                val meta = runCatching { getJson<AuthorizationServerMetadata>(url) }.getOrNull()
+                val meta = try {
+                    getJson<AuthorizationServerMetadata>(url)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) {
+                    null
+                }
                 if (meta?.authorizationEndpoint != null && meta.tokenEndpoint != null) {
                     Log.i(TAG, "discoverAuthorizationServer: found via $url")
                     return@withContext meta
@@ -294,13 +307,17 @@ class McpOAuthClient(
             .header("Accept", "application/json, text/event-stream")
             .get()
             .build()
-        return runCatching {
+        return try {
             executeRaw(request).use { response ->
                 if (response.code != 401) return null
                 val header = response.header("WWW-Authenticate") ?: return null
                 parseResourceMetadata(header)
             }
-        }.getOrNull()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     private fun parseResourceMetadata(wwwAuthenticate: String): String? {

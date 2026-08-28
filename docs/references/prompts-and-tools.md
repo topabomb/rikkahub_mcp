@@ -589,8 +589,23 @@ caller 自身返回 `target_is_caller`。
 
 ### `mcp__<server>__<tool>`
 
-启用：MCP 服务器已连接。名称、description、参数来自 `tools/list`。输入参数以完整 JSON Schema 文档保存，`$schema`、`$defs`、`$ref` 和未知扩展不会在缓存或通用工具层丢失。
-超时 120 秒。`TextContent` 进文本；`ImageContent` 先存上传文件再转 Image part。
+启用：Assistant 已选择该 server，definition 当前 enabled，并存在 definition digest 匹配的完整非空 LKG Catalog；
+当前连接健康不参与 schema 注入。名称、description、参数来自 run 开始时冻结的 `TurnMcpCapabilitySnapshot`；Settings
+只保存 enable/approval policy，不保存远端 schema。输入参数以完整 JSON Schema 文档保存，`$schema`、`$defs`、`$ref`
+和未知扩展不会丢失。
+
+用户手工刷新与 `notifications/tools/list_changed` 成功提交后只更新后续 turn；同一 run 继续使用启动 revision。
+
+失败结果只包含调用决策所需的 `status`、稳定 `reason` 和真正增加信息时的短 `message`：撤销返回
+`unavailable/tool_unavailable`；无 live session 返回 `unavailable/server_unavailable` 并触发内部恢复；需要用户授权返回
+`unavailable/authorization_required`；server 未声明 tools capability 或完整响应无法投影返回
+`failed/protocol_incompatible`；远端 `CallToolResult.isError` 或明确 MCP error 返回 `failed/remote_error` 并保留服务端
+content、`structured_content` 或经裁剪的 message；调用承诺后未取得可确认结果返回 `unknown/outcome_unknown`。
+客户端不声称本地 commitment 等于网络请求已发送，也不自动重放 unknown 调用。server/tool、transport、generation、SDK/HTTP detail、
+`retryable` 和 `request_sent` 不进入 Agent 输出。
+
+成功 `TextContent` 进文本，`ImageContent` 先取得 Artifact lease 再转 Image part，成功 `structuredContent` 也进入工具结果。
+调用总时限 120 秒，取消向上传播。
 
 ---
 

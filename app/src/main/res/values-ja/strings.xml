@@ -879,12 +879,18 @@
   <string name="setting_page_mcp_desc">MCPサーバーを設定</string>
   <string name="mcp_status_idle">アイドル</string>
   <string name="mcp_status_connecting">接続中</string>
-  <string name="mcp_status_connected">接続済み</string>
   <string name="mcp_status_reconnecting">再接続中 (%1$d/%2$d)</string>
-  <string name="mcp_status_dormant">休眠中、%1$d秒後に再試行</string>
+  <string name="mcp_status_maintenance_reconnecting">MCP サービスの復旧を確認しています</string>
   <string name="mcp_status_error">エラー: %1$s</string>
   <string name="mcp_status_needs_authorization">認証が必要です</string>
   <string name="mcp_status_authorizing">認証中</string>
+  <string name="mcp_status_discovering">ツールを検出中</string>
+  <string name="mcp_status_ready">%1$d 個のツールが利用可能</string>
+  <string name="mcp_status_retry_scheduled">再試行を予約済み（%1$d/%2$d）、%3$d 秒後</string>
+  <string name="mcp_status_maintenance_retry">MCP サービスは一時的に利用できません。%1$d 秒後に再確認します</string>
+  <string name="mcp_status_waiting_network">ネットワークを待機中</string>
+  <string name="mcp_status_catalog_rejected_empty">サーバーがツールを返さなかったため、検証済みカタログは置き換えられませんでした</string>
+  <string name="mcp_status_catalog_stale">最後に検証されたカタログ（%1$d ツール）を使用中。更新に失敗しました</string>
   <string name="mcp_oauth_authorize">認証</string>
   <string name="mcp_oauth_authorizing_hint">認証中、ブラウザで完了してください…</string>
   <string name="mcp_oauth_cancel_authorization">認証をキャンセル</string>
@@ -1336,7 +1342,12 @@
   <string name="chat_readiness_mcp_not_configured">未設定</string>
   <string name="chat_readiness_mcp_all_disabled">無効</string>
   <string name="chat_readiness_mcp_none_selected">未使用</string>
+  <string name="chat_readiness_mcp_connecting">ツールを検出中</string>
+  <string name="chat_readiness_mcp_authorization_required">認証が必要です</string>
+  <string name="chat_readiness_mcp_reconnecting">再接続を待機中</string>
+  <string name="chat_readiness_mcp_unavailable">検証済みツールなし</string>
   <string name="chat_readiness_mcp_ready">%1$d 件有効</string>
+  <string name="chat_readiness_mcp_partial">%1$d/%2$d 件準備完了</string>
   <string name="chat_readiness_mcp_description">MCP 機能を追加し、%1$s のデバイスを切り替えます。</string>
   <string name="chat_readiness_mcp_highlight_term">Measix Device Remote Control</string>
   <string name="chat_readiness_local_tools_title">ローカル機能</string>
@@ -1566,5 +1577,8 @@
   <string name="chat_message_terminal_user_stopped">停止しました</string>
   <string name="chat_message_terminal_superseded">新しい返信に置き換えられました</string>
   <string name="chat_message_terminal_process_restarted">アプリの再起動により中断されました</string>
+  <string name="error_mcp_turn_capability_unavailable">このターンでは次の MCP サーバーを利用できません：%1$s</string>
+  <string name="mcp_picker_manage_servers">MCP サーバーを管理</string>
+  <string name="mcp_refresh_continuing">%1$d 台の MCP サーバーをバックグラウンドで更新しています</string>
+  <string name="mcp_enabled_tools_count">%1$d/%2$d 件のツール</string>
 </resources>
-

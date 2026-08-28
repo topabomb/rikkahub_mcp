@@ -1,135 +1,13 @@
 package net.weero.measix.pilot.data.ai.mcp
 
-import io.modelcontextprotocol.kotlin.sdk.types.Tool
-import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
 
 class McpConfigTest {
-
-    // ==================== mergeTools 测试 ====================
-
-    private fun makeServerTool(name: String, description: String = ""): Tool {
-        return Tool(
-            name = name,
-            description = description,
-            inputSchema = ToolSchema(
-                properties = JsonObject(emptyMap()),
-                required = null,
-            )
-        )
-    }
-
-    @Test
-    fun `mergeTools should add new tools from server`() {
-        val serverTools = listOf(makeServerTool("tool_a"), makeServerTool("tool_b"))
-        val localTools = emptyList<McpTool>()
-
-        val result = mergeTools(serverTools, localTools)
-
-        assertEquals(2, result.size)
-        assertEquals("tool_a", result[0].name)
-        assertEquals("tool_b", result[1].name)
-        assertTrue(result.all { it.enable })
-    }
-
-    @Test
-    fun `mergeTools should preserve enable and needsApproval for existing tools`() {
-        val serverTools = listOf(makeServerTool("tool_a", "updated desc"))
-        val localTools = listOf(
-            McpTool(name = "tool_a", enable = false, needsApproval = true, description = "old desc")
-        )
-
-        val result = mergeTools(serverTools, localTools)
-
-        assertEquals(1, result.size)
-        assertEquals("tool_a", result[0].name)
-        assertEquals(false, result[0].enable)
-        assertEquals(true, result[0].needsApproval)
-        assertEquals("updated desc", result[0].description)
-    }
-
-    @Test
-    fun `mergeTools preserves complete MCP JSON Schema`() {
-        val defs = buildJsonObject {
-            put("query", buildJsonObject { put("type", "string") })
-        }
-        val properties = buildJsonObject {
-            put("query", buildJsonObject { put("\$ref", "#/\$defs/query") })
-        }
-        val serverTool = Tool(
-            name = "search",
-            inputSchema = ToolSchema(
-                schema = "https://json-schema.org/draft/2020-12/schema",
-                properties = properties,
-                required = listOf("query"),
-                defs = defs,
-            ),
-        )
-
-        val schema = mergeTools(listOf(serverTool), emptyList()).single().inputSchema!!
-
-        assertEquals("object", schema["type"]?.jsonPrimitive?.content)
-        assertEquals("#/\$defs/query", schema["properties"]!!.jsonObject["query"]!!.jsonObject["\$ref"]!!.jsonPrimitive.content)
-        assertEquals("string", schema["\$defs"]!!.jsonObject["query"]!!.jsonObject["type"]!!.jsonPrimitive.content)
-        assertEquals("query", schema["required"]!!.jsonArray.single().jsonPrimitive.content)
-        assertEquals(
-            "https://json-schema.org/draft/2020-12/schema",
-            schema["\$schema"]!!.jsonPrimitive.content,
-        )
-    }
-
-    @Test
-    fun `legacy cached MCP object schema decodes as canonical JSON object`() {
-        val cached = """
-            {
-              "name": "legacy",
-              "inputSchema": {
-                "type": "object",
-                "properties": {"value": {"type": "string"}},
-                "required": ["value"]
-              }
-            }
-        """.trimIndent()
-
-        val decoded = Json.decodeFromString<McpTool>(cached)
-
-        assertEquals("object", decoded.inputSchema!!["type"]!!.jsonPrimitive.content)
-        assertEquals("value", decoded.inputSchema["required"]!!.jsonArray.single().jsonPrimitive.content)
-    }
-
-    @Test
-    fun `mergeTools should remove tools not present on server`() {
-        val serverTools = listOf(makeServerTool("tool_a"))
-        val localTools = listOf(
-            McpTool(name = "tool_a"),
-            McpTool(name = "tool_b"),
-        )
-
-        val result = mergeTools(serverTools, localTools)
-
-        assertEquals(1, result.size)
-        assertEquals("tool_a", result[0].name)
-    }
-
-    @Test
-    fun `mergeTools should return empty for empty server tools`() {
-        val serverTools = emptyList<Tool>()
-        val localTools = listOf(McpTool(name = "tool_a"), McpTool(name = "tool_b"))
-
-        val result = mergeTools(serverTools, localTools)
-
-        assertTrue(result.isEmpty())
-    }
 
     // ==================== parseMcpServersFromJson 测试（原有 mcpServers 格式） ====================
 
@@ -280,12 +158,12 @@ class McpConfigTest {
     fun `parse should handle opencode remote format as streamable http`() {
         val json = """
         {
-            "mrl-D256": {
+            "remote-tools": {
                 "type": "remote",
-                "url": "https://mrl-tunnel.weero.net/D233C24D568E4756/agent/mcp",
+                "url": "https://example.com/agent/mcp",
                 "oauth": false,
                 "headers": {
-                    "Authorization": "Bearer 176025"
+                    "Authorization": "Bearer test-token"
                 }
             }
         }
@@ -296,10 +174,10 @@ class McpConfigTest {
         assertEquals(1, result.servers.size)
         val config = result.servers[0]
         assertTrue(config is McpServerConfig.StreamableHTTPServer)
-        assertEquals("mrl-D256", config.commonOptions.name)
-        assertEquals("https://mrl-tunnel.weero.net/D233C24D568E4756/agent/mcp", (config as McpServerConfig.StreamableHTTPServer).url)
+        assertEquals("remote-tools", config.commonOptions.name)
+        assertEquals("https://example.com/agent/mcp", (config as McpServerConfig.StreamableHTTPServer).url)
         assertEquals(1, config.commonOptions.headers.size)
-        assertEquals("Authorization" to "Bearer 176025", config.commonOptions.headers[0])
+        assertEquals("Authorization" to "Bearer test-token", config.commonOptions.headers[0])
         assertTrue(result.unsupportedNames.isEmpty())
     }
 
@@ -469,7 +347,7 @@ class McpConfigTest {
             id = Uuid.parse("12345678-1234-1234-1234-123456789abc"),
             commonOptions = McpCommonOptions(
                 name = "server-with-tools",
-                tools = listOf(McpTool(name = "tool_a"))
+                toolPolicies = listOf(McpToolPolicy(name = "tool_a"))
             ),
             url = "https://example.com/mcp"
         )

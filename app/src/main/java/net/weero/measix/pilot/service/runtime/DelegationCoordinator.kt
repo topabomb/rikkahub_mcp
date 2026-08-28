@@ -24,6 +24,8 @@ import net.weero.measix.pilot.data.ai.GenerationLoop
 import net.weero.measix.pilot.data.ai.GenerationMemoryContext
 import net.weero.measix.pilot.data.ai.GenerationRequest
 import net.weero.measix.pilot.data.ai.resolveGenerationMemoryOwner
+import net.weero.measix.pilot.data.ai.mcp.McpServerCapabilityState
+import net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallPhase
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
@@ -901,6 +903,8 @@ class DelegationCoordinator(
             sourceType = TtsPlaybackSource.SourceType.SUB_ASSISTANT,
         )
         val mediaCapabilities = generationLoop.resolveRequestMediaCapabilities(settings, model)
+        val mcpCapabilities = toolSetFactory.prepareMcpCapabilities(target)
+        targetMcpPreparationFailure(mcpCapabilities)?.let(::error)
 
         // The run-start schema is the Target's immutable capability ceiling. Resource and
         // configuration changes may remove or rebuild these names on later Provider steps,
@@ -913,6 +917,7 @@ class DelegationCoordinator(
             workspaceCwd = snapshot.header.workspaceCwd,
             runMode = ToolSetRunMode.TARGET,
             ttsPlaybackContext = ttsPlaybackContext,
+            mcpCapabilities = mcpCapabilities,
         ).mapTo(linkedSetOf()) { it.name }
 
         // 每个 step 重新解析资源并应用“运行开始时的 Target 能力上限 ∩ 当前有效 Settings”。
@@ -932,6 +937,7 @@ class DelegationCoordinator(
                         workspaceCwd = snapshot.header.workspaceCwd,
                         runMode = ToolSetRunMode.TARGET,
                         ttsPlaybackContext = ttsPlaybackContext,
+                        mcpCapabilities = mcpCapabilities,
                     )
                 }
             }
@@ -1153,3 +1159,13 @@ class DelegationCoordinator(
             ?: emptyList()
     }
 }
+
+internal fun targetMcpPreparationFailure(
+    snapshot: TurnMcpCapabilitySnapshot,
+): String? = snapshot.serverOutcomes
+    .filter { outcome -> outcome.state != McpServerCapabilityState.READY }
+    .takeIf { it.isNotEmpty() }
+    ?.joinToString(
+        prefix = "Target MCP capability preparation failed: ",
+        separator = ", ",
+    ) { outcome -> "${outcome.serverName}=${outcome.state}" }

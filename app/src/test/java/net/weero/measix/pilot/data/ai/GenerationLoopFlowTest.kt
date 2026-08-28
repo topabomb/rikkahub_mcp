@@ -19,6 +19,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.core.ToolResourceLease
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
@@ -715,6 +716,62 @@ class GenerationLoopFlowTest {
             toolEvents.map { it.status },
         )
         assertTrue(toolEvents.all { it.toolName == "missing_tool" })
+    }
+
+    @Test
+    fun `typed tool failure preserves owner output and records failed terminal`() = runTest {
+        val model = Model(modelId = "test-model", displayName = "Test Model")
+        val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
+        val providerManager = mockk<ProviderManager>()
+        val provider = mockk<Provider<ProviderSetting.OpenAI>>(relaxed = true)
+        every { providerManager.getProviderByType(any<ProviderSetting.OpenAI>()) } returns provider
+        val handler = GenerationLoop(
+            context = mockk<Context>(relaxed = true),
+            providerManager = providerManager,
+            json = Json,
+            memoryRepo = mockk<MemoryRepository>(relaxed = true),
+            attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+        )
+        val assistant = Assistant(enableMemory = false)
+        val toolEvents = mutableListOf<ToolExecutionEvent>()
+        val ownerOutput = UIMessagePart.Text("{\"status\":\"failed\",\"reason\":\"remote_error\"}")
+        val tool = Tool(
+            name = "mcp__server__action",
+            description = "Remote action",
+            execute = { throw ToolExecutionFailure(listOf(ownerOutput), "remote failure") },
+        )
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "call-mcp",
+                    toolName = tool.name,
+                    input = "{}",
+                    approvalState = ToolApprovalState.Approved,
+                )
+            ),
+        )
+
+        val chunks = handler.run(
+            GenerationRequest(
+                settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
+                model = model,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
+                messages = listOf(message),
+                assistant = assistant,
+                toolProvider = { listOf(tool) },
+                maxSteps = 1,
+                onCheckpoint = { checkpoint -> checkpoint.toolExecution?.let(toolEvents::add) },
+            )
+        ).toList()
+
+        val result = chunks.filterIsInstance<GenerationChunk.Messages>()
+            .last().messages.last().getTools().single()
+        assertEquals(ownerOutput, result.output.single())
+        assertEquals(
+            listOf(ToolExecutionEventStatus.STARTED, ToolExecutionEventStatus.FAILED),
+            toolEvents.map { it.status },
+        )
     }
 
     @Test

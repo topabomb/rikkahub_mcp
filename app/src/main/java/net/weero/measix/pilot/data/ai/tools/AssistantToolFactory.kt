@@ -387,6 +387,7 @@ class AssistantToolFactory(
             settings = settings,
             capabilityModel = settings.getChatModel(target),
             runMode = ToolSetRunMode.TARGET,
+            mcpCapabilities = toolSetFactory.captureMcpCapabilities(target),
         ).map { it.name }
         return buildList {
             addAll(built)

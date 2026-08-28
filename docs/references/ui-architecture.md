@@ -246,6 +246,10 @@ verticalPaneSplit(windowWidthDp, fallbackListWidthDp, hingeBounds):
 
 聊天链路中的助手、模型、文件、MCP、搜索、推理、Workspace、扩展与导出等临时内容均复用该容器；设置等页面也可以复用 `AdaptiveModal`，但这不会改变其页面导航结构。
 
+空会话引导卡片的 MCP 行与输入框“＋”菜单中的 MCP 项必须打开同一个 `McpPickerSheet`，直接修改当前助手的 MCP 选择，
+不能把引导卡片旁路到 Assistant 或全局设置页。该 Sheet 的标题左对齐，右侧“管理 MCP 服务器”按钮关闭 Sheet 后导航到
+`Screen.SettingMcp`；即使尚未登记 Server 或所有 Server 都已禁用，Sheet 仍显示空状态和这个管理入口。
+
 > **例外**：全屏图片查看器（`ImagePreviewDialog`）是刻意不经过 `AdaptiveModal` 的全屏 `Dialog`
 > （`usePlatformDefaultWidth = false`、纯黑背景、自有点按/竖直拖拽关闭手势与多图翻页）。
 > 相册式浏览需要完整的屏幕空间与手势域，不适配半屏 Sheet / 有界卡片的弹层约定。
@@ -357,6 +361,10 @@ ChatPageContent
   │              └─ AdaptiveModal pickers (助手/模型/文件/MCP/搜索/推理/Workspace)
 ```
 
+MCP 设置页只保留列表下拉刷新，避免顶部栏重复入口。下拉只调用 `McpApplicationService.refreshAll()`，指示器偏移到可折叠
+TopAppBar 下方；它最多绑定 20 秒用户 receipt，不绑定 AppScope 中可能持续数分钟的后台恢复。receipt 结束时若仍有 server
+继续执行，页面停止 spinner、给出后台继续提示，并由各 server 卡片持续显示真实状态。单 server 失败卡片保留独立重试入口。
+
 ### 5.6 顶部/底部留白
 
 | 位置 | 值 | 说明 |
@@ -437,6 +445,7 @@ Koin 模块在 `di/AppModule.kt` 和 `di/DatabaseModule.kt` 等文件中定义�
 - `UpdateChecker` — 应用更新检查（`by lazy` 缓存 `StateFlow`，AppScope 级共享，切换会话不重复请求）
 - `MasterTurnCoordinator` — 主回合生成编排
 - `ConversationApplicationService` / `ConversationQueryService` — UI 写/读端口
+- `McpApplicationService` / `McpQueryService` — MCP 命令与 definition/catalog/runtime 只读投影；Compose 不持有 client
 - `ApplicationRecoveryCoordinator` — 启动恢复与 fail-closed 门禁
 - `ChatNotificationManager` — 通知管理（`createdAtStart = true` 保证进程启动即订阅事件）
 - `AppEventBus` — 全局事件总线

@@ -34,6 +34,8 @@ import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
+import net.weero.measix.pilot.data.ai.mcp.McpLegacyCatalogMigrationPayload
+import net.weero.measix.pilot.data.ai.mcp.normalizeMcpDefinitions
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_COMPRESS_PROMPT
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_SUGGESTION_PROMPT
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_TITLE_PROMPT
@@ -66,6 +68,7 @@ private val Context.settingsStore by preferencesDataStore(
         listOf(
             OcrSettingsMigration(context),
             SearchSelectionMigration(),
+            McpLegacyCatalogSettingsMigration(),
         )
     },
 )
@@ -206,6 +209,7 @@ class SettingsStore private constructor(
 
         // MCP
         val MCP_SERVERS = stringPreferencesKey("mcp_servers")
+        internal val PENDING_MCP_CATALOG_MIGRATION = stringPreferencesKey("pending_mcp_catalog_migration")
 
         // WebDAV
         val WEBDAV_CONFIG = stringPreferencesKey("webdav_config")
@@ -349,14 +353,21 @@ class SettingsStore private constructor(
         }
     }
 
-    /** 备份恢复替换 Local shadow，但不得清空未完成的内部删除 tombstone。 */
+    /**
+     * 备份恢复替换 Local shadow，但不得清空未完成的内部删除 tombstone。旧 MCP schema
+     * staging 属于被替换配置的迁移租约，必须在同一 Settings 写串行区内作废。
+     */
     suspend fun restoreLocal(settings: Settings): Settings =
         updateMutex.withLock {
             val current = localSettings.first { !it.settings.init }.settings
-            updateInternal(
+            val restored = updateInternal(
                 current = current,
                 proposed = settings.withInternalStateFrom(current),
             )
+            dataStore.edit { preferences ->
+                preferences.remove(PENDING_MCP_CATALOG_MIGRATION)
+            }
+            restored
         }
 
     suspend fun updateLocal(transform: (Settings) -> Settings): Settings = updateMutex.withLock {
@@ -383,6 +394,22 @@ class SettingsStore private constructor(
 
     /** Backup is a durable format boundary and exports only the Local shadow. */
     internal suspend fun snapshotLocal(): Settings = localSettings.first { !it.settings.init }.settings.materializeForRead()
+
+    internal suspend fun pendingMcpCatalogMigration(): PendingMcpCatalogMigration? =
+        dataStore.data.first()[PENDING_MCP_CATALOG_MIGRATION]?.let { encoded ->
+            PendingMcpCatalogMigration(
+                encoded = encoded,
+                payload = JsonInstant.decodeFromString(encoded),
+            )
+        }
+
+    internal suspend fun completeMcpCatalogMigration(expectedEncoded: String) {
+        dataStore.edit { preferences ->
+            if (preferences[PENDING_MCP_CATALOG_MIGRATION] == expectedEncoded) {
+                preferences.remove(PENDING_MCP_CATALOG_MIGRATION)
+            }
+        }
+    }
 
     /** Applies one verified managed aggregate without exposing a second configuration owner. */
     internal suspend fun applyManagedSnapshot(envelope: ByteArray): ManagedApplyResult = updateMutex.withLock {
@@ -504,6 +531,11 @@ class SettingsStore private constructor(
 
 }
 
+internal data class PendingMcpCatalogMigration(
+    val encoded: String,
+    val payload: McpLegacyCatalogMigrationPayload,
+)
+
 /**
  * 跨进程重试的删除清理 tombstone。
  * 仅保存清理所需的 Assistant ID 与资源 URI 快照，不保存完整 Assistant 或 prompt。
@@ -570,6 +602,7 @@ data class Settings(
  * 所有 Settings 整体写入共用的纯规范化逻辑，便于用 JVM 测试覆盖真实持久化语义。
  */
 internal fun Settings.normalizeForPersistence(): Settings = copy(
+    mcpServers = mcpServers.normalizeMcpDefinitions(),
     assistants = assistants.map { assistant ->
         assistant.copy(
             description = normalizeDescription(assistant.description),

@@ -26,7 +26,7 @@ Provider 类型决定原生协议族，`useResponseApi` 只选择 OpenAI 子协�
 
 ### 工具 JSON Schema 边界
 
-`Tool.parameters` 与缓存的 `McpTool.inputSchema` 都使用完整 `JsonObject` 作为规范表示。MCP SDK 的 `ToolSchema` 会整体序列化，因而保留 JSON Schema 2020-12 的 `$schema`、`$defs`、`$ref`、`properties` 和 `required`；通用层不使用封闭数据类枚举关键字，也不按 host 删除定义。
+`Tool.parameters` 与目录中的 `McpCatalogTool.inputSchema` 都使用完整 `JsonObject` 作为规范表示。MCP SDK 的 `ToolSchema` 会整体序列化，因而保留 JSON Schema 2020-12 的 `$schema`、`$defs`、`$ref`、`properties` 和 `required`；通用层不使用封闭数据类枚举关键字，也不按 host 删除定义。
 
 OpenAI Chat Completions、Responses 和 Anthropic Messages 直接发送该文档。Gemini 使用官方的 `parametersJsonSchema` 字段，并移除该字段不接受的 `$schema` 方言声明；其余定义和引用保持原样。Provider 差异只能在对应协议 Adapter 处理，不能回写或降级通用缓存。
 

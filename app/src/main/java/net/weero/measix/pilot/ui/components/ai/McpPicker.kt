@@ -3,14 +3,17 @@ package net.weero.measix.pilot.ui.components.ai
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.draw.clip
@@ -24,6 +27,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,47 +39,33 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastFilter
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Alert01
 import me.rerere.hugeicons.stroke.Icon1stBracket
 import me.rerere.hugeicons.stroke.McpServer
 import me.rerere.hugeicons.stroke.Clock02
-import kotlin.uuid.Uuid
+import me.rerere.hugeicons.stroke.Settings03
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.ai.mcp.McpManager
-import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
 import net.weero.measix.pilot.data.ai.mcp.McpStatus
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.service.McpServerPresentation
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.components.ui.Tag
 import net.weero.measix.pilot.ui.components.ui.TagType
-import org.koin.compose.koinInject
-
-/** 判断指定服务器列表中是否有任一处于忙碌状态（连接/重连/休眠/授权中）。 */
-private fun Map<Uuid, McpStatus>.anyBusy(serverIds: Set<Uuid>): Boolean =
-    serverIds.any { id ->
-        val s = this[id] ?: return@any false
-        s == McpStatus.Connecting ||
-            s is McpStatus.Reconnecting ||
-            s is McpStatus.Dormant ||
-            s == McpStatus.Authorizing
-    }
 
 @Composable
 fun McpPickerListItem(
     assistant: Assistant,
-    servers: List<McpServerConfig>,
-    mcpManager: McpManager,
+    servers: List<McpServerPresentation>,
     modifier: Modifier = Modifier,
+    onNavigateToSettings: () -> Unit,
     onUpdateAssistant: (Assistant) -> Unit
 ) {
     var showMcpPicker by remember { mutableStateOf(false) }
-    val status: Map<Uuid, McpStatus> by mcpManager.syncingStatus.collectAsStateWithLifecycle()
     val enabledServers = servers.fastFilter {
-        it.commonOptions.enable && assistant.mcpServers.contains(it.id)
+        it.enabled && assistant.mcpServers.contains(it.serverId)
     }
-    val loading = status.anyBusy(enabledServers.map { it.id }.toSet())
+    val loading = enabledServers.any { it.isBusy }
 
     ListItem(
         leadingContent = {
@@ -113,21 +103,26 @@ fun McpPickerListItem(
         McpPickerSheet(
             assistant = assistant,
             servers = servers,
-            loading = loading,
             onUpdateAssistant = onUpdateAssistant,
+            onNavigateToSettings = onNavigateToSettings,
             onDismiss = { showMcpPicker = false },
         )
     }
 }
 
 @Composable
-private fun McpPickerSheet(
+internal fun McpPickerSheet(
     assistant: Assistant,
-    servers: List<McpServerConfig>,
-    loading: Boolean,
+    servers: List<McpServerPresentation>,
     onUpdateAssistant: (Assistant) -> Unit,
+    onNavigateToSettings: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val selectedServers = servers.fastFilter {
+        it.enabled && assistant.mcpServers.contains(it.serverId)
+    }
+    val loading = selectedServers.any { it.isBusy }
+    val hasEnabledServers = servers.any { it.enabled }
     AdaptiveModal(
         onDismissRequest = onDismiss,
     ) {
@@ -139,12 +134,32 @@ private fun McpPickerSheet(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                text = stringResource(id = R.string.mcp_picker_title),
-                style = MaterialTheme.typography.titleLarge.copy(
-                    fontWeight = FontWeight.Bold
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = stringResource(id = R.string.mcp_picker_title),
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        fontWeight = FontWeight.Bold
+                    ),
+                    modifier = Modifier.weight(1f),
                 )
-            )
+                TextButton(
+                    onClick = {
+                        onDismiss()
+                        onNavigateToSettings()
+                    },
+                ) {
+                    Icon(
+                        imageVector = HugeIcons.Settings03,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(stringResource(R.string.mcp_picker_manage_servers))
+                }
+            }
             AnimatedVisibility(loading) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -158,16 +173,35 @@ private fun McpPickerSheet(
                     )
                 }
             }
-            McpPicker(
-                assistant = assistant,
-                servers = servers,
-                onUpdateAssistant = {
-                    onUpdateAssistant(it)
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-            )
+            if (hasEnabledServers) {
+                McpPicker(
+                    assistant = assistant,
+                    servers = servers,
+                    onUpdateAssistant = onUpdateAssistant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = stringResource(
+                            if (servers.isEmpty()) {
+                                R.string.setting_mcp_page_no_mcp_servers_found
+                            } else {
+                                R.string.chat_readiness_mcp_all_disabled
+                            }
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
 }
@@ -175,19 +209,18 @@ private fun McpPickerSheet(
 @Composable
 fun McpPicker(
     assistant: Assistant,
-    servers: List<McpServerConfig>,
+    servers: List<McpServerPresentation>,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     onUpdateAssistant: (Assistant) -> Unit
 ) {
-    val mcpManager = koinInject<McpManager>()
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = contentPadding,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        items(servers.fastFilter { it.commonOptions.enable }) { server ->
-            val status by mcpManager.getStatus(server.id).collectAsStateWithLifecycle(McpStatus.Idle)
+        items(servers.fastFilter { it.enabled }, key = { it.serverId }) { server ->
+            val status = server.status
             Card {
                 Row(
                     modifier = Modifier
@@ -198,38 +231,70 @@ fun McpPicker(
                 ) {
                     when (status) {
                         McpStatus.Idle -> Icon(HugeIcons.Icon1stBracket, null)
-                        McpStatus.Connecting -> CircularProgressIndicator(
-                            modifier = Modifier.size(
-                                24.dp
-                            )
-                        )
+                        McpStatus.Connecting -> if (server.isReady) {
+                            Icon(HugeIcons.McpServer, null)
+                        } else {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        }
 
-                        McpStatus.Connected -> Icon(HugeIcons.McpServer, null)
-                        is McpStatus.Reconnecting -> CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp)
-                        )
-                        is McpStatus.Dormant -> Icon(HugeIcons.Clock02, null)
+                        McpStatus.Discovering -> if (server.isReady) {
+                            Icon(HugeIcons.McpServer, null)
+                        } else {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        }
+                        is McpStatus.Ready -> Icon(HugeIcons.McpServer, null)
+                        is McpStatus.Reconnecting -> if (status.maintenance || server.isReady) {
+                            Icon(HugeIcons.Clock02, null)
+                        } else {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        }
+                        is McpStatus.RetryScheduled,
+                        McpStatus.WaitingNetwork,
+                        is McpStatus.CatalogStale -> Icon(HugeIcons.Clock02, null)
+                        McpStatus.CatalogRejectedEmpty,
                         is McpStatus.Error -> Icon(HugeIcons.Alert01, null)
                         McpStatus.NeedsAuthorization -> Icon(HugeIcons.Alert01, null)
-                        McpStatus.Authorizing -> CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp)
-                        )
+                        McpStatus.Authorizing -> if (server.isReady) {
+                            Icon(HugeIcons.Clock02, null)
+                        } else {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        }
                     }
                     Column(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Text(
-                            text = server.commonOptions.name,
+                            text = server.name,
                             style = MaterialTheme.typography.titleLarge,
                         )
                         Text(
                             text = when (val s = status) {
                                 is McpStatus.Idle -> stringResource(R.string.mcp_status_idle)
                                 is McpStatus.Connecting -> stringResource(R.string.mcp_status_connecting)
-                                is McpStatus.Connected -> stringResource(R.string.mcp_status_connected)
-                                is McpStatus.Reconnecting -> stringResource(R.string.mcp_status_reconnecting, s.attempt, s.maxAttempts)
-                                is McpStatus.Dormant -> stringResource(R.string.mcp_status_dormant, (s.nextRetryInMs / 1000).toInt())
+                                is McpStatus.Discovering -> stringResource(R.string.mcp_status_discovering)
+                                is McpStatus.Ready -> stringResource(R.string.mcp_status_ready, s.toolCount)
+                                is McpStatus.Reconnecting -> if (s.maintenance) {
+                                    stringResource(R.string.mcp_status_maintenance_reconnecting)
+                                } else {
+                                    stringResource(R.string.mcp_status_reconnecting, s.attempt, s.maxAttempts)
+                                }
+                                is McpStatus.RetryScheduled -> if (s.maintenance) {
+                                    stringResource(
+                                        R.string.mcp_status_maintenance_retry,
+                                        (s.retryInMs / 1000).toInt(),
+                                    )
+                                } else {
+                                    stringResource(
+                                        R.string.mcp_status_retry_scheduled,
+                                        s.attempt,
+                                        s.maxAttempts,
+                                        (s.retryInMs / 1000).toInt(),
+                                    )
+                                }
+                                is McpStatus.WaitingNetwork -> stringResource(R.string.mcp_status_waiting_network)
+                                McpStatus.CatalogRejectedEmpty -> stringResource(R.string.mcp_status_catalog_rejected_empty)
+                                is McpStatus.CatalogStale -> stringResource(R.string.mcp_status_catalog_stale, s.lastKnownGoodCount)
                                 is McpStatus.Error -> s.message?.let {
                                     stringResource(R.string.mcp_status_error, it)
                                 } ?: stringResource(R.string.error_title_operation)
@@ -240,9 +305,9 @@ fun McpPicker(
                             color = LocalContentColor.current.copy(alpha = 0.8f),
                             maxLines = 5
                         )
-                        if (status == McpStatus.Connected) {
-                            val tools = server.commonOptions.tools
-                            val enabledTools = tools.fastFilter { it.enable }
+                        if (server.tools.isNotEmpty()) {
+                            val tools = server.tools
+                            val enabledTools = tools.fastFilter { it.enabled }
                             Tag(
                                 type = TagType.INFO
                             ) {
@@ -251,12 +316,12 @@ fun McpPicker(
                         }
                     }
                     Switch(
-                        checked = server.id in assistant.mcpServers,
+                        checked = server.serverId in assistant.mcpServers,
                         onCheckedChange = {
                             if (it) {
                                 val newServers = assistant.mcpServers.toMutableSet()
-                                newServers.add(server.id)
-                                newServers.removeIf { servers.none { s -> s.id == server.id } } // remove invalid servers
+                                newServers.add(server.serverId)
+                                newServers.removeIf { selectedId -> servers.none { it.serverId == selectedId } }
                                 onUpdateAssistant(
                                     assistant.copy(
                                         mcpServers = newServers.toSet()
@@ -264,8 +329,8 @@ fun McpPicker(
                                 )
                             } else {
                                 val newServers = assistant.mcpServers.toMutableSet()
-                                newServers.remove(server.id)
-                                newServers.removeIf { servers.none { s -> s.id == server.id } } //  remove invalid servers
+                                newServers.remove(server.serverId)
+                                newServers.removeIf { selectedId -> servers.none { it.serverId == selectedId } }
                                 onUpdateAssistant(
                                     assistant.copy(
                                         mcpServers = newServers.toSet()

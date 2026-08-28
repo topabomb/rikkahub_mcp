@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.architecture
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -212,6 +213,90 @@ class SingleWriterContractTest {
         assertNoHits("DelegationCoordinator?")
         assertNoHits("GenerationToolSetFactory?")
         assertNoHits("Sub-assistant coordinator is not available")
+    }
+
+    @Test
+    fun `mcp ui uses application query boundary and settings does not own remote schema`() {
+        listOf(
+            "ui/components/ai/McpPicker.kt",
+            "ui/pages/setting/SettingMcpPage.kt",
+            "ui/pages/chat/ChatVM.kt",
+            "ui/components/ai/FilesPicker.kt",
+        ).forEach { path ->
+            assertFalse(
+                "$path must not own MCP runtime",
+                File(sourceRoot, path).readText().contains("McpRuntimeCoordinator"),
+            )
+        }
+        val config = File(sourceRoot, "data/ai/mcp/McpConfig.kt").readText()
+        assertTrue(config.contains("val toolPolicies: List<McpToolPolicy>"))
+        assertFalse(config.contains("data class McpTool("))
+        assertFalse(config.contains("fun mergeTools("))
+
+        val settingPage = File(sourceRoot, "ui/pages/setting/SettingMcpPage.kt").readText()
+        assertFalse("MCP settings UI must not write Settings directly", settingPage.contains("updateSettings("))
+        assertFalse("MCP settings UI must not write SettingsStore directly", settingPage.contains("updateLocal("))
+        assertFalse("MCP settings UI must not bypass its query projection through SettingVM", settingPage.contains("SettingVM"))
+        assertFalse(
+            "MCP settings UI must not consume EffectiveSettingsSnapshot",
+            settingPage.contains("EffectiveSettingsSnapshot"),
+        )
+        assertFalse(File(sourceRoot, "ui/pages/setting/McpSettingMutation.kt").exists())
+        assertEquals(
+            "pull-to-refresh must be the single global refresh command in MCP settings",
+            1,
+            Regex(Regex.escape("mcpApplicationService.refreshAll()"))
+                .findAll(settingPage)
+                .count(),
+        )
+        assertFalse(
+            "MCP settings must not duplicate pull-to-refresh in the top app bar",
+            settingPage.contains("HugeIcons.Refresh"),
+        )
+
+        val chatPage = File(sourceRoot, "ui/pages/chat/ChatPage.kt").readText()
+        assertTrue(
+            "conversation readiness must open the same MCP picker used by chat controls",
+            Regex("onReadinessMcpClick\\s*=\\s*\\{\\s*showMcpPicker\\s*=\\s*true\\s*}")
+                .containsMatchIn(chatPage),
+        )
+        assertTrue(chatPage.contains("McpPickerSheet("))
+        val mcpPicker = File(sourceRoot, "ui/components/ai/McpPicker.kt").readText()
+        assertTrue(mcpPicker.contains("R.string.mcp_picker_manage_servers"))
+        assertTrue(mcpPicker.contains("onNavigateToSettings"))
+
+        listOf(
+            "ui/pages/setting/SettingMcpPage.kt",
+            "ui/components/ai/McpPicker.kt",
+            "ui/components/ai/FilesPicker.kt",
+            "ui/pages/chat/ConversationReadiness.kt",
+            "ui/pages/assistant/detail/AssistantMcpPage.kt",
+        ).forEach { path ->
+            val source = File(sourceRoot, path).readText()
+            assertFalse(
+                "$path must consume McpQueryService projection instead of Settings MCP definitions",
+                source.contains("settings.mcpServers") || source.contains("setting.mcpServers") ||
+                    source.contains("effectiveSettings.settings.mcpServers"),
+            )
+        }
+
+        val applicationService = File(sourceRoot, "service/McpApplicationService.kt").readText()
+        assertTrue(applicationService.contains("settingsStore.updateLocal"))
+        assertFalse(applicationService.contains("updateToolPolicy"))
+
+        val catalog = File(sourceRoot, "data/ai/mcp/McpCatalogStore.kt").readText()
+        assertFalse("negotiated protocol is session state, not catalog identity", catalog.contains("protocolVersion"))
+        assertFalse("unused server metadata must not become durable catalog fields", catalog.contains("serverImplementation"))
+        assertFalse("unused wall-clock metadata must not become durable catalog fields", catalog.contains("verifiedAtEpochMillis"))
+
+        val query = File(sourceRoot, "service/McpQueryService.kt").readText()
+        assertFalse("UI query must consume the slot capability projection", query.contains("McpCatalogStore"))
+
+        val toolFactory = File(sourceRoot, "data/ai/tools/GenerationToolSetFactory.kt").readText()
+        assertFalse(
+            "turn callers must pass an explicit MCP snapshot",
+            toolFactory.contains("mcpCapabilities: TurnMcpCapabilitySnapshot ="),
+        )
     }
 
     @Test

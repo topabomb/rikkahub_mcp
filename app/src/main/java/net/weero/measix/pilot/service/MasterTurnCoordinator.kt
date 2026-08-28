@@ -60,7 +60,7 @@ import net.weero.measix.pilot.data.ai.subassistant.buildSubAssistantCallResult
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.parseAssistantCallExtrasFromInput
-import net.weero.measix.pilot.data.ai.mcp.McpManager
+import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
 import net.weero.measix.pilot.data.ai.tools.AssistantToolFactory
 import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
 import net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
@@ -260,7 +260,7 @@ class MasterTurnCoordinator(
     private val memoryRepository: MemoryRepository,
     private val generationLoop: GenerationLoop,
     private val templateTransformer: TemplateTransformer,
-    private val mcpManager: McpManager,
+    private val mcpManager: McpRuntimeCoordinator,
     private val toolSetFactory: GenerationToolSetFactory,
     private val workspaceRepository: WorkspaceRepository,
     private val assistantToolFactory: AssistantToolFactory,
@@ -651,6 +651,22 @@ class MasterTurnCoordinator(
 
             val model = settings.getChatModel(assistant)
                 ?: error("No chat model is configured for assistant ${assistant.id}")
+            val mcpCapabilities = mcpManager.prepareTurnCapabilities(assistant)
+            val unavailableMcp = mcpCapabilities.serverOutcomes.filter {
+                it.state != net.weero.measix.pilot.data.ai.mcp.McpServerCapabilityState.READY
+            }
+            if (unavailableMcp.isNotEmpty()) {
+                chatErrorStore.add(
+                    IllegalStateException(
+                        context.getString(
+                            R.string.error_mcp_turn_capability_unavailable,
+                            unavailableMcp.joinToString(", ") { it.serverName },
+                        )
+                    ),
+                    conversationId,
+                    title = context.getString(R.string.error_title_tool_unavailable),
+                )
+            }
             senderName = if (assistant.useAssistantAvatar) {
                 assistant.name.ifEmpty { context.getString(R.string.assistant_page_default_assistant) }
             } else {
@@ -659,7 +675,7 @@ class MasterTurnCoordinator(
 
             // memory tool
             if (!model.abilities.contains(ModelAbility.TOOL)) {
-                if (shouldUseExternalWebSearch(assistant, model) || mcpManager.getAllAvailableTools(assistant).isNotEmpty()) {
+                if (shouldUseExternalWebSearch(assistant, model) || mcpCapabilities.tools.isNotEmpty()) {
                     chatErrorStore.add(
                         IllegalStateException(context.getString(R.string.tools_warning)),
                         conversationId,
@@ -696,6 +712,7 @@ class MasterTurnCoordinator(
                         capabilityMediaCapabilities = mediaCapabilities,
                         workspaceCwd = snapshot.header.workspaceCwd,
                         ttsPlaybackContext = turnTtsContext,
+                        mcpCapabilities = mcpCapabilities,
                         additionalToolsBeforeMcp = assistantToolFactory.buildTools(
                             callerAssistant = currentAssistant,
                             masterConversationId = conversationId,

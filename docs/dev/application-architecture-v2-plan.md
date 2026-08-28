@@ -120,7 +120,8 @@ Domain owners
     ├─ TurnEngine ─ GenerationLoop
     ├─ SettingsStore ─ effective configuration
     ├─ ArtifactStore / SkillManager / BackupArchiveService
-    ├─ McpManager
+    ├─ McpRuntimeCoordinator ─ McpRuntimeStateStore
+    │                         └─ McpServerRuntime
     └─ WorkspaceTerminalRuntime
     │ narrow repository, payload and platform ports
     ▼
@@ -161,7 +162,10 @@ Room / DataStore / managed snapshot / filesystem / Provider / PRoot / Android
 | 启动恢复 | `ApplicationRecoveryCoordinator` + `TurnRecovery` | 前者是全应用门禁，后者只解释当前 schema 的中断状态 |
 | 本地与受管配置、有效读模型 | `SettingsStore` | 防止出现 LocalStore、PolicyStore、EffectiveStore 三个公开 owner |
 | Artifact metadata/引用/生命周期 | `ArtifactStore` | 删除和 GC 正确性依赖唯一引用面与状态机 |
-| MCP connection lifecycle | `McpManager` | 每个 server 是进程资源，不是 Settings 的一部分 |
+| MCP Server definition 与工具策略 | `SettingsStore` | 只保存用户/受管配置，不保存远端 schema 或连接状态 |
+| MCP last-known-good catalog | `McpCatalogStore` | 远端目录是独立 durable cache；完整校验后原子提交，不增加 Settings revision |
+| MCP connection lifecycle | `McpRuntimeCoordinator` + per-server `McpServerRuntime` | Coordinator 只汇流触发和管理 registry；每个 server 的 generation/client lease/jobs/重试只有一个 owner |
+| 本轮 MCP 模型能力 | `TurnMcpCapabilitySnapshot` | run start 从 Ready catalog 截取，step 间不动态增加或替换 schema |
 | Workspace durable command / terminal process | `WorkspaceApplicationService` / `WorkspaceTerminalRuntime` | 持久化 Workspace 与 PTY 生命周期是不同事实 |
 
 Application service 的存在必须能回答“它跨越了哪两个 owner 或哪项平台边界”。无法回答的只转发 API 在 V2 删除。
@@ -526,7 +530,7 @@ ASSISTANT，工具图片仍在原 `Tool.output`；Provider 为满足 wire schema
 
 - Provider、Model、默认模型与模型级参数；
 - Assistant、Tag、Mode Injection、Quick Message、受管 Prompt 与默认选择；
-- MCP 的非机密连接定义、工具开关和策略；
+- MCP 的非机密连接定义、按 `(serverId, toolName)` 保存的工具开关和策略；远端 description/schema 不属于 Settings；
 - TTS、ASR、Search 的公开定义与默认选择；
 - 受管 Skill 的签名引用、版本、公开资源和允许关系；
 - 字段/记录锁、租户策略、能力开关和配置 generation。
@@ -642,39 +646,117 @@ lock 的本地记录继续可编辑，禁止为受管状态建立另一套 updat
 - 该变更使用 DataStore 的一次性显式迁移：根据旧列表和 index 计算 id、写新 key、删除旧 key，不保留双读；
 - 旧 key 的迁移代码作为合法持久化迁移保留，不能在客户端升级完成后当成错误修复删除。
 
-## 8. MCP：一个 server 一个 ConnectionSlot
+## 8. MCP：Definition、Catalog、Session 与 Turn Snapshot
 
-当前 `McpManager` 用 `clients`、`connectedConfigs`、`status`、`reconnectJobs`、`dormantJobs`、
-`reconnectAttempts`、`serverLocks`、`authorizationJobs` 等并行 map 表达同一 server 生命周期。任何增删、重连或取消都要
-跨 map 保持一致。
+Phase E 已把八组平行 map 收敛为一个 per-server runtime，解决了旧连接 callback 覆盖新连接、remove/re-add 和 OAuth
+资源身份等竞态。进一步审计发现 Settings 仍同时保存 Server definition、用户工具策略和远端 schema；`Connected` 同时被
+UI 解释为 transport、目录和 Agent 可用性；生成时又从 Settings 最新缓存重新装配工具。这些事实必须由独立 owner 管理，
+不能用 transport 状态或可变配置推断目录提交与当前 turn 的工具披露。
 
-V2 只保留一个 keyed `ConnectionSlot`：
+### 8.1 唯一 owner
 
 ```text
-ConnectionSlot(serverId)
-├─ desired config fingerprint + effective revision
-├─ client
-├─ lifecycle state/status
-├─ reconnect attempt/job
-├─ dormant/auth job
-└─ operation mutex
+SettingsStore
+  ├─ McpServerDefinition(id/name/transport/url/headers/oauth/enabled)
+  └─ McpToolPolicy(serverId, toolName, enable, needsApproval)
+
+McpCatalogStore
+  └─ LastKnownGoodCatalog(serverId, revision, definitionDigest,
+                           catalogDigest, tools)
+
+McpRuntimeCoordinator (AppScope)
+  ├─ McpRuntimeStateStore(server registry + immutable capability projection)
+  ├─ shared four-way lifecycle operation budget
+  └─ trigger fan-in + 20-second user receipt + turn capture
+
+McpServerRuntime (one per server)
+  ├─ desired definition + logical generation + accepted request fingerprint
+  ├─ client lease + transport state
+  └─ connection/catalog/reconnect/authorization jobs
+
+McpOAuthCoordinator / McpProtocol / McpToolCallExecutor
+  └─ OAuth CAS / stateless SDK protocol / admitted invocation execution
+
+TurnMcpCapabilitySnapshot
+  └─ run-start immutable intersection of Assistant selection,
+     enabled definition/policy and committed LKG revision
 ```
 
-所有入口最终走一个 `reconcile(effectiveRevision, desiredConfigs)`：
+远端工具 description/inputSchema 物理退出 `McpCommonOptions`。历史 Settings JSON 的 `tools` 字段在一次性 DataStore migration
+中拆为 `McpToolPolicy` 与完整非空 Catalog staging，随后新写入只含策略；运行时不保留旧 schema 双读。Catalog 使用独立
+app-private 原子持久化，不能通过 Settings 更新触发所有
+Server reconcile。删除 Server 时由一个 typed application command 同时提交 definition 删除并精确移除 catalog，不允许 UI
+分别调用两个 owner。
 
-- 有效配置变化、应用回前台、网络恢复和用户手工同步都只是触发 reconcile；
-- reconcile 以 id + connection fingerprint 做 create/update/remove，不为每种触发原因复制重连主链；
-- 仅工具 schema/开关变化时刷新工具，不重建连接；连接参数变化时关闭旧 client 后创建新 client；
-- job 只能修改拥有它的 slot，revision/fingerprint 变化后旧 job 的结果被拒绝；
-- `callTool` 在 slot mutex 内确认 client 与最新 fingerprint 匹配，取消继续传播；
-- 对外状态是 slots 的只读投影，不再另有可独立修改的 `_status` 权威；
-- managed MCP headers 仍作为既有配置记录字段解析；OAuth token 始终为设备本地状态，不进入服务端快照。
+手工备份 v4 将 `mcp_catalogs.json` 纳入 manifest；旧 v3 archive 通过同一解析规则一次性迁移。恢复替换 Settings 时作废原本地
+staging，并等待已取得迁移租约的 Catalog 写入收口后整体覆盖，防止恢复前目录在恢复后成为孤儿。
 
-实施后删除上述并行 map、`getServerLock`、重复 `createAndConnect/reconnect/syncAll` 决策分支；保留一个 Manager 是因为
-它确实拥有多连接进程资源，不能为了删类把 client 生命周期塞入 SettingsStore。`McpConnectionKey` 作为 slot 的 private
-fingerprint 合并进 `McpManager.kt`，删除独立文件；用户手工刷新入口由含义模糊的 `syncAll()` 重命名为
-`refreshConnections()`，它也只触发同一个 reconcile，不建立第二条同步路径。`McpStatus`、`McpOAuthClient` 和
-`NetworkMonitor` 分别是 UI contract、外部授权 adapter 和系统网络 adapter，明确保留。
+### 8.2 Catalog 提交协议
+
+`initialize` 成功不等于 Agent Ready。一次 activation 必须在同一 logical generation 内完成：
+
+1. 确认 server 声明 tools capability；
+2. 循环读取全部 `tools/list(cursor)`，限制页数、总工具数并拒绝重复 cursor；
+3. 校验名称、唯一性、schema 和聚合命名；
+4. 应用产品 fail-closed 规则：候选目录必须非空；
+5. 计算确定顺序的 catalog digest；
+6. 回到 actor CAS 校验 generation、definition digest 和 client lease；
+7. `McpCatalogStore` 原子提交后才发布 `Available(revision,count)`；相同 digest 不写、不增加 revision。
+
+MCP 协议允许空 tools 集合，所以空目录是 `RejectedEmpty` 产品状态，不是假造协议错误。它不得覆盖 last-known-good；已有
+同 definition LKG 时仍进入新 turn，连接健康只在工具调用结果中体现。首次没有 LKG 时，空目录不得进入新 turn。分页中任一
+页失败、取消或校验失败都不能发布半目录。
+
+`notifications/tools/list_changed` 只进入 conflated `RefreshCatalog` command；通知是 cache invalidation，不是目录事实。刷新失败
+发布 `Stale(lastGood, reason, retryAt)`，相同 generation 的通知突发最多形成当前一次和必要的一次 follow-up。未声明
+`listChanged` 的 Server 只能在新连接、definition/授权身份变化或用户明确刷新时重新发现；客户端不能声称能检测静默变化。
+
+### 8.3 Session actor 与移动端生命周期
+
+- 跨 Server 使用有限并发，每台 Server 独立完成，不能全局串行或无界 fan-out；
+- actor 只串行 owner 校验和状态提交，不能持 mutex 等待 connect/list/call；网络操作持 generation/client lease，完成后 CAS；
+- transport 重复 onError/onClose 对同 generation 幂等，只安排一次 `RetryScheduled`；取消在 generation-aware `finally` 中收敛；
+- `callTool` 使用 run-start binding 与当前 client lease，长调用不能阻塞 delete/reconnect/list_changed；用户明确撤销在调用承诺前
+  fail-closed，远端目录刷新不撤销当前 run 的旧 binding；
+- 本地 definition/policy typed command 与不可撤销 invocation commitment 共享唯一短临界区：配置提交先行时最终 admission
+  必须拒绝，调用承诺先行时进入 in-flight；SDK 不暴露网络首字节边界，承诺后的失败按 unknown 处理。远端 I/O 和 slot mutex
+  不得进入该临界区，不能借确定性之名恢复全局串行网络执行；
+- Settings collector 只观察规范化 desired fingerprint，Catalog commit 不进入 Settings，不产生 O(N²) reconcile；
+- enabled 只表示可被 Assistant 使用，不等于移动端常驻连接；启动恢复 LKG 但不把全部登记项排队。新对话只激活所选 server，
+  页面/turn 取消只停止等待，不取消 AppScope session operation；
+- Android 使用 default network callback + `NET_CAPABILITY_VALIDATED`。前台/默认网络恢复只唤醒已激活且断连的 runtime；
+  健康 session 不执行目录刷新；
+- 删除固定 Dormant 轮询。前三次 equal-jitter ceiling 为 2/6/15 秒，之后五次 maintenance ceiling 为
+  30/60/120/240/300 秒；offline/background 事件等待不
+  消耗 attempt。预算耗尽进入 `Error` 但保留 LKG，下一次调用、前台、默认网络或用户刷新重置恢复预算；
+- 跨 server connect/首次 discovery/健康 session 的 catalog refresh 共用最多四路并行门，工具调用不经过该门。operation timeout
+  从取得 permit 后开始；排队中的 runtime 不发布 Connecting，避免多配置 UI 全部永久 loading。
+
+### 8.4 本轮模型能力与即时收紧
+
+Master 和 Target 都在 run start 捕获一个 `TurnMcpCapabilitySnapshot`。Provider 后续 step 只复用该 snapshot；工具新增和 schema
+修改在下一 turn 生效，不能改变当前 prompt/tool cache。用户手工刷新和 server `list_changed` 成功提交后更新后续 turn；
+普通断连、授权状态、后台和重试不改变 LKG schema。无 live session 时旧 snapshot 调用返回
+`unavailable/server_unavailable` 并触发恢复；用户禁用/删除/definition/policy 明确撤销才在调用承诺前返回
+`unavailable/tool_unavailable`；server 未声明 tools capability 在承诺前返回 `failed/protocol_incompatible`。调用承诺后的
+timeout/transport/未分类异常在没有完整结果时统一为 `unknown/outcome_unknown`，不声称请求必然已经发送，也不得自动重放。
+Agent 结果只保留 `status + reason + 必要 message`；transport、generation、SDK detail 和恢复动作归内部诊断。
+
+`GenerationToolSetFactory` 只消费显式 snapshot，不再调用 Coordinator 读取 Settings 最新目录。单个非法 Server/工具只隔离自身，
+不能让其他合法 Server 的工具全部消失。Conversation readiness 必须组合 selected/ready/pending/failed，而不是以配置存在或
+Assistant 已选择推断 Ready。
+
+### 8.5 Application 与 UI 边界
+
+UI 只依赖 `McpApplicationService` typed commands 和 `McpQueryService` 产生的 `McpServerPresentation`，不得取得 Coordinator、runtime、
+raw Client 或连接 Job。Presentation 一次性组合用户意图、transport、catalog、availability 和当前 user operation；页面 scope
+取消只停止等待 UI receipt，不取消 AppScope 连接任务。
+
+同 definition 的非空 LKG 是唯一可注入条件，Ready 不是目录 owner。`RejectedEmpty`、`Stale`、`WaitingNetwork`、
+`RetryScheduled`、Auth 和 Failed 都有独立文案且保留真实工具计数；RetryScheduled/WaitingNetwork 不是 loading。页面下拉
+spinner 和单 server 重试只绑定本次真实 operation receipt；20 秒后停止前台等待并提示后台继续，不能因为任一 Server 处于
+长期恢复状态而无限旋转。设置页只保留下拉刷新，不保留重复的顶部刷新按钮。保留
+`McpOAuthClient`、脱敏双日志和 Android network adapter，但后者使用默认 validated network 语义。
 
 ## 9. Artifact、Skill、Backup 与 Workspace
 
@@ -797,9 +879,11 @@ V2 默认不改变 Room 结构。若实施中发现确需关系化新事实，�
 | `SubAssistantRunLeaseRegistry.kt` | `SubAssistantRunLeaseRegistryTest` 和对该内部类型的直接测试 | lease map/handle 变为 `SubAssistantRunGate` private 实现，测试 Gate 行为 |
 | 三个 presentation 原文件 | `ConversationTurnPresentation.kt`、`ToolCallPhase.kt`、`ToolCallProjection.kt` | 合并后的 `ConversationPresentation.kt` |
 | UI 私有工具阶段推断 | `ChatMessageTools.resolveToolCallPhase/resultTerminalPhase` 的独立实现 | `ConversationPresentation.kt` 的唯一纯 resolver；active durable phase 优先，历史 output 仅作已结束展示 |
-| `McpConnectionKey.kt` | `McpConnectionKeyTest` 的内部形状断言 | `McpManager.ConnectionSlot` private fingerprint；行为测试迁入 Manager reconcile 测试 |
-| MCP 并行状态容器 | `clients`、`connectedConfigs`、`reconnectJobs`、`dormantJobs`、`reconnectAttempts`、`serverLocks`、`authorizationJobs` 和可独立写 `_status` | 一个 `slots: Map<Uuid, ConnectionSlot>`，状态 Flow 只是 slots 的投影 |
-| MCP 重复重连决策 | `getServerLock` 及 `addClient/createAndConnect/reconnectClient/syncAll` 中重复的 create/update/remove 分支 | 一个 `reconcile(revision, desiredConfigs)`；连接、工具刷新、OAuth 均作为 slot transition |
+| `McpConnectionKey.kt` | `McpConnectionKeyTest` 的内部形状断言 | `McpConfig.connectionFingerprint()`；行为测试迁入 `McpServerRuntime` reconcile 测试 |
+| MCP Settings schema cache | `McpCommonOptions.tools` 中远端 description/inputSchema 与用户策略混存、`syncTools.updateLocal` | Settings 只留 `McpToolPolicy`；远端 schema 由 `McpCatalogStore` 完整提交 |
+| MCP 最新值工具装配 | `getAllAvailableTools` 从 Settings 读取且不校验 runtime、Generation 每 step 重建 | run start `TurnMcpCapabilitySnapshot` + 本地明确撤销 gate；目录刷新不撤销当前 run |
+| MCP UI 直接运行时依赖 | Setting/Picker/ChatVM 持有 runtime coordinator、raw client 和页面连接 Job | `McpApplicationService` command + `McpQueryService` presentation |
+| MCP 固定 Dormant 轮询 | 60 秒 × 30、并被 UI 当作 loading | 按需 activated slot + default network/foreground/用户事件；快速和 maintenance retry 后进入 Error 但保留 LKG |
 | `ArtifactStore.adoptSettingsOwnedImages` | 启动调用和 `ArtifactStoreLifecycleTest` 中 adoption 专用场景 | 当前 typed ownership；背景/头像缺 metadata 或 payload 时清除悬挂 Settings root |
 | 可替换的 `SettingsWritePolicy` 接口与 `AllowAll` 实现 | Store 构造参数、测试 fake policy、`ENTERPRISE_DELIVERY` 可伪造来源 | `SettingsWriteRules` 内唯一纯 lock/generation 校验；managed apply 是 internal 专用入口 |
 | 未读取的 `data_version` key 声明 | 不进入 `Settings`、无 migration 或 writer 的死声明；既有 DataStore 标量不删除 | `Preferences` 的未知 key 透传保留，不创建新的 version owner |
@@ -823,7 +907,7 @@ V2 默认不改变 Room 结构。若实施中发现确需关系化新事实，�
 | `SettingsCommitCoordinator.kt` | `SettingsCommit.kt` | 保留纯 `commitSettings` 顺序，但不把单函数称为 Coordinator |
 | `settingsFlow` | `effectiveSettings` | 所有业务消费者明确读取 Local + Managed + Built-in 的有效快照 |
 | `searchServiceSelected` | `selectedSearchServiceId` | 选择身份从列表位置改为稳定 id |
-| `McpManager.syncAll()` | `refreshConnections()` | 这是用户/生命周期触发 reconcile，不是另一种配置同步协议 |
+| `McpManager` / `syncAll()` | `McpRuntimeCoordinator` / `refreshAllRegisteredServers()` | 名称直接表达跨 server 编排与用户明确的全局目录刷新，不保留旧 facade |
 | `WorkspaceTerminalQueryService.observe()` | `WorkspaceQueryService.observeTerminal()` | 合并后仍明确表达 terminal read projection |
 | `ImageInputProjection` | `AttachmentInputMode` | 投影对象不是图片本身，且必须完整表达 `NATIVE/REFERENCE_ONLY/UNAVAILABLE` 三态 |
 
@@ -836,7 +920,7 @@ V2 默认不改变 Room 结构。若实施中发现确需关系化新事实，�
 | `ToolCallPhase`、active checkpoint projection、turn presentation、UI fallback resolver | `ConversationPresentation.kt` | presentation 不写 durable 事实；工具终态变换仍在 Transition |
 | Reducer 与 `TurnFinalization` 的 cancel/interrupted tool copy | `ConversationTransition.kt` 一份 internal 领域函数 | `TurnFinalization` 跨 Conversation 编排职责保留 |
 | SubAssistant run lease registry + Gate | `SubAssistantRunGate.kt` private 状态 | `DelegationCoordinator` 与 `TurnRecovery` 仍只调用 Gate 公共能力 |
-| MCP client/config/status/jobs/lock | `McpManager.ConnectionSlot` | `McpStatus`、OAuth adapter、NetworkMonitor 保留 |
+| MCP definition/catalog/session/turn exposure | `Settings.tools`、旧 Manager 巨类、最新值装配与 UI 推断 | `SettingsStore` policy、`McpCatalogStore`、`McpRuntimeCoordinator`、per-server `McpServerRuntime`、`TurnMcpCapabilitySnapshot`；OAuth/protocol/tool executor 各自保留单一职责 |
 | Workspace persisted + terminal read projection | `WorkspaceQueryService.kt` | `WorkspaceTerminalRuntime` 继续独占 PTY 生命周期 |
 | shell 与 terminal 的 PRoot 参数装配 | `workspace/.../ProotLaunchSpec.kt` | `ProotShellRunner` 与 Termux session adapter 继续分开 |
 | Skill 单目录 save/import/delete staging | `SkillManager.mutateSkillTree` | bundle root transaction 与 Backup restore 不合并 |
@@ -868,7 +952,7 @@ V2 默认不改变 Room 结构。若实施中发现确需关系化新事实，�
 | `ManagedConfiguration.kt` / `EffectiveSettings.kt` | 按 §7.2.1 实现 envelope、验签、LKG、四态 managed state、原子 asset 与唯一纯 resolver | 直接反序列化远端 `Settings`、第二个公开 Store/Flow、无 LKG 时静默回退 local |
 | Settings 写入入口与设置 UiModel | LOCAL/market 命中 lock 时原子拒绝；restore 只替换 shadow；原页面显示 source/lock/blocked diagnostic | 只禁用 Compose 控件、为 managed 建第二套页面/ViewModel、写失败后发布假 effective 值 |
 | Search 设置与全部搜索消费者 | `selectedSearchServiceId` 一次迁移后只按稳定 id 读写；删除旧 key 与运行时 index fallback | 同时维护 id/index，或排序后靠位置猜选中项 |
-| `McpManager` | 每个 server 只有一个 `ConnectionSlot`；配置、网络、前台、手动刷新统一调用 revision-aware `reconcile` | 平行 map、每种触发源复制连接主链、stale job 覆盖新配置 |
+| MCP 全链 | Settings definition/policy、Catalog LKG、per-server actor、run-start snapshot 与 UI presentation 各有唯一 owner；所有刷新进入 actor command | Settings schema cache、latest-value 工具装配、UI raw Client、长 I/O mutex、空/半目录发布 |
 | `ArtifactStore` 启动恢复 | 删除 settings image adoption 后只恢复合法 Artifact 状态；背景/头像缺 metadata 或 payload 时持久化回退 Settings root | 重新扫描 Settings 猜 owner 或补 DAO 行 |
 | `SkillManager` | 三个单目录公开 API 复用 private `mutateSkillTree`，整包 import 仍走 root transaction | 抽取跨 Skill/Backup/Artifact 的通用文件事务 |
 | `WorkspaceQueryService` / shell 与 terminal adapter | 合并 terminal 只读 projection；两种启动都消费同一 `ProotLaunchSpec` | Query 获得写能力、合并 PTY owner、继续手写两套 argv/env/bind |
@@ -898,7 +982,8 @@ V2 默认不改变 Room 结构。若实施中发现确需关系化新事实，�
 
 ### 11.6 新增生产文件白名单
 
-V2 只允许新增四个生产文件，其他新文件必须先修改本方案并同时指出可删除的旧文件：
+V2 原冻结允许四个生产文件。2026-08-28 的 MCP 现场审计证明远端 catalog 不能继续作为 Settings 字段，也不能让 UI 直接依赖
+runtime owner；因此白名单显式增加三个 MCP 边界文件。其他新文件仍必须先修改本方案并同时指出可删除的旧机制：
 
 | 新文件 | 唯一职责 | 替代/抵消 |
 | --- | --- | --- |
@@ -906,10 +991,13 @@ V2 只允许新增四个生产文件，其他新文件必须先修改本方案�
 | `data/datastore/EffectiveSettings.kt` | effective snapshot、lock/source index 与纯 resolver | 删除 raw/effective 双读和 AllowAll policy |
 | `data/datastore/ManagedConfiguration.kt` | envelope、验签/图校验、原子文件与 generation 资源协议 | 落地此前准备能力，不再新增 `EnterprisePolicyStore` 等公开 owner |
 | `workspace/.../ProotLaunchSpec.kt` | 两类 PRoot 启动的公共 argv/env/bind/cwd 事实 | 删除 shell/terminal 两套手写装配 |
+| `data/ai/mcp/McpCatalogStore.kt` | last-known-good catalog、revision/digest 与原子候选提交 | 删除 Settings 远端 schema 缓存和 `syncTools.updateLocal` |
+| `service/McpApplicationService.kt` | UI 的 activate/refresh/restart/auth/delete typed command | 删除页面 scope 连接 Job 与 UI→Manager mutation |
+| `service/McpQueryService.kt` | definition/catalog/runtime 的唯一 `McpServerPresentation` | 删除 UI→Manager/raw Client/status+Settings 拼装 |
 
 `ConversationTransition.kt`、`GenerationLoop.kt`、`SettingsStore.kt`、`SettingsWriteRules.kt`、`SettingsCommit.kt` 均为原文件
 直接重命名，不计作新增文件。`GenerationRequest` 留在重命名后的 `GenerationLoop.kt`，`ActiveTurnRuntime` 留在
-`ConversationRuntime.kt`，`ConnectionSlot` 留在 `McpManager.kt`，managed storage helper 留在上述两个 Settings 白名单文件；
+`ConversationRuntime.kt`，per-server actor 留在重构后的 MCP runtime owner 文件，managed storage helper 留在上述两个 Settings 白名单文件；
 不得再拆成 DTO/Factory/Manager 文件。`RequestMediaCapabilities`、`RequestImageSupport` 和 `AttachmentInputMode` 全部进入 §6.3
 指定的现有文件，不增加白名单项。
 
@@ -926,10 +1014,10 @@ V2 只允许新增四个生产文件，其他新文件必须先修改本方案�
 | --- | ---: | ---: | --- |
 | Conversation/Turn：`service/runtime/*.kt` + Master/Finalization/Recovery/SideEffects/SubAssistant Gate/Lease + `GenerationHandler.kt` | 18 / 6,867 | 15 / 7,250 | 原 5,800 把 `ConversationMutationBuilder` 算成可删大文件，但 e19ae595 已无该文件。先前 7,200 漏计 `ConversationOperationLocks`（62 行）；唯一 planner、private `ActiveTurnRuntime` 与 presentation 合并后正确实现约 7,217 行。禁止靠压缩 `TurnEngine`/`DelegationCoordinator` 或拆出范围凑数 |
 | Settings 本地/有效读模型：`data/datastore/*.kt`，不含 `ManagedConfiguration.kt` | 6 / 1,017 | 1,250 | 本地持久化、默认物化和有效读模型只能净增加 233 行；超过即说明旧链路删除或职责收敛不足 |
-| MCP：`data/ai/mcp/*.kt` | 7 / 1,890 | 6 / 1,930 | 八组 parallel map 与重复 create/update/remove 决策收成一个 `ConnectionSlot`/`reconcile`；OAuth 授权流、退避与 Dormant 策略、callTool 错误分类按 §11.8 保真保留，原 1,450 假设的重删幅度在保留这些行为时不成立。上限含并发正确性豁免：mutex 非本地 return 必须解锁、reconnect 先推进 generation、close 挂起窗口内 re-add 必须原位接回、token refresh 走同一 resource 守卫、`syncingStatus` 只从 slots 重建（相对首轮 1,738 的 +183） |
+| MCP：`data/ai/mcp/*.kt` + MCP application/query | 7 / 1,890 | 15 / 3,702（当前） | 物理删除原 2,000 行 Manager 后，按唯一职责拆为 Coordinator、ServerRuntime、Catalog、Protocol、OAuth、Tool Executor、Failure Projector、runtime state 与 application/query ports；Settings schema cache、固定 Dormant、latest-value 装配和 UI raw runtime 路径已删除。该行以当前实现实报为准，不以合并 owner 凑文件数 |
 | Artifact/Skill：`data/files/*.kt` | 14 / 2,681 | 14 / 2,700 | adoption 已在 Phase B 物理删除并计入 B 的净减；三个单目录事务合并为唯一 `mutateSkillTree` 协议（copy/validate/publish 本就共享，合并按行数近似中性，价值在协议唯一）；5ccad20b 悬挂 Settings root 修复属历史漏洞修复，行数豁免 |
 | Workspace：app workspace service + `workspace/src/main` | 13 / 2,402 | 13 / 2,460 | 合并 query、删除 terminal query 文件；§11.6 白名单新增的 `ProotLaunchSpec`（131 行）抵消大部分删除收益；基线后 workspace 模块自身已 +58 行（上游批次 13），原 2,170 未计入该漂移。上限含义为不得高于 Phase E 前水平（现 2,445） |
-| **核心合计** | **58 / 14,857** | **最多 56 / 16,150** | 文件净减 2 已达成（Phase E 后为 56）。原 14,820 由 D 修订前的估算推导：Conversation/Turn 冻结 7,250 + Settings 本地 1,250 + 受管协议 558 已占 9,058，剩余 5,762 低于 MCP/Artifact/Workspace 三域基线之和 6,973，算术上不可达；修订为各域上限之和 7,250+1,250+558+1,930+2,700+2,460，`ManagedConfiguration.kt` 仍单列实报 |
+| **核心合计** | **58 / 14,857** | **最多 65 / 18,150** | 原 Phase E 56 / 16,150 冻结因 MCP follow-up 重开。MCP 增量只允许来自上述独立 owner、原子提交和 fail-closed snapshot；不能靠保留旧路径、重复协议或压缩 owner 凑数，最终 ledger 实报 |
 
 另设一个不计入上表合计、与全仓统计重叠的“附件请求/wire 切片”：`Provider.kt`、`MessageMetadata.kt`、
 `OpenAIProvider.kt`、Chat/Responses/Claude/Google serializer、`Transformer.kt`、`AttachmentProjectionTransformer.kt`。
@@ -979,7 +1067,7 @@ close 窗口原位接回）。UI/Application 消费者的必要适配也包含�
 | Provider/Assistant/MCP/TTS/ASR 设置 | 所有本地新增、编辑、删除、排序、默认选择和即时生效保持不变；写失败不发布假配置 | `effectiveSettings`、write rules | 设置页 delta/并发测试 + 各类设置真机编辑 |
 | 受管配置（唯一允许新增的体验） | 受管记录显示来源/锁定理由且不可改；本地 shadow 不丢；坏包保持 LKG；签名撤回后才恢复本地项；启动无可用 LKG 时显示阻断诊断且 AI/MCP 不静默使用 local | Managed snapshot | resolver/验签/原子失败测试 + managed UI instrumentation |
 | Search 设置与搜索页 | index→id 后仍选择同一服务；排序、删除、受管覆盖不串项 | DataStore identity migration | 旧 key fixture migration + 设置/实际搜索一致性测试 |
-| MCP 设置页与 Picker | 状态文字、手动刷新、工具列表、OAuth、断网重连、前后台恢复不退化或闪错 server | ConnectionSlot/reconcile | fake server 并发测试 + 网络切换/OAuth 真机回归 |
+| MCP 设置页与 Picker | 状态文字、手动刷新、工具列表、OAuth、断网重连、前后台恢复不退化或闪错 server | McpServerRuntime/reconcile | fake server 并发测试 + 网络切换/OAuth 真机回归 |
 | Workspace Terminal | ready、创建/选择/重命名/排序/关闭 Tab、输入、resize、cwd、Skills bind、shell tool 结果保持一致 | Query 合并、`ProotLaunchSpec` | query/PTY 竞态测试 + arm64/x86_64 terminal 与 tool 对照 |
 | 启动、迁移与备份恢复 | 合法历史库可启动；恢复失败明确阻断；旧备份仍可导入；已清理错误状态不再扫描 | legacy repair 删除、effective settings | Room 1→8 instrumentation + 0.0.18 实库/备份样本 + kill/restart |
 
@@ -1074,18 +1162,26 @@ Phase 不得开始。
 
 ### Phase E：MCP、文件域与 Workspace 收敛
 
-目标：删除平行运行态和重复机械协议，不跨领域合并 owner。
+目标：删除平行运行态和重复机械协议，不跨领域合并 owner。2026-08-28 因目录事实与 Settings 混写缺陷重开 MCP
+子范围；旧 slot 收敛是基础，不再视为 MCP 完成定义。
 
-- 将 MCP 状态合并为 per-server `ConnectionSlot`，所有触发源统一 reconcile；
-- 验证配置 revision 变化、重连、OAuth、网络切换和 stale job，再删除并行 map 与旧重连分支；
-- 合并 `McpConnectionKey`，把 `syncAll` 重命名为 `refreshConnections`；
+- Settings 中 MCP durable 模型只保存 definition 与 policy；建立独立 LKG Catalog owner，迁移并删除旧 schema cache；
+- 将连接状态收敛为 per-server `McpServerRuntime` aggregate，所有触发源进入同一 reconcile/refresh 命令；远程 I/O 在 mutex 外、结果 CAS；
+- 实现完整分页、非空激活门槛、candidate 校验、digest no-op、通知合并、stale/LKG 和 cancellation terminal；
+- Master/Target 建立 run-start `TurnMcpCapabilitySnapshot`；调用时只对用户/definition/policy 明确撤销 fail-closed，目录刷新不
+  撤销当前 run；
+- 增加 MCP application/query 边界，Setting、Picker、ChatVM 删除 Manager/Client/Job 依赖；
+- Settings 读取/写入共用 MCP identity/policy 规范化；UI 只读 joined presentation，最终 Provider tool name 在装配边界检查碰撞；
+- Catalog commit 使用 head-token CAS，OAuth 使用 transport+canonical resource+静态 headers+revision 的完整信任边界 CAS 与同 lease single-flight；替换授权先等待旧 Job 取消并封存 revision；所有远端/持久化阶段有界；
+- 明确 enabled 与 activated/session 正交；启动只恢复 LKG，新对话只激活所选 server，删除固定 Dormant 轮询和长期 busy；
 - 删除 Artifact adoption，保持唯一引用策略；Skill 单目录操作合入 `mutateSkillTree`，不建立跨领域文件事务；
 - 删除 terminal query 文件并移入 `WorkspaceQueryService`；新增唯一 `ProotLaunchSpec` 装配；
 - 保持 Artifact、Skill、Backup、Workspace、Terminal 各自状态机和补偿边界。
 
-退出条件：MCP 每个 server 只有一个状态容器；文件 owner 无旁路；Workspace 读端减少且 PTY 所有权不变；MCP、
-Artifact/Skill、Workspace 分别不超过 §11.7 上限；对应设置页、Picker、图片生命周期和 Terminal 路径均完成设备复验；
-本阶段结构文件净减少。并发正确性豁免后的行数以修订上限验收，禁止为凑净负压缩安全边界。
+退出条件：MCP definition/policy、Catalog、Session、Turn Snapshot 和 UI presentation 各有一个 owner；可注入能力必有同
+identity 的已提交非空完整目录，连接健康不得撤下 LKG；Settings/Generation/UI 旧 schema 路径物理删除；文件 owner 无旁路；Workspace 读端减少且 PTY 所有权
+不变；对应设置页、Picker、20 工具、空目录、分页、网络切换、图片生命周期和 Terminal 路径完成风险匹配复验。行数预算按
+§11.7 修订上限验收，禁止为凑净负压缩安全边界。
 
 ### Phase F：边界、测试与文档封板
 
@@ -1098,8 +1194,9 @@ Artifact/Skill、Workspace 分别不超过 §11.7 上限；对应设置页、Pic
 - 更新所有受影响的 `docs/references/`、上游同步总账和开发记录；
 - 汇总 before/after 删除账本、核心/全仓行数、新增文件白名单、UI 矩阵、性能、migration、设备和构建证据。
 
-退出条件：代码、测试和参考文档只描述 V2 单一路径；本阶段生产 Kotlin 相对 Phase E 不增加；核心最多 56 文件/16,150 行，
-附件请求/wire 切片最多 9 文件/4,950 行，全仓生产 Kotlin 最多 608 文件/128,000 行；§11.1～§11.8 无未决项，UI 矩阵全部通过，
+退出条件：代码、测试和参考文档只描述 V2 单一路径；除 §11.6 明确重开的 MCP owner 文件外，本阶段不增加生产 Kotlin；
+核心最多 59 文件/17,200 行，MCP 范围最多 9 文件/2,800 行，附件请求/wire 切片最多 9 文件/4,950 行；全仓最终值在
+execution ledger 实报，不沿用已被现场证据推翻的 608/128,000 冻结；§11.1～§11.8 无未决项，UI 矩阵全部通过，
 不存在以“之后再删”为条件的残留。
 
 ## 13. 验证方案
@@ -1161,8 +1258,15 @@ Artifact/Skill、Workspace 分别不超过 §11.7 上限；对应设置页、Pic
 
 ### 13.5 MCP、Workspace 与 UI
 
-- 同 server 并发 sync/call/remove/auth 只作用于一个 slot；stale job 不能覆盖新 fingerprint；
-- 网络离线/恢复、前后台切换和 retry exhausted 都经同一 reconcile 收敛；
+- 两个 Server 可同时进入 connect/list；Catalog 提交不写 Settings，也不触发全量 reconcile；
+- 首次 20 工具、分页、空目录拒绝、LKG、相同 digest no-op、list_changed 合并和 stale generation 全部覆盖；
+- 同 server 并发 call/remove/auth/refresh 只作用于一个 actor；远程长调用不阻塞连接终态，取消无永久 Connecting；
+- Local/Managed/同 id shadow、同名导入、OAuth local state 与 definition resource CAS 有真实边界测试；
+- Master/Target run-start snapshot 在 step 间稳定；用户撤销在副作用前 typed fail，断连保留 schema 并在调用返回 unavailable；
+  非法单 Server 不影响合法 Server；
+- stale commit 跨 unchanged/rejection、refresh cancel restore、OAuth 凭据并发、最终工具名碰撞与重复配置 winner 全部覆盖；
+- 网络离线/恢复、前后台、default network、按需 activation 和 retry exhausted 都经同一 slot command 收敛；
+- Setting/Picker/ChatVM 只消费 application/query contract；Ready/Discovering/RejectedEmpty/Stale/WaitingNetwork 无无限 spinner；
 - shell tool 与 terminal 对相同 Workspace 生成相同 PRoot binary/binds/cwd/env；
 - terminal tab create/close/reorder 与 Workspace delete 竞态不泄漏 PTY；
 - Flow 经 lifecycle-aware collect 进入 Compose；助手切换、生成、标题、工具审批和 terminal 状态不会冻结；
@@ -1196,12 +1300,14 @@ V2 只有同时满足以下条件才算完成：
 6. §11.8 中除 managed UI 和已明确列出的附件 wire 降级修正外，界面、反馈、时序和错误行为零变化，每个 Phase 都有
    当期设备证据；
 7. 本地、内置、受管配置只生成一个有效读模型，服务端整包原子发布且失败保留 LKG；
-8. MCP 每个 server 只有一个 ConnectionSlot，网络/前台/配置变化统一 reconcile；
+8. MCP 每个 server 只有一个 actor；definition/policy、Catalog、Session、Turn Snapshot 与 UI projection owner 分离；只有同
+   generation/definition/client identity 的完整非空 Catalog 提交后才能替换 LKG；Provider schema 绑定 run-start revision，
+   临时连接健康只通过调用结果表达；
 9. 两项已确认的错误旧数据修复及其测试、文档和 command 全链物理删除；
 10. Room 1→8 全部 migration、合法 Settings/备份迁移和外部协议兼容保持有效；
 11. 无 deprecated facade、双读、双写、fallback 白名单、无调用协议或只转发的新增 owner；
-12. 新增生产文件仅限 §11.6 四个；核心最多 56 文件/16,150 行，附件请求/wire 切片最多 9 文件/4,950 行，全仓生产
-    Kotlin 最多 608 文件/128,000 行；
+12. 新增生产文件仅限 §11.6 七个；MCP follow-up 的新增结构必须由删除 Settings schema cache、UI raw runtime 路径和重复
+    lifecycle 机制抵消；最终文件/行数实报并在 ledger 冻结，不以旧 56/16,150/128,000 上限阻止已证明必需的 owner 修复；
 13. 全量门禁、migration、故障、性能和真机证据齐全，参考文档与代码一致。
 
 V2 的最终形态不是“更多层但更规范”，而是每项事实只在一个位置被决定、每项失败只沿一条路径收口、合法历史数据

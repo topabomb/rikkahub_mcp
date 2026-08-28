@@ -2,6 +2,7 @@ package net.weero.measix.pilot.data.datastore
 
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.search.SearchServiceOptions
+import net.weero.measix.pilot.data.ai.mcp.normalizeMcpDefinitions
 import kotlin.uuid.Uuid
 
 /**
@@ -28,6 +29,7 @@ internal fun Settings.materializeForRead(): Settings {
         providers = materializedProviders,
         assistants = materializedAssistants,
         ttsProviders = materializedTtsProviders,
+        mcpServers = mcpServers.normalizeMcpDefinitions(),
     )
 
     val validMcpServerIds = withDefaults.mcpServers.mapTo(HashSet()) { it.id }

@@ -266,7 +266,7 @@ class RouteActivity : ComponentActivity() {
                         source = event.source,
                     )
                     is AppEvent.OpenUsageAccessSettings -> this@RouteActivity.openUsageAccessSettings()
-                    is AppEvent.McpOAuthCallback -> Unit // 由 McpManager 消费
+                    is AppEvent.McpOAuthCallback -> Unit // 由 McpRuntimeCoordinator 消费
                     is AppEvent.ChatGenerationUpdate -> Unit // 由 ChatNotificationManager 消费
                     is AppEvent.ChatGenerationEnded -> Unit // 由 ChatNotificationManager 消费
                 }

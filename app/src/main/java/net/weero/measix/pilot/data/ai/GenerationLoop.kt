@@ -25,6 +25,7 @@ import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolExecutionContext
+import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.core.ToolResourceLease
 import me.rerere.ai.core.merge
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolveResult
@@ -766,6 +767,11 @@ class GenerationLoop(
                             )
                         }.onFailure {
                             if (it is CheckpointCommitException) throw it.cause ?: it
+                            if (it is ToolExecutionFailure) {
+                                executionFailed = true
+                                executedTools[toolOrdinalInMessage] = tool.copy(output = it.output)
+                                return@onFailure
+                            }
                             // 1. 工具超时: TimeoutCancellationException 是 CancellationException 子类
                             //    → 降级为错误 JSON 返回给 AI，不中断对话
                             if (it is TimeoutCancellationException) {
