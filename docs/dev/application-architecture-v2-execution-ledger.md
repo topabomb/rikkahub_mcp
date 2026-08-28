@@ -3,9 +3,32 @@
 This ledger records evidence required by the V2 execution plan. It is a development record; the
 current architectural contract remains in `docs/references/`.
 
-**Status (2026-08-27):** Phase B–F implementation is in the worktree and is treated as complete
+**Status (2026-08-28):** Phase B–F implementation is in the worktree and is treated as complete
 pending the user's device confirmation. JVM/build gates are recorded below. §11.8 device matrix
 and `connectedDebugAndroidTest` remain user-owned; §14 is not closed until those are recorded.
+
+## Media Capability Authority Fix (2026-08-28)
+
+Restored `Model.inputModalities` as the sole configuration fact for model image input capability.
+Removed the endpoint-host veto that silently dropped IMAGE capability for custom
+OpenAI-compatible gateways; `RequestMediaCapabilities` is now strictly an internal derived result
+of (model capability × selected provider protocol × serializer container mapping).
+
+| File | Change |
+|------|--------|
+| `ai/.../provider/Provider.kt` | `requestMediaCapabilities()` made abstract; default `NONE` removed so no new Provider can silently drop IMAGE |
+| `ai/.../openai/OpenAIEndpointProfile.kt` | Removed `COMPATIBLE` early-return; `userImages` derived unconditionally from `model.inputModalities`; generic `OPENAI_COMPATIBLE` Responses profile now sets `supportsMultimodalFunctionOutput = true` |
+| `app/.../tools/GenerationToolSetFactory.kt` | `shouldInjectAttachmentInspection()` now checks all three source containers (USER/ASSISTANT/Tool.output); `OPAQUE_REPLAY_ONLY` is not full coverage; removed `runCatching` swallow and second host veto |
+| `app/.../tools/AttachmentInspectionTool.kt` | Construction-time capture of inspection model/provider/capabilities; `executeInspection()` no longer re-resolves from Settings or returns `inspection_model_unavailable` based on capability |
+| `app/.../service/MasterTurnCoordinator.kt` | Resolves one immutable run media contract shared by projection and tool injection; Master tools and `GenerationMemoryContext` refresh from current Settings at each Provider step |
+| `app/.../runtime/DelegationCoordinator.kt` | Removed the frozen-inspection special branch; captures a generic run-start tool-name ceiling, shares the run media contract, and applies the Target Memory enable/namespace ceiling |
+| `app/.../ai/GenerationLoop.kt` | Requires the Coordinator-owned media contract; one step Memory context controls prompt/schema/owner with a write-time guard; `buildToolIndex()` rejects blank/duplicate names and missing tools durably return `tool_not_available` |
+
+Tests: `ChatCompletionsAPIMessageTest`, `ResponseAPIMessageTest`, `ShouldInjectAttachmentInspectionTest`,
+`AttachmentInspectionToolTest`, `GenerationLoopFlowTest`, `MemoryToolsTest`, `TurnEngineTest`, and
+`SubAssistantRunPolicyTest` cover serializer shape, media ownership, Memory revocation/owner policy,
+Target name ceiling, and durable missing-tool failure. Final verification evidence is
+recorded only after the gates complete; no precomputed pass count is authoritative.
 
 ## Phase B: retired historical repairs
 

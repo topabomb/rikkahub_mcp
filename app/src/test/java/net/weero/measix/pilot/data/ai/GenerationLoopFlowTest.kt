@@ -25,8 +25,11 @@ import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestMediaCapabilities
+import me.rerere.ai.provider.RequestImageSupport
+import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.MessageTerminalStatus
+import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
@@ -37,6 +40,7 @@ import net.weero.measix.pilot.data.ai.transformers.ThinkTagTransformer
 import net.weero.measix.pilot.data.ai.transformers.TransformerContext
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.data.model.AssistantMemory
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -44,6 +48,150 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GenerationLoopFlowTest {
+    @Test
+    fun `memory owner policy supports Master refresh and enforces Target run ceiling`() {
+        val assistant = Assistant(enableMemory = false, useGlobalMemory = false)
+
+        assertEquals(null, resolveGenerationMemoryOwner(assistant))
+        assertEquals(assistant.id.toString(), resolveGenerationMemoryOwner(assistant.copy(enableMemory = true)))
+        assertEquals(
+            MemoryRepository.GLOBAL_MEMORY_ID,
+            resolveGenerationMemoryOwner(assistant.copy(enableMemory = true, useGlobalMemory = true)),
+        )
+
+        val targetStartDisabled = assistant
+        assertEquals(
+            null,
+            resolveGenerationMemoryOwner(targetStartDisabled.copy(enableMemory = true), targetStartDisabled),
+        )
+        val targetStartLocal = assistant.copy(enableMemory = true)
+        val capturedOwner = resolveGenerationMemoryOwner(targetStartLocal, targetStartLocal)
+        assertEquals(targetStartLocal.id.toString(), capturedOwner)
+        assertEquals(null, resolveGenerationMemoryOwner(targetStartLocal.copy(enableMemory = false), targetStartLocal))
+        assertEquals(
+            null,
+            resolveGenerationMemoryOwner(targetStartLocal.copy(useGlobalMemory = true), targetStartLocal),
+        )
+        // The write-time guard compares the captured owner with a fresh policy result.
+        assertFalse(resolveGenerationMemoryOwner(targetStartLocal.copy(useGlobalMemory = true)) == capturedOwner)
+    }
+
+    @Test
+    fun `step memory context controls both prompt and tool schema`() = runTest {
+        val model = Model(modelId = "test-model", displayName = "Test Model")
+        val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
+        val providerManager = mockk<ProviderManager>()
+        val provider = mockk<Provider<ProviderSetting.OpenAI>>()
+        every { providerManager.getProviderByType(providerSetting) } returns provider
+        val providerMessages = slot<List<UIMessage>>()
+        val params = slot<TextGenerationParams>()
+        coEvery { provider.generateText(providerSetting, capture(providerMessages), capture(params)) } returns MessageChunk(
+            id = "response",
+            model = model.modelId,
+            choices = listOf(
+                UIMessageChoice(0, null, UIMessage.assistant("done"), "stop")
+            ),
+        )
+        val assistant = Assistant(enableMemory = false, streamOutput = false)
+        val loop = GenerationLoop(
+            context = mockk<Context>(relaxed = true),
+            providerManager = providerManager,
+            json = Json,
+            memoryRepo = mockk<MemoryRepository>(relaxed = true),
+            attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+        )
+
+        loop.run(
+            GenerationRequest(
+                settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
+                model = model,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
+                messages = listOf(UIMessage.user("hello")),
+                assistant = assistant,
+                memoryContextProvider = {
+                    GenerationMemoryContext(assistant.id.toString(), listOf(AssistantMemory(1, "step memory")))
+                },
+                maxSteps = 1,
+            )
+        ).toList()
+
+        assertTrue(providerMessages.captured.first().toText().contains("step memory"))
+        assertTrue(params.captured.tools.any { it.name == "memory_tool" })
+    }
+
+    @Test
+    fun `revoked step memory removes prompt and tool schema together`() = runTest {
+        val harness = createProviderHarness()
+
+        harness.handler.run(
+            GenerationRequest(
+                settings = harness.settings,
+                model = harness.model,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
+                messages = listOf(UIMessage.user("hello")),
+                assistant = harness.assistant,
+                memoryContextProvider = {
+                    GenerationMemoryContext(
+                        harness.assistant.id.toString(),
+                        listOf(AssistantMemory(1, "must not be visible")),
+                    )
+                },
+                memoryToolAllowed = { false },
+                maxSteps = 1,
+            )
+        ).toList()
+
+        assertFalse(harness.providerMessages.captured.any { it.toText().contains("must not be visible") })
+        assertFalse(harness.providerParams.captured.tools.any { it.name == "memory_tool" })
+    }
+
+    @Test
+    fun `run uses coordinator media contract instead of rederiving provider mapping`() = runTest {
+        val model = Model(modelId = "test-model", displayName = "Test Model")
+        val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
+        val providerManager = mockk<ProviderManager>()
+        val provider = mockk<Provider<ProviderSetting.OpenAI>>()
+        every { providerManager.getProviderByType(providerSetting) } returns provider
+        every { provider.requestMediaCapabilities(providerSetting, model) } returns RequestMediaCapabilities.NONE
+        val params = slot<TextGenerationParams>()
+        coEvery { provider.generateText(providerSetting, any(), capture(params)) } returns MessageChunk(
+            id = "response",
+            model = model.modelId,
+            choices = listOf(
+                UIMessageChoice(
+                    index = 0,
+                    delta = null,
+                    message = UIMessage.assistant("done"),
+                    finishReason = "stop",
+                )
+            ),
+        )
+        val fixedCapabilities = RequestMediaCapabilities(
+            userImages = RequestImageSupport.STRUCTURED,
+        )
+        val assistant = Assistant(enableMemory = false, streamOutput = false)
+        val loop = GenerationLoop(
+            context = mockk<Context>(relaxed = true),
+            providerManager = providerManager,
+            json = Json,
+            memoryRepo = mockk<MemoryRepository>(relaxed = true),
+            attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+        )
+
+        loop.run(
+            GenerationRequest(
+                settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
+                model = model,
+                messages = listOf(UIMessage.user("hello")),
+                assistant = assistant,
+                mediaCapabilities = fixedCapabilities,
+                maxSteps = 1,
+            )
+        ).toList()
+
+        assertEquals(fixedCapabilities, params.captured.mediaCapabilities)
+    }
+
     @Test
     fun `split think opener does not publish answer phase or raw tag before reasoning`() = runTest {
         val model = Model(modelId = "test-model", displayName = "Test Model")
@@ -71,6 +219,7 @@ class GenerationLoopFlowTest {
             GenerationRequest(
             settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
             model = model,
+            mediaCapabilities = RequestMediaCapabilities.NONE,
             messages = listOf(UIMessage.user("hello"), inFlight),
             outputTransformers = listOf(ThinkTagTransformer),
             assistant = assistant,
@@ -101,6 +250,7 @@ class GenerationLoopFlowTest {
             GenerationRequest(
             settings = harness.settings,
             model = harness.model,
+            mediaCapabilities = RequestMediaCapabilities.NONE,
             messages = listOf(user, inFlight),
             assistant = harness.assistant,
             assistantMessageId = inFlight.id,
@@ -139,6 +289,7 @@ class GenerationLoopFlowTest {
             GenerationRequest(
                 settings = harness.settings,
                 model = harness.model,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
                 messages = listOf(
                     UIMessage.user("first request"),
                     terminalDraft,
@@ -217,6 +368,7 @@ class GenerationLoopFlowTest {
             GenerationRequest(
             settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
             model = model,
+            mediaCapabilities = RequestMediaCapabilities.NONE,
             messages = listOf(message),
             assistant = assistant,
             tools = listOf(tool),
@@ -279,6 +431,7 @@ class GenerationLoopFlowTest {
                 GenerationRequest(
                 settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
                 model = model,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
                 messages = listOf(message),
                 assistant = assistant,
                 tools = listOf(tool),
@@ -333,6 +486,7 @@ class GenerationLoopFlowTest {
                 GenerationRequest(
                 settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
                 model = model,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
                 messages = listOf(message),
                 assistant = assistant,
                 tools = listOf(tool),
@@ -361,6 +515,7 @@ class GenerationLoopFlowTest {
                 GenerationRequest(
                 settings = harness.settings,
                 model = harness.model,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
                 messages = listOf(UIMessage.user("create image")),
                 outputTransformers = listOf(transformer),
                 assistant = harness.assistant,
@@ -389,6 +544,7 @@ class GenerationLoopFlowTest {
                 GenerationRequest(
                 settings = harness.settings,
                 model = harness.model,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
                 messages = listOf(UIMessage.user("create image")),
                 outputTransformers = listOf(transformer),
                 assistant = harness.assistant,
@@ -451,6 +607,7 @@ class GenerationLoopFlowTest {
             GenerationRequest(
             settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
             model = model,
+            mediaCapabilities = RequestMediaCapabilities.NONE,
             messages = listOf(message),
             assistant = assistant,
             tools = listOf(first, second),
@@ -489,6 +646,146 @@ class GenerationLoopFlowTest {
         )
     }
 
+    @Test
+    fun `approved unregistered tool returns tool_not_available without side effects`() = runTest {
+        val model = Model(modelId = "test-model", displayName = "Test Model")
+        val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
+        val providerManager = mockk<ProviderManager>()
+        val provider = mockk<Provider<ProviderSetting.OpenAI>>(relaxed = true)
+        every { providerManager.getProviderByType(any<ProviderSetting.OpenAI>()) } returns provider
+        val handler = GenerationLoop(
+            context = mockk<Context>(relaxed = true),
+            providerManager = providerManager,
+            json = Json,
+            memoryRepo = mockk<MemoryRepository>(relaxed = true),
+            attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+        )
+        val assistant = Assistant(enableMemory = false)
+        val toolEvents = mutableListOf<ToolExecutionEvent>()
+        var toolSetBuilds = 0
+        var executed = false
+        val tool = Tool(
+            name = "side_effect",
+            description = "Must not run.",
+            execute = {
+                executed = true
+                listOf(UIMessagePart.Text("executed"))
+            },
+        )
+        // Message references a tool that is NOT in the tools list.
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "call-missing",
+                    toolName = "missing_tool",
+                    input = "{}",
+                    approvalState = ToolApprovalState.Approved,
+                )
+            ),
+        )
+
+        val chunks = handler.run(
+            GenerationRequest(
+                settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
+                model = model,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
+                messages = listOf(message),
+                assistant = assistant,
+                toolProvider = {
+                    toolSetBuilds++
+                    listOf(tool)
+                },
+                maxSteps = 1,
+                onCheckpoint = { checkpoint ->
+                    checkpoint.toolExecution?.let(toolEvents::add)
+                },
+            )
+        ).toList()
+
+        assertFalse(executed)
+        assertEquals(1, toolSetBuilds)
+        val toolResult = chunks.filterIsInstance<GenerationChunk.Messages>()
+            .last().messages.last().getTools().single()
+        val outputText = (toolResult.output.single() as UIMessagePart.Text).text
+        assertTrue(outputText.contains("tool_not_available"))
+        assertFalse(outputText.contains("Tool missing_tool not found"))
+        assertEquals(
+            listOf(ToolExecutionEventStatus.STARTED, ToolExecutionEventStatus.FAILED),
+            toolEvents.map { it.status },
+        )
+        assertTrue(toolEvents.all { it.toolName == "missing_tool" })
+    }
+
+    @Test
+    fun `duplicate tool names are rejected before provider request`() = runTest {
+        val model = Model(modelId = "test-model", displayName = "Test Model")
+        val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
+        val providerManager = mockk<ProviderManager>()
+        val provider = mockk<Provider<ProviderSetting.OpenAI>>(relaxed = true)
+        every { providerManager.getProviderByType(any<ProviderSetting.OpenAI>()) } returns provider
+        val handler = GenerationLoop(
+            context = mockk<Context>(relaxed = true),
+            providerManager = providerManager,
+            json = Json,
+            memoryRepo = mockk<MemoryRepository>(relaxed = true),
+            attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+        )
+        val assistant = Assistant(enableMemory = false)
+        val toolA = Tool(name = "dup", description = "A", execute = { emptyList() })
+        val toolB = Tool(name = "dup", description = "B", execute = { emptyList() })
+
+        val failure = runCatching {
+            handler.run(
+                GenerationRequest(
+                    settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
+                    model = model,
+                    mediaCapabilities = RequestMediaCapabilities.NONE,
+                    messages = listOf(UIMessage.user("hello")),
+                    assistant = assistant,
+                    tools = listOf(toolA, toolB),
+                    maxSteps = 1,
+                )
+            ).toList()
+        }.exceptionOrNull()
+
+        assertTrue(failure != null)
+        assertTrue(failure!!.message!!.contains("Duplicate tool name"))
+    }
+
+    @Test
+    fun `blank tool name is rejected before provider request`() = runTest {
+        val model = Model(modelId = "test-model", displayName = "Test Model")
+        val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
+        val providerManager = mockk<ProviderManager>()
+        val provider = mockk<Provider<ProviderSetting.OpenAI>>(relaxed = true)
+        every { providerManager.getProviderByType(any<ProviderSetting.OpenAI>()) } returns provider
+        val handler = GenerationLoop(
+            context = mockk<Context>(relaxed = true),
+            providerManager = providerManager,
+            json = Json,
+            memoryRepo = mockk<MemoryRepository>(relaxed = true),
+            attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+        )
+
+        val failure = runCatching {
+            handler.run(
+                GenerationRequest(
+                    settings = Settings(providers = listOf(providerSetting)),
+                    model = model,
+                    mediaCapabilities = RequestMediaCapabilities.NONE,
+                    messages = listOf(UIMessage.user("hello")),
+                    assistant = Assistant(enableMemory = false),
+                    tools = listOf(Tool(name = "", description = "invalid", execute = { emptyList() })),
+                    maxSteps = 1,
+                )
+            ).toList()
+        }.exceptionOrNull()
+
+        assertTrue(failure != null)
+        assertTrue(failure!!.message!!.contains("Tool name must not be blank"))
+    }
+
     private fun createProviderHarness(): ProviderHarness {
         val model = Model(modelId = "test-model", displayName = "Test Model")
         val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
@@ -499,11 +796,12 @@ class GenerationLoopFlowTest {
         } returns provider
         every { provider.requestMediaCapabilities(any(), any()) } returns RequestMediaCapabilities.NONE
         val providerMessages = slot<List<UIMessage>>()
+        val providerParams = slot<TextGenerationParams>()
         coEvery {
             provider.generateText(
                 providerSetting = providerSetting,
                 messages = capture(providerMessages),
-                params = any(),
+                params = capture(providerParams),
             )
         } returns MessageChunk(
             id = "response",
@@ -533,6 +831,7 @@ class GenerationLoopFlowTest {
             model = model,
             assistant = assistant,
             providerMessages = providerMessages,
+            providerParams = providerParams,
         )
     }
 
@@ -570,5 +869,6 @@ class GenerationLoopFlowTest {
         val model: Model,
         val assistant: Assistant,
         val providerMessages: io.mockk.CapturingSlot<List<UIMessage>>,
+        val providerParams: io.mockk.CapturingSlot<TextGenerationParams>,
     )
 }

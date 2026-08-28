@@ -99,12 +99,13 @@ Target → Main     extras=artifacts  弱契约；看不懂也不推翻 complete
 
 当前请求能力由 Provider 的 `requestMediaCapabilities()` 解析为 `STRUCTURED`、
 `OPAQUE_REPLAY_ONLY` 或 `NONE`，并与当次模型的 `inputModalities` 一起决定 native /
-reference-only 投影；未知或兼容端点未声明时保持 `NONE` 并 fail-closed。能力按来源容器
-分别判定：USER 使用 `userImages`，ASSISTANT 使用 `assistantImages`，`Tool.output` 使用
-`toolOutputImages`。按需识别还要求 `attachmentInspectionModelId` 解析到视觉模型且其
-Provider 返回 `userImages == STRUCTURED`，否则不注入 `inspect_attachments`。当前模型只有在
-`userImages` 与 `toolOutputImages` 均为 `STRUCTURED` 时才跳过注入；因此不会仅因
-模型元数据标成 IMAGE 就把原图发送给不声明对应容器能力的端点。
+reference-only 投影。能力按来源容器分别判定：USER 使用 `userImages`，ASSISTANT 使用
+`assistantImages`，`Tool.output` 使用 `toolOutputImages`。模型图片能力唯一来源于
+`Model.inputModalities`；endpoint host 不再用于否决用户配置的 IMAGE 能力。
+按需识别的注入条件为：resolved model 的派生能力未能覆盖全部三个来源容器的 `STRUCTURED`
+（`OPAQUE_REPLAY_ONLY` 不算完整覆盖），且 `attachmentInspectionModelId` 能解析到
+Provider 可用且 `inputModalities` 含 IMAGE 的视觉模型。当前模型只有在三个来源容器
+均为 `STRUCTURED` 时才跳过注入。
 
 ---
 
@@ -257,11 +258,15 @@ Provider `requestMediaCapabilities()` 判定：
 
 | 项 | 说明 |
 |------|------|
-| `inspect_attachments` 工具 | 当前模型的 USER 或 `Tool.output` 容器不同时具备 STRUCTURED 能力、且 `attachmentInspectionModelId` 解析出视觉模型并由其 Provider 返回 `userImages == STRUCTURED` 时注入；模型显式调用才识别 |
+| `inspect_attachments` 工具 | 当前模型的派生 `RequestMediaCapabilities` 未能覆盖全部三个来源容器（USER / ASSISTANT / Tool.output）的 `STRUCTURED` 能力（`OPAQUE_REPLAY_ONLY` 不算完整覆盖），且 `attachmentInspectionModelId` 能解析到 Provider 可用且 `inputModalities` 含 IMAGE 的视觉模型时注入；模型显式调用才识别。不再根据 endpoint host 做第二次否决 |
 | 注入判定 | `shouldInjectAttachmentInspection()`（`GenerationToolSetFactory`）；不根据当前消息是否含图决定 schema |
 | 附件解析 | `ToolExecutionContext.resolveAttachments`（Runtime 注入，走统一 `AttachmentResolver`，工具不接触会话状态） |
 | 识别调用 | 单次多图调用（`[Image N ref=...]` 内部标签 + request + 固定 system instruction），结果为普通 Text Tool Result |
 | 无缓存 | 结果由 attachments + request + model 共同决定；显式 Tool Result 已是正确的历史记录 |
+
+Target 启动时捕获一次实际工具名集合；每个 Provider step 再从「该名字上限 ∩ run 开始 Assistant 字段上限 ∩ 当前有效 Settings」构建一次工具索引，同一索引用于该 step 的
+schema 与执行。附件识别不再单独冻结 model/provider。当前设置撤销工具后，待审批或恢复 ToolCall 返回
+`tool_not_available` 并记录失败，不从 run 开始快照恢复旧配置。
 
 挂载顺序：
 
@@ -540,10 +545,10 @@ AttachmentProjectionTransformer
 | ASSISTANT | `assistantImages` | 保留 Image + `input=native` 事实 | `input=reference_only`（`OPAQUE_REPLAY_ONLY` 仅允许匹配的 Responses 原始回放） |
 | `Tool.output` | `toolOutputImages` | 保留 Image + `input=native` 事实 | `input=reference_only` |
 
-能力未知或兼容端点未声明时为 `NONE`，不因模型元数据标注 IMAGE 而发送原图。当前矩阵由
-Provider/Transformer/Chat/Responses 相关测试覆盖；按需 `inspect_attachments` 还要求当前模型
-的 `userImages` 与 `toolOutputImages` 均为 `STRUCTURED` 才跳过注入，识别模型自身要求
-`userImages == STRUCTURED`。
+模型图片能力只读 `inputModalities`；未知 OpenAI-compatible host 按用户选择的 Chat Completions 或 Responses
+通用协议映射容器，不得否决 USER 图片。已知非标准 profile 只收窄其实际不同的容器。当前矩阵由
+Provider/Transformer/Chat/Responses 相关测试覆盖；按需 `inspect_attachments` 只有在当前模型的 USER、
+ASSISTANT 与 `Tool.output` 均为 `STRUCTURED` 时才跳过注入，识别模型只要求 Provider 可用且声明 IMAGE。
 
 ### 9.3 Provider File Cache
 

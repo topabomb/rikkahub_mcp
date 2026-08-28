@@ -26,6 +26,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
+import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
@@ -47,9 +48,11 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.event.AppEvent
 import net.weero.measix.pilot.data.event.AppEventBus
 import net.weero.measix.pilot.data.ai.GenerationLoop
+import net.weero.measix.pilot.data.ai.GenerationMemoryContext
 import net.weero.measix.pilot.data.ai.GenerationRequest
 import net.weero.measix.pilot.data.ai.ToolExecutionEventStatus
 import net.weero.measix.pilot.data.ai.replaceToolsAtOrdinals
+import net.weero.measix.pilot.data.ai.resolveGenerationMemoryOwner
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.data.ai.tools.shouldUseExternalWebSearch
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
@@ -679,33 +682,22 @@ class MasterTurnCoordinator(
                 assistantName = assistant.name,
                 sourceType = TtsPlaybackSource.SourceType.NORMAL,
             )
-            generationLoop.run(
-                GenerationRequest(
-                    settings = settings,
-                    model = model,
-                    reportProcessingText = runtime.processingReporter(),
-                    messages = generationMessages,
-                    assistantMessageId = assistantSlot.id,
-                    assistant = assistant,
-                    conversationSystemPrompt = snapshot.header.customSystemPrompt,
-                    conversationModeInjectionIds = snapshot.header.modeInjectionIds,
-                    workspaceCwd = snapshot.header.workspaceCwd,
-                    providerSessionId = conversationId.toString(),
-                    memories = if (assistant.useGlobalMemory) {
-                        memoryRepository.getGlobalMemories()
-                    } else {
-                        memoryRepository.getMemoriesOfAssistant(assistant.id.toString())
-                    },
-                    inputTransformers = turnPipelineFactory.masterInput(),
-                    outputTransformers = turnPipelineFactory.masterOutput(),
-                    tools = toolSetFactory.buildTools(
-                        assistant = assistant,
-                        settings = settings,
+            val mediaCapabilities = generationLoop.resolveRequestMediaCapabilities(settings, model)
+            val masterToolProvider: suspend () -> List<Tool> = {
+                val currentSettings = settingsStore.effectiveSettings.value.settings
+                val currentAssistant = currentSettings.getAssistantById(assistant.id)
+                if (currentAssistant == null) {
+                    emptyList()
+                } else {
+                    toolSetFactory.buildTools(
+                        assistant = currentAssistant,
+                        settings = currentSettings,
                         capabilityModel = model,
+                        capabilityMediaCapabilities = mediaCapabilities,
                         workspaceCwd = snapshot.header.workspaceCwd,
                         ttsPlaybackContext = turnTtsContext,
                         additionalToolsBeforeMcp = assistantToolFactory.buildTools(
-                            callerAssistant = assistant,
+                            callerAssistant = currentAssistant,
                             masterConversationId = conversationId,
                             ttsPlaybackContext = turnTtsContext,
                         ),
@@ -720,7 +712,43 @@ class MasterTurnCoordinator(
                                 conversationId = conversationId,
                             )
                         },
-                    ),
+                    )
+                }
+            }
+            val masterMemoryContextProvider: suspend () -> GenerationMemoryContext? = {
+                val currentAssistant = settingsStore.effectiveSettings.value.settings
+                    .getAssistantById(assistant.id)
+                resolveGenerationMemoryOwner(currentAssistant)?.let { ownerId ->
+                    val currentMemories = if (ownerId == MemoryRepository.GLOBAL_MEMORY_ID) {
+                        memoryRepository.getGlobalMemories()
+                    } else {
+                        memoryRepository.getMemoriesOfAssistant(ownerId)
+                    }
+                    GenerationMemoryContext(ownerId, currentMemories)
+                }
+            }
+            generationLoop.run(
+                GenerationRequest(
+                    settings = settings,
+                    model = model,
+                    reportProcessingText = runtime.processingReporter(),
+                    messages = generationMessages,
+                    assistantMessageId = assistantSlot.id,
+                    assistant = assistant,
+                    conversationSystemPrompt = snapshot.header.customSystemPrompt,
+                    conversationModeInjectionIds = snapshot.header.modeInjectionIds,
+                    workspaceCwd = snapshot.header.workspaceCwd,
+                    providerSessionId = conversationId.toString(),
+                    inputTransformers = turnPipelineFactory.masterInput(),
+                    outputTransformers = turnPipelineFactory.masterOutput(),
+                    toolProvider = masterToolProvider,
+                    mediaCapabilities = mediaCapabilities,
+                    memoryContextProvider = masterMemoryContextProvider,
+                    memoryToolAllowed = { ownerId ->
+                        resolveGenerationMemoryOwner(
+                            settingsStore.effectiveSettings.value.settings.getAssistantById(assistant.id)
+                        ) == ownerId
+                    },
                     onCheckpoint = activeTurnEngine::onCheckpoint,
                 )
             ).let { source ->

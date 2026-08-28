@@ -31,13 +31,25 @@ interface Provider<T : ProviderSetting> {
     }
 
     /**
-     * Closed request-level media capability. Unknown endpoints stay [RequestMediaCapabilities.NONE];
-     * adapters must not infer native image support from a model name or a successful prior request.
+     * Maps the user's explicitly configured model capabilities and the selected Provider protocol
+     * onto this request's container-level image projection.
+     *
+     * This is an internal derived result, not a second configuration surface: it expresses which
+     * protocol containers (USER / ASSISTANT / Tool.output) can carry images, given the model's
+     * [Model.inputModalities] and the Provider's wire contract. Endpoint profiles may select
+     * known container-shape differences, but must not veto the model's explicitly configured
+     * image-input capability. Model-name guessing and cached probe results are not inputs.
+     * For a model configured with [Modality.IMAGE], [RequestMediaCapabilities.userImages]
+     * must be [RequestImageSupport.STRUCTURED]; inspection and ordinary user input share that
+     * Provider contract. Other containers may remain unsupported or opaque-only.
+     *
+     * Every Provider must implement this; a missing override silently drops the user's IMAGE
+     * configuration, so the default is intentionally removed.
      */
-    fun requestMediaCapabilities(
+    abstract fun requestMediaCapabilities(
         providerSetting: T,
         model: Model,
-    ): RequestMediaCapabilities = RequestMediaCapabilities.NONE
+    ): RequestMediaCapabilities
 
     suspend fun generateText(
         providerSetting: T,

@@ -89,7 +89,7 @@ Target 复用相同模型可见语义，但 Transformer 装配由 `DelegationCoo
 
 ### 3.1 记忆 `buildMemoryPrompt()`
 
-`assistant.enableMemory` 时追加。生成开始时读取的记忆用于本轮提示词，后续 step 不刷新；Memory Tool 执行仍按 owner 约束写库，Target 还会即时重验记忆开关与 namespace。
+每个 Provider step 从该 step 的 `GenerationMemoryContext` 追加。Master 读取当前 Assistant 的记忆开关、namespace 与内容；Target 只能在 run 开始已启用且 namespace 未改变时继续读取。Memory Tool 与提示词共用同一 context，执行前还会按捕获的 owner 重验写权限。
 
 ```text
 **Memories**
@@ -186,7 +186,7 @@ Assistant Tools、MCP；运行时 `inspect_attachments` 由 `GenerationToolSetFa
 不允许用缺省或可空模型开启更宽的工具集。`AssistantToolFactory` 的委派与工具集依赖均为必填构造参数。
 Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过滤 `assistant_manage`、
 `assistant_inspect`、`assistant_call` 以及历史名 `assistant_memory_list`，
-保留并桥接 `ask_user`。`generate_image` 不再永久过滤：Target 已开启 `TextToImage` 且默认文生图模型可解析时才会注册。附件识别模型选择在 Target run 开始时冻结，其他动态权限按子助手运行策略重验。
+保留并桥接 `ask_user`。`generate_image` 不再永久过滤：Target 已开启 `TextToImage` 且默认文生图模型可解析时才会注册。Target 启动时额外捕获一次实际工具名集合；后续 step 可按最新设置重建或撤销其中的工具，但不能引入启动时不存在的名字。附件识别模型不单独冻结。
 
 下列 description 为源码中的英文原文（动态日期/时区用占位标明）。
 
@@ -260,6 +260,9 @@ Android host path、file URI 和内部 relative path 不进入 Tool Result。
 失败结果只有 Text part，带稳定 `reason`。本地前置失败没有 `detail`：
 `invalid_arguments`、`image_model_unavailable`、`tool_revoked`、`image_model_changed`、
 `assistant_not_found`（执行前发现会话所属 Assistant 已删除）。
+
+工具在当前运行中未注册时，返回 `tool_not_available`（结构化 JSON，含 `tool` 名称与
+`message`），不抛内部异常。模型收到后不应原样重试。
 生图调用失败由 `classifyProviderFailure()` 分类，并带回裁剪后的 `detail`
 （默认字符上限，脱敏 API key / Bearer / 内联 base64，不含堆栈）：
 
@@ -286,11 +289,13 @@ Android host path、file URI 和内部 relative path 不进入 Tool Result。
 
 ### `inspect_attachments`
 
-启用条件（工具不注入时模型看不到它）：当前对话模型的模型元数据声明 IMAGE 且其实际
-Provider `requestMediaCapabilities()` 同时返回 `userImages == STRUCTURED` 与
-`toolOutputImages == STRUCTURED` 时无需注入；否则设置中
-必须配置 Provider 可用且实际返回 `userImages == STRUCTURED` 的附件识别模型
-（`attachmentInspectionModelId`）。兼容端点或能力未知时按不可读处理并 fail-closed。
+启用条件（工具不注入时模型看不到它）：当前对话模型的派生 `RequestMediaCapabilities`
+未能覆盖全部三个附件来源容器（USER / ASSISTANT / Tool.output）的 `STRUCTURED` IMAGE
+能力（`OPAQUE_REPLAY_ONLY` 不算完整覆盖）；否则设置中必须配置
+`attachmentInspectionModelId` 能解析到模型、Provider 可用且 `inputModalities` 含 IMAGE
+的附件识别模型。模型图片能力唯一来源于 `Model.inputModalities`；
+`RequestMediaCapabilities` 只是协议容器映射，不是第二套能力配置；
+不再根据 endpoint host 做第二次否决。
 
 > Inspect attachment content on demand when the task depends on it — for example,
 > text or other visual details in an image. Returns the findings for the request.
@@ -311,10 +316,12 @@ Provider `requestMediaCapabilities()` 同时返回 `userImages == STRUCTURED` �
 映射为细分 `reason` 并附 sanitized `detail` 诊断文本（与 `generate_image` / `assistant_call`
 的失败契约一致）；原始异常写入 logcat。
 
-识别调用由工具自身持有 Provider 请求边界，不经过 `GenerationLoop`，因此先用
-`Provider.requestMediaCapabilities()` 协商并将结果写入 `TextGenerationParams.mediaCapabilities`。
-只有 `userImages = STRUCTURED` 才发送原生图片；否则 fail-closed 为
-`inspection_model_unavailable`，避免依赖参数默认值造成 Provider 序列化错误。
+识别调用由工具自身持有 Provider 请求边界，不经过 `GenerationLoop`。工具构造时
+（`createAttachmentInspectionTool`）一次性解析并捕获 inspection model、provider setting
+与派生的 `RequestMediaCapabilities`，写入 `TextGenerationParams.mediaCapabilities`。
+执行时不再通过 Settings 重找模型，也不再按 endpoint host 二次裁决图片能力。构造时仅断言 Provider 遵守
+`IMAGE` 模型必须能结构化编码 USER 图片的静态契约；若远端实际不兼容，Provider 请求返回的真实分类错误表达。识别模型配置无效时工具不会注入；若历史或恢复中的
+ToolCall 已失去该工具，则走统一 `tool_not_available`，不产生专用能力 fallback。
 
 成功结果为普通 Text part（识别模型输出），不携带附件数据。失败结果为带稳定 `reason` 的
 JSON：
@@ -324,9 +331,12 @@ JSON：
 | `invalid_attachments` | refs 为空 / 超过 4 个 / 非 `attachment:` 格式 / 解析结果无图片 |
 | `attachment_not_found` / `unsupported_attachment_type` / `unsafe_attachment_url` / `attachment_fetch_failed` | 统一 Resolver 解析失败，reason 原样透传 |
 | `attachment_resolution_unavailable` | 执行环境未提供附件解析能力 |
-| `inspection_model_unavailable` | 识别模型未配置 / Provider 不可用 / 模型不接收 IMAGE |
 | `rate_limited` / `quota_exhausted` / `auth_failed` / `permission_denied` / `invalid_request` / `provider_unavailable` / `provider_error` / `content_blocked` / `runtime_error` | Provider 调用失败，`classifyProviderFailure` 细分（与 `ProviderFailureKind` 字面一致）；失败信封可携带 `detail`（sanitized 诊断文本） |
 | `inspection_failed` | 识别输出为空（兜底，无 `detail`） |
+
+每个 Provider step 只构建一次不可变 `toolsByName`，在发请求前拒绝空名和重名；该索引同时服务 schema、审批与执行。
+Master/Target 都在下一 step 读取当前有效 Settings，Target 仍应用 run 开始能力上限。配置撤销后，待审批、恢复或历史
+ToolCall 不会复活旧工具，而是返回 `tool_not_available` 并提交 `FAILED` 执行事实。
 
 媒体资源的两种身份（全工具链统一语义）：
 

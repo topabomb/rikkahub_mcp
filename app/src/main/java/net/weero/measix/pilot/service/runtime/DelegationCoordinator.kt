@@ -21,7 +21,9 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.TurnTerminalReasons
 import net.weero.measix.pilot.data.ai.GenerationLoop
+import net.weero.measix.pilot.data.ai.GenerationMemoryContext
 import net.weero.measix.pilot.data.ai.GenerationRequest
+import net.weero.measix.pilot.data.ai.resolveGenerationMemoryOwner
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallPhase
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
@@ -38,7 +40,7 @@ import net.weero.measix.pilot.data.ai.subassistant.validateDeliverableArtifacts
 import net.weero.measix.pilot.data.ai.subassistant.projectArtifactsForCaller
 import net.weero.measix.pilot.data.ai.subassistant.computeSubAssistantPreview
 import net.weero.measix.pilot.data.ai.subassistant.computeTerminalPreview
-import net.weero.measix.pilot.data.ai.subassistant.intersectTargetToolCapabilities
+import net.weero.measix.pilot.data.ai.subassistant.buildTargetStepTools
 import net.weero.measix.pilot.data.ai.subassistant.cloneLineagePrefix
 import net.weero.measix.pilot.data.ai.subassistant.findPreviousCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.classifySubAssistantFailure
@@ -890,17 +892,6 @@ class DelegationCoordinator(
         val runtime = commandCoordinator.load(childConversationId)
         val snapshot = runtime.snapshot.value
 
-        // Target memories
-        val memories = if (target.enableMemory) {
-            if (target.useGlobalMemory) {
-                memoryRepository.getGlobalMemories()
-            } else {
-                memoryRepository.getMemoriesOfAssistant(target.id.toString())
-            }
-        } else {
-            emptyList()
-        }
-
         // 复用 turn-level TtsToolPlaybackContext 的 sessionId，使整轮 turn 内的 Master 和
         // 所有 Target 的 TTS 调用归属同一条播放队列；无 turnTtsContext 时回退独立 context。
         val ttsPlaybackContext = TtsToolPlaybackContext(
@@ -909,39 +900,52 @@ class DelegationCoordinator(
             assistantName = target.name,
             sourceType = TtsPlaybackSource.SourceType.SUB_ASSISTANT,
         )
+        val mediaCapabilities = generationLoop.resolveRequestMediaCapabilities(settings, model)
 
-        // 每个 step 重新解析资源并应用“运行快照 ∩ 当前配置”，但复用 TTS 播放上下文。
-        // inspection 的完整 Provider/model 快照在 run 开始冻结；运行安全信号仍每 step 走 latest。
-        val runStartSettings = settings
-        val frozenInspectionModelId = runStartSettings.attachmentInspectionModelId
-        val frozenInspectionProviderIds = frozenInspectionModelId
-            ?.let { modelId ->
-                runStartSettings.providers
-                    .filter { provider -> provider.models.any { it.id == modelId } }
-                    .map { it.id }
-                    .toSet()
-            }
-            .orEmpty()
+        // The run-start schema is the Target's immutable capability ceiling. Resource and
+        // configuration changes may remove or rebuild these names on later Provider steps,
+        // but may not introduce a name that this run did not expose at its start.
+        val runStartToolNames = toolSetFactory.buildTools(
+            assistant = target,
+            settings = settings,
+            capabilityModel = model,
+            capabilityMediaCapabilities = mediaCapabilities,
+            workspaceCwd = snapshot.header.workspaceCwd,
+            runMode = ToolSetRunMode.TARGET,
+            ttsPlaybackContext = ttsPlaybackContext,
+        ).mapTo(linkedSetOf()) { it.name }
+
+        // 每个 step 重新解析资源并应用“运行开始时的 Target 能力上限 ∩ 当前有效 Settings”。
+        // 所有工具（含 Attachment Inspection）遵循统一生效规则：配置变更从下一次工具集合构建开始生效。
         val toolProvider: suspend () -> List<Tool> = {
             val currentSettings = settingsStore.effectiveSettings.value.settings
             val latestTarget = currentSettings.getAssistantById(target.id)
             if (latestTarget == null) {
                 emptyList()
             } else {
-                val effectiveSettings = currentSettings.copy(
-                    attachmentInspectionModelId = frozenInspectionModelId,
-                    providers = currentSettings.providers
-                        .filterNot { it.id in frozenInspectionProviderIds } +
-                        runStartSettings.providers.filter { it.id in frozenInspectionProviderIds },
-                )
-                toolSetFactory.buildTools(
-                    assistant = intersectTargetToolCapabilities(target, latestTarget),
-                    settings = effectiveSettings,
-                    capabilityModel = model,
-                    workspaceCwd = snapshot.header.workspaceCwd,
-                    runMode = ToolSetRunMode.TARGET,
-                    ttsPlaybackContext = ttsPlaybackContext,
-                )
+                buildTargetStepTools(target, latestTarget, runStartToolNames) { effectiveTarget ->
+                    toolSetFactory.buildTools(
+                        assistant = effectiveTarget,
+                        settings = currentSettings,
+                        capabilityModel = model,
+                        capabilityMediaCapabilities = mediaCapabilities,
+                        workspaceCwd = snapshot.header.workspaceCwd,
+                        runMode = ToolSetRunMode.TARGET,
+                        ttsPlaybackContext = ttsPlaybackContext,
+                    )
+                }
+            }
+        }
+        val targetMemoryContextProvider: suspend () -> GenerationMemoryContext? = {
+            val latestTarget = settingsStore.effectiveSettings.value.settings
+                .getAssistantById(target.id)
+            resolveGenerationMemoryOwner(latestTarget, target)?.let { ownerId ->
+                val currentMemories = if (ownerId == MemoryRepository.GLOBAL_MEMORY_ID) {
+                    memoryRepository.getGlobalMemories()
+                } else {
+                    memoryRepository.getMemoriesOfAssistant(ownerId)
+                }
+                GenerationMemoryContext(ownerId, currentMemories)
             }
         }
 
@@ -973,15 +977,16 @@ class DelegationCoordinator(
                     inputTransformers = turnPipelineFactory.targetInput(),
                     outputTransformers = turnPipelineFactory.targetOutput(),
                     assistant = target,
-                    memories = memories,
-                    tools = toolProvider(), // 初始工具列表
                     toolProvider = toolProvider,
+                    mediaCapabilities = mediaCapabilities,
                     nonInteractive = true,
                     interactiveToolNames = setOf("ask_user"),
-                    memoryToolAllowed = {
-                        val latestTarget = settingsStore.effectiveSettings.value.settings.getAssistantById(target.id)
-                        latestTarget?.enableMemory == true &&
-                            latestTarget.useGlobalMemory == target.useGlobalMemory
+                    memoryContextProvider = targetMemoryContextProvider,
+                    memoryToolAllowed = { ownerId ->
+                        resolveGenerationMemoryOwner(
+                            settingsStore.effectiveSettings.value.settings.getAssistantById(target.id),
+                            target,
+                        ) == ownerId
                     },
                     assistantMessageId = started.assistantMessageId,
                     reportProcessingText = runtime.processingReporter(),

@@ -7,6 +7,7 @@ import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderSetting
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
@@ -645,6 +646,27 @@ class SubAssistantRunPolicyTest {
         assertEquals(setOf(retainedMcp), effective.mcpServers)
         assertEquals(null, effective.workspaceId)
         assertEquals(setOf("retained"), effective.enabledSkills)
+    }
+
+    @Test
+    fun `active target step rebuild applies Assistant and tool-name ceilings`() = runTest {
+        val retained = Tool(name = "retained", description = "", execute = { emptyList() })
+        val newlyAvailable = Tool(name = "newly_available", description = "", execute = { emptyList() })
+        val snapshot = makeAssistant().copy(enableWebSearch = false)
+        val latest = snapshot.copy(enableWebSearch = true)
+        var effectiveAssistant: Assistant? = null
+
+        val effective = buildTargetStepTools(
+            snapshot = snapshot,
+            latest = latest,
+            runStartToolNames = setOf(retained.name),
+        ) { assistant ->
+            effectiveAssistant = assistant
+            listOf(newlyAvailable, retained)
+        }
+
+        assertFalse(requireNotNull(effectiveAssistant).enableWebSearch)
+        assertEquals(listOf(retained.name), effective.map { it.name })
     }
 
     // ---- buildToolCreatedAssistant ----

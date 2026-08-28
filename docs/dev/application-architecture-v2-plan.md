@@ -88,7 +88,7 @@ Provider serializer 的媒体分支；serializer 的非媒体结构、流式解�
 - `SendMessageReceipt` 只表示请求已被 Runtime 接受，不冒充 durable success；同一 receipt 必须能由只读 presentation
   判断“目标消息已提交”或“本次请求已失败/取消/被替代”，UI 不得无限等待，也不得持有 Runtime Job；
 - 附件投影只存在于单次 Provider 请求，不写回 Conversation；USER、ASSISTANT、`Tool.output` 的领域来源不可改变；
-- `input=native` 必须同时满足模型能力、具体 Provider endpoint 和实际 wire container 能力，且最终请求确实携带媒体；
+- `input=native` 必须同时满足 `Model.inputModalities` 的显式模型能力、用户选择的 Provider 协议和实际 wire container 能力，且最终请求确实携带媒体；
   不支持的来源只能在原来源位置降级为 `reference_only`/`unavailable`，不得伪装成 USER，也不得静默丢图后仍标记 native；
 - `CAPABILITY_HINT` 及任何脱离附件来源、统一追加到末条消息的全局提示不得恢复。
 
@@ -138,7 +138,7 @@ Room / DataStore / managed snapshot / filesystem / Provider / PRoot / Android
 4. query 可以组合 durable 事实与进程内投影，但不能获得写能力；
 5. 同一模块内不为了形式增加接口；只有跨模块、平台实现或可替换外部传输才使用 port/adapter；
 6. 进程内状态不得通过多个 map、Flow 和 nullable Job 共同表达同一个生命周期。
-7. 请求级投影只能消费 durable snapshot 与不可变 endpoint capability；Provider serializer 只能编码投影结果，不能再次
+7. 请求级投影只能消费 durable snapshot 与不可变的派生容器能力；Provider serializer 只能编码投影结果，不能再次
    改写附件语义或另算一份能力结论。
 
 ### 4.2 唯一 owner 与保留理由
@@ -156,7 +156,7 @@ Room / DataStore / managed snapshot / filesystem / Provider / PRoot / Android
 | 子助手 run lease | `SubAssistantRunGate` | 只拥有跨 Master/Child 的 run 互斥与释放，不拥有 active request 或 durable turn |
 | Master/Child active request 生命周期与 projection | 各自的 `ConversationRuntime` | 唯一私有 `ActiveTurnRuntime` 表达该 Conversation 的进程内存活性，不冒充 durable message |
 | 请求消息投影顺序 | `TurnPipelineFactory` | Master/Target 各只有一份有序 transformer 清单，附件投影固定在链末 |
-| Provider 媒体容器能力/线编码 | `Provider` adapter | adapter 知道 endpoint/profile 和 wire schema；Transformer 只消费其不可变能力，不猜 host 方言 |
+| Provider 媒体容器能力/线编码 | `Provider` adapter | adapter 把显式模型能力映射到已选协议及已知 profile 的 wire container；Transformer 只消费其不可变派生结果 |
 | 子助手编排、lineage 与 preview/interaction 回写 | `DelegationCoordinator` | 跨 Master/Child 与工具交互，但 run 互斥委托 Gate、Conversation 状态委托 Child Runtime |
 | 启动恢复 | `ApplicationRecoveryCoordinator` + `TurnRecovery` | 前者是全应用门禁，后者只解释当前 schema 的中断状态 |
 | 本地与受管配置、有效读模型 | `SettingsStore` | 防止出现 LocalStore、PolicyStore、EffectiveStore 三个公开 owner |
@@ -428,6 +428,12 @@ TurnEngine.start(...) / continueActive(...) → StartedTurn（engine 内持 immu
 `RUNNING`。`StartedTurn` 不向 application 暴露 Job/gate，只返回 engine、assistant slot 与 resumable message。Transformer 顺序
 继续由唯一 `TurnPipelineFactory` 定义。
 
+工具配置遵循一个 step 边界：每次构建 Provider 请求前，从当前有效 Settings 构建一次确定性 `toolsByName`；该不可变
+集合同时用于 schema、审批解析和紧随其后的 ToolCall 执行。空名或重名在请求前失败。配置变更从下一次 step 构建起
+生效；Master 读取当前 Assistant，Target 还以启动时实际工具名集合和 Assistant 字段为上限，因此 Target 只允许维持、重建或撤销已有工具名。
+审批继续、恢复或历史 ToolCall 已不在当前集合时，返回稳定 `tool_not_available`、提交 `FAILED` 执行事实，不恢复已撤销工具。
+Attachment Inspection 不保存独立 model/provider 快照，Memory Tool 也在同一 step 构建点应用最新撤权信号。
+
 Master send/regenerate 与 Child run 都必须先创建 LAZY worker、再在对应 Conversation Runtime 安装 active runtime、最后启动；
 Child 的 `turnId` 因而从运行中 worker 内联调用 `TurnEngine.start` 时生成，前移到 `DelegationCoordinator` 在安装前分配并传入，删除
 `commandCoordinator.load(childId).setJob(runJob)` 旁路。`SubAssistantRunGate` 仍只控制 target run lease；它不能代替 Child
@@ -469,33 +475,34 @@ Master 在附件投影前保留 `ToolArtifactReplayTransformer`，Target 不装�
 删除 media part 的 transformer。`AttachmentProjectionTransformer` 继续留在现有文件，不并入 `GenerationLoop`、Coordinator
 或各 Provider，也不写 Conversation、Artifact metadata 或识别缓存。
 
-能力结论不再由 `ctx.model.inputModalities.contains(IMAGE)` 单独决定。V2 在现有 `ai/.../Provider.kt` 增加小型值对象
+模型是否接受图片的唯一配置事实是 `ctx.model.inputModalities.contains(IMAGE)`。V2 在现有 `ai/.../Provider.kt` 增加小型值对象
 `RequestMediaCapabilities(userImages, assistantImages, toolOutputImages)` 和 `RequestImageSupport` 三态
 `NONE/STRUCTURED/OPAQUE_REPLAY_ONLY`，以及 Provider 方法 `requestMediaCapabilities(providerSetting, model)`。
 `OPAQUE_REPLAY_ONLY` 只允许 source profile 匹配且带完整原始协议 metadata 的历史输出；普通 `UIMessagePart.Image` 不能借此
 重建成 native。
-`GenerationLoop` 对每次请求只解析一次，把同一个不可变值同时放入 `TransformerContext` 和 `TextGenerationParams`；
+Coordinator 对每个 run 只解析一次，并把同一个不可变值交给工具注入判断、`TransformerContext` 和 `TextGenerationParams`；
 Transformer 决定 `native/reference_only/unavailable`，serializer 只能按该结论编码并 fail-fast 检查，不能重算或静默降级。
 这些类型写入现有 `Provider.kt`、`Transformer.kt`、`AttachmentProjectionTransformer.kt`，不新增 capability/registry 文件。
-能力表是各 adapter 随代码发布的协议事实，不是 Settings、服务端受管配置或用户可切换选项；接口没有 permissive default，
-未登记的 endpoint/profile/source container 一律为 `NONE`。
+能力表是各 adapter 随代码发布的协议容器事实，不是 Settings、服务端受管配置或用户可切换选项；接口没有默认实现，
+避免新增 Provider 静默丢弃显式 IMAGE 配置。未知 OpenAI-compatible host 按用户选择的 Chat Completions 或 Responses
+通用协议处理；只有已知非标准 profile 才收窄其特定容器形状，host 不得关闭 USER 图片能力。
 
-能力矩阵固定为“默认拒绝、profile 明确开放”：
+能力矩阵固定为“显式模型能力 × 已选协议容器”：
 
 | Provider wire container | native 条件 | 不满足时 |
 | --- | --- | --- |
-| 普通 USER 图片 | resolved model 声明 IMAGE，且当前 endpoint 的用户输入 schema 支持图片 | 原 USER 内 `reference_only`；无稳定 ref 时 `unavailable` |
+| 普通 USER 图片 | resolved model 声明 IMAGE，且已选 Provider 协议的用户输入 schema 支持图片 | 原 USER 内 `reference_only`；无稳定 ref 时 `unavailable` |
 | OpenAI 官方 Chat Completions ASSISTANT / TOOL_OUTPUT | 永不 native；官方 assistant/tool 输入容器不承载本项目图片形状 | 分别留在 ASSISTANT / `Tool.output`，只发引用事实 |
-| OpenAI compatible Chat ASSISTANT / TOOL_OUTPUT | 只有已命名 endpoint profile 明确支持对应容器；未知 compatible profile 不猜扩展 | 原来源内引用事实 |
-| OpenAI Responses ASSISTANT / TOOL_OUTPUT | ASSISTANT 为匹配 source profile 的 raw `response.output`，或 endpoint profile 明确支持 structured assistant image；TOOL_OUTPUT 仅在 profile 明确支持 multimodal function output 时 native；未知 host 映射到 `OPENAI_COMPATIBLE` 只证明基本 wire shape，不自动证明这两项媒体扩展 | 原来源内引用事实；不得把 raw output 改造成 Chat message |
-| Claude ASSISTANT / TOOL_OUTPUT | 只有 adapter 当前使用的正式 content/tool-result schema 明确支持对应图片块 | 原来源内引用事实；不得搬到下一条 USER |
-| Gemini ASSISTANT / TOOL_OUTPUT | 只有 model/profile 与 adapter 都支持所需 model-content 或 multimodal function-response 形状及协议 metadata | 原来源内引用事实；不得伪造 model output/signature |
+| OpenAI compatible Chat ASSISTANT / TOOL_OUTPUT | 与官方 Chat 一样均不 native；未知 host 不改变显式 USER 图片能力 | 原来源内引用事实 |
+| OpenAI Responses ASSISTANT / TOOL_OUTPUT | ASSISTANT 只允许匹配 source profile 的 raw `response.output` opaque replay；通用 Responses 的 TOOL_OUTPUT 按标准 multimodal `function_call_output` 编码，Volc/DeepSeek/MiMo 等已知字符串 profile 为非 native | 原来源内引用事实；不得把 raw output 改造成 Chat message |
+| Claude ASSISTANT / TOOL_OUTPUT | ASSISTANT 非 native；Tool Result 按正式多模态 `tool_result` schema 编码 | 原 ASSISTANT 内引用事实；不得搬到下一条 USER |
+| Gemini ASSISTANT / TOOL_OUTPUT | 模型声明 IMAGE 时按 adapter 的 model-content 与 multimodal function-response 形状编码 | 无 IMAGE 时在原来源内保留引用事实 |
 
 Phase A 的初始证据以 2026-08-26 的正式请求 schema 为锚点：[OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)、
 [OpenAI Responses](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)、
 [Claude Messages/tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls) 与
 [Gemini generateContent](https://ai.google.dev/api/generate-content)。后续 schema 变化只能通过具名 profile + serializer fixture 的
-独立协议变更开放，不能让远端模型名、host 或成功过一次的请求动态扩大能力。
+独立协议变更开放；不能让模型名或历史成功请求动态改变能力，也不能让未知 host 推翻显式 USER 图片配置。
 
 每个图片在其来源位置生成且只生成一个 `AttachmentProjectionTextMetadata` 标记：能实际编码媒体为 `input=native`；不能编码
 但有稳定 `attachment:<uuid>` 为 `input=reference_only`；两者都没有为 `ref=unavailable input=unavailable`。native 图片无稳定
@@ -951,10 +958,10 @@ close 窗口原位接回）。UI/Application 消费者的必要适配也包含�
 
 ### 11.8 UI/交互功能保真矩阵
 
-新增 UI 体验只允许“受管配置来源与锁定展示”。此外，§6.3 明确授权一项线协议正确性修正：当前模型虽声明 IMAGE、但实际
-endpoint/container 未证明支持时，从“尝试发送 native”改为原来源 `reference_only`；预览、附件持久化和
-`inspect_attachments` 仍可用。依赖未声明 compatible 扩展的网关可能不再收到 ASSISTANT/TOOL_OUTPUT 原图，只有把该 host
-纳入有协议证据的命名 profile 后才能恢复 native。除此之外 V2 不授权产品行为变化。下表每一行都是硬性兼容契约，不是
+新增 UI 体验只允许“受管配置来源与锁定展示”。此外，§6.3 明确授权线协议正确性修正：USER 图片是否 native 由显式
+`Model.inputModalities` 与已选 Provider 协议决定，未知 host 不得覆盖用户配置；协议不支持的 ASSISTANT/TOOL_OUTPUT
+容器仍在原来源降级，已知非标准 Responses profile 继续按其字符串 output 契约收窄。预览、附件持久化和
+`inspect_attachments` 仍可用。除此之外 V2 不授权产品行为变化。下表每一行都是硬性兼容契约，不是
 验收方式：
 
 | 界面/用户路径 | 必须保持的现有行为 | 高风险架构动作 | 阶段退出证据 |
@@ -1000,8 +1007,8 @@ ViewModel 或 UI 侧配置合并器。因架构迁移需要调整 UI 时，允�
 - 为两项确定删除的错误状态记录 0.0.18 修复覆盖证据和当前 writer 不可再生成的证据；
 - 复算并冻结 §11.7 的文件/行数，明确核对已记录的 +115 行行为增量，不得把它称为无关变更或上调比例门槛；
 - 按 §11.8 逐行冻结自动化结果、真机步骤和现有错误反馈；
-- 按 §6.3 将每个当前 Provider endpoint/profile 的 USER/ASSISTANT/TOOL_OUTPUT 图片能力登记为显式表；未由正式 schema
-  和现有 adapter 共同证明的格子固定为非 native，不允许实施时再猜；
+- 按 §6.3 将每个当前 Provider 协议/profile 的 USER/ASSISTANT/TOOL_OUTPUT 图片容器能力登记为显式表；模型能力只读
+  `inputModalities`，未知 host 按通用兼容协议处理，已知非标准 profile 的差异必须有正式 schema 与 serializer fixture；
 - 先补齐关键行为测试，不新增锁定旧类名的测试。
 
 退出条件：§11.1～§11.5 的每个删除、重命名、合并、修改和保留项都有当前符号清单、目标 owner、失败语义和验收测试；
@@ -1123,7 +1130,7 @@ Artifact/Skill、Workspace 分别不超过 §11.7 上限；对应设置页、Pic
 - 分别覆盖模型无 IMAGE、endpoint 不支持容器、存在/缺失稳定 ref、native 编码成功/失败；marker 为 native 时反序列化最终
   request 必须找到对应图片，reference/unavailable 时最终 request 不得含该图片；
 - 覆盖 OpenAI 官方 Chat、每个已命名 compatible profile、Responses 各 `ResponseEndpointProfile`、Claude、Gemini 2.x/3.x
-  的实际 serializer fixture；未知 compatible endpoint 必须走保守能力，不靠模型名猜方言；
+  的实际 serializer fixture；未知 compatible endpoint 必须遵循用户选择的通用协议，不靠模型名猜方言或用 host 否决 USER 图片；
 - Master 与 Target 都验证 `limitContext` 在前、附件投影最后；Master 单独验证 tool artifact replay 在附件投影之前，Target
   验证不装配 replay；
 - Responses raw/rebuilt 两条路径分别验证 source profile 匹配、opaque item group/call 顺序、marker 单次追加以及无可见文本重复；

@@ -10,7 +10,7 @@ import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.OpenAIResponseSourceProfile
 import me.rerere.ai.ui.OpenAIResponseWireFormat
-import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
  * OpenAI-compatible endpoint identity derived from the actual request host.
@@ -62,22 +62,28 @@ internal fun openAIRequestMediaCapabilities(
     providerSetting: ProviderSetting.OpenAI,
     model: Model,
 ): RequestMediaCapabilities {
-    // A user-supplied OpenAI-compatible gateway has no verified media contract. Keep every
-    // container opaque until a concrete endpoint profile proves the wire shape; model metadata
-    // alone must never opt an unknown server into native image requests.
-    val endpointVendor = resolveOpenAIEndpointVendor(providerSetting.baseUrl.toHttpUrl().host)
-    if (endpointVendor == OpenAIEndpointVendor.COMPATIBLE) {
-        return RequestMediaCapabilities.NONE
-    }
+    // Model image input capability comes only from the user's explicit Model.inputModalities.
+    // The endpoint host is used only to select the wire profile (reasoning/function-output shape),
+    // never to veto a model that the user configured as IMAGE-capable. A compatible gateway that
+    // actually rejects images will surface a real Provider error at request time.
     val userImages = if (Modality.IMAGE in model.inputModalities) {
         RequestImageSupport.STRUCTURED
     } else {
         RequestImageSupport.NONE
     }
     if (!providerSetting.useResponseApi) {
-        return RequestMediaCapabilities(userImages = userImages)
+        // Chat Completions can carry images in the USER role only; assistant and tool-output
+        // containers are not native image containers on this wire.
+        return RequestMediaCapabilities(
+            userImages = userImages,
+            assistantImages = RequestImageSupport.NONE,
+            toolOutputImages = RequestImageSupport.NONE,
+        )
     }
-    val profile = resolveResponseEndpointProfile(providerSetting.baseUrl.toHttpUrl().host)
+    val profile = providerSetting.baseUrl.toHttpUrlOrNull()
+        ?.host
+        ?.let(::resolveResponseEndpointProfile)
+        ?: ResponseEndpointProfile.OPENAI_COMPATIBLE
     return RequestMediaCapabilities(
         userImages = userImages,
         assistantImages = RequestImageSupport.OPAQUE_REPLAY_ONLY,
@@ -122,7 +128,10 @@ internal enum class ResponseEndpointProfile(
         supportsReasoningSummary = true,
         supportsEncryptedContent = true,
         usesReasoningTextContent = false,
-        supportsMultimodalFunctionOutput = false,
+        // Generic OpenAI-compatible Responses gateways are assumed to follow the standard
+        // function_call_output contract, which allows image content arrays. Known non-standard
+        // implementations (Volc Ark, DeepSeek, MiMo) keep this false below.
+        supportsMultimodalFunctionOutput = true,
     ),
     VOLC_ARK(
         wireFormat = OpenAIResponseWireFormat.OPENAI,

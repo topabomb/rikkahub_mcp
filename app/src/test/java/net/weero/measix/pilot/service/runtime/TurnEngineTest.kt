@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service.runtime
 
+import android.content.Context
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -15,7 +16,15 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.Tool
+import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.Provider
+import me.rerere.ai.provider.ProviderManager
+import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.RequestMediaCapabilities
+import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.TurnTerminalReasons
@@ -26,10 +35,18 @@ import net.weero.measix.pilot.data.ai.CheckpointKind
 import net.weero.measix.pilot.data.ai.FinishedReason
 import net.weero.measix.pilot.data.ai.GenerationCheckpoint
 import net.weero.measix.pilot.data.ai.GenerationChunk
+import net.weero.measix.pilot.data.ai.GenerationLoop
+import net.weero.measix.pilot.data.ai.GenerationRequest
+import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
+import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
+import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.service.TurnFinalization
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
@@ -303,6 +320,114 @@ class TurnEngineTest {
         val target = drive()
         assertEquals(master.map { it::class }, target.map { it::class })
         assertEquals(listOf(CommitCheckpoint::class, FinalizeTurn::class), master.map { it::class })
+    }
+
+    @Test
+    fun `approval continuation persists removed tool as failed on the same handle`() = runTest {
+        val harness = harness()
+        val recorded = mutableListOf<ConversationCommand>()
+        coEvery { harness.coordinator.executeOrThrow(any(), capture(recorded)) } returns Unit
+
+        val model = Model(modelId = "test-model", displayName = "Test Model")
+        val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
+        val providerManager = mockk<ProviderManager>()
+        every { providerManager.getProviderByType(providerSetting) } returns
+            mockk<Provider<ProviderSetting.OpenAI>>(relaxed = true)
+        val generationLoop = GenerationLoop(
+            context = mockk<Context>(relaxed = true),
+            providerManager = providerManager,
+            json = Json,
+            memoryRepo = mockk<MemoryRepository>(relaxed = true),
+            attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+        )
+        val assistant = Assistant(enableMemory = false)
+        val settings = Settings(
+            providers = listOf(providerSetting),
+            assistants = listOf(assistant),
+        )
+        var executed = false
+        val tool = Tool(
+            name = "revocable_tool",
+            description = "Requires approval before executing.",
+            needsApproval = { true },
+            execute = {
+                executed = true
+                listOf(UIMessagePart.Text("executed"))
+            },
+        )
+        val waitingMessage = UIMessage(
+            id = harness.handle.assistantMessageId,
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "call-revocable",
+                    toolName = tool.name,
+                    input = "{}",
+                )
+            ),
+        )
+
+        val waitingEvents = harness.engine.bind(
+            generationLoop.run(
+                GenerationRequest(
+                    settings = settings,
+                    model = model,
+                    mediaCapabilities = RequestMediaCapabilities.NONE,
+                    messages = listOf(waitingMessage),
+                    assistant = assistant,
+                    toolProvider = { listOf(tool) },
+                    maxSteps = 1,
+                    assistantMessageId = waitingMessage.id,
+                    onCheckpoint = harness.engine::onCheckpoint,
+                )
+            )
+        ).toListSafe()
+        assertTrue((waitingEvents.last() as TurnEvent.Finished).outcome is TurnOutcome.AwaitingApproval)
+        val pendingMessage = waitingEvents.filterIsInstance<TurnEvent.Streaming>().last().messages.last()
+        assertTrue(pendingMessage.getTools().single().approvalState is ToolApprovalState.Pending)
+
+        val approvedMessage = pendingMessage.copy(
+            parts = pendingMessage.parts.map { part ->
+                if (part is UIMessagePart.Tool) {
+                    part.copy(approvalState = ToolApprovalState.Approved)
+                } else {
+                    part
+                }
+            },
+        )
+        val continuationEvents = harness.engine.bind(
+            generationLoop.run(
+                GenerationRequest(
+                    settings = settings,
+                    model = model,
+                    mediaCapabilities = RequestMediaCapabilities.NONE,
+                    messages = listOf(approvedMessage),
+                    assistant = assistant,
+                    toolProvider = { emptyList() },
+                    maxSteps = 1,
+                    assistantMessageId = approvedMessage.id,
+                    onCheckpoint = harness.engine::onCheckpoint,
+                )
+            )
+        ).toListSafe()
+
+        assertFalse(executed)
+        val committedResult = continuationEvents.filterIsInstance<TurnEvent.Streaming>()
+            .last().messages.last().getTools().single()
+        assertTrue((committedResult.output.single() as UIMessagePart.Text).text.contains("tool_not_available"))
+
+        val checkpoints = recorded.filterIsInstance<CommitCheckpoint>()
+        assertEquals(
+            listOf(ToolExecutionStatus.STARTED, ToolExecutionStatus.FAILED),
+            checkpoints.mapNotNull { it.toolExecution?.status },
+        )
+        assertTrue(recorded.all { command ->
+            when (command) {
+                is CommitCheckpoint -> command.handle == harness.handle
+                is FinalizeTurn -> command.handle == harness.handle
+                else -> true
+            }
+        })
     }
 
     @Test

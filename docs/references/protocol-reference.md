@@ -68,6 +68,12 @@ UIMessage
 
 `OpenAIEndpointProfile.kt` 是 host 到内部 endpoint 身份的唯一来源。已识别 host 用于选择经验证的参数或 wire 差异；其他 host 为 `COMPATIBLE`。
 
+endpoint host 只用于选择已知的协议差异（reasoning 格式、function output 形状等），
+**不再用于否决模型的图片输入能力**。`Model.inputModalities` 是模型图片能力的唯一配置事实；
+`RequestMediaCapabilities` 是协议适配器对 USER / ASSISTANT / Tool.output 三个容器的静态映射。
+自定义 OpenAI-compatible endpoint 按用户选择的 OpenAI-compatible 协议处理；
+代理是否完整实现该协议，由实际请求结果验证。
+
 ```text
 host
   -> resolveOpenAIEndpointVendor()
@@ -143,7 +149,7 @@ DeepSeek thinking + tools 要求后续请求保留工具步骤的 `reasoning_con
 | Profile | Wire format | Reasoning 表示 | 加密状态 | Function output |
 |---------|-------------|----------------|----------|-----------------|
 | `OPENAI` | OpenAI | summary items | `encrypted_content` | 可多模态 |
-| `OPENAI_COMPATIBLE` | OpenAI | 按 OpenAI 形状 | 按 OpenAI 形状 | 未验证，媒体能力为 `NONE` |
+| `OPENAI_COMPATIBLE` | OpenAI | 按 OpenAI 形状 | 按 OpenAI 形状 | 假定遵循标准 function_call_output 契约（可多模态） |
 | `VOLC_ARK` | OpenAI | endpoint 默认 summary | 请求 `encrypted_content` | 字符串 |
 | `DEEPSEEK` | DeepSeek | `content[].reasoning_text` | 不使用 | 字符串 |
 | `MIMO` | MiMo | reasoning text item | 不使用 | 字符串 |
@@ -249,7 +255,7 @@ TOOL 能力，不发送 thinking。
 3. **不跨来源复用**：wire format 和 source profile 都兼容时才回放原始 Responses items。
 4. **UI 投影不是协议真相**：可见 Text/Reasoning 可用于回退重建，但不能代替服务端原始状态。
 5. **host、model、provider 正交**：只在各自职责层做判断。
-6. **未知 endpoint 保守处理**：保持 compatible 默认，不猜供应商。
+6. **未知 endpoint 遵循所选兼容协议**：保持 compatible 默认，不猜供应商，也不否决显式 USER 图片能力。
 7. **失败必须可见**：协议终态缺失、签名错误或来源不兼容不得静默伪装成功。
 
 ## 10. 回归验证

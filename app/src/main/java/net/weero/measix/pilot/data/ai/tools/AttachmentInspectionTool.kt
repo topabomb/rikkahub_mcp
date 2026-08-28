@@ -14,8 +14,12 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.provider.Modality
+import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
+import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestImageSupport
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -51,78 +55,102 @@ private const val INSPECTION_SYSTEM_INSTRUCTION =
  * - 成功返回普通 Text Tool Result；失败返回带机器可判别 reason 的 JSON；
  * - 无 cache；不写回 Conversation。
  *
- * [settings] 是本 run 的 snapshot；工具执行期间设置变化不影响已注入的 schema。
+ * 工具构造时解析并捕获 inspection model、provider setting 与派生的媒体映射；
+ * 执行时不再通过 Settings 重找模型，也不再以 endpoint host 二次裁决图片能力。
+ * 构造阶段只断言 Provider 已遵守 IMAGE 模型必须提供结构化 USER 图片编码的静态契约；
+ * 远端真实不兼容由 Provider 请求返回的分类错误表达。
  */
 fun createAttachmentInspectionTool(
     settings: Settings,
     providerManager: ProviderManager,
-): Tool = Tool(
-    name = ATTACHMENT_INSPECTION_TOOL_NAME,
-    description = "Inspect attachment content on demand when the task depends on it — " +
-        "for example, text or other visual details in an image. " +
-        "Returns the findings for the request.",
-    parameters = {
-        InputSchema.Obj(
-            properties = buildJsonObject {
-                put(
-                    "attachments",
-                    buildJsonObject {
-                        put("type", "array")
-                        put(
-                            "items",
-                            buildJsonObject {
-                                put("type", "string")
-                                put(
-                                    "description",
-                                    "An attachment ref as it appears in the conversation (attachment:<uuid>)",
-                                )
-                            },
-                        )
-                        put("minItems", 1)
-                        put("maxItems", MAX_INSPECTION_ATTACHMENTS)
-                        put(
-                            "description",
-                            "Attachment refs to inspect, copied exactly from the [Attachment ref=...] lines " +
-                                "in the conversation. Currently image attachments only. " +
-                                "Up to 4; order is preserved.",
-                        )
-                    },
-                )
-                put(
-                    "request",
-                    buildJsonObject {
-                        put("type", "string")
-                        put(
-                            "description",
-                            "The specific information needed and its expected form: exact text to " +
-                                "transcribe, details to compare across images, or facts to verify. " +
-                                "Prefer precise requests over vague descriptions. " +
-                                "Keep it focused on the current task.",
-                        )
-                    },
-                )
-            },
-            required = listOf("attachments", "request"),
-        )
-    },
-    contextualExecute = { args ->
-        executeInspection(
-            args = args,
-            settings = settings,
-            providerManager = providerManager,
-            resolveAttachments = this.resolveAttachments,
-        )
-    },
-    execute = { _ ->
-        // stable attachment ref 只能由提供解析能力的上下文执行器解析。
-        inspectionFailure(AttachmentFailureReasons.ATTACHMENT_RESOLUTION_UNAVAILABLE)
-    },
-)
+): Tool {
+    // Resolve and capture at construction time. shouldInjectAttachmentInspection already
+    // validated these facts; this is the single owner boundary for the inspection contract.
+    val inspectionModel = settings.findModelById(settings.attachmentInspectionModelId)
+        ?: error("Attachment inspection model is not configured")
+    val providerSetting = inspectionModel.findProvider(settings.providers)
+        ?: error("Attachment inspection model provider not found")
+    if (!inspectionModel.inputModalities.contains(Modality.IMAGE)) {
+        error("Attachment inspection model does not support IMAGE input")
+    }
+    val provider = providerManager.getProviderByType(providerSetting)
+    val mediaCapabilities = provider.requestMediaCapabilities(providerSetting, inspectionModel)
+    check(mediaCapabilities.userImages == RequestImageSupport.STRUCTURED) {
+        "Provider contract violation: IMAGE model cannot encode structured USER images"
+    }
+
+    return Tool(
+        name = ATTACHMENT_INSPECTION_TOOL_NAME,
+        description = "Inspect attachment content on demand when the task depends on it — " +
+            "for example, text or other visual details in an image. " +
+            "Returns the findings for the request.",
+        parameters = {
+            InputSchema.Obj(
+                properties = buildJsonObject {
+                    put(
+                        "attachments",
+                        buildJsonObject {
+                            put("type", "array")
+                            put(
+                                "items",
+                                buildJsonObject {
+                                    put("type", "string")
+                                    put(
+                                        "description",
+                                        "An attachment ref as it appears in the conversation (attachment:<uuid>)",
+                                    )
+                                },
+                            )
+                            put("minItems", 1)
+                            put("maxItems", MAX_INSPECTION_ATTACHMENTS)
+                            put(
+                                "description",
+                                "Attachment refs to inspect, copied exactly from the [Attachment ref=...] lines " +
+                                    "in the conversation. Currently image attachments only. " +
+                                    "Up to 4; order is preserved.",
+                            )
+                        },
+                    )
+                    put(
+                        "request",
+                        buildJsonObject {
+                            put("type", "string")
+                            put(
+                                "description",
+                                "The specific information needed and its expected form: exact text to " +
+                                    "transcribe, details to compare across images, or facts to verify. " +
+                                    "Prefer precise requests over vague descriptions. " +
+                                    "Keep it focused on the current task.",
+                            )
+                        },
+                    )
+                },
+                required = listOf("attachments", "request"),
+            )
+        },
+        contextualExecute = { args ->
+            executeInspection(
+                args = args,
+                inspectionModel = inspectionModel,
+                providerSetting = providerSetting,
+                provider = provider,
+                mediaCapabilities = mediaCapabilities,
+                resolveAttachments = this.resolveAttachments,
+            )
+        },
+        execute = { _ ->
+            // stable attachment ref 只能由提供解析能力的上下文执行器解析。
+            inspectionFailure(AttachmentFailureReasons.ATTACHMENT_RESOLUTION_UNAVAILABLE)
+        },
+    )
+}
 
 internal suspend fun executeInspection(
     args: kotlinx.serialization.json.JsonElement,
-    settings: Settings,
-    providerManager: ProviderManager,
+    inspectionModel: Model,
+    providerSetting: ProviderSetting,
+    provider: Provider<ProviderSetting>,
+    mediaCapabilities: RequestMediaCapabilities,
     resolveAttachments: suspend (refs: List<String>) -> ToolAttachmentResolution,
 ): List<UIMessagePart> {
     val obj = args as? JsonObject
@@ -151,14 +179,6 @@ internal suspend fun executeInspection(
         return inspectionFailure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
     }
 
-    val inspectionModel = settings.findModelById(settings.attachmentInspectionModelId)
-        ?: return inspectionFailure(AttachmentFailureReasons.INSPECTION_MODEL_UNAVAILABLE)
-    val providerSetting = inspectionModel.findProvider(settings.providers)
-        ?: return inspectionFailure(AttachmentFailureReasons.INSPECTION_MODEL_UNAVAILABLE)
-    if (!inspectionModel.inputModalities.contains(Modality.IMAGE)) {
-        return inspectionFailure(AttachmentFailureReasons.INSPECTION_MODEL_UNAVAILABLE)
-    }
-
     // 单一解析规则：refs → Runtime resolver → parts；失败 reason 原样透传。
     val resolution = resolveAttachments(refs)
     resolution.failureReason?.let { return inspectionFailure(it) }
@@ -176,15 +196,6 @@ internal suspend fun executeInspection(
     }
 
     return try {
-        val provider = providerManager.getProviderByType(providerSetting)
-        // This tool is a deliberate native-image request, outside GenerationLoop's regular
-        // capability negotiation. Derive the request contract at this owner boundary instead of
-        // relying on TextGenerationParams' NONE default (which makes Chat Completions reject the
-        // image after the request projection refactor).
-        val mediaCapabilities = provider.requestMediaCapabilities(providerSetting, inspectionModel)
-        if (mediaCapabilities.userImages != RequestImageSupport.STRUCTURED) {
-            return inspectionFailure(AttachmentFailureReasons.INSPECTION_MODEL_UNAVAILABLE)
-        }
         val result = provider.generateText(
             providerSetting = providerSetting,
             messages = listOf(

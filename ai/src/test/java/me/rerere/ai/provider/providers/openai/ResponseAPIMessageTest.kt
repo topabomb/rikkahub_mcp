@@ -16,6 +16,8 @@ import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.RequestImageSupport
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.AttachmentProjectionTextMetadata
 import me.rerere.ai.ui.OpenAIReasoningMetadata
@@ -346,6 +348,20 @@ class ResponseAPIMessageTest {
     }
 
     @Test
+    fun `generic compatible responses profile enables multimodal function output`() {
+        val profile = resolveResponseEndpointProfile("proxy.example.com")
+        assertEquals(ResponseEndpointProfile.OPENAI_COMPATIBLE, profile)
+        assertTrue(profile.supportsMultimodalFunctionOutput)
+    }
+
+    @Test
+    fun `known non-standard responses profiles keep multimodal function output disabled`() {
+        assertFalse(resolveResponseEndpointProfile("ark.cn-beijing.volces.com").supportsMultimodalFunctionOutput)
+        assertFalse(resolveResponseEndpointProfile("api.deepseek.com").supportsMultimodalFunctionOutput)
+        assertFalse(resolveResponseEndpointProfile("api.xiaomimimo.com").supportsMultimodalFunctionOutput)
+    }
+
+    @Test
     fun `openai response api should include reasoning summary`() {
         val providerSetting = ProviderSetting.OpenAI(
             baseUrl = "https://api.openai.com/v1"
@@ -574,6 +590,40 @@ class ResponseAPIMessageTest {
             "Captured image\n[Attachment ref=attachment:1 type=image input=reference_only]",
             output["output"]?.jsonPrimitive?.content,
         )
+    }
+
+    @Test
+    fun `standard compatible response encodes multimodal function output array`() {
+        val assistant = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "call_image",
+                    toolName = "capture",
+                    input = "{}",
+                    output = listOf(
+                        UIMessagePart.Text("Captured image"),
+                        UIMessagePart.Image("data:image/png;base64,AQ=="),
+                    ),
+                ),
+            ),
+        )
+        val capabilities = RequestMediaCapabilities(
+            userImages = RequestImageSupport.STRUCTURED,
+            assistantImages = RequestImageSupport.OPAQUE_REPLAY_ONLY,
+            toolOutputImages = RequestImageSupport.STRUCTURED,
+        )
+
+        val output = api.buildMessages(
+            messages = listOf(assistant),
+            endpointProfile = resolveResponseEndpointProfile("proxy.example.com"),
+            mediaCapabilities = capabilities,
+        ).single { it.jsonObject["type"]?.jsonPrimitive?.content == "function_call_output" }.jsonObject
+        val content = output["output"]!!.jsonArray
+
+        assertEquals(listOf("input_text", "input_image"), content.map { it.jsonObject["type"]!!.jsonPrimitive.content })
+        assertEquals("Captured image", content[0].jsonObject["text"]!!.jsonPrimitive.content)
+        assertEquals("data:image/png;base64,AQ==", content[1].jsonObject["image_url"]!!.jsonPrimitive.content)
     }
 
     @Test

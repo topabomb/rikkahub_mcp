@@ -30,6 +30,8 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.attachments.AttachmentFailureReasons
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.datastore.findModelById
+import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -57,11 +59,13 @@ class AttachmentInspectionToolTest {
         inputModalities = listOf(Modality.TEXT),
     )
 
+    private val inspectionCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED)
+
     @Before
     fun configureProviderCapabilities() {
         every {
             provider.requestMediaCapabilities(any(), any())
-        } returns RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED)
+        } returns inspectionCapabilities
     }
 
     private fun args(
@@ -104,12 +108,24 @@ class AttachmentInspectionToolTest {
         return (payload["detail"] as? JsonPrimitive)?.contentOrNull
     }
 
+    /** Resolve the inspection contract the same way createAttachmentInspectionTool does. */
+    private fun resolveInspectionContract(model: Model): Triple<Model, ProviderSetting, Provider<ProviderSetting>> {
+        val settings = settingsFor(model)
+        val inspectionModel = settings.findModelById(settings.attachmentInspectionModelId)!!
+        val providerSetting = inspectionModel.findProvider(settings.providers)!!
+        every { providerManager.getProviderByType(providerSetting) } returns provider
+        return Triple(inspectionModel, providerSetting, provider)
+    }
+
     @Test
     fun `empty refs are invalid`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val result = executeInspection(
             args = args(emptyList()),
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { ToolAttachmentResolution() },
         )
         assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(result))
@@ -117,10 +133,13 @@ class AttachmentInspectionToolTest {
 
     @Test
     fun `more than four refs are invalid`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val result = executeInspection(
             args = args((1..5).map { "attachment:11111111-1111-1111-1111-111111111111" }),
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { ToolAttachmentResolution() },
         )
         assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(result))
@@ -128,10 +147,13 @@ class AttachmentInspectionToolTest {
 
     @Test
     fun `non attachment refs are invalid`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val result = executeInspection(
             args = args(listOf("https://example.com/a.png")),
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { error("resolver must not run") },
         )
         assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(result))
@@ -139,6 +161,7 @@ class AttachmentInspectionToolTest {
 
     @Test
     fun `mixed or blank attachment array elements are invalid instead of being dropped`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val malformed = buildJsonObject {
             put(
                 "attachments",
@@ -158,14 +181,18 @@ class AttachmentInspectionToolTest {
 
         val malformedResult = executeInspection(
             args = malformed,
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { error("resolver must not run") },
         )
         val blankResult = executeInspection(
             args = blank,
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { error("resolver must not run") },
         )
 
@@ -175,6 +202,7 @@ class AttachmentInspectionToolTest {
 
     @Test
     fun `non string request is invalid`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val objectRequest = buildJsonObject {
             put("attachments", JsonArray(listOf(JsonPrimitive("attachment:11111111-1111-1111-1111-111111111111"))))
             put("request", buildJsonObject { put("text", "describe") })
@@ -186,14 +214,18 @@ class AttachmentInspectionToolTest {
 
         val objectResult = executeInspection(
             args = objectRequest,
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { error("resolver must not run") },
         )
         val booleanResult = executeInspection(
             args = booleanRequest,
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { error("resolver must not run") },
         )
 
@@ -202,33 +234,52 @@ class AttachmentInspectionToolTest {
     }
 
     @Test
-    fun `missing inspection model fails with inspection_model_unavailable`() = runTest {
-        val result = executeInspection(
-            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
-            settings = settingsFor(null),
-            providerManager = providerManager,
-            resolveAttachments = { ToolAttachmentResolution() },
+    fun `construction fails when inspection model is not configured`() {
+        val settings = Settings(
+            providers = listOf(ProviderSetting.OpenAI(models = listOf(visionModel, textModel))),
+            attachmentInspectionModelId = null,
         )
-        assertEquals(AttachmentFailureReasons.INSPECTION_MODEL_UNAVAILABLE, resultReason(result))
+        val error = org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+            createAttachmentInspectionTool(settings, providerManager)
+        }
+        assertTrue(error.message!!.contains("not configured"))
     }
 
     @Test
-    fun `non image inspection model fails with inspection_model_unavailable`() = runTest {
-        val result = executeInspection(
-            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
-            settings = settingsFor(textModel),
-            providerManager = providerManager,
-            resolveAttachments = { ToolAttachmentResolution() },
+    fun `construction fails when inspection model is not image capable`() {
+        val settings = Settings(
+            providers = listOf(ProviderSetting.OpenAI(models = listOf(visionModel, textModel))),
+            attachmentInspectionModelId = textModel.id,
         )
-        assertEquals(AttachmentFailureReasons.INSPECTION_MODEL_UNAVAILABLE, resultReason(result))
+        val error = org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+            createAttachmentInspectionTool(settings, providerManager)
+        }
+        assertTrue(error.message!!.contains("IMAGE"))
+    }
+
+    @Test
+    fun `construction fails fast when provider breaks image encoding contract`() {
+        val settings = settingsFor(visionModel)
+        val providerSetting = visionModel.findProvider(settings.providers)!!
+        every { providerManager.getProviderByType(providerSetting) } returns provider
+        every { provider.requestMediaCapabilities(providerSetting, visionModel) } returns RequestMediaCapabilities.NONE
+
+        val error = org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+            createAttachmentInspectionTool(settings, providerManager)
+        }
+
+        assertTrue(error.message!!.contains("Provider contract violation"))
     }
 
     @Test
     fun `runtime resolution failure reason is propagated as is`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val result = executeInspection(
             args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
             resolveAttachments = {
                 ToolAttachmentResolution(failureReason = AttachmentFailureReasons.ATTACHMENT_NOT_FOUND)
             },
@@ -238,10 +289,13 @@ class AttachmentInspectionToolTest {
 
     @Test
     fun `resolution without image parts is invalid`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val result = executeInspection(
             args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { ToolAttachmentResolution(parts = emptyList()) },
         )
         assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(result))
@@ -249,7 +303,7 @@ class AttachmentInspectionToolTest {
 
     @Test
     fun `success returns observation text with a single model call`() = runTest {
-        val image = UIMessagePart.Image(url = "file:///tmp/a.png")
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         every { providerManager.getProviderByType(any()) } returns provider
         var calls = 0
         var sent: List<UIMessage>? = null
@@ -263,14 +317,15 @@ class AttachmentInspectionToolTest {
 
         val result = executeInspection(
             args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
-            resolveAttachments = { ToolAttachmentResolution(parts = listOf(image)) },
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
+            resolveAttachments = { ToolAttachmentResolution(parts = listOf(image("a.png"))) },
         )
 
         assertEquals(1, calls)
         assertEquals("a red square", (result.single() as UIMessagePart.Text).text)
-        // 识别调用只含 fixed system + 标注的图片 + request
         val messages = sent!!
         assertEquals(2, messages.size)
         val user = messages[1]
@@ -283,6 +338,7 @@ class AttachmentInspectionToolTest {
 
     @Test
     fun `inspection preserves the resolved stable ref in the image fact label`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val ref = "attachment:11111111-1111-1111-1111-111111111111"
         val image = AttachmentRefs.withMetadata(
             UIMessagePart.Image("file:///upload/shared.png"),
@@ -301,8 +357,10 @@ class AttachmentInspectionToolTest {
 
         executeInspection(
             args = args(listOf(ref)),
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { ToolAttachmentResolution(parts = listOf(image)) },
         )
 
@@ -312,6 +370,7 @@ class AttachmentInspectionToolTest {
 
     @Test
     fun `inspection call negotiates native user image capability`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         every { providerManager.getProviderByType(any()) } returns provider
         var sentParams: TextGenerationParams? = null
         coEvery {
@@ -323,8 +382,10 @@ class AttachmentInspectionToolTest {
 
         val result = executeInspection(
             args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
             resolveAttachments = {
                 ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
             },
@@ -335,32 +396,129 @@ class AttachmentInspectionToolTest {
     }
 
     @Test
-    fun `inspection fails closed when provider cannot encode native user images`() = runTest {
+    fun `inspection call sends native image into USER request`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         every { providerManager.getProviderByType(any()) } returns provider
-        every {
-            provider.requestMediaCapabilities(any(), any())
-        } returns RequestMediaCapabilities.NONE
+        var sent: List<UIMessage>? = null
         coEvery {
             provider.generateText(any(), any(), any<TextGenerationParams>())
-        } answers { successChunk("must not run") }
+        } answers {
+            sent = secondArg()
+            successChunk("ok")
+        }
 
-        val result = executeInspection(
+        executeInspection(
             args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
             resolveAttachments = {
                 ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
             },
         )
 
-        assertEquals(AttachmentFailureReasons.INSPECTION_MODEL_UNAVAILABLE, resultReason(result))
-        io.mockk.coVerify(exactly = 0) {
+        val user = sent!![1]
+        assertTrue(user.parts.any { it is UIMessagePart.Image })
+    }
+
+    @Test
+    fun `real provider failure preserves classified error reason`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
+        every { providerManager.getProviderByType(any()) } returns provider
+        coEvery {
             provider.generateText(any(), any(), any<TextGenerationParams>())
+        } throws IllegalStateException("network down")
+
+        val result = executeInspection(
+            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
+            resolveAttachments = {
+                ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
+            },
+        )
+        assertEquals(AttachmentFailureReasons.RUNTIME_ERROR, resultReason(result))
+        assertFalse(resultDetail(result).isNullOrEmpty())
+    }
+
+    @Test
+    fun `rate limited provider failure maps to rate_limited with sanitized detail`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
+        every { providerManager.getProviderByType(any()) } returns provider
+        coEvery {
+            provider.generateText(any(), any(), any<TextGenerationParams>())
+        } throws HttpException(
+            message = "Failed to get response: 429 rate_limit_exceeded Please retry after 1 second.",
+            statusCode = 429,
+            errorCode = "rate_limit_exceeded",
+        )
+
+        val result = executeInspection(
+            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
+            resolveAttachments = {
+                ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
+            },
+        )
+        assertEquals(AttachmentFailureReasons.RATE_LIMITED, resultReason(result))
+        assertTrue(resultDetail(result).orEmpty().contains("retry after 1 second"))
+    }
+
+    @Test
+    fun `empty model output counts as inspection failure`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
+        every { providerManager.getProviderByType(any()) } returns provider
+        coEvery {
+            provider.generateText(any(), any(), any<TextGenerationParams>())
+        } returns successChunk("   ")
+
+        val result = executeInspection(
+            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
+            resolveAttachments = {
+                ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
+            },
+        )
+        assertEquals(AttachmentFailureReasons.INSPECTION_FAILED, resultReason(result))
+    }
+
+    @Test
+    fun `cancellation is not swallowed as failure`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
+        every { providerManager.getProviderByType(any()) } returns provider
+        coEvery {
+            provider.generateText(any(), any(), any<TextGenerationParams>())
+        } throws kotlinx.coroutines.CancellationException("cancelled")
+
+        try {
+            executeInspection(
+                args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+                inspectionModel = model,
+                providerSetting = providerSetting,
+                provider = provider,
+                mediaCapabilities = inspectionCapabilities,
+                resolveAttachments = {
+                    ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
+                },
+            )
+            throw AssertionError("expected CancellationException")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // expected
         }
     }
 
     @Test
     fun `multiple images are inspected in one call with ordered labels`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         every { providerManager.getProviderByType(any()) } returns provider
         var calls = 0
         var sent: List<UIMessage>? = null
@@ -379,8 +537,10 @@ class AttachmentInspectionToolTest {
                     "attachment:22222222-2222-2222-2222-222222222222",
                 ),
             ),
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
             resolveAttachments = {
                 ToolAttachmentResolution(
                     parts = listOf(
@@ -402,6 +562,7 @@ class AttachmentInspectionToolTest {
 
     @Test
     fun `inspection call requests reasoningLevel auto`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         every { providerManager.getProviderByType(any()) } returns provider
         var sentParams: TextGenerationParams? = null
         coEvery {
@@ -413,98 +574,18 @@ class AttachmentInspectionToolTest {
 
         val result = executeInspection(
             args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
+            inspectionModel = model,
+            providerSetting = providerSetting,
+            provider = provider,
+            mediaCapabilities = inspectionCapabilities,
             resolveAttachments = {
                 ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
             },
         )
 
         assertEquals("ok", (result.single() as UIMessagePart.Text).text)
-        // 内部识别调用必须用 AUTO（模型默认推理档）：
-        // OFF 在 Gemini 3 系列上映射 minimal，Gemini 3.7 Flash 不支持会直接 400。
         assertEquals(ReasoningLevel.AUTO, sentParams?.reasoningLevel)
     }
 
-    @Test
-    fun `model call failure is classified as runtime_error with detail`() = runTest {
-        every { providerManager.getProviderByType(any()) } returns provider
-        coEvery {
-            provider.generateText(any(), any(), any<TextGenerationParams>())
-        } throws IllegalStateException("network down")
-
-        val result = executeInspection(
-            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
-            resolveAttachments = {
-                ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
-            },
-        )
-        assertEquals(AttachmentFailureReasons.RUNTIME_ERROR, resultReason(result))
-        assertFalse(resultDetail(result).isNullOrEmpty())
-    }
-
-    @Test
-    fun `rate limited provider failure maps to rate_limited with sanitized detail`() = runTest {
-        every { providerManager.getProviderByType(any()) } returns provider
-        coEvery {
-            provider.generateText(any(), any(), any<TextGenerationParams>())
-        } throws HttpException(
-            message = "Failed to get response: 429 rate_limit_exceeded Please retry after 1 second.",
-            statusCode = 429,
-            errorCode = "rate_limit_exceeded",
-        )
-
-        val result = executeInspection(
-            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
-            resolveAttachments = {
-                ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
-            },
-        )
-        assertEquals(AttachmentFailureReasons.RATE_LIMITED, resultReason(result))
-        assertTrue(resultDetail(result).orEmpty().contains("retry after 1 second"))
-    }
-
-    @Test
-    fun `empty model output counts as inspection failure`() = runTest {
-        every { providerManager.getProviderByType(any()) } returns provider
-        coEvery {
-            provider.generateText(any(), any(), any<TextGenerationParams>())
-        } returns successChunk("   ")
-
-        val result = executeInspection(
-            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
-            settings = settingsFor(visionModel),
-            providerManager = providerManager,
-            resolveAttachments = {
-                ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
-            },
-        )
-        assertEquals(AttachmentFailureReasons.INSPECTION_FAILED, resultReason(result))
-    }
-
-    @Test
-    fun `cancellation is not swallowed as failure`() = runTest {
-        every { providerManager.getProviderByType(any()) } returns provider
-        coEvery {
-            provider.generateText(any(), any(), any<TextGenerationParams>())
-        } throws kotlinx.coroutines.CancellationException("cancelled")
-
-        try {
-            executeInspection(
-                args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
-                settings = settingsFor(visionModel),
-                providerManager = providerManager,
-                resolveAttachments = {
-                    ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
-                },
-            )
-            throw AssertionError("expected CancellationException")
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            // expected
-        }
-    }
+    private fun image(url: String) = UIMessagePart.Image(url = url)
 }

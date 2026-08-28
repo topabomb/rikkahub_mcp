@@ -93,7 +93,7 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 
 ### 3.1 两态
 
-判定输入：本次请求的 `RequestMediaCapabilities`（模型 IMAGE 声明 + 具名 Provider endpoint/profile）。`OPAQUE_REPLAY_ONLY` 只允许 Responses raw `response.output` 回放历史媒体，不能让普通 `UIMessagePart.Image` 借消息级 metadata 变成 native。
+判定输入：本次请求的 `RequestMediaCapabilities`（显式模型 IMAGE 声明 + 用户选择的 Provider 协议 + 已知容器 profile）。未知 OpenAI-compatible host 按所选通用协议处理，不否决 USER 图片能力。`OPAQUE_REPLAY_ONLY` 只允许 Responses raw `response.output` 回放历史媒体，不能让普通 `UIMessagePart.Image` 借消息级 metadata 变成 native。
 
 | 模式 | 行为 |
 |------|------|
@@ -145,15 +145,23 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 
 工具注入判定 `shouldInjectAttachmentInspection()`（`GenerationToolSetFactory`），全部满足才注入：
 
-1. 本次 resolved model 的 USER 与 `Tool.output` 容器未同时具备 IMAGE 的 STRUCTURED 能力；
-2. `Settings.attachmentInspectionModelId` 能解析到模型；
-3. 该模型 Provider 可用；
-4. 该模型 `inputModalities` 含 IMAGE，且该 Provider 对本次请求返回
-   `RequestMediaCapabilities.userImages == STRUCTURED`；能力未知或兼容端点未声明时 fail-closed。
-   视觉 Chat Completions 等不支持 multimodal function output 的端点即使 USER 可读，
-   `toolOutputImages` 仍为 `NONE`，因此继续注入识别工具。
+1. 本次 resolved model 的派生 `RequestMediaCapabilities` 未能覆盖全部三个附件来源容器
+   （USER / ASSISTANT / Tool.output）的 `STRUCTURED` IMAGE 能力。
+   `OPAQUE_REPLAY_ONLY` 不算完整覆盖——并非所有普通 Assistant 图片都具有可回放的 Provider
+   opaque metadata，因此仍需识别工具。
+2. `Settings.attachmentInspectionModelId` 能解析到模型，且该模型 Provider 可用；
+3. 该模型 `inputModalities` 含 IMAGE。
 
-不根据当前消息是否包含图片决定 schema。注入时机遵循「配置变更在下一次构建时生效」：主链路 = 下一轮 turn；Target = 下一次 `assistant_call`；run 内 tool schema 稳定（Target 删除 / 撤权等安全信号除外，仍每 step 走 latest）。
+模型图片能力唯一来源于 `Model.inputModalities`；`RequestMediaCapabilities` 只是协议适配器
+对三个来源容器的静态映射，不是第二套能力配置。注入判断在此派生结果上进行，
+**不再根据 endpoint host 做第二次否决**——自定义 OpenAI-compatible 端点与官方端点遵循
+同一套判断规则。若远端实际不兼容图片，Provider 请求返回的真实分类错误表达，
+而非预先伪装为 `inspection_model_unavailable`。
+
+每个 Provider step 开始时只构建一次确定性工具集合；同一集合同时用于该 step 的 schema、审批解析和紧随其后的
+ToolCall 执行。Master 与 Target 都从当前有效 Settings 构建，配置变更从下一次 step 构建起生效；Target 额外应用
+启动时捕获的实际工具名集合与 Assistant 字段交集，因此只能维持、重建或撤销启动时已有的名字，不能在 run 内新增。审批继续、恢复或历史 ToolCall
+若已不在当前集合，统一提交 `FAILED` 执行事实并返回 `tool_not_available`，不恢复已撤销工具。
 
 ### 4.2 附件解析接口（`ToolExecutionContext.resolveAttachments`）
 
@@ -170,9 +178,12 @@ attachment:<uuid>（1..4 个）
 ```
 
 - 识别调用由 `AttachmentInspectionTool` 直接持有 Provider 请求边界，不经过 `GenerationLoop`；
-  因此必须在该边界以 `Provider.requestMediaCapabilities()` 协商，并把结果写入
-  `TextGenerationParams.mediaCapabilities`。只有 `userImages = STRUCTURED` 才发送原生 Image，
-  其他能力结果 fail-closed 为 `inspection_model_unavailable`，不得依赖参数默认值或把引用行当作识别输入。
+  工具构造时（`createAttachmentInspectionTool`）一次性解析并捕获 inspection model、
+  provider setting 与派生的 `RequestMediaCapabilities`，写入
+  `TextGenerationParams.mediaCapabilities`。执行时不再通过 Settings 重找模型，
+  也不再按 endpoint host 二次裁决图片能力；构造时仅断言 IMAGE 模型具有结构化 USER 图片编码映射。若远端实际不兼容，Provider 请求返回的
+  真实分类错误（如 `provider_error`）表达，而不是预先伪装为 `inspection_model_unavailable`。
+  不得依赖参数默认值或把引用行当作识别输入。
 - refs 与产出 1:1、顺序稳定（`resolveImages()` 禁用去重）；同一远程 url 在单次批量解析内只 fetch / 落盘一次。
 - 未注入 resolver 的执行环境统一返回 `attachment_resolution_unavailable`，不静默成功。
 - 识别无缓存；结果作为显式 Tool Result 已是正确的历史记录。

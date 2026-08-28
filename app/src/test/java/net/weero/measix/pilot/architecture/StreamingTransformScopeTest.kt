@@ -123,6 +123,7 @@ class StreamingTransformScopeTest {
             GenerationRequest(
             settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
             model = model,
+            mediaCapabilities = RequestMediaCapabilities.NONE,
             messages = listOf(userMessage, assistantMessage),
             inputTransformers = emptyList(),
             outputTransformers = listOf(counting),

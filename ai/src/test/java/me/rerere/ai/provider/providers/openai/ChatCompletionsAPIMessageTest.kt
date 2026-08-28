@@ -749,13 +749,20 @@ class ChatCompletionsAPIMessageTest {
     }
 
     @Test
-    fun `request media capabilities stay closed unless the adapter proves a container`() {
+    fun `request media capabilities follow model inputModalities across all endpoints`() {
         val vision = Model(
             modelId = "vision",
             displayName = "vision",
             inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
         )
+        val textOnly = Model(
+            modelId = "text-only",
+            displayName = "text-only",
+            inputModalities = listOf(Modality.TEXT),
+        )
         val openai = OpenAIProvider(OkHttpClient())
+
+        // Official OpenAI Chat Completions: user images structured, assistant/tool opaque.
         val chatOfficial = openai.requestMediaCapabilities(
             ProviderSetting.OpenAI(baseUrl = "https://api.openai.com/v1"),
             vision,
@@ -764,14 +771,24 @@ class ChatCompletionsAPIMessageTest {
         assertEquals(RequestImageSupport.NONE, chatOfficial.assistantImages)
         assertEquals(RequestImageSupport.NONE, chatOfficial.toolOutputImages)
 
+        // Custom OpenAI-compatible Chat Completions: same contract as official.
+        // The endpoint host must not veto a model the user explicitly configured as IMAGE.
         val chatCompatible = openai.requestMediaCapabilities(
             ProviderSetting.OpenAI(baseUrl = "https://proxy.example.com/v1"),
             vision,
         )
-        assertEquals(RequestImageSupport.NONE, chatCompatible.userImages)
+        assertEquals(RequestImageSupport.STRUCTURED, chatCompatible.userImages)
         assertEquals(RequestImageSupport.NONE, chatCompatible.assistantImages)
         assertEquals(RequestImageSupport.NONE, chatCompatible.toolOutputImages)
 
+        // A text-only model stays NONE regardless of endpoint.
+        val chatCompatibleText = openai.requestMediaCapabilities(
+            ProviderSetting.OpenAI(baseUrl = "https://proxy.example.com/v1"),
+            textOnly,
+        )
+        assertEquals(RequestImageSupport.NONE, chatCompatibleText.userImages)
+
+        // Official OpenAI Responses: tool output supports multimodal function output.
         val responsesOfficial = openai.requestMediaCapabilities(
             ProviderSetting.OpenAI(baseUrl = "https://api.openai.com/v1", useResponseApi = true),
             vision,
@@ -779,13 +796,44 @@ class ChatCompletionsAPIMessageTest {
         assertEquals(RequestImageSupport.OPAQUE_REPLAY_ONLY, responsesOfficial.assistantImages)
         assertEquals(RequestImageSupport.STRUCTURED, responsesOfficial.toolOutputImages)
 
+        // Generic OpenAI-compatible Responses: assumed to follow the standard function_call_output
+        // contract (image content arrays allowed); known non-standard implementations are registered
+        // separately and keep this false.
         val responsesCompatible = openai.requestMediaCapabilities(
             ProviderSetting.OpenAI(baseUrl = "https://proxy.example.com/v1", useResponseApi = true),
             vision,
         )
-        assertEquals(RequestImageSupport.NONE, responsesCompatible.userImages)
-        assertEquals(RequestImageSupport.NONE, responsesCompatible.assistantImages)
-        assertEquals(RequestImageSupport.NONE, responsesCompatible.toolOutputImages)
+        assertEquals(RequestImageSupport.STRUCTURED, responsesCompatible.userImages)
+        assertEquals(RequestImageSupport.OPAQUE_REPLAY_ONLY, responsesCompatible.assistantImages)
+        assertEquals(RequestImageSupport.STRUCTURED, responsesCompatible.toolOutputImages)
+
+        // Capability derivation is not URL validation. A malformed base URL is treated as the
+        // generic compatible profile here and will fail later at the actual request boundary.
+        val responsesMalformedBaseUrl = openai.requestMediaCapabilities(
+            ProviderSetting.OpenAI(baseUrl = "not a url", useResponseApi = true),
+            vision,
+        )
+        assertEquals(RequestImageSupport.STRUCTURED, responsesMalformedBaseUrl.userImages)
+        assertEquals(RequestImageSupport.STRUCTURED, responsesMalformedBaseUrl.toolOutputImages)
+
+        // Known non-standard Responses implementations keep tool output as NONE.
+        val responsesVolc = openai.requestMediaCapabilities(
+            ProviderSetting.OpenAI(baseUrl = "https://ark.cn-beijing.volces.com/v1", useResponseApi = true),
+            vision,
+        )
+        assertEquals(RequestImageSupport.NONE, responsesVolc.toolOutputImages)
+
+        val responsesDeepseek = openai.requestMediaCapabilities(
+            ProviderSetting.OpenAI(baseUrl = "https://api.deepseek.com/v1", useResponseApi = true),
+            vision,
+        )
+        assertEquals(RequestImageSupport.NONE, responsesDeepseek.toolOutputImages)
+
+        val responsesMimo = openai.requestMediaCapabilities(
+            ProviderSetting.OpenAI(baseUrl = "https://api.xiaomimimo.com/v1", useResponseApi = true),
+            vision,
+        )
+        assertEquals(RequestImageSupport.NONE, responsesMimo.toolOutputImages)
 
         val claude = ClaudeProvider(OkHttpClient()).requestMediaCapabilities(ProviderSetting.Claude(), vision)
         assertEquals(RequestImageSupport.STRUCTURED, claude.userImages)
@@ -796,6 +844,35 @@ class ChatCompletionsAPIMessageTest {
         assertEquals(RequestImageSupport.STRUCTURED, gemini.userImages)
         assertEquals(RequestImageSupport.STRUCTURED, gemini.assistantImages)
         assertEquals(RequestImageSupport.STRUCTURED, gemini.toolOutputImages)
+    }
+
+    @Test
+    fun `custom compatible chat request encodes configured user image`() {
+        val providerSetting = ProviderSetting.OpenAI(baseUrl = "https://proxy.example.com/v1")
+        val model = Model(
+            modelId = "custom-vision",
+            displayName = "custom-vision",
+            inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
+        )
+        val capabilities = OpenAIProvider(OkHttpClient())
+            .requestMediaCapabilities(providerSetting, model)
+        val body = invokeBuildRequest(
+            messages = listOf(
+                UIMessage(
+                    role = MessageRole.USER,
+                    parts = listOf(
+                        UIMessagePart.Text("describe"),
+                        UIMessagePart.Image("data:image/png;base64,AQ=="),
+                    ),
+                ),
+            ),
+            params = TextGenerationParams(model = model, mediaCapabilities = capabilities),
+            providerSetting = providerSetting,
+        )
+        val content = body["messages"]!!.jsonArray.single().jsonObject["content"]!!.jsonArray
+
+        assertEquals(listOf("text", "image_url"), content.map { it.jsonObject["type"]!!.jsonPrimitive.content })
+        assertEquals("data:image/png;base64,AQ==", content[1].jsonObject["image_url"]!!.jsonObject["url"]!!.jsonPrimitive.content)
     }
 
     @Test

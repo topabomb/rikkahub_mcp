@@ -43,6 +43,21 @@ fun filterTargetTools(tools: List<Tool>): List<Tool> {
     return tools.filter { it.name !in forbiddenNames }
 }
 
+/** Apply the immutable tool-name ceiling captured when a Target run starts. */
+fun filterToRunStartToolNames(tools: List<Tool>, runStartToolNames: Set<String>): List<Tool> =
+    tools.filter { it.name in runStartToolNames }
+
+/** Build one Target Provider-step schema under both Assistant-field and run-start-name ceilings. */
+suspend fun buildTargetStepTools(
+    snapshot: Assistant,
+    latest: Assistant,
+    runStartToolNames: Set<String>,
+    buildTools: suspend (Assistant) -> List<Tool>,
+): List<Tool> = filterToRunStartToolNames(
+    tools = buildTools(intersectTargetToolCapabilities(snapshot, latest)),
+    runStartToolNames = runStartToolNames,
+)
+
 /**
  * Readiness 验证结果
  */

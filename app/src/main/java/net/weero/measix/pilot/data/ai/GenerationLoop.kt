@@ -268,9 +268,35 @@ data class GenerationCheckpoint(
     val toolExecution: ToolExecutionEvent? = null,
 )
 
+data class GenerationMemoryContext(
+    val ownerId: String,
+    val memories: List<AssistantMemory>,
+)
+
+/**
+ * Resolve the only Memory owner allowed for the next Provider step.
+ * A null ceiling is the Master policy (latest Settings may enable or switch scope); a Target
+ * ceiling forbids enabling Memory mid-run or changing its namespace.
+ */
+internal fun resolveGenerationMemoryOwner(
+    latest: Assistant?,
+    runStartCeiling: Assistant? = null,
+): String? {
+    if (latest?.enableMemory != true) return null
+    if (
+        runStartCeiling != null &&
+        (!runStartCeiling.enableMemory || latest.useGlobalMemory != runStartCeiling.useGlobalMemory)
+    ) {
+        return null
+    }
+    return if (latest.useGlobalMemory) MemoryRepository.GLOBAL_MEMORY_ID else latest.id.toString()
+}
+
 data class GenerationRequest(
     val settings: Settings,
     val model: Model,
+    /** The immutable wire-container contract selected for this run. */
+    val mediaCapabilities: RequestMediaCapabilities,
     val messages: List<UIMessage>,
     val assistant: Assistant,
     val inputTransformers: List<InputMessageTransformer> = emptyList(),
@@ -285,7 +311,10 @@ data class GenerationRequest(
     val toolProvider: (suspend () -> List<Tool>)? = null,
     val nonInteractive: Boolean = false,
     val interactiveToolNames: Set<String> = emptySet(),
-    val memoryToolAllowed: suspend () -> Boolean = { true },
+    /** Re-resolved once per Provider step; null removes Memory tools and memory prompt. */
+    val memoryContextProvider: (suspend () -> GenerationMemoryContext?)? = null,
+    /** Final write-time guard for the owner captured by [memoryContextProvider]. */
+    val memoryToolAllowed: suspend (ownerId: String) -> Boolean = { true },
     val assistantMessageId: Uuid? = null,
     val onCheckpoint: suspend (GenerationCheckpoint) -> Unit = {},
     val providerSessionId: String? = null,
@@ -298,6 +327,12 @@ class GenerationLoop(
     private val memoryRepo: MemoryRepository,
     private val attachmentResolver: AttachmentResolver,
 ) {
+    fun resolveRequestMediaCapabilities(settings: Settings, model: Model): RequestMediaCapabilities {
+        val providerSetting = model.findProvider(settings.providers) ?: error("Provider not found")
+        return providerManager.getProviderByType(providerSetting)
+            .requestMediaCapabilities(providerSetting, model)
+    }
+
     fun run(request: GenerationRequest): Flow<GenerationChunk> {
         val tools = request.tools
         val toolProvider = request.toolProvider ?: { tools }
@@ -306,7 +341,18 @@ class GenerationLoop(
         val inputTransformers = request.inputTransformers
         val outputTransformers = request.outputTransformers
         val assistant = request.assistant
-        val memories = request.memories
+        val defaultMemoryOwnerId = if (assistant.useGlobalMemory) {
+            MemoryRepository.GLOBAL_MEMORY_ID
+        } else {
+            assistant.id.toString()
+        }
+        val memoryContextProvider = request.memoryContextProvider ?: {
+            if (assistant.enableMemory) {
+                GenerationMemoryContext(defaultMemoryOwnerId, request.memories.orEmpty())
+            } else {
+                null
+            }
+        }
         val maxSteps = request.maxSteps
         val reportProcessingText = request.reportProcessingText
         val conversationSystemPrompt = request.conversationSystemPrompt
@@ -324,7 +370,7 @@ class GenerationLoop(
         try {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
-        val mediaCapabilities = providerImpl.requestMediaCapabilities(provider, model)
+        val mediaCapabilities = request.mediaCapabilities
 
         var messages: List<UIMessage> = request.messages
 
@@ -398,30 +444,32 @@ class GenerationLoop(
 
             // 每个 step 重新解析工具
             val stepTools = toolProvider()
+            val memoryContext = memoryContextProvider()
+                ?.takeIf { context -> memoryToolAllowed(context.ownerId) }
 
             val toolsInternal = buildList {
                 Log.i(TAG, "generateInternal: build tools($assistant)")
-                if (assistant.enableMemory) {
-                    val memoryAssistantId = if (assistant.useGlobalMemory) {
-                        MemoryRepository.GLOBAL_MEMORY_ID
-                    } else {
-                        assistant.id.toString()
-                    }
+                if (memoryContext != null) {
                     buildMemoryTools(
                         onCreation = { content ->
-                            memoryRepo.addMemory(memoryAssistantId, content)
+                            memoryRepo.addMemory(memoryContext.ownerId, content)
                         },
                         onUpdate = { id, content ->
-                            memoryRepo.updateContent(id, content, memoryAssistantId)
+                            memoryRepo.updateContent(id, content, memoryContext.ownerId)
                         },
                         onDelete = { id ->
-                            memoryRepo.deleteMemory(id, memoryAssistantId)
+                            memoryRepo.deleteMemory(id, memoryContext.ownerId)
                         },
-                        isStillAllowed = memoryToolAllowed,
+                        isStillAllowed = { memoryToolAllowed(memoryContext.ownerId) },
                     ).let(this::addAll)
                 }
                 addAll(stepTools)
             }
+
+            // Deterministic tool index. Built before the Provider request so duplicate or
+            // empty names are rejected up front, and tool lookup at execution time never
+            // falls back to a linear scan that can leak internal exceptions to the model.
+            val toolsByName = buildToolIndex(toolsInternal)
 
             var unexecutedTools = messages.lastOrNull()?.getTools()?.filter { !it.isExecuted }.orEmpty()
 
@@ -452,7 +500,8 @@ class GenerationLoop(
                     providerImpl = providerImpl,
                     provider = provider,
                     tools = toolsInternal,
-                    memories = memories ?: emptyList(),
+                    memoryEnabled = memoryContext != null,
+                    memories = memoryContext?.memories.orEmpty(),
                     stream = assistant.streamOutput,
                     reportProcessingText = reportProcessingText,
                     conversationSystemPrompt = conversationSystemPrompt,
@@ -559,20 +608,59 @@ class GenerationLoop(
                     }
 
                     else -> {
-                        // Auto or Approved - execute the tool
-                        runCatching {
-                            val toolDef = toolsInternal.find { toolDef -> toolDef.name == tool.toolName }
-                                ?: error("Tool ${tool.toolName} not found")
-                            val args = runCatching {
-                                json.parseToJsonElement(tool.input.ifBlank { "{}" })
-                            }.getOrElse {
-                                error("Invalid tool arguments JSON for ${tool.toolName}: ${it.message}")
-                            }
-                            // 执行每个具体 ToolCall 前必须发出 Phase(tool_executing, registeredToolName)
-                            send(GenerationChunk.Phase("tool_executing", toolDef.name))
-                            val currentMessageId = messages.last().id
-                            val executionId = "${currentMessageId}_${toolOrdinalInMessage}"
-                                .replace(Regex("[^A-Za-z0-9_-]"), "_")
+                        // Auto or Approved - execute the tool.
+                        // Lookup goes through the deterministic step index; a tool that is not
+                        // registered in the current run returns a stable tool_not_available
+                        // result instead of throwing an internal exception at the model.
+                        val currentMessageId = messages.last().id
+                        val executionId = "${currentMessageId}_${toolOrdinalInMessage}"
+                            .replace(Regex("[^A-Za-z0-9_-]"), "_")
+                        val toolDef = toolsByName[tool.toolName]
+                        if (toolDef == null) {
+                            executionFailed = true
+                            executionEvent = ToolExecutionEvent(
+                                executionId = executionId,
+                                messageId = currentMessageId,
+                                toolOrdinal = toolOrdinalInMessage,
+                                toolCallId = tool.toolCallId,
+                                toolName = tool.toolName,
+                                status = ToolExecutionEventStatus.STARTED,
+                            )
+                            commitCheckpoint(
+                                kind = CheckpointKind.TOOL_EXECUTION_STARTED,
+                                toolExecution = executionEvent,
+                            )
+                            Log.w(
+                                TAG,
+                                "Unavailable tool call: ${tool.toolName}. " +
+                                    "Available tools: ${toolsByName.keys.sorted()}",
+                            )
+                            executedTools[toolOrdinalInMessage] = tool.copy(
+                                output = listOf(
+                                    UIMessagePart.Text(
+                                        json.encodeToString(
+                                            buildJsonObject {
+                                                put("status", "failed")
+                                                put("reason", "tool_not_available")
+                                                put("tool", tool.toolName)
+                                                put(
+                                                    "message",
+                                                    "This tool is not available in the current run. Do not retry unchanged.",
+                                                )
+                                            }
+                                        )
+                                    )
+                                )
+                            )
+                        } else {
+                            runCatching {
+                                val args = runCatching {
+                                    json.parseToJsonElement(tool.input.ifBlank { "{}" })
+                                }.getOrElse {
+                                    error("Invalid tool arguments JSON for ${tool.toolName}: ${it.message}")
+                                }
+                                // 执行每个具体 ToolCall 前必须发出 Phase(tool_executing, registeredToolName)
+                                send(GenerationChunk.Phase("tool_executing", toolDef.name))
                             executionEvent = ToolExecutionEvent(
                                 executionId = executionId,
                                 messageId = currentMessageId,
@@ -722,6 +810,7 @@ class GenerationLoop(
                         }
                     }
                 }
+                    }
                 } catch (error: Throwable) {
                     toolFailure = error
                     throw error
@@ -799,6 +888,7 @@ class GenerationLoop(
         providerImpl: Provider<ProviderSetting>,
         provider: ProviderSetting,
         tools: List<Tool>,
+        memoryEnabled: Boolean,
         memories: List<AssistantMemory>,
         stream: Boolean,
         reportProcessingText: (String?) -> Unit = {},
@@ -832,7 +922,7 @@ class GenerationLoop(
                 }
 
                 // 记忆
-                if (assistant.enableMemory) {
+                if (memoryEnabled) {
                     appendLine()
                     append(buildMemoryPrompt(memories = memories))
                 }
@@ -989,6 +1079,22 @@ class GenerationLoop(
                 }
             )
         ) + nonTextParts
+    }
+
+    /**
+     * Build an immutable, deterministic tool index for the current step.
+     *
+     * Rejects blank names and duplicate registrations before the Provider request, so a
+     * misconfigured tool set fails loudly instead of silently dropping or shadowing a tool.
+     */
+    private fun buildToolIndex(tools: List<Tool>): Map<String, Tool> {
+        val map = LinkedHashMap<String, Tool>(tools.size)
+        for (tool in tools) {
+            require(tool.name.isNotBlank()) { "Tool name must not be blank" }
+            require(tool.name !in map) { "Duplicate tool name: ${tool.name}" }
+            map[tool.name] = tool
+        }
+        return map.toMap()
     }
 
 }
