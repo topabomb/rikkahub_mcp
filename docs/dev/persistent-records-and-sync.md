@@ -1,9 +1,10 @@
 # 可持久化记录与云端同步基线
 
-> 文档状态：这是 2026-08-15 配置治理准备阶段的历史设计基线，部分“当前实现”字段和状态已经过时。
-> 现行 Android 配置事实、当前内部 Managed 原型与 MEASIX S0.2 企业下发边界以
-> [Android 配置架构与企业下发清单](../references/android-configuration-architecture.md) 为准。本文不能作为 S0.2 wire、
-> 已实现企业能力或最终数据模型的权威。
+> 文档状态：2026-08-15 配置治理准备阶段的历史设计基线；已于 2026-08-27 纳入新的 S0.2/S0.3 决议。
+> 当前 Android 落盘与 Managed overlay 原型事实以代码及
+> [Android 配置架构与企业下发清单](../references/android-configuration-architecture.md) 为准；S0.2 产品、对象和 wire 以
+> `measix-architecture` 的 Enterprise Realm & Experience Contract、Control Protocol 和 Portal Product Requirements 为准。
+> 本文不能证明企业接入、生产下发、User Sync 或最终数据模型已经实现。
 
 本文是配置治理、可持久化记录与云端同步的设计基线。它以当前代码为事实，回答以下问题：
 
@@ -12,8 +13,9 @@
 3. 企业下发、助手市场、MCP 市场应怎样落到这些记录上；
 4. 在不改变现有落盘结构的前提下，准备阶段必须先收口哪些架构问题。
 
-当前落盘模型**没有**来源标记、企业只读或市场导入协议。准备阶段只增加了非持久化的写入来源与
-策略插槽；文中企业覆盖、锁索引和市场包仍是设计约束，不是已实现业务能力或序列化字段。
+当前 Local 落盘模型没有 realm/source 字段或市场导入协议。代码已存在一套签名 Managed overlay、有效读模型和
+写锁原型，但没有 Enterprise Binding、ClientRealm、Snapshot v2 ingestion、Managed Memory Seed、Assistant Starter、
+Enterprise Update Feed、Portal 或生产同步入口。本文中的目标对象不能表述为当前已实现业务能力。
 
 > 准备阶段约束：不增加或修改 DataStore key、JSON 字段、Room Entity/表/索引/版本、SharedPreferences
 > key、文件目录和备份 ZIP entry；不实现企业关联、登录、下发或市场协议。先建立单一写入口、读取物化、
@@ -21,35 +23,74 @@
 
 ---
 
+## 0. 2026-08-27 决议增量
+
+S0 内部交付顺序已固定为：
+
+```text
+S0.1  Snapshot v1 + A 资源/基础 MCP 服务端基线
+  → S0.2 Personal/Enterprise Realm + Snapshot v2 + A/B/C 最小闭环 + Portal MVP
+  → S0.3 Android Model/TTS/HTTP-ASR/通用 MCP 全 required runtime integration
+```
+
+S0.2 企业交付分类固定为：
+
+```text
+A Runtime Resource       Managed Chat Model（v2 继续携带 v1 Model/TTS/ASR）
+B Enterprise Capability get_enterprise_updates Managed MCP
+C Experience Asset      Managed Assistant + read-only Memory Seed + Assistant Starter
+```
+
+以下旧设想被本节覆盖：
+
+- 不再把 `enterprise-overlay` 定义为“按 Android UUID 与 Local 同 ID 合并”的生产协议；平台 `prv_*/mdl_*/mcp_*/asd_*/str_*`
+  ID 必须原样保存，不能 hash/strip 成 Local `Uuid`；
+- 不再把 Enterprise 内容与 Personal Local 内容合成一个全局 Effective Settings；Effective Configuration 必须按
+  `PERSONAL` 或具体 `ENTERPRISE(deploymentId)` 解析；
+- Enterprise Realm 的内容策略是 `Managed Only` 或 `Managed + Enterprise Local`。Personal Local 不自动进入 Enterprise Realm，
+  应用 Built-in 也不能作为可选 A/B/C 内容绕过 Managed Only；
+- Managed Assistant 不是完整 Local `Assistant` JSON；Memory Seed 和 Starter 也不是 `MemoryEntity`/`QuickMessage` 的持久化复用；
+- 企业助手产生的 Enterprise Local Memory 将来必须回传进入 User Sync/Experience Contribution 闭环，但不直接改写已发布 seed。
+
+当前 `ManagedConfigurationEnvelope(schemaVersion=1)` 仍是代码事实和可复用实现经验，但与 S0.2 Snapshot v2 不兼容；实施时必须
+收敛为唯一生产 ingestion/owner，不能保留双协议或兼容旁路。
+
+---
+
 ## 1. 产品需求与抽象
 
 未来要支持以下能力：
 
-1. **企业下发**：提供商、模型、企业付费 TTS/ASR、企业 MCP 等。企业记录在 App 内不可改；用户仍可自建同类型记录。
+1. **企业下发**：按 A/B/C Definition 与 Managed Release 下发；Managed 内容在 App 内只读。
 2. **助手市场**：下载助手定义。同 ID 覆盖，或生成新 ID（重命名/复制）。
 3. **MCP 市场**：下载用户可编辑的 MCP 连接。企业 MCP 与用户 MCP 共存。
+4. **企业经验回流**：企业助手产生的本地记忆和后续场景结果进入独立 User Sync/Contribution 流程。
 
-这些能力不是「按类型一刀切」，而是同一类型上的**来源与可变性**不同。落地前用下面的记录模型，不要按「Provider 整表只能企业下发」来设计。
+这些能力不能用一个 `Settings JSON`、一张来源表或一套同步协议表达。Local/Managed、Personal/Enterprise、Definition/User Data
+是三个正交维度，必须分别建模。
 
 | 概念 | 含义 |
 |------|------|
 | **记录** | 有稳定身份、可单独增删改的一条配置或数据 |
-| **身份** | 覆盖/引用用的键。多数是 `Uuid`；Skill 是目录名 |
+| **身份** | Local 多数是 `Uuid`；Managed 使用平台 typed ID；两者不能互相转换冒充 |
 | **载荷** | 身份之外的可序列化内容 |
 | **机密** | 载荷里的密钥、令牌、密码。与公开定义分开传输和权限 |
 | **引用** | 指向另一条记录身份的字段。导入必须重映射或校验 |
-| **来源** | 建议值：`local` / `marketplace` / `enterprise`。现网不存在 |
-| **可变性** | `enterprise` 在客户端只读；`local`/`marketplace` 默认可改 |
-| **通道** | `enterprise-overlay`（按身份合并） / `marketplace-package`（图 + 重映射） / `preference-sync`（用户偏好） / `backup`（整库与文件） |
+| **来源** | `BUILT_IN` / `LOCAL` / `MANAGED`；当前代码已有读模型来源，Local 持久记录仍无 source 字段 |
+| **Realm** | `PERSONAL` 或 `ENTERPRISE(deploymentId)`；当前代码尚未实现 |
+| **可变性** | Managed Definition/Seed/Starter 只读；Personal/Enterprise Local 由对应 owner 修改 |
+| **通道** | `managed-delivery` / `marketplace-package` / `user-sync` / `preference-sync` / `backup`，版本与冲突模型互不复用 |
 
 细化后的产品规则：
 
-- 企业下发是**叠加**，不是独占某个 Kotlin 类型。用户 Provider 与企业 Provider 同表共存。
+- 企业下发进入独立 Managed Store/Projection，不写入 Personal `Settings` 或 Local credential。Enterprise Realm 是否允许同类
+  Enterprise Local 由 Managed Policy 决定。
 - 市场包是**引用图**，不是单条 `Assistant` JSON。助手会引用 MCP、注入、快捷消息、标签、Skill、工作区。
 - 覆盖 = 同身份替换公开载荷；复制 = 新身份 + 重写包内引用。
-- 记忆默认**不进**助手市场包。它按 `assistantId` 隔离，但是用户私有运行数据。
+- 记忆默认**不进**助手市场包。Managed Memory Seed 随 Release 下发且只读；运行产生的 Enterprise Local Memory 是 User Data。
 - 机密不进市场包。企业机密只走企业通道，客户端不可编辑。
-- `searchServiceSelected` 是列表下标，不能作为跨设备身份。选中项必须改成记录 `id` 后再做同步。
+- 当前 `selectedSearchServiceId` 已使用 `SearchServiceOptions.id: Uuid`；后续偏好同步必须继续传稳定 id，
+  并在目标记录缺失时执行显式回退，不能重新引入列表下标。
 - Child Conversation（`parentConversationId != null`）不是用户配置，不进市场，也不进企业下发。
 
 ---
@@ -58,7 +99,7 @@
 
 | 存储 | 入口 | 持久化内容 | 同步定位 |
 |------|------|------------|----------|
-| DataStore Preferences `"settings"` | `SettingsStore` / `Settings` | 全局配置；每个逻辑字段一个 key，复杂对象为独立 JSON 字符串 | 企业/市场/偏好的主要本地底座，但不是云端真源 |
+| DataStore Preferences `"settings"` | `SettingsStore` / `Settings` | 当前无 Realm 的 Local 全局配置；每个逻辑字段一个 key，复杂对象为独立 JSON 字符串 | S0.2 迁移后的 Personal Local/市场/偏好底座；Managed Delivery 不得写入 |
 | SharedPreferences `"MeasixPilot.preferences"` | `ui/hooks/SharedPreferences.kt` | 颜色模式、AMOLED、宽屏侧栏、启动时新建会话、最近会话、搜索排序等设备 UI/导航状态 | 默认不上云；不能混入企业配置 |
 | SharedPreferences `"crash_handler"` | `CrashHandler` | 崩溃标记与截断堆栈 | 仅设备诊断，不备份、不同步 |
 | Room `AppDatabase` | DAO / Repository | 会话、消息节点、记忆、工作区、文件元数据、生成媒体、收藏、文件夹 | 运行数据与备份；不是企业配置表 |
@@ -72,12 +113,13 @@ Jieba 扩展的重建行为。
 
 写入规则（当前实现）：
 
-- `SettingsStore.updateAtomic`：互斥读最新非 dummy Settings → transform → 写策略 →
-  `normalizeForPersistence` → DataStore 标量规范化 → DataStore 写入成功 → `materializeForRead` →
-  发布 `settingsFlow`。
+- `SettingsStore.updateLocal()`：互斥读取最新非 dummy Local shadow → `materializeForRead` → transform →
+  `requireLocalSettingsWriteAllowed`（基于最新 effective access index 复验）→ `updateInternal`。
+- `commitSettings()` 统一执行 `normalizeForPersistence` → `canonicalizeForDataStore` → DataStore 写入成功 →
+  发布 Local shadow；DataStore 回读和 effective projection 再使用 `materializeForRead`。
 - `normalizeForPersistence` **只**规范化 `Assistant.description`、关闭类别时清掉 `isSubAssistantGloballyVisible`、按 `assistantId` 去重 tombstone。它**不**清理失效引用。
-- DataStore 标量规范化只复用原有落盘约束：空搜索服务列表补默认项、搜索下标限制在有效范围、
-  TTS 默认速度限制在有效范围。约束在提交准备阶段完成，避免磁盘值与提交返回值不一致。
+- DataStore 标量规范化只复用原有落盘约束：空搜索服务列表补默认项、`selectedSearchServiceId`
+  限制为现存记录 id（否则回退首项）、TTS 默认速度限制在有效范围。约束在提交阶段完成，避免磁盘值与提交返回值不一致。
 - 失效引用、重复 id、内置 Provider/助手/TTS 补齐由纯 `materializeForRead` 负责；DataStore 回读与
   提交后发布共用它。导入/同步如果只调用 `normalizeForPersistence`，仍不会得到读取物化那套清理。
 - `SearchServiceOptions`、`TTSProviderSetting`、`ASRProviderSetting` 用 `decodeListLenient`：未知密封子类会被跳过。
@@ -89,10 +131,10 @@ Jieba 扩展的重建行为。
 ```text
 DataStore Preferences
   -> 逐 key 解码为持久化 Settings 快照
-  -> 补齐内置 Provider / Assistant / TTS
-  -> 恢复 builtIn、description 等运行时属性
-  -> 按 id 去重并清理部分失效引用
-  -> settingsFlow（应用消费的有效快照）
+  -> LocalSettingsSnapshot（含 explicitDefaultPaths）
+  -> materializeForRead：补齐内置项、恢复运行时属性、按 id 去重并清理部分失效引用
+  -> EffectiveSettingsResolver 与 verified managed prototype snapshot 合并
+  -> effectiveSettings（当前应用消费的全局有效快照）
 ```
 
 “持久化快照”和“应用有效快照”不是同一个概念。补齐内置项与清理引用只用于读取，不应无提示地
@@ -103,13 +145,15 @@ DataStore Preferences
 
 ```text
 调用方 transform
-  -> SettingsStore Mutex 内读取最新非 dummy 快照
-  -> 写入来源/策略边界
+  -> SettingsStore.updateLocal Mutex 内读取最新非 dummy Local shadow 与 effective snapshot
+  -> 在 materialized Local 上执行 transform
+  -> requireLocalSettingsWriteAllowed 对最新 access index 复验变化路径
   -> normalizeForPersistence
-  -> DataStore 标量规范化
+  -> canonicalizeForDataStore
   -> 单次 DataStore edit 写完全部 key
   -> edit 成功
-  -> 用读取物化后的同构快照发布 settingsFlow
+  -> 发布 LocalSettingsSnapshot
+  -> EffectiveSettingsResolver 重新发布 effectiveSettings
 ```
 
 写失败时不得发布内存值。`pendingAssistantDeletions` 只有明确的删除恢复流程可以增删；备份 JSON、
@@ -146,8 +190,8 @@ Room 事务只能保证数据库内部一致性，不能覆盖 `filesDir`。当�
 
 依赖方向固定为：UI → ViewModel/记录命令 → Store/Repository/领域 Manager → DataStore、Room 或文件；
 同步入口只能调用记录命令与领域 Manager，不能直接从 UI 写 Store，也不能绕过补偿协议直写 DAO + File。
-未来 `EffectiveSettingsResolver` 与 `RecordLockIndex` 位于消费模型和写策略层，不反向塞进 DataStore
-序列化模型。
+当前 `EffectiveSettingsResolver` 与 lock/access index 位于消费模型和写策略层，没有反向塞进 DataStore 序列化模型；
+S0.2 实施必须把该原则扩展为 realm-aware owner，而不是继续扩大现有全局 overlay。
 
 ---
 
@@ -159,26 +203,26 @@ Room 事务只能保证数据库内部一致性，不能覆盖 `filesDir`。当�
 
 | 记录 | 身份 | 机密 | 主要引用 | 建议通道 | 说明 |
 |------|------|------|----------|----------|------|
-| `ProviderSetting` | `id` | `apiKey`、Google `privateKey` 等 | 内嵌 `Model.id` | 企业叠加，或用户本地 | `OpenAI` / `Google` / `Claude`。内置预设靠固定 id 在加载时补齐 |
+| `ProviderSetting` | `id` | `apiKey`、Google `privateKey` 等 | 内嵌 `Model.id` | Personal/Enterprise Local 或市场；不是 Managed wire | `OpenAI` / `Google` / `Claude`。内置预设靠固定 id 在加载时补齐 |
 | `Model` | `id`（不是 `modelId`） | 可经 `providerOverwrite` 再带一份密钥 | 可嵌套另一份 `ProviderSetting` | 随所属 Provider | `modelId` 是线协议名；同步身份必须用内部 `id` |
-| 全局模型选择 | 各 `Settings.*ModelId` | 无 | → `Model.id` | 企业可覆盖默认聊天模型；其余多为偏好 | 未写入时聊天/快速/压缩回退 `DEFAULT_AUTO_MODEL_ID` |
+| 全局模型选择 | 各 `Settings.*ModelId` | 无 | → Local `Model.id` | Local 偏好；Managed default 属于 Snapshot Policy | 未写入时聊天/快速/压缩回退 `DEFAULT_AUTO_MODEL_ID` |
 | `Settings.assistantId` | 无（单值） | 无 | → `Assistant.id` | 偏好或不上云 | 只表示新建会话等入口的当前助手，不是已有会话归属 |
-| `McpServerConfig` | `id` | `headers`、OAuth 令牌 | 无出站引用 | 企业只读 **或** MCP 市场 | `SseTransportServer` / `StreamableHTTPServer`。`tools` 是上次同步缓存，不是用户编辑源 |
-| `TTSProviderSetting` | `id` | 云端 TTS 的 `apiKey` | 无 | 企业或本地 | `SystemTTS` 无密钥。`selectedTTSProviderId` 是选择，不是定义 |
-| `ASRProviderSetting` | `id` | `apiKey` | 无 | 企业或本地 | `selectedASRProviderId` 加载时若失效会改选列表第一项 |
-| `SearchServiceOptions` | `id` | Tavily `apiKey`、SearXNG 密码 | 无 | 企业或本地 | **当前选中是 `searchServiceSelected` 下标**，同步前必须改为按 `id` |
+| `McpServerConfig` | `id` | `headers`、OAuth 令牌 | 无出站引用 | Personal/Enterprise Local 或 MCP 市场 | Managed MCP 使用独立平台 ID/runtime auth；`tools` 是 Local 连接缓存 |
+| `TTSProviderSetting` | `id` | 云端 TTS 的 `apiKey` | 无 | Local | Managed TTS 是独立 Definition；`SystemTTS` 无密钥 |
+| `ASRProviderSetting` | `id` | `apiKey` | 无 | Local | Managed HTTP ASR 是独立 Definition，不复用当前 realtime 对象 |
+| `SearchServiceOptions` | `id` | Tavily `apiKey`、SearXNG 密码 | 无 | Local | S0.2 不下发 Search；当前通过 `selectedSearchServiceId` 选择 |
 | `Assistant` | `id` | 无直接密钥 | 见 §4 | 助手市场 | 定义见 `Assistant.kt` |
 | `PromptInjection.ModeInjection` | `id` | 无 | 被助手/会话引用 | 可随助手打包 | |
 | `QuickMessage` | `id` | 无 | 被助手引用 | 可随助手打包 | |
 | `Tag` | `id` | 无 | 被 `Assistant.tags` 引用 | 可随助手打包 | |
-| 模型级 Prompt 字符串 | 无（单值） | 无 | 无 | 企业可选覆盖 | `titlePrompt` / `suggestionPrompt` / `ocrPrompt` / `compressPrompt` |
+| 模型级 Prompt 字符串 | 无（单值） | 无 | 无 | Local | S0.2 不下发这些全局任务 Prompt |
 | `DisplaySetting` 与主题 | 无或 `CustomTheme.id` | 自定义字体是本地路径 | `chatCustomFontPath` → `filesDir/fonts` | 偏好同步 | 不要逐字段同步；整包或白名单 |
 | 备份端点 | 无 | WebDAV/S3 密码与密钥 | 无 | 默认不同步到企业/市场 | 这是备份通道自己的凭据 |
 | `developerMode` / `launchCount` / `ignoredUpdateVersion` | 无 | 无 | 无 | 不同步 | 设备或进程本地 |
 
-`Settings` 不是天然的一条同步记录；它只是当前 DataStore 的内存聚合。企业/市场同步必须按上表的
-记录边界产生操作，不能把远端整份 `Settings` 覆盖到本地。备份恢复可以替换用户快照，但仍要经过
-独立来源与内部状态保护。
+`Settings` 不是天然的一条同步记录；它只是当前 Local DataStore 的内存聚合。市场/偏好/User Sync 必须按记录边界
+产生操作；Managed Delivery 则完全走 Snapshot owner，不能把远端整份 `Settings` 覆盖到任何 Local store。备份恢复可以
+替换其所属 Local 快照，但仍要经过 realm、来源和内部状态保护。
 
 `Assistant` 上同步真正危险的是引用，不是把整份数据类再抄一遍：
 
@@ -201,7 +245,7 @@ Room 事务只能保证数据库内部一致性，不能覆盖 `filesDir`。当�
 |------|------|------|----------|------|
 | `ConversationEntity` | `id` | `assistantId`、`folderId`、`parentConversationId`、`modeInjectionIds` | 仅备份 | `nodes` 列已空置；消息在 `MessageNodeEntity`。`tags` 仍在会话行上 |
 | `MessageNodeEntity` | `id` | `conversation_id` | 随会话备份 | `messages` 为 `List<UIMessage>` JSON |
-| `MemoryEntity` | 自增 `id` | `assistantId`（或 `GLOBAL_MEMORY_ID`） | 默认不上市场；可另做用户备份 | 关记忆开关不删数据 |
+| `MemoryEntity` | 自增 `id` | `assistantId`（或 `GLOBAL_MEMORY_ID`） | 默认不上市场；Personal 可备份，Enterprise Local 未来进入 User Sync | 当前没有 realm/provenance；不得承载 Managed Memory Seed |
 | `WorkspaceEntity` | `id` | 被 `Assistant.workspaceId` 引用 | 定义可打包；Rootfs 走文件/备份 | `root` 唯一。`toolApprovals` 是用户覆盖 |
 | `FolderEntity` | `id` | `assistantId` | 备份 | 助手内分组 |
 | `FavoriteEntity` | 自有主键 | 指向消息/会话 | 备份 | |
@@ -259,93 +303,99 @@ Room
 
 ---
 
-## 5. 企业配置目标架构
+## 5. 企业配置与同步目标架构
 
 企业“只读”不能等价于把编辑控件设为 disabled。Compose、ViewModel、备份恢复、市场导入、工具调用
 和将来的后台同步都可能写配置；真正的强制边界必须位于持久化提交前。
 
-### 5.1 本地快照、企业覆盖和有效读模型分离
+### 5.1 五类 owner 分离
 
-企业数据不直接混写进现有 `Settings` JSON。后续阶段增加独立的 `EnterprisePolicyStore`，保存由企业
-通道验证过的版本化快照、租户/设备绑定、签名摘要、过期策略和密钥引用；现有 DataStore 继续只保存
-本地用户配置。两者通过纯函数生成运行时有效读模型：
+企业数据不直接混写进现有 `Settings` JSON。目标架构至少分离：
+
+1. Personal Local Configuration；
+2. deployment-scoped Enterprise Local Configuration；
+3. Applied Managed Snapshot v2 与 generation-bound projection；
+4. Enterprise Binding/Refresh Credential/Session/Managed State；
+5. Enterprise Update Feed cache 与未来 User Sync outbox/inbox。
+
+具体 class/file/schema 由实施阶段决定，但 owner 与备份边界不能合并。概念链路为：
 
 ```mermaid
 flowchart LR
-    L["Local Settings DataStore"] --> R["EffectiveSettingsResolver"]
-    B["Built-in defaults"] --> R
-    E["EnterprisePolicyStore"] --> R
-    R --> S["Effective Settings"]
-    R --> K["RecordLockIndex"]
-    S --> UI["UI / runtime consumers"]
-    K --> UI
-    UI --> G["Settings mutation gateway"]
-    G --> P["Write policy"]
-    P --> L
-    ES["Verified enterprise sync"] --> E
+    P["Personal Local"] --> R["Realm-aware resolver"]
+    EL["Enterprise Local by deployment"] --> R
+    M["Applied Managed Snapshot v2"] --> R
+    B["Binding / Session / Managed State"] --> R
+    R --> PR["PERSONAL view"]
+    R --> ER["ENTERPRISE view"]
+    ER --> G["Managed interaction guard"]
+    UI["UI / commands"] --> W["realm-aware write gateway"]
+    W --> P
+    W --> EL
+    S["Authoritative snapshot sync"] --> M
 ```
 
-这样设计会得到以下结果：
+### 5.2 Realm 解析与冲突规则
 
-- 企业记录按稳定 id 覆盖有效读模型，同类型本地记录继续共存；
-- 同 id 的本地记录可作为 shadow 保留，解除企业关联后恢复，而不是被企业载荷永久破坏；
-- 企业来源和锁定元数据不依赖客户端可伪造的 `builtIn` 或普通导入 JSON；
-- 现有 `Settings`、Provider、Assistant、MCP 等序列化结构不需要为准备阶段增加 `source` 字段。
+```text
+PERSONAL
+  = Built-in + Personal Local
 
-若产品最终选择“解除关联后删除 shadow”而不是恢复，必须在企业协议阶段明确，不能由 merge 顺序偶然决定。
+ENTERPRISE(deploymentId)
+  = Managed + policy-allowed Enterprise Local(deploymentId)
+```
 
-### 5.2 合并与冲突规则
+- Personal Realm 不展示、注册、解析或执行任何 Managed/Enterprise Local 内容；
+- Personal Local 不自动进入 Enterprise Realm；Enterprise Local 不能复用 Personal Secret/Memory；
+- Managed 平台 ID 与 Local UUID 不存在同 ID shadow/覆盖关系；冲突按 origin-aware key 处理；
+- Snapshot 内引用只能指向同 generation 的 Managed Definition；不能落到本机碰巧相似的 Local record；
+- Realm switch 不改变已有 Conversation/Assistant/Memory/Attachment/Workspace ownership，也不改变正在执行 interaction 的 captured context。
 
-有效配置按记录 id 合并，不按显示名或 Kotlin 类型整表覆盖：
-
-1. 内置默认项提供最低优先级；
-2. 本地记录覆盖同 id 内置模板的可持久化字段；
-3. 企业记录覆盖同 id 的有效公开载荷与企业机密引用；
-4. 企业记录不存在的本地 id 正常显示和可编辑；
-5. 企业默认选择可以覆盖运行时默认值，但是否允许用户在可用企业记录之间选择，应由策略显式声明；
-6. 引用解析只接受本次有效图中的目标；未知或撤回的企业依赖不能落到“本机碰巧同 id”的市场记录。
-
-企业快照应用必须是 generation/version 单调的整包事务。下载未完成、验签失败、租户不匹配或依赖图
-不完整时继续使用上一份已验证快照，不能发布半包。
+Snapshot 应用是 generation 单调的 whole-state commit。下载、TLS/schema/reference/hash/deployment 校验失败时保留 LKG，但不能
+用 LKG 绕过 authoritative state/generation barrier 开始新的 Managed interaction。
 
 ### 5.3 写入来源与授权
 
-所有配置变更必须携带来源：`LOCAL`、`BACKUP_RESTORE`、`MARKETPLACE_IMPORT`、
-`ENTERPRISE_DELIVERY`。来源不是持久化业务字段，而是写入上下文。
+所有 Local 配置变更必须携带 realm/source command context；Managed Definition 只能由 Snapshot ingestion owner 原子替换，不能
+通过通用 Settings mutation gateway 写入。
 
-- 本地、备份和市场来源不得修改 `RecordLockIndex` 中的记录或锁定字段；
-- 企业来源只能由验签后的企业同步服务调用，不能暴露给 UI 或通用 JSON 导入；
-- 策略在 Mutex 内对最新本地/企业 generation 重验，不能只在页面打开时检查；
+- Personal Local、Enterprise Local、备份和市场命令只能写各自 owner，不得修改 Managed Store；
+- Snapshot ingestion 不能暴露给 UI、工具或通用 JSON 导入；
+- 策略在提交边界对当前 realm/deployment/generation 重验，不能只在页面打开时检查；
 - UI 使用锁索引展示原因、来源和禁用状态，但 UI 判断不是授权依据；
 - 运行时始终消费有效读模型，避免用户通过旧会话或后台任务继续使用已撤回企业密钥。
 
-准备阶段只建立来源、策略和读取物化的插槽，不创建企业存储，也不伪造“已锁定”的 UI。当前普通
-写入口固定为 `LOCAL`，备份只能调用专用恢复入口；`ENTERPRISE_DELIVERY` 没有暴露给 UI 或通用导入的
-提交入口。
+当前 `updateLocal()`、`ManagedConfigurationStorage`、`EffectiveSettingsResolver` 和 lock UI 只提供实现经验；它们仍是全局
+Local + overlay 原型，没有 ClientRealm 和平台 typed ID，不能直接命名为 S0.2 owner。
 
 ### 5.4 机密边界
 
-企业 Provider/TTS/ASR/MCP 的密钥不进入市场包、普通 Settings 导出或用户可编辑表单。后续应让企业
-公开定义只持有 secret reference，密钥材料进入 Android Keystore 支持的独立机密存储；日志、异常、
-调试导出和 `toString` 都必须脱敏。是否允许企业备份由服务端策略决定，不能沿用当前 `settings.json`
-整包备份。
+企业 Upstream/Provider/TTS/ASR/MCP Secret 保留在服务端；Android 只持有受保护的 Enterprise Session credential 和
+client-safe Definition。Refresh Credential 不进入 Settings、Managed Snapshot、普通备份、日志或 WebView；Access Token 只在
+受控内存生命周期使用。
 
 ---
 
 ## 6. 各类需求怎样落到记录上
 
-### 6.1 企业下发（`enterprise-overlay`）
+### 6.1 S0.2 Managed Delivery
 
-按身份合并到现有列表，不要清空用户自建项。
+Snapshot v2 保留 v1 A/B/Policy，并增加 C 类：
 
-适合下发：`ProviderSetting`（含模型）、企业 `TTSProviderSetting` / `ASRProviderSetting`、企业 `McpServerConfig`（不要下发用户 OAuth 令牌）、企业 `SearchServiceOptions`、可选的默认 `chatModelId` 与模型级 Prompt。
+```text
+A  Managed Chat Model（TTS/ASR 完整 Android execution 属于 S0.3）
+B  get_enterprise_updates Managed MCP
+C  ManagedAssistantDefinition + Memory Seed + AssistantStarterDefinition
+```
 
-客户端约束（待实现）：
+Android 复用现有 Chat、MCP tool loop、Assistant UI、memory prompt injection 和 Quick Message 交互边界，但不能复用其 Local
+持久化身份/聚合：
 
-- 有效记录带独立来源/锁索引；`enterprise` 在 UI 只读，并由写策略强制只读。
-- 企业更新按身份覆盖企业载荷，不得覆盖 `local` 同类型记录。
-- 用户不能改企业 `apiKey`/`baseUrl`，可以换「当前选用哪一条」。
-- `ProviderSetting.builtIn` 不能当企业标记用。它只表示预设模板，而且不进磁盘。
+- Managed Assistant 是独立只读 projection，不写 `Settings.assistants`；
+- Memory Seed 随 generation 原子切换，不写 `MemoryEntity`，`memory_tool` 不能增删改 seed；
+- Assistant Starter 使用现有“点击后向输入草稿追加文本”的交互，但保持 `str_*` 身份，不写 `QuickMessage.id: Uuid`，不 auto-send；
+- Managed MCP 使用平台 runtime URL/auth，不能写 Local URL/header/OAuth；
+- Enterprise Update 使用独立 Feed cache/revision，不进入 Snapshot/Settings，也不改变 `managedGeneration`。
 
 ### 6.2 助手市场（`marketplace-package`）
 
@@ -363,7 +413,24 @@ flowchart LR
 
 ### 6.3 MCP 市场
 
-用户 MCP 与企业 MCP 共用 `Settings.mcpServers`。市场项来源为 `marketplace` 或导入后变 `local`。`McpCommonOptions.tools` 以连上服务器后的 `mergeTools` 为准，不要把缓存 schema 当市场真源。OAuth 令牌留在设备。
+市场 MCP 导入后属于 Personal Local 或用户明确创建的 Enterprise Local；它不与 Managed MCP 共用持久记录/credential owner。
+`McpCommonOptions.tools` 以连上服务器后的 `mergeTools` 为准，不要把缓存 schema 当市场真源。Local OAuth 令牌留在设备，
+Managed MCP 不复用这套 OAuth 写协议。
+
+### 6.4 企业助手记忆与经验回流
+
+S0.2 只交付只读 Memory Seed 和可变 Enterprise Local Assistant Memory 的分离，不实现上传。后续必须实现：
+
+```text
+Enterprise Local Memory durable commit
+→ User Sync change capture/outbox
+→ server acceptance/dedup/order
+→ Experience Contribution review/evaluation
+→ new Managed Assistant/Seed/Starter Release
+```
+
+回流记录至少保留 deployment/user/assistantDefinition、source conversation/message/tool/run、产生时 managedGeneration、
+本地稳定身份/revision 和敏感/共享范围。同步失败不回滚已成功的本地记忆；未审核 Contribution 不能直接成为下发经验。
 
 ---
 
@@ -380,7 +447,7 @@ flowchart LR
 | 用户头像在 Settings 写入前删除旧文件 | DataStore 写失败会留下仍指向已删除文件的旧配置 | 提交接口返回策略处理后的实际值；只依据已提交值执行旧头像/背景清理，写失败或策略拒绝不触碰旧文件 |
 | DataStore 每次变更都编码并设置完整 Settings key 集 | 大列表与 JSON 在高频输入时产生额外 CPU/分配；DataStore 最终仍是整文件提交 | 本轮优先消除无意义/陈旧快照写与无关缓存失效；字段 diff 编码需单独兼容测试后再做 |
 | Pebble 缓存在任意 Settings 变化时全量失效 | 主题、计数、备份配置变化也触发无关缓存清理 | 独立观察 Assistant `id + messageTemplate` 指纹后再失效 |
-| `searchServiceSelected` 使用列表下标 | 排序、删除、企业叠加和跨设备同步会选错记录 | 企业/偏好同步前必须迁移为稳定 id；本轮冻结现有 key 和行为 |
+| 历史版本曾用 `searchServiceSelected` 列表下标 | 排序、删除和跨设备偏好同步会选错记录 | 当前已迁移为 `selectedSearchServiceId`；同步协议继续使用稳定 id，并定义缺失引用回退 |
 | `WebDavSync` 与 `S3Sync` 重复实现 ZIP 组装/恢复 | 修复容易只落一条通道；当前 transport 与 archive 职责混合 | 后续抽取共同 archive service；传输层只上传/下载。准备阶段先记录格式与恢复风险 |
 | 备份直接复制 WAL 数据库文件，并在 Room 仍打开时覆盖 DB/WAL/SHM | 并发写时快照与恢复边界不清，不能作为记录同步实现基础 | 配置同步禁止复用备份实现；数据库灾备另行引入一致快照/受控重启协议和设备测试 |
 | ZIP 恢复同时写 Settings、DB 与文件，没有统一 staging/commit | 中途失败可形成跨介质部分恢复 | 后续采用校验清单、staging、数据库版本检查、提交顺序和恢复日志；本轮不改变现有格式 |
@@ -396,14 +463,15 @@ flowchart LR
 
 ## 8. 实现时容易踩的约束
 
-- **身份不是显示名。** 模型同步用 `Model.id`；Skill 用目录名；搜索当前选中必须先改成 `SearchServiceOptions.id`。
-- **列表下标不能同步。** `searchServiceSelected` 在增删排序后会指错引擎。
-- **加载清理 ≠ 写入清理。** 市场导入要显式做引用校验或复用 `settingsFlow` 那套过滤，不能只信 `normalizeForPersistence`。
+- **身份不是显示名，也不能跨 namespace 转换。** Local 模型用 `Model.id: Uuid`；Managed 模型保留 `mdl_*`；Skill 用目录名；搜索偏好同步前必须使用 `SearchServiceOptions.id`。
+- **列表下标不能同步。** 当前 `selectedSearchServiceId` 已消除历史下标问题；任何新同步协议都不得退回列表位置。
+- **加载清理 ≠ 写入清理。** 市场导入要显式做引用校验或复用 `materializeForRead` 的过滤规则，不能只信 `normalizeForPersistence`。
 - **`@Transient` 不是「不落盘」。** `pendingAssistantDeletions` 有独立 key；`builtIn` 则完全不落盘。
 - **会话行上的 `nodes` 不是消息源。** 备份/迁移必须带 `message_node` 表。
 - **Workspace 绑定与 Rootfs 分离。** 助手只引用 `workspaceId`；真正的 Linux 树在 `filesDir/workspaces/<root>/`。
 - **备份通道 ≠ 配置同步。** `WebDavConfig` / `S3Config` 是备份自己的密钥，不要和企业下发、市场包混在一个 API。
-- **有效读模型 ≠ 本地持久化快照。** 企业覆盖只进入 resolver；普通写入不能把有效快照整份反写本地。
+- **有效读模型 ≠ 本地持久化快照。** 当前 prototype overlay 只进入 resolver；S0.2 Managed Snapshot 也只能进入
+  realm-aware resolver，普通写入不能把任何 effective projection 整份反写 Local Store。
 - **UI 只读 ≠ 数据只读。** 锁定必须由写策略在最新 generation 上重验。
 - **来源不能由导入包自报。** `ENTERPRISE_DELIVERY` 只来自验签通道；普通 JSON 带 `enterprise` 字样仍是外部导入。
 - **Room 事务 ≠ 跨文件事务。** 市场包和备份恢复必须使用 staging、补偿与恢复日志。
@@ -416,12 +484,13 @@ flowchart LR
 ### 9.1 本轮允许的代码调整
 
 - 提取 Settings 读取物化纯函数，供 DataStore 回读和提交后发布复用；
-- 建立 `SettingsWriteSource` / `SettingsWritePolicy`，默认策略保持当前行为；
+- 建立统一的 Local 写入授权边界；历史草案中的 `SettingsWriteSource` / `SettingsWritePolicy` 名称未保留，
+  当前实现收敛为 `updateLocal()` 内调用 `requireLocalSettingsWriteAllowed()`；
 - 为备份恢复提供显式入口并保护内部 tombstone；
 - 把 Pebble cache invalidation 从持久化层移到独立观察者，只观察模板指纹，并让编译缓存键包含
   助手 id 与模板内容，使正确性不依赖异步失效时序；
 - 把本地 UI 的整份 Settings 回写改成最新值上的 transform 或明确的记录级命令；
-- 增加读取物化、授权策略、并发 delta、序列化兼容和写失败顺序测试；
+- 增加读取物化、Local 写入授权、并发 delta、序列化兼容和写失败顺序测试；
 - 同步修正引用文档中与真实 `normalizeForPersistence` 职责不一致的描述。
 
 ### 9.2 本轮禁止变化的落盘契约
@@ -437,7 +506,7 @@ flowchart LR
 
 ### 9.3 验证门槛
 
-- JVM：Settings 读取物化、写策略来源、tombstone、Assistant 兼容、相关 UI delta 与现有全量单测；
+- JVM：Settings 读取物化、Local 写锁、tombstone、Assistant 兼容、相关 UI delta 与现有全量单测；
 - Room：确认 schema/migration 文件无 diff；已有迁移链测试保持可运行，本轮无 schema 变更；
 - 静态：`git diff --check`、UTF-8 without BOM、文档链接与禁止落盘契约审查；
 - 构建：Android Lint 与 Debug APK；
@@ -453,11 +522,12 @@ flowchart LR
 | 代码 | 职责 |
 |------|------|
 | `SettingsStore` / `Settings` | DataStore 编排、公开有效快照、序列化模型 |
-| `commitSettings` | 固化并测试“策略与规范化 → 落盘 → 发布”的提交顺序；失败不发布 |
-| `prepareSettingsForWrite` | 应用来源策略、持久化归一化和既有 DataStore 标量约束，形成唯一待提交值 |
+| `SettingsStore.updateLocal` | 在最新 Local/effective 快照上执行 transform 与锁校验，是普通 Local Settings 的唯一写入口 |
+| `requireLocalSettingsWriteAllowed` | 比较 Local 变化路径并依据最新 effective access index 拒绝受管锁定字段变更 |
+| `commitSettings` | 固化并测试“持久化归一化与 DataStore 规范化 → 落盘 → 发布 Local shadow”的提交顺序；失败不发布 |
+| `canonicalizeForDataStore` | 补默认搜索服务、校验 `selectedSearchServiceId`、裁剪 TTS 速度，形成可落盘值 |
 | `materializeForRead` | 内置项物化、运行时属性恢复、去重和读取期引用清理 |
 | `normalizeForPersistence` | 写入前最小规范化；不得偷偷承担导入图校验 |
-| `SettingsWritePolicy` | 按最新状态与写入来源执行授权；未来企业锁的强制边界 |
 | `AssistantTemplateCacheInvalidator` | 观察模板指纹并失效 Pebble cache，不反向污染持久化层 |
 | `FavoriteModelService` | 收藏模型的记录级增删/排序命令；通用模型组件不直接写 Store |
 | `applySearchMode` / `ProviderSettingsApplicationService.saveConfiguration` / `applyMcpEditorSave` | 聊天搜索、Provider 详情与 MCP 编辑表单在最新记录上合并，避免整份陈旧快照覆盖 |
@@ -480,15 +550,16 @@ flowchart LR
 
 ### 11.1 已完成的架构准备
 
-- `SettingsStore` 不再实现 `KoinComponent` 或反向获取 Pebble 引擎；读取物化、写策略、提交顺序和
+- `SettingsStore` 不再实现 `KoinComponent` 或反向获取 Pebble 引擎；读取物化、Local 写锁、提交顺序和
   模板缓存观察已拆成独立职责。模板编译缓存键同时包含助手 id 与模板内容，异步观察者只负责回收，
   不再承担避免旧模板命中的正确性职责；
-- `SettingsWriteSource` 与 `SettingsWritePolicy` 已进入唯一提交链。默认策略是兼容性的 allow-all，
-  尚未伪造企业锁；
+- 普通 Local 写入已收口到 `SettingsStore.updateLocal()`，并在同一互斥区内调用
+  `requireLocalSettingsWriteAllowed()`；当前锁来自 verified managed snapshot 的 access index，代码中没有
+  `SettingsWriteSource` / `SettingsWritePolicy` 这两个历史草案类型；
 - DataStore 写成功后发布的值与 DataStore 回读共用 `materializeForRead`；落盘异常或取消发生在
-  `persist` 阶段时不会发布内存快照；搜索下标和 TTS 速度等既有落盘裁剪已前移到提交准备阶段，
+  `persist` 阶段时不会发布内存快照；搜索服务 id 校验和 TTS 速度等既有落盘裁剪已前移到提交准备阶段，
   提交返回值不再与磁盘值分叉；
-- 备份恢复使用显式 `restoreFromBackup` 来源，并合并保留不进入 `settings.json` 的删除 tombstone；
+- 备份恢复使用显式 `SettingsStore.restoreLocal()` 入口，并合并保留不进入 `settings.json` 的删除 tombstone；
 - 设置、备份、聊天、调试、提示词、图片生成等写入口已从整份旧快照改成最新值上的 transform；
   Provider、MCP、TTS、ASR、Search、Theme、Assistant 等列表操作以稳定 id 解析最新记录；
 - DisplaySetting 页面使用字段 delta；WebDAV、S3、备份提醒与注入列表直接对最新内层记录执行
@@ -507,12 +578,12 @@ flowchart LR
 
 本轮没有修改 DataStore 名称、Preferences key 字符串、`Settings`/Provider/Assistant 等序列化字段、
 Room Entity/数据库版本/migration/schema JSON、SharedPreferences、`filesDir` 契约或备份 entry。
-新增的写入来源、策略、指纹与协调器全部是运行时结构。`settings.json` 仍不包含
+新增的锁校验、指纹与协调器全部是运行时结构。`settings.json` 仍不包含
 `pendingAssistantDeletions`，恢复后继续保留设备上未完成的内部清理状态。
 
 ### 11.3 当前验证记录
 
-定向 JVM 测试已覆盖读取物化、策略来源、标量落盘规范化、提交失败不发布、备份恢复保留
+定向 JVM 测试已覆盖读取物化、Local 写锁、标量落盘规范化、提交失败不发布、备份恢复保留
 tombstone、策略拒绝后的文件补偿、Assistant/tombstone 兼容、DisplaySetting 并发 delta、
 聊天搜索模式按最新 Model 改 `tools`、Provider 表单保留最新模型列表、MCP 编辑表单保留
 OAuth/新同步工具、收藏模型稳定 id 排序、模板指纹/内容缓存键和备份路径约束，并已通过。

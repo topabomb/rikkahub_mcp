@@ -5,11 +5,7 @@
 
 ## Subagent Collaboration
 
-For non-trivial work, prefer available subagents based on their declared capabilities and permissions rather than relying on fixed names. Delegate focused codebase exploration when existing behavior, ownership, data flow, or prior implementations are unclear, and consolidate the evidence before choosing a design.
-
 At high-leverage points—especially before substantial refactors, cross-module or data-contract changes, and before declaring completion—seek an independent review in a separate context and, when practical, with a different model. The review may focus on architecture drift, duplicate mechanisms or sources of truth, unclear ownership, unstable contracts, unnecessary complexity, and material correctness or test gaps.
-
-Keep delegated tasks focused and non-overlapping, skip delegation when its coordination cost exceeds its value, and treat review findings as evidence to evaluate rather than automatic directives. The primary agent remains responsible for the final design, implementation, and verification.
 
 ## Commands and Verification
 
