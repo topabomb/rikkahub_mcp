@@ -171,6 +171,7 @@ private fun WorkspaceTerminalTabs(
 ) {
     var renameTab by remember { mutableStateOf<WorkspaceTerminalTabUiModel?>(null) }
     var renameText by remember { mutableStateOf("") }
+    var pendingCloseTabId by remember { mutableStateOf<String?>(null) }
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(6.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -211,7 +212,7 @@ private fun WorkspaceTerminalTabs(
                 Spacer(Modifier.width(4.dp))
                 Text(
                     "×",
-                    Modifier.clickable { onClose(tab.id) }.padding(horizontal = 8.dp),
+                    Modifier.clickable { pendingCloseTabId = tab.id }.padding(horizontal = 8.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -244,6 +245,34 @@ private fun WorkspaceTerminalTabs(
             },
             dismissButton = {
                 TextButton(onClick = { renameTab = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+
+    val pendingCloseTab = tabs.firstOrNull { it.id == pendingCloseTabId }
+    // tab 在确认期间因 shell exit 或 Workspace 删除而消失时自动清除，不再发送无意义命令
+    LaunchedEffect(pendingCloseTabId, pendingCloseTab) {
+        if (pendingCloseTabId != null && pendingCloseTab == null) pendingCloseTabId = null
+    }
+    pendingCloseTab?.let { tab ->
+        val tabTitle = tab.customTitle
+            ?: stringResource(R.string.workspace_terminal_tab_title, tab.number)
+        AlertDialog(
+            onDismissRequest = { pendingCloseTabId = null },
+            title = { Text(stringResource(R.string.workspace_terminal_close_title)) },
+            text = {
+                Text(stringResource(R.string.workspace_terminal_close_confirmation, tabTitle))
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingCloseTabId = null
+                    onClose(tab.id)
+                }) { Text(stringResource(R.string.workspace_terminal_close_action)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingCloseTabId = null }) {
                     Text(stringResource(R.string.common_cancel))
                 }
             },

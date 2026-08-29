@@ -93,6 +93,9 @@ Master 的主要输入顺序是 `TimeReminderTransformer`、`PromptInjectionTran
 `WorkspaceReminderTransformer`、`ToolArtifactReplayTransformer`、`AttachmentProjectionTransformer`。
 Target 由同一工厂装配，共享附件投影语义且同样把 `AttachmentProjectionTransformer` 放在
 Template / Workspace 之后；明确差异只有不装配 `ToolArtifactReplayTransformer`。
+本次请求由管线合成的内容（System、时间提醒、模式注入、Workspace 提醒及被其改写的 System）由
+`RequestMessageOriginTracker` 标记为 synthetic，`TemplateTransformer` 跳过它们，不应用用户的
+`messageTemplate`。tracker 是 request-scoped capability，不进入 durable `UIMessage`、不序列化、不跨请求缓存。
 
 Streaming Transformer 只改变显示投影；需要持久化的变化必须进入 checkpoint 的
 `OutputMessageTransformer.transform()` 或终态落盘 Transformer。
@@ -191,9 +194,16 @@ Provider 只返回开头 `<think>` 文本时，`ThinkTagTransformer` 在 Master/
 `ConversationRuntime` 的 `snapshot` 只包含已经提交的事实；Header command 不清除 active turn，冲突树命令显式结束或
 拒绝当前 owner。Runtime 无页面引用且无活跃 Job 后可由 Registry 清理，不存在 `pendingPersist` 或下一命令重试协议。
 
-启动顺序由 `ApplicationRecoveryCoordinator` 固定为：Settings ready → artifact reconcile → reference projection → FTS
-projection → Child run recovery → Master turn recovery → pending assistant deletion。任一步失败进入 `Failed(error)`，所有
+启动顺序由 `ApplicationRecoveryCoordinator` 固定为：Settings ready → artifact reconcile → generated media reconcile →
+reference projection → FTS projection → Child run recovery → Master turn recovery → pending assistant deletion。任一步失败进入 `Failed(error)`，所有
 durable command 继续被 `ApplicationRecoveryGate` 阻断；`retry()` 重新执行同一幂等顺序。
+
+用户可见发起/继续 Master turn 后，`GenerationForegroundLifetime.ensureStarted` 请求 Android 保活；
+`ChatGenerationForegroundService` 只消费 `ConversationQueryService.conversationActivities()`，只要存在
+`RESPONSE_GENERATION` 就保持前台，全部结束或只剩 `APPROVAL_REQUIRED`/`TITLE_GENERATION` 即停止。service
+不保存 generation id、turn map、Job 或消息，不调用 `KeepScreenOn`，也不操作 Window flag；生成、取消、终态
+与恢复仍由 Runtime/TurnEngine 唯一拥有。Android 15+ dataSync 的 `onTimeout(startId, fgsType)` 会先立即
+`stopSelf(startId)` 释放平台配额，再由 AppScope 经 application command 请求停止所有 projected active Master turn。
 
 恢复查询只读取非终态 execution 索引。Child/tool 先收口，再提交 owning turn 终态；健康数据库不加载 Conversation 树。
 非终态 execution 若已失去 owning Assistant 消息，恢复进入 `Failed`，不发布会话、也不补偿写入 turn/tool 事实；消息载荷损坏同样保持 fail-closed。

@@ -14,6 +14,7 @@
   <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
   <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
   <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
   <uses-permission
@@ -110,24 +111,24 @@
       </intent-filter>
     </activity>
     <activity
-      android:name=".ui.activity.McpOAuthCallbackActivity"
-      android:exported="true"
-      android:launchMode="singleTask"
-      android:theme="@android:style/Theme.Translucent.NoTitleBar">
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW" />
-
-        <category android:name="android.intent.category.DEFAULT" />
-        <category android:name="android.intent.category.BROWSABLE" />
-
-        <data
-          android:host="mcp-oauth-callback"
-          android:scheme="measix" />
-      </intent-filter>
-    </activity>
-    <activity
       android:name="com.yalantis.ucrop.UCropActivity"
       android:theme="@style/Theme.AppCompat.Light.NoActionBar" />
+
+    <!-- 生成期保活：只把 conversationActivities 投影转成前台服务语义，不持有任何运行事实 -->
+    <service
+      android:name=".service.ChatGenerationForegroundService"
+      android:exported="false"
+      android:foregroundServiceType="dataSync" />
+
+    <!-- 浏览器授权期间对 loopback 回调 socket 的保活；不保存 token/配置/授权阶段 -->
+    <service
+      android:name=".service.McpOAuthCallbackService"
+      android:exported="false"
+      android:foregroundServiceType="specialUse">
+      <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="MCP OAuth loopback callback keep-alive" />
+    </service>
 
     <provider
       android:name="androidx.core.content.FileProvider"

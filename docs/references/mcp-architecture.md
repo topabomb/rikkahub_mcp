@@ -42,7 +42,16 @@ Settings；导入、编辑、OAuth 更新也无权覆盖 Catalog。
 编辑或同名导入只在 transport、canonical resource 和静态 headers 都未变化时保留原 OAuth 状态。任一信任边界变化都会
 清除旧 access/refresh token 与 client secret，避免旧资源凭据发送到新 endpoint。`definitionDigest` 包含全部静态 headers
 （包括手工 `Authorization`）；自动 OAuth token 独立存放在 OAuth 状态中，其正常轮换不会使已确认目录失效。
-授权和 token refresh 的持久化 lease 同时校验 transport、canonical resource、规范化静态 headers 与 OAuth revision；浏览器
+授权和 token refresh 的持久化 lease 同时校验 transport、canonical resource、规范化静态 headers 与 OAuth revision。
+MCP 2025-03 授权规范要求 redirect 为 localhost 或 HTTPS。本实现的 OAuth 回调使用 loopback（RFC 8252）：
+`McpOAuthCallbackServer` 每次授权绑定 OS 分配的 ephemeral loopback 端口，redirect path 固定为 `/callback`，
+高熵 `state` 绑定本次 coordinator lease。未知 path/state、畸形或超限请求不会消费有效回调；只接受一次合法
+code/error，响应 `Cache-Control: no-store`，日志不输出 code/token/verifier。授权服务器若
+错误要求固定端口，返回明确互操作错误，不回退自定义 scheme。`McpOAuthCallbackActivity` 与
+`measix://mcp-oauth-callback` deep link 已删除；`McpOAuthCallbackService` 只在浏览器授权期间保活 loopback
+socket，并以引用计数 lease 支持并发授权，不保存 token、MCP config 或授权阶段。发现元数据、issuer、authorization、
+token 与 registration endpoint 必须保持 HTTPS，不接受 fragment 或 userinfo，且资源/issuer 精确匹配。PKCE、resource、canonical server URI 与 trust-boundary/revision CAS
+全部保留：callback 到达后、token 持久化前再次校验信任边界与 revision，旧回调不能写入新 definition。
 回调或 refresh 响应跨越任一信任边界变化时只能丢弃。重复启动授权必须先取消并等待旧 Job 完成，再推进 revision 后启动新流程。
 
 从曾将完整 schema 写在 Settings 的版本升级时，DataStore migration 在重写 policy-only Settings 的同一事务中生成一次性

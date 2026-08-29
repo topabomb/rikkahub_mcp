@@ -100,7 +100,6 @@ import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.ai.ModelAbilityTag
 import net.weero.measix.pilot.ui.components.ai.ModelModalityTag
-import net.weero.measix.pilot.ui.components.ai.ModelSelector
 import net.weero.measix.pilot.ui.components.ai.ModelTypeTag
 import net.weero.measix.pilot.ui.components.ai.ProviderBalanceText
 import net.weero.measix.pilot.ui.components.nav.BackButton

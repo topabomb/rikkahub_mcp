@@ -106,7 +106,9 @@ import net.weero.measix.pilot.data.files.FileUtils
 import net.weero.measix.pilot.service.MediaExportService
 import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.imggen.imageGenerationFailureStringRes
-import net.weero.measix.pilot.ui.components.ai.ModelSelector
+import net.weero.measix.pilot.ui.components.ai.ModelListSheet
+import net.weero.measix.pilot.ui.components.ai.ModelSelectorButton
+import net.weero.measix.pilot.ui.components.ai.rememberModelListState
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.FormItem
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDialog
@@ -446,14 +448,18 @@ private fun InputBar(
             val imageProviders = remember(settings.providers, resolver) {
                 settings.providers.filter { resolver.supportsImageGeneration(it) }
             }
-            ModelSelector(
+            val imageModelListState = rememberModelListState(
                 modelId = settings.imageGenerationModelId,
                 providers = imageProviders,
                 type = ModelType.IMAGE,
+            )
+            ModelSelectorButton(
+                state = imageModelListState,
                 onlyIcon = true,
-                onSelect = { model ->
-                    vm.selectImageGenerationModel(model.id)
-                }
+            )
+            ModelListSheet(
+                state = imageModelListState,
+                onSelect = { model -> vm.selectImageGenerationModel(model.id) },
             )
 
             IconButton(

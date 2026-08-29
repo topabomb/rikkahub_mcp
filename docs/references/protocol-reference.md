@@ -247,6 +247,9 @@ TOOL 能力，不发送 thinking。
 - 已知模型组的请求参数差异。
 
 它不决定 Provider 类型或 wire format。模型组应服务于稳定、可测试的行为差异；易变在线清单不能成为 endpoint 选择或请求硬阻断条件。匹配规则必须测试相邻版本和别名，避免 `gpt-5.10` 被误判为 `gpt-5.1` 一类的前缀错误。
+`QWEN_3_8` family（`qwen3.8-max` / `qwen3.8-flash`，常见分隔符与大小写）声明原生视觉输入；不含 `3.8` 的
+旧家族（如 `qwen3-max-2026-*`）不得被误标为视觉。能力仍只由 `Model.inputModalities` 派生，不在投影或
+endpoint host 另设第二套例外。
 
 ## 9. 协议保真原则
 

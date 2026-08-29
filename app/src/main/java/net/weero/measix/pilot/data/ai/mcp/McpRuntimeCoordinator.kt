@@ -40,7 +40,6 @@ import kotlinx.serialization.json.JsonObject
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.event.AppEventBus
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.OwnedArtifact
@@ -83,12 +82,12 @@ class McpRuntimeCoordinator(
     private val appScope: AppScope,
     private val artifactStore: ArtifactStore,
     private val networkMonitor: NetworkMonitor,
-    private val appEventBus: AppEventBus,
     private val foregroundObserver: ForegroundObserver = ProcessLifecycleForegroundObserver,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val transportOverride: ((McpServerConfig) -> AbstractTransport)? = null,
     private val clientOverride: ((McpServerConfig) -> Client)? = null,
     oauthClientOverride: McpOAuthClient? = null,
+    oauthCallbackKeepAlive: OAuthCallbackKeepAlive,
     private val foregroundState: StateFlow<Boolean> = ProcessForegroundState,
     private val retryJitter: (Long) -> Long = { upperInclusive ->
         if (upperInclusive <= 0L) 0L else Random.nextLong(upperInclusive + 1L)
@@ -114,8 +113,8 @@ class McpRuntimeCoordinator(
     private val oauthCoordinator = McpOAuthCoordinator(
         settingsStore = settingsStore,
         appScope = appScope,
-        appEventBus = appEventBus,
         oauthClient = oauthClient,
+        oauthCallbackKeepAlive = oauthCallbackKeepAlive,
         ioDispatcher = ioDispatcher,
         logger = ::logMcp,
     )

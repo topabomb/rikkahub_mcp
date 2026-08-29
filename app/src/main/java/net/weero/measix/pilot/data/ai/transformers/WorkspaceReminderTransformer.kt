@@ -33,10 +33,15 @@ class WorkspaceReminderTransformer(
         val systemIndex = messages.indexOfFirst { it.role == MessageRole.SYSTEM }
         return if (systemIndex >= 0) {
             messages.toMutableList().apply {
-                this[systemIndex] = this[systemIndex].appendText("\n\n$prompt")
+                val rewritten = this[systemIndex].appendText("\n\n$prompt")
+                this[systemIndex] = rewritten
+                // 被本次请求改写过的 System 属于合成内容，不再走用户模板
+                ctx.requestOrigins.markSynthetic(rewritten)
             }
         } else {
-            listOf(UIMessage.system(prompt)) + messages
+            val created = UIMessage.system(prompt)
+            ctx.requestOrigins.markSynthetic(created)
+            listOf(created) + messages
         }
     }
 }

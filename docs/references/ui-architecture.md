@@ -364,6 +364,7 @@ ChatPageContent
 `ChatPageContent` 是会话 turn 期间屏幕唤醒的唯一 UI owner。它直接绑定
 `ConversationPresentation.isActive`：准备、模型生成、工具执行、等待审批和停止收口阶段均保持亮屏，
 只有 turn 进入 `IDLE` 或页面退出组合时才释放；可因 IME 和自适应布局切换位置的 `ChatInput` 按钮不管理 Window flag。
+模型选择 sheet（`ModelListSheet`）由输入区的稳定根级组合一次，不随 action row 的 IME 显隐分支进入或离开组合；同一页面只存在一个 `ModelListState`，选择、清空与 dismiss 都只修改同一状态。
 
 MCP 设置页只保留列表下拉刷新，避免顶部栏重复入口。下拉只调用 `McpApplicationService.refreshAll()`，指示器偏移到可折叠
 TopAppBar 下方；它最多绑定 20 秒用户 receipt，不绑定 AppScope 中可能持续数分钟的后台恢复。receipt 结束时若仍有 server
@@ -429,7 +430,7 @@ reason 对应的短状态，取消使用中性色而不冒充错误；失败或�
 
 | ViewModel | 职责 |
 |-----------|------|
-| `ChatVM` | 单会话状态：消息列表、生成 Job、输入状态、错误处理 |
+| `ChatVM` | 单会话状态：会话读状态、输入状态、错误处理与 application command 转发；不持有 Runtime Job |
 | `ChatDrawerVM` | 侧栏状态：会话分页列表、文件夹、滚动位置 |
 | `SettingVM` | 设置读写 |
 | `AssistantDetailVM` | 助手配置（含子助手原子清理、`hasValidChatModel` 警告） |
@@ -450,6 +451,7 @@ Koin 模块在 `di/AppModule.kt` 和 `di/DatabaseModule.kt` 等文件中定义�
 - `MasterTurnCoordinator` — 主回合生成编排
 - `ConversationApplicationService` / `ConversationQueryService` — UI 写/读端口
 - `McpApplicationService` / `McpQueryService` — MCP 命令与 definition/catalog/runtime 只读投影；Compose 不持有 client
+- `FileManagementApplicationService` / `FileManagementQueryService` — 托管文件 typed 删除/范围清理与列表、候选数、存储统计；`SettingFilesPage`、`SettingPage` 不持有 Artifact/GeneratedMedia owner
 - `ApplicationRecoveryCoordinator` — 启动恢复与 fail-closed 门禁
 - `ChatNotificationManager` — 通知管理（`createdAtStart = true` 保证进程启动即订阅事件）
 - `AppEventBus` — 全局事件总线
@@ -598,10 +600,13 @@ ChatList (LazyColumn)
 | PromptInjectionTransformer | 合并助手与会话启用的提示注入 |
 | PlaceholderTransformer | 处理消息中的占位符 |
 | DocumentAsPromptTransformer | 文档附件转文本提示 |
-| OcrTransformer | 图片 OCR 文字提取 |
 | TemplateTransformer | 应用 Pebble 模板 |
 | WorkspaceReminderTransformer | 注入 Workspace 上下文提醒 |
 | ToolArtifactReplayTransformer | 按 artifact metadata 重写历史 Tool Result 路径与 Image URL |
+| AttachmentProjectionTransformer | 按本次请求的 `RequestMediaCapabilities` 投影附件，固定为最后一个 input transformer |
+
+顺序由 `TurnPipelineFactory` 唯一定义；Master 额外在附件投影之前装配 `ToolArtifactReplayTransformer`，Target 不装配它。附件之后不得再运行会新增、移动或删除媒体 part 的 transformer。完整生成链路见
+[消息生成链路](chat-generation-pipeline.md)，投影语义见 [多模态上下文与 Turn 持久化](multimodal-context-and-turn-durability.md)。
 
 ### 输出管道（OutputMessageTransformer）
 

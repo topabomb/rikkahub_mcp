@@ -29,6 +29,7 @@ class DocumentAsPromptTransformerTest {
         model = model,
         assistant = assistant,
         settings = settings,
+        requestOrigins = RequestMessageOriginTracker(),
         registerUnpublishedResource = {},
     )
 

@@ -14,6 +14,7 @@ import kotlinx.coroutines.sync.withLock
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
 import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.data.repository.ConversationRepository
 
 sealed interface ApplicationRecoveryState {
@@ -47,13 +48,14 @@ class ApplicationRecoveryGate internal constructor() {
 }
 
 /**
- * 唯一启动恢复入口。顺序固定为 Settings → artifact staging/reconcile → projection →
+ * 唯一启动恢复入口。顺序固定为 Settings → artifact/generated-media reconcile → projection →
  * interrupted run/turn → pending assistant deletion；任一步失败都保持 fail-closed，可显式 retry。
  */
 class ApplicationRecoveryCoordinator(
     private val appScope: CoroutineScope,
     private val settingsStore: SettingsStore,
     private val artifactStore: ArtifactStore,
+    private val generatedMediaStore: GeneratedMediaStore,
     private val conversationRepository: ConversationRepository,
     private val turnRecovery: TurnRecovery,
     private val assistantManagementService: AssistantManagementService,
@@ -97,6 +99,7 @@ class ApplicationRecoveryCoordinator(
                     throw ManagedConfigurationBlockedException(effective.managedFailureReason)
                 }
                 artifactStore.reconcileStartup()
+                generatedMediaStore.reconcile()
                 artifactStore.ensureReferenceProjection()
                 conversationRepository.ensureSearchProjection()
                 turnRecovery.recoverInterruptedRuns()

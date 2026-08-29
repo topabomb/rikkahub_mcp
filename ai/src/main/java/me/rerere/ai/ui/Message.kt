@@ -386,6 +386,8 @@ fun List<UIMessagePart>.isEmptyUIMessage(): Boolean {
             is UIMessagePart.Reasoning -> message.reasoning.isBlank()
             is UIMessagePart.Video -> message.url.isBlank()
             is UIMessagePart.Audio -> message.url.isBlank()
+            // 工具调用本身在 UI 上有卡片与操作入口，与是否执行、是否产出无关。
+            is UIMessagePart.Tool -> false
             else -> true
         }
     }

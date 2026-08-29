@@ -118,6 +118,7 @@ class McpOAuthClient(
                 addAll(wellKnownPrmUrls(serverUrl))
             }.distinct()
             for (url in candidates) {
+                requireSecureOAuthEndpoint(url, "protected resource metadata endpoint")
                 val meta = try {
                     getJson<ProtectedResourceMetadata>(url)
                 } catch (cancelled: CancellationException) {
@@ -126,6 +127,10 @@ class McpOAuthClient(
                     null
                 }
                 if (meta != null && meta.authorizationServers.isNotEmpty()) {
+                    validateProtectedResourceMetadata(
+                        expectedResource = canonicalResource(serverUrl),
+                        metadata = meta,
+                    )
                     Log.i(TAG, "discoverProtectedResource: found via $url -> ${meta.authorizationServers}")
                     return@withContext meta
                 }
@@ -139,7 +144,9 @@ class McpOAuthClient(
      */
     suspend fun discoverAuthorizationServer(issuer: String): AuthorizationServerMetadata =
         withContext(Dispatchers.IO) {
+            requireSecureOAuthEndpoint(issuer, "authorization server issuer")
             for (url in wellKnownAsUrls(issuer)) {
+                requireSecureOAuthEndpoint(url, "authorization server metadata endpoint")
                 val meta = try {
                     getJson<AuthorizationServerMetadata>(url)
                 } catch (cancelled: CancellationException) {
@@ -148,6 +155,7 @@ class McpOAuthClient(
                     null
                 }
                 if (meta?.authorizationEndpoint != null && meta.tokenEndpoint != null) {
+                    validateAuthorizationServerMetadata(expectedIssuer = issuer, metadata = meta)
                     Log.i(TAG, "discoverAuthorizationServer: found via $url")
                     return@withContext meta
                 }
@@ -162,6 +170,7 @@ class McpOAuthClient(
         redirectUri: String,
         scope: String?,
     ): ClientRegistrationResponse = withContext(Dispatchers.IO) {
+        requireSecureOAuthEndpoint(registrationEndpoint, "client registration endpoint")
         val body = json.encodeToString(
             ClientRegistrationRequest.serializer(),
             ClientRegistrationRequest(
@@ -205,8 +214,7 @@ class McpOAuthClient(
         scope: String?,
         resource: String?,
     ): String {
-        val base = authorizationEndpoint.toHttpUrlOrNull()
-            ?: error("非法的授权端点: $authorizationEndpoint")
+        val base = requireSecureOAuthEndpoint(authorizationEndpoint, "authorization endpoint")
         return base.newBuilder()
             .addQueryParameter("response_type", "code")
             .addQueryParameter("client_id", clientId)
@@ -269,6 +277,7 @@ class McpOAuthClient(
     }
 
     private suspend fun postToken(tokenEndpoint: String, form: FormBody): TokenResponse {
+        requireSecureOAuthEndpoint(tokenEndpoint, "token endpoint")
         val request = Request.Builder()
             .url(tokenEndpoint)
             .header("Accept", "application/json")
@@ -404,6 +413,69 @@ class McpOAuthClient(
         fun canonicalResource(serverUrl: String): String {
             val url = serverUrl.toHttpUrlOrNull() ?: return serverUrl
             return url.newBuilder().fragment(null).build().toString()
+        }
+
+        internal fun requireSecureOAuthEndpoint(value: String, label: String): HttpUrl {
+            val url = value.toHttpUrlOrNull() ?: error("Invalid $label: $value")
+            require(url.scheme == "https") { "$label must use HTTPS: $value" }
+            require(url.fragment == null) { "$label must not contain a fragment: $value" }
+            require(url.username.isEmpty() && url.password.isEmpty()) {
+                "$label must not contain user information: $value"
+            }
+            return url
+        }
+
+        internal fun validateProtectedResourceMetadata(
+            expectedResource: String,
+            metadata: ProtectedResourceMetadata,
+        ) {
+            val declaredResource = metadata.resource
+                ?: error("Protected resource metadata is missing resource")
+            require(validatedResourceUri(declaredResource) == validatedResourceUri(expectedResource)) {
+                "Protected resource metadata does not match the MCP resource"
+            }
+            require(metadata.authorizationServers.isNotEmpty()) {
+                "Protected resource metadata has no authorization server"
+            }
+            metadata.authorizationServers.forEach { issuer ->
+                requireSecureOAuthEndpoint(issuer, "authorization server issuer")
+            }
+        }
+
+        internal fun validateAuthorizationServerMetadata(
+            expectedIssuer: String,
+            metadata: AuthorizationServerMetadata,
+        ) {
+            val declaredIssuer = metadata.issuer
+                ?: error("Authorization server metadata is missing issuer")
+            val declaredIssuerUrl = requireSecureOAuthEndpoint(
+                declaredIssuer,
+                "authorization server metadata issuer",
+            )
+            val expectedIssuerUrl = requireSecureOAuthEndpoint(expectedIssuer, "authorization server issuer")
+            require(declaredIssuerUrl == expectedIssuerUrl) {
+                "Authorization server metadata issuer mismatch"
+            }
+            requireSecureOAuthEndpoint(
+                metadata.authorizationEndpoint ?: error("Authorization server is missing authorization_endpoint"),
+                "authorization endpoint",
+            )
+            requireSecureOAuthEndpoint(
+                metadata.tokenEndpoint ?: error("Authorization server is missing token_endpoint"),
+                "token endpoint",
+            )
+            metadata.registrationEndpoint?.let { endpoint ->
+                requireSecureOAuthEndpoint(endpoint, "client registration endpoint")
+            }
+        }
+
+        private fun validatedResourceUri(value: String): HttpUrl {
+            val url = value.toHttpUrlOrNull() ?: error("Invalid MCP resource URI: $value")
+            require(url.fragment == null) { "MCP resource URI must not contain a fragment: $value" }
+            require(url.username.isEmpty() && url.password.isEmpty()) {
+                "MCP resource URI must not contain user information: $value"
+            }
+            return url
         }
     }
 }

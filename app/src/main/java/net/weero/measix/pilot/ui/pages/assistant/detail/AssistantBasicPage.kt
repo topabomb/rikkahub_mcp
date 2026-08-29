@@ -48,7 +48,9 @@ import net.weero.measix.pilot.data.model.MAX_CONTEXT_MESSAGE_LIMIT
 import net.weero.measix.pilot.data.model.MIN_CONTEXT_MESSAGE_LIMIT
 import net.weero.measix.pilot.data.model.normalizeDescription
 import net.weero.measix.pilot.data.model.effectiveContextMessageLimit
-import net.weero.measix.pilot.ui.components.ai.ModelSelector
+import net.weero.measix.pilot.ui.components.ai.ModelListSheet
+import net.weero.measix.pilot.ui.components.ai.ModelSelectorButton
+import net.weero.measix.pilot.ui.components.ai.rememberModelListState
 import net.weero.measix.pilot.ui.components.ai.ReasoningButton
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.FormItem
@@ -356,10 +358,13 @@ internal fun AssistantBasicContent(
                     Text(stringResource(R.string.assistant_page_chat_model_desc))
                 },
                 content = {
-                    ModelSelector(
+                    val chatModelListState = rememberModelListState(
                         modelId = assistant.chatModelId,
                         providers = providers,
                         type = ModelType.CHAT,
+                    )
+                    ModelSelectorButton(
+                        state = chatModelListState,
                         onClear = {
                             onUpdate(
                                 assistant.copy(
@@ -368,6 +373,9 @@ internal fun AssistantBasicContent(
                             )
                         },
                         placeholder = stringResource(R.string.assistant_page_follow_default_model),
+                    )
+                    ModelListSheet(
+                        state = chatModelListState,
                         onSelect = {
                             onUpdate(
                                 assistant.copy(

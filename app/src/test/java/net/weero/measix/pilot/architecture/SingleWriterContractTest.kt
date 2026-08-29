@@ -171,6 +171,20 @@ class SingleWriterContractTest {
     }
 
     @Test
+    fun `settings files page consumes only the file management ports`() {
+        val filesPage = File(sourceRoot, "ui/pages/setting/SettingFilesPage.kt").readText()
+        val settingsPage = File(sourceRoot, "ui/pages/setting/SettingPage.kt").readText()
+        assertFalse("page must not import GeneratedMediaStore", filesPage.contains("import net.weero.measix.pilot.data.imggen.GeneratedMediaStore"))
+        assertFalse("page must not import GenMediaRepository", filesPage.contains("import net.weero.measix.pilot.data.repository.GenMediaRepository"))
+        assertFalse("settings entry must not import GeneratedMediaStore", settingsPage.contains("import net.weero.measix.pilot.data.imggen.GeneratedMediaStore"))
+        assertFalse("UI must not parse artifact string identities", filesPage.contains("substringAfter(\"artifact:"))
+        assertFalse("UI must not parse generated-media string identities", filesPage.contains("substringAfter(\"genmedia:"))
+        assertTrue(filesPage.contains("FileManagementApplicationService"))
+        assertTrue(filesPage.contains("FileManagementQueryService"))
+        assertTrue(settingsPage.contains("FileManagementQueryService"))
+    }
+
+    @Test
     fun `attachment backfill is an exact metadata patch rather than a replacement tree`() {
         assertTrue(hits("BackfillAttachmentRefs").isNotEmpty())
         assertTrue(hits("AttachmentRefBackfill").isNotEmpty())
@@ -310,6 +324,38 @@ class SingleWriterContractTest {
             "turn callers must pass an explicit MCP snapshot",
             toolFactory.contains("mcpCapabilities: TurnMcpCapabilitySnapshot ="),
         )
+    }
+
+    @Test
+    fun `transient ui owners survive ime changes and destructive terminal actions require confirmation`() {
+        val chatInput = File(sourceRoot, "ui/components/ai/ChatInput.kt").readText()
+        assertEquals(
+            "the model sheet must have exactly one stable composition owner",
+            1,
+            Regex(Regex.escape("ModelListSheet(")).findAll(chatInput).count(),
+        )
+        assertTrue(
+            "the model sheet must be composed after the IME-dependent action row",
+            chatInput.lastIndexOf("ModelListSheet(") > chatInput.lastIndexOf("actionRow(Modifier.fillMaxWidth())"),
+        )
+
+        val terminal = File(sourceRoot, "ui/pages/extensions/workspace/WorkspaceTerminalPage.kt").readText()
+        assertTrue(terminal.contains("pendingCloseTabId = tab.id"))
+        assertTrue(terminal.contains("workspace_terminal_close_confirmation"))
+        assertTrue(
+            "terminal close must only be invoked by the confirmation action",
+            Regex(Regex.escape("onClose(tab.id)")).findAll(terminal).count() == 1,
+        )
+    }
+
+    @Test
+    fun `generation foreground timeout releases the service before application cancellation work`() {
+        val service = File(sourceRoot, "service/ChatGenerationForegroundService.kt").readText()
+        assertTrue(service.contains("override fun onTimeout(startId: Int, fgsType: Int)"))
+        val timeout = service.substringAfter("override fun onTimeout(startId: Int, fgsType: Int)")
+            .substringBefore("override fun onDestroy")
+        assertTrue(timeout.indexOf("stopSelf(startId)") < timeout.indexOf("stopProjectedGenerations()"))
+        assertFalse(service.contains("override fun onTimeout(startId: Int)"))
     }
 
     @Test

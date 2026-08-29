@@ -125,7 +125,7 @@ class ModelRegistryTest {
         val toolReasoning = listOf(ModelAbility.TOOL, ModelAbility.REASONING)
         val visionInput = listOf(Modality.TEXT, Modality.IMAGE)
         assertEquals(toolReasoning, ModelRegistry.MODEL_ABILITIES.getData("qwen-3.8-max"))
-        assertEquals(listOf(Modality.TEXT), ModelRegistry.MODEL_INPUT_MODALITIES.getData("qwen-3.8-max"))
+        assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("qwen-3.8-max"))
         assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("mimo-v3"))
         assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("mimo-v3-pro"))
         assertEquals(toolReasoning, ModelRegistry.MODEL_ABILITIES.getData("mimo-v3-pro"))
@@ -135,6 +135,41 @@ class ModelRegistryTest {
         assertEquals(visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData("muse-glimmer-30b"))
         assertEquals(toolReasoning, ModelRegistry.MODEL_ABILITIES.getData("muse-spark"))
         assertEquals(toolReasoning, ModelRegistry.MODEL_ABILITIES.getData("muse-glimmer-30b"))
+    }
+
+    @Test
+    fun testQwen38FamilyIsTheOnlyQwen38Rule() {
+        val toolReasoning = listOf(ModelAbility.TOOL, ModelAbility.REASONING)
+        val visionInput = listOf(Modality.TEXT, Modality.IMAGE)
+        // 3.8 家族原生支持视觉（阿里云模型能力清单），flash 与 max 同规则
+        listOf(
+            "qwen-3.8-max",
+            "qwen-3.8-flash",
+            "qwen3.8-max",
+            "qwen3.8-flash",
+            "qwen_3.8_max",
+            "Qwen-3.8-Max",
+            "qwen-3.8-max-2026-01-01",
+        ).forEach { modelId ->
+            assertEquals("$modelId input", visionInput, ModelRegistry.MODEL_INPUT_MODALITIES.getData(modelId))
+            assertEquals("$modelId abilities", toolReasoning, ModelRegistry.MODEL_ABILITIES.getData(modelId))
+        }
+        // 不含 3.8 的旧家族不得被误标为视觉
+        listOf("qwen-3.7-max", "qwen3-max-2026-01-01", "qwen-max", "qwen3-5-max").forEach { modelId ->
+            assertEquals(
+                "$modelId input",
+                listOf(Modality.TEXT),
+                ModelRegistry.MODEL_INPUT_MODALITIES.getData(modelId)
+            )
+        }
+        // 相邻家族保持既有判定：3.5/3.6/3.7 无 max 后缀者才是视觉
+        listOf("qwen-3.7", "qwen-3.6", "qwen-3.5").forEach { modelId ->
+            assertEquals(
+                "$modelId input",
+                visionInput,
+                ModelRegistry.MODEL_INPUT_MODALITIES.getData(modelId)
+            )
+        }
     }
 
     @Test

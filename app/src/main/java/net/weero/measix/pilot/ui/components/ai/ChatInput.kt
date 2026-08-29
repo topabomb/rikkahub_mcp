@@ -278,15 +278,9 @@ fun ChatInput(
                                 .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
-                            // Model Picker
-                            ModelSelector(
-                                modelId = assistant.chatModelId ?: settings.chatModelId,
-                                providers = settings.providers,
+                            // Model Picker：sheet 在输入区稳定根级组合，不随 action row 显隐离开组合
+                            ModelSelectorButton(
                                 state = modelListState,
-                                onSelect = {
-                                    onUpdateChatModel(it)
-                                },
-                                type = ModelType.CHAT,
                                 onlyIcon = true,
                                 modifier = Modifier,
                             )
@@ -413,6 +407,12 @@ fun ChatInput(
                 }
             }
 
+            // 模型 sheet 与 action row 解耦：IME 目标变化时 action row 会离开组合，
+            // sheet 若在那个子树内会在搜索框刚获得焦点时被一起移除。
+            ModelListSheet(
+                state = modelListState,
+                onSelect = onUpdateChatModel,
+            )
         }
     }
 }

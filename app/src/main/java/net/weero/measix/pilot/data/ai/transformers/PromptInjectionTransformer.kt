@@ -18,12 +18,23 @@ object PromptInjectionTransformer : InputMessageTransformer {
         ctx: TransformerContext,
         messages: List<UIMessage>,
     ): List<UIMessage> {
-        return transformMessages(
+        val transformed = transformMessages(
             messages = messages,
             assistant = ctx.assistant,
             modeInjections = ctx.settings.modeInjections,
             conversationModeInjectionIds = ctx.conversationModeInjectionIds,
         )
+        if (transformed === messages) return messages
+        // 注入产生的新消息，以及被注入内容改写过的既有 System，都是本次请求的合成内容
+        val originalById = HashMap<Uuid, UIMessage>(messages.size).apply {
+            messages.forEach { message -> put(message.id, message) }
+        }
+        transformed.forEach { message ->
+            if (originalById[message.id] !== message) {
+                ctx.requestOrigins.markSynthetic(message)
+            }
+        }
+        return transformed
     }
 }
 

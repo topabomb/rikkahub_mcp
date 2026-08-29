@@ -422,6 +422,51 @@ class ArtifactStoreLifecycleTest {
     }
 
     @Test
+    fun `scoped folder deletion respects cutoff and keeps newer artifacts`() = runTest {
+        val folder = folder()
+        val oldStaged = payloadStore.stageFromBytes(folder, byteArrayOf(1), "old.bin", null)
+        payloadStore.promote(oldStaged)
+        val oldId = database.artifactDao().insert(
+            entity(oldStaged.relativePath, folder, ArtifactState.ACTIVE, token = null, createdAt = 1_000L)
+        )
+        val freshStaged = payloadStore.stageFromBytes(folder, byteArrayOf(2), "fresh.bin", null)
+        payloadStore.promote(freshStaged)
+        val freshId = database.artifactDao().insert(
+            entity(freshStaged.relativePath, folder, ArtifactState.ACTIVE, token = null, createdAt = 5_000L)
+        )
+
+        val result = store.deleteUserRequestedFolderCreatedBefore(folder, createdBefore = 2_000L)
+
+        assertEquals(1, result.deleted)
+        assertEquals(0, result.cleanupPending)
+        assertEquals(0, result.skippedInProgress)
+        assertEquals(0, result.failed)
+        assertNull(database.artifactDao().getById(oldId))
+        assertTrue(database.artifactDao().getById(freshId) != null)
+        assertFalse(payloadStore.finalExists(oldStaged.relativePath))
+        assertTrue(payloadStore.finalExists(freshStaged.relativePath))
+    }
+
+    @Test
+    fun `scoped folder deletion skips live ownership instead of discarding it`() = runTest {
+        val folder = folder()
+        val owned = store.createFromBytes(
+            bytes = byteArrayOf(3),
+            displayName = "in-flight.bin",
+            folder = folder,
+            origin = ArtifactOrigin.USER,
+        )
+
+        val result = store.deleteUserRequestedFolderCreatedBefore(folder, Long.MAX_VALUE)
+
+        assertEquals(0, result.deleted)
+        assertEquals(1, result.skippedInProgress)
+        assertEquals(0, result.failed)
+        assertTrue(database.artifactDao().getById(owned.entity.id) != null)
+        assertTrue(store.file(owned.entity).isFile)
+    }
+
+    @Test
     fun `settings root and garbage collection are serialized`() = runTest {
         val folder = folder()
         val assistant = Assistant()
@@ -701,13 +746,14 @@ class ArtifactStoreLifecycleTest {
         folder: String,
         state: ArtifactState,
         token: String?,
+        createdAt: Long = 1L,
     ) = ArtifactEntity(
         folder = folder,
         relativePath = relativePath,
         displayName = File(relativePath).name,
         mimeType = "application/octet-stream",
         sizeBytes = 1,
-        createdAt = 1,
+        createdAt = createdAt,
         updatedAt = 1,
         state = state.name,
         payloadToken = token,

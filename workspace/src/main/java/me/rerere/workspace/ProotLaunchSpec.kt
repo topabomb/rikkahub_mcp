@@ -93,6 +93,15 @@ data class ProotLaunchSpec(
                 "SHELL=/bin/bash",
                 "PWD=$prootCwd",
             )
+            // 非交互执行没有可回退的终端：显式告知子进程，避免 git/man/apt 等挂起或输出转义序列。
+            // 交互式 terminal 保持原环境，用户仍可自行设置分页与颜色。
+            if (command != null) {
+                arguments += listOf(
+                    "CI=1",
+                    "NO_COLOR=1",
+                    "PAGER=cat",
+                )
+            }
             if (command != null) {
                 arguments += listOf(
                     "/bin/bash",

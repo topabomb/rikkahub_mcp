@@ -56,8 +56,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.isNotConfigured
 import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
-import net.weero.measix.pilot.service.ArtifactUseCase
-import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
+import net.weero.measix.pilot.service.FileManagementQueryService
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.ui.components.ui.ProviderConfigWarningCard
@@ -84,8 +83,7 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
     val lockedMessage = lockedChange?.let {
         stringResource(R.string.managed_configuration_locked, it.reason)
     }
-    val artifactUseCase: ArtifactUseCase = koinInject()
-    val generatedMediaStore: GeneratedMediaStore = koinInject()
+    val fileManagementQueryService: FileManagementQueryService = koinInject()
 
     LaunchedEffect(lockedChange) {
         lockedChange?.let {
@@ -276,9 +274,8 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                 val lifecycleOwner = LocalLifecycleOwner.current
                 val storageState by produceState(-1 to 0L, lifecycleOwner) {
                     lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                        val (uploadCount, uploadSize) = artifactUseCase.uploadStats()
-                        val generated = generatedMediaStore.countCommitted()
-                        value = (uploadCount + generated.count) to (uploadSize + generated.sizeBytes)
+                        val storage = fileManagementQueryService.storageStats()
+                        value = storage.count to storage.sizeBytes
                     }
                 }
                 CardGroup(

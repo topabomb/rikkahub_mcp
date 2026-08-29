@@ -21,6 +21,10 @@ interface GenMediaDAO {
     @Query("SELECT * FROM genmediaentity WHERE id = :id")
     suspend fun getById(id: Int): GenMediaEntity?
 
+    /** 范围清理候选：只读 create_at 截止，由 Store 在 persist lock 内逐项复用删除协议。 */
+    @Query("SELECT * FROM genmediaentity WHERE create_at <= :cutoff ORDER BY create_at DESC")
+    suspend fun listCreatedBefore(cutoff: Long): List<GenMediaEntity>
+
     /** Caller dispatches to IO; the row commit and returned id must not be split by coroutine cancellation. */
     @Insert
     fun insert(media: GenMediaEntity): Long

@@ -158,27 +158,20 @@ fun rememberModelListState(
     }
 }
 
+/**
+ * 只渲染触发按钮：sheet 的可见性由调用方在同一处显式组合。
+ *
+ * 按钮不能自己组合 [ModelListSheet]：聊天输入区的 action row 会随 IME 目标与布局分支
+ * 离开组合，sheet 若随按钮一起消失，搜索框刚获得焦点就会关闭。
+ */
 @Composable
-fun ModelSelector(
-    modelId: Uuid?,
-    providers: List<ProviderSetting>,
-    type: ModelType,
+fun ModelSelectorButton(
+    state: ModelListState,
     modifier: Modifier = Modifier,
-    state: ModelListState = rememberModelListState(
-        modelId = modelId,
-        providers = providers,
-        type = type,
-    ),
     onlyIcon: Boolean = false,
     onClear: (() -> Unit)? = null,
     placeholder: String? = null,
-    onSelect: (Model) -> Unit
 ) {
-    state.update(
-        modelId = modelId,
-        providers = providers,
-        type = type,
-    )
     val model = state.currentModel
 
     if (!onlyIcon) {
@@ -240,11 +233,6 @@ fun ModelSelector(
             }
         }
     }
-
-    ModelListSheet(
-        state = state,
-        onSelect = onSelect,
-    )
 }
 
 @Composable

@@ -226,7 +226,7 @@ class GeneratedMediaStoreTest {
         val committed = File(images, "done.png").apply { writeText("x") }
         val pending = File(images, "live.png.pending").apply { writeText("p") }
         val repository = mockk<GenMediaRepository>()
-        coEvery { repository.getAllMediaList() } returns listOf(
+        coEvery { repository.listCreatedBefore(Long.MAX_VALUE) } returns listOf(
             GenMediaEntity(id = 1, path = "images/done.png", modelId = "m", prompt = "p", createAt = 1L),
         )
         every { repository.deleteMedia(1) } returns Unit
@@ -441,7 +441,7 @@ class GeneratedMediaStoreTest {
         val deleted = File(images, "a.png").apply { writeText("a") }
         val restored = File(images, "b.png").apply { writeText("b") }
         val repository = mockk<GenMediaRepository>()
-        coEvery { repository.getAllMediaList() } returns listOf(
+        coEvery { repository.listCreatedBefore(Long.MAX_VALUE) } returns listOf(
             GenMediaEntity(id = 1, path = "images/a.png", modelId = "m", prompt = "p", createAt = 1L),
             GenMediaEntity(id = 2, path = "images/b.png", modelId = "m", prompt = "p", createAt = 1L),
         )

@@ -48,4 +48,8 @@ interface ArtifactDAO {
 
     @Query("SELECT * FROM artifact WHERE state = :state AND created_at <= :createdBefore")
     suspend fun listByStateCreatedBefore(state: String, createdBefore: Long): List<ArtifactEntity>
+
+    /** 范围清理候选：folder + createdAt 截止，覆盖全部生命周期状态，由 Store 在 lifecycle lock 内逐项收口。 */
+    @Query("SELECT * FROM artifact WHERE folder = :folder AND created_at <= :createdBefore ORDER BY created_at DESC")
+    suspend fun listByFolderCreatedBefore(folder: String, createdBefore: Long): List<ArtifactEntity>
 }

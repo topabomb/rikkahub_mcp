@@ -117,18 +117,6 @@ class ImgGenVM(
         }
         .cachedIn(viewModelScope)
 
-    init {
-        viewModelScope.launch {
-            try {
-                coordinator.reconcileMedia()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                Log.e(TAG, "failed to reconcile generated media", error)
-            }
-        }
-    }
-
     fun updatePrompt(prompt: String) {
         _prompt.value = prompt
     }

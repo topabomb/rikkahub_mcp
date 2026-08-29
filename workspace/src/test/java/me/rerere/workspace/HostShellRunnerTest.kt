@@ -151,6 +151,32 @@ class HostShellRunnerTest {
     }
 
     @Test
+    fun closesStdinImmediatelyWhenNoInputIsProvided() {
+        val runner = HostShellRunner()
+        // 没有 stdin 时必须立即关闭管道：等待 EOF 的子进程不能挂到超时
+        val ctx = createContext(command = "cat", stdin = null, timeoutMillis = 5_000)
+        val result = runner.execute(ctx)
+
+        assertFalse("cat must reach EOF instead of hanging", result.timedOut)
+        assertEquals(0, result.exitCode)
+        assertEquals("", result.stdout)
+    }
+
+    @Test
+    fun terminatesReadWhenStdinIsEmpty() {
+        val runner = HostShellRunner()
+        val ctx = createContext(
+            command = "read line; echo done",
+            stdin = ByteArray(0),
+            timeoutMillis = 5_000,
+        )
+        val result = runner.execute(ctx)
+
+        assertFalse("read must not block forever", result.timedOut)
+        assertTrue(result.stdout.contains("done"))
+    }
+
+    @Test
     fun truncatesExcessiveOutput() {
         val runner = HostShellRunner()
         // Generate ~256KB of output, but the collector caps at MAX_OUTPUT_CHARS (128KB)

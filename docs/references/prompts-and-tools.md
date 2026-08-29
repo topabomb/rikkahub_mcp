@@ -82,6 +82,8 @@ Target 复用相同模型可见语义，但 Transformer 装配由 `DelegationCoo
 | `description` | `assistant.description` |
 
 默认模板 `"{{ message }}"` 原样输出文本。
+管线为本次请求合成的内容（System、时间提醒、模式注入、Workspace 提醒）由 request-scoped
+`RequestMessageOriginTracker` 标记，不应用该模板；普通 durable 消息仍按用户配置渲染。
 
 ---
 

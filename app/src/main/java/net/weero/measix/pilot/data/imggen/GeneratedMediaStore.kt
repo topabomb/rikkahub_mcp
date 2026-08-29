@@ -10,6 +10,7 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -46,6 +47,19 @@ data class GeneratedMediaStorageStats(
     val count: Int,
     val sizeBytes: Long,
 )
+
+/** GeneratedMedia owner 的范围清理结果；不与 Artifact lifecycle 结果互相依赖。 */
+data class GeneratedMediaCleanupResult(
+    val deleted: Int,
+    val cleanupPending: Int,
+    val failed: Int,
+)
+
+private sealed interface GeneratedMediaDeleteResult {
+    data object Completed : GeneratedMediaDeleteResult
+    data object CleanupPending : GeneratedMediaDeleteResult
+    data object Failed : GeneratedMediaDeleteResult
+}
 
 class GeneratedMediaStore(
     private val filesDir: File,
@@ -163,34 +177,53 @@ class GeneratedMediaStore(
     suspend fun delete(id: Int): Boolean = withPersistLock {
         withContext(Dispatchers.IO) {
             val entity = genMediaRepository.getMediaById(id) ?: return@withContext false
-            deleteEntityLocked(entity)
+            deleteEntityLocked(entity) != GeneratedMediaDeleteResult.Failed
         }
     }
 
-    suspend fun deleteAll(): Boolean = withPersistLock {
+    /**
+     * 按时间范围清理：在 persist lock 内按 create_at 取候选，逐项复用 [deleteEntityLocked]。
+     * 结构化结果，部分成功不压成 Boolean；取消在项目边界传播，已取得单项所有权后的清理由
+     * [deleteEntityLocked] 的既有协议收口。
+     */
+    suspend fun deleteCreatedBefore(cutoff: Long): GeneratedMediaCleanupResult = withPersistLock {
         withContext(Dispatchers.IO) {
-            val imagesDir = File(filesDir, IMAGES_DIR)
-            var allDeleted = true
-            genMediaRepository.getAllMediaList().forEach { entity ->
-                if (!deleteEntityLocked(entity)) allDeleted = false
-            }
-            if (allDeleted) {
-                imagesDir.listFiles()?.forEach { file ->
-                    if (!file.isFile || file.name.endsWith(PENDING_SUFFIX)) return@forEach
-                    if (!file.delete()) allDeleted = false
+            val entities = genMediaRepository.listCreatedBefore(cutoff)
+            var deleted = 0
+            var cleanupPending = 0
+            var failed = 0
+            entities.forEach { entity ->
+                when (deleteEntityLocked(entity)) {
+                    GeneratedMediaDeleteResult.Completed -> deleted++
+                    GeneratedMediaDeleteResult.CleanupPending -> cleanupPending++
+                    GeneratedMediaDeleteResult.Failed -> failed++
                 }
             }
-            allDeleted
+            GeneratedMediaCleanupResult(deleted, cleanupPending, failed)
         }
     }
 
-    private suspend fun deleteEntityLocked(entity: GenMediaEntity): Boolean {
+    /** 全部清理 = 同一个范围删除协议；页面不再直调本方法，统一走 application command。 */
+    suspend fun deleteAll(): Boolean = deleteCreatedBefore(Long.MAX_VALUE).let { result ->
+        result.failed == 0 && result.cleanupPending == 0
+    }
+
+    /** 只读投影：设置页通过 query port 消费，不把实体当页面协议。 */
+    fun observe(): Flow<List<GenMediaEntity>> = genMediaRepository.observeAllMedia()
+
+    /** 范围清理确认对话框的候选计数（只读提示；真实清理在 persist lock 内重新快照）。 */
+    suspend fun candidateCount(cutoff: Long): Int =
+        genMediaRepository.listCreatedBefore(cutoff).size
+
+    private suspend fun deleteEntityLocked(entity: GenMediaEntity): GeneratedMediaDeleteResult {
         val original = canonicalFile(entity)
-        if (original.name.endsWith(PENDING_SUFFIX) || original.name.endsWith(DELETING_SUFFIX)) return false
-        if (original.exists() && !original.isFile) return false
+        if (original.name.endsWith(PENDING_SUFFIX) || original.name.endsWith(DELETING_SUFFIX)) {
+            return GeneratedMediaDeleteResult.Failed
+        }
+        if (original.exists() && !original.isFile) return GeneratedMediaDeleteResult.Failed
         val deleting = File(original.parentFile, "${original.name}$DELETING_SUFFIX")
-        if (deleting.exists()) return false
-        if (original.exists() && !original.renameTo(deleting)) return false
+        if (deleting.exists()) return GeneratedMediaDeleteResult.Failed
+        if (original.exists() && !original.renameTo(deleting)) return GeneratedMediaDeleteResult.Failed
         try {
             genMediaRepository.deleteMedia(entity.id)
         } catch (cancelled: CancellationException) {
@@ -199,12 +232,14 @@ class GeneratedMediaStore(
         } catch (error: Exception) {
             restoreDeletingFile(original, deleting)?.let(error::addSuppressed)
             Log.e(TAG, "failed to delete gallery row ${entity.id}", error)
-            return false
+            return GeneratedMediaDeleteResult.Failed
         }
-        if (deleting.exists() && !deleteCommittedPayload(deleting)) {
+        return if (deleting.exists() && !deleteCommittedPayload(deleting)) {
             Log.w(TAG, "gallery row deleted; payload cleanup deferred: $deleting")
+            GeneratedMediaDeleteResult.CleanupPending
+        } else {
+            GeneratedMediaDeleteResult.Completed
         }
-        return true
     }
 
     private fun restoreDeletingFile(original: File, deleting: File): Throwable? {

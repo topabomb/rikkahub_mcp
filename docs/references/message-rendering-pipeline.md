@@ -107,6 +107,8 @@ UIMessage.parts[]
 | `Video` | Surface + Icon，点击 Intent 打开 | 原生 |
 | `Audio` | Surface + Icon，点击 Intent 打开 | 原生 |
 | `Document` | Surface + Icon + 文件名，点击 Intent 打开 | 原生 |
+`List<UIMessagePart>.isEmptyUIMessage()` 把 `UIMessagePart.Tool` 判为可见：工具调用本身有卡片与操作入口，
+与是否执行、是否产出无关；真正空白 Text 仍为空。`isEmptyInputMessage()` 是独立的"用户可输入内容"判定，不受影响。
 
 > **会话级时序相册**：聊天内的明确图片（用户附件、工具产物）由会话宿主
 > （`ChatList` / `SubAssistantDetailPage` / `AssistantPromptPage`）按消息顺序经

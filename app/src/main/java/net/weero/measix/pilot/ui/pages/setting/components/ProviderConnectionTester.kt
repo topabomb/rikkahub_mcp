@@ -37,7 +37,9 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Connect
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.service.ProviderToolProbeResult
-import net.weero.measix.pilot.ui.components.ai.ModelSelector
+import net.weero.measix.pilot.ui.components.ai.ModelListSheet
+import net.weero.measix.pilot.ui.components.ai.ModelSelectorButton
+import net.weero.measix.pilot.ui.components.ai.rememberModelListState
 import net.weero.measix.pilot.ui.pages.setting.ProviderSettingsUiState
 import net.weero.measix.pilot.ui.theme.extendColors
 import net.weero.measix.pilot.utils.UiState
@@ -65,15 +67,16 @@ fun ProviderConnectionTester(
                 Text(stringResource(R.string.setting_provider_page_test_connection))
             },
             text = {
+                val connectionModelState = rememberModelListState(
+                    modelId = selectedModel?.id,
+                    providers = listOf(internalProvider),
+                    type = ModelType.CHAT,
+                )
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    ModelSelector(
-                        modelId = selectedModel?.id,
-                        providers = listOf(internalProvider),
-                        type = ModelType.CHAT,
+                    ModelSelectorButton(
+                        state = connectionModelState,
                         modifier = Modifier.fillMaxWidth()
-                    ) {
-                        onSelectModel(it.id)
-                    }
+                    )
 
                     TestResultItem(
                         label = stringResource(R.string.setting_provider_page_test_non_streaming),
@@ -104,6 +107,10 @@ fun ProviderConnectionTester(
                         },
                     )
                 }
+                ModelListSheet(
+                    state = connectionModelState,
+                    onSelect = { onSelectModel(it.id) },
+                )
             },
             dismissButton = {
                 TextButton(onClick = onDismiss) {

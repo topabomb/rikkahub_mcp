@@ -23,6 +23,7 @@ class ThinkTagTransformerTest {
         model = Model(modelId = "test", displayName = "Test"),
         assistant = Assistant(),
         settings = Settings(),
+        requestOrigins = RequestMessageOriginTracker(),
         registerUnpublishedResource = {},
     )
 

@@ -46,7 +46,6 @@ import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsAccessIndex
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.event.AppEventBus
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.model.Assistant
 import org.junit.After
@@ -143,8 +142,8 @@ class McpRuntimeCoordinatorTest {
         oauthCoordinator = McpOAuthCoordinator(
             settingsStore = settingsStore,
             appScope = AppScope(dispatcher),
-            appEventBus = AppEventBus(),
             oauthClient = mockk(relaxed = true),
+            oauthCallbackKeepAlive = NoOpOAuthCallbackKeepAlive,
             ioDispatcher = dispatcher,
             logger = { _, _ -> },
         )
@@ -154,11 +153,11 @@ class McpRuntimeCoordinatorTest {
             appScope = AppScope(dispatcher),
             artifactStore = mockk<ArtifactStore>(relaxed = true),
             networkMonitor = networkMonitor,
-            appEventBus = AppEventBus(),
             foregroundObserver = ForegroundObserver { },
             ioDispatcher = dispatcher,
             transportOverride = { FakeTransport().also(createdTransports::add) },
             clientOverride = { config -> fakeClient(config) },
+            oauthCallbackKeepAlive = NoOpOAuthCallbackKeepAlive,
             retryJitter = { it },
         )
     }
@@ -471,11 +470,11 @@ class McpRuntimeCoordinatorTest {
             networkMonitor = mockk<NetworkMonitor>(relaxed = true).also {
                 every { it.isOnline } returns kotlinx.coroutines.flow.MutableStateFlow(true)
             },
-            appEventBus = AppEventBus(),
             foregroundObserver = ForegroundObserver { },
             ioDispatcher = dispatcher,
             transportOverride = { FakeTransport().also(createdTransports::add) },
             clientOverride = { config -> fakeClient(config) },
+            oauthCallbackKeepAlive = NoOpOAuthCallbackKeepAlive,
             oauthClientOverride = oauthClient,
         )
         emit(listOf(serverConfig(url = "https://a.example/mcp", oauth = expiredOauth)))
@@ -516,11 +515,11 @@ class McpRuntimeCoordinatorTest {
             networkMonitor = mockk<NetworkMonitor>(relaxed = true).also {
                 every { it.isOnline } returns kotlinx.coroutines.flow.MutableStateFlow(true)
             },
-            appEventBus = AppEventBus(),
             foregroundObserver = ForegroundObserver { },
             ioDispatcher = dispatcher,
             transportOverride = { FakeTransport().also(createdTransports::add) },
             clientOverride = { config -> fakeClient(config) },
+            oauthCallbackKeepAlive = NoOpOAuthCallbackKeepAlive,
             oauthClientOverride = oauthClient,
         )
         val job = launch { gatedManager.refreshAllRegisteredServers() }
@@ -1101,11 +1100,11 @@ class McpRuntimeCoordinatorTest {
             appScope = AppScope(dispatcher),
             artifactStore = mockk<ArtifactStore>(relaxed = true),
             networkMonitor = isolatedNetwork,
-            appEventBus = AppEventBus(),
             foregroundObserver = ForegroundObserver { action -> foregroundAction = action },
             ioDispatcher = dispatcher,
             transportOverride = { FakeTransport() },
             clientOverride = { config -> fakeClient(config).also(restartClients::add) },
+            oauthCallbackKeepAlive = NoOpOAuthCallbackKeepAlive,
             retryJitter = { it },
         )
         runCurrent()
@@ -1423,11 +1422,11 @@ class McpRuntimeCoordinatorTest {
             appScope = AppScope(dispatcher),
             artifactStore = mockk<ArtifactStore>(relaxed = true),
             networkMonitor = networkMonitor,
-            appEventBus = AppEventBus(),
             foregroundObserver = ForegroundObserver { },
             ioDispatcher = dispatcher,
             transportOverride = { FakeTransport() },
             clientOverride = { config -> fakeClient(config).also(isolatedClients::add) },
+            oauthCallbackKeepAlive = NoOpOAuthCallbackKeepAlive,
             oauthClientOverride = oauthClient,
         )
         val authorized = McpOAuthState(

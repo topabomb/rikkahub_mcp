@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.setting
 
+import androidx.annotation.StringRes
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Clean
 import me.rerere.hugeicons.stroke.Delete01
@@ -56,16 +57,16 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import androidx.annotation.StringRes
-import net.weero.measix.pilot.data.db.entity.GenMediaEntity
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.service.ArtifactDeleteImpactUiModel
 import net.weero.measix.pilot.service.ArtifactDeleteOutcome
-import net.weero.measix.pilot.service.ArtifactUiModel
 import net.weero.measix.pilot.service.ArtifactUiOrigin
-import net.weero.measix.pilot.service.ArtifactUseCase
-import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
-import net.weero.measix.pilot.data.repository.GenMediaRepository
+import net.weero.measix.pilot.service.FileCleanupCategory
+import net.weero.measix.pilot.service.FileCleanupRange
+import net.weero.measix.pilot.service.FileManagementApplicationService
+import net.weero.measix.pilot.service.FileManagementQueryService
+import net.weero.measix.pilot.service.ManagedFileKey
+import net.weero.measix.pilot.service.ManagedFileUiModel
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDialog
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDeleteAction
@@ -78,7 +79,6 @@ import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.utils.fileSizeToString
 import net.weero.measix.pilot.utils.toLocalDateTime
 import org.koin.compose.koinInject
-import java.io.File
 import java.time.Instant
 
 private enum class FileCategory {
@@ -89,15 +89,21 @@ private enum class FileCategory {
 /** 上传文件删除流程状态机（防重入；Confirming → Executing → Idle） */
 private sealed interface UploadDeleteState {
     data object Idle : UploadDeleteState
-    data class Confirming(val target: ArtifactUiModel) : UploadDeleteState
-    data class Executing(val target: ArtifactUiModel) : UploadDeleteState
+    data class Confirming(val target: ManagedFileUiModel) : UploadDeleteState
+    data class Executing(val target: ManagedFileUiModel) : UploadDeleteState
 }
+
+private val cleanupRanges = listOf(
+    FileCleanupRange.OlderThanDays(7),
+    FileCleanupRange.OlderThanDays(14),
+    FileCleanupRange.OlderThanDays(30),
+    FileCleanupRange.All,
+)
 
 @Composable
 fun SettingFilesPage(
-    artifactUseCase: ArtifactUseCase = koinInject(),
-    genMediaRepository: GenMediaRepository = koinInject(),
-    generatedMediaStore: GeneratedMediaStore = koinInject(),
+    applicationService: FileManagementApplicationService = koinInject(),
+    queryService: FileManagementQueryService = koinInject(),
 ) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val uploadGridState = rememberLazyStaggeredGridState()
@@ -119,25 +125,39 @@ fun SettingFilesPage(
     var pendingUploadDeleteImpact by remember {
         mutableStateOf<ArtifactDeleteImpactUiModel?>(null)
     }
-    var pendingGeneratedDelete by remember { mutableStateOf<GenMediaEntity?>(null) }
-    var showCleanDialog by remember { mutableStateOf(false) }
+    var pendingGeneratedDeleteKey by remember { mutableStateOf<ManagedFileKey.Generated?>(null) }
+    var cleanupCategory by remember { mutableStateOf<FileCleanupCategory?>(null) }
+    var cleanupRange: FileCleanupRange by remember { mutableStateOf(FileCleanupRange.All) }
+    var cleanupCandidateCount by remember { mutableStateOf(0) }
     var previewImages by remember { mutableStateOf<List<String>>(emptyList()) }
     var previewIndex by remember { mutableStateOf(-1) }
     val settings = LocalSettings.current
     val backgroundHost = rememberImageBackgroundHost(settings)
-    val uploadFiles by artifactUseCase.observeUploads().collectAsState(initial = emptyList())
-    val generatedImages by genMediaRepository.observeAllMedia().collectAsState(initial = emptyList())
+    val uploadFiles by queryService.observeUploads().collectAsState(initial = emptyList())
+    val generatedImages by queryService.observeGenerated().collectAsState(initial = emptyList())
     val isUpload = selectedCategory == FileCategory.UPLOAD
     val hasItems = if (isUpload) uploadFiles.isNotEmpty() else generatedImages.isNotEmpty()
+
+    // 清理确认只展示当前 query 候选数，不把全列表数冒充实际删除数
+    LaunchedEffect(cleanupCategory, cleanupRange) {
+        val category = cleanupCategory ?: return@LaunchedEffect
+        cleanupCandidateCount = try {
+            queryService.candidateCount(category, cleanupRange)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            0
+        }
+    }
 
     val pendingUploadDelete = (uploadDeleteState as? UploadDeleteState.Confirming)?.target
         ?: (uploadDeleteState as? UploadDeleteState.Executing)?.target
     if (pendingUploadDelete != null) {
         val target = pendingUploadDelete
         val executing = uploadDeleteState is UploadDeleteState.Executing
-        LaunchedEffect(target.id) {
+        LaunchedEffect(target.key) {
             pendingUploadDeleteImpact = try {
-                artifactUseCase.inspect(target.id)
+                queryService.inspectUpload(target.uploadKey())
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -191,7 +211,7 @@ fun SettingFilesPage(
                             uploadDeleteState = UploadDeleteState.Executing(target)
                             scope.launch {
                                 try {
-                                    val toast = when (artifactUseCase.deleteUserRequested(target.id)) {
+                                    val toast = when (applicationService.deleteUpload(target.uploadKey())) {
                                         ArtifactDeleteOutcome.Deleted,
                                         ArtifactDeleteOutcome.CleanupPending -> deletedToast
                                         ArtifactDeleteOutcome.InProgress -> deleteInProgressToast
@@ -228,14 +248,17 @@ fun SettingFilesPage(
         )
     }
 
+    val pendingGeneratedDelete = pendingGeneratedDeleteKey?.let { key ->
+        generatedImages.firstOrNull { it.key == key }
+    }
     if (pendingGeneratedDelete != null) {
-        val target = pendingGeneratedDelete!!
+        val target = pendingGeneratedDelete
         val fileLabel = generatedDeleteLabel(
-            target.prompt,
+            target.prompt.orEmpty(),
             stringResource(R.string.setting_files_page_generated_no_prompt),
         )
         AlertDialog(
-            onDismissRequest = { pendingGeneratedDelete = null },
+            onDismissRequest = { pendingGeneratedDeleteKey = null },
             title = { Text(stringResource(R.string.setting_files_page_delete_file_title)) },
             text = {
                 Text(
@@ -248,10 +271,10 @@ fun SettingFilesPage(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        pendingGeneratedDelete = null
+                        pendingGeneratedDeleteKey = null
                         scope.launch {
                             try {
-                                val ok = generatedMediaStore.delete(target.id)
+                                val ok = applicationService.deleteGenerated(target.generatedKey())
                                 toaster.show(if (ok) deletedToast else deleteFailedToast)
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
@@ -265,48 +288,66 @@ fun SettingFilesPage(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingGeneratedDelete = null }) {
+                TextButton(onClick = { pendingGeneratedDeleteKey = null }) {
                     Text(stringResource(R.string.setting_files_page_cancel_action))
                 }
             }
         )
     }
 
-    if (showCleanDialog) {
+    cleanupCategory?.let { category ->
         AlertDialog(
-            onDismissRequest = { showCleanDialog = false },
+            onDismissRequest = { cleanupCategory = null },
             title = { Text(stringResource(R.string.setting_files_page_clean_title)) },
             text = {
-                Text(
-                    stringResource(
-                        if (isUpload) {
-                            R.string.setting_files_page_clean_confirmation
-                        } else {
-                            R.string.setting_files_page_clean_generated_confirmation
-                        },
-                        if (isUpload) uploadFiles.size else generatedImages.size,
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        stringResource(
+                            if (category == FileCleanupCategory.UPLOAD) {
+                                R.string.setting_files_page_clean_confirmation
+                            } else {
+                                R.string.setting_files_page_clean_generated_confirmation
+                            },
+                            cleanupCandidateCount,
+                        )
                     )
-                )
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        cleanupRanges.forEach { range ->
+                            FilterChip(
+                                selected = cleanupRange == range,
+                                onClick = { cleanupRange = range },
+                                label = { Text(stringResource(rangeLabel(range))) }
+                            )
+                        }
+                    }
+                }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val category = selectedCategory
-                        showCleanDialog = false
+                        val confirmedCategory = category
+                        val confirmedRange = cleanupRange
+                        cleanupCategory = null
                         scope.launch {
                             try {
-                                val ok = if (category == FileCategory.UPLOAD) {
-                                    when (artifactUseCase.deleteAllUploads()) {
-                                        ArtifactDeleteOutcome.Deleted,
-                                        ArtifactDeleteOutcome.CleanupPending -> true
-                                        ArtifactDeleteOutcome.InProgress,
-                                        ArtifactDeleteOutcome.AlreadyDeleted,
-                                        is ArtifactDeleteOutcome.Failed -> false
-                                    }
-                                } else {
-                                    generatedMediaStore.deleteAll()
+                                val result = applicationService.cleanup(confirmedCategory, confirmedRange)
+                                // 部分成功不压成 Boolean：待清理/跳过/失败分别给用户可见的结果
+                                val message = when {
+                                    result.failed > 0 -> cleanFailedToast
+                                    result.cleanupPending > 0 || result.skippedInProgress > 0 ->
+                                        resources.getString(
+                                            R.string.setting_files_page_clean_partial_result,
+                                            result.deleted,
+                                            result.cleanupPending,
+                                            result.skippedInProgress,
+                                            result.failed,
+                                        )
+                                    else -> cleanedToast
                                 }
-                                toaster.show(if (ok) cleanedToast else cleanFailedToast)
+                                toaster.show(message)
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (_: Exception) {
@@ -319,7 +360,7 @@ fun SettingFilesPage(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showCleanDialog = false }) {
+                TextButton(onClick = { cleanupCategory = null }) {
                     Text(stringResource(R.string.setting_files_page_cancel_action))
                 }
             }
@@ -333,7 +374,15 @@ fun SettingFilesPage(
                 navigationIcon = { BackButton() },
                 actions = {
                     IconButton(
-                        onClick = { showCleanDialog = true },
+                        onClick = {
+                            cleanupRange = FileCleanupRange.All
+                            cleanupCandidateCount = 0
+                            cleanupCategory = if (isUpload) {
+                                FileCleanupCategory.UPLOAD
+                            } else {
+                                FileCleanupCategory.GENERATED_IMAGES
+                            }
+                        },
                         enabled = hasItems,
                     ) {
                         Icon(
@@ -369,8 +418,6 @@ fun SettingFilesPage(
                     if (uploadFiles.isEmpty()) {
                         EmptyFiles()
                     } else {
-                        // 当前 Tab 的图片文件组成一本相册(统一 file:// 前缀与 Coil 缓存键),
-                        // 点击缩略图进入查看器; 不做磁盘存在性检查(缺失文件由加载错误态兜底)
                         val imagePaths = remember(uploadFiles) {
                             uploadFiles.mapNotNull { file ->
                                 file.takeIf { it.mimeType.startsWith("image/") }
@@ -384,11 +431,11 @@ fun SettingFilesPage(
                             innerPadding = innerPadding,
                             gridState = uploadGridState,
                         ) {
-                            items(uploadFiles, key = { it.id }) { file ->
+                            items(uploadFiles, key = { it.key }) { file ->
                                 FileItem(
                                     file = file,
                                     deleteExecuting = uploadDeleteState.let { state ->
-                                        state is UploadDeleteState.Executing && state.target.id == file.id
+                                        state is UploadDeleteState.Executing && state.target.key == file.key
                                     },
                                     onDelete = { uploadDeleteState = UploadDeleteState.Confirming(file) },
                                     onImageClick = file.contentUri.let { uri ->
@@ -409,9 +456,7 @@ fun SettingFilesPage(
                         EmptyFiles()
                     } else {
                         val imagePaths = remember(generatedImages) {
-                            generatedImages.map { entity ->
-                                "file://${generatedMediaStore.resolveCanonicalFile(entity).absolutePath}"
-                            }
+                            generatedImages.map { it.contentUri }
                         }
                         val imagePathIndex = remember(imagePaths) {
                             imagePaths.withIndex().associate { (index, path) -> path to index }
@@ -420,14 +465,12 @@ fun SettingFilesPage(
                             innerPadding = innerPadding,
                             gridState = generatedGridState,
                         ) {
-                            items(generatedImages, key = { it.id }) { entity ->
-                                val fileOnDisk = generatedMediaStore.resolveCanonicalFile(entity)
+                            items(generatedImages, key = { it.key }) { file ->
                                 GeneratedImageItem(
-                                    entity = entity,
-                                    fileOnDisk = fileOnDisk,
-                                    onDelete = { pendingGeneratedDelete = entity },
-                                    onImageClick = fileOnDisk.absolutePath.let { path ->
-                                        imagePathIndex["file://$path"]?.let { index ->
+                                    file = file,
+                                    onDelete = { pendingGeneratedDeleteKey = file.generatedKey() },
+                                    onImageClick = file.contentUri.let { uri ->
+                                        imagePathIndex[uri]?.let { index ->
                                             {
                                                 previewImages = imagePaths
                                                 previewIndex = index
@@ -453,10 +496,10 @@ fun SettingFilesPage(
                 confirmationText = { imageUrl ->
                     when (selectedCategory) {
                         FileCategory.UPLOAD -> {
-                            val target = uploadFiles.firstOrNull { artifact ->
-                                artifact.contentUri == imageUrl
-                            } ?: error(deleteAlreadyDeletedToast)
-                            val impact = artifactUseCase.inspect(target.id) ?: error(deleteAlreadyDeletedToast)
+                            val target = uploadFiles.firstOrNull { it.contentUri == imageUrl }
+                                ?: error(deleteAlreadyDeletedToast)
+                            val impact = queryService.inspectUpload(target.uploadKey())
+                                ?: error(deleteAlreadyDeletedToast)
                             buildString {
                                 append(
                                     resources.getString(
@@ -490,12 +533,11 @@ fun SettingFilesPage(
                         }
 
                         FileCategory.GENERATED_IMAGES -> {
-                            val target = generatedImages.firstOrNull { entity ->
-                                "file://${generatedMediaStore.resolveCanonicalFile(entity).absolutePath}" == imageUrl
-                            } ?: error(deleteAlreadyDeletedToast)
+                            val target = generatedImages.firstOrNull { it.contentUri == imageUrl }
+                                ?: error(deleteAlreadyDeletedToast)
                             resources.getString(
                                 R.string.setting_files_page_delete_generated_confirmation,
-                                generatedDeleteLabel(target.prompt, generatedNoPrompt),
+                                generatedDeleteLabel(target.prompt.orEmpty(), generatedNoPrompt),
                             )
                         }
                     }
@@ -503,13 +545,11 @@ fun SettingFilesPage(
                 delete = { imageUrl ->
                     when (selectedCategory) {
                         FileCategory.UPLOAD -> {
-                            val target = uploadFiles.firstOrNull { artifact ->
-                                artifact.contentUri == imageUrl
-                            }
+                            val target = uploadFiles.firstOrNull { it.contentUri == imageUrl }
                             if (target == null) {
                                 ImagePreviewDeleteResult.Deleted
                             } else {
-                                when (artifactUseCase.deleteUserRequested(target.id)) {
+                                when (applicationService.deleteUpload(target.uploadKey())) {
                                     ArtifactDeleteOutcome.Deleted,
                                     ArtifactDeleteOutcome.CleanupPending,
                                     ArtifactDeleteOutcome.AlreadyDeleted -> ImagePreviewDeleteResult.Deleted
@@ -522,10 +562,8 @@ fun SettingFilesPage(
                         }
 
                         FileCategory.GENERATED_IMAGES -> {
-                            val target = generatedImages.firstOrNull { entity ->
-                                "file://${generatedMediaStore.resolveCanonicalFile(entity).absolutePath}" == imageUrl
-                            }
-                            if (target == null || generatedMediaStore.delete(target.id)) {
+                            val target = generatedImages.firstOrNull { it.contentUri == imageUrl }
+                            if (target == null || applicationService.deleteGenerated(target.generatedKey())) {
                                 ImagePreviewDeleteResult.Deleted
                             } else {
                                 ImagePreviewDeleteResult.Failed(deleteFailedToast)
@@ -538,6 +576,22 @@ fun SettingFilesPage(
         )
     }
 }
+
+@StringRes
+private fun rangeLabel(range: FileCleanupRange): Int = when (range) {
+    is FileCleanupRange.OlderThanDays -> when (range.days) {
+        7 -> R.string.setting_files_page_clean_range_7d
+        14 -> R.string.setting_files_page_clean_range_14d
+        else -> R.string.setting_files_page_clean_range_30d
+    }
+    FileCleanupRange.All -> R.string.setting_files_page_clean_range_all
+}
+
+private fun ManagedFileUiModel.uploadKey(): ManagedFileKey.Upload =
+    key as? ManagedFileKey.Upload ?: error("upload projection has non-upload key: $key")
+
+private fun ManagedFileUiModel.generatedKey(): ManagedFileKey.Generated =
+    key as? ManagedFileKey.Generated ?: error("generated projection has non-generated key: $key")
 
 @Composable
 private fun ImpactText(text: String) {
@@ -610,7 +664,7 @@ private fun categoryDisplayName(category: FileCategory): String = when (category
 
 @Composable
 private fun FileItem(
-    file: ArtifactUiModel,
+    file: ManagedFileUiModel,
     deleteExecuting: Boolean,
     onDelete: () -> Unit,
     onImageClick: (() -> Unit)? = null,
@@ -659,20 +713,20 @@ private fun FileItem(
 }
 
 @StringRes
-private fun originLabel(origin: ArtifactUiOrigin): Int = when (origin) {
+private fun originLabel(origin: ArtifactUiOrigin?): Int = when (origin) {
     ArtifactUiOrigin.USER -> R.string.setting_files_page_origin_user
     ArtifactUiOrigin.GENERATED -> R.string.setting_files_page_origin_generated
     ArtifactUiOrigin.SYSTEM -> R.string.setting_files_page_origin_system
+    null -> R.string.setting_files_page_origin_system
 }
 
 @Composable
 private fun GeneratedImageItem(
-    entity: GenMediaEntity,
-    fileOnDisk: File,
+    file: ManagedFileUiModel,
     onDelete: () -> Unit,
     onImageClick: (() -> Unit)? = null,
 ) {
-    val prompt = entity.prompt.trim().ifBlank {
+    val prompt = file.prompt.orEmpty().trim().ifBlank {
         stringResource(R.string.setting_files_page_generated_no_prompt)
     }
     Card(
@@ -681,7 +735,7 @@ private fun GeneratedImageItem(
     ) {
         Column {
             MediaThumb(
-                model = fileOnDisk,
+                model = file.contentUri,
                 contentDescription = prompt,
                 onDelete = onDelete,
                 onClick = onImageClick,
@@ -698,14 +752,14 @@ private fun GeneratedImageItem(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = entity.modelId.ifBlank { stringResource(R.string.setting_files_page_generated_unknown_model) },
+                    text = file.modelId.orEmpty().ifBlank { stringResource(R.string.setting_files_page_generated_unknown_model) },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = Instant.ofEpochMilli(entity.createAt).toLocalDateTime(),
+                    text = Instant.ofEpochMilli(file.createdAt).toLocalDateTime(),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

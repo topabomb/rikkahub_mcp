@@ -89,6 +89,8 @@ PRoot 版本为 `v5.1.107.92`（Termux/PRoot 官方 tag），记录的候选构�
 - 命令作为位置参数传入，避免再次拼接和转义。
 - cwd 必须先由 `WorkspaceManager` 验证为 `files/` 下存在的目录，再转换为 `/workspace` 路径。
 - 环境用 `env -i` 清空后显式设置 `HOME`、`PATH`、`TERM`、locale 与 `PWD`。
+非交互命令（`ProotLaunchSpec.from(command != null)`）额外设置 `CI=1`、`NO_COLOR=1`、`PAGER=cat`，
+避免 git/man/apt 等挂起或输出转义序列；交互式 terminal 保持原环境。
 
 ### Android 兼容约束
 
@@ -149,11 +151,16 @@ WorkspaceApplicationService.executeTool()
   -> readResult(timeout, stdin)
 ```
 
-stdout、stderr 和可选 stdin 使用独立 daemon 线程。超时会 `destroyForcibly()`，返回 `exitCode=-1` 与 `timedOut=true`。协程取消通过 `runInterruptible` 转换为线程中断；`readResult()` 在中断路径强制销毁进程并继续传播取消，确保停止生成不会留下后台 PRoot。
+stdout、stderr 和可选 stdin 使用独立 daemon 线程。
+`readResult` 在 `stdin == null` 时立即关闭管道，向子进程声明没有输入；等待 EOF 的 CLI（`cat`、`read`、
+`sort` 等）不会挂到超时。有输入时仍由唯一 `StreamWriter` 写入、flush 并 close。超时会 `destroyForcibly()`，返回 `exitCode=-1` 与 `timedOut=true`。协程取消通过 `runInterruptible` 转换为线程中断；`readResult()` 在中断路径强制销毁进程并继续传播取消，确保停止生成不会留下后台 PRoot。
 
 ## 7. 交互终端
 
 `WorkspaceTerminalRuntime` 是所有交互终端的 application-scoped owner。它通过 service 层的 `WorkspaceTerminalSession` helper 创建 Termux PTY，并独占 session、创建 Job、tab 顺序、选中项和 shell-exit 清理。UI/VM 只持有 `WorkspaceTerminalTabUiModel`；UI 自己拥有的 `TerminalView` 以 `WorkspaceTerminalViewport` capability 按 tab id bind/unbind，不能取得 runtime-owned `TerminalSession`。页面离开或应用进入后台不关闭 PTY，进程死亡后也不持久化虚假的运行态。
+关闭终端 Tab 前需要二次确认：确认态是 `WorkspaceTerminalPage` 的 UI 临时状态，确认后仍经
+`WorkspaceApplicationService` → `WorkspaceTerminalRuntime` 串行关闭；tab 在确认期间因 shell exit 或
+Workspace 删除而消失时自动清除 pending，不发送无意义命令。
 
 Workspace command 仍由 `WorkspaceApplicationService` 拥有；持久化列表/文件预览和 terminal 聚合投影都由 `WorkspaceQueryService` 提供，其中 terminal 读口是 `observeTerminal(workspaceId)`。Query 不获得写能力，也不反向调用 ApplicationService。`WorkspaceTerminalViewport` 只表达 UI viewport capability，不是 session facade 或第二生命周期 owner。
 

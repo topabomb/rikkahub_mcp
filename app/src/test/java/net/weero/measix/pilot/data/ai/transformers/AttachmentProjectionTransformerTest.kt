@@ -69,6 +69,7 @@ class AttachmentProjectionTransformerTest {
         model = model,
         assistant = assistant,
         settings = settings,
+        requestOrigins = RequestMessageOriginTracker(),
         mediaCapabilities = capabilitiesFor(model),
         registerUnpublishedResource = { error("projection transformer must not create resources") },
     )
@@ -244,6 +245,7 @@ class AttachmentProjectionTransformerTest {
             model = visionModel,
             assistant = assistant,
             settings = settings,
+            requestOrigins = RequestMessageOriginTracker(),
             mediaCapabilities = RequestMediaCapabilities(
                 userImages = RequestImageSupport.STRUCTURED,
                 assistantImages = RequestImageSupport.OPAQUE_REPLAY_ONLY,

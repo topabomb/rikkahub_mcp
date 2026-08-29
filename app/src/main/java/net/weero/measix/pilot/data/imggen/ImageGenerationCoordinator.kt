@@ -67,18 +67,6 @@ class ImageGenerationCoordinator(
     private var workerJob: Job? = null
     private var running: QueuedRequest? = null
 
-    fun startBackgroundMaintenance() {
-        scope.launch {
-            try {
-                mediaStore.reconcile()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                Log.e(TAG, "media reconcile failed", error)
-            }
-        }
-    }
-
     suspend fun enqueue(request: ImageGenerationRequest): ImageGenerationOutcome {
         val queued = QueuedRequest(request, CompletableDeferred())
         try {
@@ -124,10 +112,6 @@ class ImageGenerationCoordinator(
             matches + listOfNotNull(current)
         }
         waiting.forEach(::abort)
-    }
-
-    suspend fun reconcileMedia() {
-        mediaStore.reconcile()
     }
 
     private fun ensureWorkerLocked() {

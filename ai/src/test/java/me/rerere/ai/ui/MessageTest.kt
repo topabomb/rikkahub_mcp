@@ -611,4 +611,58 @@ class MessageTest {
             UIMessage.assistant("Answer $index")
         }
     }
+
+    // ==================== UI 可见性 Tests ====================
+
+    private fun toolPart(
+        name: String = "search_web",
+        output: List<UIMessagePart> = emptyList(),
+    ): UIMessagePart.Tool = UIMessagePart.Tool(
+        toolCallId = "call-1",
+        toolName = name,
+        input = "{}",
+        output = output,
+    )
+
+    @Test
+    fun `isEmptyUIMessage treats a tool call as visible content`() {
+        // 待审批、执行中、已完成都只是工具生命周期，工具卡片本身始终可见
+        listOf(
+            ToolApprovalState.Auto,
+            ToolApprovalState.Pending,
+            ToolApprovalState.Approved,
+            ToolApprovalState.Denied("denied"),
+            ToolApprovalState.Answered("yes"),
+        ).forEach { state ->
+            val parts = listOf(toolPart().copy(approvalState = state))
+            assertFalse("tool in state $state must be visible", parts.isEmptyUIMessage())
+        }
+    }
+
+    @Test
+    fun `isEmptyUIMessage keeps replay-safe input emptiness separate`() {
+        val parts = listOf(toolPart())
+        assertFalse(parts.isEmptyUIMessage())
+        // 工具调用不是用户输入内容，语义不同的另一个判定不受影响
+        assertTrue(parts.isEmptyInputMessage())
+    }
+
+    @Test
+    fun `isEmptyUIMessage still hides blank text and empty part lists`() {
+        assertTrue(emptyList<UIMessagePart>().isEmptyUIMessage())
+        assertTrue(listOf(UIMessagePart.Text("")).isEmptyUIMessage())
+        assertTrue(listOf(UIMessagePart.Text("   \n")).isEmptyUIMessage())
+        assertTrue(listOf(UIMessagePart.Image("")).isEmptyUIMessage())
+        assertTrue(listOf(UIMessagePart.Reasoning("")).isEmptyUIMessage())
+        assertFalse(listOf(UIMessagePart.Text("hello")).isEmptyUIMessage())
+    }
+
+    @Test
+    fun `isEmptyUIMessage is false when any part is visible`() {
+        val parts = listOf(
+            UIMessagePart.Text(""),
+            toolPart(),
+        )
+        assertFalse(parts.isEmptyUIMessage())
+    }
 }

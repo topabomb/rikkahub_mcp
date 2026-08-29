@@ -21,6 +21,7 @@ import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.files.ArtifactDeleteImpact
 import net.weero.measix.pilot.data.files.ArtifactDeleteResult
 import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.ArtifactCleanupResult
 import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.files.OwnedArtifact
 import net.weero.measix.pilot.data.files.requireDiscarded
@@ -39,6 +40,7 @@ data class ArtifactUiModel(
     val mimeType: String,
     val sizeBytes: Long,
     val origin: ArtifactUiOrigin,
+    val createdAt: Long,
 )
 
 data class ArtifactDeleteImpactUiModel(
@@ -143,6 +145,17 @@ class ArtifactUseCase(
         return store.deleteUserRequestedFolder(FileFolders.UPLOAD).toOutcome()
     }
 
+    /** 按时间范围清理上传；`All` 也走同一协议（cutoff = Long.MAX_VALUE）。 */
+    suspend fun deleteUploadsCreatedBefore(cutoff: Long): ArtifactCleanupResult {
+        recoveryGate.awaitReady()
+        return store.deleteUserRequestedFolderCreatedBefore(FileFolders.UPLOAD, cutoff)
+    }
+
+    suspend fun uploadCandidateCount(cutoff: Long): Int {
+        recoveryGate.awaitReady()
+        return store.countFolderCreatedBefore(FileFolders.UPLOAD, cutoff)
+    }
+
     suspend fun updateSettingsReferences(transform: (Settings) -> Settings): Settings {
         recoveryGate.awaitReady()
         return store.updateSettingsReferences(transform)
@@ -171,6 +184,7 @@ class ArtifactUseCase(
             ArtifactOrigin.GENERATED -> ArtifactUiOrigin.GENERATED
             ArtifactOrigin.SYSTEM -> ArtifactUiOrigin.SYSTEM
         },
+        createdAt = entity.createdAt,
     )
 
     private companion object {

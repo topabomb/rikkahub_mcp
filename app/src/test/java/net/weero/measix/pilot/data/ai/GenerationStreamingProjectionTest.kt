@@ -8,6 +8,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.transformers.RegexOutputTransformer
+import net.weero.measix.pilot.data.ai.transformers.RequestMessageOriginTracker
 import net.weero.measix.pilot.data.ai.transformers.ThinkTagTransformer
 import net.weero.measix.pilot.data.ai.transformers.TransformerContext
 import net.weero.measix.pilot.data.datastore.Settings
@@ -94,6 +95,7 @@ class GenerationStreamingProjectionTest {
         model = Model(modelId = "test", displayName = "Test"),
         assistant = assistant,
         settings = Settings(),
+        requestOrigins = RequestMessageOriginTracker(),
         registerUnpublishedResource = {},
     )
 }

@@ -33,8 +33,10 @@ import net.weero.measix.pilot.data.db.migrations.Migration_6_7
 import net.weero.measix.pilot.data.db.migrations.Migration_7_8
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
 import net.weero.measix.pilot.data.ai.mcp.McpCatalogStore
+import net.weero.measix.pilot.data.ai.mcp.OAuthCallbackKeepAlive
 import net.weero.measix.pilot.data.ai.mcp.NetworkMonitor
 import net.weero.measix.pilot.service.McpApplicationService
+import net.weero.measix.pilot.service.McpOAuthCallbackKeepAlive
 import net.weero.measix.pilot.service.McpQueryService
 import net.weero.measix.pilot.data.sync.webdav.WebDavSync
 import me.rerere.search.SearchService
@@ -196,6 +198,8 @@ val dataSourceModule = module {
         McpCatalogStore(context = get(), scope = get(), settingsStore = get())
     }
 
+    single<OAuthCallbackKeepAlive> { McpOAuthCallbackKeepAlive() }
+
     single {
         McpRuntimeCoordinator(
             settingsStore = get(),
@@ -203,7 +207,7 @@ val dataSourceModule = module {
             appScope = get(),
             artifactStore = get(),
             networkMonitor = get(),
-            appEventBus = get(),
+            oauthCallbackKeepAlive = get(),
         )
     }
 

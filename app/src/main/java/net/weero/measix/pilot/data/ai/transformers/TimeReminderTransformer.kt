@@ -24,7 +24,9 @@ object TimeReminderTransformer : InputMessageTransformer {
         messages: List<UIMessage>,
     ): List<UIMessage> {
         if (!ctx.assistant.enableTimeReminder) return messages
-        return applyTimeReminder(messages)
+        val transformed = applyTimeReminder(messages)
+        ctx.requestOrigins.markNewMessages(before = messages, source = transformed)
+        return transformed
     }
 }
 

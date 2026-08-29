@@ -79,6 +79,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.ai.transformers.DefaultPlaceholderProvider
+import net.weero.measix.pilot.data.ai.transformers.RequestMessageOriginTracker
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.data.ai.transformers.TransformerContext
 import net.weero.measix.pilot.data.datastore.Settings
@@ -375,6 +376,8 @@ private fun AssistantPromptContent(
                                     model = Model(modelId = "gpt-4o", displayName = "GPT-4o"),
                                     assistant = assistant,
                                     settings = settings,
+                                    // 预览没有"本次请求合成内容"，所有消息都按用户配置参与模板
+                                    requestOrigins = RequestMessageOriginTracker(),
                                     registerUnpublishedResource = {
                                         error("template preview cannot create output resources")
                                     },

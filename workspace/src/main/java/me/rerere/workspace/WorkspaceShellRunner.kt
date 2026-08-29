@@ -41,7 +41,10 @@ const val MAX_OUTPUT_CHARS = 128 * 1024
 fun Process.readResult(timeoutMillis: Long, stdin: ByteArray? = null): WorkspaceCommandResult {
     val stdout = StreamCollector(inputStream)
     val stderr = StreamCollector(errorStream)
+    // 非交互命令没有 stdin：必须立即关闭管道，否则 `cat`、`read`、`sort` 等等待 EOF 的子进程
+    // 会一直挂到超时。有输入时仍由唯一 StreamWriter 写入、flush 并 close。
     val stdinWriter = stdin?.let { bytes -> StreamWriter(outputStream, bytes) }
+        ?: closeStdin()
     try {
         val finished = waitFor(timeoutMillis, TimeUnit.MILLISECONDS)
         if (!finished) {
@@ -66,6 +69,16 @@ fun Process.readResult(timeoutMillis: Long, stdin: ByteArray? = null): Workspace
         stderr.join(1_000)
         throw e
     }
+}
+
+/** 立即向子进程声明"没有输入"；关闭失败只可能来自已退出的进程，不改变退出状态语义。 */
+private fun Process.closeStdin(): Nothing? {
+    try {
+        outputStream.close()
+    } catch (_: IOException) {
+        // 进程已退出或管道已关闭：无输入本就是预期状态
+    }
+    return null
 }
 
 private class StreamWriter(

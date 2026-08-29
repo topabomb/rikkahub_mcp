@@ -85,6 +85,8 @@ Application 层负责编排，不建立第二套数据协议。Repository 只执
 | MCP 已验证工具目录 | `McpCatalogStore` | `McpServerRuntime` candidate commit、`McpQueryService` query |
 | MCP 单 server 连接、通知与重连状态 | `McpServerRuntime` | `McpRuntimeCoordinator`、turn capability snapshot |
 | MCP OAuth 凭据刷新与授权流程 | `McpOAuthCoordinator` | `McpApplicationService`、`McpServerRuntime` |
+| 托管文件范围清理、删除与候选计数 | `FileManagementApplicationService` / `FileManagementQueryService` | 设置文件页 typed command 与 `ManagedFileUiModel` 投影 |
+| 生成期后台保活（平台消费者） | `ChatGenerationForegroundService` / `GenerationForegroundLifetime` | 只消费 `conversationActivities()`，不持有运行事实，不操作 Window flag |
 | Workspace 持久化命令、模型 Rootfs 操作与终端互斥 | `WorkspaceApplicationService` | Workspace ViewModel command 与 `executeTool` capability |
 | Workspace 管理读模型 | `WorkspaceQueryService` | Workspace 列表、详情、文件预览与 `observeTerminal` |
 | Workspace 交互 PTY 与 Tab 生命周期 | `WorkspaceTerminalRuntime` | `WorkspaceApplicationService` / `WorkspaceQueryService` |
@@ -158,7 +160,7 @@ Settings 图片导入先完成有界复制、结构魔数与实际 MIME 校验�
 
 `SubAssistantLifecycle` 拥有 lineage、retention、fork 与删除；`TurnFinalization` 拥有正常运行中的 stop 和 supersede；`TurnRecovery` 只处理进程恢复。三者不得互相吸收职责或通过整树兼容写入收口。
 
-启动恢复由 `ApplicationRecoveryCoordinator` 以固定顺序执行：Settings → Artifact → reference projection → FTS projection → Child/Master turn → Assistant cleanup。任一步失败进入 `Failed`，durable command 保持关闭；retry 重跑同一幂等顺序。
+启动恢复由 `ApplicationRecoveryCoordinator` 以固定顺序执行：Settings → Artifact → GeneratedMedia → reference projection → FTS projection → Child/Master turn → Assistant cleanup。任一步失败进入 `Failed`，durable command 保持关闭；retry 重跑同一幂等顺序。文件 command/query port 同样先等待这一全局门禁，页面不能在 tombstone 与孤儿 payload 收口前读取或删除托管文件。
 
 恢复只查询非终态 execution 索引，健康会话不加载 message tree。非终态 execution 缺少 owning Assistant message 是持久化完整性错误；恢复进入 `Failed`，不发布会话、也不补偿写入 turn/tool facts。消息 payload 损坏同样保持 fail-closed。
 

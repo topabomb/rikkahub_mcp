@@ -3,27 +3,42 @@ package net.weero.measix.pilot.data.ai.mcp
 import android.content.Context
 import androidx.annotation.VisibleForTesting
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.filterIsInstance
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.withTimeoutOrNull
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.event.AppEvent
-import net.weero.measix.pilot.data.event.AppEventBus
 import kotlin.time.Duration.Companion.minutes
 import kotlin.uuid.Uuid
+
+/**
+ * 浏览器授权期间对 loopback 回调 socket 的保活平台端口。
+ *
+ * 与 [McpRuntimeCoordinator.ForegroundObserver] 同模式：data 层只依赖本抽象，Android 前台服务
+ * 实现在 application 层（service 包）注入，避免基础设施反向定位 application service。
+ */
+fun interface OAuthCallbackKeepAliveLease : AutoCloseable {
+    override fun close()
+}
+
+interface OAuthCallbackKeepAlive {
+    /** 每次授权取得独立 lease；只有最后一个 lease 释放时平台 service 才能停止。 */
+    fun acquire(context: Context): OAuthCallbackKeepAliveLease
+}
+
+/**
+ * JVM 测试与未注入环境的空实现：保活是 best-effort 平台增强，缺失只影响后台进程存活窗口，
+ * 不改变授权语义；生产由 DI 显式注入 service 包实现。
+ */
+object NoOpOAuthCallbackKeepAlive : OAuthCallbackKeepAlive {
+    override fun acquire(context: Context) = OAuthCallbackKeepAliveLease {}
+}
 
 /**
  * Owns MCP OAuth protocol orchestration and OAuth Settings commits.
@@ -35,8 +50,8 @@ import kotlin.uuid.Uuid
 internal class McpOAuthCoordinator(
     private val settingsStore: SettingsStore,
     private val appScope: AppScope,
-    private val appEventBus: AppEventBus,
     private val oauthClient: McpOAuthClient,
+    private val oauthCallbackKeepAlive: OAuthCallbackKeepAlive,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val logger: (serverName: String, message: String) -> Unit,
 ) {
@@ -140,105 +155,110 @@ internal class McpOAuthCoordinator(
             ?: protectedResource.scopesSupported?.joinToString(" ")
             ?: authorizationServer.scopesSupported?.joinToString(" ")
 
-        val existing = config.commonOptions.oauth
-        var clientId = existing?.clientId
-        var clientSecret = existing?.clientSecret
-        if (clientId.isNullOrBlank()) {
-            val registrationEndpoint = authorizationServer.registrationEndpoint
-                ?: error("此 MCP 服务器需要 OAuth 授权，但不支持动态客户端注册 (DCR)。请在服务器设置的 OAuth 配置中手动填入 Client ID（从授权服务器注册应用获取）。")
-            val registration = withTimeout(IO_TIMEOUT_MS) {
-                oauthClient.registerClient(
-                    registrationEndpoint = registrationEndpoint,
-                    clientName = config.commonOptions.name,
-                    redirectUri = MCP_OAUTH_REDIRECT_URI,
-                    scope = scope,
-                )
-            }
-            clientId = registration.clientId
-            clientSecret = registration.clientSecret
-        }
-
+        // loopback 回调必须先于 DCR/授权 URL 绑定：redirect_uri 需要真实端口。
+        // 端口可变、完整 path 固定，符合 RFC 8252 的 loopback 端口例外；服务端若错误要求固定端口，
+        // DCR 会直接失败并返回明确互操作错误，不回退自定义 scheme。
         val pkce = oauthClient.generatePkce()
         val state = oauthClient.generateState()
-        if (!persistStateFor(
-            expectedTrustBoundary = expectedTrustBoundary,
-                serverId = config.id,
-                expectedRevision = existing?.revision ?: 0L,
-                oauth = (existing ?: McpOAuthState()).copy(
-                    enabled = true,
-                    clientId = clientId,
-                    clientSecret = clientSecret,
-                    authorizationEndpoint = authorizationEndpoint,
-                    tokenEndpoint = tokenEndpoint,
-                    registrationEndpoint = authorizationServer.registrationEndpoint,
-                    scope = scope,
-                ),
-            )
-        ) {
-            error("Server trust boundary changed during authorization")
-        }
-
-        val authorizationUrl = oauthClient.buildAuthorizationUrl(
-            authorizationEndpoint = authorizationEndpoint,
-            clientId = clientId,
-            redirectUri = MCP_OAUTH_REDIRECT_URI,
-            pkce = pkce,
-            state = state,
-            scope = scope,
-            resource = expectedResource,
-        )
-        val callback = coroutineScope {
-            val subscribed = CompletableDeferred<Unit>()
-            val awaitCallback = async {
-                withTimeoutOrNull(CALLBACK_TIMEOUT) {
-                    appEventBus.events
-                        .onSubscription { subscribed.complete(Unit) }
-                        .filterIsInstance<AppEvent.McpOAuthCallback>()
-                        .first { it.state == state }
+        val callbackServer = McpOAuthCallbackServer()
+        callbackServer.start(expectedState = state)
+        val redirectUri = callbackServer.redirectUri
+        var keepAliveLease: OAuthCallbackKeepAliveLease? = null
+        try {
+            val existing = config.commonOptions.oauth
+            var clientId = existing?.clientId
+            var clientSecret = existing?.clientSecret
+            if (clientId.isNullOrBlank()) {
+                val registrationEndpoint = authorizationServer.registrationEndpoint
+                    ?: error("此 MCP 服务器需要 OAuth 授权，但不支持动态客户端注册 (DCR)。请在服务器设置的 OAuth 配置中手动填入 Client ID（从授权服务器注册应用获取）。")
+                val registration = withTimeout(IO_TIMEOUT_MS) {
+                    oauthClient.registerClient(
+                        registrationEndpoint = registrationEndpoint,
+                        clientName = config.commonOptions.name,
+                        redirectUri = redirectUri,
+                        scope = scope,
+                    )
                 }
+                clientId = registration.clientId
+                clientSecret = registration.clientSecret
             }
-            subscribed.await()
+
+            if (!persistStateFor(
+                    expectedTrustBoundary = expectedTrustBoundary,
+                    serverId = config.id,
+                    expectedRevision = existing?.revision ?: 0L,
+                    oauth = (existing ?: McpOAuthState()).copy(
+                        enabled = true,
+                        clientId = clientId,
+                        clientSecret = clientSecret,
+                        authorizationEndpoint = authorizationEndpoint,
+                        tokenEndpoint = tokenEndpoint,
+                        registrationEndpoint = authorizationServer.registrationEndpoint,
+                        scope = scope,
+                    ),
+                )
+            ) {
+                error("Server trust boundary changed during authorization")
+            }
+
+            val authorizationUrl = oauthClient.buildAuthorizationUrl(
+                authorizationEndpoint = authorizationEndpoint,
+                clientId = clientId,
+                redirectUri = redirectUri,
+                pkce = pkce,
+                state = state,
+                scope = scope,
+                resource = expectedResource,
+            )
+            // 浏览器授权期间保活 loopback socket：避免进程被回收导致回调丢失。
+            // 服务不保存 token/配置/阶段，授权结果仍只经 callbackServer 到达。
+            keepAliveLease = oauthCallbackKeepAlive.acquire(context.applicationContext)
             withContext(Dispatchers.Main) {
                 launchOAuthAuthorization(context.applicationContext, authorizationUrl)
             }
-            awaitCallback.await()
-        } ?: error("OAuth 授权超时")
-        if (callback.error != null) error("授权失败: ${callback.error}")
-        val code = callback.code ?: error("授权失败: 未返回授权码")
+            val callback = callbackServer.awaitCallback(CALLBACK_TIMEOUT)
+                ?: error("OAuth 授权超时")
+            if (callback.state != state) error("OAuth 授权失败: state 不匹配")
+            if (callback.error != null) error("授权失败: ${callback.error}")
+            val code = callback.code ?: error("授权失败: 未返回授权码")
 
-        // RFC 8707 authorization codes are consumed by the first exchange and are not retried.
-        val token = withTimeout(IO_TIMEOUT_MS) {
-            oauthClient.exchangeCode(
-                tokenEndpoint = tokenEndpoint,
-                clientId = clientId,
-                clientSecret = clientSecret,
-                code = code,
-                codeVerifier = pkce.verifier,
-                redirectUri = MCP_OAUTH_REDIRECT_URI,
-                resource = expectedResource,
-            )
-        }
-        val accessToken = token.accessToken
-            ?: error("Token exchange failed: response missing access_token")
-        if (!persistStateFor(
-            expectedTrustBoundary = expectedTrustBoundary,
-                serverId = config.id,
-                expectedRevision = (existing?.revision ?: 0L) + 1L,
-                oauth = McpOAuthState(
-                    enabled = true,
+            // RFC 8707 authorization codes are consumed by the first exchange and are not retried.
+            val token = withTimeout(IO_TIMEOUT_MS) {
+                oauthClient.exchangeCode(
+                    tokenEndpoint = tokenEndpoint,
                     clientId = clientId,
                     clientSecret = clientSecret,
-                    authorizationEndpoint = authorizationEndpoint,
-                    tokenEndpoint = tokenEndpoint,
-                    registrationEndpoint = authorizationServer.registrationEndpoint,
-                    scope = token.scope ?: scope,
-                    accessToken = accessToken,
-                    refreshToken = token.refreshToken,
-                    expiresAt = computeExpiry(token.expiresIn),
-                ),
-            )
-        ) {
-            error("Server trust boundary changed during authorization")
+                    code = code,
+                    codeVerifier = pkce.verifier,
+                    redirectUri = redirectUri,
+                    resource = expectedResource,
+                )
+            }
+            val accessToken = token.accessToken
+                ?: error("Token exchange failed: response missing access_token")
+            if (!persistStateFor(
+                    expectedTrustBoundary = expectedTrustBoundary,
+                    serverId = config.id,
+                    expectedRevision = (existing?.revision ?: 0L) + 1L,
+                    oauth = McpOAuthState(
+                        enabled = true,
+                        clientId = clientId,
+                        clientSecret = clientSecret,
+                        authorizationEndpoint = authorizationEndpoint,
+                        tokenEndpoint = tokenEndpoint,
+                        registrationEndpoint = authorizationServer.registrationEndpoint,
+                        scope = token.scope ?: scope,
+                        accessToken = accessToken,
+                        refreshToken = token.refreshToken,
+                        expiresAt = computeExpiry(token.expiresIn),
+                    ),
+                )
+            ) {
+                error("Server trust boundary changed during authorization")
+            }
+        } finally {
+            callbackServer.close()
+            keepAliveLease?.close()
         }
     }
 

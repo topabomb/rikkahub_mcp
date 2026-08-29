@@ -494,6 +494,10 @@
   <string name="no_text_content_to_copy">コピーできるテキストコンテンツがありません</string>
   <string name="notification_channel_chat_completed">チャット完了</string>
   <string name="notification_channel_chat_live_update">チャット生成の進行状況</string>
+  <string name="generation_foreground_notification_title">バックグラウンドで生成中</string>
+  <string name="generation_foreground_notification_content">応答はまだ生成中です</string>
+  <string name="oauth_callback_foreground_notification_title">MCP 認証を完了しています</string>
+  <string name="oauth_callback_foreground_notification_content">ブラウザからの戻りを待機中</string>
   <string name="notification_live_update_chip_thinking">考え中</string>
   <string name="notification_live_update_chip_tool">ツール</string>
   <string name="notification_live_update_chip_writing">書き込み中</string>
@@ -1275,6 +1279,9 @@
   <string name="workspace_terminal_tab_title">ターミナル %1$d</string>
   <string name="workspace_terminal_limit_reached">ターミナルタブは最大 %1$d 個までです</string>
   <string name="workspace_terminal_create_failed">ターミナルの作成に失敗しました: %1$s</string>
+  <string name="workspace_terminal_close_title">ターミナルを閉じますか？</string>
+  <string name="workspace_terminal_close_confirmation">「%1$s」を閉じますか？このタブで実行中のコマンドは終了します。</string>
+  <string name="workspace_terminal_close_action">閉じる</string>
   <string name="extensions_page_workspace">ワークスペース</string>
   <string name="extensions_page_workspace_desc">エージェントがアクセス可能なローカルの作業ディレクトリを管理します</string>
   <string name="workspace_select">ワークスペースを選択</string>
@@ -1484,6 +1491,11 @@
   <string name="setting_files_page_generated_unknown_model">不明なモデル</string>
   <string name="setting_files_page_delete_generated_confirmation">「%1$s」のギャラリー原本を完全に削除します。チャットと背景のコピーは影響を受けません。この操作は元に戻せません。</string>
   <string name="setting_files_page_clean_generated_confirmation">ギャラリー内の生成画像 %1$d 枚をすべて完全に削除します。チャットと背景のコピーは影響を受けません。この操作は元に戻せません。</string>
+  <string name="setting_files_page_clean_partial_result">削除 %1$d 件、保留クリーンアップ %2$d 件、スキップ %3$d 件、失敗 %4$d 件</string>
+  <string name="setting_files_page_clean_range_7d">7 日より前</string>
+  <string name="setting_files_page_clean_range_14d">14 日より前</string>
+  <string name="setting_files_page_clean_range_30d">30 日より前</string>
+  <string name="setting_files_page_clean_range_all">すべて</string>
   <string name="image_viewer_set_as_background">背景に設定</string>
   <string name="image_viewer_background_setting">背景を設定しています…</string>
   <string name="image_viewer_background_set">「%1$s」の背景に設定しました</string>

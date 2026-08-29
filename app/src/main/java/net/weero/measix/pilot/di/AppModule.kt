@@ -16,6 +16,8 @@ import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.service.AssistantManagementService
 import net.weero.measix.pilot.service.ArtifactUseCase
+import net.weero.measix.pilot.service.FileManagementApplicationService
+import net.weero.measix.pilot.service.FileManagementQueryService
 import net.weero.measix.pilot.service.ConversationTitleCoordinator
 import net.weero.measix.pilot.service.MediaExportService
 import net.weero.measix.pilot.service.ApplicationRecoveryCoordinator
@@ -60,6 +62,8 @@ val appModule = module {
 
     single { ApplicationRecoveryGate() }
     single { ArtifactUseCase(get(), get()) }
+    single { FileManagementApplicationService(get(), get(), get()) }
+    single { FileManagementQueryService(get(), get(), get()) }
     single { MediaExportService(get()) }
     single { StatsQueryService(get(), get(), get()) }
     single { ChatErrorStore() }
@@ -90,7 +94,7 @@ val appModule = module {
         ImageGenerationCoordinator(
             scope = get<AppScope>(),
             mediaStore = get(),
-        ).apply { startBackgroundMaintenance() }
+        )
     }
 
     single {
@@ -269,6 +273,7 @@ val appModule = module {
             appScope = get<AppScope>(),
             settingsStore = get(),
             artifactStore = get(),
+            generatedMediaStore = get(),
             conversationRepository = get(),
             assistantManagementService = get(),
             turnRecovery = get(),

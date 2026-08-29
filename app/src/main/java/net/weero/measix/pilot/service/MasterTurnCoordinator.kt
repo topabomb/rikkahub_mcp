@@ -574,6 +574,9 @@ class MasterTurnCoordinator(
         messageRange: ClosedRange<Int>? = null,
         entry: MasterTurnEntry = MasterTurnEntry.START,
     ) {
+        // 用户可见地开始或继续 Master 生成后，请求平台保活；何时停止由 service 依据
+        // conversationActivities 投影自决，这里只做单向请求，不读取任何运行结果。
+        GenerationForegroundLifetime.ensureStarted(context)
         var turnOutcome: TurnOutcome? = null
         var inFlightAssistantId: Uuid? = null
         var senderName: String? = null

@@ -995,6 +995,22 @@ runtime owner；因此白名单显式增加三个 MCP 边界文件。其他新�
 | `service/McpApplicationService.kt` | UI 的 activate/refresh/restart/auth/delete typed command | 删除页面 scope 连接 Job 与 UI→Manager mutation |
 | `service/McpQueryService.kt` | definition/catalog/runtime 的唯一 `McpServerPresentation` | 删除 UI→Manager/raw Client/status+Settings 拼装 |
 
+> 第 14 批上游同步（2026-08-29，`daae3749..5662945c`）按执行规则 6 追加四个生产文件并明确抵消项。
+> 它们都满足"新增唯一 owner / 平台能力 / 跨 owner 编排"的判据，不保留旧路径：
+
+| 新文件 | 唯一职责 | 替代/抵消 |
+| --- | --- | --- |
+| `service/FileManagementApplicationService.kt` | 托管文件 typed `cleanup(category, range)`、`deleteUpload/deleteGenerated` 与确认候选计数 | 删除 `SettingFilesPage` → `GeneratedMediaStore`/`GenMediaRepository` 的 UI 直连与页面内删除状态机 |
+| `service/FileManagementQueryService.kt` | `ManagedFileUiModel` 只读投影（上传/生成媒体统一形状） | 同上（页面不再自拼 GenMediaEntity/Artifact 两套形状） |
+| `service/ChatGenerationForegroundService.kt` | 生成期 Android 保活平台消费者；同文件 internal `GenerationForegroundLifetime` | 无旧机制可删；明确它不新增第二运行事实源，只消费 `conversationActivities()`；同时清理无消费方的 `FOREGROUND_SERVICE*` 权限 |
+| `data/ai/mcp/McpOAuthCallbackServer.kt` | loopback socket + 一次性 callback session（RFC 8252） | 物理删除 `McpOAuthCallbackActivity`、Manifest deep link、`MCP_OAUTH_REDIRECT_URI`、`AppEvent.McpOAuthCallback` |
+
+配套的平台消费者 `service/McpOAuthCallbackService.kt`（浏览器授权期间保活 loopback socket）与
+`RequestMessageOriginTracker`（`data/ai/transformers/Transformer.kt` 内）不计为新的 owner 文件：
+前者是 OAuth 回调机制的 Android 生命周期宿主，后者是 request-scoped capability，不进入 §11.6。
+本批同时把 `GeneratedMediaStore.deleteAll()` 收敛为 `deleteCreatedBefore(Long.MAX_VALUE)` 的同一范围删除协议，
+不再目录扫描补删。
+
 `ConversationTransition.kt`、`GenerationLoop.kt`、`SettingsStore.kt`、`SettingsWriteRules.kt`、`SettingsCommit.kt` 均为原文件
 直接重命名，不计作新增文件。`GenerationRequest` 留在重命名后的 `GenerationLoop.kt`，`ActiveTurnRuntime` 留在
 `ConversationRuntime.kt`，per-server actor 留在重构后的 MCP runtime owner 文件，managed storage helper 留在上述两个 Settings 白名单文件；

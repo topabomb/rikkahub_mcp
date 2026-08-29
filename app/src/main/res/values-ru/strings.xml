@@ -494,6 +494,10 @@
   <string name="no_text_content_to_copy">Нет доступного текста для копирования</string>
   <string name="notification_channel_chat_completed">Чат завершён</string>
   <string name="notification_channel_chat_live_update">Прогресс генерации чата</string>
+  <string name="generation_foreground_notification_title">Генерация в фоне</string>
+  <string name="generation_foreground_notification_content">Ответ всё ещё генерируется</string>
+  <string name="oauth_callback_foreground_notification_title">Завершение авторизации MCP</string>
+  <string name="oauth_callback_foreground_notification_content">Ожидание возврата из браузера</string>
   <string name="notification_live_update_chip_thinking">Думает</string>
   <string name="notification_live_update_chip_tool">Инструмент</string>
   <string name="notification_live_update_chip_writing">Идёт запись</string>
@@ -1275,6 +1279,9 @@
   <string name="workspace_terminal_tab_title">Терминал %1$d</string>
   <string name="workspace_terminal_limit_reached">Можно открыть не более %1$d вкладок терминала</string>
   <string name="workspace_terminal_create_failed">Не удалось создать терминал: %1$s</string>
+  <string name="workspace_terminal_close_title">Закрыть терминал?</string>
+  <string name="workspace_terminal_close_confirmation">Закрыть \"%1$s\"? Команды, выполняющиеся на этой вкладке, будут завершены.</string>
+  <string name="workspace_terminal_close_action">Закрыть</string>
   <string name="extensions_page_workspace">Рабочее пространство</string>
   <string name="extensions_page_workspace_desc">Управление локальными рабочими каталогами, доступными для Agent</string>
   <string name="workspace_select">Выберите рабочее пространство</string>
@@ -1484,6 +1491,11 @@
   <string name="setting_files_page_generated_unknown_model">Неизвестная модель</string>
   <string name="setting_files_page_delete_generated_confirmation">Оригинал изображения «%1$s» будет безвозвратно удалён из галереи. Копии в чатах и фонах не затрагиваются. Действие нельзя отменить.</string>
   <string name="setting_files_page_clean_generated_confirmation">Все %1$d сгенерированных изображений в галерее будут безвозвратно удалены. Копии в чатах и фонах не затрагиваются. Действие нельзя отменить.</string>
+  <string name="setting_files_page_clean_partial_result">Удалено: %1$d, ожидает очистки: %2$d, пропущено: %3$d, ошибок: %4$d</string>
+  <string name="setting_files_page_clean_range_7d">Старше 7 дней</string>
+  <string name="setting_files_page_clean_range_14d">Старше 14 дней</string>
+  <string name="setting_files_page_clean_range_30d">Старше 30 дней</string>
+  <string name="setting_files_page_clean_range_all">Все</string>
   <string name="image_viewer_set_as_background">Сделать фоном</string>
   <string name="image_viewer_background_setting">Установка фона…</string>
   <string name="image_viewer_background_set">Установлено как фон «%1$s»</string>

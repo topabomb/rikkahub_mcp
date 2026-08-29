@@ -9,11 +9,48 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
 import kotlin.uuid.Uuid
 
+/**
+ * 单次请求内"本次请求自己合成"的消息身份集合。
+ *
+ * System、时间提醒、模式注入与 Workspace 提醒都是管线为本次请求生成或改写的内容，
+ * 它们不能再被用户的 messageTemplate 二次包裹。
+ *
+ * 这个事实刻意**不进入** [UIMessage]：UIMessage 是持久化、Provider 与 UI 共用的模型，
+ * 任何 `isSynthetic` 字段都会在 copy、反序列化、fork 与 replay 之后依赖偶然的对象路径，
+ * 无法表达"本次请求"这一唯一生命周期。tracker 因此是 request-scoped capability：
+ * 不序列化、不跨请求缓存、不是能力或状态源。
+ */
+class RequestMessageOriginTracker {
+    private val syntheticIds = mutableSetOf<Uuid>()
+
+    fun markSynthetic(messageId: Uuid) {
+        syntheticIds += messageId
+    }
+
+    fun markSynthetic(message: UIMessage) {
+        syntheticIds += message.id
+    }
+
+    fun isSynthetic(message: UIMessage): Boolean = isSynthetic(message.id)
+
+    fun isSynthetic(messageId: Uuid): Boolean = messageId in syntheticIds
+
+    /** 标记 [source] 中不存在于 [before] 的新增消息，供"注入型" transformer 复用。 */
+    fun markNewMessages(before: List<UIMessage>, source: List<UIMessage>) {
+        if (before.size == source.size && before === source) return
+        val knownIds = before.mapTo(HashSet(before.size)) { it.id }
+        source.forEach { message ->
+            if (message.id !in knownIds) markSynthetic(message.id)
+        }
+    }
+}
+
 class TransformerContext(
     val context: Context,
     val model: Model,
     val assistant: Assistant,
     val settings: Settings,
+    val requestOrigins: RequestMessageOriginTracker,
     val conversationModeInjectionIds: Set<Uuid> = emptySet(),
     val reportProcessingText: (String?) -> Unit = {},
     val workspaceCwd: String? = null,
@@ -73,6 +110,7 @@ suspend fun List<UIMessage>.transforms(
     model: Model,
     assistant: Assistant,
     settings: Settings,
+    requestOrigins: RequestMessageOriginTracker,
     conversationModeInjectionIds: Set<Uuid> = emptySet(),
     reportProcessingText: (String?) -> Unit = {},
     workspaceCwd: String? = null,
@@ -84,6 +122,7 @@ suspend fun List<UIMessage>.transforms(
         model = model,
         assistant = assistant,
         settings = settings,
+        requestOrigins = requestOrigins,
         conversationModeInjectionIds = conversationModeInjectionIds,
         reportProcessingText = reportProcessingText,
         workspaceCwd = workspaceCwd,

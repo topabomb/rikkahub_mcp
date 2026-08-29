@@ -47,6 +47,7 @@ import me.rerere.ai.ui.replaySafeProjection
 import net.weero.measix.pilot.data.ai.transformers.InputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.MessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.OutputMessageTransformer
+import net.weero.measix.pilot.data.ai.transformers.RequestMessageOriginTracker
 import net.weero.measix.pilot.data.ai.transformers.StreamingMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.ThinkTagTransformer
 import net.weero.measix.pilot.data.ai.transformers.TransformerContext
@@ -399,11 +400,15 @@ class GenerationLoop(
         // 跟踪循环退出原因，默认 step_limit_reached
         var finishReason = FinishedReason.STEP_LIMIT_REACHED
 
+        // 流式/终态输出变换不参与请求来源跟踪；请求级 tracker 只属于 generateInternal 的输入链。
+        val outputOrigins = RequestMessageOriginTracker()
+
         fun resourceTrackingTransformerContext() = TransformerContext(
             context = context,
             model = model,
             assistant = assistant,
             settings = settings,
+            requestOrigins = outputOrigins,
             mediaCapabilities = mediaCapabilities,
             registerUnpublishedResource = unpublishedResources::register,
         )
@@ -488,6 +493,7 @@ class GenerationLoop(
                             model = model,
                             assistant = assistant,
                             settings = settings,
+                            requestOrigins = outputOrigins,
                             registerUnpublishedResource = unpublishedResources::register,
                         )
                         send(
@@ -844,6 +850,7 @@ class GenerationLoop(
                                 model = model,
                                 assistant = assistant,
                                 settings = settings,
+                                requestOrigins = outputOrigins,
                                 registerUnpublishedResource = unpublishedResources::register,
                             )
                         )
@@ -915,38 +922,47 @@ class GenerationLoop(
             }
             .replaySafeProjection()
             .limitContext(assistant.effectiveContextMessageLimit())
-        val internalMessages = buildList {
-            val system = buildString {
-                val effectiveSystemPrompt =
-                    if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
-                        conversationSystemPrompt
-                    } else {
-                        assistant.systemPrompt
-                    }
-                if (effectiveSystemPrompt.isNotBlank()) {
-                    append(effectiveSystemPrompt)
+        val system = buildString {
+            val effectiveSystemPrompt =
+                if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
+                    conversationSystemPrompt
+                } else {
+                    assistant.systemPrompt
                 }
-
-                // 记忆
-                if (memoryEnabled) {
-                    appendLine()
-                    append(buildMemoryPrompt(memories = memories))
-                }
-
-                // 工具prompt
-                tools.forEach { tool ->
-                    appendLine()
-                    append(tool.systemPrompt(model, contextMessages))
-                }
+            if (effectiveSystemPrompt.isNotBlank()) {
+                append(effectiveSystemPrompt)
             }
-            if (system.isNotBlank()) add(UIMessage.system(prompt = system))
+
+            // 记忆
+            if (memoryEnabled) {
+                appendLine()
+                append(buildMemoryPrompt(memories = memories))
+            }
+
+            // 工具prompt
+            tools.forEach { tool ->
+                appendLine()
+                append(tool.systemPrompt(model, contextMessages))
+            }
+        }
+        // 本次请求唯一的来源跟踪器：System 与后续注入内容由管线合成，不能被 messageTemplate 包裹。
+        // 只标记本次新建的 System；preset 等 durable SYSTEM 消息仍是用户配置，保持原模板行为。
+        val requestOrigins = RequestMessageOriginTracker()
+        val requestMessages = buildList {
+            if (system.isNotBlank()) {
+                val systemMessage = UIMessage.system(prompt = system)
+                requestOrigins.markSynthetic(systemMessage)
+                add(systemMessage)
+            }
             addAll(contextMessages)
-        }.transforms(
+        }
+        val internalMessages = requestMessages.transforms(
             transformers = transformers,
             context = context,
             model = model,
             assistant = assistant,
             settings = settings,
+            requestOrigins = requestOrigins,
             conversationModeInjectionIds = conversationModeInjectionIds,
             reportProcessingText = reportProcessingText,
             workspaceCwd = workspaceCwd,
