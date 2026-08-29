@@ -921,7 +921,7 @@ private fun FolderBar(
                 onLongClick = {},
             )
         }
-        items(folders) { folder ->
+        items(folders, key = { it.id }) { folder ->
             var menuExpanded by remember { mutableStateOf(false) }
             Box {
                 FolderChip(

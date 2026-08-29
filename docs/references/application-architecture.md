@@ -87,7 +87,7 @@ Application 层负责编排，不建立第二套数据协议。Repository 只执
 | MCP 单 server 连接、通知与重连状态 | `McpServerRuntime` | `McpRuntimeCoordinator`、turn capability snapshot |
 | MCP OAuth 凭据刷新与授权流程 | `McpOAuthCoordinator` | `McpApplicationService`、`McpServerRuntime` |
 | 托管文件跨 owner 清理命令编排 | `FileManagementApplicationService` | 设置文件页 typed command；分别委托 Artifact / GeneratedMedia owner |
-| 托管文件列表、候选数与存储统计投影 | `FileManagementQueryService` | `ManagedFileKey` / `ManagedFileUiModel` / `ManagedStorageUiModel`；不暴露领域实体或字符串拼接身份 |
+| 托管文件列表、候选数与存储统计投影 | `FileManagementQueryService` | `ManagedFileKey` / `ManagedFileUiModel` / `ManagedStorageUiModel`；不暴露领域实体或字符串拼接身份；Compose 列表只从 typed key 提取 Bundle-safe 数值 id，不把应用层 identity 改造成 Android 可序列化类型 |
 | 生成期后台保活（平台消费者） | `ChatGenerationForegroundService` / `GenerationForegroundLifetime` | 只消费 `conversationActivities()`，不持有运行事实，不操作 Window flag |
 | Workspace 持久化命令、模型 Rootfs 操作与终端互斥 | `WorkspaceApplicationService` | Workspace ViewModel command 与 `executeTool` capability |
 | Workspace 管理读模型 | `WorkspaceQueryService` | Workspace 列表、详情、文件预览与 `observeTerminal` |

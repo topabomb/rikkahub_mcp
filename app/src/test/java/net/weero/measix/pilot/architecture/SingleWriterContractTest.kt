@@ -186,14 +186,26 @@ class SingleWriterContractTest {
     }
 
     @Test
+    fun `folder bar keeps item state attached to durable folder identity`() {
+        val chatDrawer = File(sourceRoot, "ui/pages/chat/ChatDrawer.kt").readText()
+        assertTrue(chatDrawer.contains("items(folders, key = { it.id })"))
+    }
+
+    @Test
     fun `settings files page consumes only the file management ports`() {
         val filesPage = File(sourceRoot, "ui/pages/setting/SettingFilesPage.kt").readText()
         val settingsPage = File(sourceRoot, "ui/pages/setting/SettingPage.kt").readText()
+        val fileQueryService = File(sourceRoot, "service/FileManagementQueryService.kt").readText()
         assertFalse("page must not import GeneratedMediaStore", filesPage.contains("import net.weero.measix.pilot.data.imggen.GeneratedMediaStore"))
         assertFalse("page must not import GenMediaRepository", filesPage.contains("import net.weero.measix.pilot.data.repository.GenMediaRepository"))
         assertFalse("settings entry must not import GeneratedMediaStore", settingsPage.contains("import net.weero.measix.pilot.data.imggen.GeneratedMediaStore"))
         assertFalse("UI must not parse artifact string identities", filesPage.contains("substringAfter(\"artifact:"))
         assertFalse("UI must not parse generated-media string identities", filesPage.contains("substringAfter(\"genmedia:"))
+        assertFalse("typed application keys are not Bundle-saveable lazy keys", filesPage.contains("key = { it.key }"))
+        assertTrue(filesPage.contains("items(uploadFiles, key = { it.uploadKey().artifactId })"))
+        assertTrue(filesPage.contains("items(generatedImages, key = { it.generatedKey().mediaId })"))
+        assertFalse("application identity must not depend on Android Parcelable", fileQueryService.contains("Parcelable"))
+        assertFalse("application identity must not depend on Java serialization", fileQueryService.contains("Serializable"))
         assertTrue(filesPage.contains("FileManagementApplicationService"))
         assertTrue(filesPage.contains("FileManagementQueryService"))
         assertTrue(settingsPage.contains("FileManagementQueryService"))

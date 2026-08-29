@@ -338,6 +338,8 @@ ChatDrawerContent
        └─ AssistantPicker (底部助手选择器)
 ```
 
+`FolderBar` 的动态条目以 durable `Folder.id` 作为 Lazy key，使菜单展开等 item-local 状态在插入、删除或重排后仍绑定原文件夹；不得退化为位置 key。
+
 ### 5.5 ChatPageContent 结构
 
 ```
@@ -451,7 +453,7 @@ Koin 模块在 `di/AppModule.kt` 和 `di/DatabaseModule.kt` 等文件中定义�
 - `MasterTurnCoordinator` — 主回合生成编排
 - `ConversationApplicationService` / `ConversationQueryService` — UI 写/读端口
 - `McpApplicationService` / `McpQueryService` — MCP 命令与 definition/catalog/runtime 只读投影；Compose 不持有 client
-- `FileManagementApplicationService` / `FileManagementQueryService` — 托管文件 typed 删除/范围清理、安全临时预览与列表、图库 Paging、候选数、存储统计；预览写失败清理部分文件，图库区分 loading/error/retry/空状态，`SettingFilesPage`、`SettingPage` 不持有 Artifact/GeneratedMedia owner
+- `FileManagementApplicationService` / `FileManagementQueryService` — 托管文件 typed 删除/范围清理、安全临时预览与列表、图库 Paging、候选数、存储统计；预览写失败清理部分文件，图库区分 loading/error/retry/空状态，`SettingFilesPage`、`SettingPage` 不持有 Artifact/GeneratedMedia owner。Lazy 列表的保存键在 Compose 边界从 `ManagedFileKey` 提取 `Long` / `Int`，不得直接传递应用层 typed key，也不得为适配 Android `Bundle` 而让该 identity 实现 `Parcelable` / `Serializable`
 - `ApplicationRecoveryCoordinator` — 启动恢复与 fail-closed 门禁
 - `ChatNotificationManager` — 通知管理（`createdAtStart = true` 保证进程启动即订阅事件）；进入前台时撤销已跟踪的 live/待审批通知，避免系统栏保留过期进度
 - `AppEventBus` — 全局事件总线

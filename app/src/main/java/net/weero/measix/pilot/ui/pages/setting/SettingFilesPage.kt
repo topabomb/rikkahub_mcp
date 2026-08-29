@@ -431,7 +431,7 @@ fun SettingFilesPage(
                             innerPadding = innerPadding,
                             gridState = uploadGridState,
                         ) {
-                            items(uploadFiles, key = { it.key }) { file ->
+                            items(uploadFiles, key = { it.uploadKey().artifactId }) { file ->
                                 FileItem(
                                     file = file,
                                     deleteExecuting = uploadDeleteState.let { state ->
@@ -465,7 +465,7 @@ fun SettingFilesPage(
                             innerPadding = innerPadding,
                             gridState = generatedGridState,
                         ) {
-                            items(generatedImages, key = { it.key }) { file ->
+                            items(generatedImages, key = { it.generatedKey().mediaId }) { file ->
                                 GeneratedImageItem(
                                     file = file,
                                     onDelete = { pendingGeneratedDeleteKey = file.generatedKey() },
