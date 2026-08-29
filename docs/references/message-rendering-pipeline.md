@@ -10,6 +10,7 @@
 ## 目录
 
 1. [架构总览](#1-架构总览)
+   - [关键架构文件](#11-关键架构文件)
 2. [第一层：Part 分组与分发](#2-第一层part-分组与分发)
 3. [第二层：Markdown 解析与节点分发](#3-第二层markdown-解析与节点分发)
 4. [代码块渲染](#4-代码块渲染highlightcodeblock)
@@ -62,27 +63,18 @@ UIMessage.parts[]
                逐节点分发          逐节点分发
 ```
 
-**关键文件**：
-
-| 文件 | 职责 |
-|------|------|
-| `app/.../ui/components/message/ChatMessage.kt` | 第一层分发入口，`MessagePartsBlock` 渲染 |
-| `app/.../ui/components/message/ChatMessageCot.kt` | `groupMessageParts()` 分组逻辑、`ThinkingStep` / `MessagePartBlock` 定义 |
-| `app/.../ui/components/richtext/Markdown.kt` | 路径 A：纯 Markdown AST 原生渲染 |
-| `app/.../ui/components/richtext/MarkdownNew.kt` | 路径 B：含 HTML 的 Markdown 渲染（Jsoup DOM） |
-| `app/.../ui/components/richtext/HighlightCodeBlock.kt` | 代码块渲染（三态分发） |
-| `app/.../ui/components/richtext/Mermaid.kt` | Mermaid 图表 WebView 渲染 |
-| `app/.../ui/components/richtext/LatexText.kt` | LaTeX 公式原生 Canvas 渲染 |
-| `app/.../ui/components/richtext/MathBlock.kt` | LaTeX 行内/块级公式包装 |
-| `app/.../ui/components/richtext/SimpleHtmlBlock.kt` | HTML 块原生渲染（Jsoup → Compose） |
-| `app/.../ui/components/richtext/DiffView.kt` | 文件编辑 diff 渲染（工具步骤中使用） |
-| `app/.../ui/components/richtext/ZoomableAsyncImage.kt` | 图片渲染（Coil3） |
-| `app/.../ui/components/richtext/MarkdownWeb.kt` | Markdown 全文预览 HTML 模板构建 |
-| `app/.../ui/components/webview/WebView.kt` | WebView 核心封装层 |
-| `app/.../ui/pages/webview/WebViewPage.kt` | 全屏 WebView 页面 |
-| `app/src/main/assets/html/mark.html` | Markdown 全文预览 HTML 模板 |
-
 ---
+
+## 1.1 关键架构文件
+
+| 边界 | 文件 |
+| --- | --- |
+| Part 分组与分发 | `app/src/main/java/net/weero/measix/pilot/ui/components/message/ChatMessage.kt`、`ChatMessageCot.kt` |
+| Markdown AST / HTML DOM | `app/src/main/java/net/weero/measix/pilot/ui/components/richtext/Markdown.kt`、`MarkdownNew.kt` |
+| 代码、Mermaid、LaTeX | `app/src/main/java/net/weero/measix/pilot/ui/components/richtext/HighlightCodeBlock.kt`、`Mermaid.kt`、`LatexText.kt`、`MathBlock.kt` |
+| HTML、Diff 与图片 | `app/src/main/java/net/weero/measix/pilot/ui/components/richtext/SimpleHtmlBlock.kt`、`DiffView.kt`、`ZoomableAsyncImage.kt` |
+| 全文预览 | `app/src/main/java/net/weero/measix/pilot/ui/components/richtext/MarkdownWeb.kt`、`ui/pages/webview/WebViewPage.kt`、`app/src/main/assets/html/mark.html` |
+| WebView 封装 | `app/src/main/java/net/weero/measix/pilot/ui/components/webview/WebView.kt` |
 
 ## 2. 第一层：Part 分组与分发
 

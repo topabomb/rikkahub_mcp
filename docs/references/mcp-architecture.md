@@ -192,9 +192,10 @@ server/tool 身份、generation、transport 阶段、HTTP/SDK 异常、`retryabl
 
 ## 9. 验证边界
 
-JVM 契约覆盖旧 Settings schema 与 v3 备份的一次性目录迁移、恢复/迁移竞态、durable LKG 启动恢复、20 个已登记 server 不在启动时全部排队、20 工具目录、分页、空目录拒绝、
-手工刷新 receipt、`list_changed` single-flight、断连后目录稳定、maintenance recovery、远端 `isError`、承诺后 unknown、
-当前 run 快照稳定、配置撤销与调用承诺的线性化竞态、definition/policy 撤销、OAuth CAS、授权替换与完整信任边界、Provider 名碰撞和 UI 投影。
+修改 MCP 时至少验证：旧 Settings/备份迁移与恢复竞态不会破坏 durable LKG；启动激活有界；分页、空目录拒绝、
+手工刷新和 `list_changed` single-flight 保持目录提交规则；断连、maintenance recovery 与远端错误不改写已承诺事实；
+当前 run 快照稳定；配置或 policy 撤销与调用承诺保持线性化；OAuth 使用 CAS 且授权替换不越过信任边界；Provider
+命名碰撞和 UI 投影保持确定。
 
 构建/JVM 通过不等于真实 Android 验收。前后台、Wi-Fi/蜂窝、Doze、OAuth 浏览器回调、真实通知通道和 MCP UI/Agent
 仍需连接设备后执行对应 instrumentation 与现场场景。

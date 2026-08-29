@@ -70,7 +70,10 @@ Rootfs 内的主要映射：
 
 ## 4. PRoot 执行契约
 
-PRoot 版本为 `v5.1.107.92`（Termux/PRoot 官方 tag），记录的候选构建参数为 NDK r29/API 24、`PROOT_WITH_LIBANDROID_SHMEM=true` 和静态链接。`workspace/proot-lock.json` 是唯一机器可读 manifest，固定 PRoot/Termux Packages URL、tag/commit、上游 App 二进制提交、三个源码 archive SHA-256、候选构建参数和每个 artifact 的 `abi`、仓库路径、SHA-256、ELF machine、interpreter 与精确 `DT_NEEDED`；exec 依赖 `[liblog.so,libc.so]`，freestanding loader 依赖为空。当前两个 exec 与上游 `f4508dfa` byte-identical，但固定 recipe 尚未在本地重建，因此不得写成已经 bit-for-bit 可复现。`workspace/PROOT.md` 记录来源与许可证；PRoot 对应源码/patch/build scripts、libandroid-shmem 完整 BSD notice、静态链接 libtalloc 的可重链接材料和适用安装信息共同构成独立 Release 合规门禁，provenance URL 不能代替该义务。
+`workspace/proot-lock.json` 是唯一机器可读 manifest，固定 PRoot/Termux Packages 来源、版本、源码 archive 校验、
+构建参数以及各 ABI artifact 的路径、SHA-256 和 ELF 契约。`workspace/PROOT.md` 记录来源与许可证；PRoot 源码、
+patch/build scripts、第三方许可证、静态链接依赖的可重链接材料和适用安装信息共同构成独立 Release 合规门禁，
+provenance URL 不能代替该义务。manifest 校验通过也不能表述为已经完成本地 bit-for-bit 可复现构建。
 
 `ProotLaunchSpec` 的关键参数：
 
@@ -205,13 +208,14 @@ Workspace shell 状态使用 `DISABLED`、`INSTALLING`、`READY` 和 `BROKEN`。
 
 修改 Workspace 时应覆盖：
 
-- `WorkspaceManagerTest`：路径逃逸、bind mount 优先级、内核文件系统限制；
-- `WorkspaceToolsTest`：真实注册名、审批覆盖、安全写根、结果 schema 与文本替换；
-- `ProotShellRunnerTest` / `WorkspaceShellRunnerTest`：命令参数、环境、超时、输出排空与中断；
-- `RootfsInstallerTest` / `RootfsPatcherTest`：归档逃逸、链接、取消与幂等修补；
+- 路径逃逸、bind mount 优先级与内核文件系统限制；
+- 真实工具注册名、审批覆盖、安全写根、结果 schema 与文本替换；
+- 命令参数、环境、超时、输出排空与中断；
+- Rootfs 归档逃逸、链接、取消与幂等修补；
 - 真实设备上的匹配架构 Rootfs、Android 14+ shell、交互终端和取消清理。
 
-PRoot `v5.1.107.92` 的 hash/ELF 静态契约由 `ProotArtifactContractTest` 检查；这不等同于设备验收。x86_64 Android 17/API 37 Pixel Fold AVD 已完成打包二进制 smoke：版本/accelerator、root-id、cwd、host bind+cat、`-k 4.14.0` 和 1,000 行 stdout 均通过，但没有安装匹配 Rootfs，也没有覆盖 PTY。arm64 Android 14/15/16 与完整 x86_64 Rootfs 的 cwd、文件操作、挂载、DNS/netlink、SysV shared memory、超时/取消、长输出和双 PTY 场景完成前，升级状态仍必须标记为设备待验证。
+PRoot 的 hash/ELF 静态契约不等同于设备验收。各支持 ABI 仍需在匹配 Rootfs 的真实 Android 环境验证 cwd、
+文件操作、挂载、DNS/netlink、SysV shared memory、超时/取消、长输出和双 PTY；覆盖完成前必须明确标记为设备待验证。
 
 PRoot 兼容参数（`-k` kernel spoof、seccomp 策略、环境变量与 flags）的唯一 owner 是 `ProotLaunchSpec`；
 两个入口只把它交给各自的进程 adapter（`ProcessBuilder` 与 Termux PTY）。调整兼容参数只需修改并验证

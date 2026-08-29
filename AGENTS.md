@@ -96,6 +96,7 @@ At high-leverage points—especially before substantial refactors, cross-module 
 | Android 配置目录与企业下发边界 | `docs/references/android-configuration-architecture.md` |
 | MCP definition、catalog、runtime、OAuth 与 UI 投影 | `docs/references/mcp-architecture.md` |
 | Provider 线协议 | `docs/references/protocol-reference.md` |
+| Token usage、缓存命中、累计与统计口径 | `docs/references/token-usage-accounting.md` |
 | 模型可见 prompts 与工具结果 | `docs/references/prompts-and-tools.md` |
 | Compose 导航、布局与主题 | `docs/references/ui-architecture.md` |
 | Markdown/代码/Mermaid/LaTeX 渲染 | `docs/references/message-rendering-pipeline.md` |

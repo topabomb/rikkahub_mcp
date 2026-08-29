@@ -269,7 +269,7 @@ verticalPaneSplit(windowWidthDp, fallbackListWidthDp, hingeBounds):
 - 底层 scrim：铺满整个窗口的 `clickable` 层，任何落到其上的点击触发 `onDismissRequest`
 - 上层内容层：`clipToBounds()` 防止浮动工具栏等子内容溢出 Dialog 边界；内部通过 `detectTapGestures` 吸收落在表面空白区的点击，使它们不会穿透到 scrim；子控件（按钮/输入框/分段按钮/滚动区）优先消费各自手势，不受影响
 
-该分层避免依赖内容测量边界；`AdaptiveDialogContainerTest` 锁定“点击 scrim 关闭、点击内容不关闭、底部操作可执行”三项交互契约。
+该分层避免依赖内容测量边界，并固定“点击 scrim 关闭、点击内容不关闭、底部操作可执行”三项交互契约。
 
 ---
 
@@ -428,37 +428,16 @@ reason 对应的短状态，取消使用中性色而不冒充错误；失败或�
 
 ### 7.1 ViewModel 层
 
-每个页面使用 Koin 注入对应的 ViewModel：
-
-| ViewModel | 职责 |
-|-----------|------|
-| `ChatVM` | 单会话状态：会话读状态、输入状态、错误处理与 application command 转发；不持有 Runtime Job |
-| `ChatDrawerVM` | 侧栏状态：会话分页列表、文件夹、滚动位置 |
-| `SettingVM` | 设置读写 |
-| `AssistantDetailVM` | 助手配置（含子助手原子清理、`hasValidChatModel` 警告） |
-| `SubAssistantDetailVM` | 子助手只读详情（从 Master 消息解析 Tool metadata） |
-| `HistoryVM` / `FavoriteVM` / `StatsVM` | 对应页面数据 |
-| `SearchVM` | 消息搜索 |
-| `WorkspaceVM` / `WorkspaceDetailVM` | 工作区管理 |
-| `BackupVM` | 备份/恢复 |
-| `DebugVM` / `PromptVM` / `QuickMessagesVM` / `SkillsVM` / `SkillDetailVM` | 对应页面 |
-| `ImgGenVM` | 图片生成 |
-| `ShareHandlerVM` | 分享处理 |
+页面通过 Koin 注入 ViewModel。ViewModel 只持有页面状态、调用 application command 并消费 query/read model，不得直连
+DAO、Repository、Runtime Registry 或持久化 owner。`ChatVM` 不持有 Runtime Job；`SubAssistantDetailVM` 只消费由
+Master 消息投影出的只读详情；设置、统计、工作区、备份等页面也必须经各自的 typed application/query port。
 
 ### 7.2 依赖注入
 
-Koin 模块在 `di/AppModule.kt` 和 `di/DatabaseModule.kt` 等文件中定义。关键单例：
-
-- `UpdateChecker` — 应用更新检查（`by lazy` 缓存 `StateFlow`，AppScope 级共享，切换会话不重复请求）
-- `MasterTurnCoordinator` — 主回合生成编排
-- `ConversationApplicationService` / `ConversationQueryService` — UI 写/读端口
-- `McpApplicationService` / `McpQueryService` — MCP 命令与 definition/catalog/runtime 只读投影；Compose 不持有 client
-- `FileManagementApplicationService` / `FileManagementQueryService` — 托管文件 typed 删除/范围清理、安全临时预览与列表、图库 Paging、候选数、存储统计；预览写失败清理部分文件，图库区分 loading/error/retry/空状态，`SettingFilesPage`、`SettingPage` 不持有 Artifact/GeneratedMedia owner。Lazy 列表的保存键在 Compose 边界从 `ManagedFileKey` 提取 `Long` / `Int`，不得直接传递应用层 typed key，也不得为适配 Android `Bundle` 而让该 identity 实现 `Parcelable` / `Serializable`
-- `ApplicationRecoveryCoordinator` — 启动恢复与 fail-closed 门禁
-- `ChatNotificationManager` — 通知管理（`createdAtStart = true` 保证进程启动即订阅事件）；进入前台时撤销已跟踪的 live/待审批通知，避免系统栏保留过期进度
-- `AppEventBus` — 全局事件总线
-- `LocalTools` — 本地工具集
-- `TTSManager` / `SoundEffectPlayer` / `EmojiData`
+Koin 只负责装配 AppScope owner、coordinator 与 UI port，不能被 UI 当作 service locator。会话、MCP、文件管理都向
+Compose 暴露 application/query service；恢复由 `ApplicationRecoveryCoordinator` 统一 fail-closed。`UpdateChecker` 的
+`StateFlow` 在 AppScope 共享，切换会话不得重复请求。文件列表的保存键只在 Compose 边界提取为 Bundle 支持的标量，
+不得为适配 UI 而让应用层 typed identity 实现 `Parcelable` 或 `Serializable`。
 
 ### 7.3 会话助手归属
 
@@ -588,14 +567,9 @@ ChatList (LazyColumn)
 路径。工具审批和 Target 卡片必须保留在 Part 的语义位置。节点级细节统一见
 [消息渲染管线](message-rendering-pipeline.md)，生成侧见 [消息生成链路](chat-generation-pipeline.md)。
 
-`ChatMessageNerdLine` 保持原有紧凑底栏：legacy 记录按历史 input/output/cache 展示；v2 只有 core 完整时显示
-input/output，只有 cache-read 完整且大于零时显示缓存命中。Clock 仍是整条消息墙钟耗时，TPS 仅在 v2 core 完整且
-Provider request duration 有效时显示，两者不得混用。`ChatSizeChecker` 只读取最近一次请求的 context input，不读取 turn
-累计 input。
-
-`StatsVM` 只消费 `StatsQueryService` 的 Room 投影。总 input/output/cache 是 durable Assistant usage JSON 中已知值的和；
-历史、partial、none 或缺少 usage 的 Assistant 消息分别保守计入 core/cache 非精确数量，页面以可换行短说明标明边界。
-缓存卡仅在已知累计大于零时显示，避免把未知误呈现为精确零。Compose 不解析四种线协议，也不重新累计 token。
+`ChatMessageNerdLine` 保持原有紧凑底栏，`ChatSizeChecker` 与 `StatsVM` 各自只消费 application/query 投影。Compose 不解析
+四种线协议、不累计 token，也不从 UI 状态推断完整性；三者的精确显示口径见
+[`token-usage-accounting.md`](token-usage-accounting.md)。
 
 ---
 
@@ -632,33 +606,10 @@ Provider request duration 有效时显示，两者不得混用。`ChatSizeChecke
 
 ---
 
-## 13. 测试
+## 13. 验证边界
 
-### JVM 单元测试
-
-`AdaptiveLayoutPolicyTest` 覆盖：
-
-- Width Class 边界值（599/600/840/1200/1600）
-- 手机竖屏 SinglePane
-- 矮横屏 SinglePane + 紧凑输入
-- 代表性的竖向折叠宽屏 ListDetail
-- 平板 ListDetail
-- 铰链不影响 chatLayoutMode 但阻止侧栏折叠
-- Tabletop 强制 SinglePane
-- 普通窗口 useExpandedModal 与 chatLayoutMode 边界一致，Tabletop 使用铰链安全 Dialog
-- 600dp/480dp 精确边界值
-- 真实竖向铰链坐标的 list / gap / detail 分配
-- 无效铰链过滤与多铰链中心选择
-
-`ConversationAssistantSwitchTest` 覆盖会话助手切换、重复切换幂等，以及已删除助手的回退规则。`UpdateCheckerTest` 覆盖首次订阅启动、订阅离开后不重启，以及同一共享流只执行一次上游请求。`AppearancePolicyTest` 覆盖颜色模式、动态色 API 门槛、AMOLED 仅改写 `background`/`surface`，以及未知主题回退 Sakura。`ChatSurfacePolicyTest` 覆盖助手背景下 chrome 封顶、无背景时跟随气泡不透明度，以及产物保持不透明。
-
-Token usage 的 JVM 测试覆盖 nerd line 精确/legacy 显示、TPS 边界、context 阈值和 query 映射；Room/SQLite
-instrumentation fixture 覆盖 v2 complete/partial、legacy、`usage=null`、child 节点与 JSON 聚合行为。线协议字段映射由
-`ai` 模块各 Provider usage 测试负责。
-
-### 设备仪器测试
-
-`AdaptiveDialogContainerTest` 覆盖 Dialog 的 scrim、内容区和底部操作区点击契约。设备手工验证还应至少覆盖：
+自适应 UI 修改至少验证 Width Class 与 600dp/480dp 边界、手机竖屏、矮横屏、普通宽屏、平板、竖向折叠、
+Tabletop、无效或多个铰链，以及 Dialog 的 scrim、内容区和底部操作区点击契约。设备验收还应覆盖：
 
 - 普通窄屏、普通宽屏、竖向铰链展开、折叠外屏和 Tabletop 姿态切换
 - 会话栏折叠/展开、单栏抽屉、宽屏 Dialog 与窄屏 BottomSheet

@@ -152,29 +152,21 @@ keyPassword=<password>
 
 修改客户端更新链路时至少验证：
 
-- `VersionTest`：正式版、预发布、build metadata、宽松 core 比较；
-- `UpdateCheckerTest`：首次订阅、订阅消失后不重启、进程内共享；
+- 正式版、预发布、build metadata 与宽松 core 的版本比较；
+- 首次订阅、订阅消失后不重启与进程内共享；
 - 更新卡片的持久化关闭、错误关闭和 Play Store 过滤；
 - `lint` 与 `assembleDebug`。
 
 正式发版还必须验证 Release 构建、所有 APK 签名、版本号、ABI 产物、changelog 提取结果、`repository_dispatch` 触发成功以及线上 `version.json` 内容正确。GitHub Actions 成功不替代真实安装与升级验证。
 
-## 9. 关键文件
+## 9. 关键架构文件
 
-```text
-app/src/main/java/net/weero/measix/pilot/
-├─ utils/UpdateChecker.kt
-├─ utils/PlayStoreUtil.kt
-├─ ui/components/ui/UpdateCard.kt
-├─ ui/hooks/PlayStore.kt
-└─ data/datastore/SettingsStore.kt
-
-app/build.gradle.kts
-.github/workflows/release.yml
-docs/dev/changelog.md
-
-measix-pilot-website 仓库：
-.github/workflows/sync-from-release.yml
-docs/.vuepress/public/version.json
-docs/changelog/index.md
-```
+| 边界 | 文件 |
+| --- | --- |
+| 检查 owner 与版本解析 | `app/src/main/java/net/weero/measix/pilot/utils/UpdateChecker.kt` |
+| 安装来源过滤 | `app/src/main/java/net/weero/measix/pilot/utils/PlayStoreUtil.kt`、`ui/hooks/PlayStore.kt` |
+| UI 投影 | `app/src/main/java/net/weero/measix/pilot/ui/components/ui/UpdateCard.kt` |
+| 忽略版本持久化 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsStore.kt` |
+| Android 版本与 Release 构建 | `app/build.gradle.kts` |
+| 发行工作流 | `.github/workflows/release.yml` |
+| 用户可见版本说明 | `docs/dev/changelog.md` |

@@ -51,38 +51,9 @@ UIMessage
 
 ### Token usage 规范模型
 
-线协议 Adapter 只把单次 Provider 请求的 usage 归一化为 `ProviderUsageSnapshot`；它不读取历史消息，也不负责跨请求
-累计。`GenerationLoop` 为每次真实 Provider 调用建立一个 `RequestUsageReducer`，按字段 presence 覆盖流式快照：字段缺失
-表示本事件没有更新，显式 `0` 必须覆盖旧值。请求关闭后，`TurnUsageAccumulator` 才把该请求恰好一次加入 owning
-Assistant 消息的 durable `TokenUsage`。工具循环、失败、取消和审批继续流程都复用这一条链，不存在 Provider 私自累计、
-UI 重算或第二张统计账本。
-
-| 规范字段 | 含义 |
-| --- | --- |
-| `inputTokens` | 单次请求的完整计费输入；cache read/write 与 tool-use 都是其子集，不得再次相加 |
-| `contextInputTokens` | 本次请求实际上下文输入，用于上下文阈值；它不是 turn 累计量 |
-| `outputTokens` | 单次请求的完整计费输出；reasoning 是其子集 |
-| `cacheReadInputTokens` / `cacheWriteInputTokens` | Provider 明确报告的缓存读取/写入输入；缺失不是零 |
-| `reasoningOutputTokens` / `toolUseInputTokens` | Provider 明确报告的输出/输入细分 |
-| `totalTokens` | Provider 权威总量；仅在线协议明确定义且安全时，由 Adapter 授权在单请求归一化边界推导 |
-
-四条线协议的当前映射是：
-
-| 线协议 | input/context | output | cache read/write | total |
-| --- | --- | --- | --- | --- |
-| Chat Completions | `prompt_tokens` | `completion_tokens` | `prompt_tokens_details.cached_tokens` / `cache_write_tokens`；Moonshot 顶层 `cached_tokens` 与 DeepSeek `prompt_cache_hit_tokens` 仅按已识别 endpoint vendor 使用 | Provider `total_tokens`，缺失时安全计算 input + output |
-| Responses | `input_tokens` | `output_tokens` | `input_tokens_details.cached_tokens` / `cache_write_tokens` | Provider `total_tokens`，缺失时安全计算 input + output |
-| Anthropic Messages | `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` | `output_tokens` | `cache_read_input_tokens` / `cache_creation_input_tokens` | `message_start` 与 `message_delta` 完成 presence overlay 后安全计算规范 input + output |
-| Gemini generateContent | input 为 `promptTokenCount + toolUsePromptTokenCount`，context 仅为 `promptTokenCount` | `candidatesTokenCount + thoughtsTokenCount` | `cachedContentTokenCount` / 不提供 | Provider `totalTokenCount` |
-
-`ProviderUsageSnapshot.canDeriveTotalFromInputAndOutput` 是 Adapter 提供给单请求 reducer 的瞬态策略，不进入
-`TokenUsage`、Room 或备份。当前只有 Anthropic 流需要它把互补的 `message_start` input 与 `message_delta` output 合并后
-推导 total；Provider 已报告 total 时始终优先保留。
-
-任何负值、子集大于父项、Provider total 与可验证 input + output 不一致或加法溢出都不能被修成看似精确的数字：
-请求 reducer 保留可证明字段、丢弃无效字段并降低 completeness。`coreCompleteness` 与
-`cacheReadCompleteness` 独立表示 `NONE/PARTIAL/COMPLETE`；历史 JSON 缺少新字段时解码为 `LEGACY`。持久化仍使用原来的
-`promptTokens`、`completionTokens`、`cachedTokens` JSON key，Room schema 与备份结构不变。
+线协议 Adapter 只把单次 Provider 请求的 wire usage 归一化为 `ProviderUsageSnapshot`；它不读取历史消息、不跨请求
+累计，也不决定 UI 展示。四线字段映射、request/turn 算法、完整性、持久化和消费者口径统一见
+[`token-usage-accounting.md`](token-usage-accounting.md)。
 
 `UIMessagePart.Tool` 同时保存调用参数、审批状态和执行结果。Provider 序列化时再展开为各自的 tool call/result 结构，数据库不会插入独立的持久化 `MessageRole.TOOL`。
 
@@ -392,26 +363,18 @@ endpoint host 另设第二套例外。
 
 离线单元测试、Lint 和编译只能证明客户端序列化与状态机。真实供应商验证还受账号权限、地区、灰度、模型可用性、计费和限流影响；没有在线验证时不得把“请求已构建”写成“服务端已验证”。
 
-## 11. 关键文件
+## 11. 关键架构文件
 
-```text
-ai/src/main/java/me/rerere/ai/
-├─ provider/providers/
-│  ├─ openai/OpenAIEndpointProfile.kt
-│  ├─ openai/ChatCompletionsAPI.kt
-│  ├─ openai/ResponseAPI.kt
-│  ├─ OpenAIProvider.kt
-│  ├─ ClaudeProvider.kt
-│  ├─ GoogleProvider.kt
-│  └─ ProviderMessageUtils.kt
-├─ provider/images/ImageGenerationResponseParser.kt
-├─ util/ErrorParser.kt
-├─ util/ProviderFailure.kt
-├─ registry/ModelRegistry.kt
-└─ ui/
-   ├─ Message.kt
-   └─ MessageMetadata.kt
-```
+| 边界 | 文件 |
+| --- | --- |
+| OpenAI endpoint 身份 | `ai/src/main/java/me/rerere/ai/provider/providers/openai/OpenAIEndpointProfile.kt` |
+| Chat Completions / Responses wire | `ai/src/main/java/me/rerere/ai/provider/providers/openai/ChatCompletionsAPI.kt`、`ResponseAPI.kt` |
+| Provider adapter | `ai/src/main/java/me/rerere/ai/provider/providers/OpenAIProvider.kt`、`ClaudeProvider.kt`、`GoogleProvider.kt` |
+| 共用消息转换 | `ai/src/main/java/me/rerere/ai/provider/providers/ProviderMessageUtils.kt` |
+| 错误协议 | `ai/src/main/java/me/rerere/ai/util/ErrorParser.kt`、`ProviderFailure.kt` |
+| 模型能力注册 | `ai/src/main/java/me/rerere/ai/registry/ModelRegistry.kt` |
+| Canonical message / metadata | `ai/src/main/java/me/rerere/ai/ui/Message.kt`、`MessageMetadata.kt` |
+| 图片响应解析 | `ai/src/main/java/me/rerere/ai/provider/images/ImageGenerationResponseParser.kt` |
 
 ## 12. 官方协议入口
 

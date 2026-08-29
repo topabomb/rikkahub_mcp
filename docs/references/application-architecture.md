@@ -136,10 +136,9 @@ Non-resident command 仍经过同一个 `ConversationCommandCoordinator` 锁与�
 
 Master 与 Target 共用 `TurnEngine` 和同一套 chunk-to-checkpoint 协议。`StartTurn` 在一个事务中创建 assistant 槽和 RUNNING turn fact；checkpoint 只写 changed nodes；`FinalizeTurn` 同事务关闭遗留的 STARTED tools 并提交不可逆的 turn 终态。
 
-Token usage 沿用同一 message/turn 写协议：Adapter 只报告单请求 `ProviderUsageSnapshot`，请求 reducer 在流内按 presence
-覆盖并在关闭时冻结，turn accumulator 按请求 ordinal 恰好一次累计。累计结果附着到 owning Assistant message，随既有
-checkpoint 或终态事务提交；Stats 只查询该 durable JSON，UI 只消费投影。禁止 Provider 跨请求累计、UI 重新求和、旁路
-DAO 写入或新增 usage ledger。历史 JSON 通过既有 key 解码为 `LEGACY`，不做数据库 migration，也不以新请求补全旧事实。
+Token usage 沿用同一 message/turn 写协议，唯一 durable 结果是 owning Assistant 消息的 `TokenUsage`。Adapter、request
+reducer、turn accumulator、Master/Child 隔离、历史兼容和消费者边界见
+[`token-usage-accounting.md`](token-usage-accounting.md)。
 
 Turn 和 Tool execution 使用 insert-once 与合法状态 CAS。终态不可回退，重复同终态幂等，非法转换返回明确冲突。失败或取消的终态准备必须消费 TurnEngine 累积的最新 turn-owned messages；该投影可能包含最后一次 checkpoint 后的 delta，不能用 durable nodes 覆盖。准备阶段校验完整 `TurnHandle`，关闭未完成工具后由同一个 `FinalizeTurn` 原子提交。取消必须传播；`NonCancellable` 只用于已经取得所有权的终态提交或补偿收口，完成后仍重新抛出原始 `CancellationException`。
 

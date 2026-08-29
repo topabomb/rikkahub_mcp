@@ -224,5 +224,3 @@ Fork 顶层会话时，`forkSubAssistantTree` 同时复制有效 Child，重建 
 - 修改 Child 持久化时，必须覆盖 Room migration、顶层查询过滤、事务删除、文件保留和分支复制。
 - 修改 Target 生成时，应优先复用通用 Generation Pipeline；任何差异都要作为明确的 Run Mode policy 表达。
 - 修改用户可见文案时，必须同步所有支持的 locale。
-
-主要回归测试集中在 `data/ai/subassistant`、`service/DelegationCoordinator*Test`、`ui/pages/subassistant`，以及 Room migration、DAO 与 ConversationRepository 的 instrumentation tests。

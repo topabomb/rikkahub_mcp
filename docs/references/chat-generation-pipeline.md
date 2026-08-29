@@ -102,17 +102,9 @@ Template / Workspace 之后；明确差异只有不装配 `ToolArtifactReplayTra
 Streaming Transformer 只改变显示投影；需要持久化的变化必须进入 checkpoint 的
 `OutputMessageTransformer.transform()` 或终态落盘 Transformer。
 
-`TokenUsage` 的 input/output/cache/total 是整个 Assistant turn 中所有已观察 Provider 请求的累计值；
-`latestRequestContextTokens` 只保存最近一次请求的上下文输入，因此上下文告警不能读取累计 input。Provider request duration
-从发起 Provider 调用到流关闭累计，不包含本地工具和审批等待；只有 v2 且 core 完整时才可用它计算 TPS。旧消息或
-`CONTINUE_APPROVAL` 的 legacy baseline 始终保持 `LEGACY`，不能把新请求 duration 与旧累计 output 拼成伪精确 TPS。
-字段缺失与显式零分开处理，core 与 cache-read 完整性分别累计；具体线协议映射见
-[`protocol-reference.md`](protocol-reference.md)。
-
-usage owner 是产生请求的 Assistant 消息。Master 与每个 Child 各自从 owning message 建立 request reducer 和 turn
-accumulator；Target usage 只写 Child 消息，子助手结果只向 Master 返回工具文本/附件投影，不复制 message usage。因此
-Child 请求永不汇入 Master 底部。Master 在工具调用前后通常各有一次自己的 Provider 请求：即使 Child 因余额等错误未返回
-usage，Master 仍会为读取工具失败结果再请求一次，所以 Master turn 的累计 input 可能接近调用前的两倍；这不是 Child 串账。
+usage 只归产生请求的 owning Assistant 消息。Master 与每个 Child 各自建立 request reducer 和 turn accumulator；工具前后
+属于 Master 的多次请求在 Master turn 内累计，Target usage 只写 Child。完整算法、失败/取消、审批继续和消费者口径见
+[`token-usage-accounting.md`](token-usage-accounting.md)。
 
 ## 工具装配与执行
 
@@ -230,35 +222,19 @@ durable command 继续被 `ApplicationRecoveryGate` 阻断；`retry()` 重新执
 子助手不是第二套生成引擎。`DelegationCoordinator` 只增加 preflight → materialize Child → run → terminal 四阶段：
 Child、tool STARTED 与 childConversationId 关系在 Target 启动前强制提交；失败会补偿 Child 与未发布附件。
 `SubAssistantRunGate.withLease` 编码并发所有权，`SubAssistantResultProjection` 负责纯结果形状，Target 仍使用相同的
-`TurnEngine`、`GenerationLoop` 与 checkpoint 协议。共享生成实现不共享 turn usage 状态：每次 `GenerationLoop.run()` 的
-累计器只属于传入的 owning Assistant message。
+`TurnEngine`、`GenerationLoop` 与 checkpoint 协议。共享生成实现不共享 turn usage 状态，详见
+[`token-usage-accounting.md`](token-usage-accounting.md)。
 
-## 关键文件
+## 关键架构文件
 
-```text
-app/src/main/java/net/weero/measix/pilot/
-├─ service/
-│  ├─ ConversationApplicationService.kt
-│  ├─ ConversationQueryService.kt
-│  ├─ MasterTurnCoordinator.kt
-│  ├─ GenerationSideEffects.kt
-│  ├─ ConversationTitleCoordinator.kt
-│  ├─ TurnFinalization.kt
-│  ├─ TurnRecovery.kt
-│  ├─ SubAssistantLifecycle.kt
-│  ├─ ApplicationRecoveryCoordinator.kt
-│  └─ runtime/
-│     ├─ ConversationCommands.kt
-│     ├─ ConversationTransition.kt
-│     ├─ ConversationRuntime.kt
-│     ├─ ConversationRuntimeRegistry.kt
-│     ├─ ConversationPresentation.kt
-│     ├─ ConversationCommandCoordinator.kt
-│     ├─ TurnEngine.kt
-│     └─ DelegationCoordinator.kt
-└─ data/
-   ├─ repository/ConversationRepository.kt
-   ├─ files/ArtifactStore.kt
-   ├─ files/ArtifactPayloadStore.kt
-   └─ ai/GenerationLoop.kt
-```
+| 边界 | 文件 |
+| --- | --- |
+| UI command / query port | `app/src/main/java/net/weero/measix/pilot/service/ConversationApplicationService.kt`、`ConversationQueryService.kt` |
+| Master turn 编排 | `app/src/main/java/net/weero/measix/pilot/service/MasterTurnCoordinator.kt`、`GenerationSideEffects.kt`、`ConversationTitleCoordinator.kt` |
+| 命令与 Runtime 主链 | `app/src/main/java/net/weero/measix/pilot/service/runtime/ConversationCommands.kt`、`ConversationTransition.kt`、`ConversationRuntime.kt`、`ConversationRuntimeRegistry.kt`、`ConversationCommandCoordinator.kt`、`TurnEngine.kt` |
+| UI 只读投影 | `app/src/main/java/net/weero/measix/pilot/service/runtime/ConversationPresentation.kt` |
+| 终态与恢复 | `app/src/main/java/net/weero/measix/pilot/service/TurnFinalization.kt`、`TurnRecovery.kt`、`ApplicationRecoveryCoordinator.kt` |
+| Provider 循环 | `app/src/main/java/net/weero/measix/pilot/data/ai/GenerationLoop.kt` |
+| 工具装配 | `app/src/main/java/net/weero/measix/pilot/data/ai/tools/GenerationToolSetFactory.kt` |
+| Durable conversation / artifact | `app/src/main/java/net/weero/measix/pilot/data/repository/ConversationRepository.kt`、`data/files/ArtifactStore.kt`、`ArtifactPayloadStore.kt` |
+| 子助手扩展 | `app/src/main/java/net/weero/measix/pilot/service/runtime/DelegationCoordinator.kt`、`service/SubAssistantLifecycle.kt` |

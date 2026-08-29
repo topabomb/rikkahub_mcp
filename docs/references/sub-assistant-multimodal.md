@@ -83,7 +83,7 @@ Target → Main     extras=artifacts  弱契约；看不懂也不推翻 complete
 
 典型组合正是：Target 绑定视觉/绘图模型，Caller 是文本模型。Caller 得到的是带 `input=reference_only` 的附件事实；需要内容时点名 `extras=["artifacts"]` 拿 native parts，或显式调用 `inspect_attachments`。
 
-### 2.3 实现时纠正过的易错点
+### 2.3 当前不变量与常见误判
 
 | 易错假设 | 实际判定 |
 |----------|----------|
@@ -475,7 +475,7 @@ Resolver 顺序：
 
 ---
 
-## 8. 组件、测试与维护约束
+## 8. 组件与维护约束
 
 | 组件 | 职责 |
 |------|------|
@@ -495,9 +495,7 @@ Resolver 顺序：
 | `ConversationApplicationService` / `MasterTurnCoordinator` | 发送/编辑盖章，生成前 durable backfill |
 | `SubAssistantRunPolicy` / `filterTargetTools` | 不再永久过滤 `TextToImage` / `generate_image` |
 
-不改：`GenerationLoop` 主循环语义、Provider 编码、lineage / lease。
-
-主要测试：`AssistantCallToolTest`、`AttachmentRefsTest`、`AttachmentResolverTest`、`SafeRemoteMediaFetcherTest`、`AttachmentProjectionTransformerTest`、`AttachmentInspectionToolTest`、`ShouldInjectAttachmentInspectionTest`、`SubAssistantAttachmentCoordinatorTest`、`SubAssistantChildPartsTest`、`SubAssistantResultProjectionTest`、`SubAssistantArtifactProjectionTest`、`SubAssistantRunPolicyTest`、`SubAssistantCallMetadataTest` 与恢复/终态测试。
+该扩展不得建立第二套 `GenerationLoop`、Provider 编码、lineage 或 lease 协议。
 
 维护约束：
 
@@ -508,33 +506,15 @@ Resolver 顺序：
 - Caller 投影不判能力、不调用识别模型；native/引用行统一由 `AttachmentProjectionTransformer` 按当次请求模型决定。
 - 未点名 extras 时不要把 Image 写入 Master `Tool.output`，也不要调用识别模型。
 - `errorResult` 迁移只限 `assistant_call`。
-- 用户可见字符串走 5 份 `strings.xml`。
+- 用户可见字符串同步到所有受支持 locale 的 `strings.xml`。
 - 文档不要写行号或易变计数；用类名 / 函数名 / 常量名定位。
 - http / data: 图不会被投影器转译。Child 只存 `file://`。
 
 ---
 
-## 9. 将来扩展与补充
+## 9. 当前能力与禁止项
 
-这些**不是**当前实现的缺口，而是同一条多模态需求里尚未立项的方向。协议（`attachments[]`、`extras=["artifacts"]`、`attachment:`）预期保持不变。
-
-### 9.1 类型扩展（产品上最常见的下一步）
-
-内部命名保持 Attachment。到时只加投影器的类型分支与 Resolver 的 MIME 分支，不再改 `attachments[]`、Child USER、lineage、RunSpec：
-
-```text
-AttachmentProjectionTransformer
-    ├── Image（native / reference-only）   ← 已落地
-    ├── Document    ← 引用行已落地；按需扩展投影与 inspect 支持
-    ├── Audio       ← 同上
-    └── Video       ← 同上
-```
-
-出站对 Document / Audio / Video 做与 Image 对等的投影与按需识别支持。
-
-文档类应复用 `DocumentAsPromptTransformer`，不要再写一套 PDF 抽文本。
-
-### 9.2 能力判定矩阵（当前约束）
+### 9.1 能力判定矩阵
 
 能力判定已由 `Provider.requestMediaCapabilities()` 与模型 `inputModalities` 共同实现，
 并由 `AttachmentProjectionTransformer` 和协议 Adapter 复用：
@@ -546,28 +526,14 @@ AttachmentProjectionTransformer
 | `Tool.output` | `toolOutputImages` | 保留 Image + `input=native` 事实 | `input=reference_only` |
 
 模型图片能力只读 `inputModalities`；未知 OpenAI-compatible host 按用户选择的 Chat Completions 或 Responses
-通用协议映射容器，不得否决 USER 图片。已知非标准 profile 只收窄其实际不同的容器。当前矩阵由
-Provider/Transformer/Chat/Responses 相关测试覆盖；按需 `inspect_attachments` 只有在当前模型的 USER、
+通用协议映射容器，不得否决 USER 图片。已知非标准 profile 只收窄其实际不同的容器。按需 `inspect_attachments` 只有在当前模型的 USER、
 ASSISTANT 与 `Tool.output` 均为 `STRUCTURED` 时才跳过注入，识别模型只要求 Provider 可用且声明 IMAGE。
 
-### 9.3 Provider File Cache
-
-OpenAI / Claude / Gemini 远端文件缓存。同一张图多轮反复发给同一家视觉模型时，可省重复编码与上传。不改变「传什么 / 是否点名内容」的契约。
-
-### 9.4 历史视觉 token
+### 9.2 历史视觉 token
 
 点名 `extras=["artifacts"]` 后，native Image 会留在 Master 历史并在后续 turn 回放（可读图模型持续消耗视觉 token；不可读模型只回放引用行）。若要「只让本轮看见」，需另做历史 `assistant_call` 媒体折叠，并可能改 `GenerationLoop`。不要在未点名时发明「只发给本轮、不落盘」的通道。
 
-### 9.5 Target 跨 step 回放 `/upload`
-
-Child 仍无 `ToolArtifactReplayTransformer`。本 run 刚生成的图在当前 step 的 Tool.output 里看得到；跨 step 只剩路径字符串时，Target 不一定能再当原图用。入站靠 Resolver 预落地规避。若子助手经常「先画再改同一张图」，再补 replay。
-
-### 9.6 文件寿命
-
-Child clone / Master fork 对本地 `file:` 附件执行内容级复制，复制产生的 `OwnedArtifact` 在新聚合提交成功后发布；`ConversationFileReferences` 仍把
-`sub_assistant_call.artifacts[].artifact` 与 `generate_image` 顶层 `"artifact"` 键视为引用（按完整 URL 与 filesDir 相对路径双探测）。复制 assistant_call 交付物时，metadata manifest 与 `Tool.output` 会在同一克隆步骤同步改写，避免源文件删除或 GC 后留下旧相对路径。
-
-### 9.7 明确不做（除非需求改口）
+### 9.3 明确禁止
 
 - 不把 Child 里所有非文本 Tool output 打包回传。
 - 不在未点名 `artifacts` 时触发视觉转译（包括「为了卡片描述」）。

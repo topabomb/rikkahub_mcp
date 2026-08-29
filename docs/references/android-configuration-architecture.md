@@ -1,21 +1,8 @@
-# Android 配置架构与企业下发清单
+# Android 配置架构与企业下发边界
 
-> 状态：当前实现事实登记 + S0.2 企业下发规划基线
-> 审查日期：2026-08-27
-> Android 实现仓库：`topabomb/rikkahub_mcp`
-> 平台架构权威：`topabomb/measix-architecture` 的 S0.2 Android Integration Contract 与 S0 Control Protocol
+> 当前实现事实以 Android 代码为准；尚未落地的 S0.2 企业边界以外部平台契约为准，不在本文中冒充已实现能力。
+> 平台架构权威：`topabomb/measix-architecture` 的 S0.2 Enterprise Realm & Experience Contract、S0.4 Android Managed Runtime Integration Contract 与 S0 Control Protocol
 > Executable wire：`topabomb/measix-platform-core/api/client/client-control.openapi.yaml`
-
-本次登记基线：
-
-| 仓库/Artifact | 调研版本 |
-|---|---|
-| `measix-architecture` | `dbb56952ab1cf60fa55e4cbb8d14ee70eda43a48` |
-| `measix-platform-core` | `11e2b2efffac3ecb5690f08e3a03303d09d240eb` |
-| `rikkahub_mcp` | `e80eafbe954690f9cd8c7c2252bbd8c888b8c8cc` |
-| 当前 generated Android OpenAPI source hash | `sha256:67dd2bec0debbaf99d19543d96b3b39534a324536eaa347c657c96f49c807d11` |
-
-这些是调研可复现基线，不是有效 C7 Freeze pin。
 
 本文回答两个不同问题：
 
@@ -45,30 +32,32 @@ Enterprise Binding + Credential + Managed State
        └── 只负责身份、同步和 Managed interaction correctness
 ```
 
-当前 S0.2 企业下发范围已经由架构收敛为：
+外部平台契约的分阶段边界是：
 
 ```text
-ManagedSnapshot
-  ├─ providers[]
-  ├─ models[]
-  ├─ tts[]
-  ├─ asr[]
-  ├─ mcp[]
-  └─ policy
+S0.1 Snapshot v1
+  └─ Provider / Model / TTS / ASR / Direct MCP / Policy
+S0.2 Snapshot v2
+  └─ v1 + Managed Assistant / Memory Seed / Assistant Starter
+S0.3 Snapshot v3
+  └─ v2 + Enterprise Tool Gateway
+S0.4 Android integration
+  └─ 消费冻结后的完整 profile
 ```
 
 因此：
 
-- **Snapshot 必须携带**：Managed Provider/Model/TTS/HTTP-ASR/MCP typed 数组字段和 Managed Policy；五个数组均可为空，
-  实际资源由 Release 决定；
+- **Snapshot v2**：保留 v1 的 Managed Provider/Model/TTS/HTTP-ASR/Direct MCP/Policy，并增加
+  `ManagedAssistantDefinition`、其中的 Managed Memory Seed 和 `AssistantStarterDefinition`；
 - **必须独立保存但不是能力配置**：Enterprise Binding、Refresh Credential、Applied Snapshot payload/元数据；
-- **S0.2 保持本地**：Assistant、Prompt、Memory、Search、Skill、Workspace、主题/显示、备份、快捷消息、图片生成、实时 ASR 等；
+- **仍保持本地或属于后续阶段**：Personal Assistant/Prompt/Memory、Search、Skill、Workspace、主题/显示、备份、
+  快捷消息、图片生成和实时 ASR；Enterprise Local Assistant Memory 是 User Data，不进入 Snapshot；
 - **禁止下发到 Android**：`UpstreamDefinition`、`upstreamId`、base/internal URL、企业 API Key/Secret、RuntimeBinding、
   `runtimeRouteId`、Pricing；这不包含客户端必须接收的 `upstreamModelKey`；
 - **禁止实现方式**：把服务端 payload 直接反序列化为 `Settings`，或把 Enterprise Token 写入本地 Provider/MCP credential 字段。
 
-当前 `measix-platform-core` 明确仍处于 S0.1 pre-freeze，尚无有效 C7 Freeze。因此本文可以完成盘点和映射设计，
-但 Android S0.2 wire/code 实现必须等 Freeze 后以固定的 commit、OpenAPI hash、fixture hash 和 schema version 开始。
+当前 Android 只有内部签名 overlay 原型，没有 ClientRealm、Enrollment/Session、Snapshot v2/v3 generated DTO、
+Enterprise Update/Portal 或生产同步入口；不能把该原型表述为已完成 S0.2/S0.4 集成。
 
 ## 2. 配置 owner 与读写架构
 
@@ -82,9 +71,9 @@ ManagedSnapshot
 | Local durable resource | Room + `filesDir` | Workspace、Skill、会话级覆盖、资源文件 | 仅备份协议明确包含的域 |
 | Local runtime cache | `cacheDir/lru_key_roulette.json` 等 | 可重建的 key 轮换/发现缓存；不是配置真源 | 否 |
 | Managed prototype | `filesDir/managed_configuration/` | 当前代码中的签名通用 overlay 原型 | 否 |
-| Enterprise Binding | S0.2 待实现的独立持久化 | Deployment/User/Device/Session binding | 否 |
-| Enterprise credential | S0.2 待实现的 Keystore-backed store | Refresh Credential；Access Token 仅内存 | 否 |
-| Applied Managed State | S0.2 待实现的 crash-safe whole state | Snapshot payload + generation/hash/schema/release | 否；与 credential 分离 |
+| Enterprise Binding | 当前 Android 未实现 | Deployment/User/Device/Session binding | 否 |
+| Enterprise credential | 当前 Android 未实现 | Refresh Credential；Access Token 仅内存 | 否 |
+| Applied Managed State | 当前 Android 未实现 | Snapshot payload + generation/hash/schema/release | 否；与 credential 分离 |
 | Server runtime owner | Control Hub / Runtime Relay | Upstream、Secret、RuntimeBinding、route、pricing | 永不进入 Android 本地配置 |
 
 `lru_key_roulette.json` 当前以原始 API key 作为 map key 保存轮换时间。它虽然不是配置真源也不进入手工备份，仍是
@@ -115,16 +104,7 @@ updateLocal(latest Local shadow transform)
 - `restoreLocal()` 和 `snapshotLocal()` 只操作 Local shadow；
 - `pendingAssistantDeletions` 虽为 `@Transient`，仍由独立 DataStore key 持久化，恢复普通 Settings 时不得清空。
 
-主要实现：
-
-- `data/datastore/SettingsStore.kt`
-- `data/datastore/SettingsCommit.kt`
-- `data/datastore/SettingsNormalization.kt`
-- `data/datastore/SettingsWriteRules.kt`
-- `data/datastore/EffectiveSettings.kt`
-- `data/datastore/ManagedConfiguration.kt`
-
-## 3. Local Settings 完整顶层结构（38 个持久 key）
+## 3. Local Settings 顶层结构
 
 下表中的“读取默认”以空 DataStore 的真实读取/物化结果为准，不以 `Settings()` 中为序列化兼容而存在的随机 UUID
 占位值为准。配置演进时必须分别检查四种语义：Kotlin 构造默认、DataStore key 缺失默认、`materializeForRead()`
@@ -498,403 +478,54 @@ Conversation.folderId            → Folder.id
 读取物化会补齐 Built-in Provider/Assistant/System TTS、按 ID 去重，并清理部分失效引用；它不会把清理结果静默写回磁盘。
 跨记录删除、授权清理和默认选择修正仍需由对应 application service 在同一次 `updateLocal` transform 中完成。
 
-## 7. S0.2 企业下发的精确结构
-
-以下结构来自当前 pre-freeze Client OpenAPI。Freeze 前仍允许按架构流程修正；Android 实现必须 pin 最终 frozen artifact。
-
-### 7.1 Snapshot wrapper
-
-```text
-ManagedSnapshot
-  deploymentId: dep_*
-  schemaVersion: 1
-  managedGeneration: integer >= 1
-  releaseId: rel_*
-  snapshotHash: sha256:<hex>
-  providers: ProviderDefinition[]
-  models: ModelDefinition[]
-  tts: TtsDefinition[]
-  asr: AsrDefinition[]
-  mcp: McpDefinition[]
-  policy: ManagedPolicy
-  metadata:
-    publishedAt
-    publishedByUserId?
-```
-
-数组按稳定平台 ID 排序参与服务端 canonical hash；Android 只校验 HTTP ETag 与 `body.snapshotHash` 一致，并校验
-TLS、deployment identity、schema 和引用后原子替换 Applied state。Android 不自行重算或发明 JSON canonicalization。
-
-### 7.2 Provider / Model
-
-```text
-ProviderDefinition
-  providerId: prv_*
-  displayName: non-empty String
-  clientProtocol: OPENAI_CHAT_COMPLETIONS
-  enabled: Boolean
-
-ModelDefinition
-  modelId: mdl_*
-  providerId: prv_*
-  displayName: String
-  upstreamModelKey: String
-  runtimePath: path-only String
-  inputModalities: [TEXT | IMAGE]
-  outputModalities: [TEXT]
-  capabilities: [TOOL | REASONING]
-  enabled: Boolean
-```
-
-Managed Provider 只是客户端分组/协议身份，不是 Local `ProviderSetting`。它没有 base URL、API key、balance、Responses、
-provider overwrite 或 custom header/body。
-
-### 7.3 TTS / ASR / MCP
-
-```text
-TtsDefinition
-  ttsId: tts_*
-  displayName: String
-  clientProtocol: OPENAI_AUDIO_SPEECH
-  upstreamModelKey: non-empty String
-  voice: non-empty String
-  runtimePath: path-only String
-  enabled: Boolean
-
-AsrDefinition
-  asrId: asr_*
-  displayName: String
-  clientProtocol: OPENAI_AUDIO_TRANSCRIPTIONS
-  upstreamModelKey: non-empty String
-  language?: String
-  runtimePath: path-only String
-  enabled: Boolean
-
-McpDefinition
-  mcpServerId: mcp_*
-  displayName: String
-  clientProtocol: MCP_STREAMABLE_HTTP
-  runtimePath: path-only String
-  authOwnership: ENTERPRISE_MANAGED | NONE
-  enabled: Boolean
-```
-
-### 7.4 Policy
-
-```text
-ManagedPolicy
-  policyId: pol_*
-  allowLocalProviders: Boolean
-  allowLocalTts: Boolean
-  allowLocalAsr: Boolean
-  allowLocalMcp: Boolean
-  defaultModelId?: mdl_*
-  defaultTtsId?: tts_*
-  defaultAsrId?: asr_*
-```
-
-Policy default 引用 Managed 平台 ID，不能写入 Local `Settings.*Id: Uuid`。Effective runtime 必须保留 origin-aware identity，
-由同一 picker/catalog 展示 Local + Managed，但使用各自原始稳定 ID。
-
-### 7.5 绝不进入 Snapshot 的服务端字段
-
-```text
-RuntimeBindingDefinition
-  runtimeRouteId, resourceId, upstreamId,
-  allowedMethods, allowedPathPrefixes,
-  transportPolicy, timeoutPolicy
-
-Upstream base/internal URL
-Enterprise Secret / API key / resolved credential
-PricingRule
-```
-
-Android 只使用：
-
-```text
-{platform origin}/runtime/v1/resources/{resourceId}{runtimePath}
-Authorization: Bearer <enterprise access token>
-X-Measix-Managed-Generation: <captured generation>
-X-Measix-Interaction-Id: int_*
-```
-
-## 8. 企业控制状态：部分必须持久化，但不是配置下发项
-
-### 8.1 Discovery、Enrollment 与 Bootstrap wire
-
-Android 从用户输入的 secure platform origin 开始，只把服务端返回的 path-only base 拼到该 origin；不能接受 Snapshot
-下发新的 host。当前 pre-freeze Discovery 完整结构为：
-
-```text
-Discovery
-  product: MEASIX_AGENT_PLATFORM
-  protocolVersion: "1"
-  deploymentId: dep_*
-  deploymentName: String
-  clientApiBase: path-only String
-  runtimeApiBase: path-only String
-  supportedSnapshotSchemaVersions: Integer[]
-```
-
-Enrollment exchange 结构为：
-
-```text
-request
-  code
-  installationId: ins_*
-  deviceName
-  appVersion
-  platform: ANDROID
-
-response
-  deploymentId: dep_*
-  userId: usr_*
-  deviceId: dev_*
-  sessionId: ses_*
-  accessToken
-  accessTokenExpiresAt
-  refreshToken
-  refreshExpiresAt
-```
-
-Refresh request 只携带 `refreshToken`，response 只返回新 `accessToken/accessTokenExpiresAt`；Logout 同样以
-refresh token 撤销 session。Bootstrap 返回：
-
-```text
-deployment { deploymentId, name }
-user       { userId, displayName }
-device     { deviceId, status: ACTIVE | REVOKED }
-session    { sessionId, expiresAt }
-supportedSnapshotSchemaVersions[]
-managedState
-```
-
-### 8.2 Binding 与 credential partition
-
-```text
-BindingState = UNBOUND | ENROLLING | BOUND | REVOKED
-
-durable binding identity
-  platform origin
-  deploymentId
-  userId
-  deviceId
-  sessionId
-  refresh/session expiry metadata
-```
-
-`installationId` 由 Android 生成；User/Device/Session ID 必须由 Hub 返回。Refresh Credential 使用 Keystore-backed
-保护，Access Token 仅内存。Disconnect 只清 Enterprise Binding/Credential/Managed state，不删除 Local Settings/history。
-
-### 8.3 Managed readiness 与 Applied state
-
-Control plane 的 `ManagedState` wire 与 Android 派生状态不是同一个 enum：
-
-```text
-ManagedState
-  runtimeStatus: READY | ACTIVATING | DEGRADED
-  activeManagedGeneration: Integer >= 0
-  managedStateRevision: Integer >= 0
-  syncRequired: Boolean
-  targetManagedGeneration?: Integer >= 1
-  runtimeBlocked: Boolean
-
-ManagedRuntimeState
-  UNKNOWN | READY | SYNC_REQUIRED | SYNCING |
-  SYNC_FAILED | CONTROL_UNAVAILABLE
-
-AppliedManagedState                  # crash-safe whole-state unit
-  snapshot payload
-  appliedManagedGeneration
-  snapshotHash
-  schemaVersion
-  releaseId
-  validated recovery metadata
-```
-
-每个新的顶层 Managed interaction 必须先获取 authoritative Managed State；并发可以共享 single-flight preflight/sync，
-但每个 interaction 捕获独立 immutable `{interactionId, generation, effectiveRuntime, startedAt}`。不能用 TTL、本地 LKG 或
-全局 mutable current interaction 绕过 guard。
-
-### 8.4 Generation deny 与禁止 replay
-
-只有确有 Applied Snapshot 时，preflight 才发送：
-
-```http
-X-Measix-Applied-Managed-Generation: N
-```
-
-Runtime Relay 的 generation mismatch 必须在 forward 前返回：
-
-```text
-HTTP 428
-code: managed_snapshot_required
-targetManagedGeneration
-requestId
-forwarded: false
-```
-
-Android 终止当前 interaction/request 并进入 sync；同步完成后，只有下一次新的 user/top-level action 才能用新的
-interaction identity 与 generation。不得在同一 interaction 自动 replay 原 user/tool/MCP side effect，也不存在 generation
-grace window。
-
-## 9. Android Local → Managed 映射与缺口
-
-| 领域 | 可复用的现有边界 | 不能直接复用的 Local 结构 | S0.2 所需结果 |
-|---|---|---|---|
-| Provider/Model | OpenAI Chat Completions 请求、stream/tool/render pipeline | `ProviderSetting` 含 baseUrl/apiKey；Local ID 是 UUID；Managed ID 是 `prv_*/mdl_*` | 独立 Managed projection + 平台 endpoint/auth adapter，进入同一 Effective runtime/picker |
-| TTS | OpenAI request、binary audio playback/save/cancel | Local TTS 把 baseUrl/apiKey/model/voice 放在一个对象 | 使用 Snapshot model+voice，平台路由和 auth；禁止 Local voice fallback |
-| ASR | 音频采集和文本消费 UI | 现有 `ASRProviderSetting` 全是 WebSocket realtime | 增加 HTTP multipart Managed execution adapter，不制造 VAD/sample-rate |
-| MCP | Streamable HTTP client、工具 discovery/call | Local URL、headers、OAuth 和连接恢复可绕过企业 guard | 平台 runtime URL + authOwnership；connect/call/reconnect 全部受 interaction/generation guard |
-| Policy/default | 现有 origin/lock UI 和 Store 写门禁可提供经验 | 当前 lock 是任意 record path；默认 ID 是 UUID | 按 frozen policy 决定 availability/default；Managed mutation 在 command/commit boundary 拒绝 |
-| Persistence | `SettingsStore` 的落盘后发布、单一 effective read model | 当前 managed 文件不是 binding/credential/applied-state whole unit | Binding、credential、Applied state 分 owner，原子发布统一 Effective runtime revision |
-
-Managed runtime identity 不能通过“把 `mdl_*` hash 成 UUID”伪装成本地 ID，也不能把 Managed Policy default 写进 Local Settings。
-实现需要一个 origin-aware key，例如概念上的 `{origin, stableId}`，但不能因此复制第二套用户 picker 或第二套 Chat runtime。
-
-## 10. 企业下发分级清单
-
-| Android 配置域 | S0.2 结论 | 原因/后续条件 |
-|---|---|---|
-| Managed Provider grouping | **下发** | required Snapshot profile |
-| Managed Chat Model | **下发** | OpenAI Chat Completions required profile |
-| Managed TTS | **下发** | OpenAI Audio Speech + required voice |
-| Managed HTTP ASR | **下发** | OpenAI Audio Transcriptions multipart |
-| Managed MCP | **下发** | Streamable HTTP + auth ownership |
-| Managed Policy/default | **下发** | Local capability availability + Managed defaults |
-| Binding/Managed State | **控制面同步** | 身份/正确性状态，不是 Snapshot resource |
-| Refresh/Access Token | **安全会话状态** | 不得进入 Settings/Snapshot/backup |
-| Local Provider/Model/API key | **保持本地** | Local Runtime 完整；enterprise secret server-side |
-| Assistant/Tag/Prompt/Quick Message | **S0.2 不下发** | 当前 Snapshot 无定义；属于 Agent/体验定义扩展 |
-| Memory/Recent chats/Conversation override | **S0.2 不下发** | User Data Sync 与 Managed Delivery 永久分离 |
-| Search | **S0.2 不下发** | required Managed profile 未定义 Search |
-| Skill | **S0.2 不下发** | 需要签名 bundle、ID、版本、引用和生命周期协议 |
-| Workspace/local tool approval | **S0.2 不下发** | Agent Space/Remote Runtime 在后续 Stage |
-| Theme/Display/Language/UI preference | **保持本地** | 个人设备体验，不是执行能力定义 |
-| WebDAV/S3/Backup reminder | **保持本地** | 用户备份域，不能承载 enterprise sync |
-| Title/Suggestion/Compression prompt/model | **保持本地** | S0 Snapshot 没有相应资源/任务语义 |
-| Image Generation/Embedding | **S0.2 不下发** | 明确非 required profile |
-| Local realtime ASR | **保持本地** | Managed v1 仅 HTTP transcription |
-| RuntimeBinding/Upstream/Secret/Pricing | **禁止下发** | server-only topology/security/operations |
-
-以后要下发 Assistant、Prompt、Search、Skill 或 Workspace 时，应各自成为 typed definition/bundle，并先更新 architecture、
-Control Protocol、OpenAPI、fixtures、Android compatibility 和测试。不要把完整 `Settings` 或任意 `JsonObject` 当扩展协议。
-
-## 11. 现有 ManagedConfiguration 原型的定位
-
-当前 Android 已有一套内部原型：
-
-```text
-ManagedConfigurationEnvelope
-  schemaVersion, keyId, tenantId, generation, expiresAt, signature
-  payload
-    records[]       # Provider/Assistant/Tag/MCP/TTS/ASR/Search/Injection/QuickMessage
-    defaults        # 多个 Local UUID selector
-    locks
-    assets / assistant asset bindings
-    revoked
-```
-
-原型的 `records.kind` 完整集合是 `PROVIDER/ASSISTANT/ASSISTANT_TAG/MCP_SERVER/TTS_PROVIDER/ASR_PROVIDER/
-SEARCH_SERVICE/MODE_INJECTION/QUICK_MESSAGE`；`defaults` 完整集合是 chat、fast、title、image-generation、
-attachment-inspection、compress model，以及 Assistant、Search、TTS、ASR selector。它不能表达 suggestion model/prompt、
-Display、Search common option、播放速度或集合级 allow/deny policy。
-
-原型文件是 `filesDir/managed_configuration/active.envelope` 和 `generation-<n>/assets/`，envelope 上限 2 MiB；当前
-trust anchor 固定为 `keyId=rikkahub-managed-v1`、`tenantId=rikkahub`。运行状态为
-`ABSENT/ACTIVE/DEGRADED/BLOCKED`：过期包进入 `DEGRADED` 但继续提供已验证 overlay/lock，损坏的已存包进入
-`BLOCKED`，更高 generation 的签名 `revoked` 包回到 `ABSENT`。
-
-它具备签名校验、generation 单调、asset staging、原子 envelope 替换、Local shadow merge 和 write lock 等实现经验，
-但**不是当前 S0.1/S0.2 Client Snapshot contract**：
-
-- transport shape 与 OpenAPI `ManagedSnapshot` 不同；
-- 使用硬编码 tenant/key trust anchor，而 S0 使用 Enrollment/Deployment/Session/TLS/ETag contract；
-- record/default identity 是 Android UUID，平台资源是 typed `prv_*/mdl_*/tts_*/asr_*/mcp_*`；
-- 下发 Assistant/Search/Prompt/assets，而 S0.2 required Snapshot 不包含这些域；
-- 缺少 `ManagedPolicy`、Binding、secure credential、Managed State preflight、interaction context 和 Relay 428 语义；
-- `SettingsStore.applyManagedSnapshot()` 当前只有测试调用，没有生产 Enrollment/Sync 接入者。
-- `SettingsStore.restoreLocal()` 当前只替换 Local shadow，允许其在 overlay 遮挡期间继续变化、并在 Managed remove/disconnect
-  后重新显现；这符合 S0 Local-shadow 原则。它绕过当前旧原型的自定义 `locks`，是否要约束整份备份恢复只是旧原型
-  语义，不能外推为 S0.2 Managed mutation 规则。
-- MCP discovery 只向 `McpCatalogStore` 提交完整非空 candidate；OAuth 与用户审批策略仍属于 Local Settings。
-  Managed MCP 的 credential partition 和用户是否能覆盖受管工具策略仍必须由冻结协议明确，不能把目录 schema
-  或 enterprise token 回写到 Managed Definition。
-
-S0.2 实施时不应给该原型再套一层兼容 adapter 或保留双 transport/source of truth。应在有效 Freeze 后以 frozen generated types
-和 canonical fixtures 重建唯一 Managed ingestion path；能复用的仅是已验证的原子持久化、Local shadow、effective projection、
-source/lock UI 和提交门禁原则。旧 envelope/record path 在切换完成时应物理删除或完全收口为新的唯一协议实现。
-
-## 12. Freeze 前必须由权威契约解决的问题
-
-下面不是 Android 可自行选择的实现细节。它们在 C7 Freeze 前必须由 architecture/OpenAPI/fixtures 或 S0.2 Android
-implementation decision 给出唯一答案：
-
-1. **双域 ID 与 shadow 规则**：Local 资源使用 `Uuid`，平台使用 `prv_*/mdl_*/tts_*/asr_*/mcp_*`；当前没有可执行的
-   “同稳定 ID 覆盖”关系。必须明确 origin-aware identity 与冲突语义，不能 strip prefix、hash 成 UUID 或碰撞后取首项。
-2. **一个 `defaultModelId` 对 Android 多模型角色的作用范围**：必须明确它只影响 Chat effective default，还是会影响
-   Assistant、fast/title/compress/attachment inspection；它绝不能误覆盖 Image Generation。
-3. **Local 被禁止后的引用/fallback**：当 Assistant 显式引用 Local model、`allowLocalProviders=false` 且 Managed default
-   缺失时，是 unavailable 还是选择某个 Managed model，必须有确定规则；不得回写或清空 Local shadow。
-4. **disabled 资源的 default 与 Relay enforcement**：当前 Core validation 只检查 policy default 引用“存在”，不检查
-   `enabled`；Runtime Control 也按全部 bindings 编译 route。Freeze 前必须保证 disabled 资源不能成为有效 default，且不能
-   被客户端绕过 catalog 直接调用。
-5. **Model 字段约束**：当前 OpenAPI/后端没有像 TTS/ASR 一样要求 Model `upstreamModelKey` 非空，也没有规定
-   modalities/capabilities 的非空、去重组合；Android 不能发明隐式默认。
-6. **Managed MCP tool policy**：Snapshot 没有 tool enable/approval 字段。必须明确 discovery cache 的 owner、用户能否本地
-   disable/require approval、这些偏好如何跨 generation 继承，以及它们是否算 Managed mutation。
-7. **Snapshot hash fixture 完整性**：当前 Go `snapshotDescriptor + json.Marshal` 是服务端 canonical authority，只有
-   `snapshot/generation-42.json` 参与 golden hash；`full-required-profile.json` 的 hash 只是格式占位。Freeze 必须提供
-   可执行的 full-profile hash fixture 与 artifact manifest。Android 只验证 HTTP ETag 等于 `body.snapshotHash`，不能重写一份
-   可能漂移的 canonicalization。
-8. **response forward compatibility**：OpenAPI 对对象使用 `additionalProperties:false`，协议同时要求 client 忽略新增的
-   optional response 字段。Android DTO/decoder 必须登记 `ignoreUnknownKeys` 等等价规则，同时保持 request strict。
-9. **Binding 与 Keystore 的 crash recovery**：Binding metadata 与 refresh credential 分属不同存储；必须定义
-   staging/commit/recovery 顺序，保证 Enrollment 失败或进程终止不会留下 half binding。
-10. **Android Freeze pin 落点**：当前 Core 的 `api/generated/android/` 只有 OpenAPI copy 与 manifest；Android 仓库尚无
-    Kotlin DTO、已消费的 manifest pin、hash drift gate 或 fixture consumer。这些必须在开始 S0.2 code 前登记。
-
-在以上问题解决且 C7 Freeze 生效前，本文状态只能是“pre-freeze architecture registry”，不能当成最终 v1 wire 或
-Android 已具备企业下发能力的声明。
-
-## 13. 文档与实现同步规则
-
-以下变化必须同步本文：
-
-- `Settings` 顶层字段、默认读取值或 DataStore key；
-- Provider/Model/Assistant/TTS/ASR/MCP/Search 的持久字段；
-- SharedPreferences 产品 key；
-- Workspace/Skill/会话覆盖的配置边界；
-- Local backup 包含/排除范围；
-- Effective settings owner、merge、origin 或 write-lock 语义；
-- frozen Client Snapshot schema、required profile 或 Managed Policy；
-- 某 Local 配置域被提升为 typed Managed Definition。
-
-对应验证至少包括：
-
-1. Settings key/serialization/default compatibility；
-2. Local backup 不包含 Enterprise Binding/credential/Applied state；
-3. frozen OpenAPI/fixture/generated type drift gate；
-4. Local + Managed same-identity/不同-origin 的 deterministic merge；
-5. Managed mutation UI disabled + command/commit deny；
-6. Model/TTS/HTTP-ASR/MCP 全入口 guard 与 endpoint/auth 映射；
-7. invalid/corrupt Snapshot 保持 LKG 和 Local，不出现 half commit；
-8. 428/revoke/auth/network/cancel 不自动重放可能有副作用的请求；
-9. real emulator/device 从 Enrollment 开始的完整 T4 路径；
-10. Local runtime 全量回归。
-
-## 14. 权威来源与更新顺序
-
-需求与语义按以下顺序裁决，后层不能反向改写前层：
-
-1. `measix-architecture/README.md`、`docs/measix-stage-document-index.md`；
-2. `docs/10-runtime-foundation/s0/measix-s0-foundation-contract-spec.md`；
-3. `measix-s0-capability-delivery-contract-spec.md`、`measix-s0-control-protocol.md`、
-   `measix-s0-android-integration-contract-spec.md`、`measix-s0-android-client-testing-spec.md`；
-4. `measix-platform-core/api/client/client-control.openapi.yaml` 与 `api/fixtures/`；
-5. 有效 C7 Freeze manifest；当前进度以 `measix-platform-core/docs/s0-execution-progress.md` 为准；
-6. Android 的 `SettingsStore.kt`、`ManagedConfiguration.kt`、`EffectiveSettings.kt`、各领域 data model 与 application service；
-7. 本文和各领域 reference 文档。
-
-Architecture 负责产品/跨组件契约，Core 负责 executable wire/fixtures，Android 仓库负责本地配置、映射、持久化与执行细节。
-如果三者冲突，先在 owner 层修正并重新 Freeze，不能只在本文或 Android adapter 中加兼容旁路。
+## 7. 企业集成边界
+
+现行平台契约以 S0.2 Snapshot v2 增加 Managed Assistant、Managed Memory Seed 与 Assistant Starter；S0.3 再增加
+Enterprise Tool Gateway，S0.4 才完成 Android 对冻结 profile 的完整集成。Enterprise Update 使用独立 Feed，不进入
+Snapshot；Enterprise Local Assistant Memory 属于 User Data，也不进入 Snapshot。
+
+当前 Android 的 `ManagedConfigurationEnvelope` 是 `schemaVersion=1` 的内部签名 overlay 原型。它具备签名校验、
+generation 单调、asset staging、Local shadow、effective projection 和写门禁，但没有 ClientRealm、Enrollment/Session、
+Snapshot v2/v3 generated DTO、Enterprise Update/Portal 或生产同步入口。因此：
+
+- 它不能冒充 S0.2/S0.4 实现，也不能通过 adapter 与未来平台协议并存为双 source of truth；
+- Enterprise Binding、credential 与 Applied Snapshot 必须独立于 Local Settings、普通备份和 Provider/MCP credential；
+- Local shadow 不因 Managed overlay 删除；Managed remove/disconnect 后恢复；
+- Managed Assistant 与 Personal Assistant 必须保留 origin/provenance，不能把平台 ID hash 或转写为 Local UUID；
+- 服务端 upstream、secret、runtime route 和 pricing 永不进入 Android Snapshot；
+- UI disabled 只是投影，Managed mutation 必须在 command/commit boundary 拒绝；
+- 新协议落地时应替换旧原型的传输与 owner 路径，物理删除无调用的旧协议，不保留兼容旁路。
+
+Assistant 的当前 Local 字段和 S0.2 映射见
+[助手配置参考](assistant-configuration.md)。平台 Snapshot、Realm、Gateway 和 Android full-profile 的精确 wire/阶段边界
+以 MEASIX Architecture、冻结后的 Control Protocol 与 generated OpenAPI 为准；本仓库参考只登记已经实现的 Android
+owner、持久化和消费边界，不复制阶段性 fixture、commit/hash 或 Freeze 待办。
+
+## 8. 关键架构文件
+
+| 边界 | 文件 |
+| --- | --- |
+| Settings owner 与 Local shadow | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsStore.kt` |
+| 提交与发布顺序 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsCommit.kt` |
+| 读取物化与持久化归一化 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsNormalization.kt` |
+| Managed 写门禁 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsWriteRules.kt` |
+| 唯一有效读模型 | `app/src/main/java/net/weero/measix/pilot/data/datastore/EffectiveSettings.kt` |
+| 当前签名 overlay 原型 | `app/src/main/java/net/weero/measix/pilot/data/datastore/ManagedConfiguration.kt` |
+| Assistant 配置模型 | `app/src/main/java/net/weero/measix/pilot/data/model/Assistant.kt` |
+
+## 9. 维护与验证
+
+以下变化必须同步本文：Settings 字段与默认读取语义、Local/Managed owner、有效读模型、持久化与备份边界、稳定引用
+规则，以及已经实际接入 Android 的平台 typed definition。
+
+修改当前 Android 配置链至少验证：
+
+- Settings serialization、缺失 key 默认、读取物化和旧备份兼容；
+- Local shadow、Managed overlay、write lock 与“落盘后发布”顺序；
+- Local 备份不包含 Managed envelope、Enterprise Binding、credential 或 Applied Snapshot；
+- 无效、过期、撤销或损坏 Managed payload 的 fail-closed/LKG 行为；
+- 删除与恢复在 Provider、Assistant、MCP、TTS、ASR、Search 和文件引用之间保持原子；
+- UI 与运行时只消费同一个 effective read model，不建立第二 owner。
+
+构建/JVM 验证不能表述为真实 Enrollment、Keystore、后台同步、网络失败、428/revoke 或设备集成验收。相关生产路径
+落地后，必须按冻结平台契约补齐真实 emulator/device 与服务端互操作验证。

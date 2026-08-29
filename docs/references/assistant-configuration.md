@@ -1,10 +1,9 @@
 # 助手配置参考
 
-> 状态：当前 Android Assistant 实现事实参考，审查日期 2026-08-27。
 > 企业边界：MEASIX S0.2 已正式包含 `ManagedAssistantDefinition + Memory Seed + AssistantStarterDefinition`，
 > 但 Android 当前内部签名 overlay 仍是 `schemaVersion=1` 的通用 Local-record 原型，没有 ClientRealm 或生产下发入口，
 > 不是 S0.2 Snapshot v2。目标范围以 `measix-architecture` 的 Enterprise Realm & Experience Contract/Control Protocol 为准；
-> Android 映射总览见 [Android 配置架构与企业下发清单](android-configuration-architecture.md)。
+> Android 映射总览见 [Android 配置架构与企业下发边界](android-configuration-architecture.md)。
 
 本文说明 `Assistant` 的持久化字段、默认值、解析规则和配置消费边界。完整生成过程见
 [消息生成链路](chat-generation-pipeline.md)，模型可见提示与工具契约见
@@ -250,25 +249,29 @@ Memory Seed、Starter 和 Enterprise Local Memory 分 owner。实施时必须替
 删除 Assistant 由 `AssistantManagementService` 协调：先写 tombstone，再取消相关生成和子助手运行，
 清理记忆与会话，最后提交 Settings 清理。中断后由 tombstone 恢复流程继续完成，不能把列表移除视为删除完成。
 
-## 6. 配置消费位置
+## 6. 配置消费边界
 
-| 责任 | 主要实现 |
-|------|----------|
-| 数据模型、正则、上下文阈值、默认提示 | `data/model/Assistant.kt` |
-| Settings Local shadow、有效读模型与受管快照 | `data/datastore/SettingsStore.kt`、`EffectiveSettings.kt`、`ManagedConfiguration.kt` |
-| 读取物化、写规则与提交顺序 | `SettingsNormalization.kt`、`SettingsWriteRules.kt`、`SettingsCommit.kt` |
-| UI 新建与编辑 | `ui/pages/assistant/` |
-| 会话助手归属与迁移 | `ConversationApplicationService.moveToAssistant()`、`UpdateHeader` |
-| 模型 readiness 与主生成工具装配 | `MasterTurnCoordinator`、`GenerationToolSetFactory` |
-| 请求构建、工具循环与 Transformer | `GenerationLoop` |
-| 工具创建/修改/删除助手 | `AssistantManagementService`、`AssistantToolFactory` |
-| Target 默认模板和运行过滤 | `SubAssistantRunPolicy` |
-| 子助手执行与恢复 | `DelegationCoordinator`、`TurnRecovery`、`ApplicationRecoveryCoordinator` |
-| Provider 参数映射 | `ai/.../provider/providers/` |
+`Assistant` 数据模型定义持久字段与默认语义；Settings 的 Local shadow、受管快照、有效读模型、读取物化和提交规则归
+Settings owner。会话助手归属只经 `ConversationApplicationService` 迁移；模型 readiness 与主生成工具装配归
+`MasterTurnCoordinator` 和 `GenerationToolSetFactory`；请求映射、工具循环与 Transformer 归 `GenerationLoop`；助手的
+创建、修改和删除归 `AssistantManagementService`。子助手的运行过滤、执行与恢复分别归 `SubAssistantRunPolicy`、
+`DelegationCoordinator`、`TurnRecovery` 和 `ApplicationRecoveryCoordinator`。
 
-当前不存在的 S0.2 owner 不能添加到上表冒充实现，包括 ClientRealm、Enterprise Binding/Session、Snapshot v2 generated DTO、
-Managed Memory Seed store、Starter projection 和 Enterprise Update/Portal。它们落地时必须在同一变更中补充真实 owner、消费位置和测试。
+UI 和 Provider adapter 只能消费上述 typed 配置与有效读模型，不能成为第二 owner。当前不存在的 S0.2 owner 不能冒充
+已实现能力，包括 ClientRealm、Enterprise Binding/Session、Snapshot v2 generated DTO、Managed Memory Seed store、
+Starter projection 和 Enterprise Update/Portal；它们落地时必须在同一变更中补充真实 owner、消费边界和验证。
 
 维护配置时应从“持久化默认值 → UI/工具创建入口 → 解析与归一化 → 请求消费 → 测试/文档”完整检查，
 避免只修改数据类或单一页面。
 `contextMessageLimit` 编辑器使用独立草稿状态：合法值为 `0` 或 `40..512`，仅在 IME Done 或失焦时提交；关闭写 `0`，重新启用写默认值 `80`。开关提交会抑制随后一次失焦对旧草稿的重复写入，Done 与失焦也不会重复提交同一值。编辑中收到外部设置更新时保留当前输入缓冲，但更新去重基线；未聚焦时同步 durable 值。最终写入仍走 Assistant 配置既有 typed 更新链。
+
+## 7. 关键架构文件
+
+| 边界 | 文件 |
+| --- | --- |
+| Assistant 数据模型 | `app/src/main/java/net/weero/measix/pilot/data/model/Assistant.kt` |
+| Local shadow 与 effective owner | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsStore.kt`、`EffectiveSettings.kt` |
+| 读取物化、写规则与提交 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsNormalization.kt`、`SettingsWriteRules.kt`、`SettingsCommit.kt` |
+| 会话归属与生成装配 | `app/src/main/java/net/weero/measix/pilot/service/ConversationApplicationService.kt`、`MasterTurnCoordinator.kt`、`data/ai/GenerationLoop.kt`、`data/ai/tools/GenerationToolSetFactory.kt` |
+| 助手管理工具 | `app/src/main/java/net/weero/measix/pilot/service/AssistantManagementService.kt`、`data/ai/tools/AssistantToolFactory.kt` |
+| 子助手策略与执行 | `app/src/main/java/net/weero/measix/pilot/data/ai/subassistant/SubAssistantRunPolicy.kt`、`service/runtime/DelegationCoordinator.kt` |
