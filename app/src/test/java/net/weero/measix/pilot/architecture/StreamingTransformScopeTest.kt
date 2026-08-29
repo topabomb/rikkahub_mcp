@@ -134,9 +134,9 @@ class StreamingTransformScopeTest {
         ).toList()
 
         // 流式期间仅 active assistant 消息进入 transformStreaming
-        // （5000 个 text chunk + 1 个 finishReason=stop 收尾 chunk 各触发一次 onUpdateMessages）
+        // （5000 个 text chunk + 1 个 finishReason=stop 收尾 chunk，再加一次 request usage close 投影）
         assertEquals(setOf(assistantMessage.id), counting.callsPerMessageId.keys)
-        assertEquals((chunkCount + 1).toLong(), counting.callsPerMessageId[assistantMessage.id]?.get())
+        assertEquals((chunkCount + 2).toLong(), counting.callsPerMessageId[assistantMessage.id]?.get())
 
         // 历史消息零次进入
         assertTrue(!counting.callsPerMessageId.containsKey(userMessage.id))

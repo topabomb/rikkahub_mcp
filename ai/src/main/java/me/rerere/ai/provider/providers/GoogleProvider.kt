@@ -25,11 +25,13 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ProviderUsageSnapshot
+import me.rerere.ai.core.sumTokenCountsOrNull
 import me.rerere.ai.core.ReasoningLevel
-import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
@@ -962,20 +964,27 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         return steps
     }
 
-    private fun parseUsageMeta(jsonObject: JsonObject?): TokenUsage? {
+    internal fun parseUsageMeta(jsonObject: JsonObject?): ProviderUsageSnapshot? {
         if (jsonObject == null) {
             return null
         }
-        val promptTokens = jsonObject["promptTokenCount"]?.jsonPrimitiveOrNull?.intOrNull ?: 0
-        val thoughtTokens = jsonObject["thoughtsTokenCount"]?.jsonPrimitiveOrNull?.intOrNull ?: 0
-        val cachedTokens = jsonObject["cachedContentTokenCount"]?.jsonPrimitiveOrNull?.intOrNull ?: 0
-        val candidatesTokens = jsonObject["candidatesTokenCount"]?.jsonPrimitiveOrNull?.intOrNull ?: 0
-        val totalTokens = jsonObject["totalTokenCount"]?.jsonPrimitiveOrNull?.intOrNull ?: 0
-        return TokenUsage(
-            promptTokens = promptTokens,
-            completionTokens = candidatesTokens + thoughtTokens,
-            totalTokens = totalTokens,
-            cachedTokens = cachedTokens
+        val promptTokens = jsonObject["promptTokenCount"]?.jsonPrimitiveOrNull?.longOrNull
+        val thoughtTokens = jsonObject["thoughtsTokenCount"]?.jsonPrimitiveOrNull?.longOrNull
+        val candidatesTokens = jsonObject["candidatesTokenCount"]?.jsonPrimitiveOrNull?.longOrNull
+        val toolUseInputTokens = jsonObject["toolUsePromptTokenCount"]?.jsonPrimitiveOrNull?.longOrNull
+        return ProviderUsageSnapshot(
+            inputTokens = promptTokens?.let { sumTokenCountsOrNull(it, toolUseInputTokens ?: 0L) },
+            contextInputTokens = promptTokens,
+            outputTokens = when {
+                candidatesTokens != null -> sumTokenCountsOrNull(candidatesTokens, thoughtTokens ?: 0L)
+                thoughtTokens != null -> thoughtTokens
+                else -> null
+            },
+            cacheReadInputTokens = jsonObject["cachedContentTokenCount"]?.jsonPrimitiveOrNull?.longOrNull,
+            reasoningOutputTokens = thoughtTokens,
+            toolUseInputTokens = toolUseInputTokens,
+            // Provider total is authoritative and is never recomputed in this adapter.
+            totalTokens = jsonObject["totalTokenCount"]?.jsonPrimitiveOrNull?.longOrNull,
         )
     }
 }

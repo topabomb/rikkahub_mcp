@@ -1407,7 +1407,7 @@ class ResponseAPIMessageTest {
             it["type"]?.jsonPrimitive?.content
         })
         assertEquals("final_answer", outputItems[1]["phase"]?.jsonPrimitive?.content)
-        assertEquals(3, terminalChunk.usage?.totalTokens)
+        assertEquals(3L, terminalChunk.usage?.totalTokens)
     }
 
     @Test

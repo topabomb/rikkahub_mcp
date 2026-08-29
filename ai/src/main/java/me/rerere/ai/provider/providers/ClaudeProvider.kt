@@ -24,11 +24,13 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ProviderUsageSnapshot
+import me.rerere.ai.core.sumTokenCountsOrNull
 import me.rerere.ai.core.ReasoningLevel
-import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.ClaudePromptCacheTtl
 import me.rerere.ai.provider.ImageGenerationParams
 import me.rerere.ai.provider.Modality
@@ -693,23 +695,34 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         )
     }
 
-    private fun parseTokenUsage(bodyJson: JsonObject?): TokenUsage? {
+    internal fun parseTokenUsage(bodyJson: JsonObject?): ProviderUsageSnapshot? {
         if (bodyJson == null) return null
 
         // 回退到标准 usage 字段
         val usageJson = bodyJson["usage"]?.jsonObject
             ?: bodyJson["message"]?.jsonObject?.get("usage")?.jsonObject
             ?: return null
-        val inputTokens = usageJson["input_tokens"]?.jsonPrimitive?.intOrNull ?: 0
-        val cachedInputTokens = usageJson["cache_read_input_tokens"]?.jsonPrimitiveOrNull?.intOrNull ?: 0
-        val cachedCreationTokens = usageJson["cache_creation_input_tokens"]?.jsonPrimitiveOrNull?.intOrNull ?: 0
-        val completionTokens = usageJson["output_tokens"]?.jsonPrimitive?.intOrNull ?: 0
-        val promptTokens = inputTokens + cachedInputTokens + cachedCreationTokens
-        return TokenUsage(
-            promptTokens = promptTokens,
-            completionTokens = completionTokens,
-            totalTokens = promptTokens + completionTokens,
-            cachedTokens = cachedInputTokens,
+        val uncachedInputTokens = usageJson["input_tokens"]?.jsonPrimitiveOrNull?.longOrNull
+        val cacheReadInputTokens = usageJson["cache_read_input_tokens"]?.jsonPrimitiveOrNull?.longOrNull
+        val cacheWriteInputTokens = usageJson["cache_creation_input_tokens"]?.jsonPrimitiveOrNull?.longOrNull
+        val outputTokens = usageJson["output_tokens"]?.jsonPrimitiveOrNull?.longOrNull
+        val inputTokens = uncachedInputTokens?.let {
+            sumTokenCountsOrNull(it, cacheReadInputTokens ?: 0L, cacheWriteInputTokens ?: 0L)
+        }
+        val isStreamingUsageEvent = bodyJson["type"]?.jsonPrimitiveOrNull?.contentOrNull in
+            setOf("message_start", "message_delta")
+        return ProviderUsageSnapshot(
+            inputTokens = inputTokens,
+            contextInputTokens = inputTokens,
+            outputTokens = outputTokens,
+            cacheReadInputTokens = cacheReadInputTokens,
+            cacheWriteInputTokens = cacheWriteInputTokens,
+            totalTokens = if (isStreamingUsageEvent) {
+                null
+            } else {
+                sumTokenCountsOrNull(inputTokens, outputTokens)
+            },
+            canDeriveTotalFromInputAndOutput = true,
         )
     }
 }

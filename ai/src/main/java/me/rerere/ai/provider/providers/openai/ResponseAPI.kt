@@ -21,11 +21,13 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ProviderUsageSnapshot
+import me.rerere.ai.core.sumTokenCountsOrNull
 import me.rerere.ai.core.ReasoningLevel
-import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
@@ -951,7 +953,7 @@ class ResponseAPI(
         responseId: String = "",
         outputItems: List<JsonObject>,
         endpointProfile: ResponseEndpointProfile,
-        usage: TokenUsage? = null,
+        usage: ProviderUsageSnapshot? = null,
     ): MessageChunk? {
         if (outputItems.isEmpty()) return null
         return MessageChunk(
@@ -1128,14 +1130,22 @@ class ResponseAPI(
         )
     }
 
-    private fun parseTokenUsage(jsonObject: JsonObject?): TokenUsage? {
+    internal fun parseTokenUsage(jsonObject: JsonObject?): ProviderUsageSnapshot? {
         if (jsonObject == null) return null
-        return TokenUsage(
-            promptTokens = jsonObject["input_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
-            completionTokens = jsonObject["output_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
-            totalTokens = jsonObject["total_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
-            cachedTokens = jsonObject["input_tokens_details"]?.jsonObjectOrNull?.get("cached_tokens")?.jsonPrimitive?.intOrNull
-                ?: 0
+        val inputTokens = jsonObject["input_tokens"]?.jsonPrimitiveOrNull?.longOrNull
+        val outputTokens = jsonObject["output_tokens"]?.jsonPrimitiveOrNull?.longOrNull
+        val inputDetails = jsonObject["input_tokens_details"]?.jsonObjectOrNull
+        val outputDetails = jsonObject["output_tokens_details"]?.jsonObjectOrNull
+        return ProviderUsageSnapshot(
+            inputTokens = inputTokens,
+            contextInputTokens = inputTokens,
+            outputTokens = outputTokens,
+            // Cache read/write are subsets of input_tokens and must not be added to inputTokens.
+            cacheReadInputTokens = inputDetails?.get("cached_tokens")?.jsonPrimitiveOrNull?.longOrNull,
+            cacheWriteInputTokens = inputDetails?.get("cache_write_tokens")?.jsonPrimitiveOrNull?.longOrNull,
+            reasoningOutputTokens = outputDetails?.get("reasoning_tokens")?.jsonPrimitiveOrNull?.longOrNull,
+            totalTokens = jsonObject["total_tokens"]?.jsonPrimitiveOrNull?.longOrNull
+                ?: sumTokenCountsOrNull(inputTokens, outputTokens),
         )
     }
 

@@ -25,11 +25,13 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ProviderUsageSnapshot
+import me.rerere.ai.core.sumTokenCountsOrNull
 import me.rerere.ai.core.ReasoningLevel
-import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
@@ -136,7 +138,8 @@ class ChatCompletionsAPI(
             ?.jsonPrimitive
             ?.content
             ?: "unknown"
-        val usage = parseTokenUsage(bodyJson["usage"] as? JsonObject)
+        val endpointVendor = resolveOpenAIEndpointVendor(providerSetting.baseUrl.toHttpUrl().host)
+        val usage = parseTokenUsage(bodyJson["usage"] as? JsonObject, endpointVendor)
 
         MessageChunk(
             id = id,
@@ -177,6 +180,7 @@ class ChatCompletionsAPI(
         Log.d(TAG, "streamText: model=${params.model.modelId}")
 
         val streamState = ChatCompletionsStreamState()
+        val endpointVendor = resolveOpenAIEndpointVendor(providerSetting.baseUrl.toHttpUrl().host)
 
         val listener = object : EventSourceListener() {
             override fun onEvent(
@@ -203,7 +207,7 @@ class ChatCompletionsAPI(
                                 close(it["error"]!!.parseErrorDetail())
                                 return
                             }
-                            val messageChunk = parseStreamPayload(it, streamState)
+                            val messageChunk = parseStreamPayload(it, streamState, endpointVendor)
                             trySend(messageChunk).onFailure { e ->
                                 Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
                             }
@@ -785,6 +789,7 @@ class ChatCompletionsAPI(
     internal fun parseStreamPayload(
         payload: JsonObject,
         streamState: ChatCompletionsStreamState? = null,
+        endpointVendor: OpenAIEndpointVendor = OpenAIEndpointVendor.COMPATIBLE,
     ): MessageChunk {
         val id = payload["id"]?.jsonPrimitiveOrNull?.contentOrNull.orEmpty()
         val model = payload["model"]?.jsonPrimitiveOrNull?.contentOrNull.orEmpty()
@@ -809,7 +814,7 @@ class ChatCompletionsAPI(
             id = id,
             model = model,
             choices = choiceList,
-            usage = parseTokenUsage(payload["usage"] as? JsonObject),
+            usage = parseTokenUsage(payload["usage"] as? JsonObject, endpointVendor),
         )
     }
 
@@ -930,18 +935,34 @@ class ChatCompletionsAPI(
         }
     }
 
-    private fun parseTokenUsage(jsonObject: JsonObject?): TokenUsage? {
+    internal fun parseTokenUsage(
+        jsonObject: JsonObject?,
+        endpointVendor: OpenAIEndpointVendor = OpenAIEndpointVendor.COMPATIBLE,
+    ): ProviderUsageSnapshot? {
         if (jsonObject == null) return null
-        return TokenUsage(
-            promptTokens = jsonObject["prompt_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
-            completionTokens = jsonObject["completion_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
-            totalTokens = jsonObject["total_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
-            // 各 provider 汇报缓存命中的字段形状不统一，按方言兜底解析（#1576）：
-            // OpenAI 嵌套 -> Moonshot 顶层 cached_tokens -> DeepSeek prompt_cache_hit_tokens
-            cachedTokens = jsonObject["prompt_tokens_details"]?.jsonObjectOrNull?.get("cached_tokens")?.jsonPrimitive?.intOrNull
-                ?: jsonObject["cached_tokens"]?.jsonPrimitive?.intOrNull
-                ?: jsonObject["prompt_cache_hit_tokens"]?.jsonPrimitive?.intOrNull
-                ?: 0
+        val inputTokens = jsonObject["prompt_tokens"]?.jsonPrimitiveOrNull?.longOrNull
+        val outputTokens = jsonObject["completion_tokens"]?.jsonPrimitiveOrNull?.longOrNull
+        val promptDetails = jsonObject["prompt_tokens_details"]?.jsonObjectOrNull
+        val completionDetails = jsonObject["completion_tokens_details"]?.jsonObjectOrNull
+        return ProviderUsageSnapshot(
+            inputTokens = inputTokens,
+            contextInputTokens = inputTokens,
+            outputTokens = outputTokens,
+            // Cache read/write are subsets of prompt_tokens and must not be added to inputTokens.
+            cacheReadInputTokens = promptDetails?.get("cached_tokens")?.jsonPrimitiveOrNull?.longOrNull
+                ?: when (endpointVendor) {
+                    OpenAIEndpointVendor.MOONSHOT ->
+                        jsonObject["cached_tokens"]?.jsonPrimitiveOrNull?.longOrNull
+
+                    OpenAIEndpointVendor.DEEPSEEK ->
+                        jsonObject["prompt_cache_hit_tokens"]?.jsonPrimitiveOrNull?.longOrNull
+
+                    else -> null
+                },
+            cacheWriteInputTokens = promptDetails?.get("cache_write_tokens")?.jsonPrimitiveOrNull?.longOrNull,
+            reasoningOutputTokens = completionDetails?.get("reasoning_tokens")?.jsonPrimitiveOrNull?.longOrNull,
+            totalTokens = jsonObject["total_tokens"]?.jsonPrimitiveOrNull?.longOrNull
+                ?: sumTokenCountsOrNull(inputTokens, outputTokens),
         )
     }
 

@@ -1134,7 +1134,7 @@
   <string name="speech_page_title">말하기</string>
   <string name="speech_tab_asr">음성 인식</string>
   <string name="speech_tab_tts">텍스트 음성 변환</string>
-  <string name="stats_page_cached_tokens">캐시된 토큰</string>
+  <string name="stats_page_cached_tokens">캐시 적중 입력 토큰</string>
   <string name="stats_page_dow_fri">금</string>
   <string name="stats_page_dow_mon">월</string>
   <string name="stats_page_dow_wed">수</string>
@@ -1147,6 +1147,7 @@
   <string name="stats_page_title">통계</string>
   <string name="stats_page_total_conversations">총 대화 수</string>
   <string name="stats_page_total_messages">총 메시지</string>
+  <string name="stats_page_token_totals_non_exact">합계가 정확하지 않습니다. 입출력 사용량이 불완전한 메시지는 %1$d개, 캐시 사용량이 불완전한 메시지는 %2$d개입니다.</string>
   <string name="stop">중지</string>
   <string name="tag_input_dialog_create_new">새 태그 생성</string>
   <string name="tag_input_dialog_existing_tags">기존 태그</string>

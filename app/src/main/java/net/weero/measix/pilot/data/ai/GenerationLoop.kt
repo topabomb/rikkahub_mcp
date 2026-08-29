@@ -27,7 +27,6 @@ import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.core.ToolResourceLease
-import me.rerere.ai.core.merge
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolveResult
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import me.rerere.ai.provider.CustomBody
@@ -67,6 +66,7 @@ import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.utils.applyPlaceholders
 import java.util.Locale
 import kotlin.time.Clock
+import kotlin.time.TimeSource
 import kotlin.uuid.Uuid
 
 private const val TAG = "GenerationLoop"
@@ -504,7 +504,10 @@ class GenerationLoop(
                     settings = settings,
                     messages = messages,
                     onUpdateMessages = { updatedMessages ->
-                        messages = updatedMessages.transforms(
+                        // Publish the turn-owned raw projection before the first suspension so
+                        // cancellation finalization can retain usage already observed on the wire.
+                        messages = updatedMessages
+                        messages = messages.transforms(
                             transformers = outputTransformers,
                             context = context,
                             model = model,
@@ -1033,6 +1036,15 @@ class GenerationLoop(
         ).replaySafeProjection()
 
         var messages: List<UIMessage> = messages
+        val turnUsage = TurnUsageAccumulator.from(messages.lastOrNull()?.usage)
+        val requestUsage = RequestUsageReducer(turnUsage.nextRequestOrdinal())
+
+        fun attachUsage(usage: me.rerere.ai.core.TokenUsage) {
+            messages = messages.mapIndexed { index, message ->
+                if (index == messages.lastIndex) message.copy(usage = usage) else message
+            }
+        }
+
         val params = TextGenerationParams(
             model = model,
             temperature = assistant.temperature,
@@ -1053,79 +1065,101 @@ class GenerationLoop(
         )
         // 请求构建完成，进入等待模型响应阶段
         onPhase?.invoke("model_waiting")
-        if (stream) {
-            var reasoningPhaseSent = false
-            var answerPhaseSent = false
-            providerImpl.streamText(
-                providerSetting = provider,
-                messages = internalMessages,
-                params = params
-            ).collect {
+        val requestStarted = TimeSource.Monotonic.markNow()
+        fun providerDurationMillis(): Long = requestStarted.elapsedNow().inWholeMilliseconds.coerceAtLeast(0)
+        var requestOutcome = ProviderRequestOutcome.FAILED
+        var providerFailure: Throwable? = null
+        try {
+            if (stream) {
+                var reasoningPhaseSent = false
+                var answerPhaseSent = false
+                providerImpl.streamText(
+                    providerSetting = provider,
+                    messages = internalMessages,
+                    params = params
+                ).collect { chunk ->
+                    messages = messages.handleMessageChunk(
+                        chunk = chunk,
+                        model = model,
+                        assistantMessageId = assistantMessageId,
+                    )
+                    chunk.usage?.let { usage ->
+                        requestUsage.accept(usage)
+                        attachUsage(turnUsage.preview(requestUsage.preview(providerDurationMillis())))
+                    }
+                    // Phase uses the same accumulated-message semantics as the output projection.
+                    // Text inside a leading <think> block is reasoning, not answer content.
+                    val tagPhase = messages.lastOrNull()?.let(ThinkTagTransformer::classifyPhase)
+                    if (!reasoningPhaseSent) {
+                        val hasReasoning = chunk.choices.any { choice ->
+                            choice.delta?.parts?.any { p -> p is UIMessagePart.Reasoning } == true
+                        } || tagPhase?.hasReasoning == true
+                        if (hasReasoning) {
+                            reasoningPhaseSent = true
+                            onPhase?.invoke("reasoning_streaming")
+                        }
+                    }
+                    if (!answerPhaseSent) {
+                        val deltaHasText = chunk.choices.any { choice ->
+                            choice.delta?.parts?.any { p -> p is UIMessagePart.Text && p.text.isNotEmpty() } == true
+                        }
+                        val hasText = when {
+                            tagPhase?.undecided == true -> false
+                            tagPhase != null -> tagPhase.hasAnswer
+                            else -> deltaHasText
+                        }
+                        if (hasText) {
+                            answerPhaseSent = true
+                            onPhase?.invoke("answer_streaming")
+                        }
+                    }
+                    onUpdateMessages(messages)
+                }
+            } else {
+                val chunk = providerImpl.generateText(
+                    providerSetting = provider,
+                    messages = internalMessages,
+                    params = params,
+                )
                 messages = messages.handleMessageChunk(
-                    chunk = it,
+                    chunk = chunk,
                     model = model,
                     assistantMessageId = assistantMessageId,
                 )
-                it.usage?.let { usage ->
-                    messages = messages.mapIndexed { index, message ->
-                        if (index == messages.lastIndex) {
-                            message.copy(usage = message.usage.merge(usage))
-                        } else {
-                            message
-                        }
-                    }
-                }
-                // Phase uses the same accumulated-message semantics as the output projection.
-                // Text inside a leading <think> block is reasoning, not answer content.
-                val tagPhase = messages.lastOrNull()?.let(ThinkTagTransformer::classifyPhase)
-                if (!reasoningPhaseSent) {
-                    val hasReasoning = it.choices.any { choice ->
-                        choice.delta?.parts?.any { p -> p is UIMessagePart.Reasoning } == true
-                    } || tagPhase?.hasReasoning == true
-                    if (hasReasoning) {
-                        reasoningPhaseSent = true
-                        onPhase?.invoke("reasoning_streaming")
-                    }
-                }
-                if (!answerPhaseSent) {
-                    val deltaHasText = it.choices.any { choice ->
-                        choice.delta?.parts?.any { p -> p is UIMessagePart.Text && p.text.isNotEmpty() } == true
-                    }
-                    val hasText = when {
-                        tagPhase?.undecided == true -> false
-                        tagPhase != null -> tagPhase.hasAnswer
-                        else -> deltaHasText
-                    }
-                    if (hasText) {
-                        answerPhaseSent = true
-                        onPhase?.invoke("answer_streaming")
-                    }
-                }
+                chunk.usage?.let(requestUsage::accept)
                 onUpdateMessages(messages)
             }
-        } else {
-            val chunk = providerImpl.generateText(
-                providerSetting = provider,
-                messages = internalMessages,
-                params = params,
+            requestOutcome = ProviderRequestOutcome.COMPLETED
+        } catch (error: Throwable) {
+            providerFailure = error
+            requestOutcome = if (error is CancellationException) {
+                ProviderRequestOutcome.CANCELLED
+            } else {
+                ProviderRequestOutcome.FAILED
+            }
+            throw error
+        } finally {
+            val completedUsage = requestUsage.close(
+                outcome = requestOutcome,
+                providerRequestDurationMillis = providerDurationMillis(),
             )
-            messages = messages.handleMessageChunk(
-                chunk = chunk,
-                model = model,
-                assistantMessageId = assistantMessageId,
-            )
-            chunk.usage?.let { usage ->
-                messages = messages.mapIndexed { index, message ->
-                    if (index == messages.lastIndex) {
-                        message.copy(
-                            usage = message.usage.merge(usage)
-                        )
-                    } else {
-                        message
-                    }
+            val appliedUsage = turnUsage.apply(completedUsage)
+            val usageDiagnostics = completedUsage.diagnostics + appliedUsage.diagnostics
+            if (usageDiagnostics.isNotEmpty()) {
+                Log.w(TAG, "Provider usage normalization diagnostics: ${usageDiagnostics.joinToString()}")
+            }
+            attachUsage(appliedUsage.usage)
+            try {
+                onUpdateMessages(messages)
+            } catch (updateError: Throwable) {
+                val failure = providerFailure
+                if (failure == null) {
+                    throw updateError
+                }
+                if (updateError !== failure) {
+                    failure.addSuppressed(updateError)
                 }
             }
-            onUpdateMessages(messages)
         }
     }
 

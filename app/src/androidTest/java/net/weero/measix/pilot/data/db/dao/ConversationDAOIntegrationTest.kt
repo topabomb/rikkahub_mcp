@@ -93,25 +93,25 @@ class ConversationDAOIntegrationTest {
                 node(
                     id = "master-node",
                     conversationId = master.id,
-                    promptTokens = 10,
-                    completionTokens = 2,
-                    cachedTokens = 3,
+                    inputTokens = 10,
+                    outputTokens = 2,
+                    cacheReadInputTokens = 3,
                 ),
                 node(
                     id = "child-node",
                     conversationId = child.id,
-                    promptTokens = 20,
-                    completionTokens = 4,
-                    cachedTokens = 5,
+                    inputTokens = 20,
+                    outputTokens = 4,
+                    cacheReadInputTokens = 5,
                 ),
             )
         )
 
         val stats = messageNodeDao.getTokenStats()
         assertEquals(1, stats.totalMessages)
-        assertEquals(30L, stats.promptTokens)
-        assertEquals(6L, stats.completionTokens)
-        assertEquals(8L, stats.cachedTokens)
+        assertEquals(30L, stats.inputTokens)
+        assertEquals(6L, stats.outputTokens)
+        assertEquals(8L, stats.cacheReadInputTokens)
         assertEquals(1, messageNodeDao.getMessageCountPerDay("2026-01-01").sumOf { it.count })
     }
 
@@ -226,14 +226,14 @@ class ConversationDAOIntegrationTest {
     private fun node(
         id: String,
         conversationId: String,
-        promptTokens: Int,
-        completionTokens: Int,
-        cachedTokens: Int,
+        inputTokens: Int,
+        outputTokens: Int,
+        cacheReadInputTokens: Int,
     ) = MessageNodeEntity(
         id = id,
         conversationId = conversationId,
         nodeIndex = 0,
-        messages = """[{"role":"user","createdAt":"2026-08-12T10:00:00","usage":{"promptTokens":$promptTokens,"completionTokens":$completionTokens,"cachedTokens":$cachedTokens}}]""",
+        messages = """[{"role":"user","createdAt":"2026-08-12T10:00:00","usage":{"promptTokens":$inputTokens,"completionTokens":$outputTokens,"cachedTokens":$cacheReadInputTokens}}]""",
         selectIndex = 0,
     )
 }

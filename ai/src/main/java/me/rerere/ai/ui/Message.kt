@@ -8,6 +8,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 import kotlinx.serialization.json.JsonObject
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ProviderUsageSnapshot
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.Model
 import me.rerere.ai.util.json
@@ -815,7 +816,7 @@ data class MessageChunk(
     val id: String,
     val model: String,
     val choices: List<UIMessageChoice>,
-    val usage: TokenUsage? = null,
+    val usage: ProviderUsageSnapshot? = null,
 )
 
 @Serializable

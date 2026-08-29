@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.stats
+package net.weero.measix.pilot.ui.pages.stats
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ChartColumn
@@ -304,21 +304,32 @@ private fun StatsGrid(stats: AppStats, modifier: Modifier = Modifier) {
                 modifier = Modifier.weight(1f),
                 icon = HugeIcons.Cpu,
                 label = stringResource(R.string.stats_page_input_tokens),
-                value = formatTokens(stats.totalPromptTokens),
+                value = formatTokens(stats.totalInputTokens),
             )
             StatCard(
                 modifier = Modifier.weight(1f),
                 icon = HugeIcons.Cpu,
                 label = stringResource(R.string.stats_page_output_tokens),
-                value = formatTokens(stats.totalCompletionTokens),
+                value = formatTokens(stats.totalOutputTokens),
             )
         }
-        if (stats.totalCachedTokens > 0) {
+        if (stats.totalCacheReadInputTokens > 0) {
             StatCard(
                 modifier = Modifier.fillMaxWidth(),
                 icon = HugeIcons.Zap,
                 label = stringResource(R.string.stats_page_cached_tokens),
-                value = formatTokens(stats.totalCachedTokens),
+                value = formatTokens(stats.totalCacheReadInputTokens),
+            )
+        }
+        if (stats.coreNonExactMessages > 0 || stats.cacheReadNonExactMessages > 0) {
+            Text(
+                text = stringResource(
+                    R.string.stats_page_token_totals_non_exact,
+                    stats.coreNonExactMessages,
+                    stats.cacheReadNonExactMessages,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         StatCard(

@@ -92,9 +92,11 @@ interface MessageNodeDAO {
 
 data class MessageTokenStats(
     val totalMessages: Int = 0,
-    val promptTokens: Long = 0,
-    val completionTokens: Long = 0,
-    val cachedTokens: Long = 0,
+    val inputTokens: Long = 0,
+    val outputTokens: Long = 0,
+    val cacheReadInputTokens: Long = 0,
+    val coreNonExactMessages: Int = 0,
+    val cacheReadNonExactMessages: Int = 0,
 )
 
 data class MessageNodePayloadHeader(
@@ -140,9 +142,15 @@ data class MessageDayCount(val day: String, val count: Int)
 // SQLite json_each() 展开 messages JSON 数组，json_extract() 提取 Token 字段并聚合
 private val TOKEN_STATS_SQL = SimpleSQLiteQuery(
     "SELECT COUNT(CASE WHEN c.parent_conversation_id IS NULL THEN 1 END) AS totalMessages, " +
-        "COALESCE(SUM(CAST(json_extract(j.value, '$.usage.promptTokens') AS INTEGER)), 0) AS promptTokens, " +
-        "COALESCE(SUM(CAST(json_extract(j.value, '$.usage.completionTokens') AS INTEGER)), 0) AS completionTokens, " +
-        "COALESCE(SUM(CAST(json_extract(j.value, '$.usage.cachedTokens') AS INTEGER)), 0) AS cachedTokens " +
+        "COALESCE(SUM(CAST(json_extract(j.value, '$.usage.promptTokens') AS INTEGER)), 0) AS inputTokens, " +
+        "COALESCE(SUM(CAST(json_extract(j.value, '$.usage.completionTokens') AS INTEGER)), 0) AS outputTokens, " +
+        "COALESCE(SUM(CAST(json_extract(j.value, '$.usage.cachedTokens') AS INTEGER)), 0) AS cacheReadInputTokens, " +
+        "COALESCE(SUM(CASE WHEN json_extract(j.value, '$.role') = 'assistant' " +
+        "AND COALESCE(json_extract(j.value, '$.usage.coreCompleteness'), 'LEGACY') != 'COMPLETE' " +
+        "THEN 1 ELSE 0 END), 0) AS coreNonExactMessages, " +
+        "COALESCE(SUM(CASE WHEN json_extract(j.value, '$.role') = 'assistant' " +
+        "AND COALESCE(json_extract(j.value, '$.usage.cacheReadCompleteness'), 'LEGACY') != 'COMPLETE' " +
+        "THEN 1 ELSE 0 END), 0) AS cacheReadNonExactMessages " +
         "FROM message_node mn " +
         "JOIN conversationentity c ON c.id = mn.conversation_id, " +
         "json_each(mn.messages) j"

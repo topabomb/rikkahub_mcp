@@ -12,9 +12,11 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 data class StatsSnapshot(
     val totalConversations: Int,
     val totalMessages: Int,
-    val totalPromptTokens: Long,
-    val totalCompletionTokens: Long,
-    val totalCachedTokens: Long,
+    val totalInputTokens: Long,
+    val totalOutputTokens: Long,
+    val totalCacheReadInputTokens: Long,
+    val coreNonExactMessages: Int,
+    val cacheReadNonExactMessages: Int,
     val conversationsPerDay: Map<LocalDate, Int>,
     val launchCount: Int,
 )
@@ -36,9 +38,11 @@ class StatsQueryService(
         StatsSnapshot(
             totalConversations = conversationDAO.countAll(),
             totalMessages = tokenStats.totalMessages,
-            totalPromptTokens = tokenStats.promptTokens,
-            totalCompletionTokens = tokenStats.completionTokens,
-            totalCachedTokens = tokenStats.cachedTokens,
+            totalInputTokens = tokenStats.inputTokens,
+            totalOutputTokens = tokenStats.outputTokens,
+            totalCacheReadInputTokens = tokenStats.cacheReadInputTokens,
+            coreNonExactMessages = tokenStats.coreNonExactMessages,
+            cacheReadNonExactMessages = tokenStats.cacheReadNonExactMessages,
             conversationsPerDay = conversationsPerDay,
             launchCount = settingsStore.effectiveSettings.value.settings.launchCount,
         )

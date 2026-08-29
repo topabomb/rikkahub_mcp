@@ -49,6 +49,41 @@ UIMessage
 `providerReplayProjection` 只存在于 `replaySafeProjection()` 返回的投影对象，不写回 Conversation、Room、备份或 UI durable 状态。
 详见 [多模态上下文与 Turn 持久化](multimodal-context-and-turn-durability.md)。
 
+### Token usage 规范模型
+
+线协议 Adapter 只把单次 Provider 请求的 usage 归一化为 `ProviderUsageSnapshot`；它不读取历史消息，也不负责跨请求
+累计。`GenerationLoop` 为每次真实 Provider 调用建立一个 `RequestUsageReducer`，按字段 presence 覆盖流式快照：字段缺失
+表示本事件没有更新，显式 `0` 必须覆盖旧值。请求关闭后，`TurnUsageAccumulator` 才把该请求恰好一次加入 owning
+Assistant 消息的 durable `TokenUsage`。工具循环、失败、取消和审批继续流程都复用这一条链，不存在 Provider 私自累计、
+UI 重算或第二张统计账本。
+
+| 规范字段 | 含义 |
+| --- | --- |
+| `inputTokens` | 单次请求的完整计费输入；cache read/write 与 tool-use 都是其子集，不得再次相加 |
+| `contextInputTokens` | 本次请求实际上下文输入，用于上下文阈值；它不是 turn 累计量 |
+| `outputTokens` | 单次请求的完整计费输出；reasoning 是其子集 |
+| `cacheReadInputTokens` / `cacheWriteInputTokens` | Provider 明确报告的缓存读取/写入输入；缺失不是零 |
+| `reasoningOutputTokens` / `toolUseInputTokens` | Provider 明确报告的输出/输入细分 |
+| `totalTokens` | Provider 权威总量；仅在线协议明确定义且安全时，由 Adapter 授权在单请求归一化边界推导 |
+
+四条线协议的当前映射是：
+
+| 线协议 | input/context | output | cache read/write | total |
+| --- | --- | --- | --- | --- |
+| Chat Completions | `prompt_tokens` | `completion_tokens` | `prompt_tokens_details.cached_tokens` / `cache_write_tokens`；Moonshot 顶层 `cached_tokens` 与 DeepSeek `prompt_cache_hit_tokens` 仅按已识别 endpoint vendor 使用 | Provider `total_tokens`，缺失时安全计算 input + output |
+| Responses | `input_tokens` | `output_tokens` | `input_tokens_details.cached_tokens` / `cache_write_tokens` | Provider `total_tokens`，缺失时安全计算 input + output |
+| Anthropic Messages | `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` | `output_tokens` | `cache_read_input_tokens` / `cache_creation_input_tokens` | `message_start` 与 `message_delta` 完成 presence overlay 后安全计算规范 input + output |
+| Gemini generateContent | input 为 `promptTokenCount + toolUsePromptTokenCount`，context 仅为 `promptTokenCount` | `candidatesTokenCount + thoughtsTokenCount` | `cachedContentTokenCount` / 不提供 | Provider `totalTokenCount` |
+
+`ProviderUsageSnapshot.canDeriveTotalFromInputAndOutput` 是 Adapter 提供给单请求 reducer 的瞬态策略，不进入
+`TokenUsage`、Room 或备份。当前只有 Anthropic 流需要它把互补的 `message_start` input 与 `message_delta` output 合并后
+推导 total；Provider 已报告 total 时始终优先保留。
+
+任何负值、子集大于父项、Provider total 与可验证 input + output 不一致或加法溢出都不能被修成看似精确的数字：
+请求 reducer 保留可证明字段、丢弃无效字段并降低 completeness。`coreCompleteness` 与
+`cacheReadCompleteness` 独立表示 `NONE/PARTIAL/COMPLETE`；历史 JSON 缺少新字段时解码为 `LEGACY`。持久化仍使用原来的
+`promptTokens`、`completionTokens`、`cachedTokens` JSON key，Room schema 与备份结构不变。
+
 `UIMessagePart.Tool` 同时保存调用参数、审批状态和执行结果。Provider 序列化时再展开为各自的 tool call/result 结构，数据库不会插入独立的持久化 `MessageRole.TOOL`。
 
 生成图片在解析源头就必须是可渲染 URL。Chat Completions 保留完整 `data:` URI，Gemini 使用真实 mime 组装 `data:<mime>;base64,<payload>`。合并层只把无前缀的 base64 碎片追加到当前图片，不会给已经完整的 URL 再补 `image/png` 前缀，也不会把两张完整图片拼成一条。
@@ -104,7 +139,7 @@ xAI Imagine 使用相同信封或顶层 `code`/`message`，并可能在 200 响�
 - system/developer/user/assistant/tool 角色映射；
 - 文本、图片、推理、拒答、生成图片与 Tool parts 的序列化和解析；
 - `tool_calls[].index` 对并行工具参数 delta 的关联；
-- usage 与各兼容 endpoint 缓存字段的归一化；
+- 单请求 usage 与已识别 endpoint 缓存字段的归一化；
 - endpoint/model 特定的 reasoning、temperature、token limit 和 stream 参数；
 - `ChatReasoningReplayPolicy` 的唯一解析与消费（`resolveChatReasoningReplayPolicy()`）。
 
@@ -349,10 +384,10 @@ endpoint host 另设第二套例外。
 | 范围 | 必须验证 |
 |------|----------|
 | 通用消息 | 多工具、并行工具、工具边界、delta 合并、usage、错误终态 |
-| Chat Completions | host registry、system/developer、token limit、reasoning 映射、DeepSeek 回放 |
-| Responses | profile、完整 output 批次、旧 metadata、跨来源隔离、字符串/多模态工具结果 |
-| Claude | legacy/adaptive thinking、budget 边界、signature、redacted data、跨模型剥离、cache control |
-| Gemini | function ID、任意 Part 签名、草稿图、function 与内置工具共存、schema enum |
+| Chat Completions | host registry、system/developer、token limit、reasoning 映射、DeepSeek 回放、标准与 vendor-gated cache usage |
+| Responses | profile、完整 output 批次、旧 metadata、跨来源隔离、字符串/多模态工具结果、三类终态 usage |
+| Claude | legacy/adaptive thinking、budget 边界、signature、redacted data、跨模型剥离、cache control 与 input 分项归一化 |
+| Gemini | function ID、任意 Part 签名、草稿图、function 与内置工具共存、schema enum、thought/tool-use usage |
 | ModelRegistry | 能力、版本边界、别名和错误前缀 |
 
 离线单元测试、Lint 和编译只能证明客户端序列化与状态机。真实供应商验证还受账号权限、地区、灰度、模型可用性、计费和限流影响；没有在线验证时不得把“请求已构建”写成“服务端已验证”。

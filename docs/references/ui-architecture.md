@@ -588,6 +588,15 @@ ChatList (LazyColumn)
 路径。工具审批和 Target 卡片必须保留在 Part 的语义位置。节点级细节统一见
 [消息渲染管线](message-rendering-pipeline.md)，生成侧见 [消息生成链路](chat-generation-pipeline.md)。
 
+`ChatMessageNerdLine` 保持原有紧凑底栏：legacy 记录按历史 input/output/cache 展示；v2 只有 core 完整时显示
+input/output，只有 cache-read 完整且大于零时显示缓存命中。Clock 仍是整条消息墙钟耗时，TPS 仅在 v2 core 完整且
+Provider request duration 有效时显示，两者不得混用。`ChatSizeChecker` 只读取最近一次请求的 context input，不读取 turn
+累计 input。
+
+`StatsVM` 只消费 `StatsQueryService` 的 Room 投影。总 input/output/cache 是 durable Assistant usage JSON 中已知值的和；
+历史、partial、none 或缺少 usage 的 Assistant 消息分别保守计入 core/cache 非精确数量，页面以可换行短说明标明边界。
+缓存卡仅在已知累计大于零时显示，避免把未知误呈现为精确零。Compose 不解析四种线协议，也不重新累计 token。
+
 ---
 
 ## 12. Message Transformer 管道
@@ -642,6 +651,10 @@ ChatList (LazyColumn)
 - 无效铰链过滤与多铰链中心选择
 
 `ConversationAssistantSwitchTest` 覆盖会话助手切换、重复切换幂等，以及已删除助手的回退规则。`UpdateCheckerTest` 覆盖首次订阅启动、订阅离开后不重启，以及同一共享流只执行一次上游请求。`AppearancePolicyTest` 覆盖颜色模式、动态色 API 门槛、AMOLED 仅改写 `background`/`surface`，以及未知主题回退 Sakura。`ChatSurfacePolicyTest` 覆盖助手背景下 chrome 封顶、无背景时跟随气泡不透明度，以及产物保持不透明。
+
+Token usage 的 JVM 测试覆盖 nerd line 精确/legacy 显示、TPS 边界、context 阈值和 query 映射；Room/SQLite
+instrumentation fixture 覆盖 v2 complete/partial、legacy、`usage=null`、child 节点与 JSON 聚合行为。线协议字段映射由
+`ai` 模块各 Provider usage 测试负责。
 
 ### 设备仪器测试
 

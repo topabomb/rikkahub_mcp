@@ -6,8 +6,10 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.toList
@@ -19,6 +21,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ProviderUsageSnapshot
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.core.ToolResourceLease
@@ -1024,6 +1027,201 @@ class GenerationLoopFlowTest {
 
         assertTrue(failure != null)
         assertTrue(failure!!.message!!.contains("Tool name must not be blank"))
+    }
+
+    @Test
+    fun `tool continuation accumulates each provider request usage once`() = runTest {
+        val model = Model(modelId = "test-model", displayName = "Test Model")
+        val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
+        val providerManager = mockk<ProviderManager>()
+        val provider = mockk<Provider<ProviderSetting.OpenAI>>()
+        every { providerManager.getProviderByType(providerSetting) } returns provider
+        every { provider.requestMediaCapabilities(any(), any()) } returns RequestMediaCapabilities.NONE
+        coEvery {
+            provider.generateText(providerSetting, any(), any())
+        } returnsMany listOf(
+            MessageChunk(
+                id = "tool-step",
+                model = model.modelId,
+                choices = listOf(
+                    UIMessageChoice(
+                        index = 0,
+                        delta = null,
+                        message = UIMessage(
+                            role = MessageRole.ASSISTANT,
+                            parts = listOf(
+                                UIMessagePart.Tool(
+                                    toolCallId = "call-1",
+                                    toolName = "echo_tool",
+                                    input = "{}",
+                                )
+                            ),
+                        ),
+                        finishReason = "tool_calls",
+                    )
+                ),
+                usage = ProviderUsageSnapshot(
+                    inputTokens = 100,
+                    contextInputTokens = 100,
+                    outputTokens = 20,
+                    cacheReadInputTokens = 50,
+                    totalTokens = 120,
+                ),
+            ),
+            MessageChunk(
+                id = "answer-step",
+                model = model.modelId,
+                choices = listOf(
+                    UIMessageChoice(
+                        index = 0,
+                        delta = null,
+                        message = UIMessage.assistant("done"),
+                        finishReason = "stop",
+                    )
+                ),
+                usage = ProviderUsageSnapshot(
+                    inputTokens = 200,
+                    contextInputTokens = 200,
+                    outputTokens = 10,
+                    cacheReadInputTokens = 0,
+                    totalTokens = 210,
+                ),
+            ),
+        )
+        val assistant = Assistant(enableMemory = false, streamOutput = false)
+        val loop = GenerationLoop(
+            context = mockk<Context>(relaxed = true),
+            providerManager = providerManager,
+            json = Json,
+            memoryRepo = mockk<MemoryRepository>(relaxed = true),
+            attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+        )
+        val tool = Tool(
+            name = "echo_tool",
+            description = "Returns a stable result.",
+            execute = { listOf(UIMessagePart.Text("tool result")) },
+        )
+
+        val chunks = loop.run(
+            GenerationRequest(
+                settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
+                model = model,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
+                messages = listOf(UIMessage.user("hello")),
+                assistant = assistant,
+                tools = listOf(tool),
+                maxSteps = 2,
+            )
+        ).toList()
+
+        val usage = chunks.filterIsInstance<GenerationChunk.Messages>().last().messages.last().usage
+        assertEquals(300L, usage?.inputTokens)
+        assertEquals(30L, usage?.outputTokens)
+        assertEquals(50L, usage?.cacheReadInputTokens)
+        assertEquals(330L, usage?.totalTokens)
+        assertEquals(200L, usage?.latestRequestContextTokens)
+        assertEquals(2, usage?.observedProviderRequestCount)
+        assertEquals(2, usage?.observedUsageReportedRequestCount)
+        assertEquals(me.rerere.ai.core.UsageCompleteness.COMPLETE, usage?.coreCompleteness)
+        assertEquals(me.rerere.ai.core.UsageCompleteness.COMPLETE, usage?.cacheReadCompleteness)
+    }
+
+    @Test
+    fun `provider failure closes observed usage once and preserves the original error`() = runTest {
+        val expectedFailure = IllegalStateException("provider stream failed")
+        val harness = createFailingUsageStreamHarness(expectedFailure)
+        val chunks = mutableListOf<GenerationChunk>()
+
+        val failure = runCatching {
+            harness.handler.run(
+                GenerationRequest(
+                    settings = harness.settings,
+                    model = harness.model,
+                    mediaCapabilities = RequestMediaCapabilities.NONE,
+                    messages = listOf(UIMessage.user("hello")),
+                    assistant = harness.assistant,
+                    maxSteps = 1,
+                )
+            ).collect(chunks::add)
+        }.exceptionOrNull()
+
+        assertTrue(failure is IllegalStateException)
+        assertTrue(failure === expectedFailure || failure?.cause === expectedFailure)
+        val usage = chunks.filterIsInstance<GenerationChunk.Messages>().last().messages.last().usage
+        assertEquals(100L, usage?.inputTokens)
+        assertEquals(20L, usage?.outputTokens)
+        assertEquals(120L, usage?.totalTokens)
+        assertEquals(1, usage?.observedProviderRequestCount)
+        assertEquals(1, usage?.observedUsageReportedRequestCount)
+        assertEquals(me.rerere.ai.core.UsageCompleteness.COMPLETE, usage?.coreCompleteness)
+    }
+
+    @Test
+    fun `provider cancellation closes observed usage once and propagates cancellation`() = runTest {
+        val expectedCancellation = CancellationException("provider stream cancelled")
+        val harness = createFailingUsageStreamHarness(expectedCancellation)
+        val chunks = mutableListOf<GenerationChunk>()
+
+        val failure = runCatching {
+            harness.handler.run(
+                GenerationRequest(
+                    settings = harness.settings,
+                    model = harness.model,
+                    mediaCapabilities = RequestMediaCapabilities.NONE,
+                    messages = listOf(UIMessage.user("hello")),
+                    assistant = harness.assistant,
+                    maxSteps = 1,
+                )
+            ).collect(chunks::add)
+        }.exceptionOrNull()
+
+        assertTrue(failure is CancellationException)
+        assertTrue(failure === expectedCancellation || failure?.cause === expectedCancellation)
+        val usage = chunks.filterIsInstance<GenerationChunk.Messages>().last().messages.last().usage
+        assertEquals(100L, usage?.inputTokens)
+        assertEquals(20L, usage?.outputTokens)
+        assertEquals(120L, usage?.totalTokens)
+        assertEquals(1, usage?.observedProviderRequestCount)
+        assertEquals(1, usage?.observedUsageReportedRequestCount)
+        assertEquals(me.rerere.ai.core.UsageCompleteness.COMPLETE, usage?.coreCompleteness)
+    }
+
+    private fun createFailingUsageStreamHarness(failure: Throwable): ProviderHarness {
+        val model = Model(modelId = "test-model", displayName = "Test Model")
+        val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
+        val providerManager = mockk<ProviderManager>()
+        val provider = mockk<Provider<ProviderSetting.OpenAI>>()
+        every { providerManager.getProviderByType(providerSetting) } returns provider
+        every { provider.requestMediaCapabilities(any(), any()) } returns RequestMediaCapabilities.NONE
+        coEvery { provider.streamText(providerSetting, any(), any()) } returns flow {
+            emit(
+                textDelta("partial").copy(
+                    usage = ProviderUsageSnapshot(
+                        inputTokens = 100,
+                        contextInputTokens = 100,
+                        outputTokens = 20,
+                        cacheReadInputTokens = 0,
+                        totalTokens = 120,
+                    )
+                )
+            )
+            throw failure
+        }
+        val assistant = Assistant(enableMemory = false, streamOutput = true)
+        return ProviderHarness(
+            handler = GenerationLoop(
+                context = mockk<Context>(relaxed = true),
+                providerManager = providerManager,
+                json = Json,
+                memoryRepo = mockk<MemoryRepository>(relaxed = true),
+                attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            ),
+            settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
+            model = model,
+            assistant = assistant,
+            providerMessages = slot(),
+            providerParams = slot(),
+        )
     }
 
     private fun createProviderHarness(

@@ -17,6 +17,7 @@
 | `ConversationRuntimeRegistry` | `Loading/Draft/Ready/Missing/Failed` 生命周期、引用与生成 Job；Draft 只服务未发送首条消息的新聊天，首消息事务后晋升 Ready；禁止伪造 durable 会话 |
 | `ConversationTransition` | 唯一 command planner：同时产生 snapshot、delta mutation 与 execution facts；未变化节点保持引用 |
 | `TurnEngine` / `TurnPipelineFactory` | Master/Target 共用的 start、checkpoint、stream 与非空 `TurnOutcome` 协议；固定 Transformer 顺序 |
+| `RequestUsageReducer` / `TurnUsageAccumulator` | 单 Provider 请求 presence overlay 与请求关闭、turn 内恰好一次累计；只产出 owning Assistant 消息的 durable `TokenUsage` |
 | `ConversationTitleCoordinator` | 确定性本地标题、模型标题阶段、token/CAS、手动与异步提交串行化、进程内去重与有限重试；不增加持久化字段 |
 | `ConversationRepository` | CommandCoordinator 内部使用的 Room 持久化原语 |
 | `ApplicationRecoveryCoordinator` | 唯一启动恢复入口；失败时 durable write 保持关闭 |
@@ -86,7 +87,8 @@ UI 状态表或第二写入口。没有终态事件便关闭的流同样收口�
 3. 组装 Assistant/会话 System、Memory 与 Tool prompt。
 4. 运行 `TurnPipelineFactory` 提供的 Input Transformer。
 5. 构建模型、采样、输出上限、自定义 Header/Body 与工具参数。
-6. 调用 Provider，合并 chunk 和 usage。
+6. 每次真实 Provider 调用建立一个 request usage reducer，合并 chunk，并按字段 presence 覆盖该请求的 usage snapshot。
+7. 正常、失败或取消关闭请求后，将它恰好一次加入 turn usage；流式投影可预览，checkpoint/终态仍只持久化 owning Assistant 消息。
 
 Master 的主要输入顺序是 `TimeReminderTransformer`、`PromptInjectionTransformer`、
 `PlaceholderTransformer`、`DocumentAsPromptTransformer`、`TemplateTransformer`、
@@ -99,6 +101,18 @@ Template / Workspace 之后；明确差异只有不装配 `ToolArtifactReplayTra
 
 Streaming Transformer 只改变显示投影；需要持久化的变化必须进入 checkpoint 的
 `OutputMessageTransformer.transform()` 或终态落盘 Transformer。
+
+`TokenUsage` 的 input/output/cache/total 是整个 Assistant turn 中所有已观察 Provider 请求的累计值；
+`latestRequestContextTokens` 只保存最近一次请求的上下文输入，因此上下文告警不能读取累计 input。Provider request duration
+从发起 Provider 调用到流关闭累计，不包含本地工具和审批等待；只有 v2 且 core 完整时才可用它计算 TPS。旧消息或
+`CONTINUE_APPROVAL` 的 legacy baseline 始终保持 `LEGACY`，不能把新请求 duration 与旧累计 output 拼成伪精确 TPS。
+字段缺失与显式零分开处理，core 与 cache-read 完整性分别累计；具体线协议映射见
+[`protocol-reference.md`](protocol-reference.md)。
+
+usage owner 是产生请求的 Assistant 消息。Master 与每个 Child 各自从 owning message 建立 request reducer 和 turn
+accumulator；Target usage 只写 Child 消息，子助手结果只向 Master 返回工具文本/附件投影，不复制 message usage。因此
+Child 请求永不汇入 Master 底部。Master 在工具调用前后通常各有一次自己的 Provider 请求：即使 Child 因余额等错误未返回
+usage，Master 仍会为读取工具失败结果再请求一次，所以 Master turn 的累计 input 可能接近调用前的两倍；这不是 Child 串账。
 
 ## 工具装配与执行
 
@@ -183,7 +197,8 @@ Master 的 `FAILED` / `INCOMPLETE` 由 `ChatErrorStore` 投影为当前会话底
 `Assistant.contextMessageLimit` 只控制本次 Provider 请求。裁剪从完整 USER 轮次边界开始，不改 durable history。
 
 Provider 只返回开头 `<think>` 文本时，`ThinkTagTransformer` 在 Master/Target 共用 output pipeline 以最后一个已执行 Tool 为边界，只把当前 assistant→tool step 的首个非空 `Text` 拆成 `Reasoning` 与回答正文。只有当前 step 已有 Provider 原生 Reasoning 时才禁用该 fallback；已完成 step 的 Reasoning 不得抑制后续 step。闭合标签到达时立即冻结当前 step reasoning 的 `finishedAt`，后续累计正文 chunk 只从上一投影的同一 step 复用首次闭合时间；流结束只为当前 step 未闭合标签补时间。`GenerationLoop` 的 phase 判定同样基于累计 raw message 的当前 step，同一标签内文本只发布 `reasoning_streaming`，标签后的正文出现后才发布 `answer_streaming`；终态提交保留各 step 闭合标签首次投影的完成时间。
-消息条数不等于 token 数，长文档、图片、工具 schema 与 System prompt 仍可能占据大量上下文。
+消息条数不等于 token 数，长文档、图片、工具 schema 与 System prompt 仍可能占据大量上下文。上下文阈值只使用
+Provider 最近一次请求明确报告的 `latestRequestContextTokens`；缺失时不以 turn 累计 input 猜测。
 
 显式压缩由 `ConversationApplicationService.compress()` 进入 `GenerationSideEffects.compressConversation()`：生成摘要，
 保留指定的最近完整轮次，再以 durable tree command 替换历史。它是用户触发、持久化且不可撤销的操作，不自动挂到
@@ -215,7 +230,8 @@ durable command 继续被 `ApplicationRecoveryGate` 阻断；`retry()` 重新执
 子助手不是第二套生成引擎。`DelegationCoordinator` 只增加 preflight → materialize Child → run → terminal 四阶段：
 Child、tool STARTED 与 childConversationId 关系在 Target 启动前强制提交；失败会补偿 Child 与未发布附件。
 `SubAssistantRunGate.withLease` 编码并发所有权，`SubAssistantResultProjection` 负责纯结果形状，Target 仍使用相同的
-`TurnEngine`、`GenerationLoop` 与 checkpoint 协议。
+`TurnEngine`、`GenerationLoop` 与 checkpoint 协议。共享生成实现不共享 turn usage 状态：每次 `GenerationLoop.run()` 的
+累计器只属于传入的 owning Assistant message。
 
 ## 关键文件
 

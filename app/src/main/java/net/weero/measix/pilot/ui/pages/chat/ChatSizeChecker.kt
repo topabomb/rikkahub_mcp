@@ -16,11 +16,11 @@ import net.weero.measix.pilot.data.model.MessageNode
 
 // 消息节点数量警告阈值
 const val MESSAGE_NODE_WARNING_THRESHOLD = 768
-const val LAST_ASSISTANT_INPUT_TOKEN_WARNING_THRESHOLD = 300_000
+const val LAST_ASSISTANT_INPUT_TOKEN_WARNING_THRESHOLD = 300_000L
 
 data class ConversationSizeInfo(
     val nodeCount: Int,
-    val lastAssistantInputTokens: Int,
+    val lastAssistantInputTokens: Long,
     val exceedNodeCountThreshold: Boolean,
     val exceedInputTokenThreshold: Boolean,
     val showWarning: Boolean
@@ -28,7 +28,7 @@ data class ConversationSizeInfo(
 
 private val DefaultSizeInfo = ConversationSizeInfo(
     nodeCount = 0,
-    lastAssistantInputTokens = 0,
+    lastAssistantInputTokens = 0L,
     exceedNodeCountThreshold = false,
     exceedInputTokenThreshold = false,
     showWarning = false
@@ -36,24 +36,26 @@ private val DefaultSizeInfo = ConversationSizeInfo(
 
 @Composable
 fun rememberConversationSizeInfo(nodes: List<MessageNode>): ConversationSizeInfo {
-    return remember(nodes) {
-        val nodeCount = nodes.size
-        val lastAssistantInputTokens = nodes.asReversed()
-            .map { it.currentMessage }
-            .firstOrNull { it.role == MessageRole.ASSISTANT }
-            ?.usage
-            ?.promptTokens
-            ?: 0
-        val exceedNodeCountThreshold = nodeCount > MESSAGE_NODE_WARNING_THRESHOLD
-        val exceedInputTokenThreshold = lastAssistantInputTokens > LAST_ASSISTANT_INPUT_TOKEN_WARNING_THRESHOLD
-        ConversationSizeInfo(
-            nodeCount = nodeCount,
-            lastAssistantInputTokens = lastAssistantInputTokens,
-            exceedNodeCountThreshold = exceedNodeCountThreshold,
-            exceedInputTokenThreshold = exceedInputTokenThreshold,
-            showWarning = exceedNodeCountThreshold && exceedInputTokenThreshold
-        )
-    }
+    return remember(nodes) { calculateConversationSizeInfo(nodes) }
+}
+
+internal fun calculateConversationSizeInfo(nodes: List<MessageNode>): ConversationSizeInfo {
+    val nodeCount = nodes.size
+    val lastAssistantInputTokens = nodes.asReversed()
+        .map { it.currentMessage }
+        .firstOrNull { it.role == MessageRole.ASSISTANT }
+        ?.usage
+        ?.latestRequestContextTokens
+        ?: 0L
+    val exceedNodeCountThreshold = nodeCount > MESSAGE_NODE_WARNING_THRESHOLD
+    val exceedInputTokenThreshold = lastAssistantInputTokens > LAST_ASSISTANT_INPUT_TOKEN_WARNING_THRESHOLD
+    return ConversationSizeInfo(
+        nodeCount = nodeCount,
+        lastAssistantInputTokens = lastAssistantInputTokens,
+        exceedNodeCountThreshold = exceedNodeCountThreshold,
+        exceedInputTokenThreshold = exceedInputTokenThreshold,
+        showWarning = exceedNodeCountThreshold && exceedInputTokenThreshold
+    )
 }
 
 @Composable
