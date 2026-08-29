@@ -116,6 +116,7 @@ import net.weero.measix.pilot.ui.components.ai.WorkspaceSelectSheet
 import net.weero.measix.pilot.ui.components.ai.rememberModelListState
 import net.weero.measix.pilot.ui.components.ai.completion.WorkspaceCompletionProvider
 import net.weero.measix.pilot.ui.components.ai.useCropLauncher
+import net.weero.measix.pilot.ui.components.ui.KeepScreenOn
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionCamera
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionManager
 import net.weero.measix.pilot.ui.components.ui.permission.rememberPermissionState
@@ -448,6 +449,8 @@ private fun ChatPageContent(
     onDismissError: (Uuid) -> Unit,
     onClearAllErrors: () -> Unit,
 ) {
+    KeepScreenOn(enabled = turnPresentation.isActive)
+
     val scope = rememberCoroutineScope()
     val latestConversationUiModel by rememberUpdatedState(conversationUiModel)
     val imeInsets = WindowInsets.ime

@@ -361,6 +361,10 @@ ChatPageContent
   │              └─ AdaptiveModal pickers (助手/模型/文件/MCP/搜索/推理/Workspace)
 ```
 
+`ChatPageContent` 是会话 turn 期间屏幕唤醒的唯一 UI owner。它直接绑定
+`ConversationPresentation.isActive`：准备、模型生成、工具执行、等待审批和停止收口阶段均保持亮屏，
+只有 turn 进入 `IDLE` 或页面退出组合时才释放；可因 IME 和自适应布局切换位置的 `ChatInput` 按钮不管理 Window flag。
+
 MCP 设置页只保留列表下拉刷新，避免顶部栏重复入口。下拉只调用 `McpApplicationService.refreshAll()`，指示器偏移到可折叠
 TopAppBar 下方；它最多绑定 20 秒用户 receipt，不绑定 AppScope 中可能持续数分钟的后台恢复。receipt 结束时若仍有 server
 继续执行，页面停止 spinner、给出后台继续提示，并由各 server 卡片持续显示真实状态。单 server 失败卡片保留独立重试入口。

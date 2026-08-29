@@ -7,13 +7,17 @@ import androidx.compose.ui.platform.LocalContext
 import net.weero.measix.pilot.utils.getActivity
 
 @Composable
-fun KeepScreenOn() {
+fun KeepScreenOn(enabled: Boolean = true) {
     val context = LocalContext.current
-    DisposableEffect(Unit) {
-        val window = context.getActivity()?.window
-        window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    val window = context.getActivity()?.window
+    DisposableEffect(window, enabled) {
+        if (enabled) {
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
         onDispose {
-            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            if (enabled) {
+                window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
         }
     }
 }

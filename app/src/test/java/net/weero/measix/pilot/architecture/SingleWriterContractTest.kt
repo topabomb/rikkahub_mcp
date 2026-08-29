@@ -158,6 +158,19 @@ class SingleWriterContractTest {
     }
 
     @Test
+    fun `chat page exclusively owns turn screen wakefulness`() {
+        assertEquals(
+            setOf(
+                "ui/components/ui/KeepScreenOn.kt",
+                "ui/pages/chat/ChatPage.kt",
+            ),
+            hits("KeepScreenOn(").toSet(),
+        )
+        val chatPage = File(sourceRoot, "ui/pages/chat/ChatPage.kt").readText()
+        assertTrue(chatPage.contains("KeepScreenOn(enabled = turnPresentation.isActive)"))
+    }
+
+    @Test
     fun `attachment backfill is an exact metadata patch rather than a replacement tree`() {
         assertTrue(hits("BackfillAttachmentRefs").isNotEmpty())
         assertTrue(hits("AttachmentRefBackfill").isNotEmpty())

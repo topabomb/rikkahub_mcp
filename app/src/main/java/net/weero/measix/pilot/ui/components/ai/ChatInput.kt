@@ -109,7 +109,6 @@ import net.weero.measix.pilot.ui.components.ai.completion.ChatCompletionItem
 import net.weero.measix.pilot.ui.components.ai.completion.ChatCompletionList
 import net.weero.measix.pilot.ui.components.ai.completion.ChatCompletionProvider
 import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
-import net.weero.measix.pilot.ui.components.ui.KeepScreenOn
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionManager
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionRecordAudio
 import net.weero.measix.pilot.ui.components.ui.permission.rememberPermissionState
@@ -461,7 +460,6 @@ private fun SendButton(
     ) {
         Surface(Modifier.fillMaxSize(), shape = CircleShape, color = containerColor, content = {})
         if (loading) {
-            KeepScreenOn()
             Icon(HugeIcons.Cancel01, stringResource(R.string.stop), tint = contentColor, modifier = Modifier.size(18.dp))
         } else {
             Icon(HugeIcons.ArrowUp02, stringResource(R.string.send), tint = contentColor, modifier = Modifier.size(18.dp))
