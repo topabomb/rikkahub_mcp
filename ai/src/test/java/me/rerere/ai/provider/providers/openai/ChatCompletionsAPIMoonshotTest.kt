@@ -28,14 +28,6 @@ class ChatCompletionsAPIMoonshotTest {
         modelId: String,
         reasoningLevel: ReasoningLevel,
     ): JsonObject {
-        val method = ChatCompletionsAPI::class.java.getDeclaredMethod(
-            "buildChatCompletionRequest",
-            List::class.java,
-            TextGenerationParams::class.java,
-            ProviderSetting.OpenAI::class.java,
-            Boolean::class.javaPrimitiveType
-        )
-        method.isAccessible = true
         val params = TextGenerationParams(
             model = Model(
                 modelId = modelId,
@@ -43,13 +35,12 @@ class ChatCompletionsAPIMoonshotTest {
             ),
             reasoningLevel = reasoningLevel,
         )
-        return method.invoke(
-            api,
-            listOf(UIMessage.user("hi")),
-            params,
-            ProviderSetting.OpenAI(baseUrl = "https://api.moonshot.cn/v1"),
-            true
-        ) as JsonObject
+        return api.buildChatCompletionRequest(
+            messages = listOf(UIMessage.user("hi")),
+            params = params,
+            providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.moonshot.cn/v1"),
+            stream = true,
+        )
     }
 
     @Test

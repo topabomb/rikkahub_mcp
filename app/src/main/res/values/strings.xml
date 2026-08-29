@@ -460,6 +460,7 @@
   <string name="imggen_page_image_saved_success">Image saved to gallery</string>
   <string name="imggen_page_image_size">Image Size</string>
   <string name="imggen_page_no_generated_images">No generated images</string>
+  <string name="imggen_page_load_failed">Failed to load generated images</string>
   <string name="imggen_page_prompt_placeholder">Describe the image you want to generate...</string>
   <string name="imggen_page_save">Save</string>
   <string name="imggen_page_save_failed">Save failed: %1$s</string>
@@ -1595,4 +1596,3 @@
   <string name="mcp_refresh_continuing">%1$d MCP servers are still refreshing in the background</string>
   <string name="mcp_enabled_tools_count">%1$d/%2$d tools</string>
 </resources>
-

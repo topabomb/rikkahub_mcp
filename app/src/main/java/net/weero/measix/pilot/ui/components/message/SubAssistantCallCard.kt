@@ -449,7 +449,7 @@ private fun SubAssistantCallCardFallback(
                 text = stringResource(R.string.sub_assistant_call_title),
                 style = MaterialTheme.typography.titleSmall,
             )
-            if (tool.isExecuted) {
+            if (tool.hasReplayResult) {
                 val fields = parseSubAssistantToolResultFields(tool, JsonInstant)
                 val rawOutput = tool.output.filterIsInstance<UIMessagePart.Text>()
                     .joinToString("\n") { it.text }

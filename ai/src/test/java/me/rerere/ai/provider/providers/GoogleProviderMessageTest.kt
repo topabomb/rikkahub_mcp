@@ -1,8 +1,10 @@
 package me.rerere.ai.provider.providers
 
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
@@ -24,9 +26,12 @@ import me.rerere.ai.ui.GoogleThoughtMetadata
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
+import me.rerere.ai.ui.toMetadata
+import me.rerere.ai.util.ProviderTerminalStatus
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -44,44 +49,49 @@ import org.junit.Test
 class GoogleProviderMessageTest {
 
     private lateinit var provider: GoogleProvider
+    private val testModelId = "gemini-test"
+    private val testSourceProfile = "google:developer:test.example.com"
 
     @Before
     fun setUp() {
         provider = GoogleProvider(OkHttpClient())
     }
 
-    // Helper to invoke private buildContents method via reflection
     private fun invokeBuildContents(
         messages: List<UIMessage>,
         mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
-    ): JsonArray {
-        val method = GoogleProvider::class.java.getDeclaredMethod(
-            "buildContents",
-            List::class.java,
-            RequestMediaCapabilities::class.java,
-        )
-        method.isAccessible = true
-        return method.invoke(provider, messages, mediaCapabilities) as JsonArray
-    }
+    ): JsonArray = provider.buildContents(
+        messages = messages,
+        mediaCapabilities = mediaCapabilities,
+        modelId = testModelId,
+        sourceProfile = testSourceProfile,
+    )
 
     private fun invokeBuildRequest(
         messages: List<UIMessage>,
         params: TextGenerationParams,
-    ): JsonObject {
-        val method = GoogleProvider::class.java.getDeclaredMethod(
-            "buildCompletionRequestBody",
-            List::class.java,
-            TextGenerationParams::class.java,
-        )
-        method.isAccessible = true
-        return method.invoke(provider, messages, params) as JsonObject
-    }
+    ): JsonObject = provider.buildCompletionRequestBody(
+        messages = messages,
+        params = params,
+        sourceProfile = testSourceProfile,
+    )
 
-    private fun invokeParsePart(part: JsonObject): UIMessagePart {
-        val method = GoogleProvider::class.java.getDeclaredMethod("parseMessagePart", JsonObject::class.java)
-        method.isAccessible = true
-        return method.invoke(provider, part) as UIMessagePart
-    }
+    private fun invokeBuildRequestWithSource(
+        messages: List<UIMessage>,
+        params: TextGenerationParams,
+        sourceProfile: String,
+    ): JsonObject = provider.buildCompletionRequestBody(
+        messages = messages,
+        params = params,
+        sourceProfile = sourceProfile,
+    )
+
+    private fun invokeParsePart(part: JsonObject): UIMessagePart = provider.parseMessagePart(
+        jsonObject = part,
+        sourceModelId = testModelId,
+        sourceProfile = testSourceProfile,
+        providerStepId = "test-step",
+    )
 
     @Test
     fun `attachment facts retain user model and function response containers`() {
@@ -683,6 +693,193 @@ class GoogleProviderMessageTest {
     }
 
     @Test
+    fun `adjacent tools from distinct gemini response steps remain sequential`() {
+        fun tool(id: String, step: String) = createExecutedTool(id, "lookup", "{}", id).copy(
+            metadata = GoogleThoughtMetadata(
+                functionCallId = id,
+                thoughtSignature = "signature-$id",
+                providerStepId = step,
+            ).toMetadata(),
+        )
+        val contents = invokeBuildContents(
+            listOf(
+                UIMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(tool("call-1", "step-1"), tool("call-2", "step-2")),
+                )
+            )
+        )
+
+        assertEquals(listOf("model", "user", "model", "user"), contents.map {
+            it.jsonObject["role"]!!.jsonPrimitive.content
+        })
+        assertTrue(contents[0].jsonObject["parts"]!!.jsonArray.single().jsonObject.containsKey("functionCall"))
+        assertTrue(contents[2].jsonObject["parts"]!!.jsonArray.single().jsonObject.containsKey("functionCall"))
+    }
+
+    @Test
+    fun `parallel tools from one gemini response step remain one envelope`() {
+        fun tool(id: String) = createExecutedTool(id, "lookup", "{}", id).copy(
+            metadata = GoogleThoughtMetadata(
+                functionCallId = id,
+                thoughtSignature = if (id == "call-1") "signature" else null,
+                providerStepId = "shared-step",
+            ).toMetadata(),
+        )
+        val contents = invokeBuildContents(
+            listOf(
+                UIMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(tool("call-1"), tool("call-2")),
+                )
+            )
+        )
+
+        assertEquals(listOf("model", "user"), contents.map {
+            it.jsonObject["role"]!!.jsonPrimitive.content
+        })
+        assertEquals(2, contents[0].jsonObject["parts"]!!.jsonArray.size)
+        assertEquals(2, contents[1].jsonObject["parts"]!!.jsonArray.size)
+    }
+
+    @Test
+    fun `gemini signature replay requires exact model and endpoint source`() {
+        val metadata = GoogleThoughtMetadata(
+            thoughtSignature = "opaque-signature",
+            sourceModelId = "gemini-3-flash",
+            sourceProfile = "google:developer:generativelanguage.googleapis.com",
+            providerStepId = "step-1",
+        ).toMetadata()
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(UIMessagePart.Text("answer", metadata)),
+        )
+        val params = TextGenerationParams(
+            model = Model(modelId = "gemini-3-flash", displayName = "Gemini 3 Flash"),
+        )
+
+        val matched = invokeBuildRequestWithSource(
+            listOf(message), params, "google:developer:generativelanguage.googleapis.com"
+        )
+        val switched = invokeBuildRequestWithSource(
+            listOf(message), params, "google:vertex:aiplatform.googleapis.com"
+        )
+        val matchedPart = matched["contents"]!!.jsonArray.single().jsonObject["parts"]!!
+            .jsonArray.single().jsonObject
+        val switchedPart = switched["contents"]!!.jsonArray.single().jsonObject["parts"]!!
+            .jsonArray.single().jsonObject
+        assertEquals("opaque-signature", matchedPart["thoughtSignature"]?.jsonPrimitive?.content)
+        assertFalse(switchedPart.containsKey("thoughtSignature"))
+    }
+
+    @Test
+    fun `gemini replay source profile follows actual developer or vertex endpoint`() {
+        assertEquals(
+            "google:developer:proxy.example.com",
+            googleReplaySourceProfile(
+                me.rerere.ai.provider.ProviderSetting.Google(
+                    baseUrl = "https://proxy.example.com/v1beta",
+                )
+            ),
+        )
+        val vertexA = googleReplaySourceProfile(
+            me.rerere.ai.provider.ProviderSetting.Google(
+                baseUrl = "https://unused-one.example.com/v1beta",
+                vertexAI = true,
+            )
+        )
+        val vertexB = googleReplaySourceProfile(
+            me.rerere.ai.provider.ProviderSetting.Google(
+                baseUrl = "https://unused-two.example.com/v1beta",
+                vertexAI = true,
+            )
+        )
+        assertEquals("google:vertex:aiplatform.googleapis.com", vertexA)
+        assertEquals(vertexA, vertexB)
+    }
+
+    @Test
+    fun `tool delta metadata merge preserves prior gemini signature and call id`() {
+        val first = UIMessagePart.Tool(
+            toolCallId = "call-1",
+            toolName = "lookup",
+            input = "{",
+            metadata = GoogleThoughtMetadata(
+                thoughtSignature = "signature",
+                functionCallId = "call-1",
+                providerStepId = "step-1",
+            ).toMetadata(),
+        )
+        val delta = UIMessagePart.Tool(
+            toolCallId = "call-1",
+            toolName = "",
+            input = "}",
+            metadata = GoogleThoughtMetadata(providerStepId = "step-1").toMetadata(),
+        )
+
+        val merged = first.merge(delta).metadataAs<GoogleThoughtMetadata>()!!
+        assertEquals("signature", merged.thoughtSignature)
+        assertEquals("call-1", merged.functionCallId)
+        assertEquals("step-1", merged.providerStepId)
+    }
+
+    @Test
+    fun `gemini finish reasons map to typed terminal status`() {
+        assertEquals(null, geminiFinishReasonException("STOP"))
+        assertEquals(
+            ProviderTerminalStatus.INCOMPLETE,
+            geminiFinishReasonException("MAX_TOKENS")?.terminalStatus,
+        )
+        listOf("SAFETY", "MALFORMED_FUNCTION_CALL", "UNKNOWN_NEW_REASON", null).forEach { reason ->
+            assertEquals(ProviderTerminalStatus.FAILED, geminiFinishReasonException(reason)?.terminalStatus)
+        }
+    }
+
+    @Test
+    fun `all system text is retained in order including image output models`() {
+        val body = invokeBuildRequest(
+            messages = listOf(
+                UIMessage(role = MessageRole.SYSTEM, parts = listOf(UIMessagePart.Text("one"), UIMessagePart.Text("two"))),
+                UIMessage.system("three"),
+                UIMessage.user("hello"),
+            ),
+            params = TextGenerationParams(
+                model = Model(
+                    modelId = "gemini-image",
+                    displayName = "Gemini Image",
+                    outputModalities = listOf(me.rerere.ai.provider.Modality.IMAGE),
+                ),
+            ),
+        )
+
+        val text = body["systemInstruction"]!!.jsonObject["parts"]!!.jsonArray
+            .single().jsonObject["text"]!!.jsonPrimitive.content
+        assertEquals("one\ntwo\nthree", text)
+    }
+
+    @Test
+    fun `audio and video remain reference only until common capability supports them`() {
+        val contents = invokeBuildContents(
+            listOf(
+                UIMessage(
+                    role = MessageRole.USER,
+                    parts = listOf(
+                        UIMessagePart.Text("[Attachment ref=attachment:a type=audio]"),
+                        UIMessagePart.Audio("file:///audio.wav"),
+                        UIMessagePart.Text("[Attachment ref=attachment:v type=video]"),
+                        UIMessagePart.Video("file:///video.webm"),
+                    ),
+                )
+            )
+        )
+
+        val parts = contents.single().jsonObject["parts"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(2, parts.size)
+        assertTrue(parts.all { it.containsKey("text") })
+        assertTrue(parts.none { it.containsKey("inlineData") })
+    }
+
+    @Test
     fun `gemini text reasoning and draft image protocol state should round trip`() {
         val text = invokeParsePart(buildJsonObject {
             put("text", "answer")
@@ -749,5 +946,143 @@ class GoogleProviderMessageTest {
             input = input,
             output = listOf(UIMessagePart.Text(output))
         )
+    }
+
+    // ==================== Custom Body Ownership Tests ====================
+
+    private fun invokeBuildRequestBodyWithCustomBody(
+        customBody: List<me.rerere.ai.provider.CustomBody>,
+    ): JsonObject {
+        val model = Model(
+            modelId = "gemini-2.0-flash",
+            displayName = "Gemini 2.0 Flash",
+            abilities = emptyList(),
+        )
+        val params = TextGenerationParams(
+            model = model,
+            customBody = customBody,
+        )
+        val messages = listOf(UIMessage.user("hello"))
+        return provider.buildCompletionRequestBody(
+            messages = messages,
+            params = params,
+            sourceProfile = testSourceProfile,
+        )
+    }
+
+    @Test
+    fun `gemini function call requires nonblank name and object args`() {
+        val invalidCalls = listOf(
+            buildJsonObject {
+                put("functionCall", buildJsonObject {
+                    put("name", "lookup")
+                })
+            },
+            buildJsonObject {
+                put("functionCall", buildJsonObject {
+                    put("name", "lookup")
+                    put("args", JsonNull)
+                })
+            },
+            buildJsonObject {
+                put("functionCall", buildJsonObject {
+                    put("name", "lookup")
+                    put("args", "invalid")
+                })
+            },
+            buildJsonObject {
+                put("functionCall", buildJsonObject {
+                    put("name", "lookup")
+                    put("args", buildJsonArray { add("invalid") })
+                })
+            },
+            buildJsonObject {
+                put("functionCall", buildJsonObject {
+                    put("name", "")
+                    put("args", buildJsonObject {})
+                })
+            },
+        )
+
+        invalidCalls.forEach { part ->
+            assertThrows(IllegalArgumentException::class.java) {
+                invokeParsePart(part)
+            }
+        }
+    }
+
+    @Test
+    fun `gemini custom body with reserved key contents throws before request`() {
+        var caught: Throwable? = null
+        try {
+            invokeBuildRequestBodyWithCustomBody(
+                listOf(me.rerere.ai.provider.CustomBody("contents", JsonPrimitive("[]"))),
+            )
+        } catch (e: Throwable) {
+            caught = e
+        }
+        assertTrue(
+            "expected CustomBodyReservedKeyException, got $caught",
+            caught is me.rerere.ai.util.CustomBodyReservedKeyException,
+        )
+        assertTrue(
+            (caught as me.rerere.ai.util.CustomBodyReservedKeyException).conflictingKeys.contains("contents"),
+        )
+    }
+
+    @Test
+    fun `gemini custom body with reserved key systemInstruction throws before request`() {
+        var caught: Throwable? = null
+        try {
+            invokeBuildRequestBodyWithCustomBody(
+                listOf(me.rerere.ai.provider.CustomBody("systemInstruction", JsonPrimitive("{}"))),
+            )
+        } catch (e: Throwable) {
+            caught = e
+        }
+        assertTrue(caught is me.rerere.ai.util.CustomBodyReservedKeyException)
+    }
+
+    @Test
+    fun `gemini custom body with non-reserved key still merges`() {
+        val body = invokeBuildRequestBodyWithCustomBody(
+            listOf(me.rerere.ai.provider.CustomBody("generationConfig", buildJsonObject { put("temperature", 0.5) })),
+        )
+        assertTrue(body.containsKey("generationConfig"))
+    }
+
+    @Test
+    fun `gemini custom body rejects nested response shape controls`() {
+        val unsafeBodies = listOf(
+            me.rerere.ai.provider.CustomBody(
+                "generationConfig",
+                buildJsonObject { put("candidateCount", 2) },
+            ),
+            me.rerere.ai.provider.CustomBody(
+                "generationConfig",
+                buildJsonObject { putJsonArray("responseModalities") { add(JsonPrimitive("AUDIO")) } },
+            ),
+            me.rerere.ai.provider.CustomBody(
+                "toolConfig",
+                buildJsonObject {
+                    put("functionCallingConfig", buildJsonObject {
+                        put("streamFunctionCallArguments", true)
+                    })
+                },
+            ),
+        )
+
+        unsafeBodies.forEach { body ->
+            var caught: Throwable? = null
+            try {
+                invokeBuildRequestBodyWithCustomBody(listOf(body))
+            } catch (e: Throwable) {
+                caught = e
+            }
+            assertTrue(
+                "expected nested ownership rejection for ${body.key}, got $caught",
+                caught is me.rerere.ai.util.CustomBodyReservedKeyException,
+            )
+        }
     }
 }

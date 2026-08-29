@@ -3,6 +3,7 @@ package me.rerere.ai.provider.providers.openai
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -13,6 +14,7 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.BuiltInTools
+import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderSetting
@@ -28,10 +30,12 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
+import me.rerere.ai.util.CustomBodyReservedKeyException
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 
@@ -1638,5 +1642,72 @@ class ResponseAPIMessageTest {
             input = input,
             output = listOf(UIMessagePart.Text(output))
         )
+    }
+
+    // ==================== Custom Body Ownership Tests ====================
+
+    private fun invokeBuildRequestBodyWithCustomBody(
+        customBody: List<CustomBody>,
+    ): JsonObject {
+        val model = Model(
+            modelId = "gpt-5",
+            displayName = "GPT-5",
+            abilities = emptyList(),
+        )
+        val params = TextGenerationParams(
+            model = model,
+            customBody = customBody,
+        )
+        val providerSetting = ProviderSetting.OpenAI(
+            baseUrl = "https://api.openai.com/v1",
+            useResponseApi = true,
+            models = listOf(model),
+        )
+        val messages = listOf(UIMessage.user("hello"))
+        return api.buildRequestBody(providerSetting, messages, params, false)
+    }
+
+    @Test
+    fun `responses custom body with reserved key input throws before request`() {
+        var caught: Throwable? = null
+        try {
+            invokeBuildRequestBodyWithCustomBody(
+                listOf(CustomBody("input", JsonPrimitive("[]"))),
+            )
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            caught = e.cause
+        } catch (e: Throwable) {
+            caught = e
+        }
+        assertTrue(
+            "expected CustomBodyReservedKeyException, got $caught",
+            caught is CustomBodyReservedKeyException,
+        )
+        assertTrue(
+            (caught as CustomBodyReservedKeyException).conflictingKeys.contains("input"),
+        )
+    }
+
+    @Test
+    fun `responses custom body with reserved key tools throws before request`() {
+        var caught: Throwable? = null
+        try {
+            invokeBuildRequestBodyWithCustomBody(
+                listOf(CustomBody("tools", JsonPrimitive("[]"))),
+            )
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            caught = e.cause
+        } catch (e: Throwable) {
+            caught = e
+        }
+        assertTrue(caught is CustomBodyReservedKeyException)
+    }
+
+    @Test
+    fun `responses custom body with non-reserved key still merges`() {
+        val body = invokeBuildRequestBodyWithCustomBody(
+            listOf(CustomBody("temperature", JsonPrimitive(0.5))),
+        )
+        assertTrue(body.containsKey("temperature"))
     }
 }

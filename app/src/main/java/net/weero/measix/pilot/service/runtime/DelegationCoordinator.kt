@@ -1091,7 +1091,7 @@ class DelegationCoordinator(
     ): List<UIMessage> {
         val message = requireNotNull(messages.lastOrNull()) { "ask_user continuation has no assistant message" }
         val toolOrdinal = message.getTools().indexOfFirst { tool ->
-            !tool.isExecuted && tool.toolName == "ask_user" &&
+            !tool.hasReplayResult && tool.toolName == "ask_user" &&
                 tool.approvalState is ToolApprovalState.Pending
         }
         check(toolOrdinal >= 0) { "AWAITING_APPROVAL has no pending ask_user tool" }

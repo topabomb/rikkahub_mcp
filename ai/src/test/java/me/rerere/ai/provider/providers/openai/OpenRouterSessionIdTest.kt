@@ -49,16 +49,11 @@ class OpenRouterSessionIdTest {
             model = model,
             providerSessionId = sessionId,
         )
-        return ChatCompletionsAPI::class.java.getDeclaredMethod(
-            "buildChatCompletionRequest",
-            List::class.java,
-            TextGenerationParams::class.java,
-            ProviderSetting.OpenAI::class.java,
-            Boolean::class.javaPrimitiveType,
-        ).run {
-            isAccessible = true
-            invoke(chatApi, listOf(UIMessage.user("hi")), params, provider, false) as JsonObject
-        }
+        return chatApi.buildChatCompletionRequest(
+            messages = listOf(UIMessage.user("hi")),
+            params = params,
+            providerSetting = provider,
+        )
     }
 
     private fun buildResponsesRequest(

@@ -110,7 +110,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             tool = displayTool,
             arguments = parsedArguments.getOrElse { JsonObject(emptyMap()) },
             argumentsValid = parsedArguments.isSuccess,
-            content = if (displayTool.isExecuted) {
+            content = if (displayTool.hasReplayResult) {
                 runCatching {
                     JsonInstant.parseToJsonElement(
                         displayTool.output.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text }

@@ -37,6 +37,8 @@ At high-leverage points—especially before substantial refactors, cross-module 
 - 会话命令与 turn：`app/src/main/java/net/weero/measix/pilot/service/runtime/`、`MasterTurnCoordinator`、
   `TurnFinalization`、`TurnRecovery`。
 - Artifact：`ArtifactStore`、`ArtifactPayloadStore`、`ArtifactSettingsCoordinator`、`ArtifactUseCase`。
+- 生成媒体与文件管理：`GeneratedMediaStore`、`FileManagementApplicationService`、`FileManagementQueryService`。
+- MCP：`McpServerRuntime`、`McpRuntimeCoordinator`、`McpCatalogStore`、`McpOAuthCoordinator`。
 - 子助手：`DelegationCoordinator`、`SubAssistantLifecycle`、`SubAssistantRunGate`。
 - UI 边界：`ConversationApplicationService`、`ConversationQueryService` 及专用 reader/query port。
 - 架构契约：`app/src/test/java/net/weero/measix/pilot/architecture/SingleWriterContractTest.kt` 与性能证据测试。
@@ -54,18 +56,20 @@ At high-leverage points—especially before substantial refactors, cross-module 
   会话列表或启动 turn。
 - 新 turn 的 `START` 与审批后的 `CONTINUE_APPROVAL` 是不同协议。继续流程保留原 `TurnHandle`，不得清理树、
   回填附件或创建第二 turn。durable 流程只读取 `snapshot.nodes`；`renderNodes` 只用于显示，禁止以对象身份推断写入。
-- 工具装配、调用拼接、就绪、审批、执行和终态使用 typed phase。`Tool.output` 只表示 Provider 可回放结果，
-  不能充当运行状态或详情门禁；执行阶段只随已提交 checkpoint 推进，metadata 只细化领域子阶段。
+- 工具装配、调用拼接、就绪、审批、执行和终态使用 typed phase。`UIMessagePart.Tool.hasReplayResult` / `Tool.output`
+  只表示 Provider 可回放结果，不能充当 active 运行状态或详情门禁；执行阶段只随已提交 checkpoint 推进，metadata 只细化领域子阶段。
 - UI/ViewModel 只依赖 application/query ports 与 UiModel，不得直连 DAO、ConversationRepository、Runtime
-  Registry、ArtifactStore 或 payload 层。UI 使用 `ConversationPresentation`，不持有 Runtime Job。
+  Registry、ArtifactStore、GeneratedMediaStore 或 payload 层。UI 使用 `ConversationPresentation`，不持有 Runtime Job。
 - 标题由 `ConversationTitleCoordinator` 管理。模型结果使用 token + expected-title CAS，并与手动标题写入串行；
   异步或 force 结果不得覆盖请求发出后产生的手动标题。
 - Artifact metadata、引用和生命周期只归 `ArtifactStore`；`ArtifactPayloadStore` 只做磁盘 IO 且无 DAO。
   未发布资源必须用 typed lease/owner 交接，checkpoint 成功后发布，失败或取消精确回滚。
+- 图库生成媒体的 canonical row、payload 与删除恢复只归 `GeneratedMediaStore`。`FileManagementApplicationService`
+  与 `FileManagementQueryService` 只做跨 owner 命令编排和只读投影，不成为第三个文件 owner。
 - `attachment:<uuid>` 的索引只归 `AttachmentReferenceLookup`。执行和查询投影共用规则；UI 不扫描消息 metadata、
   不解析子助手 payload，也不直连 Artifact。
-- 启动恢复 fail-closed；损坏或不完整聚合不得伪装 Ready。破坏性操作使用可恢复状态机与幂等/CAS，
-  不以日志、空列表或 best-effort 代表成功。
+- 启动恢复按 Settings → Artifact → GeneratedMedia → projection → turn/assistant cleanup 固定顺序 fail-closed；
+  损坏或不完整聚合不得伪装 Ready。破坏性操作使用可恢复状态机与幂等/CAS，不以日志、空列表或 best-effort 代表成功。
 - 架构迁移必须在同一交付中物理删除旧 facade、fallback、deprecated 转发、兼容白名单、过渡命名和无调用协议；
   同步更新静态契约测试与参考文档，不保留双路径。
 
@@ -83,13 +87,14 @@ At high-leverage points—especially before substantial refactors, cross-module 
 
 | Topic | Reference |
 | --- | --- |
-| 应用 V1 总体架构、所有者与边界 | `docs/references/application-architecture-v1.md` |
+| 应用总体架构、所有者与边界 | `docs/references/application-architecture.md` |
 | 会话、Runtime、turn、审批与标题 | `docs/references/chat-generation-pipeline.md` |
 | 多模态、附件、Artifact、Turn/Tool durability | `docs/references/multimodal-context-and-turn-durability.md` |
 | 子助手 owner、lineage、retention、恢复 | `docs/references/sub-assistant-architecture.md` |
 | 子助手多模态输入输出 | `docs/references/sub-assistant-multimodal.md` |
 | Assistant 配置模型 | `docs/references/assistant-configuration.md` |
 | Android 配置目录与企业下发边界 | `docs/references/android-configuration-architecture.md` |
+| MCP definition、catalog、runtime、OAuth 与 UI 投影 | `docs/references/mcp-architecture.md` |
 | Provider 线协议 | `docs/references/protocol-reference.md` |
 | 模型可见 prompts 与工具结果 | `docs/references/prompts-and-tools.md` |
 | Compose 导航、布局与主题 | `docs/references/ui-architecture.md` |
@@ -109,14 +114,15 @@ At high-leverage points—especially before substantial refactors, cross-module 
   `app/build.gradle.kts` 的 `versionCode`/`versionName`；默认保持不变。
 - `docs/dev/upstream-sync.md` 是上游同步总账，其中包括了工作流说明和方法论，执行同步时注意架构的变迁，引入上游变更要合理整合到本项目架构。每次同步都先 fetch，按上一批冻结点续查，并追加本批摘要。
 
-`docs/dev/` 为开发过程文档：`original-architecture.md`、`docs\dev\fork-simplification-plan.md`是冻结归档；其余调研、方案和历史记录按需查阅。不要把阶段计划、临时结论或迁移过程术语写进代码注释。
+`docs/dev/` 为开发过程文档：`original-architecture.md`、`fork-simplification-plan.md` 是 Fork 时的冻结归档；不作为当前架构规则来源。
 
 ## Code and Localization Conventions
 
 - 遵循 `.editorconfig`：Kotlin/Gradle 4 空格，XML/JSON/Markdown/YAML 2 空格，文本统一 UTF-8 without BOM + CRLF，
   Kotlin 类型使用 PascalCase，测试类以 `*Test` 结尾。
 - 注释解释长期成立的语义、所有权与非显然原因；删除临时计划、迁移阶段和已经失效的说明。
-- 正常用户可见字符串必须同步 `values`、`values-zh`、`values-ja`、`values-ko-rKR`、`values-ru`。
+- 用户交互流程常见可见字符串同步 `values`、`values-zh`、`values-ja`、`values-ko-rKR`、`values-ru`，适度扩展语言文件，避免逐渐膨胀。
   底层英文诊断 reason/detail 可只放源语言。Compose 使用 `stringResource`，非 Composable 使用 `Context.getString`。
 - 变更必须完整、清晰、可验证。文件或概念命名不再符合唯一语义时直接改名；删除无调用代码、重复 owner、
 - 禁止“最小改动”或“影响面小”的理由以打补丁或者会造成歧义的方式实现，禁止保留架构债。
+- 不要把阶段计划、临时结论或迁移过程术语写进代码注释。

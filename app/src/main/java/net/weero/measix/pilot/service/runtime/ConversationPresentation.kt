@@ -8,6 +8,7 @@ import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.CheckpointKind
+import net.weero.measix.pilot.data.ai.ToolResultEventStatus
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.utils.JsonInstant
 import kotlin.uuid.Uuid
@@ -130,7 +131,7 @@ internal fun ActiveTurnState.withStreamingMessages(nextMessages: List<UIMessage>
 internal fun ActiveTurnState.afterCheckpoint(command: CommitCheckpoint): ActiveTurnState {
     val assistant = command.messages.lastOrNull { it.id == assistantMessageId } ?: return this
     val phases = toolCallPhases.toMutableMap()
-    fun setFromMessage(includeExecuted: Boolean) {
+    fun setReadyPhases() {
         assistant.getTools().forEachIndexed { ordinal, tool ->
             val locator = ToolCallLocator(assistantMessageId, ordinal)
             val phase = when {
@@ -141,17 +142,15 @@ internal fun ActiveTurnState.afterCheckpoint(command: CommitCheckpoint): ActiveT
                 phases[locator] == ToolCallPhase.CANCELLED -> ToolCallPhase.CANCELLED
                 phases[locator] == ToolCallPhase.INTERRUPTED -> ToolCallPhase.INTERRUPTED
                 phases[locator] == ToolCallPhase.COMPLETED -> ToolCallPhase.COMPLETED
-                tool.isExecuted && includeExecuted -> ToolCallPhase.COMPLETED
-                !tool.isExecuted -> ToolCallPhase.READY
-                else -> phases[locator]
+                else -> ToolCallPhase.READY
             }
-            if (phase != null) phases[locator] = phase
+            phases[locator] = phase
         }
     }
     when (command.kind) {
         CheckpointKind.STEP_COMPLETED,
         CheckpointKind.AWAITING_APPROVAL,
-        -> setFromMessage(includeExecuted = false)
+        -> setReadyPhases()
 
         CheckpointKind.TOOL_EXECUTION_STARTED,
         CheckpointKind.TOOL_STATE_CHANGED,
@@ -162,16 +161,44 @@ internal fun ActiveTurnState.afterCheckpoint(command: CommitCheckpoint): ActiveT
         }
 
         CheckpointKind.TOOL_RESULT_COMPLETED -> {
-            val execution = command.toolExecution
-            if (execution == null) {
-                setFromMessage(includeExecuted = true)
-            } else {
-                phases[ToolCallLocator(assistantMessageId, execution.toolOrdinal)] = when (execution.status) {
-                    ToolExecutionStatus.COMPLETED -> ToolCallPhase.COMPLETED
-                    ToolExecutionStatus.FAILED -> ToolCallPhase.FAILED
-                    ToolExecutionStatus.STARTED -> ToolCallPhase.EXECUTING
-                    ToolExecutionStatus.CANCELLED -> ToolCallPhase.CANCELLED
-                    ToolExecutionStatus.UNKNOWN -> ToolCallPhase.INTERRUPTED
+            require(command.toolResults.isNotEmpty()) {
+                "tool-result checkpoint requires typed result facts"
+            }
+            require(command.toolResults.map { it.toolOrdinal }.distinct().size == command.toolResults.size) {
+                "tool-result checkpoint contains duplicate tool ordinals"
+            }
+            val tools = assistant.getTools()
+            command.toolResults.forEach { result ->
+                require(result.messageId == assistantMessageId) {
+                    "tool-result checkpoint targets a different assistant message"
+                }
+                require(result.toolOrdinal in tools.indices) {
+                    "tool-result checkpoint targets a missing tool ordinal"
+                }
+                require(tools[result.toolOrdinal].hasReplayResult) {
+                    "tool-result checkpoint requires a Provider replay result"
+                }
+                phases[ToolCallLocator(result.messageId, result.toolOrdinal)] = when (result.status) {
+                    ToolResultEventStatus.COMPLETED -> ToolCallPhase.COMPLETED
+                    ToolResultEventStatus.FAILED -> ToolCallPhase.FAILED
+                    ToolResultEventStatus.DENIED -> ToolCallPhase.DENIED
+                    ToolResultEventStatus.ANSWERED -> ToolCallPhase.ANSWERED
+                }
+            }
+            command.toolExecution?.let { execution ->
+                require(command.toolResults.size == 1 && command.toolResults.single().toolOrdinal == execution.toolOrdinal) {
+                    "tool execution and result checkpoint target different tools"
+                }
+                val expected = when (execution.status) {
+                    ToolExecutionStatus.COMPLETED -> ToolResultEventStatus.COMPLETED
+                    ToolExecutionStatus.FAILED -> ToolResultEventStatus.FAILED
+                    ToolExecutionStatus.STARTED,
+                    ToolExecutionStatus.CANCELLED,
+                    ToolExecutionStatus.UNKNOWN,
+                    -> error("tool-result checkpoint contains a non-result execution status")
+                }
+                require(command.toolResults.single().status == expected) {
+                    "tool execution and result checkpoint have conflicting terminal statuses"
                 }
             }
         }
@@ -184,7 +211,7 @@ fun resolveToolCallPhase(tool: UIMessagePart.Tool, activePhase: ToolCallPhase?):
         tool.approvalState is ToolApprovalState.Pending -> ToolCallPhase.AWAITING_APPROVAL
         tool.approvalState is ToolApprovalState.Denied -> ToolCallPhase.DENIED
         tool.approvalState is ToolApprovalState.Answered -> ToolCallPhase.ANSWERED
-        else -> tool.resultTerminalPhase() ?: if (tool.isExecuted) {
+        else -> tool.resultTerminalPhase() ?: if (tool.hasReplayResult) {
             ToolCallPhase.COMPLETED
         } else {
             ToolCallPhase.READY
@@ -192,7 +219,7 @@ fun resolveToolCallPhase(tool: UIMessagePart.Tool, activePhase: ToolCallPhase?):
     }
 
 private fun UIMessagePart.Tool.resultTerminalPhase(): ToolCallPhase? {
-    if (!isExecuted) return null
+    if (!hasReplayResult) return null
     val result = runCatching {
         JsonInstant.parseToJsonElement(
             output.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text },

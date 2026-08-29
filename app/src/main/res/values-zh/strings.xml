@@ -443,6 +443,7 @@
   <string name="imggen_page_image_saved_success">图片已保存到相册</string>
   <string name="imggen_page_image_size">图片尺寸</string>
   <string name="imggen_page_no_generated_images">暂无生成的图片</string>
+  <string name="imggen_page_load_failed">无法加载生成的图片</string>
   <string name="imggen_page_prompt_placeholder">描述您想要生成的图片...</string>
   <string name="imggen_page_save">保存</string>
   <string name="imggen_page_save_failed">保存失败: %1$s</string>

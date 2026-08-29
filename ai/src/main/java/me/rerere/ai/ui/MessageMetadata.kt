@@ -123,6 +123,12 @@ data class GoogleThoughtMetadata(
     val functionCallId: String? = null,
     val thought: Boolean? = null,
     val inlineData: JsonObject? = null,
+    /** Exact model that produced the opaque signature; null legacy state is not replayable. */
+    val sourceModelId: String? = null,
+    /** Endpoint/profile identity that produced the opaque signature. */
+    val sourceProfile: String? = null,
+    /** One Gemini candidate response step; parallel calls share this identity. */
+    val providerStepId: String? = null,
 ) : PartMetadata
 
 /**
@@ -191,6 +197,38 @@ internal fun mergeReasoningPartMetadata(
     return OpenRouterReasoningMetadata(
         reasoningDetails = mergeOpenRouterReasoningDetails(existingDetails, incomingDetails),
     ).toMetadata()
+}
+
+/** Merge sparse Part metadata without allowing an empty streaming delta to erase prior state. */
+internal fun mergePartMetadata(
+    existing: JsonObject?,
+    incoming: JsonObject?,
+): JsonObject? = when {
+    incoming == null -> existing
+    existing == null -> incoming
+    else -> JsonObject(existing + incoming)
+}
+
+private val OPAQUE_REPLAY_METADATA_KEYS = setOf(
+    "signature",
+    "redactedData",
+    "reasoning_id",
+    "encrypted_content",
+    "source_profile",
+    "thoughtSignature",
+    "functionCallId",
+    "thought",
+    "inlineData",
+    "sourceModelId",
+    "sourceProfile",
+    "providerStepId",
+    "reasoning_details",
+)
+
+/** Remove Provider continuation state while preserving unrelated display/attachment metadata. */
+internal fun JsonObject?.withoutOpaqueReplayMetadata(): JsonObject? {
+    val retained = this?.filterKeys { it !in OPAQUE_REPLAY_METADATA_KEYS }.orEmpty()
+    return JsonObject(retained).takeIf { it.isNotEmpty() }
 }
 
 internal fun mergeOpenRouterReasoningDetails(

@@ -2,6 +2,7 @@ package me.rerere.ai.provider.providers
 
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
@@ -481,5 +482,79 @@ class ClaudeProviderMessageTest {
             input = input,
             output = listOf(UIMessagePart.Text(output))
         )
+    }
+
+    // ==================== Custom Body Ownership Tests ====================
+
+    private fun invokeBuildMessageRequestWithCustomBody(
+        customBody: List<me.rerere.ai.provider.CustomBody>,
+    ): JsonObject {
+        val model = me.rerere.ai.provider.Model(
+            modelId = "claude-sonnet-4-20250514",
+            displayName = "Claude Sonnet 4",
+            abilities = emptyList(),
+        )
+        val params = me.rerere.ai.provider.TextGenerationParams(
+            model = model,
+            customBody = customBody,
+        )
+        val providerSetting = me.rerere.ai.provider.ProviderSetting.Claude(
+            apiKey = "test-key",
+            models = listOf(model),
+        )
+        val messages = listOf(UIMessage.user("hello"))
+        val method = ClaudeProvider::class.java.getDeclaredMethod(
+            "buildMessageRequest",
+            me.rerere.ai.provider.ProviderSetting.Claude::class.java,
+            List::class.java,
+            me.rerere.ai.provider.TextGenerationParams::class.java,
+            Boolean::class.javaPrimitiveType,
+        )
+        method.isAccessible = true
+        return method.invoke(provider, providerSetting, messages, params, false) as JsonObject
+    }
+
+    @org.junit.Test
+    fun `claude custom body with reserved key messages throws before request`() {
+        var caught: Throwable? = null
+        try {
+            invokeBuildMessageRequestWithCustomBody(
+                listOf(me.rerere.ai.provider.CustomBody("messages", JsonPrimitive("[]"))),
+            )
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            caught = e.cause
+        } catch (e: Throwable) {
+            caught = e
+        }
+        assertTrue(
+            "expected CustomBodyReservedKeyException, got $caught",
+            caught is me.rerere.ai.util.CustomBodyReservedKeyException,
+        )
+        assertTrue(
+            (caught as me.rerere.ai.util.CustomBodyReservedKeyException).conflictingKeys.contains("messages"),
+        )
+    }
+
+    @org.junit.Test
+    fun `claude custom body with reserved key system throws before request`() {
+        var caught: Throwable? = null
+        try {
+            invokeBuildMessageRequestWithCustomBody(
+                listOf(me.rerere.ai.provider.CustomBody("system", JsonPrimitive("[]"))),
+            )
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            caught = e.cause
+        } catch (e: Throwable) {
+            caught = e
+        }
+        assertTrue(caught is me.rerere.ai.util.CustomBodyReservedKeyException)
+    }
+
+    @org.junit.Test
+    fun `claude custom body with non-reserved key still merges`() {
+        val body = invokeBuildMessageRequestWithCustomBody(
+            listOf(me.rerere.ai.provider.CustomBody("metadata", buildJsonObject { put("user_id", "u1") })),
+        )
+        assertTrue(body.containsKey("metadata"))
     }
 }

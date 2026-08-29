@@ -272,8 +272,8 @@ class ConversationTransitionTest {
         )
         val closedTool = r.nodes[0].messages.single().parts.filterIsInstance<UIMessagePart.Tool>().single()
         assertEquals(MessageTerminalStatus.INTERRUPTED, r.nodes[0].messages.single().terminalStatus)
-        // interrupt 语义：写入 interrupted output（isExecuted=true），保留原 approvalState
-        assertTrue(closedTool.isExecuted)
+        // interrupt 语义：写入 interrupted output（hasReplayResult=true），保留原 approvalState
+        assertTrue(closedTool.hasReplayResult)
         val output = closedTool.output.filterIsInstance<UIMessagePart.Text>().single().text
         assertTrue(output.contains("interrupted"))
     }

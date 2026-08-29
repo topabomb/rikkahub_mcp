@@ -676,7 +676,7 @@ internal object ConversationTransition {
             if (part !is UIMessagePart.Tool) return@map part
             val currentOrdinal = ordinal++
             if (currentOrdinal != command.toolOrdinal) return@map part
-            if (part.isExecuted) return null
+            if (part.hasReplayResult) return null
             if (part.approvalState == command.approvalState) {
                 matched = true
                 return@map part

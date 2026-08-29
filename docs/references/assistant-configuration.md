@@ -134,12 +134,17 @@ MCP 还必须与 definition 匹配的完整非空 LKG Catalog 和用户工具策
 |------|--------|------|
 | `regexes` | 空列表 | 用户/助手文本正则替换规则，按列表顺序应用，可在提示词页拖动排序 |
 | `customHeaders` | 空列表 | 合并到 Provider HTTP 请求头 |
-| `customBodies` | 空列表 | 合并到 Provider 请求体 |
+| `customBodies` | 空列表 | 合并到 Provider 请求体（非结构高级参数覆盖入口） |
 
 `AssistantRegex` 的 `affectingScope` 选择 USER 或 ASSISTANT，`visualOnly` 区分只用于 UI 的
 `visualTransform` 与真正进入消息/持久化流程的替换。非法正则或非法替换引用会保留原文本，避免破坏生成。
 
-自定义 Header/Body 是高级覆盖入口。它们可以改变 Provider 请求语义，配置 UI 和导入逻辑不应把它们误当成普通提示字段。
+自定义 Header/Body 是高级覆盖入口。`customBody` 只允许扩展或覆盖非结构字段；Provider builder 拥有的身份、
+消息、工具、续轮和传输生命周期字段是保留字段，发生冲突时在 HTTP 前抛出 typed 本地错误
+（`CustomBodyReservedKeyException`，stable reason `custom_body_reserved_key`）。已有冲突配置仍可加载和编辑，
+但请求会 fail-fast。由于 Assistant 级配置会随默认模型或 Provider override 切换协议，配置 UI 不使用跨协议
+保留键并集；当前协议 request builder 是唯一权威校验 owner。不自动删除、改名或迁移用户的 custom body。
+详见 [协议层参考](protocol-reference.md)。
 
 ### 子助手访问字段
 

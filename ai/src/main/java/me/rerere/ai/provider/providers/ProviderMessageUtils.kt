@@ -5,7 +5,7 @@ import me.rerere.ai.ui.UIMessagePart
 /**
  * 消息 parts 按工具边界分组的结果
  * - Content: 普通内容（Text、Image、Reasoning 等）
- * - Tools: 连续的已执行工具
+ * - Tools: 连续且存在 Provider 可回放结果的工具
  */
 internal sealed class PartGroup {
     data class Content(val parts: List<UIMessagePart>) : PartGroup()
@@ -43,7 +43,7 @@ internal fun groupPartsByToolBoundary(parts: List<UIMessagePart>): List<PartGrou
     }
 
     for (part in parts) {
-        if (part is UIMessagePart.Tool && part.isExecuted) {
+        if (part is UIMessagePart.Tool && part.hasReplayResult) {
             flushContent()
             currentTools.add(part)
         } else {

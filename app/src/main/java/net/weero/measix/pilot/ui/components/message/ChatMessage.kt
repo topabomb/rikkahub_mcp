@@ -370,7 +370,7 @@ private fun MessagePartsBlock(
     val handleClickCitation: (String) -> Unit = remember {
         handler@{ citationId ->
             partsState.forEach { part ->
-                if (part is UIMessagePart.Tool && part.toolName == "search_web" && part.isExecuted) {
+                if (part is UIMessagePart.Tool && part.toolName == "search_web" && part.hasReplayResult) {
                     val outputText = part.output.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text }
                     val items =
                         runCatching { JsonInstant.parseToJsonElement(outputText).jsonObject["items"]?.jsonArray }.getOrNull()

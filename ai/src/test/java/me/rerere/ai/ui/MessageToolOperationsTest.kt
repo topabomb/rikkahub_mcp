@@ -46,24 +46,24 @@ class MessageToolOperationsTest {
     }
 
     @Test
-    fun `isExecuted is true when tool has output`() {
+    fun `hasReplayResult is true when tool has output`() {
         val tool = UIMessagePart.Tool(
             toolCallId = "tc1",
             toolName = "search_web",
             input = """{"query":"test"}""",
             output = listOf(UIMessagePart.Text("result"))
         )
-        assertTrue(tool.isExecuted)
+        assertTrue(tool.hasReplayResult)
     }
 
     @Test
-    fun `isExecuted is false when tool has no output`() {
+    fun `hasReplayResult is false when tool has no output`() {
         val tool = UIMessagePart.Tool(
             toolCallId = "tc1",
             toolName = "search_web",
             input = """{"query":"test"}"""
         )
-        assertFalse(tool.isExecuted)
+        assertFalse(tool.hasReplayResult)
     }
 
     @Test
@@ -89,40 +89,40 @@ class MessageToolOperationsTest {
     }
 
     @Test
-    fun `canResumeExecution is true for unexecuted approved tool`() {
+    fun `canResumeResultAssembly is true for unexecuted approved tool`() {
         val tool = UIMessagePart.Tool(
             toolCallId = "tc1",
             toolName = "ask_user",
             input = """{"question":"?"}""",
             approvalState = ToolApprovalState.Approved
         )
-        assertTrue(tool.canResumeExecution)
+        assertTrue(tool.canResumeResultAssembly)
     }
 
     @Test
-    fun `canResumeExecution is true for unexecuted denied tool`() {
+    fun `canResumeResultAssembly is true for unexecuted denied tool`() {
         val tool = UIMessagePart.Tool(
             toolCallId = "tc1",
             toolName = "ask_user",
             input = """{"question":"?"}""",
             approvalState = ToolApprovalState.Denied("no")
         )
-        assertTrue(tool.canResumeExecution)
+        assertTrue(tool.canResumeResultAssembly)
     }
 
     @Test
-    fun `canResumeExecution is true for unexecuted answered tool`() {
+    fun `canResumeResultAssembly is true for unexecuted answered tool`() {
         val tool = UIMessagePart.Tool(
             toolCallId = "tc1",
             toolName = "ask_user",
             input = """{"question":"?"}""",
             approvalState = ToolApprovalState.Answered("yes")
         )
-        assertTrue(tool.canResumeExecution)
+        assertTrue(tool.canResumeResultAssembly)
     }
 
     @Test
-    fun `canResumeExecution is false for executed tool`() {
+    fun `canResumeResultAssembly is false for executed tool`() {
         val tool = UIMessagePart.Tool(
             toolCallId = "tc1",
             toolName = "search_web",
@@ -130,29 +130,29 @@ class MessageToolOperationsTest {
             output = listOf(UIMessagePart.Text("result")),
             approvalState = ToolApprovalState.Approved
         )
-        assertFalse(tool.canResumeExecution)
+        assertFalse(tool.canResumeResultAssembly)
     }
 
     @Test
-    fun `canResumeExecution is false for pending tool`() {
+    fun `canResumeResultAssembly is false for pending tool`() {
         val tool = UIMessagePart.Tool(
             toolCallId = "tc1",
             toolName = "ask_user",
             input = """{"question":"?"}""",
             approvalState = ToolApprovalState.Pending
         )
-        assertFalse(tool.canResumeExecution)
+        assertFalse(tool.canResumeResultAssembly)
     }
 
     @Test
-    fun `canResumeExecution is false for auto tool`() {
+    fun `canResumeResultAssembly is false for auto tool`() {
         val tool = UIMessagePart.Tool(
             toolCallId = "tc1",
             toolName = "search_web",
             input = """{"query":"test"}""",
             approvalState = ToolApprovalState.Auto
         )
-        assertFalse(tool.canResumeExecution)
+        assertFalse(tool.canResumeResultAssembly)
     }
 
     @Test
@@ -191,7 +191,7 @@ class MessageToolOperationsTest {
         )
         val updated = original.copy(approvalState = ToolApprovalState.Pending)
         assertTrue(updated.isPending)
-        assertFalse(updated.isExecuted)
+        assertFalse(updated.hasReplayResult)
     }
 
     @Test
@@ -204,12 +204,12 @@ class MessageToolOperationsTest {
         val executed = original.copy(
             output = listOf(UIMessagePart.Text("2"))
         )
-        assertTrue(executed.isExecuted)
-        assertFalse(executed.canResumeExecution)
+        assertTrue(executed.hasReplayResult)
+        assertFalse(executed.canResumeResultAssembly)
     }
 
     // ==================== finishPendingTools 回归测试 ====================
-    // 回归: finishPendingTools 曾对所有 !isExecuted 的工具调用 transform,
+    // 回归: finishPendingTools 曾对所有 !hasReplayResult 的工具调用 transform,
     // 导致超时中断的 Auto/Approved 工具被误标记为 "Denied: Generation cancelled by user"。
     // 修复后 finishPendingTools 只处理 Pending 状态的工具。
 
@@ -244,11 +244,11 @@ class MessageToolOperationsTest {
         val updatedAuto = updated.parts.filterIsInstance<UIMessagePart.Tool>().find { it.toolCallId == "auto" }!!
 
         // Pending 工具应被处理
-        assertTrue(updatedPending.isExecuted)
+        assertTrue(updatedPending.hasReplayResult)
         assertTrue(updatedPending.approvalState is ToolApprovalState.Denied)
 
         // Auto 工具不应被处理（保留原状态）
-        assertFalse(updatedAuto.isExecuted)
+        assertFalse(updatedAuto.hasReplayResult)
         assertTrue(updatedAuto.approvalState is ToolApprovalState.Auto)
     }
 
@@ -302,7 +302,7 @@ class MessageToolOperationsTest {
     }
 
     // ==================== finishInterruptedTools 回归测试 ====================
-    // finishInterruptedTools 处理非 Pending 但 !isExecuted 的工具（超时/异常中断场景）
+    // finishInterruptedTools 处理非 Pending 但 !hasReplayResult 的工具（超时/异常中断场景）
 
     @Test
     fun `finishInterruptedTools should process Auto tools without output`() {
@@ -325,7 +325,7 @@ class MessageToolOperationsTest {
         }
 
         val tool = updated.parts.filterIsInstance<UIMessagePart.Tool>().first()
-        assertTrue(tool.isExecuted)
+        assertTrue(tool.hasReplayResult)
         // approvalState 应保持不变（不标记为 Denied）
         assertTrue(tool.approvalState is ToolApprovalState.Auto)
     }
@@ -351,7 +351,7 @@ class MessageToolOperationsTest {
         }
 
         val tool = updated.parts.filterIsInstance<UIMessagePart.Tool>().first()
-        assertTrue(tool.isExecuted)
+        assertTrue(tool.hasReplayResult)
         assertTrue(tool.approvalState is ToolApprovalState.Approved)
     }
 
@@ -376,7 +376,7 @@ class MessageToolOperationsTest {
         }
 
         val tool = updated.parts.filterIsInstance<UIMessagePart.Tool>().first()
-        assertFalse(tool.isExecuted)
+        assertFalse(tool.hasReplayResult)
         assertTrue(tool.approvalState is ToolApprovalState.Pending)
     }
 
@@ -442,11 +442,11 @@ class MessageToolOperationsTest {
         val finalAuto = afterInterrupted.parts.filterIsInstance<UIMessagePart.Tool>().find { it.toolCallId == "auto" }!!
 
         // pendingTool: 被标记为 Denied
-        assertTrue(finalPending.isExecuted)
+        assertTrue(finalPending.hasReplayResult)
         assertTrue(finalPending.approvalState is ToolApprovalState.Denied)
 
         // autoTool: 被标记为中断，但 approvalState 保持 Auto（不是 Denied）
-        assertTrue(finalAuto.isExecuted)
+        assertTrue(finalAuto.hasReplayResult)
         assertTrue(finalAuto.approvalState is ToolApprovalState.Auto)
     }
 }

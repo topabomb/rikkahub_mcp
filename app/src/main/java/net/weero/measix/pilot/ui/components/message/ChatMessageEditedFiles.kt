@@ -63,7 +63,7 @@ internal fun EditedFilesList(
     val workspaceId = assistant?.workspaceId?.toString() ?: return
     val editedFiles = remember(parts) {
         parts.filterIsInstance<UIMessagePart.Tool>()
-            .filter { it.toolName in WORKSPACE_FILE_TOOL_NAMES && it.isExecuted }
+            .filter { it.toolName in WORKSPACE_FILE_TOOL_NAMES && it.hasReplayResult }
             .mapNotNull { tool ->
                 tool.inputAsJson().jsonObject["path"]?.jsonPrimitive?.contentOrNull
             }

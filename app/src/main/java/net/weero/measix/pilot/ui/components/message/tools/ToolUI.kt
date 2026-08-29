@@ -54,7 +54,7 @@ data class ToolUIContext(
     val arguments: JsonElement,
     /** False while a provider is still streaming an incomplete JSON argument document. */
     val argumentsValid: Boolean,
-    /** 输出文本部件解析出的 JSON, 工具未执行时为 null */
+    /** 输出文本部件解析出的 JSON；Provider 回放结果尚未形成时为 null。 */
     val content: JsonElement?,
     /** Call assembly, approval and execution are deliberately distinct. */
     val phase: ToolCallPhase,

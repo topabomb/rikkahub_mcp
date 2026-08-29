@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.data.imggen
 
 import android.util.Log
+import androidx.paging.PagingSource
 import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.CRC32
@@ -24,6 +25,12 @@ import net.weero.measix.pilot.data.repository.GenMediaRepository
 
 enum class GeneratedMediaConsumer {
     CHAT_TOOL_RESULT,
+}
+
+/** Domain kind mapped to the existing stable Room string only inside the media owner. */
+enum class GeneratedMediaKind(internal val persistedValue: String) {
+    GENERATION(GenMediaEntity.TYPE_IMAGE_GENERATION),
+    EDIT(GenMediaEntity.TYPE_IMAGE_EDIT),
 }
 
 data class GeneratedMediaConsumerPlan(
@@ -75,11 +82,11 @@ class GeneratedMediaStore(
         item: ImageGenerationItem,
         prompt: String,
         modelLabel: String,
-        type: String = GenMediaEntity.TYPE_IMAGE_GENERATION,
+        kind: GeneratedMediaKind = GeneratedMediaKind.GENERATION,
         sourcePaths: String? = null,
         consumerPlan: GeneratedMediaConsumerPlan = GeneratedMediaConsumerPlan.NONE,
     ): CommittedGeneratedMedia = withPersistLock {
-        commitLocked(item, prompt, modelLabel, type, sourcePaths, consumerPlan)
+        commitLocked(item, prompt, modelLabel, kind, sourcePaths, consumerPlan)
     }
 
     @OptIn(ExperimentalEncodingApi::class)
@@ -87,7 +94,7 @@ class GeneratedMediaStore(
         item: ImageGenerationItem,
         prompt: String,
         modelLabel: String,
-        type: String,
+        kind: GeneratedMediaKind,
         sourcePaths: String?,
         consumerPlan: GeneratedMediaConsumerPlan,
     ): CommittedGeneratedMedia {
@@ -125,7 +132,7 @@ class GeneratedMediaStore(
                             modelId = modelLabel,
                             prompt = prompt,
                             createAt = System.currentTimeMillis(),
-                            type = type,
+                            type = kind.persistedValue,
                             sourcePaths = sourcePaths,
                         )
                     )
@@ -211,6 +218,9 @@ class GeneratedMediaStore(
     /** 只读投影：设置页通过 query port 消费，不把实体当页面协议。 */
     fun observe(): Flow<List<GenMediaEntity>> = genMediaRepository.observeAllMedia()
 
+    /** Gallery paging remains owned by this store; UI consumes only the query-port projection. */
+    fun pagingSource(): PagingSource<Int, GenMediaEntity> = genMediaRepository.getAllMedia()
+
     /** 范围清理确认对话框的候选计数（只读提示；真实清理在 persist lock 内重新快照）。 */
     suspend fun candidateCount(cutoff: Long): Int =
         genMediaRepository.listCreatedBefore(cutoff).size
@@ -262,6 +272,12 @@ class GeneratedMediaStore(
     }
 
     fun resolveCanonicalFile(entity: GenMediaEntity): File = canonicalFile(entity)
+
+    fun isManagedFile(file: File): Boolean = runCatching {
+        val imagesDir = File(filesDir, IMAGES_DIR).canonicalFile
+        val target = file.canonicalFile
+        target.path.startsWith(imagesDir.path + File.separator)
+    }.getOrDefault(false)
 
     private fun canonicalFile(entity: GenMediaEntity): File {
         val normalized = entity.path.replace('\\', '/')

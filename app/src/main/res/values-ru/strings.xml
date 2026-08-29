@@ -441,6 +441,7 @@
   <string name="imggen_page_image_saved_success">Изображение сохранено в галерею</string>
   <string name="imggen_page_image_size">Размер изображения</string>
   <string name="imggen_page_no_generated_images">Нет сгенерированных изображений</string>
+  <string name="imggen_page_load_failed">Не удалось загрузить созданные изображения</string>
   <string name="imggen_page_prompt_placeholder">Опишите изображение, которое хотите сгенерировать…</string>
   <string name="imggen_page_save">Сохранить</string>
   <string name="imggen_page_save_failed">Не удалось сохранить: %1$s</string>

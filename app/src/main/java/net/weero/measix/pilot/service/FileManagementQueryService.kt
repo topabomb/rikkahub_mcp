@@ -1,5 +1,10 @@
 package net.weero.measix.pilot.service
 
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import androidx.paging.PagingData
+import androidx.paging.map
+import java.io.File
 import kotlin.time.Clock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
@@ -32,9 +37,18 @@ data class ManagedStorageUiModel(
     val sizeBytes: Long,
 )
 
+data class GeneratedMediaUiModel(
+    val id: Int,
+    val prompt: String,
+    val filePath: String,
+    val createdAt: Long,
+    val modelId: String,
+)
+
 /**
- * 设置域唯一文件读端口。所有 read 在全局 recovery gate 后开始，避免页面观察到尚未 reconcile 的
- * `.pending` / `.deleting` 或缺 payload row；本类只组合既有 owner 的只读投影。
+ * 设置域唯一文件读端口。会读取 row/payload 状态的查询在全局 recovery gate 后开始，避免页面观察到尚未
+ * reconcile 的 `.pending` / `.deleting` 或缺 payload row。纯 canonical-root 路径分类不读取 durable 状态，
+ * 可安全用于恢复前的本地图片信息展示；本类只组合既有 owner 的只读投影。
  */
 class FileManagementQueryService(
     private val artifactUseCase: ArtifactUseCase,
@@ -53,6 +67,21 @@ class FileManagementQueryService(
             entities.map { it.toManaged(generatedMediaStore) }
         })
     }
+
+    fun observeGeneratedPaging(): Flow<PagingData<GeneratedMediaUiModel>> = flow {
+        recoveryGate.awaitReady()
+        emitAll(
+            Pager(
+                config = PagingConfig(pageSize = 20, enablePlaceholders = false),
+                pagingSourceFactory = generatedMediaStore::pagingSource,
+            ).flow.map { pagingData ->
+                pagingData.map { entity -> entity.toGeneratedUi(generatedMediaStore) }
+            }
+        )
+    }
+
+    /** Pure canonical-root classification; does not claim that a row/payload is committed. */
+    fun isManagedGeneratedFile(file: File): Boolean = generatedMediaStore.isManagedFile(file)
 
     suspend fun candidateCount(category: FileCleanupCategory, range: FileCleanupRange): Int {
         recoveryGate.awaitReady()
@@ -110,3 +139,12 @@ private fun GenMediaEntity.toManaged(store: GeneratedMediaStore): ManagedFileUiM
         modelId = modelId,
     )
 }
+
+private fun GenMediaEntity.toGeneratedUi(store: GeneratedMediaStore): GeneratedMediaUiModel =
+    GeneratedMediaUiModel(
+        id = id,
+        prompt = prompt,
+        filePath = store.resolveCanonicalFile(this).absolutePath,
+        createdAt = createAt,
+        modelId = modelId,
+    )

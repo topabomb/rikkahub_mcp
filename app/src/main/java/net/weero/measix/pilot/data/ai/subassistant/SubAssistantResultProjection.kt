@@ -186,7 +186,7 @@ suspend fun projectArtifactsForCaller(
 
 internal fun isSuccessfulGenerateImage(tool: UIMessagePart.Tool): Boolean {
     if (tool.toolName != GENERATE_IMAGE_TOOL_NAME) return false
-    if (!tool.isExecuted) return false
+    if (!tool.hasReplayResult) return false
     if (generateImageOutputFailed(tool)) return false
     val hasImage = tool.output.any { it is UIMessagePart.Image }
     if (!hasImage) return false
@@ -425,7 +425,7 @@ private fun extractTextAfterLastWorkTool(message: UIMessage): String {
     var lastWorkToolEnd = 0
     for ((idx, part) in parts.withIndex()) {
         if (part is UIMessagePart.Tool &&
-            part.isExecuted &&
+            part.hasReplayResult &&
             part.toolName !in SUB_ASSISTANT_SIDE_EFFECT_TOOLS
         ) {
             lastWorkToolEnd = idx + 1

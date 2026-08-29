@@ -24,12 +24,23 @@ sealed class AppEvent {
         val conversationId: Uuid,
         val lastMessage: UIMessage,
         val senderName: String,
+        /** Ordinal whose committed runtime phase is EXECUTING; null for every other phase. */
+        val executingToolOrdinal: Int?,
     ) : AppEvent()
 
-    /** 生成结束（正常完成或失败），由 MasterTurnCoordinator 发出。 */
+    /** Turn 已稳定停在待审批态，不是生成完成。 */
+    data class ChatGenerationAwaitingApproval(
+        val conversationId: Uuid,
+        val lastMessage: UIMessage,
+        val senderName: String,
+        val pendingToolOrdinal: Int,
+    ) : AppEvent()
+
+    /** Turn 已进入终态；只有正常完成才允许发送“已完成”通知。 */
     data class ChatGenerationEnded(
         val conversationId: Uuid,
         val senderName: String,
         val contentPreview: String?,
+        val notifyCompletion: Boolean,
     ) : AppEvent()
 }

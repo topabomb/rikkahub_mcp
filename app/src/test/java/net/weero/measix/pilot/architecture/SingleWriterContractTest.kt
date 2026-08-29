@@ -142,9 +142,22 @@ class SingleWriterContractTest {
         val toolUi = sources.filter {
             it.relativeTo(sourceRoot).invariantSeparatorsPath.startsWith("ui/components/message/")
         }
-        assertNoHits("loading && !step.tool.isExecuted", toolUi)
+        assertNoHits("loading && !step.tool.hasReplayResult", toolUi)
         assertNoHits("val loading: Boolean", toolUi)
         assertTrue(hits("ToolCallPhase", toolUi).isNotEmpty())
+        val notificationManager = sourceRoot.resolve("service/ChatNotificationManager.kt").readText()
+        assertFalse(
+            "notifications must not infer execution from Provider replay results",
+            notificationManager.contains("!lastTool.hasReplayResult"),
+        )
+        assertTrue(notificationManager.contains("executingToolOrdinal"))
+        assertTrue(notificationManager.contains("committedToolPhaseChanged"))
+        assertTrue(notificationManager.contains("ChatGenerationAwaitingApproval"))
+        assertTrue(notificationManager.contains("if (!event.notifyCompletion) return"))
+        assertTrue(notificationManager.contains("activeLiveNotifications.toList().forEach(::cancelLiveUpdateNotification)"))
+        val masterCoordinator = sourceRoot.resolve("service/MasterTurnCoordinator.kt").readText()
+        assertTrue(masterCoordinator.contains("appEventBus.emit(\n                    AppEvent.ChatGenerationAwaitingApproval"))
+        assertTrue(masterCoordinator.contains("appEventBus.emit(\n                    AppEvent.ChatGenerationEnded"))
     }
 
     @Test
@@ -155,6 +168,8 @@ class SingleWriterContractTest {
         assertNoHits("conversationJob", chatUi)
         assertNoHits("loadingJob", chatUi)
         assertTrue(hits("ConversationPresentation", chatUi).isNotEmpty())
+        val chatPage = File(sourceRoot, "ui/pages/chat/ChatPage.kt").readText()
+        assertTrue(chatPage.contains("turnPresentation.phase == ConversationTurnPhase.STOPPING"))
     }
 
     @Test
@@ -182,6 +197,22 @@ class SingleWriterContractTest {
         assertTrue(filesPage.contains("FileManagementApplicationService"))
         assertTrue(filesPage.contains("FileManagementQueryService"))
         assertTrue(settingsPage.contains("FileManagementQueryService"))
+    }
+
+    @Test
+    fun `all UI generated media access goes through application and query ports`() {
+        val uiSources = sources.filter {
+            it.relativeTo(sourceRoot).invariantSeparatorsPath.startsWith("ui/")
+        }
+        assertNoHits("data.imggen.GeneratedMediaStore", uiSources)
+        assertNoHits("data.repository.GenMediaRepository", uiSources)
+        assertNoHits("data.db.entity.GenMediaEntity", uiSources)
+        assertNoHits("GeneratedMediaStore.IMAGES_DIR", uiSources)
+        val galleryPage = File(sourceRoot, "ui/pages/imggen/ImgGenPage.kt").readText()
+        assertTrue(galleryPage.contains("refreshState is LoadState.Loading"))
+        assertTrue(galleryPage.contains("refreshState is LoadState.Error"))
+        assertTrue(galleryPage.contains("generatedImages::retry"))
+        assertTrue(galleryPage.contains("generatedImages.loadState.append is LoadState.Loading"))
     }
 
     @Test

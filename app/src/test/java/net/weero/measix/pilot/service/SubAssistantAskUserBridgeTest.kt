@@ -32,7 +32,7 @@ class SubAssistantAskUserBridgeTest {
         val recovered = message.finalizeSubAssistantToolsAfterInterruption("app_restarted")
         val tools = recovered.getTools()
 
-        assertTrue(tools.all { it.isExecuted })
+        assertTrue(tools.all { it.hasReplayResult })
         assertEquals(ToolApprovalState.Denied("app_restarted"), tools[0].approvalState)
         assertEquals(ToolApprovalState.Auto, tools[1].approvalState)
         assertTrue((tools[0].output.single() as UIMessagePart.Text).text.contains("app_restarted"))
@@ -48,7 +48,7 @@ class SubAssistantAskUserBridgeTest {
         val recovered = message.finalizeSubAssistantToolsAfterInterruption("user_cancelled")
         val tool = recovered.getTools().single()
 
-        assertTrue(tool.isExecuted)
+        assertTrue(tool.hasReplayResult)
         assertEquals(ToolApprovalState.Denied("user_cancelled"), tool.approvalState)
         assertTrue((tool.output.single() as UIMessagePart.Text).text.contains("user_cancelled"))
     }

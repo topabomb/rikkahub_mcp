@@ -1,7 +1,10 @@
 # Application Architecture V2 Execution Ledger
 
-This ledger records evidence required by the V2 execution plan. It is a development record; the
-current architectural contract remains in `docs/references/`.
+> **Frozen archive:** This ledger records the V2 implementation and review evidence. It is not a
+> current architecture contract and should only receive missing device-acceptance evidence already
+> defined by the plan. Current owners, protocols, and boundaries live in
+> [`../references/application-architecture.md`](../references/application-architecture.md) and the
+> domain references under `docs/references/`.
 
 **Status (2026-08-28):** Phase B–F are re-frozen. The MCP scope reopened after catalog ownership and
 publication defects were found outside the original slot tests. The final

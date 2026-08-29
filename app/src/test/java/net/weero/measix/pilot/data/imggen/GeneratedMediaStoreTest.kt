@@ -389,6 +389,20 @@ class GeneratedMediaStoreTest {
     }
 
     @Test
+    fun `managed file predicate accepts only descendants of the generated media root`() {
+        val filesDir = tempDir("media-managed-path")
+        val images = File(filesDir, GeneratedMediaStore.IMAGES_DIR).apply { mkdirs() }
+        val inside = File(images, "inside.png")
+        val sibling = File(filesDir, "images2/outside.png")
+        val store = GeneratedMediaStore(filesDir, mockk(relaxed = true), mockk(relaxed = true))
+
+        assertTrue(store.isManagedFile(inside))
+        assertFalse(store.isManagedFile(sibling))
+        assertFalse(store.isManagedFile(File(images, "../outside.png")))
+        filesDir.deleteRecursively()
+    }
+
+    @Test
     fun `delete succeeds after row commit when tombstone cleanup is deferred`() = runTest {
         val filesDir = tempDir("media-delete-deferred")
         val images = File(filesDir, "images").apply { mkdirs() }

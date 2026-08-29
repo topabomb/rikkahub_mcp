@@ -49,6 +49,7 @@ import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.util.HttpException
 import me.rerere.ai.util.ProviderTerminalStatus
 import me.rerere.ai.util.KeyRoulette
+import me.rerere.ai.util.RequestBodyOwnership
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeNativeImage
 import me.rerere.ai.util.json
@@ -378,7 +379,10 @@ class ResponseAPI(
                     }
                 }
             }
-        }.mergeCustomBody(params.customBody)
+        }.mergeCustomBody(
+            params.customBody,
+            RESPONSES_OWNERSHIP,
+        )
     }
 
     internal fun buildMessages(
@@ -512,7 +516,7 @@ class ResponseAPI(
                         })
                     }
                     group.tools.forEach { tool ->
-                        if (tool.isExecuted) addFunctionCallOutput(tool, endpointProfile, mediaCapabilities)
+                        if (tool.hasReplayResult) addFunctionCallOutput(tool, endpointProfile, mediaCapabilities)
                     }
                 }
             }
@@ -549,7 +553,7 @@ class ResponseAPI(
                         consumedToolsByCallId[id] = index + 1
                         toolsByCallId[id]?.getOrNull(index)
                     }
-                    if (tool?.isExecuted == true) addFunctionCallOutput(tool, endpointProfile, mediaCapabilities)
+                    if (tool?.hasReplayResult == true) addFunctionCallOutput(tool, endpointProfile, mediaCapabilities)
                 }
             }
         }
@@ -1218,4 +1222,25 @@ private fun List<UIMessagePart>.isOnlyTextPart(): Boolean {
     val texts = filter { it is UIMessagePart.Text }.size
     return gonnaSend == texts && texts == 1
 }
+
+/**
+ * Builder-owned structural keys for OpenAI Responses requests.
+ *
+ * These fields are exclusively owned by [ResponseAPI.buildRequestBody]; a [CustomBody] entry
+ * attempting to override any of them is rejected before HTTP with a typed
+ * [me.rerere.ai.util.CustomBodyReservedKeyException].
+ */
+internal val RESPONSES_OWNERSHIP = RequestBodyOwnership(
+    protocol = "openai-responses",
+    reservedKeys = setOf(
+        "model",
+        "input",
+        "tools",
+        "stream",
+        "store",
+        "include",
+        "previous_response_id",
+        "session_id",
+    ),
+)
 

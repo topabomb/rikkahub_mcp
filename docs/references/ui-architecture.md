@@ -363,7 +363,7 @@ ChatPageContent
 
 `ChatPageContent` 是会话 turn 期间屏幕唤醒的唯一 UI owner。它直接绑定
 `ConversationPresentation.isActive`：准备、模型生成、工具执行、等待审批和停止收口阶段均保持亮屏，
-只有 turn 进入 `IDLE` 或页面退出组合时才释放；可因 IME 和自适应布局切换位置的 `ChatInput` 按钮不管理 Window flag。
+只有 turn 进入 `IDLE` 或页面退出组合时才释放；`STOPPING` 期间工具审批、工具回答和子助手回答 callback 统一为空，不向正在收口的 turn 发命令。可因 IME 和自适应布局切换位置的 `ChatInput` 按钮不管理 Window flag。
 模型选择 sheet（`ModelListSheet`）由输入区的稳定根级组合一次，不随 action row 的 IME 显隐分支进入或离开组合；同一页面只存在一个 `ModelListState`，选择、清空与 dismiss 都只修改同一状态。
 
 MCP 设置页只保留列表下拉刷新，避免顶部栏重复入口。下拉只调用 `McpApplicationService.refreshAll()`，指示器偏移到可折叠
@@ -451,9 +451,9 @@ Koin 模块在 `di/AppModule.kt` 和 `di/DatabaseModule.kt` 等文件中定义�
 - `MasterTurnCoordinator` — 主回合生成编排
 - `ConversationApplicationService` / `ConversationQueryService` — UI 写/读端口
 - `McpApplicationService` / `McpQueryService` — MCP 命令与 definition/catalog/runtime 只读投影；Compose 不持有 client
-- `FileManagementApplicationService` / `FileManagementQueryService` — 托管文件 typed 删除/范围清理与列表、候选数、存储统计；`SettingFilesPage`、`SettingPage` 不持有 Artifact/GeneratedMedia owner
+- `FileManagementApplicationService` / `FileManagementQueryService` — 托管文件 typed 删除/范围清理、安全临时预览与列表、图库 Paging、候选数、存储统计；预览写失败清理部分文件，图库区分 loading/error/retry/空状态，`SettingFilesPage`、`SettingPage` 不持有 Artifact/GeneratedMedia owner
 - `ApplicationRecoveryCoordinator` — 启动恢复与 fail-closed 门禁
-- `ChatNotificationManager` — 通知管理（`createdAtStart = true` 保证进程启动即订阅事件）
+- `ChatNotificationManager` — 通知管理（`createdAtStart = true` 保证进程启动即订阅事件）；进入前台时撤销已跟踪的 live/待审批通知，避免系统栏保留过期进度
 - `AppEventBus` — 全局事件总线
 - `LocalTools` — 本地工具集
 - `TTSManager` / `SoundEffectPlayer` / `EmojiData`

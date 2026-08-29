@@ -10,9 +10,11 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
+import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
@@ -24,13 +26,17 @@ import me.rerere.ai.provider.providers.ClaudeProvider
 import me.rerere.ai.provider.providers.GoogleProvider
 import me.rerere.ai.provider.providers.OpenAIProvider
 import me.rerere.ai.ui.MessageChunk
+import me.rerere.ai.ui.MessageTerminalStatus
+import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.OpenRouterReasoningMetadata
 import me.rerere.ai.ui.handleMessageChunk
 import me.rerere.ai.ui.metadataAs
+import me.rerere.ai.ui.replaySafeProjection
 import me.rerere.ai.util.KeyRoulette
+import me.rerere.common.http.jsonPrimitiveOrNull
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
@@ -61,13 +67,27 @@ class ChatCompletionsAPIMessageTest {
         modelId: String = "test-model",
         host: String = "proxy.example.com",
         includeOpenRouterReasoningDetails: Boolean = false,
+        requestHasTools: Boolean = messages.any { msg ->
+            msg.role == MessageRole.ASSISTANT &&
+                    msg.parts.any { it is UIMessagePart.Tool && it.hasReplayResult }
+        },
     ): JsonArray {
+        val endpointVendor = resolveOpenAIEndpointVendor(host)
+        val replayPolicy = resolveChatReasoningReplayPolicy(
+            endpointVendor = endpointVendor,
+            modelId = modelId,
+            requestHasTools = requestHasTools,
+            includeHistoryReasoning = includeHistoryReasoning,
+        )
+        val adjustedPolicy = if (includeOpenRouterReasoningDetails) {
+            replayPolicy.copy(opaque = OpaqueReasoningReplay.OPENROUTER_SOURCE_MATCHED)
+        } else {
+            replayPolicy.copy(opaque = OpaqueReasoningReplay.NONE)
+        }
         return api.buildMessages(
             messages = messages,
-            includeHistoryReasoning = includeHistoryReasoning,
+            replayPolicy = adjustedPolicy,
             mediaCapabilities = RequestMediaCapabilities.NONE,
-            requiresToolReasoningReplay = requiresToolReasoningReplay(host, modelId),
-            includeOpenRouterReasoningDetails = includeOpenRouterReasoningDetails,
         )
     }
 
@@ -75,16 +95,11 @@ class ChatCompletionsAPIMessageTest {
         messages: List<UIMessage>,
         params: TextGenerationParams,
         providerSetting: ProviderSetting.OpenAI,
-    ) = ChatCompletionsAPI::class.java.getDeclaredMethod(
-        "buildChatCompletionRequest",
-        List::class.java,
-        TextGenerationParams::class.java,
-        ProviderSetting.OpenAI::class.java,
-        Boolean::class.javaPrimitiveType,
-    ).run {
-        isAccessible = true
-        invoke(api, messages, params, providerSetting, false) as kotlinx.serialization.json.JsonObject
-    }
+    ) = api.buildChatCompletionRequest(
+        messages = messages,
+        params = params,
+        providerSetting = providerSetting,
+    )
 
     @Test
     fun `attachment facts retain user assistant and tool protocol roles`() {
@@ -314,12 +329,17 @@ class ChatCompletionsAPIMessageTest {
         }
 
         assertEquals(2, assistantMessages.size)
+        // DeepSeek V4 with tools mandates ALL_ASSISTANT_ENVELOPES: both the tool-bound
+        // envelope and the trailing final answer envelope must carry their reasoning.
         assertEquals(
             "Tool-step thinking",
             assistantMessages[0].jsonObject["reasoning_content"]?.jsonPrimitive?.content
         )
         assertTrue(assistantMessages[0].jsonObject.containsKey("tool_calls"))
-        assertFalse(assistantMessages[1].jsonObject.containsKey("reasoning_content"))
+        assertEquals(
+            "Final thinking",
+            assistantMessages[1].jsonObject["reasoning_content"]?.jsonPrimitive?.content
+        )
     }
 
     @Test
@@ -745,7 +765,12 @@ class ChatCompletionsAPIMessageTest {
         val toolResult = body["messages"]!!.jsonArray[2].jsonObject["content"] as JsonPrimitive
         assertEquals("[Attachment ref=attachment:1 type=image input=reference_only]", toolResult.content)
         assertFalse(toolResult.content.contains("Image output omitted"))
-        assertFalse(requiresToolReasoningReplay("api.openai.com", "deepseek-v4-flash"))
+        assertEquals(
+            VisibleReasoningReplay.NONE,
+            resolveChatReasoningReplayPolicy(
+                OpenAIEndpointVendor.OPENAI, "deepseek-v4-flash", true, true,
+            ).visible,
+        )
     }
 
     @Test
@@ -1331,5 +1356,545 @@ class ChatCompletionsAPIMessageTest {
             input = input,
             output = listOf(UIMessagePart.Text(output))
         )
+    }
+
+    // ==================== Chat Reasoning Replay Policy Tests ====================
+
+    @Test
+    fun `chat reasoning policy for compatible gateway deepseek v4 flash with tools replays all reasoning`() {
+        val policy = resolveChatReasoningReplayPolicy(
+            endpointVendor = OpenAIEndpointVendor.COMPATIBLE,
+            modelId = "deepseek-v4-flash",
+            requestHasTools = true,
+            includeHistoryReasoning = false,
+        )
+        assertEquals(VisibleReasoningReplay.ALL_ASSISTANT_ENVELOPES, policy.visible)
+        assertEquals(OpaqueReasoningReplay.NONE, policy.opaque)
+        assertEquals(TerminalAssistantReplay.COMPLETE_STEP_PREFIX, policy.terminalAssistant)
+    }
+
+    @Test
+    fun `b ai deepseek v4 request with actual tools replays all assistant reasoning`() {
+        assertEquals(OpenAIEndpointVendor.COMPATIBLE, resolveOpenAIEndpointVendor("api.b.ai"))
+        val tool = Tool(
+            name = "search",
+            description = "Search",
+            parameters = { buildJsonObject { put("type", "object") } },
+            execute = { emptyList() },
+        )
+        val body = invokeBuildRequest(
+            messages = listOf(
+                UIMessage.user("question"),
+                UIMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(
+                        UIMessagePart.Reasoning(reasoning = "first reasoning"),
+                        UIMessagePart.Text("first answer"),
+                    ),
+                ),
+                UIMessage.user("continue"),
+                UIMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(
+                        UIMessagePart.Reasoning(reasoning = "tool reasoning"),
+                        createExecutedTool("call-1", "search", "{}", "result"),
+                    ),
+                ),
+            ),
+            params = TextGenerationParams(
+                model = Model(
+                    modelId = "deepseek-v4-flash",
+                    displayName = "DeepSeek V4 Flash",
+                    abilities = listOf(ModelAbility.REASONING, ModelAbility.TOOL),
+                ),
+                tools = listOf(tool),
+            ),
+            providerSetting = ProviderSetting.OpenAI(
+                baseUrl = "https://api.b.ai/v1",
+                includeHistoryReasoning = false,
+            ),
+        )
+
+        assertTrue(body.containsKey("tools"))
+        val reasoning = body["messages"]!!.jsonArray.mapNotNull {
+            it.jsonObject["reasoning_content"]?.jsonPrimitive?.contentOrNull
+        }
+        assertEquals(listOf("first reasoning", "tool reasoning"), reasoning)
+    }
+
+    @Test
+    fun `b ai deepseek v4 requires both model tool ability and nonempty tools for mandatory replay`() {
+        val tool = Tool(
+            name = "search",
+            description = "Search",
+            parameters = { buildJsonObject { put("type", "object") } },
+            execute = { emptyList() },
+        )
+        val history = listOf(
+            UIMessage.user("question"),
+            UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(
+                    UIMessagePart.Reasoning(reasoning = "must stay local"),
+                    UIMessagePart.Text("answer"),
+                ),
+            ),
+        )
+        val provider = ProviderSetting.OpenAI(
+            baseUrl = "https://api.b.ai/v1",
+            includeHistoryReasoning = false,
+        )
+        val requests = listOf(
+            TextGenerationParams(
+                model = Model(
+                    modelId = "deepseek-v4-flash",
+                    abilities = listOf(ModelAbility.REASONING),
+                ),
+                tools = listOf(tool),
+            ),
+            TextGenerationParams(
+                model = Model(
+                    modelId = "deepseek-v4-flash",
+                    abilities = listOf(ModelAbility.REASONING, ModelAbility.TOOL),
+                ),
+                tools = emptyList(),
+            ),
+        )
+
+        requests.forEach { params ->
+            val body = invokeBuildRequest(history, params, provider)
+            assertFalse(body.containsKey("tools"))
+            assertTrue(body["messages"]!!.jsonArray.none {
+                it.jsonObject.containsKey("reasoning_content")
+            })
+        }
+    }
+
+    @Test
+    fun `b ai non deepseek model does not inherit mandatory reasoning replay`() {
+        val tool = Tool(
+            name = "search",
+            description = "Search",
+            parameters = { buildJsonObject { put("type", "object") } },
+            execute = { emptyList() },
+        )
+        val body = invokeBuildRequest(
+            messages = listOf(
+                UIMessage.user("question"),
+                UIMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(
+                        UIMessagePart.Reasoning(reasoning = "must stay local"),
+                        UIMessagePart.Text("answer"),
+                    ),
+                ),
+            ),
+            params = TextGenerationParams(
+                model = Model(
+                    modelId = "custom-model",
+                    displayName = "Custom",
+                    abilities = listOf(ModelAbility.REASONING, ModelAbility.TOOL),
+                ),
+                tools = listOf(tool),
+            ),
+            providerSetting = ProviderSetting.OpenAI(
+                baseUrl = "https://api.b.ai/v1",
+                includeHistoryReasoning = false,
+            ),
+        )
+
+        assertTrue(body["messages"]!!.jsonArray.none {
+            it.jsonObject.containsKey("reasoning_content")
+        })
+    }
+
+    @Test
+    fun `chat reasoning policy for compatible gateway deepseek v4 pro with tools replays all reasoning`() {
+        val policy = resolveChatReasoningReplayPolicy(
+            endpointVendor = OpenAIEndpointVendor.COMPATIBLE,
+            modelId = "deepseek-v4-pro",
+            requestHasTools = true,
+            includeHistoryReasoning = false,
+        )
+        assertEquals(VisibleReasoningReplay.ALL_ASSISTANT_ENVELOPES, policy.visible)
+    }
+
+    @Test
+    fun `chat reasoning policy for compatible gateway non-deepseek model with tools does not replay reasoning`() {
+        val policy = resolveChatReasoningReplayPolicy(
+            endpointVendor = OpenAIEndpointVendor.COMPATIBLE,
+            modelId = "gpt-5",
+            requestHasTools = true,
+            includeHistoryReasoning = false,
+        )
+        assertEquals(VisibleReasoningReplay.NONE, policy.visible)
+        assertEquals(TerminalAssistantReplay.COMPATIBLE_PARTIAL, policy.terminalAssistant)
+    }
+
+    @Test
+    fun `chat reasoning policy for compatible gateway deepseek v4 without tools does not replay when disabled`() {
+        val policy = resolveChatReasoningReplayPolicy(
+            endpointVendor = OpenAIEndpointVendor.COMPATIBLE,
+            modelId = "deepseek-v4-flash",
+            requestHasTools = false,
+            includeHistoryReasoning = false,
+        )
+        assertEquals(VisibleReasoningReplay.NONE, policy.visible)
+    }
+
+    @Test
+    fun `chat reasoning policy for deepseek v4 without tools replays when enabled`() {
+        val policy = resolveChatReasoningReplayPolicy(
+            endpointVendor = OpenAIEndpointVendor.COMPATIBLE,
+            modelId = "deepseek-v4-flash",
+            requestHasTools = false,
+            includeHistoryReasoning = true,
+        )
+        assertEquals(VisibleReasoningReplay.ALL_ASSISTANT_ENVELOPES, policy.visible)
+    }
+
+    @Test
+    fun `chat reasoning policy for official openai suppresses third party reasoning`() {
+        val policy = resolveChatReasoningReplayPolicy(
+            endpointVendor = OpenAIEndpointVendor.OPENAI,
+            modelId = "deepseek-v4-flash",
+            requestHasTools = true,
+            includeHistoryReasoning = true,
+        )
+        assertEquals(VisibleReasoningReplay.NONE, policy.visible)
+        assertEquals(OpaqueReasoningReplay.NONE, policy.opaque)
+    }
+
+    @Test
+    fun `chat reasoning policy for mimo with tools replays tool-bound reasoning only`() {
+        val policy = resolveChatReasoningReplayPolicy(
+            endpointVendor = OpenAIEndpointVendor.MIMO,
+            modelId = "mimo-model",
+            requestHasTools = true,
+            includeHistoryReasoning = false,
+        )
+        assertEquals(VisibleReasoningReplay.TOOL_ASSISTANT_ENVELOPES, policy.visible)
+    }
+
+    @Test
+    fun `chat reasoning policy for openrouter replays details and visible reasoning when enabled`() {
+        val policy = resolveChatReasoningReplayPolicy(
+            endpointVendor = OpenAIEndpointVendor.OPENROUTER,
+            modelId = "openrouter/auto",
+            requestHasTools = true,
+            includeHistoryReasoning = true,
+        )
+        assertEquals(VisibleReasoningReplay.ALL_ASSISTANT_ENVELOPES, policy.visible)
+        assertEquals(OpaqueReasoningReplay.OPENROUTER_SOURCE_MATCHED, policy.opaque)
+    }
+
+    @Test
+    fun `chat reasoning policy for openrouter with disabled reasoning replays details only`() {
+        val policy = resolveChatReasoningReplayPolicy(
+            endpointVendor = OpenAIEndpointVendor.OPENROUTER,
+            modelId = "openrouter/auto",
+            requestHasTools = true,
+            includeHistoryReasoning = false,
+        )
+        assertEquals(VisibleReasoningReplay.NONE, policy.visible)
+        assertEquals(OpaqueReasoningReplay.OPENROUTER_SOURCE_MATCHED, policy.opaque)
+    }
+
+    @Test
+    fun `chat reasoning policy for compatible gateway replays reasoning when enabled`() {
+        val policy = resolveChatReasoningReplayPolicy(
+            endpointVendor = OpenAIEndpointVendor.COMPATIBLE,
+            modelId = "custom-model",
+            requestHasTools = false,
+            includeHistoryReasoning = true,
+        )
+        assertEquals(VisibleReasoningReplay.ALL_ASSISTANT_ENVELOPES, policy.visible)
+    }
+
+    // ==================== Custom Body Ownership Tests ====================
+
+    @Test
+    fun `chat completions custom body with reserved key throws before request`() {
+        // Reflection invoke wraps exceptions in InvocationTargetException; unwrap to
+        // verify the typed local error is produced before any HTTP request.
+        var caught: Throwable? = null
+        try {
+            invokeBuildRequest(
+                messages = listOf(UIMessage.user("hello")),
+                params = TextGenerationParams(
+                    model = Model(modelId = "test", displayName = "test"),
+                    customBody = listOf(
+                        me.rerere.ai.provider.CustomBody("messages", JsonPrimitive("[]")),
+                    ),
+                ),
+                providerSetting = ProviderSetting.OpenAI(baseUrl = "https://proxy.example.com/v1"),
+            )
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            caught = e.cause
+        } catch (e: Throwable) {
+            caught = e
+        }
+        assertTrue(
+            "expected CustomBodyReservedKeyException, got $caught",
+            caught is me.rerere.ai.util.CustomBodyReservedKeyException,
+        )
+        assertTrue(
+            (caught as me.rerere.ai.util.CustomBodyReservedKeyException).conflictingKeys.contains("messages"),
+        )
+    }
+
+    @Test
+    fun `chat completions custom body with non-reserved key still merges`() {
+        val body = invokeBuildRequest(
+            messages = listOf(UIMessage.user("hello")),
+            params = TextGenerationParams(
+                model = Model(modelId = "test", displayName = "test"),
+                customBody = listOf(
+                    me.rerere.ai.provider.CustomBody("temperature", JsonPrimitive(0.5)),
+                ),
+            ),
+            providerSetting = ProviderSetting.OpenAI(baseUrl = "https://proxy.example.com/v1"),
+        )
+        // temperature is not reserved, so it should be present
+        // (it may be overridden by the builder's own temperature logic, but no exception)
+    }
+
+    // ==================== Chat Request-Level Terminal Replay Tests ====================
+
+    private fun terminalAssistantWithCompleteStep(
+        completeReasoning: String,
+        completeText: String,
+        tailReasoning: String,
+        tailText: String,
+    ): UIMessage {
+        val completedTool = UIMessagePart.Tool(
+            toolCallId = "call-1",
+            toolName = "search",
+            input = "{}",
+            output = listOf(UIMessagePart.Text("result")),
+        )
+        return UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Reasoning(reasoning = completeReasoning),
+                UIMessagePart.Text(completeText),
+                completedTool,
+                UIMessagePart.Reasoning(reasoning = tailReasoning),
+                UIMessagePart.Text(tailText),
+            ),
+            terminalStatus = MessageTerminalStatus.FAILED,
+            terminalReason = TurnTerminalReasons.PROVIDER_FAILED,
+        )
+    }
+
+    @Test
+    fun `deepseek v4 strict terminal with tools drops incomplete tail from history`() {
+        val terminal = terminalAssistantWithCompleteStep(
+            completeReasoning = "Step reasoning",
+            completeText = "Calling search",
+            tailReasoning = "Tail reasoning",
+            tailText = "Partial answer",
+        )
+        val messages = listOf(
+            UIMessage.user("Use a tool"),
+            terminal.replaySafeProjection()!!,
+        )
+
+        val result = invokeBuildMessages(
+            messages = messages,
+            includeHistoryReasoning = false,
+            modelId = "deepseek-v4-flash",
+            requestHasTools = true,
+        )
+        val assistantMessages = result.filter {
+            it.jsonObject["role"]?.jsonPrimitive?.content == "assistant"
+        }
+
+        // Only the complete prefix (Reasoning + Text + Tool) should appear in history.
+        // The tail reasoning and text must not be present.
+        assertTrue("Expected at least one assistant message", assistantMessages.isNotEmpty())
+        val firstAssistant = assistantMessages.first().jsonObject
+        assertEquals("Step reasoning", firstAssistant["reasoning_content"]?.jsonPrimitive?.content)
+        assertTrue(firstAssistant.containsKey("tool_calls"))
+        // Tail reasoning must not appear
+        assistantMessages.forEach { msg ->
+            assertFalse(
+                "Tail reasoning should not be in strict history",
+                msg.jsonObject["reasoning_content"]?.jsonPrimitive?.content == "Tail reasoning",
+            )
+        }
+        // Tail text should not appear as content
+        assistantMessages.forEach { msg ->
+            val content = msg.jsonObject["content"]
+            val textContent = when (content) {
+                is JsonPrimitive -> content.content
+                is JsonArray -> content.joinToString("") {
+                    it.jsonObject["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                }
+                else -> ""
+            }
+            assertFalse(
+                "Tail text should not be in strict history",
+                textContent.contains("Partial answer"),
+            )
+        }
+    }
+
+    @Test
+    fun `deepseek v4 strict terminal with zero complete prefix drops entire message from history`() {
+        val terminal = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Reasoning(reasoning = "unfinished"),
+                UIMessagePart.Text("partial"),
+            ),
+            terminalStatus = MessageTerminalStatus.INCOMPLETE,
+            terminalReason = TurnTerminalReasons.PROVIDER_INCOMPLETE,
+        )
+        val projected = terminal.replaySafeProjection()!!
+        assertEquals(0, projected.providerReplayProjection!!.completePartCount)
+
+        val messages = listOf(
+            UIMessage.user("Use a tool"),
+            projected,
+        )
+
+        val result = invokeBuildMessages(
+            messages = messages,
+            includeHistoryReasoning = false,
+            modelId = "deepseek-v4-flash",
+            requestHasTools = true,
+        )
+        // completePartCount == 0: the terminal assistant should not enter DeepSeek strict history.
+        // Only the user message survives; the request-only marker belongs to the incomplete tail.
+        val assistantMessages = result.filter {
+            it.jsonObject["role"]?.jsonPrimitive?.content == "assistant"
+        }
+        assertTrue(assistantMessages.isEmpty())
+    }
+
+    @Test
+    fun `deepseek v4 strict terminal with multiple complete steps keeps all complete prefixes`() {
+        val tool1 = UIMessagePart.Tool(
+            toolCallId = "call-1",
+            toolName = "search",
+            input = "{}",
+            output = listOf(UIMessagePart.Text("result1")),
+        )
+        val tool2 = UIMessagePart.Tool(
+            toolCallId = "call-2",
+            toolName = "calculate",
+            input = "{}",
+            output = listOf(UIMessagePart.Text("result2")),
+        )
+        val terminal = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Reasoning(reasoning = "First reasoning"),
+                UIMessagePart.Text("First content"),
+                tool1,
+                UIMessagePart.Reasoning(reasoning = "Second reasoning"),
+                UIMessagePart.Text("Second content"),
+                tool2,
+                UIMessagePart.Reasoning(reasoning = "Tail reasoning"),
+                UIMessagePart.Text("Tail text"),
+            ),
+            terminalStatus = MessageTerminalStatus.FAILED,
+            terminalReason = TurnTerminalReasons.PROVIDER_FAILED,
+        )
+        val projected = terminal.replaySafeProjection()!!
+        assertEquals(6, projected.providerReplayProjection!!.completePartCount)
+
+        val messages = listOf(
+            UIMessage.user("Use tools"),
+            projected,
+        )
+
+        val result = invokeBuildMessages(
+            messages = messages,
+            includeHistoryReasoning = false,
+            modelId = "deepseek-v4-flash",
+            requestHasTools = true,
+        )
+        val assistantMessages = result.filter {
+            it.jsonObject["role"]?.jsonPrimitive?.content == "assistant"
+        }
+        // Both complete tool-bound steps should appear; tail reasoning must not.
+        assertTrue(assistantMessages.size >= 2)
+        assertEquals("First reasoning", assistantMessages[0].jsonObject["reasoning_content"]?.jsonPrimitive?.content)
+        assertEquals("Second reasoning", assistantMessages[1].jsonObject["reasoning_content"]?.jsonPrimitive?.content)
+        assistantMessages.forEach { msg ->
+            assertFalse(
+                "Tail reasoning should not be in strict history",
+                msg.jsonObject["reasoning_content"]?.jsonPrimitive?.content == "Tail reasoning",
+            )
+        }
+    }
+
+    @Test
+    fun `non-deepseek protocol keeps partial text in terminal assistant for compatibility`() {
+        val terminal = terminalAssistantWithCompleteStep(
+            completeReasoning = "Step reasoning",
+            completeText = "Calling search",
+            tailReasoning = "Tail reasoning",
+            tailText = "Partial answer",
+        )
+        val projected = terminal.replaySafeProjection()!!
+        val messages = listOf(
+            UIMessage.user("Use a tool"),
+            projected,
+        )
+
+        val result = invokeBuildMessages(
+            messages = messages,
+            includeHistoryReasoning = false,
+            modelId = "gpt-5",
+            requestHasTools = true,
+        )
+        // Non-DeepSeek protocols keep the partial tail text + incomplete marker for compatibility.
+        val allContent = result.joinToString("") { message ->
+            when (val content = message.jsonObject["content"]) {
+                is JsonPrimitive -> content.content
+                is JsonArray -> content.joinToString("") {
+                    it.jsonObject["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                }
+                else -> ""
+            }
+        }
+        assertTrue("Partial answer should survive in non-strict history", allContent.contains("Partial answer"))
+        assertTrue("Incomplete marker should survive", allContent.contains("did not complete"))
+    }
+
+    @Test
+    fun `deepseek v4 strict terminal without tools keeps partial text for compatibility`() {
+        val terminal = terminalAssistantWithCompleteStep(
+            completeReasoning = "Step reasoning",
+            completeText = "Calling search",
+            tailReasoning = "Tail reasoning",
+            tailText = "Partial answer",
+        )
+        val projected = terminal.replaySafeProjection()!!
+        val messages = listOf(
+            UIMessage.user("Use a tool"),
+            projected,
+        )
+
+        // requestHasTools = false: even DeepSeek V4 does not apply strict truncation per §6.5.
+        val result = invokeBuildMessages(
+            messages = messages,
+            includeHistoryReasoning = true,
+            modelId = "deepseek-v4-flash",
+            requestHasTools = false,
+        )
+        val allContent = result.joinToString("") { message ->
+            when (val content = message.jsonObject["content"]) {
+                is JsonPrimitive -> content.content
+                is JsonArray -> content.joinToString("") {
+                    it.jsonObject["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                }
+                else -> ""
+            }
+        }
+        assertTrue("Partial answer should survive when no tools", allContent.contains("Partial answer"))
     }
 }

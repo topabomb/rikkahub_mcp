@@ -45,26 +45,106 @@ fun ResponseBody.stringSafe(): String? {
     }
 }
 
-fun JsonObject.mergeCustomBody(bodies: List<CustomBody>): JsonObject {
+/**
+ * Ownership contract for a Provider request body, declaring which top-level keys are owned
+ * exclusively by the Provider adapter and cannot be overridden through [CustomBody].
+ *
+ * Each Provider builder declares its own reserved-key set; there is no global mega-table.
+ * If a custom body conflicts with a reserved key, [mergeCustomBody] throws a typed local
+ * error before any HTTP request is sent, instead of silently replacing or ignoring the
+ * structural field.
+ */
+data class RequestBodyOwnership(
+    val protocol: String,
+    val reservedKeys: Set<String>,
+    /** Nested response-shape paths that remain adapter-owned while sibling settings stay extensible. */
+    val reservedPaths: Set<List<String>> = emptySet(),
+)
+
+/**
+ * Typed local error raised when a [CustomBody] entry attempts to override a reserved key
+ * owned by the Provider adapter.
+ *
+ * The stable [reason] is `custom_body_reserved_key`; the message lists the protocol and the
+ * sorted conflicting keys for deterministic local diagnostics. This error is produced before
+ * the HTTP request and must not be recorded as a remote 400.
+ */
+class CustomBodyReservedKeyException(
+    val protocol: String,
+    conflictingKeys: List<String>,
+) : Exception(
+    "custom_body_reserved_key: protocol=$protocol, conflicting keys=${conflictingKeys.sorted().joinToString(", ")}"
+) {
+    val reason: String = "custom_body_reserved_key"
+    val conflictingKeys: List<String> = conflictingKeys.sorted()
+}
+
+fun JsonObject.mergeCustomBody(
+    bodies: List<CustomBody>,
+    ownership: RequestBodyOwnership,
+): JsonObject {
     if (bodies.isEmpty()) return this
+
+    val conflicts = buildSet {
+        bodies.forEach { body ->
+            if (body.key in ownership.reservedKeys) add(body.key)
+            val baseValue = this@mergeCustomBody[body.key]
+            if (baseValue is JsonObject) {
+                addAll(baseValue.findObjectShapeConflicts(body.value, listOf(body.key)))
+            }
+            ownership.reservedPaths
+                .filter { path -> path.firstOrNull() == body.key }
+                .filter { path -> body.value.containsJsonPath(path.drop(1)) }
+                .forEach { path -> add(path.joinToString(".")) }
+        }
+    }
+    if (conflicts.isNotEmpty()) {
+        throw CustomBodyReservedKeyException(
+            protocol = ownership.protocol,
+            conflictingKeys = conflicts.toList(),
+        )
+    }
 
     val content = toMutableMap()
     bodies.forEach { body ->
         if (body.key.isNotBlank()) {
-            // 如果已存在相同键且两者都是JsonObject，则需要递归合并
             val existingValue = content[body.key]
             val newValue = body.value
 
             if (existingValue is JsonObject && newValue is JsonObject) {
-                // 递归合并两个JsonObject
                 content[body.key] = mergeJsonObjects(existingValue, newValue)
             } else {
-                // 直接替换或添加
                 content[body.key] = newValue
             }
         }
     }
     return JsonObject(content)
+}
+
+private fun JsonObject.findObjectShapeConflicts(
+    overlay: JsonElement,
+    path: List<String>,
+): Set<String> {
+    val overlayObject = overlay as? JsonObject ?: return setOf(path.joinToString("."))
+    return buildSet {
+        this@findObjectShapeConflicts.forEach { (key, baseValue) ->
+            if (baseValue is JsonObject && key in overlayObject) {
+                addAll(
+                    baseValue.findObjectShapeConflicts(
+                        overlay = requireNotNull(overlayObject[key]),
+                        path = path + key,
+                    )
+                )
+            }
+        }
+    }
+}
+
+private fun JsonElement.containsJsonPath(path: List<String>): Boolean {
+    if (path.isEmpty()) return true
+    val objectValue = this as? JsonObject ?: return false
+    val child = objectValue[path.first()] ?: return false
+    return child.containsJsonPath(path.drop(1))
 }
 
 /**

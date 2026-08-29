@@ -73,7 +73,7 @@ class SubAssistantInterruptionProjectionTest {
         assertEquals(SubAssistantCallState.STOPPED, metadata.state)
         assertEquals("app_restarted", metadata.reason)
         assertEquals("partial answer", metadata.preview)
-        assertTrue(recovered.isExecuted)
+        assertTrue(recovered.hasReplayResult)
         assertEquals(setOf(child.id), result.referencedChildIds)
         assertEquals("app_restarted", result.childStopReasons[child.id])
     }
@@ -155,7 +155,7 @@ class SubAssistantInterruptionProjectionTest {
         assertTrue(result.referencedChildIds.isEmpty())
         result.master.messageNodes.single().currentMessage.getTools().forEach { tool ->
             assertEquals("child_missing", tool.getSubAssistantCallMetadata(json)?.reason)
-            assertTrue(tool.isExecuted)
+            assertTrue(tool.hasReplayResult)
         }
     }
 

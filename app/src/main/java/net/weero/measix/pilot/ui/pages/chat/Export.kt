@@ -604,7 +604,7 @@ private fun ExportedChatMessage(
                                     text = block.tool.toolName,
                                     style = MaterialTheme.typography.labelMedium
                                 )
-                                if (block.tool.isExecuted) {
+                                if (block.tool.hasReplayResult) {
                                     block.tool.output.firstOrNull { it is UIMessagePart.Text }?.let {
                                         Text(
                                             text = (it as UIMessagePart.Text).text.take(200),

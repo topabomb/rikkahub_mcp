@@ -144,7 +144,7 @@ object ThinkTagTransformer : OutputMessageTransformer, StreamingMessageTransform
     }
 
     private fun UIMessage.currentStepStart(): Int =
-        parts.indexOfLast { it is UIMessagePart.Tool && it.isExecuted } + 1
+        parts.indexOfLast { it is UIMessagePart.Tool && it.hasReplayResult } + 1
 
     private fun UIMessage.currentStepParts(): List<UIMessagePart> =
         parts.subList(currentStepStart(), parts.size)

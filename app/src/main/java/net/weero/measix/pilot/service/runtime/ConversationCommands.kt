@@ -5,6 +5,7 @@ import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefBackfill
 import net.weero.measix.pilot.data.ai.CheckpointKind
+import net.weero.measix.pilot.data.ai.ToolResultEvent
 import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
@@ -44,6 +45,7 @@ data class CommitCheckpoint(
     val turnStatus: TurnExecutionStatus,
     val turnReason: String?,
     val toolExecution: ToolExecutionEntity?,
+    val toolResults: List<ToolResultEvent> = emptyList(),
 ) : ConversationCommand
 
 /** 终态收口（finishReasoning / closeOpenTools / markAssistantTerminal 在 reducer 内纯变换） */

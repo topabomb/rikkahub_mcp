@@ -12,10 +12,9 @@ class ClassifyImageSourceTest {
 
     @Test
     fun `classifies inline and network by scheme`() {
-        val filesDir = temp.newFolder()
-        assertEquals(ImageInfoSource.Inline, classifyImageSource("data:image/png;base64,QUJD", filesDir))
-        assertEquals(ImageInfoSource.Network, classifyImageSource("https://example.com/a.png", filesDir))
-        assertEquals(ImageInfoSource.Network, classifyImageSource("http://example.com/a.png", filesDir))
+        assertEquals(ImageInfoSource.Inline, classifyImageSource("data:image/png;base64,QUJD"))
+        assertEquals(ImageInfoSource.Network, classifyImageSource("https://example.com/a.png"))
+        assertEquals(ImageInfoSource.Network, classifyImageSource("http://example.com/a.png"))
     }
 
     @Test
@@ -24,15 +23,22 @@ class ClassifyImageSourceTest {
         val generated = File(filesDir, "images/x.png").absolutePath
         val upload = File(filesDir, "upload/y.png").absolutePath
         val uploadUrl = "file://$upload"
+        val isGenerated: (File) -> Boolean = { it.absolutePath == generated }
 
-        assertEquals(ImageInfoSource.Generated, classifyImageSource("file://$generated", filesDir))
+        assertEquals(
+            ImageInfoSource.Generated,
+            classifyImageSource("file://$generated", isManagedGeneratedFile = isGenerated),
+        )
         assertEquals(
             ImageInfoSource.Upload,
-            classifyImageSource(uploadUrl, filesDir, isManagedUploadUrl = { it == uploadUrl }),
+            classifyImageSource(uploadUrl, isManagedUploadUrl = { it == uploadUrl }),
         )
-        assertEquals(ImageInfoSource.Generated, classifyImageSource(generated, filesDir))
-        assertEquals(ImageInfoSource.Local, classifyImageSource("file:///sdcard/Pictures/z.png", filesDir))
-        assertEquals(ImageInfoSource.Local, classifyImageSource("/sdcard/Pictures/z.png", filesDir))
+        assertEquals(
+            ImageInfoSource.Generated,
+            classifyImageSource(generated, isManagedGeneratedFile = isGenerated),
+        )
+        assertEquals(ImageInfoSource.Local, classifyImageSource("file:///sdcard/Pictures/z.png"))
+        assertEquals(ImageInfoSource.Local, classifyImageSource("/sdcard/Pictures/z.png"))
     }
 
     @Test
@@ -40,7 +46,13 @@ class ClassifyImageSourceTest {
         val filesDir = temp.newFolder()
         val sibling = File(filesDir, "images2/x.png").absolutePath
 
-        assertEquals(ImageInfoSource.Local, classifyImageSource("file://$sibling", filesDir))
+        val generatedDir = File(filesDir, "images").absoluteFile
+        assertEquals(
+            ImageInfoSource.Local,
+            classifyImageSource("file://$sibling", isManagedGeneratedFile = { file ->
+                file.absolutePath.startsWith(generatedDir.path + File.separator)
+            }),
+        )
     }
 
     @Test
@@ -49,6 +61,9 @@ class ClassifyImageSourceTest {
         val generated = File(filesDir, "images/x.png").absoluteFile
         val uppercase = "FILE://" + generated.absolutePath.replace('\\', '/')
 
-        assertEquals(ImageInfoSource.Generated, classifyImageSource(uppercase, filesDir))
+        assertEquals(
+            ImageInfoSource.Generated,
+            classifyImageSource(uppercase, isManagedGeneratedFile = { it.absoluteFile == generated }),
+        )
     }
 }

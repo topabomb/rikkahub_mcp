@@ -2,7 +2,7 @@
 
 > 定位：会话中的多媒体附件如何成为持久事实（stable attachment ref + Artifact）、如何在每次生成请求中按模型能力投影（`AttachmentProjectionTransformer` / `inspect_attachments`）、以及一轮生成（Turn）如何以执行事实落库并在崩溃后恢复。
 >
-> 分工：总体 owner 与分层边界见 [application-architecture-v1.md](application-architecture-v1.md)；`inspect_attachments` 的模型可见描述与失败 reason 表见 [prompts-and-tools.md](prompts-and-tools.md)；Resolver 的 SSRF / 魔数 / 去重细节与子助手附件链路见 [sub-assistant-multimodal.md](sub-assistant-multimodal.md)；生成主链路与 Transformer 顺序见 [chat-generation-pipeline.md](chat-generation-pipeline.md)；数据层结构见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and-sync.md)。
+> 分工：总体 owner 与分层边界见 [application-architecture.md](application-architecture.md)；`inspect_attachments` 的模型可见描述与失败 reason 表见 [prompts-and-tools.md](prompts-and-tools.md)；Resolver 的 SSRF / 魔数 / 去重细节与子助手附件链路见 [sub-assistant-multimodal.md](sub-assistant-multimodal.md)；生成主链路与 Transformer 顺序见 [chat-generation-pipeline.md](chat-generation-pipeline.md)；数据层结构见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and-sync.md)。
 
 ## 1. 行为总览
 
@@ -88,6 +88,16 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 - `ChatMessage`、会话相册与聊天导出只消费查询投影返回的本地媒体 URL；没有投影 map 时，
   `file:` 图片/媒体保持不可见，不回退为原始路径。助手配置页的合成消息预览同样不读取本地附件。
 - Resolver 对 managed manifest 与本地 file URL 都必须先通过 `ArtifactStore` 校验 ACTIVE、version、mime 与受管根目录；仅 payload 文件存在不能使已失效的附件重新可用。
+
+### 2.5 范围清理与恢复
+
+上传 Artifact 与图库生成媒体保持独立 owner，不存在共享目录扫描删除器：
+
+- 上传文件由 `ArtifactStore` 从 durable metadata 选取候选，在同一 lifecycle lock 内重验 retention pin、消息引用和 Settings roots，并复用单项 CREATING / ACTIVE / DELETING 状态机；
+- 图库媒体由 `GeneratedMediaStore` 从 canonical row 选取候选，在 persist lock 内复用单项删除协议。row 删除成功而 payload 暂未清除时返回 `cleanupPending`，保留删除 tombstone，由启动 reconcile 继续收口；row 删除失败则恢复原 payload 身份；
+- 候选计数只用于确认提示，不锁定待删集合；真正执行时由 owner 在锁内重新取候选。取消在单项之间传播，已经取得删除所有权的单项按既有终态或补偿协议完成；
+- 两个领域分别返回结构化结果。`FileManagementApplicationService` 只映射为 UI 所需的 `deleted`、`cleanupPending`、`skippedInProgress` 与 `failed`，不把部分成功压成 Boolean，也不为没有该状态的领域伪造结果；
+- `FileManagementApplicationService` 的 owner 命令与 `FileManagementQueryService` 中会读取 row/payload 状态的列表、分页、统计和检查均等待全局 `ApplicationRecoveryGate`。纯 canonical-root 路径分类不读取 row 或 payload 状态，只用于本地图片来源标签。`ApplicationRecoveryCoordinator` 在发布文件读写能力前依次完成 Artifact 与 GeneratedMedia reconcile，页面不会观察或操作尚未收口的 tombstone、staging 或孤儿 payload。
 
 ## 3. 请求级投影（`AttachmentProjectionTransformer`）
 
@@ -249,7 +259,30 @@ non-terminal execution 的 owning message 缺失是持久化完整性错误，�
 
 ### 7.2 回放安全
 
-- 非成功 Assistant 历史在再次发给 Provider 前经过 `replaySafeProjection()`（`me.rerere.ai.ui` 扩展）：保留有效 Text / Image / 已执行且安全封套的 Tool；剔除 media-failure 文本、`data:` 图（Tool.output 内降级为失败 JSON 文本）、终态下未完成的 Reasoning 与未执行 / 无安全封套的 Tool；对非成功终态追加 `[Previous assistant response did not complete.]` 标记并清空 `terminalStatus`、`terminalReason` 与 `terminalDetail`。不修改持久化会话，也不把用户诊断发送给 Provider。
+非成功 Assistant 历史在再次发给 Provider 前经过 `replaySafeProjection()`（`me.rerere.ai.ui` 扩展）。
+terminal messages 按完整 Provider step 原子回放：
+
+1. 连续的 Content（Reasoning/Text/Image）+ 具有合法 call envelope 和可回放 result output 的 Tool 组成完整
+   replay 前缀：保留 Text、持久化成功的 Image、Reasoning 和 source metadata，并保留 call/result 配对；
+2. pending、未执行、参数损坏或无安全 envelope 的 Tool 仍删除；
+3. 最后一个完整 Tool step 之后的尾部：Text/Image 按现有规则保留为辅助上下文，Reasoning 与不透明 provider metadata 删除，
+   追加 `[Previous assistant response did not complete.]` 标记，从该尾部开始不计入 `completePartCount`；
+4. message-level `providerMetadata` 在 terminal message 上清除；
+5. `terminalStatus`、`terminalReason`、`terminalDetail` 继续不进入 Provider wire。
+
+这里的 `UIMessagePart.Tool.hasReplayResult` / `Tool.output` 只表示 Provider 可回放结果，不表示实时执行状态，也不代替 turn checkpoint/phase owner。工具合法返回空 part 列表时，结果 owner 将其规范化为非空结构化 replay envelope，避免把已经产生副作用的工具重新识别为待执行。
+如果 parts 出现"unsafe/pending tool 之后又有带结果 Tool"的非连续结构，投影 fail-closed：只保留第一个不安全边界
+之前的完整前缀，不能跨越不完整 step 拼接后续内容。
+
+投影返回的 `UIMessage` 携带 request-only `providerReplayProjection: ProviderReplayProjection`（`@Transient`，不持久化）：
+- `completePartCount`：具有完整 Provider call/result 回放配对的前缀 part 数量；
+- `hasIncompleteTail`：是否存在未完成尾部。
+
+严格协议由 `TerminalAssistantReplay.COMPLETE_STEP_PREFIX` 显式选择，只序列化
+`parts.take(completePartCount)`，
+不发送 partial assistant tail。`completePartCount == 0` 时该 terminal Assistant 不进入严格历史。
+其他协议维持现有 partial text + marker 兼容行为。不修改持久化会话中的部分文本和终态诊断。
+
 - 模型切换后的历史回放由统一投影负责（§3），无迁移逻辑。
 - `ToolArtifactReplayTransformer` 按 metadata 恢复历史 Tool Result 的路径与 Image URL（会话 fork / 恢复 / 文件迁移后仍指向有效文件）。
 

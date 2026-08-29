@@ -1,6 +1,5 @@
 package net.weero.measix.pilot.ui.components.ui
 
-import android.content.Context
 import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.activity.compose.BackHandler
@@ -88,7 +87,7 @@ import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.service.ArtifactUseCase
 import net.weero.measix.pilot.service.MediaExportService
 import net.weero.measix.pilot.service.IMAGE_SAVE_PERMISSION_REQUIRED
-import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
+import net.weero.measix.pilot.service.FileManagementQueryService
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.utils.fileSizeToString
 import net.weero.measix.pilot.utils.toLocalDateTime
@@ -141,6 +140,7 @@ fun ImagePreviewDialog(
     }
     val context = LocalContext.current
     val artifactUseCase: ArtifactUseCase = koinInject()
+    val fileManagementQueryService: FileManagementQueryService = koinInject()
     val mediaExportService: MediaExportService = koinInject()
     val dialogToaster = rememberToasterState()
     val scope = rememberCoroutineScope()
@@ -192,7 +192,11 @@ fun ImagePreviewDialog(
     LaunchedEffect(currentUrl) {
         val url = currentUrl ?: return@LaunchedEffect
         imageInfo = withContext(Dispatchers.IO) {
-            resolveImageInfo(context, url, artifactUseCase::isManagedUploadUrl)
+            resolveImageInfo(
+                url = url,
+                isManagedGeneratedFile = fileManagementQueryService::isManagedGeneratedFile,
+                isManagedUploadUrl = artifactUseCase::isManagedUploadUrl,
+            )
         }
     }
     val infoBlocked = rememberUpdatedState(infoVisible)
@@ -689,20 +693,18 @@ internal data class ImageInfo(
 
 /**
  * 按 url 与应用目录推断图片来源: data: 前缀为内联, http(s) 为网络,
- * 位于 filesDir/images 为生成图片, filesDir/upload 为上传文件, 其余为本地文件
+ * 生成媒体与上传来源由各自 query port 判定，其余路径只作为普通本地文件展示。
  */
 internal fun classifyImageSource(
     url: String,
-    filesDir: File,
+    isManagedGeneratedFile: (File) -> Boolean = { false },
     isManagedUploadUrl: (String) -> Boolean = { false },
 ): ImageInfoSource {
     if (url.startsWith("data:", ignoreCase = true)) return ImageInfoSource.Inline
     if (url.startsWith("http", ignoreCase = true)) return ImageInfoSource.Network
     val file = localImageFile(url)
-    val generatedDir = File(filesDir, GeneratedMediaStore.IMAGES_DIR).absoluteFile.normalize()
-    val normalized = file.absoluteFile.normalize()
     return when {
-        normalized.path.startsWith(generatedDir.path + File.separator) -> ImageInfoSource.Generated
+        isManagedGeneratedFile(file) -> ImageInfoSource.Generated
         isManagedUploadUrl(url) -> ImageInfoSource.Upload
         else -> ImageInfoSource.Local
     }
@@ -740,11 +742,11 @@ private fun guessMimeFromExtension(extension: String?): String? =
 
 /** 只读图片头(不解码像素)与文件元数据, 全程 IO 线程 */
 internal fun resolveImageInfo(
-    context: Context,
     url: String,
+    isManagedGeneratedFile: (File) -> Boolean,
     isManagedUploadUrl: (String) -> Boolean,
 ): ImageInfo {
-    val source = classifyImageSource(url, context.filesDir, isManagedUploadUrl)
+    val source = classifyImageSource(url, isManagedGeneratedFile, isManagedUploadUrl)
     return when {
         url.startsWith("data:", ignoreCase = true) -> {
             val bytes = runCatching {

@@ -9,6 +9,8 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.util.json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
@@ -414,10 +416,193 @@ class MessageTest {
         assertTrue(projected.parts.none { it === openTool })
         assertTrue(projected.toText().contains("partial answer"))
         assertTrue(projected.toText().contains("did not complete"))
-        val projectedTool = projected.getTools().single()
-        assertEquals("done-call", projectedTool.toolCallId)
-        assertTrue(projectedTool.output.single().let { it is UIMessagePart.Text && it.text.contains("unavailable") })
+        // Fail-closed: openTool (unsafe) is before completedTool, so the entire
+        // message is an incomplete tail — no tools survive projection.
+        assertTrue(projected.getTools().isEmpty())
         assertEquals(0, projected.parts.countMediaPersistenceFailures())
+    }
+
+    @Test
+    fun `terminal replay projection preserves reasoning in complete steps and drops tail reasoning`() {
+        val completedTool = UIMessagePart.Tool(
+            toolCallId = "call-1",
+            toolName = "search",
+            input = "{}",
+            output = listOf(UIMessagePart.Text("result")),
+        )
+        val terminal = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Reasoning(reasoning = "Step 1 reasoning"),
+                UIMessagePart.Text("Calling search"),
+                completedTool,
+                UIMessagePart.Reasoning(reasoning = "Incomplete final reasoning"),
+                UIMessagePart.Text("Partial final answer"),
+            ),
+            terminalStatus = MessageTerminalStatus.FAILED,
+            terminalReason = TurnTerminalReasons.PROVIDER_FAILED,
+            terminalDetail = "detail",
+        )
+
+        val projected = terminal.replaySafeProjection()!!
+        val projection = projected.providerReplayProjection
+        assertNotNull(projection)
+        assertTrue(projection!!.hasIncompleteTail)
+        // The complete prefix is: Reasoning, Text, Tool = 3 parts
+        assertEquals(3, projection.completePartCount)
+        // The complete prefix must retain reasoning
+        assertTrue(projected.parts.take(3).any { it is UIMessagePart.Reasoning })
+        // The tail must not contain reasoning
+        val tailParts = projected.parts.drop(3)
+        assertTrue(tailParts.none { it is UIMessagePart.Reasoning })
+        assertTrue(tailParts.any { it is UIMessagePart.Text && it.text.contains("Partial final answer") })
+    }
+
+    @Test
+    fun `terminal replay with only partial reasoning and text has zero complete prefix`() {
+        val terminal = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Reasoning(reasoning = "unfinished"),
+                UIMessagePart.Text("partial"),
+            ),
+            terminalStatus = MessageTerminalStatus.INCOMPLETE,
+            terminalReason = TurnTerminalReasons.PROVIDER_INCOMPLETE,
+        )
+
+        val projected = terminal.replaySafeProjection()!!
+        val projection = projected.providerReplayProjection!!
+        assertEquals(0, projection.completePartCount)
+        assertTrue(projection.hasIncompleteTail)
+        assertTrue(projected.parts.none { it is UIMessagePart.Reasoning })
+        assertTrue(projected.parts.any { it is UIMessagePart.Text })
+    }
+
+    @Test
+    fun `terminal replay strips google opaque state from partial text and image only`() {
+        val textMetadata = buildJsonObject {
+            GoogleThoughtMetadata(
+                thoughtSignature = "text-signature",
+                sourceModelId = "gemini-3-flash",
+                sourceProfile = "google:developer:example",
+                providerStepId = "step-1",
+            ).toMetadata().forEach { (key, value) -> put(key, value) }
+            AttachmentProjectionTextMetadata(attachmentProjectionText = true)
+                .toMetadata().forEach { (key, value) -> put(key, value) }
+        }
+        val imageMetadata = GoogleThoughtMetadata(
+            thoughtSignature = "image-signature",
+            sourceModelId = "gemini-3-flash",
+            sourceProfile = "google:developer:example",
+            providerStepId = "step-1",
+        ).toMetadata()
+        val terminal = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Text("partial", textMetadata),
+                UIMessagePart.Image("https://example.com/image.png", imageMetadata),
+            ),
+            terminalStatus = MessageTerminalStatus.INCOMPLETE,
+        )
+
+        val projected = terminal.replaySafeProjection()!!
+        val text = projected.parts.filterIsInstance<UIMessagePart.Text>().first()
+        val image = projected.parts.filterIsInstance<UIMessagePart.Image>().single()
+        assertNull(text.metadataAs<GoogleThoughtMetadata>()?.thoughtSignature)
+        assertNull(image.metadataAs<GoogleThoughtMetadata>()?.thoughtSignature)
+        assertEquals(true, text.metadataAs<AttachmentProjectionTextMetadata>()?.attachmentProjectionText)
+    }
+
+    @Test
+    fun `terminal replay fail-closed at unsafe tool boundary drops subsequent steps`() {
+        val safeTool = UIMessagePart.Tool(
+            toolCallId = "safe-1",
+            toolName = "search",
+            input = "{}",
+            output = listOf(UIMessagePart.Text("ok")),
+        )
+        val unsafeTool = UIMessagePart.Tool(
+            toolCallId = "unsafe",
+            toolName = "broken",
+            input = "{invalid",
+        )
+        val laterSafeTool = UIMessagePart.Tool(
+            toolCallId = "later-safe",
+            toolName = "search2",
+            input = "{}",
+            output = listOf(UIMessagePart.Text("ok2")),
+        )
+        val terminal = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Reasoning(reasoning = "First reasoning"),
+                UIMessagePart.Text("First content"),
+                safeTool,
+                UIMessagePart.Reasoning(reasoning = "Second reasoning"),
+                UIMessagePart.Text("Second content"),
+                unsafeTool,
+                UIMessagePart.Text("After unsafe"),
+                laterSafeTool,
+            ),
+            terminalStatus = MessageTerminalStatus.FAILED,
+            terminalReason = TurnTerminalReasons.PROVIDER_FAILED,
+        )
+
+        val projected = terminal.replaySafeProjection()!!
+        val projection = projected.providerReplayProjection!!
+        // Complete prefix ends at the safe tool (index 2), everything after is tail
+        assertEquals(3, projection.completePartCount)
+        assertTrue(projection.hasIncompleteTail)
+        // laterSafeTool must not appear in the projected parts (fail-closed)
+        assertTrue(projected.parts.none { it is UIMessagePart.Tool && it.toolCallId == "later-safe" })
+        // safeTool must still be present
+        assertTrue(projected.parts.any { it is UIMessagePart.Tool && it.toolCallId == "safe-1" })
+    }
+
+    @Test
+    fun `terminal replay keeps complete prefix reasoning for deepseek v4 strict history`() {
+        val completedTool = UIMessagePart.Tool(
+            toolCallId = "call-1",
+            toolName = "search",
+            input = "{}",
+            output = listOf(UIMessagePart.Text("result")),
+        )
+        val terminal = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Reasoning(reasoning = "Step reasoning"),
+                UIMessagePart.Text("Calling search"),
+                completedTool,
+                UIMessagePart.Reasoning(reasoning = "Tail reasoning"),
+                UIMessagePart.Text("Partial answer"),
+            ),
+            terminalStatus = MessageTerminalStatus.FAILED,
+            terminalReason = TurnTerminalReasons.PROVIDER_FAILED,
+        )
+
+        val projected = terminal.replaySafeProjection()!!
+        val projection = projected.providerReplayProjection!!
+        val completePrefix = projected.parts.take(projection.completePartCount)
+        // Complete prefix must contain the reasoning
+        assertTrue(completePrefix.any { it is UIMessagePart.Reasoning })
+    }
+
+    @Test
+    fun `provider replay projection is not persisted through serialization`() {
+        val terminal = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Text("partial"),
+            ),
+            terminalStatus = MessageTerminalStatus.FAILED,
+            terminalReason = TurnTerminalReasons.PROVIDER_FAILED,
+        )
+
+        val projected = terminal.replaySafeProjection()!!
+        assertNotNull(projected.providerReplayProjection)
+
+        val restored = json.decodeFromString<UIMessage>(json.encodeToString(projected))
+        assertNull(restored.providerReplayProjection)
     }
 
     @Test

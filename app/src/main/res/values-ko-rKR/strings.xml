@@ -441,6 +441,7 @@
   <string name="imggen_page_image_saved_success">이미지가 갤러리에 저장되었습니다</string>
   <string name="imggen_page_image_size">이미지 크기</string>
   <string name="imggen_page_no_generated_images">생성된 이미지가 없습니다</string>
+  <string name="imggen_page_load_failed">생성된 이미지를 불러오지 못했습니다</string>
   <string name="imggen_page_prompt_placeholder">생성하고 싶은 이미지를 설명하세요...</string>
   <string name="imggen_page_save">저장</string>
   <string name="imggen_page_save_failed">저장 실패: %1$s</string>

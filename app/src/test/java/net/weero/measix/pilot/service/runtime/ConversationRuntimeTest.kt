@@ -23,6 +23,8 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
 import net.weero.measix.pilot.data.ai.CheckpointKind
+import net.weero.measix.pilot.data.ai.ToolResultEvent
+import net.weero.measix.pilot.data.ai.ToolResultEventStatus
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
@@ -481,6 +483,7 @@ class ConversationRuntimeTest {
                 turnStatus = TurnExecutionStatus.RUNNING,
                 turnReason = null,
                 toolExecution = startedFact.copy(status = ToolExecutionStatus.COMPLETED),
+                toolResults = listOf(ToolResultEvent(result.id, 0, ToolResultEventStatus.COMPLETED)),
             )
         )
         assertEquals(ToolCallPhase.COMPLETED, rt.snapshot.value.activeTurn?.toolCallPhases?.get(locator))
@@ -516,6 +519,101 @@ class ConversationRuntimeTest {
             ToolCallPhase.CALL_STREAMING,
             projected.toolCallPhases[ToolCallLocator(assistantId, 0)],
         )
+    }
+
+    @Test
+    fun `result without execution advances only from typed committed result fact`() {
+        val assistantId = Uuid.random()
+        val handle = TurnHandle(
+            conversationId = Uuid.random(),
+            epoch = 1L,
+            turnId = Uuid.random(),
+            assistantMessageId = assistantId,
+        )
+        val initial = ActiveTurnState(
+            epoch = handle.epoch,
+            turnId = handle.turnId,
+            assistantMessageId = assistantId,
+            messages = emptyList(),
+        )
+        val toolMessage = UIMessage(
+            id = assistantId,
+            role = MessageRole.ASSISTANT,
+            parts = listOf(UIMessagePart.Tool("call", "generate_image", "{}")),
+        )
+        val ready = initial.withStreamingMessages(listOf(toolMessage)).afterCheckpoint(
+            CommitCheckpoint(
+                handle = handle,
+                kind = CheckpointKind.STEP_COMPLETED,
+                messages = listOf(toolMessage),
+                turnStatus = TurnExecutionStatus.RUNNING,
+                turnReason = null,
+                toolExecution = null,
+            )
+        )
+        val failedMessage = toolMessage.copy(
+            parts = listOf(
+                (toolMessage.parts.single() as UIMessagePart.Tool).copy(
+                    output = listOf(UIMessagePart.Text("{\"status\":\"failed\"}")),
+                )
+            )
+        )
+        val streamed = ready.withStreamingMessages(listOf(failedMessage))
+        val locator = ToolCallLocator(assistantId, 0)
+        assertEquals(ToolCallPhase.READY, streamed.toolCallPhases[locator])
+
+        val committed = streamed.afterCheckpoint(
+            CommitCheckpoint(
+                handle = handle,
+                kind = CheckpointKind.TOOL_RESULT_COMPLETED,
+                messages = listOf(failedMessage),
+                turnStatus = TurnExecutionStatus.RUNNING,
+                turnReason = null,
+                toolExecution = null,
+                toolResults = listOf(ToolResultEvent(assistantId, 0, ToolResultEventStatus.FAILED)),
+            )
+        )
+
+        assertEquals(ToolCallPhase.FAILED, committed.toolCallPhases[locator])
+
+        val invalidOrdinal = runCatching {
+            streamed.afterCheckpoint(
+                CommitCheckpoint(
+                    handle = handle,
+                    kind = CheckpointKind.TOOL_RESULT_COMPLETED,
+                    messages = listOf(failedMessage),
+                    turnStatus = TurnExecutionStatus.RUNNING,
+                    turnReason = null,
+                    toolExecution = null,
+                    toolResults = listOf(ToolResultEvent(assistantId, 1, ToolResultEventStatus.FAILED)),
+                )
+            )
+        }.exceptionOrNull()
+        assertTrue(invalidOrdinal?.message?.contains("missing tool ordinal") == true)
+
+        val execution = ToolExecutionEntity(
+            executionId = "execution",
+            turnId = handle.turnId.toString(),
+            toolOrdinal = 0,
+            status = ToolExecutionStatus.COMPLETED,
+            reason = null,
+            createdAt = 1L,
+            updatedAt = 1L,
+        )
+        val conflictingStatus = runCatching {
+            streamed.afterCheckpoint(
+                CommitCheckpoint(
+                    handle = handle,
+                    kind = CheckpointKind.TOOL_RESULT_COMPLETED,
+                    messages = listOf(failedMessage),
+                    turnStatus = TurnExecutionStatus.RUNNING,
+                    turnReason = null,
+                    toolExecution = execution,
+                    toolResults = listOf(ToolResultEvent(assistantId, 0, ToolResultEventStatus.FAILED)),
+                )
+            )
+        }.exceptionOrNull()
+        assertTrue(conflictingStatus?.message?.contains("conflicting terminal statuses") == true)
     }
 
     @Test
@@ -564,16 +662,26 @@ class ConversationRuntimeTest {
         assertEquals(ToolCallPhase.READY, rt.snapshot.value.activeTurn?.toolCallPhases?.get(first))
         assertEquals(ToolCallPhase.EXECUTING, rt.snapshot.value.activeTurn?.toolCallPhases?.get(second))
 
+        val failedMessage = message.copy(
+            parts = message.parts.mapIndexed { index, part ->
+                if (index == 1 && part is UIMessagePart.Tool) {
+                    part.copy(output = listOf(UIMessagePart.Text("{\"status\":\"failed\"}")))
+                } else {
+                    part
+                }
+            }
+        )
         rt.applyCommand(CommitCheckpoint(
                 handle = handle,
                 kind = CheckpointKind.TOOL_RESULT_COMPLETED,
-                messages = listOf(message),
+                messages = listOf(failedMessage),
                 turnStatus = TurnExecutionStatus.RUNNING,
                 turnReason = null,
                 toolExecution = secondExecution.copy(
                     status = ToolExecutionStatus.FAILED,
                     reason = "provider_error",
                 ),
+                toolResults = listOf(ToolResultEvent(message.id, 1, ToolResultEventStatus.FAILED)),
             )
         )
         assertEquals(ToolCallPhase.READY, rt.snapshot.value.activeTurn?.toolCallPhases?.get(first))

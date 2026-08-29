@@ -62,16 +62,12 @@ class MiMoEndpointContractTest {
             topP = 0.9f,
             maxTokens = 4096,
         )
-        return ChatCompletionsAPI::class.java.getDeclaredMethod(
-            "buildChatCompletionRequest",
-            List::class.java,
-            TextGenerationParams::class.java,
-            ProviderSetting.OpenAI::class.java,
-            Boolean::class.javaPrimitiveType,
-        ).run {
-            isAccessible = true
-            invoke(api, listOf(UIMessage.user("hi")), params, provider, stream) as JsonObject
-        }
+        return api.buildChatCompletionRequest(
+            messages = listOf(UIMessage.user("hi")),
+            params = params,
+            providerSetting = provider,
+            stream = stream,
+        )
     }
 
     private fun buildResponsesRequest(
@@ -273,17 +269,30 @@ class MiMoEndpointContractTest {
 
     @Test
     fun `MiMo tool continuation requires reasoning replay`() {
-        assertTrue(requiresToolReasoningReplay("api.xiaomimimo.com", "mimo-v3"))
-        assertTrue(requiresToolReasoningReplay("token-plan-cn.xiaomimimo.com", "mimo-v3"))
+        val policy1 = resolveChatReasoningReplayPolicy(
+            OpenAIEndpointVendor.MIMO, "mimo-v3", requestHasTools = true, includeHistoryReasoning = false,
+        )
+        assertEquals(VisibleReasoningReplay.TOOL_ASSISTANT_ENVELOPES, policy1.visible)
+
+        val policy2 = resolveChatReasoningReplayPolicy(
+            OpenAIEndpointVendor.MIMO, "mimo-v3", requestHasTools = true, includeHistoryReasoning = false,
+        )
+        assertEquals(VisibleReasoningReplay.TOOL_ASSISTANT_ENVELOPES, policy2.visible)
     }
 
     @Test
     fun `official OpenAI host never requires reasoning replay`() {
-        assertFalse(requiresToolReasoningReplay("api.openai.com", "mimo-v3"))
+        val policy = resolveChatReasoningReplayPolicy(
+            OpenAIEndpointVendor.OPENAI, "mimo-v3", requestHasTools = true, includeHistoryReasoning = true,
+        )
+        assertEquals(VisibleReasoningReplay.NONE, policy.visible)
     }
 
     @Test
     fun `unrelated compatible host does not require reasoning replay`() {
-        assertFalse(requiresToolReasoningReplay("proxy.example.com", "mimo-v3"))
+        val policy = resolveChatReasoningReplayPolicy(
+            OpenAIEndpointVendor.COMPATIBLE, "mimo-v3", requestHasTools = true, includeHistoryReasoning = false,
+        )
+        assertEquals(VisibleReasoningReplay.NONE, policy.visible)
     }
 }

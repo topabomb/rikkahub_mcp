@@ -79,7 +79,7 @@ class TurnEngine(
             messages: List<UIMessage>,
             resumeFilter: (UIMessage) -> Boolean = { message ->
                 message.role == me.rerere.ai.core.MessageRole.ASSISTANT &&
-                    message.getTools().any { !it.isExecuted }
+                    message.getTools().any { !it.hasReplayResult }
             },
             turnFinalization: TurnFinalization,
         ): StartedTurn {
@@ -140,6 +140,7 @@ class TurnEngine(
                 turnStatus = TurnExecutionStatus.RUNNING,
                 turnReason = null,
                 toolExecution = checkpoint.toolExecution.toToolExecutionEntity(handle.turnId),
+                toolResults = checkpoint.toolResults,
             ),
         )
     }

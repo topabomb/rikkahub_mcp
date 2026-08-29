@@ -1,11 +1,12 @@
 # Application Architecture V2：减法重构方案
 
-> 状态：实现已落地，等待用户设备确认。
+> 状态：冻结归档。生产实现与自动门禁已落地，设备验收仍单独开放。
 >
+> 本文只保留 V2 重构的设计原因、删除决策、预算与验收矩阵，不再作为当前架构规则来源；除补录本文已列出的设备验收结果外不再扩展。
 > Phase B–F 生产代码、测试与 `docs/references/` 已按本文实施。§11.8 设备矩阵与
-> `connectedDebugAndroidTest` 由用户验收；该项记录前，§14 完成定义仍开放，不得把 V2 写成已验收完成。
-> 当前 owner、协议和边界以 [`../references/application-architecture-v1.md`](../references/application-architecture-v1.md)
-> 及各专题参考为准。证据见 [`application-architecture-v2-execution-ledger.md`](application-architecture-v2-execution-ledger.md)。
+> `connectedDebugAndroidTest` 由用户验收；该项记录前，不得把 V2 写成已完成设备验收。
+> 当前 owner、协议和边界以 [`../references/application-architecture.md`](../references/application-architecture.md)
+> 及各专题参考为准。历史实施证据见 [`application-architecture-v2-execution-ledger.md`](application-architecture-v2-execution-ledger.md)。
 >
 > 本方案以 0.0.18 的现行代码和数据写入协议为重构起点，完整保留 Room schema 1→8 的历史迁移能力。
 > “发送后按消息身份定位”和“附件按来源做请求级投影”是 V2 必须保留的用户行为。

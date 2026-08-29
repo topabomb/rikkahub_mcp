@@ -36,7 +36,7 @@ class GenerationLoopLogicTest {
             approvalState = ToolApprovalState.Auto
         )
         val updated = resolveToolApprovals(
-            unexecutedTools = listOf(tool),
+            toolsAwaitingReplayResult = listOf(tool),
             toolDefinitions = listOf(toolDefinition("ask_user", needsApproval = true)),
             nonInteractive = false,
             interactiveToolNames = emptySet(),
@@ -56,7 +56,7 @@ class GenerationLoopLogicTest {
             approvalState = ToolApprovalState.Auto
         )
         val updated = resolveToolApprovals(
-            unexecutedTools = listOf(tool),
+            toolsAwaitingReplayResult = listOf(tool),
             toolDefinitions = listOf(toolDefinition("search_web", needsApproval = false)),
             nonInteractive = false,
             interactiveToolNames = emptySet(),
@@ -94,7 +94,7 @@ class GenerationLoopLogicTest {
         }
 
         val executedTool = tool.copy(output = output)
-        assertTrue(executedTool.isExecuted)
+        assertTrue(executedTool.hasReplayResult)
         val outputText = (executedTool.output[0] as UIMessagePart.Text).text
         assertTrue(outputText.contains("Security concern"))
         assertTrue(outputText.contains("denied"))
@@ -132,7 +132,7 @@ class GenerationLoopLogicTest {
         }
 
         val executedTool = tool.copy(output = output)
-        assertTrue(executedTool.isExecuted)
+        assertTrue(executedTool.hasReplayResult)
         assertEquals("My name is Alice", (executedTool.output[0] as UIMessagePart.Text).text)
     }
 
@@ -145,8 +145,8 @@ class GenerationLoopLogicTest {
             approvalState = ToolApprovalState.Approved
         )
 
-        assertTrue(tool.canResumeExecution)
-        assertFalse(tool.isExecuted)
+        assertTrue(tool.canResumeResultAssembly)
+        assertFalse(tool.hasReplayResult)
         assertFalse(tool.isPending)
     }
 
@@ -178,7 +178,7 @@ class GenerationLoopLogicTest {
         assertEquals(1, pendingTools.size)
         assertEquals("tc2", pendingTools[0].toolCallId)
 
-        val resumableTools = tools.filter { it.canResumeExecution }
+        val resumableTools = tools.filter { it.canResumeResultAssembly }
         assertTrue(resumableTools.isEmpty()) // Auto can't resume, Pending can't resume
     }
 
@@ -202,7 +202,7 @@ class GenerationLoopLogicTest {
             )
         )
 
-        val resumableTools = message.getTools().filter { it.canResumeExecution }
+        val resumableTools = message.getTools().filter { it.canResumeResultAssembly }
         assertEquals(2, resumableTools.size)
     }
 
@@ -215,8 +215,8 @@ class GenerationLoopLogicTest {
             )
         )
 
-        val unexecutedTools = message.getTools().filter { !it.isExecuted }
-        assertTrue(unexecutedTools.isEmpty())
+        val toolsAwaitingReplayResult = message.getTools().filter { !it.hasReplayResult }
+        assertTrue(toolsAwaitingReplayResult.isEmpty())
         // This should trigger "break" in the ReAct loop
     }
 
@@ -242,11 +242,11 @@ class GenerationLoopLogicTest {
         val tools = message.getTools()
         assertEquals(2, tools.size)
 
-        val unexecuted = tools.filter { !it.isExecuted }
+        val unexecuted = tools.filter { !it.hasReplayResult }
         assertEquals(1, unexecuted.size)
         assertEquals("tc2", unexecuted[0].toolCallId)
 
-        val executed = tools.filter { it.isExecuted }
+        val executed = tools.filter { it.hasReplayResult }
         assertEquals(1, executed.size)
         assertEquals("tc1", executed[0].toolCallId)
     }
@@ -298,7 +298,7 @@ class GenerationLoopLogicTest {
         val updatedMessage = originalMessage.replaceToolsAtOrdinals(mapOf(0 to executedTool))
         val tools = updatedMessage.getTools()
         assertEquals(1, tools.size)
-        assertTrue(tools[0].isExecuted)
+        assertTrue(tools[0].hasReplayResult)
         assertEquals("search results", (tools[0].output[0] as UIMessagePart.Text).text)
     }
 
@@ -343,7 +343,7 @@ class GenerationLoopLogicTest {
         )
 
         val resolution = resolveToolApprovals(
-            unexecutedTools = listOf(automatic, question),
+            toolsAwaitingReplayResult = listOf(automatic, question),
             toolDefinitions = listOf(
                 toolDefinition("get_time_info", needsApproval = false),
                 toolDefinition("ask_user", needsApproval = true),
@@ -354,7 +354,7 @@ class GenerationLoopLogicTest {
         )
 
         assertTrue(resolution.hasPendingApproval)
-        assertFalse(resolution.tools[0].isExecuted)
+        assertFalse(resolution.tools[0].hasReplayResult)
         assertEquals(ToolApprovalState.Pending, resolution.tools[1].approvalState)
     }
 
@@ -372,7 +372,7 @@ class GenerationLoopLogicTest {
         )
 
         val resolution = resolveToolApprovals(
-            unexecutedTools = listOf(question, shell),
+            toolsAwaitingReplayResult = listOf(question, shell),
             toolDefinitions = listOf(
                 toolDefinition("ask_user", needsApproval = true),
                 toolDefinition("workspace_shell", needsApproval = true),
@@ -385,7 +385,7 @@ class GenerationLoopLogicTest {
         assertTrue(resolution.hasPendingApproval)
         assertEquals(ToolApprovalState.Pending, resolution.tools[0].approvalState)
         val rejected = resolution.tools[1]
-        assertTrue(rejected.isExecuted)
+        assertTrue(rejected.hasReplayResult)
         assertNotEquals(ToolApprovalState.Pending, rejected.approvalState)
         val payload = json.parseToJsonElement(
             (rejected.output.single() as UIMessagePart.Text).text
@@ -403,7 +403,7 @@ class GenerationLoopLogicTest {
         )
 
         val resolution = resolveToolApprovals(
-            unexecutedTools = listOf(shell),
+            toolsAwaitingReplayResult = listOf(shell),
             toolDefinitions = listOf(
                 toolDefinition("workspace_shell", needsApproval = true),
             ),
@@ -414,7 +414,7 @@ class GenerationLoopLogicTest {
 
         assertFalse(resolution.hasPendingApproval)
         val rejected = resolution.tools.single()
-        assertTrue(rejected.isExecuted)
+        assertTrue(rejected.hasReplayResult)
         assertNotEquals(ToolApprovalState.Pending, rejected.approvalState)
         val payload = json.parseToJsonElement(
             (rejected.output.single() as UIMessagePart.Text).text
@@ -436,7 +436,7 @@ class GenerationLoopLogicTest {
         )
 
         val resolution = resolveToolApprovals(
-            unexecutedTools = listOf(automatic),
+            toolsAwaitingReplayResult = listOf(automatic),
             toolDefinitions = listOf(
                 toolDefinition("get_time_info", needsApproval = false),
             ),
@@ -447,7 +447,7 @@ class GenerationLoopLogicTest {
 
         assertFalse(resolution.hasPendingApproval)
         val tool = resolution.tools.single()
-        assertFalse(tool.isExecuted)
+        assertFalse(tool.hasReplayResult)
         assertEquals(ToolApprovalState.Auto, tool.approvalState)
     }
 
@@ -463,7 +463,7 @@ class GenerationLoopLogicTest {
         )
 
         val resolution = resolveToolApprovals(
-            unexecutedTools = listOf(tool),
+            toolsAwaitingReplayResult = listOf(tool),
             toolDefinitions = listOf(buildAskUserTool()),
             nonInteractive = false,
             interactiveToolNames = emptySet(),
@@ -473,7 +473,7 @@ class GenerationLoopLogicTest {
         val resolved = resolution.tools.single()
         assertFalse(resolution.hasPendingApproval)
         assertEquals(ToolApprovalState.Auto, resolved.approvalState)
-        assertTrue(resolved.isExecuted)
+        assertTrue(resolved.hasReplayResult)
         val output = (resolved.output.single() as UIMessagePart.Text).text
         assertTrue(output.contains("invalid_arguments"))
         assertTrue(output.contains("questions[0].options[0]"))
@@ -489,7 +489,7 @@ class GenerationLoopLogicTest {
         )
 
         val resolution = resolveToolApprovals(
-            unexecutedTools = listOf(tool),
+            toolsAwaitingReplayResult = listOf(tool),
             toolDefinitions = listOf(buildAskUserTool()),
             nonInteractive = false,
             interactiveToolNames = setOf("ask_user"),
@@ -498,7 +498,7 @@ class GenerationLoopLogicTest {
 
         val resolved = resolution.tools.single()
         assertFalse(resolution.hasPendingApproval)
-        assertTrue(resolved.isExecuted)
+        assertTrue(resolved.hasReplayResult)
         assertTrue((resolved.output.single() as UIMessagePart.Text).text.contains("invalid_arguments"))
     }
 
@@ -528,7 +528,7 @@ class GenerationLoopLogicTest {
         )
 
         val resolution = resolveToolApprovals(
-            unexecutedTools = listOf(invalid, valid),
+            toolsAwaitingReplayResult = listOf(invalid, valid),
             toolDefinitions = listOf(buildAskUserTool()),
             nonInteractive = false,
             interactiveToolNames = emptySet(),
@@ -536,10 +536,10 @@ class GenerationLoopLogicTest {
         )
 
         assertTrue(resolution.hasPendingApproval)
-        assertTrue(resolution.tools[0].isExecuted)
+        assertTrue(resolution.tools[0].hasReplayResult)
         assertTrue((resolution.tools[0].output.single() as UIMessagePart.Text).text.contains("invalid_arguments"))
         assertEquals(ToolApprovalState.Pending, resolution.tools[1].approvalState)
-        assertFalse(resolution.tools[1].isExecuted)
+        assertFalse(resolution.tools[1].hasReplayResult)
     }
 
     @Test
@@ -565,7 +565,7 @@ class GenerationLoopLogicTest {
         )
 
         val resolution = resolveToolApprovals(
-            unexecutedTools = listOf(tool),
+            toolsAwaitingReplayResult = listOf(tool),
             toolDefinitions = listOf(buildAskUserTool()),
             nonInteractive = false,
             interactiveToolNames = emptySet(),

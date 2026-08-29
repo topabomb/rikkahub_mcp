@@ -4,8 +4,6 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.paging.Pager
-import androidx.paging.PagingConfig
 import androidx.paging.PagingData
 import androidx.paging.cachedIn
 import androidx.paging.map
@@ -27,16 +25,18 @@ import me.rerere.ai.ui.ImageGenSize
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.common.android.appTempFolder
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.db.entity.GenMediaEntity
 import net.weero.measix.pilot.data.imggen.GeneratedMediaConsumerPlan
-import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
+import net.weero.measix.pilot.data.imggen.GeneratedMediaKind
 import net.weero.measix.pilot.data.imggen.ImageGenerationCoordinator
 import net.weero.measix.pilot.data.imggen.ImageGenerationOutcome
 import net.weero.measix.pilot.data.imggen.ImageGenerationRequest
 import net.weero.measix.pilot.data.imggen.ImageGenerationSelection
 import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.imggen.ImageGenerationSource
-import net.weero.measix.pilot.data.repository.GenMediaRepository
+import net.weero.measix.pilot.service.FileManagementApplicationService
+import net.weero.measix.pilot.service.FileManagementQueryService
+import net.weero.measix.pilot.service.GeneratedMediaUiModel
+import net.weero.measix.pilot.service.ManagedFileKey
 import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.uuid.Uuid
@@ -50,13 +50,13 @@ data class GeneratedImage(
     val model: String
 )
 
-private fun GenMediaEntity.toGeneratedImage(store: GeneratedMediaStore): GeneratedImage {
+private fun GeneratedMediaUiModel.toGeneratedImage(): GeneratedImage {
     return GeneratedImage(
-        id = this.id,
-        prompt = this.prompt,
-        filePath = store.resolveCanonicalFile(this).absolutePath,
-        timestamp = this.createAt,
-        model = this.modelId
+        id = id,
+        prompt = prompt,
+        filePath = filePath,
+        timestamp = createdAt,
+        model = modelId,
     )
 }
 
@@ -64,10 +64,10 @@ class ImgGenVM(
     context: Application,
     private val settingsStore: SettingsStore,
     val providerManager: ProviderManager,
-    val genMediaRepository: GenMediaRepository,
     private val selectionResolver: ImageGenerationSelectionResolver,
     private val coordinator: ImageGenerationCoordinator,
-    private val generatedMediaStore: GeneratedMediaStore,
+    private val fileManagementQueryService: FileManagementQueryService,
+    private val fileManagementApplicationService: FileManagementApplicationService,
 ) : AndroidViewModel(context) {
     val settings: StateFlow<Settings> = settingsStore.effectiveSettings
         .map { it.settings }
@@ -107,13 +107,10 @@ class ImgGenVM(
     private val _referenceImages = MutableStateFlow<List<String>>(emptyList())
     val referenceImages: StateFlow<List<String>> = _referenceImages
 
-    val pager = Pager(
-        config = PagingConfig(pageSize = 20, enablePlaceholders = false),
-        pagingSourceFactory = { genMediaRepository.getAllMedia() }
-    )
-    val generatedImages: Flow<PagingData<GeneratedImage>> = pager.flow
+    val generatedImages: Flow<PagingData<GeneratedImage>> = fileManagementQueryService
+        .observeGeneratedPaging()
         .map { pagingData ->
-            pagingData.map { entity -> entity.toGeneratedImage(generatedMediaStore) }
+            pagingData.map(GeneratedMediaUiModel::toGeneratedImage)
         }
         .cachedIn(viewModelScope)
 
@@ -261,7 +258,7 @@ class ImgGenVM(
                     numOfImages = _numberOfImages.value,
                     size = _size.value,
                     partialImages = 2,
-                    mediaType = GenMediaEntity.TYPE_IMAGE_EDIT,
+                    mediaKind = GeneratedMediaKind.EDIT,
                     sourcePaths = sourceImages.joinToString("\n"),
                     editImages = sourceImages,
                     onPartial = { item ->
@@ -322,19 +319,15 @@ class ImgGenVM(
         }
     }
 
-    private fun saveImagePreview(item: ImageGenerationItem): File {
-        val bytes = GeneratedMediaStore.decodeImageBytes(item.data)
-        val inspected = GeneratedMediaStore.inspectImagePayload(bytes, item.mimeType)
-        val imageFile = File(
-            getApplication<Application>().appTempFolder,
-            "imggen_preview_${Uuid.random()}.${inspected.extension}",
+    private suspend fun saveImagePreview(item: ImageGenerationItem): File {
+        return fileManagementApplicationService.createGeneratedPreview(
+            item = item,
+            tempDirectory = getApplication<Application>().appTempFolder,
         )
-        imageFile.writeBytes(bytes)
-        return imageFile
     }
 
     suspend fun deleteImage(image: GeneratedImage): Boolean = try {
-        generatedMediaStore.delete(image.id)
+        fileManagementApplicationService.deleteGenerated(ManagedFileKey.Generated(image.id))
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (error: Exception) {

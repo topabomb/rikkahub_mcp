@@ -102,6 +102,7 @@ import net.weero.measix.pilot.service.ConversationReadState
 import net.weero.measix.pilot.service.ConversationUiModel
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
 import net.weero.measix.pilot.ui.theme.ProvideChatSurfacePolicy
 import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
@@ -761,14 +762,22 @@ private fun ChatPageContent(
                         chatListState.requestScrollToItem(index)
                     }
                 },
-                onToolApproval = { locator, approved, reason ->
-                    vm.handleToolApproval(locator, approved, reason)
+                onToolApproval = if (turnPresentation.phase == ConversationTurnPhase.STOPPING) {
+                    null
+                } else {
+                    { locator, approved, reason -> vm.handleToolApproval(locator, approved, reason) }
                 },
-                onToolAnswer = { locator, answer ->
-                    vm.handleToolAnswer(locator, answer)
+                onToolAnswer = if (turnPresentation.phase == ConversationTurnPhase.STOPPING) {
+                    null
+                } else {
+                    { locator, answer -> vm.handleToolAnswer(locator, answer) }
                 },
-                onSubAssistantAnswer = { runId, interactionId, answer ->
-                    vm.handleSubAssistantAnswer(runId, interactionId, answer)
+                onSubAssistantAnswer = if (turnPresentation.phase == ConversationTurnPhase.STOPPING) {
+                    null
+                } else {
+                    { runId, interactionId, answer ->
+                        vm.handleSubAssistantAnswer(runId, interactionId, answer)
+                    }
                 },
                 onToggleFavorite = { node ->
                     vm.toggleMessageFavorite(node)

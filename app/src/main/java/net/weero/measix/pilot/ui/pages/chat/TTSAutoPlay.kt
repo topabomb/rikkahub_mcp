@@ -64,7 +64,7 @@ internal fun shouldAutoPlayTts(conversationId: kotlin.uuid.Uuid, snapshot: Conve
     if (hasPendingTools) return false
     // 模型已通过 text_to_speech 入队播放时，不再把整条可见回复追加朗读一遍。
     val alreadySpokenByTool = lastMessage.parts.any {
-        it is UIMessagePart.Tool && it.toolName == "text_to_speech" && it.isExecuted
+        it is UIMessagePart.Tool && it.toolName == "text_to_speech" && it.hasReplayResult
     }
     return !alreadySpokenByTool
 }

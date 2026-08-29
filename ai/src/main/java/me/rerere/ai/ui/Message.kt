@@ -5,6 +5,7 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.JsonObject
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.TokenUsage
@@ -38,6 +39,14 @@ data class UIMessage(
     val terminalReason: String? = null,
     /** Sanitized human-readable diagnostic for reopening a terminal error after restart. */
     val terminalDetail: String? = null,
+    /**
+     * Request-only replay projection computed by [replaySafeProjection]; never persisted to Room,
+     * backup or Conversation snapshot. Null on normal (successful or still-running) messages;
+     * non-null on terminal assistant messages so that strict protocols (e.g. DeepSeek V4 with
+     * tools) can serialize only the replay-safe provider call/result prefix.
+     */
+    @Transient
+    val providerReplayProjection: ProviderReplayProjection? = null,
 ) {
     private fun appendChunk(chunk: MessageChunk): UIMessage {
         val choice = chunk.choices.getOrNull(0)
@@ -53,11 +62,11 @@ data class UIMessage(
              * 不变，并确保当前步骤始终为 Reasoning -> Content -> pending Tool(s)。
              */
             fun List<UIMessagePart>.currentStepStart(): Int =
-                indexOfLast { it is UIMessagePart.Tool && it.isExecuted } + 1
+                indexOfLast { it is UIMessagePart.Tool && it.hasReplayResult } + 1
 
             fun List<UIMessagePart>.firstPendingToolIndex(stepStart: Int): Int {
                 val relativeIndex = subList(stepStart, size).indexOfFirst {
-                    it is UIMessagePart.Tool && !it.isExecuted
+                    it is UIMessagePart.Tool && !it.hasReplayResult
                 }
                 return if (relativeIndex >= 0) stepStart + relativeIndex else size
             }
@@ -178,7 +187,7 @@ data class UIMessage(
                             // Never cross an executed Tool boundary: that would mutate an earlier request's history.
                             val stepStart = acc.currentStepStart()
                             val lastTool = acc.subList(stepStart, acc.size)
-                                .lastOrNull { it is UIMessagePart.Tool && !it.isExecuted } as? UIMessagePart.Tool
+                                .lastOrNull { it is UIMessagePart.Tool && !it.hasReplayResult } as? UIMessagePart.Tool
                             if (lastTool != null) {
                                 acc.map { part ->
                                     if (part === lastTool) part.merge(deltaPart) else part
@@ -440,6 +449,22 @@ fun List<UIMessage>.findUserTurnStart(startIndex: Int): Int {
     return safeStartIndex
 }
 
+/**
+ * Request-only replay projection for a terminal (non-success) assistant message.
+ *
+ * [completePartCount] is the number of parts forming replay-safe provider call/result steps; the
+ * remainder is an incomplete tail. Strict protocols (DeepSeek V4 with tools) must only
+ * serialize `parts.take(completePartCount)` and drop the tail entirely. Other protocols
+ * may still replay partial text with the terminal marker for compatibility.
+ *
+ * This type is not persisted and only lives on the projected [UIMessage] returned by
+ * [replaySafeProjection].
+ */
+data class ProviderReplayProjection(
+    val completePartCount: Int,
+    val hasIncompleteTail: Boolean,
+)
+
 @Serializable
 enum class MessageTerminalStatus {
     @SerialName("cancelled")
@@ -547,6 +572,14 @@ private const val TERMINAL_REPLAY_MARKER = "[Previous assistant response did not
  * reasoning may represent an incomplete wire item, and an open tool call cannot be replayed as a
  * completed call. Valid text/media and fully paired tool facts remain available, followed by an
  * explicit request-only marker so partial text is not presented as a normal completed answer.
+ *
+ * Terminal messages are projected atomically by replay-safe provider steps: a contiguous prefix
+ * of Content (Text/Image/Reasoning) followed by Tools with a valid call envelope and replayable
+ * result output forms a complete wire pair. This does not describe live tool execution state.
+ * Reasoning within a complete step is preserved; the incomplete tail after the last safe Tool
+ * keeps its Text/Image for context but loses Reasoning and opaque metadata. An unsafe/pending
+ * Tool boundary causes fail-closed truncation: nothing past that boundary is replayed, preventing
+ * partial steps from being spliced together.
  */
 fun List<UIMessage>.replaySafeProjection(): List<UIMessage> = mapNotNull { message ->
     message.replaySafeProjection()
@@ -554,25 +587,86 @@ fun List<UIMessage>.replaySafeProjection(): List<UIMessage> = mapNotNull { messa
 
 fun UIMessage.replaySafeProjection(): UIMessage? {
     val isTerminalAssistant = role == MessageRole.ASSISTANT && terminalStatus != null
-    val projectedParts = parts.replaySafeParts(
-        terminalAssistant = isTerminalAssistant,
+    if (!isTerminalAssistant) {
+        val projectedParts = parts.replaySafeParts(
+            toolOutput = false,
+        )
+        val projected = copy(parts = projectedParts)
+        return projected.takeIf { it.isValidToUpload() }
+    }
+
+    val (completeParts, tailParts) = splitTerminalCompletePrefix(parts)
+    val projectedComplete = completeParts.replaySafeParts(
         toolOutput = false,
-    ).toMutableList()
-    if (isTerminalAssistant && projectedParts.isNotEmpty()) {
+    )
+    val projectedTail = tailParts.replaySafeTailParts()
+    val projectedParts = (projectedComplete + projectedTail).toMutableList()
+    val hasIncompleteTail = tailParts.isNotEmpty()
+    if (projectedParts.isNotEmpty() && hasIncompleteTail) {
         projectedParts += UIMessagePart.Text(TERMINAL_REPLAY_MARKER)
     }
+    val completePartCount = projectedComplete.size
     val projected = copy(
         parts = projectedParts,
-        providerMetadata = if (isTerminalAssistant) null else providerMetadata,
-        terminalStatus = if (isTerminalAssistant) null else terminalStatus,
-        terminalReason = if (isTerminalAssistant) null else terminalReason,
-        terminalDetail = if (isTerminalAssistant) null else terminalDetail,
+        providerMetadata = null,
+        terminalStatus = null,
+        terminalReason = null,
+        terminalDetail = null,
+        providerReplayProjection = ProviderReplayProjection(
+            completePartCount = completePartCount,
+            hasIncompleteTail = hasIncompleteTail,
+        ),
     )
     return projected.takeIf { it.isValidToUpload() }
 }
 
+/**
+ * Splits the parts of a terminal assistant message into a replay-safe call/result prefix and an
+ * incomplete tail.
+ *
+ * A replay-safe provider step is: Content (Reasoning/Text/Image) followed by Tools with valid
+ * call envelopes and replayable result output.
+ * The split happens at the first unsafe boundary: a pending, unexecuted, or envelope-damaged Tool
+ * causes fail-closed truncation — everything from that point is the incomplete tail, even if a
+ * a later Tool with output appears (non-contiguous structure).
+ */
+private fun splitTerminalCompletePrefix(
+    parts: List<UIMessagePart>,
+): Pair<List<UIMessagePart>, List<UIMessagePart>> {
+    var splitIndex = parts.size
+    for (i in parts.indices) {
+        val part = parts[i]
+        if (part is UIMessagePart.Tool && (!part.hasReplayResult || !part.hasReplaySafeEnvelope())) {
+            splitIndex = i
+            break
+        }
+    }
+    // The complete prefix includes the Content and safe Tools up to (not including) the unsafe
+    // boundary. If the split is at a Tool boundary, we must also ensure that Content parts
+    // immediately before an unsafe Tool are still part of the tail (they belong to the
+    // incomplete step), not the complete prefix.
+    // Walk back from splitIndex to exclude trailing Content parts that belong to the
+    // incomplete step (the unsafe Tool's own preceding reasoning/text).
+    var completeEnd = splitIndex
+    while (completeEnd > 0) {
+        val prev = parts[completeEnd - 1]
+        if (prev is UIMessagePart.Tool && prev.hasReplayResult && prev.hasReplaySafeEnvelope()) {
+            break
+        }
+        if (prev is UIMessagePart.Tool) {
+            // Another unsafe tool earlier — shouldn't happen since we break at first, but guard.
+            break
+        }
+        // This is a Content part (Reasoning/Text/Image/etc) trailing before the unsafe boundary.
+        // It belongs to the incomplete step, not a complete one.
+        completeEnd--
+    }
+    val complete = parts.subList(0, completeEnd)
+    val tail = parts.subList(completeEnd, parts.size)
+    return complete to tail
+}
+
 private fun List<UIMessagePart>.replaySafeParts(
-    terminalAssistant: Boolean,
     toolOutput: Boolean,
 ): List<UIMessagePart> = mapNotNull { part ->
     when (part) {
@@ -586,7 +680,7 @@ private fun List<UIMessagePart>.replaySafeParts(
             }
         }
 
-        is UIMessagePart.Reasoning -> if (terminalAssistant) null else part
+        is UIMessagePart.Reasoning -> part
 
         is UIMessagePart.Image -> {
             if (part.url.startsWith("data:")) {
@@ -597,22 +691,46 @@ private fun List<UIMessagePart>.replaySafeParts(
         }
 
         is UIMessagePart.Tool -> {
-            if (terminalAssistant && (!part.isExecuted || !part.hasReplaySafeEnvelope())) {
-                null
+            val output = part.output.replaySafeParts(
+                toolOutput = true,
+            )
+            part.copy(
+                output = if (part.hasReplayResult && output.isEmpty()) {
+                    listOf(UIMessagePart.Text(MEDIA_FAILURE_TOOL_RESULT))
+                } else {
+                    output
+                },
+            )
+        }
+
+        else -> part
+    }
+}
+
+/**
+ * Projects the incomplete tail of a terminal assistant message: Text/Image are kept as
+ * context, but Reasoning and opaque metadata are removed so partial provider state is
+ * never replayed as if it were complete.
+ */
+private fun List<UIMessagePart>.replaySafeTailParts(): List<UIMessagePart> = mapNotNull { part ->
+    when (part) {
+        is UIMessagePart.Text -> {
+            if (part.mediaFailureMetadataOrNull() == null) {
+                part.copy(metadata = part.metadata.withoutOpaqueReplayMetadata())
             } else {
-                val output = part.output.replaySafeParts(
-                    terminalAssistant = terminalAssistant,
-                    toolOutput = true,
-                )
-                part.copy(
-                    output = if (part.isExecuted && output.isEmpty()) {
-                        listOf(UIMessagePart.Text(MEDIA_FAILURE_TOOL_RESULT))
-                    } else {
-                        output
-                    },
-                )
+                null
             }
         }
+
+        is UIMessagePart.Reasoning -> null
+
+        is UIMessagePart.Image -> if (part.url.startsWith("data:")) {
+            null
+        } else {
+            part.copy(metadata = part.metadata.withoutOpaqueReplayMetadata())
+        }
+
+        is UIMessagePart.Tool -> null
 
         else -> part
     }
@@ -649,7 +767,7 @@ fun UIMessage.finishPendingTools(
     transform: (UIMessagePart.Tool) -> UIMessagePart.Tool
 ): UIMessage {
     val updatedParts = parts.map { part ->
-        if (part is UIMessagePart.Tool && !part.isExecuted && part.approvalState is ToolApprovalState.Pending) {
+        if (part is UIMessagePart.Tool && !part.hasReplayResult && part.approvalState is ToolApprovalState.Pending) {
             transform(part)
         } else {
             part
@@ -675,7 +793,7 @@ fun UIMessage.finishInterruptedTools(
     transform: (UIMessagePart.Tool) -> UIMessagePart.Tool
 ): UIMessage {
     val updatedParts = parts.map { part ->
-        if (part is UIMessagePart.Tool && !part.isExecuted && part.approvalState !is ToolApprovalState.Pending) {
+        if (part is UIMessagePart.Tool && !part.hasReplayResult && part.approvalState !is ToolApprovalState.Pending) {
             transform(part)
         } else {
             part

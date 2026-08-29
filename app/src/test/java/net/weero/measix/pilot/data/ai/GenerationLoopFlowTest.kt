@@ -9,6 +9,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
@@ -35,6 +36,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
+import net.weero.measix.pilot.data.ai.transformers.InputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.OutputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.StreamingMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.ThinkTagTransformer
@@ -49,6 +51,106 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GenerationLoopFlowTest {
+    @Test
+    fun `empty tool outputs become explicit Provider replay results`() {
+        val successful = ensureProviderReplayResult(emptyList(), EmptyToolResultStatus.COMPLETED)
+        val failed = ensureProviderReplayResult(
+            ToolExecutionFailure(emptyList(), "empty failure").output,
+            EmptyToolResultStatus.FAILED,
+        )
+
+        assertEquals(
+            listOf(UIMessagePart.Text("{\"status\":\"completed\",\"result\":null}")),
+            successful,
+        )
+        assertEquals(
+            listOf(UIMessagePart.Text("{\"status\":\"failed\",\"reason\":\"tool_failed_without_output\"}")),
+            failed,
+        )
+    }
+
+    @Test
+    fun `contract rejection emits typed failed result without execution fact`() = runTest {
+        val toolMessage = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "call-invalid-image",
+                    toolName = "generate_image",
+                    input = "{}",
+                )
+            ),
+        )
+        val harness = createProviderHarness(responseMessage = toolMessage)
+        var resultCheckpoint: GenerationCheckpoint? = null
+
+        harness.handler.run(
+            GenerationRequest(
+                settings = harness.settings,
+                model = harness.model,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
+                messages = listOf(UIMessage.user("draw")),
+                assistant = harness.assistant,
+                maxSteps = 1,
+                onCheckpoint = { checkpoint ->
+                    if (checkpoint.kind == CheckpointKind.TOOL_RESULT_COMPLETED) {
+                        resultCheckpoint = checkpoint
+                    }
+                },
+            )
+        ).toList()
+
+        val committed = requireNotNull(resultCheckpoint)
+        assertEquals(null, committed.toolExecution)
+        assertEquals(1, committed.toolResults.size)
+        assertEquals(0, committed.toolResults.single().toolOrdinal)
+        assertEquals(committed.messages.last().id, committed.toolResults.single().messageId)
+        assertEquals(ToolResultEventStatus.FAILED, committed.toolResults.single().status)
+    }
+
+    @Test
+    fun `contract rejection commits its result when neighboring tool awaits approval`() = runTest {
+        val toolMessage = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool("invalid", "generate_image", "{}"),
+                UIMessagePart.Tool("approval", "approval_tool", "{}"),
+            ),
+        )
+        val approvalTool = Tool(
+            name = "approval_tool",
+            description = "requires approval",
+            needsApproval = { true },
+            execute = { listOf(UIMessagePart.Text("done")) },
+        )
+        val harness = createProviderHarness(responseMessage = toolMessage)
+        val resultCheckpoints = mutableListOf<GenerationCheckpoint>()
+
+        val chunks = harness.handler.run(
+            GenerationRequest(
+                settings = harness.settings,
+                model = harness.model,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
+                messages = listOf(UIMessage.user("draw then continue")),
+                assistant = harness.assistant,
+                tools = listOf(approvalTool),
+                maxSteps = 1,
+                onCheckpoint = { checkpoint ->
+                    if (checkpoint.kind == CheckpointKind.TOOL_RESULT_COMPLETED) {
+                        resultCheckpoints += checkpoint
+                    }
+                },
+            )
+        ).toList()
+
+        val committed = resultCheckpoints.single()
+        assertEquals(null, committed.toolExecution)
+        assertEquals(listOf(0), committed.toolResults.map(ToolResultEvent::toolOrdinal))
+        assertEquals(ToolResultEventStatus.FAILED, committed.toolResults.single().status)
+        val finished = chunks.filterIsInstance<GenerationChunk.Finished>().single()
+        assertEquals(FinishedReason.AWAITING_APPROVAL, finished.reason)
+    }
+
     @Test
     fun `memory owner policy supports Master refresh and enforces Target run ceiling`() {
         val assistant = Assistant(enableMemory = false, useGlobalMemory = false)
@@ -315,6 +417,70 @@ class GenerationLoopFlowTest {
     }
 
     @Test
+    fun `provider input applies replay safety after input transformers`() = runTest {
+        val harness = createProviderHarness()
+        val terminal = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(UIMessagePart.Text("original")),
+            terminalStatus = MessageTerminalStatus.INCOMPLETE,
+            terminalReason = "provider_incomplete",
+        )
+        val completeTool = UIMessagePart.Tool(
+            toolCallId = "complete-call",
+            toolName = "lookup",
+            input = "{}",
+            output = listOf(UIMessagePart.Text("result")),
+        )
+        val unsafeTool = UIMessagePart.Tool(
+            toolCallId = "unsafe-call",
+            toolName = "lookup",
+            input = "{",
+        )
+        val rematerializeTerminal = object : InputMessageTransformer {
+            override suspend fun transform(
+                ctx: TransformerContext,
+                messages: List<UIMessage>,
+            ): List<UIMessage> = messages.map { message ->
+                if (message.id == terminal.id) {
+                    message.copy(
+                        parts = listOf(
+                            UIMessagePart.Text("transformed"),
+                            completeTool,
+                            UIMessagePart.Reasoning("unsafe transformed reasoning"),
+                            unsafeTool,
+                        ),
+                        providerMetadata = buildJsonObject { put("opaque", "unsafe transformed state") },
+                    )
+                } else {
+                    message
+                }
+            }
+        }
+        val inFlight = UIMessage(role = MessageRole.ASSISTANT, parts = emptyList())
+
+        harness.handler.run(
+            GenerationRequest(
+                settings = harness.settings,
+                model = harness.model,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
+                messages = listOf(UIMessage.user("first"), terminal, UIMessage.user("continue"), inFlight),
+                assistant = harness.assistant,
+                assistantMessageId = inFlight.id,
+                inputTransformers = listOf(rematerializeTerminal),
+                maxSteps = 1,
+            )
+        ).toList()
+
+        val projected = harness.providerMessages.captured.single { it.id == terminal.id }
+        assertEquals(2, projected.providerReplayProjection?.completePartCount)
+        assertEquals(null, projected.providerMetadata)
+        assertEquals(listOf("complete-call"), projected.getTools().map { it.toolCallId })
+        assertTrue(projected.parts.none { it is UIMessagePart.Reasoning })
+        assertTrue(projected.toText().contains("transformed"))
+        assertTrue(projected.toText().contains("did not complete"))
+    }
+
+    @Test
     fun `metadata emitted from child job remains flow transparent`() = runTest {
         val model = Model(modelId = "test-model", displayName = "Test Model")
         val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
@@ -343,6 +509,7 @@ class GenerationLoopFlowTest {
         )
         val persistedBeforeExecute = AtomicBoolean(false)
         val executed = AtomicBoolean(false)
+        val presentationEvents = mutableListOf<String>()
         val tool = Tool(
             name = "metadata_tool",
             description = "Reports metadata from a cancellable child run.",
@@ -376,13 +543,22 @@ class GenerationLoopFlowTest {
             maxSteps = 1,
             onCheckpoint = { checkpoint ->
                 if (checkpoint.kind == CheckpointKind.TOOL_EXECUTION_STARTED) {
+                    presentationEvents += "checkpoint:started"
                     persistedBeforeExecute.set(true)
                     assertTrue(!executed.get())
                     assertEquals(ToolExecutionEventStatus.STARTED, checkpoint.toolExecution?.status)
                 }
+                if (checkpoint.kind == CheckpointKind.TOOL_RESULT_COMPLETED) {
+                    presentationEvents += "checkpoint:result"
+                }
             },
             )
-        ).toList()
+        ).onEach { chunk ->
+            if (chunk is GenerationChunk.Messages) {
+                val hasReplayResult = chunk.messages.lastOrNull()?.getTools()?.singleOrNull()?.hasReplayResult
+                presentationEvents += "messages:$hasReplayResult"
+            }
+        }.toList()
 
         assertTrue(chunks.any { it == GenerationChunk.Phase("tool_executing", "metadata_tool") })
         assertTrue(persistedBeforeExecute.get())
@@ -390,6 +566,13 @@ class GenerationLoopFlowTest {
             .last().messages.last().getTools().single()
         assertEquals("running", finalTool.metadata?.get("phase")?.jsonPrimitive?.content)
         assertEquals("ok", (finalTool.output.single() as UIMessagePart.Text).text)
+        val startedIndex = presentationEvents.indexOf("checkpoint:started")
+        val resultIndex = presentationEvents.indexOf("checkpoint:result")
+        assertTrue(startedIndex >= 0)
+        assertTrue(resultIndex > startedIndex)
+        assertTrue(presentationEvents.drop(startedIndex + 1).take(resultIndex - startedIndex - 1)
+            .contains("messages:false"))
+        assertTrue(presentationEvents.drop(resultIndex + 1).contains("messages:true"))
     }
 
     @Test
@@ -618,7 +801,7 @@ class GenerationLoopFlowTest {
                     toolEvents += event
                     executionOrder += "commit:${event.toolName}:${event.status.name.lowercase()}"
                     if (event.toolName == second.name && event.status == ToolExecutionEventStatus.STARTED) {
-                        assertTrue(checkpoint.messages.last().getTools().first().isExecuted)
+                        assertTrue(checkpoint.messages.last().getTools().first().hasReplayResult)
                     }
                 }
             },
@@ -843,7 +1026,9 @@ class GenerationLoopFlowTest {
         assertTrue(failure!!.message!!.contains("Tool name must not be blank"))
     }
 
-    private fun createProviderHarness(): ProviderHarness {
+    private fun createProviderHarness(
+        responseMessage: UIMessage = UIMessage.assistant("done"),
+    ): ProviderHarness {
         val model = Model(modelId = "test-model", displayName = "Test Model")
         val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
         val providerManager = mockk<ProviderManager>()
@@ -867,7 +1052,7 @@ class GenerationLoopFlowTest {
                 UIMessageChoice(
                     index = 0,
                     delta = null,
-                    message = UIMessage.assistant("done"),
+                    message = responseMessage,
                     finishReason = "stop",
                 )
             ),

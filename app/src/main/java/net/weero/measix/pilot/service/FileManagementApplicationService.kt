@@ -1,6 +1,13 @@
 package net.weero.measix.pilot.service
 
+import java.io.File
+import java.io.IOException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import me.rerere.ai.ui.ImageGenerationItem
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
+import kotlin.uuid.Uuid
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.days
 
@@ -39,6 +46,9 @@ class FileManagementApplicationService(
     private val generatedMediaStore: GeneratedMediaStore,
     private val recoveryGate: ApplicationRecoveryGate,
     private val clock: Clock = Clock.System,
+    private val writeGeneratedPreview: (File, ByteArray) -> Unit = { file, bytes ->
+        file.writeBytes(bytes)
+    },
 ) {
     suspend fun cleanup(category: FileCleanupCategory, range: FileCleanupRange): FileCleanupResult {
         recoveryGate.awaitReady()
@@ -71,6 +81,36 @@ class FileManagementApplicationService(
     suspend fun deleteGenerated(key: ManagedFileKey.Generated): Boolean {
         recoveryGate.awaitReady()
         return generatedMediaStore.delete(key.mediaId)
+    }
+
+    suspend fun createGeneratedPreview(item: ImageGenerationItem, tempDirectory: File): File {
+        var candidate: File? = null
+        try {
+            return withContext(Dispatchers.IO) {
+                val bytes = GeneratedMediaStore.decodeImageBytes(item.data)
+                val inspected = GeneratedMediaStore.inspectImagePayload(bytes, item.mimeType)
+                val preview = File(
+                    tempDirectory,
+                    "imggen_preview_${Uuid.random()}.${inspected.extension}",
+                )
+                candidate = preview
+                writeGeneratedPreview(preview, bytes)
+                preview
+            }
+        } catch (error: Throwable) {
+            withContext(NonCancellable + Dispatchers.IO) {
+                candidate?.let { preview ->
+                    try {
+                        if (preview.exists() && !preview.delete()) {
+                            error.addSuppressed(IOException("failed to remove incomplete generated preview"))
+                        }
+                    } catch (cleanupError: Throwable) {
+                        error.addSuppressed(cleanupError)
+                    }
+                }
+            }
+            throw error
+        }
     }
 }
 

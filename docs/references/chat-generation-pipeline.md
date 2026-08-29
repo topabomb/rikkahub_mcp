@@ -1,7 +1,7 @@
 # 消息生成链路
 
 > 本文档以当前实现为准，说明用户命令、生成流、持久化与恢复的唯一链路。总体 owner 与分层边界见
-> [`application-architecture-v1.md`](application-architecture-v1.md)，附件与执行事实细节见
+> [`application-architecture.md`](application-architecture.md)，附件与执行事实细节见
 > [`multimodal-context-and-turn-durability.md`](multimodal-context-and-turn-durability.md)，子助手扩展见
 > [`sub-assistant-architecture.md`](sub-assistant-architecture.md)。
 
@@ -133,7 +133,7 @@ Master 生成入口显式区分 `MasterTurnEntry.START` 与 `CONTINUE_APPROVAL`�
 
 `ActiveTurnState.toolCallPhases` 是运行中工具卡片的唯一阶段投影，仍由同一 Runtime snapshot 发布。Provider 首次流出
 Tool part 时为 `CALL_STREAMING`；`STEP_COMPLETED` 提交后转为 `READY` 或 `AWAITING_APPROVAL`；`STARTED` execution fact
-与结果 checkpoint 提交后依次转为 `EXECUTING` 和终态。工具 output 只表示 Provider 可回放结果，不表示执行中状态。
+与结果 checkpoint 提交后依次转为 `EXECUTING` 和终态，同一生成流在这两类影响通知的 checkpoint 后补发 presentation tick，使通知投影即使没有后续 Provider chunk 也只观察已提交阶段。Live Update 对文本增量保留节流，但执行 ordinal 从空到有、从有到空或在工具间切换时立即发布，不能被文本节流窗口吞掉。工具 output 只表示 Provider 可回放结果，不表示执行中状态。
 因此卡片从首次 Tool delta 起即可打开：参数 JSON 尚未闭合时显示原始片段，文生图执行期间显示其 metadata 提供的
 queued/generating/persisting/setting-background 子阶段。崩溃恢复、停止和抛异常/超时的标准结果封套分别投影为
 `INTERRUPTED`、`CANCELLED`、`FAILED`，不会因 output 非空被误报为完成。工具正常返回的领域失败仍是调用
@@ -141,7 +141,7 @@ queued/generating/persisting/setting-background 子阶段。崩溃恢复、停�
 
 会话页和 Drawer 不读取 Runtime 的 coroutine Job。`ConversationPresentation` 从私有 active request 与 durable
 snapshot 派生 `IDLE`、`PREPARING`、`GENERATING`、`AWAITING_APPROVAL`、`STOPPING`；审批暂停仍属于同一 turn owner，底部使用不同颜色和问询图标保持明确的
-用户注意力提示，且文件夹/消息树结构操作继续受 active owner 保护。完成工具卡片保留 `COMPLETED` 事实，但隐藏常驻
+用户注意力提示，且文件夹/消息树结构操作继续受 active owner 保护。`STOPPING` 期间不再提供工具审批、问题回答或 Target 交互入口。后台通知将 `AWAITING_APPROVAL` 保留为独立可操作状态，只有 `Completed` 终态才发送“已完成”通知，失败、取消和 incomplete 只清理 live update。流式增量可用有界 `tryEmit` 降压，但待审批与终态使用可挂起 `emit`，不得因 buffer 满遗留 ongoing 通知；应用进入前台时撤销已跟踪的 live/待审批通知。完成工具卡片保留 `COMPLETED` 事实，但隐藏常驻
 状态文字；失败、拒绝、回答、取消和中断仍显示简短终态。
 
 Master 的 `FAILED` / `INCOMPLETE` 由 `ChatErrorStore` 投影为当前会话底部诊断卡，卡片只允许用户关闭，不自动超时；

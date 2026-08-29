@@ -49,6 +49,7 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.util.KeyRoulette
+import me.rerere.ai.util.RequestBodyOwnership
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeNativeImage
 import me.rerere.ai.util.json
@@ -426,7 +427,10 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     }
                 }
             }
-        }.mergeCustomBody(params.customBody)
+        }.mergeCustomBody(
+            params.customBody,
+            CLAUDE_MESSAGES_OWNERSHIP,
+        )
     }
 
     private fun cacheControlEphemeral(promptCacheTtl: ClaudePromptCacheTtl) = buildJsonObject {
@@ -729,3 +733,21 @@ internal fun stripClaudeThinkingFromOtherModels(
         message
     }
 }
+
+/**
+ * Builder-owned structural keys for Anthropic Messages requests.
+ *
+ * These fields are exclusively owned by [ClaudeProvider.buildMessageRequest]; a [CustomBody]
+ * entry attempting to override any of them is rejected before HTTP with a typed
+ * [me.rerere.ai.util.CustomBodyReservedKeyException].
+ */
+internal val CLAUDE_MESSAGES_OWNERSHIP = RequestBodyOwnership(
+    protocol = "anthropic-messages",
+    reservedKeys = setOf(
+        "model",
+        "messages",
+        "system",
+        "tools",
+        "stream",
+    ),
+)

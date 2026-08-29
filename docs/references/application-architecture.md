@@ -1,4 +1,4 @@
-# Application Architecture V1
+# Application Architecture
 
 本文档是 Pilot 当前应用架构的总览与边界参考。它定义稳定语义、唯一所有者、写入协议和跨领域依赖方向；具体实现细节由文末专题文档补充。代码与静态架构契约必须符合本文，行为或边界变化必须在同一变更中同步更新参考文档。
 
@@ -74,6 +74,7 @@ Application 层负责编排，不建立第二套数据协议。Repository 只执
 | Artifact metadata、引用、状态机 | `ArtifactStore` | `ArtifactUseCase` 与领域服务 |
 | Artifact payload IO | `ArtifactPayloadStore` | 仅由 `ArtifactStore` 调用 |
 | Settings 图片 roots | `ArtifactSettingsCoordinator` | 头像与背景 typed operation |
+| 生成媒体 canonical row、payload 与删除恢复 | `GeneratedMediaStore` | `ImageGenerationCoordinator`、文件管理 application port |
 | 应用配置 durable state、有效读模型与提交顺序 | `SettingsStore` | `updateLocal` → `SettingsWriteRules` → `commitSettings` → `effectiveSettings` |
 | Skill 文件树、frontmatter 解释、bundle 事务与中断恢复 | `SkillManager` | typed DTO/result、cancellable import、root-swap 与删除暂存恢复 |
 | 会话读模型 | `ConversationQueryService` | UI、会话工具与只读详情 |
@@ -85,7 +86,8 @@ Application 层负责编排，不建立第二套数据协议。Repository 只执
 | MCP 已验证工具目录 | `McpCatalogStore` | `McpServerRuntime` candidate commit、`McpQueryService` query |
 | MCP 单 server 连接、通知与重连状态 | `McpServerRuntime` | `McpRuntimeCoordinator`、turn capability snapshot |
 | MCP OAuth 凭据刷新与授权流程 | `McpOAuthCoordinator` | `McpApplicationService`、`McpServerRuntime` |
-| 托管文件范围清理、删除与候选计数 | `FileManagementApplicationService` / `FileManagementQueryService` | 设置文件页 typed command 与 `ManagedFileUiModel` 投影 |
+| 托管文件跨 owner 清理命令编排 | `FileManagementApplicationService` | 设置文件页 typed command；分别委托 Artifact / GeneratedMedia owner |
+| 托管文件列表、候选数与存储统计投影 | `FileManagementQueryService` | `ManagedFileKey` / `ManagedFileUiModel` / `ManagedStorageUiModel`；不暴露领域实体或字符串拼接身份 |
 | 生成期后台保活（平台消费者） | `ChatGenerationForegroundService` / `GenerationForegroundLifetime` | 只消费 `conversationActivities()`，不持有运行事实，不操作 Window flag |
 | Workspace 持久化命令、模型 Rootfs 操作与终端互斥 | `WorkspaceApplicationService` | Workspace ViewModel command 与 `executeTool` capability |
 | Workspace 管理读模型 | `WorkspaceQueryService` | Workspace 列表、详情、文件预览与 `observeTerminal` |
@@ -134,7 +136,7 @@ Master 与 Target 共用 `TurnEngine` 和同一套 chunk-to-checkpoint 协议。
 
 Turn 和 Tool execution 使用 insert-once 与合法状态 CAS。终态不可回退，重复同终态幂等，非法转换返回明确冲突。失败或取消的终态准备必须消费 TurnEngine 累积的最新 turn-owned messages；该投影可能包含最后一次 checkpoint 后的 delta，不能用 durable nodes 覆盖。准备阶段校验完整 `TurnHandle`，关闭未完成工具后由同一个 `FinalizeTurn` 原子提交。取消必须传播；`NonCancellable` 只用于已经取得所有权的终态提交或补偿收口，完成后仍重新抛出原始 `CancellationException`。
 
-工具调用按 typed phase 区分调用流、就绪、等待审批、执行和终态。`Tool.output` 只表示 Provider 可回放结果，不能作为执行中状态、完成状态或详情点击门禁。执行阶段只能随已提交 execution checkpoint 推进；metadata 只细化领域子阶段。
+工具调用按 typed phase 区分调用流、就绪、等待审批、执行和终态。`UIMessagePart.Tool.hasReplayResult` / `Tool.output` 只表示 Provider 可回放结果，不能作为 active 执行中状态、active 完成状态或详情点击门禁。active phase 只能随已提交 checkpoint 的 `ToolExecutionEntity` 或 typed `ToolResultEvent` 推进；影响通知的工具执行与结果 checkpoint 成功后，同一生成流发布 presentation tick，通知等边缘投影只消费提交后 phase。没有 active turn 的历史消息可从 durable replay result 形成静态终态展示，但该兼容展示不反向驱动运行态。metadata 只细化领域子阶段。
 
 新 turn 的 `START` 与审批后的 `CONTINUE_APPROVAL` 是不同入口：
 
@@ -149,6 +151,8 @@ Turn 和 Tool execution 使用 insert-once 与合法状态 CAS。终态不可回
 `ArtifactStore` 是 metadata、reference 和生命周期的唯一 owner；`ArtifactPayloadStore` 只执行 staging、rename、stat 和物理删除，不持有 DAO。创建协议是 staging → CREATING row → 原子 rename → ACTIVE，启动恢复可幂等完成或回滚。
 
 未发布资源必须以 `OwnedArtifact` 或 `ToolResourceLease` 显式交接：durable checkpoint 成功后发布，失败或取消精确回滚。用户删除先 CAS 到 DELETING，再在 Settings roots 锁内 detach，最后删除 payload 与 row。GC 只从索引候选出发，并在同一生命周期锁内重验 message refs 与 Settings roots。
+
+上传 Artifact 与图库生成媒体是两个独立领域：前者继续由 `ArtifactStore` 管理引用和生命周期，后者由 `GeneratedMediaStore` 管理 canonical row、payload 与删除恢复。`FileManagementApplicationService` 在 application 边界路由范围删除、单项删除和临时预览写入，预览写入失败时必须删除不完整临时文件；`FileManagementQueryService` 组合列表、图库分页、统计和路径分类等只读投影。Gallery UI 只使用 `GeneratedMediaKind` 和 `GeneratedMediaUiModel`，不接触 `GenMediaEntity`、Repository 或媒体根目录常量，并将 Paging 的首次加载、刷新和错误/重试与真实空状态分开。两个 port 都不成为第三个持久化 owner，也不把两套删除状态合并成新的持久化事实。
 
 Settings 图片导入先完成有界复制、结构魔数与实际 MIME 校验，再提交 root 并发布 artifact。当前写协议不会提交缺少 ACTIVE artifact metadata 的本地 Settings root；启动遇到这类根即以完整性错误 fail-closed，既不扫描目录补录，也不丢弃 root 或 payload。
 
@@ -168,13 +172,13 @@ Settings 图片导入先完成有界复制、结构魔数与实际 MIME 校验�
 
 会话 UI 只消费 `ConversationReadState`、`ConversationSnapshot`、`ConversationSummary`、`ConversationPresentation` 或专用 UiModel。页面对同一 snapshot 建立一个权威订阅；UI 不从 Runtime Job、布尔值或 Tool output 推断活动状态。
 
-`ConversationPresentation` 区分 idle、generating 与 awaiting approval。审批暂停仍属于 active turn，且必须有独立的可访问性语义。Tool 卡片从首个调用 delta 起可查看；不完整 JSON 显示原始片段，不能等 output 出现才开放详情。
+`ConversationPresentation` 区分 idle、generating、awaiting approval 与 stopping。审批暂停仍属于 active turn，通知协议将其表达为可回到会话处理的待审批态，不得误报为“生成完成”。`STOPPING` 期间隐藏审批、回答与子助手交互入口，避免向已在收口的 owner 提交竞态命令。Tool 卡片从首个调用 delta 起可查看；不完整 JSON 显示原始片段，不能等 output 出现才开放详情。
 
 `ConversationTitleCoordinator` 统一确定性本地标题、模型标题 phase、token、重试与手动写入。模型请求携带 expected title，并以 `UpdateTitleIfCurrent` CAS 提交；CAS 的成功语义是 expected title 匹配，与新旧文本是否相同无关，相同值无需写库但仍收口为 resolved。手动标题和模型提交共享串行边界，手动提交会使活动和排队 token 失效。异步结果与 force 请求都不能覆盖请求发出后产生的手动标题。
 
 ## 持久化与兼容边界
 
-当前 V1 架构不要求回滚已有数据库或 Settings 数据结构。Conversation、Message、Turn、Tool 与 Artifact 的 schema 变化只能通过显式 Room migration 演进，并以 fresh schema 同构、历史 migration、数据保全和外键检查验证。
+当前架构不要求回滚已有数据库或 Settings 数据结构。Conversation、Message、Turn、Tool 与 Artifact 的 schema 变化只能通过显式 Room migration 演进，并以 fresh schema 同构、历史 migration、数据保全和外键检查验证。
 
 兼容只允许存在于稳定的持久化数据和外部协议解析边界，且必须被类型化、测试化。内部旧 facade、deprecated 转发、fallback、服务定位器、过渡命名、无调用协议和静态白名单必须物理删除。应用版本与 changelog 只有在发布需求明确要求时才修改。
 

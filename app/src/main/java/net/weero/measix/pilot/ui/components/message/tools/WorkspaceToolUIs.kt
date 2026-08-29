@@ -69,7 +69,7 @@ object EditFileToolUI : ToolUIRenderer {
      * 未执行 (如等待审批) 时基于入参的 old_text/new_text 片段生成预览 diff
      */
     private fun diffOf(context: ToolUIContext): String? {
-        if (context.tool.isExecuted) {
+        if (context.tool.hasReplayResult) {
             return context.tool.output.firstOrNull()?.metadataAs<DiffMetadata>()?.diff
         }
         val path = context.arguments.getStringContent("path") ?: return null

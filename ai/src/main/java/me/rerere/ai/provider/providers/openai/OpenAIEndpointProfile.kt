@@ -303,6 +303,122 @@ internal fun mapMiMoChatThinkingType(level: ReasoningLevel): String {
     return if (level.isEnabled) "enabled" else "disabled"
 }
 
+/**
+ * Scope of visible reasoning text replayed in Chat Completions history.
+ *
+ * Visible reasoning is the human-readable `reasoning_content` string persisted in
+ * [UIMessagePart.Reasoning]. Its replay scope is orthogonal to opaque continuation state:
+ * DeepSeek V4 mandates all complete assistant envelopes when the request carries tools,
+ * MiMo only mandates tool-bound envelopes, and ordinary compatible gateways follow the
+ * user's `includeHistoryReasoning` preference.
+ */
+internal enum class VisibleReasoningReplay {
+    NONE,
+    TOOL_ASSISTANT_ENVELOPES,
+    ALL_ASSISTANT_ENVELOPES,
+}
+
+/**
+ * Scope of source-isolated opaque reasoning details replayed in Chat Completions history.
+ *
+ * Only OpenRouter `reasoning_details` are opaque continuation state on this wire; they must
+ * never be replayed to a different host, and when details exist the visible text is not
+ * downgraded to `reasoning_content` for the same envelope.
+ */
+internal enum class OpaqueReasoningReplay {
+    NONE,
+    OPENROUTER_SOURCE_MATCHED,
+}
+
+/**
+ * Replay behavior for a non-success terminal assistant envelope.
+ *
+ * This is deliberately independent from visible reasoning replay. DeepSeek V4 tool requests
+ * require a complete provider-step prefix, while ordinary compatible and OpenRouter requests may
+ * still keep request-only partial text even when they also replay visible reasoning.
+ */
+internal enum class TerminalAssistantReplay {
+    COMPATIBLE_PARTIAL,
+    COMPLETE_STEP_PREFIX,
+}
+
+/**
+ * Chat-line reasoning replay policy resolved from the final request shape.
+ *
+ * The three dimensions are independent: a DeepSeek V4 request with tools mandates all visible
+ * reasoning envelopes but no opaque details; an OpenRouter request always checks source-matched
+ * details but only sends visible text when the user opted in. This separation prevents leaking
+ * one provider's continuation state through another's serializer.
+ */
+internal data class ChatReasoningReplayPolicy(
+    val visible: VisibleReasoningReplay,
+    val opaque: OpaqueReasoningReplay,
+    val terminalAssistant: TerminalAssistantReplay,
+)
+
+/**
+ * Unique resolver for Chat Completions reasoning replay policy.
+ *
+ * Inputs are the endpoint vendor (derived from the actual request host), the model id
+ * (checked against registered model families, not loose string contains), whether the final
+ * request body carries top-level `tools`, and the user's `includeHistoryReasoning` preference.
+ * The serializer consumes the resulting policy without re-computing conditions.
+ *
+ * B.AI and other compatible gateways hosting `deepseek-v4-flash` are identified solely through
+ * [ModelRegistry.DEEPSEEK_V4]; the host itself provides no model-protocol evidence and must not
+ * be special-cased.
+ */
+internal fun resolveChatReasoningReplayPolicy(
+    endpointVendor: OpenAIEndpointVendor,
+    modelId: String,
+    requestHasTools: Boolean,
+    includeHistoryReasoning: Boolean,
+): ChatReasoningReplayPolicy {
+    // DeepSeek V4 model-family contract is only matched on the official DeepSeek endpoint or
+    // unknown compatible gateways. OpenRouter and MiMo host their own protocol dialects and
+    // must not inherit DeepSeek V4 mandatory replay rules even if they serve a matching model.
+    val isDeepSeekV4 = endpointVendor == OpenAIEndpointVendor.DEEPSEEK ||
+            (endpointVendor == OpenAIEndpointVendor.COMPATIBLE &&
+                    ModelRegistry.DEEPSEEK_V4.match(modelId))
+    val isMiMo = endpointVendor == OpenAIEndpointVendor.MIMO
+    val isOpenRouter = endpointVendor == OpenAIEndpointVendor.OPENROUTER
+
+    val visible = when {
+        endpointVendor == OpenAIEndpointVendor.OPENAI -> VisibleReasoningReplay.NONE
+
+        isDeepSeekV4 && requestHasTools -> VisibleReasoningReplay.ALL_ASSISTANT_ENVELOPES
+        isDeepSeekV4 && !requestHasTools && includeHistoryReasoning -> VisibleReasoningReplay.ALL_ASSISTANT_ENVELOPES
+
+        isMiMo && requestHasTools -> VisibleReasoningReplay.TOOL_ASSISTANT_ENVELOPES
+        isMiMo && !requestHasTools && includeHistoryReasoning -> VisibleReasoningReplay.ALL_ASSISTANT_ENVELOPES
+
+        isOpenRouter && includeHistoryReasoning -> VisibleReasoningReplay.ALL_ASSISTANT_ENVELOPES
+
+        !isDeepSeekV4 && !isMiMo && !isOpenRouter && includeHistoryReasoning ->
+            VisibleReasoningReplay.ALL_ASSISTANT_ENVELOPES
+
+        else -> VisibleReasoningReplay.NONE
+    }
+
+    val opaque = if (isOpenRouter) {
+        OpaqueReasoningReplay.OPENROUTER_SOURCE_MATCHED
+    } else {
+        OpaqueReasoningReplay.NONE
+    }
+
+    val terminalAssistant = if (isDeepSeekV4 && requestHasTools) {
+        TerminalAssistantReplay.COMPLETE_STEP_PREFIX
+    } else {
+        TerminalAssistantReplay.COMPATIBLE_PARTIAL
+    }
+
+    return ChatReasoningReplayPolicy(
+        visible = visible,
+        opaque = opaque,
+        terminalAssistant = terminalAssistant,
+    )
+}
+
 /** True only when the request will actually enable MiMo reasoning on the wire. */
 internal fun isMiMoThinkingEnabled(model: Model, level: ReasoningLevel): Boolean =
     model.abilities.contains(ModelAbility.REASONING) && level.isEnabled

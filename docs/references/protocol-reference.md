@@ -41,14 +41,22 @@ UIMessage
 ├─ role
 ├─ parts: Text / Reasoning / Image / Document / Audio / Video / Tool
 ├─ providerMetadata: MessageMetadata
+├─ terminalStatus / terminalReason / terminalDetail
+├─ providerReplayProjection: ProviderReplayProjection?  (request-only, @Transient, 不持久化)
 └─ createdAt / finishedAt / usage
 ```
+
+`providerReplayProjection` 只存在于 `replaySafeProjection()` 返回的投影对象，不写回 Conversation、Room、备份或 UI durable 状态。
+详见 [多模态上下文与 Turn 持久化](multimodal-context-and-turn-durability.md)。
 
 `UIMessagePart.Tool` 同时保存调用参数、审批状态和执行结果。Provider 序列化时再展开为各自的 tool call/result 结构，数据库不会插入独立的持久化 `MessageRole.TOOL`。
 
 生成图片在解析源头就必须是可渲染 URL。Chat Completions 保留完整 `data:` URI，Gemini 使用真实 mime 组装 `data:<mime>;base64,<payload>`。合并层只把无前缀的 base64 碎片追加到当前图片，不会给已经完整的 URL 再补 `image/png` 前缀，也不会把两张完整图片拼成一条。
 
-所有 Provider 使用 `groupPartsByToolBoundary()` 重建 assistant/tool 步骤。已执行 Tool 是边界；同一模型 step 的 Reasoning、Text 和并行 Tool 保持顺序，工具结果紧跟产生它们的 assistant step。
+通用 Provider 可使用 `groupPartsByToolBoundary()` 重建 assistant/tool 步骤。Gemini 不能只靠相邻 Tool 推断：
+同一响应中的并行 calls 共享 `providerStepId`，无可见文本的后续模型响应使用新的 step ID，回放时据此保持
+`FC1/FR1/FC2/FR2` 与 `FC1+FC2/FR1+FR2` 的真实区别。旧会话没有 step ID 时无法恢复这一身份，serializer
+保留原有相邻工具分组以兼容历史并行 calls；该 legacy 歧义不参与新响应，也不生成第二状态源。
 
 ### Metadata 分层
 
@@ -56,7 +64,7 @@ UIMessage
 |------|------|----------|
 | `ClaudeReasoningMetadata` | Part | thinking `signature`、`redacted_thinking.data` |
 | `OpenAIReasoningMetadata` | Part | reasoning item ID、`encrypted_content`、来源 profile |
-| `GoogleThoughtMetadata` | Part | `thoughtSignature`、function call ID、thought 标记、草稿图原始数据 |
+| `GoogleThoughtMetadata` | Part | `thoughtSignature`、function call ID、thought/草稿图、模型与 endpoint source、provider step ID |
 | `OpenRouterReasoningMetadata` | Part | 仅 `openrouter.ai` 回传的有序 `reasoning_details`；旧会话无此字段时走可见 `reasoning_content` |
 | `OpenAIResponseMetadata` | Message | 无状态完整历史回放所需的有序 `response.output` 批次、wire format、来源 profile |
 | `AttachmentProjectionTextMetadata` | Part | 标识输入投影器生成的 request-only 附件事实文本；不持久化，不直接进入线协议 |
@@ -97,7 +105,28 @@ xAI Imagine 使用相同信封或顶层 `code`/`message`，并可能在 200 响�
 - 文本、图片、推理、拒答、生成图片与 Tool parts 的序列化和解析；
 - `tool_calls[].index` 对并行工具参数 delta 的关联；
 - usage 与各兼容 endpoint 缓存字段的归一化；
-- endpoint/model 特定的 reasoning、temperature、token limit 和 stream 参数。
+- endpoint/model 特定的 reasoning、temperature、token limit 和 stream 参数；
+- `ChatReasoningReplayPolicy` 的唯一解析与消费（`resolveChatReasoningReplayPolicy()`）。
+
+### customBody 所有权
+
+请求体的结构性字段只有 Provider builder 一个 owner。`customBody` 收敛成高级扩展参数入口，不再拥有结构性协议字段。
+各 builder 声明自身保留字段集合（`RequestBodyOwnership`），`mergeCustomBody()` 必须接收 ownership 契约。
+
+| 请求线 | builder-owned 保留字段 |
+|---|---|
+| OpenAI Chat Completions | `model`, `messages`, `tools`, `stream`, `stream_options`, `session_id` |
+| OpenAI Responses | `model`, `input`, `tools`, `stream`, `store`, `include`, `previous_response_id`, `session_id` |
+| Anthropic Messages | `model`, `messages`, `system`, `tools`, `stream` |
+| Gemini Generate Content | `contents`, `systemInstruction`, `tools`；另保留会改变响应形状的 `generationConfig.candidateCount`、`generationConfig.responseModalities`、`toolConfig.functionCallingConfig.streamFunctionCallArguments` |
+
+发生冲突时在 HTTP 前抛出 typed 本地异常（`CustomBodyReservedKeyException`），stable reason 为 `custom_body_reserved_key`。
+custom body 可以递归合并 builder object 的非保留 leaf，但不能用 scalar/array 替换 builder 已建立的 object shape；
+这种 shape replacement 同样作为本地 ownership 冲突报告。
+允许 custom body 继续配置的典型字段：`temperature`、`top_p`、token 上限、`reasoning_effort`、`thinking`、
+`response_format`、`tool_choice`、`parallel_tool_calls`、路由/缓存/实验开关等 Provider 扩展字段。
+Assistant 级 custom body 可随默认模型和 Provider override 切换协议，因此 UI 不维护跨协议保留键并集；
+实际请求 builder 按当前协议 ownership 做唯一权威校验，避免把另一个协议的合法扩展误报为错误。
 
 ### System role 与 token limit
 
@@ -122,15 +151,43 @@ XHIGH 保持文档别名 `high`，只有独立的 MAX 级别才发送 `max`。�
 
 OpenRouter 直连 host（`openrouter.ai`）若返回结构化 `reasoning_details`，会保存在 Reasoning part 的 source-isolated metadata 中，并只在同一 host 的后续请求回传该数组。流式分片按到达顺序累积：相同 `id` 或相同 `index` 的条目合并 `text`/`summary`，新条目追加。其他 Chat Completions host 只回放可见 `reasoning_content`。
 
-### DeepSeek reasoning 回放
+### Chat reasoning 回放策略
 
-DeepSeek thinking + tools 要求后续请求保留工具步骤的 `reasoning_content`。`requiresToolReasoningReplay()` 在以下场景启用：
+Chat Completions 使用 typed `ChatReasoningReplayPolicy` 替代旧布尔量，由 `resolveChatReasoningReplayPolicy()` 统一解析。
+策略有三个正交维度：`VisibleReasoningReplay` 控制可见 `reasoning_content`，`OpaqueReasoningReplay` 控制
+source-isolated 不透明状态，`TerminalAssistantReplay` 控制非成功 Assistant 使用兼容 partial text 还是只使用完整
+step 前缀。`includeHistoryReasoning` 只控制可选的可见历史思考，不控制 Provider mandatory state。
 
-- host 是 `api.deepseek.com`；
-- 兼容代理上的 modelId 可由 `ModelRegistry.DEEPSEEK_V4` 明确识别；
-- host 是 MiMo 官方端点（`api.xiaomimimo.com` 或 `token-plan-cn.xiaomimimo.com`）。
+有效策略冻结如下：
 
-工具步骤强制回放 reasoning；普通无工具回答仍遵循 `includeHistoryReasoning`。Provider `toolCallId` 只用于线协议，不作为本地工具执行定位键。
+| Endpoint/model | requestHasTools | includeHistoryReasoning | visible reasoning | opaque state | terminal Assistant |
+|---|---:|---:|---|---|---|
+| 官方 OpenAI Chat | 任意 | 任意 | `NONE` | `NONE` | `COMPATIBLE_PARTIAL` |
+| DeepSeek 官方端点 | 是 | 任意 | `ALL_ASSISTANT_ENVELOPES` | `NONE` | `COMPLETE_STEP_PREFIX` |
+| DeepSeek V4 on compatible gateway | 是 | 任意 | `ALL_ASSISTANT_ENVELOPES` | `NONE` | `COMPLETE_STEP_PREFIX` |
+| DeepSeek/DeepSeek V4 | 否 | 开 | `ALL_ASSISTANT_ENVELOPES` | `NONE` | `COMPATIBLE_PARTIAL` |
+| DeepSeek/DeepSeek V4 | 否 | 关 | `NONE` | `NONE` | `COMPATIBLE_PARTIAL` |
+| MiMo 官方端点 | 是 | 任意 | `TOOL_ASSISTANT_ENVELOPES` | `NONE` | `COMPATIBLE_PARTIAL` |
+| MiMo 官方端点 | 否 | 开 | `ALL_ASSISTANT_ENVELOPES` | `NONE` | `COMPATIBLE_PARTIAL` |
+| OpenRouter | 任意 | 开 | `ALL_ASSISTANT_ENVELOPES` | `OPENROUTER_SOURCE_MATCHED` | `COMPATIBLE_PARTIAL` |
+| OpenRouter | 任意 | 关 | `NONE` | `OPENROUTER_SOURCE_MATCHED` | `COMPATIBLE_PARTIAL` |
+| 其他 compatible Chat | 任意 | 开 | `ALL_ASSISTANT_ENVELOPES` | `NONE` | `COMPATIBLE_PARTIAL` |
+| 其他 compatible Chat | 任意 | 关 | `NONE` | `NONE` | `COMPATIBLE_PARTIAL` |
+
+`requestHasTools` 在 request builder 顶部只计算一次（`params.model.abilities.contains(ModelAbility.TOOL) && params.tools.isNotEmpty()`），
+同时控制是否写入顶层 `tools` 和 DeepSeek/MiMo mandatory replay policy。`tool_choice = none` 不改变 `requestHasTools`。
+
+`ALL_ASSISTANT_ENVELOPES` 的范围是：经过上下文裁剪、输入 Transformer 和最后的 `replaySafeProjection()` 后，最终进入本次
+Chat `messages` 数组的每个完整 assistant envelope，只要保存了非空 Reasoning，就写出 `reasoning_content`，
+不论该 envelope 是否包含 `tool_calls`。B.AI 和其他兼容网关上的 DeepSeek V4 只由 `ModelRegistry.DEEPSEEK_V4`
+明确登记的模型契约识别，不在 serializer 中新增 `contains("deepseek-v4")`，也不新增 B.AI vendor。
+
+只有 `TerminalAssistantReplay.COMPLETE_STEP_PREFIX` 识别 terminal request projection：只序列化
+`parts.take(completePartCount)` 的完整前缀，
+不发送 partial assistant tail。`completePartCount == 0` 时该 terminal Assistant 不进入 DeepSeek Chat 历史。
+
+OpenRouter `reasoning_details` 继续 source-isolated：存在 details 时不降级发送 visible `reasoning_content`，
+其他 host 不能消费该 metadata。Provider `toolCallId` 只用于线协议，不作为本地工具执行定位键。
 
 ### MiMo 端点
 
@@ -231,12 +288,36 @@ TOOL 能力，不发送 thinking。
 - `GEMINI_3_NO_MINIMAL_THINKING`（3.1 Pro 全形态 + 3.7 Flash）不支持 `minimal`（官方 API 校验错误，
   无法停用思考），`ReasoningLevel.OFF` 降级为 `low`。`GEMINI_3_PRO` 通过 `notTokens("1")` 排除
   3.1 Pro 的 subsequence 宽匹配，版本号优先由 `GEMINI_3_1_PRO` 独立接管。
-- `GoogleThoughtMetadata` 在 Text、Reasoning、Image 和 FunctionCall 等 Part 上保留 `thoughtSignature`。
+- `GoogleThoughtMetadata` 在 Text、Reasoning、Image 和 FunctionCall 等 Part 上保留 `thoughtSignature`，并绑定
+  产生它的 model ID、transport + 实际请求 endpoint host source profile 和 provider response step ID；Vertex 使用
+  实际固定的 `aiplatform.googleapis.com`。旧的无来源 opaque state
+  不进入新的有来源请求。
 - 带签名 Part 不能与相邻 Part 合并；空文本 Part 上的签名也必须保留。
 - function call 的 API ID 保存并回填到对应 `functionResponse.id`。
+- 同一响应的并行 function calls 共享 step ID；每次后续模型响应生成新 step ID。回放按 step 分组，不能按
+  Tool output 或工具完成顺序重新推断并行关系；只有缺少 step ID 的旧会话保留原有相邻工具兼容分组。
 - thought image 的原始 `inlineData` 保存在 metadata 中，UI 可以显示占位而续轮仍能原样回放。
 
-函数声明与模型内置工具合并到同一个 `tools` 数组。Schema 清理只移除当前适配明确不使用的兼容字段，保留 Gemini 支持的 `enum`。grounding metadata 转为 `UIMessageAnnotation.UrlCitation`。
+所有 SYSTEM 文本按消息和 Part 顺序用换行合入一个 text-only `systemInstruction`；图片输出模型也不再静默丢弃它。
+函数声明与模型内置工具合并到同一个 `tools` 数组。Schema 清理只移除当前适配明确不使用的兼容字段，保留
+Gemini 支持的 `enum`。grounding metadata 转为 `UIMessageAnnotation.UrlCitation`。
+
+公共 `RequestMediaCapabilities` 当前只声明原生图片容器；Google 的 Audio/Video 因此只保留附件引用文本，
+不由 Provider 私自 base64 发送或硬编码 MIME。恢复原生音视频前必须先扩展公共 capability 和真实 MIME owner。
+
+### 响应终态与流关闭
+
+- `STOP` 是唯一正常完成终态；
+- `MAX_TOKENS` 映射为 typed Provider incomplete；
+- safety、recitation、malformed/unexpected tool、缺签名以及未知 finish reason 均 fail-closed 为 Provider failure；
+- `promptFeedback.blockReason` 即使没有 candidates 也进入正式失败路径；
+- SSE 未见 candidate 0 的 terminal `finishReason` 就关闭，映射为 incomplete，不能提交为成功；
+- usage-only SSE 仍发布 usage snapshot，不因 candidates 为空而丢失；
+- 请求体、原始 SSE body、opaque signature 和 base64 媒体不得写入日志。
+
+未知 Part 类型显式失败并只报告字段名，不静默删除，也不把完整原始 payload 放入诊断。当前客户端 function-call
+增量仍只接受完整 `args` object；会启用 partial args、多候选或新输出模态的 custom body path 被 ownership 拒绝，
+直到对应 decoder 明确实现。
 
 ## 8. ModelRegistry 的职责
 

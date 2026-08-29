@@ -635,7 +635,7 @@ class ImageGenerationCoordinatorTest {
                 selection = available(provider),
                 prompt = "make it blue",
                 size = "auto",
-                mediaType = net.weero.measix.pilot.data.db.entity.GenMediaEntity.TYPE_IMAGE_EDIT,
+                mediaKind = GeneratedMediaKind.EDIT,
                 editImages = listOf("/tmp/ref.png"),
             )
         )

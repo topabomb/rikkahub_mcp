@@ -83,7 +83,7 @@ class TurnFinalizationTest {
             "checkpoint + after checkpoint",
             (preparedAssistant.parts.first() as UIMessagePart.Text).text,
         )
-        assertTrue(preparedAssistant.getTools().single().isExecuted)
+        assertTrue(preparedAssistant.getTools().single().hasReplayResult)
 
         val staleFailure = runCatching {
             finalization.prepareOwnedTurnMessagesForFailure(

@@ -103,6 +103,8 @@ import net.weero.measix.pilot.service.runtime.TurnEngine
 import net.weero.measix.pilot.service.runtime.TurnEvent
 import net.weero.measix.pilot.service.runtime.TurnHandle
 import net.weero.measix.pilot.service.runtime.TurnOutcome
+import net.weero.measix.pilot.service.runtime.ToolCallPhase
+import net.weero.measix.pilot.service.runtime.currentTurnPresentation
 import net.weero.measix.pilot.service.runtime.AppendUserMessage
 import net.weero.measix.pilot.service.runtime.ActiveTurnState
 import net.weero.measix.pilot.service.runtime.BackfillAttachmentRefs
@@ -181,7 +183,7 @@ internal suspend fun applyToolApprovalDecision(
         ?.getOrNull(locator.toolOrdinal)
         ?.takeIf { it.approvalState == ToolApprovalState.Pending }
         ?: return
-    check(!pending.isExecuted) { "executed tool cannot accept an approval decision" }
+    check(!pending.hasReplayResult) { "tool with a replay result cannot accept an approval decision" }
 
     submit(
         UpdateToolApproval(
@@ -224,9 +226,9 @@ internal fun retainValidMessageNodes(nodes: List<MessageNode>): List<MessageNode
     var messagesNodes = nodes.map { node ->
         val current = runCatching { node.currentMessage }.getOrNull() ?: return@map node
         val tools = current.getTools()
-        val hasUnexecutedTools = tools.any { !it.isExecuted }
-        if (!hasUnexecutedTools) return@map node
-        if (tools.any { !it.isExecuted && (it.isPending || it.approvalState.canResumeToolExecution()) }) {
+        val hasPendingReplayResults = tools.any { !it.hasReplayResult }
+        if (!hasPendingReplayResults) return@map node
+        if (tools.any { !it.hasReplayResult && (it.isPending || it.approvalState.canResumeToolExecution()) }) {
             return@map node
         }
         if (current.terminalStatus != null) return@map node
@@ -616,7 +618,7 @@ class MasterTurnCoordinator(
             inFlightAssistantId = null
             val resumeFilter: (UIMessage) -> Boolean = { message ->
                 message.role == MessageRole.ASSISTANT &&
-                    message.getTools().any { !it.isExecuted && it.approvalState.canResumeToolExecution() }
+                    message.getTools().any { !it.hasReplayResult && it.approvalState.canResumeToolExecution() }
             }
             val started = when (entry) {
                 MasterTurnEntry.START -> TurnEngine.start(
@@ -783,8 +785,18 @@ class MasterTurnCoordinator(
                             // 通知等边缘副作用由 ChatNotificationManager 消费；
                             // tryEmit 不挂起，事件丢失只影响单次通知更新，不能反压生成链
                             event.lastMessage?.let { lastMessage ->
+                                val executingToolOrdinal = lastMessage.getTools().indices.lastOrNull { ordinal ->
+                                    runtime.currentTurnPresentation().toolCallPhases[
+                                        ToolCallLocator(lastMessage.id, ordinal)
+                                    ] == ToolCallPhase.EXECUTING
+                                }
                                 appEventBus.tryEmit(
-                                    AppEvent.ChatGenerationUpdate(conversationId, lastMessage, senderName.orEmpty())
+                                    AppEvent.ChatGenerationUpdate(
+                                        conversationId = conversationId,
+                                        lastMessage = lastMessage,
+                                        senderName = senderName.orEmpty(),
+                                        executingToolOrdinal = executingToolOrdinal,
+                                    )
                                 )
                             }
 
@@ -931,13 +943,27 @@ class MasterTurnCoordinator(
                     title = context.getString(R.string.error_title_generation),
                 )
             }
-            appEventBus.tryEmit(
-                AppEvent.ChatGenerationEnded(
-                    conversationId = conversationId,
-                    senderName = senderName,
-                    contentPreview = finalMessage?.toText()?.take(50)?.trim(),
+            val pendingToolOrdinal = finalMessage?.getTools()?.indexOfFirst { it.isPending }
+                ?.takeIf { it >= 0 }
+            if (outcome is TurnOutcome.AwaitingApproval && finalMessage != null && pendingToolOrdinal != null) {
+                appEventBus.emit(
+                    AppEvent.ChatGenerationAwaitingApproval(
+                        conversationId = conversationId,
+                        lastMessage = finalMessage,
+                        senderName = senderName,
+                        pendingToolOrdinal = pendingToolOrdinal,
+                    )
                 )
-            )
+            } else {
+                appEventBus.emit(
+                    AppEvent.ChatGenerationEnded(
+                        conversationId = conversationId,
+                        senderName = senderName,
+                        contentPreview = finalMessage?.toText()?.take(50)?.trim(),
+                        notifyCompletion = outcome is TurnOutcome.Completed,
+                    )
+                )
+            }
         }
     }
 }

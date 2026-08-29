@@ -42,21 +42,11 @@ class ChatCompletionsAPIToolSchemaTest {
                 )
             ),
         )
-        val method = ChatCompletionsAPI::class.java.getDeclaredMethod(
-            "buildChatCompletionRequest",
-            List::class.java,
-            TextGenerationParams::class.java,
-            ProviderSetting.OpenAI::class.java,
-            Boolean::class.javaPrimitiveType,
-        ).apply { isAccessible = true }
-
-        val body = method.invoke(
-            api,
-            listOf(UIMessage.user("hello")),
-            params,
-            ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
-            false,
-        ) as JsonObject
+        val body = api.buildChatCompletionRequest(
+            messages = listOf(UIMessage.user("hello")),
+            params = params,
+            providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
+        )
         val sent = body["tools"]!!.jsonArray.single().jsonObject["function"]!!
             .jsonObject["parameters"]!!.jsonObject
 
@@ -85,21 +75,11 @@ class ChatCompletionsAPIToolSchemaTest {
                 )
             ),
         )
-        val method = ChatCompletionsAPI::class.java.getDeclaredMethod(
-            "buildChatCompletionRequest",
-            List::class.java,
-            TextGenerationParams::class.java,
-            ProviderSetting.OpenAI::class.java,
-            Boolean::class.javaPrimitiveType,
-        ).apply { isAccessible = true }
-
-        val body = method.invoke(
-            api,
-            listOf(UIMessage.user("hello")),
-            params,
-            ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
-            false,
-        ) as JsonObject
+        val body = api.buildChatCompletionRequest(
+            messages = listOf(UIMessage.user("hello")),
+            params = params,
+            providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
+        )
         val sent = body["tools"]!!.jsonArray.single().jsonObject["function"]!!
             .jsonObject["parameters"]!!.jsonObject
 
@@ -125,21 +105,11 @@ class ChatCompletionsAPIToolSchemaTest {
                 )
             ),
         )
-        val method = ChatCompletionsAPI::class.java.getDeclaredMethod(
-            "buildChatCompletionRequest",
-            List::class.java,
-            TextGenerationParams::class.java,
-            ProviderSetting.OpenAI::class.java,
-            Boolean::class.javaPrimitiveType,
-        ).apply { isAccessible = true }
-
-        val body = method.invoke(
-            api,
-            listOf(UIMessage.user("hello")),
-            params,
-            ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
-            false,
-        ) as JsonObject
+        val body = api.buildChatCompletionRequest(
+            messages = listOf(UIMessage.user("hello")),
+            params = params,
+            providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
+        )
         val sent = body["tools"]!!.jsonArray.single().jsonObject["function"]!!
             .jsonObject["parameters"]!!.jsonObject
 

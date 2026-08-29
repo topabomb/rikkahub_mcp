@@ -33,7 +33,9 @@ import me.rerere.ai.provider.images.parseImageGenerationResponseBody
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.util.CustomBodyReservedKeyException
 import me.rerere.ai.util.KeyRoulette
+import me.rerere.ai.util.RequestBodyOwnership
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.formatProviderHttpError
 import me.rerere.ai.util.json
@@ -181,7 +183,10 @@ class OpenAIProvider(
                     }
                 }
                 params.dimensions?.let { put("dimensions", it) }
-            }.mergeCustomBody(params.customBody)
+            }.mergeCustomBody(
+                params.customBody,
+                OPENAI_EMBEDDING_OWNERSHIP,
+            )
         )
 
         val request = Request.Builder()
@@ -237,10 +242,11 @@ class OpenAIProvider(
                     put("size", params.size)
                 }
             }
-                .mergeCustomBody(params.customBody)
+                .mergeCustomBody(
+                    params.customBody,
+                    OPENAI_IMAGE_GENERATION_OWNERSHIP,
+                )
         )
-
-        Log.i(TAG, "generateImage: $requestBody")
 
         val request = Request.Builder()
             .url("${providerSetting.baseUrl}/images/generations")
@@ -299,12 +305,23 @@ class OpenAIProvider(
             )
         }
 
-        params.customBody.forEach { customBody ->
-            val value = when (val element = customBody.value) {
-                is JsonPrimitive -> element.contentOrNull ?: element.toString()
-                else -> element.toString()
+        params.customBody.let { bodies ->
+            val conflicts = bodies.map { it.key }
+                .filter { it.isNotBlank() && it in OPENAI_IMAGE_EDIT_OWNERSHIP.reservedKeys }
+                .distinct()
+            if (conflicts.isNotEmpty()) {
+                throw CustomBodyReservedKeyException(
+                    protocol = OPENAI_IMAGE_EDIT_OWNERSHIP.protocol,
+                    conflictingKeys = conflicts,
+                )
             }
-            bodyBuilder.addFormDataPart(customBody.key, value)
+            bodies.forEach { customBody ->
+                val value = when (val element = customBody.value) {
+                    is JsonPrimitive -> element.contentOrNull ?: element.toString()
+                    else -> element.toString()
+                }
+                bodyBuilder.addFormDataPart(customBody.key, value)
+            }
         }
 
         val request = Request.Builder()
@@ -374,3 +391,44 @@ class OpenAIProvider(
         private val SUPPORTED_EDIT_IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp")
     }
 }
+
+/**
+ * Builder-owned structural keys for OpenAI Embedding requests.
+ */
+internal val OPENAI_EMBEDDING_OWNERSHIP = RequestBodyOwnership(
+    protocol = "openai-embeddings",
+    reservedKeys = setOf(
+        "model",
+        "input",
+    ),
+)
+
+/**
+ * Builder-owned structural keys for OpenAI image generation requests.
+ */
+internal val OPENAI_IMAGE_GENERATION_OWNERSHIP = RequestBodyOwnership(
+    protocol = "openai-images-generations",
+    reservedKeys = setOf(
+        "model",
+        "prompt",
+        "n",
+    ),
+)
+
+/**
+ * Builder-owned structural keys for OpenAI image edit requests.
+ *
+ * The edit endpoint shares `model`, `prompt` and `n` with the generation endpoint, plus
+ * `image`/`image[]` and `size` which are also exclusively managed by the builder.
+ */
+internal val OPENAI_IMAGE_EDIT_OWNERSHIP = RequestBodyOwnership(
+    protocol = "openai-images-edits",
+    reservedKeys = setOf(
+        "model",
+        "prompt",
+        "n",
+        "image",
+        "image[]",
+        "size",
+    ),
+)

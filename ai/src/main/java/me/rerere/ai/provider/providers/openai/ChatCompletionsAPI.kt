@@ -50,6 +50,7 @@ import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.util.HttpException
 import me.rerere.ai.util.KeyRoulette
+import me.rerere.ai.util.RequestBodyOwnership
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeNativeImage
 import me.rerere.ai.util.json
@@ -249,7 +250,7 @@ class ChatCompletionsAPI(
     }.buffer(Channel.UNLIMITED)
 
 
-    private fun buildChatCompletionRequest(
+    internal fun buildChatCompletionRequest(
         messages: List<UIMessage>,
         params: TextGenerationParams,
         providerSetting: ProviderSetting.OpenAI,
@@ -258,19 +259,22 @@ class ChatCompletionsAPI(
         val host = providerSetting.baseUrl.toHttpUrl().host
         val endpointVendor = resolveOpenAIEndpointVendor(host)
         val isOfficialOpenAI = endpointVendor == OpenAIEndpointVendor.OPENAI
+        val requestHasTools =
+            params.model.abilities.contains(ModelAbility.TOOL) && params.tools.isNotEmpty()
+        val replayPolicy = resolveChatReasoningReplayPolicy(
+            endpointVendor = endpointVendor,
+            modelId = params.model.modelId,
+            requestHasTools = requestHasTools,
+            includeHistoryReasoning = providerSetting.includeHistoryReasoning,
+        )
         return buildJsonObject {
             put("model", params.model.modelId)
             put(
                 "messages",
                 buildMessages(
                     messages = messages,
-                    includeHistoryReasoning = providerSetting.includeHistoryReasoning && !isOfficialOpenAI,
+                    replayPolicy = replayPolicy,
                     mediaCapabilities = params.mediaCapabilities,
-                    requiresToolReasoningReplay = requiresToolReasoningReplay(
-                        host = host,
-                        modelId = params.model.modelId,
-                    ),
-                    includeOpenRouterReasoningDetails = endpointVendor == OpenAIEndpointVendor.OPENROUTER,
                     useDeveloperRoleForSystemMessages = isOfficialOpenAI &&
                             (ModelRegistry.OPENAI_O_MODELS.match(params.model.modelId) ||
                                     ModelRegistry.OPENAI_GPT_5_SERIES.match(params.model.modelId)),
@@ -459,7 +463,7 @@ class ChatCompletionsAPI(
                 }
             }
 
-            if (params.model.abilities.contains(ModelAbility.TOOL) && params.tools.isNotEmpty()) {
+            if (requestHasTools) {
                 putJsonArray("tools") {
                     params.tools.forEach { tool ->
                         add(buildJsonObject {
@@ -473,7 +477,10 @@ class ChatCompletionsAPI(
                     }
                 }
             }
-        }.mergeCustomBody(params.customBody)
+        }.mergeCustomBody(
+            params.customBody,
+            CHAT_COMPLETIONS_OWNERSHIP,
+        )
     }
 
     private fun isModelAllowTemperature(
@@ -497,10 +504,8 @@ class ChatCompletionsAPI(
 
     internal fun buildMessages(
         messages: List<UIMessage>,
-        includeHistoryReasoning: Boolean = true,
+        replayPolicy: ChatReasoningReplayPolicy,
         mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
-        requiresToolReasoningReplay: Boolean = false,
-        includeOpenRouterReasoningDetails: Boolean = false,
         useDeveloperRoleForSystemMessages: Boolean = false,
     ) = buildJsonArray {
         val filteredMessages = messages.filter { it.isValidToUpload() }
@@ -509,10 +514,8 @@ class ChatCompletionsAPI(
             if (message.role == MessageRole.ASSISTANT) {
                 addAssistantMessages(
                     message = message,
-                    includeHistoryReasoning = includeHistoryReasoning,
+                    replayPolicy = replayPolicy,
                     mediaCapabilities = mediaCapabilities,
-                    requiresToolReasoningReplay = requiresToolReasoningReplay,
-                    includeOpenRouterReasoningDetails = includeOpenRouterReasoningDetails,
                 )
             } else {
                 addNonAssistantMessage(message, useDeveloperRoleForSystemMessages, mediaCapabilities)
@@ -522,12 +525,26 @@ class ChatCompletionsAPI(
 
     private fun JsonArrayBuilder.addAssistantMessages(
         message: UIMessage,
-        includeHistoryReasoning: Boolean,
+        replayPolicy: ChatReasoningReplayPolicy,
         mediaCapabilities: RequestMediaCapabilities,
-        requiresToolReasoningReplay: Boolean,
-        includeOpenRouterReasoningDetails: Boolean,
     ) {
-        val groups = groupPartsByToolBoundary(message.parts)
+        val includeVisible = replayPolicy.visible == VisibleReasoningReplay.ALL_ASSISTANT_ENVELOPES
+        val includeToolVisible =
+            replayPolicy.visible == VisibleReasoningReplay.ALL_ASSISTANT_ENVELOPES ||
+                    replayPolicy.visible == VisibleReasoningReplay.TOOL_ASSISTANT_ENVELOPES
+        val includeOpenRouterDetails =
+            replayPolicy.opaque == OpaqueReasoningReplay.OPENROUTER_SOURCE_MATCHED
+        val projection = message.providerReplayProjection
+        val strictTerminalPrefix =
+            replayPolicy.terminalAssistant == TerminalAssistantReplay.COMPLETE_STEP_PREFIX
+
+        val effectiveParts = if (strictTerminalPrefix && projection != null) {
+            message.parts.take(projection.completePartCount)
+        } else {
+            message.parts
+        }
+
+        val groups = groupPartsByToolBoundary(effectiveParts)
         val contentBuffer = mutableListOf<UIMessagePart>()
         val reasoningParts = mutableListOf<UIMessagePart.Reasoning>()
 
@@ -541,11 +558,7 @@ class ChatCompletionsAPI(
                 }
 
                 is PartGroup.Tools -> {
-                    // DeepSeek 将工具调用前的 reasoning_content 视为后续请求必须携带的协议状态。
-                    // 因此这里只对“即将绑定 tool_calls 的 assistant 消息”强制回传；末尾普通回答仍由
-                    // includeHistoryReasoning 控制，避免把协议要求误扩散到其他历史思考内容。
-                    // OpenRouter 的 reasoning_details 同样是工具续轮必须回传的 host 限定信封。
-                    val replayReasoning = includeHistoryReasoning || requiresToolReasoningReplay
+                    val replayReasoning = includeToolVisible
                     buildAssistantMessageJson(
                         contentParts = contentBuffer,
                         tools = group.tools,
@@ -555,7 +568,7 @@ class ChatCompletionsAPI(
                             ?.joinToString(separator = "") { it.reasoning },
                         reasoningDetails = collectOpenRouterReasoningDetails(
                             parts = reasoningParts,
-                            include = includeOpenRouterReasoningDetails,
+                            include = includeOpenRouterDetails,
                         ),
                     )?.let { assistantMessage ->
                         add(assistantMessage)
@@ -563,7 +576,6 @@ class ChatCompletionsAPI(
                     contentBuffer.clear()
                     reasoningParts.clear()
 
-                    // 紧跟 tool 结果消息
                     group.tools.forEach { tool ->
                         add(buildJsonObject {
                             put("role", "tool")
@@ -576,13 +588,12 @@ class ChatCompletionsAPI(
             }
         }
 
-        // 输出剩余内容
         val trailingDetails = collectOpenRouterReasoningDetails(
             parts = reasoningParts,
-            include = includeOpenRouterReasoningDetails && includeHistoryReasoning,
+            include = includeOpenRouterDetails,
         )
         if (contentBuffer.isNotEmpty() ||
-            (includeHistoryReasoning && reasoningParts.any { it.reasoning.isNotBlank() }) ||
+            (includeVisible && reasoningParts.any { it.reasoning.isNotBlank() }) ||
             trailingDetails != null
         ) {
             buildAssistantMessageJson(
@@ -590,7 +601,7 @@ class ChatCompletionsAPI(
                 tools = emptyList(),
                 mediaCapabilities = mediaCapabilities,
                 reasoningContent = reasoningParts
-                    .takeIf { includeHistoryReasoning }
+                    .takeIf { includeVisible }
                     ?.joinToString(separator = "") { it.reasoning },
                 reasoningDetails = trailingDetails,
             )?.let { assistantMessage ->
@@ -942,16 +953,20 @@ class ChatCompletionsAPI(
 }
 
 /**
- * 判断 Chat Completions 工具步骤是否必须回传 reasoning_content。
+ * Builder-owned structural keys for OpenAI Chat Completions requests.
  *
- * DeepSeek 和 MiMo 都将工具调用前的 reasoning_content 视为后续请求必须携带的协议状态。
- * 直连 DeepSeek/MiMo 时 host 可以覆盖自定义模型别名；经过代理时只能依赖可识别的 modelId。
- * 未知代理上的其他模型保持原行为，不会因为使用 OpenAI 兼容接口而被误判。
+ * These fields are exclusively owned by [ChatCompletionsAPI.buildChatCompletionRequest]; a
+ * [CustomBody] entry attempting to override any of them is rejected before HTTP with a typed
+ * [me.rerere.ai.util.CustomBodyReservedKeyException].
  */
-internal fun requiresToolReasoningReplay(host: String, modelId: String): Boolean {
-    val endpointVendor = resolveOpenAIEndpointVendor(host)
-    if (endpointVendor == OpenAIEndpointVendor.OPENAI) return false
-    return endpointVendor == OpenAIEndpointVendor.DEEPSEEK ||
-            endpointVendor == OpenAIEndpointVendor.MIMO ||
-            ModelRegistry.DEEPSEEK_V4.match(modelId)
-}
+internal val CHAT_COMPLETIONS_OWNERSHIP = RequestBodyOwnership(
+    protocol = "openai-chat-completions",
+    reservedKeys = setOf(
+        "model",
+        "messages",
+        "tools",
+        "stream",
+        "stream_options",
+        "session_id",
+    ),
+)

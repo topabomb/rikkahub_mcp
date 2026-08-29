@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
@@ -79,6 +80,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.paging.compose.itemContentType
 import androidx.paging.compose.itemKey
+import androidx.paging.LoadState
 import coil3.compose.AsyncImage
 import com.dokar.sonner.ToastType
 import kotlinx.coroutines.CoroutineScope
@@ -590,13 +592,40 @@ private fun ImageGalleryScreen(
     val backgroundHost = rememberImageBackgroundHost(settings)
     val generatedNoPrompt = stringResource(R.string.imggen_page_no_prompt)
     val imageDeleteFailed = stringResource(R.string.image_viewer_delete_failed)
+    val refreshState = generatedImages.loadState.refresh
 
     PullToRefreshBox(
-        isRefreshing = false,
+        isRefreshing = refreshState is LoadState.Loading && generatedImages.itemCount > 0,
         onRefresh = { generatedImages.refresh() },
         state = pullToRefreshState
     ) {
-        if (generatedImages.itemCount == 0) {
+        if (refreshState is LoadState.Loading && generatedImages.itemCount == 0) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                ContainedLoadingIndicator()
+            }
+        } else if (refreshState is LoadState.Error && generatedImages.itemCount == 0) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.imggen_page_load_failed),
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center,
+                    )
+                    TextButton(onClick = generatedImages::retry) {
+                        Text(stringResource(R.string.application_recovery_retry))
+                    }
+                }
+            }
+        } else if (generatedImages.itemCount == 0) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -627,6 +656,23 @@ private fun ImageGalleryScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxSize(),
             ) {
+                if (refreshState is LoadState.Error) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.imggen_page_load_failed),
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            TextButton(onClick = generatedImages::retry) {
+                                Text(stringResource(R.string.application_recovery_retry))
+                            }
+                        }
+                    }
+                }
                 items(
                     count = generatedImages.itemCount,
                     key = generatedImages.itemKey { it.id },
@@ -733,6 +779,27 @@ private fun ImageGalleryScreen(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+                if (generatedImages.loadState.append is LoadState.Error) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            TextButton(onClick = generatedImages::retry) {
+                                Text(stringResource(R.string.application_recovery_retry))
+                            }
+                        }
+                    }
+                } else if (generatedImages.loadState.append is LoadState.Loading) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularWavyProgressIndicator(modifier = Modifier.size(32.dp))
                         }
                     }
                 }

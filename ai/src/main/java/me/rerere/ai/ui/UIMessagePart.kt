@@ -109,13 +109,13 @@ sealed class UIMessagePart {
          * waiting for approval or executing remotely while [output] is still empty. Active
          * lifecycle presentation is owned by the turn projection.
          */
-        val isExecuted: Boolean get() = output.isNotEmpty()
+        val hasReplayResult: Boolean get() = output.isNotEmpty()
 
         /** Whether the tool is pending user approval */
         val isPending: Boolean get() = approvalState is ToolApprovalState.Pending
 
-        /** Whether generation can resume and handle this tool immediately */
-        val canResumeExecution: Boolean get() = !isExecuted && approvalState.canResumeToolExecution()
+        /** Whether a resolved approval can resume assembly of the Provider replay result. */
+        val canResumeResultAssembly: Boolean get() = !hasReplayResult && approvalState.canResumeToolExecution()
 
         /** Parse input string as JsonElement */
         fun inputAsJson(): JsonElement = runCatching {
@@ -129,7 +129,7 @@ sealed class UIMessagePart {
                 input = input + other.input,
                 output = output + other.output,
                 approvalState = approvalState,
-                metadata = if (other.metadata != null) other.metadata else metadata,
+                metadata = mergePartMetadata(metadata, other.metadata),
             )
         }
     }

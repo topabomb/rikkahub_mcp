@@ -19,7 +19,6 @@ import me.rerere.ai.provider.ImageEditParams
 import me.rerere.ai.provider.ImageGenerationParams
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.util.classifyProviderFailure
-import net.weero.measix.pilot.data.db.entity.GenMediaEntity
 
 sealed class ImageGenerationSource {
     data class Page(val sessionId: String) : ImageGenerationSource()
@@ -43,7 +42,7 @@ data class ImageGenerationRequest(
     val numOfImages: Int = 1,
     val size: String,
     val partialImages: Int = 0,
-    val mediaType: String = GenMediaEntity.TYPE_IMAGE_GENERATION,
+    val mediaKind: GeneratedMediaKind = GeneratedMediaKind.GENERATION,
     val sourcePaths: String? = null,
     val consumerPlan: GeneratedMediaConsumerPlan = GeneratedMediaConsumerPlan.NONE,
     val editImages: List<String> = emptyList(),
@@ -195,7 +194,7 @@ class ImageGenerationCoordinator(
                     item = item,
                     prompt = request.prompt,
                     modelLabel = modelLabel,
-                    type = request.mediaType,
+                    kind = request.mediaKind,
                     sourcePaths = request.sourcePaths,
                     consumerPlan = request.consumerPlan,
                 )
