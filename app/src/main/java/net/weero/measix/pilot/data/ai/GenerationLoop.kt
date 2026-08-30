@@ -9,6 +9,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.datetime.TimeZone
@@ -39,6 +40,7 @@ import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.handleMessageChunk
 import me.rerere.ai.ui.limitContext
@@ -953,7 +955,7 @@ class GenerationLoop(
             }
         }
 
-    }.flowOn(Dispatchers.IO)
+    }.buffer(capacity = 0).flowOn(Dispatchers.IO)
     }
 
     private suspend fun generateInternal(
@@ -1067,6 +1069,12 @@ class GenerationLoop(
         onPhase?.invoke("model_waiting")
         val requestStarted = TimeSource.Monotonic.markNow()
         fun providerDurationMillis(): Long = requestStarted.elapsedNow().inWholeMilliseconds.coerceAtLeast(0)
+        var timeToFirstOutputMillis: Long? = null
+        fun observeFirstOutput(chunk: MessageChunk) {
+            if (timeToFirstOutputMillis == null && chunk.hasModelOutputPayload()) {
+                timeToFirstOutputMillis = providerDurationMillis()
+            }
+        }
         var requestOutcome = ProviderRequestOutcome.FAILED
         var providerFailure: Throwable? = null
         try {
@@ -1078,6 +1086,7 @@ class GenerationLoop(
                     messages = internalMessages,
                     params = params
                 ).collect { chunk ->
+                    observeFirstOutput(chunk)
                     messages = messages.handleMessageChunk(
                         chunk = chunk,
                         model = model,
@@ -1085,7 +1094,14 @@ class GenerationLoop(
                     )
                     chunk.usage?.let { usage ->
                         requestUsage.accept(usage)
-                        attachUsage(turnUsage.preview(requestUsage.preview(providerDurationMillis())))
+                        attachUsage(
+                            turnUsage.preview(
+                                requestUsage.preview(
+                                    providerRequestDurationMillis = providerDurationMillis(),
+                                    timeToFirstOutputMillis = timeToFirstOutputMillis,
+                                )
+                            )
+                        )
                     }
                     // Phase uses the same accumulated-message semantics as the output projection.
                     // Text inside a leading <think> block is reasoning, not answer content.
@@ -1121,6 +1137,7 @@ class GenerationLoop(
                     messages = internalMessages,
                     params = params,
                 )
+                observeFirstOutput(chunk)
                 messages = messages.handleMessageChunk(
                     chunk = chunk,
                     model = model,
@@ -1142,6 +1159,7 @@ class GenerationLoop(
             val completedUsage = requestUsage.close(
                 outcome = requestOutcome,
                 providerRequestDurationMillis = providerDurationMillis(),
+                timeToFirstOutputMillis = timeToFirstOutputMillis,
             )
             val appliedUsage = turnUsage.apply(completedUsage)
             val usageDiagnostics = completedUsage.diagnostics + appliedUsage.diagnostics
@@ -1215,6 +1233,21 @@ class GenerationLoop(
         return map.toMap()
     }
 
+}
+
+internal fun MessageChunk.hasModelOutputPayload(): Boolean = choices.any { choice ->
+    val message = choice.delta ?: choice.message ?: return@any false
+    message.parts.any { part ->
+        when (part) {
+            is UIMessagePart.Text -> part.text.isNotEmpty()
+            is UIMessagePart.Reasoning -> part.reasoning.isNotEmpty()
+            is UIMessagePart.Tool -> true
+            is UIMessagePart.Image -> part.url.isNotBlank()
+            is UIMessagePart.Audio -> part.url.isNotBlank()
+            is UIMessagePart.Video -> part.url.isNotBlank()
+            is UIMessagePart.Document -> part.url.isNotBlank()
+        }
+    }
 }
 
 internal enum class EmptyToolResultStatus {

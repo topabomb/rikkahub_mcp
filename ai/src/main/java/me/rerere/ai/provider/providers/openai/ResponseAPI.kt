@@ -1138,7 +1138,6 @@ class ResponseAPI(
         val outputDetails = jsonObject["output_tokens_details"]?.jsonObjectOrNull
         return ProviderUsageSnapshot(
             inputTokens = inputTokens,
-            contextInputTokens = inputTokens,
             outputTokens = outputTokens,
             // Cache read/write are subsets of input_tokens and must not be added to inputTokens.
             cacheReadInputTokens = inputDetails?.get("cached_tokens")?.jsonPrimitiveOrNull?.longOrNull,

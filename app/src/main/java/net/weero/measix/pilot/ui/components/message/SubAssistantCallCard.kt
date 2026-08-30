@@ -172,8 +172,8 @@ fun SubAssistantCallCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 16.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                    .padding(start = 16.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),

@@ -33,7 +33,6 @@ class ResponseAPIUsageTest {
         )!!
 
         assertEquals(100L, usage.inputTokens)
-        assertEquals(100L, usage.contextInputTokens)
         assertEquals(20L, usage.outputTokens)
         assertEquals(60L, usage.cacheReadInputTokens)
         assertEquals(30L, usage.cacheWriteInputTokens)

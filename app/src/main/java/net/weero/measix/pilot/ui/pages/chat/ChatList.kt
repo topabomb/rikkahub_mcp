@@ -117,7 +117,6 @@ import net.weero.measix.pilot.ui.components.ui.RabbitLoadingIndicator
 import net.weero.measix.pilot.ui.components.ui.Tooltip
 import net.weero.measix.pilot.ui.hooks.ImeLazyListAutoScroller
 import net.weero.measix.pilot.ui.theme.ChatFontProvider
-import net.weero.measix.pilot.utils.plus
 import kotlin.math.roundToInt
 import kotlin.uuid.Uuid
 
@@ -387,7 +386,7 @@ private fun ChatListNormal(
                     bottom = 24.dp + innerPadding.calculateBottomPadding(),
                     ),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier
                     .widthIn(max = AdaptiveLayoutDefaults.ReadableContentMaxWidth)
                     .fillMaxWidth()
@@ -512,7 +511,7 @@ private fun ChatListNormal(
                     if (loading) {
                         item(LoadingIndicatorKey) {
                             Row(
-                                modifier = Modifier.padding(8.dp),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
@@ -798,8 +797,13 @@ private fun ChatListPreview(
 
         // 消息预览
         LazyColumn(
-            contentPadding = PaddingValues(16.dp) + PaddingValues(bottom = 24.dp + innerPadding.calculateBottomPadding()),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                top = 8.dp,
+                end = 16.dp,
+                bottom = 24.dp + innerPadding.calculateBottomPadding(),
+            ),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),

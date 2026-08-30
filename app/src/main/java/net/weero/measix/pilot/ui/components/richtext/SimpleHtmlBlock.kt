@@ -102,7 +102,7 @@ private fun RenderNode(
                                 color = inlineStyle?.color ?: LocalContentColor.current,
                                 fontWeight = inlineStyle?.fontWeight ?: FontWeight.Normal
                             ),
-                            modifier = Modifier.padding(bottom = 8.dp)
+                            modifier = Modifier.padding(bottom = 4.dp)
                         )
                     }
                 }
@@ -130,7 +130,7 @@ private fun RenderNode(
                                 color = inlineStyle?.color ?: LocalContentColor.current,
                                 fontWeight = inlineStyle?.fontWeight ?: textStyle.fontWeight
                             ),
-                            modifier = Modifier.padding(vertical = 8.dp)
+                            modifier = Modifier.padding(vertical = 4.dp)
                         )
                     }
                 }
@@ -195,7 +195,7 @@ private fun RenderList(
     isOrdered: Boolean,
     onLinkClick: (String) -> Unit
 ) {
-    Column(modifier = Modifier.padding(start = 16.dp, bottom = 8.dp)) {
+    Column(modifier = Modifier.padding(start = 16.dp, bottom = 4.dp)) {
         listElement.children().forEachIndexed { index, item ->
             if (item.tagName().lowercase() == "li") {
                 Row(modifier = Modifier.padding(vertical = 2.dp)) {
@@ -236,7 +236,7 @@ private fun RenderDetails(
     }
     val summaryText = summaryElement?.text() ?: "Details"
 
-    Column(modifier = Modifier.padding(vertical = 4.dp)) {
+    Column(modifier = Modifier.padding(vertical = 2.dp)) {
         // Summary (clickable header)
         Row(
             modifier = Modifier
@@ -294,7 +294,7 @@ private fun RenderImage(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 8.dp),
+                .padding(vertical = 4.dp),
             contentAlignment = Alignment.Center
         ) {
             ZoomableAsyncImage(
@@ -675,7 +675,7 @@ private fun RenderTable(
     }
 
     if (headers.isNotEmpty() || rows.isNotEmpty()) {
-        Box(modifier = Modifier.padding(vertical = 8.dp)) {
+        Box(modifier = Modifier.padding(vertical = 4.dp)) {
             DataTable(
                 headers = headers,
                 rows = rows,

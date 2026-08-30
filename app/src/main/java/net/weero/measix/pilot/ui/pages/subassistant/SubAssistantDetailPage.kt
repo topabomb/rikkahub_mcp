@@ -222,7 +222,7 @@ private fun DetailContent(
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             state = listState,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             item(key = "request") {
                 Surface(

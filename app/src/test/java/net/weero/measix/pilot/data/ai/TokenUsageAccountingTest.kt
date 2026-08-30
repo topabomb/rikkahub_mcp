@@ -18,7 +18,6 @@ class TokenUsageAccountingTest {
         reducer.accept(
             ProviderUsageSnapshot(
                 inputTokens = 100,
-                contextInputTokens = 100,
                 outputTokens = 20,
                 cacheReadInputTokens = 50,
                 totalTokens = 120,
@@ -38,7 +37,6 @@ class TokenUsageAccountingTest {
         reducer.accept(
             ProviderUsageSnapshot(
                 inputTokens = 100,
-                contextInputTokens = 100,
                 outputTokens = 1,
                 canDeriveTotalFromInputAndOutput = true,
             )
@@ -106,6 +104,82 @@ class TokenUsageAccountingTest {
     }
 
     @Test
+    fun `latest request context and cache overwrite while initial ttft stays on first request`() {
+        val accumulator = TurnUsageAccumulator.from(null)
+        val first = completed(
+            ordinal = 1,
+            input = 100,
+            output = 20,
+            cacheRead = 50,
+            total = 120,
+            duration = 40,
+            timeToFirstOutput = 12,
+        )
+        val second = completed(
+            ordinal = 2,
+            input = 200,
+            output = 10,
+            cacheRead = 0,
+            total = 210,
+            duration = 60,
+            timeToFirstOutput = 30,
+        )
+
+        accumulator.apply(first)
+        val usage = accumulator.apply(second).usage
+
+        assertEquals(200L, usage.latestRequestContextTokens)
+        assertEquals(0L, usage.latestRequestCacheReadInputTokens)
+        assertEquals(12L, usage.initialRequestTimeToFirstOutputMillis)
+    }
+
+    @Test
+    fun `active request preview keeps the last closed context and cache pair`() {
+        val accumulator = TurnUsageAccumulator.from(null)
+        accumulator.apply(completed(1, 100, 20, 50, 120, 40))
+        val second = RequestUsageReducer(requestOrdinal = 2)
+        second.accept(
+            ProviderUsageSnapshot(
+                inputTokens = 200,
+                outputTokens = 1,
+                cacheReadInputTokens = 0,
+                totalTokens = 201,
+            )
+        )
+
+        val preview = accumulator.preview(
+            second.preview(providerRequestDurationMillis = 10)
+        )
+
+        assertEquals(100L, preview.latestRequestContextTokens)
+        assertEquals(50L, preview.latestRequestCacheReadInputTokens)
+        assertEquals(2, preview.observedProviderRequestCount)
+
+        val closed = accumulator.apply(
+            second.close(
+                outcome = ProviderRequestOutcome.COMPLETED,
+                providerRequestDurationMillis = 20,
+            )
+        ).usage
+        assertEquals(200L, closed.latestRequestContextTokens)
+        assertEquals(0L, closed.latestRequestCacheReadInputTokens)
+    }
+
+    @Test
+    fun `latest request fields become unknown when a request reports no usage`() {
+        val accumulator = TurnUsageAccumulator.from(null)
+        accumulator.apply(completed(1, 100, 20, 50, 120, 40, timeToFirstOutput = 12))
+        val missing = RequestUsageReducer(requestOrdinal = 2)
+            .close(ProviderRequestOutcome.FAILED, providerRequestDurationMillis = 15)
+
+        val usage = accumulator.apply(missing).usage
+
+        assertNull(usage.latestRequestContextTokens)
+        assertNull(usage.latestRequestCacheReadInputTokens)
+        assertEquals(12L, usage.initialRequestTimeToFirstOutputMillis)
+    }
+
+    @Test
     fun `master and child turns keep usage independent when child provider fails`() {
         val master = TurnUsageAccumulator.from(null)
         val child = TurnUsageAccumulator.from(null)
@@ -158,7 +232,6 @@ class TokenUsageAccountingTest {
         reducer.accept(
             ProviderUsageSnapshot(
                 inputTokens = 100,
-                contextInputTokens = 100,
                 outputTokens = 20,
                 totalTokens = 120,
             )
@@ -171,7 +244,7 @@ class TokenUsageAccountingTest {
     }
 
     @Test
-    fun `legacy baseline remains legacy after an approval continuation request`() {
+    fun `legacy baseline becomes partial after an observed continuation request`() {
         val accumulator = TurnUsageAccumulator.from(
             TokenUsage(
                 inputTokens = 100,
@@ -194,8 +267,8 @@ class TokenUsageAccountingTest {
 
         assertEquals(140L, usage.inputTokens)
         assertEquals(25L, usage.outputTokens)
-        assertEquals(UsageCompleteness.LEGACY, usage.coreCompleteness)
-        assertEquals(UsageCompleteness.LEGACY, usage.cacheReadCompleteness)
+        assertEquals(UsageCompleteness.PARTIAL, usage.coreCompleteness)
+        assertEquals(UsageCompleteness.PARTIAL, usage.cacheReadCompleteness)
         assertEquals(1, usage.observedProviderRequestCount)
     }
 
@@ -205,7 +278,6 @@ class TokenUsageAccountingTest {
         reducer.accept(
             ProviderUsageSnapshot(
                 inputTokens = 100,
-                contextInputTokens = 100,
                 outputTokens = 20,
                 cacheReadInputTokens = 110,
                 totalTokens = 999,
@@ -295,17 +367,21 @@ class TokenUsageAccountingTest {
         cacheRead: Long,
         total: Long,
         duration: Long,
+        timeToFirstOutput: Long? = null,
     ): CompletedRequestUsage {
         val reducer = RequestUsageReducer(requestOrdinal = ordinal)
         reducer.accept(
             ProviderUsageSnapshot(
                 inputTokens = input,
-                contextInputTokens = input,
                 outputTokens = output,
                 cacheReadInputTokens = cacheRead,
                 totalTokens = total,
             )
         )
-        return reducer.close(ProviderRequestOutcome.COMPLETED, providerRequestDurationMillis = duration)
+        return reducer.close(
+            outcome = ProviderRequestOutcome.COMPLETED,
+            providerRequestDurationMillis = duration,
+            timeToFirstOutputMillis = timeToFirstOutput,
+        )
     }
 }

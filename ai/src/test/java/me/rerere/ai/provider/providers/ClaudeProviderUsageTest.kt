@@ -34,7 +34,6 @@ class ClaudeProviderUsageTest {
         )!!
 
         assertEquals(60L, usage.inputTokens)
-        assertEquals(60L, usage.contextInputTokens)
         assertEquals(4L, usage.outputTokens)
         assertEquals(20L, usage.cacheReadInputTokens)
         assertEquals(30L, usage.cacheWriteInputTokens)

@@ -946,7 +946,6 @@ class ChatCompletionsAPI(
         val completionDetails = jsonObject["completion_tokens_details"]?.jsonObjectOrNull
         return ProviderUsageSnapshot(
             inputTokens = inputTokens,
-            contextInputTokens = inputTokens,
             outputTokens = outputTokens,
             // Cache read/write are subsets of prompt_tokens and must not be added to inputTokens.
             cacheReadInputTokens = promptDetails?.get("cached_tokens")?.jsonPrimitiveOrNull?.longOrNull

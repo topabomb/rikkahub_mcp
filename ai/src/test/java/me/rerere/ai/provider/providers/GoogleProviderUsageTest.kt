@@ -34,7 +34,6 @@ class GoogleProviderUsageTest {
         )!!
 
         assertEquals(10336L, usage.inputTokens)
-        assertEquals(27L, usage.contextInputTokens)
         assertEquals(76L, usage.outputTokens)
         assertEquals(10L, usage.cacheReadInputTokens)
         assertEquals(10309L, usage.toolUseInputTokens)
@@ -46,7 +45,6 @@ class GoogleProviderUsageTest {
     fun `usage distinguishes absent fields from explicit zero`() {
         val absent = provider.parseUsageMeta(Json.parseToJsonElement("{}").jsonObject)!!
         assertNull(absent.inputTokens)
-        assertNull(absent.contextInputTokens)
         assertNull(absent.outputTokens)
         assertNull(absent.cacheReadInputTokens)
         assertNull(absent.toolUseInputTokens)
@@ -67,7 +65,6 @@ class GoogleProviderUsageTest {
             ).jsonObject
         )!!
         assertEquals(0L, zero.inputTokens)
-        assertEquals(0L, zero.contextInputTokens)
         assertEquals(0L, zero.outputTokens)
         assertEquals(0L, zero.cacheReadInputTokens)
         assertEquals(0L, zero.toolUseInputTokens)

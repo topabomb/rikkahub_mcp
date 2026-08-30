@@ -211,6 +211,10 @@ Flow 异步收集。
 > **流式安全性**：`CODE_FENCE` 节点通过检查 `CODE_FENCE_END` token 判断代码块是否完整（`completeCodeBlock`），
 > 传入 `HighlightCodeBlock`。流式生成中未闭合的代码块不会触发 Mermaid/HTML 预览，避免渲染半成品。
 
+两条路径共用紧凑的块级纵向节奏：相邻段落保留半个正文 font size，标题按级别使用 3–8dp，块级公式、表格和 HTML
+图片外沿使用 4dp，分割线使用 8dp。代码块、WebView、表格、媒体和工具详情内部仍各自保留可读 padding；这里收紧的是
+它们与上下正文之间的重复外部留白。`<details>` 等可点击标题行维持原有内边距，固定预览高度也不变。
+
 ---
 
 ## 4. 代码块渲染（HighlightCodeBlock）
@@ -287,13 +291,15 @@ HighlightCodeBlock(code, language, completeCodeBlock)
 - **导出 PNG**：Kotlin 侧通过 `webViewState.webView?.evaluateJavascript("exportSvgToPng();", null)` 触发 JS 函数
   - JS 侧：SVG 序列化 → Base64 → Canvas 绘制（含水印）→ `canvas.toDataURL('image/png')` → 调用 `AndroidInterface.exportImage(base64)`
   - Kotlin 侧：解码 Bitmap → `exportImage()` 保存到相册
-- **全屏预览**：点击 View 图标 → `navController.navigate(Screen.WebView(content = html.base64Encode()))`
+- **全屏预览**：代码块 Header 的 View 图标将同一 Mermaid HTML 写入 `WebViewContentCache`，再导航到
+  `Screen.WebView(contentId)`
 
 ### 5.4 布局
 
 - 内联预览：`Modifier.height(200.dp)` 固定高度
 - `useWideViewPort = true` + `loadWithOverviewMode = true` 自适应内容宽度
 - 圆角裁剪：`Modifier.clip(RoundedCornerShape(4.dp))`
+- View 与导出入口均归入代码块 Header；200dp WebView 内没有覆盖层，也不再在预览下方增加第二行高度
 
 ---
 
@@ -433,4 +439,5 @@ WebViewState
 
 8. **JS 接口安全**：`@JavascriptInterface` 仅暴露必要方法，在 `onReset`/`onRelease` 时主动 `removeJavascriptInterface` 清理。
 
-9. **内联 Mermaid 离线可用**：Mermaid 脚本从本地 assets 加载（`WEB_VIEW_ASSET_URL`），不依赖 CDN，确保离线环境下图表正常渲染。全文预览的 Mermaid 仍使用 CDN（esm.sh）。
+9. **代码块 Mermaid 离线可用**：内联与从代码块 Header 打开的全屏预览复用同一 HTML，Mermaid 脚本均从本地 assets
+   加载（`WEB_VIEW_ASSET_URL`），不依赖 CDN。Markdown 全文预览仍由自身模板加载 Mermaid 依赖。

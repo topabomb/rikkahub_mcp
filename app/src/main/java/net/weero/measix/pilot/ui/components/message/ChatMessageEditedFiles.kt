@@ -57,18 +57,10 @@ private val WORKSPACE_FILE_TOOL_NAMES = setOf("workspace_write_file", "workspace
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun EditedFilesList(
-    parts: List<UIMessagePart>,
+    editedFiles: List<String>,
     assistant: Assistant?,
 ) {
     val workspaceId = assistant?.workspaceId?.toString() ?: return
-    val editedFiles = remember(parts) {
-        parts.filterIsInstance<UIMessagePart.Tool>()
-            .filter { it.toolName in WORKSPACE_FILE_TOOL_NAMES && it.hasReplayResult }
-            .mapNotNull { tool ->
-                tool.inputAsJson().jsonObject["path"]?.jsonPrimitive?.contentOrNull
-            }
-            .distinct()
-    }
     if (editedFiles.isEmpty()) return
 
     val context = LocalContext.current
@@ -112,7 +104,7 @@ internal fun EditedFilesList(
                 color = MaterialTheme.colorScheme.tertiaryContainer,
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
@@ -140,7 +132,7 @@ internal fun EditedFilesList(
                 Text(
                     text = "+${editedFiles.size - DEFAULT_VISIBLE_COUNT}",
                     style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                 )
             }
         }
@@ -247,6 +239,14 @@ internal fun EditedFilesList(
         }
     }
 }
+
+internal fun editedWorkspaceFilePaths(parts: List<UIMessagePart>): List<String> =
+    parts.filterIsInstance<UIMessagePart.Tool>()
+        .filter { it.toolName in WORKSPACE_FILE_TOOL_NAMES && it.hasReplayResult }
+        .mapNotNull { tool ->
+            tool.inputAsJson().jsonObject["path"]?.jsonPrimitive?.contentOrNull
+        }
+        .distinct()
 
 private fun resolveWorkspacePath(path: String): Pair<WorkspaceStorageArea, String> {
     val trimmed = path.trimEnd('/')

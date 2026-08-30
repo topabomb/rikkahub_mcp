@@ -93,7 +93,7 @@ fun <T> ChainOfThought(
         ) {
             Column(
                 modifier = Modifier
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .padding(horizontal = 12.dp, vertical = 2.dp)
                     .animateContentSize(
                         animationSpec = MaterialTheme.motionScheme.defaultSpatialSpec()
                     ),
@@ -417,7 +417,7 @@ private class ChainOfThoughtScopeImpl : ChainOfThoughtScope {
                                 Modifier
                             }
                         )
-                        .padding(start = 32.dp, top = 4.dp, bottom = 8.dp)
+                        .padding(start = 32.dp, top = 2.dp, bottom = 4.dp)
                 ) {
                     content()
                 }

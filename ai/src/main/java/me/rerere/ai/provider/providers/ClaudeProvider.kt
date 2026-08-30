@@ -713,7 +713,6 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             setOf("message_start", "message_delta")
         return ProviderUsageSnapshot(
             inputTokens = inputTokens,
-            contextInputTokens = inputTokens,
             outputTokens = outputTokens,
             cacheReadInputTokens = cacheReadInputTokens,
             cacheWriteInputTokens = cacheWriteInputTokens,

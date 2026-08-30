@@ -33,8 +33,7 @@ Provider wire usage event
 
 | 字段 | 含义 |
 | --- | --- |
-| `inputTokens` | 单请求完整输入；cache read/write 与 tool-use 是其子集，不得再次相加 |
-| `contextInputTokens` | 最近请求中可用于上下文阈值的输入，不是 turn 累计量 |
+| `inputTokens` | 单请求完整输入，也是最新请求 Context 的唯一来源；cache read/write 与 tool-use 是其子集，不得再次相加 |
 | `outputTokens` | 单请求完整输出；reasoning 是其子集 |
 | `cacheReadInputTokens` | Provider 明确报告的缓存读取输入；缺失不等于零 |
 | `cacheWriteInputTokens` | Provider 明确报告的缓存写入输入；缺失不等于零 |
@@ -45,10 +44,12 @@ Provider wire usage event
 
 `TokenUsage` 保存 turn 累计 input/output/cache/细分/total，以及：
 
-- `latestRequestContextTokens`：只覆盖为最新一次请求的 context input；最新请求未报告时写 `null`，不能继承旧值。
+- `latestRequestContextTokens`：只覆盖为最新一次请求的 canonical input；最新请求未报告时写 `null`，不能继承旧值。
+- `latestRequestCacheReadInputTokens`：只覆盖为最新一次请求的 cache read；缺失写 `null`，显式零保留为零。
 - `observedProviderRequestCount`：版本 2 新 turn 中已经关闭并加入该 turn 的 Provider 请求数。
 - `observedUsageReportedRequestCount`：上述请求中至少报告一个 usage 字段的请求数。
 - `providerRequestDurationMillis`：版本 2 新 turn 中各 Provider 请求从发起到响应流关闭的墙钟时间之和，不包含工具执行和审批等待。
+- `initialRequestTimeToFirstOutputMillis`：本 turn 第一次 Provider 请求发起到首个有效模型输出 chunk 的时间；只记录 ordinal 1，后续请求不累计、不覆盖。
 - `coreCompleteness` 与 `cacheReadCompleteness`：核心量与 cache-read 各自独立的完整性。
 - `semanticsVersion`：当前新记录为版本 2；缺少该字段的历史记录解释为版本 1。
 
@@ -61,8 +62,12 @@ Provider wire usage event
 1. 流式事件按字段 presence 覆盖当前请求快照；字段缺失表示本事件不更新该字段，显式 `0` 必须覆盖旧值。
    携带 usage 的事件即使没有 choices/candidates 也必须进入 reducer，包括 Chat 最终 usage-only chunk、Responses
    completed/incomplete/failed terminal event 和 Gemini usage-only event。
-2. 流式 UI 可以读取“已累计 turn + 当前请求预览”，但预览不是 durable fact。
+2. 流式 UI 可以读取“已累计 turn + 当前请求预览”，但预览不是 durable fact。紧凑栏的 Context/Cache 成对保留上一条
+   已收口请求，当前请求关闭后再原子切换；没有上一条已收口请求时保持 unknown，不能用流式中间态的临时零覆盖。
 3. 正常、失败和取消都在 Provider 调用的 `finally` 路径关闭请求；一个 reducer 只能关闭一次。
+   `GenerationLoop.run()` 的 `channelFlow` 使用 rendezvous 容量：允许 Transformer 子协程安全发布；当 Provider 抛出失败或
+   取消且下游仍 active 时，带最终 usage 的消息投影被下游接收后才传播原异常，不能让缓冲在异常收口时丢弃已观测 usage。
+   若 collector/turn 已从外部取消，则不承诺最终 UI 投影交付，取消仍立即传播。
 4. `TurnUsageAccumulator.apply()` 只接受下一个连续 ordinal，因此一次请求最多累计一次，重复或跳号立即失败。
 5. checkpoint 成功后，该 turn 累计值才成为后续 step 或审批继续的 durable baseline。
 
@@ -70,13 +75,13 @@ turn 聚合规则：
 
 - input、output、cache read/write、reasoning、tool-use 和 Provider request duration 分别按请求求和。
 - `totalTokens` 按各请求的权威 total 求和，不在 turn 末尾用累计 input + output 重写。
-- 最新请求没有 context input 时，`latestRequestContextTokens` 覆盖为 `null`。
+- 已收口最新请求的 canonical input/cache read 分别覆盖 `latestRequestContextTokens` 与
+  `latestRequestCacheReadInputTokens`；没有报告时覆盖为 `null`。进行中的 request preview 保留上一条已收口请求的这对字段。
+- TTFT 从第一次请求发起计时；空协议事件和 usage-only 事件不算，Text、Reasoning、Tool 或媒体 payload 首次出现时冻结。
 - 没有 usage 的失败请求仍计入 `observedProviderRequestCount`，但不增加 `observedUsageReportedRequestCount`，并使相关 turn 完整性降级。
 - Provider 内容已经返回时，即使随后失败、取消或响应 incomplete，已收到的 usage 仍随原 turn 收口；取消异常继续传播。
 - `CONTINUE_APPROVAL` 从原 Assistant 消息的已提交 usage 恢复，不创建第二 turn，也不重复加入 checkpoint 前的请求。
-- 历史版本 1 baseline 的请求边界不可恢复；继续运行时保留 `LEGACY`，不能升级为伪精确版本 2。此时 usage 数值是
-  legacy baseline 与新增请求的已知累计，但 observed request count、usage-reported count 和 Provider duration 只描述升级后
-  实际观察到的请求，不得解释为整个历史 turn 的请求数或时长。
+- 历史版本 1 baseline 的请求边界不可恢复；若继续运行，完整性按当前请求合并为 `PARTIAL`，不保留 legacy 特殊累计或显示路径。
 
 ## 4. 四种线协议映射
 
@@ -92,7 +97,7 @@ turn 聚合规则：
 | OpenAI Chat Completions | `prompt_tokens` | `completion_tokens` | `prompt_tokens_details.cached_tokens` / `cache_write_tokens`；Moonshot 顶层 `cached_tokens` 与 DeepSeek `prompt_cache_hit_tokens` 只按已识别 endpoint vendor 使用 | `total_tokens` 优先；缺失且 input/output 完整时安全推导 |
 | OpenAI Responses | `input_tokens` | `output_tokens` | `input_tokens_details.cached_tokens` / `cache_write_tokens` | `total_tokens` 优先；缺失且 input/output 完整时安全推导 |
 | Anthropic Messages | `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` | `output_tokens` | `cache_read_input_tokens` / `cache_creation_input_tokens` | 合并 `message_start` 与 `message_delta` 的互补快照后安全推导 canonical input + output |
-| Gemini generateContent | input 为 `promptTokenCount + toolUsePromptTokenCount`；context 仅为 `promptTokenCount` | `candidatesTokenCount + thoughtsTokenCount` | `cachedContentTokenCount` / 不提供 | Provider `totalTokenCount` |
+| Gemini generateContent | `promptTokenCount + toolUsePromptTokenCount` | `candidatesTokenCount + thoughtsTokenCount` | `cachedContentTokenCount` / 不提供 | Provider `totalTokenCount` |
 
 `response.completed`、`response.incomplete` 和 `response.failed` 使用同一个 Responses usage decoder。Anthropic 的
 `message_start` 与 `message_delta` 是同一请求的互补快照，不是两个请求。Gemini 的 tool-use 和 thoughts 已分别包含在
@@ -109,7 +114,7 @@ canonical input/output 中，不能再次加入 total；其 Provider total 保�
 | `NONE` | 当前已观察请求均没有该维度的可用值 |
 | `LEGACY` | 历史记录没有足够证据恢复请求边界或完整性 |
 
-单请求 core 需要有效的 input、output 和 total 才是 `COMPLETE`；cache-read 是否完整独立判断。turn 只有在 baseline 与新请求均为 `COMPLETE` 时才能保持 `COMPLETE`；`LEGACY` baseline 始终保持 `LEGACY`。响应成功与 usage 完整是两件事，不能用 HTTP/流终态推断缺失字段为零。
+单请求 core 需要有效的 input、output 和 total 才是 `COMPLETE`；cache-read 是否完整独立判断。turn 只有在 baseline 与新请求均为 `COMPLETE` 时才能保持 `COMPLETE`；其他组合按已知值归为 `PARTIAL` 或 `NONE`。响应成功与 usage 完整是两件事，不能用 HTTP/流终态推断缺失字段为零。
 
 ## 6. Master 与 Child 隔离
 
@@ -121,7 +126,8 @@ usage owner 是实际发起请求的 Assistant 消息。Master 与每个 Child �
 - Child Provider 失败且未返回 usage 时，只影响 Child 自己的完整性，不改变 Master usage。
 - Master 在工具调用前后通常各发起一次自己的 Provider 请求；后一次用于读取工具成功或失败结果，因此两次 Master input 都应计入同一个 Master turn。
 
-例如 Master 第一次请求约 16.7K input，工具返回后第二次请求约 16.5K，则底部显示约 33.2K。即使 Child 因余额不足未产生 usage，这个数值仍然正确，因为它是两次 Master 请求之和，不是 Child 串账。
+例如 Master 第一次请求约 16.7K input，工具返回后第二次请求约 16.5K，则默认 Context 显示最新请求约 16.5K，展开后的
+turn input 显示约 33.2K。即使 Child 因余额不足未产生 usage，33.2K 仍是两次 Master 请求之和，不是 Child 串账。
 
 ## 7. 持久化与兼容
 
@@ -134,21 +140,24 @@ usage 仍位于 `UIMessage` JSON 中，不新增 Room 表或 schema migration。
 | `outputTokens` | `completionTokens` |
 | `cacheReadInputTokens` | `cachedTokens` |
 
-旧 JSON、备份与历史消息继续解码为 `LEGACY`，不猜测回填，不增加 deprecated getter、typealias、双字段写入或读取旁路。
+新增 usage 字段均为 nullable 且默认 `null`。旧 JSON、备份与历史消息不迁移、不重写、不猜测回填；缺失字段直接保持
+unknown。旧记录可以继续解码，但 UI 不为 `LEGACY` 建立特殊显示或计算旁路。Stats 仍按数据库实际保存的历史值查询。
 
 ## 8. 消费者口径
 
 ### 聊天消息底部
 
-`ChatMessageNerdLine` 保持紧凑图标、顺序和短文本：
+`ChatMessageNerdLine` 是低对比度、无容器背景的紧凑 footer：
 
-- Upload 显示当前 Assistant turn 的累计 input；Download 显示累计 output。
-- 版本 2 只有 core `COMPLETE` 才显示 input/output；legacy 记录保留历史 input/output 显示行为。
-- 版本 2 只有 cache-read `COMPLETE` 且命中量大于零时显示 `(x cached)`；legacy cache 大于零时保留历史显示行为；
-  不增加 miss、write 或 unknown 展开项。
-- TPS 只在 `semanticsVersion >= 2`、core `COMPLETE`、output 已知且 Provider request duration 大于零时，按累计 output
-  除以累计 Provider request duration 计算。legacy 及 legacy continuation 永不使用升级后 duration 计算 TPS。
-  Clock 仍是整条消息的用户可见墙钟时间，两者不能混用。
+- 默认单行固定显示 `Context x · Cache y% · Req n`。Context 与 Cache 同属最新请求，Req 是 owning Assistant turn 的请求数。
+- Cache 百分比为 `latestRequestCacheReadInputTokens / latestRequestContextTokens`；分母必须大于零且 cache 不得超过 Context。
+  缺失显示 unknown，显式零显示 `0%`；cache write 不进入分子。显示精度按原始比例确定：低于 90% 为整数，
+  90% 至低于 99% 保留一位小数，99% 及以上保留两位小数；仅格式化显示，不改变原始计数和比值。
+- 点击后最多补充两个自适应信息组：turn 累计 input/output/cache read，以及 tok/s、初始 TTFT、整条消息总耗时。
+- turn input/output 只有 core `COMPLETE` 时显示；turn cache 只有 cache-read `COMPLETE` 时显示。`LEGACY` 没有显示特例。
+- TPS 按累计 output 除以累计 Provider request duration；Clock 使用消息 `createdAt` 到 `finishedAt`，包含工具和审批等待。
+- 活动动效与等待审批继续由 `ChatList` 原有独立状态行显示；归属、28dp loading、主题主色、容器、审批标签和判断条件
+  均不改变，只收紧该行的上下留白。它不进入 usage footer，关闭 token 显示也不会隐藏 turn 活动状态。
 
 ### 上下文预警
 

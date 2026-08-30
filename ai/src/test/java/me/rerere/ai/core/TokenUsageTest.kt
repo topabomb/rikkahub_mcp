@@ -5,6 +5,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -27,6 +28,8 @@ class TokenUsageTest {
         assertEquals(UsageCompleteness.LEGACY, usage.coreCompleteness)
         assertEquals(UsageCompleteness.LEGACY, usage.cacheReadCompleteness)
         assertEquals(LEGACY_TOKEN_USAGE_SEMANTICS_VERSION, usage.semanticsVersion)
+        assertNull(usage.latestRequestCacheReadInputTokens)
+        assertNull(usage.initialRequestTimeToFirstOutputMillis)
     }
 
     @Test
@@ -38,9 +41,11 @@ class TokenUsageTest {
                 cacheReadInputTokens = 50,
                 totalTokens = 330,
                 latestRequestContextTokens = 200,
+                latestRequestCacheReadInputTokens = 150,
                 observedProviderRequestCount = 2,
                 observedUsageReportedRequestCount = 2,
                 providerRequestDurationMillis = 1_000,
+                initialRequestTimeToFirstOutputMillis = 125,
                 coreCompleteness = UsageCompleteness.COMPLETE,
                 cacheReadCompleteness = UsageCompleteness.COMPLETE,
                 semanticsVersion = CURRENT_TOKEN_USAGE_SEMANTICS_VERSION,
@@ -50,6 +55,8 @@ class TokenUsageTest {
         assertTrue("\"promptTokens\":300" in encoded)
         assertTrue("\"completionTokens\":30" in encoded)
         assertTrue("\"cachedTokens\":50" in encoded)
+        assertTrue("\"latestRequestCacheReadInputTokens\":150" in encoded)
+        assertTrue("\"initialRequestTimeToFirstOutputMillis\":125" in encoded)
         assertFalse("\"inputTokens\"" in encoded)
         assertFalse("\"outputTokens\"" in encoded)
     }

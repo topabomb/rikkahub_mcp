@@ -97,7 +97,7 @@ fun ColumnScope.ChatMessageActionButtons(
             modifier = Modifier
                 .clip(CircleShape)
                 .clickable { context.copyMessageToClipboard(message) }
-                .padding(8.dp)
+                .padding(horizontal = 8.dp, vertical = 4.dp)
                 .size(16.dp),
             tint = actionIconColor
         )
@@ -114,7 +114,7 @@ fun ColumnScope.ChatMessageActionButtons(
                         onRegenerate()
                     }
                 }
-                .padding(8.dp)
+                .padding(horizontal = 8.dp, vertical = 4.dp)
                 .size(16.dp),
             tint = actionIconColor
         )
@@ -148,7 +148,7 @@ fun ColumnScope.ChatMessageActionButtons(
                             }
                         }
                     )
-                    .padding(8.dp)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
                     .size(16.dp),
                 tint = if (isAvailable) actionIconColor else actionIconColor.copy(alpha = 0.38f)
             )
@@ -166,7 +166,7 @@ fun ColumnScope.ChatMessageActionButtons(
                         onOpenActionSheet()
                     }
                 )
-                .padding(8.dp)
+                .padding(horizontal = 8.dp, vertical = 4.dp)
                 .size(16.dp),
             tint = actionIconColor
         )

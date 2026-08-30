@@ -14,7 +14,6 @@ import androidx.compose.ui.unit.dp
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
-import me.rerere.ai.ui.isEmptyUIMessage
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
@@ -30,7 +29,7 @@ fun ChatMessageUserAvatar(
     modifier: Modifier = Modifier,
 ) {
     val settings = LocalSettings.current
-    if (message.role == MessageRole.USER && !message.parts.isEmptyUIMessage() && settings.displaySetting.showUserAvatar) {
+    if (message.role == MessageRole.USER && settings.displaySetting.showUserAvatar) {
         Row(
             modifier = modifier,
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),

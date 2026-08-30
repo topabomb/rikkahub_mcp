@@ -2,6 +2,7 @@
 
 import android.content.ClipData
 import android.net.Uri
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -29,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -64,6 +66,7 @@ import me.rerere.hugeicons.stroke.ArrowUp01
 import me.rerere.hugeicons.stroke.Code
 import me.rerere.hugeicons.stroke.Copy01
 import me.rerere.hugeicons.stroke.Download04
+import me.rerere.hugeicons.stroke.Download01
 import me.rerere.hugeicons.stroke.Eye
 import me.rerere.hugeicons.stroke.View
 import net.weero.measix.pilot.R
@@ -103,13 +106,32 @@ fun HighlightCodeBlock(
     val clipboardManager = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val navController = LocalNavController.current
+    val activity = LocalActivity.current
     val context = LocalContext.current
     val settings = LocalSettings.current
+    val colorScheme = MaterialTheme.colorScheme
     val normalizedLanguage = remember(language) { language.lowercase() }
     val canInlinePreview = completeCodeBlock && normalizedLanguage in PREVIEWABLE_LANGUAGES
+    val fullScreenPreviewContent = remember(
+        completeCodeBlock,
+        normalizedLanguage,
+        code,
+        colorScheme,
+    ) {
+        if (!completeCodeBlock) {
+            null
+        } else if (normalizedLanguage in PREVIEWABLE_LANGUAGES) {
+            buildCodePreviewHtml(code = code, language = normalizedLanguage)
+        } else if (normalizedLanguage == "mermaid") {
+            buildMermaidHtml(code = code, colorScheme = colorScheme)
+        } else {
+            null
+        }
+    }
     var previewMode by remember(canInlinePreview, code, normalizedLanguage) {
         mutableStateOf(canInlinePreview)
     }
+    var mermaidExportRequestKey by remember(code) { mutableIntStateOf(0) }
 
     var isExpanded by remember(settings.displaySetting.codeBlockAutoCollapse) {
         mutableStateOf(!settings.displaySetting.codeBlockAutoCollapse)
@@ -152,9 +174,16 @@ fun HighlightCodeBlock(
                 code = code,
                 createDocumentLauncher = createDocumentLauncher,
                 navController = navController,
-                completeCodeBlock = completeCodeBlock,
+                fullScreenPreviewContent = fullScreenPreviewContent,
                 previewMode = previewMode,
                 canInlinePreview = canInlinePreview,
+                onExportRenderedPreview = if (
+                    activity != null && completeCodeBlock && normalizedLanguage == "mermaid"
+                ) {
+                    { mermaidExportRequestKey++ }
+                } else {
+                    null
+                },
                 onTogglePreviewMode = {
                     previewMode = !previewMode
                 },
@@ -176,6 +205,7 @@ fun HighlightCodeBlock(
                 completeCodeBlock && normalizedLanguage == "mermaid" -> {
                     Mermaid(
                         code = code,
+                        exportRequestKey = mermaidExportRequestKey,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -359,9 +389,10 @@ private fun HighlightCodeActions(
     code: String,
     createDocumentLauncher: ManagedActivityResultLauncher<String, Uri?>,
     navController: Navigator,
-    completeCodeBlock: Boolean = true,
+    fullScreenPreviewContent: String? = null,
     previewMode: Boolean = false,
     canInlinePreview: Boolean = false,
+    onExportRenderedPreview: (() -> Unit)? = null,
     onTogglePreviewMode: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -436,7 +467,6 @@ private fun HighlightCodeActions(
                     .size(iconSize)
             )
 
-            val normalizedLanguage = language.lowercase()
             if (canInlinePreview) {
                 Icon(
                     imageVector = if (previewMode) HugeIcons.Code else HugeIcons.View,
@@ -452,7 +482,7 @@ private fun HighlightCodeActions(
                 )
             }
 
-            if (completeCodeBlock && normalizedLanguage in PREVIEWABLE_LANGUAGES) {
+            if (fullScreenPreviewContent != null) {
                 Icon(
                     imageVector = HugeIcons.Eye,
                     contentDescription = stringResource(id = R.string.code_block_preview),
@@ -460,12 +490,27 @@ private fun HighlightCodeActions(
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
                         .onClick {
-                            val content = buildCodePreviewHtml(code = code, language = normalizedLanguage)
-                            val contentId = WebViewContentCache.store(context.cacheDir, content)
+                            val contentId = WebViewContentCache.store(
+                                context.cacheDir,
+                                fullScreenPreviewContent,
+                            )
                             navController.navigate(Screen.WebView(contentId = contentId))
                         }
                         .padding(4.dp)
                         .size(iconSize)
+                )
+            }
+
+            if (onExportRenderedPreview != null) {
+                Icon(
+                    imageVector = HugeIcons.Download01,
+                    contentDescription = stringResource(R.string.mermaid_export),
+                    tint = iconTint,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .onClick { onExportRenderedPreview() }
+                        .padding(4.dp)
+                        .size(iconSize),
                 )
             }
         }

@@ -1062,7 +1062,6 @@ class GenerationLoopFlowTest {
                 ),
                 usage = ProviderUsageSnapshot(
                     inputTokens = 100,
-                    contextInputTokens = 100,
                     outputTokens = 20,
                     cacheReadInputTokens = 50,
                     totalTokens = 120,
@@ -1081,7 +1080,6 @@ class GenerationLoopFlowTest {
                 ),
                 usage = ProviderUsageSnapshot(
                     inputTokens = 200,
-                    contextInputTokens = 200,
                     outputTokens = 10,
                     cacheReadInputTokens = 0,
                     totalTokens = 210,
@@ -1198,7 +1196,6 @@ class GenerationLoopFlowTest {
                 textDelta("partial").copy(
                     usage = ProviderUsageSnapshot(
                         inputTokens = 100,
-                        contextInputTokens = 100,
                         outputTokens = 20,
                         cacheReadInputTokens = 0,
                         totalTokens = 120,

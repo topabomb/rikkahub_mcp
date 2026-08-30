@@ -974,7 +974,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         val toolUseInputTokens = jsonObject["toolUsePromptTokenCount"]?.jsonPrimitiveOrNull?.longOrNull
         return ProviderUsageSnapshot(
             inputTokens = promptTokens?.let { sumTokenCountsOrNull(it, toolUseInputTokens ?: 0L) },
-            contextInputTokens = promptTokens,
             outputTokens = when {
                 candidatesTokens != null -> sumTokenCountsOrNull(candidatesTokens, thoughtTokens ?: 0L)
                 thoughtTokens != null -> thoughtTokens

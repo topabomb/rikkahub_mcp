@@ -303,12 +303,12 @@ object HeaderStyle {
     }
 
     fun verticalPadding(level: Int) = when (level) {
-        1 -> 16.dp
-        2 -> 14.dp
-        3 -> 12.dp
-        4 -> 10.dp
-        5 -> 8.dp
-        else -> 6.dp
+        1 -> 8.dp
+        2 -> 7.dp
+        3 -> 6.dp
+        4 -> 5.dp
+        5 -> 4.dp
+        else -> 3.dp
     }
 
     fun fromMarkdownType(type: IElementType, fontSizeRatio: Float): TextStyle = fromLevel(
@@ -509,7 +509,7 @@ private fun MarkdownNode(
 
         MarkdownTokenTypes.HORIZONTAL_RULE -> {
             HorizontalDivider(
-                modifier = Modifier.padding(vertical = 16.dp),
+                modifier = Modifier.padding(vertical = 8.dp),
                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
                 thickness = 0.5.dp
             )
@@ -559,7 +559,7 @@ private fun MarkdownNode(
                 MathBlock(
                     formula, modifier = modifier
                         .fillMaxWidth()
-                        .padding(vertical = 8.dp),
+                        .padding(vertical = 4.dp),
                     fontSize = LocalTextStyle.current.fontSize
                 )
             } else {
@@ -568,7 +568,7 @@ private fun MarkdownNode(
                     fontFamily = FontFamily.Monospace,
                     modifier = modifier
                         .fillMaxWidth()
-                        .padding(vertical = 8.dp)
+                        .padding(vertical = 4.dp)
                 )
             }
         }
@@ -793,7 +793,7 @@ private fun Paragraph(
     val latexColorArgb = LocalContentColor.current.toArgb()
     FlowRow(
         modifier = modifier.then(
-            if (node.nextSibling() != null) Modifier.padding(bottom = LocalTextStyle.current.fontSize.toDp())
+            if (node.nextSibling() != null) Modifier.padding(bottom = LocalTextStyle.current.fontSize.toDp() / 2)
             else Modifier
         )
     ) {
@@ -897,7 +897,7 @@ private fun TableNode(node: ASTNode, content: String, modifier: Modifier = Modif
     // 渲染表格卡片（工具栏 + 表格）
     Column(
         modifier = modifier
-            .padding(vertical = 8.dp)
+            .padding(vertical = 4.dp)
             .clip(MaterialTheme.shapes.large)
             .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), MaterialTheme.shapes.large)
             .background(MaterialTheme.colorScheme.surfaceContainer)

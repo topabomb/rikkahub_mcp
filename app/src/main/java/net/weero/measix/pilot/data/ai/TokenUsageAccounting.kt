@@ -28,6 +28,7 @@ internal data class CompletedRequestUsage(
     val cacheReadCompleteness: UsageCompleteness,
     val outcome: ProviderRequestOutcome,
     val providerRequestDurationMillis: Long,
+    val timeToFirstOutputMillis: Long?,
     val diagnostics: Set<UsageDiagnostic>,
 )
 
@@ -48,7 +49,6 @@ internal class RequestUsageReducer(
         val previous = current ?: ProviderUsageSnapshot()
         current = ProviderUsageSnapshot(
             inputTokens = overlay(previous.inputTokens, incoming.inputTokens),
-            contextInputTokens = overlay(previous.contextInputTokens, incoming.contextInputTokens),
             outputTokens = overlay(previous.outputTokens, incoming.outputTokens),
             cacheReadInputTokens = overlay(previous.cacheReadInputTokens, incoming.cacheReadInputTokens),
             cacheWriteInputTokens = overlay(previous.cacheWriteInputTokens, incoming.cacheWriteInputTokens),
@@ -60,26 +60,32 @@ internal class RequestUsageReducer(
         ).validated()
     }
 
-    fun preview(providerRequestDurationMillis: Long): CompletedRequestUsage {
+    fun preview(
+        providerRequestDurationMillis: Long,
+        timeToFirstOutputMillis: Long? = null,
+    ): CompletedRequestUsage {
         check(!closed) { "request usage is already closed" }
         return completed(
             outcome = ProviderRequestOutcome.COMPLETED,
             providerRequestDurationMillis = providerRequestDurationMillis,
+            timeToFirstOutputMillis = timeToFirstOutputMillis,
         )
     }
 
     fun close(
         outcome: ProviderRequestOutcome,
         providerRequestDurationMillis: Long,
+        timeToFirstOutputMillis: Long? = null,
     ): CompletedRequestUsage {
         check(!closed) { "request usage is already closed" }
         closed = true
-        return completed(outcome, providerRequestDurationMillis)
+        return completed(outcome, providerRequestDurationMillis, timeToFirstOutputMillis)
     }
 
     private fun completed(
         outcome: ProviderRequestOutcome,
         providerRequestDurationMillis: Long,
+        timeToFirstOutputMillis: Long?,
     ): CompletedRequestUsage {
         val snapshot = current?.deriveTotalIfAllowed()?.takeIf(ProviderUsageSnapshot::hasAnyValue)
         val coreValues = listOf(snapshot?.inputTokens, snapshot?.outputTokens, snapshot?.totalTokens)
@@ -105,6 +111,7 @@ internal class RequestUsageReducer(
             cacheReadCompleteness = cacheReadCompleteness,
             outcome = outcome,
             providerRequestDurationMillis = providerRequestDurationMillis.coerceAtLeast(0),
+            timeToFirstOutputMillis = timeToFirstOutputMillis?.coerceAtLeast(0),
             diagnostics = diagnostics.toSet(),
         )
     }
@@ -165,7 +172,13 @@ internal class TurnUsageAccumulator private constructor(
 
     fun nextRequestOrdinal(): Int = Math.addExact(lastAppliedOrdinal, 1)
 
-    fun preview(request: CompletedRequestUsage): TokenUsage = aggregate(summary, request).usage
+    fun preview(request: CompletedRequestUsage): TokenUsage {
+        val preview = aggregate(summary, request).usage
+        return preview.copy(
+            latestRequestContextTokens = summary?.latestRequestContextTokens,
+            latestRequestCacheReadInputTokens = summary?.latestRequestCacheReadInputTokens,
+        )
+    }
 
     fun apply(request: CompletedRequestUsage): AppliedTurnUsage {
         check(request.requestOrdinal == nextRequestOrdinal()) {
@@ -202,8 +215,6 @@ internal class TurnUsageAccumulator private constructor(
             }
         }
 
-        val legacy = baseline?.coreCompleteness == UsageCompleteness.LEGACY ||
-            baseline?.cacheReadCompleteness == UsageCompleteness.LEGACY
         val snapshot = request.snapshot
         val updated = TokenUsage(
             inputTokens = add(
@@ -229,7 +240,8 @@ internal class TurnUsageAccumulator private constructor(
                 snapshot?.totalTokens,
                 onOverflow = { coreOverflowed = true },
             ),
-            latestRequestContextTokens = snapshot?.contextInputTokens,
+            latestRequestContextTokens = snapshot?.inputTokens,
+            latestRequestCacheReadInputTokens = snapshot?.cacheReadInputTokens,
             observedProviderRequestCount = Math.addExact(baseline?.observedProviderRequestCount ?: 0, 1),
             observedUsageReportedRequestCount = Math.addExact(
                 baseline?.observedUsageReportedRequestCount ?: 0,
@@ -240,16 +252,12 @@ internal class TurnUsageAccumulator private constructor(
                 request.providerRequestDurationMillis,
                 retainKnownSubtotal = false,
             ),
-            coreCompleteness = if (legacy) {
-                UsageCompleteness.LEGACY
-            } else {
-                combine(baseline?.coreCompleteness, request.coreCompleteness)
-            },
-            cacheReadCompleteness = if (legacy) {
-                UsageCompleteness.LEGACY
-            } else {
-                combine(baseline?.cacheReadCompleteness, request.cacheReadCompleteness)
-            },
+            initialRequestTimeToFirstOutputMillis = baseline?.initialRequestTimeToFirstOutputMillis
+                ?: request.timeToFirstOutputMillis.takeIf {
+                    baseline == null && request.requestOrdinal == 1
+                },
+            coreCompleteness = combine(baseline?.coreCompleteness, request.coreCompleteness),
+            cacheReadCompleteness = combine(baseline?.cacheReadCompleteness, request.cacheReadCompleteness),
             semanticsVersion = CURRENT_TOKEN_USAGE_SEMANTICS_VERSION,
         )
         return AppliedTurnUsage(
@@ -286,7 +294,6 @@ internal class TurnUsageAccumulator private constructor(
 
 private fun ProviderUsageSnapshot.hasAnyValue(): Boolean =
     inputTokens != null ||
-        contextInputTokens != null ||
         outputTokens != null ||
         cacheReadInputTokens != null ||
         cacheWriteInputTokens != null ||
@@ -304,8 +311,8 @@ private fun addExactOrNull(left: Long?, right: Long?): Long? {
 }
 
 private fun UsageCompleteness.degrade(): UsageCompleteness = when (this) {
-    UsageCompleteness.LEGACY -> UsageCompleteness.LEGACY
     UsageCompleteness.NONE -> UsageCompleteness.NONE
+    UsageCompleteness.LEGACY,
     UsageCompleteness.PARTIAL,
     UsageCompleteness.COMPLETE,
     -> UsageCompleteness.PARTIAL

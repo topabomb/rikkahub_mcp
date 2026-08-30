@@ -556,7 +556,7 @@ stateInOnce(scope, initialValue) =
 ChatList (LazyColumn)
   └─ items: messageNodes
        └─ ChatMessage（单条消息与分支容器）
-            ├─ avatar / branch / actions / nerd line
+            ├─ avatar / branch / actions / compact footer
             └─ groupMessageParts（按原始 Part 顺序分组）
                  ├─ ContentBlock → 文本、图片、音频、视频、文档等
                  ├─ ThinkingBlock → reasoning 与普通工具 step（折叠时钉住 Pending 与 generate_image）
@@ -567,8 +567,16 @@ ChatList (LazyColumn)
 路径。工具审批和 Target 卡片必须保留在 Part 的语义位置。节点级细节统一见
 [消息渲染管线](message-rendering-pipeline.md)，生成侧见 [消息生成链路](chat-generation-pipeline.md)。
 
-`ChatMessageNerdLine` 保持原有紧凑底栏，`ChatSizeChecker` 与 `StatsVM` 各自只消费 application/query 投影。Compose 不解析
-四种线协议、不累计 token，也不从 UI 状态推断完整性；三者的精确显示口径见
+`ChatMessageNerdLine` 使用低对比度单行摘要与最多两行展开详情。聊天列表顶层 item 间距和同一消息主要区块均为 4dp，
+统计详情与芯片换行使用 2dp；被动统计摘要不再叠加纵向 padding。消息末尾的操作栏、Workspace 产出文件与 usage 组成一个
+footer，footer 内部只保留 2dp 区块间距；操作栏和分支按钮保留 8dp 横向内边距，纵向内边距统一为 4dp。终态提示和 Workspace 文件芯片
+使用紧凑的 4dp 纵向内边距。`ChainOfThought` 只收紧卡片外沿与展开内容的重复留白，步骤和折叠控制仍保留原有点击行内边距；
+子助手卡使用 8dp 上下内边距和 4dp 区块间距，子助手详情中的消息 item 同样使用 4dp；审批按钮、媒体缩略图、气泡正文与
+弹层内容仍保留原有可读空间。只有确实显示头像或名称时才创建消息 Header，避免关闭身份信息后
+留下空 Header 间距。`ChatList` 原有独立
+loading/审批状态行不改变归属、组件或判断，只将自身上下留白保持为 2dp 以靠近消息统计；
+它不进入 usage 行。`ChatSizeChecker` 与 `StatsVM`
+各自只消费 application/query 投影。Compose 不解析四种线协议、不累计 token，也不从 UI 状态推断完整性；精确口径见
 [`token-usage-accounting.md`](token-usage-accounting.md)。
 
 ---

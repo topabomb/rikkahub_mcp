@@ -149,13 +149,23 @@ fun ChatMessage(
     if (shouldHideEmptyCancelledMessage(message, renderableParts)) {
         return
     }
-    val hasVisibleMessage = !renderableParts.isEmptyUIMessage() || message.terminalStatus != null
+    val hasRenderableParts = !renderableParts.isEmptyUIMessage()
+    val hasVisibleMessage = hasRenderableParts || message.terminalStatus != null
+    val showHeader = shouldShowChatMessageHeader(
+        role = message.role,
+        hasRenderableParts = hasRenderableParts,
+        hasVisibleMessage = hasVisibleMessage,
+        showUserAvatar = settings.showUserAvatar,
+        showAssistantIcon = settings.showModelIcon,
+        showAssistantName = settings.showModelName,
+        hasAssistantIdentity = model != null || assistant?.useAssistantAvatar == true,
+    )
     Column(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = if (message.role == MessageRole.USER) Alignment.End else Alignment.Start,
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        if (hasVisibleMessage) {
+        if (showHeader) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth(),
@@ -210,34 +220,48 @@ fun ChatMessage(
         } else {
             hasVisibleMessage
         }
-
-        AnimatedVisibility(
-            visible = showActions,
-            enter = slideInVertically { it / 2 } + fadeIn(),
-            exit = slideOutVertically { it / 2 } + fadeOut()
-        ) {
-            Column(
-                modifier = Modifier.animateContentSize()
-            ) {
-                ChatMessageActionButtons(
-                    message = message,
-                    onRegenerate = onRegenerate,
-                    node = node,
-                    onUpdate = onUpdate,
-                    onOpenActionSheet = {
-                        showActionsSheet = true
-                    }
-                )
-            }
+        val editedFiles = remember(message.parts) {
+            editedWorkspaceFilePaths(message.parts)
         }
+        val showEditedFiles = assistant?.workspaceId != null && editedFiles.isNotEmpty()
+        val showUsage = settings.showTokenUsage &&
+            message.usage?.toNerdLineDisplay()?.hasCompactSummary == true
 
-        EditedFilesList(
-            parts = message.parts,
-            assistant = assistant,
-        )
+        if (showActions || showEditedFiles || showUsage) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                AnimatedVisibility(
+                    visible = showActions,
+                    enter = slideInVertically { it / 2 } + fadeIn(),
+                    exit = slideOutVertically { it / 2 } + fadeOut()
+                ) {
+                    Column(
+                        modifier = Modifier.animateContentSize()
+                    ) {
+                        ChatMessageActionButtons(
+                            message = message,
+                            onRegenerate = onRegenerate,
+                            node = node,
+                            onUpdate = onUpdate,
+                            onOpenActionSheet = {
+                                showActionsSheet = true
+                            }
+                        )
+                    }
+                }
 
-        ProvideTextStyle(textStyle) {
-            ChatMessageNerdLine(message = message)
+                if (showEditedFiles) {
+                    EditedFilesList(
+                        editedFiles = editedFiles,
+                        assistant = assistant,
+                    )
+                }
+
+                if (showUsage) {
+                    ProvideTextStyle(textStyle) {
+                        ChatMessageNerdLine(message = message)
+                    }
+                }
+            }
         }
 
     }
@@ -302,6 +326,22 @@ internal fun shouldHideEmptyCancelledMessage(
 ): Boolean = message.terminalStatus == MessageTerminalStatus.CANCELLED &&
     renderableParts.isEmptyUIMessage()
 
+internal fun shouldShowChatMessageHeader(
+    role: MessageRole,
+    hasRenderableParts: Boolean,
+    hasVisibleMessage: Boolean,
+    showUserAvatar: Boolean,
+    showAssistantIcon: Boolean,
+    showAssistantName: Boolean,
+    hasAssistantIdentity: Boolean,
+): Boolean = when (role) {
+    MessageRole.USER -> hasRenderableParts && showUserAvatar
+    MessageRole.ASSISTANT -> hasVisibleMessage &&
+        hasAssistantIdentity &&
+        (showAssistantIcon || showAssistantName)
+    else -> false
+}
+
 internal fun terminalStatusTextResource(status: MessageTerminalStatus, reason: String? = null): Int =
     terminalMessagePresentation(status, reason).statusResource
 
@@ -336,7 +376,7 @@ private fun MessageTerminalStatusNotice(
             text = stringResource(terminalStatusTextResource(status, message.terminalReason)),
             color = contentColor,
             style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
         )
     }
 }

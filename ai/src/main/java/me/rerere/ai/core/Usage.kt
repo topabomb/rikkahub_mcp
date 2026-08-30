@@ -6,7 +6,6 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class ProviderUsageSnapshot(
     val inputTokens: Long? = null,
-    val contextInputTokens: Long? = null,
     val outputTokens: Long? = null,
     val cacheReadInputTokens: Long? = null,
     val cacheWriteInputTokens: Long? = null,
@@ -37,9 +36,11 @@ data class TokenUsage(
     val toolUseInputTokens: Long? = null,
     val totalTokens: Long? = null,
     val latestRequestContextTokens: Long? = null,
+    val latestRequestCacheReadInputTokens: Long? = null,
     val observedProviderRequestCount: Int? = null,
     val observedUsageReportedRequestCount: Int? = null,
     val providerRequestDurationMillis: Long? = null,
+    val initialRequestTimeToFirstOutputMillis: Long? = null,
     val coreCompleteness: UsageCompleteness = UsageCompleteness.LEGACY,
     val cacheReadCompleteness: UsageCompleteness = UsageCompleteness.LEGACY,
     val semanticsVersion: Int = LEGACY_TOKEN_USAGE_SEMANTICS_VERSION,

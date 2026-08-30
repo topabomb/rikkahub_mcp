@@ -204,7 +204,7 @@ private fun HtmlBlockElement(
             element = element,
             onClickCitation = onClickCitation,
             modifier = if (element.nextElementSibling() != null)
-                Modifier.padding(bottom = LocalTextStyle.current.fontSize.toDp())
+                Modifier.padding(bottom = LocalTextStyle.current.fontSize.toDp() / 2)
             else Modifier,
         )
 
@@ -238,7 +238,7 @@ private fun HtmlBlockElement(
         }
 
         "hr" -> HorizontalDivider(
-            modifier = Modifier.padding(vertical = 16.dp),
+            modifier = Modifier.padding(vertical = 8.dp),
             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
             thickness = 0.5.dp,
         )
@@ -572,7 +572,7 @@ private fun HtmlMathBlock(formula: String) {
             latex = formula,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 8.dp),
+                .padding(vertical = 4.dp),
         )
     } else {
         Text(
@@ -580,7 +580,7 @@ private fun HtmlMathBlock(formula: String) {
             fontFamily = FontFamily.Monospace,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 8.dp),
+                .padding(vertical = 4.dp),
         )
     }
 }
@@ -625,7 +625,7 @@ private fun HtmlTable(element: Element, onClickCitation: (String) -> Unit) {
     DataTable(
         headers = headers,
         rows = rows,
-        modifier = Modifier.padding(vertical = 8.dp),
+        modifier = Modifier.padding(vertical = 4.dp),
         columnMinWidths = List(columnCount) { 80.dp },
         columnMaxWidths = List(columnCount) { 200.dp },
     )
@@ -639,7 +639,7 @@ private fun HtmlDetails(element: Element, onClickCitation: (String) -> Unit) {
 
     var expanded by remember { mutableStateOf(element.hasAttr("open")) }
 
-    Column(modifier = Modifier.padding(vertical = 4.dp)) {
+    Column(modifier = Modifier.padding(vertical = 2.dp)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()

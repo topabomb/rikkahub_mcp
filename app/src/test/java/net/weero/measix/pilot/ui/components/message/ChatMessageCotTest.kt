@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.message
 
+import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.MessageTerminalStatus
 import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.ui.UIMessage
@@ -148,5 +149,53 @@ class ChatMessageCotTest {
 
         assertTrue(shouldHideEmptyCancelledMessage(empty))
         assertFalse(shouldHideEmptyCancelledMessage(partial))
+    }
+
+    @Test
+    fun `message header is emitted only when it has visible identity content`() {
+        assertTrue(
+            shouldShowChatMessageHeader(
+                role = MessageRole.USER,
+                hasRenderableParts = true,
+                hasVisibleMessage = true,
+                showUserAvatar = true,
+                showAssistantIcon = false,
+                showAssistantName = false,
+                hasAssistantIdentity = false,
+            ),
+        )
+        assertFalse(
+            shouldShowChatMessageHeader(
+                role = MessageRole.USER,
+                hasRenderableParts = true,
+                hasVisibleMessage = true,
+                showUserAvatar = false,
+                showAssistantIcon = false,
+                showAssistantName = false,
+                hasAssistantIdentity = false,
+            ),
+        )
+        assertFalse(
+            shouldShowChatMessageHeader(
+                role = MessageRole.ASSISTANT,
+                hasRenderableParts = true,
+                hasVisibleMessage = true,
+                showUserAvatar = false,
+                showAssistantIcon = false,
+                showAssistantName = false,
+                hasAssistantIdentity = true,
+            ),
+        )
+        assertTrue(
+            shouldShowChatMessageHeader(
+                role = MessageRole.ASSISTANT,
+                hasRenderableParts = true,
+                hasVisibleMessage = true,
+                showUserAvatar = false,
+                showAssistantIcon = true,
+                showAssistantName = false,
+                hasAssistantIdentity = true,
+            ),
+        )
     }
 }

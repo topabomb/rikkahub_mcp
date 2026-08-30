@@ -56,7 +56,7 @@ fun ChatMessageBranchSelector(
                             }
                         }
                     )
-                    .padding(8.dp)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
                     .size(16.dp),
                 tint = actionColor
             )
@@ -86,7 +86,7 @@ fun ChatMessageBranchSelector(
                             }
                         }
                     )
-                    .padding(8.dp)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
                     .size(16.dp),
                 tint = actionColor
             )

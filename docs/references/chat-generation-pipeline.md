@@ -190,7 +190,7 @@ Master 的 `FAILED` / `INCOMPLETE` 由 `ChatErrorStore` 投影为当前会话底
 
 Provider 只返回开头 `<think>` 文本时，`ThinkTagTransformer` 在 Master/Target 共用 output pipeline 以最后一个已执行 Tool 为边界，只把当前 assistant→tool step 的首个非空 `Text` 拆成 `Reasoning` 与回答正文。只有当前 step 已有 Provider 原生 Reasoning 时才禁用该 fallback；已完成 step 的 Reasoning 不得抑制后续 step。闭合标签到达时立即冻结当前 step reasoning 的 `finishedAt`，后续累计正文 chunk 只从上一投影的同一 step 复用首次闭合时间；流结束只为当前 step 未闭合标签补时间。`GenerationLoop` 的 phase 判定同样基于累计 raw message 的当前 step，同一标签内文本只发布 `reasoning_streaming`，标签后的正文出现后才发布 `answer_streaming`；终态提交保留各 step 闭合标签首次投影的完成时间。
 消息条数不等于 token 数，长文档、图片、工具 schema 与 System prompt 仍可能占据大量上下文。上下文阈值只使用
-Provider 最近一次请求明确报告的 `latestRequestContextTokens`；缺失时不以 turn 累计 input 猜测。
+Provider 最近一次请求 canonical input 投影出的 `latestRequestContextTokens`；缺失时不以 turn 累计 input 猜测。
 
 显式压缩由 `ConversationApplicationService.compress()` 进入 `GenerationSideEffects.compressConversation()`：生成摘要，
 保留指定的最近完整轮次，再以 durable tree command 替换历史。它是用户触发、持久化且不可撤销的操作，不自动挂到

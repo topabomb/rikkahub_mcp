@@ -4,36 +4,25 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import android.webkit.JavascriptInterface
 import androidx.activity.compose.LocalActivity
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.dokar.sonner.ToastType
-import me.rerere.hugeicons.HugeIcons
-import me.rerere.hugeicons.stroke.Download01
-import me.rerere.hugeicons.stroke.View
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.ui.components.webview.WEB_VIEW_ASSET_URL
 import net.weero.measix.pilot.ui.components.webview.WEB_VIEW_BASE_URL
 import net.weero.measix.pilot.ui.components.webview.WebView
-import net.weero.measix.pilot.ui.components.webview.WebViewContentCache
 import net.weero.measix.pilot.ui.components.webview.rememberWebViewState
-import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.LocalDarkMode
 import net.weero.measix.pilot.utils.ImageExportResult
@@ -44,6 +33,7 @@ import net.weero.measix.pilot.utils.toCssHex
 @Composable
 fun Mermaid(
     code: String,
+    exportRequestKey: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -51,7 +41,6 @@ fun Mermaid(
     val context = LocalContext.current
     val activity = LocalActivity.current
     val toaster = LocalToaster.current
-    val navController = LocalNavController.current
 
     val exportSuccessText = stringResource(R.string.mermaid_export_success)
     val exportFailedText = stringResource(R.string.mermaid_export_failed)
@@ -129,50 +118,22 @@ fun Mermaid(
         }
     )
 
-    Column(
-        modifier = modifier
-    ) {
-        WebView(
-            state = webViewState,
-            modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .height(200.dp),
-        )
-
-        if (activity != null) {
-            Row(
-                modifier = Modifier
-                    .align(Alignment.End)
-                    .padding(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                IconButton(
-                    onClick = {
-                        val contentId = WebViewContentCache.store(context.cacheDir, html)
-                        navController.navigate(Screen.WebView(contentId = contentId))
-                    },
-                ) {
-                    Icon(
-                        HugeIcons.View,
-                        contentDescription = "Preview"
-                    )
-                }
-                IconButton(
-                    onClick = {
-                        webViewState.webView?.evaluateJavascript(
-                            "exportSvgToPng();",
-                            null
-                        )
-                    },
-                ) {
-                    Icon(
-                        HugeIcons.Download01,
-                        contentDescription = stringResource(R.string.mermaid_export)
-                    )
-                }
-            }
+    LaunchedEffect(exportRequestKey) {
+        if (exportRequestKey > 0) {
+            webViewState.webView?.evaluateJavascript(
+                "exportSvgToPng();",
+                null,
+            )
         }
     }
+
+    WebView(
+        state = webViewState,
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(4.dp))
+            .height(200.dp),
+    )
 }
 
 private class MermaidInterface(
@@ -184,7 +145,7 @@ private class MermaidInterface(
     }
 }
 
-private fun buildMermaidHtml(
+internal fun buildMermaidHtml(
     code: String,
     colorScheme: ColorScheme,
 ): String {
