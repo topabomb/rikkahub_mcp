@@ -146,9 +146,16 @@ class WorkspaceApplicationService(
 data class WorkspaceCreated(val workspaceId: String)
 
 interface WorkspaceToolSession {
-    suspend fun rootfsFileSize(path: String): Long
+    suspend fun readRootfsBytes(path: String, maxBytes: Long): ByteArray
 
-    suspend fun exportRootfsFile(path: String, output: OutputStream)
+    suspend fun writeRootfsText(path: String, text: String, overwrite: Boolean, approvedByUser: Boolean): WorkspaceFileEntry
+
+    suspend fun updateRootfsText(
+        path: String,
+        maxBytes: Long,
+        approvedByUser: Boolean,
+        transform: (String) -> String,
+    ): WorkspaceFileEntry
 
     suspend fun executeCommand(
         command: String,
@@ -162,11 +169,22 @@ private class RepositoryWorkspaceToolSession(
     private val repository: WorkspaceRepository,
     private val workspaceId: String,
 ) : WorkspaceToolSession {
-    override suspend fun rootfsFileSize(path: String): Long =
-        repository.rootfsFileSize(workspaceId, path)
+    override suspend fun readRootfsBytes(path: String, maxBytes: Long): ByteArray =
+        repository.readRootfsBytes(workspaceId, path, maxBytes)
 
-    override suspend fun exportRootfsFile(path: String, output: OutputStream) =
-        repository.exportRootfsFile(workspaceId, path, output)
+    override suspend fun writeRootfsText(
+        path: String,
+        text: String,
+        overwrite: Boolean,
+        approvedByUser: Boolean,
+    ): WorkspaceFileEntry = repository.writeRootfsText(workspaceId, path, text, overwrite, approvedByUser)
+
+    override suspend fun updateRootfsText(
+        path: String,
+        maxBytes: Long,
+        approvedByUser: Boolean,
+        transform: (String) -> String,
+    ): WorkspaceFileEntry = repository.updateRootfsText(workspaceId, path, maxBytes, approvedByUser, transform)
 
     override suspend fun executeCommand(
         command: String,

@@ -31,6 +31,8 @@ import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
 import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
 import net.weero.measix.pilot.utils.JsonInstant
 
+const val APP_DATABASE_VERSION = 9
+
 @Database(
     entities = [
         ConversationEntity::class,
@@ -46,7 +48,7 @@ import net.weero.measix.pilot.utils.JsonInstant
         TurnExecutionEntity::class,
         ToolExecutionEntity::class,
     ],
-    version = 8,
+    version = APP_DATABASE_VERSION,
     autoMigrations = [],
 )
 @TypeConverters(TokenUsageConverter::class)

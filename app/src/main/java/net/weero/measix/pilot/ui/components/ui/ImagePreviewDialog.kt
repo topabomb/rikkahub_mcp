@@ -205,7 +205,8 @@ fun ImagePreviewDialog(
         onDismissRequest = onDismissRequest,
         properties = DialogProperties(
             dismissOnClickOutside = false,
-            usePlatformDefaultWidth = false
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
         )
     ) {
         CompositionLocalProvider(LocalToaster provides dialogToaster) {

@@ -23,6 +23,8 @@ Provider wire usage event
 - `RequestUsageReducer` 是单请求快照合并和完整性判定的唯一 owner。
 - `TurnUsageAccumulator` 是一个 Assistant turn 内多次 Provider 请求累计的唯一 owner。
 - `UIMessage.usage` 是 durable usage 的唯一事实；它随 owning Assistant 消息通过既有 checkpoint 或终态事务提交。
+- `ActiveTurnState.latestAvailableContextCache` 只保留活动 turn 的 Context/Cache 展示对及来源 Assistant ID，
+  随既有 snapshot 发布；不进入 usage、持久化、累计器或独立状态流。
 - UI 只显示投影，`MessageNodeDAO` / `StatsQueryService` 只查询 durable JSON；二者都不重新计算 usage，也不建立账本。
 
 禁止 Provider Adapter 跨请求求和、UI 按 chunk 或消息重算、旁路 DAO 写入、第二 usage 表、fallback 累计器和旧字段转发属性。
@@ -62,12 +64,16 @@ Provider wire usage event
 1. 流式事件按字段 presence 覆盖当前请求快照；字段缺失表示本事件不更新该字段，显式 `0` 必须覆盖旧值。
    携带 usage 的事件即使没有 choices/candidates 也必须进入 reducer，包括 Chat 最终 usage-only chunk、Responses
    completed/incomplete/failed terminal event 和 Gemini usage-only event。
-2. 流式 UI 可以读取“已累计 turn + 当前请求预览”，但预览不是 durable fact。紧凑栏的 Context/Cache 成对保留上一条
-   已收口请求，当前请求关闭后再原子切换；没有上一条已收口请求时保持 unknown，不能用流式中间态的临时零覆盖。
+2. 流式 UI 可以读取“已累计 turn + 当前请求预览”，但预览不是 durable fact。request preview 的 latest 字段保留本 turn
+   上一条已收口请求；第一条请求收口前保持 unknown，不使用流式中间态的临时零。活动 footer 的跨请求展示保留规则见下文。
 3. 正常、失败和取消都在 Provider 调用的 `finally` 路径关闭请求；一个 reducer 只能关闭一次。
    `GenerationLoop.run()` 的 `channelFlow` 使用 rendezvous 容量：允许 Transformer 子协程安全发布；当 Provider 抛出失败或
    取消且下游仍 active 时，带最终 usage 的消息投影被下游接收后才传播原异常，不能让缓冲在异常收口时丢弃已观测 usage。
    若 collector/turn 已从外部取消，则不承诺最终 UI 投影交付，取消仍立即传播。
+   `GenerationRequest.onMessagesObserved` 在可取消 Transformer 和消息发送前同步交接已关闭 usage，
+   `TurnEngine.observeMessages` 更新唯一 turn-owned 最新消息槽；`bind` 不再另存或回写消息副本。
+   因而真实 worker/collector `Job.cancel()` 仍以请求关闭后的计数、完整性、latest 字段与耗时提交终态，
+   不依赖取消后的 UI 投影交付，也不向已取消 channel 强行发送。
 4. `TurnUsageAccumulator.apply()` 只接受下一个连续 ordinal，因此一次请求最多累计一次，重复或跳号立即失败。
 5. checkpoint 成功后，该 turn 累计值才成为后续 step 或审批继续的 durable baseline。
 
@@ -80,6 +86,9 @@ turn 聚合规则：
 - TTFT 从第一次请求发起计时；空协议事件和 usage-only 事件不算，Text、Reasoning、Tool 或媒体 payload 首次出现时冻结。
 - 没有 usage 的失败请求仍计入 `observedProviderRequestCount`，但不增加 `observedUsageReportedRequestCount`，并使相关 turn 完整性降级。
 - Provider 内容已经返回时，即使随后失败、取消或响应 incomplete，已收到的 usage 仍随原 turn 收口；取消异常继续传播。
+- Google / Responses 的非流式 HTTP 成功但协议失败响应先解码可用内容和 usage，再抛出携带该快照的
+  `ProviderResponseException`。`GenerationLoop` 先接收快照，再沿原失败链关闭请求；不执行失败响应中的工具。
+  其他 `generateText` 调用者仍收到异常，不会把 partial 响应当成成功。
 - `CONTINUE_APPROVAL` 从原 Assistant 消息的已提交 usage 恢复，不创建第二 turn，也不重复加入 checkpoint 前的请求。
 - 历史版本 1 baseline 的请求边界不可恢复；若继续运行，完整性按当前请求合并为 `PARTIAL`，不保留 legacy 特殊累计或显示路径。
 
@@ -143,21 +152,36 @@ usage 仍位于 `UIMessage` JSON 中，不新增 Room 表或 schema migration。
 新增 usage 字段均为 nullable 且默认 `null`。旧 JSON、备份与历史消息不迁移、不重写、不猜测回填；缺失字段直接保持
 unknown。旧记录可以继续解码，但 UI 不为 `LEGACY` 建立特殊显示或计算旁路。Stats 仍按数据库实际保存的历史值查询。
 
+Context/Cache 展示保留是 process-local 的 `ActiveTurnState` 字段，不改变任何 JSON 或数据库结构。进程重建或重新进入
+turn 时，只能从现有 durable 选中消息取得有效的 latest 对；已被后续 unknown 请求覆盖的同 turn 较早请求无法恢复，不猜测补齐。
+
 ## 8. 消费者口径
 
 ### 聊天消息底部
 
 `ChatMessageNerdLine` 是低对比度、无容器背景的紧凑 footer：
 
-- 默认单行固定显示 `Context x · Cache y% · Req n`。Context 与 Cache 同属最新请求，Req 是 owning Assistant turn 的请求数。
+- 默认单行固定显示 `Context x · Cache y% · Req n`。历史消息显示其 latest 请求；活动消息显示最近可用的已关闭请求对，
+  Req 始终是 owning Assistant turn 的请求数，不随展示保留继承历史计数。
 - Cache 百分比为 `latestRequestCacheReadInputTokens / latestRequestContextTokens`；分母必须大于零且 cache 不得超过 Context。
-  缺失显示 unknown，显式零显示 `0%`；cache write 不进入分子。显示精度按原始比例确定：低于 90% 为整数，
+  显式零显示 `0%`；正数低于 0.5% 显示 `<1%`，避免舍入为未命中；cache write 不进入分子。显示精度按原始比例确定：其余低于 90% 为整数，
   90% 至低于 99% 保留一位小数，99% 及以上保留两位小数；仅格式化显示，不改变原始计数和比值。
 - 点击后最多补充两个自适应信息组：turn 累计 input/output/cache read，以及 tok/s、初始 TTFT、整条消息总耗时。
 - turn input/output 只有 core `COMPLETE` 时显示；turn cache 只有 cache-read `COMPLETE` 时显示。`LEGACY` 没有显示特例。
 - TPS 按累计 output 除以累计 Provider request duration；Clock 使用消息 `createdAt` 到 `finishedAt`，包含工具和审批等待。
 - 活动动效与等待审批继续由 `ChatList` 原有独立状态行显示；归属、28dp loading、主题主色、容器、审批标签和判断条件
   均不改变，只收紧该行的上下留白。它不进入 usage footer，关闭 token 显示也不会隐藏 turn 活动状态。
+
+活动 Context/Cache 由 Runtime 保留、query/presentation 投影，主聊天与 Child 详情共用规则：
+
+- `START` 建立选中 Assistant 槽后，从该分支选中消息逆序取得最近有效的一对 Context/cache read；不读取未选中的变体、
+  其他会话或子助手的 usage。再生成的新槽不会继承同节点已取消选中的旧变体。
+- stream 或已提交 checkpoint 带来有效 latest 对时，原子替换展示对和来源 Assistant ID；任一字段缺失或无效时成对保留，
+  不把新 Context 与旧 Cache 拼接。真实零是有效新值，立即替换。没有有效历史对时只显示本消息可证明的字段，缺失项为 `—`。
+- 这对原始值只存在同一个 `ActiveTurnState`，`ConversationPresentation.activeContextCache` 仅供 owning active Assistant
+  消费。订阅暂停、页面重入与 StateFlow conflation 不丢失已观察值；较旧 checkpoint 的发布不能覆盖并发 stream 已观察的新对。
+- 审批等待及同 handle 继续保留展示值；取消过程中仍保留，终态提交清除 active hint。历史/idle 消息始终显示自身真实字段，
+  最新请求 unknown 仍为 `—`，不永久伪装为上一请求的 usage。累计 input/cache、Req、速度与时延从不读取展示 hint。
 
 ### 上下文预警
 
@@ -183,6 +207,8 @@ Stats 表示“当前数据库仍保留的 Provider usage”，不是账户终�
 | Request reducer / turn accumulator | `app/src/main/java/net/weero/measix/pilot/data/ai/TokenUsageAccounting.kt` |
 | Provider 请求循环 | `app/src/main/java/net/weero/measix/pilot/data/ai/GenerationLoop.kt` |
 | Checkpoint / continue owner | `app/src/main/java/net/weero/measix/pilot/service/runtime/TurnEngine.kt` |
+| 活动展示保留 owner / 发布 | `app/src/main/java/net/weero/measix/pilot/service/runtime/ConversationCommands.kt`、`ConversationTransition.kt`、`ConversationRuntime.kt` |
+| Context/Cache 成对展示投影 | `app/src/main/java/net/weero/measix/pilot/service/runtime/ConversationPresentation.kt`、`service/ConversationQueryService.kt` |
 | 紧凑底栏与上下文预警 | `app/src/main/java/net/weero/measix/pilot/ui/components/message/ChatMessageNerdLine.kt`、`ui/pages/chat/ChatSizeChecker.kt` |
 | Stats durable SQL 投影 | `app/src/main/java/net/weero/measix/pilot/data/db/dao/MessageNodeDAO.kt` |
 | Stats query / UI 投影 | `app/src/main/java/net/weero/measix/pilot/service/StatsQueryService.kt`、`ui/pages/stats/StatsVM.kt`、`StatsPage.kt` |

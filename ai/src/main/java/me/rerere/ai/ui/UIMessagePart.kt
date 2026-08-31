@@ -117,7 +117,7 @@ sealed class UIMessagePart {
         /** Whether a resolved approval can resume assembly of the Provider replay result. */
         val canResumeResultAssembly: Boolean get() = !hasReplayResult && approvalState.canResumeToolExecution()
 
-        /** Parse input string as JsonElement */
+        /** Replay/display projection for partial input; execution must use Tool.parseArguments. */
         fun inputAsJson(): JsonElement = runCatching {
             json.parseToJsonElement(input.ifBlank { "{}" })
         }.getOrElse { JsonObject(emptyMap()) }

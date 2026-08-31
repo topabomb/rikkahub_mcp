@@ -33,6 +33,7 @@ import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.service.TurnFinalization
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.uuid.Uuid
 
 /**
@@ -128,6 +129,15 @@ class TurnEngine(
     }
 
     private var submittedTerminalStatus: TurnExecutionStatus? = null
+    private val latestMessages = AtomicReference(runtime.snapshot.value.currentMessages())
+
+    /** Only the producer updates this slot; presentation delivery can be cancelled or delayed. */
+    fun observeMessages(messages: List<UIMessage>) {
+        require(messages.lastOrNull()?.id == handle.assistantMessageId) {
+            "observed messages do not end with the owning assistant message"
+        }
+        latestMessages.set(messages)
+    }
 
     /** 交给 GenerationRequest.onCheckpoint 的回调：将 GenerationCheckpoint 落为 CommitCheckpoint 命令。 */
     suspend fun onCheckpoint(checkpoint: net.weero.measix.pilot.data.ai.GenerationCheckpoint) {
@@ -147,7 +157,6 @@ class TurnEngine(
 
     /** 把 GenerationChunk 流绑定到提交协议（冷流，collect 触发执行）。 */
     fun bind(source: Flow<GenerationChunk>): Flow<TurnEvent> = flow {
-        var lastMessages: List<UIMessage> = emptyList()
         var terminalSeen = false
         val sourceEvents = source.transform<GenerationChunk, TurnSourceEvent> { chunk ->
             emit(TurnSourceEvent.Chunk(chunk))
@@ -161,7 +170,6 @@ class TurnEngine(
                     val outcome = TurnOutcome.fromFailure(event.error)
                     submitStreamFinalize(
                         outcome = outcome,
-                        lastMessages = lastMessages,
                         closeInterruptedTools = false,
                     )
                     terminalSeen = true
@@ -170,7 +178,6 @@ class TurnEngine(
                 }
                 when (val chunk = (event as TurnSourceEvent.Chunk).value) {
                     is GenerationChunk.Messages -> {
-                        lastMessages = chunk.messages
                         check(runtime.applyStreamingDelta(handle, chunk.messages) == StreamingDeltaResult.APPLIED) {
                             "stale streaming delta for turn ${handle.turnId}"
                         }
@@ -183,7 +190,6 @@ class TurnEngine(
                         val outcome = TurnOutcome.fromFinishedReason(chunk.reason)
                         submitStreamFinalize(
                             outcome = outcome,
-                            lastMessages = lastMessages,
                             closeInterruptedTools = false,
                         )
                         terminalSeen = true
@@ -198,7 +204,6 @@ class TurnEngine(
                 )
                 submitStreamFinalize(
                     outcome = outcome,
-                    lastMessages = lastMessages,
                     closeInterruptedTools = false,
                 )
                 emit(TurnEvent.Finished(outcome))
@@ -213,7 +218,6 @@ class TurnEngine(
                     withContext(NonCancellable) {
                         submitStreamFinalize(
                             outcome = outcome,
-                            lastMessages = lastMessages,
                             closeInterruptedTools = false,
                         )
                     }
@@ -228,11 +232,10 @@ class TurnEngine(
     /** Finalizes an owner failure that happens outside the bound provider flow. */
     suspend fun finalizeOwnerFailure(
         outcome: TurnOutcome,
-        messages: List<UIMessage>,
         closeInterruptedTools: Boolean = false,
     ) {
         require(outcome !is TurnOutcome.AwaitingApproval) { "an approval checkpoint is not an owner failure" }
-        submitStreamFinalize(outcome, messages, closeInterruptedTools)
+        submitStreamFinalize(outcome, closeInterruptedTools)
     }
 
     /**
@@ -284,13 +287,13 @@ class TurnEngine(
 
     private suspend fun submitStreamFinalize(
         outcome: TurnOutcome,
-        lastMessages: List<UIMessage>,
         closeInterruptedTools: Boolean,
     ) {
         if (outcome !is TurnOutcome.AwaitingApproval && submittedTerminalStatus != null) {
             submitOutcome(messages = null, outcome = outcome, closeInterruptedTools = closeInterruptedTools)
             return
         }
+        val lastMessages = latestMessages.get()
         val prepared = messagesForFinalize(outcome, lastMessages)
         val messages = prepared.takeIf { it.isNotEmpty() }
             ?: lastMessages.takeIf { it.isNotEmpty() }

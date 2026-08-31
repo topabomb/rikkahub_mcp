@@ -39,8 +39,8 @@ enum class ArtifactOrigin {
     tableName = "artifact",
     indices = [
         Index(value = ["relative_path"], unique = true),
-        Index(value = ["folder"]),
-        Index(value = ["state"]),
+        Index(value = ["folder", "created_at"]),
+        Index(value = ["state", "created_at"]),
     ]
 )
 data class ArtifactEntity(

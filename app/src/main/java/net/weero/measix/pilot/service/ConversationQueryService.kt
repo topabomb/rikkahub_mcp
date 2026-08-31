@@ -14,11 +14,13 @@ import net.weero.measix.pilot.data.repository.ConversationListRecord
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.FolderRepository
 import net.weero.measix.pilot.data.model.Folder
+import net.weero.measix.pilot.service.runtime.ActiveContextCache
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeState
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
+import net.weero.measix.pilot.service.runtime.activeContextCache
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import java.time.Instant
 import kotlin.uuid.Uuid
@@ -102,6 +104,8 @@ class ConversationQueryService(
 
     /** Re-emits query models when ArtifactStore invalidates or removes a referenced payload. */
     fun attachmentPreviewChanges(): Flow<Unit> = attachmentPreviewProjector.lifecycleChanges()
+
+    fun activeContextCache(snapshot: ConversationSnapshot): ActiveContextCache? = snapshot.activeContextCache()
 
     fun ttsQueueSessionId(conversationId: Uuid): String? =
         runtimeRegistry.findRuntime(conversationId)?.peekTtsQueueSessionId()
@@ -188,4 +192,6 @@ class SubAssistantDetailReader(private val queryService: ConversationQueryServic
         queryService.attachmentPreviews(snapshot)
 
     fun attachmentPreviewChanges(): Flow<Unit> = queryService.attachmentPreviewChanges()
+
+    fun activeContextCache(snapshot: ConversationSnapshot): ActiveContextCache? = queryService.activeContextCache(snapshot)
 }

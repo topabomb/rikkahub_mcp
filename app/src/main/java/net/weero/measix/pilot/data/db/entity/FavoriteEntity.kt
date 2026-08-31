@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.db.entity
+package net.weero.measix.pilot.data.db.entity
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
@@ -9,7 +9,7 @@ import androidx.room.PrimaryKey
     tableName = "favorites",
     indices = [
         Index(value = ["ref_key"], unique = true),
-        Index(value = ["type"]),
+        Index(value = ["type", "created_at"]),
         Index(value = ["created_at"])
     ]
 )

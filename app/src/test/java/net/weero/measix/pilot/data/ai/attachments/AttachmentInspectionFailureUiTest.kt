@@ -16,8 +16,8 @@ class AttachmentInspectionFailureUiTest {
                 R.string.chat_message_tool_inspection_failed_invalid_arguments,
             AttachmentFailureReasons.ATTACHMENT_NOT_FOUND to attachmentResolution,
             AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE to attachmentResolution,
-            AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL to attachmentResolution,
-            AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED to attachmentResolution,
+            AttachmentFailureReasons.ATTACHMENT_TOO_LARGE to attachmentResolution,
+            AttachmentFailureReasons.ATTACHMENT_READ_FAILED to attachmentResolution,
             AttachmentFailureReasons.ATTACHMENT_RESOLUTION_UNAVAILABLE to attachmentResolution,
             AttachmentFailureReasons.INSPECTION_MODEL_UNAVAILABLE to
                 R.string.chat_message_tool_inspection_failed_model_unavailable,

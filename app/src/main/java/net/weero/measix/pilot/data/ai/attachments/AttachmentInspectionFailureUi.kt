@@ -15,8 +15,8 @@ fun attachmentInspectionFailureStringRes(reason: String?): Int = when (reason) {
 
     AttachmentFailureReasons.ATTACHMENT_NOT_FOUND,
     AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE,
-    AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL,
-    AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED,
+    AttachmentFailureReasons.ATTACHMENT_TOO_LARGE,
+    AttachmentFailureReasons.ATTACHMENT_READ_FAILED,
     AttachmentFailureReasons.ATTACHMENT_RESOLUTION_UNAVAILABLE,
         -> R.string.chat_message_tool_inspection_failed_attachment
 

@@ -36,9 +36,13 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.longOrNull
+import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.File02
@@ -242,11 +246,34 @@ internal fun EditedFilesList(
 
 internal fun editedWorkspaceFilePaths(parts: List<UIMessagePart>): List<String> =
     parts.filterIsInstance<UIMessagePart.Tool>()
-        .filter { it.toolName in WORKSPACE_FILE_TOOL_NAMES && it.hasReplayResult }
-        .mapNotNull { tool ->
-            tool.inputAsJson().jsonObject["path"]?.jsonPrimitive?.contentOrNull
-        }
+        .mapNotNull(::successfulWorkspaceFilePath)
         .distinct()
+
+/** A completed file mutation is described by its result, never inferred from requested arguments. */
+private fun successfulWorkspaceFilePath(tool: UIMessagePart.Tool): String? {
+    if (tool.toolName !in WORKSPACE_FILE_TOOL_NAMES ||
+        tool.approvalState is ToolApprovalState.Denied || tool.approvalState is ToolApprovalState.Pending
+    ) return null
+    val text = (tool.output.singleOrNull() as? UIMessagePart.Text)?.text ?: return null
+    val result = try {
+        Json.parseToJsonElement(text) as? JsonObject
+    } catch (_: SerializationException) {
+        null
+    } ?: return null
+    if ("error" in result || "status" in result || "success" in result) return null
+    val path = (result["path"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
+    if (!path.startsWith('/') || path.endsWith('/') || '\u0000' in path) return null
+    fun number(key: String): Long? =
+        (result[key] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
+    if (number("sizeBytes")?.let { it >= 0 } != true || number("updatedAt") == null) return null
+    val succeeded = when (tool.toolName) {
+        "workspace_write_file" -> (result["isDirectory"] as? JsonPrimitive)
+            ?.takeUnless { it.isString }?.booleanOrNull == false
+        "workspace_edit_file" -> number("replacements")?.let { it > 0 } == true
+        else -> false
+    }
+    return path.takeIf { succeeded }
+}
 
 private fun resolveWorkspacePath(path: String): Pair<WorkspaceStorageArea, String> {
     val trimmed = path.trimEnd('/')

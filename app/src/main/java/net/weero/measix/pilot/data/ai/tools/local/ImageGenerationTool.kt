@@ -17,6 +17,7 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolExecutionContext
+import me.rerere.ai.core.ToolMetadataDelivery
 import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.datastore.Settings
@@ -76,18 +77,10 @@ internal fun parseGenerateImageArguments(args: JsonElement): Result<GenerateImag
     val backgroundRaw = obj["set_as_background"]
     val setAsBackground = when {
         backgroundRaw == null -> false
-        backgroundRaw is JsonPrimitive && backgroundRaw.booleanOrNull != null -> backgroundRaw.booleanOrNull!!
+        backgroundRaw is JsonPrimitive && !backgroundRaw.isString && backgroundRaw.booleanOrNull != null -> backgroundRaw.booleanOrNull!!
         else -> return Result.failure(GenerateImageArgumentError())
     }
     return Result.success(GenerateImageArguments(prompt, setAsBackground))
-}
-
-internal fun generateImageApprovalRejection(
-    toolName: String,
-    args: JsonElement,
-): List<UIMessagePart>? {
-    if (toolName != GENERATE_IMAGE_TOOL_NAME) return null
-    return parseGenerateImageArguments(args).exceptionOrNull()?.let { failedResult(reason = "invalid_arguments") }
 }
 
 internal fun imageGenerationSystemPrompt(descriptor: ImageGenerationModelDescriptor): String {
@@ -97,15 +90,14 @@ internal fun imageGenerationSystemPrompt(descriptor: ImageGenerationModelDescrip
         "when writing the prompt.\n$json"
 }
 
-internal fun failedResult(reason: String, detail: String? = null): List<UIMessagePart> = listOf(
-    UIMessagePart.Text(
-        buildJsonObject {
-            put("status", "failed")
-            put("reason", reason)
-            detail?.trim()?.takeIf { it.isNotEmpty() }?.let { put("detail", it) }
-        }.toString()
-    )
-)
+private fun imageGenerationFailureJson(reason: String, detail: String? = null): JsonObject = buildJsonObject {
+    put("status", "failed")
+    put("reason", reason)
+    detail?.trim()?.takeIf { it.isNotEmpty() }?.let { put("detail", it) }
+}
+
+internal fun failedResult(reason: String, detail: String? = null): List<UIMessagePart> =
+    listOf(UIMessagePart.Text(imageGenerationFailureJson(reason, detail).toString()))
 
 data class AssistantToolBuildContext(
     val ownerAssistantId: Uuid,
@@ -156,6 +148,9 @@ class ImageGenerationToolFactory(
             needsApproval = { args ->
                 parseGenerateImageArguments(args).getOrNull()?.setAsBackground == true
             },
+            validateArguments = { args ->
+                parseGenerateImageArguments(args).exceptionOrNull()?.let { imageGenerationFailureJson("invalid_arguments") }
+            },
             outputPolicy = ToolOutputPolicy.PRESERVE,
             execute = { failedResult("invalid_arguments") },
             contextualExecute = { args ->
@@ -204,7 +199,7 @@ private suspend fun executeGenerateImage(
     )
     if (preflight != null) return failedResult(preflight.reason)
 
-    suspend fun reportPhase(phase: String, checkpoint: Boolean, extra: ImageGenerationToolMetadata? = null) {
+    suspend fun reportPhase(phase: String, delivery: ToolMetadataDelivery, extra: ImageGenerationToolMetadata? = null) {
         val metadata = extra ?: ImageGenerationToolMetadata(
             phase = phase,
             providerType = capturedSelection.descriptor.providerType,
@@ -212,7 +207,7 @@ private suspend fun executeGenerateImage(
             modelId = capturedSelection.descriptor.modelId,
             modelName = capturedSelection.descriptor.modelName,
         )
-        context.reportMetadata(json.encodeToJsonElement(ImageGenerationToolMetadata.serializer(), metadata).jsonObject(), checkpoint)
+        context.reportMetadata(json.encodeToJsonElement(ImageGenerationToolMetadata.serializer(), metadata).jsonObject(), delivery)
     }
 
     var lastPhaseOrdinal = -1
@@ -244,7 +239,7 @@ private suspend fun executeGenerateImage(
                         ImageGenerationPhase.GENERATING -> "generating"
                         ImageGenerationPhase.PERSISTING -> "persisting"
                     },
-                    checkpoint = true,
+                    delivery = ToolMetadataDelivery.CHECKPOINT,
                 )
             }
         },
@@ -254,7 +249,7 @@ private suspend fun executeGenerateImage(
         is ImageGenerationOutcome.Failure -> {
             reportPhase(
                 phase = "failed",
-                checkpoint = false,
+                delivery = ToolMetadataDelivery.DEFERRED,
                 extra = ImageGenerationToolMetadata(
                     phase = "failed",
                     providerType = capturedSelection.descriptor.providerType,
@@ -281,7 +276,7 @@ private suspend fun executeGenerateImage(
             context.registerUnpublishedResource(artifactStore.unpublishedLease(ownedArtifact))
             var background = BackgroundUpdateResult(requested = parsed.setAsBackground, updated = false)
             if (parsed.setAsBackground) {
-                reportPhase("setting_background", checkpoint = true)
+                reportPhase("setting_background", delivery = ToolMetadataDelivery.CHECKPOINT)
                 background = backgroundService.replaceGeneratedBackground(
                     assistantId = ownerAssistantId,
                     source = media.canonicalFile,
@@ -312,7 +307,7 @@ private suspend fun executeGenerateImage(
             )
             val metadataJson = json.encodeToJsonElement(ImageGenerationToolMetadata.serializer(), terminal).jsonObject()
             val withArtifact = rewriter.encodeArtifactRef(metadataJson, artifact)
-            context.reportMetadata(withArtifact, false)
+            context.reportMetadata(withArtifact, ToolMetadataDelivery.DEFERRED)
             listOf(
                 UIMessagePart.Text(text),
                 net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.ensureAttachmentRef(

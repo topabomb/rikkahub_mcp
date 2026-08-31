@@ -4,10 +4,12 @@ object AttachmentFailureReasons {
     const val INVALID_ATTACHMENTS = "invalid_attachments"
     const val ATTACHMENT_NOT_FOUND = "attachment_not_found"
     const val UNSUPPORTED_ATTACHMENT_TYPE = "unsupported_attachment_type"
+    const val ATTACHMENT_TOO_LARGE = "attachment_too_large"
+    const val ATTACHMENT_READ_FAILED = "attachment_read_failed"
     const val UNSAFE_ATTACHMENT_URL = "unsafe_attachment_url"
     const val ATTACHMENT_FETCH_FAILED = "attachment_fetch_failed"
 
-    /** 工具执行环境未提供 stable attachment ref 解析能力。 */
+    /** 工具执行环境未提供受管图片路径读取能力。 */
     const val ATTACHMENT_RESOLUTION_UNAVAILABLE = "attachment_resolution_unavailable"
     const val INSPECTION_MODEL_UNAVAILABLE = "inspection_model_unavailable"
     const val INSPECTION_FAILED = "inspection_failed"

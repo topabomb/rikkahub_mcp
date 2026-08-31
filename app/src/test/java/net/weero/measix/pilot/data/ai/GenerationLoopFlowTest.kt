@@ -7,7 +7,12 @@ import io.mockk.mockk
 import io.mockk.slot
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -24,10 +29,12 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ProviderUsageSnapshot
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolExecutionFailure
+import me.rerere.ai.core.ToolMetadataDelivery
 import me.rerere.ai.core.ToolResourceLease
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
+import me.rerere.ai.provider.ProviderResponseException
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.provider.RequestImageSupport
@@ -38,7 +45,10 @@ import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.util.HttpException
+import me.rerere.ai.util.ProviderTerminalStatus
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
+import net.weero.measix.pilot.data.ai.tools.local.buildAskUserTool
 import net.weero.measix.pilot.data.ai.transformers.InputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.OutputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.StreamingMessageTransformer
@@ -54,6 +64,63 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GenerationLoopFlowTest {
+    @Test
+    fun `invalid pending closes while valid batch waits and resumes exactly once with derived approval`() = runTest {
+        val executed = mutableListOf<Pair<String, Boolean>>()
+        val approved = Tool(
+            name = "approved", description = "approved", needsApproval = { true },
+            execute = { error("context required") },
+            contextualExecute = {
+                executed += "approved" to approvedByUser
+                listOf(UIMessagePart.Text("ok"))
+            },
+        )
+        val automatic = Tool(
+            name = "automatic", description = "automatic",
+            execute = { error("context required") },
+            contextualExecute = {
+                executed += "automatic" to approvedByUser
+                listOf(UIMessagePart.Text("ok"))
+            },
+        )
+        val harness = createProviderHarness()
+        val initial = listOf(
+            UIMessage.user("continue"),
+            UIMessage(role = MessageRole.ASSISTANT, parts = listOf(
+                UIMessagePart.Tool("bad", "ask_user", "{}", approvalState = ToolApprovalState.Pending),
+                UIMessagePart.Tool("yes", "approved", ""),
+                UIMessagePart.Tool("auto", "automatic", """{"approvedByUser":true}"""),
+            )),
+        )
+        val checkpoints = mutableListOf<GenerationCheckpoint>()
+        val request = GenerationRequest(
+            settings = harness.settings,
+            model = harness.model,
+            mediaCapabilities = RequestMediaCapabilities.NONE,
+            messages = initial,
+            assistant = harness.assistant,
+            tools = listOf(buildAskUserTool(), approved, automatic),
+            maxSteps = 1,
+            onCheckpoint = checkpoints::add,
+        )
+        val first = harness.handler.run(request).toList()
+        assertEquals(FinishedReason.AWAITING_APPROVAL, first.filterIsInstance<GenerationChunk.Finished>().single().reason)
+        assertTrue(executed.isEmpty())
+        val awaiting = first.filterIsInstance<GenerationChunk.Messages>().last().messages
+        assertFalse(awaiting.last().getTools()[0].isPending)
+        assertTrue(awaiting.last().getTools()[0].hasReplayResult)
+        assertTrue(checkpoints.none { it.toolExecution != null })
+        assertEquals(listOf(ToolResultEventStatus.FAILED), checkpoints.flatMap { it.toolResults }.map { it.status })
+
+        val decision = awaiting.last().replaceToolsAtOrdinals(mapOf(
+            1 to awaiting.last().getTools()[1].copy(approvalState = ToolApprovalState.Approved),
+        ))
+        harness.handler.run(request.copy(messages = awaiting.dropLast(1) + decision)).toList()
+        assertEquals(listOf("approved" to true, "automatic" to false), executed)
+        assertEquals(listOf(1, 2), checkpoints.mapNotNull { it.toolExecution }
+            .filter { it.status == ToolExecutionEventStatus.STARTED }.map { it.toolOrdinal })
+    }
+
     @Test
     fun `empty tool outputs become explicit Provider replay results`() {
         val successful = ensureProviderReplayResult(emptyList(), EmptyToolResultStatus.COMPLETED)
@@ -79,7 +146,7 @@ class GenerationLoopFlowTest {
             parts = listOf(
                 UIMessagePart.Tool(
                     toolCallId = "call-invalid-image",
-                    toolName = "generate_image",
+                    toolName = "ask_user",
                     input = "{}",
                 )
             ),
@@ -94,6 +161,7 @@ class GenerationLoopFlowTest {
                 mediaCapabilities = RequestMediaCapabilities.NONE,
                 messages = listOf(UIMessage.user("draw")),
                 assistant = harness.assistant,
+                tools = listOf(buildAskUserTool()),
                 maxSteps = 1,
                 onCheckpoint = { checkpoint ->
                     if (checkpoint.kind == CheckpointKind.TOOL_RESULT_COMPLETED) {
@@ -116,7 +184,7 @@ class GenerationLoopFlowTest {
         val toolMessage = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
-                UIMessagePart.Tool("invalid", "generate_image", "{}"),
+                UIMessagePart.Tool("invalid", "ask_user", "{}"),
                 UIMessagePart.Tool("approval", "approval_tool", "{}"),
             ),
         )
@@ -136,7 +204,7 @@ class GenerationLoopFlowTest {
                 mediaCapabilities = RequestMediaCapabilities.NONE,
                 messages = listOf(UIMessage.user("draw then continue")),
                 assistant = harness.assistant,
-                tools = listOf(approvalTool),
+                tools = listOf(approvalTool, buildAskUserTool()),
                 maxSteps = 1,
                 onCheckpoint = { checkpoint ->
                     if (checkpoint.kind == CheckpointKind.TOOL_RESULT_COMPLETED) {
@@ -524,7 +592,7 @@ class GenerationLoopFlowTest {
                     withContext(childJob) {
                         reportMetadata(
                             buildJsonObject { put("phase", JsonPrimitive("running")) },
-                            true,
+                            ToolMetadataDelivery.CHECKPOINT,
                         )
                     }
                 } finally {
@@ -897,11 +965,7 @@ class GenerationLoopFlowTest {
         val outputText = (toolResult.output.single() as UIMessagePart.Text).text
         assertTrue(outputText.contains("tool_not_available"))
         assertFalse(outputText.contains("Tool missing_tool not found"))
-        assertEquals(
-            listOf(ToolExecutionEventStatus.STARTED, ToolExecutionEventStatus.FAILED),
-            toolEvents.map { it.status },
-        )
-        assertTrue(toolEvents.all { it.toolName == "missing_tool" })
+        assertTrue(toolEvents.isEmpty())
     }
 
     @Test
@@ -1127,7 +1191,7 @@ class GenerationLoopFlowTest {
     @Test
     fun `provider failure closes observed usage once and preserves the original error`() = runTest {
         val expectedFailure = IllegalStateException("provider stream failed")
-        val harness = createFailingUsageStreamHarness(expectedFailure)
+        val harness = createUsageStreamHarness(expectedFailure)
         val chunks = mutableListOf<GenerationChunk>()
 
         val failure = runCatching {
@@ -1157,7 +1221,7 @@ class GenerationLoopFlowTest {
     @Test
     fun `provider cancellation closes observed usage once and propagates cancellation`() = runTest {
         val expectedCancellation = CancellationException("provider stream cancelled")
-        val harness = createFailingUsageStreamHarness(expectedCancellation)
+        val harness = createUsageStreamHarness(expectedCancellation)
         val chunks = mutableListOf<GenerationChunk>()
 
         val failure = runCatching {
@@ -1184,7 +1248,342 @@ class GenerationLoopFlowTest {
         assertEquals(me.rerere.ai.core.UsageCompleteness.COMPLETE, usage?.coreCompleteness)
     }
 
-    private fun createFailingUsageStreamHarness(failure: Throwable): ProviderHarness {
+    @Test
+    fun `nonstream terminal response retains partial content and usage without executing its tools`() = runTest {
+        val model = Model(modelId = "test-model")
+        val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
+        val providerManager = mockk<ProviderManager>()
+        val provider = mockk<Provider<ProviderSetting.OpenAI>>()
+        every { providerManager.getProviderByType(providerSetting) } returns provider
+        val response = MessageChunk(
+            id = "failed-response", model = model.modelId,
+            choices = listOf(UIMessageChoice(
+                index = 0, delta = null,
+                message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(
+                    UIMessagePart.Text("partial answer"),
+                    UIMessagePart.Tool("call", "side_effect", "{}"),
+                )),
+                finishReason = "MAX_TOKENS",
+            )),
+            usage = ProviderUsageSnapshot(inputTokens = 100, outputTokens = 20, totalTokens = 120),
+        )
+        val expected = ProviderResponseException(response, HttpException(
+            "maximum tokens", terminalStatus = ProviderTerminalStatus.INCOMPLETE,
+        ))
+        coEvery { provider.generateText(providerSetting, any(), any()) } throws expected
+        val handler = GenerationLoop(
+            context = mockk<Context>(relaxed = true), providerManager = providerManager, json = Json,
+            memoryRepo = mockk<MemoryRepository>(relaxed = true),
+            attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+        )
+        var executed = false
+        val chunks = mutableListOf<GenerationChunk>()
+        val checkpoints = mutableListOf<GenerationCheckpoint>()
+        var observed = emptyList<UIMessage>()
+        val failure = runCatching {
+            handler.run(GenerationRequest(
+                settings = Settings(providers = listOf(providerSetting)), model = model,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
+                messages = listOf(UIMessage.user("hello")),
+                assistant = Assistant(enableMemory = false, streamOutput = false),
+                tools = listOf(Tool(name = "side_effect", description = "test", execute = {
+                    executed = true
+                    emptyList()
+                })),
+                onCheckpoint = { checkpoints += it },
+                onMessagesObserved = { observed = it },
+            )).collect(chunks::add)
+        }.exceptionOrNull()
+
+        assertTrue(failure === expected || failure?.cause === expected)
+        assertFalse(executed)
+        assertTrue(checkpoints.isEmpty())
+        assertTrue(chunks.none { it is GenerationChunk.Finished })
+        val message = observed.last()
+        assertEquals("partial answer", message.parts.filterIsInstance<UIMessagePart.Text>().single().text)
+        assertEquals(100L, message.usage!!.inputTokens)
+        assertEquals(20L, message.usage!!.outputTokens)
+        assertEquals(1, message.usage!!.observedProviderRequestCount)
+        assertEquals(100L, message.usage!!.latestRequestContextTokens)
+    }
+
+    @Test
+    fun `cancelled output transformer cannot erase closed usage and discards its unpublished lease`() = runTest {
+        val harness = createUsageStreamHarness()
+        val entered = CompletableDeferred<Unit>()
+        val discarded = AtomicBoolean(false)
+        val published = AtomicBoolean(false)
+        val registered = AtomicBoolean(false)
+        val transformer = object : OutputMessageTransformer {
+            override suspend fun transform(ctx: TransformerContext, messages: List<UIMessage>): List<UIMessage> {
+                if (messages.last().usage?.latestRequestContextTokens != null) {
+                    if (registered.compareAndSet(false, true)) {
+                        ctx.registerUnpublishedResource(ToolResourceLease(
+                            publish = { published.set(true) },
+                            discard = { discarded.set(true) },
+                        ))
+                    }
+                    entered.complete(Unit)
+                    awaitCancellation()
+                }
+                return messages
+            }
+        }
+        var observed = emptyList<UIMessage>()
+        val collector = launch {
+            harness.handler.run(GenerationRequest(
+                settings = harness.settings, model = harness.model,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
+                messages = listOf(UIMessage.user("hello")), assistant = harness.assistant,
+                outputTransformers = listOf(transformer),
+                onMessagesObserved = { observed = it },
+            )).collect { }
+        }
+        entered.await()
+        collector.cancelAndJoin()
+
+        assertTrue(collector.isCancelled)
+        assertTrue(discarded.get())
+        assertFalse(published.get())
+        assertEquals(100L, observed.last().usage!!.latestRequestContextTokens)
+        assertEquals(1, observed.last().usage!!.observedProviderRequestCount)
+    }
+
+    @Test
+    fun `cancellation before output checkpoint never observes the discarded local payload`() = runTest {
+        checkOutputResourceHandoff(OutputHandoffInterruption.BEFORE_COMMIT)
+    }
+
+    @Test
+    fun `cancellation during output checkpoint completes root lease and owner handoff`() = runTest {
+        checkOutputResourceHandoff(OutputHandoffInterruption.DURING_COMMIT)
+    }
+
+    @Test
+    fun `failed output checkpoint discards its lease without observing the local payload`() = runTest {
+        checkOutputResourceHandoff(OutputHandoffInterruption.COMMIT_FAILED)
+    }
+
+    @Test
+    fun `lease publication failure retains the committed local payload in the owner slot`() = runTest {
+        checkOutputResourceHandoff(OutputHandoffInterruption.PUBLISH_FAILED)
+    }
+
+    private enum class OutputHandoffInterruption { BEFORE_COMMIT, DURING_COMMIT, COMMIT_FAILED, PUBLISH_FAILED }
+
+    private suspend fun kotlinx.coroutines.test.TestScope.checkOutputResourceHandoff(
+        interruption: OutputHandoffInterruption,
+    ) {
+        val rawUrl = "data:image/png;base64,uncommitted"
+        val localUrl = "file:///upload/owned-result.png"
+        val harness = createProviderHarness(UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(UIMessagePart.Image(rawUrl)),
+        ))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val discarded = AtomicBoolean(false)
+        val published = AtomicBoolean(false)
+        val observations = mutableListOf<List<UIMessage>>()
+        var committedMessages: List<UIMessage>? = null
+        var failure: Throwable? = null
+        val transformer = object : OutputMessageTransformer, StreamingMessageTransformer {
+            override suspend fun onStreamingFinish(
+                ctx: TransformerContext,
+                message: UIMessage,
+                previousProjection: UIMessage?,
+            ): UIMessage {
+                ctx.registerUnpublishedResource(ToolResourceLease(
+                    publish = {
+                        if (interruption == OutputHandoffInterruption.PUBLISH_FAILED) error("publish failed")
+                        published.set(true)
+                    },
+                    discard = {
+                        check(committedMessages == null) { "durable root prevents discard" }
+                        discarded.set(true)
+                    },
+                ))
+                if (interruption == OutputHandoffInterruption.BEFORE_COMMIT) {
+                    // Model a completed owned IO operation returning just after cancellation.
+                    withContext(NonCancellable) {
+                        entered.complete(Unit)
+                        release.await()
+                    }
+                }
+                return message.copy(parts = listOf(UIMessagePart.Image(localUrl)))
+            }
+        }
+        val collector = launch {
+            try {
+                harness.handler.run(GenerationRequest(
+                    settings = harness.settings, model = harness.model,
+                    mediaCapabilities = RequestMediaCapabilities.NONE,
+                    messages = listOf(UIMessage.user("image")), assistant = harness.assistant,
+                    outputTransformers = listOf(transformer),
+                    onMessagesObserved = { observations += it },
+                    onCheckpoint = { checkpoint ->
+                        if (checkpoint.kind == CheckpointKind.STEP_COMPLETED) {
+                            if (interruption == OutputHandoffInterruption.COMMIT_FAILED) error("commit failed")
+                            committedMessages = checkpoint.messages
+                            if (interruption == OutputHandoffInterruption.DURING_COMMIT) {
+                                entered.complete(Unit)
+                                release.await()
+                            }
+                        }
+                    },
+                )).collect { }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                failure = error
+            }
+        }
+        if (interruption in setOf(OutputHandoffInterruption.BEFORE_COMMIT, OutputHandoffInterruption.DURING_COMMIT)) {
+            entered.await()
+            collector.cancel()
+            release.complete(Unit)
+        }
+        collector.join()
+
+        fun List<UIMessage>.hasLocalImage() = last().parts.filterIsInstance<UIMessagePart.Image>()
+            .any { it.url == localUrl }
+        if (interruption in setOf(OutputHandoffInterruption.DURING_COMMIT, OutputHandoffInterruption.PUBLISH_FAILED)) {
+            assertTrue(committedMessages!!.hasLocalImage())
+            assertFalse(discarded.get())
+            assertTrue(observations.last().hasLocalImage())
+            if (interruption == OutputHandoffInterruption.DURING_COMMIT) {
+                assertTrue(collector.isCancelled)
+                assertTrue(published.get())
+            } else {
+                assertFalse(published.get())
+                assertTrue(failure?.message?.contains("publish failed") == true)
+            }
+        } else {
+            assertTrue(discarded.get())
+            assertFalse(published.get())
+            assertTrue(observations.none { it.hasLocalImage() })
+            assertTrue(committedMessages == null)
+            if (interruption == OutputHandoffInterruption.COMMIT_FAILED) {
+                assertTrue(failure?.message?.contains("commit failed") == true)
+            } else {
+                assertTrue(collector.isCancelled)
+            }
+        }
+    }
+
+    @Test
+    fun `deferred tool metadata never escapes a failed result checkpoint`() = runTest {
+        checkToolMetadataHandoff(ToolMetadataInterruption.COMMIT_FAILED)
+    }
+
+    @Test
+    fun `real cancellation of deferred tool metadata discards its unobserved resource`() = runTest {
+        checkToolMetadataHandoff(ToolMetadataInterruption.CANCELLED)
+    }
+
+    @Test
+    fun `progress checkpoints leave resources unpublished until the result is rooted`() = runTest {
+        checkToolMetadataHandoff(ToolMetadataInterruption.NONE)
+    }
+
+    @Test
+    fun `tool result assembly failure keeps its unrooted lease available for compensation`() = runTest {
+        checkToolMetadataHandoff(ToolMetadataInterruption.ASSEMBLY_FAILED)
+    }
+
+    private enum class ToolMetadataInterruption { NONE, COMMIT_FAILED, CANCELLED, ASSEMBLY_FAILED }
+
+    private suspend fun kotlinx.coroutines.test.TestScope.checkToolMetadataHandoff(
+        interruption: ToolMetadataInterruption,
+    ) {
+        val harness = createProviderHarness()
+        val entered = CompletableDeferred<Unit>()
+        val observations = mutableListOf<List<UIMessage>>()
+        var committedTool: UIMessagePart.Tool? = null
+        var published = false
+        var discarded = false
+        var failure: Throwable? = null
+        fun UIMessagePart.Tool.hasArtifact() = metadata?.containsKey("artifact") == true
+        val tool = Tool(
+            name = "metadata_tool", description = "test", execute = { emptyList() },
+            contextualExecute = {
+                registerUnpublishedResource(ToolResourceLease(
+                    publish = {
+                        check(committedTool?.hasArtifact() == true) { "resource has no durable root" }
+                        published = true
+                    },
+                    discard = {
+                        check(committedTool?.hasArtifact() != true) { "durable root prevents discard" }
+                        discarded = true
+                    },
+                ))
+                reportMetadata(buildJsonObject { put("phase", "setting_background") }, ToolMetadataDelivery.CHECKPOINT)
+                assertFalse(published)
+                if (interruption == ToolMetadataInterruption.ASSEMBLY_FAILED) error("output assembly failed")
+                reportMetadata(buildJsonObject {
+                    put("phase", "completed")
+                    put("artifact", "file:///upload/result.png")
+                }, ToolMetadataDelivery.DEFERRED)
+                assertTrue(observations.none { it.last().getTools().single().hasArtifact() })
+                if (interruption == ToolMetadataInterruption.CANCELLED) {
+                    entered.complete(Unit)
+                    awaitCancellation()
+                }
+                listOf(UIMessagePart.Text("done"))
+            },
+        )
+        val collector = launch {
+            try {
+                harness.handler.run(GenerationRequest(
+                    settings = harness.settings, model = harness.model,
+                    mediaCapabilities = RequestMediaCapabilities.NONE,
+                    messages = listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(
+                        UIMessagePart.Tool("call", tool.name, "{}"),
+                    ))),
+                    assistant = harness.assistant, tools = listOf(tool), maxSteps = 1,
+                    onMessagesObserved = { observations += it },
+                    onCheckpoint = { checkpoint ->
+                        if (checkpoint.kind == CheckpointKind.TOOL_STATE_CHANGED) {
+                            assertFalse(published)
+                            assertFalse(checkpoint.messages.last().getTools().single().hasArtifact())
+                        }
+                        if (checkpoint.kind == CheckpointKind.TOOL_RESULT_COMPLETED) {
+                            if (interruption == ToolMetadataInterruption.COMMIT_FAILED) error("result commit failed")
+                            committedTool = checkpoint.messages.last().getTools().single()
+                        }
+                    },
+                )).collect { }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                failure = error
+            }
+        }
+        if (interruption == ToolMetadataInterruption.CANCELLED) {
+            entered.await()
+            collector.cancelAndJoin()
+        } else {
+            collector.join()
+        }
+        if (interruption == ToolMetadataInterruption.NONE) {
+            assertTrue(failure == null)
+            assertTrue(published)
+            assertFalse(discarded)
+            assertTrue(observations.last().last().getTools().single().hasArtifact())
+        } else {
+            assertFalse(published)
+            assertTrue(discarded)
+            assertTrue(observations.none { it.last().getTools().single().hasArtifact() })
+            when (interruption) {
+                ToolMetadataInterruption.CANCELLED -> assertTrue(collector.isCancelled)
+                ToolMetadataInterruption.COMMIT_FAILED -> assertTrue(failure?.message?.contains("result commit failed") == true)
+                ToolMetadataInterruption.ASSEMBLY_FAILED -> assertTrue(failure?.message?.contains("resource has no durable root") == true)
+                ToolMetadataInterruption.NONE -> error("unreachable")
+            }
+        }
+    }
+
+    private fun createUsageStreamHarness(failure: Throwable? = null): ProviderHarness {
         val model = Model(modelId = "test-model", displayName = "Test Model")
         val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
         val providerManager = mockk<ProviderManager>()
@@ -1202,7 +1601,7 @@ class GenerationLoopFlowTest {
                     )
                 )
             )
-            throw failure
+            failure?.let { throw it }
         }
         val assistant = Assistant(enableMemory = false, streamOutput = true)
         return ProviderHarness(

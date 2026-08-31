@@ -6,8 +6,10 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.spyk
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.uuid.Uuid
@@ -15,12 +17,10 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.Dispatchers
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
@@ -87,6 +87,7 @@ class ArtifactStoreLifecycleTest {
             messageNodeDAO = database.messageNodeDao(),
             settingsCoordinator = ArtifactSettingsCoordinator(settingsStore),
             transactionRunner = RoomDatabaseTransactionRunner(database),
+            fileNameCandidates = { List(4) { "000000" } },
         )
     }
 
@@ -95,6 +96,228 @@ class ArtifactStoreLifecycleTest {
         folders.forEach { File(context.filesDir, it).deleteRecursively() }
         File(context.filesDir, ArtifactPayloadStore.STAGING_FOLDER).deleteRecursively()
         database.close()
+    }
+
+    @Test
+    fun `asset allocation selects the first free candidate in all four priority tiers`() = runTest {
+        val candidates = listOf("aaaaaa", "bbbbbbb", "cccccccc", "Dddddddd")
+        for (freeIndex in candidates.indices) {
+            val folder = folder()
+            candidates.take(freeIndex).forEach { stem ->
+                payloadStore.file("$folder/$stem.bin").apply { parentFile!!.mkdirs(); writeText(stem) }
+            }
+            val selectingStore = testStore(payloadStore, candidates)
+            val owned = selectingStore.createFromBytes(byteArrayOf(1), "sample.bin", folder = folder, origin = ArtifactOrigin.USER)
+            assertEquals("$folder/${candidates[freeIndex]}.bin", owned.entity.relativePath)
+            candidates.take(freeIndex).forEach { stem ->
+                assertEquals(stem, payloadStore.file("$folder/$stem.bin").readText())
+            }
+        }
+    }
+
+    @Test
+    fun `all four occupied candidates use suffixes on the first candidate only`() = runTest {
+        val folder = folder()
+        val candidates = listOf("aaaaaa", "bbbbbbb", "cccccccc", "Dddddddd")
+        (candidates + "aaaaaa-2").forEach { stem ->
+            payloadStore.file("$folder/$stem.bin").apply { parentFile!!.mkdirs(); writeText(stem) }
+        }
+        val owned = testStore(payloadStore, candidates).createFromBytes(
+            byteArrayOf(1), "sample.bin", folder = folder, origin = ArtifactOrigin.USER,
+        )
+        assertEquals("$folder/aaaaaa-3.bin", owned.entity.relativePath)
+    }
+
+    @Test
+    fun `duplicate candidate text is checked once before suffix fallback`() = runTest {
+        val folder = folder()
+        val candidates = listOf("aaaaaa", "bbbbbbb", "cccccccc", "cccccccc")
+        candidates.distinct().forEach { stem ->
+            payloadStore.file("$folder/$stem.bin").apply { parentFile!!.mkdirs(); writeText(stem) }
+        }
+        val counted = spyk(payloadStore)
+        val owned = testStore(counted, candidates).createFromBytes(
+            byteArrayOf(1), "sample.bin", folder = folder, origin = ArtifactOrigin.USER,
+        )
+        assertEquals("$folder/aaaaaa-2.bin", owned.entity.relativePath)
+        coVerify(exactly = 1) { counted.pathOccupied(folder, "cccccccc.bin") }
+    }
+
+    @Test
+    fun `short name allocation skips final staging and every metadata state without rewriting history`() = runTest {
+        val folder = folder()
+        val oldPath = "$folder/809278de-6677-4bc1-9249-d94c85b0930c.png"
+        val oldFile = payloadStore.file(oldPath).apply { parentFile!!.mkdirs(); writeText("history") }
+        val oldId = database.artifactDao().insert(entity(oldPath, folder, ArtifactState.ACTIVE, null))
+        val existing = payloadStore.file("$folder/000000.png").apply { writeText("existing") }
+        val staged = stageBytes(folder, byteArrayOf(7), "000000-2.png")
+        val rows = ArtifactState.entries.mapIndexed { index, state ->
+            database.artifactDao().insert(entity("$folder/000000-${index + 3}.png", folder, state, null))
+        }
+
+        val owned = store.createFromBytes(TINY_PNG, "image.png", "image/png", folder, ArtifactOrigin.USER)
+
+        assertEquals("$folder/000000-6.png", owned.entity.relativePath)
+        assertEquals("existing", existing.readText())
+        assertEquals("history", oldFile.readText())
+        assertEquals(oldPath, database.artifactDao().getById(oldId)?.relativePath)
+        assertTrue(payloadStore.stagingExists(staged.stagingToken))
+        rows.forEach { assertTrue(database.artifactDao().getById(it) != null) }
+    }
+
+    @Test
+    fun `concurrent creation with repeated candidates reserves distinct suffixes`() = runTest {
+        val folder = folder()
+        val created = (0 until 20).map { value ->
+            async(Dispatchers.Default) {
+                value to store.createFromBytes(byteArrayOf(value.toByte()), "sample.bin", folder = folder, origin = ArtifactOrigin.USER)
+            }
+        }.awaitAll()
+        assertEquals(20, created.map { it.second.entity.relativePath }.toSet().size)
+        created.forEach { (value, owned) -> assertEquals(value.toByte(), store.file(owned.entity).readBytes().single()) }
+        assertTrue(payloadStore.listStagingTokens().isEmpty())
+    }
+
+    @Test
+    fun `structural copies preserve source origin while allocating a distinct short name`() = runTest {
+        val folder = folder()
+        ArtifactOrigin.entries.forEach { origin ->
+            val source = store.createFromBytes(byteArrayOf(1), "source.bin", folder = folder, origin = origin)
+            val copy = store.createFromUri(source.uri, folder, origin = ArtifactOrigin.USER)
+            assertEquals(origin.name, copy.entity.origin)
+            assertTrue(source.entity.relativePath != copy.entity.relativePath)
+        }
+    }
+
+    @Test
+    fun `payload atomic reservation never overwrites another staging file`() = runTest {
+        val folder = folder()
+        val results = (0 until 10).map { value ->
+            async(Dispatchers.Default) {
+                value to runCatching { stageBytes(folder, byteArrayOf(value.toByte()), "000000.bin") }
+            }
+        }.awaitAll()
+        val winner = results.single { it.second.isSuccess }
+        val staged = winner.second.getOrThrow()
+        val final = payloadStore.promote(staged)
+        assertEquals(winner.first.toByte(), final.readBytes().single())
+    }
+
+    @Test
+    fun `failed bounded copy removes only its own new staging payload`() = runTest {
+        val folder = folder()
+        val existing = stageBytes(folder, byteArrayOf(7), "000000.bin")
+        val source = payloadStore.file("$folder/source.bin").apply { parentFile!!.mkdirs(); writeBytes(byteArrayOf(1, 2, 3)) }
+        val result = runCatching { store.createFromUri(source.toUri(), folder, maxBytes = 1) }
+        assertTrue(result.isFailure)
+        assertEquals(listOf(existing.stagingToken), payloadStore.listStagingTokens())
+        assertTrue(database.artifactDao().listAllStatesByFolder(folder).first().isEmpty())
+        assertEquals(listOf<Byte>(1, 2, 3), source.readBytes().toList())
+    }
+
+    @Test
+    fun `publication collision rollback preserves a file not published by this owner`() = runTest {
+        val folder = folder()
+        val guardedPayload = spyk(payloadStore)
+        coEvery { guardedPayload.promote(any<ArtifactPayloadStore.StagedPayload>()) } coAnswers {
+            val staged = firstArg<ArtifactPayloadStore.StagedPayload>()
+            payloadStore.file(staged.relativePath).apply { parentFile!!.mkdirs(); writeText("other owner") }
+            payloadStore.promote(staged)
+        }
+        val guardedStore = ArtifactStore(
+            payloadStore = guardedPayload,
+            artifactDAO = database.artifactDao(),
+            artifactReferenceDAO = database.artifactReferenceDao(),
+            systemMetaDAO = database.systemMetaDao(),
+            conversationDAO = database.conversationDao(),
+            messageNodeDAO = database.messageNodeDao(),
+            settingsCoordinator = mockk(relaxed = true),
+            transactionRunner = RoomDatabaseTransactionRunner(database),
+            fileNameCandidates = { List(4) { "000000" } },
+        )
+        val failure = runCatching {
+            guardedStore.createFromBytes(byteArrayOf(1), "sample.bin", folder = folder, origin = ArtifactOrigin.USER)
+        }.exceptionOrNull()
+        assertTrue(failure is IllegalStateException)
+        assertEquals("other owner", payloadStore.file("$folder/000000.bin").readText())
+        assertTrue(payloadStore.listStagingTokens().isEmpty())
+        assertTrue(database.artifactDao().listAllStatesByFolder(folder).first().isEmpty())
+    }
+
+    @Test
+    fun `cancelled payload writer removes only the staging file it reserved`() = runTest {
+        val folder = folder()
+        val previous = stageBytes(folder, byteArrayOf(7), "previous.bin")
+        val resolver = mockk<android.content.ContentResolver>()
+        every { resolver.openInputStream(any()) } returns object : java.io.InputStream() {
+            override fun read(): Int = throw kotlin.coroutines.cancellation.CancellationException("source cancelled")
+        }
+        val testContext = mockk<Context>()
+        every { testContext.filesDir } returns context.filesDir
+        every { testContext.contentResolver } returns resolver
+        val testPayload = ArtifactPayloadStore(testContext)
+        val reserved = testPayload.reserve(folder, "new.bin")
+        val failure = runCatching {
+            testPayload.stageFromUri(reserved, android.net.Uri.parse("content://test/source"))
+        }.exceptionOrNull()
+        assertTrue(failure is kotlin.coroutines.cancellation.CancellationException)
+        assertEquals(listOf(previous.stagingToken), payloadStore.listStagingTokens())
+    }
+
+    @Test
+    fun `blocking source IO does not hold the artifact lifecycle lock`() = runTest {
+        val folder = folder()
+        val reading = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val resolver = mockk<android.content.ContentResolver>()
+        every { resolver.openInputStream(any()) } returns object : java.io.ByteArrayInputStream(byteArrayOf(3)) {
+            override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+                reading.countDown()
+                check(release.await(15, java.util.concurrent.TimeUnit.SECONDS))
+                return super.read(buffer, offset, length)
+            }
+        }
+        val testContext = mockk<Context>()
+        every { testContext.filesDir } returns context.filesDir
+        every { testContext.contentResolver } returns resolver
+        val ioStore = testStore(ArtifactPayloadStore(testContext))
+        val first = async(Dispatchers.Default) {
+            ioStore.createFromUri(android.net.Uri.parse("content://test/source"), folder, "sample.bin", "application/octet-stream")
+        }
+        try {
+            kotlinx.coroutines.withContext(Dispatchers.IO) {
+                assertTrue(reading.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            }
+            val second = kotlinx.coroutines.withContext(Dispatchers.Default) {
+                kotlinx.coroutines.withTimeout(5_000) {
+                    ioStore.createFromBytes(byteArrayOf(4), "sample.bin", folder = folder, origin = ArtifactOrigin.USER)
+                }
+            }
+            assertEquals("$folder/000000-2.bin", second.entity.relativePath)
+            assertEquals(4.toByte(), ioStore.file(second.entity).readBytes().single())
+        } finally {
+            release.countDown()
+        }
+        assertEquals("$folder/000000.bin", first.await().entity.relativePath)
+    }
+
+    @Test
+    fun `cancellation after reservation before IO dispatch removes the owned reservation`() = runTest {
+        val folder = folder()
+        val guarded = spyk(payloadStore)
+        coEvery { guarded.reserve(any(), any()) } coAnswers {
+            payloadStore.reserve(firstArg(), secondArg()).also {
+                kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]!!.cancel()
+            }
+        }
+        val ioStore = testStore(guarded)
+        val creation = async {
+            ioStore.createFromBytes(byteArrayOf(1), "sample.bin", folder = folder, origin = ArtifactOrigin.USER)
+        }
+        val failure = runCatching { creation.await() }.exceptionOrNull()
+        assertTrue(failure is kotlin.coroutines.cancellation.CancellationException)
+        assertTrue(payloadStore.listStagingTokens().isEmpty())
+        assertTrue(database.artifactDao().listAllStatesByFolder(folder).first().isEmpty())
     }
 
     @Test
@@ -142,7 +365,7 @@ class ArtifactStoreLifecycleTest {
     @Test
     fun `startup rolls back a creating row whose staging payload survived`() = runTest {
         val folder = folder()
-        val staged = payloadStore.stageFromBytes(folder, byteArrayOf(9), "recover.bin", null)
+        val staged = stageBytes(folder, byteArrayOf(9), "recover.bin")
         val id = database.artifactDao().insert(
             entity(staged.relativePath, folder, ArtifactState.CREATING, staged.stagingToken)
         )
@@ -157,7 +380,7 @@ class ArtifactStoreLifecycleTest {
     @Test
     fun `startup rolls back a creating row whose final payload survived`() = runTest {
         val folder = folder()
-        val staged = payloadStore.stageFromBytes(folder, byteArrayOf(9), "promoted.bin", null)
+        val staged = stageBytes(folder, byteArrayOf(9), "promoted.bin")
         val id = database.artifactDao().insert(
             entity(staged.relativePath, folder, ArtifactState.CREATING, staged.stagingToken)
         )
@@ -171,7 +394,7 @@ class ArtifactStoreLifecycleTest {
     }
 
     @Test
-    fun `cancellation while waiting for lifecycle ownership removes the staged payload`() = runTest {
+    fun `cancellation while waiting for lifecycle ownership never reserves a payload`() = runTest {
         val folder = folder()
         val lockAcquired = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
@@ -185,9 +408,8 @@ class ArtifactStoreLifecycleTest {
         val creator = async {
             store.createFromBytes(byteArrayOf(1), "cancelled.bin", folder = folder, origin = ArtifactOrigin.USER)
         }
-        withTimeout(5_000) {
-            while (payloadStore.listStagingTokens().isEmpty()) delay(10)
-        }
+        runCurrent()
+        assertTrue(payloadStore.listStagingTokens().isEmpty())
 
         creator.cancelAndJoin()
         release.complete(Unit)
@@ -316,7 +538,7 @@ class ArtifactStoreLifecycleTest {
     fun `read port exposes only active artifacts`() = runTest {
         val folder = folder()
         val active = store.createFromBytes(byteArrayOf(1), "active.bin", folder = folder, origin = ArtifactOrigin.USER)
-        val staging = payloadStore.stageFromBytes(folder, byteArrayOf(2), "creating.bin", null)
+        val staging = stageBytes(folder, byteArrayOf(2), "creating.bin")
         database.artifactDao().insert(entity(staging.relativePath, folder, ArtifactState.CREATING, staging.stagingToken))
         val deleting = store.createFromBytes(byteArrayOf(3), "deleting.bin", folder = folder, origin = ArtifactOrigin.USER)
         database.artifactDao().compareAndSetState(
@@ -407,7 +629,7 @@ class ArtifactStoreLifecycleTest {
         store.updateSettingsReferences { current ->
             current.copy(assistants = current.assistants.map { it.copy(background = null) })
         }
-        val staged = payloadStore.stageFromBytes(folder, byteArrayOf(8), "creating.bin", null)
+        val staged = stageBytes(folder, byteArrayOf(8), "creating.bin")
         val creatingId = database.artifactDao().insert(
             entity(staged.relativePath, folder, ArtifactState.CREATING, staged.stagingToken)
         )
@@ -424,12 +646,12 @@ class ArtifactStoreLifecycleTest {
     @Test
     fun `scoped folder deletion respects cutoff and keeps newer artifacts`() = runTest {
         val folder = folder()
-        val oldStaged = payloadStore.stageFromBytes(folder, byteArrayOf(1), "old.bin", null)
+        val oldStaged = stageBytes(folder, byteArrayOf(1), "old.bin")
         payloadStore.promote(oldStaged)
         val oldId = database.artifactDao().insert(
             entity(oldStaged.relativePath, folder, ArtifactState.ACTIVE, token = null, createdAt = 1_000L)
         )
-        val freshStaged = payloadStore.stageFromBytes(folder, byteArrayOf(2), "fresh.bin", null)
+        val freshStaged = stageBytes(folder, byteArrayOf(2), "fresh.bin")
         payloadStore.promote(freshStaged)
         val freshId = database.artifactDao().insert(
             entity(freshStaged.relativePath, folder, ArtifactState.ACTIVE, token = null, createdAt = 5_000L)
@@ -693,6 +915,7 @@ class ArtifactStoreLifecycleTest {
             messageNodeDAO = database.messageNodeDao(),
             settingsCoordinator = ArtifactSettingsCoordinator(settingsStore),
             transactionRunner = RoomDatabaseTransactionRunner(database),
+            fileNameCandidates = { List(4) { "000000" } },
         )
 
         val results = (0 until 20).map {
@@ -738,6 +961,24 @@ class ArtifactStoreLifecycleTest {
         assertTrue(failure is ArtifactProjectionException)
         assertFalse(store.isReferenceProjectionCurrent())
     }
+
+    private suspend fun stageBytes(folder: String, bytes: ByteArray, fileName: String): ArtifactPayloadStore.StagedPayload =
+        payloadStore.stageFromBytes(payloadStore.reserve(folder, fileName), bytes)
+
+    private fun testStore(
+        payload: ArtifactPayloadStore,
+        candidates: List<String> = List(4) { "000000" },
+    ) = ArtifactStore(
+        payloadStore = payload,
+        artifactDAO = database.artifactDao(),
+        artifactReferenceDAO = database.artifactReferenceDao(),
+        systemMetaDAO = database.systemMetaDao(),
+        conversationDAO = database.conversationDao(),
+        messageNodeDAO = database.messageNodeDao(),
+        settingsCoordinator = mockk(relaxed = true),
+        transactionRunner = RoomDatabaseTransactionRunner(database),
+        fileNameCandidates = { candidates },
+    )
 
     private fun folder(): String = "artifact-test-${Uuid.random()}".also(folders::add)
 

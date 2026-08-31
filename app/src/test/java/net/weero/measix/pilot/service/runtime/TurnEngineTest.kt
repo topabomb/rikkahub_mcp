@@ -18,6 +18,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ProviderUsageSnapshot
+import me.rerere.ai.core.UsageCompleteness
 import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
@@ -25,6 +27,8 @@ import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.ui.ToolApprovalState
+import me.rerere.ai.ui.MessageChunk
+import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.TurnTerminalReasons
@@ -39,7 +43,6 @@ import net.weero.measix.pilot.data.ai.GenerationLoop
 import net.weero.measix.pilot.data.ai.GenerationRequest
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
@@ -47,6 +50,8 @@ import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.service.TurnFinalization
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
@@ -112,9 +117,12 @@ class TurnEngineTest {
     @Test
     fun `streaming chunks update the owned projection before incomplete close`() = runTest {
         val harness = harness()
-        val messages = listOf(msg("hi"))
+        val messages = listOf(msg("hi").copy(id = harness.handle.assistantMessageId))
 
-        val events = harness.engine.bind(flowOf(GenerationChunk.Messages(messages))).toListSafe()
+        val events = harness.engine.bind(flow {
+            harness.engine.observeMessages(messages)
+            emit(GenerationChunk.Messages(messages))
+        }).toListSafe()
 
         assertTrue(events.first() is TurnEvent.Streaming)
         assertTrue((events.last() as TurnEvent.Finished).outcome is TurnOutcome.Incomplete)
@@ -141,10 +149,11 @@ class TurnEngineTest {
     fun `runtime failure submits classified detail and retains the exception`() = runTest {
         val harness = harness()
         val failure = IllegalStateException("provider failed")
-        val partial = listOf(msg("partial after checkpoint"))
+        val partial = listOf(msg("partial after checkpoint").copy(id = harness.handle.assistantMessageId))
 
         val events = harness.engine.bind(
             flow {
+                harness.engine.observeMessages(partial)
                 emit(GenerationChunk.Messages(partial))
                 throw failure
             }
@@ -257,11 +266,12 @@ class TurnEngineTest {
     @Test
     fun `cancellation submits cancelled once and rethrows`() = runTest {
         val harness = harness()
-        val partial = listOf(msg("partial after checkpoint"))
+        val partial = listOf(msg("partial after checkpoint").copy(id = harness.handle.assistantMessageId))
 
         val thrown = runCatching {
             harness.engine.bind(
                 flow {
+                    harness.engine.observeMessages(partial)
                     emit(GenerationChunk.Messages(partial))
                     throw CancellationException("stop")
                 }
@@ -379,6 +389,7 @@ class TurnEngineTest {
                     maxSteps = 1,
                     assistantMessageId = waitingMessage.id,
                     onCheckpoint = harness.engine::onCheckpoint,
+                    onMessagesObserved = harness.engine::observeMessages,
                 )
             )
         ).toListSafe()
@@ -407,6 +418,7 @@ class TurnEngineTest {
                     maxSteps = 1,
                     assistantMessageId = approvedMessage.id,
                     onCheckpoint = harness.engine::onCheckpoint,
+                    onMessagesObserved = harness.engine::observeMessages,
                 )
             )
         ).toListSafe()
@@ -417,10 +429,13 @@ class TurnEngineTest {
         assertTrue((committedResult.output.single() as UIMessagePart.Text).text.contains("tool_not_available"))
 
         val checkpoints = recorded.filterIsInstance<CommitCheckpoint>()
-        assertEquals(
-            listOf(ToolExecutionStatus.STARTED, ToolExecutionStatus.FAILED),
-            checkpoints.mapNotNull { it.toolExecution?.status },
-        )
+        assertTrue(checkpoints.mapNotNull { it.toolExecution }.isEmpty())
+        assertTrue(checkpoints.any { checkpoint ->
+            checkpoint.messages.last().getTools().any { result ->
+                result.output.filterIsInstance<UIMessagePart.Text>()
+                    .any { it.text.contains("tool_not_available") }
+            }
+        })
         assertTrue(recorded.all { command ->
             when (command) {
                 is CommitCheckpoint -> command.handle == harness.handle
@@ -435,13 +450,14 @@ class TurnEngineTest {
         val harness = harness()
         val recorded = mutableListOf<ConversationCommand>()
         coEvery { harness.coordinator.executeOrThrow(any(), capture(recorded)) } returns Unit
-        val waitingMessages = listOf(msg("waiting"))
+        val waitingMessages = listOf(msg("waiting").copy(id = harness.handle.assistantMessageId))
 
         harness.engine.bind(
-            flowOf(
-                GenerationChunk.Messages(waitingMessages),
-                GenerationChunk.Finished(FinishedReason.AWAITING_APPROVAL),
-            )
+            flow {
+                harness.engine.observeMessages(waitingMessages)
+                emit(GenerationChunk.Messages(waitingMessages))
+                emit(GenerationChunk.Finished(FinishedReason.AWAITING_APPROVAL))
+            }
         ).collect { }
         harness.engine.onCheckpoint(
             GenerationCheckpoint(
@@ -466,6 +482,132 @@ class TurnEngineTest {
         assertEquals(harness.handle, (recorded[0] as CommitCheckpoint).handle)
         assertEquals(harness.handle, (recorded[1] as CommitCheckpoint).handle)
         assertEquals(harness.handle, (recorded[2] as FinalizeTurn).handle)
+    }
+
+    @Test
+    fun `real cancellation after a tool request accounts for the second request without usage`() = runTest {
+        val finalized = cancelProviderRequest(afterTool = true, reportPendingUsage = false)
+        val usage = finalized.messages!!.last().usage!!
+
+        assertEquals(2, usage.observedProviderRequestCount)
+        assertEquals(1, usage.observedUsageReportedRequestCount)
+        assertEquals(100L, usage.inputTokens)
+        assertEquals(20L, usage.outputTokens)
+        assertEquals(120L, usage.totalTokens)
+        assertEquals(UsageCompleteness.PARTIAL, usage.coreCompleteness)
+        assertEquals(UsageCompleteness.PARTIAL, usage.cacheReadCompleteness)
+        assertNull(usage.latestRequestContextTokens)
+        assertNull(usage.latestRequestCacheReadInputTokens)
+        assertNotNull(usage.providerRequestDurationMillis)
+    }
+
+    @Test
+    fun `real cancellation of first request without usage still records its closed boundary`() = runTest {
+        val finalized = cancelProviderRequest(afterTool = false, reportPendingUsage = false)
+        val usage = finalized.messages!!.last().usage!!
+
+        assertEquals(1, usage.observedProviderRequestCount)
+        assertEquals(0, usage.observedUsageReportedRequestCount)
+        assertEquals(UsageCompleteness.NONE, usage.coreCompleteness)
+        assertEquals(UsageCompleteness.NONE, usage.cacheReadCompleteness)
+        assertNull(usage.inputTokens)
+        assertNull(usage.outputTokens)
+        assertNotNull(usage.providerRequestDurationMillis)
+        assertNotNull(usage.initialRequestTimeToFirstOutputMillis)
+    }
+
+    @Test
+    fun `real cancellation replaces request preview with closed latest context and cache`() = runTest {
+        val finalized = cancelProviderRequest(afterTool = false, reportPendingUsage = true)
+        val usage = finalized.messages!!.last().usage!!
+
+        assertEquals(1, usage.observedProviderRequestCount)
+        assertEquals(100L, usage.inputTokens)
+        assertEquals(20L, usage.outputTokens)
+        assertEquals(100L, usage.latestRequestContextTokens)
+        assertEquals(0L, usage.latestRequestCacheReadInputTokens)
+        assertEquals(UsageCompleteness.COMPLETE, usage.coreCompleteness)
+    }
+
+    private suspend fun kotlinx.coroutines.test.TestScope.cancelProviderRequest(
+        afterTool: Boolean,
+        reportPendingUsage: Boolean,
+    ): FinalizeTurn {
+        val harness = harness()
+        val recorded = mutableListOf<ConversationCommand>()
+        coEvery { harness.coordinator.executeOrThrow(any(), capture(recorded)) } returns Unit
+        val model = Model(modelId = "test-model")
+        val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
+        val provider = mockk<Provider<ProviderSetting.OpenAI>>()
+        val providerManager = mockk<ProviderManager>()
+        every { providerManager.getProviderByType(providerSetting) } returns provider
+        val completeUsage = ProviderUsageSnapshot(
+            inputTokens = 100, outputTokens = 20, cacheReadInputTokens = 0, totalTokens = 120,
+        )
+        var requests = 0
+        coEvery { provider.streamText(providerSetting, any(), any()) } coAnswers {
+            val firstToolRequest = afterTool && requests++ == 0
+            flow {
+                val part = if (firstToolRequest) {
+                    UIMessagePart.Tool("call", "test_tool", "{}")
+                } else {
+                    UIMessagePart.Text("pending response")
+                }
+                emit(MessageChunk(
+                    id = "response",
+                    model = model.modelId,
+                    choices = listOf(UIMessageChoice(
+                        index = 0,
+                        delta = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(part)),
+                        message = null,
+                        finishReason = null,
+                    )),
+                    usage = completeUsage.takeIf { firstToolRequest || reportPendingUsage },
+                ))
+                if (!firstToolRequest) awaitCancellation()
+            }
+        }
+        val generationLoop = GenerationLoop(
+            context = mockk<Context>(relaxed = true),
+            providerManager = providerManager,
+            json = Json,
+            memoryRepo = mockk<MemoryRepository>(relaxed = true),
+            attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+        )
+        val assistant = Assistant(enableMemory = false, streamOutput = true)
+        val pendingSeen = CompletableDeferred<Unit>()
+        val collector = launch {
+            harness.engine.bind(generationLoop.run(GenerationRequest(
+                settings = Settings(providers = listOf(providerSetting)),
+                model = model,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
+                messages = listOf(UIMessage.user("hello"), UIMessage(
+                    id = harness.handle.assistantMessageId,
+                    role = MessageRole.ASSISTANT,
+                    parts = emptyList(),
+                )),
+                assistant = assistant,
+                assistantMessageId = harness.handle.assistantMessageId,
+                tools = listOf(Tool(
+                    name = "test_tool",
+                    description = "test",
+                    execute = { listOf(UIMessagePart.Text("done")) },
+                )),
+                onCheckpoint = harness.engine::onCheckpoint,
+                onMessagesObserved = harness.engine::observeMessages,
+            ))).collect { event ->
+                if (event is TurnEvent.Streaming && event.lastMessage?.toText()?.contains("pending response") == true) {
+                    pendingSeen.complete(Unit)
+                }
+            }
+        }
+        pendingSeen.await()
+        collector.cancelAndJoin()
+        assertTrue(collector.isCancelled)
+        val finalized = recorded.filterIsInstance<FinalizeTurn>().single()
+        assertEquals(TurnExecutionStatus.CANCELLED, finalized.terminalStatus)
+        assertTrue(finalized.messages!!.last().toText().contains("pending response"))
+        return finalized
     }
 }
 

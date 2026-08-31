@@ -183,6 +183,7 @@ internal object ConversationTransition {
             turnId = command.turnId,
             assistantMessageId = command.assistantMessageId,
             messages = emptyList(),
+            latestAvailableContextCache = reduced.latestBranchContextCache(),
         )
         is HeaderConversationCommand,
         is CommitCheckpoint,

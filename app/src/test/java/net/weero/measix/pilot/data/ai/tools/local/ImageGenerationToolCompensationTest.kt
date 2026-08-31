@@ -10,15 +10,22 @@ import kotlin.io.path.createTempDirectory
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.ToolAttachmentResolution
+import me.rerere.ai.core.ToolArgumentsException
 import me.rerere.ai.core.ToolExecutionContext
+import me.rerere.ai.core.ToolMetadataDelivery
 import me.rerere.ai.core.ToolResourceLease
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
@@ -42,12 +49,42 @@ import net.weero.measix.pilot.data.imggen.TINY_PNG
 import net.weero.measix.pilot.data.model.Assistant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ImageGenerationToolCompensationTest {
     private val ownerId = Uuid.random()
     private val model = Model(modelId = "gpt-image-1", displayName = "GPT Image", type = ModelType.IMAGE)
     private val providerSetting = ProviderSetting.OpenAI(name = "OpenAI", models = listOf(model))
+
+    @Test
+    fun `registered image tool rejects bad input before approval without invoking generation`() {
+        val settings = Settings(assistants = listOf(Assistant(id = ownerId, localTools = listOf(LocalToolOption.TextToImage))))
+        val resolver = mockk<ImageGenerationSelectionResolver>()
+        every { resolver.resolve(any()) } returns available()
+        val coordinator = mockk<ImageGenerationCoordinator>()
+        val artifactStore = mockk<ArtifactStore>()
+        val factory = ImageGenerationToolFactory(
+            filesDir = File("unused"), settingsStore = mockk(), resolver = resolver,
+            coordinator = coordinator, backgroundService = mockk(), artifactStore = artifactStore,
+            rewriter = ToolArtifactRewriter(File("unused"), artifactStore),
+        )
+        val tool = factory.create(AssistantToolBuildContext(ownerId, settings))!!
+        val failure = assertThrows(ToolArgumentsException::class.java) { tool.parseArguments("{}", Json) }
+        val replay = Json.parseToJsonElement((failure.output.single() as UIMessagePart.Text).text).jsonObject
+        val domainFailure = requireNotNull(tool.validateArguments(buildJsonObject {}))
+        val executionFailure = Json.parseToJsonElement((failedResult("invalid_arguments").single() as UIMessagePart.Text).text)
+        assertEquals(domainFailure, executionFailure)
+        assertFalse(domainFailure.containsKey("type"))
+        assertFalse(domainFailure.containsKey("error"))
+        assertEquals(domainFailure, JsonObject(replay.filterKeys { it != "type" && it != "error" }))
+        assertEquals("invalid_arguments", replay["error"]!!.jsonPrimitive.content)
+        assertEquals("error", replay["type"]!!.jsonPrimitive.content)
+        assertFalse(tool.needsApproval(tool.parseArguments("""{"prompt":"a cat"}""", Json)))
+        assertTrue(tool.needsApproval(tool.parseArguments("""{"prompt":"a cat","set_as_background":true}""", Json)))
+        coVerify(exactly = 0) { coordinator.enqueue(any()) }
+    }
 
     private fun available(): ImageGenerationSelection.Available {
         val provider = mockk<Provider<*>>()
@@ -182,12 +219,13 @@ class ImageGenerationToolCompensationTest {
         )
         val tool = factory.create(AssistantToolBuildContext(ownerId, settings))!!
         val resources = mutableListOf<ToolResourceLease>()
+        val metadataPatches = mutableListOf<Pair<JsonObject, ToolMetadataDelivery>>()
         val parts = tool.executeWithContext(
             ToolExecutionContext(
                 messageId = Uuid.random(),
                 toolOrdinal = 0,
                 toolCallId = "call",
-                reportMetadata = { _, _ -> },
+                reportMetadata = { patch, delivery -> metadataPatches += patch to delivery },
                 resolveAttachments = { ToolAttachmentResolution(failureReason = "not_used") },
                 reportChildConversation = { },
                 registerUnpublishedResource = resources::add,
@@ -199,6 +237,16 @@ class ImageGenerationToolCompensationTest {
         )
         assertEquals(2, parts.size)
         assertEquals(1, resources.size)
+        assertEquals(
+            ToolMetadataDelivery.CHECKPOINT,
+            metadataPatches.single { (patch, _) ->
+                patch["phase"]?.jsonPrimitive?.content == "setting_background"
+            }.second,
+        )
+        val (terminalMetadata, terminalDelivery) = metadataPatches.last()
+        assertEquals("completed", terminalMetadata["phase"]?.jsonPrimitive?.content)
+        assertTrue(terminalMetadata.containsKey(ToolArtifactRewriter.ARTIFACT_KEY))
+        assertEquals(ToolMetadataDelivery.DEFERRED, terminalDelivery)
         coVerify(exactly = 0) { artifactStore.discardUnpublished(any()) }
         filesDir.deleteRecursively()
     }

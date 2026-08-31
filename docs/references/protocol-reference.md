@@ -195,6 +195,8 @@ Chat `messages` 数组的每个完整 assistant envelope，只要保存了非空
 OpenRouter `reasoning_details` 继续 source-isolated：存在 details 时不降级发送 visible `reasoning_content`，
 其他 host 不能消费该 metadata。Provider `toolCallId` 只用于线协议，不作为本地工具执行定位键。
 
+工具参数分片只合并到当前未完成步骤中定位到的那一个 Tool。后续请求即使复用相同 `toolCallId`，也不能改写前序已完成调用的参数、结果或 metadata。
+
 ### MiMo 端点
 
 `OpenAIEndpointVendor.MIMO` 识别 MiMo 官方端点 `api.xiaomimimo.com` 与 `token-plan-cn.xiaomimimo.com`。模型声明 `REASONING` capability 时，Chat Completions 按本地 reasoning 开关发送 `thinking.type=enabled|disabled`；只有 wire 上实际启用 thinking 时才不发送 `temperature`/`top_p`，非 reasoning 模型保留 sampling，token 上限使用 `max_completion_tokens`。Responses 使用 `ResponseEndpointProfile.MIMO` 和 `OpenAIResponseSourceProfile.MIMO`：OFF 映射为 `reasoning.effort=none`，AUTO 省略，LOW/MEDIUM/HIGH 原样，XHIGH/MAX 降为 `high`；sampling 是否省略复用同一 capability + level 判定。MiMo Responses 不请求 unsupported reasoning summary/encrypted content，也不复用其他 endpoint 的 opaque item。
@@ -235,7 +237,15 @@ OpenRouter `reasoning_details` 继续 source-isolated：存在 details 时不降
 
 `AttachmentProjectionTransformer` 生成的附件事实遵循来源容器：USER 图片仍在 user input，工具图片仍在 `function_call_output`，ASSISTANT 顶层图片及其事实仍使用 assistant role。Responses 命中原始 `outputItemGroups` 回放时不能修改不透明 output，也不能从可见 UI parts 重建整个消息；`ResponseAPI.addAssistantItems()` 因此在完整原始批次和本地函数结果之后，只选择带 `AttachmentProjectionTextMetadata` 的 request-only 文本追加为 assistant message。普通可见回答不会重复，前置 system/developer 内容也不变化。
 
+附件事实的外部位置统一写为 `path=/upload/<file>`，不发送 UUID handle 或重复 name；无可用文件路径时省略 path。
+路径是否存在不代替图片能力判定。按需识图读取 ArtifactStore 校验后的内存快照，经共用 FileEncoder 规范化为 data URI，四种协议仍使用其标准
+USER 图片编码；这不需要 Workspace、额外磁盘文件或专用 Provider 编码旁路。
+
 流式状态用 item ID 关联 reasoning、text 和 function arguments，并在终态把完整 output items 写回 metadata。连接在未收到协议终态时关闭视为异常，不能把半个 response 当作成功。
+
+非流式 HTTP 200 的 `failed` / `incomplete` 响应同样不是成功结果：Adapter 先解码可用 output 和 usage，
+再抛出 `ProviderResponseException`。它只在数据属性中携带 `MessageChunk`，异常文本不包含该 payload，
+原 `HttpException` 保留为分类 cause；生成循环接收已返回的内容与 usage 后继续失败收口，不能执行其中的工具。
 
 ### DeepSeek Responses effort
 
@@ -319,6 +329,8 @@ Gemini 支持的 `enum`。grounding metadata 转为 `UIMessageAnnotation.UrlCita
 - `promptFeedback.blockReason` 即使没有 candidates 也进入正式失败路径；
 - SSE 未见 candidate 0 的 terminal `finishReason` 就关闭，映射为 incomplete，不能提交为成功；
 - usage-only SSE 仍发布 usage snapshot，不因 candidates 为空而丢失；
+- 非流式失败/incomplete 使用与 Responses 相同的 `ProviderResponseException` 交接已解码内容和 usage，
+  不在 finish reason 校验时丢失已返回的 partial 响应；
 - 请求体、原始 SSE body、opaque signature 和 base64 媒体不得写入日志。
 
 未知 Part 类型显式失败并只报告字段名，不静默删除，也不把完整原始 payload 放入诊断。当前客户端 function-call

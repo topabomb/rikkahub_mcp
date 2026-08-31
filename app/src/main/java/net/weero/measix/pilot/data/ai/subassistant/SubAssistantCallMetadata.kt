@@ -13,6 +13,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.files.LocalArtifactRef
+import net.weero.measix.pilot.data.files.LocalToolPath
 import kotlin.uuid.Uuid
 
 @Serializable
@@ -22,6 +23,17 @@ data class SubAssistantCallArtifact(
     val mime: String,
     val artifact: LocalArtifactRef? = null,
 )
+
+/** Model paths are derived from managed files; durable attachment identity stays internal. */
+internal fun buildSubAssistantArtifactManifest(artifacts: List<SubAssistantCallArtifact>): JsonArray =
+    JsonArray(artifacts.mapNotNull { item ->
+        val toolPath = item.artifact?.toolPath() ?: return@mapNotNull null
+        buildJsonObject {
+            put("path", toolPath)
+            put("type", item.type)
+            put("mime", item.mime)
+        }
+    })
 
 /**
  * 子助手调用的稳定状态枚举。
@@ -174,12 +186,12 @@ internal fun parseAssistantCallExtras(raw: kotlinx.serialization.json.JsonElemen
 internal const val MAX_ASSISTANT_CALL_ATTACHMENTS = net.weero.measix.pilot.data.ai.attachments.MAX_ASSISTANT_CALL_ATTACHMENTS
 
 sealed class AttachmentParseResult {
-    data class Ok(val refs: List<String>) : AttachmentParseResult()
+    data class Ok(val paths: List<String>) : AttachmentParseResult()
     data object Invalid : AttachmentParseResult()
 }
 
 /**
- * Parse `attachments`: missing / empty means none. Duplicate normalized strings
+ * Parse image file paths: missing / empty means none. Duplicate normalized paths
  * are dropped before the max-4 cap.
  */
 internal fun parseAssistantCallAttachments(raw: kotlinx.serialization.json.JsonElement?): AttachmentParseResult {
@@ -193,7 +205,7 @@ internal fun parseAssistantCallAttachments(raw: kotlinx.serialization.json.JsonE
         val primitive = element as? JsonPrimitive
         if (primitive?.isString != true) return AttachmentParseResult.Invalid
         val value = primitive.content.trim()
-        if (value.isEmpty()) return AttachmentParseResult.Invalid
+        if (LocalToolPath.parseUploadToolPath(value) == null) return AttachmentParseResult.Invalid
         normalized.add(value)
     }
     if (normalized.size > MAX_ASSISTANT_CALL_ATTACHMENTS) return AttachmentParseResult.Invalid
@@ -243,19 +255,7 @@ fun buildSubAssistantCallResult(
         }
         if (status == "completed" && hasNonTextOutput) put("has_non_text_output", true)
         if (status == "completed" && artifacts.isNotEmpty()) {
-            put(
-                "artifacts",
-                JsonArray(
-                    artifacts.map { item ->
-                        buildJsonObject {
-                            put("ref", item.ref)
-                            put("type", item.type)
-                            put("mime", item.mime)
-                            item.artifact?.toolPath()?.let { put("path", it) }
-                        }
-                    },
-                ),
-            )
+            put("artifacts", buildSubAssistantArtifactManifest(artifacts))
             if (artifactsOmitted > 0) put("artifacts_omitted", artifactsOmitted)
         }
         if (ttsStats != null && ttsStats.calls > 0) {

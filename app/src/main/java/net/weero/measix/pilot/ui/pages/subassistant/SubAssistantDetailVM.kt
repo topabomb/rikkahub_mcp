@@ -26,6 +26,7 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ConversationDetailRead
 import net.weero.measix.pilot.service.SubAssistantDetailReader
+import net.weero.measix.pilot.service.runtime.ActiveContextCache
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 import kotlin.uuid.Uuid
 
@@ -150,6 +151,7 @@ sealed interface SubAssistantDetailUiState {
         val child: ConversationSnapshot,
         val timeline: List<MessageNode>,
         val attachmentPreviews: Map<String, String> = emptyMap(),
+        val activeContextCache: ActiveContextCache? = null,
     ) : SubAssistantDetailUiState
 }
 
@@ -305,6 +307,7 @@ class SubAssistantDetailVM(
                 child = child,
                 timeline = timeline,
                 attachmentPreviews = previews,
+                activeContextCache = detailReader.activeContextCache(child),
             )
         }
     }

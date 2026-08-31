@@ -77,7 +77,7 @@ class ImageGenerationCoordinatorTest {
             }
         }
         val filesDir = tempDir("img-coord")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returnsMany listOf(11L, 22L)
         val store = GeneratedMediaStore(
             filesDir = filesDir,
@@ -122,7 +122,7 @@ class ImageGenerationCoordinatorTest {
         coEvery { failing.generateImage(any(), any()) } returns flow { error("boom") }
         coEvery { succeeding.generateImage(any(), any()) } returns flowOf(pngItem())
         val filesDir = tempDir("img-fail")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returns 7L
         val coordinator = ImageGenerationCoordinator(
             this,
@@ -171,7 +171,7 @@ class ImageGenerationCoordinatorTest {
             )
         }
         val filesDir = tempDir("img-classify")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         val coordinator = ImageGenerationCoordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
@@ -209,7 +209,7 @@ class ImageGenerationCoordinatorTest {
             awaitCancellation()
         }
         val filesDir = tempDir("img-cancel")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returns 1L
         val coordinator = ImageGenerationCoordinator(
             this,
@@ -250,7 +250,7 @@ class ImageGenerationCoordinatorTest {
         coEvery { firstProvider.generateImage(any(), any()) } returns flowOf(pngItem())
         coEvery { secondProvider.generateImage(any(), any()) } returns flowOf(pngItem())
         val filesDir = tempDir("img-drain")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returnsMany listOf(1L, 2L)
         val coordinator = ImageGenerationCoordinator(
             this,
@@ -289,7 +289,7 @@ class ImageGenerationCoordinatorTest {
             flowOf(pngItem())
         }
         val filesDir = tempDir("img-phase-order")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returns 1L
         val coordinator = ImageGenerationCoordinator(
             this,
@@ -324,7 +324,7 @@ class ImageGenerationCoordinatorTest {
             awaitCancellation()
         }
         val filesDir = tempDir("img-cancel-running")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         val coordinator = ImageGenerationCoordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
@@ -353,7 +353,7 @@ class ImageGenerationCoordinatorTest {
             emit(pngItem())
         }
         val filesDir = tempDir("img-extra")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returnsMany listOf(1L, 2L, 3L)
         val coordinator = ImageGenerationCoordinator(
             this,
@@ -388,7 +388,7 @@ class ImageGenerationCoordinatorTest {
             }
         }
         val filesDir = tempDir("img-hang")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returns 1L
         val coordinator = ImageGenerationCoordinator(
             this,
@@ -434,7 +434,7 @@ class ImageGenerationCoordinatorTest {
             }
         }
         val filesDir = tempDir("img-caller-queued")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returns 1L
         val coordinator = ImageGenerationCoordinator(
             this,
@@ -486,7 +486,7 @@ class ImageGenerationCoordinatorTest {
             }
         }
         val filesDir = tempDir("img-caller-running")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         val coordinator = ImageGenerationCoordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
@@ -517,7 +517,7 @@ class ImageGenerationCoordinatorTest {
         val provider = mockk<Provider<ProviderSetting>>()
         coEvery { provider.generateImage(any(), any()) } returns flowOf(pngItem())
         val filesDir = tempDir("img-caller-persist")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } answers {
             entered.complete(Unit)
             release.await()
@@ -565,7 +565,7 @@ class ImageGenerationCoordinatorTest {
         val provider = mockk<Provider<ProviderSetting>>()
         coEvery { provider.generateImage(any(), any()) } returns flowOf(pngItem())
         val filesDir = tempDir("img-persist-cancel")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } answers {
             entered.complete(Unit)
             release.await()
@@ -597,7 +597,7 @@ class ImageGenerationCoordinatorTest {
         val provider = mockk<Provider<ProviderSetting>>()
         coEvery { provider.generateImage(any(), any()) } returns flowOf(pngItem())
         val filesDir = tempDir("img-phase")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         val coordinator = ImageGenerationCoordinator(
             this,
             GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)),
@@ -623,7 +623,7 @@ class ImageGenerationCoordinatorTest {
         val provider = mockk<Provider<ProviderSetting>>()
         coEvery { provider.editImage(any(), any()) } returns flowOf(pngItem())
         val filesDir = tempDir("img-edit")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returns 33L
         val coordinator = ImageGenerationCoordinator(
             this,

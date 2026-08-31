@@ -217,10 +217,7 @@ val appModule = module {
 
     single {
         AttachmentResolver(
-            context = get(),
             artifactStore = get(),
-            fetcher = get(),
-            artifactRewriter = get(),
         )
     }
 

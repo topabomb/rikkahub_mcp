@@ -3,11 +3,13 @@ package net.weero.measix.pilot.ui.components.message
 import me.rerere.ai.core.CURRENT_TOKEN_USAGE_SEMANTICS_VERSION
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.core.UsageCompleteness
+import net.weero.measix.pilot.service.runtime.ContextCacheDisplay
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 import java.util.Locale
+import kotlin.uuid.Uuid
 
 class ChatMessageNerdLineUsageTest {
     @Test
@@ -48,6 +50,47 @@ class ChatMessageNerdLineUsageTest {
         assertEquals("99.00", 99.0.formatCachePercent())
         assertEquals("99.95", 99.95.formatCachePercent())
         assertEquals("100.00", 100.0.formatCachePercent())
+    }
+
+    @Test
+    fun `small positive hit rates never round down to explicit zero`() {
+        assertEquals("0", 0.0.formatCachePercent())
+        assertEquals("<1", 0.000001.formatCachePercent())
+        assertEquals("<1", 0.499999.formatCachePercent())
+        assertEquals("1", 0.5.formatCachePercent())
+        assertEquals("1", 0.999999.formatCachePercent())
+        assertEquals("1", 1.0.formatCachePercent())
+        assertEquals(
+            "Context 23K · Cache <1% · Req 2",
+            completeUsage().copy(latestRequestCacheReadInputTokens = 1).toNerdLineDisplay().compactText(),
+        )
+    }
+
+    @Test
+    fun `active display carry replaces context and cache together but never turn details`() {
+        val carry = ContextCacheDisplay(Uuid.random(), 20_000, 15_000)
+        val usage = completeUsage().copy(latestRequestContextTokens = 40_000, latestRequestCacheReadInputTokens = null)
+
+        val display = usage.toNerdLineDisplay(carry)
+
+        assertEquals("Context 20K · Cache 75% · Req 2", display.compactText())
+        assertEquals(43_000L, display.inputTokens)
+        assertEquals(18_000L, display.cacheReadInputTokens)
+        assertEquals(12.0, display.tokensPerSecond!!, 0.0001)
+        assertEquals(800L, display.initialTtftMillis)
+        assertNull(usage.latestRequestCacheReadInputTokens)
+        assertEquals("Context 40K · Cache — · Req 2", usage.toNerdLineDisplay().compactText())
+    }
+
+    @Test
+    fun `a new assistant can display carried context before having any usage without inventing counters`() {
+        val display = (null as TokenUsage?).toNerdLineDisplay(ContextCacheDisplay(Uuid.random(), 20_000, 0))
+
+        assertEquals("Context 20K · Cache 0% · Req —", display.compactText())
+        assertFalse(display.hasTokenDetails)
+        assertNull(display.tokensPerSecond)
+        assertNull(display.initialTtftMillis)
+        assertFalse((null as TokenUsage?).toNerdLineDisplay().hasCompactSummary)
     }
 
     @Test

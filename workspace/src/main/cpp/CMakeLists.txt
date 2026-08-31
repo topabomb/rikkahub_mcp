@@ -29,6 +29,8 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
         # List C/C++ source files with relative paths to this CMakeLists.txt.
         workspace.cpp)
 
+target_compile_features(${CMAKE_PROJECT_NAME} PRIVATE cxx_std_17)
+
 add_library(termux SHARED
         termux_pty.cpp)
 

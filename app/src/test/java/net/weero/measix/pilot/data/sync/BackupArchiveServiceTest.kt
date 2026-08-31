@@ -24,6 +24,7 @@ import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
 import net.weero.measix.pilot.data.ai.mcp.initialSnapshot
 import net.weero.measix.pilot.data.ai.mcp.mcpDefinitionDigest
 import net.weero.measix.pilot.data.db.AppDatabase
+import net.weero.measix.pilot.data.db.APP_DATABASE_VERSION
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.utils.JsonInstant
@@ -34,6 +35,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -389,10 +391,48 @@ class BackupArchiveServiceTest {
         return file
     }
 
-    private fun createDatabase(file: File, marker: String, artifactPath: String? = null) {
+    @Test
+    fun `v8 archive remains restorable without rewriting its database or filenames`() = runTest {
+        val path = "upload/809278de-6677-4bc1-9249-d94c85b0930c.png"
+        val source = File(work, "v8.sqlite")
+        createDatabase(source, "v8", artifactPath = path, version = 8)
+        val archive = modernArchive(source, mapOf(path to byteArrayOf(1, 2, 3)))
+
+        service.stageRestore(archive, BackupSelection(true, true))
+        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+
+        val restored = context.getDatabasePath("measix_pilot")
+        assertEquals("v8", databaseMarker(restored))
+        SQLiteDatabase.openDatabase(restored.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+            assertEquals(8, db.version)
+        }
+        assertArrayEquals(byteArrayOf(1, 2, 3), File(context.filesDir, path).readBytes())
+    }
+
+    @Test
+    fun `unsupported archive versions fail before live mutation`() = runTest {
+        val live = context.getDatabasePath("measix_pilot")
+        createDatabase(live, "live")
+        for (version in listOf(7, APP_DATABASE_VERSION + 1)) {
+            val source = File(work, "unsupported-$version.sqlite")
+            createDatabase(source, "unsupported", version = version)
+            val archive = modernArchive(source, emptyMap())
+
+            assertTrue(runCatching { service.stageRestore(archive, BackupSelection(true, true)) }.isFailure)
+            assertEquals("live", databaseMarker(live))
+            assertFalse(File(context.noBackupFilesDir, "backup_restore/pending").exists())
+        }
+    }
+
+    private fun createDatabase(
+        file: File,
+        marker: String,
+        artifactPath: String? = null,
+        version: Int = APP_DATABASE_VERSION,
+    ) {
         file.parentFile?.mkdirs()
         val db = SQLiteDatabase.openOrCreateDatabase(file, null)
-        db.version = 8
+        db.version = version
         db.execSQL("CREATE TABLE marker(value TEXT NOT NULL)")
         db.execSQL("INSERT INTO marker VALUES(?)", arrayOf(marker))
         db.execSQL("CREATE TABLE artifact(relative_path TEXT NOT NULL, state TEXT NOT NULL)")

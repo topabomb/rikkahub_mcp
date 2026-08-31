@@ -156,8 +156,12 @@ class SingleWriterContractTest {
         assertTrue(notificationManager.contains("if (!event.notifyCompletion) return"))
         assertTrue(notificationManager.contains("activeLiveNotifications.toList().forEach(::cancelLiveUpdateNotification)"))
         val masterCoordinator = sourceRoot.resolve("service/MasterTurnCoordinator.kt").readText()
-        assertTrue(masterCoordinator.contains("appEventBus.emit(\n                    AppEvent.ChatGenerationAwaitingApproval"))
-        assertTrue(masterCoordinator.contains("appEventBus.emit(\n                    AppEvent.ChatGenerationEnded"))
+        listOf("ChatGenerationAwaitingApproval", "ChatGenerationEnded").forEach { event ->
+            assertTrue(
+                "$event must use suspending delivery",
+                Regex("""appEventBus\.emit\(\s*AppEvent\.$event\b""").containsMatchIn(masterCoordinator),
+            )
+        }
     }
 
     @Test
@@ -234,13 +238,16 @@ class SingleWriterContractTest {
     }
 
     @Test
-    fun `attachment execution and previews share one durable reference lookup`() {
+    fun `attachment path reads belong to file owner and internal lookup belongs to preview projection`() {
         val lookupOwners = hits("AttachmentReferenceLookup.index")
         assertTrue(
-            "execution and preview must share AttachmentReferenceLookup: $lookupOwners",
-            lookupOwners.contains("data/ai/attachments/AttachmentResolver.kt") &&
-                lookupOwners.contains("service/ConversationAttachmentPreviewProjector.kt"),
+            "preview projection must use the internal attachment lookup: $lookupOwners",
+            lookupOwners.contains("service/ConversationAttachmentPreviewProjector.kt"),
         )
+        val resolver = File(sourceRoot, "data/ai/attachments/AttachmentResolver.kt").readText()
+        assertTrue(resolver.contains("artifactStore.withUploadImages"))
+        listOf("AttachmentReferenceLookup", "ConversationRepository", "masterMessages", "Workspace", "SafeRemoteMediaFetcher")
+            .forEach { dependency -> assertFalse("path reads must not depend on $dependency", resolver.contains(dependency)) }
         val messageUi = sources.filter {
             it.relativeTo(sourceRoot).invariantSeparatorsPath.startsWith("ui/components/message/")
         }

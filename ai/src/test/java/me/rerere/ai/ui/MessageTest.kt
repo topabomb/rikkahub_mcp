@@ -278,9 +278,12 @@ class MessageTest {
                 UIMessagePart.Tool(
                     toolCallId = "reused-id",
                     toolName = "second",
-                    input = "[]",
+                    input = "[",
                 )
             )
+        )
+        messages = messages.handleMessageChunk(
+            assistantChunk(UIMessagePart.Tool(toolCallId = "reused-id", toolName = "", input = "]"))
         )
 
         val tools = messages.last().parts.filterIsInstance<UIMessagePart.Tool>()

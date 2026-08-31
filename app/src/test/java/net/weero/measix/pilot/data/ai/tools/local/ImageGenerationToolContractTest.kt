@@ -10,7 +10,6 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.imggen.ImageGenerationModelDescriptor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -41,19 +40,14 @@ class ImageGenerationToolContractTest {
     fun `pure generation does not request background`() {
         val parsed = parseGenerateImageArguments(buildJsonObject { put("prompt", "a cat") }).getOrThrow()
         assertFalse(parsed.setAsBackground)
-        assertNull(generateImageApprovalRejection(GENERATE_IMAGE_TOOL_NAME, buildJsonObject { put("prompt", "a cat") }))
     }
 
     @Test
-    fun `invalid args reject before pending`() {
-        val rejected = generateImageApprovalRejection(
-            GENERATE_IMAGE_TOOL_NAME,
-            buildJsonObject { put("prompt", "") },
-        )
-        val text = (rejected!!.single() as UIMessagePart.Text).text
-        val json = Json.parseToJsonElement(text).jsonObject
-        assertEquals("failed", json["status"]?.jsonPrimitive?.content)
-        assertEquals("invalid_arguments", json["reason"]?.jsonPrimitive?.content)
+    fun `string booleans cannot enable a background mutation`() {
+        assertTrue(parseGenerateImageArguments(buildJsonObject {
+            put("prompt", "cat")
+            put("set_as_background", "true")
+        }).isFailure)
     }
 
     @Test

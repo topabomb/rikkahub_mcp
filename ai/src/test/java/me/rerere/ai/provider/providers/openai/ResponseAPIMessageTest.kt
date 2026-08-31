@@ -579,7 +579,7 @@ class ResponseAPIMessageTest {
                     input = "{}",
                     output = listOf(
                         UIMessagePart.Text("Captured image"),
-                        UIMessagePart.Text("[Attachment ref=attachment:1 type=image input=reference_only]"),
+                        UIMessagePart.Text("[Attachment path=/upload/abc123.png type=image input=reference_only]"),
                     ),
                 )
             ),
@@ -591,7 +591,7 @@ class ResponseAPIMessageTest {
         ).single { it.jsonObject["type"]?.jsonPrimitive?.content == "function_call_output" }.jsonObject
 
         assertEquals(
-            "Captured image\n[Attachment ref=attachment:1 type=image input=reference_only]",
+            "Captured image\n[Attachment path=/upload/abc123.png type=image input=reference_only]",
             output["output"]?.jsonPrimitive?.content,
         )
     }
@@ -816,9 +816,9 @@ class ResponseAPIMessageTest {
 
     @Test
     fun `raw response replay appends only request projection text in assistant role`() {
-        val toolMarker = "[Attachment ref=attachment:tool type=image name=\"tool.png\" input=reference_only]"
+        val toolMarker = "[Attachment path=/upload/tool.png type=image input=reference_only]"
         val assistantMarker =
-            "[Attachment ref=attachment:assistant type=image name=\"assistant.png\" input=reference_only]"
+            "[Attachment path=/upload/assistant.png type=image input=reference_only]"
         val rawImageItem = buildJsonObject {
             put("id", "ig_1")
             put("type", "image_generation_call")
@@ -874,7 +874,7 @@ class ResponseAPIMessageTest {
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Text("assistant attachment fact"),
-                UIMessagePart.Text("[Attachment ref=attachment:1 type=image input=reference_only]"),
+                UIMessagePart.Text("[Attachment path=/upload/abc123.png type=image input=reference_only]"),
             ),
         )
 
@@ -885,7 +885,7 @@ class ResponseAPIMessageTest {
         assertEquals("output_text", content[0].jsonObject["type"]?.jsonPrimitive?.content)
         assertEquals("assistant attachment fact", content[0].jsonObject["text"]?.jsonPrimitive?.content)
         assertEquals(
-            "[Attachment ref=attachment:1 type=image input=reference_only]",
+            "[Attachment path=/upload/abc123.png type=image input=reference_only]",
             content[1].jsonObject["text"]?.jsonPrimitive?.content,
         )
         assertTrue(content.none { it.jsonObject["type"]?.jsonPrimitive?.content == "input_image" })

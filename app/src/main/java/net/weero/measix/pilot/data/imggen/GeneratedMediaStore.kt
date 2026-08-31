@@ -8,7 +8,6 @@ import java.util.zip.CRC32
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
-import kotlin.uuid.Uuid
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
@@ -20,6 +19,7 @@ import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.db.entity.GenMediaEntity
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.OwnedArtifact
+import net.weero.measix.pilot.data.files.AssetFileNames
 import net.weero.measix.pilot.data.files.requireDiscarded
 import net.weero.measix.pilot.data.repository.GenMediaRepository
 
@@ -73,6 +73,7 @@ class GeneratedMediaStore(
     private val genMediaRepository: GenMediaRepository,
     private val artifactStore: ArtifactStore,
     private val deleteCommittedPayload: (File) -> Boolean = File::delete,
+    private val fileNameCandidates: () -> List<String> = AssetFileNames::candidates,
 ) {
     private val persistMutex = Mutex()
 
@@ -106,16 +107,17 @@ class GeneratedMediaStore(
                 val mimeType = inspected.mimeType
                 val extension = inspected.extension
                 val imagesDir = File(filesDir, IMAGES_DIR).apply { mkdirs() }
-                val fileName = "${Uuid.random()}.$extension"
+                val fileName = availableFileName(imagesDir, extension)
                 val pending = File(imagesDir, "$fileName.pending")
                 val finalFile = File(imagesDir, fileName)
+                check(pending.createNewFile()) { "Generated media pending collision: $fileName" }
+                var finalPublished = false
                 var chatArtifact: OwnedArtifact? = null
                 try {
                     pending.writeBytes(bytes)
-                    if (!pending.renameTo(finalFile)) {
-                        pending.copyTo(finalFile, overwrite = true)
-                        pending.delete()
-                    }
+                    check(!finalFile.exists()) { "Generated media target already exists: $fileName" }
+                    check(pending.renameTo(finalFile)) { "Failed to atomically publish generated media: $fileName" }
+                    finalPublished = true
                     if (GeneratedMediaConsumer.CHAT_TOOL_RESULT in consumerPlan.consumers) {
                         // 生成媒体在聊天域的副本——诞生方式为生成派生
                         chatArtifact = artifactStore.copyFile(
@@ -149,7 +151,7 @@ class GeneratedMediaStore(
                         if (pending.exists() && !pending.delete()) {
                             error.addSuppressed(IllegalStateException("Failed to remove pending generated media: $pending"))
                         }
-                        if (finalFile.exists() && !finalFile.delete()) {
+                        if (finalPublished && finalFile.exists() && !finalFile.delete()) {
                             error.addSuppressed(IllegalStateException("Failed to remove generated media: $finalFile"))
                         }
                     }
@@ -179,6 +181,26 @@ class GeneratedMediaStore(
         } catch (cleanupFailure: Throwable) {
             primary.addSuppressed(cleanupFailure)
         }
+    }
+
+    private suspend fun availableFileName(imagesDir: File, extension: String): String {
+        val stems = fileNameCandidates()
+        require(stems.size == 4) { "Asset naming requires exactly four candidates" }
+        suspend fun occupied(name: String): Boolean =
+            genMediaRepository.existsByPath("$IMAGES_DIR/$name") ||
+                File(imagesDir, name).exists() ||
+                File(imagesDir, "$name$PENDING_SUFFIX").exists() ||
+                File(imagesDir, "$name$DELETING_SUFFIX").exists()
+        val names = stems.map { AssetFileNames.fileName(it, extension) }.distinct()
+        for (name in names) {
+            if (!occupied(name)) return name
+        }
+        var ordinal = 2
+        var candidate = AssetFileNames.fileName(stems.first(), extension, ordinal)
+        while (occupied(candidate)) {
+            candidate = AssetFileNames.fileName(stems.first(), extension, ++ordinal)
+        }
+        return candidate
     }
 
     suspend fun delete(id: Int): Boolean = withPersistLock {

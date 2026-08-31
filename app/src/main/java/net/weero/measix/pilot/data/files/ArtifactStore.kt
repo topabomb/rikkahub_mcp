@@ -88,7 +88,7 @@ class OwnedArtifact internal constructor(
     internal val ownershipToken: String = Uuid.random().toString(),
 )
 
-/** Temporary GC/deletion pin for an application-level undo capability. */
+/** Temporary GC/deletion pin owned by a scoped read or application-level undo capability. */
 class ArtifactRetentionLease internal constructor(
     private val releaseAction: () -> Unit,
 ) : AutoCloseable {
@@ -97,6 +97,15 @@ class ArtifactRetentionLease internal constructor(
     override fun close() {
         if (closed.compareAndSet(false, true)) releaseAction()
     }
+}
+
+/** In-memory read snapshot. No new payload or durable identity is created by reading. */
+data class ArtifactImageContent(val reference: LocalArtifactRef, val uri: Uri, val bytes: ByteArray, val mimeType: String)
+
+sealed interface ArtifactImageReadResult {
+    data class Success(val images: List<ArtifactImageContent>) : ArtifactImageReadResult
+    data class Failure(val reason: Reason) : ArtifactImageReadResult
+    enum class Reason { NOT_FOUND, TOO_LARGE, UNSUPPORTED_TYPE, READ_FAILED }
 }
 
 data class PersistedMessageArtifacts(
@@ -149,6 +158,7 @@ class ArtifactStore(
     private val messageNodeDAO: MessageNodeDAO,
     private val settingsCoordinator: ArtifactSettingsCoordinator,
     private val transactionRunner: DatabaseTransactionRunner,
+    private val fileNameCandidates: () -> List<String> = AssetFileNames::candidates,
 ) {
     private val lifecycleMutex = Mutex()
     private val unpublishedPins = mutableMapOf<Long, String>()
@@ -275,6 +285,69 @@ class ArtifactStore(
         return candidate.takeIf { it.isFile && LocalToolPath.isInsideDirectory(it, upload) }
     }
 
+    /**
+     * Authorizes existing upload images independently of conversation/workspace membership.
+     * The same lifecycle lock protects ACTIVE validation and retention acquisition. Reads and
+     * the consumer run outside that lock; deletion/GC reject retained artifacts until it returns.
+     */
+    suspend fun <T> withUploadImages(
+        paths: List<String>,
+        consume: suspend (ArtifactImageReadResult) -> T,
+    ): T {
+        var retention: ArtifactRetentionLease? = null
+        try {
+            val entities = withContext(Dispatchers.IO) {
+                withLifecycleLock {
+                    val selected = mutableListOf<ArtifactEntity>()
+                    for (path in paths) {
+                        val name = LocalToolPath.parseUploadToolPath(path) ?: return@withLifecycleLock null
+                        val entity = getByRelativePath("${FileFolders.UPLOAD}/$name") ?: return@withLifecycleLock null
+                        // An unpublished creation still belongs to its producer and may be rolled back.
+                        if (synchronized(unpublishedPins) { unpublishedPins.containsKey(entity.id) }) {
+                            return@withLifecycleLock null
+                        }
+                        val file = runCatching { payloadStore.file(entity.relativePath) }.getOrNull()
+                            ?: return@withLifecycleLock null
+                        if (!file.isFile || !LocalToolPath.isInsideDirectory(file, payloadStore.file(FileFolders.UPLOAD))) {
+                            return@withLifecycleLock null
+                        }
+                        selected += entity
+                    }
+                    retention = retainIds(selected.mapTo(mutableSetOf()) { it.id })
+                    selected
+                }
+            }
+            if (entities == null) return consume(ArtifactImageReadResult.Failure(ArtifactImageReadResult.Reason.NOT_FOUND))
+            val images = ArrayList<ArtifactImageContent>(entities.size)
+            for (entity in entities) {
+                val bytes = try {
+                    payloadStore.readBytes(entity.relativePath, GeneratedMediaStore.MAX_IMAGE_BYTES.toLong())
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: ArtifactPayloadTooLargeException) {
+                    return consume(ArtifactImageReadResult.Failure(ArtifactImageReadResult.Reason.TOO_LARGE))
+                } catch (_: java.io.IOException) {
+                    return consume(ArtifactImageReadResult.Failure(ArtifactImageReadResult.Reason.READ_FAILED))
+                }
+                val mime = ImageMime.sniff(bytes)
+                if (mime == null || ImageMime.isUnsupportedNonImage(bytes, entity.mimeType) || !ImageMime.isAcceptedImage(bytes)) {
+                    return consume(ArtifactImageReadResult.Failure(ArtifactImageReadResult.Reason.UNSUPPORTED_TYPE))
+                }
+                images += ArtifactImageContent(
+                    reference = LocalArtifactRef(relativePath = entity.relativePath, mimeType = entity.mimeType),
+                    uri = payloadStore.file(entity.relativePath).toUri(),
+                    bytes = bytes,
+                    mimeType = mime,
+                )
+            }
+            // The consumer may commit a durable Child. Keep its return in the caller context,
+            // so dispatcher prompt-cancellation cannot discard that ownership handoff.
+            return consume(ArtifactImageReadResult.Success(images))
+        } finally {
+            retention?.close()
+        }
+    }
+
     suspend fun copyFile(
         source: File,
         mimeType: String,
@@ -331,7 +404,9 @@ class ArtifactStore(
         val resolvedName = displayName ?: payloadStore.displayName(uri) ?: "file"
         val resolvedMime = mimeType ?: payloadStore.mimeType(uri) ?: "application/octet-stream"
         val inheritedOrigin = resolveOrigin(uri, origin)
-        val staged = payloadStore.stageFromUri(folder, uri, resolvedName, resolvedMime, maxBytes)
+        val staged = stageNamedPayload(folder, resolvedName, resolvedMime) { reserved ->
+            payloadStore.stageFromUri(reserved, uri, maxBytes)
+        }
         return activateStaged(staged, resolvedName, resolvedMime, inheritedOrigin)
     }
 
@@ -342,7 +417,9 @@ class ArtifactStore(
         folder: String = FileFolders.UPLOAD,
         origin: ArtifactOrigin,
     ): OwnedArtifact {
-        val staged = payloadStore.stageFromBytes(folder, bytes, displayName, mimeType)
+        val staged = stageNamedPayload(folder, displayName, mimeType) { reserved ->
+            payloadStore.stageFromBytes(reserved, bytes)
+        }
         return activateStaged(staged, displayName, mimeType, origin)
     }
 
@@ -353,8 +430,37 @@ class ArtifactStore(
         folder: String = FileFolders.UPLOAD,
         origin: ArtifactOrigin = ArtifactOrigin.USER,
     ): OwnedArtifact {
-        val staged = payloadStore.stageText(folder, text, displayName, mimeType)
+        val staged = stageNamedPayload(folder, displayName, mimeType) { reserved ->
+            payloadStore.stageText(reserved, text)
+        }
         return activateStaged(staged, displayName, mimeType, origin)
+    }
+
+    private suspend fun stageNamedPayload(
+        folder: String,
+        displayName: String,
+        mimeType: String,
+        stage: suspend (ArtifactPayloadStore.ReservedPayload) -> ArtifactPayloadStore.StagedPayload,
+    ): ArtifactPayloadStore.StagedPayload {
+        val reserved = withLifecycleLock {
+            val stems = fileNameCandidates()
+            require(stems.size == 4) { "Asset naming requires exactly four candidates" }
+            val extension = FileUtils.safeExtension(displayName, mimeType)
+            suspend fun occupied(name: String): Boolean =
+                artifactDAO.existsByPath("$folder/$name") || payloadStore.pathOccupied(folder, name)
+            val names = stems.map { AssetFileNames.fileName(it, extension) }.distinct()
+            for (name in names) {
+                if (!occupied(name)) return@withLifecycleLock payloadStore.reserve(folder, name)
+            }
+            var ordinal = 2
+            var candidate = AssetFileNames.fileName(stems.first(), extension, ordinal)
+            while (occupied(candidate)) {
+                candidate = AssetFileNames.fileName(stems.first(), extension, ++ordinal)
+            }
+            payloadStore.reserve(folder, candidate)
+        }
+        // The staging reservation protects the name while potentially large IO runs outside the lock.
+        return stage(reserved)
     }
 
     @OptIn(ExperimentalEncodingApi::class)
@@ -450,6 +556,7 @@ class ArtifactStore(
         origin: ArtifactOrigin,
     ): OwnedArtifact {
         var insertedId: Long? = null
+        var finalPublished = false
         return try {
             withLifecycleLock {
                 val now = System.currentTimeMillis()
@@ -468,17 +575,21 @@ class ArtifactStore(
                 val id = artifactDAO.insert(creating)
                 check(id != -1L) { "Artifact metadata collision: ${staged.relativePath}" }
                 insertedId = id
-                payloadStore.promote(staged)
+                // Finish the owned atomic rename and record its outcome before observing cancellation.
+                withContext(NonCancellable) {
+                    payloadStore.promote(staged)
+                    finalPublished = true
+                }
                 check(artifactDAO.activateCreated(id, staged.stagingToken, System.currentTimeMillis()) == 1) {
                     "Artifact activation conflict: $id"
                 }
                 owned(creating.copy(id = id, state = ArtifactState.ACTIVE.name, payloadToken = null))
             }
         } catch (cancelled: CancellationException) {
-            rollbackCreating(insertedId, staged)?.let(cancelled::addSuppressed)
+            rollbackCreating(insertedId, staged, finalPublished)?.let(cancelled::addSuppressed)
             throw cancelled
         } catch (error: Throwable) {
-            rollbackCreating(insertedId, staged)?.let(error::addSuppressed)
+            rollbackCreating(insertedId, staged, finalPublished)?.let(error::addSuppressed)
             throw error
         }
     }
@@ -490,6 +601,7 @@ class ArtifactStore(
     private suspend fun rollbackCreating(
         id: Long?,
         staged: ArtifactPayloadStore.StagedPayload,
+        finalPublished: Boolean,
     ): Throwable? = withContext(NonCancellable) {
         try {
             if (id == null) {
@@ -503,7 +615,7 @@ class ArtifactStore(
             }
             withLifecycleLock {
                 val stagingDeleted = payloadStore.deleteStaging(staged.stagingToken)
-                val finalDeleted = payloadStore.deleteFinal(staged.relativePath)
+                val finalDeleted = !finalPublished || payloadStore.deleteFinal(staged.relativePath)
                 if (stagingDeleted && finalDeleted) {
                     check(artifactDAO.deleteById(id) == 1 || artifactDAO.getById(id) == null) {
                         "Failed to remove rolled-back artifact metadata: $id"
@@ -595,10 +707,14 @@ class ArtifactStore(
         val ids = conversations.flatMap { conversation ->
             buildMutableReferencesForNodes(conversation.messageNodes).map(ArtifactReferenceEntity::artifactId)
         }.toSet()
+        retainIds(ids)
+    }
+
+    private fun retainIds(ids: Set<Long>): ArtifactRetentionLease {
         synchronized(retentionPins) {
             ids.forEach { id -> retentionPins[id] = retentionPins.getOrDefault(id, 0) + 1 }
         }
-        ArtifactRetentionLease {
+        return ArtifactRetentionLease {
             synchronized(retentionPins) {
                 ids.forEach { id ->
                     val remaining = retentionPins.getOrDefault(id, 0) - 1

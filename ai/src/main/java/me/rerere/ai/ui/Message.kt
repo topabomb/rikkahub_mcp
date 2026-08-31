@@ -200,15 +200,15 @@ data class UIMessage(
                             // Has ID - only merge inside the current assistant step. Some compatible
                             // services reuse ids; an old executed Tool must remain immutable history.
                             val stepStart = acc.currentStepStart()
-                            val existsPart = acc.subList(stepStart, acc.size).find {
-                                it is UIMessagePart.Tool && it.toolCallId == deltaPart.toolCallId
-                            } as? UIMessagePart.Tool
-                            if (existsPart == null) {
+                            val existingIndex = (stepStart until acc.size).firstOrNull { index ->
+                                (acc[index] as? UIMessagePart.Tool)?.toolCallId == deltaPart.toolCallId
+                            }
+                            if (existingIndex == null) {
                                 acc + deltaPart.copy()
                             } else {
-                                acc.map { part ->
-                                    if (part is UIMessagePart.Tool && part.toolCallId == deltaPart.toolCallId) {
-                                        part.merge(deltaPart)
+                                acc.mapIndexed { index, part ->
+                                    if (index == existingIndex) {
+                                        (part as UIMessagePart.Tool).merge(deltaPart)
                                     } else part
                                 }
                             }

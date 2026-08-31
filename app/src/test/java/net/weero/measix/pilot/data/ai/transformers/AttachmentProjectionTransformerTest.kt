@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.transformers
 
+import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
@@ -9,8 +11,12 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
+import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestImageSupport
 import me.rerere.ai.provider.RequestMediaCapabilities
+import me.rerere.ai.provider.providers.ClaudeProvider
+import me.rerere.ai.provider.providers.GoogleProvider
+import me.rerere.ai.provider.providers.OpenAIProvider
 import me.rerere.ai.ui.AttachmentProjectionTextMetadata
 import me.rerere.ai.ui.OpenAIResponseMetadata
 import me.rerere.ai.ui.OpenAIResponseSourceProfile
@@ -22,16 +28,18 @@ import me.rerere.ai.ui.toMetadata
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.LocalArtifactRef
 import net.weero.measix.pilot.data.model.Assistant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import okhttp3.OkHttpClient
 import kotlin.uuid.Uuid
 
 class AttachmentProjectionTransformerTest {
-    private val context = mockk<android.content.Context>(relaxed = true)
-    private val artifactStore = mockk<ArtifactStore>(relaxed = true)
+    private val context = mockk<android.content.Context>()
+    private val artifactStore = mockk<ArtifactStore>()
     private val transformer = AttachmentProjectionTransformer(artifactStore)
     private val visionModel = Model(
         id = Uuid.random(),
@@ -52,6 +60,9 @@ class AttachmentProjectionTransformerTest {
 
     init {
         every { context.filesDir } returns java.io.File(requireNotNull(System.getProperty("java.io.tmpdir")))
+        coEvery { artifactStore.resolveManagedReference(any()) } answers {
+            LocalArtifactRef(relativePath = "upload/${firstArg<java.io.File>().name}", mimeType = "image/png")
+        }
     }
 
     private fun capabilitiesFor(model: Model) = if (Modality.IMAGE in model.inputModalities) {
@@ -64,13 +75,13 @@ class AttachmentProjectionTransformerTest {
         RequestMediaCapabilities.NONE
     }
 
-    private fun ctxFor(model: Model) = TransformerContext(
+    private fun ctxFor(model: Model, capabilities: RequestMediaCapabilities = capabilitiesFor(model)) = TransformerContext(
         context = context,
         model = model,
         assistant = assistant,
         settings = settings,
         requestOrigins = RequestMessageOriginTracker(),
-        mediaCapabilities = capabilitiesFor(model),
+        mediaCapabilities = capabilities,
         registerUnpublishedResource = { error("projection transformer must not create resources") },
     )
 
@@ -88,6 +99,98 @@ class AttachmentProjectionTransformerTest {
         metadataAs<AttachmentProjectionTextMetadata>()?.attachmentProjectionText == true
 
     @Test
+    fun `managed upload exposes one actual file path without changing durable identity`() = runTest {
+        val ref = AttachmentRefs.format(Uuid.random())
+        val image = stampedImage(ref, "u7km2n4p.png")
+        coEvery { artifactStore.resolveManagedReference(any()) } returns
+            LocalArtifactRef(relativePath = "upload/u7km2n4p.png", mimeType = "image/png")
+        val message = UIMessage(role = MessageRole.USER, parts = listOf(image))
+
+        val output = transformer.transform(ctxFor(visionModel), listOf(message)).single().parts
+
+        assertEquals(
+            "[Attachment path=/upload/u7km2n4p.png type=image input=native]",
+            (output.first() as UIMessagePart.Text).text,
+        )
+        assertEquals(image, output.last())
+        assertEquals(ref, AttachmentRefs.getStableRef(image))
+        assertEquals(listOf(image), message.parts)
+    }
+
+    @Test
+    fun `unavailable managed image never advertises a usable path or UUID`() = runTest {
+        val image = stampedImage()
+        coEvery { artifactStore.resolveManagedReference(any()) } returns null
+
+        listOf(textModel, visionModel).forEach { model ->
+            val parts = transformer.transform(
+                ctxFor(model), listOf(UIMessage(role = MessageRole.USER, parts = listOf(image))),
+            ).single().parts
+            val mode = if (model == visionModel) "native" else "unavailable"
+            assertEquals(
+                "[Attachment type=image input=$mode]",
+                (parts.first() as UIMessagePart.Text).text,
+            )
+            assertEquals(model == visionModel, parts.any { it is UIMessagePart.Image })
+        }
+    }
+
+    @Test
+    fun `remote image does not disclose UUID or fabricated local path`() = runTest {
+        val image = stampedImage().copy(url = "https://example.test/remote.png")
+        listOf(textModel, visionModel).forEach { model ->
+            val parts = transformer.transform(
+                ctxFor(model), listOf(UIMessage(role = MessageRole.USER, parts = listOf(image))),
+            ).single().parts
+            val mode = if (model == visionModel) "native" else "unavailable"
+            assertEquals("[Attachment type=image input=$mode]", (parts.first() as UIMessagePart.Text).text)
+            assertEquals(model == visionModel, parts.any { it is UIMessagePart.Image })
+        }
+        coVerify(exactly = 0) { artifactStore.resolveManagedReference(any()) }
+    }
+
+    @Test
+    fun `document audio and video disclose actual managed names instead of document display names`() = runTest {
+        val source = listOf(
+            UIMessagePart.Document(url = "file:///tmp/u7km2n4p.pdf", fileName = "original report.pdf"),
+            UIMessagePart.Audio(url = "file:///tmp/u4nz8q2a.wav"),
+            UIMessagePart.Video(url = "file:///tmp/u9rv3c6t.mp4"),
+        ).map(AttachmentRefs::ensureAttachmentRef)
+        coEvery { artifactStore.resolveManagedReference(any()) } answers {
+            LocalArtifactRef(relativePath = "upload/${firstArg<java.io.File>().name}", mimeType = "application/octet-stream")
+        }
+
+        val projected = transformer.transform(
+            ctxFor(textModel), listOf(UIMessage(role = MessageRole.USER, parts = source)),
+        ).single().parts
+
+        val names = listOf("u7km2n4p.pdf", "u4nz8q2a.wav", "u9rv3c6t.mp4")
+        val types = listOf("document", "audio", "video")
+        names.forEachIndexed { index, name ->
+            assertEquals(
+                "[Attachment path=/upload/$name type=${types[index]}]",
+                (projected[index * 2] as UIMessagePart.Text).text,
+            )
+            assertEquals(source[index], projected[index * 2 + 1])
+        }
+    }
+
+    @Test
+    fun `managed reference lookup cancellation propagates from request projection`() = runTest {
+        val cancelled = kotlinx.coroutines.CancellationException("turn cancelled")
+        coEvery { artifactStore.resolveManagedReference(any()) } throws cancelled
+
+        try {
+            transformer.transform(
+                ctxFor(textModel), listOf(UIMessage(role = MessageRole.USER, parts = listOf(stampedImage()))),
+            )
+            org.junit.Assert.fail("cancellation must propagate")
+        } catch (actual: kotlinx.coroutines.CancellationException) {
+            assertEquals(cancelled, actual)
+        }
+    }
+
+    @Test
     fun `native user image keeps image and records native input fact in user message`() = runTest {
         val ref = AttachmentRefs.format(Uuid.random())
         val image = stampedImage(ref)
@@ -99,7 +202,7 @@ class AttachmentProjectionTransformerTest {
         assertEquals("hi", (projected.parts[0] as UIMessagePart.Text).text)
         val marker = projected.parts[1] as UIMessagePart.Text
         assertEquals(
-            "[Attachment ref=$ref type=image name=\"shot.png\" input=native]",
+            "[Attachment path=/upload/shot.png type=image input=native]",
             marker.text,
         )
         assertTrue(marker.isProjectionText())
@@ -117,36 +220,38 @@ class AttachmentProjectionTransformerTest {
         assertEquals(1, projected.parts.size)
         val marker = projected.parts.single() as UIMessagePart.Text
         assertEquals(
-            "[Attachment ref=$ref type=image name=\"shot.png\" input=reference_only]",
+            "[Attachment path=/upload/shot.png type=image input=reference_only]",
             marker.text,
         )
         assertTrue(marker.isProjectionText())
     }
 
     @Test
-    fun `malformed image ref is treated as unavailable rather than exposed to the provider`() = runTest {
+    fun `managed path disclosure is independent of malformed internal UUID metadata`() = runTest {
         val image = stampedImage(ref = "attachment:not-a-uuid")
         val message = UIMessage(role = MessageRole.USER, parts = listOf(image))
 
         val projected = transformer.transform(ctxFor(textModel), listOf(message)).single()
 
         assertEquals(
-            "[Attachment ref=unavailable type=image input=unavailable]",
+            "[Attachment path=/upload/shot.png type=image input=reference_only]",
             (projected.parts.single() as UIMessagePart.Text).text,
         )
     }
 
     @Test
-    fun `marker display names escape grammar delimiters`() = runTest {
-        val image = stampedImage(fileName = "quote\"line\n.png")
-        val message = UIMessage(role = MessageRole.USER, parts = listOf(image))
-
-        val projected = transformer.transform(ctxFor(textModel), listOf(message)).single()
-
-        assertEquals(
-            "[Attachment ref=${AttachmentRefs.getStableRef(image)} type=image name=\"quote\\\"line\\n.png\" input=reference_only]",
-            (projected.parts.single() as UIMessagePart.Text).text,
-        )
+    fun `non upload managed image does not expose its internal handle`() = runTest {
+        coEvery { artifactStore.resolveManagedReference(any()) } returns
+            LocalArtifactRef(relativePath = "images/existing.png", mimeType = "image/png")
+        val image = stampedImage()
+        listOf(textModel, visionModel).forEach { model ->
+            val projected = transformer.transform(
+                ctxFor(model), listOf(UIMessage(role = MessageRole.USER, parts = listOf(image))),
+            ).single()
+            val mode = if (model == visionModel) "native" else "unavailable"
+            assertEquals("[Attachment type=image input=$mode]", (projected.parts.first() as UIMessagePart.Text).text)
+            assertEquals(model == visionModel, projected.parts.any { it is UIMessagePart.Image })
+        }
     }
 
     @Test
@@ -158,26 +263,26 @@ class AttachmentProjectionTransformerTest {
         val projected = transformer.transform(ctxFor(textModel), listOf(historical, current))
 
         assertEquals(
-            "[Attachment ref=$ref type=image name=\"shot.png\" input=reference_only]",
+            "[Attachment path=/upload/shot.png type=image input=reference_only]",
             (projected.first().parts.single() as UIMessagePart.Text).text,
         )
         assertEquals(listOf(UIMessagePart.Text("more")), projected.last().parts)
     }
 
     @Test
-    fun `reference only image without stable ref becomes unavailable fact`() = runTest {
+    fun `managed image without stable ref discloses its actual path`() = runTest {
         val image = UIMessagePart.Image(url = "file:///tmp/legacy.png")
         val message = UIMessage(role = MessageRole.USER, parts = listOf(image))
 
         val projected = transformer.transform(ctxFor(textModel), listOf(message)).single()
 
         val marker = projected.parts.single() as UIMessagePart.Text
-        assertEquals("[Attachment ref=unavailable type=image input=unavailable]", marker.text)
+        assertEquals("[Attachment path=/upload/legacy.png type=image input=reference_only]", marker.text)
         assertTrue(marker.isProjectionText())
     }
 
     @Test
-    fun `native image without stable ref keeps the image and records unavailable native fact`() = runTest {
+    fun `native managed image without stable ref keeps its actual path and image`() = runTest {
         val image = UIMessagePart.Image(url = "file:///tmp/legacy.png")
         val message = UIMessage(role = MessageRole.USER, parts = listOf(image))
 
@@ -185,7 +290,7 @@ class AttachmentProjectionTransformerTest {
 
         assertEquals(2, projected.parts.size)
         val marker = projected.parts.first() as UIMessagePart.Text
-        assertEquals("[Attachment ref=unavailable type=image input=native]", marker.text)
+        assertEquals("[Attachment path=/upload/legacy.png type=image input=native]", marker.text)
         assertTrue(marker.isProjectionText())
         assertTrue(projected.parts.last() is UIMessagePart.Image)
     }
@@ -208,7 +313,7 @@ class AttachmentProjectionTransformerTest {
         val output = (projected.parts.single() as UIMessagePart.Tool).output
         val marker = output.single() as UIMessagePart.Text
         assertEquals(
-            "[Attachment ref=$ref type=image name=\"shot.png\" input=reference_only]",
+            "[Attachment path=/upload/shot.png type=image input=reference_only]",
             marker.text,
         )
         assertTrue(marker.isProjectionText())
@@ -223,7 +328,7 @@ class AttachmentProjectionTransformerTest {
 
         assertEquals(MessageRole.ASSISTANT, projected.role)
         assertEquals(
-            "[Attachment ref=$ref type=image name=\"shot.png\" input=reference_only]",
+            "[Attachment path=/upload/shot.png type=image input=reference_only]",
             (projected.parts.single() as UIMessagePart.Text).text,
         )
     }
@@ -259,7 +364,7 @@ class AttachmentProjectionTransformerTest {
         val projected = transformer.transform(ctx, listOf(message)).single()
 
         assertEquals(
-            "[Attachment ref=$ref type=image name=\"shot.png\" input=reference_only]",
+            "[Attachment path=/upload/shot.png type=image input=reference_only]",
             (projected.parts.single() as UIMessagePart.Text).text,
         )
         assertFalse(projected.parts.any { it is UIMessagePart.Image })
@@ -290,12 +395,12 @@ class AttachmentProjectionTransformerTest {
         assertEquals("before", (projected.parts[0] as UIMessagePart.Text).text)
         val projectedTool = projected.parts[1] as UIMessagePart.Tool
         assertEquals(
-            "[Attachment ref=$toolRef type=image name=\"tool.png\" input=reference_only]",
+            "[Attachment path=/upload/tool.png type=image input=reference_only]",
             (projectedTool.output.single() as UIMessagePart.Text).text,
         )
         assertEquals("after", (projected.parts[2] as UIMessagePart.Text).text)
         assertEquals(
-            "[Attachment ref=$directRef type=image name=\"direct.png\" input=reference_only]",
+            "[Attachment path=/upload/direct.png type=image input=reference_only]",
             (projected.parts[3] as UIMessagePart.Text).text,
         )
     }
@@ -362,5 +467,61 @@ class AttachmentProjectionTransformerTest {
         assertTrue(message.parts[1] === originalParts[1])
         assertEquals(image.url, (message.parts[1] as UIMessagePart.Image).url)
         assertFalse((message.parts[0] as UIMessagePart.Text).isProjectionText())
+    }
+
+    @Test
+    fun `three image origins retain their source container across four wire protocols`() = runTest {
+        val client = OkHttpClient()
+        val openAI = OpenAIProvider(client)
+        val claude = ClaudeProvider(client)
+        val google = GoogleProvider(client)
+        val userImage = stampedImage(fileName = "user.png")
+        val toolImage = stampedImage(fileName = "tool.png")
+        val assistantImage = stampedImage(fileName = "assistant.png")
+        val messages = listOf(
+            UIMessage.system("unchanged"),
+            UIMessage(role = MessageRole.USER, parts = listOf(userImage)),
+            UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(
+                    UIMessagePart.Tool(
+                        toolCallId = "image-call", toolName = "generate_image", input = "{}",
+                        output = listOf(toolImage),
+                    ),
+                    assistantImage,
+                ),
+            ),
+        )
+        listOf(textModel, visionModel).forEach { model ->
+            val adapters = listOf(
+                "chat" to openAI.requestMediaCapabilities(ProviderSetting.OpenAI(), model),
+                "responses" to openAI.requestMediaCapabilities(ProviderSetting.OpenAI(useResponseApi = true), model),
+                "claude" to claude.requestMediaCapabilities(ProviderSetting.Claude(), model),
+                "google" to google.requestMediaCapabilities(ProviderSetting.Google(), model),
+            )
+            adapters.forEach { (wire, capabilities) ->
+                val context = ctxFor(model, capabilities)
+                val projected = transformer.transform(context, messages)
+                assertEquals(messages.map { it.role }, projected.map { it.role })
+                assertEquals(messages.first(), projected.first())
+                val tool = projected.last().parts.filterIsInstance<UIMessagePart.Tool>().single()
+                val origins = listOf(
+                    Triple("user.png", capabilities.userImages, projected[1].parts),
+                    Triple("tool.png", capabilities.toolOutputImages, tool.output),
+                    Triple("assistant.png", capabilities.assistantImages, projected.last().parts.drop(1)),
+                )
+                origins.forEach { (name, support, parts) ->
+                    val native = support == RequestImageSupport.STRUCTURED
+                    val mode = if (native) "native" else "reference_only"
+                    assertEquals(
+                        "$wire ${model.modelId} $name",
+                        "[Attachment path=/upload/$name type=image input=$mode]",
+                        (parts.first() as UIMessagePart.Text).text,
+                    )
+                    assertEquals(native, parts.any { it is UIMessagePart.Image })
+                }
+            }
+        }
+        assertEquals(listOf(userImage), messages[1].parts)
     }
 }

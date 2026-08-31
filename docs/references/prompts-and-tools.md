@@ -190,6 +190,14 @@ Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过�
 `assistant_inspect`、`assistant_call` 以及历史名 `assistant_memory_list`，
 保留并桥接 `ask_user`。`generate_image` 不再永久过滤：Target 已开启 `TextToImage` 且默认文生图模型可解析时才会注册。Target 启动时额外捕获一次实际工具名集合；后续 step 可按最新设置重建或撤销其中的工具，但不能引入启动时不存在的名字。附件识别模型不单独冻结。
 
+每个 Provider step 只构建一次不可变 `toolsByName`，在发请求前拒绝空名和重名；该索引同时服务 schema、审批与执行。
+Master/Target 都在下一 step 读取当前有效 Settings，Target 仍应用 run 开始能力上限。配置撤销后，待审批、恢复或历史
+ToolCall 不会复活旧工具，而是在审批前返回 `tool_not_available` 并提交 `FAILED` 结果。
+所有工具先校验合法 JSON object，再调用自身纯参数校验；空参数缓冲按无参 `{}` 解释，非空损坏 JSON 不当成空 object，也不先询问用户。
+纯参数校验只返回领域错误，`ToolArgumentsException` 保留其字段并补齐 `error` 与 `type:"error"`。工具撤销或审批不可用
+同样带标准错误标记，使历史重读仍显示 FAILED；未执行的拒绝不创建 `tool_execution` 记录或伪造 STARTED。
+正常执行返回的领域失败保持原有信封，不因此变成执行失败。MCP 本地只检查 JSON object，远端 schema 与业务校验仍归 Server。
+
 下列 description 为源码中的英文原文（动态日期/时区用占位标明）。
 
 ### `search_web`
@@ -238,23 +246,24 @@ Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过�
 | `prompt` | A complete, model-ready prompt for the image. Preserve the user's intent and relevant context, and refine it using effective prompting techniques suited to the target image model. |
 | `set_as_background` | Whether to use the generated image as the current assistant's chat background. Set to true when the user asks to apply the image as the background. |
 
-`set_as_background` 默认 false，纯生成不审批；`set_as_background=true` 必须审批。参数不是
-合法 object、prompt 为空或 boolean 类型不合法时，在审批门口直接返回 `{"status":"failed","reason":"invalid_arguments"}`。
+`set_as_background` 默认 false，纯生成不审批；`set_as_background=true` 必须审批。通用入口先验证合法 JSON object；
+prompt 为空或 boolean 类型不合法时，审批前的最终结果为
+`{"status":"failed","reason":"invalid_arguments","error":"invalid_arguments","type":"error"}`。
 
 成功结果是 bounded JSON + `UIMessagePart.Image`，使用 `ToolOutputPolicy.PRESERVE`，不回显 prompt：
 
 ```json
 {
   "status": "completed",
-  "file": { "path": "/upload/9a3f-image.png", "mime_type": "image/png" },
+  "file": { "path": "/upload/7ka2b9.png", "mime_type": "image/png" },
   "background": { "requested": false, "updated": false }
 }
 ```
 
 `file.path` 是 Tool Result 内唯一模型可见的文件访问标识，语义为本地工具可消费的
-`/upload/<safe-file-name>`。引用身份 `attachment:<uuid>` 锚定在 Image part metadata 上，
-由 `AttachmentProjectionTransformer` 在请求 Model View 中投影成带 `input=native` 或
-`input=reference_only` 的 `[Attachment ref=...]` 事实行。
+`/upload/<safe-file-name>`。逻辑身份 `attachment:<uuid>` 仍锚定在 Image part metadata 上；
+`AttachmentProjectionTransformer` 对托管 upload 披露同一个实际路径与文件名，形成带
+`input=native` 或 `input=reference_only` 的 `[Attachment path=/upload/... ]` 事实行。
 Android host path、file URI 和内部 relative path 不进入 Tool Result。
 会话 fork / 恢复按 metadata 中的 `LocalArtifactRef.relativePath` 重写该字段；文件缺失时不得
 伪造 completed + readable path。
@@ -291,26 +300,26 @@ Android host path、file URI 和内部 relative path 不进入 Tool Result。
 
 ### `inspect_attachments`
 
-启用条件（工具不注入时模型看不到它）：当前对话模型的派生 `RequestMediaCapabilities`
-未能覆盖全部三个附件来源容器（USER / ASSISTANT / Tool.output）的 `STRUCTURED` IMAGE
-能力（`OPAQUE_REPLAY_ONLY` 不算完整覆盖）；否则设置中必须配置
-`attachmentInspectionModelId` 能解析到模型、Provider 可用且 `inputModalities` 含 IMAGE
-的附件识别模型。模型图片能力唯一来源于 `Model.inputModalities`；
-`RequestMediaCapabilities` 只是协议容器映射，不是第二套能力配置；
-不再根据 endpoint host 做第二次否决。
+启用条件：`attachmentInspectionModelId` 能解析到 Provider 可用且 `inputModalities` 含 IMAGE 的识图模型。
+不要求当前模型缺少视觉能力，也不要求当前会话已携带图片或有可用工作区。原生视觉能力与按需读取文件是不同能力；
+模型能力由 `Model.inputModalities` 声明，协议容器由 `RequestMediaCapabilities` 映射，不按 host 再次否决。
 
 > Inspect attachment content on demand when the task depends on it — for example,
 > text or other visual details in an image. Returns the findings for the request.
 
 参数：
 
-- `attachments`（array，1–4 项，required）：`Attachment refs to inspect, copied exactly
-  from the [Attachment ref=...] lines in the conversation. Currently image attachments
-  only. Up to 4; order is preserved.` items：`An attachment ref as it appears in the
-  conversation (attachment:<uuid>)`
+- `attachments`（array，1–4 项，required）：`Image file paths from the user's request, [Attachment path=...] markers,
+  tool result file.path, or artifacts[].path. Files need not have appeared as images in this chat.
+  Up to 4; order is preserved. Does not require a workspace.` items：`Exact image file path: /upload/<file>.`
 - `request`（string，required）：`The specific information needed and its expected form: exact text to
   transcribe, details to compare across images, or facts to verify. Prefer precise requests over vague
   descriptions. Keep it focused on the current task.`
+
+路径经 `ArtifactStore` 校验为 ACTIVE、已发布、位于受管 upload 且可读的真实图片；不要求当前分支引用。
+不接受 UUID、HTTP(S)、file URI、裸文件名或 `/workspace`。识图读取形成内存快照，通过共用 FileEncoder 规范化为
+data URI，保留压缩、方向和格式转换规则，不落盘或复制文件。
+识图模型接收固定独立 System instruction、按序 `[Image N path=...]` 与 Image、最后的 request；不携带主会话历史。
 
 识别调用内部以 `reasoningLevel = AUTO`（Provider 使用模型默认推理档）发起，不表达「关闭
 推理」——`OFF` 在 Gemini 3 系列上会映射为 `thinkingLevel = "minimal"`，Gemini 3.7 Flash
@@ -330,28 +339,26 @@ JSON：
 
 | reason | 含义 |
 |--------|------|
-| `invalid_attachments` | refs 为空 / 超过 4 个 / 非 `attachment:` 格式 / 解析结果无图片 |
-| `attachment_not_found` / `unsupported_attachment_type` / `unsafe_attachment_url` / `attachment_fetch_failed` | 统一 Resolver 解析失败，reason 原样透传 |
+| `invalid_attachments` | paths 为空 / 超过 4 个 / 不是安全 upload 路径 / request 非字符串或为空 / 解析图片数与输入数不一致 |
+| `attachment_not_found` | 无已发布 ACTIVE 登记、文件不存在或不在受管目录 |
+| `unsupported_attachment_type` | 文件内容不是支持的图片 |
+| `attachment_too_large` | 图片超过大小上限 |
+| `attachment_read_failed` | 本地读取 IO 失败 |
 | `attachment_resolution_unavailable` | 执行环境未提供附件解析能力 |
 | `rate_limited` / `quota_exhausted` / `auth_failed` / `permission_denied` / `invalid_request` / `provider_unavailable` / `provider_error` / `content_blocked` / `runtime_error` | Provider 调用失败，`classifyProviderFailure` 细分（与 `ProviderFailureKind` 字面一致）；失败信封可携带 `detail`（sanitized 诊断文本） |
 | `inspection_failed` | 识别输出为空（兜底，无 `detail`） |
 
-每个 Provider step 只构建一次不可变 `toolsByName`，在发请求前拒绝空名和重名；该索引同时服务 schema、审批与执行。
-Master/Target 都在下一 step 读取当前有效 Settings，Target 仍应用 run 开始能力上限。配置撤销后，待审批、恢复或历史
-ToolCall 不会复活旧工具，而是返回 `tool_not_available` 并提交 `FAILED` 执行事实。
-
-媒体资源的两种身份（全工具链统一语义）：
+媒体资源引用（全工具链统一语义）：
 
 ```text
-attachment:<uuid>   引用身份——把附件作为输入传给工具（inspect_attachments、
-                    assistant_call.attachments）；在投影出的 [Attachment ref=...] 引用行交付
-/upload/<file>      文件身份——读写字节（workspace_read_file / workspace_shell 等）；
+attachment:<uuid>   仅内部持久化逻辑身份，不作为模型披露或工具输入
+/upload/<file>      托管附件的模型文件路径；识别与委托不依赖 workspace
 /workspace/...      工作产物区。会话共享的只读文件（上传与生成的媒体）挂载在 /upload
 ```
 
-工具产出新媒体（如 `generate_image`）时两种身份同时获得：文件身份写入 Tool Result
-`file.path`，引用身份由 `AttachmentRefs.ensureAttachmentRef` 锚定在 Image part metadata
-上、经投影管线以引用行交付。除这两者外不向模型暴露其他标识。
+工具产出新媒体（如 `generate_image`）时，Tool Result `file.path` 与附件事实行的 path 指向同一聊天副本。
+内部 UUID 不改写成文件名，模型也不需要在图库名称、副本路径与 UUID 之间换算。
+新文件使用无前缀的短名，按四档随机候选查重，全冲突才加数字后缀；旧文件原样保留，规则见[多模态参考](multimodal-context-and-turn-durability.md)。
 
 ### `get_time_info`
 
@@ -388,8 +395,8 @@ read：`{"text":"..."}`。write：`{"success":true}`。
 ### `ask_user`
 
 启用：`LocalToolOption.AskUser`。`needsApproval` 恒为 true；合法调用由 HITL 收答案，`execute` 不直接跑。
-参数不合法时在审批门口直接失败：写入
-`{"error":"invalid_arguments","field":"...","expected":"..."}`，不 Pending、不自动执行。
+问题字段不合法时在审批门口直接失败：写入
+`{"error":"invalid_arguments","field":"...","expected":"...","type":"error"}`，不 Pending、不自动执行。
 `options` 格式错误时额外带 `hint`。Target 上由 Coordinator 桥到主聊天子助手卡片。
 
 > Ask the user one or more questions when you need clarification or confirmation.
@@ -419,7 +426,7 @@ read：`{"text":"..."}`。write：`{"success":true}`。
 
 > Query device calendar events (`begin`/`end`, or `range`: today/week/month).
 > Device timezone: '\<zone\>' (UTC \<offset\>); naive times use this zone.
-> Requires Calendar permission; if missing, a request is triggered and an error is returned.
+> Requires Calendar permission; if missing, an error asks the user to enable it in local tools settings.
 
 另有 `query`（标题关键字）与 `limit`（默认 20）。
 
@@ -429,9 +436,12 @@ read：`{"text":"..."}`。write：`{"success":true}`。
 
 > Create a calendar event (title and start required). End defaults to 1 hour after start, or the next day if all-day.
 > Device timezone: '\<zone\>' (UTC \<offset\>).
-> Requires Calendar permission; if missing, a request is triggered and an error is returned.
+> Requires Calendar permission; if missing, an error asks the user to enable it in local tools settings.
 
 成功结果：`{"success":true,"event_id":N,"start":"...","end":"..."}`。`start`/`end` 是解析后的规范时间。
+
+创建工具在每个 step 装配时捕获设备时区，参数校验与执行共用该快照。必填项、字段类型和时间范围在审批前校验；
+系统权限检查、日历选择和实际插入仍属于执行阶段，参数错误不会触发授权或系统权限访问。
 
 ### `eval_javascript`
 
@@ -496,6 +506,7 @@ create：`{"id":N}`。edit / delete：`{"success":true,"id":N}`。
 
 `text`：UTF-8 text content to write。`overwrite` 默认 true。
 路径落在可写根之外时强制审批。结果为文件元数据（path / name / sizeBytes / updatedAt），不含正文。
+审批按规范化路径判定，缺字段或错误类型先返回参数错误；文件工具不跟随符号链接，实际 IO 由 Workspace owner 的安全文件操作完成。
 
 ### `workspace_edit_file`
 
@@ -525,7 +536,8 @@ unified diff 只进 part metadata，不进发给模型的文本。
 
 ### `assistant_manage`
 
-启用：`LocalToolOption.AssistantManagement`。`CREATE` 不审批；`UPDATE` / `DELETE` 以及缺失或非法 `action` 必须审批。
+启用：`LocalToolOption.AssistantManagement`。合法 `CREATE` 不审批；合法 `UPDATE` / `DELETE` 必须审批。
+缺失或非法 action、错误字段类型、非法 ID 和不完整操作参数在审批前直接返回 `invalid_arguments`。
 
 > Create, update, or delete a sub-assistant (sub-agent). New ones join your allowed list.
 
@@ -533,9 +545,9 @@ unified diff 只进 part metadata，不进发给模型的文本。
 |------|-------------|
 | `action` | CREATE, UPDATE, or DELETE. |
 | `assistant_id` | Required for UPDATE and DELETE. |
-| `name` | Display name. |
-| `description` | Specialty and when to call it. Not a system prompt. |
-| `instructions` | System prompt for the sub-assistant: role, method, output style. Do not invent tools or skills. |
+| `name` | Display name. Required and non-empty for CREATE; optional replacement for UPDATE. |
+| `description` | Specialty and when to call it. Required and non-empty for CREATE; optional replacement for UPDATE. Not a system prompt. |
+| `instructions` | System prompt for the sub-assistant: role, method, output style. Required and non-empty for CREATE; optional replacement for UPDATE. Do not invent tools or skills. |
 
 成功只回 `action` 与 `id`，不回显 `name` / `description` / `instructions`。DELETE 可带 `cleanup_pending`。
 
@@ -570,13 +582,16 @@ caller 自身返回 `target_is_caller`。
 |------|-------------|
 | `assistant_id` | Catalog id. |
 | `request` | It cannot see this chat. Give a clear goal, the facts it needs, and any constraints. Say what you need back; a concise, high-value reply is usually enough. |
-| `attachments` | Up to 4 task-related attachments. Prefer `attachment:<uuid>`; generated images may use `/upload/<file>`. The target cannot see this chat. |
+| `attachments` | Up to 4 task-related image file paths: `/upload/<file>`. Copy paths from the user's request, `[Attachment path=...]` markers, tool result `file.path`, or `artifacts[].path`. The target cannot see this chat—do not assume it can see a just-uploaded image. |
 | `extras` | Extra result content for the caller model. Default none. Values: artifacts, tts, tool_calls. Request artifacts when you need to inspect, reason about, or reuse the file contents produced by the sub-assistant. The user can already see those files in the call card. A short artifact list is always included when files were produced. |
 
 完成：`{"status":"completed","assistant_name":"...","content":"..."}`，必要时
 `has_non_text_output`。本次 run 有可持久化交付物时，无论是否点名 extras 都带轻量
-`artifacts[]`（`ref` / `type` / `mime`，以及 managed `path`）；超出上限时另带
+`artifacts[]`（仅 `path` / `type` / `mime`，无可用 path 的项不披露）；超出上限时另带
 `artifacts_omitted`。其他终态带稳定 `reason`。`content_blocked`、`provider_error` 与 `runtime_error` 另带提炼后的 `detail`。`provider_error` / `runtime_error` 含单行异常类型与消息（按字符上限裁剪，不含因果链和堆栈）；`content_blocked` 使用稳定政策说明，不回传检查类型（含 OpenAI `content_filter`）。
+
+默认清单是 Text JSON，没有 Image 或 `[Attachment ...]` 事实行。需要后续检查时，可以直接使用 `artifacts[].path`
+调用识图；无需重跑子助手。`extras` 只在原委托调用时选择内容，不是事后补取接口。
 
 已跑过 Child 且调用过 `text_to_speech` 时，默认另带精简 `tts_stats`（`calls` 次数、`chars` 朗读字符合计）。体积较大或需 Caller 主动取回的段只在 `extras` 点名后返回：
 
@@ -584,7 +599,7 @@ caller 自身返回 `target_is_caller`。
 - `tool_calls`：本次 run 范围内每个工具的发出次数（`header+rows`，首次出现序）
 - `tts`：按调用顺序的朗读文本表
 
-`unavailable` 不加这些段。进入 Coordinator 前的参数错误也使用同一信封（`status=unavailable` + `reason`），不再使用 `{"error":...}`。附件相关 reason：`invalid_attachments`、`attachment_not_found`、`unsupported_attachment_type`、`unsafe_attachment_url`、`attachment_fetch_failed`。聊天模型 / Target 不接收 IMAGE 本身不是 attachment failure。
+`unavailable` 不加这些段。通过共用 JSON object 校验后的委托领域参数错误也使用同一信封（`status=unavailable` + `reason`）。附件相关 reason：`invalid_attachments`、`attachment_not_found`、`unsupported_attachment_type`、`attachment_too_large`、`attachment_read_failed`。聊天模型 / Target 不接收 IMAGE 本身不是 attachment failure。
 
 `content` 取本次 run 范围内：优先最后一条 ASSISTANT 在最后一个工作工具之后的顶层 Text；
 `text_to_speech` 不算工作工具；最后一步为空则回退更早 step，再回退最后一段 Text island。

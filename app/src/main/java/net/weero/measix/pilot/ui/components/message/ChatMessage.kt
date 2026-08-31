@@ -79,6 +79,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
+import net.weero.measix.pilot.service.runtime.ActiveContextCache
 import net.weero.measix.pilot.service.runtime.ToolCallPhase
 import net.weero.measix.pilot.data.model.AssistantAffectScope
 import net.weero.measix.pilot.data.model.MessageNode
@@ -128,8 +129,10 @@ fun ChatMessage(
     toolCallPhases: Map<ToolCallLocator, ToolCallPhase> = emptyMap(),
     onShowTerminalError: ((UIMessage) -> Unit)? = null,
     readOnly: Boolean = false,
+    activeContextCache: ActiveContextCache? = null,
 ) {
     val message = node.messages[node.selectIndex]
+    val contextCache = activeContextCache?.forMessage(message.id)
     val settings = LocalSettings.current.displaySetting
     val chatFontFamily = LocalChatFontFamily.current ?: rememberChatFontFamily(settings)
     val textStyle = LocalTextStyle.current.copy(
@@ -225,7 +228,7 @@ fun ChatMessage(
         }
         val showEditedFiles = assistant?.workspaceId != null && editedFiles.isNotEmpty()
         val showUsage = settings.showTokenUsage &&
-            message.usage?.toNerdLineDisplay()?.hasCompactSummary == true
+            message.usage.toNerdLineDisplay(contextCache).hasCompactSummary
 
         if (showActions || showEditedFiles || showUsage) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -258,7 +261,7 @@ fun ChatMessage(
 
                 if (showUsage) {
                     ProvideTextStyle(textStyle) {
-                        ChatMessageNerdLine(message = message)
+                        ChatMessageNerdLine(message = message, contextCache = contextCache)
                     }
                 }
             }

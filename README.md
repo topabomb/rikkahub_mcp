@@ -34,7 +34,7 @@ material3/    Material3 颜色工具扩展
 common/       通用工具
 ```
 
-**核心概念**：Assistant（助手配置）、Conversation（对话线程）、UIMessage（消息抽象）、Provider（服务商适配）、MCP（工具协议）、Transformer（消息变换管道）。详见 [界面架构参考](docs/references/ui-architecture.md)。
+**核心概念**：Assistant（助手配置）、Conversation（对话线程）、UIMessage（消息抽象）、Provider（服务商适配）、MCP（工具协议）、Transformer（消息变换管道）。详见 [应用总体架构](docs/references/application-architecture.md)。
 
 ## 技术栈
 
@@ -83,22 +83,28 @@ common/       通用工具
 
 | 文档 | 说明 |
 |------|------|
+| [应用总体架构](docs/references/application-architecture.md) | durable owner、命令写协议、应用服务与 UI 边界 |
 | [界面架构参考](docs/references/ui-architecture.md) | UI 架构层次、导航体系、自适应布局策略、折叠屏适配方案 |
 | [消息渲染管线](docs/references/message-rendering-pipeline.md) | UIMessage.parts 到像素的完整渲染管线、Markdown 双路径、WebView 封装 |
 | [助手配置参考](docs/references/assistant-configuration.md) | Assistant 字段、默认模板、解析/持久化规则与配置消费边界 |
 | [Android 配置架构与企业下发清单](docs/references/android-configuration-architecture.md) | Android 完整配置目录、持久化/引用架构、企业下发边界与 S0.2 Snapshot 映射 |
 | [消息生成链路](docs/references/chat-generation-pipeline.md) | 从用户发送到模型回复落盘的完整数据流 |
+| [多模态与持久化](docs/references/multimodal-context-and-turn-durability.md) | 附件身份、文件路径、请求投影与 Turn/Tool 持久化 |
 | [AI 协议参考](docs/references/protocol-reference.md) | 四类基础协议规范、Provider 差异映射、模型级适配 |
+| [Token 与缓存统计](docs/references/token-usage-accounting.md) | 请求、turn 累计、上下文与缓存展示口径 |
+| [MCP 架构](docs/references/mcp-architecture.md) | 工具目录、连接运行态、OAuth 与审批边界 |
+| [数据库索引](docs/references/database-indexing.md) | 查询覆盖、索引职责与迁移边界 |
 | [工作区架构](docs/references/workspace-architecture.md) | Rootfs/挂载边界、PRoot 执行、文件工具、终端与安装生命周期 |
 | [更新与发行](docs/references/update-mechanism.md) | 更新检查、宽松版本排序、下载委托、签名与 CI 发行契约 |
 | [子助手架构](docs/references/sub-assistant-architecture.md) | Target 访问、同步调用、Child lineage、撤权、恢复与只读详情 |
+| [子助手多模态](docs/references/sub-assistant-multimodal.md) | 图片输入、产出清单、附件交付与主助手请求投影 |
 | [提示词与工具](docs/references/prompts-and-tools.md) | 模型可见的系统注入、实际工具名、参数和 Tool Result 形状 |
 
 ### 开发文档（`docs/dev/`）
 
 | 文档 | 说明 |
 |------|------|
-| [功能迭代清单](docs/dev/changelog.md) | 0.0.3 起的功能迭代历史（每次迭代更新） |
+| [版本变更记录](docs/dev/changelog.md) | 各发布版本的功能与修复摘要 |
 | [Fork 精简计划](docs/dev/fork-simplification-plan.md) | Fork 精简规划与落地记录（已归档） |
 | [原始架构文档](docs/dev/original-architecture.md) | Fork 前 RikkaHub 架构详解（已归档） |
 | [上游同步记录](docs/dev/upstream-sync.md) | RikkaHub 上游提交检查与同步历史 |

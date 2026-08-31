@@ -251,7 +251,9 @@ verticalPaneSplit(windowWidthDp, fallbackListWidthDp, hingeBounds):
 `Screen.SettingMcp`；即使尚未登记 Server 或所有 Server 都已禁用，Sheet 仍显示空状态和这个管理入口。
 
 > **例外**：全屏图片查看器（`ImagePreviewDialog`）是刻意不经过 `AdaptiveModal` 的全屏 `Dialog`
-> （`usePlatformDefaultWidth = false`、纯黑背景、自有点按/竖直拖拽关闭手势与多图翻页）。
+> （`usePlatformDefaultWidth = false`、`decorFitsSystemWindows = false`），宽度和系统栏布局均显式配置，不依赖平台默认测量。
+> 纯黑背景与图片手势层铺满窗口；页码、操作栏、信息面板和 Toast 单独应用 `safeDrawing`，避开系统栏与屏幕缺口。
+> 查看器保留自身的点按/竖直拖拽关闭、缩放平移与多图翻页交互。
 > 相册式浏览需要完整的屏幕空间与手势域，不适配半屏 Sheet / 有界卡片的弹层约定。
 > 场景差异通过 `extraActions` / `overlay` 与 `LocalImagePreviewActions` /
 > `LocalImagePreviewOverlay` 注入（如设为背景、确认框、助手选择器），查看器不理解助手或页面。

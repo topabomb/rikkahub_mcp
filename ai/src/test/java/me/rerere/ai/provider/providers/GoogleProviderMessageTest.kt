@@ -864,9 +864,9 @@ class GoogleProviderMessageTest {
                 UIMessage(
                     role = MessageRole.USER,
                     parts = listOf(
-                        UIMessagePart.Text("[Attachment ref=attachment:a type=audio]"),
+                        UIMessagePart.Text("[Attachment path=/upload/audio.wav type=audio]"),
                         UIMessagePart.Audio("file:///audio.wav"),
-                        UIMessagePart.Text("[Attachment ref=attachment:v type=video]"),
+                        UIMessagePart.Text("[Attachment path=/upload/video.mp4 type=video]"),
                         UIMessagePart.Video("file:///video.webm"),
                     ),
                 )

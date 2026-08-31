@@ -1,16 +1,13 @@
 package net.weero.measix.pilot.data.ai.transformers
 
-import java.io.File
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.RequestImageSupport
 import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.ui.AttachmentProjectionTextMetadata
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
-import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
-import net.weero.measix.pilot.data.files.FileUtils
 import net.weero.measix.pilot.data.files.ArtifactStore
 
 /**
@@ -37,7 +34,6 @@ class AttachmentProjectionTransformer(
                     role = message.role,
                     capabilities = ctx.mediaCapabilities,
                     artifactStore = artifactStore,
-                    filesDir = ctx.context.filesDir,
                 ),
             )
         }
@@ -48,7 +44,6 @@ class AttachmentProjectionTransformer(
         role: MessageRole,
         capabilities: RequestMediaCapabilities,
         artifactStore: ArtifactStore,
-        filesDir: File,
         insideToolOutput: Boolean = false,
     ): List<UIMessagePart> {
         val result = ArrayList<UIMessagePart>(parts.size + 2)
@@ -60,7 +55,6 @@ class AttachmentProjectionTransformer(
                         role = role,
                         capabilities = capabilities,
                         artifactStore = artifactStore,
-                        filesDir = filesDir,
                         insideToolOutput = true,
                     ),
                 )
@@ -68,63 +62,45 @@ class AttachmentProjectionTransformer(
                 is UIMessagePart.Image -> {
                     val support = capabilities.supportFor(role, insideToolOutput)
                     val native = support == RequestImageSupport.STRUCTURED
-                    val ref = AttachmentRefs.getStableRef(part)
+                    val path = pathOf(part, artifactStore)
+                    result += attachmentProjectionText(
+                        attachmentPathLine(
+                            path = path,
+                            type = "image",
+                            imageInput = when {
+                                native -> AttachmentInputMode.NATIVE
+                                path != null -> AttachmentInputMode.REFERENCE_ONLY
+                                else -> AttachmentInputMode.UNAVAILABLE
+                            },
+                        ),
+                    )
                     if (native) {
-                        result += if (ref != null) {
-                            attachmentProjectionText(
-                                attachmentRefLine(
-                                    refValue = ref,
-                                    type = "image",
-                                    displayName = displayNameOf(part, artifactStore, filesDir),
-                                    imageInput = AttachmentInputMode.NATIVE,
-                                ),
-                            )
-                        } else {
-                            attachmentProjectionText(
-                                "[Attachment ref=unavailable type=image input=native]",
-                            )
-                        }
                         result += part
-                    } else {
-                        if (ref != null) {
-                            result += attachmentProjectionText(
-                                attachmentRefLine(
-                                    refValue = ref,
-                                    type = "image",
-                                    displayName = displayNameOf(part, artifactStore, filesDir),
-                                    imageInput = AttachmentInputMode.REFERENCE_ONLY,
-                                ),
-                            )
-                        } else {
-                            result += attachmentProjectionText(
-                                "[Attachment ref=unavailable type=image input=unavailable]",
-                            )
-                        }
                     }
                 }
 
                 is UIMessagePart.Document -> {
-                    AttachmentRefs.getStableRef(part)?.let { ref ->
+                    pathOf(part, artifactStore)?.let { path ->
                         result += attachmentProjectionText(
-                            attachmentRefLine(ref, "document", displayNameOf(part, artifactStore, filesDir)),
+                            attachmentPathLine(path, "document"),
                         )
                     }
                     result += part
                 }
 
                 is UIMessagePart.Audio -> {
-                    AttachmentRefs.getStableRef(part)?.let { ref ->
+                    pathOf(part, artifactStore)?.let { path ->
                         result += attachmentProjectionText(
-                            attachmentRefLine(ref, "audio", displayNameOf(part, artifactStore, filesDir)),
+                            attachmentPathLine(path, "audio"),
                         )
                     }
                     result += part
                 }
 
                 is UIMessagePart.Video -> {
-                    AttachmentRefs.getStableRef(part)?.let { ref ->
+                    pathOf(part, artifactStore)?.let { path ->
                         result += attachmentProjectionText(
-                            attachmentRefLine(ref, "video", displayNameOf(part, artifactStore, filesDir)),
+                            attachmentPathLine(path, "video"),
                         )
                     }
                     result += part
@@ -143,17 +119,15 @@ internal enum class AttachmentInputMode(val markerValue: String) {
     UNAVAILABLE("unavailable"),
 }
 
-/** `[Attachment ref=attachment:8f2... type=image name="screenshot.png" input=native]`。 */
-internal fun attachmentRefLine(
-    refValue: String,
+/** Paths are disclosed only when the managed file has an actual tool-readable location. */
+internal fun attachmentPathLine(
+    path: String?,
     type: String,
-    displayName: String,
     imageInput: AttachmentInputMode? = null,
 ): String {
     val input = imageInput?.let { " input=${it.markerValue}" }.orEmpty()
-    return "[Attachment ref=${AttachmentRefs.escapeMarkerValue(refValue)} " +
-        "type=${AttachmentRefs.escapeMarkerValue(type)} " +
-        "name=\"${AttachmentRefs.escapeMarkerValue(displayName)}\"$input]"
+    val location = path?.let { " path=${AttachmentRefs.escapeMarkerValue(it)}" }.orEmpty()
+    return "[Attachment$location type=${AttachmentRefs.escapeMarkerValue(type)}$input]"
 }
 
 private fun attachmentProjectionText(text: String): UIMessagePart.Text = UIMessagePart.Text(
@@ -161,32 +135,17 @@ private fun attachmentProjectionText(text: String): UIMessagePart.Text = UIMessa
     metadata = AttachmentProjectionTextMetadata(attachmentProjectionText = true).toMetadata(),
 )
 
-private suspend fun displayNameOf(
-    part: UIMessagePart,
-    artifactStore: ArtifactStore,
-    filesDir: File,
-): String {
-    val url = when (part) {
-        is UIMessagePart.Image -> part.url
-        is UIMessagePart.Document -> part.fileName.ifBlank { part.url }
-        is UIMessagePart.Audio -> part.url
-        is UIMessagePart.Video -> part.url
-        else -> return "attachment"
-    }
-    if (part is UIMessagePart.Document && part.fileName.isNotBlank()) {
-        return part.fileName
-    }
-    if (url.startsWith("file:", ignoreCase = true)) {
-        val file = AttachmentRefs.parseFileUrl(url)
-        if (file != null) {
-            val relative = FileUtils.getRelativePathInFilesDir(filesDir, file)
-            if (relative != null) {
-                val entity = artifactStore.getByRelativePath(relative)
-                val display = entity?.displayName?.trim().orEmpty()
-                if (display.isNotEmpty()) return display
-            }
-            if (file.name.isNotBlank()) return file.name
-        }
-    }
-    return url.substringAfterLast('/').substringBefore('?').ifBlank { "attachment" }
+private fun mediaUrl(part: UIMessagePart): String? = when (part) {
+    is UIMessagePart.Image -> part.url
+    is UIMessagePart.Document -> part.url
+    is UIMessagePart.Audio -> part.url
+    is UIMessagePart.Video -> part.url
+    else -> null
+}
+
+private suspend fun pathOf(part: UIMessagePart, artifactStore: ArtifactStore): String? {
+    val url = mediaUrl(part) ?: return null
+    val file = AttachmentRefs.parseFileUrl(url) ?: return null
+    val managed = artifactStore.resolveManagedReference(file) ?: return null
+    return managed.toolPath()
 }

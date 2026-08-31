@@ -145,7 +145,7 @@ class ConversationRuntime(
     val snapshot: StateFlow<ConversationSnapshot> = _snapshot.asStateFlow()
 
     /**
-     * 流式高频更新：非挂起、conflated、永不落库、不加锁。只更新 activeTurn.messages。
+     * 流式高频更新：非挂起、conflated、永不落库、不加锁。只更新 activeTurn 展示态。
      */
     fun applyStreamingDelta(handle: TurnHandle, messages: List<UIMessage>): StreamingDeltaResult {
         if (handle.conversationId != id) return StreamingDeltaResult.STALE_TURN
@@ -191,7 +191,19 @@ class ConversationRuntime(
                         ConversationTransition.apply(
                             committed.copy(activeTurn = latestActive),
                             command,
-                        ).activeTurn
+                        ).activeTurn?.let { published ->
+                            // A checkpoint planned before a newer stream observation must not
+                            // replace that observation with its older display pair.
+                            published.copy(
+                                latestAvailableContextCache = if (
+                                    latestActive.latestAvailableContextCache != old.activeTurn?.latestAvailableContextCache
+                                ) {
+                                    latestActive.latestAvailableContextCache
+                                } else {
+                                    published.latestAvailableContextCache
+                                },
+                            )
+                        }
                     } else {
                         latestActive
                     }

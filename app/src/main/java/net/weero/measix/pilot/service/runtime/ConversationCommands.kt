@@ -231,6 +231,8 @@ data class ActiveTurnState(
     val assistantMessageId: Uuid,
     val messages: List<UIMessage>,
     val toolCallPhases: Map<ToolCallLocator, ToolCallPhase> = emptyMap(),
+    /** Retained inside this transient owner so absent request usage cannot erase the active display. */
+    val latestAvailableContextCache: ContextCacheDisplay? = null,
 )
 
 data class TurnHandle(

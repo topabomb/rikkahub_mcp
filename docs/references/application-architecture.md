@@ -80,7 +80,7 @@ Application 层负责编排，不建立第二套数据协议。Repository 只执
 | 应用配置 durable state、有效读模型与提交顺序 | `SettingsStore` | `updateLocal` → `SettingsWriteRules` → `commitSettings` → `effectiveSettings` |
 | Skill 文件树、frontmatter 解释、bundle 事务与中断恢复 | `SkillManager` | typed DTO/result、cancellable import、root-swap 与删除暂存恢复 |
 | 会话读模型 | `ConversationQueryService` | UI、会话工具与只读详情 |
-| 稳定附件 handle 索引 | `AttachmentReferenceLookup` | 执行 resolver 与查询 projector |
+| 内部稳定附件 handle 索引 | `AttachmentReferenceLookup` | 查询 projector；不作为工具文件读取授权 |
 | 启动恢复顺序与写门禁 | `ApplicationRecoveryCoordinator` | Android 启动入口与 retry |
 | 标题阶段、异步 token 与提交仲裁 | `ConversationTitleCoordinator` | application 与生成副作用 |
 | Provider 设置写入、模型目录、余额与连接探测 | `ProviderSettingsApplicationService` | `ProviderSettingsVM` typed command/query |
@@ -142,7 +142,7 @@ reducer、turn accumulator、Master/Child 隔离、历史兼容和消费者边�
 
 Turn 和 Tool execution 使用 insert-once 与合法状态 CAS。终态不可回退，重复同终态幂等，非法转换返回明确冲突。失败或取消的终态准备必须消费 TurnEngine 累积的最新 turn-owned messages；该投影可能包含最后一次 checkpoint 后的 delta，不能用 durable nodes 覆盖。准备阶段校验完整 `TurnHandle`，关闭未完成工具后由同一个 `FinalizeTurn` 原子提交。取消必须传播；`NonCancellable` 只用于已经取得所有权的终态提交或补偿收口，完成后仍重新抛出原始 `CancellationException`。
 
-工具调用按 typed phase 区分调用流、就绪、等待审批、执行和终态。`UIMessagePart.Tool.hasReplayResult` / `Tool.output` 只表示 Provider 可回放结果，不能作为 active 执行中状态、active 完成状态或详情点击门禁。active phase 只能随已提交 checkpoint 的 `ToolExecutionEntity` 或 typed `ToolResultEvent` 推进；影响通知的工具执行与结果 checkpoint 成功后，同一生成流发布 presentation tick，通知等边缘投影只消费提交后 phase。没有 active turn 的历史消息可从 durable replay result 形成静态终态展示，但该兼容展示不反向驱动运行态。metadata 只细化领域子阶段。
+工具调用按 typed phase 区分调用流、就绪、等待审批、执行和终态。`UIMessagePart.Tool.hasReplayResult` / `Tool.output` 只表示 Provider 可回放结果，不能作为 active 执行中状态、active 完成状态或详情点击门禁。active phase 只能随已提交 checkpoint 的 `ToolExecutionEntity` 或 typed `ToolResultEvent` 推进；影响通知的工具执行与结果 checkpoint 成功后，同一生成流发布 presentation tick，通知等边缘投影只消费提交后 phase。没有 active turn 的历史消息可从 durable replay result 形成静态终态展示，但该静态投影不反向驱动运行态。metadata 只细化领域子阶段。
 
 新 turn 的 `START` 与审批后的 `CONTINUE_APPROVAL` 是不同入口：
 
@@ -152,6 +152,15 @@ Turn 和 Tool execution 使用 insert-once 与合法状态 CAS。终态不可回
 
 审批屏障以 `messageId + toolOrdinal` 定位 ToolCall；Pending 全部解决后再按 ordinal 串行执行。Provider 的 toolCallId 只保留为协议数据，不作为本地唯一键。
 
+工具参数契约归各 `Tool.validateArguments`，只做纯校验，不读取 Settings、数据库、文件或网络。
+`Tool.parseArguments` 是审批与执行共用的 JSON object 解析入口；空参数缓冲表示无参 object，非空损坏 JSON 不得替换为空 object。
+`GenerationLoop` 使用同一个 step 工具索引按可用性 → 参数校验 → 审批 → 执行编排，不按工具名维护校验特例。
+参数失败或工具撤销直接提交 FAILED 结果，不创建 `tool_execution` 记录或制造 STARTED 执行事实；旧 Pending 同时退出等待。
+纯参数校验返回领域 `JsonObject`；`ToolArgumentsException` 保留领域字段并统一补齐 `error` / `type: error`，
+确保无 active turn 的历史投影仍是失败。该标记不添加到工具正常执行返回的业务失败中。
+Denied/Answered 保留已有决定；Approved 仍检查当前参数但不重复询问。实际资源与权限由原执行 owner 复核，
+`ToolExecutionContext.approvedByUser` 只从该调用已有审批事实派生，不接受模型提供的授权值，也不新增持久化状态。
+
 ## Artifact 与附件
 
 `ArtifactStore` 是 metadata、reference 和生命周期的唯一 owner；`ArtifactPayloadStore` 只执行 staging、rename、stat 和物理删除，不持有 DAO。创建协议是 staging → CREATING row → 原子 rename → ACTIVE，启动恢复可幂等完成或回滚。
@@ -160,9 +169,21 @@ Turn 和 Tool execution 使用 insert-once 与合法状态 CAS。终态不可回
 
 上传 Artifact 与图库生成媒体是两个独立领域：前者继续由 `ArtifactStore` 管理引用和生命周期，后者由 `GeneratedMediaStore` 管理 canonical row、payload 与删除恢复。`FileManagementApplicationService` 在 application 边界路由范围删除、单项删除和临时预览写入，预览写入失败时必须删除不完整临时文件；`FileManagementQueryService` 组合列表、图库分页、统计和路径分类等只读投影。Gallery UI 只使用 `GeneratedMediaKind` 和 `GeneratedMediaUiModel`，不接触 `GenMediaEntity`、Repository 或媒体根目录常量，并将 Paging 的首次加载、刷新和错误/重试与真实空状态分开。两个 port 都不成为第三个持久化 owner，也不把两套删除状态合并成新的持久化事实。
 
-Settings 图片导入先完成有界复制、结构魔数与实际 MIME 校验，再提交 root 并发布 artifact。当前写协议不会提交缺少 ACTIVE artifact metadata 的本地 Settings root；启动遇到这类根即以完整性错误 fail-closed，既不扫描目录补录，也不丢弃 root 或 payload。
+Settings 图片导入先完成有界复制、结构魔数与实际 MIME 校验，再提交 root 并发布 artifact。当前写协议不会提交缺少
+ACTIVE metadata 的本地 Settings root。启动发现头像/背景 metadata 或 payload 缺失时，经既有 Settings root 协议持久化
+回到默认显示偏好，不扫描目录认领文件；仍被消息引用的 ACTIVE artifact 缺少 payload 则保持 fail-closed。
 
-模型可见的稳定附件 handle 使用 `attachment:<uuid>`。`AttachmentReferenceLookup` 统一索引直接 message part 与 `assistant_call.artifacts`；执行侧每批建立一次索引，查询侧每次从 durable nodes 与 owning active assistant message 重建索引，并经 ArtifactStore 生命周期校验。UI 只消费 map 并做常数时间查找，不扫描消息 metadata、子助手 payload 或 ArtifactStore。
+内部稳定附件 handle 使用 `attachment:<uuid>`，由 `AttachmentReferenceLookup` 统一索引直接 message part 与
+`assistant_call.artifacts`，只用于内部 metadata 与查询投影。模型可见位置统一为真实 `/upload/<file>` 的 `path`，
+识图与委托不接受 UUID、远程 URL 或任意 file URI，也不依赖 Workspace、当前分支是否引用该文件。
+`ArtifactStore.withUploadImages` 在 lifecycle lock 内校验 ACTIVE/已发布文件并取得既有 retention pin，锁外有界读取和
+校验实际图片；finally 释放，删除/GC 尊重同一保留规则。识图内存快照经共用 FileEncoder 规范化后使用 data URI，
+Child 在保留作用域内提交原文件引用。读取本身不创建磁盘副本、持久化记录、别名或第二套 owner。
+
+查询侧从 durable nodes 与 owning active assistant message 重建内部索引，同时为已知附件工具的顶层 `attachments`
+路径生成预览。所有本地预览经 ArtifactStore 校验，UI 只做 map lookup，不扫描 metadata 或直连文件 owner；
+预览 map 和工具输入路径不成为 durable root。`AssetFileNames` 只生成无来源前缀候选名，占位与碰撞裁决留在各文件 owner；
+旧文件与内部 UUID 不改写，图库索引通过显式 Room migration 创建。细节见 [多模态参考](multimodal-context-and-turn-durability.md)。
 
 ## 子助手与恢复
 
@@ -185,6 +206,8 @@ Settings 图片导入先完成有界复制、结构魔数与实际 MIME 校验�
 ## 持久化与兼容边界
 
 当前架构不要求回滚已有数据库或 Settings 数据结构。Conversation、Message、Turn、Tool 与 Artifact 的 schema 变化只能通过显式 Room migration 演进，并以 fresh schema 同构、历史 migration、数据保全和外键检查验证。
+
+`AppDatabase` 是业务 Room 数据库。索引随实体 schema 和显式 migration 一起维护，不由启动恢复或业务请求临时创建；查询和写入继续通过既有 owner。当前查询覆盖与索引边界见[数据库索引参考](database-indexing.md)。
 
 兼容只允许存在于稳定的持久化数据和外部协议解析边界，且必须被类型化、测试化。内部旧 facade、deprecated 转发、fallback、服务定位器、过渡命名、无调用协议和静态白名单必须物理删除。应用版本与 changelog 只有在发布需求明确要求时才修改。
 
@@ -216,5 +239,6 @@ Settings 图片导入先完成有界复制、结构魔数与实际 MIME 校验�
 | 模型可见 prompts 与工具结果 | [`prompts-and-tools.md`](prompts-and-tools.md) |
 | Compose 导航、布局与主题 | [`ui-architecture.md`](ui-architecture.md) |
 | 消息渲染 | [`message-rendering-pipeline.md`](message-rendering-pipeline.md) |
+| 数据库查询索引与迁移边界 | [`database-indexing.md`](database-indexing.md) |
 | Workspace/PRoot | [`workspace-architecture.md`](workspace-architecture.md) |
 | 更新与发布 | [`update-mechanism.md`](update-mechanism.md) |

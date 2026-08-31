@@ -6,8 +6,6 @@ import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderManager
-import me.rerere.ai.provider.RequestImageSupport
-import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
 import net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot
@@ -58,7 +56,6 @@ class GenerationToolSetFactory(
      * @param assistant 目标助手
      * @param settings 当前 step 构建时的有效设置快照
      * @param capabilityModel 本次 run 的实际模型，或非运行时检查中显式解析的配置模型。
-     * @param capabilityMediaCapabilities 本次 run 固定的线协议容器契约；运行时调用方必须传入。
      * @param workspaceCwd 工作目录（可覆盖会话级别）
      * @param runMode Target Run 时过滤 Assistant Tools；ask_user 保留给 Coordinator 桥接
      */
@@ -66,7 +63,6 @@ class GenerationToolSetFactory(
         assistant: Assistant,
         settings: Settings,
         capabilityModel: Model?,
-        capabilityMediaCapabilities: RequestMediaCapabilities? = null,
         workspaceCwd: String? = null,
         runMode: ToolSetRunMode = ToolSetRunMode.NORMAL,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
@@ -79,13 +75,7 @@ class GenerationToolSetFactory(
                 addAll(createSearchTools(settings))
             }
 
-            val mediaCapabilities = capabilityMediaCapabilities ?: capabilityModel
-                ?.findProvider(settings.providers)
-                ?.let { providerSetting ->
-                    providerManager.getProviderByType(providerSetting)
-                        .requestMediaCapabilities(providerSetting, capabilityModel)
-                }
-            if (shouldInjectAttachmentInspection(capabilityModel, mediaCapabilities, settings)) {
+            if (shouldInjectAttachmentInspection(settings)) {
                 add(createAttachmentInspectionTool(settings, providerManager))
             }
 
@@ -234,28 +224,12 @@ fun shouldUseExternalWebSearch(assistant: Assistant, model: Model?): Boolean {
 }
 
 /**
- * 识别模型场景注入 `inspect_attachments`：当前模型在其 Provider 协议下未能覆盖全部附件来源
- * 容器（USER / ASSISTANT / Tool.output）的原生 IMAGE，且配置了存在、Provider 可用且
- * 自身支持 IMAGE 输入的附件识别模型。不根据当前消息是否包含 Image 决定 tool schema。
- *
- * 模型能力唯一来源于 [Model.inputModalities]；[RequestMediaCapabilities] 只是协议适配器
- * 对三个来源容器的静态映射，不是第二套能力配置。注入判断在此派生结果上进行，
- * 不再根据 endpoint host 做第二次否决。
+ * 配置了有效的 IMAGE 识别模型即可按需读取图片，不依赖工作区或当前模型的图片能力。
+ * 原生视觉能力不表示当前请求已携带所需图片；文件清单本身不包含图片内容。
  */
 fun shouldInjectAttachmentInspection(
-    resolvedModel: Model?,
-    currentCapabilities: RequestMediaCapabilities?,
     settings: Settings,
 ): Boolean {
-    if (resolvedModel == null || currentCapabilities == null) return false
-    val coversAllAttachmentImageSources =
-        currentCapabilities.userImages == RequestImageSupport.STRUCTURED &&
-            currentCapabilities.assistantImages == RequestImageSupport.STRUCTURED &&
-            currentCapabilities.toolOutputImages == RequestImageSupport.STRUCTURED
-    // OPAQUE_REPLAY_ONLY is not full coverage: not every ordinary assistant image carries
-    // replayable Provider opaque metadata, so it still needs the inspection tool.
-    if (coversAllAttachmentImageSources) return false
-
     val inspectionModel = settings.findModelById(settings.attachmentInspectionModelId) ?: return false
     inspectionModel.findProvider(settings.providers) ?: return false
     if (!inspectionModel.inputModalities.contains(Modality.IMAGE)) return false

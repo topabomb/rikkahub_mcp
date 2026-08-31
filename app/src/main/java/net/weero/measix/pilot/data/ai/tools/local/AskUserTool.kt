@@ -124,24 +124,15 @@ private fun validateAskUserOptions(
     return null
 }
 
-internal fun AskUserArgumentError.toToolResult(): List<UIMessagePart> {
-    val payload = buildJsonObject {
-        put("error", "invalid_arguments")
-        put("field", field)
-        put("expected", expected)
-        hint?.let { put("hint", it) }
-    }
-    return listOf(UIMessagePart.Text(payload.toString()))
+internal fun AskUserArgumentError.toErrorJson(): JsonObject = buildJsonObject {
+    put("error", "invalid_arguments")
+    put("field", field)
+    put("expected", expected)
+    hint?.let { put("hint", it) }
 }
 
-/** 参数不合法时在审批门口直接失败，不进入 HITL，也不走自动执行。 */
-internal fun askUserApprovalRejection(
-    toolName: String,
-    args: JsonElement,
-): List<UIMessagePart>? {
-    if (toolName != ASK_USER_TOOL_NAME) return null
-    return validateAskUserArguments(args)?.toToolResult()
-}
+internal fun AskUserArgumentError.toToolResult(): List<UIMessagePart> =
+    listOf(UIMessagePart.Text(toErrorJson().toString()))
 
 internal fun buildAskUserTool(): Tool = Tool(
     name = ASK_USER_TOOL_NAME,
@@ -199,6 +190,7 @@ internal fun buildAskUserTool(): Tool = Tool(
         )
     },
     needsApproval = { true },
+    validateArguments = { validateAskUserArguments(it)?.toErrorJson() },
     execute = { args ->
         validateAskUserArguments(args)?.toToolResult()
             ?: error("ask_user tool should be handled by HITL flow")

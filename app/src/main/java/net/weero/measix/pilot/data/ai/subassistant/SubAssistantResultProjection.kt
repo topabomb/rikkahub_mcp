@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ToolMetadataDelivery
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
@@ -505,7 +506,7 @@ internal suspend fun buildUnavailableCallResult(
         state = SubAssistantCallState.UNAVAILABLE,
         reason = reason,
     )
-    reportSubAssistantMetadataPatch(json, execContext, metadata, checkpoint = false)
+    reportSubAssistantMetadataPatch(json, execContext, metadata, delivery = ToolMetadataDelivery.DEFERRED)
     return buildSubAssistantCallResultParts(
         json = json,
         status = "unavailable",
@@ -533,7 +534,7 @@ internal suspend fun buildClassifiedFailureResult(
         state = SubAssistantCallState.FAILED,
         reason = failureReason,
     )
-    reportSubAssistantMetadataPatch(json, execContext, metadata, checkpoint = false)
+    reportSubAssistantMetadataPatch(json, execContext, metadata, delivery = ToolMetadataDelivery.DEFERRED)
     return buildSubAssistantCallResultParts(
         json = json,
         status = "failed",
@@ -544,17 +545,17 @@ internal suspend fun buildClassifiedFailureResult(
     )
 }
 
-/** 将 sub_assistant_call metadata 补丁上报给生成管道（checkpoint=true 时随事实行落库）。 */
+/** 将 sub_assistant_call metadata 补丁及其事实阶段交给生成管道。 */
 internal suspend fun reportSubAssistantMetadataPatch(
     json: kotlinx.serialization.json.Json,
     execContext: me.rerere.ai.core.ToolExecutionContext,
     meta: SubAssistantCallMetadata,
-    checkpoint: Boolean,
+    delivery: ToolMetadataDelivery,
 ) {
     val patch = kotlinx.serialization.json.JsonObject(
         mapOf("sub_assistant_call" to json.encodeToJsonElement(SubAssistantCallMetadata.serializer(), meta))
     )
-    execContext.reportMetadata(patch, checkpoint)
+    execContext.reportMetadata(patch, delivery)
 }
 
 /** 流式 phase 事件 → 卡片 phase 枚举。 */

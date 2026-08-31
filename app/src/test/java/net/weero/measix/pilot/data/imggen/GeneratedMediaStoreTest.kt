@@ -12,6 +12,8 @@ import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.io.path.createTempDirectory
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.test.runTest
@@ -31,6 +33,106 @@ class GeneratedMediaStoreTest {
     private fun tempDir(prefix: String): File = createTempDirectory(prefix).toFile()
 
     @Test
+    fun `generated media selects the first free candidate in all four tiers`() = runTest {
+        val filesDir = tempDir("media-candidate-priority")
+        try {
+            val candidates = listOf("aaaaaa", "bbbbbbb", "cccccccc", "Dddddddd")
+            for (freeIndex in candidates.indices) {
+                val directory = File(filesDir, freeIndex.toString()).apply { mkdirs() }
+                val repository = mockk<GenMediaRepository>()
+                coEvery { repository.existsByPath(any()) } answers {
+                    firstArg<String>() in candidates.take(freeIndex).map { "images/$it.png" }
+                }
+                every { repository.insertMedia(any()) } returns 1L
+                val store = GeneratedMediaStore(directory, repository, mockk(relaxed = true), fileNameCandidates = { candidates })
+                val committed = store.commit(item(TINY_PNG, "image/png"), "cat", "model")
+                assertEquals("images/${candidates[freeIndex]}.png", committed.canonicalRelativePath)
+                candidates.drop(freeIndex + 1).forEach { stem ->
+                    coVerify(exactly = 0) { repository.existsByPath("images/$stem.png") }
+                }
+            }
+        } finally {
+            filesDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `generated all-candidate collisions and duplicate text use first stem suffixes`() = runTest {
+        val filesDir = tempDir("media-candidate-suffix")
+        try {
+            val candidates = listOf("aaaaaa", "bbbbbbb", "cccccccc", "cccccccc")
+            val repository = mockk<GenMediaRepository>()
+            coEvery { repository.existsByPath(any()) } answers { firstArg<String>() != "images/aaaaaa-3.png" }
+            every { repository.insertMedia(any()) } returns 1L
+            val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true), fileNameCandidates = { candidates })
+            val committed = store.commit(item(TINY_PNG, "image/png"), "cat", "model")
+            assertEquals("images/aaaaaa-3.png", committed.canonicalRelativePath)
+            coVerify(exactly = 1) { repository.existsByPath("images/cccccccc.png") }
+            coVerify(exactly = 1) { repository.existsByPath("images/aaaaaa-2.png") }
+        } finally {
+            filesDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `short generated names skip final pending deleting and recorded paths`() = runTest {
+        val filesDir = tempDir("media-name-collision")
+        try {
+            val images = File(filesDir, "images").apply { mkdirs() }
+            val existingNames = listOf("000000.png", "000000-2.png.pending", "000000-3.png.deleting")
+            existingNames.forEach { File(images, it).writeText(it) }
+            val repository = mockk<GenMediaRepository>()
+            coEvery { repository.existsByPath(any()) } answers { firstArg<String>() == "images/000000-4.png" }
+            every { repository.insertMedia(any()) } returns 1L
+            val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true), fileNameCandidates = { List(4) { "000000" } })
+
+            val committed = store.commit(item(TINY_PNG, "image/png"), "cat", "model")
+
+            assertEquals("images/000000-5.png", committed.canonicalRelativePath)
+            existingNames.forEach { assertEquals(it, File(images, it).readText()) }
+        } finally {
+            filesDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `concurrent generated images with repeated candidates use distinct suffixes`() = runTest {
+        val filesDir = tempDir("media-name-concurrent")
+        try {
+            val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
+            every { repository.insertMedia(any()) } returns 1L
+            val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true), fileNameCandidates = { List(4) { "000000" } })
+            val committed = (0 until 10).map {
+                async(Dispatchers.Default) { store.commit(item(TINY_PNG, "image/png"), "cat", "model") }
+            }.awaitAll()
+            assertEquals(10, committed.map { it.canonicalRelativePath }.toSet().size)
+            committed.forEach { assertTrue(it.canonicalFile.readBytes().contentEquals(TINY_PNG)) }
+            assertEquals(10, File(filesDir, "images").listFiles().orEmpty().size)
+        } finally {
+            filesDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `failed generated publication preserves all preexisting collision payloads`() = runTest {
+        val filesDir = tempDir("media-name-rollback")
+        try {
+            val images = File(filesDir, "images").apply { mkdirs() }
+            val existingNames = listOf("000000.png", "000000-2.png.pending")
+            existingNames.forEach { File(images, it).writeText(it) }
+            val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
+            every { repository.insertMedia(any()) } throws CancellationException("cancel insert")
+            val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true), fileNameCandidates = { List(4) { "000000" } })
+            val failure = runCatching { store.commit(item(TINY_PNG, "image/png"), "cat", "model") }.exceptionOrNull()
+            assertTrue(failure is CancellationException)
+            assertEquals(existingNames.sorted(), images.listFiles().orEmpty().map { it.name }.sorted())
+            existingNames.forEach { assertEquals(it, File(images, it).readText()) }
+        } finally {
+            filesDir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `mime type selects extension`() {
         assertEquals("jpg", GeneratedMediaStore.extensionForMime("image/jpeg"))
         assertEquals("webp", GeneratedMediaStore.extensionForMime("image/webp"))
@@ -47,7 +149,7 @@ class GeneratedMediaStoreTest {
     @Test
     fun `commit writes gallery file and returns media id`() = runTest {
         val filesDir = tempDir("media-store")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returns 42L
         val artifactStore = mockk<ArtifactStore>()
         val owned = mockk<OwnedArtifact>()
@@ -77,7 +179,7 @@ class GeneratedMediaStoreTest {
     @Test
     fun `room insert failure deletes canonical file`() = runTest {
         val filesDir = tempDir("media-fail")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } throws IllegalStateException("db")
         val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true))
         runCatching {
@@ -95,7 +197,7 @@ class GeneratedMediaStoreTest {
     @Test
     fun `cancellation before insert deletes the canonical file`() = runTest {
         val filesDir = tempDir("media-cancel")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } throws CancellationException("persist cancelled")
         val artifactStore = mockk<ArtifactStore>()
         val owned = mockk<OwnedArtifact>()
@@ -122,7 +224,7 @@ class GeneratedMediaStoreTest {
     @Test
     fun `cancellation after insert keeps durable media and discards unpublished consumer artifact`() = runTest {
         val filesDir = tempDir("media-cancel-after-commit")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         val cancellationJob = Job()
         every { repository.insertMedia(any()) } answers {
             cancellationJob.cancel(CancellationException("cancel after commit"))
@@ -164,7 +266,7 @@ class GeneratedMediaStoreTest {
             setLastModified(1L)
         }
         val pending = File(images, "live.png.pending").apply { writeText("p") }
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         coEvery { repository.getAllMediaList() } returns listOf(
             GenMediaEntity(id = 9, path = "images/missing.png", modelId = "m", prompt = "p", createAt = 1L),
         )
@@ -182,7 +284,7 @@ class GeneratedMediaStoreTest {
         val filesDir = tempDir("media-delete")
         val images = File(filesDir, "images").apply { mkdirs() }
         val file = File(images, "keep.png").apply { writeText("x") }
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         coEvery { repository.getMediaById(3) } returns GenMediaEntity(
             id = 3,
             path = "images/keep.png",
@@ -205,7 +307,7 @@ class GeneratedMediaStoreTest {
         val images = File(filesDir, "images").apply { mkdirs() }
         val locked = File(images, "locked.png").apply { mkdirs() }
         File(locked, "child").writeText("x")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         coEvery { repository.getMediaById(4) } returns GenMediaEntity(
             id = 4,
             path = "images/locked.png",
@@ -225,7 +327,7 @@ class GeneratedMediaStoreTest {
         val images = File(filesDir, "images").apply { mkdirs() }
         val committed = File(images, "done.png").apply { writeText("x") }
         val pending = File(images, "live.png.pending").apply { writeText("p") }
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         coEvery { repository.listCreatedBefore(Long.MAX_VALUE) } returns listOf(
             GenMediaEntity(id = 1, path = "images/done.png", modelId = "m", prompt = "p", createAt = 1L),
         )
@@ -254,7 +356,7 @@ class GeneratedMediaStoreTest {
     @Test
     fun `declared jpeg png payload is saved as png`() = runTest {
         val filesDir = tempDir("media-mime-mismatch")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returns 8L
         val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true))
         val committed = store.commit(
@@ -270,7 +372,7 @@ class GeneratedMediaStoreTest {
     @Test
     fun `unknown mime uses detected signature`() = runTest {
         val filesDir = tempDir("media-unknown-mime")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         every { repository.insertMedia(any()) } returns 9L
         val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true))
         val committed = store.commit(
@@ -286,7 +388,7 @@ class GeneratedMediaStoreTest {
     @Test
     fun `non image payload is rejected`() = runTest {
         val filesDir = tempDir("media-not-image")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true))
         val result = runCatching {
             store.commit(
@@ -344,7 +446,7 @@ class GeneratedMediaStoreTest {
         val filesDir = tempDir("media-delete-dao")
         val images = File(filesDir, "images").apply { mkdirs() }
         val file = File(images, "gone.png").apply { writeText("x") }
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         coEvery { repository.getMediaById(5) } returns GenMediaEntity(
             id = 5,
             path = "images/gone.png",
@@ -407,7 +509,7 @@ class GeneratedMediaStoreTest {
         val filesDir = tempDir("media-delete-deferred")
         val images = File(filesDir, "images").apply { mkdirs() }
         File(images, "deferred.png").writeText("x")
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         coEvery { repository.getMediaById(7) } returns GenMediaEntity(
             id = 7,
             path = "images/deferred.png",
@@ -434,7 +536,7 @@ class GeneratedMediaStoreTest {
         val filesDir = tempDir("media-delete-recovery")
         val images = File(filesDir, "images").apply { mkdirs() }
         val deleting = File(images, "keep.png${GeneratedMediaStore.DELETING_SUFFIX}").apply { writeText("x") }
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         coEvery { repository.getAllMediaList() } returns listOf(
             GenMediaEntity(id = 6, path = "images/keep.png", modelId = "m", prompt = "p", createAt = 1L),
         )
@@ -454,7 +556,7 @@ class GeneratedMediaStoreTest {
         val images = File(filesDir, "images").apply { mkdirs() }
         val deleted = File(images, "a.png").apply { writeText("a") }
         val restored = File(images, "b.png").apply { writeText("b") }
-        val repository = mockk<GenMediaRepository>()
+        val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
         coEvery { repository.listCreatedBefore(Long.MAX_VALUE) } returns listOf(
             GenMediaEntity(id = 1, path = "images/a.png", modelId = "m", prompt = "p", createAt = 1L),
             GenMediaEntity(id = 2, path = "images/b.png", modelId = "m", prompt = "p", createAt = 1L),

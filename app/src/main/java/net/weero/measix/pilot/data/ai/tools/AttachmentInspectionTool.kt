@@ -30,6 +30,7 @@ import net.weero.measix.pilot.data.ai.attachments.MAX_INSPECTION_ATTACHMENTS
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
+import net.weero.measix.pilot.data.files.LocalToolPath
 
 const val ATTACHMENT_INSPECTION_TOOL_NAME = "inspect_attachments"
 
@@ -47,7 +48,7 @@ private const val INSPECTION_SYSTEM_INSTRUCTION =
 /**
  * `inspect_attachments`：按需读取附件内容的 Runtime capability tool。
  *
- * - 只接受 stable `attachment:<uuid>`，1..4 个，输入顺序即识别/比较顺序；
+ * - 接受 /upload 图片文件路径，1..4 个，输入顺序即识别/比较顺序；
  * - 附件解析统一走 [ToolExecutionContext.resolveAttachments]（单一解析规则），
  *   工具不接触会话消息快照；
  * - 一次附件识别模型调用提供全部图片（多图比较无歧义的内部标签）；
@@ -97,7 +98,7 @@ fun createAttachmentInspectionTool(
                                     put("type", "string")
                                     put(
                                         "description",
-                                        "An attachment ref as it appears in the conversation (attachment:<uuid>)",
+                                        "Exact image file path: /upload/<file>.",
                                     )
                                 },
                             )
@@ -105,9 +106,10 @@ fun createAttachmentInspectionTool(
                             put("maxItems", MAX_INSPECTION_ATTACHMENTS)
                             put(
                                 "description",
-                                "Attachment refs to inspect, copied exactly from the [Attachment ref=...] lines " +
-                                    "in the conversation. Currently image attachments only. " +
-                                    "Up to 4; order is preserved.",
+                                "Image file paths from the user's request, [Attachment path=...] markers, " +
+                                    "tool result file.path, or artifacts[].path. " +
+                                    "Files need not have appeared as images in this chat. " +
+                                    "Up to 4; order is preserved. Does not require a workspace.",
                             )
                         },
                     )
@@ -139,7 +141,7 @@ fun createAttachmentInspectionTool(
             )
         },
         execute = { _ ->
-            // stable attachment ref 只能由提供解析能力的上下文执行器解析。
+            // 受管文件读取只能由提供解析能力的上下文执行器执行。
             inspectionFailure(AttachmentFailureReasons.ATTACHMENT_RESOLUTION_UNAVAILABLE)
         },
     )
@@ -151,11 +153,11 @@ internal suspend fun executeInspection(
     providerSetting: ProviderSetting,
     provider: Provider<ProviderSetting>,
     mediaCapabilities: RequestMediaCapabilities,
-    resolveAttachments: suspend (refs: List<String>) -> ToolAttachmentResolution,
+    resolveAttachments: suspend (paths: List<String>) -> ToolAttachmentResolution,
 ): List<UIMessagePart> {
     val obj = args as? JsonObject
         ?: return inspectionFailure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
-    val refs = (obj["attachments"] as? JsonArray)?.let { array ->
+    val paths = (obj["attachments"] as? JsonArray)?.let { array ->
         if (array.any { element ->
                 val primitive = element as? JsonPrimitive
                 primitive?.isString != true || primitive.content.trim().isEmpty()
@@ -167,7 +169,7 @@ internal suspend fun executeInspection(
         }
     }
         ?: return inspectionFailure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
-    if (refs.any { AttachmentRefs.parse(it) == null }) {
+    if (paths.any { LocalToolPath.parseUploadToolPath(it) == null }) {
         return inspectionFailure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
     }
     val request = (obj["request"] as? JsonPrimitive)
@@ -175,21 +177,21 @@ internal suspend fun executeInspection(
         ?.content
         ?.trim()
         .orEmpty()
-    if (refs.isEmpty() || refs.size > MAX_INSPECTION_ATTACHMENTS || request.isEmpty()) {
+    if (paths.isEmpty() || paths.size > MAX_INSPECTION_ATTACHMENTS || request.isEmpty()) {
         return inspectionFailure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
     }
 
-    // 单一解析规则：refs → Runtime resolver → parts；失败 reason 原样透传。
-    val resolution = resolveAttachments(refs)
+    // 单一解析规则：paths → Runtime resolver → parts；失败 reason 原样透传。
+    val resolution = resolveAttachments(paths)
     resolution.failureReason?.let { return inspectionFailure(it) }
     val images = resolution.parts.filterIsInstance<UIMessagePart.Image>()
-    if (images.isEmpty()) {
+    if (images.size != paths.size) {
         return inspectionFailure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
     }
 
     val userParts = buildList {
         images.forEachIndexed { index, image ->
-            add(UIMessagePart.Text(imageLabel(index, image)))
+            add(UIMessagePart.Text(imageLabel(index, paths[index])))
             add(image)
         }
         add(UIMessagePart.Text(request))
@@ -238,13 +240,8 @@ internal suspend fun executeInspection(
 }
 
 /** 多图输入的内部标签，保证跨图比较无歧义。 */
-internal fun imageLabel(index: Int, image: UIMessagePart.Image): String {
-    val ref = AttachmentRefs.getStableRef(image)
-    val name = image.url.substringAfterLast('/').substringBefore('?').ifBlank { "image" }
-    val safeName = AttachmentRefs.escapeMarkerValue(name)
-    val refAttr = ref?.let { " ref=$it" }.orEmpty()
-    return "[Image ${index + 1}$refAttr name=\"$safeName\"]"
-}
+internal fun imageLabel(index: Int, path: String): String =
+    "[Image ${index + 1} path=${AttachmentRefs.escapeMarkerValue(path)}]"
 
 internal fun inspectionFailure(reason: String, detail: String? = null): List<UIMessagePart> = listOf(
     UIMessagePart.Text(

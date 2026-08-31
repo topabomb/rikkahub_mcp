@@ -35,6 +35,7 @@ import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ProviderResponseException
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.Provider
@@ -216,12 +217,13 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         val bodyStr = response.body?.string() ?: ""
         val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
 
-        bodyJson.googlePromptBlockException()?.let { throw it }
         val candidates = bodyJson["candidates"]?.jsonArray.orEmpty()
-        if (candidates.isEmpty()) {
-            throw HttpException("Gemini returned no candidates")
-        }
         val usage = bodyJson["usageMetadata"] as? JsonObject
+        val terminalError = bodyJson.googlePromptBlockException()
+            ?: (if (candidates.isEmpty()) HttpException("Gemini returned no candidates") else null)
+            ?: candidates.firstNotNullOfOrNull { candidate ->
+                geminiFinishReasonException(candidate.jsonObject["finishReason"]?.jsonPrimitive?.contentOrNull)
+            }
 
         val messageChunk = MessageChunk(
             id = Uuid.random().toString(),
@@ -229,14 +231,18 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             choices = candidates.mapIndexed { index, candidate ->
                 val candidateObject = candidate.jsonObject
                 val finishReason = candidateObject["finishReason"]?.jsonPrimitive?.contentOrNull
-                validateGeminiFinishReason(finishReason)
                 UIMessageChoice(
-                    message = parseMessage(
-                        message = candidateObject,
-                        sourceModelId = params.model.modelId,
-                        sourceProfile = replaySourceProfile,
-                        providerStepId = Uuid.random().toString(),
-                    ),
+                    message = if (candidateObject["content"] is JsonObject) {
+                        parseMessage(
+                            message = candidateObject,
+                            sourceModelId = params.model.modelId,
+                            sourceProfile = replaySourceProfile,
+                            providerStepId = Uuid.random().toString(),
+                        )
+                    } else {
+                        check(terminalError != null) { "Gemini returned no content" }
+                        null
+                    },
                     index = candidateObject["index"]?.jsonPrimitive?.intOrNull ?: index,
                     finishReason = finishReason,
                     delta = null
@@ -245,6 +251,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             usage = parseUsageMeta(usage)
         )
 
+        terminalError?.let { throw ProviderResponseException(messageChunk, it) }
         messageChunk
     }
 

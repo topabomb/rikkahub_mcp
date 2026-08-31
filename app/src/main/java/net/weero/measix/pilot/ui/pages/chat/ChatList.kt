@@ -456,6 +456,7 @@ private fun ChatListNormal(
                             ) {
                                 ChatMessage(
                                     node = node,
+                                    activeContextCache = turnPresentation.activeContextCache,
                                     masterConversationId = snapshot.conversationId,
                                     model = node.currentMessage.modelId?.let(modelById::get),
                                     assistant = messageAssistant,

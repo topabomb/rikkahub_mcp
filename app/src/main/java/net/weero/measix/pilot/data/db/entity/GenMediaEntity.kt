@@ -1,10 +1,11 @@
-﻿package net.weero.measix.pilot.data.db.entity
+package net.weero.measix.pilot.data.db.entity
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity
+@Entity(indices = [Index(value = ["path"]), Index(value = ["create_at"])])
 data class GenMediaEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Int = 0,

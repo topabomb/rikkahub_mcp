@@ -21,6 +21,8 @@ Assistant.workspaceId 有效
 | 组件 | 职责 |
 |------|------|
 | `WorkspaceManager` | 目录布局、路径解析、文件操作、命令执行上下文与 bind mount 表 |
+| `RootfsPath` | 纯 guest 路径规范化与安全写区分类，供审批及 Manager 共用 |
+| `RootfsFileHandle` / `RootfsFileAccess` | Manager 内部的受控目录/文件描述符 IO；不读取配置、不拥有审批或持久化事实 |
 | `WorkspaceFileSystem` | `FILES` / `LINUX` 存储区内的安全相对路径操作 |
 | `WorkspaceShellRunner` | 阻塞式命令执行接口与进程 I/O 收集 |
 | `ProotLaunchSpec` | 两类 PRoot 启动共用的 executable、bind、cwd、env 与 argv |
@@ -37,7 +39,7 @@ Assistant.workspaceId 有效
 `workspace` Gradle 模块不依赖应用 UI；`app` 模块负责 Room、Compose、文件上传、工具注册和 DI。
 Workspace 工具由 `GenerationToolSetFactory` 在 Master/Target 共用的 `TurnEngine` 管道中装配；工具执行事实经 `CommitCheckpoint` / `FinalizeTurn` 写入，不另开落库路径。
 
-`GenerationToolSetFactory` 只从 `WorkspaceQueryService` 取得 typed readiness 与审批投影。真正执行时，`WorkspaceApplicationService.executeTool` 在 per-workspace gate 内重新校验 Workspace 仍存在且为 `READY`，再交付只含 Rootfs size/export/command 的 `WorkspaceToolSession`；工具代码不能取得 Repository。这样从装配到执行之间发生删除、重装或状态变化时 fail-closed，且 `workspace_edit_file` 的 read/replace/write 整体不会与 UI 写入、安装或删除交错。
+`GenerationToolSetFactory` 只从 `WorkspaceQueryService` 取得 typed readiness 与审批投影。真正执行时，`WorkspaceApplicationService.executeTool` 在 per-workspace gate 内重新校验 Workspace 仍存在且为 `READY`，再交付只含 Rootfs read/write/update/command 的 `WorkspaceToolSession`；工具代码不能取得 Repository。这样从装配到执行之间发生删除、重装或状态变化时 fail-closed，且 `workspace_edit_file` 的 read/replace/write 整体不会与 UI 写入、安装或删除交错。
 
 Compose、ViewModel、聊天文件补全、cwd 选择和已编辑文件导出都只能依赖 `WorkspaceQueryService` / `WorkspaceApplicationService`；不得持有 `WorkspaceRepository` 或 Room `WorkspaceEntity`。`WorkspaceUiModel` 只公开 UI 所需的 id、名称、typed `WorkspaceShellStatus` 和工具审批投影，不把持久化实体或 `shell_status` 字符串编码当作页面协议。字符串只存在于 Room 边界，并由 `WorkspaceEntity.resolvedShellStatus` 一次解析；未知值按 `BROKEN` fail-closed，不能意外开放工具或终端。
 
@@ -64,7 +66,7 @@ Rootfs 内的主要映射：
 | `/upload` | 用户上传目录 | 提示词要求只读；需修改时先复制到 `/workspace` |
 | `/dev`、`/proc`、`/sys` | Android 对应目录 | 仅存在时挂载，不允许文件 API 直接读取 |
 
-`WorkspaceManager.resolveRootfsPath()` 负责把 Rootfs 绝对路径映射回宿主文件。bind mount 按目标路径长度降序匹配，避免较短前缀抢先命中；`/workspace` 映射到当前 Workspace 文件区，其他路径落到 `linux/`。内核文件系统只能通过 shell 访问。
+`WorkspaceManager.resolveRootfsPath()` 负责把规范化的 Rootfs 绝对路径映射回宿主文件。`RootfsPath.parse` 消除 `.` / `..` 与重复分隔符，拒绝越过 guest 根、NUL 和反斜线；审批与执行共用规范化后的路径。bind mount 按目标路径长度降序匹配，避免较短前缀抢先命中；`/workspace` 映射到当前 Workspace 文件区，其他路径落到 `linux/`。内核文件系统只能通过 shell 访问。
 
 `WorkspaceStorageArea.FILES` 和 `LINUX` 用于管理页面的直接文件操作；AI 工具使用 Rootfs 绝对路径，以便与 shell 看到同一命名空间。
 
@@ -112,7 +114,8 @@ x86_64 设备必须使用 x86_64 PRoot 和 Rootfs，arm64 设备必须使用 arm
 | `workspace_edit_file` | `false` | 按 `old_text` / `new_text` 精确或宽松匹配替换，diff 只进入 UI metadata |
 | `workspace_shell` | `true` | 在 Rootfs 中执行任意 shell 命令 |
 
-Workspace 实体可用 `toolApprovals` 对各工具覆盖默认值。即使用户关闭写入或编辑审批，只要目标路径不在 `/workspace` 或 `/tmp`，实现仍强制审批；参数无效也按需审批处理，不能利用解析失败绕过路径保护。
+Workspace 实体可用 `toolApprovals` 对各工具覆盖默认值。参数先由 `WorkspaceToolArguments` 的纯解析器校验，缺字段或错误类型直接失败，不进入审批。即使用户关闭写入或编辑审批，只要规范化后的目标路径不在 `/workspace` 或 `/tmp`，仍强制审批；例如 `/tmp/../etc/config` 属于 `/etc`，不能按原字符串前缀放行。
+执行时 Manager 再次检查同一路径分类；区外写入必须携带从该调用已有审批决定派生的 `approvedByUser`，模型参数不能授予此能力。授权设置、会话审批和数据库结构保持既有协议。
 
 Target Run 沿用同一工具定义，但非交互审批策略会拒绝除 `ask_user` 之外的所有需审批工具。因此默认配置下，子助手可以直接读写安全根，却不能直接运行 `workspace_shell`；用户撤销 Workspace 或工具权限后，下一模型 step 会按运行快照与当前配置的交集移除能力。
 
@@ -120,8 +123,10 @@ Target Run 沿用同一工具定义，但非交互审批策略会拒绝除 `ask_
 
 - `workspace_read_file` 要求 Rootfs 绝对路径。文本按 UTF-8 返回 `{path,text}`；图片保存为聊天文件后返回 Image part 和路径说明。
 - 单次读取上限由 `MAX_READ_FILE_BYTES` 控制；大文件应改用 shell 的 `head`、`tail`、`grep` 等分段读取。
-- `workspace_write_file` 支持 `overwrite`，通过受控 shell 命令创建父目录、写 stdin 并读取 `stat` 元数据。
+- 文件工具由 Manager 使用 native 目录描述符逐段打开路径（包含 mount anchor 祖先），拒绝符号链接；不先 canonical 检查后再沿原路径打开。需要跟随链接时使用遵循自身审批策略的 `workspace_shell`。
+- `workspace_write_file` 支持 `overwrite`，写入先在已打开父目录内完成临时文件，再原子发布，保留已有文件权限；取消或失败不预先截断原文件。写目标为多硬链接文件时拒绝。
 - `workspace_edit_file` 依次尝试 exact、line-trimmed 和 block-anchor 策略；除非 `replace_all=true`，匹配必须唯一。
+- 编辑读取和写入共用同一描述符作用域，替换前检查原目标是否变化。已打开目录随后被重命名时保持原对象，不追随路径替换；此约束不是对拥有独立 Shell 能力的并发进程提供绝对隔离。
 - unified diff 存在 `DiffMetadata`，用于 `DiffView`，不会混入发送给 Provider 的工具结果文本。
 
 ### Shell 工具

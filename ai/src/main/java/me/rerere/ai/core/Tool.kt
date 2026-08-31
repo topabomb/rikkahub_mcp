@@ -1,7 +1,9 @@
 package me.rerere.ai.core
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Transient
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -20,7 +22,7 @@ data class ToolCallLocator(
 )
 
 /**
- * 工具按 stable attachment refs 请求 Runtime 解析附件的统一结果。
+ * 工具按受管文件路径请求 Runtime 读取附件的统一结果。
  *
  * [parts] 是解析成功的只读 parts（如 Image）；[failureReason] 非空表示解析失败，
  * 原因字符串由 Runtime 定义，工具应原样透传给模型，不做本地解释。
@@ -50,6 +52,32 @@ class ToolExecutionFailure(
     cause: Throwable? = null,
 ) : RuntimeException(message, cause)
 
+/** A rejected input has a replay result, but must never enter approval or execution. */
+class ToolArgumentsException(details: JsonObject) : IllegalArgumentException("invalid_arguments") {
+    val output: List<UIMessagePart> = listOf(UIMessagePart.Text(buildJsonObject {
+        details.forEach { (key, value) -> put(key, value) }
+        put("error", details["error"] ?: JsonPrimitive("invalid_arguments"))
+        put("type", "error")
+    }.toString()))
+}
+
+private fun invalidToolArguments(detail: String): ToolArgumentsException = ToolArgumentsException(
+    buildJsonObject {
+        put("error", "invalid_arguments")
+        put("detail", detail)
+    }
+)
+
+/** Controls when a metadata patch becomes visible outside the active tool execution. */
+enum class ToolMetadataDelivery {
+    /** Transient progress; carries no newly created resource references. */
+    STREAMING,
+    /** A durable progress/approval fact, committed before publishing its projection. */
+    CHECKPOINT,
+    /** Metadata owned by the next tool result or child-link checkpoint; merge without publishing. */
+    DEFERRED,
+}
+
 /**
  * 通用工具执行上下文，提供 metadata 回写能力。
  * 不引入 App 的 Conversation 类型，保持 ai 模块的平台无关性。
@@ -58,20 +86,22 @@ class ToolExecutionFailure(
  * [toolCallId] 保留给 Provider 协议，不能作为内存更新的唯一键。
  *
  * 工具获得的是执行时的资源访问能力，不是 Agent 的完整会话状态：
- * [resolveAttachments] 按 stable ref 批量解析附件，底层可以使用执行时刻的 durable
- * 消息快照（含本 run 内已完成的 Tool 结果），但这是 Runtime 的实现细节，不暴露给工具。
+ * [resolveAttachments] 按文件路径批量读取图片内容，不要求当前会话已引用文件，
+ * 也不依赖 Workspace；Runtime 委托文件 owner 校验并读取。
  */
 data class ToolExecutionContext(
     val messageId: Uuid,
     val toolOrdinal: Int,
     val toolCallId: String,
-    val reportMetadata: suspend (patch: JsonObject, checkpoint: Boolean) -> Unit,
-    /** 按 stable attachment refs 批量解析附件 parts。 */
-    val resolveAttachments: suspend (refs: List<String>) -> ToolAttachmentResolution,
+    val reportMetadata: suspend (patch: JsonObject, delivery: ToolMetadataDelivery) -> Unit,
+    /** 按受管文件路径读取请求级图片内容，不创建持久化副本。 */
+    val resolveAttachments: suspend (paths: List<String>) -> ToolAttachmentResolution,
     /** 委派类工具在派生会话确定后回写其 id，并入本次工具执行的 durable 事实。 */
     val reportChildConversation: suspend (childConversationId: String) -> Unit,
     /** Transfers an unpublished output resource to the generation/checkpoint owner. */
     val registerUnpublishedResource: (ToolResourceLease) -> Unit,
+    /** Derived from this call's committed approval decision, never from model arguments. */
+    val approvedByUser: Boolean = false,
 )
 
 @Serializable
@@ -81,6 +111,9 @@ data class Tool(
     val parameters: () -> JsonObject? = { null },
     val systemPrompt: (model: Model, messages: List<UIMessage>) -> String = { _, _ -> "" },
     val needsApproval: (JsonElement) -> Boolean = { false },
+    /** Pure input validation. No resource access, authorization changes or side effects. */
+    @Transient
+    val validateArguments: (JsonElement) -> JsonObject? = { null },
     val outputPolicy: ToolOutputPolicy = ToolOutputPolicy.TRUNCATABLE_TEXT,
     val execute: suspend (JsonElement) -> List<UIMessagePart>,
     /**
@@ -90,6 +123,22 @@ data class Tool(
     @Transient
     val contextualExecute: (suspend ToolExecutionContext.(JsonElement) -> List<UIMessagePart>)? = null,
 ) {
+    /** Same parser for approval and execution; remote schema semantics remain with the server. */
+    fun parseArguments(input: String, json: Json): JsonObject {
+        // Providers may represent a valid empty argument object as an empty streaming buffer.
+        val parsed = try {
+            json.parseToJsonElement(input.ifBlank { "{}" })
+        } catch (_: SerializationException) {
+            throw invalidToolArguments("Arguments must be valid JSON.")
+        }
+        val arguments = parsed as? JsonObject
+            ?: throw invalidToolArguments("Arguments must be a JSON object.")
+        validateArguments(arguments)?.let { rejection ->
+            throw ToolArgumentsException(rejection)
+        }
+        return arguments
+    }
+
     /**
      * 统一执行入口：上下文工具使用 [contextualExecute]，普通工具使用 [execute]。
      */

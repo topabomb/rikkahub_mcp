@@ -31,6 +31,7 @@ import net.weero.measix.pilot.data.db.migrations.Migration_4_5
 import net.weero.measix.pilot.data.db.migrations.Migration_5_6
 import net.weero.measix.pilot.data.db.migrations.Migration_6_7
 import net.weero.measix.pilot.data.db.migrations.Migration_7_8
+import net.weero.measix.pilot.data.db.migrations.Migration_8_9
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
 import net.weero.measix.pilot.data.ai.mcp.McpCatalogStore
 import net.weero.measix.pilot.data.ai.mcp.OAuthCallbackKeepAlive
@@ -67,6 +68,7 @@ val dataSourceModule = module {
                 Migration_5_6,
                 Migration_6_7,
                 Migration_7_8,
+                Migration_8_9,
             )
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onOpen(db: SupportSQLiteDatabase) {

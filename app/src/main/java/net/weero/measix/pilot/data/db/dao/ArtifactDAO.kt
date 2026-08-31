@@ -15,6 +15,9 @@ interface ArtifactDAO {
     @Query("SELECT * FROM artifact WHERE id = :id")
     suspend fun getById(id: Long): ArtifactEntity?
 
+    @Query("SELECT EXISTS(SELECT 1 FROM artifact WHERE relative_path = :relativePath)")
+    suspend fun existsByPath(relativePath: String): Boolean
+
     @Query("SELECT * FROM artifact WHERE relative_path = :relativePath AND state = :state")
     suspend fun getByPathAndState(relativePath: String, state: String): ArtifactEntity?
 

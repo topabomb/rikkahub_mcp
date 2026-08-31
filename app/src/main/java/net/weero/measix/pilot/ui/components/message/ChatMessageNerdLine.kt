@@ -36,6 +36,7 @@ import me.rerere.hugeicons.stroke.Clock02
 import me.rerere.hugeicons.stroke.Download04
 import me.rerere.hugeicons.stroke.Upload02
 import me.rerere.hugeicons.stroke.Zap
+import net.weero.measix.pilot.service.runtime.ContextCacheDisplay
 import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.utils.toFixed
 import java.time.Duration
@@ -47,10 +48,11 @@ fun ChatMessageNerdLine(
     message: UIMessage,
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f),
+    contextCache: ContextCacheDisplay? = null,
 ) {
     val settings = LocalSettings.current.displaySetting
-    val display = message.usage?.toNerdLineDisplay()
-    val summary = display?.takeIf { settings.showTokenUsage && it.hasCompactSummary }
+    val display = message.usage.toNerdLineDisplay(contextCache)
+    val summary = display.takeIf { settings.showTokenUsage && it.hasCompactSummary }
     val elapsedSeconds = message.finishedAt?.let { finishedAt ->
         Duration.between(
             message.createdAt.toJavaLocalDateTime(),
@@ -183,34 +185,37 @@ internal data class NerdLineUsageDisplay(
     }
 }
 
-internal fun TokenUsage.toNerdLineDisplay(): NerdLineUsageDisplay {
-    val showCore = coreCompleteness == UsageCompleteness.COMPLETE
-    val showCacheRead = cacheReadCompleteness == UsageCompleteness.COMPLETE
-    val latestCachePercent = latestRequestCacheReadInputTokens?.let { cacheRead ->
-        latestRequestContextTokens
+internal fun TokenUsage?.toNerdLineDisplay(
+    contextCache: ContextCacheDisplay? = null,
+): NerdLineUsageDisplay {
+    val showCore = this?.coreCompleteness == UsageCompleteness.COMPLETE
+    val showCacheRead = this?.cacheReadCompleteness == UsageCompleteness.COMPLETE
+    val latestCachePercent = contextCache?.cachePercent ?: this?.latestRequestCacheReadInputTokens?.let { cacheRead ->
+        this.latestRequestContextTokens
             ?.takeIf { it > 0L && cacheRead in 0L..it }
             ?.let { context -> cacheRead.toDouble() / context * 100.0 }
     }
-    val displayedOutput = outputTokens.takeIf { showCore }
-    val requestDuration = providerRequestDurationMillis?.takeIf { it > 0L }
+    val displayedOutput = this?.outputTokens.takeIf { showCore }
+    val requestDuration = this?.providerRequestDurationMillis?.takeIf { it > 0L }
     val tokensPerSecond = if (displayedOutput != null && requestDuration != null) {
         displayedOutput.toDouble() / requestDuration * 1000.0
     } else {
         null
     }
     return NerdLineUsageDisplay(
-        latestContextTokens = latestRequestContextTokens,
+        latestContextTokens = contextCache?.contextTokens ?: this?.latestRequestContextTokens,
         latestCachePercent = latestCachePercent,
-        requestCount = observedProviderRequestCount,
-        inputTokens = inputTokens.takeIf { showCore },
+        requestCount = this?.observedProviderRequestCount,
+        inputTokens = this?.inputTokens.takeIf { showCore },
         outputTokens = displayedOutput,
-        cacheReadInputTokens = cacheReadInputTokens.takeIf { showCacheRead },
+        cacheReadInputTokens = this?.cacheReadInputTokens.takeIf { showCacheRead },
         tokensPerSecond = tokensPerSecond,
-        initialTtftMillis = initialRequestTimeToFirstOutputMillis,
+        initialTtftMillis = this?.initialRequestTimeToFirstOutputMillis,
     )
 }
 
 internal fun Double.formatCachePercent(): String {
+    if (this > 0.0 && this < 0.5) return "<1"
     val fractionDigits = when {
         this < 90.0 -> 0
         this < 99.0 -> 1

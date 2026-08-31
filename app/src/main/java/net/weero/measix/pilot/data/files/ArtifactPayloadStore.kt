@@ -8,12 +8,23 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import java.io.ByteArrayOutputStream
+
+internal class ArtifactPayloadTooLargeException : java.io.IOException("Artifact payload exceeds the size limit")
 
 /**
  * 托管 artifact 的纯磁盘层。它不知道数据库、引用或删除策略，只负责 staging、
  * 同文件系统发布、查询与物理删除。生命周期裁决全部由 [ArtifactStore] 完成。
  */
 class ArtifactPayloadStore(private val context: Context) {
+    class ReservedPayload internal constructor(
+        val folder: String,
+        val relativePath: String,
+        val stagingToken: String,
+    )
+
     data class StagedPayload(
         val folder: String,
         val relativePath: String,
@@ -22,72 +33,86 @@ class ArtifactPayloadStore(private val context: Context) {
     )
 
     suspend fun stageFromUri(
-        folder: String,
+        reserved: ReservedPayload,
         uri: Uri,
-        displayName: String,
-        mimeType: String?,
         maxBytes: Long? = null,
-    ): StagedPayload = stageOnIo {
-        stage(folder, displayName, mimeType) { staging ->
-            val input = context.contentResolver.openInputStream(uri)
-                ?: error("Failed to open input stream for $uri")
-            input.use { source ->
-                staging.outputStream().use { destination ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    var written = 0L
-                    while (true) {
-                        val read = source.read(buffer)
-                        if (read < 0) break
-                        written += read
-                        require(maxBytes == null || written <= maxBytes) {
-                            "Artifact payload exceeds the size limit"
-                        }
-                        destination.write(buffer, 0, read)
+    ): StagedPayload = stageOnIo(reserved) { staging ->
+        val input = context.contentResolver.openInputStream(uri)
+            ?: error("Failed to open input stream for $uri")
+        input.use { source ->
+            staging.outputStream().use { destination ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var written = 0L
+                while (true) {
+                    val read = source.read(buffer)
+                    if (read < 0) break
+                    written += read
+                    require(maxBytes == null || written <= maxBytes) {
+                        "Artifact payload exceeds the size limit"
                     }
+                    destination.write(buffer, 0, read)
                 }
             }
         }
     }
 
     suspend fun stageFromBytes(
-        folder: String,
+        reserved: ReservedPayload,
         bytes: ByteArray,
-        displayName: String,
-        mimeType: String?,
-    ): StagedPayload = stageOnIo {
-        stage(folder, displayName, mimeType) { it.writeBytes(bytes) }
-    }
+    ): StagedPayload = stageOnIo(reserved) { it.writeBytes(bytes) }
 
     suspend fun stageText(
-        folder: String,
+        reserved: ReservedPayload,
         text: String,
-        displayName: String,
-        mimeType: String?,
-    ): StagedPayload = stageOnIo {
-        stage(folder, displayName, mimeType) { it.writeText(text) }
+    ): StagedPayload = stageOnIo(reserved) { it.writeText(text) }
+
+    /** Atomically occupies a candidate; metadata and naming decisions stay in ArtifactStore. */
+    suspend fun reserve(folder: String, fileName: String): ReservedPayload {
+        val acquired = AtomicReference<ReservedPayload?>()
+        return try {
+            withContext(Dispatchers.IO) {
+                require(fileName.isNotBlank() && File(fileName).name == fileName && '/' !in fileName && '\\' !in fileName)
+                val relativePath = FileUtils.buildRelativePath(folder, File(fileName))
+                val token = "$fileName.part"
+                val staging = stagingFile(token)
+                staging.parentFile?.mkdirs()
+                check(!file(relativePath).exists()) { "Artifact target already exists: $relativePath" }
+                check(staging.createNewFile()) { "Artifact staging collision: $token" }
+                ReservedPayload(folder, relativePath, token).also(acquired::set)
+            }
+        } catch (error: Throwable) {
+            acquired.get()?.let { cleanupReservation(it, error) }
+            throw error
+        }
     }
 
     /**
      * Owns the staging file until the completed descriptor is delivered back to ArtifactStore.
      * This closes the prompt-cancellation gap at the IO dispatcher return boundary.
      */
-    private suspend fun stageOnIo(block: () -> StagedPayload): StagedPayload {
-        val completed = AtomicReference<StagedPayload?>()
+    private suspend fun stageOnIo(reserved: ReservedPayload, writer: (File) -> Unit): StagedPayload {
         return try {
-            withContext(Dispatchers.IO) { block().also(completed::set) }
+            withContext(Dispatchers.IO) {
+                val staging = stagingFile(reserved.stagingToken)
+                check(staging.isFile) { "Artifact staging reservation missing: ${reserved.stagingToken}" }
+                writer(staging)
+                StagedPayload(reserved.folder, reserved.relativePath, reserved.stagingToken, staging.length())
+            }
         } catch (error: Throwable) {
-            completed.get()?.let { staged ->
-                withContext(NonCancellable + Dispatchers.IO) {
-                    if (!deleteIfPresent(stagingFile(staged.stagingToken))) {
-                        error.addSuppressed(
-                            IllegalStateException(
-                                "Failed to remove undelivered artifact staging payload: ${staged.stagingToken}"
-                            )
-                        )
-                    }
+            cleanupReservation(reserved, error)
+            throw error
+        }
+    }
+
+    private suspend fun cleanupReservation(reserved: ReservedPayload, primary: Throwable) {
+        try {
+            withContext(NonCancellable + Dispatchers.IO) {
+                check(deleteIfPresent(stagingFile(reserved.stagingToken))) {
+                    "Failed to remove artifact staging payload: ${reserved.stagingToken}"
                 }
             }
-            throw error
+        } catch (cleanup: Throwable) {
+            primary.addSuppressed(cleanup)
         }
     }
 
@@ -129,9 +154,31 @@ class ArtifactPayloadStore(private val context: Context) {
 
     fun mimeType(uri: Uri): String? = FileUtils.getFileMimeType(context, uri)
 
+    /** Bounded, cancellable payload read; lifetime authorization belongs to ArtifactStore. */
+    suspend fun readBytes(relativePath: String, maxBytes: Long): ByteArray = withContext(Dispatchers.IO) {
+        val source = file(relativePath)
+        if (source.length() > maxBytes) throw ArtifactPayloadTooLargeException()
+        source.inputStream().use { input ->
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                val count = input.read(buffer)
+                if (count < 0) break
+                if (output.size().toLong() + count > maxBytes) throw ArtifactPayloadTooLargeException()
+                output.write(buffer, 0, count)
+            }
+            output.toByteArray()
+        }
+    }
+
     fun stagingExists(stagingToken: String): Boolean = stagingFile(stagingToken).isFile
 
     fun finalExists(relativePath: String): Boolean = file(relativePath).isFile
+
+    suspend fun pathOccupied(folder: String, fileName: String): Boolean = withContext(Dispatchers.IO) {
+        file("$folder/$fileName").exists() || stagingFile("$fileName.part").exists()
+    }
 
     suspend fun deleteStaging(stagingToken: String?): Boolean = withContext(Dispatchers.IO) {
         stagingToken == null || deleteIfPresent(stagingFile(stagingToken))
@@ -152,31 +199,6 @@ class ArtifactPayloadStore(private val context: Context) {
         if (!directory.exists()) return true
         val entries = directory.listFiles() ?: return false
         return entries.isEmpty() && directory.delete()
-    }
-
-    private fun stage(
-        folder: String,
-        displayName: String,
-        mimeType: String?,
-        writer: (File) -> Unit,
-    ): StagedPayload {
-        val finalName = FileUtils.buildUuidFileName(displayName, mimeType)
-        val relativePath = FileUtils.buildRelativePath(folder, File(finalName))
-        val token = "$finalName.part"
-        val staging = stagingFile(token)
-        staging.parentFile?.mkdirs()
-        check(staging.createNewFile()) { "Artifact staging collision: $token" }
-        try {
-            writer(staging)
-            return StagedPayload(folder, relativePath, token, staging.length())
-        } catch (error: Throwable) {
-            if (staging.exists() && !staging.delete()) {
-                error.addSuppressed(
-                    IllegalStateException("Failed to remove incomplete artifact staging payload: $token")
-                )
-            }
-            throw error
-        }
     }
 
     private fun stagingFile(token: String): File {

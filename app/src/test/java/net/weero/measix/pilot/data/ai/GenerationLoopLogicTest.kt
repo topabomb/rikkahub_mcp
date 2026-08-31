@@ -37,7 +37,7 @@ class GenerationLoopLogicTest {
         )
         val updated = resolveToolApprovals(
             toolsAwaitingReplayResult = listOf(tool),
-            toolDefinitions = listOf(toolDefinition("ask_user", needsApproval = true)),
+            toolDefinitions = buildToolIndex(listOf(toolDefinition("ask_user", needsApproval = true))),
             nonInteractive = false,
             interactiveToolNames = emptySet(),
             json = json,
@@ -57,7 +57,7 @@ class GenerationLoopLogicTest {
         )
         val updated = resolveToolApprovals(
             toolsAwaitingReplayResult = listOf(tool),
-            toolDefinitions = listOf(toolDefinition("search_web", needsApproval = false)),
+            toolDefinitions = buildToolIndex(listOf(toolDefinition("search_web", needsApproval = false))),
             nonInteractive = false,
             interactiveToolNames = emptySet(),
             json = json,
@@ -344,10 +344,10 @@ class GenerationLoopLogicTest {
 
         val resolution = resolveToolApprovals(
             toolsAwaitingReplayResult = listOf(automatic, question),
-            toolDefinitions = listOf(
+            toolDefinitions = buildToolIndex(listOf(
                 toolDefinition("get_time_info", needsApproval = false),
                 toolDefinition("ask_user", needsApproval = true),
-            ),
+            )),
             nonInteractive = false,
             interactiveToolNames = emptySet(),
             json = json,
@@ -373,10 +373,10 @@ class GenerationLoopLogicTest {
 
         val resolution = resolveToolApprovals(
             toolsAwaitingReplayResult = listOf(question, shell),
-            toolDefinitions = listOf(
+            toolDefinitions = buildToolIndex(listOf(
                 toolDefinition("ask_user", needsApproval = true),
                 toolDefinition("workspace_shell", needsApproval = true),
-            ),
+            )),
             nonInteractive = true,
             interactiveToolNames = setOf("ask_user"),
             json = json,
@@ -404,9 +404,9 @@ class GenerationLoopLogicTest {
 
         val resolution = resolveToolApprovals(
             toolsAwaitingReplayResult = listOf(shell),
-            toolDefinitions = listOf(
+            toolDefinitions = buildToolIndex(listOf(
                 toolDefinition("workspace_shell", needsApproval = true),
-            ),
+            )),
             nonInteractive = true,
             interactiveToolNames = emptySet(),
             json = json,
@@ -437,9 +437,9 @@ class GenerationLoopLogicTest {
 
         val resolution = resolveToolApprovals(
             toolsAwaitingReplayResult = listOf(automatic),
-            toolDefinitions = listOf(
+            toolDefinitions = buildToolIndex(listOf(
                 toolDefinition("get_time_info", needsApproval = false),
-            ),
+            )),
             nonInteractive = true,
             interactiveToolNames = emptySet(),
             json = json,
@@ -464,7 +464,7 @@ class GenerationLoopLogicTest {
 
         val resolution = resolveToolApprovals(
             toolsAwaitingReplayResult = listOf(tool),
-            toolDefinitions = listOf(buildAskUserTool()),
+            toolDefinitions = buildToolIndex(listOf(buildAskUserTool())),
             nonInteractive = false,
             interactiveToolNames = emptySet(),
             json = json,
@@ -490,7 +490,7 @@ class GenerationLoopLogicTest {
 
         val resolution = resolveToolApprovals(
             toolsAwaitingReplayResult = listOf(tool),
-            toolDefinitions = listOf(buildAskUserTool()),
+            toolDefinitions = buildToolIndex(listOf(buildAskUserTool())),
             nonInteractive = false,
             interactiveToolNames = setOf("ask_user"),
             json = json,
@@ -529,7 +529,7 @@ class GenerationLoopLogicTest {
 
         val resolution = resolveToolApprovals(
             toolsAwaitingReplayResult = listOf(invalid, valid),
-            toolDefinitions = listOf(buildAskUserTool()),
+            toolDefinitions = buildToolIndex(listOf(buildAskUserTool())),
             nonInteractive = false,
             interactiveToolNames = emptySet(),
             json = json,
@@ -566,7 +566,7 @@ class GenerationLoopLogicTest {
 
         val resolution = resolveToolApprovals(
             toolsAwaitingReplayResult = listOf(tool),
-            toolDefinitions = listOf(buildAskUserTool()),
+            toolDefinitions = buildToolIndex(listOf(buildAskUserTool())),
             nonInteractive = false,
             interactiveToolNames = emptySet(),
             json = json,

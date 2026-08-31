@@ -295,6 +295,7 @@ private fun DetailContent(
                 items(state.timeline, key = { it.id }) { node ->
                     ChatMessage(
                         node = node,
+                        activeContextCache = state.activeContextCache,
                         modifier = Modifier.padding(horizontal = 8.dp),
                         loading = false,
                         model = null,

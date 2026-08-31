@@ -151,11 +151,11 @@ class AssistantCallToolTest {
                 put("assistant_id", targetId.toString())
                 put("request", "Look at these")
                 put("attachments", buildJsonArray {
-                    add(JsonPrimitive("attachment:1"))
-                    add(JsonPrimitive("attachment:2"))
-                    add(JsonPrimitive("attachment:3"))
-                    add(JsonPrimitive("attachment:4"))
-                    add(JsonPrimitive("attachment:5"))
+                    add(JsonPrimitive("/upload/1.png"))
+                    add(JsonPrimitive("/upload/2.png"))
+                    add(JsonPrimitive("/upload/3.png"))
+                    add(JsonPrimitive("/upload/4.png"))
+                    add(JsonPrimitive("/upload/5.png"))
                 })
             },
         )
@@ -175,7 +175,7 @@ class AssistantCallToolTest {
                 put("assistant_id", targetId.toString())
                 put("request", "Look at these")
                 put("attachments", buildJsonArray {
-                    add(JsonPrimitive("attachment:11111111-1111-1111-1111-111111111111"))
+                    add(JsonPrimitive("/upload/b.png"))
                     add(JsonPrimitive(42))
                 })
             },
@@ -191,7 +191,7 @@ class AssistantCallToolTest {
         val coordinator = mockk<DelegationCoordinator>()
         val tool = createTool(coordinator)
         val expected = listOf(UIMessagePart.Text("done"))
-        val ref = "attachment:11111111-1111-1111-1111-111111111111"
+        val path = "/upload/b.png"
         coEvery {
             coordinator.executeCall(
                 callerAssistantId = callerId,
@@ -200,7 +200,7 @@ class AssistantCallToolTest {
                 task = "Look",
                 execContext = any(),
                 extras = emptySet(),
-                attachments = listOf(ref, "/upload/a.png"),
+                attachments = listOf(path, "/upload/a.png"),
             )
         } returns expected
 
@@ -210,8 +210,8 @@ class AssistantCallToolTest {
                 put("assistant_id", targetId.toString())
                 put("request", "Look")
                 put("attachments", buildJsonArray {
-                    add(JsonPrimitive(ref))
-                    add(JsonPrimitive(" $ref "))
+                    add(JsonPrimitive(path))
+                    add(JsonPrimitive(" $path "))
                     add(JsonPrimitive("/upload/a.png"))
                 })
             },
@@ -228,7 +228,11 @@ class AssistantCallToolTest {
             .jsonPrimitive
             .content
         assertTrue(attachmentsDescription.contains("Up to 4"))
-        assertTrue(attachmentsDescription.contains("attachment:<uuid>"))
+        assertTrue(attachmentsDescription.contains("/upload/<file>"))
+        assertTrue(attachmentsDescription.contains("[Attachment path=...]"))
+        assertTrue(attachmentsDescription.contains("file.path"))
+        assertTrue(attachmentsDescription.contains("artifacts[].path"))
+        assertFalse(attachmentsDescription.contains("attachment:<uuid>"))
         assertTrue(attachmentsDescription.contains("cannot see this chat"))
         assertFalse(attachmentsDescription.contains("vision", ignoreCase = true))
         assertFalse(attachmentsDescription.contains("ocr", ignoreCase = true))

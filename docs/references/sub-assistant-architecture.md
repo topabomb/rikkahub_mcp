@@ -14,7 +14,12 @@
 - **Child Conversation**：Target 的持久化工作会话，`parentConversationId` 指向 Master。
 - **Run**：一次 `assistant_call` 执行，由全局唯一 `run_id` 标识。
 
-Caller 调用 Target 后，当前 Tool Loop 会等待 Target 返回终态。Target 不读取 Master 历史，只收到 `request` 以及可选的 `attachments`；因此 Caller 必须在请求中提供完成任务所需的事实、约束、相关附件和交付要求。Target 可以连续使用自身 Child 历史，但不能再次调用或管理其他 Assistant。附件由 Runtime 解析成本地 Image part 写入 Child USER；是否以原图或 visual observation 发给 Target，由本次 RunSpec 模型决定。Target 产出的 Image 交付物由卡片用引用展示，Caller 默认只拿轻量 `artifacts[]`，点名 `extras=["artifacts"]` 后才按 Caller 能力投影内容。多模态协议、设计判定与扩展方向见 [sub-assistant-multimodal.md](sub-assistant-multimodal.md)。
+Caller 调用 Target 后，当前 Tool Loop 会等待 Target 返回终态。Target 不读取 Master 历史，只收到 `request` 以及可选的
+`attachments` 文件路径；Caller 必须提供任务所需事实、约束和交付要求。Target 可以继续自身 Child 历史，但不能再次委托。
+附件由 Runtime 经 ArtifactStore 受保护读取，将原文件 Image 写入 Child USER；当次 Provider 容器决定原图或路径事实，
+不自动生成 visual observation。Caller 默认只收到轻量 `artifacts[].path/type/mime`，没有 Image 或附件事实行；
+点名 `extras=["artifacts"]` 才追加内容并按 Caller 能力投影。有效配置识图模型时，Caller/Target 均可按路径显式识图，
+不依赖 Workspace 或当前会话已有图片。完整协议见 [sub-assistant-multimodal.md](sub-assistant-multimodal.md)。
 
 当前实现不包含异步 mailbox、后台结果回投、多层递归委托或并行 fan-out。这些能力不能通过提示词假装存在。
 
@@ -107,6 +112,8 @@ Child 的 `assistantId` 固定为 Target，`parentConversationId` 固定为 Mast
 | `user_interaction` | 正在等待宿主回答的 `ask_user` locator 与入参 |
 
 `SubAssistantRunStateReducer` 保证终态不可回到运行态，迟到的 phase/preview 不覆盖终态，所有 patch 都从完整快照派生。
+metadata 的交付使用共用 `ToolMetadataDelivery`：phase/preview 为流式投影，等待回答先提交 checkpoint，
+初始关联和最终结果只合并进当前生成消息，分别随 Child link 与 Tool Result 提交，不提前发布未提交的引用。
 
 ## 5. `assistant_call` 执行流程
 
@@ -130,7 +137,14 @@ Master ToolCall
 
 调用开始依次验证 Caller 的委托权限、Target 存在且不是 Caller、Target 可作为子助手、访问公式成立、模型来源可解析、同一 lineage 没有活跃 Run。失败在创建 Child 前返回稳定 reason。
 
-Lineage 决策完成后先获取 `(masterConversationId, targetAssistantId)` lease，再从最新 Settings 重验身份、访问与模型可用性。写入 Child 之前解析 `attachments` 为本地资产，但不做 Image 能力 preflight：无法解析的 ref 才阻断创建；模型能否 native 由 Target `RequestMediaCapabilities` 在请求投影中决定。这样同一 Master/Target 串行执行，而不同 Master 可以独立运行；并发竞态不会创建重复 Child，也不会留下只有 USER、没有 Run 的脏 Child。
+Lineage 决策完成后先获取 `(masterConversationId, targetAssistantId)` lease，再从最新 Settings 重验身份、访问与模型可用性。
+`AttachmentResolver.withImages` 校验安全 `/upload` 图片路径，并在 ArtifactStore retention 作用域内提交 Child USER；
+不要求 Master 当前分支引用，不复制输入文件。路径或文件不可用才阻断创建，Target 是否 native 由请求投影决定。
+同一 Master/Target 串行，不同 Master 独立运行；图片读取完成、失败或取消均释放保留，不新增持久化结构。
+
+Child clone 创建的历史附件由 `DelegationCoordinator` 持有到关联提交：先原子提交 Master metadata 与执行事实的 Child link，
+再发布该批 `OwnedArtifact`。关联失败才补偿未关联 Child；关联成功后的资源发布失败保留 Child 和已有引用，
+进入带原 Child/run 身份的失败终态，不能误删已关联 Child。该批资源不交给通用 Tool Result lease 作用域。
 
 ### Lineage
 
@@ -200,7 +214,7 @@ Target 每个模型 step 都重新构建工具集。有效工具能力是“调�
 
 Master 分支切换或历史裁剪后，`SubAssistantLifecycle` 只保留仍被有效 metadata 引用的 Child，并把共享 Child 收缩到最长仍被引用的 lineage 前缀。未变化 Child 不重写，写入量只与裁剪 delta 相关。
 
-Fork 顶层会话时，`forkSubAssistantTree` 同时复制有效 Child，重建 `MessageNode.id`、`UIMessage.id`、`run_id`、`previous_run_id` 和 Child link。新 Child 改绑新 Master；随后 `AttachmentCloner.cloneParts()` 对本地附件做内容级复制，并同步改写 `assistant_call` 的 artifact manifest、递归 `Tool.output` Image URL 及结果 JSON `artifacts[].path`。除这些文件归属字段外，Provider metadata 与选中消息内容保持不变；失效 artifact 的输出图片与旧路径会被移除或降级为无路径的不可用描述。
+Fork 顶层会话时，`forkSubAssistantTree` 同时复制有效 Child，重建 `MessageNode.id`、`UIMessage.id`、`run_id`、`previous_run_id` 和 Child link。新 Child 改绑新 Master；随后 `AttachmentCloner.cloneParts()` 对本地附件做内容级复制，并同步改写 `assistant_call` 的 artifact manifest、递归 `Tool.output` Image URL，按复制后的 typed metadata 重建本工具结果 JSON 的 `artifacts[].path`。托管 upload 使用新副本的实际路径，durable UUID 不变。除这些文件归属字段外，Provider metadata 与选中消息内容保持不变；失效 artifact 的输出图片与旧路径会被移除或降级为无路径的不可用描述。
 
 ### 删除
 
@@ -212,7 +226,10 @@ Fork 顶层会话时，`forkSubAssistantTree` 同时复制有效 Child，重建 
 
 `ConversationRuntimeRegistry` 保证一个 Conversation ID 对应一个 Runtime，并显式暴露 `Loading/Draft/Ready/Missing/Failed`；Draft 仅用于尚未发送首条消息的普通新聊天，Child 不使用 Draft。持久化 Child 只能经 `loadRuntime()` 安装已读取的 Ready Snapshot；不存在默认 Assistant 或空树占位。页面引用归零但 Job 活跃时 Runtime 继续保留；生成结束且空闲后再清理。
 
-停止 Master、删除 Target、撤销访问、模型失效、回答等待中断或应用恢复都会取消 Target Job。正常运行中的中断由 `TurnFinalization` 在 `NonCancellable` 收尾区分别尝试 Child 与 Master metadata 终态写入；两侧都执行，任一失败最终仍向调用方传播，并以 suppressed exception 保留双侧诊断。lease 与交互等待器由 `SubAssistantRunGate.withLease` 的结构化作用域释放。
+停止 Master、删除 Target、撤销访问、模型失效、回答等待中断或应用恢复都会取消 Target Job。正常运行中的中断由
+`TurnFinalization` 在 `NonCancellable` 收尾区分别尝试 Child 终态提交与 Master metadata 准备；两侧都执行，
+任一失败向调用方传播并保留双侧诊断。Master metadata 随工具结果提交；Master 自身已经取消时，由 owning turn 的
+`FinalizeTurn` 收口，不向已取消的显示通道发送终态。lease 与交互等待器由 `SubAssistantRunGate.withLease` 释放。
 
 每个 Master turn 创建共享的 `TtsToolPlaybackContext`，其中稳定 `sessionId` 是播放队列的唯一边界。Master 和该 turn 内的 Target 复用此 ID，Target 只替换 Assistant 身份和 `SUB_ASSISTANT` 来源类型；工具审批暂停与恢复继续使用原 ID，新消息或重新生成才轮换。`TtsController` 同时只接受一个 session 独占队列：新 session 替换旧队列；同 session 在顺序开关开启时追加、关闭时替换。Tool 不维护“是否首调”状态，UI `activeSource` 也不参与队列仲裁；每个 chunk 在入队时直接绑定来源，避免跳过或追加导致来源索引错位。控制条仅在当前来源是 Target 且该 Assistant 开启 `useAssistantAvatar` 时显示 Target 头像；播放结束会清空显示来源，但保留该 session 的队列所有权，以便同 turn 的迟到调用继续追加；Provider 切换、stop 或 dispose 才释放所有权。旧 worker 与旧播放器回调不能覆盖或停止新队列。`assistant_call` 结束不会中断已提交的音频。
 

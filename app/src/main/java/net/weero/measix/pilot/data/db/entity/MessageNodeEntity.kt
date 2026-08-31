@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.db.entity
+package net.weero.measix.pilot.data.db.entity
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
@@ -16,7 +16,7 @@ import androidx.room.PrimaryKey
             onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index("conversation_id")]
+    indices = [Index(value = ["conversation_id", "node_index"])]
 )
 data class MessageNodeEntity(
     @PrimaryKey

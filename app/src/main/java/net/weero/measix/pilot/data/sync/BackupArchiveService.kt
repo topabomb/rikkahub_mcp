@@ -33,6 +33,7 @@ import net.weero.measix.pilot.data.ai.mcp.mcpDefinitionDigest
 import net.weero.measix.pilot.data.ai.mcp.migrateLegacyMcpSettingsDocument
 import net.weero.measix.pilot.data.ai.mcp.validated
 import net.weero.measix.pilot.data.db.AppDatabase
+import net.weero.measix.pilot.data.db.APP_DATABASE_VERSION
 import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.BackupSnapshotBarrier
@@ -318,7 +319,9 @@ class BackupArchiveService(
                 check(cursor.moveToFirst() && cursor.getString(0) == "ok") { "Backup database integrity check failed" }
             }
             val version = db.version
-            require(version in 1..8) { "Unsupported backup database version: $version" }
+            require(version in 1..APP_DATABASE_VERSION) {
+                "Unsupported backup database version: $version"
+            }
         } finally {
             db.close()
         }
@@ -393,7 +396,9 @@ class BackupArchiveService(
     private fun validateModernAggregate(staging: File) {
         val db = SQLiteDatabase.openDatabase(File(staging, DATABASE_ENTRY).absolutePath, null, SQLiteDatabase.OPEN_READONLY)
         try {
-            require(db.version == 8) { "Modern backup database version must be 8: ${db.version}" }
+            require(db.version in 8..APP_DATABASE_VERSION) {
+                "Unsupported modern backup database version: ${db.version}"
+            }
             require(tableExists(db, "artifact")) { "Modern backup database is missing artifact metadata" }
             require(tableExists(db, "GenMediaEntity")) { "Modern backup database is missing generated-media metadata" }
             val artifactPaths = queryStrings(db, "SELECT relative_path FROM artifact WHERE state = 'ACTIVE'")

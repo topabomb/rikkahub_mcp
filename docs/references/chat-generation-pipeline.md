@@ -50,6 +50,7 @@ ConversationApplicationService / MasterTurnCoordinator
             │
             ▼
        TurnEngine.bind
+         ├─ onMessagesObserved：Producer 同步更新 TurnEngine 唯一最新消息槽，不依赖 UI 交付
          ├─ Messages：TurnHandle/epoch 校验后更新纯内存 activeTurn
          ├─ Checkpoint：CommitCheckpoint durable command
          └─ Finished/异常/取消：FinalizeTurn durable command + sealed TurnOutcome
@@ -73,6 +74,15 @@ Runtime 不发布未提交状态。Streaming 是唯一先发布且不落库的�
 任一步失败则整体回滚。Turn 状态使用 insert-once + 合法 CAS，终态不可回退，重复同终态幂等。
 失败或取消时，Application 终态准备显式接收 TurnEngine 累积的最新 messages，校验同一 `TurnHandle` 后在该投影上
 关闭未完成工具；它不能改读 durable nodes，否则会丢失最后一次 checkpoint 之后已经流出的文本或工具 delta。
+`GenerationRequest.onMessagesObserved` 在每次发布前、特别是请求关闭 usage 后的可取消变换之前同步更新
+`TurnEngine` 的唯一最新消息槽；`bind` 只消费展示和终态事件，不把迟到展示消息回写该槽。
+外部取消仍从这一槽准备终态，因此未返回 usage 的已发起请求也计入请求数和不完整性。
+失败准备使用既有 `withoutUnpersistableBase64()` 把未落盘媒体转为 typed 失败占位，保留已落盘文件 part；
+未发布资源仍由原 lease 作用域精确补偿。
+`STEP_COMPLETED` 与带新输出的 `TOOL_RESULT_COMPLETED` 在显示 local payload 前，先提交 checkpoint、
+更新同一最新消息槽，再发布 lease。交接开始前检查取消；已经取得结果/资源所有权后的这一小段提交不可取消，
+完成后继续传播取消。提交前取消或提交失败不会把随后被回滚的 local URI 交给终态消息；
+checkpoint 成功后即使 lease 发布失败，终态仍使用已有 durable root 的消息，不退回提交前的内容。
 `TurnOutcome.fromFailure` 是 Master/Target 共用的失败分类点：Provider 失败使用 `ProviderFailureKind.reason` 作为细分稳定码，
 并把 `classifyProviderFailure().detail` 的脱敏诊断随 `FinalizeTurn.terminalDetail` 写入 owning Assistant 消息 JSON；
 `INCOMPLETE` 保留独立状态与 `provider_incomplete` / limit reason。Turn execution 与消息仍共享同一终态提交，不增加
@@ -119,6 +129,9 @@ Assistant、MCP 与按需附件识别工具；Memory Tool 在每个工具循环 
 
 工具能力判定必须显式传入本次 run 的 `capabilityModel`；主/子生成传入实际 resolved model，
 `assistant_inspect` 这类非运行时检查显式解析目标助手的配置模型，不存在“未传模型则启用兼容集”。
+按需识图只取决于有效的 `attachmentInspectionModelId`，不由当前模型容器覆盖或 Workspace 就绪状态否决。
+文件清单不是图片内容：`inspect_attachments` 通过 Runtime 注入的只读能力按安全 `/upload` 路径读取内存图片，
+不扫描当前会话获取授权，也不创建持久化附件副本。
 `AssistantToolFactory` 构造时必须同时获得 `DelegationCoordinator` 与 `GenerationToolSetFactory`，
 不把缺失装配降级为工具运行时错误。
 
@@ -129,6 +142,25 @@ Assistant、MCP 与按需附件识别工具；Memory Tool 在每个工具循环 
 按 ordinal 串行执行。`UpdateToolApproval` 在同一次 reducer 变换中更新 durable node 与 active-turn projection，
 Runtime 仅在事务提交成功后发布该投影；因此 UI、Master resume 与 Child `ask_user` 只会观察到同一个终态决定。
 工具输出内联在 `UIMessagePart.Tool.output`；Provider 序列化时再展开为各自协议。
+
+审批前通过同一个 step 工具索引确认可用性，再由 `Tool.parseArguments` 严格解析 JSON object 并调用工具自身的纯
+`validateArguments`。Provider 的空参数缓冲按无参 `{}` 解释；非空坏 JSON、非 object 或工具参数错误直接返回失败，
+不进入审批或执行。`ask_user`、生图等领域校验属于工具定义，循环不维护工具名特判。
+无效或已撤销的 Pending 调用清除等待态，并通过既有 `TOOL_RESULT_COMPLETED` 提交 FAILED 结果；同批其余合法 Pending
+仍形成审批屏障。用户已 Denied/Answered 的决定不被参数错误覆盖；Approved 不重复审批。执行仍使用同一解析入口，
+实际文件、权限、配置与远端状态只在原执行 owner 内复核。未执行的拒绝不创建 `tool_execution` 行。
+纯校验返回结构化领域错误，由 `ToolArgumentsException` 保留原字段并补齐标准 `error` / `type: error`；
+通用 JSON 错误为 `invalid_arguments`。撤销或审批不可用的 Runtime 拒绝同样携带标准错误标记，重读历史仍显示 FAILED；
+不将正常执行返回的领域业务失败改成执行失败。
+
+取消收口对尚无 Child link 的 `assistant_call` 使用通用中断结果：`TurnFinalization` 根据已校验的 turn 与
+`tool_execution` ordinal 确认不存在执行事实，或仅有尚未建立 Child link 的 `STARTED` 事实，且 run metadata key 不存在。
+已有 Child link 必须与 run metadata 一致；存在但损坏的 metadata、终态执行缺失结果仍 fail-closed，不能降级成未执行调用。
+
+`ToolExecutionContext.reportMetadata` 使用 `ToolMetadataDelivery` 明确交付边界：`STREAMING` 只发布进度投影，
+`CHECKPOINT` 提交后再展示，`DEFERRED` 只合并进生成器现有 messages，随接下来的既有 checkpoint 交接。
+生图与子助手的最终 metadata 使用 `DEFERRED`，与结果一起提交；新 Child 的初始 metadata 同样随 child link
+checkpoint 交接。未提交的文件引用不会提前进入显示或取消终态，不新增 metadata 缓冲或持久化字段。
 
 Master 生成入口显式区分 `MasterTurnEntry.START` 与 `CONTINUE_APPROVAL`。START 在尚无 active turn 时完成建议清理、
 无效消息清理和附件引用精确回填，再由 `TurnEngine.start()` 建立 owner；批准、拒绝和回答都由
@@ -175,12 +207,12 @@ Master 的 `FAILED` / `INCOMPLETE` 由 `ChatErrorStore` 投影为当前会话底
 托管文件只有 `ArtifactStore` 持有 metadata 与生命周期能力；`ArtifactPayloadStore` 只做 staging、rename、stat 和
 物理删除。创建协议为 staging → CREATING row → 原子 rename → ACTIVE，启动可幂等完成或回滚。
 
-- 草稿发布：消息或 Settings 提交成功后才 `markPublished`。
+- 草稿发布：消息或 Settings 提交成功后才经 `publishUnpublished` / `publishAllUnpublished` 交接所有权。
 - 创建补偿：仅 `OwnedArtifact` 可调用 `discardUnpublished`。
 - 用户删除：`deleteUserRequested` 先 CAS DELETING，再在统一 Settings roots 锁下 detach，最后删除 payload 与 row。
 - GC：只读取索引候选，并在生命周期锁内重验 message refs 与 Settings roots；DELETING artifact 不能建立新引用。
 - 引用投影：message delta 与 `artifact_reference` 同事务；损坏节点不会把 backfill 标为完成。
-- Settings 完整性：当前写协议不会提交缺少 ACTIVE artifact metadata 的本地 root；启动发现这种根时 fail-closed，不补录、不清除 root 或 payload。
+- Settings 完整性：写入要求 ACTIVE artifact。启动时发现背景/头像缺少 metadata 或 payload，先持久化默认显示偏好；不扫描认领遗留文件。仍被消息引用的 ACTIVE artifact 缺少 payload 则 fail-closed，详见多模态参考的文件可用性与恢复约定。
 
 显式删除后的历史引用保留，Replay 投影为 unavailable；系统不会从其他化身自动“复活”用户已删除的文件。
 

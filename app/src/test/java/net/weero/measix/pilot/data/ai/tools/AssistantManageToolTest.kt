@@ -1,8 +1,11 @@
 package net.weero.measix.pilot.data.ai.tools
 
+import io.mockk.Called
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -12,6 +15,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolArgumentsException
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
@@ -92,7 +96,12 @@ class AssistantManageToolTest {
         val tool = manageTool(createFactory(listOf(caller(), target())), caller())
         assertFalse(
             tool.needsApproval(
-                buildJsonObject { put("action", "CREATE") },
+                buildJsonObject {
+                    put("action", "CREATE")
+                    put("name", "Helper")
+                    put("description", "Research")
+                    put("instructions", "Find evidence")
+                },
             ),
         )
         assertTrue(
@@ -100,6 +109,7 @@ class AssistantManageToolTest {
                 buildJsonObject {
                     put("action", "UPDATE")
                     put("assistant_id", targetId.toString())
+                    put("name", "Renamed")
                 },
             ),
         )
@@ -111,8 +121,98 @@ class AssistantManageToolTest {
                 },
             ),
         )
-        assertTrue(tool.needsApproval(buildJsonObject { }))
-        assertTrue(tool.needsApproval(buildJsonObject { put("action", "RENAME") }))
+        assertFalse(tool.needsApproval(buildJsonObject { }))
+        assertFalse(tool.needsApproval(buildJsonObject { put("action", "RENAME") }))
+    }
+
+
+    @Test
+    fun `invalid arguments are rejected before settings or management access`() = runTest {
+        val settingsStore = mockk<SettingsStore>()
+        val service = mockk<AssistantManagementService>()
+        val factory = AssistantToolFactory(
+            settingsStore, service, json, mockk(), mockk(),
+        )
+        val tool = manageTool(factory, caller())
+        val invalid = listOf(
+            """{}""",
+            """{"action":"RENAME"}""",
+            """{"action":true}""",
+            """{"action":"CREATE"}""",
+            """{"action":"CREATE","name":"n","description":42,"instructions":"i"}""",
+            """{"action":"CREATE","name":"n","description":"d","instructions":"  "}""",
+            """{"action":"UPDATE","assistant_id":"$targetId"}""",
+            """{"action":"UPDATE","assistant_id":"wrong","name":"new"}""",
+            """{"action":"UPDATE","assistant_id":"$targetId","name":null}""",
+            """{"action":"UPDATE","assistant_id":"$targetId","instructions":[]}""",
+            """{"action":"DELETE"}""",
+            """{"action":"DELETE","assistant_id":false}""",
+            """{"action":"DELETE","assistant_id":"$targetId","description":{}}""",
+        )
+        for (raw in invalid) {
+            val args = json.parseToJsonElement(raw)
+            val expected = requireNotNull(tool.validateArguments(args))
+            assertEquals("invalid_arguments", expected["error"]!!.jsonPrimitive.content)
+            assertEquals(expected, parseResult(tool.execute(args)))
+            assertFalse(expected.containsKey("type"))
+            assertFalse(tool.needsApproval(args))
+            try {
+                tool.parseArguments(raw, json)
+                throw AssertionError("invalid input must not reach approval")
+            } catch (failure: ToolArgumentsException) {
+                val replay = parseResult(failure.output)
+                assertEquals(expected, JsonObject(replay.filterKeys { it != "type" }))
+                assertEquals("error", replay["type"]!!.jsonPrimitive.content)
+            }
+        }
+        verify { settingsStore wasNot Called }
+        verify { service wasNot Called }
+    }
+
+    @Test
+    fun `pure validator accepts unknown target while execution rechecks dynamic access`() = runTest {
+        val tool = manageTool(createFactory(listOf(caller())), caller())
+        val args = buildJsonObject {
+            put("action", "DELETE")
+            put("assistant_id", targetId.toString())
+        }
+
+        assertEquals(null, tool.validateArguments(args))
+        assertTrue(tool.needsApproval(args))
+        assertEquals("target_not_allowed", parseResult(tool.execute(args))["error"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `parser normalizes supported fields using existing description semantics`() {
+        val args = json.parseToJsonElement(
+            """{"action":"CREATE","name":"  Helper  ","description":"a  b","instructions":"  Work carefully  "}""",
+        )
+        val parsed = requireNotNull(parseAssistantManageArguments(args))
+
+        assertEquals("Helper", parsed.name)
+        assertEquals("a b", parsed.description)
+        assertEquals("Work carefully", parsed.instructions)
+    }
+
+    @Test
+    fun `management result cancellation is rethrown`() = runTest {
+        val cancellation = CancellationException("stop mutation")
+        val settingsStore = mockk<SettingsStore>()
+        every { settingsStore.effectiveSettings } returns MutableStateFlow(
+            Settings(assistants = listOf(caller(), target())).toEffectiveSettingsSnapshot(),
+        )
+        val service = mockk<AssistantManagementService>()
+        coEvery { service.deleteAssistant(any(), any()) } returns Result.failure(cancellation)
+        val tool = manageTool(AssistantToolFactory(settingsStore, service, json, mockk(), mockk()), caller())
+        try {
+            tool.execute(buildJsonObject {
+                put("action", "DELETE")
+                put("assistant_id", targetId.toString())
+            })
+            throw AssertionError("expected cancellation")
+        } catch (actual: CancellationException) {
+            assertTrue(actual === cancellation)
+        }
     }
 
     @Test

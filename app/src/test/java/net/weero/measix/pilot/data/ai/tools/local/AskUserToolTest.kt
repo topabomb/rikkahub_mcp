@@ -10,10 +10,12 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import me.rerere.ai.core.ToolArgumentsException
 import me.rerere.ai.ui.UIMessagePart
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -74,6 +76,12 @@ class AskUserToolTest {
         assertEquals("questions[0].options[0]", result["field"]!!.jsonPrimitive.content)
         assertEquals("non-empty string", result["expected"]!!.jsonPrimitive.content)
         assertEquals(ASK_USER_OPTIONS_HINT, result["hint"]!!.jsonPrimitive.content)
+        assertEquals(result, tool.validateArguments(args))
+        assertNull(result["type"])
+        val rejection = assertThrows(ToolArgumentsException::class.java) { tool.parseArguments(args.toString(), json) }
+        val replay = parseResult(rejection.output)
+        assertEquals(result, JsonObject(replay.filterKeys { it != "type" }))
+        assertEquals("error", replay["type"]!!.jsonPrimitive.content)
     }
 
     @Test

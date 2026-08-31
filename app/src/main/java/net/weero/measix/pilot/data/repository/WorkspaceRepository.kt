@@ -237,23 +237,35 @@ class WorkspaceRepository(
         manager.exportFile(workspace.root, path, area, outputStream)
     }
 
-    suspend fun rootfsFileSize(
+    suspend fun readRootfsBytes(
         id: String,
         path: String,
-    ): Long = withContext(Dispatchers.IO) {
+        maxBytes: Long,
+    ): ByteArray = withContext(Dispatchers.IO) {
         val workspace = dao.getById(id) ?: error("Workspace not found: $id")
-        manager.ensureWorkspace(workspace.root)
-        manager.rootfsFileSize(workspace.root, path)
+        runInterruptible { manager.readRootfsBytes(workspace.root, path, maxBytes) }
     }
 
-    suspend fun exportRootfsFile(
+    suspend fun writeRootfsText(
         id: String,
         path: String,
-        outputStream: OutputStream,
-    ) = withContext(Dispatchers.IO) {
+        text: String,
+        overwrite: Boolean,
+        approvedByUser: Boolean,
+    ): WorkspaceFileEntry = withContext(Dispatchers.IO) {
         val workspace = dao.getById(id) ?: error("Workspace not found: $id")
-        manager.ensureWorkspace(workspace.root)
-        manager.exportRootfsFile(workspace.root, path, outputStream)
+        runInterruptible { manager.writeRootfsText(workspace.root, path, text, overwrite, approvedByUser) }
+    }
+
+    suspend fun updateRootfsText(
+        id: String,
+        path: String,
+        maxBytes: Long,
+        approvedByUser: Boolean,
+        transform: (String) -> String,
+    ): WorkspaceFileEntry = withContext(Dispatchers.IO) {
+        val workspace = dao.getById(id) ?: error("Workspace not found: $id")
+        runInterruptible { manager.updateRootfsText(workspace.root, path, maxBytes, approvedByUser, transform) }
     }
 
     suspend fun deleteFile(

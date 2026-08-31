@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.tools
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -31,6 +32,7 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.data.model.normalizeDescription
 import net.weero.measix.pilot.utils.jsonPrimitiveOrNull
 import net.weero.measix.pilot.service.AssistantDeletionResult
 import net.weero.measix.pilot.service.AssistantManagementService
@@ -50,6 +52,37 @@ private val INSPECT_SECTIONS = setOf(
     INSPECT_SECTION_SKILLS,
     INSPECT_SECTION_MEMORY,
 )
+
+internal enum class AssistantManageAction { CREATE, UPDATE, DELETE }
+
+internal data class AssistantManageArguments(
+    val action: AssistantManageAction,
+    val assistantId: Uuid?,
+    val name: String?,
+    val description: String?,
+    val instructions: String?,
+)
+
+/** Pure model-input validation; current permissions and target existence remain execution-time facts. */
+internal fun parseAssistantManageArguments(args: kotlinx.serialization.json.JsonElement): AssistantManageArguments? {
+    val obj = args as? JsonObject ?: return null
+    val stringFields = listOf("action", "assistant_id", "name", "description", "instructions")
+    if (stringFields.any { it in obj && (obj[it] as? JsonPrimitive)?.isString != true }) return null
+    val action = AssistantManageAction.entries.find { it.name == obj["action"]?.jsonPrimitive?.content } ?: return null
+    val rawId = obj["assistant_id"]?.jsonPrimitive?.content
+    val assistantId = rawId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+    if (rawId != null && assistantId == null) return null
+    val name = obj["name"]?.jsonPrimitive?.content?.trim()
+    val description = obj["description"]?.jsonPrimitive?.content?.let(::normalizeDescription)
+    val instructions = obj["instructions"]?.jsonPrimitive?.content?.trim()
+    if (listOfNotNull(name, description, instructions).any { it.isEmpty() }) return null
+    when (action) {
+        AssistantManageAction.CREATE -> if (name == null || description == null || instructions == null) return null
+        AssistantManageAction.UPDATE -> if (assistantId == null || listOfNotNull(name, description, instructions).isEmpty()) return null
+        AssistantManageAction.DELETE -> if (assistantId == null) return null
+    }
+    return AssistantManageArguments(action, assistantId, name, description, instructions)
+}
 
 /**
  * 构建三个 Assistant Tools 及 Catalog。
@@ -126,15 +159,15 @@ class AssistantToolFactory(
                     })
                     put("name", buildJsonObject {
                         put("type", "string")
-                        put("description", "Display name.")
+                        put("description", "Display name. Required and non-empty for CREATE; optional replacement for UPDATE.")
                     })
                     put("description", buildJsonObject {
                         put("type", "string")
-                        put("description", "Specialty and when to call it. Not a system prompt.")
+                        put("description", "Specialty and when to call it. Required and non-empty for CREATE; optional replacement for UPDATE. Not a system prompt.")
                     })
                     put("instructions", buildJsonObject {
                         put("type", "string")
-                        put("description", "System prompt for the sub-assistant: role, method, output style. Do not invent tools or skills.")
+                        put("description", "System prompt for the sub-assistant: role, method, output style. Required and non-empty for CREATE; optional replacement for UPDATE. Do not invent tools or skills.")
                     })
                 },
                 required = listOf("action"),
@@ -152,7 +185,12 @@ class AssistantToolFactory(
                 json = json,
             )
         },
-        needsApproval = { args -> assistantManageNeedsApproval(args) },
+        validateArguments = { args ->
+            if (parseAssistantManageArguments(args) == null) errorJson("invalid_arguments") else null
+        },
+        needsApproval = { args ->
+            parseAssistantManageArguments(args)?.action?.let { it != AssistantManageAction.CREATE } == true
+        },
         execute = { args ->
             executeAssistantManage(callerAssistantId, args)
         },
@@ -162,8 +200,8 @@ class AssistantToolFactory(
         callerAssistantId: Uuid,
         args: kotlinx.serialization.json.JsonElement,
     ): List<UIMessagePart> {
-        val obj = args as? JsonObject ?: return errorResult("invalid_arguments")
-        val action = obj["action"]?.let { (it as? JsonPrimitive)?.content } ?: return errorResult("invalid_arguments")
+        val parameters = parseAssistantManageArguments(args) ?: return errorResult("invalid_arguments")
+        val action = parameters.action
 
         // 执行时从最新 Settings 重新校验 caller 仍存在、AssistantManagement 仍启用
         val settings = settingsStore.effectiveSettings.value.settings
@@ -174,17 +212,14 @@ class AssistantToolFactory(
         }
 
         val result = when (action) {
-            "CREATE" -> {
-                val name = obj["name"]?.let { (it as? JsonPrimitive)?.content } ?: ""
-                val description = obj["description"]?.let { (it as? JsonPrimitive)?.content } ?: ""
-                val instructions = obj["instructions"]?.let { (it as? JsonPrimitive)?.content } ?: ""
-                assistantManagementService.createAssistant(name, description, instructions, callerAssistantId)
+            AssistantManageAction.CREATE -> {
+                assistantManagementService.createAssistant(
+                    requireNotNull(parameters.name), requireNotNull(parameters.description),
+                    requireNotNull(parameters.instructions), callerAssistantId,
+                )
             }
-            "UPDATE" -> {
-                val assistantIdStr = obj["assistant_id"]?.let { (it as? JsonPrimitive)?.content }
-                    ?: return errorResult("invalid_arguments")
-                val assistantId = runCatching { Uuid.parse(assistantIdStr) }.getOrNull()
-                    ?: return errorResult("invalid_arguments")
+            AssistantManageAction.UPDATE -> {
+                val assistantId = requireNotNull(parameters.assistantId)
                 // Target 必须在当前 Catalog 有效范围内
                 val target = settings.getAssistantById(assistantId)
                 if (target == null || !SubAssistantAccessPolicy.canAccess(caller, target)) {
@@ -192,17 +227,14 @@ class AssistantToolFactory(
                 }
                 assistantManagementService.updateAssistant(
                     assistantId = assistantId,
-                    name = obj["name"]?.let { (it as? JsonPrimitive)?.content },
-                    description = obj["description"]?.let { (it as? JsonPrimitive)?.content },
-                    instructions = obj["instructions"]?.let { (it as? JsonPrimitive)?.content },
+                    name = parameters.name,
+                    description = parameters.description,
+                    instructions = parameters.instructions,
                     callerAssistantId = callerAssistantId,
                 )
             }
-            "DELETE" -> {
-                val assistantIdStr = obj["assistant_id"]?.let { (it as? JsonPrimitive)?.content }
-                    ?: return errorResult("invalid_arguments")
-                val assistantId = runCatching { Uuid.parse(assistantIdStr) }.getOrNull()
-                    ?: return errorResult("invalid_arguments")
+            AssistantManageAction.DELETE -> {
+                val assistantId = requireNotNull(parameters.assistantId)
                 // Target 必须在当前 Catalog 有效范围内
                 val target = settings.getAssistantById(assistantId)
                 if (target == null || !SubAssistantAccessPolicy.canAccess(caller, target)) {
@@ -210,7 +242,6 @@ class AssistantToolFactory(
                 }
                 assistantManagementService.deleteAssistant(assistantId, callerAssistantId)
             }
-            else -> Result.failure(IllegalArgumentException("invalid_arguments"))
         }
 
         val resultJson = result.fold(
@@ -218,7 +249,7 @@ class AssistantToolFactory(
                 when (data) {
                     is Assistant -> {
                         buildJsonObject {
-                            put("action", action.lowercase())
+                            put("action", action.name.lowercase())
                             put("id", data.id.toString())
                         }
                     }
@@ -239,6 +270,7 @@ class AssistantToolFactory(
                 }
             },
             onFailure = { error ->
+                if (error is CancellationException) throw error
                 val reason = when (error) {
                     is NoSuchElementException -> "assistant_not_found"
                     is IllegalArgumentException -> error.message ?: "invalid_arguments"
@@ -409,12 +441,6 @@ class AssistantToolFactory(
         return names.toSet().ifEmpty { setOf(INSPECT_SECTION_PROFILE) }
     }
 
-    /** CREATE 自动执行；UPDATE/DELETE 以及缺失或非法 action 一律审批。 */
-    private fun assistantManageNeedsApproval(args: kotlinx.serialization.json.JsonElement): Boolean {
-        val action = (args as? JsonObject)?.get("action")?.let { (it as? JsonPrimitive)?.content }
-        return action != "CREATE"
-    }
-
     // ---- assistant_call ----
 
     private fun buildAssistantCallTool(
@@ -466,8 +492,9 @@ class AssistantToolFactory(
                         put("maxItems", MAX_ASSISTANT_CALL_ATTACHMENTS)
                         put(
                             "description",
-                            "Up to 4 task-related attachments. Prefer attachment:<uuid>; " +
-                                "generated images may use /upload/<file>. The target cannot see this chat—" +
+                            "Up to 4 task-related image file paths: /upload/<file>. " +
+                                "Copy paths from the user's request, [Attachment path=...] markers, " +
+                                "tool result file.path, or artifacts[].path. The target cannot see this chat—" +
                                 "do not assume it can see a just-uploaded image.",
                         )
                         put("items", buildJsonObject {
@@ -528,7 +555,7 @@ class AssistantToolFactory(
         val attachments = when (val parsed = parseAssistantCallAttachments(obj["attachments"])) {
             is AttachmentParseResult.Invalid ->
                 return callUnavailable(AttachmentFailureReasons.INVALID_ATTACHMENTS)
-            is AttachmentParseResult.Ok -> parsed.refs
+            is AttachmentParseResult.Ok -> parsed.paths
         }
 
         return delegationCoordinator.executeCall(
@@ -559,10 +586,10 @@ class AssistantToolFactory(
 
     // ---- 工具函数 ----
 
-    private fun errorResult(errorCode: String): List<UIMessagePart> {
-        val json = buildJsonObject {
-            put("error", errorCode)
-        }
-        return listOf(UIMessagePart.Text(json.toString()))
+    private fun errorJson(errorCode: String): JsonObject = buildJsonObject {
+        put("error", errorCode)
     }
+
+    private fun errorResult(errorCode: String): List<UIMessagePart> =
+        listOf(UIMessagePart.Text(errorJson(errorCode).toString()))
 }

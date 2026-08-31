@@ -1,8 +1,9 @@
 package net.weero.measix.pilot.service.runtime
 
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
+import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
@@ -45,6 +46,42 @@ enum class ConversationTurnPhase {
     STOPPING,
 }
 
+/** One observed request pair for display only; never a turn accounting baseline. */
+data class ContextCacheDisplay(
+    val sourceAssistantMessageId: Uuid,
+    val contextTokens: Long,
+    val cacheReadInputTokens: Long,
+) {
+    init {
+        require(contextTokens > 0 && cacheReadInputTokens in 0..contextTokens)
+    }
+
+    val cachePercent: Double get() = cacheReadInputTokens.toDouble() / contextTokens * 100.0
+}
+
+data class ActiveContextCache(
+    val assistantMessageId: Uuid,
+    val value: ContextCacheDisplay,
+) {
+    fun forMessage(messageId: Uuid): ContextCacheDisplay? = value.takeIf { messageId == assistantMessageId }
+}
+
+internal fun UIMessage.contextCacheDisplay(): ContextCacheDisplay? {
+    if (role != MessageRole.ASSISTANT) return null
+    val context = usage?.latestRequestContextTokens?.takeIf { it > 0 } ?: return null
+    val cache = usage?.latestRequestCacheReadInputTokens?.takeIf { it in 0..context } ?: return null
+    return ContextCacheDisplay(id, context, cache)
+}
+
+internal fun ConversationSnapshot.latestBranchContextCache(): ContextCacheDisplay? =
+    nodes.asReversed().firstNotNullOfOrNull { it.currentMessage.contextCacheDisplay() }
+
+internal fun ConversationSnapshot.activeContextCache(): ActiveContextCache? {
+    val active = activeTurn ?: return null
+    val pair = active.latestAvailableContextCache ?: return null
+    return ActiveContextCache(active.assistantMessageId, pair)
+}
+
 /**
  * UI-facing turn runtime. It is derived from the private active request and durable
  * snapshot, never persisted, and is not a write protocol.
@@ -56,6 +93,7 @@ data class ConversationPresentation(
     val toolCallPhases: Map<ToolCallLocator, ToolCallPhase>,
     /** Latest terminated request identity, used to close a receipt wait without timing guesses. */
     val lastTerminatedRequestTurnId: Uuid? = null,
+    val activeContextCache: ActiveContextCache? = null,
 ) {
     val isActive: Boolean get() = phase != ConversationTurnPhase.IDLE
 
@@ -101,6 +139,7 @@ internal fun resolveConversationPresentation(
         processingText = active?.processingText,
         toolCallPhases = toolCallPhases,
         lastTerminatedRequestTurnId = lastTerminatedRequestTurnId,
+        activeContextCache = snapshot.activeContextCache(),
     )
 }
 
@@ -124,7 +163,11 @@ internal fun ActiveTurnState.withStreamingMessages(nextMessages: List<UIMessage>
         val current = toolCallPhases[locator]
         locator to (current ?: ToolCallPhase.CALL_STREAMING)
     }.toMap()
-    return copy(messages = nextMessages, toolCallPhases = nextPhases)
+    return copy(
+        messages = nextMessages,
+        toolCallPhases = nextPhases,
+        latestAvailableContextCache = assistant.contextCacheDisplay() ?: latestAvailableContextCache,
+    )
 }
 
 /** Advances the active UI projection only from an already committed checkpoint command. */
@@ -203,7 +246,10 @@ internal fun ActiveTurnState.afterCheckpoint(command: CommitCheckpoint): ActiveT
             }
         }
     }
-    return copy(toolCallPhases = phases)
+    return copy(
+        toolCallPhases = phases,
+        latestAvailableContextCache = assistant.contextCacheDisplay() ?: latestAvailableContextCache,
+    )
 }
 
 fun resolveToolCallPhase(tool: UIMessagePart.Tool, activePhase: ToolCallPhase?): ToolCallPhase =
@@ -225,12 +271,13 @@ private fun UIMessagePart.Tool.resultTerminalPhase(): ToolCallPhase? {
             output.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text },
         ).jsonObject
     }.getOrNull() ?: return null
+    fun stringField(name: String): String? = (result[name] as? JsonPrimitive)?.contentOrNull
     return when {
-        result["status"]?.jsonPrimitive?.contentOrNull == "cancelled" -> ToolCallPhase.CANCELLED
-        result["status"]?.jsonPrimitive?.contentOrNull == "interrupted" -> ToolCallPhase.INTERRUPTED
-        result["error"] != null && result["type"]?.jsonPrimitive?.contentOrNull == "error" ->
+        stringField("status") == "cancelled" -> ToolCallPhase.CANCELLED
+        stringField("status") == "interrupted" -> ToolCallPhase.INTERRUPTED
+        result["error"] != null && stringField("type") == "error" ->
             ToolCallPhase.FAILED
-        result["error"] != null && result["type"]?.jsonPrimitive?.contentOrNull == "timeout" ->
+        result["error"] != null && stringField("type") == "timeout" ->
             ToolCallPhase.FAILED
         else -> null
     }

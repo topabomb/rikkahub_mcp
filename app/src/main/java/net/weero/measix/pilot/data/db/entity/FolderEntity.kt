@@ -14,7 +14,7 @@ import androidx.room.PrimaryKey
  */
 @Entity(
     tableName = "conversation_folder",
-    indices = [Index(value = ["assistant_id"])]
+    indices = [Index(value = ["assistant_id", "sort_index", "create_at"])]
 )
 data class FolderEntity(
     @PrimaryKey

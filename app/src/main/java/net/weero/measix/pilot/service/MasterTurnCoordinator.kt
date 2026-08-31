@@ -714,7 +714,6 @@ class MasterTurnCoordinator(
                         assistant = currentAssistant,
                         settings = currentSettings,
                         capabilityModel = model,
-                        capabilityMediaCapabilities = mediaCapabilities,
                         workspaceCwd = snapshot.header.workspaceCwd,
                         ttsPlaybackContext = turnTtsContext,
                         mcpCapabilities = mcpCapabilities,
@@ -772,6 +771,7 @@ class MasterTurnCoordinator(
                         ) == ownerId
                     },
                     onCheckpoint = activeTurnEngine::onCheckpoint,
+                    onMessagesObserved = activeTurnEngine::observeMessages,
                 )
             ).let { source ->
                 // 提交协议唯一实现——chunk→applyStreamingDelta（永不落库）、
@@ -858,7 +858,6 @@ class MasterTurnCoordinator(
                 withContext(NonCancellable) {
                     turnEngine?.finalizeOwnerFailure(
                         outcome = outcome,
-                        messages = startedRuntime?.snapshot?.value?.currentMessages().orEmpty(),
                         closeInterruptedTools = false,
                     )
                 }
@@ -879,7 +878,6 @@ class MasterTurnCoordinator(
                 withContext(NonCancellable) {
                     turnEngine?.finalizeOwnerFailure(
                         outcome = outcome,
-                        messages = startedRuntime?.snapshot?.value?.currentMessages().orEmpty(),
                         closeInterruptedTools = false,
                     )
                 }

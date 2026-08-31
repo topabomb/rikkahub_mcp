@@ -2,7 +2,7 @@
 
 > 定位：会话中的多媒体附件如何成为持久事实（stable attachment ref + Artifact）、如何在每次生成请求中按模型能力投影（`AttachmentProjectionTransformer` / `inspect_attachments`）、以及一轮生成（Turn）如何以执行事实落库并在崩溃后恢复。
 >
-> 分工：总体 owner 与分层边界见 [application-architecture.md](application-architecture.md)；`inspect_attachments` 的模型可见描述与失败 reason 表见 [prompts-and-tools.md](prompts-and-tools.md)；Resolver 的 SSRF / 魔数 / 去重细节与子助手附件链路见 [sub-assistant-multimodal.md](sub-assistant-multimodal.md)；生成主链路与 Transformer 顺序见 [chat-generation-pipeline.md](chat-generation-pipeline.md)；数据层结构见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and-sync.md)。
+> 分工：总体 owner 与分层边界见 [application-architecture.md](application-architecture.md)；`inspect_attachments` 的模型可见描述与失败 reason 表见 [prompts-and-tools.md](prompts-and-tools.md)；Resolver 的受管读取 / 魔数 / 去重细节与子助手附件链路见 [sub-assistant-multimodal.md](sub-assistant-multimodal.md)；生成主链路与 Transformer 顺序见 [chat-generation-pipeline.md](chat-generation-pipeline.md)；数据层结构见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and-sync.md)。
 
 ## 1. 行为总览
 
@@ -19,7 +19,7 @@ AttachmentProjectionTransformer（按本次 RequestMediaCapabilities）
     └── NONE / OPAQUE_REPLAY_ONLY 的普通 Image part → input=reference_only 引用事实
            │  模型需要细节时显式调用
            ▼
-    inspect_attachments(refs, request)
+    inspect_attachments(attachments, request)
         → ToolExecutionContext.resolveAttachments → 识别模型（单次多图调用）→ Text
     ▼
 Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → ConversationRepository.commit(ConversationWrite)，Room 事务）
@@ -38,7 +38,7 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 - 子助手交付物：Master 的 `assistant_call` metadata 以 `SubAssistantCallArtifact(ref, artifact)` 保存同一种稳定
   handle；不复制图片 part 来伪造第二份引用事实。
 - 唯一性：一个 ref 指向一个逻辑附件；不同 part 可指向同一文件（保持各自 ref）。
-- 幂等：`ensureAttachmentRef` 对已带**合法可解析** ref 的 part 恒等返回；仅对非多媒体 part 恒等。导入 / 旧数据 / 异常 Provider metadata 中的非法 ref 会被重建为合法 UUID，避免模型拿到永远无法解析的 handle。
+- 幂等：`ensureAttachmentRef` 对已带**合法可解析** ref 的 part 恒等返回；仅对非多媒体 part 恒等。导入 / 旧数据 / 异常 Provider metadata 中的非法 ref 会被重建为合法 UUID，保持内部身份可解析。
 - `AttachmentReferenceLookup` 只索引多媒体 part 的合法 ref；同一 ref 同时出现在 `Tool.output` 直接媒体与
   `sub_assistant_call.artifacts[]` manifest 是正常双表示，直接媒体优先、manifest 作为回退。等价资源的重复声明复用同一逻辑附件；多个不同 direct 资源或仅 manifest 间的不一致声明 fail-closed，不按遍历顺序选取。
 
@@ -51,9 +51,8 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 | 用户上传 / 编辑消息 | `ConversationApplicationService` / `MasterTurnCoordinator` 提交前 |
 | `generate_image` 产出 | 工具成功时对 Image part 盖章 |
 | MCP 图片内容 | `McpToolCallExecutor` 转本地文件时 |
-| 外部 HTTPS 图 | 入站时落地（`wrapLocalImage`），Child 只存 `file://` |
 | base64 图片 | `Base64ImageToLocalFileTransformer` 经 `ArtifactStore` 终态落盘并盖章 |
-| `assistant_call` 注入 Child | 复制源 ref（跨会话引用同一 Artifact） |
+| `assistant_call` 注入 Child | 为新 Image part 盖章；原文件身份不变，不复制 payload |
 | 历史消息补章 | 仅在 `MasterTurnCoordinator` 的 START structural preflight 由 `planDurableAttachmentRefBackfills` / `BackfillAttachmentRefs` 执行；会话加载与恢复只做校验，不由 UI/query 旁路补章 |
 
 所有字节型图片入口都在创建 durable artifact 前限制输入规模并校验实际内容：
@@ -65,29 +64,43 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 - 本地 Settings background/头像是可变显示偏好，不是 artifact owner。冷启动发现其 ACTIVE metadata 缺失时，经 `ArtifactReferencePolicy.detach` 持久化回退默认值，绝不扫描或认领遗留文件；metadata 存在而 payload 缺失时，也先持久化回退默认值，再删除该失效 metadata。两种情形均不阻断 Settings 读取；消息附件仍按其独立 durable root 规则 fail-closed。
 - 生成中预览与助手背景只接受经结构检查的图片，文件名与扩展名由实际内容生成，不信任模型名、索引或远程声明。
 
-### 2.3 资源的两种身份
+### 2.3 内部身份与模型引用
 
-每个进入会话的媒体同时拥有两个标识，模型可见标识只此两种：
+逻辑附件与物理文件不是同一身份，不相互截断或推导 UUID：
 
 | 身份 | 标识 | 用途 | 交付方式 |
 |------|------|------|----------|
-| 引用身份 | `attachment:<uuid>` | 把附件作为输入传给工具（`inspect_attachments`、`assistant_call.attachments`） | 投影出的 `[Attachment ref=...]` 引用行 |
-| 文件身份 | `/upload/<file>`、`/workspace/...` | 读写字节（workspace 工具族） | `<UploadFile path=...>`（文档展开）、Tool Result `file.path` |
+| 逻辑身份 | `attachment:<uuid>` | durable metadata、克隆与 UI 稳定 handle 索引 | 仅内部使用，不作为工具入参或模型披露 |
+| 托管文件路径 | `/upload/<file>` | 识别、委托与 workspace 读取使用同一路径；前两者不依赖工作区 | `[Attachment path=...]`、Tool Result `file.path`、子助手 `artifacts[].path` |
+| 工作产物路径 | `/workspace/...` | workspace 工具族读写 | workspace 工具结果；不属于附件识别输入 |
 
 `/upload` 挂载会话共享的只读文件（用户上传与生成媒体）。内部数据库 id（如已移除的 `media_id`）不进入模型可见 JSON。
 
+新托管文件由 `AssetFileNames.candidates()` 生成四个随机候选主体，顺序固定为 base36 的 6、7、8 位及 base62 的 8 位。字符集分别为 `0-9a-z` 与 `0-9a-zA-Z`；每档使用 `ThreadLocalRandom.current().nextLong(bound)` 整体取样后定宽编码，不查重、不做 IO。候选、最终落盘文件名和模型引用均无来源前缀，来源继续由既有 `ArtifactOrigin` metadata 表达。扩展名经 `FileUtils.safeExtension` 校验，生图按实际图片格式确定。
+
+候选是否可用由既有 owner 裁决：按优先级逐一查重并跳过重复文本，首个可用项立即占位；四个候选均被占用时，为第一个主体追加 `-2`、`-3` 等尾缀并继续查重。`ArtifactStore` 在 lifecycle lock 内检查任意状态 metadata、最终文件与 staging，并由 `ArtifactPayloadStore` 原子创建 staging 占位；`GeneratedMediaStore` 在 persist lock 内检查 canonical row、final、pending、deleting 并占有 pending。仅命名规则共享，不引入第三个文件 owner。发布仍走同文件系统 rename，不覆盖现有文件，失败只清理本次取得所有权的资源。
+
+命名不持久化随机种子或序号，不新增表、字段、设置键或名称登记表，不依赖系统时间；字节写入在 Artifact 生命周期锁外进行。保证当前受管路径不被覆盖，不承诺已删除资源的历史名称永久不重用。
+
+图库原件与聊天副本各自归原 owner，允许有不同短名；模型只披露聊天副本的真实 `/upload` 路径，不再重复披露 `name` 或混入图库原名。用户可见的原始上传名称仍保存在现有 displayName。已有文件、UUID、metadata 字段与内容均不改；旧长路径按同一规则使用，不建别名、不按相似名称或忽略大小写纠错。
+
+路径查重沿用 Artifact 的 `relative_path` 唯一索引，图库使用 `GenMediaEntity.path` 普通索引。Room v8→v9 是[索引补全迁移](database-indexing.md)，不重建表、不增加业务字段，也不对历史重复路径施加新约束。完整备份的 v8/v9 数据库沿用同一归档校验流程，恢复后由 Room 执行适用的迁移，备份 manifest 结构不变。
+
 ### 2.4 文件可用性
 
-- 文件被清理后，历史消息仍保留 Image part 与 ref；投影引用行照常回放，`inspect_attachments` 解析该 ref 时按 `attachment_not_found` 失败，不伪造内容。
-- 模型读到 `[Attachment ref=...]` 只代表引用存在，不代表文件可用——需要内容时显式调用工具验证。
-- `AttachmentReferenceLookup` 是 message part 与 `assistant_call` 交付物 metadata 的唯一 handle 索引规则；
-  `AttachmentResolver` 每批建立一次索引，`ConversationAttachmentPreviewProjector` 每次查询都从 durable nodes
-  与 active assistant message 重建索引，并经 `ArtifactStore` 生命周期校验，不缓存 payload/索引。缩略图 Compose
-  只做 O(1) map lookup，不扫描消息 metadata；查询投影器通过 `ArtifactStore` 只读文件端口解析 managed fallback，
-  因此执行可解析的 ref 与卡片缩略图不会形成两套索引语义。
+- 文件被清理后，历史消息仍保留 Image part 与 ref；请求投影不为失效本地资源披露可用路径。历史文本中的旧引用若被再次调用，Resolver 按真实可用性失败，不伪造内容。
+- 模型读到 `[Attachment path=...]` 表示投影时存在可用受管路径，不保证后续调用时文件仍然存在；工具执行必须重新校验。
+- `AttachmentReferenceLookup` 只负责 message part 与 `assistant_call` 交付物 metadata 的内部 handle 索引。
+  `ConversationAttachmentPreviewProjector` 从 durable nodes 与 owning active assistant message 重建 UI map，
+  并为已知工具 `inspect_attachments` / `assistant_call` 顶层 `attachments` 中的合法路径补充预览。
+  所有本地 URL 均经 `ArtifactStore` 生命周期与内容校验，文件生命周期变化使投影失效。
+  UI 只做 O(1) map lookup，不扫描 metadata；该 map 既不是持久化别名，也不是文件读取授权或 durable root。
 - `ChatMessage`、会话相册与聊天导出只消费查询投影返回的本地媒体 URL；没有投影 map 时，
   `file:` 图片/媒体保持不可见，不回退为原始路径。助手配置页的合成消息预览同样不读取本地附件。
-- Resolver 对 managed manifest 与本地 file URL 都必须先通过 `ArtifactStore` 校验 ACTIVE、version、mime 与受管根目录；仅 payload 文件存在不能使已失效的附件重新可用。
+- Resolver 只接受安全 `/upload` 路径，由 `ArtifactStore.withUploadImages` 校验 ACTIVE、已发布、文件存在、受管根目录、大小与实际图片内容；仅 payload 存在不能认领孤儿文件。路径读取不要求当前会话引用，不依赖 Workspace。
+- Fork/Child clone 只按本次已经取得的文件复制映射，重绑定 `inspect_attachments` 与 `assistant_call` 的
+  `attachments` 输入数组中的 `/upload` 路径，使工具卡查询和后续引用指向新会话副本。UUID、其他字段与正文不改，
+  未复制的路径不触发额外文件复制，查询层不增加源路径别名；详见子助手多模态参考的文件寿命与 fork 协议。
 
 ### 2.5 范围清理与恢复
 
@@ -108,26 +121,28 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 | 模式 | 行为 |
 |------|------|
 | STRUCTURED | Image part 保留，前方插入 `input=native` 引用事实 |
-| NONE 或 OPAQUE_REPLAY_ONLY 的直接 Image | Image 替换为 `input=reference_only`（无稳定 ref 时 `unavailable`） |
+| NONE 或 OPAQUE_REPLAY_ONLY 的直接 Image | Image 替换为 `input=reference_only`（无可用文件路径时 `unavailable`） |
 
 ### 3.2 投影规则
 
-带 stable ref 的图片事实格式：
+图片事实格式（与内部 UUID 无关）：
 
 ```text
-[Attachment ref=attachment:<uuid> type=image name="screenshot.png" input=native]
-[Attachment ref=attachment:<uuid> type=image name="screenshot.png" input=reference_only]
+[Attachment path=/upload/7ka2b9.png type=image input=native]
+[Attachment path=/upload/7ka2b9.png type=image input=reference_only]
 ```
 
 | 对象 | 可读图模式 | 不可读图模式 |
 |------|-----------|-------------|
-| Image（带 ref） | 引用行 + 原图 | 替换为引用行 |
-| Image（无 ref，legacy） | 原图，不发明引用 | 替换为 `[Attachment ref=unavailable type=image input=unavailable]` |
-| Document / Audio / Video | 引用行 + 原 part（始终保留，不分叉） | 同左 |
+| Image（有可用 path） | 路径事实 + 原图 | 替换为路径事实 |
+| Image（无可用 path） | `[Attachment type=image input=native]` + 原图 | `[Attachment type=image input=unavailable]` |
+| Document / Audio / Video | 有可用 path 时前插路径事实；原 part 始终保留 | 同左 |
 | `Tool.output` 内媒体 | 递归同上（否则模型看不到生图结果上的 ref） | 递归同上 |
 
-- 图片事实只描述 `ref`、`type`、`name` 与本次输入形态 `input`，不包含能力判断、行为指令或工具调用建议。`native` 表示原 Image 同时进入该请求，`reference_only` 表示只有引用文本进入，`unavailable` 表示没有可用 stable ref。
-- 引用事实不含 mime、host path。显示名优先 `ArtifactEntity.displayName`，否则磁盘文件名。
+- 图片事实只描述可选 `path`、`type` 与本次输入形态 `input`，不含重复文件名、MIME、内部 UUID、host path 或行为指令。
+  `native` 表示 Image 同时进入请求，`reference_only` 表示只携带可读路径，`unavailable` 表示既无结构化图片输入也无可用路径。
+- 本地路径由 `ArtifactStore.resolveManagedReference` 校验后经 `LocalArtifactRef.toolPath()` 派生，不要求该 part 带内部 ref。
+  远程、非 upload 或失效资源省略 `path`；原生图片能力仍按来源容器判定，不伪造 UUID 工具入口。
 - 投影文本带 request-only `AttachmentProjectionTextMetadata`，仅供协议适配器识别；不进入持久化，也不在 UI 显示。
 
 ### 3.3 不变量
@@ -137,7 +152,7 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 | 非破坏 | 投影只产生请求副本，durable Conversation 原对象不变（含 `Tool.output`） |
 | 无状态 | 无跨请求缓存；同一消息按不同模型投影出不同请求，互不影响 |
 | 来源稳定 | 事实文本只留在原 `UIMessage` 或原 `Tool.output`，不追加到别的消息，不改变 role |
-| 事实先行 | ref 在持久化时锚定；引用行只是 ref 的模型可见呈现 |
+| 事实先行 | UUID 与文件路径在既有持久化协议中锚定；引用行只投影已有事实，不创建短别名 |
 
 ### 3.4 三种来源与协议归属
 
@@ -153,37 +168,34 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 
 ### 4.1 注入条件
 
-工具注入判定 `shouldInjectAttachmentInspection()`（`GenerationToolSetFactory`），全部满足才注入：
+工具注入判定 `shouldInjectAttachmentInspection(settings)`（`GenerationToolSetFactory`）只要求：
 
-1. 本次 resolved model 的派生 `RequestMediaCapabilities` 未能覆盖全部三个附件来源容器
-   （USER / ASSISTANT / Tool.output）的 `STRUCTURED` IMAGE 能力。
-   `OPAQUE_REPLAY_ONLY` 不算完整覆盖——并非所有普通 Assistant 图片都具有可回放的 Provider
-   opaque metadata，因此仍需识别工具。
-2. `Settings.attachmentInspectionModelId` 能解析到模型，且该模型 Provider 可用；
-3. 该模型 `inputModalities` 含 IMAGE。
+1. `Settings.attachmentInspectionModelId` 能解析到模型，且 Provider 可用；
+2. 该识图模型 `inputModalities` 含 IMAGE。
 
-模型图片能力唯一来源于 `Model.inputModalities`；`RequestMediaCapabilities` 只是协议适配器
-对三个来源容器的静态映射，不是第二套能力配置。注入判断在此派生结果上进行，
-**不再根据 endpoint host 做第二次否决**——自定义 OpenAI-compatible 端点与官方端点遵循
-同一套判断规则。若远端实际不兼容图片，Provider 请求返回的真实分类错误表达，
-而非预先伪装为 `inspection_model_unavailable`。
+不依赖当前会话是否含图、当前模型的图片容器覆盖或工作区状态。模型具备原生视觉能力，不代表上下文已经携带文件清单中的图片。
+子助手默认清单只有 `artifacts[].path/type/mime`，没有 Image 或附件事实行；后续仍可直接按路径调用识图。
+
+模型图片能力唯一来源于 `Model.inputModalities`；`RequestMediaCapabilities` 负责协议容器映射，不负责禁止按需读取。
+不按 endpoint host 再次否决 IMAGE 能力；真实远端不兼容由 Provider 分类失败表达。
 
 每个 Provider step 开始时只构建一次确定性工具集合；同一集合同时用于该 step 的 schema、审批解析和紧随其后的
 ToolCall 执行。Master 与 Target 都从当前有效 Settings 构建，配置变更从下一次 step 构建起生效；Target 额外应用
 启动时捕获的实际工具名集合与 Assistant 字段交集，因此只能维持、重建或撤销启动时已有的名字，不能在 run 内新增。审批继续、恢复或历史 ToolCall
-若已不在当前集合，统一提交 `FAILED` 执行事实并返回 `tool_not_available`，不恢复已撤销工具。
+若已不在当前集合，统一通过结果 checkpoint 持久化带标准错误标记的 `tool_not_available`，不恢复已撤销工具。
+未实际执行的拒绝只有消息中的失败结果，不创建 `tool_execution` 记录或伪造 STARTED 阶段。
 
 ### 4.2 附件解析接口（`ToolExecutionContext.resolveAttachments`）
 
 工具获得的不是会话状态，而是最小只读资源访问能力：
 
 ```text
-attachment:<uuid>（1..4 个）
-→ ToolExecutionContext.resolveAttachments(refs)
-→ AttachmentReferenceLookup（直接 part 或子助手交付物 metadata）
-→ 统一 AttachmentResolver（Runtime 内部使用执行时刻的 durable 消息快照，含本 run 内已完成的 Tool Result）
-→ Image parts
-→ 识别模型（单次多图调用，[Image N ref=...] 内部标签 + request + 固定 system instruction）
+/upload/<file>（1..4 个，精确文件路径）
+→ ToolExecutionContext.resolveAttachments(paths)
+→ AttachmentResolver.readImages(paths)
+→ ArtifactStore.withUploadImages（授权与保留文件，有界读取和图片校验）
+→ 共用 FileEncoder 规范化内存快照 → data URI Image parts，无临时文件
+→ 识图模型（[Image N path=...] + 图片 + request；独立固定 system instruction）
 → Text Tool Result
 ```
 
@@ -194,7 +206,9 @@ attachment:<uuid>（1..4 个）
   也不再按 endpoint host 二次裁决图片能力；构造时仅断言 IMAGE 模型具有结构化 USER 图片编码映射。若远端实际不兼容，Provider 请求返回的
   真实分类错误（如 `provider_error`）表达，而不是预先伪装为 `inspection_model_unavailable`。
   不得依赖参数默认值或把引用行当作识别输入。
-- refs 与产出 1:1、顺序稳定（`resolveImages()` 禁用去重）；同一远程 url 在单次批量解析内只 fetch / 落盘一次。
+- paths 与产出 1:1、顺序稳定，重复路径保留对应图片位置；内部标签使用原请求路径。识图与委托入口均不接受 UUID、HTTP(S)、file URI、workspace 或越界路径，不提供旧参数兼容入口。
+- `ArtifactStore` 在同一 lifecycle lock 内校验 ACTIVE/已发布并取得既有 retention pin，锁外读取；成功、失败和取消都在 finally 释放。
+  识图内存快照复用 FileEncoder 的压缩、EXIF 方向和格式转换，不以 raw data URI 绕过现有图片编码；网络调用不持有磁盘文件，也不创建副本。
 - 未注入 resolver 的执行环境统一返回 `attachment_resolution_unavailable`，不静默成功。
 - 识别无缓存；结果作为显式 Tool Result 已是正确的历史记录。
 - 失败 reason 原样透传（表见 [prompts-and-tools.md](prompts-and-tools.md)）。
@@ -209,8 +223,8 @@ attachment:<uuid>（1..4 个）
 | 链路 | Transformer 顺序要点 |
 |------|---------------------|
 | Master 聊天 | `DocumentAsPromptTransformer` → Template → Workspace → 可选 `ToolArtifactReplayTransformer` → `AttachmentProjectionTransformer` |
-| `generate_image` 产出 | 成功时 Image part 落入本次 Tool.output 并盖章；下一个 step 的请求由投影管线回放（原图或引用行）。识别这张图 = 把它的 ref 传给 `inspect_attachments` |
-| Target（`assistant_call`） | Child 拥有完整 Assistant 级 transformer 链 + 自己的 resolved model；入站只校验 ref / 资产，视觉能力由 Target run 自己的投影与工具集表达；`AttachmentProjectionTransformer` 同样位于动态模板之后、Provider 序列化之前 |
+| `generate_image` 产出 | 成功时 Image part 落入本次 Tool.output 并盖章；下一个 step 的请求由投影管线回放（原图或引用行）。识别这张图 = 把它的 `file.path` 传给 `inspect_attachments` |
+| Target（`assistant_call`） | Child 拥有完整 Assistant 级 transformer 链 + 自己的 resolved model；入站只校验 path / 资产，视觉能力由 Target run 自己的投影与工具集表达；`AttachmentProjectionTransformer` 同样位于动态模板之后、Provider 序列化之前 |
 
 ## 6. Turn / Tool 执行事实
 
@@ -291,7 +305,7 @@ terminal messages 按完整 Provider step 原子回放：
 | 符号（全局搜索定位） | 职责 |
 |----------------------|------|
 | `AttachmentRefs` | ref 前缀、metadata 键、merge / ensure / backfill、file URL |
-| `AttachmentResolver` | 引用 → 本地 Image 统一解析（安全细节见 sub-assistant-multimodal.md） |
+| `AttachmentResolver` | path → 识图内存快照 / Child 本地 Image；只通过 ArtifactStore 读取 |
 | `AttachmentProjectionTransformer` | 请求级投影（本文件 §3） |
 | `AttachmentInspectionTool` / `shouldInjectAttachmentInspection` | `inspect_attachments` 工具与注入判定 |
 | `ToolExecutionContext` / `ToolAttachmentResolution` | ai 模块最小只读附件能力接口 |
@@ -309,8 +323,8 @@ terminal messages 按完整 Provider step 原子回放：
 |------|----------|
 | 在投影或工具里改写 / 删除 durable 消息 | 投影只产生请求副本；ref 在持久化时锚定，工具结果显式写入 |
 | 期望 `inspect_attachments` 有缓存或自动触发 | 识别只有模型显式调用一条路径；无缓存 |
-| 能力不足当成附件失败 | 入站只校验 ref / 资产；`attachment_not_found` 是解析失败，能力不足由投影与工具集表达 |
-| 向 Tool 暴露会话消息或内部 id | 工具只拿 `resolveAttachments` 最小能力；模型可见标识只有 ref 与 `/upload`、`/workspace` 路径 |
+| 能力不足当成附件失败 | 入站只校验 path / 资产；`attachment_not_found` 是解析失败，能力不足由投影与工具集表达 |
+| 向 Tool 暴露会话消息或内部 id | 识图工具只拿 `resolveAttachments` 只读能力；对外附件位置只有 `/upload` 的 path，Workspace 路径另归工作区工具 |
 | 工具副作用前未写 `STARTED` | 副作用可观测时 DB 必须已有记录，否则恢复后无法判定 |
 | 把 `toolCallId` 当持久 locator | 重试后 id 会变；用 `messageId + toolOrdinal` |
-| Target run 内期望设置变更立即生效 | 配置变更在下一次构建生效；run 内 schema 冻结，安全信号除外 |
+| Target run 内期望设置变更立即生效 | 配置变更在下一 step 构建生效，且不能超出 run 启动时工具名与 Assistant 字段上限；撤权信号按运行期规则处理 |

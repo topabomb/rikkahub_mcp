@@ -10,6 +10,8 @@ import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.MessageMediaFailureReason
+import me.rerere.ai.ui.mediaFailureMetadataOrNull
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.model.Conversation
@@ -33,6 +35,36 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TurnFinalizationTest {
+    @Test
+    fun `failure preparation marks only unpersisted base64 and preserves published file parts`() = runTest {
+        val conversationId = Uuid.random()
+        val turnId = Uuid.random()
+        val localImage = UIMessagePart.Image("file:///upload/published.png")
+        val assistant = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(
+            localImage,
+            UIMessagePart.Image("data:image/png;base64,unfinished"),
+            UIMessagePart.Tool("call", "image_tool", "{}", output = listOf(
+                localImage,
+                UIMessagePart.Image("data:image/png;base64,unfinished-tool-image"),
+            )),
+        ))
+        val base = Conversation.ofId(conversationId).copy(messageNodes = listOf(MessageNode.of(assistant))).toSnapshot()
+        val handle = TurnHandle(conversationId, 1, turnId, assistant.id)
+        val snapshot = base.copy(activeTurn = ActiveTurnState(1, turnId, assistant.id, listOf(assistant)))
+        val finalization = TurnFinalization(mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true), Json)
+
+        val prepared = finalization.prepareOwnedTurnMessagesForFailure(
+            snapshot, handle, listOf(assistant), "user_stop", true,
+        ).last()
+
+        assertEquals(localImage, prepared.parts[0])
+        assertEquals(MessageMediaFailureReason.PERSISTENCE_FAILED, prepared.parts[1].mediaFailureMetadataOrNull()?.reason)
+        val toolOutput = prepared.getTools().single().output
+        assertEquals(localImage, toolOutput[0])
+        assertEquals(MessageMediaFailureReason.PERSISTENCE_FAILED, toolOutput[1].mediaFailureMetadataOrNull()?.reason)
+        assertTrue(!prepared.hasBase64Part())
+    }
+
     @Test
     fun `failure preparation retains messages emitted after the durable checkpoint`() = runTest {
         val conversationId = Uuid.random()

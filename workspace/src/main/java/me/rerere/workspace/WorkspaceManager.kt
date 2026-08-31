@@ -10,15 +10,19 @@ import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 
 class WorkspaceManager(
-    private val baseDir: File,
+    baseDir: File,
     private val config: WorkspaceConfig = WorkspaceConfig(),
     private val shellRunner: WorkspaceShellRunner = HostShellRunner(),
-    private val bindMounts: List<WorkspaceBindMount> = emptyList(),
+    bindMounts: List<WorkspaceBindMount> = emptyList(),
 ) {
     private val fileSystem = WorkspaceFileSystem(config)
+    // Resolve trusted Android storage aliases once, never canonicalize a mutable guest target.
+    private val baseDir = baseDir.canonicalFile
+    private val bindMounts = bindMounts
+        .map { it.copy(source = it.source.canonicalFile, target = RootfsPath.parse(it.target).value) }
 
     // Longest target first so that /a/b is matched before /a.
-    private val sortedBindMounts = bindMounts.sortedByDescending { it.target.trimEnd('/').length }
+    private val sortedBindMounts = this.bindMounts.sortedByDescending { it.target.length }
 
     init {
         baseDir.mkdirs()
@@ -159,8 +163,10 @@ class WorkspaceManager(
      * them under [WorkspaceStorageArea.LINUX] would instead point at the empty mount point.
      */
     fun resolveRootfsPath(root: String, path: String): RootfsLocation {
-        val trimmed = path.trim().trimEnd('/').ifBlank { "/" }
-        require(trimmed.startsWith("/")) { "Rootfs path must be absolute: $path" }
+        val trimmed = RootfsPath.parse(path).value
+        KERNEL_FS_MOUNTS.firstOrNull { trimmed == it || trimmed.startsWith("$it/") }?.let {
+            error("$it is a kernel filesystem and cannot be read as a file, use workspace_shell instead")
+        }
 
         sortedBindMounts.forEach { mount ->
             val target = mount.target.trimEnd('/')
@@ -177,31 +183,59 @@ class WorkspaceManager(
             )
         }
 
-        KERNEL_FS_MOUNTS.firstOrNull { trimmed == it || trimmed.startsWith("$it/") }?.let {
-            error("$it is a kernel filesystem and cannot be read as a file, use workspace_shell instead")
-        }
-
         return RootfsLocation(linuxDir(root), trimmed.trimStart('/'))
     }
 
-    fun rootfsFileSize(root: String, path: String): Long =
-        resolveRootfsFile(root, path).also { it.requireReadableFile(path) }.length()
-
-    fun exportRootfsFile(root: String, path: String, outputStream: OutputStream) {
-        val file = resolveRootfsFile(root, path)
-        file.requireReadableFile(path)
-        outputStream.use { out -> file.inputStream().use { it.copyTo(out) } }
-    }
-
-    private fun resolveRootfsFile(root: String, path: String): File {
+    fun readRootfsBytes(root: String, path: String, maxBytes: Long): ByteArray {
         val location = resolveRootfsPath(root, path)
-        return fileSystem.resolve(location.rootDir, location.relativePath)
+        return RootfsFileHandle(location.rootDir, location.relativePath, false, false, false).use {
+            it.read(maxBytes)
+        }
     }
 
-    private fun File.requireReadableFile(path: String) {
-        require(exists()) { "File does not exist: $path" }
-        require(isFile) { "Path is not a file: $path" }
+    fun writeRootfsText(
+        root: String,
+        path: String,
+        text: String,
+        overwrite: Boolean,
+        approvedByUser: Boolean,
+    ): WorkspaceFileEntry {
+        val normalized = authorizedWritePath(path, approvedByUser)
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        val location = resolveRootfsPath(root, normalized.value)
+        return RootfsFileHandle(location.rootDir, location.relativePath, true, true, overwrite).use {
+            rootfsEntry(normalized, it.write(bytes))
+        }
     }
+
+    /** The edit callback and atomic replacement share one descriptor-owned target. */
+    fun updateRootfsText(
+        root: String,
+        path: String,
+        maxBytes: Long,
+        approvedByUser: Boolean,
+        transform: (String) -> String,
+    ): WorkspaceFileEntry {
+        val normalized = authorizedWritePath(path, approvedByUser)
+        val location = resolveRootfsPath(root, normalized.value)
+        return RootfsFileHandle(location.rootDir, location.relativePath, true, false, true).use {
+            val updated = transform(it.read(maxBytes).toString(Charsets.UTF_8)).toByteArray(Charsets.UTF_8)
+            rootfsEntry(normalized, it.write(updated))
+        }
+    }
+
+    private fun authorizedWritePath(path: String, approvedByUser: Boolean): RootfsPath =
+        RootfsPath.parse(path).also {
+            require(approvedByUser || !it.requiresWriteApproval) { "Writing outside /workspace and /tmp requires user approval" }
+        }
+
+    private fun rootfsEntry(path: RootfsPath, metadata: LongArray) = WorkspaceFileEntry(
+        path = path.value,
+        name = path.value.substringAfterLast('/'),
+        isDirectory = false,
+        sizeBytes = metadata[0],
+        updatedAt = metadata[1],
+    )
 
     fun deleteFile(
         root: String,
@@ -256,7 +290,7 @@ class WorkspaceManager(
     }
 
     private fun requireValidRoot(root: String) {
-        require(root.matches(ROOT_NAME_REGEX)) {
+        require(root != "." && root != ".." && root.matches(ROOT_NAME_REGEX)) {
             "Invalid workspace root name: $root"
         }
     }

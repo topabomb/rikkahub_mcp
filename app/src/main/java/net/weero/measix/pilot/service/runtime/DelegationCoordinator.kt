@@ -16,6 +16,7 @@ import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolExecutionContext
+import me.rerere.ai.core.ToolMetadataDelivery
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
@@ -321,19 +322,12 @@ class DelegationCoordinator(
         extras: Set<String>,
     ): Materialized {
         val target = preflight.target
-        // 本批解析新落地的远程文件；Child 写入失败时要回滚，避免留下孤儿文件。
+        // Clone-created files remain owned here until the Child link has committed.
         val createdArtifacts = mutableListOf<OwnedArtifact>()
         try {
-            val latestMasterMessages = runtimeRegistry.findRuntime(masterConversationId)
-                ?.snapshot?.value?.currentMessages()
-                ?: emptyList()
-            // 能力不足不是附件失败：入站只验证 attachment ref/资产，
-            // 视觉能力由 Target run 自己的 AttachmentProjectionTransformer 与 tool set 表达。
-            val resolvedImages = if (attachments.isEmpty()) {
-                emptyList()
-            } else {
-                when (val resolved = attachmentResolver.resolve(latestMasterMessages, attachments)) {
-                    is AttachmentResolveResult.Failure -> return Materialized.Failure(
+            return attachmentResolver.withImages(attachments) { resolved ->
+                val resolvedImages = when (resolved) {
+                    is AttachmentResolveResult.Failure -> return@withImages Materialized.Failure(
                         buildUnavailableCallResult(
                             json = json,
                             execContext = execContext,
@@ -343,47 +337,44 @@ class DelegationCoordinator(
                             runId = preflight.runId,
                         )
                     )
-                    is AttachmentResolveResult.Success -> {
-                        createdArtifacts += resolved.createdArtifacts
-                        resolved.parts
+                    is AttachmentResolveResult.Success -> resolved.parts
+                }
+                val userParts = buildChildUserParts(preflight.processedTask, resolvedImages)
+
+                when (preflight.lineageDecision) {
+                    is LineageDecision.CreateNew,
+                    is LineageDecision.CreateNewDueToError,
+                    -> {
+                        val (childId, taskNodeId) = createNewChild(target, masterConversationId, userParts)
+                        Materialized.Ready(childId, taskNodeId, preflight.lease.job, true, createdArtifacts.toList())
+                    }
+
+                    is LineageDecision.ReuseChild -> {
+                        val taskNodeId = reuseChild(target, preflight.lineageDecision.childConversationId, userParts)
+                        Materialized.Ready(
+                            preflight.lineageDecision.childConversationId,
+                            taskNodeId,
+                            preflight.lease.job,
+                            false,
+                            createdArtifacts.toList(),
+                        )
+                    }
+
+                    is LineageDecision.CloneChild -> {
+                        val (childId, taskNodeId) = cloneChild(
+                            target = target,
+                            masterConversationId = masterConversationId,
+                            sourceChildId = preflight.lineageDecision.sourceChildConversationId,
+                            throughTaskMessageId = preflight.lineageDecision.throughTaskMessageId,
+                            userParts = userParts,
+                            createdArtifacts = createdArtifacts,
+                        )
+                        Materialized.Ready(childId, taskNodeId, preflight.lease.job, true, createdArtifacts.toList())
                     }
                 }
             }
-            val userParts = buildChildUserParts(preflight.processedTask, resolvedImages)
-
-            return when (preflight.lineageDecision) {
-                is LineageDecision.CreateNew,
-                is LineageDecision.CreateNewDueToError,
-                -> {
-                    val (childId, taskNodeId) = createNewChild(target, masterConversationId, userParts)
-                    Materialized.Ready(childId, taskNodeId, preflight.lease.job, true, createdArtifacts.toList())
-                }
-
-                is LineageDecision.ReuseChild -> {
-                    val taskNodeId = reuseChild(target, preflight.lineageDecision.childConversationId, userParts)
-                    Materialized.Ready(
-                        preflight.lineageDecision.childConversationId,
-                        taskNodeId,
-                        preflight.lease.job,
-                        false,
-                        createdArtifacts.toList(),
-                    )
-                }
-
-                is LineageDecision.CloneChild -> {
-                    val (childId, taskNodeId) = cloneChild(
-                        target = target,
-                        masterConversationId = masterConversationId,
-                        sourceChildId = preflight.lineageDecision.sourceChildConversationId,
-                        throughTaskMessageId = preflight.lineageDecision.throughTaskMessageId,
-                        userParts = userParts,
-                        createdArtifacts = createdArtifacts,
-                    )
-                    Materialized.Ready(childId, taskNodeId, preflight.lease.job, true, createdArtifacts.toList())
-                }
-            }
         } catch (e: Exception) {
-            // Child 写入/持久化失败：删除本批刚落地的远程附件，避免孤儿文件。
+            // Child persistence failure only rolls back newly created clone resources.
             // lease 释放由 executeCall 的统一 finally 负责。
             discardCreatedArtifacts(createdArtifacts, "sub-assistant materialization rollback", e)
             if (e is CancellationException) throw e
@@ -509,12 +500,10 @@ class DelegationCoordinator(
                 // 先只更新内存投影，再由 child link 的单次 checkpoint 原子提交
                 // messages + tool_execution.child_conversation_id。不得拆成两个 durable 提交。
                 withContext(NonCancellable) {
-                    reportSubAssistantMetadataPatch(json, execContext, initialMeta, checkpoint = false)
-                    child.createdArtifacts.forEach { artifact ->
-                        execContext.registerUnpublishedResource(artifactStore.unpublishedLease(artifact))
-                    }
+                    reportSubAssistantMetadataPatch(json, execContext, initialMeta, delivery = ToolMetadataDelivery.DEFERRED)
                     execContext.reportChildConversation(childConversationId.toString())
                     childLinkCommitted = true
+                    artifactStore.publishAllUnpublished(child.createdArtifacts)
                 }
             } catch (e: Exception) {
                 if (!childLinkCommitted) {
@@ -526,7 +515,7 @@ class DelegationCoordinator(
                         }
                     }
                 }
-                if (e is CancellationException) throw e
+                if (childLinkCommitted || e is CancellationException) throw e
                 return buildClassifiedFailureResult(
                     json = json,
                     error = e,
@@ -719,7 +708,7 @@ class DelegationCoordinator(
                 artifacts = artifacts,
                 artifactOmitted = extracted.omitted,
             )
-            reportSubAssistantMetadataPatch(json, execContext, terminalMeta, checkpoint = false)
+            reportSubAssistantMetadataPatch(json, execContext, terminalMeta, delivery = ToolMetadataDelivery.DEFERRED)
             buildSubAssistantCallResultParts(
                 json = json,
                 status = "completed",
@@ -751,7 +740,7 @@ class DelegationCoordinator(
             state = SubAssistantCallState.FAILED,
             reason = reason,
         )
-        reportSubAssistantMetadataPatch(json, execContext, terminalMeta, checkpoint = false)
+        reportSubAssistantMetadataPatch(json, execContext, terminalMeta, delivery = ToolMetadataDelivery.DEFERRED)
         return buildSubAssistantCallResultParts(
             json = json,
             status = "failed",
@@ -913,7 +902,6 @@ class DelegationCoordinator(
             assistant = target,
             settings = settings,
             capabilityModel = model,
-            capabilityMediaCapabilities = mediaCapabilities,
             workspaceCwd = snapshot.header.workspaceCwd,
             runMode = ToolSetRunMode.TARGET,
             ttsPlaybackContext = ttsPlaybackContext,
@@ -933,7 +921,6 @@ class DelegationCoordinator(
                         assistant = effectiveTarget,
                         settings = currentSettings,
                         capabilityModel = model,
-                        capabilityMediaCapabilities = mediaCapabilities,
                         workspaceCwd = snapshot.header.workspaceCwd,
                         runMode = ToolSetRunMode.TARGET,
                         ttsPlaybackContext = ttsPlaybackContext,
@@ -995,6 +982,7 @@ class DelegationCoordinator(
                         ) == ownerId
                     },
                     assistantMessageId = started.assistantMessageId,
+                    onMessagesObserved = turnEngine::observeMessages,
                     reportProcessingText = runtime.processingReporter(),
                     conversationSystemPrompt = null, // Child 不设置对话级 System Prompt
                     // Child does not inherit the Master's mode injection. Passing the Target IDs also
@@ -1024,7 +1012,7 @@ class DelegationCoordinator(
                                 val before = runState.snapshot()
                                 val meta = runState.updatePreview(preview.ifEmpty { null })
                                 if (meta !== before) {
-                                    reportSubAssistantMetadataPatch(json, execContext, meta, checkpoint = false)
+                                    reportSubAssistantMetadataPatch(json, execContext, meta, delivery = ToolMetadataDelivery.STREAMING)
                                 }
                             }
                         }
@@ -1035,7 +1023,7 @@ class DelegationCoordinator(
                                 val before = runState.snapshot()
                                 val meta = runState.updatePhase(phase, event.toolName)
                                 if (meta !== before) {
-                                    reportSubAssistantMetadataPatch(json, execContext, meta, checkpoint = false)
+                                    reportSubAssistantMetadataPatch(json, execContext, meta, delivery = ToolMetadataDelivery.STREAMING)
                                 }
                             }
                         }
@@ -1110,7 +1098,7 @@ class DelegationCoordinator(
             interaction = interaction,
             preview = computeSubAssistantPreview(messages, childTaskNodeId).ifEmpty { null },
         )
-        reportSubAssistantMetadataPatch(json, execContext, waitingMetadata, checkpoint = true)
+        reportSubAssistantMetadataPatch(json, execContext, waitingMetadata, delivery = ToolMetadataDelivery.CHECKPOINT)
         val owner = requireNotNull(runtime.snapshot.value.activeTurn) {
             "ask_user wait has no active turn owner"
         }
@@ -1145,7 +1133,7 @@ class DelegationCoordinator(
                 json = json,
                 execContext = execContext,
                 meta = runState.clearUserInteraction(),
-                checkpoint = true,
+                delivery = ToolMetadataDelivery.CHECKPOINT,
             )
             runtime.markRunning(handle)
             runtime.snapshot.value.currentMessages()

@@ -154,6 +154,10 @@ Assistant 选择
 `list_changed` 或手工刷新成功后，下一 run 捕获新 revision；当前 run 仍可调用旧 schema，让 server 自己对已删除或修改的
 工具返回协议错误。用户本地明确禁用/删除/definition 修改及 approval tightening 会在调用承诺前拒绝旧 binding。
 
+本地审批前通过共用 `Tool.parseArguments` 检查参数为合法 JSON object；非空损坏 JSON、数组或标量直接失败，
+不会先询问用户或发送 RPC。远端 `inputSchema` 仍完整保留，其完整 schema 与业务参数语义由 Server 校验；
+客户端不通过局部扫描 `required` 或忽略 `$ref` 的自制校验器建立第二份参数契约。
+
 本地 definition/policy typed command 与 `tools/call` 的不可撤销调用承诺共享
 `McpRuntimeCoordinator.configurationInvocationCommitMutex`，形成唯一线性化顺序：配置提交先取得门时，最终 admission 读取新配置并拒绝；
 调用先取得门时，该 invocation 已进入 in-flight，随后配置变化只影响后续调用和披露。SDK 不暴露“首个 HTTP 字节已写出”的

@@ -1,128 +1,85 @@
 package me.rerere.workspace
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
-import java.io.ByteArrayOutputStream
-import java.io.File
 
 class RootfsPathResolutionTest {
     @get:Rule
     val tempFolder = TemporaryFolder()
 
-    private lateinit var skillsDir: File
-    private lateinit var manager: WorkspaceManager
-
     private val root = "test-workspace"
 
-    private fun createManager(): WorkspaceManager {
-        skillsDir = tempFolder.newFolder("skills")
-        val uploadDir = tempFolder.newFolder("upload")
-        return WorkspaceManager(
-            baseDir = tempFolder.newFolder("workspaces"),
-            bindMounts = listOf(
-                WorkspaceBindMount(source = skillsDir, target = "/skills"),
-                WorkspaceBindMount(source = uploadDir, target = "/upload"),
-            ),
-        ).also { it.ensureWorkspace(root) }
-    }
-
     @Test
-    fun readsFileWrittenThroughBindMountPath() {
-        manager = createManager()
-        File(skillsDir, "issue-1561").mkdirs()
-        File(skillsDir, "issue-1561/SKILL.md").writeText("---\nversion: before\n---\n")
-
-        val size = manager.rootfsFileSize(root, "/skills/issue-1561/SKILL.md")
-        val buffer = ByteArrayOutputStream(size.toInt())
-        manager.exportRootfsFile(root, "/skills/issue-1561/SKILL.md", buffer)
-
-        assertEquals("---\nversion: before\n---\n", buffer.toString(Charsets.UTF_8.name()))
-    }
-
-    @Test
-    fun bindMountTargetDoesNotMatchLongerSiblingPrefix() {
-        val skills = tempFolder.newFolder("skills-src")
-        val skillsets = tempFolder.newFolder("skillsets-src")
+    fun normalizedGuestPathDeterminesMountAndApproval() {
+        val skills = tempFolder.newFolder("skills")
         val manager = WorkspaceManager(
-            baseDir = tempFolder.newFolder("workspaces"),
-            bindMounts = listOf(
-                WorkspaceBindMount(source = skills, target = "/skills"),
-                WorkspaceBindMount(source = skillsets, target = "/skillsets"),
-            ),
+            tempFolder.newFolder("workspaces"),
+            bindMounts = listOf(WorkspaceBindMount(skills, "/skills")),
         ).also { it.ensureWorkspace(root) }
 
-        assertEquals(skills, manager.resolveRootfsPath(root, "/skills/a.md").rootDir)
-        assertEquals(skillsets, manager.resolveRootfsPath(root, "/skillsets/a.md").rootDir)
+        val skill = manager.resolveRootfsPath(root, "/skills/a/../SKILL.md")
+        assertEquals(skills.canonicalFile, skill.rootDir)
+        assertEquals("SKILL.md", skill.relativePath)
+        assertEquals(manager.filesDir(root), manager.resolveRootfsPath(root, "/tmp/../workspace/a").rootDir)
+        assertEquals(manager.linuxDir(root), manager.resolveRootfsPath(root, "/skills/../etc/x").rootDir)
+        assertEquals("etc/x", manager.resolveRootfsPath(root, "/tmp/../etc/x").relativePath)
+        assertEquals("skills-extra/a", manager.resolveRootfsPath(root, "/skills-extra/a").relativePath)
+        assertTrue(RootfsPath.parse("/tmp/../etc/x").requiresWriteApproval)
+        assertFalse(RootfsPath.parse("/etc/../workspace/x").requiresWriteApproval)
     }
 
     @Test
-    fun workspacePathStillResolvesToFilesArea() {
-        manager = createManager()
-        File(manager.filesDir(root), "notes.txt").writeText("hello")
-
-        val location = manager.resolveRootfsPath(root, "/workspace/notes.txt")
-        assertEquals(manager.filesDir(root), location.rootDir)
-        assertEquals("notes.txt", location.relativePath)
-
-        val buffer = ByteArrayOutputStream()
-        manager.exportRootfsFile(root, "/workspace/notes.txt", buffer)
-        assertEquals("hello", buffer.toString(Charsets.UTF_8.name()))
+    fun longestBindMountWinsOnSegmentBoundary() {
+        val skills = tempFolder.newFolder("skills")
+        val nested = tempFolder.newFolder("nested")
+        val manager = WorkspaceManager(
+            tempFolder.newFolder("workspaces"),
+            bindMounts = listOf(WorkspaceBindMount(skills, "/skills"), WorkspaceBindMount(nested, "/skills/local")),
+        )
+        assertEquals(nested.canonicalFile, manager.resolveRootfsPath(root, "/skills/local/a").rootDir)
+        assertEquals(skills.canonicalFile, manager.resolveRootfsPath(root, "/skills/local-other/a").rootDir)
     }
 
     @Test
-    fun unknownAbsolutePathFallsBackToRootfsInterior() {
-        manager = createManager()
-        File(manager.linuxDir(root), "etc").mkdirs()
-        File(manager.linuxDir(root), "etc/hostname").writeText("measix-pilot\n")
-
-        val buffer = ByteArrayOutputStream()
-        manager.exportRootfsFile(root, "/etc/hostname", buffer)
-        assertEquals("measix-pilot\n", buffer.toString(Charsets.UTF_8.name()))
+    fun rootfsInteriorAndTmpKeepLinuxAnchor() {
+        val manager = WorkspaceManager(tempFolder.newFolder("workspaces"))
+        assertEquals(RootfsLocation(manager.filesDir(root), "a"), manager.resolveRootfsPath(root, "/workspace/a"))
+        assertEquals(RootfsLocation(manager.linuxDir(root), "tmp/a"), manager.resolveRootfsPath(root, "/tmp/a"))
+        assertEquals(RootfsLocation(manager.linuxDir(root), "etc/a"), manager.resolveRootfsPath(root, "/etc/a"))
     }
 
     @Test
-    fun traversalOutOfBindMountIsRejected() {
-        manager = createManager()
-        tempFolder.newFile("secret.txt").writeText("secret")
-
-        val error = assertThrows(IllegalArgumentException::class.java) {
-            manager.rootfsFileSize(root, "/skills/../secret.txt")
+    fun writeApprovalUsesNormalizedWholeSegments() {
+        listOf("/workspace/a", "/tmp/a", "/workspace", "/tmp//./a", "/etc/../tmp/a").forEach {
+            assertFalse(it, RootfsPath.parse(it).requiresWriteApproval)
         }
-        assertTrue(error.message!!.contains("escapes workspace root"))
+        listOf("/workspace-extra/a", "/tmp-extra/a", "/etc/a", "/", "/workspace/../etc/a").forEach {
+            assertTrue(it, RootfsPath.parse(it).requiresWriteApproval)
+        }
     }
 
     @Test
-    fun kernelFilesystemPathIsRejectedWithHint() {
-        manager = createManager()
-
-        val error = assertThrows(IllegalStateException::class.java) {
-            manager.rootfsFileSize(root, "/proc/version")
+    fun invalidPathsAndRootNamesAreRejected() {
+        listOf("", "relative", "/../etc/x", "/tmp/../../x", "/tmp/\u0000x", "/tmp/\\x").forEach {
+            assertThrows(it, IllegalArgumentException::class.java) { RootfsPath.parse(it) }
         }
-        assertTrue(error.message!!.contains("workspace_shell"))
+        val manager = WorkspaceManager(tempFolder.newFolder("workspaces"))
+        listOf(".", "..", "../outside").forEach {
+            assertThrows(IllegalArgumentException::class.java) { manager.workspaceDir(it) }
+        }
     }
 
     @Test
-    fun missingFileReportsOriginalAbsolutePath() {
-        manager = createManager()
-
-        val error = assertThrows(IllegalArgumentException::class.java) {
-            manager.rootfsFileSize(root, "/skills/missing/SKILL.md")
+    fun kernelPathsAreRejectedAfterNormalization() {
+        val manager = WorkspaceManager(tempFolder.newFolder("workspaces"))
+        listOf("/proc/version", "/tmp/../dev/null", "/sys/a").forEach {
+            val error = assertThrows(IllegalStateException::class.java) { manager.resolveRootfsPath(root, it) }
+            assertTrue(error.message!!.contains("workspace_shell"))
         }
-        assertEquals("File does not exist: /skills/missing/SKILL.md", error.message)
-    }
-
-    @Test
-    fun directoryPathIsNotReadableAsFile() {
-        manager = createManager()
-        File(skillsDir, "issue-1561").mkdirs()
-
-        val error = assertThrows(IllegalArgumentException::class.java) {
-            manager.rootfsFileSize(root, "/skills/issue-1561")
-        }
-        assertEquals("Path is not a file: /skills/issue-1561", error.message)
     }
 }

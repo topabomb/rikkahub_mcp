@@ -640,6 +640,41 @@ class ChatCompletionsAPIMessageTest {
     }
 
     @Test
+    fun `indexed continuation of reused tool id preserves earlier request arguments`() {
+        val completed = createExecutedTool("call-0", "earlier", "{\"old\":true}", "earlier result")
+        var messages = listOf(
+            UIMessage.user("Continue"),
+            UIMessage(role = MessageRole.ASSISTANT, parts = listOf(completed)),
+        )
+        val streamState = ChatCompletionsStreamState()
+        listOf(
+            """{"tool_calls":[{"index":0,"id":"call-0","function":{"name":"next","arguments":"{"}},{"index":1,"id":"call-1","function":{"name":"parallel","arguments":"["}}]}""",
+            """{"tool_calls":[{"index":1,"function":{"arguments":"]"}},{"index":0,"function":{"arguments":"}"}}]}""",
+        ).forEach { deltaJson ->
+            messages = messages.handleMessageChunk(
+                MessageChunk(
+                    id = "response-2",
+                    model = "test-model",
+                    choices = listOf(
+                        UIMessageChoice(
+                            index = 0,
+                            delta = api.parseMessage(Json.parseToJsonElement(deltaJson).jsonObject, streamState),
+                            message = null,
+                            finishReason = null,
+                        ),
+                    ),
+                ),
+            )
+        }
+
+        val tools = messages.last().getTools()
+        assertEquals(3, tools.size)
+        assertTrue(completed === tools[0])
+        assertEquals(listOf("{\"old\":true}", "{}", "[]"), tools.map { it.input })
+        assertEquals(listOf("earlier", "next", "parallel"), tools.map { it.toolName })
+    }
+
+    @Test
     fun `non deepseek tool reasoning should remain excluded when history reasoning disabled`() {
         val messages = listOf(
             UIMessage.user("Use a tool"),
@@ -732,7 +767,7 @@ class ChatCompletionsAPIMessageTest {
                         toolName = "lookup",
                         input = "{}",
                         output = listOf(
-                            UIMessagePart.Text("[Attachment ref=attachment:1 type=image input=reference_only]"),
+                            UIMessagePart.Text("[Attachment path=/upload/abc123.png type=image input=reference_only]"),
                         ),
                     )
                 )
@@ -763,7 +798,7 @@ class ChatCompletionsAPIMessageTest {
         val assistant = body["messages"]!!.jsonArray[1].jsonObject
         assertFalse(assistant.containsKey("reasoning_content"))
         val toolResult = body["messages"]!!.jsonArray[2].jsonObject["content"] as JsonPrimitive
-        assertEquals("[Attachment ref=attachment:1 type=image input=reference_only]", toolResult.content)
+        assertEquals("[Attachment path=/upload/abc123.png type=image input=reference_only]", toolResult.content)
         assertFalse(toolResult.content.contains("Image output omitted"))
         assertEquals(
             VisibleReasoningReplay.NONE,

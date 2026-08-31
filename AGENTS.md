@@ -58,6 +58,8 @@ At high-leverage points—especially before substantial refactors, cross-module 
   回填附件或创建第二 turn。durable 流程只读取 `snapshot.nodes`；`renderNodes` 只用于显示，禁止以对象身份推断写入。
 - 工具装配、调用拼接、就绪、审批、执行和终态使用 typed phase。`UIMessagePart.Tool.hasReplayResult` / `Tool.output`
   只表示 Provider 可回放结果，不能充当 active 运行状态或详情门禁；执行阶段只随已提交 checkpoint 推进，metadata 只细化领域子阶段。
+- 工具参数由 `Tool.parseArguments` 与工具自身纯校验在审批前检查；可用性、审批与执行共用同一 step 工具索引。
+  未执行的拒绝只提交消息失败结果，不创建执行记录；资源、权限与远端业务校验仍归实际执行 owner。
 - UI/ViewModel 只依赖 application/query ports 与 UiModel，不得直连 DAO、ConversationRepository、Runtime
   Registry、ArtifactStore、GeneratedMediaStore 或 payload 层。UI 使用 `ConversationPresentation`，不持有 Runtime Job。
 - 标题由 `ConversationTitleCoordinator` 管理。模型结果使用 token + expected-title CAS，并与手动标题写入串行；
@@ -66,7 +68,8 @@ At high-leverage points—especially before substantial refactors, cross-module 
   未发布资源必须用 typed lease/owner 交接，checkpoint 成功后发布，失败或取消精确回滚。
 - 图库生成媒体的 canonical row、payload 与删除恢复只归 `GeneratedMediaStore`。`FileManagementApplicationService`
   与 `FileManagementQueryService` 只做跨 owner 命令编排和只读投影，不成为第三个文件 owner。
-- `attachment:<uuid>` 的索引只归 `AttachmentReferenceLookup`。执行和查询投影共用规则；UI 不扫描消息 metadata、
+- 内部 `attachment:<uuid>` 的索引只归 `AttachmentReferenceLookup`；对外只披露真实 `/upload` 路径。
+  路径读取由 `ArtifactStore` 校验受管文件，不要求当前分支引用，也不依赖 Workspace。UI 不扫描消息 metadata、
   不解析子助手 payload，也不直连 Artifact。
 - 启动恢复按 Settings → Artifact → GeneratedMedia → projection → turn/assistant cleanup 固定顺序 fail-closed；
   损坏或不完整聚合不得伪装 Ready。破坏性操作使用可恢复状态机与幂等/CAS，不以日志、空列表或 best-effort 代表成功。
@@ -88,6 +91,7 @@ At high-leverage points—especially before substantial refactors, cross-module 
 | Topic | Reference |
 | --- | --- |
 | 应用总体架构、所有者与边界 | `docs/references/application-architecture.md` |
+| Room 索引、查询覆盖与迁移边界 | `docs/references/database-indexing.md` |
 | 会话、Runtime、turn、审批与标题 | `docs/references/chat-generation-pipeline.md` |
 | 多模态、附件、Artifact、Turn/Tool durability | `docs/references/multimodal-context-and-turn-durability.md` |
 | 子助手 owner、lineage、retention、恢复 | `docs/references/sub-assistant-architecture.md` |

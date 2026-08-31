@@ -28,18 +28,15 @@ import net.weero.measix.pilot.data.ai.GenerationLoop
 import net.weero.measix.pilot.data.ai.GenerationRequest
 import net.weero.measix.pilot.data.ai.ToolExecutionEventStatus
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
-import net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.RoomDatabaseTransactionRunner
-import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.db.fts.MessageFtsManager
 import net.weero.measix.pilot.data.files.ArtifactPayloadStore
 import net.weero.measix.pilot.data.files.ArtifactSettingsCoordinator
 import net.weero.measix.pilot.data.files.ArtifactStore
-import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
@@ -132,7 +129,7 @@ class ApprovalContinuationMissingToolIntegrationTest {
     }
 
     @Test
-    fun approvedToolRemovedBeforeContinuationPersistsOneFailedExecutionOnOriginalTurn() = runBlocking {
+    fun approvedToolRemovedBeforeContinuationPersistsFailedResultWithoutExecutionOnOriginalTurn() = runBlocking {
         val model = Model(modelId = "test-model", displayName = "Test Model")
         val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
         val assistant = Assistant(chatModelId = model.id, enableMemory = false)
@@ -148,10 +145,7 @@ class ApprovalContinuationMissingToolIntegrationTest {
             json = Json,
             memoryRepo = MemoryRepository(database.memoryDao()),
             attachmentResolver = AttachmentResolver(
-                context = context,
                 artifactStore = artifactStore,
-                fetcher = SafeRemoteMediaFetcher(),
-                artifactRewriter = ToolArtifactRewriter(context.filesDir, artifactStore),
             ),
         )
 
@@ -217,6 +211,7 @@ class ApprovalContinuationMissingToolIntegrationTest {
                             maxSteps = 1,
                             assistantMessageId = waitingMessage.id,
                             onCheckpoint = started.engine::onCheckpoint,
+                            onMessagesObserved = started.engine::observeMessages,
                         ),
                     ),
                 ).toList()
@@ -309,17 +304,9 @@ class ApprovalContinuationMissingToolIntegrationTest {
                                         continuation.engine.onCheckpoint(checkpoint)
                                         checkpoint.toolExecution?.let { event ->
                                             executionStatuses += event.status
-                                            if (event.status == ToolExecutionEventStatus.STARTED) {
-                                                val persisted = repository
-                                                    .getToolExecutions(turnId.toString())
-                                                    .single()
-                                                assertEquals(
-                                                    ToolExecutionStatus.STARTED,
-                                                    persisted.status,
-                                                )
-                                            }
                                         }
                                     },
+                                    onMessagesObserved = continuation.engine::observeMessages,
                                 ),
                             ),
                         ).toList()
@@ -345,10 +332,7 @@ class ApprovalContinuationMissingToolIntegrationTest {
         assertNull(runtime.currentWorker())
 
         assertFalse(toolExecuted)
-        assertEquals(
-            listOf(ToolExecutionEventStatus.STARTED, ToolExecutionEventStatus.FAILED),
-            executionStatuses,
-        )
+        assertTrue(executionStatuses.isEmpty())
         val turns = repository.getTurnExecutions(conversationId)
         assertEquals(1, turns.size)
         assertEquals(turnId.toString(), turns.single().turnId)
@@ -356,15 +340,16 @@ class ApprovalContinuationMissingToolIntegrationTest {
         assertEquals(TurnExecutionStatus.INCOMPLETE, turns.single().status)
 
         val executions = repository.getToolExecutions(turnId.toString())
-        assertEquals(1, executions.size)
-        assertEquals(0, executions.single().toolOrdinal)
-        assertEquals(ToolExecutionStatus.FAILED, executions.single().status)
+        assertTrue(executions.isEmpty())
 
-        val durableTool = runtime.snapshot.value.currentMessages().last().getTools().single()
+        val reloaded = requireNotNull(repository.getConversationById(conversationId))
+        val durableTool = reloaded.currentMessages.last().getTools().single()
         assertTrue(
             durableTool.output.filterIsInstance<UIMessagePart.Text>()
                 .single().text.contains("tool_not_available"),
         )
+        assertEquals(ToolCallPhase.FAILED, resolveToolCallPhase(durableTool, null))
+        assertEquals(runtime.snapshot.value.currentMessages().last().getTools().single(), durableTool)
         assertNull(runtime.snapshot.value.activeTurn)
     }
 }

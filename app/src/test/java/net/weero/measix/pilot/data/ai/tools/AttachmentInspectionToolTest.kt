@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.data.ai.tools
 
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
@@ -135,7 +136,7 @@ class AttachmentInspectionToolTest {
     fun `more than four refs are invalid`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val result = executeInspection(
-            args = args((1..5).map { "attachment:11111111-1111-1111-1111-111111111111" }),
+            args = args((1..5).map { "/upload/a.png" }),
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
@@ -160,6 +161,39 @@ class AttachmentInspectionToolTest {
     }
 
     @Test
+    fun `only safe upload paths are accepted and UUID handles are not an alternate protocol`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
+        listOf(
+            "attachment:11111111-1111-1111-1111-111111111111",
+            "a.png", "file:///upload/a.png", "/workspace/a.png",
+            "/upload/../a.png", "/upload/%61.png", "/upload/sub/a.png",
+        ).forEach { path ->
+            val result = executeInspection(
+                args = args(listOf(path)), inspectionModel = model, providerSetting = providerSetting,
+                provider = provider, mediaCapabilities = inspectionCapabilities,
+                resolveAttachments = { error("invalid paths must not reach resolver") },
+            )
+            assertEquals(path, AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(result))
+        }
+        coVerify(exactly = 0) { provider.generateText(any(), any(), any()) }
+    }
+
+    @Test
+    fun `schema describes file paths from every disclosure source without internal identifiers`() {
+        val settings = settingsFor(visionModel)
+        every { providerManager.getProviderByType(any()) } returns provider
+        val tool = createAttachmentInspectionTool(settings, providerManager)
+        val parameters = tool.parameters().toString()
+        assertTrue(parameters.contains("/upload/<file>"))
+        assertTrue(parameters.contains("[Attachment path=...]"))
+        assertTrue(parameters.contains("file.path"))
+        assertTrue(parameters.contains("artifacts[].path"))
+        assertTrue(parameters.contains("Does not require a workspace"))
+        assertFalse(parameters.contains("attachment:<uuid>"))
+        assertFalse(parameters.contains("Attachment ref="))
+    }
+
+    @Test
     fun `mixed or blank attachment array elements are invalid instead of being dropped`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val malformed = buildJsonObject {
@@ -167,7 +201,7 @@ class AttachmentInspectionToolTest {
                 "attachments",
                 JsonArray(
                     listOf(
-                        JsonPrimitive("attachment:11111111-1111-1111-1111-111111111111"),
+                        JsonPrimitive("/upload/a.png"),
                         JsonPrimitive(42),
                     ),
                 ),
@@ -204,11 +238,11 @@ class AttachmentInspectionToolTest {
     fun `non string request is invalid`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val objectRequest = buildJsonObject {
-            put("attachments", JsonArray(listOf(JsonPrimitive("attachment:11111111-1111-1111-1111-111111111111"))))
+            put("attachments", JsonArray(listOf(JsonPrimitive("/upload/a.png"))))
             put("request", buildJsonObject { put("text", "describe") })
         }
         val booleanRequest = buildJsonObject {
-            put("attachments", JsonArray(listOf(JsonPrimitive("attachment:11111111-1111-1111-1111-111111111111"))))
+            put("attachments", JsonArray(listOf(JsonPrimitive("/upload/a.png"))))
             put("request", true)
         }
 
@@ -275,7 +309,7 @@ class AttachmentInspectionToolTest {
     fun `runtime resolution failure reason is propagated as is`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val result = executeInspection(
-            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+            args = args(listOf("/upload/a.png")),
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
@@ -291,7 +325,7 @@ class AttachmentInspectionToolTest {
     fun `resolution without image parts is invalid`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val result = executeInspection(
-            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+            args = args(listOf("/upload/a.png")),
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
@@ -299,6 +333,49 @@ class AttachmentInspectionToolTest {
             resolveAttachments = { ToolAttachmentResolution(parts = emptyList()) },
         )
         assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(result))
+    }
+
+    @Test
+    fun `inspection rejects resolver cardinality mismatches before provider dispatch`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
+        for (resolvedCount in listOf(1, 3)) {
+            val result = executeInspection(
+                args = args(listOf("/upload/u7km2n4p.png", "/upload/u7km2n4p.png")),
+                inspectionModel = model, providerSetting = providerSetting, provider = provider,
+                mediaCapabilities = inspectionCapabilities,
+                resolveAttachments = {
+                    ToolAttachmentResolution(parts = List(resolvedCount) { image("file:///tmp/u7km2n4p.png") })
+                },
+            )
+            assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(result))
+        }
+        coVerify(exactly = 0) { provider.generateText(any(), any(), any()) }
+    }
+
+    @Test
+    fun `short and historical file paths preserve exact paths in ordered image labels`() = runTest {
+        val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
+        val refs = listOf("/upload/abc123.png", "/upload/11111111-1111-1111-1111-111111111111.png")
+        var sent = emptyList<UIMessage>()
+        coEvery { provider.generateText(any(), any(), any()) } answers {
+            sent = secondArg()
+            successChunk("comparison")
+        }
+        val result = executeInspection(
+            args = args(refs), inspectionModel = model, providerSetting = providerSetting,
+            provider = provider, mediaCapabilities = inspectionCapabilities,
+            resolveAttachments = { requested ->
+                assertEquals(refs, requested)
+                ToolAttachmentResolution(parts = listOf(image("file:///private/a.png"), image("file:///private/b.png")))
+            },
+        )
+
+        assertEquals("comparison", (result.single() as UIMessagePart.Text).text)
+        assertEquals(
+            refs.mapIndexed { index, ref -> "[Image ${index + 1} path=$ref]" } + "what is in the image",
+            sent.last().parts.filterIsInstance<UIMessagePart.Text>().map { it.text },
+        )
+        coVerify(exactly = 1) { provider.generateText(any(), any(), any()) }
     }
 
     @Test
@@ -316,7 +393,7 @@ class AttachmentInspectionToolTest {
         }
 
         val result = executeInspection(
-            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+            args = args(listOf("/upload/a.png")),
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
@@ -331,13 +408,13 @@ class AttachmentInspectionToolTest {
         val user = messages[1]
         assertEquals(MessageRole.USER, user.role)
         val userTexts = user.parts.filterIsInstance<UIMessagePart.Text>().map { it.text }
-        assertTrue(userTexts.any { it.startsWith("[Image 1") && it.contains("name=") })
+        assertEquals("[Image 1 path=/upload/a.png]", userTexts.first())
         assertEquals("what is in the image", userTexts.last())
         assertTrue(user.parts.any { it is UIMessagePart.Image })
     }
 
     @Test
-    fun `inspection preserves the resolved stable ref in the image fact label`() = runTest {
+    fun `inspection labels requested path while preserving resolved image UUID`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val ref = "attachment:11111111-1111-1111-1111-111111111111"
         val image = AttachmentRefs.withMetadata(
@@ -356,7 +433,7 @@ class AttachmentInspectionToolTest {
         }
 
         executeInspection(
-            args = args(listOf(ref)),
+            args = args(listOf("/upload/shared.png")),
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
@@ -365,7 +442,8 @@ class AttachmentInspectionToolTest {
         )
 
         val label = sent!![1].parts.filterIsInstance<UIMessagePart.Text>().first()
-        assertTrue(label.text.contains(ref))
+        assertEquals("[Image 1 path=/upload/shared.png]", label.text)
+        assertEquals(ref, AttachmentRefs.getStableRef(sent!![1].parts.filterIsInstance<UIMessagePart.Image>().single()))
     }
 
     @Test
@@ -381,7 +459,7 @@ class AttachmentInspectionToolTest {
         }
 
         val result = executeInspection(
-            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+            args = args(listOf("/upload/a.png")),
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
@@ -408,7 +486,7 @@ class AttachmentInspectionToolTest {
         }
 
         executeInspection(
-            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+            args = args(listOf("/upload/a.png")),
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
@@ -431,7 +509,7 @@ class AttachmentInspectionToolTest {
         } throws IllegalStateException("network down")
 
         val result = executeInspection(
-            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+            args = args(listOf("/upload/a.png")),
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
@@ -457,7 +535,7 @@ class AttachmentInspectionToolTest {
         )
 
         val result = executeInspection(
-            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+            args = args(listOf("/upload/a.png")),
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
@@ -479,7 +557,7 @@ class AttachmentInspectionToolTest {
         } returns successChunk("   ")
 
         val result = executeInspection(
-            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+            args = args(listOf("/upload/a.png")),
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
@@ -501,7 +579,7 @@ class AttachmentInspectionToolTest {
 
         try {
             executeInspection(
-                args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+                args = args(listOf("/upload/a.png")),
                 inspectionModel = model,
                 providerSetting = providerSetting,
                 provider = provider,
@@ -533,8 +611,8 @@ class AttachmentInspectionToolTest {
         val result = executeInspection(
             args = args(
                 listOf(
-                    "attachment:11111111-1111-1111-1111-111111111111",
-                    "attachment:22222222-2222-2222-2222-222222222222",
+                    "/upload/a.png",
+                    "/upload/b.png",
                 ),
             ),
             inspectionModel = model,
@@ -573,7 +651,7 @@ class AttachmentInspectionToolTest {
         }
 
         val result = executeInspection(
-            args = args(listOf("attachment:11111111-1111-1111-1111-111111111111")),
+            args = args(listOf("/upload/a.png")),
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,

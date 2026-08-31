@@ -23,9 +23,10 @@ data class LocalArtifactRef(
     }
 
     fun toolPath(): String? {
-        val name = relativePath.substringAfterLast('/')
-        if (relativePath.substringBefore('/') != FileFolders.UPLOAD || name.isBlank()) return null
-        return "/${FileFolders.UPLOAD}/$name"
+        if (version != CURRENT_VERSION) return null
+        val path = "/$relativePath"
+        val name = LocalToolPath.parseUploadToolPath(path) ?: return null
+        return path.takeIf { it == "/${FileFolders.UPLOAD}/$name" }
     }
 
     companion object {

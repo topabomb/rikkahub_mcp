@@ -7,7 +7,12 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.CalendarContract
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -30,7 +35,7 @@ internal fun buildCalendarQueryTool(context: Context): Tool = Tool(
     description = """
         Query device calendar events (`begin`/`end`, or `range`: today/week/month).
         Device timezone: '${ZoneId.systemDefault()}' (UTC ${OffsetDateTime.now().offset}); naive times use this zone.
-        Requires Calendar permission; if missing, a request is triggered and an error is returned.
+        Requires Calendar permission; if missing, an error asks the user to enable it in local tools settings.
     """.trimIndent().replace("\n", " "),
     parameters = {
         InputSchema.Obj(
@@ -216,173 +221,206 @@ internal fun buildCalendarQueryTool(context: Context): Tool = Tool(
     }
 )
 
-internal fun buildCalendarCreateTool(context: Context): Tool = Tool(
-    name = "calendar_create",
-    description = """
-        Create a calendar event (title and start required). End defaults to 1 hour after start, or the next day if all-day.
-        Device timezone: '${ZoneId.systemDefault()}' (UTC ${OffsetDateTime.now().offset}).
-        Requires Calendar permission; if missing, a request is triggered and an error is returned.
-    """.trimIndent().replace("\n", " "),
-    needsApproval = { true },
-    parameters = {
-        InputSchema.Obj(
-            properties = buildJsonObject {
-                put("title", buildJsonObject {
-                    put("type", "string")
-                    put("description", "Event title.")
-                })
-                put("description", buildJsonObject {
-                    put("type", "string")
-                    put("description", "Event description or notes.")
-                })
-                put("location", buildJsonObject {
-                    put("type", "string")
-                    put("description", "Event location.")
-                })
-                put("start", buildJsonObject {
-                    put("type", "string")
-                    put(
-                        "description",
-                        "Start time. Accepts an ISO-8601 date 'yyyy-MM-dd', a local " +
-                            "date-time 'yyyy-MM-ddTHH:mm:ss', an offset date-time, or epoch milliseconds."
-                    )
-                })
-                put("end", buildJsonObject {
-                    put("type", "string")
-                    put(
-                        "description",
-                        "End time, same formats as 'start'. Defaults to 1 hour after start."
-                    )
-                })
-                put("all_day", buildJsonObject {
-                    put("type", "boolean")
-                    put("description", "Whether this is an all-day event. Default false.")
-                })
-            },
-            required = listOf("title", "start")
-        )
-    },
-    execute = { args ->
-        if (!hasCalendarWritePermission(context)) {
-            val payload = buildJsonObject {
-                put("error", "NO_PERMISSION")
-                put(
-                    "message",
-                    "Calendar write permission is not granted. Please ask the user to enable " +
-                        "the calendar permission in the assistant's local tools settings."
-                )
-            }
-            return@Tool listOf(UIMessagePart.Text(payload.toString()))
+internal data class CalendarCreateArguments(
+    val title: String,
+    val description: String,
+    val location: String,
+    val allDay: Boolean,
+    val startTime: ZonedDateTime,
+    val endTime: ZonedDateTime,
+    val startMillis: Long,
+    val endMillis: Long,
+    val timeZone: String,
+)
+
+internal sealed interface CalendarCreateParseResult {
+    data class Valid(val event: CalendarCreateArguments) : CalendarCreateParseResult
+    data class Invalid(val error: String, val message: String) : CalendarCreateParseResult {
+        fun toErrorJson(): JsonObject = buildJsonObject {
+            put("error", error)
+            put("message", message)
         }
 
-        val params = args.jsonObject
-        val title = params["title"]?.jsonPrimitive?.contentOrNull
-        val startRaw = params["start"]?.jsonPrimitive?.contentOrNull
-        val endRaw = params["end"]?.jsonPrimitive?.contentOrNull
-        val allDay = params["all_day"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false
+        fun toToolResult(): List<UIMessagePart> = listOf(UIMessagePart.Text(toErrorJson().toString()))
+    }
+}
 
-        if (title.isNullOrBlank() || startRaw.isNullOrBlank()) {
-            val payload = buildJsonObject {
-                put("error", "MISSING_REQUIRED")
-                put("message", "Both 'title' and 'start' are required.")
-            }
-            return@Tool listOf(UIMessagePart.Text(payload.toString()))
+/** Same pure input parser for approval and execution; permissions and Calendar IO stay outside. */
+internal fun parseCalendarCreateArguments(args: JsonElement, zone: ZoneId): CalendarCreateParseResult {
+    fun invalid(error: String, message: String) = CalendarCreateParseResult.Invalid(error, message)
+    val obj = args as? JsonObject ?: return invalid("INVALID_ARGUMENTS", "Arguments must be an object.")
+    val strings = listOf("title", "start", "end", "description", "location")
+    if (strings.any { it in obj && (obj[it] as? JsonPrimitive)?.isString != true }) {
+        return invalid("INVALID_ARGUMENTS", "title, start, end, description and location must be strings when provided.")
+    }
+    val allDayValue = obj["all_day"]
+    if (allDayValue != null && (
+        allDayValue !is JsonPrimitive || allDayValue.isString || allDayValue.booleanOrNull == null
+    )) return invalid("INVALID_ARGUMENTS", "all_day must be a boolean when provided.")
+    val title = obj["title"]?.jsonPrimitive?.content
+    val startRaw = obj["start"]?.jsonPrimitive?.content
+    if (title.isNullOrBlank() || startRaw.isNullOrBlank()) {
+        return invalid("MISSING_REQUIRED", "Both 'title' and 'start' are required.")
+    }
+    val allDay = allDayValue?.booleanOrNull ?: false
+    val endRaw = obj["end"]?.jsonPrimitive?.content
+    return try {
+        val startTime = parseCalendarTime(startRaw, zone)
+        val endTime = when {
+            endRaw != null -> parseCalendarTime(endRaw, zone)
+            allDay -> startTime.toLocalDate().plusDays(1).atStartOfDay(zone)
+            else -> startTime.plusHours(1)
         }
-
-        val zone = ZoneId.systemDefault()
-        val startTime: ZonedDateTime
-        val endTime: ZonedDateTime
-        try {
-            startTime = parseCalendarTime(startRaw, zone)
-            endTime = if (endRaw != null) {
-                parseCalendarTime(endRaw, zone)
-            } else if (allDay) {
-                startTime.toLocalDate().plusDays(1).atStartOfDay(zone)
-            } else {
-                startTime.plusHours(1)
-            }
-        } catch (e: Exception) {
-            val payload = buildJsonObject {
-                put("error", "INVALID_TIME")
-                put("message", e.message ?: "Invalid time format.")
-            }
-            return@Tool listOf(UIMessagePart.Text(payload.toString()))
-        }
-
         if (!startTime.isBefore(endTime)) {
-            val payload = buildJsonObject {
-                put("error", "INVALID_RANGE")
-                put("message", "end must be later than start.")
-            }
-            return@Tool listOf(UIMessagePart.Text(payload.toString()))
+            return invalid("INVALID_RANGE", "end must be later than start.")
         }
-
-        val description = params["description"]?.jsonPrimitive?.contentOrNull ?: ""
-        val location = params["location"]?.jsonPrimitive?.contentOrNull ?: ""
-
-        val eventStartMillis: Long
-        val eventEndMillis: Long
-        val eventTimeZone: String
+        val startMillis: Long
+        val endMillis: Long
         if (allDay) {
             val startDate = startTime.toLocalDate()
             val endDate = endTime.toLocalDate()
             if (!startDate.isBefore(endDate)) {
+                return invalid("INVALID_RANGE", "all-day event end date must be later than start date.")
+            }
+            startMillis = startDate.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+            endMillis = endDate.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        } else {
+            startMillis = startTime.toInstant().toEpochMilli()
+            endMillis = endTime.toInstant().toEpochMilli()
+        }
+        CalendarCreateParseResult.Valid(CalendarCreateArguments(
+            title = title,
+            description = obj["description"]?.jsonPrimitive?.content.orEmpty(),
+            location = obj["location"]?.jsonPrimitive?.content.orEmpty(),
+            allDay = allDay,
+            startTime = startTime,
+            endTime = endTime,
+            startMillis = startMillis,
+            endMillis = endMillis,
+            timeZone = if (allDay) "UTC" else zone.id,
+        ))
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: java.time.DateTimeException) {
+        invalid("INVALID_TIME", error.message ?: "Invalid time format.")
+    } catch (error: IllegalStateException) {
+        invalid("INVALID_TIME", error.message ?: "Invalid time format.")
+    } catch (error: ArithmeticException) {
+        invalid("INVALID_TIME", error.message ?: "Invalid time range.")
+    }
+}
+
+internal fun buildCalendarCreateTool(context: Context): Tool {
+    val zone = ZoneId.systemDefault()
+    return Tool(
+        name = "calendar_create",
+        description = """
+            Create a calendar event (title and start required). End defaults to 1 hour after start, or the next day if all-day.
+            Device timezone: '$zone' (UTC ${OffsetDateTime.now(zone).offset}).
+            Requires Calendar permission; if missing, an error asks the user to enable it in local tools settings.
+        """.trimIndent().replace("\n", " "),
+        needsApproval = { true },
+        validateArguments = { args ->
+            (parseCalendarCreateArguments(args, zone) as? CalendarCreateParseResult.Invalid)?.toErrorJson()
+        },
+        parameters = {
+            InputSchema.Obj(
+                properties = buildJsonObject {
+                    put("title", buildJsonObject {
+                        put("type", "string")
+                        put("description", "Event title.")
+                    })
+                    put("description", buildJsonObject {
+                        put("type", "string")
+                        put("description", "Event description or notes.")
+                    })
+                    put("location", buildJsonObject {
+                        put("type", "string")
+                        put("description", "Event location.")
+                    })
+                    put("start", buildJsonObject {
+                        put("type", "string")
+                        put(
+                            "description",
+                            "Start time. Accepts an ISO-8601 date 'yyyy-MM-dd', a local " +
+                                "date-time 'yyyy-MM-ddTHH:mm:ss', an offset date-time, or epoch milliseconds."
+                        )
+                    })
+                    put("end", buildJsonObject {
+                        put("type", "string")
+                        put(
+                            "description",
+                            "End time, same formats as 'start'. Defaults to 1 hour after start."
+                        )
+                    })
+                    put("all_day", buildJsonObject {
+                        put("type", "boolean")
+                        put("description", "Whether this is an all-day event. Default false.")
+                    })
+                },
+                required = listOf("title", "start")
+            )
+        },
+        execute = { args ->
+            val event = when (val parsed = parseCalendarCreateArguments(args, zone)) {
+                is CalendarCreateParseResult.Invalid -> return@Tool parsed.toToolResult()
+                is CalendarCreateParseResult.Valid -> parsed.event
+            }
+            if (!hasCalendarWritePermission(context)) {
                 val payload = buildJsonObject {
-                    put("error", "INVALID_RANGE")
-                    put("message", "all-day event end date must be later than start date.")
+                    put("error", "NO_PERMISSION")
+                    put(
+                        "message",
+                        "Calendar write permission is not granted. Please ask the user to enable " +
+                            "the calendar permission in the assistant's local tools settings."
+                    )
                 }
                 return@Tool listOf(UIMessagePart.Text(payload.toString()))
             }
-            eventStartMillis = startDate.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-            eventEndMillis = endDate.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-            eventTimeZone = "UTC"
-        } else {
-            eventStartMillis = startTime.toInstant().toEpochMilli()
-            eventEndMillis = endTime.toInstant().toEpochMilli()
-            eventTimeZone = zone.id
-        }
 
-        val calendarId = getDefaultCalendarId(context)
-        if (calendarId == null) {
+            val calendarId = getDefaultCalendarId(context)
+            if (calendarId == null) {
+                val payload = buildJsonObject {
+                    put("error", "NO_CALENDAR")
+                    put("message", "No calendar account found on this device. Please add a calendar account first.")
+                }
+                return@Tool listOf(UIMessagePart.Text(payload.toString()))
+            }
+
+            val values = ContentValues().apply {
+                put(CalendarContract.Events.CALENDAR_ID, calendarId)
+                put(CalendarContract.Events.TITLE, event.title)
+                put(CalendarContract.Events.DESCRIPTION, event.description)
+                put(CalendarContract.Events.EVENT_LOCATION, event.location)
+                put(CalendarContract.Events.DTSTART, event.startMillis)
+                put(CalendarContract.Events.DTEND, event.endMillis)
+                put(CalendarContract.Events.EVENT_TIMEZONE, event.timeZone)
+                if (event.allDay) {
+                    put(CalendarContract.Events.ALL_DAY, 1)
+                }
+            }
+
+            val uri = context.contentResolver.insert(CalendarContract.Events.CONTENT_URI, values)
+            if (uri == null) {
+                val payload = buildJsonObject {
+                    put("error", "INSERT_FAILED")
+                    put("message", "Failed to insert calendar event.")
+                }
+                return@Tool listOf(UIMessagePart.Text(payload.toString()))
+            }
+
+            val eventId = ContentUris.parseId(uri)
             val payload = buildJsonObject {
-                put("error", "NO_CALENDAR")
-                put("message", "No calendar account found on this device. Please add a calendar account first.")
+                put("success", true)
+                put("event_id", eventId)
+                put("start", event.startTime.withNano(0).toString())
+                put("end", event.endTime.withNano(0).toString())
             }
-            return@Tool listOf(UIMessagePart.Text(payload.toString()))
+            listOf(UIMessagePart.Text(payload.toString()))
         }
+    )
 
-        val values = ContentValues().apply {
-            put(CalendarContract.Events.CALENDAR_ID, calendarId)
-            put(CalendarContract.Events.TITLE, title)
-            put(CalendarContract.Events.DESCRIPTION, description)
-            put(CalendarContract.Events.EVENT_LOCATION, location)
-            put(CalendarContract.Events.DTSTART, eventStartMillis)
-            put(CalendarContract.Events.DTEND, eventEndMillis)
-            put(CalendarContract.Events.EVENT_TIMEZONE, eventTimeZone)
-            if (allDay) {
-                put(CalendarContract.Events.ALL_DAY, 1)
-            }
-        }
-
-        val uri = context.contentResolver.insert(CalendarContract.Events.CONTENT_URI, values)
-        if (uri == null) {
-            val payload = buildJsonObject {
-                put("error", "INSERT_FAILED")
-                put("message", "Failed to insert calendar event.")
-            }
-            return@Tool listOf(UIMessagePart.Text(payload.toString()))
-        }
-
-        val eventId = ContentUris.parseId(uri)
-        val payload = buildJsonObject {
-            put("success", true)
-            put("event_id", eventId)
-            put("start", startTime.withNano(0).toString())
-            put("end", endTime.withNano(0).toString())
-        }
-        listOf(UIMessagePart.Text(payload.toString()))
-    }
-)
+}
 
 private fun hasCalendarReadPermission(context: Context): Boolean =
     ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED

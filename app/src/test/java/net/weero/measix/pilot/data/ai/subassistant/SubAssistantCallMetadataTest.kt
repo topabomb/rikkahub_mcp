@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.JsonNull
 import me.rerere.ai.ui.UIMessagePart
@@ -181,28 +182,28 @@ class SubAssistantCallMetadataTest {
 
     @Test
     fun `attachments parse empty and missing as none`() {
-        assertEquals(emptyList<String>(), (parseAssistantCallAttachments(null) as AttachmentParseResult.Ok).refs)
-        assertEquals(emptyList<String>(), (parseAssistantCallAttachments(JsonNull) as AttachmentParseResult.Ok).refs)
-        assertEquals(emptyList<String>(), (parseAssistantCallAttachments(buildJsonArray {}) as AttachmentParseResult.Ok).refs)
+        assertEquals(emptyList<String>(), (parseAssistantCallAttachments(null) as AttachmentParseResult.Ok).paths)
+        assertEquals(emptyList<String>(), (parseAssistantCallAttachments(JsonNull) as AttachmentParseResult.Ok).paths)
+        assertEquals(emptyList<String>(), (parseAssistantCallAttachments(buildJsonArray {}) as AttachmentParseResult.Ok).paths)
     }
 
     @Test
     fun `attachments dedup then enforce max four`() {
         val ok = parseAssistantCallAttachments(
             buildJsonArray {
-                add(JsonPrimitive("a"))
-                add(JsonPrimitive(" a "))
-                add(JsonPrimitive("b"))
+                add(JsonPrimitive("/upload/a.png"))
+                add(JsonPrimitive(" /upload/a.png "))
+                add(JsonPrimitive("/upload/b.png"))
             },
         ) as AttachmentParseResult.Ok
-        assertEquals(listOf("a", "b"), ok.refs)
+        assertEquals(listOf("/upload/a.png", "/upload/b.png"), ok.paths)
         assertTrue(parseAssistantCallAttachments(
             buildJsonArray {
-                add(JsonPrimitive("1"))
-                add(JsonPrimitive("2"))
-                add(JsonPrimitive("3"))
-                add(JsonPrimitive("4"))
-                add(JsonPrimitive("5"))
+                add(JsonPrimitive("/upload/1.png"))
+                add(JsonPrimitive("/upload/2.png"))
+                add(JsonPrimitive("/upload/3.png"))
+                add(JsonPrimitive("/upload/4.png"))
+                add(JsonPrimitive("/upload/5.png"))
             },
         ) is AttachmentParseResult.Invalid)
     }
@@ -211,7 +212,7 @@ class SubAssistantCallMetadataTest {
     fun `attachments reject non string json primitives`() {
         assertTrue(parseAssistantCallAttachments(
             buildJsonArray {
-                add(JsonPrimitive("attachment:11111111-1111-1111-1111-111111111111"))
+                add(JsonPrimitive("/upload/a.png"))
                 add(JsonPrimitive(42))
             },
         ) is AttachmentParseResult.Invalid)
@@ -223,6 +224,20 @@ class SubAssistantCallMetadataTest {
     }
 
     // ---- buildSubAssistantCallResult ----
+
+    @Test
+    fun `attachments accept historical file paths but reject UUID and non upload inputs`() {
+        val historical = "/upload/11111111-1111-1111-1111-111111111111.png"
+        val accepted = parseAssistantCallAttachments(buildJsonArray { add(JsonPrimitive(historical)) })
+        assertEquals(listOf(historical), (accepted as AttachmentParseResult.Ok).paths)
+        listOf(
+            "attachment:11111111-1111-1111-1111-111111111111",
+            "https://example.test/a.png", "file:///upload/a.png", "a.png",
+            "/workspace/a.png", "/upload/../a.png", "/upload/%61.png", "/upload/sub/a.png",
+        ).forEach { path ->
+            assertTrue(path, parseAssistantCallAttachments(buildJsonArray { add(JsonPrimitive(path)) }) is AttachmentParseResult.Invalid)
+        }
+    }
 
     @Test
     fun `result includes assistant_name not assistant_id`() {
@@ -294,11 +309,50 @@ class SubAssistantCallMetadataTest {
             artifactsOmitted = 2,
         )
         assertTrue(result.contains("\"artifacts\""))
-        assertTrue(result.contains("attachment:11111111-1111-1111-1111-111111111111"))
+        assertFalse(result.contains("attachment:11111111-1111-1111-1111-111111111111"))
+        assertFalse(result.contains("\"ref\""))
         assertTrue(result.contains("\"path\":\"/upload/a.png\""))
         assertTrue(result.contains("\"artifacts_omitted\":2"))
         assertFalse(result.contains("file:"))
         assertFalse(result.contains("artifact_delivery"))
+    }
+
+    @Test
+    fun `model manifest omits resources without usable paths and preserves durable metadata`() {
+        val stableRef = "attachment:11111111-1111-1111-1111-111111111111"
+        val image = SubAssistantCallArtifact(
+            ref = stableRef,
+            type = ARTIFACT_TYPE_IMAGE,
+            mime = "image/png",
+            artifact = net.weero.measix.pilot.data.files.LocalArtifactRef(
+                relativePath = "images/existing.png",
+                mimeType = "image/png",
+            ),
+        )
+        val manifest = buildSubAssistantArtifactManifest(listOf(image))
+
+        assertTrue(manifest.isEmpty())
+        assertEquals(stableRef, image.ref)
+        assertFalse(manifest.toString().contains("images/"))
+        assertFalse(manifest.toString().contains("\"path\""))
+    }
+
+    @Test
+    fun `manifest exposes only readable file paths type and mime in delivery order`() {
+        val source = listOf("upload/abc123.png", "images/hidden.png", "upload/11111111-1111-1111-1111-111111111111.png")
+            .mapIndexed { index, path ->
+                SubAssistantCallArtifact(
+                    ref = "attachment:internal-$index", type = ARTIFACT_TYPE_IMAGE, mime = "image/png",
+                    artifact = net.weero.measix.pilot.data.files.LocalArtifactRef(relativePath = path, mimeType = "image/png"),
+                )
+            }
+        val manifest = buildSubAssistantArtifactManifest(source)
+        assertEquals(
+            listOf("/upload/abc123.png", "/upload/11111111-1111-1111-1111-111111111111.png"),
+            manifest.map { (it as JsonObject)["path"]!!.jsonPrimitive.content },
+        )
+        manifest.forEach { assertEquals(setOf("path", "type", "mime"), (it as JsonObject).keys) }
+        assertEquals("attachment:internal-0", source.first().ref)
     }
 
     @Test

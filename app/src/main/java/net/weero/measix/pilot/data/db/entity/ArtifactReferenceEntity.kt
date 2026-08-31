@@ -15,7 +15,6 @@ enum class ArtifactReferenceType {
 @Entity(
     tableName = "artifact_reference",
     indices = [
-        Index("artifact_id"),
         Index("node_id"),
         Index(value = ["artifact_id", "node_id", "reference_type"], unique = true),
     ],

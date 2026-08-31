@@ -31,6 +31,7 @@ import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
+import me.rerere.ai.provider.ProviderResponseException
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestImageSupport
 import me.rerere.ai.provider.RequestMediaCapabilities
@@ -61,6 +62,7 @@ import me.rerere.ai.util.stringSafe
 import me.rerere.ai.util.toHeaders
 import me.rerere.common.http.await
 import me.rerere.common.http.jsonObjectOrNull
+import me.rerere.common.http.jsonArrayOrNull
 import me.rerere.common.http.jsonPrimitiveOrNull
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -141,10 +143,22 @@ class ResponseAPI(
 
         val bodyStr = response.body?.string() ?: ""
         val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
-        parseResponseObjectError(bodyJson)?.let { throw it }
+        val terminalError = parseResponseObjectError(bodyJson)
         val endpointProfile = resolveResponseEndpointProfile(providerSetting.baseUrl.toHttpUrl().host)
-        val output = parseResponseOutput(bodyJson, endpointProfile)
+        val output = if (bodyJson["output"]?.jsonArrayOrNull != null) {
+            parseResponseOutput(bodyJson, endpointProfile)
+        } else if (terminalError != null) {
+            MessageChunk(
+                id = bodyJson["id"]?.jsonPrimitiveOrNull?.contentOrNull.orEmpty(),
+                model = bodyJson["model"]?.jsonPrimitiveOrNull?.contentOrNull.orEmpty(),
+                choices = emptyList(),
+                usage = parseTokenUsage(bodyJson["usage"]?.jsonObjectOrNull),
+            )
+        } else {
+            error("output not found")
+        }
 
+        terminalError?.let { throw ProviderResponseException(output, it) }
         return output
     }
 

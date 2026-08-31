@@ -12,7 +12,12 @@ import androidx.room.PrimaryKey
  */
 @Entity(
     tableName = "ConversationEntity",
-    indices = [Index("parent_conversation_id"), Index("assistant_id")],
+    indices = [
+        Index(value = ["parent_conversation_id", "is_pinned", "update_at"]),
+        Index(value = ["assistant_id", "parent_conversation_id", "is_pinned", "update_at"]),
+        Index(value = ["assistant_id", "parent_conversation_id", "folder_id", "is_pinned", "update_at"]),
+        Index(value = ["folder_id", "parent_conversation_id", "is_pinned", "update_at"]),
+    ],
     foreignKeys = [
         ForeignKey(
             entity = ConversationEntity::class,

@@ -90,6 +90,10 @@ UIMessage.parts[]
 
 ### 2.2 ContentBlock 分发
 
+`ChatMessageEditedFiles.editedWorkspaceFilePaths` 只从 `workspace_write_file` / `workspace_edit_file` 的成功结果提取产出路径，
+不从原请求或单纯 `hasReplayResult` 推断写入成功。坏 JSON/类型、错误和拒绝结果不显示文件提示；成功结果必须包含有效
+`path` 与文件元数据，写入结果确认非目录，编辑结果确认正数替换次数。该纯投影不访问 Workspace 或文件 owner。
+
 `MessagePartsBlock()`（`ChatMessage.kt`）对 `ContentBlock` 内的 part 按类型分发：
 
 | Part 类型 | 渲染组件 | 方式 |
@@ -300,6 +304,7 @@ HighlightCodeBlock(code, language, completeCodeBlock)
 - `useWideViewPort = true` + `loadWithOverviewMode = true` 自适应内容宽度
 - 圆角裁剪：`Modifier.clip(RoundedCornerShape(4.dp))`
 - View 与导出入口均归入代码块 Header；200dp WebView 内没有覆盖层，也不再在预览下方增加第二行高度
+- 调试页与消息正文均通过 `HighlightCodeBlock(language = "mermaid")` 接入，复用同一套全屏与导出操作。
 
 ---
 

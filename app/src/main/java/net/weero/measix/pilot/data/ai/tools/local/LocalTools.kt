@@ -25,8 +25,6 @@ class LocalTools(
 
     val calendarQueryTool by lazy { buildCalendarQueryTool(context) }
 
-    val calendarCreateTool by lazy { buildCalendarCreateTool(context) }
-
     fun getTools(
         options: List<LocalToolOption>,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
@@ -55,7 +53,7 @@ class LocalTools(
         }
         if (options.contains(LocalToolOption.Calendar)) {
             tools.add(calendarQueryTool)
-            tools.add(calendarCreateTool)
+            tools.add(buildCalendarCreateTool(context))
         }
         if (options.contains(LocalToolOption.TextToImage) && buildContext != null) {
             imageGenerationToolFactory.create(buildContext)?.let(tools::add)

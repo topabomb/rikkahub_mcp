@@ -7,8 +7,10 @@ import kotlinx.serialization.json.contentOrNull
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata
+import net.weero.measix.pilot.data.ai.subassistant.buildSubAssistantArtifactManifest
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
+import net.weero.measix.pilot.data.ai.tools.ATTACHMENT_INSPECTION_TOOL_NAME
 import net.weero.measix.pilot.utils.JsonInstant
 import java.io.File
 
@@ -68,8 +70,8 @@ internal object AttachmentCloner {
             is UIMessagePart.Audio -> part.copy(url = copyUrl(part.url))
             is UIMessagePart.Tool -> {
                 val subAssistantMetadata = part.getSubAssistantCallMetadata(JsonInstant)
-                if (subAssistantMetadata != null && subAssistantMetadata.artifacts.isNotEmpty()) {
-                    return cloneSubAssistantTool(
+                val cloned = if (subAssistantMetadata != null && subAssistantMetadata.artifacts.isNotEmpty()) {
+                    cloneSubAssistantTool(
                         part = part,
                         metadata = subAssistantMetadata,
                         artifactStore = artifactStore,
@@ -77,30 +79,60 @@ internal object AttachmentCloner {
                         toolArtifactRewriter = toolArtifactRewriter,
                         copiedArtifacts = copiedArtifacts,
                     )
-                }
-                val sourceRef = part.metadata?.let(toolArtifactRewriter::decodeArtifactRef)
-                if (sourceRef != null) {
-                    val rewritten = toolArtifactRewriter.rewriteToolOutput(
-                        output = part.output,
-                        metadata = part.metadata,
-                        copiedArtifacts = copiedArtifacts,
-                    )
-                    rewritten.ownedArtifact?.let(createdArtifacts::add)
-                    part.copy(output = rewritten.output, metadata = rewritten.metadata)
                 } else {
-                    part.copy(
-                        output = clonePartsInternal(
-                            part.output,
-                            artifactStore,
-                            createdArtifacts,
-                            toolArtifactRewriter,
-                            copiedArtifacts,
-                        ),
-                    )
+                    val sourceRef = part.metadata?.let(toolArtifactRewriter::decodeArtifactRef)
+                    if (sourceRef != null) {
+                        val rewritten = toolArtifactRewriter.rewriteToolOutput(
+                            output = part.output,
+                            metadata = part.metadata,
+                            copiedArtifacts = copiedArtifacts,
+                        )
+                        rewritten.ownedArtifact?.let(createdArtifacts::add)
+                        part.copy(output = rewritten.output, metadata = rewritten.metadata)
+                    } else {
+                        part.copy(
+                            output = clonePartsInternal(
+                                part.output,
+                                artifactStore,
+                                createdArtifacts,
+                                toolArtifactRewriter,
+                                copiedArtifacts,
+                            ),
+                        )
+                    }
                 }
+                rebindAttachmentInput(cloned, artifactStore, copiedArtifacts)
             }
             else -> part
         }
+    }
+
+    /** Known attachment inputs follow files already copied by this clone, never create owners. */
+    private suspend fun rebindAttachmentInput(
+        tool: UIMessagePart.Tool,
+        artifactStore: ArtifactStore,
+        copiedArtifacts: Map<String, OwnedArtifact>,
+    ): UIMessagePart.Tool {
+        if (tool.toolName != ATTACHMENT_INSPECTION_TOOL_NAME && tool.toolName != "assistant_call") return tool
+        if (copiedArtifacts.isEmpty()) return tool
+        val input = runCatching { JsonInstant.parseToJsonElement(tool.input) as? JsonObject }.getOrNull()
+            ?: return tool
+        val attachments = input["attachments"] as? JsonArray ?: return tool
+        if (attachments.any { it !is JsonPrimitive || !it.isString }) return tool
+        val rebound = attachments.map { value ->
+            val path = (value as JsonPrimitive).content
+            if (LocalToolPath.parseUploadToolPath(path) == null) return@map value
+            val source = artifactStore.resolveToolPath(path) ?: return@map value
+            val copied = copiedArtifacts[canonicalPath(source)] ?: return@map value
+            val copiedPath = copied.localRef.toolPath() ?: return@map value
+            JsonPrimitive(copiedPath)
+        }
+        if (rebound == attachments) return tool
+        return tool.copy(
+            input = JsonObject(input.toMutableMap().apply {
+                put("attachments", JsonArray(rebound))
+            }).toString(),
+        )
     }
 
     suspend fun cloneParts(
@@ -135,10 +167,8 @@ internal object AttachmentCloner {
         toolArtifactRewriter: ToolArtifactRewriter,
         copiedArtifacts: MutableMap<String, OwnedArtifact>,
     ): UIMessagePart.Tool {
-        val pathRewrites = linkedMapOf<String, String>()
         val unavailableRefs = linkedSetOf<String>()
         val unavailablePaths = linkedSetOf<String>()
-        val unavailableToolPaths = linkedSetOf<String>()
         var removeUnresolvedLocalMedia = false
         val rewrittenArtifacts = metadata.artifacts.map { item ->
             val sourceRef = item.artifact
@@ -157,7 +187,6 @@ internal object AttachmentCloner {
                 runCatching { artifactStore.file(sourceRef) }
                     .getOrNull()
                     ?.let { unavailablePaths += canonicalPath(it) }
-                sourceRef.toolPath()?.let { unavailableToolPaths += it }
                 return@map item.copy(artifact = null)
             }
             val sourceFile = artifactStore.file(materialized)
@@ -170,36 +199,28 @@ internal object AttachmentCloner {
                 copiedArtifacts[key] = it
                 createdArtifacts += it
             }
-            sourceRef.toolPath()?.let { sourcePath ->
-                copied.localRef.toolPath()?.let { targetPath ->
-                    pathRewrites[sourcePath] = targetPath
-                }
-            }
             item.copy(artifact = copied.localRef)
         }
-        val clonedOutput = rewriteSubAssistantArtifactPaths(
-            sanitizeUnavailableSubAssistantOutput(
-                parts = clonePartsInternal(
-                    parts = part.output,
-                    artifactStore = artifactStore,
-                    createdArtifacts = createdArtifacts,
-                    toolArtifactRewriter = toolArtifactRewriter,
-                    copiedArtifacts = copiedArtifacts,
-                ),
-                unavailableRefs = unavailableRefs,
-                unavailablePaths = unavailablePaths,
-                unavailableToolPaths = unavailableToolPaths,
-                removeUnresolvedLocalMedia = removeUnresolvedLocalMedia,
+        val clonedMetadata = metadata.copy(artifacts = rewrittenArtifacts)
+        val clonedOutput = sanitizeUnavailableSubAssistantOutput(
+            parts = clonePartsInternal(
+                parts = part.output,
+                artifactStore = artifactStore,
+                createdArtifacts = createdArtifacts,
+                toolArtifactRewriter = toolArtifactRewriter,
+                copiedArtifacts = copiedArtifacts,
             ),
-            pathRewrites,
-        )
+            unavailableRefs = unavailableRefs,
+            unavailablePaths = unavailablePaths,
+            removeUnresolvedLocalMedia = removeUnresolvedLocalMedia,
+        ).map { output -> rebuildSubAssistantArtifactManifest(output, clonedMetadata) }
         return part
             .copy(output = clonedOutput)
-            .mergeSubAssistantCallMetadata(JsonInstant, metadata.copy(artifacts = rewrittenArtifacts))
+            .mergeSubAssistantCallMetadata(JsonInstant, clonedMetadata)
     }
 
     /**
-     * Removes stale multimedia payloads and strips their old manifest paths after a clone.
+     * Removes stale multimedia payloads after a clone.
      * The metadata descriptor remains as an explicit unavailable placeholder, while output
      * never retains a file URL whose ArtifactStore owner was not materialized.
      */
@@ -207,7 +228,6 @@ internal object AttachmentCloner {
         parts: List<UIMessagePart>,
         unavailableRefs: Set<String>,
         unavailablePaths: Set<String>,
-        unavailableToolPaths: Set<String>,
         removeUnresolvedLocalMedia: Boolean,
     ): List<UIMessagePart> = parts.mapNotNull { part ->
         when (part) {
@@ -240,85 +260,28 @@ internal object AttachmentCloner {
                     parts = part.output,
                     unavailableRefs = unavailableRefs,
                     unavailablePaths = unavailablePaths,
-                    unavailableToolPaths = unavailableToolPaths,
                     removeUnresolvedLocalMedia = removeUnresolvedLocalMedia,
                 ),
-            )
-
-            is UIMessagePart.Text -> sanitizeUnavailableArtifactManifest(
-                part = part,
-                unavailableRefs = unavailableRefs,
-                unavailableToolPaths = unavailableToolPaths,
             )
 
             else -> part
         }
     }
 
-    private fun sanitizeUnavailableArtifactManifest(
-        part: UIMessagePart.Text,
-        unavailableRefs: Set<String>,
-        unavailableToolPaths: Set<String>,
-    ): UIMessagePart.Text {
+    /** Only this tool's result manifest belongs to its metadata; prose and nested tools do not. */
+    private fun rebuildSubAssistantArtifactManifest(
+        part: UIMessagePart,
+        metadata: SubAssistantCallMetadata,
+    ): UIMessagePart {
+        if (part !is UIMessagePart.Text) return part
         val root = runCatching { JsonInstant.parseToJsonElement(part.text) as? JsonObject }.getOrNull()
             ?: return part
-        val artifacts = root["artifacts"] as? JsonArray ?: return part
-        var changed = false
-        val sanitizedArtifacts = JsonArray(artifacts.map { element ->
-            val artifact = element as? JsonObject ?: return@map element
-            val ref = (artifact["ref"] as? JsonPrimitive)?.contentOrNull
-                ?.let { AttachmentRefs.parse(it)?.let(AttachmentRefs::format) }
-            val path = (artifact["path"] as? JsonPrimitive)?.contentOrNull
-            if (ref !in unavailableRefs && path !in unavailableToolPaths) return@map element
-            if (path == null) return@map element
-            changed = true
-            JsonObject(artifact.toMutableMap().apply { remove("path") })
-        })
-        if (!changed) return part
+        if ((root["status"] as? JsonPrimitive)?.contentOrNull != "completed" || "artifacts" !in root) return part
         return part.copy(
-            text = JsonObject(root.toMutableMap().apply { put("artifacts", sanitizedArtifacts) }).toString(),
+            text = JsonObject(root.toMutableMap().apply {
+                put("artifacts", buildSubAssistantArtifactManifest(metadata.artifacts))
+            }).toString(),
         )
-    }
-
-    /**
-     * Rewrites only the structured `artifacts[].path` fields emitted by assistant_call.
-     * A global string replacement would corrupt explanatory text and unrelated tool payloads.
-     */
-    private fun rewriteSubAssistantArtifactPaths(
-        parts: List<UIMessagePart>,
-        pathRewrites: Map<String, String>,
-    ): List<UIMessagePart> {
-        if (pathRewrites.isEmpty()) return parts
-        return parts.map { part ->
-            when (part) {
-                is UIMessagePart.Tool -> part.copy(
-                    output = rewriteSubAssistantArtifactPaths(part.output, pathRewrites),
-                )
-
-                is UIMessagePart.Text -> rewriteSubAssistantArtifactPathText(part, pathRewrites)
-
-                else -> part
-            }
-        }
-    }
-
-    private fun rewriteSubAssistantArtifactPathText(
-        part: UIMessagePart.Text,
-        pathRewrites: Map<String, String>,
-    ): UIMessagePart.Text {
-        val root = runCatching { JsonInstant.parseToJsonElement(part.text) as? JsonObject }.getOrNull()
-            ?: return part
-        val artifacts = root["artifacts"] as? JsonArray ?: return part
-        var changed = false
-        val rewrittenArtifacts = JsonArray(artifacts.map { item ->
-            val artifact = item as? JsonObject ?: return@map item
-            val oldPath = (artifact["path"] as? JsonPrimitive)?.contentOrNull
-            val newPath = oldPath?.let(pathRewrites::get) ?: return@map item
-            changed = true
-            JsonObject(artifact.toMutableMap().apply { put("path", JsonPrimitive(newPath)) })
-        })
-        if (!changed) return part
-        return part.copy(text = JsonObject(root.toMutableMap().apply { put("artifacts", rewrittenArtifacts) }).toString())
     }
 
     private fun canonicalPath(file: File): String =

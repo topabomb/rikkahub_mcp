@@ -53,7 +53,7 @@ import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.richtext.MarkdownBlock
 import net.weero.measix.pilot.ui.components.richtext.MathBlock
-import net.weero.measix.pilot.ui.components.richtext.Mermaid
+import net.weero.measix.pilot.ui.components.richtext.HighlightCodeBlock
 import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.JetbrainsMono
@@ -165,7 +165,8 @@ private fun MainPage(vm: DebugVM) {
             },
             name = "A"
         )
-        Mermaid(
+        HighlightCodeBlock(
+            language = "mermaid",
             code = """
                 mindmap
                   root((mindmap))

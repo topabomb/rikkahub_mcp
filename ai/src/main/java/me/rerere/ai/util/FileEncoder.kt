@@ -7,16 +7,14 @@ import android.graphics.Matrix
 import android.util.Base64
 import android.util.Base64OutputStream
 import androidx.core.net.toUri
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import me.rerere.ai.ui.UIMessagePart
 import java.io.ByteArrayOutputStream
 import java.io.File
-
-private val supportedTypes = setOf(
-    "image/jpeg",
-    "image/png",
-    "image/gif",
-    "image/webp",
-)
+import java.io.InputStream
 
 data class EncodedImage(
     val base64: String,
@@ -65,7 +63,7 @@ fun UIMessagePart.Image.encodeBase64(withPrefix: Boolean = true): Result<Encoded
             }
             val mimeType = file.guessMimeType().getOrThrow()
             // 统一进行压缩处理
-            val (encoded, outputMimeType) = file.compressAndEncode(mimeType)
+            val (encoded, outputMimeType) = compressAndEncode(mimeType, openStream = file::inputStream)
             EncodedImage(
                 base64 = if (withPrefix) "data:$outputMimeType;base64,$encoded" else encoded,
                 mimeType = outputMimeType
@@ -122,22 +120,42 @@ fun UIMessagePart.Audio.encodeBase64(withPrefix: Boolean = true): Result<String>
     }
 }
 
-private fun File.compressAndEncode(
+/** Encodes an owner-validated memory snapshot with the same policy as a native file image. */
+suspend fun encodeImageBytes(bytes: ByteArray, withPrefix: Boolean = true): EncodedImage = withContext(Dispatchers.IO) {
+    val coroutineContext = currentCoroutineContext()
+    coroutineContext.ensureActive()
+    val mimeType = bytes.inputStream().use(::guessImageMimeType)
+    val (encoded, outputMimeType) = compressAndEncode(
+        mimeType = mimeType,
+        openStream = bytes::inputStream,
+        checkActive = coroutineContext::ensureActive,
+    )
+    coroutineContext.ensureActive()
+    EncodedImage(
+        base64 = if (withPrefix) "data:$outputMimeType;base64,$encoded" else encoded,
+        mimeType = outputMimeType,
+    )
+}
+
+private fun compressAndEncode(
     mimeType: String,
+    openStream: () -> InputStream,
+    checkActive: () -> Unit = {},
     maxDimension: Int = 10_000,
     maxPixels: Long = 16_000_000L,
     quality: Int = 85
 ): Pair<String, String> {
     // GIF 保持原样（可能是动图）
     if (mimeType == "image/gif") {
-        return Pair(encodeToBase64Streaming(), mimeType)
+        return Pair(encodeToBase64Streaming(openStream, checkActive), mimeType)
     }
 
     // 读取图片尺寸
     val options = BitmapFactory.Options().apply {
         inJustDecodeBounds = true
     }
-    BitmapFactory.decodeFile(absolutePath, options)
+    checkActive()
+    openStream().use { BitmapFactory.decodeStream(it, null, options) }
 
     options.inSampleSize = calculateImageInSampleSize(
         width = options.outWidth,
@@ -147,16 +165,22 @@ private fun File.compressAndEncode(
     )
     options.inJustDecodeBounds = false
 
-    val bitmap = BitmapFactory.decodeFile(absolutePath, options)
-        ?: throw IllegalArgumentException("Failed to decode image: $absolutePath")
-    val normalizedBitmap = normalizeByExif(bitmap)
-
+    checkActive()
+    val bitmap = openStream().use { BitmapFactory.decodeStream(it, null, options) }
+        ?: throw IllegalArgumentException("Failed to decode image")
+    var normalizedBitmap = bitmap
     return try {
+        checkActive()
+        normalizedBitmap = normalizeByExif(bitmap, openStream)
+        checkActive()
         val byteArrayOutputStream = ByteArrayOutputStream()
         // 强制使用 JPEG 格式，因为很多提供商不支持 webp
         Base64OutputStream(byteArrayOutputStream, Base64.NO_WRAP).use { base64Stream ->
-            normalizedBitmap.compress(Bitmap.CompressFormat.JPEG, quality, base64Stream)
+            check(normalizedBitmap.compress(Bitmap.CompressFormat.JPEG, quality, base64Stream)) {
+                "Failed to compress image"
+            }
         }
+        checkActive()
         Pair(byteArrayOutputStream.toString(Charsets.ISO_8859_1.name()), "image/jpeg")
     } finally {
         if (normalizedBitmap !== bitmap) {
@@ -166,12 +190,14 @@ private fun File.compressAndEncode(
     }
 }
 
-private fun File.normalizeByExif(bitmap: Bitmap): Bitmap {
+private fun normalizeByExif(bitmap: Bitmap, openStream: () -> InputStream): Bitmap {
     val orientation = runCatching {
-        ExifInterface(absolutePath).getAttributeInt(
-            ExifInterface.TAG_ORIENTATION,
-            ExifInterface.ORIENTATION_NORMAL
-        )
+        openStream().use { stream ->
+            ExifInterface(stream).getAttributeInt(
+                ExifInterface.TAG_ORIENTATION,
+                ExifInterface.ORIENTATION_NORMAL,
+            )
+        }
     }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
     val transform = mapExifOrientationToTransform(orientation)
     return applyExifTransform(bitmap, transform)
@@ -203,11 +229,19 @@ private fun applyExifTransform(bitmap: Bitmap, transform: ExifTransformType): Bi
     }.getOrElse { bitmap }
 }
 
-private fun File.encodeToBase64Streaming(): String {
+private fun File.encodeToBase64Streaming(): String = encodeToBase64Streaming(this::inputStream)
+
+private fun encodeToBase64Streaming(openStream: () -> InputStream, checkActive: () -> Unit = {}): String {
     val byteArrayOutputStream = ByteArrayOutputStream()
     Base64OutputStream(byteArrayOutputStream, Base64.NO_WRAP).use { base64Stream ->
-        inputStream().use { input ->
-            input.copyTo(base64Stream, bufferSize = 8 * 1024)
+        openStream().use { input ->
+            val buffer = ByteArray(8 * 1024)
+            while (true) {
+                checkActive()
+                val count = input.read(buffer)
+                if (count < 0) break
+                base64Stream.write(buffer, 0, count)
+            }
         }
     }
     return byteArrayOutputStream.toString(Charsets.ISO_8859_1.name())
@@ -233,56 +267,58 @@ internal fun calculateImageInSampleSize(
 }
 
 private fun File.guessMimeType(): Result<String> = runCatching {
-    inputStream().use { input ->
-        val bytes = ByteArray(16)
-        val read = input.read(bytes)
-        if (read < 12) error("File too short to determine MIME type")
+    inputStream().use(::guessImageMimeType)
+}
 
-        // 判断 HEIF/HEIC/AVIF 格式：ISO-BMFF 容器，"ftyp" box 位于字节 4..8，主品牌码位于 8..12
-        // 新手机的 HDR HEIF 照片常用 heix/hevc/mif1/msf1 等品牌码，而非仅 heic，需全部识别
-        if (bytes.copyOfRange(4, 8).toString(Charsets.US_ASCII) == "ftyp") {
-            when (bytes.copyOfRange(8, 12).toString(Charsets.US_ASCII)) {
-                "heic", "heix", "heim", "heis",
-                "hevc", "hevx", "hevm", "hevs",
-                "mif1", "msf1", "heif",
-                    -> return@runCatching "image/heic"
+private fun guessImageMimeType(input: InputStream): String {
+    val bytes = ByteArray(16)
+    val read = input.read(bytes)
+    if (read < 12) error("File too short to determine MIME type")
 
-                "avif", "avis" -> return@runCatching "image/avif"
-            }
+    // 判断 HEIF/HEIC/AVIF 格式：ISO-BMFF 容器，"ftyp" box 位于字节 4..8，主品牌码位于 8..12
+    // 新手机的 HDR HEIF 照片常用 heix/hevc/mif1/msf1 等品牌码，而非仅 heic，需全部识别
+    if (bytes.copyOfRange(4, 8).toString(Charsets.US_ASCII) == "ftyp") {
+        when (bytes.copyOfRange(8, 12).toString(Charsets.US_ASCII)) {
+            "heic", "heix", "heim", "heis",
+            "hevc", "hevx", "hevm", "hevs",
+            "mif1", "msf1", "heif",
+                -> return "image/heic"
+
+            "avif", "avis" -> return "image/avif"
         }
-
-        // 判断 JPEG 格式：开头为 0xFF 0xD8
-        if (bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte()) {
-            return@runCatching "image/jpeg"
-        }
-
-        // 判断 PNG 格式：开头为 89 50 4E 47 0D 0A 1A 0A
-        if (bytes.copyOfRange(0, 8).contentEquals(
-                byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
-            )
-        ) {
-            return@runCatching "image/png"
-        }
-
-        // 判断WebP格式：开头为 "RIFF" + 4字节长度 + "WEBP"
-        if (bytes.copyOfRange(0, 4).toString(Charsets.US_ASCII) == "RIFF" && bytes.copyOfRange(8, 12)
-                .toString(Charsets.US_ASCII) == "WEBP"
-        ) {
-            return@runCatching "image/webp"
-        }
-
-        // 判断 GIF 格式：开头为 "GIF89a" 或 "GIF87a"
-        val header = bytes.copyOfRange(0, 6).toString(Charsets.US_ASCII)
-        if (header == "GIF89a" || header == "GIF87a") {
-            return@runCatching "image/gif"
-        }
-
-        error(
-            "Failed to guess MIME type: $header, ${
-                bytes.joinToString(",") {
-                    it.toUByte().toString()
-                }
-            }"
-        )
     }
+
+    // 判断 JPEG 格式：开头为 0xFF 0xD8
+    if (bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte()) {
+        return "image/jpeg"
+    }
+
+    // 判断 PNG 格式：开头为 89 50 4E 47 0D 0A 1A 0A
+    if (bytes.copyOfRange(0, 8).contentEquals(
+            byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
+        )
+    ) {
+        return "image/png"
+    }
+
+    // 判断WebP格式：开头为 "RIFF" + 4字节长度 + "WEBP"
+    if (bytes.copyOfRange(0, 4).toString(Charsets.US_ASCII) == "RIFF" && bytes.copyOfRange(8, 12)
+            .toString(Charsets.US_ASCII) == "WEBP"
+    ) {
+        return "image/webp"
+    }
+
+    // 判断 GIF 格式：开头为 "GIF89a" 或 "GIF87a"
+    val header = bytes.copyOfRange(0, 6).toString(Charsets.US_ASCII)
+    if (header == "GIF89a" || header == "GIF87a") {
+        return "image/gif"
+    }
+
+    error(
+        "Failed to guess MIME type: $header, ${
+            bytes.joinToString(",") {
+                it.toUByte().toString()
+            }
+        }"
+    )
 }

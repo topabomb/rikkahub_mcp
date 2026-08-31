@@ -3,15 +3,20 @@ package net.weero.measix.pilot.service
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.transform
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.attachments.AttachmentReferenceLookup
 import net.weero.measix.pilot.data.ai.attachments.AttachmentReferenceTarget
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.files.ArtifactStore
+import net.weero.measix.pilot.data.files.LocalToolPath
+import net.weero.measix.pilot.utils.JsonInstant
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 
 /**
- * Query-side projection from stable attachment handles to local preview URLs.
+ * Query-side projection from attachment handles and disclosed upload paths to preview URLs.
  *
  * Preview resolution is suspend because ArtifactStore is the lifecycle owner: every local URL
  * and managed artifact is checked against ACTIVE metadata, the allowed root, MIME and signature
@@ -69,7 +74,45 @@ class ConversationAttachmentPreviewProjector(
 
                 AttachmentReferenceTarget.Conflict -> null
             }
-            if (url != null) projected[ref] = url
+            if (url != null) {
+                projected[ref] = url
+                val toolPath = when (target) {
+                    is AttachmentReferenceTarget.ManagedArtifact -> target.artifact.toolPath()
+                    is AttachmentReferenceTarget.MessagePart -> try {
+                        AttachmentRefs.parseFileUrl(url)?.let { file ->
+                            artifactStore.resolveManagedReference(file)?.toolPath()
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        null
+                    }
+                    AttachmentReferenceTarget.Conflict -> null
+                }
+                if (toolPath != null) projected[toolPath] = url
+            }
+        }
+        // Tool input paths may intentionally reference a file absent from this conversation.
+        // They are preview requests, not durable attachment roots or aliases.
+        AttachmentRefs.walkMessageParts(messages).filterIsInstance<UIMessagePart.Tool>().forEach { tool ->
+            if (tool.toolName != "inspect_attachments" && tool.toolName != "assistant_call") return@forEach
+            val arguments = runCatching { JsonInstant.parseToJsonElement(tool.input) as? JsonObject }.getOrNull()
+                ?: return@forEach
+            val paths = arguments["attachments"] as? JsonArray ?: return@forEach
+            for (value in paths) {
+                val primitive = value as? JsonPrimitive ?: continue
+                if (!primitive.isString) continue
+                val path = primitive.content.trim()
+                if (LocalToolPath.parseUploadToolPath(path) == null || path in projected) continue
+                try {
+                    val file = artifactStore.resolveToolPath(path) ?: continue
+                    artifactStore.resolveImagePreviewForFile(file)?.let { projected[path] = it }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // Malformed or no-longer-available paths have no preview.
+                }
+            }
         }
         return projected
     }

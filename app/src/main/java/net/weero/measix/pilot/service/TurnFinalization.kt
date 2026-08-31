@@ -7,6 +7,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ToolExecutionContext
+import me.rerere.ai.core.ToolMetadataDelivery
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -21,6 +22,7 @@ import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.parseAssistantCallExtrasFromInput
 import net.weero.measix.pilot.data.ai.subassistant.reportSubAssistantMetadataPatch
+import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
@@ -71,7 +73,12 @@ class TurnFinalization(
             "assistant message $messageId is not present in the owned conversation snapshot"
         }
         val (nodeIndex, targetMessage) = located
-        val updatedMessage = closeOpenToolsInMessage(targetMessage, reason, cancelledByUser)
+        val updatedMessage = closeOpenToolsInMessage(
+            targetMessage,
+            reason,
+            cancelledByUser,
+            owningTurnId = snapshot.activeTurn?.takeIf { it.assistantMessageId == messageId }?.turnId,
+        )
         if (updatedMessage == targetMessage) return snapshot
         return snapshot.copy(
             nodes = snapshot.nodes.mapIndexed { index, node ->
@@ -116,7 +123,12 @@ class TurnFinalization(
         require(
             targetMessage.id == handle.assistantMessageId && targetMessage.role == MessageRole.ASSISTANT
         ) { "latest turn messages do not end with the owning assistant message" }
-        val updatedMessage = closeOpenToolsInMessage(targetMessage, reason, cancelledByUser)
+        val updatedMessage = closeOpenToolsInMessage(
+            targetMessage.withoutUnpersistableBase64(),
+            reason,
+            cancelledByUser,
+            owningTurnId = handle.turnId,
+        )
         if (updatedMessage == targetMessage) return ownedMessages
         return ownedMessages.toMutableList().apply { set(lastIndex, updatedMessage) }
     }
@@ -125,6 +137,7 @@ class TurnFinalization(
         targetMessage: UIMessage,
         reason: String,
         cancelledByUser: Boolean,
+        owningTurnId: Uuid?,
     ): UIMessage {
         var updatedMessage = targetMessage.finishPendingTools { tool ->
             if (cancelledByUser) {
@@ -133,8 +146,37 @@ class TurnFinalization(
                 net.weero.measix.pilot.service.runtime.interruptPendingTool(tool)
             }
         }
+        val messageTools = updatedMessage.getTools()
+        val interruptedOrdinals = messageTools.mapIndexedNotNull { ordinal, tool ->
+            ordinal.takeIf { !tool.hasReplayResult && tool.approvalState !is ToolApprovalState.Pending }
+        }
+        val hasInterruptedAssistantCall = interruptedOrdinals.any { ordinal ->
+            messageTools[ordinal].toolName == "assistant_call"
+        }
+        val executionFacts = if (owningTurnId != null && hasInterruptedAssistantCall) {
+            conversationRepository.getToolExecutions(owningTurnId.toString()).associateBy { it.toolOrdinal }
+        } else {
+            null
+        }
+        val ordinalIterator = interruptedOrdinals.iterator()
         val childMessagesByConversation = loadChildMessagesForInterruptedCalls(updatedMessage)
         updatedMessage = updatedMessage.finishInterruptedTools { tool ->
+            val ordinal = ordinalIterator.next()
+            val execution = executionFacts?.get(ordinal)
+            if (tool.toolName == "assistant_call") {
+                val hasRunMetadata = tool.metadata?.containsKey("sub_assistant_call") == true
+                // STARTED precedes materialization. Only the child-link checkpoint establishes a run;
+                // an absent metadata key is legal before that point, but never repairs a linked run.
+                val hasNoLinkedRun = executionFacts != null && !hasRunMetadata &&
+                    (execution == null ||
+                        (execution.status == ToolExecutionStatus.STARTED && execution.childConversationId == null))
+                if (hasNoLinkedRun) return@finishInterruptedTools interruptPendingTool(tool)
+                execution?.childConversationId?.let { childId ->
+                    require(tool.getSubAssistantCallMetadata(json)?.childConversationId == childId) {
+                        "assistant_call metadata does not match committed child link at ordinal $ordinal"
+                    }
+                }
+            }
             val childId = tool.getSubAssistantCallMetadata(json)?.childConversationId
                 ?.let(Uuid::parse)
             finishInterruptedToolAfterGenerationStop(
@@ -197,7 +239,7 @@ class TurnFinalization(
         )
     }
 
-    /** Finalizes an active sub-assistant run on cancellation or failure. */
+    /** Finalizes the Child and stages Caller metadata for its next result/turn terminal commit. */
     suspend fun finalizeSubAssistantRun(
         childConversationId: Uuid,
         reason: String,
@@ -208,14 +250,14 @@ class TurnFinalization(
             timeoutMillis = FINALIZATION_TIMEOUT_MS,
             finalizeChild = { finalizeChild(childConversationId, reason) },
             finalizeMetadata = {
-                reportSubAssistantMetadataPatch(json, execContext, terminalMetadata, checkpoint = false)
+                reportSubAssistantMetadataPatch(json, execContext, terminalMetadata, delivery = ToolMetadataDelivery.DEFERRED)
             },
         )
         failures.child?.let { error ->
             Log.e(TAG, "Unable to finalize interrupted child $childConversationId", error)
         }
         failures.metadata?.let { error ->
-            Log.e(TAG, "Unable to persist terminal metadata for ${terminalMetadata.runId}", error)
+            Log.e(TAG, "Unable to stage terminal metadata for ${terminalMetadata.runId}", error)
         }
         failures.throwIfAny(childConversationId, terminalMetadata.runId)
     }
@@ -349,7 +391,7 @@ internal data class InterruptedRunFinalizationFailures(
     fun throwIfAny(childConversationId: Uuid, runId: String) {
         val primary = child ?: metadata ?: return
         val failure = IllegalStateException(
-            "Sub-assistant terminal state was not durably finalized: child=$childConversationId, run=$runId",
+            "Sub-assistant Child finalization or Caller metadata staging failed: child=$childConversationId, run=$runId",
             primary,
         )
         if (child != null && metadata != null && metadata !== primary) {

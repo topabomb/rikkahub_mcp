@@ -6,6 +6,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,9 +25,11 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolArgumentsException
 import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.core.ToolExecutionFailure
+import me.rerere.ai.core.ToolMetadataDelivery
 import me.rerere.ai.core.ToolResourceLease
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolveResult
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
@@ -34,6 +37,7 @@ import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
+import me.rerere.ai.provider.ProviderResponseException
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.provider.TextGenerationParams
@@ -56,8 +60,6 @@ import net.weero.measix.pilot.data.files.FileFolders
 import java.io.File
 import net.weero.measix.pilot.data.ai.transformers.transforms
 import net.weero.measix.pilot.data.ai.tools.buildMemoryTools
-import net.weero.measix.pilot.data.ai.tools.local.askUserApprovalRejection
-import net.weero.measix.pilot.data.ai.tools.local.generateImageApprovalRejection
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
@@ -69,6 +71,7 @@ import net.weero.measix.pilot.utils.applyPlaceholders
 import java.util.Locale
 import kotlin.time.Clock
 import kotlin.time.TimeSource
+import kotlin.coroutines.coroutineContext
 import kotlin.uuid.Uuid
 
 private const val TAG = "GenerationLoop"
@@ -118,31 +121,45 @@ internal data class ToolApprovalResolution(
 
 internal fun resolveToolApprovals(
     toolsAwaitingReplayResult: List<UIMessagePart.Tool>,
-    toolDefinitions: List<Tool>,
+    toolDefinitions: Map<String, Tool>,
     nonInteractive: Boolean,
     interactiveToolNames: Set<String>,
     json: Json,
 ): ToolApprovalResolution {
     var hasPendingApproval = false
     val updatedTools = toolsAwaitingReplayResult.map { tool ->
-        val toolDefinition = toolDefinitions.find { it.name == tool.toolName }
-        val args = tool.inputAsJson()
-        val contractRejection = askUserApprovalRejection(tool.toolName, args)
-            ?: generateImageApprovalRejection(tool.toolName, args)
-        when {
-            contractRejection != null &&
-                tool.approvalState !is ToolApprovalState.Denied &&
-                tool.approvalState !is ToolApprovalState.Answered -> {
-                tool.copy(output = contractRejection)
-            }
+        if (tool.hasReplayResult || tool.approvalState is ToolApprovalState.Denied ||
+            tool.approvalState is ToolApprovalState.Answered
+        ) return@map tool
 
+        fun reject(output: List<UIMessagePart>) = tool.copy(
+            output = output,
+            approvalState = if (tool.approvalState is ToolApprovalState.Pending) ToolApprovalState.Auto
+                else tool.approvalState,
+        )
+        val toolDefinition = toolDefinitions[tool.toolName] ?: return@map reject(
+            listOf(UIMessagePart.Text(buildJsonObject {
+                put("error", "tool_not_available")
+                put("type", "error")
+                put("status", "failed")
+                put("reason", "tool_not_available")
+                put("tool", tool.toolName)
+                put("message", "This tool is not available in the current run. Do not retry unchanged.")
+            }.toString()))
+        )
+        val args = try {
+            toolDefinition.parseArguments(tool.input, json)
+        } catch (rejection: ToolArgumentsException) {
+            return@map reject(rejection.output)
+        }
+        when {
             tool.approvalState is ToolApprovalState.Pending -> {
                 hasPendingApproval = true
                 tool
             }
 
             tool.approvalState is ToolApprovalState.Auto &&
-                toolDefinition?.needsApproval(args) == true -> {
+                toolDefinition.needsApproval(args) -> {
                 if (nonInteractive && tool.toolName !in interactiveToolNames) {
                     tool.copy(
                         output = listOf(
@@ -150,6 +167,7 @@ internal fun resolveToolApprovals(
                                 json.encodeToString(
                                     buildJsonObject {
                                         put("error", JsonPrimitive("tool_not_permitted"))
+                                        put("type", "error")
                                         put("reason", JsonPrimitive("approval_unavailable"))
                                         put(
                                             "message",
@@ -335,6 +353,8 @@ data class GenerationRequest(
     /** Final write-time guard for the owner captured by [memoryContextProvider]. */
     val memoryToolAllowed: suspend (ownerId: String) -> Boolean = { true },
     val assistantMessageId: Uuid? = null,
+    /** Synchronous handoff to the turn owner; independent of cancellable presentation delivery. */
+    val onMessagesObserved: (List<UIMessage>) -> Unit = {},
     val onCheckpoint: suspend (GenerationCheckpoint) -> Unit = {},
     val providerSessionId: String? = null,
 )
@@ -392,6 +412,12 @@ class GenerationLoop(
         val mediaCapabilities = request.mediaCapabilities
 
         var messages: List<UIMessage> = request.messages
+        request.onMessagesObserved(messages)
+
+        suspend fun publishMessages(next: List<UIMessage>) {
+            request.onMessagesObserved(next)
+            send(GenerationChunk.Messages(next))
+        }
 
         suspend fun commitCheckpoint(
             kind: CheckpointKind,
@@ -399,21 +425,35 @@ class GenerationLoop(
             toolResults: List<ToolResultEvent> = emptyList(),
             publishResources: Boolean = false,
         ) {
-            try {
+            val checkpointMessages = messages
+            suspend fun commit() {
                 onCheckpoint(
                     GenerationCheckpoint(
                         kind = kind,
-                        messages = messages,
+                        messages = checkpointMessages,
                         toolExecution = toolExecution,
                         toolResults = toolResults,
                     )
                 )
+                if (publishResources) {
+                    request.onMessagesObserved(checkpointMessages)
+                    unpublishedResources.publishAll()
+                }
+            }
+            try {
+                if (publishResources) {
+                    coroutineContext.ensureActive()
+                    // A completed output owns these resources. Durable rooting, lease handoff and
+                    // the turn-owned projection must finish together before cancellation resumes.
+                    withContext(NonCancellable) { commit() }
+                } else {
+                    commit()
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 throw CheckpointCommitException(e)
             }
-            if (publishResources) unpublishedResources.publishAll()
         }
 
         // 跟踪循环退出原因，默认 step_limit_reached
@@ -509,6 +549,7 @@ class GenerationLoop(
                         // Publish the turn-owned raw projection before the first suspension so
                         // cancellation finalization can retain usage already observed on the wire.
                         messages = updatedMessages
+                        request.onMessagesObserved(messages)
                         messages = messages.transforms(
                             transformers = outputTransformers,
                             context = context,
@@ -518,11 +559,7 @@ class GenerationLoop(
                             requestOrigins = outputOrigins,
                             registerUnpublishedResource = unpublishedResources::register,
                         )
-                        send(
-                            GenerationChunk.Messages(
-                                transformStreamingLast(messages)
-                            )
-                        )
+                        publishMessages(transformStreamingLast(messages))
                     },
                     transformers = inputTransformers,
                     model = model,
@@ -547,8 +584,8 @@ class GenerationLoop(
                     finishedAt = Clock.System.now()
                         .toLocalDateTime(TimeZone.currentSystemDefault())
                 )
-                send(GenerationChunk.Messages(messages))
                 commitCheckpoint(CheckpointKind.STEP_COMPLETED, publishResources = true)
+                publishMessages(messages)
 
                 toolsAwaitingReplayResult = messages.last().getTools().filter { !it.hasReplayResult }
                 if (toolsAwaitingReplayResult.isEmpty()) {
@@ -567,7 +604,7 @@ class GenerationLoop(
             check(replayPendingOrdinals.size == toolsAwaitingReplayResult.size)
             val approvalResolution = resolveToolApprovals(
                 toolsAwaitingReplayResult = toolsAwaitingReplayResult,
-                toolDefinitions = toolsInternal,
+                toolDefinitions = toolsByName,
                 nonInteractive = nonInteractive,
                 interactiveToolNames = interactiveToolNames,
                 json = json,
@@ -577,7 +614,7 @@ class GenerationLoop(
             if (updatedTools != toolsAwaitingReplayResult) {
                 val replacements = replayPendingOrdinals.zip(updatedTools).toMap()
                 messages = messages.dropLast(1) + messages.last().replaceToolsAtOrdinals(replacements)
-                send(GenerationChunk.Messages(messages))
+                publishMessages(messages)
             }
 
             val messageId = messages.last().id
@@ -600,7 +637,7 @@ class GenerationLoop(
                     toolResults = immediateResultFacts,
                 )
                 // Edge projections may only observe tool state after the durable checkpoint commits.
-                send(GenerationChunk.Messages(transformStreamingLast(messages)))
+                publishMessages(transformStreamingLast(messages))
             }
 
             if (approvalResolution.hasPendingApproval) {
@@ -621,9 +658,6 @@ class GenerationLoop(
             toolsToProcess.forEach { (toolOrdinalInMessage, tool) ->
                 var executionEvent: ToolExecutionEvent? = null
                 var executionFailed = false
-                val temporaryResources = UnpublishedResourceScope()
-                var toolFailure: Throwable? = null
-                try {
                 when (tool.approvalState) {
                     is ToolApprovalState.Denied -> {
                         // Tool was denied by user
@@ -660,59 +694,15 @@ class GenerationLoop(
 
                     else -> {
                         // Auto or Approved - execute the tool.
-                        // Lookup goes through the deterministic step index; a tool that is not
-                        // registered in the current run returns a stable tool_not_available
-                        // result instead of throwing an internal exception at the model.
+                        // Availability and arguments were validated against this same step index.
                         val currentMessageId = messages.last().id
                         val executionId = "${currentMessageId}_${toolOrdinalInMessage}"
                             .replace(Regex("[^A-Za-z0-9_-]"), "_")
-                        val toolDef = toolsByName[tool.toolName]
-                        if (toolDef == null) {
-                            executionFailed = true
-                            executionEvent = ToolExecutionEvent(
-                                executionId = executionId,
-                                messageId = currentMessageId,
-                                toolOrdinal = toolOrdinalInMessage,
-                                toolCallId = tool.toolCallId,
-                                toolName = tool.toolName,
-                                status = ToolExecutionEventStatus.STARTED,
-                            )
-                            commitCheckpoint(
-                                kind = CheckpointKind.TOOL_EXECUTION_STARTED,
-                                toolExecution = executionEvent,
-                            )
-                            send(GenerationChunk.Messages(transformStreamingLast(messages)))
-                            Log.w(
-                                TAG,
-                                "Unavailable tool call: ${tool.toolName}. " +
-                                    "Available tools: ${toolsByName.keys.sorted()}",
-                            )
-                            completedReplayResults[toolOrdinalInMessage] = tool.copy(
-                                output = listOf(
-                                    UIMessagePart.Text(
-                                        json.encodeToString(
-                                            buildJsonObject {
-                                                put("status", "failed")
-                                                put("reason", "tool_not_available")
-                                                put("tool", tool.toolName)
-                                                put(
-                                                    "message",
-                                                    "This tool is not available in the current run. Do not retry unchanged.",
-                                                )
-                                            }
-                                        )
-                                    )
-                                )
-                            )
-                        } else {
-                            runCatching {
-                                val args = runCatching {
-                                    json.parseToJsonElement(tool.input.ifBlank { "{}" })
-                                }.getOrElse {
-                                    error("Invalid tool arguments JSON for ${tool.toolName}: ${it.message}")
-                                }
-                                // 执行每个具体 ToolCall 前必须发出 Phase(tool_executing, registeredToolName)
-                                send(GenerationChunk.Phase("tool_executing", toolDef.name))
+                        val toolDef = checkNotNull(toolsByName[tool.toolName])
+                        runCatching {
+                            val args = toolDef.parseArguments(tool.input, json)
+                            // 执行每个具体 ToolCall 前必须发出 Phase(tool_executing, registeredToolName)
+                            send(GenerationChunk.Phase("tool_executing", toolDef.name))
                             executionEvent = ToolExecutionEvent(
                                 executionId = executionId,
                                 messageId = currentMessageId,
@@ -725,7 +715,7 @@ class GenerationLoop(
                                 kind = CheckpointKind.TOOL_EXECUTION_STARTED,
                                 toolExecution = executionEvent,
                             )
-                            send(GenerationChunk.Messages(transformStreamingLast(messages)))
+                            publishMessages(transformStreamingLast(messages))
                             Log.i(TAG, "generateText: executing tool ${toolDef.name} with args: $args")
 
                             // 构建 ToolExecutionContext，提供 reportMetadata 回写能力
@@ -735,14 +725,11 @@ class GenerationLoop(
                                 messageId = currentMessageId,
                                 toolOrdinal = toolOrdinal,
                                 toolCallId = tool.toolCallId,
-                                // 最小只读附件能力：refs → 统一 AttachmentResolver。
-                                // 消息快照（含本 run 内已完成的 Tool 结果）是 Runtime 实现细节，不暴露给工具。
-                                resolveAttachments = { refs ->
-                                    when (val resolved = attachmentResolver.resolveImages(messages, refs)) {
+                                approvedByUser = tool.approvalState is ToolApprovalState.Approved,
+                                // File-owner reads are independent of this conversation and Workspace.
+                                resolveAttachments = { paths ->
+                                    when (val resolved = attachmentResolver.readImages(paths)) {
                                         is AttachmentResolveResult.Success -> {
-                                            resolved.createdArtifacts.forEach { owned ->
-                                                temporaryResources.register(attachmentResolver.temporaryLease(owned))
-                                            }
                                             ToolAttachmentResolution(resolved.parts)
                                         }
                                         is AttachmentResolveResult.Failure -> ToolAttachmentResolution(
@@ -750,7 +737,7 @@ class GenerationLoop(
                                         )
                                     }
                                 },
-                                reportMetadata = { patch: JsonObject, checkpoint: Boolean ->
+                                reportMetadata = { patch: JsonObject, delivery: ToolMetadataDelivery ->
                                     // 从最新 messages 中按 locator 重新取得 Tool，merge metadata patch
                                     val allTools = messages.last().getTools()
                                     val currentTool = allTools.getOrNull(toolOrdinal)
@@ -776,13 +763,13 @@ class GenerationLoop(
                                         }
                                     }
                                     messages = messages.dropLast(1) + lastMsg.copy(parts = newParts)
-                                    send(
-                                        GenerationChunk.Messages(
-                                            transformStreamingLast(messages)
-                                        )
-                                    )
-                                    if (checkpoint) {
-                                        commitCheckpoint(CheckpointKind.TOOL_STATE_CHANGED)
+                                    when (delivery) {
+                                        ToolMetadataDelivery.DEFERRED -> Unit
+                                        ToolMetadataDelivery.STREAMING -> publishMessages(transformStreamingLast(messages))
+                                        ToolMetadataDelivery.CHECKPOINT -> {
+                                            commitCheckpoint(CheckpointKind.TOOL_STATE_CHANGED)
+                                            publishMessages(transformStreamingLast(messages))
+                                        }
                                     }
                                 },
                                 // 委派类工具派生会话确定后，将 child id 并入本次执行的 durable 事实
@@ -794,8 +781,8 @@ class GenerationLoop(
                                         commitCheckpoint(
                                             CheckpointKind.TOOL_STATE_CHANGED,
                                             toolExecution = executionEvent,
-                                            publishResources = true,
                                         )
+                                        request.onMessagesObserved(messages)
                                     }
                                 },
                                 registerUnpublishedResource = unpublishedResources::register,
@@ -822,6 +809,11 @@ class GenerationLoop(
                             )
                         }.onFailure {
                             if (it is CheckpointCommitException) throw it.cause ?: it
+                            if (it is ToolArgumentsException) {
+                                executionFailed = true
+                                completedReplayResults[toolOrdinalInMessage] = tool.copy(output = it.output)
+                                return@onFailure
+                            }
                             if (it is ToolExecutionFailure) {
                                 executionFailed = true
                                 completedReplayResults[toolOrdinalInMessage] = tool.copy(
@@ -874,21 +866,8 @@ class GenerationLoop(
                                 )
                             )
                         }
-                    }
                 }
                     }
-                } catch (error: Throwable) {
-                    toolFailure = error
-                    throw error
-                } finally {
-                    temporaryResources.discardAll()?.let { cleanupFailure ->
-                        if (toolFailure != null) {
-                            requireNotNull(toolFailure).addSuppressed(cleanupFailure)
-                        } else {
-                            throw cleanupFailure
-                        }
-                    }
-                }
 
                 val completedReplayResult = completedReplayResults.remove(toolOrdinalInMessage)
                 if (completedReplayResult != null) {
@@ -905,7 +884,6 @@ class GenerationLoop(
                         requestOrigins = outputOrigins,
                         registerUnpublishedResource = unpublishedResources::register,
                     )
-                    send(GenerationChunk.Messages(presentationMessages))
                     commitCheckpoint(
                         kind = CheckpointKind.TOOL_RESULT_COMPLETED,
                         toolExecution = executionEvent?.copy(
@@ -932,7 +910,7 @@ class GenerationLoop(
                         publishResources = true,
                     )
                     // Clear the committed EXECUTING projection even when no provider chunk follows.
-                    send(GenerationChunk.Messages(presentationMessages))
+                    publishMessages(presentationMessages)
                 }
             }
 
@@ -1132,11 +1110,22 @@ class GenerationLoop(
                     onUpdateMessages(messages)
                 }
             } else {
-                val chunk = providerImpl.generateText(
-                    providerSetting = provider,
-                    messages = internalMessages,
-                    params = params,
-                )
+                val chunk = try {
+                    providerImpl.generateText(
+                        providerSetting = provider,
+                        messages = internalMessages,
+                        params = params,
+                    )
+                } catch (error: ProviderResponseException) {
+                    observeFirstOutput(error.response)
+                    messages = messages.handleMessageChunk(
+                        chunk = error.response,
+                        model = model,
+                        assistantMessageId = assistantMessageId,
+                    )
+                    error.response.usage?.let(requestUsage::accept)
+                    throw error
+                }
                 observeFirstOutput(chunk)
                 messages = messages.handleMessageChunk(
                     chunk = chunk,
@@ -1217,22 +1206,17 @@ class GenerationLoop(
         ) + nonTextParts
     }
 
-    /**
-     * Build an immutable, deterministic tool index for the current step.
-     *
-     * Rejects blank names and duplicate registrations before the Provider request, so a
-     * misconfigured tool set fails loudly instead of silently dropping or shadowing a tool.
-     */
-    private fun buildToolIndex(tools: List<Tool>): Map<String, Tool> {
-        val map = LinkedHashMap<String, Tool>(tools.size)
-        for (tool in tools) {
-            require(tool.name.isNotBlank()) { "Tool name must not be blank" }
-            require(tool.name !in map) { "Duplicate tool name: ${tool.name}" }
-            map[tool.name] = tool
-        }
-        return map.toMap()
-    }
+}
 
+/** Reject ambiguous registrations before a request; approval and execution share this step index. */
+internal fun buildToolIndex(tools: List<Tool>): Map<String, Tool> {
+    val map = LinkedHashMap<String, Tool>(tools.size)
+    for (tool in tools) {
+        require(tool.name.isNotBlank()) { "Tool name must not be blank" }
+        require(tool.name !in map) { "Duplicate tool name: ${tool.name}" }
+        map[tool.name] = tool
+    }
+    return map.toMap()
 }
 
 internal fun MessageChunk.hasModelOutputPayload(): Boolean = choices.any { choice ->
