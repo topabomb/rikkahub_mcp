@@ -308,7 +308,6 @@ class RouteActivity : ComponentActivity() {
                     alignment = Alignment.TopCenter,
                     showCloseButton = true,
                 )
-                TTSController()
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -348,7 +347,8 @@ class RouteActivity : ComponentActivity() {
                                     id = Uuid.parse(key.id),
                                     text = key.text,
                                     files = key.files.map { it.toUri() },
-                                    nodeId = key.nodeId?.let { Uuid.parse(it) }
+                                    nodeId = key.nodeId?.let { Uuid.parse(it) },
+                                    isActiveRoute = backStack.lastOrNull() == key,
                                 )
                             }
 
@@ -560,6 +560,9 @@ class RouteActivity : ComponentActivity() {
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
                         )
+                    }
+                    if (recoveryState !is ApplicationRecoveryState.Ready || backStack.lastOrNull() !is Screen.Chat) {
+                        TTSController()
                     }
                     AnimatedVisibility(
                         visible = migrationState is MigrationState.Migrating,

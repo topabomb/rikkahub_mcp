@@ -87,6 +87,7 @@ import me.rerere.hugeicons.stroke.Menu03
 import me.rerere.hugeicons.stroke.MessageAdd01
 import me.rerere.hugeicons.stroke.PanelLeftOpen
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.ui.components.ui.TTSController
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
@@ -105,6 +106,7 @@ import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
 import net.weero.measix.pilot.ui.theme.ProvideChatSurfacePolicy
+import net.weero.measix.pilot.ui.theme.hasVisibleChatBackground
 import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.adaptive.ChatLayoutMode
@@ -142,7 +144,13 @@ import java.io.File
 import kotlin.uuid.Uuid
 
 @Composable
-fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
+fun ChatPage(
+    id: Uuid,
+    text: String?,
+    files: List<Uri>,
+    isActiveRoute: Boolean,
+    nodeId: Uuid? = null,
+) {
     val vm: ChatVM = koinViewModel(
         parameters = {
             parametersOf(id.toString())
@@ -160,24 +168,31 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
         ConversationReadState.Loading -> {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
+                if (isActiveRoute) TTSController()
             }
             return
         }
         ConversationReadState.Missing -> {
-            ConversationUnavailable(
-                title = stringResource(R.string.chat_conversation_missing_title),
-                message = stringResource(R.string.chat_conversation_missing_message),
-                onRetry = vm::retryConversationLoad,
-            )
+            Box(Modifier.fillMaxSize()) {
+                ConversationUnavailable(
+                    title = stringResource(R.string.chat_conversation_missing_title),
+                    message = stringResource(R.string.chat_conversation_missing_message),
+                    onRetry = vm::retryConversationLoad,
+                )
+                if (isActiveRoute) TTSController()
+            }
             return
         }
         is ConversationReadState.Failed -> {
             val diagnostic = state.error.message ?: state.error::class.simpleName.orEmpty()
-            ConversationUnavailable(
-                title = stringResource(R.string.chat_conversation_load_failed_title),
-                message = stringResource(R.string.chat_conversation_load_failed_message, diagnostic),
-                onRetry = vm::retryConversationLoad,
-            )
+            Box(Modifier.fillMaxSize()) {
+                ConversationUnavailable(
+                    title = stringResource(R.string.chat_conversation_load_failed_title),
+                    message = stringResource(R.string.chat_conversation_load_failed_message, diagnostic),
+                    onRetry = vm::retryConversationLoad,
+                )
+                if (isActiveRoute) TTSController()
+            }
             return
         }
         is ConversationReadState.Ready -> state.snapshot
@@ -329,6 +344,7 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
                     // 聊天详情区从真实铰链右边界开始；平面宽屏则占满固定侧栏后的剩余宽度。
                     Box(Modifier.weight(1f).fillMaxHeight()) {
                         ChatPageContent(
+                            isActiveRoute = isActiveRoute,
                             inputState = inputState,
                             turnPresentation = currentTurnPresentation,
                             conversationUiModel = conversationUiModel,
@@ -373,6 +389,7 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
                     }
                 ) {
                     ChatPageContent(
+                        isActiveRoute = isActiveRoute,
                         inputState = inputState,
                         turnPresentation = currentTurnPresentation,
                         conversationUiModel = conversationUiModel,
@@ -443,6 +460,7 @@ private fun ConversationUnavailable(
 
 @Composable
 private fun ChatPageContent(
+    isActiveRoute: Boolean,
     inputState: ChatInputState,
     turnPresentation: ConversationPresentation,
     conversationUiModel: ConversationUiModel?,
@@ -818,6 +836,16 @@ private fun ChatPageContent(
                     navController.navigate(Screen.AssistantMemory(assistant.id.toString()))
                 },
             )
+            if (isActiveRoute) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+                    TTSController(
+                        modifier = Modifier.widthIn(max = AdaptiveLayoutDefaults.ReadableContentMaxWidth),
+                        contentPadding = innerPadding,
+                        hazeState = hazeState,
+                        hasVisibleBackground = assistant.hasVisibleChatBackground(),
+                    )
+                }
+            }
         }
 
         if (showFilesSheet) {

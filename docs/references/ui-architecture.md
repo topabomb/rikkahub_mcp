@@ -111,7 +111,7 @@ enum class ColorMode { SYSTEM, LIGHT, DARK }
 助手开启背景图或渐变后，聊天页通过 `ProvideChatSurfacePolicy` 写入 `LocalChatChromeAlpha`：
 
 - **消息层 Chrome**（思考过程 `ChainOfThought`、用户/助手气泡、子助手卡、空态 readiness、建议胶囊）：使用 `ChatSurfacePolicy.chromeAlpha`。有背景时封顶为 `BACKGROUND_CHROME_MAX_ALPHA`，用户仍可通过气泡不透明度滑条再调低
-- **输入条实心底**：只用 `pageChromeAlpha`（有背景 `0.82`，无背景 `1.0`），不跟随气泡滑条，避免输入区随消息透明度一起变淡
+- **输入卡片与 TTS 工具条**：共用 `ChatOverlaySurface` 和 `surfaceContainerLow` 底色。关闭模糊时只用 `pageChromeAlpha`（有背景 `0.82`，无背景 `1.0`），不跟随气泡滑条；开启模糊时共用聊天页背景源和 12dp 模糊参数。只处理容器背景，不降低按钮和文字的不透明度
 - **产物与正文**（代码块、Mermaid/HTML 预览、表格、块级公式、图片/音视频/文档芯片、工具输出正文）：保持完全不透明，不套 chrome alpha
 - 没有助手背景时，消息层 chrome 继续只跟随 `DisplaySetting.bubbleOpacity`（默认 1.0）
 
@@ -656,6 +656,18 @@ Assistant 配置页提供 Target 类别、全局可见与 Caller 访问范围设
 主聊天把 `assistant_call` 渲染为独立 `SubAssistantCallCard`。卡片显示 Target、request、运行状态、有界文本预览和桥接的 `ask_user`，整卡进入 `SubAssistantDetail(masterConversationId, runId)`。详情页校验 run 与 Child 关系，并通过 `ChatMessage(readOnly = true)` 与不提供输入区来禁止修改型交互。
 
 TTS 控制条由当前 worker 的 `isSpeaking` 决定可见性，暂停不隐藏。暂停优先于底层播放器状态。同 turn 新内容继续入队，新 turn 替换整条队列；`stop` 释放所有权。控制条只在当前播放来源为 Target 且该 Assistant 开启 `useAssistantAvatar` 时显示 Target 头像。
+
+聊天页在 `ChatPageContent` 的 `Scaffold` 内容层承载 `TTSController`，以 `innerPadding` 提供的输入面板实测上沿为底边，
+再留出 8dp 间距。工具条与输入卡片使用相同的 8dp 横向外边距，起始边缘对齐。
+两者共用 `ChatOverlaySurface` 的透明度与模糊规则；工具条不叠加独立的 tonal elevation 或阴影。
+输入面板已包含 IME 和导航栏避让；工具条消费同一 `contentPadding` 后才处理剩余 `safeDrawing` 与 `ime`
+insets，不能重复加上键盘高度。多行、编辑态、附件及键盘变化均跟随本次布局的实测边界，不记录坐标或猜测输入高度。
+工具条与输入区使用相同的居中可读宽度，位于聊天详情栏和 Tabletop 内容边界内；不占用聊天布局空间，也不覆盖输入面板。
+非聊天页面由 `RouteActivity` 承载窗口安全底部覆盖层，聊天 Loading/Missing/Failed 状态也保留这类无输入面板的播放控制。
+只有精确匹配当前活动 NavKey 的聊天页面组合工具条，退出动画中的旧页面不保留第二条控制栏。工具条不支持自由拖动，
+工具条以外的区域不拦截页面触摸。
+窄窗口或大字体下可横向滚动工具条，保持展开后的所有操作可达。头像读取根层提供的 `LocalSettings`，
+不自行订阅配置 Store。承载页面切换不改变播放 owner；其他 Activity 和独立 Dialog 窗口不承载此覆盖层。
 
 完整配置、执行状态、详情解析和生命周期见 [sub-assistant-architecture.md](sub-assistant-architecture.md)。
 

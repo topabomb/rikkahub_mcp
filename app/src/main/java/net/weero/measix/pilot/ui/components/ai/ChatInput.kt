@@ -79,11 +79,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.dokar.sonner.ToastType
-import dev.chrisbanes.haze.HazeInput
 import dev.chrisbanes.haze.HazeState
-import dev.chrisbanes.haze.blur.HazeBlurStyle
-import dev.chrisbanes.haze.blur.hazeBlur
-import dev.chrisbanes.haze.blur.material3.Material3
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -114,9 +110,8 @@ import net.weero.measix.pilot.ui.components.ui.permission.PermissionRecordAudio
 import net.weero.measix.pilot.ui.components.ui.permission.rememberPermissionState
 import net.weero.measix.pilot.ui.context.LocalASRState
 import net.weero.measix.pilot.ui.context.LocalSettings
-import net.weero.measix.pilot.ui.theme.ChatSurfacePolicy
+import net.weero.measix.pilot.ui.components.ui.ChatOverlaySurface
 import net.weero.measix.pilot.ui.theme.hasVisibleChatBackground
-import net.weero.measix.pilot.ui.theme.withOverlayAlpha
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.hooks.ChatInputState
 import net.weero.measix.pilot.utils.SoundEffectPlayer
@@ -146,10 +141,6 @@ fun ChatInput(
 ) {
     val toaster = LocalToaster.current
     val useCompactHeightLayout = LocalAdaptiveLayoutInfo.current.useCompactChatInput
-    val hazeTintColor = MaterialTheme.colorScheme.surfaceContainerLow
-    val inputHazeStyle = HazeBlurStyle.Material3(containerColor = hazeTintColor) {
-        blurRadius(12.dp)
-    }
 
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -236,27 +227,13 @@ fun ChatInput(
                 .padding(bottom = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(containerShape)
-                    .then(
-                        if (settings.displaySetting.enableBlurEffect) Modifier.hazeBlur(
-                            input = HazeInput.Sources(hazeState),
-                            style = inputHazeStyle,
-                        )
-                        else Modifier
-                    ),
+            ChatOverlaySurface(
+                modifier = Modifier.fillMaxWidth(),
                 shape = containerShape,
-                tonalElevation = 0.dp,
+                enableBlurEffect = settings.displaySetting.enableBlurEffect,
+                hasVisibleBackground = assistant.hasVisibleChatBackground(),
+                hazeState = hazeState,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-                color = if (settings.displaySetting.enableBlurEffect) {
-                    Color.Transparent
-                } else {
-                    hazeTintColor.withOverlayAlpha(
-                        ChatSurfacePolicy.pageChromeAlpha(assistant.hasVisibleChatBackground())
-                    )
-                },
             ) {
                 Column(
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
