@@ -370,6 +370,17 @@ ChatPageContent
 只有 turn 进入 `IDLE` 或页面退出组合时才释放；`STOPPING` 期间工具审批、工具回答和子助手回答 callback 统一为空，不向正在收口的 turn 发命令。可因 IME 和自适应布局切换位置的 `ChatInput` 按钮不管理 Window flag。
 模型选择 sheet（`ModelListSheet`）由输入区的稳定根级组合一次，不随 action row 的 IME 显隐分支进入或离开组合；同一页面只存在一个 `ModelListState`，选择、清空与 dismiss 都只修改同一状态。
 
+前台 turn 触觉只由 `ChatPage` 的 `TurnHapticFeedback` 管理，调用位于自适应布局分支之外，不依赖消息列表项的组合生命周期。
+它直接收集 `ChatVM` 既有热流中的 `ConversationUiModel.turnFeedback` 同版本查询投影与设置，不经渲染快照转发，避免恢复前台时旧组合值造成误提醒；投影尚未就绪时静默，UI 不解析子助手 metadata 或读取 Runtime Job。
+`enableMessageGenerationHapticEffect` 统一控制触觉；页面内的 `AndroidTurnHapticPlayer` 只将 `WORK` / `ATTENTION` 映射到平台效果，不管理节拍或运行状态，不影响声音或通知。
+工作反馈沿用 `KeyboardTap`；待处理提醒使用 `VIBRATE` 权限播放系统预定义 `EFFECT_HEAVY_CLICK`，Android 8/9 使用 35ms 默认强度短脉冲。每次重击都检查 View 触觉开关；Android 13 起交由系统通过 `USAGE_TOUCH` 应用触觉偏好，不再读取已废弃的 `HAPTIC_FEEDBACK_ENABLED`；旧版逐次读取该开关并使用 `USAGE_ASSISTANCE_SONIFICATION`。不绕过系统限制，无振动器时静默。双击由可取消的页面协程逐次播放，不提交不可单独取消第二下的整段波形。
+页面处于 `RESUMED` 时，`runTurnHapticFeedback` 根据查询投影的 `outputCharacters` 增长触发轻振：观察后的首份新输出立即反馈，随后累计约 24 个新增字符且距上次振动至少 0.75 秒时反馈；不足 24 字但间隔已达 3 秒时，只随下一次新输出反馈，不定时补振。
+相邻投影长度正增长计入输出量；尚无 Assistant 槽位时长度为未知，首次取得槽位只建立基线，文本转换造成长度缩短时清空累计并从新长度继续。大块输出只振一次，不保留振动欠账。投影输出长度无变化且请求仍在工作时，每 5 秒轻振一次；重复快照不推迟心跳。输出与等待反馈共享最近振动时间，心跳后也遵守输出最短间隔。
+慢心跳只表示本地请求仍在处理或等待，不证明远端进展；没有速度档位、token 统计或新增配置。
+新的待审批或当前执行子助手的待回答交互重击两次，间隔 200ms，表达“需要用户处理”，随后暂停工作心跳，不周期催促；交互身份在当前观察期间去重。
+初次观察、恢复前台、重新开启设置和切换 turn 只建立现状基线，不重播既有输出或待处理提示。
+进入 `STOPPING`、`IDLE`，离开页面、失去 `RESUMED` 或关闭开关时取消所有后续触觉，包括双振的第二下。
+
 MCP 设置页只保留列表下拉刷新，避免顶部栏重复入口。下拉只调用 `McpApplicationService.refreshAll()`，指示器偏移到可折叠
 TopAppBar 下方；它最多绑定 20 秒用户 receipt，不绑定 AppScope 中可能持续数分钟的后台恢复。receipt 结束时若仍有 server
 继续执行，页面停止 spinner、给出后台继续提示，并由各 server 卡片持续显示真实状态。单 server 失败卡片保留独立重试入口。

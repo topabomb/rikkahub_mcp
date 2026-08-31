@@ -41,7 +41,9 @@ data class ConversationUiModel(
     val snapshot: ConversationSnapshot,
     val presentation: ConversationPresentation,
     val attachmentPreviews: Map<String, String> = emptyMap(),
-)
+) {
+    val turnFeedback: ConversationTurnFeedback? = projectConversationTurnFeedback(snapshot, presentation)
+}
 
 sealed interface ConversationReadState {
     data object Loading : ConversationReadState

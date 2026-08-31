@@ -190,6 +190,29 @@ class SingleWriterContractTest {
     }
 
     @Test
+    fun `foreground turn haptics have one page owner outside adaptive layout branches`() {
+        assertEquals(
+            setOf("ui/pages/chat/TurnHapticFeedback.kt", "ui/pages/chat/ChatPage.kt"),
+            hits("TurnHapticFeedback(").toSet(),
+        )
+        val page = File(sourceRoot, "ui/pages/chat/ChatPage.kt").readText()
+        assertEquals(1, Regex("""\bTurnHapticFeedback\(""").findAll(page).count())
+        assertTrue(page.indexOf("TurnHapticFeedback(") > page.indexOf("fun ChatPage("))
+        assertTrue(page.indexOf("TurnHapticFeedback(") < page.indexOf("val pageLayout:"))
+        assertTrue(page.contains("combine(vm.conversationUiModel, vm.settings)"))
+        val effect = File(sourceRoot, "ui/pages/chat/TurnHapticFeedback.kt").readText()
+        assertTrue(effect.contains("repeatOnLifecycle(Lifecycle.State.RESUMED)"))
+        assertFalse(effect.contains("snapshotFlow"))
+        assertFalse(effect.contains("metadata"))
+        assertFalse(effect.contains("debounce"))
+        assertEquals(setOf("ui/pages/chat/TurnHapticFeedback.kt"), hits("VibrationEffect.").toSet())
+        assertTrue(effect.contains("Settings.System.HAPTIC_FEEDBACK_ENABLED"))
+        assertFalse(effect.contains("FLAG_BYPASS"))
+        assertFalse(effect.contains("FLAG_IGNORE"))
+        assertFalse(File(sourceRoot, "ui/components/message/ChatMessage.kt").readText().contains("HapticFeedback"))
+    }
+
+    @Test
     fun `folder bar keeps item state attached to durable folder identity`() {
         val chatDrawer = File(sourceRoot, "ui/pages/chat/ChatDrawer.kt").readText()
         assertTrue(chatDrawer.contains("items(folders, key = { it.id })"))

@@ -182,6 +182,13 @@ snapshot 派生 `IDLE`、`PREPARING`、`GENERATING`、`AWAITING_APPROVAL`、`STO
 用户注意力提示，且文件夹/消息树结构操作继续受 active owner 保护。`STOPPING` 期间不再提供工具审批、问题回答或 Target 交互入口。后台通知将 `AWAITING_APPROVAL` 保留为独立可操作状态，只有 `Completed` 终态才发送“已完成”通知，失败、取消和 incomplete 只清理 live update。流式增量可用有界 `tryEmit` 降压，但待审批与终态使用可挂起 `emit`，不得因 buffer 满遗留 ongoing 通知；应用进入前台时撤销已跟踪的 live/待审批通知。完成工具卡片保留 `COMPLETED` 事实，但隐藏常驻
 状态文字；失败、拒绝、回答、取消和中断仍显示简短终态。
 
+`ConversationUiModel.turnFeedback` 由 `projectConversationTurnFeedback` 只读派生，不建立新的运行事实。
+准备阶段允许尚无 Assistant 的有效 request；生成阶段必须有与 active turn 匹配的 request，残留 durable turn 不产生工作心跳。
+输出量 `outputCharacters` 只取 owning Assistant 的正文、思考文字和工具输入的 UTF-16 长度之和，不计工具 replay output、metadata 或媒体 URL；该只读数值仅近似触觉所需的输出量，不是 token 用量。首次 streaming projection 尚未发布时，从同一 snapshot 末节点当前选中的 owning Assistant 槽位取得基线，且严格匹配 `assistantMessageId`，不扫描历史节点；尚无槽位时为未知长度，不伪装为空输出。
+待审批可由 durable 状态投影；主 turn 仍在生成阶段时，
+只有当前 `EXECUTING` 的 `assistant_call` 且 metadata 为 `RUNNING` / `AWAITING_USER` 并携带有效 `ask_user` 交互才视为待回答。
+查询投影负责识别这些领域状态，前台页面只负责触觉节拍、效果与取消：工作使用轻振，新的待审批或待回答使用间隔 200ms 的两次重击，等待期间不继续工作心跳或周期催促；声音和后台通知协议不变。
+
 Master 的 `FAILED` / `INCOMPLETE` 由 `ChatErrorStore` 投影为当前会话底部诊断卡，卡片只允许用户关闭，不自动超时；
 卡片标题由 durable reason 映射为限流、额度、鉴权、权限、政策、无效请求、服务不可用、Provider、本地运行或未完成，
 正文读取消息上的脱敏 `terminalDetail`。关闭卡片后，消息终态短标签仍可点击并从同一消息事实重新打开；Store 只按

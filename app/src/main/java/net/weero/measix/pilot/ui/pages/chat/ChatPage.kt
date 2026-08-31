@@ -72,6 +72,7 @@ import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
@@ -188,6 +189,15 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
     // coordination must never combine revisions from separate runtime streams.
     val currentSnapshot = conversationUiModel?.snapshot ?: stateSnapshot
     val currentTurnPresentation = conversationUiModel?.presentation ?: turnPresentation
+    val turnFeedbackUpdates = remember(vm) {
+        combine(vm.conversationUiModel, vm.settings) { model, settings ->
+            model?.turnFeedback.takeIf { settings.displaySetting.enableMessageGenerationHapticEffect }
+        }
+    }
+    TurnHapticFeedback(
+        conversationId = currentSnapshot.conversationId,
+        updates = turnFeedbackUpdates,
+    )
     val enableWebSearch by vm.enableWebSearch.collectAsStateWithLifecycle()
     val errors by vm.errors.collectAsStateWithLifecycle()
     val favoriteNodeIds by vm.favoriteNodeIds.collectAsStateWithLifecycle()
