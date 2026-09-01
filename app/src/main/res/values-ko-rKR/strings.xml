@@ -1551,6 +1551,7 @@
   <string name="chat_message_tool_phase_call_streaming">호출 구성 중</string>
   <string name="chat_message_tool_phase_ready">실행 대기</string>
   <string name="chat_message_tool_phase_awaiting_approval">승인 대기</string>
+  <string name="chat_message_tool_phase_awaiting_input">답변 대기</string>
   <string name="chat_message_tool_phase_executing">실행 중</string>
   <string name="chat_message_tool_phase_completed">완료</string>
   <string name="chat_message_tool_phase_failed">실패</string>
@@ -1595,4 +1596,5 @@
   <string name="mcp_picker_manage_servers">MCP 서버 관리</string>
   <string name="mcp_refresh_continuing">MCP 서버 %1$d개를 백그라운드에서 계속 새로고침하고 있습니다</string>
   <string name="mcp_enabled_tools_count">%1$d/%2$d개 도구</string>
+  <string name="chat_message_tool_output_archived_summary">보관된 도구 출력: %1$d줄, %2$d자</string>
 </resources>

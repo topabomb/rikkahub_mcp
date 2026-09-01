@@ -12,6 +12,7 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolAttachmentResolution
+import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
@@ -222,6 +223,9 @@ internal suspend fun executeInspection(
         }
     } catch (e: CancellationException) {
         throw e
+    } catch (failure: ToolExecutionFailure) {
+        // 本函数内部已经形成的领域失败必须保留原 reason，不能再次分类成 runtime_error。
+        throw failure
     } catch (e: Exception) {
         // Provider 异常经统一分类器映射为细分 reason（429 → rate_limited 等）并附 sanitized detail，
         // 与 generate_image / assistant_call 的失败契约一致；原始异常仍写 logcat。
@@ -243,12 +247,15 @@ internal suspend fun executeInspection(
 internal fun imageLabel(index: Int, path: String): String =
     "[Image ${index + 1} path=${AttachmentRefs.escapeMarkerValue(path)}]"
 
-internal fun inspectionFailure(reason: String, detail: String? = null): List<UIMessagePart> = listOf(
-    UIMessagePart.Text(
-        buildJsonObject {
-            put("status", "failed")
-            put("reason", reason)
-            if (!detail.isNullOrBlank()) put("detail", detail)
-        }.toString(),
+internal fun inspectionFailure(reason: String, detail: String? = null): Nothing = failToolResult(
+    output = listOf(
+        UIMessagePart.Text(
+            buildJsonObject {
+                put("status", "failed")
+                put("reason", reason)
+                if (!detail.isNullOrBlank()) put("detail", detail)
+            }.toString(),
+        ),
     ),
+    reason = reason,
 )

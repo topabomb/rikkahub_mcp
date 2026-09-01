@@ -16,7 +16,7 @@ class ToolArgumentsTest {
     private fun tool(validator: (kotlinx.serialization.json.JsonElement) -> JsonObject? = { null }) = Tool(
         name = "test",
         description = "test",
-        needsApproval = { error("Parsing must not request approval") },
+        interactionRequirement = { error("Parsing must not request interaction") },
         validateArguments = validator,
         execute = { error("Parsing must not execute") },
     )

@@ -21,6 +21,16 @@ interface ArtifactReferenceDAO {
     )
     suspend fun referencingConversationIds(artifactId: Long): List<String>
 
+    /** scoped read 授权检查：该会话的消息节点是否以指定类型引用此 artifact。 */
+    @Query(
+        """
+        SELECT EXISTS(SELECT 1 FROM artifact_reference ar
+        JOIN message_node mn ON mn.id = ar.node_id
+        WHERE ar.artifact_id = :artifactId AND mn.conversation_id = :conversationId AND ar.reference_type = :referenceType)
+        """
+    )
+    suspend fun existsInConversation(artifactId: Long, conversationId: String, referenceType: String): Boolean
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAll(references: List<ArtifactReferenceEntity>)
 

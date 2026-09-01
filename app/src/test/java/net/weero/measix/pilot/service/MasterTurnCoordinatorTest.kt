@@ -1,6 +1,10 @@
 package net.weero.measix.pilot.service
 
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.MessageTerminalStatus
@@ -14,7 +18,8 @@ import net.weero.measix.pilot.service.runtime.ActiveTurnState
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationTransition
 import net.weero.measix.pilot.service.runtime.TurnHandle
-import net.weero.measix.pilot.service.runtime.UpdateToolApproval
+import net.weero.measix.pilot.service.runtime.ResolveToolInteraction
+import net.weero.measix.pilot.service.runtime.ToolUserDecision
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -23,7 +28,10 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class MasterTurnCoordinatorTest {
-    private fun approvalSnapshot(approvalState: ToolApprovalState): Pair<Uuid, ConversationSnapshot> {
+    private fun approvalSnapshot(
+        approvalState: ToolApprovalState,
+        metadata: JsonObject? = null,
+    ): Pair<Uuid, ConversationSnapshot> {
         val turnId = Uuid.random()
         val message = UIMessage(
             id = Uuid.random(),
@@ -34,6 +42,7 @@ class MasterTurnCoordinatorTest {
                     toolName = "generate_image",
                     input = "{}",
                     approvalState = approvalState,
+                    metadata = metadata,
                 ),
             ),
         )
@@ -69,7 +78,7 @@ class MasterTurnCoordinatorTest {
             val (turnId, snapshot) = approvalSnapshot(decision)
 
             val policy = masterTurnLaunchPolicy(
-                entry = MasterTurnEntry.CONTINUE_APPROVAL,
+                entry = MasterTurnEntry.CONTINUE_USER_INTERACTION,
                 snapshot = snapshot,
                 turnId = turnId,
                 messageRange = null,
@@ -84,19 +93,19 @@ class MasterTurnCoordinatorTest {
     @Test
     fun `approve and deny orchestration commit one typed decision and retain the active owner`() = runTest {
         listOf(
-            ToolApprovalState.Approved,
-            ToolApprovalState.Denied("not allowed"),
+            ToolUserDecision.Approve,
+            ToolUserDecision.Deny("not allowed"),
         ).forEach { decision ->
             val (turnId, initial) = approvalSnapshot(ToolApprovalState.Pending)
             val owner = requireNotNull(initial.activeTurn)
             val locator = ToolCallLocator(owner.assistantMessageId, 0)
             var current = initial
-            val submitted = mutableListOf<UpdateToolApproval>()
+            val submitted = mutableListOf<ResolveToolInteraction>()
             var continuation: Pair<Uuid, MasterTurnEntry>? = null
 
-            applyToolApprovalDecision(
+            applyToolUserDecision(
                 locator = locator,
-                approvalState = decision,
+                decision = decision,
                 awaitPreviousGeneration = {},
                 currentSnapshot = { current },
                 submit = { command ->
@@ -109,10 +118,10 @@ class MasterTurnCoordinatorTest {
 
             assertEquals(
                 listOf(
-                    UpdateToolApproval(
+                    ResolveToolInteraction(
                         messageId = locator.messageId,
                         toolOrdinal = locator.toolOrdinal,
-                        approvalState = decision,
+                        decision = decision,
                         handle = TurnHandle(
                             conversationId = current.conversationId,
                             epoch = owner.epoch,
@@ -123,7 +132,7 @@ class MasterTurnCoordinatorTest {
                 ),
                 submitted,
             )
-            assertEquals(turnId to MasterTurnEntry.CONTINUE_APPROVAL, continuation)
+            assertEquals(turnId to MasterTurnEntry.CONTINUE_USER_INTERACTION, continuation)
             assertFalse(
                 masterTurnLaunchPolicy(
                     entry = requireNotNull(continuation).second,
@@ -133,6 +142,31 @@ class MasterTurnCoordinatorTest {
                 ).runStructuralPreflight,
             )
         }
+    }
+
+    @Test
+    fun `malformed runtime metadata cannot reach the decision command`() = runTest {
+        val metadata = buildJsonObject {
+            put("tool_runtime", Json.parseToJsonElement("""{"version":2,"interaction":"approval"}"""))
+        }
+        val (_, snapshot) = approvalSnapshot(ToolApprovalState.Pending, metadata)
+        val owner = requireNotNull(snapshot.activeTurn)
+        var submitted = false
+
+        val failure = runCatching {
+            applyToolUserDecision(
+                locator = ToolCallLocator(owner.assistantMessageId, 0),
+                decision = ToolUserDecision.Approve,
+                awaitPreviousGeneration = {},
+                currentSnapshot = { snapshot },
+                submit = { submitted = true },
+                onMoreApprovalsPending = {},
+                continueTurn = { _, _ -> },
+            )
+        }.exceptionOrNull()
+
+        assertTrue(failure is IllegalStateException)
+        assertFalse(submitted)
     }
 
     @Test

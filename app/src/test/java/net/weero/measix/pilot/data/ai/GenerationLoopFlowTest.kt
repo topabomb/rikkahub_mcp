@@ -29,8 +29,10 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ProviderUsageSnapshot
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolExecutionFailure
+import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.core.ToolMetadataDelivery
 import me.rerere.ai.core.ToolResourceLease
+import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
@@ -48,6 +50,11 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.HttpException
 import me.rerere.ai.util.ProviderTerminalStatus
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
+import net.weero.measix.pilot.data.ai.tools.EmptyToolResultStatus
+import net.weero.measix.pilot.data.ai.tools.ToolOutputArchive
+import net.weero.measix.pilot.data.ai.tools.ToolOutputArchiveRef
+import net.weero.measix.pilot.data.ai.tools.ToolOutputStore
+import net.weero.measix.pilot.data.ai.tools.ensureProviderReplayResult
 import net.weero.measix.pilot.data.ai.tools.local.buildAskUserTool
 import net.weero.measix.pilot.data.ai.transformers.InputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.OutputMessageTransformer
@@ -60,6 +67,7 @@ import net.weero.measix.pilot.data.model.AssistantMemory
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -68,7 +76,7 @@ class GenerationLoopFlowTest {
     fun `invalid pending closes while valid batch waits and resumes exactly once with derived approval`() = runTest {
         val executed = mutableListOf<Pair<String, Boolean>>()
         val approved = Tool(
-            name = "approved", description = "approved", needsApproval = { true },
+            name = "approved", description = "approved", interactionRequirement = { ToolInteractionRequirement.Approval },
             execute = { error("context required") },
             contextualExecute = {
                 executed += "approved" to approvedByUser
@@ -94,6 +102,7 @@ class GenerationLoopFlowTest {
         )
         val checkpoints = mutableListOf<GenerationCheckpoint>()
         val request = GenerationRequest(
+            conversationId = kotlin.uuid.Uuid.random(),
             settings = harness.settings,
             model = harness.model,
             mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -156,6 +165,7 @@ class GenerationLoopFlowTest {
 
         harness.handler.run(
             GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = harness.settings,
                 model = harness.model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -191,7 +201,7 @@ class GenerationLoopFlowTest {
         val approvalTool = Tool(
             name = "approval_tool",
             description = "requires approval",
-            needsApproval = { true },
+            interactionRequirement = { ToolInteractionRequirement.Approval },
             execute = { listOf(UIMessagePart.Text("done")) },
         )
         val harness = createProviderHarness(responseMessage = toolMessage)
@@ -199,6 +209,7 @@ class GenerationLoopFlowTest {
 
         val chunks = harness.handler.run(
             GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = harness.settings,
                 model = harness.model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -273,10 +284,12 @@ class GenerationLoopFlowTest {
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            toolOutputStore = io.mockk.mockk(relaxed = true),
         )
 
         loop.run(
             GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
                 model = model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -299,6 +312,7 @@ class GenerationLoopFlowTest {
 
         harness.handler.run(
             GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = harness.settings,
                 model = harness.model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -350,10 +364,12 @@ class GenerationLoopFlowTest {
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            toolOutputStore = io.mockk.mockk(relaxed = true),
         )
 
         loop.run(
             GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
                 model = model,
                 messages = listOf(UIMessage.user("hello")),
@@ -387,10 +403,12 @@ class GenerationLoopFlowTest {
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            toolOutputStore = io.mockk.mockk(relaxed = true),
         )
 
         val chunks = handler.run(
             GenerationRequest(
+            conversationId = kotlin.uuid.Uuid.random(),
             settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
             model = model,
             mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -422,6 +440,7 @@ class GenerationLoopFlowTest {
 
         harness.handler.run(
             GenerationRequest(
+            conversationId = kotlin.uuid.Uuid.random(),
             settings = harness.settings,
             model = harness.model,
             mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -461,6 +480,7 @@ class GenerationLoopFlowTest {
 
         harness.handler.run(
             GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = harness.settings,
                 model = harness.model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -531,6 +551,7 @@ class GenerationLoopFlowTest {
 
         harness.handler.run(
             GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = harness.settings,
                 model = harness.model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -566,6 +587,7 @@ class GenerationLoopFlowTest {
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            toolOutputStore = io.mockk.mockk(relaxed = true),
         )
         val assistant = Assistant(enableMemory = false)
         val message = UIMessage(
@@ -605,6 +627,7 @@ class GenerationLoopFlowTest {
 
         val chunks = handler.run(
             GenerationRequest(
+            conversationId = kotlin.uuid.Uuid.random(),
             settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
             model = model,
             mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -659,6 +682,7 @@ class GenerationLoopFlowTest {
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            toolOutputStore = io.mockk.mockk(relaxed = true),
         )
         val assistant = Assistant(enableMemory = false)
         var executed = false
@@ -684,6 +708,7 @@ class GenerationLoopFlowTest {
         val failure = runCatching {
             handler.run(
                 GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
                 model = model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -717,6 +742,7 @@ class GenerationLoopFlowTest {
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            toolOutputStore = io.mockk.mockk(relaxed = true),
         )
         val assistant = Assistant(enableMemory = false)
         val discarded = AtomicBoolean(false)
@@ -739,6 +765,7 @@ class GenerationLoopFlowTest {
         val failure = runCatching {
             handler.run(
                 GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
                 model = model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -760,6 +787,73 @@ class GenerationLoopFlowTest {
     }
 
     @Test
+    fun `tool trim count becomes durable only with its successful step checkpoint`() = runTest {
+        suspend fun runCase(failure: Throwable?): UIMessage? {
+            val assistantMessageId = kotlin.uuid.Uuid.random()
+            val store = mockk<ToolOutputStore>()
+            val archive = ToolOutputArchive(
+                ref = 7,
+                artifact = ToolOutputArchiveRef("tool_outputs/trim.txt", "text/plain"),
+                characters = 10,
+                lines = 1,
+            )
+            coEvery { store.stageCompaction(any()) } returns ToolOutputStore.StagedCompactionBatch(
+                replacements = mapOf(
+                    ToolCallLocator(assistantMessageId, 0) to ToolOutputStore.CompactionReplacement(
+                        marker = UIMessagePart.Text("[archived]"),
+                        archive = archive,
+                    ),
+                ),
+                lease = null,
+            )
+            val response = UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(
+                    UIMessagePart.Tool(
+                        toolCallId = "done",
+                        toolName = "historical_tool",
+                        input = "{}",
+                        output = listOf(UIMessagePart.Text("large result")),
+                    ),
+                ),
+            )
+            val harness = createProviderHarness(responseMessage = response, toolOutputStore = store)
+            var durable: UIMessage? = null
+            runCatching {
+                harness.handler.run(
+                    GenerationRequest(
+                        conversationId = kotlin.uuid.Uuid.random(),
+                        settings = harness.settings,
+                        model = harness.model,
+                        mediaCapabilities = RequestMediaCapabilities.NONE,
+                        messages = listOf(UIMessage.user("continue")),
+                        assistant = harness.assistant,
+                        maxSteps = 1,
+                        assistantMessageId = assistantMessageId,
+                        onCheckpoint = { checkpoint ->
+                            if (checkpoint.kind == CheckpointKind.STEP_COMPLETED) {
+                                assertEquals(
+                                    1,
+                                    checkpoint.messages.last().usage
+                                        ?.successfulToolOutputCompactionBatchCount,
+                                )
+                                failure?.let { throw it }
+                                durable = checkpoint.messages.last()
+                            }
+                        },
+                    ),
+                ).toList()
+            }
+            return durable
+        }
+
+        val committed = requireNotNull(runCase(null))
+        assertEquals(1, committed.usage?.successfulToolOutputCompactionBatchCount)
+        assertEquals(null, runCase(IllegalStateException("checkpoint failed")))
+        assertEquals(null, runCase(CancellationException("cancelled before checkpoint")))
+    }
+
+    @Test
     fun `terminal transformer resource is discarded when step checkpoint fails`() = runTest {
         val harness = createProviderHarness()
         val discarded = AtomicBoolean(false)
@@ -768,6 +862,7 @@ class GenerationLoopFlowTest {
         val failure = runCatching {
             harness.handler.run(
                 GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = harness.settings,
                 model = harness.model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -797,6 +892,7 @@ class GenerationLoopFlowTest {
         val failure = runCatching {
             harness.handler.run(
                 GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = harness.settings,
                 model = harness.model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -830,6 +926,7 @@ class GenerationLoopFlowTest {
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            toolOutputStore = io.mockk.mockk(relaxed = true),
         )
         val assistant = Assistant(enableMemory = false)
         val executionOrder = mutableListOf<String>()
@@ -860,6 +957,7 @@ class GenerationLoopFlowTest {
 
         handler.run(
             GenerationRequest(
+            conversationId = kotlin.uuid.Uuid.random(),
             settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
             model = model,
             mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -914,6 +1012,7 @@ class GenerationLoopFlowTest {
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            toolOutputStore = io.mockk.mockk(relaxed = true),
         )
         val assistant = Assistant(enableMemory = false)
         val toolEvents = mutableListOf<ToolExecutionEvent>()
@@ -942,6 +1041,7 @@ class GenerationLoopFlowTest {
 
         val chunks = handler.run(
             GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
                 model = model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -981,6 +1081,7 @@ class GenerationLoopFlowTest {
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            toolOutputStore = io.mockk.mockk(relaxed = true),
         )
         val assistant = Assistant(enableMemory = false)
         val toolEvents = mutableListOf<ToolExecutionEvent>()
@@ -997,13 +1098,14 @@ class GenerationLoopFlowTest {
                     toolCallId = "call-mcp",
                     toolName = tool.name,
                     input = "{}",
-                    approvalState = ToolApprovalState.Approved,
+                    approvalState = ToolApprovalState.Auto,
                 )
             ),
         )
 
         val chunks = handler.run(
             GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
                 model = model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -1037,6 +1139,7 @@ class GenerationLoopFlowTest {
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            toolOutputStore = io.mockk.mockk(relaxed = true),
         )
         val assistant = Assistant(enableMemory = false)
         val toolA = Tool(name = "dup", description = "A", execute = { emptyList() })
@@ -1045,6 +1148,7 @@ class GenerationLoopFlowTest {
         val failure = runCatching {
             handler.run(
                 GenerationRequest(
+                    conversationId = kotlin.uuid.Uuid.random(),
                     settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
                     model = model,
                     mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -1073,11 +1177,13 @@ class GenerationLoopFlowTest {
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            toolOutputStore = io.mockk.mockk(relaxed = true),
         )
 
         val failure = runCatching {
             handler.run(
                 GenerationRequest(
+                    conversationId = kotlin.uuid.Uuid.random(),
                     settings = Settings(providers = listOf(providerSetting)),
                     model = model,
                     mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -1157,6 +1263,7 @@ class GenerationLoopFlowTest {
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            toolOutputStore = io.mockk.mockk(relaxed = true),
         )
         val tool = Tool(
             name = "echo_tool",
@@ -1166,6 +1273,7 @@ class GenerationLoopFlowTest {
 
         val chunks = loop.run(
             GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
                 model = model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -1189,27 +1297,80 @@ class GenerationLoopFlowTest {
     }
 
     @Test
+    fun `request summary starts before provider usage and closed accounting remains atomic`() = runTest {
+        val harness = createUsageStreamHarness(
+            snapshots = listOf(
+                ProviderUsageSnapshot(
+                    inputTokens = 100,
+                    outputTokens = 5,
+                    cacheReadInputTokens = 10,
+                    totalTokens = 105,
+                ),
+                ProviderUsageSnapshot(
+                    inputTokens = 100,
+                    outputTokens = 20,
+                    cacheReadInputTokens = 90,
+                    totalTokens = 120,
+                ),
+            ),
+        )
+        val observedUsage = mutableListOf<me.rerere.ai.core.TokenUsage?>()
+
+        harness.handler.run(
+            GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
+                settings = harness.settings,
+                model = harness.model,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
+                messages = listOf(UIMessage.user("hello")),
+                assistant = harness.assistant,
+                maxSteps = 1,
+                onMessagesObserved = { messages -> observedUsage += messages.lastOrNull()?.usage },
+            ),
+        ).toList()
+
+        val requestStartedIndex = observedUsage.indexOfFirst {
+            it?.latestRequestEstimatedContextTokens != null
+        }
+        assertTrue(requestStartedIndex >= 0)
+        val requestStarted = requireNotNull(observedUsage[requestStartedIndex])
+        assertNull(requestStarted.observedProviderRequestCount)
+        assertNull(requestStarted.latestRequestContextTokens)
+
+        val closed = observedUsage.filterNotNull().last { it.observedProviderRequestCount == 1 }
+        assertEquals(100L, closed.latestRequestContextTokens)
+        assertEquals(20L, closed.latestRequestOutputTokens)
+        assertEquals(90L, closed.latestRequestCacheReadInputTokens)
+        assertEquals(90.0, closed.latestRequestCacheHitPercent!!, 0.0)
+        assertTrue(closed.latestRequestTimeToFirstOutputMillis != null)
+    }
+
+    @Test
     fun `provider failure closes observed usage once and preserves the original error`() = runTest {
         val expectedFailure = IllegalStateException("provider stream failed")
         val harness = createUsageStreamHarness(expectedFailure)
         val chunks = mutableListOf<GenerationChunk>()
+        var observed = emptyList<UIMessage>()
 
         val failure = runCatching {
             harness.handler.run(
                 GenerationRequest(
+                    conversationId = kotlin.uuid.Uuid.random(),
                     settings = harness.settings,
                     model = harness.model,
                     mediaCapabilities = RequestMediaCapabilities.NONE,
                     messages = listOf(UIMessage.user("hello")),
                     assistant = harness.assistant,
                     maxSteps = 1,
+                    onMessagesObserved = { observed = it },
                 )
             ).collect(chunks::add)
         }.exceptionOrNull()
 
         assertTrue(failure is IllegalStateException)
         assertTrue(failure === expectedFailure || failure?.cause === expectedFailure)
-        val usage = chunks.filterIsInstance<GenerationChunk.Messages>().last().messages.last().usage
+        // 失败展示事件可被终止传播抢先取消；同步 turn-owner 观察才是 finalize 的事实来源。
+        val usage = observed.last().usage
         assertEquals(100L, usage?.inputTokens)
         assertEquals(20L, usage?.outputTokens)
         assertEquals(120L, usage?.totalTokens)
@@ -1223,23 +1384,26 @@ class GenerationLoopFlowTest {
         val expectedCancellation = CancellationException("provider stream cancelled")
         val harness = createUsageStreamHarness(expectedCancellation)
         val chunks = mutableListOf<GenerationChunk>()
+        var observed = emptyList<UIMessage>()
 
         val failure = runCatching {
             harness.handler.run(
                 GenerationRequest(
+                    conversationId = kotlin.uuid.Uuid.random(),
                     settings = harness.settings,
                     model = harness.model,
                     mediaCapabilities = RequestMediaCapabilities.NONE,
                     messages = listOf(UIMessage.user("hello")),
                     assistant = harness.assistant,
                     maxSteps = 1,
+                    onMessagesObserved = { observed = it },
                 )
             ).collect(chunks::add)
         }.exceptionOrNull()
 
         assertTrue(failure is CancellationException)
         assertTrue(failure === expectedCancellation || failure?.cause === expectedCancellation)
-        val usage = chunks.filterIsInstance<GenerationChunk.Messages>().last().messages.last().usage
+        val usage = observed.last().usage
         assertEquals(100L, usage?.inputTokens)
         assertEquals(20L, usage?.outputTokens)
         assertEquals(120L, usage?.totalTokens)
@@ -1275,6 +1439,7 @@ class GenerationLoopFlowTest {
             context = mockk<Context>(relaxed = true), providerManager = providerManager, json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            toolOutputStore = io.mockk.mockk(relaxed = true),
         )
         var executed = false
         val chunks = mutableListOf<GenerationChunk>()
@@ -1282,6 +1447,7 @@ class GenerationLoopFlowTest {
         var observed = emptyList<UIMessage>()
         val failure = runCatching {
             handler.run(GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = Settings(providers = listOf(providerSetting)), model = model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,
                 messages = listOf(UIMessage.user("hello")),
@@ -1332,6 +1498,7 @@ class GenerationLoopFlowTest {
         var observed = emptyList<UIMessage>()
         val collector = launch {
             harness.handler.run(GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = harness.settings, model = harness.model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,
                 messages = listOf(UIMessage.user("hello")), assistant = harness.assistant,
@@ -1416,6 +1583,7 @@ class GenerationLoopFlowTest {
         val collector = launch {
             try {
                 harness.handler.run(GenerationRequest(
+                    conversationId = kotlin.uuid.Uuid.random(),
                     settings = harness.settings, model = harness.model,
                     mediaCapabilities = RequestMediaCapabilities.NONE,
                     messages = listOf(UIMessage.user("image")), assistant = harness.assistant,
@@ -1535,6 +1703,7 @@ class GenerationLoopFlowTest {
         val collector = launch {
             try {
                 harness.handler.run(GenerationRequest(
+                    conversationId = kotlin.uuid.Uuid.random(),
                     settings = harness.settings, model = harness.model,
                     mediaCapabilities = RequestMediaCapabilities.NONE,
                     messages = listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(
@@ -1583,7 +1752,17 @@ class GenerationLoopFlowTest {
         }
     }
 
-    private fun createUsageStreamHarness(failure: Throwable? = null): ProviderHarness {
+    private fun createUsageStreamHarness(
+        failure: Throwable? = null,
+        snapshots: List<ProviderUsageSnapshot> = listOf(
+            ProviderUsageSnapshot(
+                inputTokens = 100,
+                outputTokens = 20,
+                cacheReadInputTokens = 0,
+                totalTokens = 120,
+            ),
+        ),
+    ): ProviderHarness {
         val model = Model(modelId = "test-model", displayName = "Test Model")
         val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
         val providerManager = mockk<ProviderManager>()
@@ -1591,19 +1770,17 @@ class GenerationLoopFlowTest {
         every { providerManager.getProviderByType(providerSetting) } returns provider
         every { provider.requestMediaCapabilities(any(), any()) } returns RequestMediaCapabilities.NONE
         coEvery { provider.streamText(providerSetting, any(), any()) } returns flow {
-            emit(
-                textDelta("partial").copy(
-                    usage = ProviderUsageSnapshot(
-                        inputTokens = 100,
-                        outputTokens = 20,
-                        cacheReadInputTokens = 0,
-                        totalTokens = 120,
-                    )
-                )
-            )
+            snapshots.forEachIndexed { index, snapshot ->
+                emit(textDelta(if (index == 0) "partial" else " continued").copy(usage = snapshot))
+            }
             failure?.let { throw it }
         }
         val assistant = Assistant(enableMemory = false, streamOutput = true)
+        val toolOutputStore = mockk<ToolOutputStore>()
+        coEvery { toolOutputStore.stageCompaction(any()) } returns ToolOutputStore.StagedCompactionBatch(
+            replacements = emptyMap(),
+            lease = null,
+        )
         return ProviderHarness(
             handler = GenerationLoop(
                 context = mockk<Context>(relaxed = true),
@@ -1611,6 +1788,7 @@ class GenerationLoopFlowTest {
                 json = Json,
                 memoryRepo = mockk<MemoryRepository>(relaxed = true),
                 attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+                toolOutputStore = toolOutputStore,
             ),
             settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
             model = model,
@@ -1622,6 +1800,7 @@ class GenerationLoopFlowTest {
 
     private fun createProviderHarness(
         responseMessage: UIMessage = UIMessage.assistant("done"),
+        toolOutputStore: ToolOutputStore = io.mockk.mockk(relaxed = true),
     ): ProviderHarness {
         val model = Model(modelId = "test-model", displayName = "Test Model")
         val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
@@ -1659,6 +1838,7 @@ class GenerationLoopFlowTest {
                 json = Json,
                 memoryRepo = mockk<MemoryRepository>(relaxed = true),
                 attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+                toolOutputStore = toolOutputStore,
             ),
             settings = Settings(
                 providers = listOf(providerSetting),

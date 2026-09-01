@@ -13,6 +13,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.ui.UIMessagePart
@@ -120,7 +121,7 @@ class AssistantToolFactory(
         return buildList {
             if (enableManagement) {
                 add(buildAssistantManageTool(callerAssistant.id, enableDelegation))
-                add(buildAssistantInspectTool(callerAssistant.id))
+                add(buildAssistantInspectTool(callerAssistant.id, masterConversationId))
             }
             if (enableDelegation) {
                 add(buildAssistantCallTool(
@@ -188,8 +189,14 @@ class AssistantToolFactory(
         validateArguments = { args ->
             if (parseAssistantManageArguments(args) == null) errorJson("invalid_arguments") else null
         },
-        needsApproval = { args ->
-            parseAssistantManageArguments(args)?.action?.let { it != AssistantManageAction.CREATE } == true
+        interactionRequirement = { args ->
+            parseAssistantManageArguments(args)?.action?.let {
+                if (it != AssistantManageAction.CREATE) {
+                    ToolInteractionRequirement.Approval
+                } else {
+                    ToolInteractionRequirement.None
+                }
+            } ?: ToolInteractionRequirement.None
         },
         execute = { args ->
             executeAssistantManage(callerAssistantId, args)
@@ -262,11 +269,7 @@ class AssistantToolFactory(
                             }
                         }
                     }
-                    else -> {
-                        buildJsonObject {
-                            put("error", "operation_failed")
-                        }
-                    }
+                    else -> errorResult("operation_failed")
                 }
             },
             onFailure = { error ->
@@ -276,9 +279,7 @@ class AssistantToolFactory(
                     is IllegalArgumentException -> error.message ?: "invalid_arguments"
                     else -> "operation_failed"
                 }
-                buildJsonObject {
-                    put("error", reason)
-                }
+                errorResult(reason)
             },
         )
         return listOf(UIMessagePart.Text(resultJson.toString()))
@@ -288,6 +289,7 @@ class AssistantToolFactory(
 
     private fun buildAssistantInspectTool(
         callerAssistantId: Uuid,
+        masterConversationId: Uuid,
     ): Tool = Tool(
         name = TOOL_ASSISTANT_INSPECT,
         description = "Inspect a sub-assistant's configuration before updating or deleting it. " +
@@ -320,15 +322,15 @@ class AssistantToolFactory(
             )
         },
         systemPrompt = { _, _ -> "" },
-        needsApproval = { false },
         execute = { args ->
-            executeAssistantInspect(args, callerAssistantId)
+            executeAssistantInspect(args, callerAssistantId, masterConversationId)
         },
     )
 
     private suspend fun executeAssistantInspect(
         args: kotlinx.serialization.json.JsonElement,
         callerAssistantId: Uuid,
+        masterConversationId: Uuid,
     ): List<UIMessagePart> {
         val obj = args as? JsonObject ?: return errorResult("invalid_arguments")
         val assistantIdStr = obj["assistant_id"]?.let { (it as? JsonPrimitive)?.content }
@@ -354,7 +356,7 @@ class AssistantToolFactory(
 
         val sections = parseInspectSections(obj)
         val toolNames = if (INSPECT_SECTION_TOOLS in sections) {
-            listTargetToolNames(target, settings)
+            listTargetToolNames(target, settings, masterConversationId)
         } else {
             emptyList()
         }
@@ -413,9 +415,14 @@ class AssistantToolFactory(
         return listOf(UIMessagePart.Text(resultJson.toString()))
     }
 
-    private suspend fun listTargetToolNames(target: Assistant, settings: Settings): List<String> {
+    private suspend fun listTargetToolNames(
+        target: Assistant,
+        settings: Settings,
+        masterConversationId: Uuid,
+    ): List<String> {
         val built = toolSetFactory.buildTools(
             assistant = target,
+            conversationId = masterConversationId,
             settings = settings,
             capabilityModel = settings.getChatModel(target),
             runMode = ToolSetRunMode.TARGET,
@@ -450,7 +457,9 @@ class AssistantToolFactory(
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
     ): Tool = Tool(
         name = TOOL_ASSISTANT_CALL,
+        // 未执行、失败与无法解析的结果继续保留；成功结果再按实际交付物决定是否可归档。
         outputPolicy = ToolOutputPolicy.PRESERVE,
+        successfulOutputPolicy = { output -> assistantCallSuccessfulOutputPolicy(output, json) },
         description = "Delegate a self-contained request to a catalog sub-assistant (sub-agent). " +
             "Do not prescribe how it must work.",
         parameters = {
@@ -519,18 +528,39 @@ class AssistantToolFactory(
                 json = json,
             )
         },
-        needsApproval = { false },
         contextualExecute = { args ->
             executeAssistantCall(callerAssistantId, masterConversationId, this, args, ttsPlaybackContext)
         },
         execute = { _ ->
             // assistant_call 必须由带 durable locator 与 metadata 回写能力的执行器调用。
-            listOf(UIMessagePart.Text(buildJsonObject {
-                put("status", "unavailable")
-                put("reason", "context_required")
-            }.toString()))
+            callUnavailable("context_required")
         },
     )
+
+    /**
+     * 普通子助手纯文本结果可在模型读取后归档；`artifacts[].path` 在 fork 时需要专用改写，
+     * 因此带这类路径、混合媒体或损坏信封的结果必须继续 inline 保留。
+     */
+    private fun assistantCallSuccessfulOutputPolicy(
+        output: List<UIMessagePart>,
+        json: Json,
+    ): ToolOutputPolicy {
+        val text = (output.singleOrNull() as? UIMessagePart.Text)?.text
+            ?: return ToolOutputPolicy.PRESERVE
+        val payload = runCatching {
+            json.parseToJsonElement(text) as? JsonObject
+        }.getOrNull() ?: return ToolOutputPolicy.PRESERVE
+        fun stringField(name: String): String? = payload[name]?.jsonPrimitiveOrNull
+            ?.takeIf { it.isString }?.contentOrNull
+        val status = stringField("status")
+        if (status != "completed") return ToolOutputPolicy.PRESERVE
+        if (stringField("assistant_name") == null || stringField("content") == null) {
+            return ToolOutputPolicy.PRESERVE
+        }
+        // 正式 builder 只在存在有效交付 manifest 时写 artifacts；出现该 key 即不得共享归档 payload。
+        if ("artifacts" in payload) return ToolOutputPolicy.PRESERVE
+        return ToolOutputPolicy.ARCHIVABLE_TEXT
+    }
 
     /**
      * assistant_call 执行入口。
@@ -558,7 +588,7 @@ class AssistantToolFactory(
             is AttachmentParseResult.Ok -> parsed.paths
         }
 
-        return delegationCoordinator.executeCall(
+        val output = delegationCoordinator.executeCall(
             callerAssistantId = callerAssistantId,
             masterConversationId = masterConversationId,
             targetAssistantId = targetId,
@@ -568,28 +598,44 @@ class AssistantToolFactory(
             extras = parseAssistantCallExtras(obj["extras"]),
             attachments = attachments,
         )
+        val envelope = output.filterIsInstance<UIMessagePart.Text>().singleOrNull()?.text?.let { text ->
+            runCatching { json.parseToJsonElement(text) as? JsonObject }.getOrNull()
+        }
+        val status = envelope?.get("status")?.jsonPrimitiveOrNull
+            ?.takeIf { it.isString }?.contentOrNull
+        if (status != "completed") {
+            val reason = envelope?.get("reason")?.jsonPrimitiveOrNull
+                ?.takeIf { it.isString }?.contentOrNull
+                ?: status
+                ?: "invalid_result"
+            failToolResult(output, reason)
+        }
+        return output
     }
 
-    private fun callUnavailable(reason: String): List<UIMessagePart> {
-        return listOf(
+    private fun callUnavailable(reason: String): Nothing {
+        failToolResult(
+            output = listOf(
             UIMessagePart.Text(
                 buildSubAssistantCallResult(
                     json = json,
-                    status = "unavailable",
+                    status = "failed",
                     assistantName = "",
                     content = "",
                     reason = reason,
                 ),
             ),
+            ),
+            reason = reason,
         )
     }
 
     // ---- 工具函数 ----
 
+    /** 仅供审批前纯参数校验返回字段级 reason；执行期失败统一走 [failToolResult]。 */
     private fun errorJson(errorCode: String): JsonObject = buildJsonObject {
         put("error", errorCode)
     }
 
-    private fun errorResult(errorCode: String): List<UIMessagePart> =
-        listOf(UIMessagePart.Text(errorJson(errorCode).toString()))
+    private fun errorResult(errorCode: String): Nothing = failToolResult(errorCode)
 }

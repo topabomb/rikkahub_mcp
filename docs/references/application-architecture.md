@@ -21,7 +21,7 @@ Work（一个 Conversation）
 | Turn | `TurnEngine`、`TurnHandle`、`TurnOutcome` | `turn_execution` |
 | Step | `GenerationChunk.Phase`、checkpoint | 只在 checkpoint 后形成执行事实 |
 | Tool Execution | `ToolExecutionContext`、`ToolCallPhase` | Tool message part 与 `tool_execution` |
-| Approval | `UpdateToolApproval` | Tool message part 与 execution status |
+| Tool User Interaction | `ResolveToolInteraction` | Tool message part 与 execution status |
 | Artifact | `ArtifactStore`、`OwnedArtifact`、`ToolResourceLease` | artifact metadata、reference 与 payload |
 | Sub-Agent Run | `DelegationCoordinator`、`SubAssistantLifecycle` | Child Conversation 与 `sub_assistant_call` metadata |
 
@@ -144,17 +144,31 @@ Turn 和 Tool execution 使用 insert-once 与合法状态 CAS。终态不可回
 
 工具调用按 typed phase 区分调用流、就绪、等待审批、执行和终态。`UIMessagePart.Tool.hasReplayResult` / `Tool.output` 只表示 Provider 可回放结果，不能作为 active 执行中状态、active 完成状态或详情点击门禁。active phase 只能随已提交 checkpoint 的 `ToolExecutionEntity` 或 typed `ToolResultEvent` 推进；影响通知的工具执行与结果 checkpoint 成功后，同一生成流发布 presentation tick，通知等边缘投影只消费提交后 phase。没有 active turn 的历史消息可从 durable replay result 形成静态终态展示，但该静态投影不反向驱动运行态。metadata 只细化领域子阶段。
 
-新 turn 的 `START` 与审批后的 `CONTINUE_APPROVAL` 是不同入口：
+新 turn 的 `START` 与用户交互后的 `CONTINUE_USER_INTERACTION` 是不同入口：
 
 - `START` 只在没有 active owner 时做结构预检，并由 `TurnEngine.start` 建立新的 `TurnHandle`。
-- Approve、deny 与 answer 只提交一个 `UpdateToolApproval`，然后以 `CONTINUE_APPROVAL` 继续原 owner。
+- Approve、deny 与 answer 只提交一个 `ResolveToolInteraction`，然后以 `CONTINUE_USER_INTERACTION` 继续原 owner。
 - Continue 不得再次清理树、回填附件、建立第二 turn 或轮换该 turn 的 TTS session。
 
 审批屏障以 `messageId + toolOrdinal` 定位 ToolCall；Pending 全部解决后再按 ordinal 串行执行。Provider 的 toolCallId 只保留为协议数据，不作为本地唯一键。
 
 工具参数契约归各 `Tool.validateArguments`，只做纯校验，不读取 Settings、数据库、文件或网络。
 `Tool.parseArguments` 是审批与执行共用的 JSON object 解析入口；空参数缓冲表示无参 object，非空损坏 JSON 不得替换为空 object。
-`GenerationLoop` 使用同一个 step 工具索引按可用性 → 参数校验 → 审批 → 执行编排，不按工具名维护校验特例。
+`GenerationToolSetFactory` 是每个 step 工具集合的装配 owner，并稳定注册 `read_tool_output` / `grep_tool_output`、拒绝保留名冲突。
+`GenerationLoop` 只编排 Provider step、整批交互屏障、执行顺序、streaming 和 checkpoint；同一个 step 工具索引交给
+`ToolCallRuntime` 完成 definition lookup、一次参数解析/纯校验、typed interaction gate、执行包装和结果规范化，不按工具名维护
+审批或校验特例。审批与 `ask_user` 分别使用 `Approval` / `UserInput` requirement 和 typed decision，但都只通过 Conversation
+command 写回原 ToolCall 并复用原 TurnHandle。
+
+`ConversationContextPlanner` 是请求窗口和成功 Provider step 后 Tool Result 压缩候选的唯一纯规划边界。普通历史裁剪只影响
+request projection；完整纯文本 Tool Result 只有被成功 `ModelStepReceipt` 保守确认已进入最终请求投影后才可压缩。
+压缩由 48K inline estimated-token 高水位触发，按 16K 低水位和 24K 整批最小净回收量选择；单结果必须净回收至少
+512 estimated tokens。最近两个 typed 批次和最近 4K estimated tokens 受保护，不额外冻结整个已完成 USER turn。
+稳定估算按每个 Tool Result 独立计算：ASCII code point 总数除以 4 并向上取整、其他 code point 各计 1；生产阈值统一定义在
+`ContextTrimmingPolicy.kt`，不由 Provider input token 或 cache 命中率驱动。`ToolOutputStore` 对 `ARCHIVABLE_TEXT` 复用
+`ArtifactStore`、`ArtifactReferenceType.TOOL_OUTPUT` 和 unpublished lease，在 `STEP_COMPLETED` checkpoint 建立 root 后发布；
+对 `REGENERABLE_TEXT` 只折叠固定 marker，不创建 Artifact。模型只能通过 conversation-scoped read/grep query capability
+读取归档正文，UI 不接触 DAO、relative path 或私有文件。
 参数失败或工具撤销直接提交 FAILED 结果，不创建 `tool_execution` 记录或制造 STARTED 执行事实；旧 Pending 同时退出等待。
 纯参数校验返回领域 `JsonObject`；`ToolArgumentsException` 保留领域字段并统一补齐 `error` / `type: error`，
 确保无 active turn 的历史投影仍是失败。该标记不添加到工具正常执行返回的业务失败中。

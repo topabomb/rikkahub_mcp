@@ -226,6 +226,7 @@ val dataSourceModule = module {
             json = get(),
             memoryRepo = get(),
             attachmentResolver = get(),
+            toolOutputStore = get(),
         )
     }
 

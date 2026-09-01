@@ -1551,6 +1551,7 @@
   <string name="chat_message_tool_phase_call_streaming">呼び出し構築中</string>
   <string name="chat_message_tool_phase_ready">実行待ち</string>
   <string name="chat_message_tool_phase_awaiting_approval">承認待ち</string>
+  <string name="chat_message_tool_phase_awaiting_input">回答待ち</string>
   <string name="chat_message_tool_phase_executing">実行中</string>
   <string name="chat_message_tool_phase_completed">完了</string>
   <string name="chat_message_tool_phase_failed">失敗</string>
@@ -1595,4 +1596,5 @@
   <string name="mcp_picker_manage_servers">MCP サーバーを管理</string>
   <string name="mcp_refresh_continuing">%1$d 台の MCP サーバーをバックグラウンドで更新しています</string>
   <string name="mcp_enabled_tools_count">%1$d/%2$d 件のツール</string>
+  <string name="chat_message_tool_output_archived_summary">アーカイブ済みツール出力：%1$d 行、%2$d 文字</string>
 </resources>

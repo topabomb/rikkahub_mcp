@@ -113,7 +113,7 @@ class ShouldInjectAttachmentInspectionTest {
                     runMode = mode,
                     mcpCapabilities = TurnMcpCapabilitySnapshot(tools = emptyList()),
                 )
-                assertEquals(listOf(ATTACHMENT_INSPECTION_TOOL_NAME), tools.map { it.name })
+                assertEquals(listOf("read_tool_output", "grep_tool_output", ATTACHMENT_INSPECTION_TOOL_NAME), tools.map { it.name })
             }
         }
     }

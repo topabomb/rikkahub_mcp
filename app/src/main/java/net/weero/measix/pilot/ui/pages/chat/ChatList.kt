@@ -100,6 +100,7 @@ import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
+import net.weero.measix.pilot.service.runtime.ToolUserDecision
 import net.weero.measix.pilot.ui.components.ai.ApprovalRequiredIndicator
 import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import net.weero.measix.pilot.ui.components.message.ChatMessage
@@ -156,8 +157,7 @@ internal fun ChatList(
     onSwitchAssistant: () -> Unit,
     onManageAssistant: () -> Unit,
     onMemoryClick: () -> Unit,
-    onToolApproval: ((locator: ToolCallLocator, approved: Boolean, reason: String) -> Unit)? = null,
-    onToolAnswer: ((locator: ToolCallLocator, answer: String) -> Unit)? = null,
+    onToolDecision: ((locator: ToolCallLocator, decision: ToolUserDecision) -> Unit)? = null,
     onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
     onToggleFavorite: ((MessageNode) -> Unit)? = null,
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
@@ -210,8 +210,7 @@ internal fun ChatList(
                 onManageAssistant = onManageAssistant,
                 onMemoryClick = onMemoryClick,
                 animatedVisibilityScope = this@AnimatedContent,
-                onToolApproval = onToolApproval,
-                onToolAnswer = onToolAnswer,
+                onToolDecision = onToolDecision,
                 onSubAssistantAnswer = onSubAssistantAnswer,
                 onToggleFavorite = onToggleFavorite,
                 onConversationSystemPromptChange = onConversationSystemPromptChange,
@@ -251,8 +250,7 @@ private fun ChatListNormal(
     onManageAssistant: () -> Unit,
     onMemoryClick: () -> Unit,
     animatedVisibilityScope: AnimatedVisibilityScope,
-    onToolApproval: ((locator: ToolCallLocator, approved: Boolean, reason: String) -> Unit)? = null,
-    onToolAnswer: ((locator: ToolCallLocator, answer: String) -> Unit)? = null,
+    onToolDecision: ((locator: ToolCallLocator, decision: ToolUserDecision) -> Unit)? = null,
     onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
     onToggleFavorite: ((MessageNode) -> Unit)? = null,
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
@@ -367,7 +365,7 @@ private fun ChatListNormal(
                 }
             }
         }
-        val backgroundHost = rememberImageBackgroundHost(settings, assistant.id)
+    val backgroundHost = rememberImageBackgroundHost(settings, assistant.id)
         val previewActions = remember(backgroundHost.action) { listOf(backgroundHost.action) }
 
         CompositionLocalProvider(
@@ -456,7 +454,6 @@ private fun ChatListNormal(
                             ) {
                                 ChatMessage(
                                     node = node,
-                                    activeContextCache = turnPresentation.activeContextCache,
                                     masterConversationId = snapshot.conversationId,
                                     model = node.currentMessage.modelId?.let(modelById::get),
                                     assistant = messageAssistant,
@@ -487,8 +484,7 @@ private fun ChatListNormal(
                                     onToggleFavorite = {
                                         onToggleFavorite?.invoke(node)
                                     },
-                                    onToolApproval = onToolApproval,
-                                    onToolAnswer = onToolAnswer,
+                                    onToolDecision = onToolDecision,
                                     onSubAssistantAnswer = onSubAssistantAnswer,
                                     toolCallPhases = turnPresentation.toolCallPhases,
                                     lastMessage = index == lastMessageIndex,
@@ -516,7 +512,7 @@ private fun ChatListNormal(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                if (turnPresentation.phase == ConversationTurnPhase.AWAITING_APPROVAL) {
+                                if (turnPresentation.phase == ConversationTurnPhase.AWAITING_USER) {
                                     ApprovalRequiredIndicator(
                                         showLabel = true,
                                     )

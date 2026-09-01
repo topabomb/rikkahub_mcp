@@ -34,13 +34,13 @@ class ConversationActivityProjectionTest {
                     ),
                     approvalOnly to ConversationPresentation(
                         activeRequestTurnId = approvalOnly,
-                        phase = ConversationTurnPhase.AWAITING_APPROVAL,
+                        phase = ConversationTurnPhase.AWAITING_USER,
                         processingText = null,
                         toolCallPhases = emptyMap(),
                     ),
                     both to ConversationPresentation(
                         activeRequestTurnId = both,
-                        phase = ConversationTurnPhase.AWAITING_APPROVAL,
+                        phase = ConversationTurnPhase.AWAITING_USER,
                         processingText = null,
                         toolCallPhases = emptyMap(),
                     ),

@@ -1551,6 +1551,7 @@
   <string name="chat_message_tool_phase_call_streaming">Формирование</string>
   <string name="chat_message_tool_phase_ready">Готово</string>
   <string name="chat_message_tool_phase_awaiting_approval">Нужно подтверждение</string>
+  <string name="chat_message_tool_phase_awaiting_input">Нужен ответ</string>
   <string name="chat_message_tool_phase_executing">Выполнение</string>
   <string name="chat_message_tool_phase_completed">Завершено</string>
   <string name="chat_message_tool_phase_failed">Ошибка</string>
@@ -1595,4 +1596,5 @@
   <string name="mcp_picker_manage_servers">Управление серверами MCP</string>
   <string name="mcp_refresh_continuing">Серверы MCP (%1$d) продолжают обновляться в фоновом режиме</string>
   <string name="mcp_enabled_tools_count">%1$d/%2$d инструментов</string>
+  <string name="chat_message_tool_output_archived_summary">Архивированный вывод инструмента: %1$d строк, %2$d символов</string>
 </resources>

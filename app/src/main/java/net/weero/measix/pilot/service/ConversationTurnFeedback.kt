@@ -30,7 +30,7 @@ internal fun projectConversationTurnFeedback(
     val requestId = presentation.activeRequestTurnId
     val active = snapshot.activeTurn
     // A durable unfinished turn alone is not evidence of a running request.
-    if (phase != ConversationTurnPhase.AWAITING_APPROVAL && requestId == null) return null
+    if (phase != ConversationTurnPhase.AWAITING_USER && requestId == null) return null
     if (phase != ConversationTurnPhase.PREPARING &&
         (active == null || (requestId != null && requestId != active.turnId))
     ) return null
@@ -49,17 +49,17 @@ internal fun projectConversationTurnFeedback(
             message?.getTools()?.forEachIndexed { ordinal, tool ->
                 val locator = ToolCallLocator(message.id, ordinal)
                 val toolPhase = presentation.toolCallPhases[locator]
-                if (phase == ConversationTurnPhase.AWAITING_APPROVAL &&
+                if (phase == ConversationTurnPhase.AWAITING_USER &&
                     toolPhase == ToolCallPhase.AWAITING_APPROVAL
                 ) {
                     add("tool:${message.id}:$ordinal")
                 }
-                if (toolPhase == ToolCallPhase.EXECUTING && tool.toolName == "assistant_call") {
+                if (toolPhase == ToolCallPhase.EXECUTING) {
                     val metadata = tool.getSubAssistantCallMetadata(JsonInstant)
                     val interaction = metadata?.userInteraction
                     if (metadata?.state == SubAssistantCallState.RUNNING &&
                         metadata.phase == SubAssistantCallPhase.AWAITING_USER &&
-                        interaction?.toolName == "ask_user" && interaction.interactionId.isNotBlank()
+                        interaction != null && interaction.interactionId.isNotBlank()
                     ) {
                         add("ask:${interaction.interactionId}")
                     }
@@ -78,7 +78,7 @@ internal fun projectConversationTurnFeedback(
                 else -> 0L
             }
         },
-        awaitingUser = phase == ConversationTurnPhase.AWAITING_APPROVAL || attentionKeys.isNotEmpty(),
+        awaitingUser = phase == ConversationTurnPhase.AWAITING_USER || attentionKeys.isNotEmpty(),
         attentionKeys = attentionKeys,
     )
 }

@@ -96,15 +96,48 @@ class TokenUsageAccountingTest {
         assertEquals(30L, usage.outputTokens)
         assertEquals(50L, usage.cacheReadInputTokens)
         assertEquals(330L, usage.totalTokens)
+        assertEquals(210L, usage.peakRequestContextTokens)
+        assertEquals(200L, usage.latestRequestContextTokens)
+        assertEquals(10L, usage.latestRequestOutputTokens)
+        assertEquals(0L, usage.latestRequestCacheReadInputTokens)
+        assertNull(usage.latestRequestOutputDurationMillis)
         assertEquals(2, usage.observedProviderRequestCount)
         assertEquals(2, usage.observedUsageReportedRequestCount)
         assertEquals(100L, usage.providerRequestDurationMillis)
+        assertEquals(UsageCompleteness.COMPLETE, usage.inputCompleteness)
         assertEquals(UsageCompleteness.COMPLETE, usage.coreCompleteness)
         assertEquals(UsageCompleteness.COMPLETE, usage.cacheReadCompleteness)
     }
 
     @Test
-    fun `latest request context and cache overwrite while initial ttft stays on first request`() {
+    fun `legacy turn with unknown historical peak never invents a partial peak on continuation`() {
+        val legacy = TokenUsage(
+            inputTokens = 100,
+            outputTokens = 20,
+            observedProviderRequestCount = 1,
+            observedUsageReportedRequestCount = 1,
+            coreCompleteness = UsageCompleteness.COMPLETE,
+            semanticsVersion = 2,
+        )
+        val accumulator = TurnUsageAccumulator.from(legacy)
+
+        val usage = accumulator.apply(
+            completed(
+                ordinal = 2,
+                input = 200,
+                output = 10,
+                cacheRead = 0,
+                total = 210,
+                duration = 60,
+            ),
+        ).usage
+
+        assertNull(usage.peakRequestContextTokens)
+        assertEquals(CURRENT_TOKEN_USAGE_SEMANTICS_VERSION, usage.semanticsVersion)
+    }
+
+    @Test
+    fun `latest request summary fields overwrite together while initial ttft stays on first request`() {
         val accumulator = TurnUsageAccumulator.from(null)
         val first = completed(
             ordinal = 1,
@@ -129,40 +162,48 @@ class TokenUsageAccountingTest {
         val usage = accumulator.apply(second).usage
 
         assertEquals(200L, usage.latestRequestContextTokens)
+        assertEquals(10L, usage.latestRequestOutputTokens)
         assertEquals(0L, usage.latestRequestCacheReadInputTokens)
+        assertEquals(30L, usage.latestRequestOutputDurationMillis)
         assertEquals(12L, usage.initialRequestTimeToFirstOutputMillis)
     }
 
     @Test
-    fun `active request preview keeps the last closed context and cache pair`() {
+    fun `request summaries refresh only at their own triggers and otherwise carry within the turn`() {
         val accumulator = TurnUsageAccumulator.from(null)
-        accumulator.apply(completed(1, 100, 20, 50, 120, 40))
-        val second = RequestUsageReducer(requestOrdinal = 2)
-        second.accept(
-            ProviderUsageSnapshot(
-                inputTokens = 200,
-                outputTokens = 1,
-                cacheReadInputTokens = 0,
-                totalTokens = 201,
-            )
-        )
 
-        val preview = accumulator.preview(
-            second.preview(providerRequestDurationMillis = 10)
-        )
+        val sent = accumulator.recordRequestStarted(1_234)
+        assertEquals(1_234L, sent.latestRequestEstimatedContextTokens)
+        assertNull(sent.observedProviderRequestCount)
 
-        assertEquals(100L, preview.latestRequestContextTokens)
-        assertEquals(50L, preview.latestRequestCacheReadInputTokens)
-        assertEquals(2, preview.observedProviderRequestCount)
-
-        val closed = accumulator.apply(
-            second.close(
-                outcome = ProviderRequestOutcome.COMPLETED,
-                providerRequestDurationMillis = 20,
-            )
+        accumulator.recordFirstOutput(10)
+        val first = accumulator.apply(
+            completed(
+                ordinal = 1,
+                input = 100,
+                output = 20,
+                cacheRead = 50,
+                total = 120,
+                duration = 110,
+                timeToFirstOutput = 10,
+            ),
         ).usage
-        assertEquals(200L, closed.latestRequestContextTokens)
-        assertEquals(0L, closed.latestRequestCacheReadInputTokens)
+        assertEquals(1_234L, first.latestRequestEstimatedContextTokens)
+        assertEquals(10L, first.latestRequestTimeToFirstOutputMillis)
+        assertEquals(50.0, first.latestRequestCacheHitPercent!!, 0.0)
+        assertEquals(200.0, first.latestRequestTokensPerSecond!!, 0.0)
+        assertEquals(UsageCompleteness.COMPLETE, first.coreCompleteness)
+
+        accumulator.recordRequestStarted(2_345)
+        val missing = RequestUsageReducer(requestOrdinal = 2)
+            .close(ProviderRequestOutcome.FAILED, providerRequestDurationMillis = 15)
+        val second = accumulator.apply(missing).usage
+
+        assertEquals(2_345L, second.latestRequestEstimatedContextTokens)
+        assertEquals(10L, second.latestRequestTimeToFirstOutputMillis)
+        assertEquals(50.0, second.latestRequestCacheHitPercent!!, 0.0)
+        assertEquals(200.0, second.latestRequestTokensPerSecond!!, 0.0)
+        assertEquals(2, second.observedProviderRequestCount)
     }
 
     @Test
@@ -175,7 +216,9 @@ class TokenUsageAccountingTest {
         val usage = accumulator.apply(missing).usage
 
         assertNull(usage.latestRequestContextTokens)
+        assertNull(usage.latestRequestOutputTokens)
         assertNull(usage.latestRequestCacheReadInputTokens)
+        assertNull(usage.latestRequestOutputDurationMillis)
         assertEquals(12L, usage.initialRequestTimeToFirstOutputMillis)
     }
 
@@ -268,6 +311,7 @@ class TokenUsageAccountingTest {
         assertEquals(140L, usage.inputTokens)
         assertEquals(25L, usage.outputTokens)
         assertEquals(UsageCompleteness.PARTIAL, usage.coreCompleteness)
+        assertEquals(UsageCompleteness.PARTIAL, usage.inputCompleteness)
         assertEquals(UsageCompleteness.PARTIAL, usage.cacheReadCompleteness)
         assertEquals(1, usage.observedProviderRequestCount)
     }

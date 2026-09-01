@@ -21,6 +21,7 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ProviderUsageSnapshot
 import me.rerere.ai.core.UsageCompleteness
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
@@ -112,6 +113,27 @@ class TurnEngineTest {
         val checkpoint = command.captured as CommitCheckpoint
         assertEquals(harness.handle, checkpoint.handle)
         assertEquals(TurnExecutionStatus.RUNNING, checkpoint.turnStatus)
+    }
+
+    @Test
+    fun `finalization cannot overwrite a committed checkpoint before its projection chunk`() = runTest {
+        val harness = harness()
+        val recorded = mutableListOf<ConversationCommand>()
+        coEvery { harness.coordinator.executeOrThrow(any(), capture(recorded)) } returns Unit
+        val checkpointMessages = listOf(msg("[Derived tool result folded]").copy(
+            id = harness.handle.assistantMessageId,
+        ))
+
+        harness.engine.onCheckpoint(
+            GenerationCheckpoint(
+                kind = CheckpointKind.STEP_COMPLETED,
+                messages = checkpointMessages,
+            ),
+        )
+        harness.engine.bind(emptyFlow()).collect { }
+
+        assertEquals(listOf(CommitCheckpoint::class, FinalizeTurn::class), recorded.map { it::class })
+        assertEquals(checkpointMessages, (recorded.last() as FinalizeTurn).messages)
     }
 
     @Test
@@ -349,6 +371,7 @@ class TurnEngineTest {
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            toolOutputStore = io.mockk.mockk(relaxed = true),
         )
         val assistant = Assistant(enableMemory = false)
         val settings = Settings(
@@ -359,7 +382,7 @@ class TurnEngineTest {
         val tool = Tool(
             name = "revocable_tool",
             description = "Requires approval before executing.",
-            needsApproval = { true },
+            interactionRequirement = { ToolInteractionRequirement.Approval },
             execute = {
                 executed = true
                 listOf(UIMessagePart.Text("executed"))
@@ -380,6 +403,7 @@ class TurnEngineTest {
         val waitingEvents = harness.engine.bind(
             generationLoop.run(
                 GenerationRequest(
+                    conversationId = kotlin.uuid.Uuid.random(),
                     settings = settings,
                     model = model,
                     mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -394,7 +418,10 @@ class TurnEngineTest {
             )
         ).toListSafe()
         assertTrue((waitingEvents.last() as TurnEvent.Finished).outcome is TurnOutcome.AwaitingApproval)
-        val pendingMessage = waitingEvents.filterIsInstance<TurnEvent.Streaming>().last().messages.last()
+        val pendingMessage = recorded.filterIsInstance<CommitCheckpoint>()
+            .asSequence()
+            .map { it.messages.last() }
+            .first { message -> message.getTools().singleOrNull()?.isPending == true }
         assertTrue(pendingMessage.getTools().single().approvalState is ToolApprovalState.Pending)
 
         val approvedMessage = pendingMessage.copy(
@@ -406,9 +433,10 @@ class TurnEngineTest {
                 }
             },
         )
-        val continuationEvents = harness.engine.bind(
+        harness.engine.bind(
             generationLoop.run(
                 GenerationRequest(
+                    conversationId = kotlin.uuid.Uuid.random(),
                     settings = settings,
                     model = model,
                     mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -424,8 +452,13 @@ class TurnEngineTest {
         ).toListSafe()
 
         assertFalse(executed)
-        val committedResult = continuationEvents.filterIsInstance<TurnEvent.Streaming>()
-            .last().messages.last().getTools().single()
+        val committedResult = recorded.filterIsInstance<CommitCheckpoint>()
+            .asSequence()
+            .flatMap { checkpoint -> checkpoint.messages.last().getTools().asSequence() }
+            .first { result ->
+                result.output.filterIsInstance<UIMessagePart.Text>()
+                    .any { it.text.contains("tool_not_available") }
+            }
         assertTrue((committedResult.output.single() as UIMessagePart.Text).text.contains("tool_not_available"))
 
         val checkpoints = recorded.filterIsInstance<CommitCheckpoint>()
@@ -517,7 +550,7 @@ class TurnEngineTest {
     }
 
     @Test
-    fun `real cancellation replaces request preview with closed latest context and cache`() = runTest {
+    fun `real cancellation commits closed latest context and cache`() = runTest {
         val finalized = cancelProviderRequest(afterTool = false, reportPendingUsage = true)
         val usage = finalized.messages!!.last().usage!!
 
@@ -573,11 +606,13 @@ class TurnEngineTest {
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            toolOutputStore = io.mockk.mockk(relaxed = true),
         )
         val assistant = Assistant(enableMemory = false, streamOutput = true)
         val pendingSeen = CompletableDeferred<Unit>()
         val collector = launch {
             harness.engine.bind(generationLoop.run(GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = Settings(providers = listOf(providerSetting)),
                 model = model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,

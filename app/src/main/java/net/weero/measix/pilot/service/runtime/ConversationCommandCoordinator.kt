@@ -354,7 +354,7 @@ internal fun validateConversationCommandOwner(
             throw ConversationCommandConflictException("stale finalization for turn ${command.handle.turnId}")
         }
         is HeaderConversationCommand -> Unit
-        is UpdateToolApproval -> {
+        is ResolveToolInteraction -> {
             val handle = command.handle
             requireActiveIdentity(handle.turnId)
             if (

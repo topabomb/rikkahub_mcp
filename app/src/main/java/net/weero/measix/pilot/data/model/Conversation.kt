@@ -9,6 +9,8 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.InstantSerializer
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
+import net.weero.measix.pilot.data.db.entity.ArtifactReferenceType
+import net.weero.measix.pilot.data.ai.tools.ToolRuntimeMetadata
 import java.time.Instant
 import kotlin.uuid.Uuid
 
@@ -157,7 +159,6 @@ private const val TOOL_METADATA_ARTIFACT_KEY = "artifact"
 private const val TOOL_METADATA_SUB_ASSISTANT_CALL_KEY = "sub_assistant_call"
 private const val TOOL_METADATA_ARTIFACTS_KEY = "artifacts"
 private const val LOCAL_ARTIFACT_RELATIVE_PATH_KEY = "relativePath"
-
 private fun artifactRelativePathOf(element: kotlinx.serialization.json.JsonElement): String? {
     val primitive = (element as? kotlinx.serialization.json.JsonObject)
         ?.get(LOCAL_ARTIFACT_RELATIVE_PATH_KEY) as? kotlinx.serialization.json.JsonPrimitive
@@ -185,17 +186,51 @@ private fun UIMessagePart.toolMetadataReferenceTokens(): List<String> {
     return tokens
 }
 
+/**
+ * tool_runtime.archive.artifact 的相对路径：已归档 Tool Result 的唯一 durable 句柄，
+ * 引用类型为 TOOL_OUTPUT，与附件生命周期分开。
+ */
+private fun UIMessagePart.toolOutputArchiveReferences(): List<MessageArtifactReference> {
+    if (this !is UIMessagePart.Tool) return emptyList()
+    val archive = ToolRuntimeMetadata.archiveOf(this.metadata) ?: return emptyList()
+    return listOf(
+        MessageArtifactReference(
+            token = archive.artifact.relativePath,
+            type = ArtifactReferenceType.TOOL_OUTPUT,
+            expectedArtifactId = archive.ref,
+        ),
+    )
+}
+
+/** 消息历史对 artifact 的带类型引用 token（file:// URL 或相对路径 + 引用类型）。 */
+internal data class MessageArtifactReference(
+    val token: String,
+    val type: ArtifactReferenceType,
+    /** Tool Output ref 指定的 Artifact id；投影时必须与相对路径解析出的实体一致。 */
+    val expectedArtifactId: Long? = null,
+)
+
 internal fun List<UIMessage>.collectFileUrlStrings(): Set<String> =
     flatMap { it.parts }.collectAllParts().mapNotNull { it.fileUrlString() }.toSet()
 
 /**
- * 会话引用的全部文件标识 token：parts 里的 file:// URL + Tool.metadata 里 LocalArtifactRef
- * 的相对路径。文件清理的保留判定用这个集合。
+ * 会话引用的全部 artifact token，按语义分类：
+ *  - 媒体 part URL 与 Tool.metadata 交付物 → ATTACHMENT；
+ *  - tool_runtime.archive.artifact → TOOL_OUTPUT。
+ * 文件清理的保留判定与 artifact_reference 投影共用这一份规则。
  */
-internal fun List<UIMessage>.collectFileReferenceTokens(): Set<String> =
+internal fun List<UIMessage>.collectArtifactReferences(): List<MessageArtifactReference> =
     flatMap { it.parts }.collectAllParts().flatMap { part ->
-        listOfNotNull(part.fileUrlString()) + part.toolMetadataReferenceTokens()
-    }.toSet()
+        listOfNotNull(part.fileUrlString()).map {
+            MessageArtifactReference(it, ArtifactReferenceType.ATTACHMENT)
+        } + part.toolMetadataReferenceTokens().map {
+            MessageArtifactReference(it, ArtifactReferenceType.ATTACHMENT)
+        } + part.toolOutputArchiveReferences()
+    }
+
+/** 会话引用的全部文件标识 token：文件清理的保留判定用这个集合。 */
+internal fun List<UIMessage>.collectFileReferenceTokens(): Set<String> =
+    collectArtifactReferences().map { it.token }.toSet()
 
 internal fun List<UIMessage>.collectFileUris(): Set<Uri> =
     collectFileUrlStrings().map { it.toUri() }.toSet()

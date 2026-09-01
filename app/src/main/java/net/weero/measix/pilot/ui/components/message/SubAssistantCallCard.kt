@@ -377,8 +377,8 @@ fun SubAssistantCallCard(
                 }
 
                 val interaction = metadata.userInteraction
-                if (isRunning && interaction?.toolName == "ask_user") {
-                    // ask_user 交互区必须消费点击事件，防止冒泡到 Card 的 navigateToDetail。
+                if (isRunning && interaction != null) {
+                    // typed UserInput 交互区必须消费点击事件，防止冒泡到 Card 的 navigateToDetail。
                     // OutlinedTextField 不像 FilterChip 那样通过 Modifier.clickable 消费事件，
                     // 不加此消费层时点击文本输入框会触发详情导航。
                     val interactionSource = remember { MutableInteractionSource() }
@@ -410,7 +410,7 @@ fun SubAssistantCallCard(
                             ChainOfThought(steps = listOf(askTool)) { pendingTool ->
                                 AskUserToolStep(
                                     tool = pendingTool,
-                                    phase = ToolCallPhase.AWAITING_APPROVAL,
+                                    phase = ToolCallPhase.AWAITING_INPUT,
                                     onAnswer = onAnswer?.let { callback ->
                                         { answer ->
                                             callback(metadata.runId, interaction.interactionId, answer)

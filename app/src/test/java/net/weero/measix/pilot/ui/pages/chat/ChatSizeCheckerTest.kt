@@ -11,18 +11,18 @@ import org.junit.Test
 
 class ChatSizeCheckerTest {
     @Test
-    fun `size check uses latest request context instead of accumulated input`() {
+    fun `size check uses latest pre-send context estimate instead of accumulated input`() {
         val assistantNode = node(
             role = MessageRole.ASSISTANT,
             usage = TokenUsage(
                 inputTokens = 900_000,
-                latestRequestContextTokens = 120_000,
+                latestRequestEstimatedContextTokens = 120_000,
             ),
         )
 
         val info = calculateConversationSizeInfo(listOf(assistantNode))
 
-        assertEquals(120_000L, info.lastAssistantInputTokens)
+        assertEquals(120_000L, info.lastAssistantEstimatedContextTokens)
         assertFalse(info.exceedInputTokenThreshold)
     }
 
@@ -31,7 +31,7 @@ class ChatSizeCheckerTest {
         val userNode = node(MessageRole.USER)
         val assistantNode = node(
             role = MessageRole.ASSISTANT,
-            usage = TokenUsage(latestRequestContextTokens = 300_001),
+            usage = TokenUsage(latestRequestEstimatedContextTokens = 300_001),
         )
 
         val info = calculateConversationSizeInfo(List(768) { userNode } + assistantNode)

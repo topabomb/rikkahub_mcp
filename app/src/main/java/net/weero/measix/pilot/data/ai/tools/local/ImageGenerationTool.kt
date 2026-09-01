@@ -17,6 +17,7 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolExecutionContext
+import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.core.ToolMetadataDelivery
 import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.ui.UIMessagePart
@@ -39,6 +40,7 @@ import net.weero.measix.pilot.data.imggen.ImageGenerationRequest
 import net.weero.measix.pilot.data.imggen.ImageGenerationSelection
 import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.imggen.ImageGenerationSource
+import net.weero.measix.pilot.data.ai.tools.failToolResult
 import net.weero.measix.pilot.utils.JsonInstant
 
 internal const val GENERATE_IMAGE_TOOL_NAME = "generate_image"
@@ -96,8 +98,11 @@ private fun imageGenerationFailureJson(reason: String, detail: String? = null): 
     detail?.trim()?.takeIf { it.isNotEmpty() }?.let { put("detail", it) }
 }
 
-internal fun failedResult(reason: String, detail: String? = null): List<UIMessagePart> =
-    listOf(UIMessagePart.Text(imageGenerationFailureJson(reason, detail).toString()))
+internal fun failedResult(reason: String, detail: String? = null): Nothing =
+    failToolResult(
+        output = listOf(UIMessagePart.Text(imageGenerationFailureJson(reason, detail).toString())),
+        reason = reason,
+    )
 
 data class AssistantToolBuildContext(
     val ownerAssistantId: Uuid,
@@ -145,8 +150,12 @@ class ImageGenerationToolFactory(
                 )
             },
             systemPrompt = { _, _ -> imageGenerationSystemPrompt(capturedSelection.descriptor) },
-            needsApproval = { args ->
-                parseGenerateImageArguments(args).getOrNull()?.setAsBackground == true
+            interactionRequirement = { args ->
+                if (parseGenerateImageArguments(args).getOrNull()?.setAsBackground == true) {
+                    ToolInteractionRequirement.Approval
+                } else {
+                    ToolInteractionRequirement.None
+                }
             },
             validateArguments = { args ->
                 parseGenerateImageArguments(args).exceptionOrNull()?.let { imageGenerationFailureJson("invalid_arguments") }

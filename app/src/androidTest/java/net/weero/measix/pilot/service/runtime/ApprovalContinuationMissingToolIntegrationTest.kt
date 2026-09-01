@@ -15,6 +15,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderManager
@@ -45,7 +46,7 @@ import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.service.ApplicationRecoveryGate
 import net.weero.measix.pilot.service.MasterTurnEntry
 import net.weero.measix.pilot.service.TurnFinalization
-import net.weero.measix.pilot.service.applyToolApprovalDecision
+import net.weero.measix.pilot.service.applyToolUserDecision
 import okhttp3.OkHttpClient
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -147,6 +148,7 @@ class ApprovalContinuationMissingToolIntegrationTest {
             attachmentResolver = AttachmentResolver(
                 artifactStore = artifactStore,
             ),
+            toolOutputStore = net.weero.measix.pilot.data.ai.tools.ToolOutputStore(artifactStore),
         )
 
         val conversationId = Uuid.random()
@@ -164,7 +166,7 @@ class ApprovalContinuationMissingToolIntegrationTest {
         val revocableTool = Tool(
             name = "revocable_tool",
             description = "Requires approval before execution.",
-            needsApproval = { true },
+            interactionRequirement = { ToolInteractionRequirement.Approval },
             execute = {
                 toolExecuted = true
                 listOf(UIMessagePart.Text("executed"))
@@ -202,6 +204,7 @@ class ApprovalContinuationMissingToolIntegrationTest {
                 val waitingEvents = started.engine.bind(
                     generationLoop.run(
                         GenerationRequest(
+                            conversationId = kotlin.uuid.Uuid.random(),
                             settings = settings,
                             model = model,
                             mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -257,15 +260,15 @@ class ApprovalContinuationMissingToolIntegrationTest {
         var continuationWorker: Job? = null
         var continuationFailure: Throwable? = null
         val executionStatuses = mutableListOf<ToolExecutionEventStatus>()
-        applyToolApprovalDecision(
+        applyToolUserDecision(
             locator = ToolCallLocator(pendingMessage.id, 0),
-            approvalState = ToolApprovalState.Approved,
+            decision = ToolUserDecision.Approve,
             awaitPreviousGeneration = { initialWorker.join() },
             currentSnapshot = { runtime.snapshot.value },
             submit = { command -> coordinator.executeOrThrow(conversationId, command) },
             onMoreApprovalsPending = { error("the only tool approval should resume immediately") },
             continueTurn = { owner, entry ->
-                assertEquals(MasterTurnEntry.CONTINUE_APPROVAL, entry)
+                assertEquals(MasterTurnEntry.CONTINUE_USER_INTERACTION, entry)
                 val handle = TurnHandle(
                     conversationId = conversationId,
                     epoch = owner.epoch,
@@ -292,6 +295,7 @@ class ApprovalContinuationMissingToolIntegrationTest {
                         continuation.engine.bind(
                             generationLoop.run(
                                 GenerationRequest(
+                                    conversationId = kotlin.uuid.Uuid.random(),
                                     settings = settings,
                                     model = model,
                                     mediaCapabilities = RequestMediaCapabilities.NONE,

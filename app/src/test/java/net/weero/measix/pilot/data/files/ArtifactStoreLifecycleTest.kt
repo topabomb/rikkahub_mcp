@@ -24,6 +24,20 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.Dispatchers
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
+import net.weero.measix.pilot.data.ai.ToolOutputProtocolLimits
+import net.weero.measix.pilot.data.ai.ContextTrimmingPolicy
+import net.weero.measix.pilot.data.ai.ToolOutputCompactionCandidate
+import net.weero.measix.pilot.data.ai.ToolOutputCompactionPlan
+import net.weero.measix.pilot.data.ai.estimateStableTextTokens
+import net.weero.measix.pilot.data.ai.tools.ToolOutputGrepResult
+import net.weero.measix.pilot.data.ai.tools.ToolOutputArchive
+import net.weero.measix.pilot.data.ai.tools.ToolOutputArchiveRef
+import net.weero.measix.pilot.data.ai.tools.ToolOutputReadResult
+import net.weero.measix.pilot.data.ai.tools.ToolOutputStore
+import net.weero.measix.pilot.data.ai.tools.ToolRuntimeMetadata
+import net.weero.measix.pilot.data.ai.tools.REGENERABLE_TOOL_OUTPUT_FOLDED_MARKER
+import net.weero.measix.pilot.data.ai.tools.estimatedToolOutputMarkerTokens
+import net.weero.measix.pilot.data.ai.tools.formatReadResult
 import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
 import net.weero.measix.pilot.data.datastore.SettingsAccessIndex
@@ -37,9 +51,16 @@ import net.weero.measix.pilot.data.db.entity.ArtifactReferenceEntity
 import net.weero.measix.pilot.data.db.entity.ArtifactReferenceType
 import net.weero.measix.pilot.data.db.entity.ConversationEntity
 import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
+import me.rerere.ai.core.ToolCallLocator
+import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ToolOutputPolicy
+import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Avatar
+import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.imggen.TINY_PNG
+import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -96,6 +117,351 @@ class ArtifactStoreLifecycleTest {
         folders.forEach { File(context.filesDir, it).deleteRecursively() }
         File(context.filesDir, ArtifactPayloadStore.STAGING_FOLDER).deleteRecursively()
         database.close()
+    }
+
+    @Test
+    fun `tool output retained read is conversation scoped and fails closed for missing payload`() = runTest {
+        val owned = store.createText(
+            text = "one\ntwo\nthree\n",
+            displayName = "tool_output.txt",
+            mimeType = "text/plain",
+            folder = FileFolders.TOOL_OUTPUTS,
+            origin = ArtifactOrigin.SYSTEM,
+        )
+        folders += FileFolders.TOOL_OUTPUTS
+        val allowed = Uuid.random()
+        val denied = Uuid.random()
+        val nodeId = Uuid.random().toString()
+        database.conversationDao().insert(
+            ConversationEntity(
+                id = allowed.toString(),
+                assistantId = Uuid.random().toString(),
+                title = "tool-output",
+                createAt = 1,
+                updateAt = 1,
+                chatSuggestions = "[]",
+                isPinned = false,
+            )
+        )
+        database.messageNodeDao().insertAll(
+            listOf(MessageNodeEntity(nodeId, allowed.toString(), 0, "[]", 0))
+        )
+        database.artifactReferenceDao().insertAll(
+            listOf(ArtifactReferenceEntity(
+                artifactId = owned.entity.id,
+                nodeId = nodeId,
+                referenceType = ArtifactReferenceType.TOOL_OUTPUT.name,
+            ))
+        )
+        store.publishUnpublished(owned)
+
+        assertEquals(
+            listOf("one", "two", "three"),
+            store.withToolOutputText(allowed, owned.entity.id) { it.readLines() },
+        )
+        val read = ToolOutputStore(store).read(
+            allowed,
+            owned.entity.id,
+            1,
+            10,
+        ) as ToolOutputReadResult.Success
+        assertEquals(3, read.totalLines)
+        assertNull(store.withToolOutputText(denied, owned.entity.id) { it.readLines() })
+
+        store.file(owned.entity).delete()
+        assertNull(store.withToolOutputText(allowed, owned.entity.id) { it.readLines() })
+    }
+
+    @Test
+    fun `shared tool output survives source deletion and is reclaimed after the last fork reference`() = runTest {
+        val archivedText = "shared archived output"
+        val owned = store.createText(
+            text = archivedText,
+            displayName = "tool_output.txt",
+            mimeType = "text/plain",
+            folder = FileFolders.TOOL_OUTPUTS,
+            origin = ArtifactOrigin.SYSTEM,
+        )
+        folders += FileFolders.TOOL_OUTPUTS
+        val archive = ToolOutputArchive(
+            ref = owned.entity.id,
+            artifact = ToolOutputArchiveRef(owned.entity.relativePath, "text/plain"),
+            characters = archivedText.length.toLong(),
+            lines = 1,
+        )
+        val message = UIMessage(
+            id = Uuid.random(),
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "shared",
+                    toolName = "tool",
+                    input = "{}",
+                    output = listOf(UIMessagePart.Text("[archived tool output]")),
+                    metadata = ToolRuntimeMetadata.withArchive(null, archive),
+                ),
+            ),
+        )
+        val sourceConversationId = Uuid.random()
+        val forkConversationId = Uuid.random()
+        listOf(sourceConversationId, forkConversationId).forEachIndexed { index, conversationId ->
+            database.conversationDao().insert(
+                ConversationEntity(
+                    id = conversationId.toString(),
+                    assistantId = Uuid.random().toString(),
+                    title = "tool-output-$index",
+                    createAt = 1,
+                    updateAt = 1,
+                    chatSuggestions = "[]",
+                    isPinned = false,
+                ),
+            )
+            database.messageNodeDao().insertAll(
+                listOf(
+                    MessageNodeEntity(
+                        id = Uuid.random().toString(),
+                        conversationId = conversationId.toString(),
+                        nodeIndex = 0,
+                        messages = JsonInstant.encodeToString(listOf(message)),
+                        selectIndex = 0,
+                    ),
+                ),
+            )
+        }
+        store.ensureReferenceProjection()
+        store.publishUnpublished(owned)
+
+        assertEquals(archivedText, store.withToolOutputText(sourceConversationId, owned.entity.id) { it.readText() })
+        assertEquals(archivedText, store.withToolOutputText(forkConversationId, owned.entity.id) { it.readText() })
+
+        database.conversationDao().deleteById(sourceConversationId.toString())
+        assertNull(store.withToolOutputText(sourceConversationId, owned.entity.id) { it.readText() })
+        assertEquals(archivedText, store.withToolOutputText(forkConversationId, owned.entity.id) { it.readText() })
+        assertTrue(store.collectGarbage(protectionWindowMillis = 0).isEmpty())
+
+        val payload = store.file(owned.entity)
+        database.conversationDao().deleteById(forkConversationId.toString())
+        assertEquals(listOf(owned.entity.id), store.collectGarbage(protectionWindowMillis = 0).map { it.id })
+        assertNull(database.artifactDao().getById(owned.entity.id))
+        assertFalse(payload.exists())
+    }
+
+    @Test
+    fun `tool output paging and grep stay bounded across giant physical lines`() = runTest {
+        val text = (1..20).joinToString("\n") { line -> "Hit-$line-${"界".repeat(30_000)}" }
+        val owned = store.createText(
+            text = text,
+            displayName = "tool_output.txt",
+            mimeType = "text/plain",
+            folder = FileFolders.TOOL_OUTPUTS,
+            origin = ArtifactOrigin.SYSTEM,
+        )
+        folders += FileFolders.TOOL_OUTPUTS
+        val conversationId = Uuid.random()
+        val nodeId = Uuid.random().toString()
+        database.conversationDao().insert(
+            ConversationEntity(
+                id = conversationId.toString(),
+                assistantId = Uuid.random().toString(),
+                title = "tool-output-page",
+                createAt = 1,
+                updateAt = 1,
+                chatSuggestions = "[]",
+                isPinned = false,
+            )
+        )
+        database.messageNodeDao().insertAll(
+            listOf(MessageNodeEntity(nodeId, conversationId.toString(), 0, "[]", 0))
+        )
+        database.artifactReferenceDao().insertAll(
+            listOf(
+                ArtifactReferenceEntity(
+                    artifactId = owned.entity.id,
+                    nodeId = nodeId,
+                    referenceType = ArtifactReferenceType.TOOL_OUTPUT.name,
+                )
+            )
+        )
+        store.publishUnpublished(owned)
+
+        val outputStore = ToolOutputStore(store)
+        val first = outputStore.read(conversationId, owned.entity.id, 1, 20) as ToolOutputReadResult.Success
+        assertTrue(first.byteLimited)
+        assertEquals(first.endLine + 1, first.nextStartLine)
+        assertTrue(formatReadResult(first).toByteArray(Charsets.UTF_8).size <=
+            ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_RESPONSE_BYTES)
+
+        val second = outputStore.read(conversationId, owned.entity.id, first.nextStartLine!!, 1)
+            as ToolOutputReadResult.Success
+        assertEquals(first.endLine + 1, second.lines.single().number)
+        val grep = outputStore.grep(conversationId, owned.entity.id, "^hit-(1|2)-[界]+$", true, 1, 10)
+            as ToolOutputGrepResult.Success
+        assertTrue(grep.matchCount >= 1)
+        assertTrue(grep.truncated)
+        assertEquals(
+            ToolOutputGrepResult.InvalidPattern,
+            outputStore.grep(conversationId, owned.entity.id, "Hit-(?=1)", false, 0, 10),
+        )
+        assertEquals(
+            ToolOutputGrepResult.InvalidPattern,
+            outputStore.grep(conversationId, owned.entity.id, "(Hit)-\\1", false, 0, 10),
+        )
+    }
+
+    @Test
+    fun `staged tool output batch uses one all or nothing ownership lease`() = runTest {
+        folders += FileFolders.TOOL_OUTPUTS
+        val messageId = Uuid.random()
+        val candidates = listOf("a".repeat(4096), "b".repeat(4096)).mapIndexed { ordinal, value ->
+                val originalTokens = estimateStableTextTokens(value)
+                val markerTokens = estimatedToolOutputMarkerTokens("completed", value)
+                ToolOutputCompactionCandidate(
+                    locator = ToolCallLocator(messageId, ordinal),
+                    toolName = "tool",
+                    terminalStatus = "completed",
+                    outputPolicy = me.rerere.ai.core.ToolOutputPolicy.ARCHIVABLE_TEXT,
+                    text = value,
+                    characters = value.length.toLong(),
+                    originalEstimatedTokens = originalTokens,
+                    markerEstimatedTokens = markerTokens,
+                    netReclaimEstimatedTokens = originalTokens - markerTokens,
+                )
+            }
+        val plan = ToolOutputCompactionPlan(
+            candidates = candidates,
+            netReclaimedEstimatedTokens = candidates.sumOf { it.netReclaimEstimatedTokens },
+        )
+        val staged = ToolOutputStore(store).stageCompaction(plan)
+        val lease = requireNotNull(staged.lease)
+        val artifactIds = staged.replacements.values.map { requireNotNull(it.archive).ref }
+
+        val failure = runCatching { lease.publish() }.exceptionOrNull()
+        assertTrue(failure is IllegalStateException)
+        lease.discard()
+        artifactIds.forEach { artifactId ->
+            assertNull(database.artifactDao().getById(artifactId))
+        }
+    }
+
+    @Test
+    fun `regenerable lookup output folds without creating another artifact`() = runTest {
+        val minimum = ContextTrimmingPolicy.TOOL_OUTPUT_MINIMUM_RESULT_NET_RECLAIM_ESTIMATED_TOKENS
+        val markerTokens = estimateStableTextTokens(REGENERABLE_TOOL_OUTPUT_FOLDED_MARKER)
+        fun candidate(netReclaim: Long): ToolOutputCompactionCandidate {
+            val text = "x".repeat(((markerTokens + netReclaim) * 4).toInt())
+            val originalTokens = estimateStableTextTokens(text)
+            return ToolOutputCompactionCandidate(
+                locator = ToolCallLocator(Uuid.random(), 0),
+                toolName = "read_tool_output",
+                terminalStatus = "completed",
+                outputPolicy = ToolOutputPolicy.REGENERABLE_TEXT,
+                text = text,
+                characters = text.length.toLong(),
+                originalEstimatedTokens = originalTokens,
+                markerEstimatedTokens = markerTokens,
+                netReclaimEstimatedTokens = originalTokens - markerTokens,
+            )
+        }
+        fun plan(candidate: ToolOutputCompactionCandidate) = ToolOutputCompactionPlan(
+            candidates = listOf(candidate),
+            netReclaimedEstimatedTokens = candidate.netReclaimEstimatedTokens,
+        )
+        val below = candidate(minimum - 1)
+        val belowFailure = runCatching { ToolOutputStore(store).stageCompaction(plan(below)) }.exceptionOrNull()
+        assertTrue(belowFailure is IllegalArgumentException)
+
+        val candidate = candidate(minimum)
+        val staged = ToolOutputStore(store).stageCompaction(plan(candidate))
+
+        val replacement = staged.replacements.getValue(candidate.locator)
+        assertEquals(minimum, candidate.netReclaimEstimatedTokens)
+        assertEquals(REGENERABLE_TOOL_OUTPUT_FOLDED_MARKER, replacement.marker.text)
+        assertNull(replacement.archive)
+        assertNull(staged.lease)
+        assertTrue(database.artifactDao().listAllStatesByFolder(FileFolders.TOOL_OUTPUTS).first().isEmpty())
+    }
+
+    @Test
+    fun `staged output gains a projected durable root before publish and remains readable`() = runTest {
+        folders += FileFolders.TOOL_OUTPUTS
+        val conversationId = Uuid.random()
+        val messageId = Uuid.random()
+        val nodeId = Uuid.random()
+        val locator = ToolCallLocator(messageId, 0)
+        val archivedText = "stable output ".repeat(200)
+        val originalTokens = estimateStableTextTokens(archivedText)
+        val markerTokens = estimatedToolOutputMarkerTokens("completed", archivedText)
+        val staged = ToolOutputStore(store).stageCompaction(
+            ToolOutputCompactionPlan(
+                candidates = listOf(
+                    ToolOutputCompactionCandidate(
+                        locator = locator,
+                        toolName = "tool",
+                        terminalStatus = "completed",
+                        outputPolicy = me.rerere.ai.core.ToolOutputPolicy.ARCHIVABLE_TEXT,
+                        text = archivedText,
+                        characters = archivedText.length.toLong(),
+                        originalEstimatedTokens = originalTokens,
+                        markerEstimatedTokens = markerTokens,
+                        netReclaimEstimatedTokens = originalTokens - markerTokens,
+                    ),
+                ),
+                netReclaimedEstimatedTokens = originalTokens - markerTokens,
+            ),
+        )
+        val replacement = staged.replacements.getValue(locator)
+        val archive = requireNotNull(replacement.archive)
+        assertEquals(1, archive.lines)
+        assertEquals(archivedText.length.toLong(), archive.characters)
+
+        database.conversationDao().insert(
+            ConversationEntity(
+                id = conversationId.toString(),
+                assistantId = Uuid.random().toString(),
+                title = "empty-tool-output",
+                createAt = 1,
+                updateAt = 1,
+                chatSuggestions = "[]",
+                isPinned = false,
+            ),
+        )
+        database.messageNodeDao().insertAll(
+            listOf(MessageNodeEntity(nodeId.toString(), conversationId.toString(), 0, "[]", 0)),
+        )
+        val node = MessageNode(
+            id = nodeId,
+            messages = listOf(
+                UIMessage(
+                    id = messageId,
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(
+                        UIMessagePart.Tool(
+                            toolCallId = "call",
+                            toolName = "tool",
+                            input = "{}",
+                            output = listOf(replacement.marker),
+                            metadata = ToolRuntimeMetadata.withArchive(null, archive),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val delta = store.prepareReferenceDelta(listOf(node), emptyList())
+        assertEquals(
+            archive.ref,
+            delta.references.single().artifactId,
+        )
+        store.applyReferenceDeltaInTransaction(delta)
+        requireNotNull(staged.lease).publish()
+
+        val read = ToolOutputStore(store).read(
+            conversationId = conversationId,
+            ref = archive.ref,
+            startLine = 1,
+            lineCount = 10,
+        ) as ToolOutputReadResult.Success
+        assertEquals(1, read.totalLines)
+        assertEquals(archivedText, read.lines.single().text)
     }
 
     @Test

@@ -85,7 +85,7 @@ Provider step 编排
 1. 一次连续工具处理只解析参数一次，审批与执行使用同一个不可变 `JsonObject`；
 2. 所有 ToolCall 经过同一个 availability、validation、interaction 和 execution runtime；
 3. 审批、回答、拒绝、工具不可用和参数失败具有明确 typed 结果，并且未执行调用不创建 STARTED fact；
-4. 工具完整结果先 durable、先被模型读取，再按统一策略滚动归档；
+4. 工具完整结果先 durable、先被模型读取，再按统一策略滚动压缩；
 5. 上下文规划独立于 Provider adapter、UI、Workspace 和物理文件路径；
 6. fork、删除、GC、备份、恢复和 payload 缺失场景下，归档结果遵守 Artifact 现有生命周期；
 7. Master 与 Target 使用同一运行时，差异只由显式 run policy 表达。
@@ -100,7 +100,7 @@ Provider step 编排
 - 每种 Tool、失败或输出类型一个 handler/projector 类；
 - 模型可见的 App 私有路径、`file://`、Artifact relative path 或 shell 回查协议；
 - 依赖当前 Tool definition 反向解释历史 Tool Result；
-- 新旧运行时、旧即时裁剪与新滚动归档长期双路径并存。
+- 新旧运行时、旧即时裁剪与新滚动压缩长期双路径并存。
 
 工具自身的结果数量限制、搜索分页、文件读取范围和 MCP 图片字节限制继续归具体 Tool 或协议 adapter，
 不纳入通用上下文裁剪。
@@ -114,8 +114,8 @@ Provider step 编排
 | `GenerationToolSetFactory` | 决定当前 step 有哪些 Tool definitions，并拒绝保留名冲突 |
 | `GenerationLoop` | Provider step、工具批次顺序、暂停、streaming、checkpoint 编排 |
 | `ToolCallRuntime` | 一次 ToolCall 的输入准备、用户门控、通用执行包装与结果规范化 |
-| `ConversationContextPlanner` | 纯函数规划本次请求消息窗口和成功 step 后的历史 Tool Result 归档候选 |
-| `ToolOutputStore` | Tool Result 文本规范化、Artifact staging、source 授权、bounded read/grep |
+| `ConversationContextPlanner` | 纯函数规划本次请求消息窗口和成功 step 后的历史 Tool Result 压缩候选 |
+| `ToolOutputStore` | Tool Result 文本规范化、Artifact staging、ref 授权、bounded read/grep |
 | `MasterTurnCoordinator` | 接收用户决定、提交 command、在全部交互完成后继续原 Turn |
 | `ConversationCommandCoordinator` / `ConversationTransition` | 用户决定的唯一 durable 写入和合法状态迁移 |
 | `TurnEngine` | checkpoint、Turn 状态和 Tool execution fact 的 durable owner |
@@ -147,20 +147,21 @@ GenerationLoop
     ├─ ConversationContextPlanner.planPostStepCompaction(...)
     │      └─ 仅选择已成功消费的历史纯文本 Tool Result
     │
-    ├─ ToolOutputStore.stageArchive(...)
-    │      └─ ArtifactStore unpublished leases
+    ├─ ToolOutputStore.stageCompaction(...)
+    │      ├─ ARCHIVABLE_TEXT → ArtifactStore unpublished leases
+    │      └─ REGENERABLE_TEXT → 固定 marker，不创建 Artifact
     │
     └─ TurnEngine checkpoint
            ├─ messages + execution facts + artifact refs 同事务
            └─ checkpoint 成功后 publish leases
 ```
 
-UI 和模型回查工具共享同一个读取边界：
+归档正文只保留一个模型回查边界；UI 只显示 durable marker 摘要，不读取正文：
 
 ```text
 read_tool_output ─┐
-grep_tool_output ─┼─→ ToolOutputStore → ArtifactStore retained read
-Tool detail UI ───┘
+grep_tool_output ─┴─→ ToolOutputStore → ArtifactStore retained read
+Tool detail UI ─────→ message marker metadata（零文件 IO）
 ```
 
 ## 5. Tool 定义协议
@@ -180,23 +181,31 @@ sealed interface ToolInteractionRequirement {
 核心传输类型固定为：
 
 ```kotlin
-data class ToolOutputArchiveCandidate(
+data class ToolOutputCompactionCandidate(
     val locator: ToolCallLocator,
-    val canonicalText: String,
+    val toolName: String,
     val terminalStatus: String,
+    val outputPolicy: ToolOutputPolicy,
+    val text: String,
     val characters: Long,
-    val lines: Int,
-    val failedTail: String?,
+    val originalEstimatedTokens: Long,
+    val markerEstimatedTokens: Long,
+    val netReclaimEstimatedTokens: Long,
 )
 
-data class ToolOutputArchivePlan(
-    val candidates: List<ToolOutputArchiveCandidate>,
-    val reclaimedCharacters: Long,
+data class ToolOutputCompactionPlan(
+    val candidates: List<ToolOutputCompactionCandidate>,
+    val netReclaimedEstimatedTokens: Long,
 )
 
-data class StagedToolOutputArchive(
-    val replacements: Map<ToolCallLocator, UIMessagePart.Tool>,
-    val leases: List<ToolResourceLease>,
+data class CompactionReplacement(
+    val marker: UIMessagePart.Text,
+    val archive: ToolOutputArchive?,
+)
+
+data class StagedCompactionBatch(
+    val replacements: Map<ToolCallLocator, CompactionReplacement>,
+    val lease: ToolResourceLease?,
 )
 
 sealed interface ToolOutputReadResult
@@ -219,6 +228,7 @@ data class Tool(
     },
     val validateArguments: (JsonElement) -> JsonObject? = { null },
     val outputPolicy: ToolOutputPolicy = ToolOutputPolicy.ARCHIVABLE_TEXT,
+    val successfulOutputPolicy: (List<UIMessagePart>) -> ToolOutputPolicy = { outputPolicy },
     val execute: suspend (JsonElement) -> List<UIMessagePart>,
     val contextualExecute:
         (suspend ToolExecutionContext.(JsonElement) -> List<UIMessagePart>)? = null,
@@ -257,6 +267,9 @@ enum class ToolOutputPolicy {
     /** 成功被模型读取后，历史纯文本结果允许归档。 */
     ARCHIVABLE_TEXT,
 
+    /** 结果可由同一调用参数重新生成；滚动折叠不复制 payload。 */
+    REGENERABLE_TEXT,
+
     /** Provider replay 始终保留完整原始 parts。 */
     PRESERVE,
 }
@@ -264,6 +277,22 @@ enum class ToolOutputPolicy {
 
 `ARCHIVABLE_TEXT` 不表示“工具返回时立即裁剪”。第一版只有纯 Text parts 才可归档；Image、Audio、Video、
 Document、混合媒体和 Provider opaque replay 一律 `PRESERVE`。
+
+少数工具的成功结果是否可恢复取决于实际交付物时，静态 `outputPolicy` 继续作为失败、拒绝和无法解析场景的
+fail-closed 默认值；`ToolCallRuntime` 仅在成功结果规范化后调用纯 `successfulOutputPolicy`，并把解析后的策略写入同一
+runtime metadata。该函数不得访问 IO 或外部状态，Planner 仍只读取 metadata，不增加工具名分支。
+
+### 5.3 结果终态协议
+
+内建工具不为每个成功结果重复包一层 `status=completed`；成功直接返回简洁的领域数据，由 Runtime 在 metadata 中提交
+`completed` 终态。明确的领域失败通过 `ToolExecutionFailure` 提交 `failed` 终态，通用正文使用短小稳定的
+`{"status":"failed","reason":"...","detail":"..."}`；确有专用卡片或协议时可以保留有界领域失败正文。
+参数校验拒绝发生在执行前，不伪装成已执行失败；`denied`、`answered` 仍是各自独立终态。
+
+压缩后正文统一替换为单行 marker。`completed` 与 `failed` 只要同时满足纯 Text、可压缩 policy、Provider receipt 和
+净回收门槛，就进入同一候选规则。`ARCHIVABLE_TEXT` 保存 Artifact；`REGENERABLE_TEXT` 只留下固定 marker，原 Tool 调用参数仍在，
+不复制派生结果。MCP 远端 payload 不强制改成内建失败信封，但 Runtime 仍统一记录终态与
+输出策略；MCP 纯文本参与同一裁剪，MCP 媒体或已登记 Artifact 强制 `PRESERVE`。
 
 ## 6. ToolCallRuntime
 
@@ -558,7 +587,7 @@ Workspace 路径、Android 权限、文件存在性和远端业务规则。`Tool
     "output_policy": "archivable_text",
     "terminal_status": "completed",
     "archive": {
-      "source": "tool-output://v1/4821",
+      "ref": 4821,
       "artifact": {
         "relativePath": "tool_outputs/...",
         "mimeType": "text/plain"
@@ -599,14 +628,14 @@ internal class ConversationContextPlanner {
         committedMessages: List<UIMessage>,
         receipt: ModelStepReceipt,
         budget: ToolOutputBudget,
-    ): ToolOutputArchivePlan
+    ): ToolOutputCompactionPlan
 }
 ```
 
 它统一“上下文选择决策”，但不统一不同事实的写协议：
 
 - 普通消息窗口是 request-only projection，不修改 durable Conversation；
-- Tool Result 归档是可逆 durable rewrite，必须进入现有 STEP_COMPLETED checkpoint，并由 Artifact lease 保障；
+- Tool Result 压缩是 durable rewrite，必须进入现有 STEP_COMPLETED checkpoint；只有归档候选需要 Artifact lease；
 - 用户触发语义压缩继续走现有 Conversation command，不进入自动 planner。
 
 ### 9.2 三层上下文策略
@@ -614,7 +643,7 @@ internal class ConversationContextPlanner {
 | 层 | 目的 | 是否改写 durable history | Owner |
 | --- | --- | --- | --- |
 | 请求级滚动窗口 | 控制发送的普通历史范围 | 否 | `ConversationContextPlanner.planRequest` |
-| 已消费 Tool Result 归档 | 降低旧大文本长期占用 | 是，但可通过 source 回查 | Planner + `ToolOutputStore` + checkpoint |
+| 已消费 Tool Result 滚动压缩 | 降低旧大文本长期占用 | 是；归档用 ref 回查，可再生结果按原参数重跑 | Planner + `ToolOutputStore` + checkpoint |
 | 用户触发语义压缩 | 用摘要替换早期历史 | 是，不可逆 | 现有 `ConversationApplicationService.compress` |
 
 自动 planner 不生成摘要，不把旧对话变成不可审计的模型概括。
@@ -667,13 +696,13 @@ suspend fun requestModel(
 ): ModelStepReceipt
 ```
 
-receipt 从该函数已经完成 transformer、附件投影和 Provider serializer 容器选择的最终消息中提取，不能从
-`RequestContextPlan.messages` 或 durable messages 预先猜测。具体 Provider adapter 不返回 conversation locator；
-`generateInternal` 在交给 adapter 的同一最终 `UIMessage` 投影上记录 locator，再在调用成功后构造 receipt。
+receipt 从已经完成 transformer、附件投影和 Provider 容器选择的最终 `UIMessage` 投影中提取，不能从
+`RequestContextPlan.messages` 或 durable messages 预先猜测。它是 adapter 最终投影的 fail-closed 下界：只有能确认完整且
+可回放的 locator 才登记；Responses opaque item 还必须能与原始 `function_call` 配对。无法确认时宁可暂不归档，不能误报已发送。
 
-## 10. Tool Result 独立滚动归档
+## 10. Tool Result 独立滚动压缩
 
-### 10.1 归档时序
+### 10.1 压缩时序
 
 工具刚执行完成时始终保留完整结果：
 
@@ -722,39 +751,49 @@ MeasixPilotApp 对 ephemeral tool_outputs 的启动清理
 一个 Tool Result 必须同时满足：
 
 - locator 出现在成功 `ModelStepReceipt.visibleInlineToolOutputs`；
-- runtime metadata policy 为 `ARCHIVABLE_TEXT`；
+- runtime metadata policy 为 `ARCHIVABLE_TEXT` 或 `REGENERABLE_TEXT`；
+- runtime metadata 有明确 `completed` 或 `failed` 终态；`denied`、`answered` 与缺失终态不归档；
 - output 全部为 Text parts；
-- 当前仍是 INLINE，没有 archive metadata；
+- 当前仍是 INLINE，没有 archive metadata，也不是已折叠 marker；
 - 不含 Provider opaque replay；
-- 不是 `read_tool_output` 或 `grep_tool_output` 的结果。
+- 本次执行没有登记 unpublished Artifact；只要产生交付产物，成功或失败都强制 `PRESERVE`；
+- `originalEstimatedTokens - markerEstimatedTokens >= 512`。
+
+当前正在生成的长 turn 与上一个已完成 USER turn 都不特殊冻结；只保护最近两个 typed 批次，以及从尾部累计的最近
+4K estimated tokens，避免频繁改写最靠近尾部的缓存前缀。
 
 ### 10.3 第一版预算
 
-当前 `Model` 没有可信的统一 context-window 元数据，字符数也不是 token。因此第一版使用明确的**字符预算**，
-不采用 `effectiveContextWindow * 20%` 这类看似精确但没有可靠输入的公式：
+不同 Provider 的 tokenizer 不统一，因此滚动策略只使用一个确定性的**估算 token 预算**：对每个 Tool Result，ASCII
+code point 总数除以 4 并向上取整，其他 Unicode code point 各估算为 1 token。它只服务于稳定裁剪，不冒充 Provider 计费 token；不采用
+Provider input、cache 百分比或 `effectiveContextWindow * 20%` 作为触发器：
 
 ```text
-highWatermarkChars = 64 KiB
-lowWatermarkChars = 32 KiB
-minimumReclaimChars = 24 KiB
+highWatermarkEstimatedTokens = 48K
+lowWatermarkEstimatedTokens = 16K
+minimumBatchNetReclaimEstimatedTokens = 24K
+minimumResultNetReclaimEstimatedTokens = 512
 protectedRecentBatches = 2
-protectedRecentChars = 12 KiB
+protectedRecentEstimatedTokens = 4K
 ```
 
 对应 typed 输入：
 
 ```kotlin
 data class ToolOutputBudget(
-    val highWatermarkChars: Long = 64 * 1024L,
-    val lowWatermarkChars: Long = 32 * 1024L,
-    val minimumReclaimChars: Long = 24 * 1024L,
+    val highWatermarkEstimatedTokens: Long = 48 * 1024L,
+    val lowWatermarkEstimatedTokens: Long = 16 * 1024L,
+    val minimumBatchNetReclaimEstimatedTokens: Long = 24 * 1024L,
+    val minimumResultNetReclaimEstimatedTokens: Long = 512L,
     val protectedRecentBatches: Int = 2,
-    val protectedRecentChars: Long = 12 * 1024L,
+    val protectedRecentEstimatedTokens: Long = 4 * 1024L,
 )
 ```
 
-触发后从最老 eligible output 开始，一次归档到低水位；若可回收量低于 `minimumReclaimChars` 则不执行。
-`latestRequestContextTokens` 只用于观测和后续策略评估，不反推当前请求中某一 Tool Result 的精确 token。
+生产常量只定义在 `ContextTrimmingPolicy.kt`；planner 测试可注入 typed budget，不允许在循环、工具描述或测试中复制生产数字。
+inline Tool 文本估算达到 48K tokens 才启动，触发后从最老 eligible output 开始，尽量降到 16K；整批预计净回收不足
+24K 时不改写历史。净回收量按 `原结果 estimated tokens - marker estimated tokens` 计算；归档 marker 使用最长合法 ref
+保守估算，可再生 marker 使用固定正文。Provider 的 `latestRequestContextTokens` 与 cache 命中率都不参与压缩决策。
 
 未来只有在模型窗口元数据具有“注册表默认值 + 用户覆盖 + 来源”、Provider 能估算最终序列化请求且覆盖
 System/Tools/多模态后，才允许增加 typed token budget；届时必须保留字符预算作为未知模型的明确降级策略。
@@ -770,16 +809,17 @@ INLINE → ARCHIVED
 成功 marker：
 
 ```text
-[archived tool output: source=tool-output://v1/4821; lines=1248; characters=37642]
+[Archived tool result: ref=4821; status=completed; lines=1248]
 ```
 
 失败 marker：
 
 ```text
-[archived tool output: failed; source=tool-output://v1/4821; lines=3198; characters=86742; tail="BUILD FAILED in 28s"]
+[Archived tool result: ref=4821; status=failed; lines=3198; tail="BUILD FAILED in 28s"]
 ```
 
-规则：marker 单行；不保留 4 KiB preview；failed 可保留最后一个非空逻辑行，tail 最多 160 字符；
+只有明确 `completed` / `failed` 结果允许生成 marker。规则：marker 单行；不保留 4 KiB preview；
+只有 failed 可保留最后一个非空逻辑行，tail 最多 160 字符；
 回查说明只写在工具 description，不在每个 marker 中重复。
 
 ## 11. ToolOutputStore 与 Artifact 生命周期
@@ -796,21 +836,18 @@ app/src/main/java/net/weero/measix/pilot/data/ai/tools/ToolOutputStore.kt
 internal class ToolOutputStore(
     private val artifactStore: ArtifactStore,
 ) {
-    suspend fun stageArchive(
-        conversationId: Uuid,
-        plan: ToolOutputArchivePlan,
-    ): StagedToolOutputArchive
+    suspend fun stageCompaction(plan: ToolOutputCompactionPlan): StagedCompactionBatch
 
     suspend fun read(
         conversationId: Uuid,
-        source: String,
+        ref: Long,
         startLine: Int,
         lineCount: Int,
     ): ToolOutputReadResult
 
     suspend fun grep(
         conversationId: Uuid,
-        source: String,
+        ref: Long,
         pattern: String,
         ignoreCase: Boolean,
         contextLines: Int,
@@ -819,7 +856,7 @@ internal class ToolOutputStore(
 }
 ```
 
-它负责文本规范化、source codec、marker、Artifact staging、conversation-scoped 授权、bounded read/grep。
+它负责文本规范化、marker、Artifact staging、conversation-scoped 授权、bounded read/grep。
 它不直接访问 DAO，不管理 GC，不提交 Conversation，不解释 Tool execution。
 
 ### 11.2 复用 ArtifactStore
@@ -872,17 +909,13 @@ data class MessageArtifactReference(
 fork 后原 node 与 fork node 可以引用同一个 Tool Output Artifact。删除任一会话只删除自己的 reference，最后一个引用
 消失后才允许 GC，不建立 `executionId → file` 第二生命周期。
 
-## 12. tool-output source 与回查工具
+## 12. Tool Output ref 与回查工具
 
-### 12.1 Source 授权
+### 12.1 Ref 授权
 
-逻辑地址：
-
-```text
-tool-output://v1/<artifact-id>
-```
-
-模型知道 source 不等于获得读取授权。每次 read/grep 必须同时验证：
+marker 只向模型暴露正整数 Artifact ID `ref`，不再包装 URI 或重复版本号。
+`tool_runtime.version` 已是持久化协议的版本边界。模型知道 ref 不等于获得读取授权；
+每次 read/grep 必须同时验证：
 
 - Artifact 状态为 ACTIVE；
 - folder 为 `tool_outputs`；
@@ -890,17 +923,13 @@ tool-output://v1/<artifact-id>
 - 当前 conversation 的 message node 确实存在 `TOOL_OUTPUT` reference；
 - retained payload 在读取期间受现有 retention pin 保护。
 
-不存在、payload 缺失和越权统一 fail-closed：
+不存在、payload 缺失和越权统一 fail-closed，并返回内建工具统一失败信封：
 
 ```json
-{
-  "status": "failed",
-  "error": "tool_output_unavailable",
-  "message": "The requested tool output is not available in this conversation."
-}
+{"status":"failed","reason":"archive_unavailable"}
 ```
 
-不披露 Artifact id 之外的数据库字段、relative path、App 私有路径或 `file://`。
+不披露 relative path、App 私有路径、`file://` 或其他数据库字段。
 
 ### 12.2 `read_tool_output`
 
@@ -908,14 +937,15 @@ tool-output://v1/<artifact-id>
 
 ```json
 {
-  "source": "tool-output://v1/4821",
-  "start_line": 3150,
-  "line_count": 100
+  "ref": 4821,
+  "start": 3150,
+  "limit": 100
 }
 ```
 
-约束：`start_line` 从 1 开始；默认 200 行；最多 500 行；同时受 16 KiB 返回上限约束；不提供 `read_all`。
-结果包含 source、当前范围、总行数、带稳定行号的内容和 `next_start_line`。
+约束：`start` 从 1 开始；`limit` 默认 200，最多 500；同时受 16 KiB 返回上限约束；不提供 `read_all`。
+结果使用短小纯文本 header，只包含当前范围、总行数、必要时的 `next` 和带稳定行号的内容；
+不重复回显 `ref` 或调用入参，不包装 JSON。
 
 ### 12.3 `grep_tool_output`
 
@@ -923,19 +953,24 @@ tool-output://v1/<artifact-id>
 
 ```json
 {
-  "source": "tool-output://v1/4821",
+  "ref": 4821,
   "pattern": "error|failed|Caused by",
   "ignore_case": true,
-  "context_lines": 2,
-  "max_matches": 20
+  "context": 2,
+  "limit": 20
 }
 ```
 
-约束：`context_lines` 为 0..5；`max_matches` 默认 20、最多 100；pattern 长度受限；返回总量受 16 KiB 限制。
-使用 RE2/J 或等价无灾难性回溯的实现，不能直接接受模型可控的无界 Java regex。
+约束：`context` 为 0..5；`limit` 默认 20、最多 100；pattern 长度受限；返回使用纯文本编号块，
+总量受 16 KiB 限制，不回显 `ref`、pattern 或其他入参。
+实现使用 RE2/J，对每个稳定虚拟行单独匹配；支持常用的分组、交替、字符类、锚点和量词，
+`ignore_case` 通过 RE2/J flag 实现。为保证线性时间，lookaround 与 backreference 不支持；无效 pattern 统一返回
+`{"status":"failed","reason":"invalid_pattern"}`。
 
-两个工具始终随 Master 和 Target 稳定注册，`interactionRequirement=None`、`outputPolicy=PRESERVE`，输出严格有界，
-因此不会形成“回查结果再次归档”的引用链。它们的名称是内置保留名，动态/MCP 工具冲突时在装配阶段明确拒绝。
+两个工具始终随 Master 和 Target 稳定注册，`interactionRequirement=None`、`outputPolicy=REGENERABLE_TEXT`，输出严格有界。
+回查结果仍参与统一滚动压缩，但只替换为 `[Derived tool result folded]`，不创建新 Artifact 或新 ref；原 Tool 输入保留，
+需要时可用同一参数重新调用，因此不会形成“原输出 A → 读取切片 → 新归档 B”的复制链。它们的名称是内置保留名，
+动态/MCP 工具冲突时在装配阶段明确拒绝。
 
 ### 12.4 文本规范化与行号
 
@@ -946,7 +981,7 @@ CRLF / CR → LF
 移除 ANSI 控制序列
 不做 JSON pretty-print
 不生成摘要
-超长物理行每 4096 字符切为稳定虚拟行
+超长物理行每 4096 Unicode code point 切为稳定虚拟行，不拆分 UTF-16 代理项
 ```
 
 read/grep 使用 buffered streaming scan。只有真实性能证据表明远距离读取成为瓶颈后，才考虑每 128 行一个稀疏索引。
@@ -994,7 +1029,6 @@ Room 枚举名称。
 sealed interface ToolOutputProjection {
     data class Inline(val parts: List<UIMessagePart>) : ToolOutputProjection
     data class Archived(
-        val source: String,
         val characters: Long,
         val lines: Int,
         val terminalStatus: String,
@@ -1002,9 +1036,12 @@ sealed interface ToolOutputProjection {
 }
 ```
 
-`ToolUIContext` 使用统一 codec：Inline 保持现有 renderer；Archived 显示摘要和按页加载入口。详情通过
-`ConversationQueryService` 的窄 query capability 调用同一个 `ToolOutputStore.read`；UI 不直连 ArtifactStore、DAO 或 File，
-加载 Conversation 时也不把全部归档文本恢复进内存。
+`ToolUIContext` 使用统一 codec：Inline 保持现有 renderer；Archived 只显示消息中已经持久化的行数/字符数摘要。
+UI 不提供归档正文加载入口，也不直连 `ToolOutputStore`、ArtifactStore、DAO 或 File；精确正文只由模型通过
+conversation-scoped `read_tool_output` / `grep_tool_output` 按需回查。
+
+`assistant_call` 是专用卡片例外：卡片与 Child 详情只读 typed metadata/lineage，不增加归档正文界面；无交付 manifest 的
+完成态正文归档后，精确正文只供模型使用 conversation-scoped 回查工具读取。这样保持移动端卡片紧凑，也不形成第二套 UI 文件读取。
 
 依赖完整 JSON 绘制摘要的特殊 Tool 必须使用 `PRESERVE`，不能让 renderer 自动读取几十万字符来维持旧 UI。
 
@@ -1023,18 +1060,22 @@ for (step in 0 until maxSteps) {
         val receipt = requestModel(requestPlan.messages, definitions)
         messages = finishStreamingLast(messages)
 
-        val archivePlan = contextPlanner.planPostStepCompaction(
+        val compactionPlan = contextPlanner.planPostStepCompaction(
             committedMessages = messages,
             receipt = receipt,
             budget = toolOutputBudget,
         )
-        val staged = toolOutputStore.stageArchive(conversationId, archivePlan)
-        val checkpointMessages = applyArchiveReplacements(messages, staged.replacements)
-        staged.leases.forEach(unpublishedResources::register)
+        val staged = toolOutputStore.stageCompaction(compactionPlan)
+        val checkpointMessages = applyToolOutputCompactionBatchToCheckpoint(messages, staged.replacements)
+        val compactionPatches = staged.replacements.map { (locator, replacement) ->
+            ToolOutputCompactionPatch(locator, replacement.marker, replacement.archive)
+        }
+        staged.lease?.let(unpublishedResources::register)
 
         commitCheckpoint(
             kind = CheckpointKind.STEP_COMPLETED,
             checkpointMessages = checkpointMessages,
+            toolOutputCompactionPatches = compactionPatches,
             publishResources = true,
         )
         messages = checkpointMessages
@@ -1092,6 +1133,9 @@ Workspace 工具 requirement 仍由构造时捕获的 approval override 与规�
 Target 使用 `ToolInteractionAvailability.USER_INPUT_ONLY`。`ask_user` requirement 为 `UserInput`，可通过现有 Child interaction
 桥接提交 typed `Answer`；Approval 工具自动得到 `approval_unavailable`，不再靠 `interactiveToolNames=setOf("ask_user")`。
 Child 继续复用同一 `TurnHandle`，interaction 次数限制和 run gate 仍归 `DelegationCoordinator` / `SubAssistantRunGate`。
+`assistant_call` 的未执行、非 `completed`、损坏信封及带 `artifacts` manifest 的结果保持 `PRESERVE`；只有恰好一个 Text、
+`status` / `assistant_name` / `content` 均为字符串且没有交付 manifest 的成功结果解析为 `ARCHIVABLE_TEXT`，因此答题/调研类
+连续委托会进入同一个 48K estimated-token 滚动压缩入口。
 
 ## 16. 文件级调整
 
@@ -1143,25 +1187,25 @@ app/src/main/java/net/weero/measix/pilot/data/ai/tools/
 
 ### 17.2 切片 B：受管 Tool Output 与回查能力
 
-- 新增 `ToolOutputStore`、typed runtime metadata 和 source codec；
+- 新增 `ToolOutputStore`、typed runtime metadata 和数字 ref；
 - `TOOL_OUTPUTS` 纳入 Artifact lifecycle；
 - 修正 typed reference projection 并提升 projection version；
-- 增加 read/grep 工具和 UI Archived query port；
+- 增加 read/grep 工具；UI 只消费 durable marker 摘要，不增加归档正文 query port；
 - 补齐 fork、delete、GC、backup、restore、startup recovery；
 - 删除 PRoot `/tool_outputs` mount，模型回查只能走 scoped tools；
 - 可在测试/诊断中运行纯 planner 观察候选，但不得写 durable shadow state。
 
-### 17.3 切片 C：切换统一上下文 planner 与滚动归档
+### 17.3 切片 C：切换统一上下文 planner 与滚动压缩
 
 同一变更中完成：
 
 - 迁移请求级 `limitContext` 到 `ConversationContextPlanner` 并删除旧入口；
 - `generateInternal` 返回 `ModelStepReceipt`；
-- 启用成功 step 后滚动归档；
+- 启用成功 step 后滚动压缩；
 - 删除 32 KiB 即时裁剪、4 KiB preview、shell/path 提示、直接文件 IO 和 ephemeral 清理；
 - 更新全部参考文档和静态架构契约。
 
-切换后不能继续保留“单结果即时裁剪 + 历史滚动归档”两套生产策略。
+切换后不能继续保留“单结果即时裁剪 + 历史滚动压缩”两套生产策略。
 
 ## 18. 测试与验收矩阵
 
@@ -1204,14 +1248,15 @@ app/src/main/java/net/weero/measix/pilot/data/ai/tools/
 - 普通历史不会被自动摘要或 durable 删除。
 - 将 `ai/src/test/.../MessageTest.kt` 中的 `limitContext` 用例迁移到 app 层 planner 测试，并删除 ai 层旧生产函数与旧测试入口。
 
-### 18.4 滚动归档
+### 18.4 滚动压缩
 
-- 新 Tool Result 第一次被模型读取前绝不归档；
-- Provider 失败、取消和序列化失败不归档；
+- 新 Tool Result 第一次被模型读取前绝不压缩；
+- Provider 失败、取消和序列化失败不压缩；
 - receipt 只记录最终实际发送的 inline output；
 - 高水位触发后一次降到低水位，低于 minimum reclaim 不抖动；
-- 最近两个批次与最近 12 KiB Tool 文本受保护；
-- `PRESERVE`、混合媒体和回查工具结果不归档；
+- 最近两个批次与最近 4K estimated tokens 受保护，不额外冻结整个 USER turn；
+- 只有显式 `completed` / `failed` 且净回收至少 512 estimated tokens 的结果可压缩；
+- `PRESERVE`、混合媒体和 Provider opaque replay 不压缩；回查结果只折叠，不创建新 Artifact；
 - marker 一旦提交保持稳定；
 - 归档与本 step 新输出共用 `STEP_COMPLETED` durability boundary；
 - checkpoint 失败时旧完整 output 仍在，暂存 Artifact 被精确回滚。
@@ -1221,10 +1266,10 @@ app/src/main/java/net/weero/measix/pilot/data/ai/tools/
 - 多个候选 staging 全有或全无；
 - 进程在 Artifact 创建后/checkpoint 前中断可恢复或回滚；
 - checkpoint 后/lease publish 前中断由现有 startup reconcile 收口；
-- fork 后 source 可读取；删除原会话不破坏 fork；最后引用消失后可 GC；
+- fork 后 ref 可读取；删除原会话不破坏 fork；最后引用消失后可 GC；
 - 其他 conversation 猜测 artifact id 不能读取；
 - payload 缺失 fail-closed；
-- backup/restore 后 source 和 reference type 保持有效；
+- backup/restore 后 ref 和 reference type 保持有效；
 - reference projection 重建不会把 TOOL_OUTPUT 降级成 ATTACHMENT。
 
 ### 18.6 UI 与设备
@@ -1232,18 +1277,31 @@ app/src/main/java/net/weero/measix/pilot/data/ai/tools/
 - AWAITING_APPROVAL 只显示 Approve/Deny；
 - AWAITING_INPUT 只显示回答表单；
 - STOPPING 隐藏所有交互入口；
-- Archived 详情分页读取，不在 Conversation 加载时读取全文；
+- Archived 详情只显示 durable 摘要，不提供正文回读且不产生文件 IO；
 - 特殊 renderer 的 PRESERVE 策略保持原 UI；
 - Compose interaction、进程重启 Pending、backup/restore 和真实文件生命周期需要
   `connectedDebugAndroidTest` 及真机/模拟器场景，JVM 测试不能表述为设备验收通过。
 
-### 18.7 性能证据
+### 18.7 Turn 统计呈现
+
+- 第一行依次展示 `[Layers] context · [Database] cached % · [Zap] tok/s · [StopWatch] TTFT`，非零时在末尾追加
+  `[Scissor] trims`；只有 `tok/s` 与 `TTFT` 保留可见文字，其余只显示图标和数值；点击后展开响应式第二行，
+  Input、Output、Cached、Provider、Total 只显示图标和数值，只有请求次数保留 `Req` 文字；
+- Context 在最终请求投影发送前用稳定规则估算并刷新；TTFT 在每次请求首个有效输出到达时刷新；Cached % 与 tok/s
+  在请求关闭且 Provider 给出公式所需数据时刷新。未触发项在当前 turn 内沿用旧值，尚未触发的项隐藏；第二行保留 turn 累计且缺失不当作零；
+- 新 turn 的 Assistant 槽从空 usage 开始；Provider 请求关闭时原子更新 canonical 请求审计和 turn 累计；
+- 一次非空滚动裁剪批次无论替换几个结果、是否创建 Artifact，都只随成功提交的同一 checkpoint 把 `Tool trims` 加一；
+  它表示当前 turn 截至此刻成功提交的裁剪批次数，新 turn 归零、0 时隐藏，Scissor 图标使用主题主色；
+- `Total` 从 Assistant `createdAt` 计算到 turn 终态命令提交的 `finishedAt`，不复用中间 Provider step 时间；
+- 第一行四个请求指标可以随各自触发升降；第二行累计项和 trims 只增不减，终态后冻结。
+
+### 18.8 性能证据
 
 记录长 Agent 任务中的：
 
 ```text
 每个 Provider 请求的 inline Tool Result characters / observed context tokens
-归档触发次数与每次回收字符数
+压缩触发次数与每次回收 estimated tokens
 首次 marker 所在的 Provider 缓存前缀位置
 归档前后 TTFT 与完整任务累计等待时间
 read/grep 回查率
@@ -1264,7 +1322,7 @@ read/grep 回查率
 5. 请求级普通历史窗口只有 `ConversationContextPlanner` 一个入口；
 6. Tool Result 不在第一次成功模型消费前归档；
 7. Tool Output 只通过 ArtifactStore + TOOL_OUTPUT reference 持久化；
-8. 模型和 UI 只通过 `ToolOutputStore` scoped read/grep 读取归档；
+8. 只有模型通过 `ToolOutputStore` scoped read/grep 回查归档；UI 只显示 durable marker 摘要；
 9. 旧即时裁剪、shell 回查、ephemeral cleanup、旧命名和无调用协议全部物理删除；
 10. 对应参考文档、架构契约、测试和备份/恢复说明在同一交付更新。
 

@@ -75,14 +75,14 @@ class ConversationTurnFeedbackTest {
         val pending = message.copy(parts = listOf(tool))
         val phases = mapOf(ToolCallLocator(message.id, 0) to ToolCallPhase.AWAITING_APPROVAL)
         val feedback = requireNotNull(model(
-            ConversationTurnPhase.AWAITING_APPROVAL,
+            ConversationTurnPhase.AWAITING_USER,
             requestId = null,
             activeTurn = active.copy(messages = listOf(pending)),
             phases = phases,
         ).turnFeedback)
         assertTrue(feedback.awaitingUser)
         assertEquals(setOf("tool:${message.id}:0"), feedback.attentionKeys)
-        assertTrue(requireNotNull(model(ConversationTurnPhase.AWAITING_APPROVAL).turnFeedback).awaitingUser)
+        assertTrue(requireNotNull(model(ConversationTurnPhase.AWAITING_USER).turnFeedback).awaitingUser)
     }
 
     @Test
@@ -105,11 +105,17 @@ class ConversationTurnFeedbackTest {
             childMetadata().copy(phase = SubAssistantCallPhase.TOOL_EXECUTING),
             childMetadata().copy(userInteraction = null),
             childMetadata().copy(userInteraction = childMetadata().userInteraction!!.copy(interactionId = " ")),
-            childMetadata().copy(userInteraction = childMetadata().userInteraction!!.copy(toolName = "other")),
         ).forEach { metadata ->
             assertFalse(childFeedback(childTool(metadata), ToolCallPhase.EXECUTING).awaitingUser)
         }
-        assertFalse(childFeedback(tool.copy(toolName = "other"), ToolCallPhase.EXECUTING).awaitingUser)
+        // typed 子阶段与 interaction 才是语义 owner，显示名称变化不应抹掉已提交等待态。
+        assertTrue(childFeedback(
+            childTool(childMetadata().copy(
+                userInteraction = childMetadata().userInteraction!!.copy(toolName = "other"),
+            )),
+            ToolCallPhase.EXECUTING,
+        ).awaitingUser)
+        assertTrue(childFeedback(tool.copy(toolName = "other"), ToolCallPhase.EXECUTING).awaitingUser)
         assertFalse(childFeedback(tool.copy(metadata = null), ToolCallPhase.EXECUTING).awaitingUser)
     }
 

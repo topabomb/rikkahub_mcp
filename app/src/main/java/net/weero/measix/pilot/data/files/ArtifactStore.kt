@@ -4,7 +4,9 @@ import android.net.Uri
 import android.util.Log
 import android.graphics.BitmapFactory
 import androidx.core.net.toUri
+import java.io.BufferedReader
 import java.io.File
+import java.io.InputStreamReader
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.Flow
@@ -36,7 +38,7 @@ import net.weero.measix.pilot.data.db.entity.SystemMetaEntity
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.model.Conversation
-import net.weero.measix.pilot.data.model.collectFileReferenceTokens
+import net.weero.measix.pilot.data.model.collectArtifactReferences
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.utils.JsonInstant
 import kotlin.uuid.Uuid
@@ -343,6 +345,48 @@ class ArtifactStore(
             // The consumer may commit a durable Child. Keep its return in the caller context,
             // so dispatcher prompt-cancellation cannot discard that ownership handoff.
             return consume(ArtifactImageReadResult.Success(images))
+        } finally {
+            retention?.close()
+        }
+    }
+
+    /**
+     * Conversation-scoped 授权读取已归档 Tool Output：lifecycle lock 内校验 ACTIVE 状态、
+     * tool_outputs 目录、text/plain MIME 与本会话的 TOOL_OUTPUT reference，并获取 retention pin；
+     * 锁外向调用方提供只读字符流，finally 释放。未授权、记录缺失或 payload 缺失统一返回 null
+     * （fail-closed），不返回 entity、relativePath 或 file:// 句柄。
+     */
+    suspend fun <T> withToolOutputText(
+        conversationId: Uuid,
+        artifactId: Long,
+        consume: suspend (BufferedReader) -> T,
+    ): T? {
+        var retention: ArtifactRetentionLease? = null
+        try {
+            val file = withContext(Dispatchers.IO) {
+                withLifecycleLock {
+                    val entity = artifactDAO.getById(artifactId) ?: return@withLifecycleLock null
+                    if (entity.state != ArtifactState.ACTIVE.name) return@withLifecycleLock null
+                    val normalized = entity.relativePath.replace('\\', '/')
+                    if (!normalized.startsWith("${FileFolders.TOOL_OUTPUTS}/")) return@withLifecycleLock null
+                    if (entity.mimeType != "text/plain") return@withLifecycleLock null
+                    if (!artifactReferenceDAO.existsInConversation(
+                            artifactId,
+                            conversationId.toString(),
+                            ArtifactReferenceType.TOOL_OUTPUT.name,
+                        )
+                    ) {
+                        return@withLifecycleLock null
+                    }
+                    val candidate = runCatching { payloadStore.file(entity.relativePath) }.getOrNull()
+                        ?.takeIf { it.isFile } ?: return@withLifecycleLock null
+                    retention = retainIds(setOf(entity.id))
+                    candidate
+                }
+            } ?: return null
+            return withContext(Dispatchers.IO) {
+                BufferedReader(InputStreamReader(file.inputStream(), Charsets.UTF_8)).use { consume(it) }
+            }
         } finally {
             retention?.close()
         }
@@ -1117,26 +1161,30 @@ class ArtifactStore(
             synchronized(retentionPins) { retentionPins.containsKey(id) }
 
     /**
-     * 节点引用解析：引用 token = file:// URL + Tool.metadata 的 LocalArtifactRef
-     * 相对路径（collectFileReferenceTokens）。URL 转 filesDir 相对路径，相对路径 token 直用；
+     * 节点引用解析（typed）：引用 token = file:// URL + Tool.metadata 的 LocalArtifactRef
+     * 相对路径 + tool_runtime.archive.artifact（collectArtifactReferences）。URL 转 filesDir
+     * 相对路径，相对路径 token 直用；引用类型按来源语义登记（ATTACHMENT / TOOL_OUTPUT），
      * metadata-only 引用（generate_image artifact 等）同样登记、阻止 GC 回收。
      */
     private suspend fun resolveNodeReferenceEntities(nodeId: String, messages: List<UIMessage>): List<ArtifactReferenceEntity> {
         val refs = mutableListOf<ArtifactReferenceEntity>()
-        val seenArtifacts = mutableSetOf<Long>()
-        messages.collectFileReferenceTokens().forEach { token ->
-            val relativePath = if (token.startsWith("file:", ignoreCase = true)) {
-                payloadStore.relativePathForUri(Uri.parse(token)) ?: return@forEach
+        val seen = mutableSetOf<Pair<Long, String>>()
+        messages.collectArtifactReferences().forEach { reference ->
+            val relativePath = if (reference.token.startsWith("file:", ignoreCase = true)) {
+                payloadStore.relativePathForUri(Uri.parse(reference.token)) ?: return@forEach
             } else {
-                token
+                reference.token
             }
-            artifactDAO.getByPathAndState(relativePath, ArtifactState.ACTIVE.name)?.let { artifact ->
-                if (seenArtifacts.add(artifact.id)) {
+            artifactDAO.getByPathAndState(relativePath, ArtifactState.ACTIVE.name)
+                ?.takeIf { artifact ->
+                    reference.expectedArtifactId == null || reference.expectedArtifactId == artifact.id
+                }?.let { artifact ->
+                if (seen.add(artifact.id to reference.type.name)) {
                     refs.add(
                         ArtifactReferenceEntity(
                             artifactId = artifact.id,
                             nodeId = nodeId,
-                            referenceType = ArtifactReferenceType.ATTACHMENT.name,
+                            referenceType = reference.type.name,
                         )
                     )
                 }
@@ -1214,6 +1262,6 @@ class ArtifactStore(
     companion object {
         private const val TAG = "ArtifactStore"
         private const val MAX_BASE64_IMAGE_CHARS = 32 * 1024 * 1024
-        const val REFERENCE_PROJECTION_VERSION_KEY = "artifact_reference_projection_transactional_v1"
+        const val REFERENCE_PROJECTION_VERSION_KEY = "artifact_reference_projection_transactional_v2"
     }
 }

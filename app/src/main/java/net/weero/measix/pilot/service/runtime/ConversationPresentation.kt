@@ -3,13 +3,14 @@ package net.weero.measix.pilot.service.runtime
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
-import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.CheckpointKind
 import net.weero.measix.pilot.data.ai.ToolResultEventStatus
+import net.weero.measix.pilot.data.ai.tools.ToolInteractionKind
+import net.weero.measix.pilot.data.ai.tools.ToolRuntimeMetadata
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.utils.JsonInstant
 import kotlin.uuid.Uuid
@@ -26,6 +27,7 @@ enum class ToolCallPhase {
     CALL_STREAMING,
     READY,
     AWAITING_APPROVAL,
+    AWAITING_INPUT,
     EXECUTING,
     COMPLETED,
     FAILED,
@@ -38,48 +40,17 @@ enum class ToolCallPhase {
 val ToolCallPhase.isBusy: Boolean
     get() = this == ToolCallPhase.CALL_STREAMING || this == ToolCallPhase.EXECUTING
 
+/**
+ * Turn-level display state. [AWAITING_USER] covers both authorization approval and user-input
+ * collection; the per-call [ToolCallPhase] distinguishes them. The durable Room encoding keeps
+ * its historical AWAITING_APPROVAL name — this projection is the application-level meaning.
+ */
 enum class ConversationTurnPhase {
     IDLE,
     PREPARING,
     GENERATING,
-    AWAITING_APPROVAL,
+    AWAITING_USER,
     STOPPING,
-}
-
-/** One observed request pair for display only; never a turn accounting baseline. */
-data class ContextCacheDisplay(
-    val sourceAssistantMessageId: Uuid,
-    val contextTokens: Long,
-    val cacheReadInputTokens: Long,
-) {
-    init {
-        require(contextTokens > 0 && cacheReadInputTokens in 0..contextTokens)
-    }
-
-    val cachePercent: Double get() = cacheReadInputTokens.toDouble() / contextTokens * 100.0
-}
-
-data class ActiveContextCache(
-    val assistantMessageId: Uuid,
-    val value: ContextCacheDisplay,
-) {
-    fun forMessage(messageId: Uuid): ContextCacheDisplay? = value.takeIf { messageId == assistantMessageId }
-}
-
-internal fun UIMessage.contextCacheDisplay(): ContextCacheDisplay? {
-    if (role != MessageRole.ASSISTANT) return null
-    val context = usage?.latestRequestContextTokens?.takeIf { it > 0 } ?: return null
-    val cache = usage?.latestRequestCacheReadInputTokens?.takeIf { it in 0..context } ?: return null
-    return ContextCacheDisplay(id, context, cache)
-}
-
-internal fun ConversationSnapshot.latestBranchContextCache(): ContextCacheDisplay? =
-    nodes.asReversed().firstNotNullOfOrNull { it.currentMessage.contextCacheDisplay() }
-
-internal fun ConversationSnapshot.activeContextCache(): ActiveContextCache? {
-    val active = activeTurn ?: return null
-    val pair = active.latestAvailableContextCache ?: return null
-    return ActiveContextCache(active.assistantMessageId, pair)
 }
 
 /**
@@ -93,7 +64,6 @@ data class ConversationPresentation(
     val toolCallPhases: Map<ToolCallLocator, ToolCallPhase>,
     /** Latest terminated request identity, used to close a receipt wait without timing guesses. */
     val lastTerminatedRequestTurnId: Uuid? = null,
-    val activeContextCache: ActiveContextCache? = null,
 ) {
     val isActive: Boolean get() = phase != ConversationTurnPhase.IDLE
 
@@ -117,8 +87,9 @@ internal fun resolveConversationPresentation(
     val phase = when {
         requestPhase != null -> requestPhase
         durable == null -> ConversationTurnPhase.IDLE
-        durable.toolCallPhases.values.any { it == ToolCallPhase.AWAITING_APPROVAL } ->
-            ConversationTurnPhase.AWAITING_APPROVAL
+        durable.toolCallPhases.values.any {
+            it == ToolCallPhase.AWAITING_APPROVAL || it == ToolCallPhase.AWAITING_INPUT
+        } -> ConversationTurnPhase.AWAITING_USER
         else -> ConversationTurnPhase.GENERATING
     }
     val joined = active?.handle?.takeIf { handle ->
@@ -139,7 +110,6 @@ internal fun resolveConversationPresentation(
         processingText = active?.processingText,
         toolCallPhases = toolCallPhases,
         lastTerminatedRequestTurnId = lastTerminatedRequestTurnId,
-        activeContextCache = snapshot.activeContextCache(),
     )
 }
 
@@ -166,7 +136,6 @@ internal fun ActiveTurnState.withStreamingMessages(nextMessages: List<UIMessage>
     return copy(
         messages = nextMessages,
         toolCallPhases = nextPhases,
-        latestAvailableContextCache = assistant.contextCacheDisplay() ?: latestAvailableContextCache,
     )
 }
 
@@ -178,7 +147,7 @@ internal fun ActiveTurnState.afterCheckpoint(command: CommitCheckpoint): ActiveT
         assistant.getTools().forEachIndexed { ordinal, tool ->
             val locator = ToolCallLocator(assistantMessageId, ordinal)
             val phase = when {
-                tool.approvalState is ToolApprovalState.Pending -> ToolCallPhase.AWAITING_APPROVAL
+                tool.approvalState is ToolApprovalState.Pending -> pendingPhaseOf(tool)
                 tool.approvalState is ToolApprovalState.Denied -> ToolCallPhase.DENIED
                 tool.approvalState is ToolApprovalState.Answered -> ToolCallPhase.ANSWERED
                 phases[locator] == ToolCallPhase.FAILED -> ToolCallPhase.FAILED
@@ -246,15 +215,17 @@ internal fun ActiveTurnState.afterCheckpoint(command: CommitCheckpoint): ActiveT
             }
         }
     }
-    return copy(
-        toolCallPhases = phases,
-        latestAvailableContextCache = assistant.contextCacheDisplay() ?: latestAvailableContextCache,
-    )
+    return copy(toolCallPhases = phases)
 }
 
 fun resolveToolCallPhase(tool: UIMessagePart.Tool, activePhase: ToolCallPhase?): ToolCallPhase =
     activePhase ?: when {
-        tool.approvalState is ToolApprovalState.Pending -> ToolCallPhase.AWAITING_APPROVAL
+        ToolRuntimeMetadata.isInvalid(tool.metadata) -> ToolCallPhase.FAILED
+        ToolRuntimeMetadata.terminalStatusOf(tool.metadata) == "completed" -> ToolCallPhase.COMPLETED
+        ToolRuntimeMetadata.terminalStatusOf(tool.metadata) == "failed" -> ToolCallPhase.FAILED
+        ToolRuntimeMetadata.terminalStatusOf(tool.metadata) == "denied" -> ToolCallPhase.DENIED
+        ToolRuntimeMetadata.terminalStatusOf(tool.metadata) == "answered" -> ToolCallPhase.ANSWERED
+        tool.approvalState is ToolApprovalState.Pending -> pendingPhaseOf(tool)
         tool.approvalState is ToolApprovalState.Denied -> ToolCallPhase.DENIED
         tool.approvalState is ToolApprovalState.Answered -> ToolCallPhase.ANSWERED
         else -> tool.resultTerminalPhase() ?: if (tool.hasReplayResult) {
@@ -262,6 +233,16 @@ fun resolveToolCallPhase(tool: UIMessagePart.Tool, activePhase: ToolCallPhase?):
         } else {
             ToolCallPhase.READY
         }
+    }
+
+/**
+ * A paused call shows the interaction the Runtime captured when it paused. Calls without that
+ * metadata predate the typed protocol; authorization approval is the safe default projection.
+ */
+private fun pendingPhaseOf(tool: UIMessagePart.Tool): ToolCallPhase =
+    when (ToolRuntimeMetadata.interactionKindOf(tool.metadata)) {
+        ToolInteractionKind.USER_INPUT -> ToolCallPhase.AWAITING_INPUT
+        else -> ToolCallPhase.AWAITING_APPROVAL
     }
 
 private fun UIMessagePart.Tool.resultTerminalPhase(): ToolCallPhase? {
@@ -275,6 +256,7 @@ private fun UIMessagePart.Tool.resultTerminalPhase(): ToolCallPhase? {
     return when {
         stringField("status") == "cancelled" -> ToolCallPhase.CANCELLED
         stringField("status") == "interrupted" -> ToolCallPhase.INTERRUPTED
+        stringField("status") in setOf("failed", "stopped", "unavailable") -> ToolCallPhase.FAILED
         result["error"] != null && stringField("type") == "error" ->
             ToolCallPhase.FAILED
         result["error"] != null && stringField("type") == "timeout" ->

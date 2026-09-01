@@ -197,6 +197,7 @@ dependencies {
     implementation(libs.androidx.profileinstaller)
     implementation(libs.termux.terminal.view)
     implementation(libs.snakeyaml)
+    implementation(libs.re2j)
 
     // Compose
     implementation(libs.androidx.activity.compose)

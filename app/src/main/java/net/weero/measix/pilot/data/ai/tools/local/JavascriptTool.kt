@@ -2,8 +2,6 @@ package net.weero.measix.pilot.data.ai.tools.local
 
 import com.whl.quickjs.wrapper.QuickJSContext
 import com.whl.quickjs.wrapper.QuickJSObject
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -17,7 +15,7 @@ internal fun buildJavascriptTool(): Tool = Tool(
     name = "eval_javascript",
     description = """
         Execute JavaScript (QuickJS, ES2020). Result is the last expression.
-        Use toFixed() for decimal precision. No DOM or Node.js APIs. Console output is in logs.
+        Use toFixed() for decimal precision. No DOM or Node.js APIs. Console output precedes the result.
     """.trimIndent().replace("\n", " "),
     parameters = {
         InputSchema.Obj(
@@ -53,23 +51,31 @@ internal fun buildJavascriptTool(): Tool = Tool(
             })
             val code = it.jsonObject["code"]?.jsonPrimitive?.contentOrNull
             val result = context.evaluate(code)
-            val payload = buildJsonObject {
-                if (logs.isNotEmpty()) {
-                    put("logs", JsonPrimitive(logs.joinToString("\n")))
-                }
-                put(
-                    key = "result",
-                    element = when (result) {
-                        null -> JsonNull
-                        is QuickJSObject -> JsonPrimitive(result.stringify())
-                        else -> JsonPrimitive(result.toString())
-                    }
+            listOf(
+                UIMessagePart.Text(
+                    formatJavascriptOutput(
+                        logs = logs,
+                        result = when (result) {
+                            null -> "null"
+                            is QuickJSObject -> result.stringify()
+                            else -> result.toString()
+                        },
+                    )
                 )
-            }
-            listOf(UIMessagePart.Text(payload.toString()))
+            )
         } finally {
             // 确保无论执行成功或抛异常都释放原生 JS runtime, 避免内存泄漏
             context.destroy()
         }
     }
 )
+
+/** 模型可见结果保持真实换行，确保 Tool Output 的按行归档与 grep 语义忠实。 */
+internal fun formatJavascriptOutput(logs: List<String>, result: String): String = buildString {
+    if (logs.isNotEmpty()) {
+        appendLine("[console]")
+        appendLine(logs.joinToString("\n"))
+    }
+    appendLine("[result]")
+    append(result)
+}

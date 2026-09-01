@@ -11,8 +11,6 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.workspace.WorkspaceFileEntry
-import net.weero.measix.pilot.data.ai.buildToolIndex
-import net.weero.measix.pilot.data.ai.resolveToolApprovals
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
 import net.weero.measix.pilot.service.workspace.WorkspaceToolSession
@@ -22,8 +20,21 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.uuid.Uuid
 
 class WorkspaceToolArgumentsTest {
+    private val runtime = ToolCallRuntime(Json)
+
+    private fun pendingBatch(
+        tools: List<me.rerere.ai.core.Tool>,
+        calls: List<UIMessagePart.Tool>,
+    ): ToolBatchPreparation = runtime.prepareBatch(
+        messageId = Uuid.random(),
+        calls = calls.mapIndexed { ordinal, tool -> LocatedToolCall(ordinal, tool) },
+        toolIndex = runtime.buildIndex(tools),
+        availability = ToolInteractionAvailability.FULL,
+    )
+
     @Test
     fun validationReturnsStructuredDomainDetailsWithoutReplayEnvelope() {
         val error = validateWorkspaceArguments { parseWorkspaceWriteArguments(buildJsonObject {}) }
@@ -36,18 +47,21 @@ class WorkspaceToolArgumentsTest {
     @Test
     fun assembledToolsRejectMissingPathBeforeApprovalAndHonorNormalizedPolicy() = runTest {
         val tools = createWorkspaceTools("workspace", mockk(), emptyMap(), mockk())
-        val index = buildToolIndex(tools)
         val missingPath = UIMessagePart.Tool("bad", "workspace_write_file", """{"text":"x"}""")
-        val rejected = resolveToolApprovals(listOf(missingPath), index, false, emptySet(), Json)
-        assertFalse(rejected.hasPendingApproval)
-        val output = (rejected.tools.single().output.single() as UIMessagePart.Text).text
+        val rejected = pendingBatch(tools, listOf(missingPath))
+        assertTrue(rejected.pendingInteractions.isEmpty())
+        assertTrue(rejected.immediateResults.isNotEmpty())
+        val output = (rejected.replacements.getValue(0).output.single() as UIMessagePart.Text).text
         assertTrue(output.contains("invalid_arguments"))
         assertTrue(output.contains("path is required"))
 
         val safe = UIMessagePart.Tool("safe", "workspace_write_file", """{"path":"/tmp/x","text":"x"}""")
         val outside = UIMessagePart.Tool("outside", "workspace_write_file", """{"path":"/tmp/../etc/x","text":"x"}""")
-        assertFalse(resolveToolApprovals(listOf(safe), index, false, emptySet(), Json).hasPendingApproval)
-        assertTrue(resolveToolApprovals(listOf(outside), index, false, emptySet(), Json).hasPendingApproval)
+        assertTrue(pendingBatch(tools, listOf(safe)).pendingInteractions.isEmpty())
+        assertEquals(
+            setOf(ToolInteractionKind.APPROVAL),
+            pendingBatch(tools, listOf(outside)).pendingInteractions,
+        )
     }
 
     @Test

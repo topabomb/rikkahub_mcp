@@ -24,6 +24,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.fastForEach
+import androidx.compose.runtime.remember
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.contentOrNull
 import me.rerere.ai.ui.UIMessagePart
@@ -58,7 +59,20 @@ data class ToolUIContext(
     val content: JsonElement?,
     /** Call assembly, approval and execution are deliberately distinct. */
     val phase: ToolCallPhase,
+    /** Inline 保持现有 renderer；Archived 只展示 durable 裁剪摘要。 */
+    val outputProjection: ToolOutputProjection = ToolOutputProjection.Inline(tool.output),
 )
+
+/** Tool Result 的展示投影：完整内联，或已归档为 durable 摘要。 */
+sealed interface ToolOutputProjection {
+    data class Inline(val parts: List<UIMessagePart>) : ToolOutputProjection
+    data class Archived(
+        val characters: Long,
+        val lines: Int,
+        val terminalStatus: String,
+    ) : ToolOutputProjection
+}
+
 
 internal val ToolUIContext.busy: Boolean
     get() = phase.isBusy
@@ -189,6 +203,11 @@ fun ToolCallJsonDetails(
             style = TextStyle(fontSize = 10.sp, lineHeight = 12.sp)
         )
     }
+    val projection = context.outputProjection
+    if (projection is ToolOutputProjection.Archived) {
+        ArchivedToolOutputDetails(projection)
+        return
+    }
     val resultParts = context.tool.output.filter { part ->
         part is UIMessagePart.Text || (includeImages && part is UIMessagePart.Image)
     }
@@ -241,4 +260,18 @@ fun ToolCallJsonDetails(
             }
         }
     }
+}
+
+/** 归档输出详情只呈现 durable 摘要；精确正文仅由模型通过 scoped tools 按需回查。 */
+@Composable
+fun ArchivedToolOutputDetails(projection: ToolOutputProjection.Archived) {
+    Text(
+        text = stringResource(
+            R.string.chat_message_tool_output_archived_summary,
+            projection.lines,
+            projection.characters,
+        ),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }

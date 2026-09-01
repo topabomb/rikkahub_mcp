@@ -11,6 +11,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.ToolArgumentsException
+import me.rerere.ai.core.ToolExecutionFailure
+import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.ui.UIMessagePart
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -24,18 +26,28 @@ class AskUserToolTest {
     private val json = Json { ignoreUnknownKeys = true }
     private val tool = buildAskUserTool()
 
+    private suspend fun executionFailure(args: JsonObject): JsonObject {
+        val failure = try {
+            tool.execute(args)
+            throw AssertionError("expected ToolExecutionFailure")
+        } catch (error: ToolExecutionFailure) {
+            error
+        }
+        return parseResult(failure.output)
+    }
+
     @Test
     fun `valid text question is approved for HITL`() {
         val args = validTextQuestion()
         assertNull(validateAskUserArguments(args))
-        assertTrue(tool.needsApproval(args))
+        assertEquals(ToolInteractionRequirement.UserInput, tool.interactionRequirement(args))
     }
 
     @Test
     fun `valid single-select strings are approved for HITL`() {
         val args = validSingleQuestion()
         assertNull(validateAskUserArguments(args))
-        assertTrue(tool.needsApproval(args))
+        assertEquals(ToolInteractionRequirement.UserInput, tool.interactionRequirement(args))
     }
 
     @Test
@@ -69,18 +81,16 @@ class AskUserToolTest {
         assertEquals("questions[0].options[0]", error!!.field)
         assertEquals("non-empty string", error.expected)
         assertEquals(ASK_USER_OPTIONS_HINT, error.hint)
-        assertTrue(tool.needsApproval(args))
+        assertEquals(ToolInteractionRequirement.UserInput, tool.interactionRequirement(args))
 
-        val result = parseResult(tool.execute(args))
-        assertEquals("invalid_arguments", result["error"]!!.jsonPrimitive.content)
-        assertEquals("questions[0].options[0]", result["field"]!!.jsonPrimitive.content)
-        assertEquals("non-empty string", result["expected"]!!.jsonPrimitive.content)
-        assertEquals(ASK_USER_OPTIONS_HINT, result["hint"]!!.jsonPrimitive.content)
-        assertEquals(result, tool.validateArguments(args))
-        assertNull(result["type"])
+        val result = executionFailure(args)
+        assertEquals("failed", result["status"]!!.jsonPrimitive.content)
+        assertEquals("invalid_arguments", result["reason"]!!.jsonPrimitive.content)
+        val validation = requireNotNull(tool.validateArguments(args))
+        assertNull(validation["type"])
         val rejection = assertThrows(ToolArgumentsException::class.java) { tool.parseArguments(args.toString(), json) }
         val replay = parseResult(rejection.output)
-        assertEquals(result, JsonObject(replay.filterKeys { it != "type" }))
+        assertEquals(validation, JsonObject(replay.filterKeys { it != "type" }))
         assertEquals("error", replay["type"]!!.jsonPrimitive.content)
     }
 
@@ -89,8 +99,8 @@ class AskUserToolTest {
         val args = buildJsonObject { }
         val error = validateAskUserArguments(args)!!
         assertEquals("questions", error.field)
-        assertTrue(tool.needsApproval(args))
-        assertEquals("invalid_arguments", parseResult(tool.execute(args))["error"]!!.jsonPrimitive.content)
+        assertEquals(ToolInteractionRequirement.UserInput, tool.interactionRequirement(args))
+        assertEquals("invalid_arguments", executionFailure(args)["reason"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -101,7 +111,7 @@ class AskUserToolTest {
         val error = validateAskUserArguments(args)!!
         assertEquals("questions", error.field)
         assertEquals("non-empty array", error.expected)
-        assertTrue(tool.needsApproval(args))
+        assertEquals(ToolInteractionRequirement.UserInput, tool.interactionRequirement(args))
     }
 
     @Test
@@ -176,7 +186,7 @@ class AskUserToolTest {
         val error = validateAskUserArguments(args)!!
         assertEquals("questions[0].options", error.field)
         assertEquals(ASK_USER_OPTIONS_HINT, error.hint)
-        assertTrue(tool.needsApproval(args))
+        assertEquals(ToolInteractionRequirement.UserInput, tool.interactionRequirement(args))
     }
 
     @Test

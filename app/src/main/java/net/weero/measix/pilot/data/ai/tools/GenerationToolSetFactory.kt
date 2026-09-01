@@ -2,6 +2,7 @@ package net.weero.measix.pilot.data.ai.tools
 
 import android.util.Log
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
@@ -43,7 +44,9 @@ class GenerationToolSetFactory(
     private val mcpManager: McpRuntimeCoordinator,
     private val providerManager: ProviderManager,
     private val artifactStore: ArtifactStore,
+    private val toolOutputStore: ToolOutputStore = ToolOutputStore(artifactStore),
 ) {
+
     fun captureMcpCapabilities(assistant: Assistant): TurnMcpCapabilitySnapshot =
         mcpManager.captureTurnCapabilities(assistant)
 
@@ -61,6 +64,7 @@ class GenerationToolSetFactory(
      */
     suspend fun buildTools(
         assistant: Assistant,
+        conversationId: Uuid = Uuid.random(),
         settings: Settings,
         capabilityModel: Model?,
         workspaceCwd: String? = null,
@@ -71,6 +75,9 @@ class GenerationToolSetFactory(
         onInvalidMcpServerNames: (List<String>) -> Unit = {},
     ): List<Tool> {
         return buildList {
+            // 归档回查工具始终注册（Master 与 Target 相同）：ref 授权按 conversationId 校验。
+            addAll(createToolOutputLookupTools(toolOutputStore, conversationId))
+
             if (shouldUseExternalWebSearch(assistant, capabilityModel)) {
                 addAll(createSearchTools(settings))
             }
@@ -160,7 +167,13 @@ class GenerationToolSetFactory(
                             name = providerToolName(tool.serverName, tool.name),
                             description = tool.description ?: "",
                             parameters = { tool.inputSchema },
-                            needsApproval = { tool.needsApproval },
+                            interactionRequirement = {
+                                if (tool.needsApproval) {
+                                    ToolInteractionRequirement.Approval
+                                } else {
+                                    ToolInteractionRequirement.None
+                                }
+                            },
                             execute = { error("MCP tools require ToolExecutionContext") },
                             contextualExecute = {
                                 mcpManager.callTool(
@@ -177,6 +190,14 @@ class GenerationToolSetFactory(
                     )
                 }
         }.let { tools ->
+            // 保留名冲突诊断：动态来源（local/additional/MCP）占用回查保留名时装配阶段拒绝。
+            val reserved = ToolOutputToolNames.RESERVED
+            val conflicts = tools.filterIndexed { index, tool ->
+                tool.name in reserved && tools.indexOfFirst { it.name == tool.name } != index
+            }.map { it.name }.distinct()
+            require(conflicts.isEmpty()) {
+                "Tool names collide with reserved Tool Output lookup names: ${conflicts.joinToString()}"
+            }
             if (runMode == ToolSetRunMode.TARGET) {
                 filterTargetTools(tools)
             } else {

@@ -41,7 +41,7 @@ ConversationApplicationService / MasterTurnCoordinator
             │
             ▼
        GenerationLoop.run
-         ├─ limitContext：只改变本次请求
+         ├─ ConversationContextPlanner.planRequest：replay-safe 后按完整 USER 轮次裁剪，只改变本次请求
          ├─ System / Memory / Tool prompt
          ├─ Input Transformers
          ├─ Provider stream
@@ -139,7 +139,7 @@ Assistant、MCP 与按需附件识别工具；Memory Tool 在每个工具循环 
 `ConversationListRecord` 列表形状，不装载 `MessageNode` 树；全文检索仍由同一查询端口限定助手与顶层会话范围。
 
 同一 Assistant message 的 ToolCall 以 `messageId + toolOrdinal` 定位。审批是一批工具的屏障：Pending 全部解决后，
-按 ordinal 串行执行。`UpdateToolApproval` 在同一次 reducer 变换中更新 durable node 与 active-turn projection，
+按 ordinal 串行执行。`ResolveToolInteraction` 在同一次 reducer 变换中更新 durable node 与 active-turn projection，
 Runtime 仅在事务提交成功后发布该投影；因此 UI、Master resume 与 Child `ask_user` 只会观察到同一个终态决定。
 工具输出内联在 `UIMessagePart.Tool.output`；Provider 序列化时再展开为各自协议。
 
@@ -162,9 +162,9 @@ Runtime 仅在事务提交成功后发布该投影；因此 UI、Master resume �
 生图与子助手的最终 metadata 使用 `DEFERRED`，与结果一起提交；新 Child 的初始 metadata 同样随 child link
 checkpoint 交接。未提交的文件引用不会提前进入显示或取消终态，不新增 metadata 缓冲或持久化字段。
 
-Master 生成入口显式区分 `MasterTurnEntry.START` 与 `CONTINUE_APPROVAL`。START 在尚无 active turn 时完成建议清理、
+Master 生成入口显式区分 `MasterTurnEntry.START` 与 `CONTINUE_USER_INTERACTION`。START 在尚无 active turn 时完成建议清理、
 无效消息清理和附件引用精确回填，再由 `TurnEngine.start()` 建立 owner；批准、拒绝和回答都由
-`applyToolApprovalDecision` 提交唯一 `UpdateToolApproval` 后进入 CONTINUE_APPROVAL，只复用既有 `TurnHandle` 并调用
+`applyToolUserDecision` 提交唯一 `ResolveToolInteraction` 后进入 CONTINUE_USER_INTERACTION，只复用既有 `TurnHandle` 并调用
 `TurnEngine.continueActive()`，不得再次执行结构预检或提交树命令。
 结构预检只读取 durable `ConversationSnapshot.nodes`；`renderNodes` 是每次读取都可能新建的显示投影，不能作为持久化输入，
 也不能用列表引用身份判断是否需要写入。
@@ -206,8 +206,23 @@ Master 的 `FAILED` / `INCOMPLETE` 由 `ChatErrorStore` 投影为当前会话底
 产生的手动标题。进程重启后缺少候选 provenance 的非空持久化标题按 `RESOLVED` 保护。标题文本仍使用现有 header 字段，
 数据库 schema 不变。
 
-文本工具输出过大且 Workspace 可读时，消息只保留预览，完整内容写入 `/tool_outputs/{executionId}.txt`。
-模型不可读取 Workspace 时不生成虚假文件引用。
+`ConversationContextPlanner` 同时负责请求窗口和成功 Provider step 后的 Tool Result 压缩候选。完整工具结果先经
+`TOOL_RESULT_COMPLETED` durable checkpoint 保存，并且只有被成功 `ModelStepReceipt` 保守确认进入最终 Provider 请求投影后，
+才允许压缩。inline Tool 文本达到 48K estimated tokens 才触发，按 16K 低水位、24K 整批最小净回收量、最近两个 typed
+批次和最近 4K estimated tokens 保护规则选择；不额外冻结整个已完成 USER turn。候选必须有显式 `completed` / `failed`
+终态，且 `originalEstimatedTokens - markerEstimatedTokens >= 512`。估算规则按每个 Tool Result 独立计算：ASCII code point
+总数除以 4 并向上取整，其他 code point 各计 1；全部生产阈值只来自 `ContextTrimmingPolicy.kt`，Provider input token 与 cache 命中百分比
+都不参与决策。`PRESERVE`、混合媒体、Provider opaque replay、已归档结果与 `denied` / `answered` 不参与。
+回查工具结果标为 `REGENERABLE_TEXT`，满足同一滚动规则时只折叠固定 marker，不创建新的 Artifact。
+一次执行只要登记过 unpublished Artifact，Runtime 对成功和失败结果都强制 `PRESERVE`，不把产物交付引用交给 planner 猜测。
+
+`ToolOutputStore` 将可归档文本规范化后暂存为 `ArtifactStore` 管理的 `tool_outputs` Artifact；可再生文本不复制 payload。
+marker replacement 只进入局部 `checkpointMessages`；其中旧 Tool Result 通过 locator + marker + 可空 archive 的 typed
+`toolOutputCompactionPatches` delta 与本 step 的
+`STEP_COMPLETED` 共用事务，不能只提交最后一条 Assistant。checkpoint 成功后才发布 lease 和 marker projection，失败则
+保留原完整 inline output 并精确回滚暂存 Artifact。模型只通过稳定注册的 `read_tool_output` / `grep_tool_output` 按当前
+conversation 的 `TOOL_OUTPUT` reference 回查；UI 只显示消息中的 durable 归档摘要，不提供正文回读，也不触发文件 IO。
+任何路径都不披露私有文件路径或依赖 Workspace shell。
 
 ## Artifact 生命周期
 
@@ -228,8 +243,9 @@ Master 的 `FAILED` / `INCOMPLETE` 由 `ChatErrorStore` 投影为当前会话底
 `Assistant.contextMessageLimit` 只控制本次 Provider 请求。裁剪从完整 USER 轮次边界开始，不改 durable history。
 
 Provider 只返回开头 `<think>` 文本时，`ThinkTagTransformer` 在 Master/Target 共用 output pipeline 以最后一个已执行 Tool 为边界，只把当前 assistant→tool step 的首个非空 `Text` 拆成 `Reasoning` 与回答正文。只有当前 step 已有 Provider 原生 Reasoning 时才禁用该 fallback；已完成 step 的 Reasoning 不得抑制后续 step。闭合标签到达时立即冻结当前 step reasoning 的 `finishedAt`，后续累计正文 chunk 只从上一投影的同一 step 复用首次闭合时间；流结束只为当前 step 未闭合标签补时间。`GenerationLoop` 的 phase 判定同样基于累计 raw message 的当前 step，同一标签内文本只发布 `reasoning_streaming`，标签后的正文出现后才发布 `answer_streaming`；终态提交保留各 step 闭合标签首次投影的完成时间。
-消息条数不等于 token 数，长文档、图片、工具 schema 与 System prompt 仍可能占据大量上下文。上下文阈值只使用
-Provider 最近一次请求 canonical input 投影出的 `latestRequestContextTokens`；缺失时不以 turn 累计 input 猜测。
+消息条数不等于 token 数，长文档、图片、工具 schema 与 System prompt 仍可能占据大量上下文。`ChatSizeChecker` 的
+上下文预警阈值只使用最终请求投影在发送前按稳定规则估算出的 `latestRequestEstimatedContextTokens`；缺失时不以 turn
+累计 input 猜测。它与前述 Tool Output 滚动压缩共用估算口径，但预警只读取最近一次实际发送请求的快照，不参与压缩决策。
 
 显式压缩由 `ConversationApplicationService.compress()` 进入 `GenerationSideEffects.compressConversation()`：生成摘要，
 保留指定的最近完整轮次，再以 durable tree command 替换历史。它是用户触发、持久化且不可撤销的操作，不自动挂到

@@ -203,7 +203,7 @@ OpenRouter `reasoning_details` 继续 source-isolated：存在 details 时不降
 
 ### OpenRouter session_id
 
-`TextGenerationParams.providerSessionId` 是 request-scoped 的 nullable typed 字段，不进入 Settings、Conversation、Room 或 backup。Master 使用当前 master conversation UUID，Target 使用 child conversation UUID；同一 turn 的多 step 与 `CONTINUE_APPROVAL` 复用同一个值，fork 因新 conversation UUID 自然隔离。只有 `OpenAIEndpointVendor.OPENROUTER` 的 Chat Completions 和 Responses builder 把非空、长度不超过 256 的值写为顶层 `session_id`。标题生成、建议问题、附件检查、Provider 连接测试等无 conversation owner 的后台调用传 null。
+`TextGenerationParams.providerSessionId` 是 request-scoped 的 nullable typed 字段，不进入 Settings、Conversation、Room 或 backup。Master 使用当前 master conversation UUID，Target 使用 child conversation UUID；同一 turn 的多 step 与 `CONTINUE_USER_INTERACTION` 复用同一个值，fork 因新 conversation UUID 自然隔离。只有 `OpenAIEndpointVendor.OPENROUTER` 的 Chat Completions 和 Responses builder 把非空、长度不超过 256 的值写为顶层 `session_id`。标题生成、建议问题、附件检查、Provider 连接测试等无 conversation owner 的后台调用传 null。
 
 ## 5. Responses API
 

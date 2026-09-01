@@ -131,6 +131,48 @@ class SingleWriterContractTest {
     }
 
     @Test
+    fun `tool runtime context planner and archived output have single owners`() {
+        val generationLoop = File(sourceRoot, "data/ai/GenerationLoop.kt").readText()
+        val toolRuntime = File(sourceRoot, "data/ai/tools/ToolCallRuntime.kt")
+        val planner = File(sourceRoot, "data/ai/ConversationContextPlanner.kt")
+        val outputStore = File(sourceRoot, "data/ai/tools/ToolOutputStore.kt")
+        assertTrue(toolRuntime.isFile)
+        assertTrue(planner.isFile)
+        assertTrue(outputStore.isFile)
+        listOf(
+            "MAX_TOOL_OUTPUT_CHARS",
+            "TOOL_OUTPUT_PREVIEW_CHARS",
+            "maybeTruncateToolOutput",
+            "legacyTruncateOutput",
+            "/tool_outputs/",
+            "limitContext(",
+        ).forEach { legacy -> assertFalse("GenerationLoop must not retain $legacy", generationLoop.contains(legacy)) }
+        assertTrue(generationLoop.contains("contextPlanner.planRequest"))
+        assertTrue(generationLoop.contains("contextPlanner.planPostStepCompaction"))
+        assertEquals(
+            1,
+            Regex(Regex.escape("contextPlanner.planPostStepCompaction(")).findAll(generationLoop).count(),
+        )
+        assertEquals(
+            1,
+            Regex(Regex.escape("toolOutputStore.stageCompaction(")).findAll(generationLoop).count(),
+        )
+        assertTrue(generationLoop.contains("checkpointMessages = checkpointMessages"))
+        assertFalse(File(sourceRoot, "MeasixPilotApp.kt").readText().contains("cleanupToolOutputs"))
+        listOf("baseline-prof.txt", "startup-prof.txt").forEach { profileName ->
+            val profile = File("src/release/generated/baselineProfiles", profileName)
+            assertTrue(profile.isFile)
+            assertFalse(profile.readText().contains("cleanupToolOutputs"))
+        }
+        assertFalse(
+            File("../workspace/src/main/java/me/rerere/workspace/ProotLaunchSpec.kt")
+                .readText().contains("TOOL_OUTPUTS_DIR")
+        )
+        val ui = sources.filter { it.relativeTo(sourceRoot).invariantSeparatorsPath.startsWith("ui/") }
+        assertNoHits("import net.weero.measix.pilot.data.files.ArtifactStore", ui)
+        assertNoHits("import net.weero.measix.pilot.data.ai.tools.ToolOutputStore", ui)
+    }
+    @Test
     fun `tool output ownership transfer is mandatory`() {
         assertTrue(hits("registerUnpublishedResource").isNotEmpty())
         assertTrue(hits("ToolResourceLease").isNotEmpty())
@@ -145,6 +187,16 @@ class SingleWriterContractTest {
         assertNoHits("loading && !step.tool.hasReplayResult", toolUi)
         assertNoHits("val loading: Boolean", toolUi)
         assertTrue(hits("ToolCallPhase", toolUi).isNotEmpty())
+        val chatMessageTools = sourceRoot.resolve("ui/components/message/ChatMessageTools.kt").readText()
+        assertTrue(chatMessageTools.contains("val isPending = phase == ToolCallPhase.AWAITING_INPUT"))
+        assertTrue(chatMessageTools.contains("phase == ToolCallPhase.ANSWERED"))
+        assertFalse(chatMessageTools.contains("val isPending = tool.approvalState"))
+        val nerdLine = sourceRoot.resolve("ui/components/message/ChatMessageNerdLine.kt").readText()
+        assertTrue(nerdLine.contains("mutableStateOf(false)"))
+        assertTrue(nerdLine.contains("AnimatedVisibility(visible = expanded)"))
+        assertTrue(nerdLine.contains("FlowRow("))
+        assertTrue(nerdLine.contains("appendInlineContent(SUMMARY_TOGGLE_INLINE_ID)"))
+        assertFalse(nerdLine.contains("Modifier.weight(1f)"))
         val notificationManager = sourceRoot.resolve("service/ChatNotificationManager.kt").readText()
         assertFalse(
             "notifications must not infer execution from Provider replay results",

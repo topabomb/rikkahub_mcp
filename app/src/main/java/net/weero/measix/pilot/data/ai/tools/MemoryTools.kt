@@ -59,11 +59,7 @@ fun buildMemoryTools(
         },
         execute = execute@{
             if (!isStillAllowed()) {
-                return@execute listOf(
-                    UIMessagePart.Text(
-                        buildJsonObject { put("error", "tool_not_permitted") }.toString()
-                    )
-                )
+                failToolResult("tool_not_permitted")
             }
             val params = it.jsonObject
             val action = params["action"]?.jsonPrimitive?.contentOrNull ?: error("action is required")

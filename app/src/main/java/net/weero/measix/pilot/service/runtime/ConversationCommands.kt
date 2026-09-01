@@ -1,15 +1,20 @@
 package net.weero.measix.pilot.service.runtime
 
+import kotlinx.datetime.LocalDateTime
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefBackfill
 import net.weero.measix.pilot.data.ai.CheckpointKind
+import net.weero.measix.pilot.data.ai.ToolOutputCompactionPatch
 import net.weero.measix.pilot.data.ai.ToolResultEvent
 import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.model.MessageNode
+import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
 /**
@@ -46,6 +51,8 @@ data class CommitCheckpoint(
     val turnReason: String?,
     val toolExecution: ToolExecutionEntity?,
     val toolResults: List<ToolResultEvent> = emptyList(),
+    /** 与当前 Assistant 消息同事务提交的全部 Tool Output 窄压缩 patch。 */
+    val toolOutputCompactionPatches: List<ToolOutputCompactionPatch> = emptyList(),
 ) : ConversationCommand
 
 /** 终态收口（finishReasoning / closeOpenTools / markAssistantTerminal 在 reducer 内纯变换） */
@@ -56,6 +63,9 @@ data class FinalizeTurn(
     val terminalReason: String?,
     val closeInterruptedTools: Boolean,   // 崩溃恢复场景：关闭未完工具
     val terminalDetail: String? = null,
+    /** owning turn 的稳定终止时间；用于 durable Total，而不是复用中间 Provider step 的完成时间。 */
+    val finishedAt: LocalDateTime =
+        Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()),
 ) : ConversationCommand
 
 /** Process-recovery-only command. Normal turn owners must use [FinalizeTurn] with their handle. */
@@ -65,6 +75,9 @@ data class RecoverInterruptedTurn(
     val messages: List<UIMessage>?,
     val terminalReason: String,
     val closeInterruptedTools: Boolean,
+    /** 恢复收口的稳定终止时间。 */
+    val finishedAt: LocalDateTime =
+        Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()),
 ) : ConversationCommand
 
 /** Appends the user message and, for the first user turn, its deterministic local title atomically. */
@@ -118,21 +131,38 @@ data class MoveToAssistant(val assistantId: Uuid) : HeaderConversationCommand
 /** Atomically flips the committed pin state inside the coordinator's per-conversation lock. */
 data object TogglePinned : HeaderConversationCommand
 
+/** The user's typed decision for one paused tool call. */
+sealed interface ToolUserDecision {
+    /** Permission granted for an Approval interaction. */
+    data object Approve : ToolUserDecision
+
+    /** Permission refused for an Approval interaction. */
+    data class Deny(val reason: String = "") : ToolUserDecision
+
+    /** Content collected for a UserInput interaction; the answer is the replay result. */
+    data class Answer(val answer: String) : ToolUserDecision
+}
+
+/** Durable encoding of a terminal user decision on the Tool message part. */
+internal fun ToolUserDecision.toApprovalState(): ToolApprovalState = when (this) {
+    ToolUserDecision.Approve -> ToolApprovalState.Approved
+    is ToolUserDecision.Deny -> ToolApprovalState.Denied(reason)
+    is ToolUserDecision.Answer -> ToolApprovalState.Answered(answer)
+}
+
 /** A terminal HITL decision addressed by the owning message and stable tool ordinal. */
-data class UpdateToolApproval(
+data class ResolveToolInteraction(
     val messageId: Uuid,
     val toolOrdinal: Int,
-    val approvalState: ToolApprovalState,
+    val decision: ToolUserDecision,
     val handle: TurnHandle,
 ) : ConversationCommand {
     init {
-        require(toolOrdinal >= 0) { "tool approval ordinal must be non-negative" }
-        require(
-            approvalState is ToolApprovalState.Approved ||
-                approvalState is ToolApprovalState.Denied ||
-                approvalState is ToolApprovalState.Answered
-        ) { "tool approval command requires a terminal user decision" }
+        require(toolOrdinal >= 0) { "tool interaction ordinal must be non-negative" }
     }
+
+    /** The durable encoding stays `ToolApprovalState`; it is not a second source of truth. */
+    val approvalState: ToolApprovalState = decision.toApprovalState()
 }
 
 // ---- 三态包装（同文件） ----
@@ -231,8 +261,6 @@ data class ActiveTurnState(
     val assistantMessageId: Uuid,
     val messages: List<UIMessage>,
     val toolCallPhases: Map<ToolCallLocator, ToolCallPhase> = emptyMap(),
-    /** Retained inside this transient owner so absent request usage cannot erase the active display. */
-    val latestAvailableContextCache: ContextCacheDisplay? = null,
 )
 
 data class TurnHandle(

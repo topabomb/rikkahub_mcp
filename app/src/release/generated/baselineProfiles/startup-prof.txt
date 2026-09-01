@@ -46422,7 +46422,6 @@ SPLme/rerere/rikkahub/RikkaHubApp;->$r8$lambda$Y1ZqNXDwBe_K9UTHi1O7t4FbaUw(Lcom/
 SPLme/rerere/rikkahub/RikkaHubApp;-><clinit>()V
 SPLme/rerere/rikkahub/RikkaHubApp;-><init>()V
 SPLme/rerere/rikkahub/RikkaHubApp;->checkWorkspaceIntegrity()V
-SPLme/rerere/rikkahub/RikkaHubApp;->cleanupToolOutputs()V
 SPLme/rerere/rikkahub/RikkaHubApp;->cleanupWorkspaceTempDirs()V
 SPLme/rerere/rikkahub/RikkaHubApp;->createNotificationChannel()V
 SPLme/rerere/rikkahub/RikkaHubApp;->deleteTempFiles()V
@@ -46442,10 +46441,6 @@ Lme/rerere/rikkahub/RikkaHubApp$checkWorkspaceIntegrity$1;
 SPLme/rerere/rikkahub/RikkaHubApp$checkWorkspaceIntegrity$1;-><init>(Lme/rerere/rikkahub/RikkaHubApp;Lkotlin/coroutines/Continuation;)V
 SPLme/rerere/rikkahub/RikkaHubApp$checkWorkspaceIntegrity$1;->create(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Lkotlin/coroutines/Continuation;
 SPLme/rerere/rikkahub/RikkaHubApp$checkWorkspaceIntegrity$1;->invokeSuspend(Ljava/lang/Object;)Ljava/lang/Object;
-Lme/rerere/rikkahub/RikkaHubApp$cleanupToolOutputs$1;
-SPLme/rerere/rikkahub/RikkaHubApp$cleanupToolOutputs$1;-><init>(Lme/rerere/rikkahub/RikkaHubApp;Lkotlin/coroutines/Continuation;)V
-SPLme/rerere/rikkahub/RikkaHubApp$cleanupToolOutputs$1;->create(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Lkotlin/coroutines/Continuation;
-SPLme/rerere/rikkahub/RikkaHubApp$cleanupToolOutputs$1;->invokeSuspend(Ljava/lang/Object;)Ljava/lang/Object;
 Lme/rerere/rikkahub/RikkaHubApp$cleanupWorkspaceTempDirs$1;
 SPLme/rerere/rikkahub/RikkaHubApp$cleanupWorkspaceTempDirs$1;-><init>(Lme/rerere/rikkahub/RikkaHubApp;Lkotlin/coroutines/Continuation;)V
 SPLme/rerere/rikkahub/RikkaHubApp$cleanupWorkspaceTempDirs$1;->create(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Lkotlin/coroutines/Continuation;

@@ -15,6 +15,7 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.data.ai.tools.failToolResult
 import net.weero.measix.pilot.data.event.AppEvent
 import net.weero.measix.pilot.data.event.AppEventBus
 import net.weero.measix.pilot.utils.hasUsageStatsPermission
@@ -75,15 +76,10 @@ internal fun buildScreenTimeTool(context: Context, eventBus: AppEventBus): Tool 
     execute = {
         if (!context.hasUsageStatsPermission()) {
             eventBus.emit(AppEvent.OpenUsageAccessSettings)
-            val payload = buildJsonObject {
-                put("error", "NO_PERMISSION")
-                put(
-                    "message",
-                    "Usage access permission is not granted. The system settings page has been " +
-                        "opened; please ask the user to enable 'Usage access' for this app and try again."
-                )
-            }
-            return@Tool listOf(UIMessagePart.Text(payload.toString()))
+            failToolResult(
+                "no_permission",
+                "Usage access is not granted. The system settings page was opened; ask the user to enable it.",
+            )
         }
 
         val params = it.jsonObject
@@ -106,19 +102,11 @@ internal fun buildScreenTimeTool(context: Context, eventBus: AppEventBus): Tool 
                 else -> now.toLocalDate().atStartOfDay(zone)
             }
         } catch (e: Exception) {
-            val payload = buildJsonObject {
-                put("error", "INVALID_TIME")
-                put("message", e.message ?: "Invalid time format for begin/end.")
-            }
-            return@Tool listOf(UIMessagePart.Text(payload.toString()))
+            failToolResult("invalid_time", e.message ?: "Invalid time format for begin/end.")
         }
 
         if (!startTime.isBefore(endTime)) {
-            val payload = buildJsonObject {
-                put("error", "INVALID_RANGE")
-                put("message", "begin must be earlier than end.")
-            }
-            return@Tool listOf(UIMessagePart.Text(payload.toString()))
+            failToolResult("invalid_range", "begin must be earlier than end.")
         }
 
         val isCustom = beginRaw != null || endRaw != null

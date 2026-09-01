@@ -147,6 +147,7 @@ class TurnCancellationIntegrationTest {
             attachmentResolver = AttachmentResolver(
                 artifactStore = artifactStore,
             ),
+            toolOutputStore = net.weero.measix.pilot.data.ai.tools.ToolOutputStore(artifactStore),
         )
     }
 
@@ -309,6 +310,7 @@ class TurnCancellationIntegrationTest {
                 started.engine.bind(
                     generationLoop.run(
                         GenerationRequest(
+                            conversationId = kotlin.uuid.Uuid.random(),
                             settings = settings,
                             model = model,
                             mediaCapabilities = RequestMediaCapabilities.NONE,

@@ -170,10 +170,10 @@ class ConversationCommandCoordinatorTest {
         val failure = runCatching {
             coordinator.executeOrThrow(
                 id,
-                UpdateToolApproval(
+                ResolveToolInteraction(
                     Uuid.random(),
                     0,
-                    me.rerere.ai.ui.ToolApprovalState.Approved,
+                    net.weero.measix.pilot.service.runtime.ToolUserDecision.Approve,
                     TurnHandle(id, 1, Uuid.random(), Uuid.random()),
                 ),
             )

@@ -115,12 +115,14 @@ class StreamingTransformScopeTest {
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            toolOutputStore = io.mockk.mockk(relaxed = true),
         )
         val assistant = Assistant(enableMemory = false, streamOutput = true)
         val userMessage = UIMessage.user("hello")
 
         val chunks = handler.run(
             GenerationRequest(
+            conversationId = kotlin.uuid.Uuid.random(),
             settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
             model = model,
             mediaCapabilities = RequestMediaCapabilities.NONE,
@@ -134,9 +136,9 @@ class StreamingTransformScopeTest {
         ).toList()
 
         // 流式期间仅 active assistant 消息进入 transformStreaming
-        // （5000 个 text chunk + 1 个 finishReason=stop 收尾 chunk，再加一次 request usage close 投影）
+        // （5000 个 text chunk + 1 个 finishReason=stop 收尾 chunk，另有发送前 Context 与 request close 两次 usage 投影）
         assertEquals(setOf(assistantMessage.id), counting.callsPerMessageId.keys)
-        assertEquals((chunkCount + 2).toLong(), counting.callsPerMessageId[assistantMessage.id]?.get())
+        assertEquals((chunkCount + 3).toLong(), counting.callsPerMessageId[assistantMessage.id]?.get())
 
         // 历史消息零次进入
         assertTrue(!counting.callsPerMessageId.containsKey(userMessage.id))

@@ -58,9 +58,13 @@ import me.rerere.hugeicons.stroke.BubbleChatQuestion
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Tick01
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.data.ai.tools.ToolRuntimeMetadata
 import net.weero.measix.pilot.service.runtime.ToolCallPhase
+import net.weero.measix.pilot.service.runtime.ToolUserDecision
 import net.weero.measix.pilot.service.runtime.isBusy
 import net.weero.measix.pilot.service.runtime.resolveToolCallPhase
+import net.weero.measix.pilot.ui.components.message.tools.ArchivedToolOutputDetails
+import net.weero.measix.pilot.ui.components.message.tools.ToolOutputProjection
 import net.weero.measix.pilot.ui.components.message.tools.ToolUIContext
 import net.weero.measix.pilot.ui.components.message.tools.ToolUIRegistry
 import net.weero.measix.pilot.ui.components.message.tools.busy
@@ -79,17 +83,17 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     tool: UIMessagePart.Tool,
     locator: ToolCallLocator,
     phase: ToolCallPhase? = null,
-    onToolApproval: ((locator: ToolCallLocator, approved: Boolean, reason: String) -> Unit)? = null,
-    onToolAnswer: ((locator: ToolCallLocator, answer: String) -> Unit)? = null,
+    onToolDecision: ((locator: ToolCallLocator, decision: ToolUserDecision) -> Unit)? = null,
 ) {
-    // ask_user 是交互式问答流程, 不走注册式渲染框架
+    // ask_user 是交互式问答流程, 不走注册式渲染框架。这是 UI Renderer 特化；
+    // 交互门控由 typed phase 决定，不在此处解释审批语义。
     if (tool.toolName == ASK_USER_TOOL_NAME) {
         AskUserToolStep(
             tool = tool,
             phase = resolveToolCallPhase(tool, phase),
-            onAnswer = onToolAnswer?.let { callback ->
+            onAnswer = onToolDecision?.let { callback ->
                 { answer ->
-                    callback(locator, answer)
+                    callback(locator, ToolUserDecision.Answer(answer))
                     true
                 }
             },
@@ -105,12 +109,22 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     val parsedArguments = remember(displayTool.input) {
         runCatching { JsonInstant.parseToJsonElement(displayTool.input.ifBlank { "{}" }) }
     }
-    val context = remember(displayTool, resolvedPhase, parsedArguments) {
+    // Archived 投影只读 Runtime metadata，不解析工具名，也不自动读取归档正文。
+    val outputProjection = remember(displayTool) {
+        ToolRuntimeMetadata.archiveOf(displayTool.metadata)?.let { archive ->
+            ToolOutputProjection.Archived(
+                characters = archive.characters,
+                lines = archive.lines,
+                terminalStatus = ToolRuntimeMetadata.terminalStatusOf(displayTool.metadata) ?: "completed",
+            )
+        } ?: ToolOutputProjection.Inline(displayTool.output)
+    }
+    val context = remember(displayTool, resolvedPhase, parsedArguments, outputProjection) {
         ToolUIContext(
             tool = displayTool,
             arguments = parsedArguments.getOrElse { JsonObject(emptyMap()) },
             argumentsValid = parsedArguments.isSuccess,
-            content = if (displayTool.hasReplayResult) {
+            content = if (outputProjection is ToolOutputProjection.Inline && displayTool.hasReplayResult) {
                 runCatching {
                     JsonInstant.parseToJsonElement(
                         displayTool.output.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text }
@@ -120,18 +134,20 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                 null
             },
             phase = resolvedPhase,
+            outputProjection = outputProjection,
         )
     }
 
     var showResult by remember { mutableStateOf(false) }
     var showDenyDialog by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(true) }
-    val isPending = displayTool.approvalState is ToolApprovalState.Pending
+    val isAwaitingApproval = resolvedPhase == ToolCallPhase.AWAITING_APPROVAL
     val isDenied = displayTool.approvalState is ToolApprovalState.Denied
     val images = displayTool.output.filterIsInstance<UIMessagePart.Image>()
+    val isArchived = outputProjection is ToolOutputProjection.Archived
 
-    // 摘要由注册的渲染器决定; 图片输出与拒绝原因为所有工具通用
-    val hasExtraContent = renderer.hasSummary(context) || isDenied || images.isNotEmpty()
+    // 归档结果在 UI 边界直接终止专用输出解析，只展示统一 durable 摘要。
+    val hasExtraContent = isArchived || renderer.hasSummary(context) || isDenied || images.isNotEmpty()
 
     ControlledChainOfThoughtStep(
         expanded = expanded,
@@ -169,7 +185,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                 }
             }
         },
-        extra = if (isPending && onToolApproval != null) {
+        extra = if (isAwaitingApproval && onToolDecision != null) {
             {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -190,7 +206,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                         )
                     }
                     FilledTonalIconButton(
-                        onClick = { onToolApproval(locator, true, "") },
+                        onClick = { onToolDecision(locator, ToolUserDecision.Approve) },
                         modifier = Modifier.size(32.dp),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(
                             containerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -214,8 +230,12 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
         content = if (hasExtraContent) {
             {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    renderer.Summary(context)
-                    if (images.isNotEmpty()) {
+                    if (outputProjection is ToolOutputProjection.Archived) {
+                        ArchivedToolOutputDetails(outputProjection)
+                    } else {
+                        renderer.Summary(context)
+                    }
+                    if (!isArchived && images.isNotEmpty()) {
                         // 会话级时序相册: 稳定 provider, 点击期由 ZoomableAsyncImage 求值
                         val conversationAlbum = LocalConversationImages.current
                         val attachmentPreview = LocalAttachmentPreview.current
@@ -263,12 +283,12 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
         },
     )
 
-    if (showDenyDialog && onToolApproval != null) {
+    if (showDenyDialog && onToolDecision != null) {
         ToolDenyReasonDialog(
             onDismiss = { showDenyDialog = false },
             onConfirm = { reason ->
                 showDenyDialog = false
-                onToolApproval(locator, false, reason)
+                onToolDecision(locator, ToolUserDecision.Deny(reason))
             }
         )
     }
@@ -284,10 +304,17 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             content = {
                 CompositionLocalProvider(LocalToaster provides modalToaster) {
                     Box(modifier = Modifier.fillMaxWidth()) {
-                        renderer.Preview(
-                            context = context,
-                            onDismissRequest = { showResult = false },
-                        )
+                        val projection = outputProjection
+                        if (projection is ToolOutputProjection.Archived) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                ArchivedToolOutputDetails(projection)
+                            }
+                        } else {
+                            renderer.Preview(
+                                context = context,
+                                onDismissRequest = { showResult = false },
+                            )
+                        }
                         Toaster(
                             state = modalToaster,
                             darkTheme = LocalDarkMode.current,
@@ -309,8 +336,10 @@ internal fun ChainOfThoughtScope.AskUserToolStep(
     phase: ToolCallPhase,
     onAnswer: ((answer: String) -> Boolean)?,
 ) {
-    val isPending = tool.approvalState is ToolApprovalState.Pending
-    val isAnswered = tool.approvalState is ToolApprovalState.Answered
+    // 控件只服从严格投影出的 typed phase；持久化 payload 仅在 ANSWERED 阶段读取。
+    val isPending = phase == ToolCallPhase.AWAITING_INPUT
+    val answeredState = (tool.approvalState as? ToolApprovalState.Answered)
+        ?.takeIf { phase == ToolCallPhase.ANSWERED }
     val arguments = tool.inputAsJson()
 
     // Parse questions from arguments
@@ -465,9 +494,8 @@ internal fun ChainOfThoughtScope.AskUserToolStep(
                                     )
                                 }
                             }
-                        } else if (isAnswered) {
+                        } else if (answeredState != null) {
                             // Show the user's answer
-                            val answeredState = tool.approvalState as ToolApprovalState.Answered
                             val answerJson = runCatching {
                                 JsonInstant.parseToJsonElement(answeredState.answer)
                             }.getOrNull()
@@ -527,6 +555,7 @@ private fun toolCallPhaseString(phase: ToolCallPhase): Int = when (phase) {
     ToolCallPhase.CALL_STREAMING -> R.string.chat_message_tool_phase_call_streaming
     ToolCallPhase.READY -> R.string.chat_message_tool_phase_ready
     ToolCallPhase.AWAITING_APPROVAL -> R.string.chat_message_tool_phase_awaiting_approval
+    ToolCallPhase.AWAITING_INPUT -> R.string.chat_message_tool_phase_awaiting_input
     ToolCallPhase.EXECUTING -> R.string.chat_message_tool_phase_executing
     ToolCallPhase.COMPLETED -> R.string.chat_message_tool_phase_completed
     ToolCallPhase.FAILED -> R.string.chat_message_tool_phase_failed

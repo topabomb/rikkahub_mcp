@@ -252,7 +252,7 @@ Schema 见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and
 - `ToolExecutionContext` 以 `messageId + toolOrdinal` 作为工具执行在 Assistant 消息内的唯一 locator（`toolCallId` 只供 Provider 协议使用，重试后会变）。
 - 工具产生副作用（文件、数据库、外部调用）前必须先落 `STARTED`——副作用可观测时 DB 中必有记录。
 - 同一 Assistant 消息的多个 ToolCall 在审批屏障结束后按 Tool ordinal 串行处理。
-- Master 的新 turn 启动与审批继续使用不同 typed entry：只有 START 可在 active turn 建立前执行消息树清理和附件引用回填；批准、拒绝与回答由 `applyToolApprovalDecision` 提交决定后只继续原 owner，不执行结构维护。回填计划只从 durable nodes 生成精确 part-path assignment，显示用 `renderNodes` 不参与持久化判断。
+- Master 的新 turn 启动与用户交互继续使用不同 typed entry：只有 START 可在 active turn 建立前执行消息树清理和附件引用回填；批准、拒绝与回答由 `applyToolUserDecision` 提交决定后只进入 `CONTINUE_USER_INTERACTION` 继续原 owner，不执行结构维护。回填计划只从 durable nodes 生成精确 part-path assignment，显示用 `renderNodes` 不参与持久化判断。
 
 ### 6.4 终态收口
 
@@ -310,6 +310,9 @@ terminal messages 按完整 Provider step 原子回放：
 | `AttachmentInspectionTool` / `shouldInjectAttachmentInspection` | `inspect_attachments` 工具与注入判定 |
 | `ToolExecutionContext` / `ToolAttachmentResolution` | ai 模块最小只读附件能力接口 |
 | `GenerationLoop` | 工具循环、checkpoint、`resolveAttachments` 注入 |
+| ToolCallRuntime | ToolCall 一次参数准备、typed interaction gate、通用执行包装与结果规范化 |
+| ConversationContextPlanner | 请求窗口与成功消费后的纯文本 Tool Result 归档候选（纯函数） |
+| ToolOutputStore | Artifact-backed Tool Output staging、marker、conversation-scoped bounded read/grep |
 | `ConversationApplicationService` / `MasterTurnCoordinator` / `DelegationCoordinator` | 盖章时机、Master/Target 工具集 |
 | `TurnFinalization` | 正常 stop/supersede 与中断结果终态 |
 | `TurnRecovery` | 仅重启恢复（Master/Child/tool 定点链路） |
@@ -317,7 +320,30 @@ terminal messages 按完整 Provider step 原子回放：
 | `TurnExecutionStatus` / `ToolExecutionStatus` | 执行事实状态枚举 |
 | `SettingsOcrMigration` / `migrateLegacySettingsJson` | 旧 OCR 设置迁移边界 |
 
-## 9. 易错点
+## 9. Tool Output 压缩 durability
+
+归档 Tool Result 不建立新表或第二 checkpoint。执行完成的完整 output 先随 `TOOL_RESULT_COMPLETED` 持久化；下一次成功
+Provider 请求从最终 request projection 生成保守 `ModelStepReceipt` 后，planner 才可选择历史 `ARCHIVABLE_TEXT` 或
+`REGENERABLE_TEXT` 纯文本结果。inline Tool 文本达到 48K estimated tokens 才启动，尽量降到 16K，整批至少预计净回收
+24K estimated tokens；单结果净回收至少 512 estimated tokens。最近两个 typed tool-call 批次和最近 4K estimated tokens
+受保护，不额外冻结整个已完成 USER turn。估算按每个 Tool Result 独立计算：ASCII code point 总数除以 4 并向上取整，
+其他 code point 各计 1。
+`ToolOutputStore` 对 `ARCHIVABLE_TEXT` 创建 unpublished `tool_outputs` Artifact，并写稳定 marker 与
+`tool_runtime.archive.artifact`；对 `REGENERABLE_TEXT` 只写固定 folded marker，不创建 Artifact。历史 marker 通过 locator、marker
+与可空 archive 的 `toolOutputCompactionPatches` typed delta 和当前 Assistant 一起由 `STEP_COMPLETED` 同事务写入；该 delta
+覆盖历史与当前 owning Assistant，Reducer 对两者执行相同的 policy、marker 和最小净回收校验；
+当前 Assistant 的校验原文来自已提交的 selected durable node，不读取 transient streaming projection；
+`STEP_COMPLETED` 还逐 ordinal 比较 durable message 中全部既有 Tool 与应用 typed patches 后的 expected Tool，未携带 patch 的
+既有 Tool 必须原样保留，只允许 Provider 在尾部追加新 ToolCall，因此不能靠省略 patch 绕过压缩校验；
+归档候选同时重建 typed `artifact_reference`（`TOOL_OUTPUT`）并在成功后 publish lease，checkpoint 失败则保留原 inline output，
+精确 discard 已暂存的 Artifact。
+
+`ArtifactStore.withToolOutputText` 在 lifecycle lock 内同时验证 ACTIVE、`tool_outputs` folder、`text/plain`、当前 conversation
+的 `TOOL_OUTPUT` reference 并取得 retention pin，锁外流式读取，finally 释放。ref 猜测、其他会话、payload 缺失都统一
+fail-closed。fork 的节点引用同一 Artifact；删除任一会话只移除自己的 reference，最后引用消失后才允许 GC。backup/restore
+包含 `tool_outputs` durable directory，启动恢复按 Artifact 既有 CREATING/DELETING 协议收口。
+
+## 10. 易错点
 
 | 易错 | 正确做法 |
 |------|----------|

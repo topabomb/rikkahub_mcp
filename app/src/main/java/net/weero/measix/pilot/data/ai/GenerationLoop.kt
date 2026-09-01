@@ -19,18 +19,13 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
-import me.rerere.ai.core.ToolArgumentsException
 import me.rerere.ai.core.ToolAttachmentResolution
-import me.rerere.ai.core.ToolExecutionContext
-import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.core.ToolMetadataDelivery
 import me.rerere.ai.core.ToolResourceLease
+import me.rerere.ai.core.ToolCallLocator
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolveResult
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import me.rerere.ai.provider.CustomBody
@@ -45,9 +40,7 @@ import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.MessageChunk
-import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.handleMessageChunk
-import me.rerere.ai.ui.limitContext
 import me.rerere.ai.ui.replaySafeProjection
 import net.weero.measix.pilot.data.ai.transformers.InputMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.MessageTransformer
@@ -56,9 +49,14 @@ import net.weero.measix.pilot.data.ai.transformers.RequestMessageOriginTracker
 import net.weero.measix.pilot.data.ai.transformers.StreamingMessageTransformer
 import net.weero.measix.pilot.data.ai.transformers.ThinkTagTransformer
 import net.weero.measix.pilot.data.ai.transformers.TransformerContext
-import net.weero.measix.pilot.data.files.FileFolders
-import java.io.File
 import net.weero.measix.pilot.data.ai.transformers.transforms
+import net.weero.measix.pilot.data.ai.tools.LocatedToolCall
+import net.weero.measix.pilot.data.ai.tools.ResolvedToolCall
+import net.weero.measix.pilot.data.ai.tools.ToolCallRuntime
+import net.weero.measix.pilot.data.ai.tools.ToolExecutionHooks
+import net.weero.measix.pilot.data.ai.tools.ToolInteractionAvailability
+import net.weero.measix.pilot.data.ai.tools.ToolOutputArchive
+import net.weero.measix.pilot.data.ai.tools.ToolRuntimeMetadata
 import net.weero.measix.pilot.data.ai.tools.buildMemoryTools
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findModelById
@@ -75,8 +73,6 @@ import kotlin.coroutines.coroutineContext
 import kotlin.uuid.Uuid
 
 private const val TAG = "GenerationLoop"
-private const val MAX_TOOL_OUTPUT_CHARS = 32 * 1024
-private const val TOOL_OUTPUT_PREVIEW_CHARS = 4 * 1024
 
 private class CheckpointCommitException(cause: Throwable) : RuntimeException(cause)
 
@@ -114,87 +110,42 @@ private class UnpublishedResourceScope {
     }
 }
 
-internal data class ToolApprovalResolution(
-    val tools: List<UIMessagePart.Tool>,
-    val hasPendingApproval: Boolean,
-)
 
-internal fun resolveToolApprovals(
-    toolsAwaitingReplayResult: List<UIMessagePart.Tool>,
-    toolDefinitions: Map<String, Tool>,
-    nonInteractive: Boolean,
-    interactiveToolNames: Set<String>,
-    json: Json,
-): ToolApprovalResolution {
-    var hasPendingApproval = false
-    val updatedTools = toolsAwaitingReplayResult.map { tool ->
-        if (tool.hasReplayResult || tool.approvalState is ToolApprovalState.Denied ||
-            tool.approvalState is ToolApprovalState.Answered
-        ) return@map tool
-
-        fun reject(output: List<UIMessagePart>) = tool.copy(
-            output = output,
-            approvalState = if (tool.approvalState is ToolApprovalState.Pending) ToolApprovalState.Auto
-                else tool.approvalState,
-        )
-        val toolDefinition = toolDefinitions[tool.toolName] ?: return@map reject(
-            listOf(UIMessagePart.Text(buildJsonObject {
-                put("error", "tool_not_available")
-                put("type", "error")
-                put("status", "failed")
-                put("reason", "tool_not_available")
-                put("tool", tool.toolName)
-                put("message", "This tool is not available in the current run. Do not retry unchanged.")
-            }.toString()))
-        )
-        val args = try {
-            toolDefinition.parseArguments(tool.input, json)
-        } catch (rejection: ToolArgumentsException) {
-            return@map reject(rejection.output)
-        }
-        when {
-            tool.approvalState is ToolApprovalState.Pending -> {
-                hasPendingApproval = true
-                tool
-            }
-
-            tool.approvalState is ToolApprovalState.Auto &&
-                toolDefinition.needsApproval(args) -> {
-                if (nonInteractive && tool.toolName !in interactiveToolNames) {
-                    tool.copy(
-                        output = listOf(
-                            UIMessagePart.Text(
-                                json.encodeToString(
-                                    buildJsonObject {
-                                        put("error", JsonPrimitive("tool_not_permitted"))
-                                        put("type", "error")
-                                        put("reason", JsonPrimitive("approval_unavailable"))
-                                        put(
-                                            "message",
-                                            JsonPrimitive(
-                                                "Approval is required but unavailable in this run. Do not retry unchanged."
-                                            )
-                                        )
-                                    }
-                                )
-                            )
-                        )
-                    )
-                } else {
-                    hasPendingApproval = true
-                    tool.copy(approvalState = ToolApprovalState.Pending)
-                }
-            }
-
-            else -> tool
-        }
+/**
+ * 把一次非空 Tool Result 滚动裁剪批次写入同一 checkpoint 候选，并在 owning Assistant usage 中只计一次。
+ * 只有该 checkpoint 提交成功后消息才会发布，因此失败、取消和重试前不会形成可见计数。
+ */
+internal fun applyToolOutputCompactionBatchToCheckpoint(
+    messages: List<UIMessage>,
+    replacements: Map<me.rerere.ai.core.ToolCallLocator, net.weero.measix.pilot.data.ai.tools.ToolOutputStore.CompactionReplacement>,
+): List<UIMessage> {
+    if (replacements.isEmpty()) return messages
+    val replaced = messages.map { message ->
+        val byOrdinal = replacements.filterKeys { it.messageId == message.id }
+            .mapKeys { it.key.toolOrdinal }
+        if (byOrdinal.isEmpty()) return@map message
+        var ordinal = 0
+        message.copy(parts = message.parts.map { part ->
+            if (part !is UIMessagePart.Tool) return@map part
+            val replacement = byOrdinal[ordinal++] ?: return@map part
+            part.copy(
+                output = listOf(replacement.marker),
+                metadata = replacement.archive?.let { ToolRuntimeMetadata.withArchive(part.metadata, it) }
+                    ?: part.metadata,
+            )
+        })
     }
-    return ToolApprovalResolution(updatedTools, hasPendingApproval)
+    val assistant = replaced.lastOrNull()
+        ?.takeIf { it.role == MessageRole.ASSISTANT }
+        ?: error("tool output trim batch requires an owning Assistant message")
+    val usage = assistant.usage ?: error("tool output trim batch requires turn usage")
+    val count = Math.addExact(usage.successfulToolOutputCompactionBatchCount ?: 0, 1)
+    return replaced.dropLast(1) + assistant.copy(
+        usage = usage.copy(successfulToolOutputCompactionBatchCount = count),
+    )
 }
-
 internal fun UIMessage.replaceToolsAtOrdinals(
     replacements: Map<Int, UIMessagePart.Tool>,
-    preserveCurrentMetadata: Boolean = false,
 ): UIMessage {
     var ordinal = 0
     return copy(
@@ -203,11 +154,7 @@ internal fun UIMessage.replaceToolsAtOrdinals(
                 part
             } else {
                 val replacement = replacements[ordinal++]
-                when {
-                    replacement == null -> part
-                    preserveCurrentMetadata -> replacement.copy(metadata = part.metadata)
-                    else -> replacement
-                }
+                replacement ?: part
             }
         }
     )
@@ -284,11 +231,21 @@ data class ToolExecutionEvent(
  * An awaited durability boundary. Production owners must not return until both the
  * message snapshot and optional tool execution fact are committed.
  */
+/** 对一个已消费历史 Tool Result 的窄压缩改写；不得携带整条历史消息。 */
+data class ToolOutputCompactionPatch(
+    val locator: ToolCallLocator,
+    val marker: UIMessagePart.Text,
+    /** 可归档正文有 Artifact；可再生回查结果只折叠 marker。 */
+    val archive: ToolOutputArchive? = null,
+)
+
 data class GenerationCheckpoint(
     val kind: CheckpointKind,
     val messages: List<UIMessage>,
     val toolExecution: ToolExecutionEvent? = null,
     val toolResults: List<ToolResultEvent> = emptyList(),
+    /** 本 checkpoint 中发生 marker 改写的全部 Tool Result；只允许统一压缩入口填充。 */
+    val toolOutputCompactionPatches: List<ToolOutputCompactionPatch> = emptyList(),
 )
 
 enum class ToolResultEventStatus {
@@ -330,6 +287,7 @@ internal fun resolveGenerationMemoryOwner(
 }
 
 data class GenerationRequest(
+    val conversationId: Uuid,
     val settings: Settings,
     val model: Model,
     /** The immutable wire-container contract selected for this run. */
@@ -346,8 +304,8 @@ data class GenerationRequest(
     val conversationModeInjectionIds: Set<Uuid> = emptySet(),
     val workspaceCwd: String? = null,
     val toolProvider: (suspend () -> List<Tool>)? = null,
-    val nonInteractive: Boolean = false,
-    val interactiveToolNames: Set<String> = emptySet(),
+    /** Which user interactions this run may pause for; replaces the old name-whitelist policy. */
+    val interactionAvailability: ToolInteractionAvailability = ToolInteractionAvailability.FULL,
     /** Re-resolved once per Provider step; null removes Memory tools and memory prompt. */
     val memoryContextProvider: (suspend () -> GenerationMemoryContext?)? = null,
     /** Final write-time guard for the owner captured by [memoryContextProvider]. */
@@ -365,7 +323,10 @@ class GenerationLoop(
     private val json: Json,
     private val memoryRepo: MemoryRepository,
     private val attachmentResolver: AttachmentResolver,
+    private val toolOutputStore: net.weero.measix.pilot.data.ai.tools.ToolOutputStore,
 ) {
+    private val toolCallRuntime = ToolCallRuntime(json)
+    private val contextPlanner = ConversationContextPlanner()
     fun resolveRequestMediaCapabilities(settings: Settings, model: Model): RequestMediaCapabilities {
         val providerSetting = model.findProvider(settings.providers) ?: error("Provider not found")
         return providerManager.getProviderByType(providerSetting)
@@ -373,6 +334,7 @@ class GenerationLoop(
     }
 
     fun run(request: GenerationRequest): Flow<GenerationChunk> {
+        val conversationId = request.conversationId
         val tools = request.tools
         val toolProvider = request.toolProvider ?: { tools }
         val settings = request.settings
@@ -397,8 +359,7 @@ class GenerationLoop(
         val conversationSystemPrompt = request.conversationSystemPrompt
         val conversationModeInjectionIds = request.conversationModeInjectionIds
         val workspaceCwd = request.workspaceCwd
-        val nonInteractive = request.nonInteractive
-        val interactiveToolNames = request.interactiveToolNames
+        val interactionAvailability = request.interactionAvailability
         val memoryToolAllowed = request.memoryToolAllowed
         val assistantMessageId = request.assistantMessageId
         val onCheckpoint = request.onCheckpoint
@@ -424,13 +385,15 @@ class GenerationLoop(
             toolExecution: ToolExecutionEvent? = null,
             toolResults: List<ToolResultEvent> = emptyList(),
             publishResources: Boolean = false,
+            checkpointMessages: List<UIMessage> = messages,
+            toolOutputCompactionPatches: List<ToolOutputCompactionPatch> = emptyList(),
         ) {
-            val checkpointMessages = messages
             suspend fun commit() {
                 onCheckpoint(
                     GenerationCheckpoint(
                         kind = kind,
                         messages = checkpointMessages,
+                        toolOutputCompactionPatches = toolOutputCompactionPatches,
                         toolExecution = toolExecution,
                         toolResults = toolResults,
                     )
@@ -534,14 +497,14 @@ class GenerationLoop(
             // Deterministic tool index. Built before the Provider request so duplicate or
             // empty names are rejected up front, and tool lookup at execution time never
             // falls back to a linear scan that can leak internal exceptions to the model.
-            val toolsByName = buildToolIndex(toolsInternal)
+            val toolsByName = toolCallRuntime.buildIndex(toolsInternal)
 
             var toolsAwaitingReplayResult = messages.lastOrNull()?.getTools()?.filter { !it.hasReplayResult }.orEmpty()
 
             // 没有上一轮待处理 ToolCall 时才请求模型；审批恢复时绝不提前发起下一 step。
             if (toolsAwaitingReplayResult.isEmpty()) {
                 send(GenerationChunk.Phase("preparing"))
-                generateInternal(
+                val receipt = generateInternal(
                     assistant = assistant,
                     settings = settings,
                     messages = messages,
@@ -584,7 +547,27 @@ class GenerationLoop(
                     finishedAt = Clock.System.now()
                         .toLocalDateTime(TimeZone.currentSystemDefault())
                 )
-                commitCheckpoint(CheckpointKind.STEP_COMPLETED, publishResources = true)
+                val compactionPlan = contextPlanner.planPostStepCompaction(messages, receipt)
+                val stagedCompaction = toolOutputStore.stageCompaction(compactionPlan)
+                stagedCompaction.lease?.let(unpublishedResources::register)
+                val checkpointMessages = applyToolOutputCompactionBatchToCheckpoint(
+                    messages,
+                    stagedCompaction.replacements,
+                )
+                val toolOutputCompactionPatches = stagedCompaction.replacements.map { (locator, replacement) ->
+                    ToolOutputCompactionPatch(
+                        locator = locator,
+                        marker = replacement.marker,
+                        archive = replacement.archive,
+                    )
+                }
+                commitCheckpoint(
+                    CheckpointKind.STEP_COMPLETED,
+                    publishResources = true,
+                    checkpointMessages = checkpointMessages,
+                    toolOutputCompactionPatches = toolOutputCompactionPatches,
+                )
+                messages = checkpointMessages
                 publishMessages(messages)
 
                 toolsAwaitingReplayResult = messages.last().getTools().filter { !it.hasReplayResult }
@@ -595,323 +578,201 @@ class GenerationLoop(
                 }
             }
 
-            // 一批 ToolCall 先统一解析审批状态。只要还有 Pending，本批任何自动工具都不先执行；
-            // 全部决策完成后再严格按消息中的原顺序串行执行，保证时序清晰且协议结果完整。
+            // 一批 ToolCall 先经过统一门控：解析、校验与交互判断在 ToolCallRuntime 中一次完成。
+            // 只要还有 Pending，本批任何自动工具都不先执行；全部决策完成后再严格按消息中的原顺序串行执行。
             val messageTools = messages.last().getTools()
             val replayPendingOrdinals = messageTools.mapIndexedNotNull { ordinal, tool ->
                 ordinal.takeIf { !tool.hasReplayResult }
             }
             check(replayPendingOrdinals.size == toolsAwaitingReplayResult.size)
-            val approvalResolution = resolveToolApprovals(
-                toolsAwaitingReplayResult = toolsAwaitingReplayResult,
-                toolDefinitions = toolsByName,
-                nonInteractive = nonInteractive,
-                interactiveToolNames = interactiveToolNames,
-                json = json,
+            val preparation = toolCallRuntime.prepareBatch(
+                messageId = messages.last().id,
+                calls = replayPendingOrdinals.map { LocatedToolCall(it, messageTools[it]) },
+                toolIndex = toolsByName,
+                availability = interactionAvailability,
             )
-            val updatedTools = approvalResolution.tools
 
-            if (updatedTools != toolsAwaitingReplayResult) {
-                val replacements = replayPendingOrdinals.zip(updatedTools).toMap()
-                messages = messages.dropLast(1) + messages.last().replaceToolsAtOrdinals(replacements)
-                publishMessages(messages)
+            if (preparation.replacements.isNotEmpty()) {
+                messages = messages.dropLast(1) +
+                    messages.last().replaceToolsAtOrdinals(preparation.replacements)
             }
 
-            val messageId = messages.last().id
-            val immediateResultFacts = replayPendingOrdinals.zip(updatedTools)
-                .filter { (_, tool) -> tool.hasReplayResult }
-                .map { (ordinal, tool) ->
-                    ToolResultEvent(
-                        messageId = messageId,
-                        toolOrdinal = ordinal,
-                        status = when (tool.approvalState) {
-                            is ToolApprovalState.Denied -> ToolResultEventStatus.DENIED
-                            is ToolApprovalState.Answered -> ToolResultEventStatus.ANSWERED
-                            else -> ToolResultEventStatus.FAILED
-                        },
-                    )
-                }
-            if (immediateResultFacts.isNotEmpty()) {
+            if (preparation.immediateResults.isNotEmpty()) {
                 commitCheckpoint(
                     kind = CheckpointKind.TOOL_RESULT_COMPLETED,
-                    toolResults = immediateResultFacts,
+                    toolResults = preparation.immediateResults,
                 )
                 // Edge projections may only observe tool state after the durable checkpoint commits.
                 publishMessages(transformStreamingLast(messages))
             }
 
-            if (approvalResolution.hasPendingApproval) {
-                Log.i(TAG, "generateText: waiting for all tool approvals")
+            if (preparation.pendingInteractions.isNotEmpty()) {
+                if (preparation.immediateResults.isEmpty()) {
+                    // TurnEngine must durably commit this exact private projection as AWAITING
+                    // before any presentation observer can see the Pending state.
+                    request.onMessagesObserved(messages)
+                }
+                Log.i(TAG, "generateText: waiting for all tool user interactions")
                 finishReason = FinishedReason.AWAITING_APPROVAL
                 break
             }
 
-            val toolsToProcess = replayPendingOrdinals.zip(updatedTools)
-                .filter { (_, tool) -> !tool.hasReplayResult }
-            if (toolsToProcess.isEmpty()) {
+            if (preparation.resolvedCalls.isEmpty()) {
                 continue
             }
 
-            // Handle tools (execute approved tools, handle denied tools)
             // tool_executing phase with registered tool name is emitted per-tool below
-            val completedReplayResults = linkedMapOf<Int, UIMessagePart.Tool>()
-            toolsToProcess.forEach { (toolOrdinalInMessage, tool) ->
+            for (resolved in preparation.resolvedCalls) {
                 var executionEvent: ToolExecutionEvent? = null
                 var executionFailed = false
-                when (tool.approvalState) {
-                    is ToolApprovalState.Denied -> {
-                        // Tool was denied by user
-                        val reason = (tool.approvalState as ToolApprovalState.Denied).reason
-                        completedReplayResults[toolOrdinalInMessage] = tool.copy(
-                            output = listOf(
-                                UIMessagePart.Text(
-                                    json.encodeToString(
-                                        buildJsonObject {
-                                            put(
-                                                "error",
-                                                JsonPrimitive("Tool execution denied by user. Reason: ${reason.ifBlank { "No reason provided" }}")
-                                            )
-                                        }
-                                    )
-                                )
-                            )
+                val completedTool: UIMessagePart.Tool
+                when (resolved) {
+                    is ResolvedToolCall.Denied -> completedTool = resolved.result
+                    is ResolvedToolCall.Answered -> completedTool = resolved.result
+                    is ResolvedToolCall.Executable -> {
+                        val call = resolved.call
+                        val toolOrdinal = resolved.ordinal
+                        send(GenerationChunk.Phase("tool_executing", call.definition.name))
+                        executionEvent = ToolExecutionEvent(
+                            executionId = call.executionId,
+                            messageId = call.locator.messageId,
+                            toolOrdinal = toolOrdinal,
+                            toolCallId = call.source.toolCallId,
+                            toolName = call.definition.name,
+                            status = ToolExecutionEventStatus.STARTED,
                         )
-                    }
-
-                    is ToolApprovalState.Answered -> {
-                        // Tool was answered by user (e.g., ask_user tool)
-                        val answer = (tool.approvalState as ToolApprovalState.Answered).answer
-                        completedReplayResults[toolOrdinalInMessage] = tool.copy(
-                            output = listOf(
-                                UIMessagePart.Text(answer)
-                            )
+                        commitCheckpoint(
+                            kind = CheckpointKind.TOOL_EXECUTION_STARTED,
+                            toolExecution = executionEvent,
                         )
-                    }
+                        publishMessages(transformStreamingLast(messages))
+                        Log.i(
+                            TAG,
+                            "generateText: executing tool ${call.definition.name} with args: ${call.arguments}",
+                        )
 
-                    is ToolApprovalState.Pending -> {
-                        // Should not reach here, but just in case
-                    }
-
-                    else -> {
-                        // Auto or Approved - execute the tool.
-                        // Availability and arguments were validated against this same step index.
-                        val currentMessageId = messages.last().id
-                        val executionId = "${currentMessageId}_${toolOrdinalInMessage}"
-                            .replace(Regex("[^A-Za-z0-9_-]"), "_")
-                        val toolDef = checkNotNull(toolsByName[tool.toolName])
-                        runCatching {
-                            val args = toolDef.parseArguments(tool.input, json)
-                            // 执行每个具体 ToolCall 前必须发出 Phase(tool_executing, registeredToolName)
-                            send(GenerationChunk.Phase("tool_executing", toolDef.name))
-                            executionEvent = ToolExecutionEvent(
-                                executionId = executionId,
-                                messageId = currentMessageId,
-                                toolOrdinal = toolOrdinalInMessage,
-                                toolCallId = tool.toolCallId,
-                                toolName = toolDef.name,
-                                status = ToolExecutionEventStatus.STARTED,
-                            )
-                            commitCheckpoint(
-                                kind = CheckpointKind.TOOL_EXECUTION_STARTED,
-                                toolExecution = executionEvent,
-                            )
-                            publishMessages(transformStreamingLast(messages))
-                            Log.i(TAG, "generateText: executing tool ${toolDef.name} with args: $args")
-
-                            // 构建 ToolExecutionContext，提供 reportMetadata 回写能力
-                            // messageId + toolOrdinal 是精确 locator，不依赖 toolCallId
-                            val toolOrdinal = toolOrdinalInMessage
-                            val execContext = ToolExecutionContext(
-                                messageId = currentMessageId,
-                                toolOrdinal = toolOrdinal,
-                                toolCallId = tool.toolCallId,
-                                approvedByUser = tool.approvalState is ToolApprovalState.Approved,
-                                // File-owner reads are independent of this conversation and Workspace.
-                                resolveAttachments = { paths ->
-                                    when (val resolved = attachmentResolver.readImages(paths)) {
-                                        is AttachmentResolveResult.Success -> {
-                                            ToolAttachmentResolution(resolved.parts)
-                                        }
-                                        is AttachmentResolveResult.Failure -> ToolAttachmentResolution(
-                                            failureReason = resolved.reason,
-                                        )
+                        // File-owner reads are independent of this conversation and Workspace.
+                        // The hooks carry the generation owner's capabilities; the Runtime never
+                        // obtains Room or presentation write access directly.
+                        val hooks = ToolExecutionHooks(
+                            resolveAttachments = { paths ->
+                                when (val resolvedAttachments = attachmentResolver.readImages(paths)) {
+                                    is AttachmentResolveResult.Success -> {
+                                        ToolAttachmentResolution(resolvedAttachments.parts)
                                     }
-                                },
-                                reportMetadata = { patch: JsonObject, delivery: ToolMetadataDelivery ->
-                                    // 从最新 messages 中按 locator 重新取得 Tool，merge metadata patch
-                                    val allTools = messages.last().getTools()
-                                    val currentTool = allTools.getOrNull(toolOrdinal)
-                                        ?: return@ToolExecutionContext
-                                    val existingMeta = currentTool.metadata ?: JsonObject(emptyMap())
-                                    val newMeta = JsonObject(
-                                        existingMeta.toMutableMap().apply { putAll(patch) }
+
+                                    is AttachmentResolveResult.Failure -> ToolAttachmentResolution(
+                                        failureReason = resolvedAttachments.reason,
                                     )
-                                    val updatedTool = currentTool.copy(metadata = newMeta)
-                                    val lastMsg = messages.last()
-                                    var toolCount = 0
-                                    val newParts = lastMsg.parts.map { p ->
-                                        if (p is UIMessagePart.Tool) {
-                                            if (toolCount == toolOrdinal) {
-                                                toolCount++
-                                                updatedTool
-                                            } else {
-                                                toolCount++
-                                                p
-                                            }
+                                }
+                            },
+                            reportMetadata = { patch: JsonObject, delivery: ToolMetadataDelivery ->
+                                // The tool_runtime namespace belongs to the Runtime alone.
+                                val toolPatch = ToolRuntimeMetadata.requireToolOwnedPatch(patch)
+                                // Re-read the Tool by locator from the latest messages and merge the patch.
+                                val allTools = messages.last().getTools()
+                                val currentTool = allTools.getOrNull(toolOrdinal)
+                                    ?: return@ToolExecutionHooks
+                                val existingMeta = currentTool.metadata ?: JsonObject(emptyMap())
+                                val newMeta = JsonObject(
+                                    existingMeta.toMutableMap().apply { putAll(toolPatch) }
+                                )
+                                val updatedTool = currentTool.copy(metadata = newMeta)
+                                val lastMsg = messages.last()
+                                var toolCount = 0
+                                val newParts = lastMsg.parts.map { p ->
+                                    if (p is UIMessagePart.Tool) {
+                                        if (toolCount == toolOrdinal) {
+                                            toolCount++
+                                            updatedTool
                                         } else {
+                                            toolCount++
                                             p
                                         }
+                                    } else {
+                                        p
                                     }
-                                    messages = messages.dropLast(1) + lastMsg.copy(parts = newParts)
-                                    when (delivery) {
-                                        ToolMetadataDelivery.DEFERRED -> Unit
-                                        ToolMetadataDelivery.STREAMING -> publishMessages(transformStreamingLast(messages))
-                                        ToolMetadataDelivery.CHECKPOINT -> {
-                                            commitCheckpoint(CheckpointKind.TOOL_STATE_CHANGED)
-                                            publishMessages(transformStreamingLast(messages))
-                                        }
+                                }
+                                messages = messages.dropLast(1) + lastMsg.copy(parts = newParts)
+                                when (delivery) {
+                                    ToolMetadataDelivery.DEFERRED -> Unit
+                                    ToolMetadataDelivery.STREAMING -> publishMessages(transformStreamingLast(messages))
+                                    ToolMetadataDelivery.CHECKPOINT -> {
+                                        commitCheckpoint(CheckpointKind.TOOL_STATE_CHANGED)
+                                        publishMessages(transformStreamingLast(messages))
                                     }
-                                },
-                                // 委派类工具派生会话确定后，将 child id 并入本次执行的 durable 事实
-                                reportChildConversation = { childConversationId ->
-                                    executionEvent = executionEvent?.copy(
-                                        childConversationId = childConversationId,
-                                    )
-                                    if (executionEvent != null) {
-                                        commitCheckpoint(
-                                            CheckpointKind.TOOL_STATE_CHANGED,
-                                            toolExecution = executionEvent,
-                                        )
-                                        request.onMessagesObserved(messages)
-                                    }
-                                },
-                                registerUnpublishedResource = unpublishedResources::register,
-                            )
-
-                            val result = toolDef.executeWithContext(execContext, args)
-
-                            // 执行完成后，从最新 messages 按 locator 重新取得 Tool，copy terminal output
-                            val finalTool = messages.last().getTools().getOrNull(toolOrdinal)
-                                ?: tool
-                            val hasShellAccess = toolsInternal.any { it.name == "workspace_shell" }
-                            // 使用 locator 唯一确定的 execution ID，不使用 Provider toolCallId
-                            // 避免空值、跨 step 复用或路径字符造成覆盖与越界风险
-                            completedReplayResults[toolOrdinalInMessage] = finalTool.copy(
-                                output = ensureProviderReplayResult(
-                                    maybeTruncateToolOutput(
-                                        executionId = executionId,
-                                        output = result,
-                                        hasShellAccess = hasShellAccess,
-                                        outputPolicy = toolDef.outputPolicy,
-                                    ),
-                                    emptyStatus = EmptyToolResultStatus.COMPLETED,
-                                )
-                            )
-                        }.onFailure {
-                            if (it is CheckpointCommitException) throw it.cause ?: it
-                            if (it is ToolArgumentsException) {
-                                executionFailed = true
-                                completedReplayResults[toolOrdinalInMessage] = tool.copy(output = it.output)
-                                return@onFailure
-                            }
-                            if (it is ToolExecutionFailure) {
-                                executionFailed = true
-                                completedReplayResults[toolOrdinalInMessage] = tool.copy(
-                                    output = ensureProviderReplayResult(
-                                        it.output,
-                                        emptyStatus = EmptyToolResultStatus.FAILED,
-                                    )
-                                )
-                                return@onFailure
-                            }
-                            // 1. 工具超时: TimeoutCancellationException 是 CancellationException 子类
-                            //    → 降级为错误 JSON 返回给 AI，不中断对话
-                            if (it is TimeoutCancellationException) {
-                                executionFailed = true
-                                Log.w(TAG, "Tool ${tool.toolName} timed out: ${it.message}")
-                                completedReplayResults[toolOrdinalInMessage] = tool.copy(
-                                    output = listOf(
-                                        UIMessagePart.Text(
-                                            json.encodeToString(
-                                                buildJsonObject {
-                                                    put("error", JsonPrimitive("Tool '${tool.toolName}' timed out"))
-                                                    put("type", JsonPrimitive("timeout"))
-                                                }
-                                            )
-                                        )
-                                    )
-                                )
-                                return@onFailure
-                            }
-                            // 2. 取消必须向上传播，否则停止生成会被误报为工具执行错误
-                            if (it is CancellationException) throw it
-                            executionFailed = true
-                            // 3. 其他异常: 包装为结构化错误 JSON 返回给 AI
-                            Log.w(TAG, "Tool ${tool.toolName} failed: ${it.message}", it)
-                            completedReplayResults[toolOrdinalInMessage] = tool.copy(
-                                output = listOf(
-                                    UIMessagePart.Text(
-                                        json.encodeToString(
-                                            buildJsonObject {
-                                                put(
-                                                    "error",
-                                                    // Exception class names are obfuscated in Release; the full type and
-                                                    // stack remain in Logcat, while protocol output stays stable.
-                                                    JsonPrimitive(it.message ?: "Unknown error")
-                                                )
-                                                put("type", JsonPrimitive("error"))
-                                            }
-                                        )
-                                    )
-                                )
-                            )
-                        }
-                }
-                    }
-
-                val completedReplayResult = completedReplayResults.remove(toolOrdinalInMessage)
-                if (completedReplayResult != null) {
-                    messages = messages.dropLast(1) + messages.last().replaceToolsAtOrdinals(
-                        replacements = mapOf(toolOrdinalInMessage to completedReplayResult),
-                        preserveCurrentMetadata = true,
-                    )
-                    val presentationMessages = messages.transforms(
-                        transformers = outputTransformers,
-                        context = context,
-                        model = model,
-                        assistant = assistant,
-                        settings = settings,
-                        requestOrigins = outputOrigins,
-                        registerUnpublishedResource = unpublishedResources::register,
-                    )
-                    commitCheckpoint(
-                        kind = CheckpointKind.TOOL_RESULT_COMPLETED,
-                        toolExecution = executionEvent?.copy(
-                            status = if (executionFailed) {
-                                ToolExecutionEventStatus.FAILED
-                            } else {
-                                ToolExecutionEventStatus.COMPLETED
+                                }
                             },
-                        ),
-                        toolResults = listOf(
-                            ToolResultEvent(
-                                messageId = messages.last().id,
-                                toolOrdinal = toolOrdinalInMessage,
-                                status = when {
-                                    completedReplayResult.approvalState is ToolApprovalState.Denied ->
-                                        ToolResultEventStatus.DENIED
-                                    completedReplayResult.approvalState is ToolApprovalState.Answered ->
-                                        ToolResultEventStatus.ANSWERED
-                                    executionFailed -> ToolResultEventStatus.FAILED
-                                    else -> ToolResultEventStatus.COMPLETED
-                                },
-                            )
-                        ),
-                        publishResources = true,
-                    )
-                    // Clear the committed EXECUTING projection even when no provider chunk follows.
-                    publishMessages(presentationMessages)
+                            // Delegation tools report the derived child conversation id into this
+                            // execution's durable fact.
+                            reportChildConversation = { childConversationId ->
+                                executionEvent = executionEvent?.copy(
+                                    childConversationId = childConversationId,
+                                )
+                                if (executionEvent != null) {
+                                    commitCheckpoint(
+                                        CheckpointKind.TOOL_STATE_CHANGED,
+                                        toolExecution = executionEvent,
+                                    )
+                                    request.onMessagesObserved(messages)
+                                }
+                            },
+                            registerUnpublishedResource = unpublishedResources::register,
+
+                        )
+
+                        val outcome = toolCallRuntime.execute(call, hooks)
+                        executionFailed = outcome.executionFailed
+                        // Re-read by locator so metadata reported during execution is retained; the
+                        // Runtime-owned tool_metadata is merged here and committed with the result.
+                        val latestTool = messages.last().getTools().getOrNull(toolOrdinal) ?: call.source
+                        completedTool = latestTool.copy(
+                            output = outcome.output,
+                            metadata = ToolRuntimeMetadata.applyTo(
+                                latestTool.metadata,
+                                outcome.runtimeMetadata,
+                            ),
+                        )
+                    }
                 }
+
+                messages = messages.dropLast(1) + messages.last().replaceToolsAtOrdinals(
+                    replacements = mapOf(resolved.ordinal to completedTool),
+                )
+                val presentationMessages = messages.transforms(
+                    transformers = outputTransformers,
+                    context = context,
+                    model = model,
+                    assistant = assistant,
+                    settings = settings,
+                    requestOrigins = outputOrigins,
+                    registerUnpublishedResource = unpublishedResources::register,
+                )
+                commitCheckpoint(
+                    kind = CheckpointKind.TOOL_RESULT_COMPLETED,
+                    toolExecution = executionEvent?.copy(
+                        status = if (executionFailed) {
+                            ToolExecutionEventStatus.FAILED
+                        } else {
+                            ToolExecutionEventStatus.COMPLETED
+                        },
+                    ),
+                    toolResults = listOf(
+                        ToolResultEvent(
+                            messageId = messages.last().id,
+                            toolOrdinal = resolved.ordinal,
+                            status = when {
+                                resolved is ResolvedToolCall.Denied -> ToolResultEventStatus.DENIED
+                                resolved is ResolvedToolCall.Answered -> ToolResultEventStatus.ANSWERED
+                                executionFailed -> ToolResultEventStatus.FAILED
+                                else -> ToolResultEventStatus.COMPLETED
+                            },
+                        )
+                    ),
+                    publishResources = true,
+                )
+                // Clear the committed EXECUTING projection even when no provider chunk follows.
+                publishMessages(presentationMessages)
             }
 
             send(GenerationChunk.Phase("between_steps"))
@@ -958,15 +819,16 @@ class GenerationLoop(
         mediaCapabilities: RequestMediaCapabilities,
         onPhase: (suspend (String) -> Unit)? = null,
         providerSessionId: String? = null,
-    ) {
-        val contextMessages = messages
-            .filterNot { message ->
+    ): ModelStepReceipt {
+        val requestPlan = contextPlanner.planRequest(
+            durableMessages = messages.filterNot { message ->
                 message.id == assistantMessageId &&
                     message.role == MessageRole.ASSISTANT &&
                     message.parts.isEmpty()
-            }
-            .limitContext(assistant.effectiveContextMessageLimit())
-        val replaySafeContextMessages = contextMessages.replaySafeProjection()
+            },
+            messageLimit = assistant.effectiveContextMessageLimit(),
+        )
+        val contextMessages = requestPlan.messages
         val system = buildString {
             val effectiveSystemPrompt =
                 if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
@@ -987,7 +849,7 @@ class GenerationLoop(
             // 工具prompt
             tools.forEach { tool ->
                 appendLine()
-                append(tool.systemPrompt(model, replaySafeContextMessages))
+                append(tool.systemPrompt(model, contextMessages))
             }
         }
         // 本次请求唯一的来源跟踪器：System 与后续注入内容由管线合成，不能被 messageTemplate 包裹。
@@ -999,7 +861,16 @@ class GenerationLoop(
                 requestOrigins.markSynthetic(systemMessage)
                 add(systemMessage)
             }
-            addAll(contextMessages)
+            val durableById = messages.associateBy(UIMessage::id)
+            addAll(contextMessages.map { projected ->
+                val durable = durableById[projected.id]
+                projected.copy(
+                    terminalStatus = durable?.terminalStatus,
+                    terminalReason = durable?.terminalReason,
+                    terminalDetail = durable?.terminalDetail,
+                    providerReplayProjection = null,
+                )
+            })
         }
         val internalMessages = requestMessages.transforms(
             transformers = transformers,
@@ -1015,6 +886,11 @@ class GenerationLoop(
             registerUnpublishedResource = registerUnpublishedResource,
         ).replaySafeProjection()
 
+        val pendingReceipt = contextPlanner.receiptOf(internalMessages)
+        val estimatedRequestContextTokens = contextPlanner.estimateRequestContextTokens(
+            providerMessages = internalMessages,
+            tools = tools,
+        )
         var messages: List<UIMessage> = messages
         val turnUsage = TurnUsageAccumulator.from(messages.lastOrNull()?.usage)
         val requestUsage = RequestUsageReducer(turnUsage.nextRequestOrdinal())
@@ -1045,12 +921,16 @@ class GenerationLoop(
         )
         // 请求构建完成，进入等待模型响应阶段
         onPhase?.invoke("model_waiting")
+        attachUsage(turnUsage.recordRequestStarted(estimatedRequestContextTokens))
+        onUpdateMessages(messages)
         val requestStarted = TimeSource.Monotonic.markNow()
         fun providerDurationMillis(): Long = requestStarted.elapsedNow().inWholeMilliseconds.coerceAtLeast(0)
         var timeToFirstOutputMillis: Long? = null
         fun observeFirstOutput(chunk: MessageChunk) {
             if (timeToFirstOutputMillis == null && chunk.hasModelOutputPayload()) {
-                timeToFirstOutputMillis = providerDurationMillis()
+                val observed = providerDurationMillis()
+                timeToFirstOutputMillis = observed
+                attachUsage(turnUsage.recordFirstOutput(observed))
             }
         }
         var requestOutcome = ProviderRequestOutcome.FAILED
@@ -1059,28 +939,21 @@ class GenerationLoop(
             if (stream) {
                 var reasoningPhaseSent = false
                 var answerPhaseSent = false
+                var responseEstablished = false
                 providerImpl.streamText(
                     providerSetting = provider,
                     messages = internalMessages,
                     params = params
                 ).collect { chunk ->
+                    responseEstablished = true
                     observeFirstOutput(chunk)
                     messages = messages.handleMessageChunk(
                         chunk = chunk,
                         model = model,
                         assistantMessageId = assistantMessageId,
                     )
-                    chunk.usage?.let { usage ->
-                        requestUsage.accept(usage)
-                        attachUsage(
-                            turnUsage.preview(
-                                requestUsage.preview(
-                                    providerRequestDurationMillis = providerDurationMillis(),
-                                    timeToFirstOutputMillis = timeToFirstOutputMillis,
-                                )
-                            )
-                        )
-                    }
+                    // Provider usage 只在请求关闭时原子并入 turn；流式快照不改写累计账本。
+                    chunk.usage?.let(requestUsage::accept)
                     // Phase uses the same accumulated-message semantics as the output projection.
                     // Text inside a leading <think> block is reasoning, not answer content.
                     val tagPhase = messages.lastOrNull()?.let(ThinkTagTransformer::classifyPhase)
@@ -1109,6 +982,7 @@ class GenerationLoop(
                     }
                     onUpdateMessages(messages)
                 }
+                check(responseEstablished) { "Provider stream completed without a response" }
             } else {
                 val chunk = try {
                     providerImpl.generateText(
@@ -1168,55 +1042,10 @@ class GenerationLoop(
                 }
             }
         }
+        return pendingReceipt
     }
 
-    private fun maybeTruncateToolOutput(
-        executionId: String,
-        output: List<UIMessagePart>,
-        hasShellAccess: Boolean,
-        outputPolicy: me.rerere.ai.core.ToolOutputPolicy,
-    ): List<UIMessagePart> {
-        if (outputPolicy == me.rerere.ai.core.ToolOutputPolicy.PRESERVE) return output
-        val textParts = output.filterIsInstance<UIMessagePart.Text>()
-        val nonTextParts = output.filter { it !is UIMessagePart.Text }
-        val totalChars = textParts.sumOf { it.text.length }
 
-        if (totalChars <= MAX_TOOL_OUTPUT_CHARS || !hasShellAccess) return output
-
-        Log.i(TAG, "maybeTruncateToolOutput: truncating tool $executionId output ($totalChars chars)")
-
-        val fullText = textParts.joinToString("\n") { it.text }
-        val preview = fullText.take(TOOL_OUTPUT_PREVIEW_CHARS)
-
-        val fileName = "${executionId}.txt"
-        val outputDir = File(context.filesDir, FileFolders.TOOL_OUTPUTS).apply { mkdirs() }
-        File(outputDir, fileName).writeText(fullText)
-
-        return listOf(
-            UIMessagePart.Text(
-                buildString {
-                    appendLine("[Tool output truncated: $totalChars characters total]")
-                    appendLine("Full output saved to: /tool_outputs/$fileName")
-                    appendLine("Use shell to read: `cat /tool_outputs/$fileName`")
-                    appendLine("Use shell to search: `grep \"pattern\" /tool_outputs/$fileName`")
-                    appendLine()
-                    append(preview)
-                }
-            )
-        ) + nonTextParts
-    }
-
-}
-
-/** Reject ambiguous registrations before a request; approval and execution share this step index. */
-internal fun buildToolIndex(tools: List<Tool>): Map<String, Tool> {
-    val map = LinkedHashMap<String, Tool>(tools.size)
-    for (tool in tools) {
-        require(tool.name.isNotBlank()) { "Tool name must not be blank" }
-        require(tool.name !in map) { "Duplicate tool name: ${tool.name}" }
-        map[tool.name] = tool
-    }
-    return map.toMap()
 }
 
 internal fun MessageChunk.hasModelOutputPayload(): Boolean = choices.any { choice ->
@@ -1232,23 +1061,6 @@ internal fun MessageChunk.hasModelOutputPayload(): Boolean = choices.any { choic
             is UIMessagePart.Document -> part.url.isNotBlank()
         }
     }
-}
-
-internal enum class EmptyToolResultStatus {
-    COMPLETED,
-    FAILED,
-}
-
-/** Empty tool output is valid, but every Provider needs a non-empty serializable result envelope. */
-internal fun ensureProviderReplayResult(
-    output: List<UIMessagePart>,
-    emptyStatus: EmptyToolResultStatus,
-): List<UIMessagePart> = output.ifEmpty {
-    val fallback = when (emptyStatus) {
-        EmptyToolResultStatus.COMPLETED -> "{\"status\":\"completed\",\"result\":null}"
-        EmptyToolResultStatus.FAILED -> "{\"status\":\"failed\",\"reason\":\"tool_failed_without_output\"}"
-    }
-    listOf(UIMessagePart.Text(fallback))
 }
 
 internal suspend fun finishStreamingProjection(

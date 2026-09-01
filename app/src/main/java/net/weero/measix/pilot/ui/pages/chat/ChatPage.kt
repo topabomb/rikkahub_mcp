@@ -105,6 +105,7 @@ import net.weero.measix.pilot.service.ConversationUiModel
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
+import net.weero.measix.pilot.service.runtime.ToolUserDecision
 import net.weero.measix.pilot.ui.theme.ProvideChatSurfacePolicy
 import net.weero.measix.pilot.ui.theme.hasVisibleChatBackground
 import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
@@ -790,15 +791,10 @@ private fun ChatPageContent(
                         chatListState.requestScrollToItem(index)
                     }
                 },
-                onToolApproval = if (turnPresentation.phase == ConversationTurnPhase.STOPPING) {
+                onToolDecision = if (turnPresentation.phase == ConversationTurnPhase.STOPPING) {
                     null
                 } else {
-                    { locator, approved, reason -> vm.handleToolApproval(locator, approved, reason) }
-                },
-                onToolAnswer = if (turnPresentation.phase == ConversationTurnPhase.STOPPING) {
-                    null
-                } else {
-                    { locator, answer -> vm.handleToolAnswer(locator, answer) }
+                    { locator, decision -> vm.submitToolDecision(locator, decision) }
                 },
                 onSubAssistantAnswer = if (turnPresentation.phase == ConversationTurnPhase.STOPPING) {
                     null

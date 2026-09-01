@@ -14,6 +14,7 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.ToolAttachmentResolution
+import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
@@ -109,6 +110,14 @@ class AttachmentInspectionToolTest {
         return (payload["detail"] as? JsonPrimitive)?.contentOrNull
     }
 
+    /** 领域失败必须以 typed 异常进入 Runtime 的 FAILED 终态，同时保留工具拥有的正文。 */
+    private suspend fun failureResult(block: suspend () -> List<UIMessagePart>): List<UIMessagePart> = try {
+        block()
+        throw AssertionError("expected ToolExecutionFailure")
+    } catch (failure: ToolExecutionFailure) {
+        failure.output
+    }
+
     /** Resolve the inspection contract the same way createAttachmentInspectionTool does. */
     private fun resolveInspectionContract(model: Model): Triple<Model, ProviderSetting, Provider<ProviderSetting>> {
         val settings = settingsFor(model)
@@ -121,42 +130,42 @@ class AttachmentInspectionToolTest {
     @Test
     fun `empty refs are invalid`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
-        val result = executeInspection(
+        val result = failureResult { executeInspection(
             args = args(emptyList()),
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { ToolAttachmentResolution() },
-        )
+        ) }
         assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(result))
     }
 
     @Test
     fun `more than four refs are invalid`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
-        val result = executeInspection(
+        val result = failureResult { executeInspection(
             args = args((1..5).map { "/upload/a.png" }),
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { ToolAttachmentResolution() },
-        )
+        ) }
         assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(result))
     }
 
     @Test
     fun `non attachment refs are invalid`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
-        val result = executeInspection(
+        val result = failureResult { executeInspection(
             args = args(listOf("https://example.com/a.png")),
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { error("resolver must not run") },
-        )
+        ) }
         assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(result))
     }
 
@@ -168,11 +177,11 @@ class AttachmentInspectionToolTest {
             "a.png", "file:///upload/a.png", "/workspace/a.png",
             "/upload/../a.png", "/upload/%61.png", "/upload/sub/a.png",
         ).forEach { path ->
-            val result = executeInspection(
+            val result = failureResult { executeInspection(
                 args = args(listOf(path)), inspectionModel = model, providerSetting = providerSetting,
                 provider = provider, mediaCapabilities = inspectionCapabilities,
                 resolveAttachments = { error("invalid paths must not reach resolver") },
-            )
+            ) }
             assertEquals(path, AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(result))
         }
         coVerify(exactly = 0) { provider.generateText(any(), any(), any()) }
@@ -213,22 +222,22 @@ class AttachmentInspectionToolTest {
             put("request", "describe")
         }
 
-        val malformedResult = executeInspection(
+        val malformedResult = failureResult { executeInspection(
             args = malformed,
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { error("resolver must not run") },
-        )
-        val blankResult = executeInspection(
+        ) }
+        val blankResult = failureResult { executeInspection(
             args = blank,
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { error("resolver must not run") },
-        )
+        ) }
 
         assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(malformedResult))
         assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(blankResult))
@@ -246,22 +255,22 @@ class AttachmentInspectionToolTest {
             put("request", true)
         }
 
-        val objectResult = executeInspection(
+        val objectResult = failureResult { executeInspection(
             args = objectRequest,
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { error("resolver must not run") },
-        )
-        val booleanResult = executeInspection(
+        ) }
+        val booleanResult = failureResult { executeInspection(
             args = booleanRequest,
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { error("resolver must not run") },
-        )
+        ) }
 
         assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(objectResult))
         assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(booleanResult))
@@ -308,7 +317,7 @@ class AttachmentInspectionToolTest {
     @Test
     fun `runtime resolution failure reason is propagated as is`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
-        val result = executeInspection(
+        val result = failureResult { executeInspection(
             args = args(listOf("/upload/a.png")),
             inspectionModel = model,
             providerSetting = providerSetting,
@@ -317,21 +326,21 @@ class AttachmentInspectionToolTest {
             resolveAttachments = {
                 ToolAttachmentResolution(failureReason = AttachmentFailureReasons.ATTACHMENT_NOT_FOUND)
             },
-        )
+        ) }
         assertEquals(AttachmentFailureReasons.ATTACHMENT_NOT_FOUND, resultReason(result))
     }
 
     @Test
     fun `resolution without image parts is invalid`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
-        val result = executeInspection(
+        val result = failureResult { executeInspection(
             args = args(listOf("/upload/a.png")),
             inspectionModel = model,
             providerSetting = providerSetting,
             provider = provider,
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { ToolAttachmentResolution(parts = emptyList()) },
-        )
+        ) }
         assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(result))
     }
 
@@ -339,14 +348,14 @@ class AttachmentInspectionToolTest {
     fun `inspection rejects resolver cardinality mismatches before provider dispatch`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         for (resolvedCount in listOf(1, 3)) {
-            val result = executeInspection(
+            val result = failureResult { executeInspection(
                 args = args(listOf("/upload/u7km2n4p.png", "/upload/u7km2n4p.png")),
                 inspectionModel = model, providerSetting = providerSetting, provider = provider,
                 mediaCapabilities = inspectionCapabilities,
                 resolveAttachments = {
                     ToolAttachmentResolution(parts = List(resolvedCount) { image("file:///tmp/u7km2n4p.png") })
                 },
-            )
+            ) }
             assertEquals(AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(result))
         }
         coVerify(exactly = 0) { provider.generateText(any(), any(), any()) }
@@ -508,7 +517,7 @@ class AttachmentInspectionToolTest {
             provider.generateText(any(), any(), any<TextGenerationParams>())
         } throws IllegalStateException("network down")
 
-        val result = executeInspection(
+        val result = failureResult { executeInspection(
             args = args(listOf("/upload/a.png")),
             inspectionModel = model,
             providerSetting = providerSetting,
@@ -517,7 +526,7 @@ class AttachmentInspectionToolTest {
             resolveAttachments = {
                 ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
             },
-        )
+        ) }
         assertEquals(AttachmentFailureReasons.RUNTIME_ERROR, resultReason(result))
         assertFalse(resultDetail(result).isNullOrEmpty())
     }
@@ -534,7 +543,7 @@ class AttachmentInspectionToolTest {
             errorCode = "rate_limit_exceeded",
         )
 
-        val result = executeInspection(
+        val result = failureResult { executeInspection(
             args = args(listOf("/upload/a.png")),
             inspectionModel = model,
             providerSetting = providerSetting,
@@ -543,7 +552,7 @@ class AttachmentInspectionToolTest {
             resolveAttachments = {
                 ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
             },
-        )
+        ) }
         assertEquals(AttachmentFailureReasons.RATE_LIMITED, resultReason(result))
         assertTrue(resultDetail(result).orEmpty().contains("retry after 1 second"))
     }
@@ -556,7 +565,7 @@ class AttachmentInspectionToolTest {
             provider.generateText(any(), any(), any<TextGenerationParams>())
         } returns successChunk("   ")
 
-        val result = executeInspection(
+        val result = failureResult { executeInspection(
             args = args(listOf("/upload/a.png")),
             inspectionModel = model,
             providerSetting = providerSetting,
@@ -565,7 +574,7 @@ class AttachmentInspectionToolTest {
             resolveAttachments = {
                 ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
             },
-        )
+        ) }
         assertEquals(AttachmentFailureReasons.INSPECTION_FAILED, resultReason(result))
     }
 

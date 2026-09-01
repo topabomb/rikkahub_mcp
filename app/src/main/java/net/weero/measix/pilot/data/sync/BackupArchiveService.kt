@@ -420,7 +420,8 @@ class BackupArchiveService(
     private fun requireManagedPayload(staging: File, relativePath: String, owner: String) {
         require(
             relativePath.startsWith("${FileFolders.UPLOAD}/") ||
-                relativePath.startsWith("${FileFolders.IMAGES}/")
+                relativePath.startsWith("${FileFolders.IMAGES}/") ||
+                relativePath.startsWith("${FileFolders.TOOL_OUTPUTS}/")
         ) { "$owner payload is outside a managed domain: $relativePath" }
         check(resolveInside(staging, relativePath).isFile) {
             "Backup is missing declared $owner payload: $relativePath"
@@ -503,6 +504,7 @@ class BackupArchiveService(
             FileFolders.IMAGES,
             FileFolders.SKILLS,
             FileFolders.FONTS,
+            FileFolders.TOOL_OUTPUTS,
         )
         private const val MAX_ENTRIES = 20_000
         private const val MAX_ENTRY_BYTES = 2L * 1024 * 1024 * 1024

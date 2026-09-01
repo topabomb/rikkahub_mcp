@@ -102,7 +102,7 @@ class ConversationRuntime(
         fun markAwaitingApproval(handle: TurnHandle) {
             check(handle.turnId == turnId) { "approval handle ${handle.turnId} does not match request $turnId" }
             _handle.set(handle)
-            _phase.set(ConversationTurnPhase.AWAITING_APPROVAL)
+            _phase.set(ConversationTurnPhase.AWAITING_USER)
         }
 
         fun reportProcessingText(text: String?) {
@@ -180,30 +180,18 @@ class ConversationRuntime(
             when (command) {
                 is HeaderConversationCommand,
                 is CommitCheckpoint,
-                is UpdateToolApproval,
+                is ResolveToolInteraction,
                 -> {
                     val latestActive = latest.activeTurn
                         ?.takeIf { active -> old.activeTurn?.sameOwner(active) == true }
                     val publishedActive = if (
-                        (command is UpdateToolApproval || command is CommitCheckpoint) &&
+                        (command is ResolveToolInteraction || command is CommitCheckpoint) &&
                         latestActive != null
                     ) {
                         ConversationTransition.apply(
                             committed.copy(activeTurn = latestActive),
                             command,
-                        ).activeTurn?.let { published ->
-                            // A checkpoint planned before a newer stream observation must not
-                            // replace that observation with its older display pair.
-                            published.copy(
-                                latestAvailableContextCache = if (
-                                    latestActive.latestAvailableContextCache != old.activeTurn?.latestAvailableContextCache
-                                ) {
-                                    latestActive.latestAvailableContextCache
-                                } else {
-                                    published.latestAvailableContextCache
-                                },
-                            )
-                        }
+                        ).activeTurn
                     } else {
                         latestActive
                     }
@@ -234,7 +222,7 @@ class ConversationRuntime(
     internal fun isAwaitingApproval(turnId: Uuid): Boolean {
         val current = _activeRequest.value ?: return false
         return current.turnId == turnId &&
-            current.presentationPhase() == ConversationTurnPhase.AWAITING_APPROVAL
+            current.presentationPhase() == ConversationTurnPhase.AWAITING_USER
     }
 
     internal suspend fun awaitCurrentWorker() {
@@ -338,7 +326,7 @@ class ConversationRuntime(
         if (
             current == null ||
             current.turnId != handle.turnId ||
-            current.presentationPhase() != ConversationTurnPhase.AWAITING_APPROVAL ||
+            current.presentationPhase() != ConversationTurnPhase.AWAITING_USER ||
             current.handle != handle ||
             durable == null ||
             !durable.matches(handle)
@@ -379,7 +367,7 @@ class ConversationRuntime(
         if (worker != null && current.worker !== worker) return
         if (
             retainAwaitingOwner &&
-            current.presentationPhase() == ConversationTurnPhase.AWAITING_APPROVAL &&
+            current.presentationPhase() == ConversationTurnPhase.AWAITING_USER &&
             worker == null &&
             snapshot.value.activeTurn?.turnId == turnId
         ) return
@@ -400,7 +388,7 @@ class ConversationRuntime(
         val current = _activeRequest.value
         if (current === request) {
             when (current.presentationPhase()) {
-                ConversationTurnPhase.AWAITING_APPROVAL,
+                ConversationTurnPhase.AWAITING_USER,
                 ConversationTurnPhase.STOPPING,
                 -> publishActive(current)
                 else -> releaseActiveRequest(current.turnId, current.worker)

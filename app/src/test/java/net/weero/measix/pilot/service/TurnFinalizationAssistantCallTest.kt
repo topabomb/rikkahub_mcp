@@ -154,11 +154,13 @@ class TurnFinalizationAssistantCallTest {
             json = Json,
             memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
+            toolOutputStore = io.mockk.mockk(relaxed = true),
         )
         val engine = TurnEngine(harness.coordinator, harness.runtime, harness.handle, harness.finalization)
         val callObserved = CompletableDeferred<Unit>()
         val collector = launch {
             engine.bind(loop.run(GenerationRequest(
+                conversationId = kotlin.uuid.Uuid.random(),
                 settings = Settings(providers = listOf(providerSetting)),
                 model = model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,

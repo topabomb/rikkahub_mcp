@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.ui.DiffMetadata
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.toMetadata
@@ -37,17 +38,20 @@ suspend fun createWorkspaceTools(
     cwd: String? = null,
 ): List<Tool> {
     if (workspaceId.isNullOrBlank()) return emptyList()
-    fun needsApproval(name: String) = resolveWorkspaceToolApproval(name, approvalOverrides)
+    fun approvalRequired(name: String) = resolveWorkspaceToolApproval(name, approvalOverrides)
 
     val shellCwd = cwd?.let(::normalizeWorkspaceCwd)
 
     return listOf(
-        createReadFileTool(workspaceId, ::needsApproval, workspaceApplicationService, artifactStore),
-        createWriteFileTool(workspaceId, ::needsApproval, workspaceApplicationService),
-        createEditFileTool(workspaceId, ::needsApproval, workspaceApplicationService),
-        createShellTool(workspaceId, ::needsApproval, workspaceApplicationService, shellCwd),
+        createReadFileTool(workspaceId, ::approvalRequired, workspaceApplicationService, artifactStore),
+        createWriteFileTool(workspaceId, ::approvalRequired, workspaceApplicationService),
+        createEditFileTool(workspaceId, ::approvalRequired, workspaceApplicationService),
+        createShellTool(workspaceId, ::approvalRequired, workspaceApplicationService, shellCwd),
     )
 }
+
+private fun approvalRequirementOf(required: Boolean): ToolInteractionRequirement =
+    if (required) ToolInteractionRequirement.Approval else ToolInteractionRequirement.None
 
 private val IMAGE_EXTENSIONS = setOf(
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "heic", "heif", "avif", "ico",
@@ -58,7 +62,7 @@ private fun String.isImagePath(): Boolean =
 
 private fun createReadFileTool(
     workspaceId: String,
-    needsApproval: (String) -> Boolean,
+    approvalRequired: (String) -> Boolean,
     workspaceApplicationService: WorkspaceApplicationService,
     artifactStore: ArtifactStore,
 ) = Tool(
@@ -75,7 +79,10 @@ private fun createReadFileTool(
         )
     },
     validateArguments = { validateWorkspaceArguments { parseWorkspaceReadArguments(it) } },
-    needsApproval = { parseWorkspaceReadArguments(it); needsApproval("workspace_read_file") },
+    interactionRequirement = {
+        parseWorkspaceReadArguments(it)
+        approvalRequirementOf(approvalRequired("workspace_read_file"))
+    },
     execute = { error("workspace_read_file requires ToolExecutionContext") },
     contextualExecute = {
         val path = parseWorkspaceReadArguments(it).value
@@ -106,7 +113,7 @@ private fun createReadFileTool(
 
 private fun createWriteFileTool(
     workspaceId: String,
-    needsApproval: (String) -> Boolean,
+    approvalRequired: (String) -> Boolean,
     workspaceApplicationService: WorkspaceApplicationService,
 ) = Tool(
     name = "workspace_write_file",
@@ -130,9 +137,9 @@ private fun createWriteFileTool(
         )
     },
     validateArguments = { validateWorkspaceArguments { parseWorkspaceWriteArguments(it) } },
-    needsApproval = {
+    interactionRequirement = {
         val args = parseWorkspaceWriteArguments(it)
-        needsApproval("workspace_write_file") || args.path.requiresWriteApproval
+        approvalRequirementOf(approvalRequired("workspace_write_file") || args.path.requiresWriteApproval)
     },
     execute = { error("workspace_write_file requires ToolExecutionContext") },
     contextualExecute = {
@@ -147,7 +154,7 @@ private fun createWriteFileTool(
 
 private fun createEditFileTool(
     workspaceId: String,
-    needsApproval: (String) -> Boolean,
+    approvalRequired: (String) -> Boolean,
     workspaceApplicationService: WorkspaceApplicationService,
 ) = Tool(
     name = "workspace_edit_file",
@@ -176,9 +183,9 @@ private fun createEditFileTool(
         )
     },
     validateArguments = { validateWorkspaceArguments { parseWorkspaceEditArguments(it) } },
-    needsApproval = {
+    interactionRequirement = {
         val args = parseWorkspaceEditArguments(it)
-        needsApproval("workspace_edit_file") || args.path.requiresWriteApproval
+        approvalRequirementOf(approvalRequired("workspace_edit_file") || args.path.requiresWriteApproval)
     },
     execute = { error("workspace_edit_file requires ToolExecutionContext") },
     contextualExecute = {
@@ -214,7 +221,7 @@ private fun createEditFileTool(
 
 private fun createShellTool(
     workspaceId: String,
-    needsApproval: (String) -> Boolean,
+    approvalRequired: (String) -> Boolean,
     workspaceApplicationService: WorkspaceApplicationService,
     defaultCwd: String? = null,
 ) = Tool(
@@ -256,15 +263,19 @@ private fun createShellTool(
         )
     },
     validateArguments = { validateWorkspaceArguments { parseWorkspaceShellArguments(it, defaultCwd) } },
-    needsApproval = { parseWorkspaceShellArguments(it, defaultCwd); needsApproval("workspace_shell") },
+    interactionRequirement = {
+        parseWorkspaceShellArguments(it, defaultCwd)
+        approvalRequirementOf(approvalRequired("workspace_shell"))
+    },
     execute = {
         val args = parseWorkspaceShellArguments(it, defaultCwd)
         val result = workspaceApplicationService.executeTool(workspaceId) {
             executeCommand(args.command, args.cwd, args.timeoutMillis)
         }
-        listOf(
+        val output = listOf(
             UIMessagePart.Text(
                 buildJsonObject {
+                    put("status", if (result.timedOut || result.exitCode != 0) "failed" else "completed")
                     put("exitCode", result.exitCode)
                     put("stdout", result.stdout)
                     put("stderr", result.stderr)
@@ -273,6 +284,11 @@ private fun createShellTool(
                 }.toString()
             )
         )
+        when {
+            result.timedOut -> failToolResult(output, "shell_timeout")
+            result.exitCode != 0 -> failToolResult(output, "shell_exit_nonzero")
+            else -> output
+        }
     },
 )
 

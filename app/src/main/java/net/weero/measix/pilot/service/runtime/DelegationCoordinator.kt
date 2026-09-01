@@ -62,6 +62,9 @@ import net.weero.measix.pilot.data.ai.subassistant.ReadinessResult
 import net.weero.measix.pilot.data.ai.subassistant.LineageDecision
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantDeliverableArtifact
 import net.weero.measix.pilot.data.ai.tools.GenerationToolSetFactory
+import net.weero.measix.pilot.data.ai.tools.ToolInteractionAvailability
+import net.weero.measix.pilot.data.ai.tools.ToolInteractionKind
+import net.weero.measix.pilot.data.ai.tools.ToolRuntimeMetadata
 import net.weero.measix.pilot.data.ai.tools.ToolSetRunMode
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
@@ -900,6 +903,7 @@ class DelegationCoordinator(
         // but may not introduce a name that this run did not expose at its start.
         val runStartToolNames = toolSetFactory.buildTools(
             assistant = target,
+            conversationId = childConversationId,
             settings = settings,
             capabilityModel = model,
             workspaceCwd = snapshot.header.workspaceCwd,
@@ -919,6 +923,7 @@ class DelegationCoordinator(
                 buildTargetStepTools(target, latestTarget, runStartToolNames) { effectiveTarget ->
                     toolSetFactory.buildTools(
                         assistant = effectiveTarget,
+                        conversationId = childConversationId,
                         settings = currentSettings,
                         capabilityModel = model,
                         workspaceCwd = snapshot.header.workspaceCwd,
@@ -964,6 +969,7 @@ class DelegationCoordinator(
             outcome = null
             generationLoop.run(
                 GenerationRequest(
+                    conversationId = childConversationId,
                     settings = settings,
                     model = model,
                     messages = lastMessages,
@@ -972,8 +978,7 @@ class DelegationCoordinator(
                     assistant = target,
                     toolProvider = toolProvider,
                     mediaCapabilities = mediaCapabilities,
-                    nonInteractive = true,
-                    interactiveToolNames = setOf("ask_user"),
+                    interactionAvailability = ToolInteractionAvailability.USER_INPUT_ONLY,
                     memoryContextProvider = targetMemoryContextProvider,
                     memoryToolAllowed = { ownerId ->
                         resolveGenerationMemoryOwner(
@@ -1077,12 +1082,15 @@ class DelegationCoordinator(
         execContext: ToolExecutionContext,
         runState: SubAssistantRunStateReducer,
     ): List<UIMessage> {
-        val message = requireNotNull(messages.lastOrNull()) { "ask_user continuation has no assistant message" }
+        val message = requireNotNull(messages.lastOrNull()) { "user-input continuation has no assistant message" }
+        // The Runtime captured the interaction kind in reserved metadata when the call paused;
+        // the bridge must not special-case the tool name.
         val toolOrdinal = message.getTools().indexOfFirst { tool ->
-            !tool.hasReplayResult && tool.toolName == "ask_user" &&
-                tool.approvalState is ToolApprovalState.Pending
+            !tool.hasReplayResult &&
+                tool.approvalState is ToolApprovalState.Pending &&
+                ToolRuntimeMetadata.interactionKindOf(tool.metadata) == ToolInteractionKind.USER_INPUT
         }
-        check(toolOrdinal >= 0) { "AWAITING_APPROVAL has no pending ask_user tool" }
+        check(toolOrdinal >= 0) { "AWAITING_APPROVAL has no pending user-input tool" }
         val tool = message.getTools()[toolOrdinal]
         val interactionId = "${runId}_${message.id}_$toolOrdinal"
         val answer = runGate.registerPendingInteraction(runId, interactionId)
@@ -1107,16 +1115,16 @@ class DelegationCoordinator(
 
         return try {
             val answered = answer.await()
-            // 应答 = UpdateToolApproval(Answered) 命令（与 Master HITL 同一命令路径）
+            // 应答 = ResolveToolInteraction(Answer) 命令（与 Master HITL 同一命令路径）
             val before = runtime.snapshot.value
             commandCoordinator.executeOrThrow(
                 runtime.id,
-                UpdateToolApproval(
+                ResolveToolInteraction(
                     messageId = message.id,
                     toolOrdinal = toolOrdinal,
-                    approvalState = ToolApprovalState.Answered(answered),
+                    decision = ToolUserDecision.Answer(answered),
                     handle = before.activeTurn.let { owner ->
-                        requireNotNull(owner) { "ask_user approval has no active turn owner" }
+                        requireNotNull(owner) { "user interaction continuation has no active turn owner" }
                         TurnHandle(
                             conversationId = runtime.id,
                             epoch = owner.epoch,

@@ -16,6 +16,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolExecutionContext
+import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
@@ -75,10 +76,87 @@ class AssistantCallToolTest {
         registerUnpublishedResource = {},
     )
 
+    private suspend fun failurePayload(block: suspend () -> List<UIMessagePart>): kotlinx.serialization.json.JsonObject {
+        val failure = try {
+            block()
+            throw AssertionError("expected ToolExecutionFailure")
+        } catch (error: ToolExecutionFailure) {
+            error
+        }
+        return Json.parseToJsonElement(
+            (failure.output.single() as UIMessagePart.Text).text,
+        ).jsonObject
+    }
+
+    private fun completedOutput(content: String = "done") = listOf(
+        UIMessagePart.Text(
+            """{"status":"completed","assistant_name":"Target","content":"$content"}""",
+        ),
+    )
+
     @Test
-    fun `assistant call preserves its structured JSON result`() {
+    fun `assistant call keeps preserve as its fail closed default`() {
         val tool = createTool(mockk(relaxed = true))
         assertEquals(ToolOutputPolicy.PRESERVE, tool.outputPolicy)
+    }
+
+    @Test
+    fun `assistant call archives successful path free text but preserves fork sensitive results`() {
+        val tool = createTool(mockk(relaxed = true))
+
+        assertEquals(
+            ToolOutputPolicy.ARCHIVABLE_TEXT,
+            tool.successfulOutputPolicy(
+                listOf(
+                    UIMessagePart.Text(
+                        """{"status":"completed","assistant_name":"Quiz","content":"answer"}""",
+                    ),
+                ),
+            ),
+        )
+        assertEquals(
+            ToolOutputPolicy.PRESERVE,
+            tool.successfulOutputPolicy(
+                listOf(
+                    UIMessagePart.Text(
+                        """{"status":"completed","assistant_name":"Quiz","content":"answer","artifacts":[{"path":"/upload/a.png"}]}""",
+                    ),
+                ),
+            ),
+        )
+        assertEquals(
+            ToolOutputPolicy.PRESERVE,
+            tool.successfulOutputPolicy(listOf(UIMessagePart.Text("not-json"))),
+        )
+        assertEquals(
+            ToolOutputPolicy.PRESERVE,
+            tool.successfulOutputPolicy(
+                listOf(
+                    UIMessagePart.Text(
+                        """{"status":"completed","assistant_name":"Quiz","content":"answer"}""",
+                    ),
+                    UIMessagePart.Image("https://example.com/result.png"),
+                ),
+            ),
+        )
+        listOf("failed", "stopped", "unavailable").forEach { status ->
+            assertEquals(
+                ToolOutputPolicy.PRESERVE,
+                tool.successfulOutputPolicy(
+                    listOf(UIMessagePart.Text("""{"status":"$status","reason":"test"}""")),
+                ),
+            )
+        }
+        listOf(
+            """{"status":"completed","content":"answer"}""",
+            """{"status":"completed","assistant_name":"Quiz"}""",
+            """{"status":"completed","assistant_name":"Quiz","content":"answer","artifacts":{}}""",
+        ).forEach { malformedCompleted ->
+            assertEquals(
+                ToolOutputPolicy.PRESERVE,
+                tool.successfulOutputPolicy(listOf(UIMessagePart.Text(malformedCompleted))),
+            )
+        }
     }
 
     @Test
@@ -109,16 +187,16 @@ class AssistantCallToolTest {
         val coordinator = mockk<DelegationCoordinator>(relaxed = true)
         val tool = createTool(coordinator)
 
-        val result = tool.executeWithContext(
-            executionContext(),
-            buildJsonObject {
-                put("assistant_id", targetId.toString())
-                put("request", "  \n")
-            },
-        )
-
-        val payload = Json.parseToJsonElement((result.single() as UIMessagePart.Text).text).jsonObject
-        assertEquals("unavailable", payload["status"]?.jsonPrimitive?.content)
+        val payload = failurePayload {
+            tool.executeWithContext(
+                executionContext(),
+                buildJsonObject {
+                    put("assistant_id", targetId.toString())
+                    put("request", "  \n")
+                },
+            )
+        }
+        assertEquals("failed", payload["status"]?.jsonPrimitive?.content)
         assertEquals("request_required", payload["reason"]?.jsonPrimitive?.content)
         coVerify(exactly = 0) { coordinator.executeCall(any(), any(), any(), any(), any()) }
     }
@@ -128,15 +206,15 @@ class AssistantCallToolTest {
         val coordinator = mockk<DelegationCoordinator>(relaxed = true)
         val tool = createTool(coordinator)
 
-        val result = tool.executeWithContext(
-            executionContext(),
-            buildJsonObject {
-                put("assistant_id", targetId.toString())
-                put("task", "old protocol")
-            },
-        )
-
-        val payload = Json.parseToJsonElement((result.single() as UIMessagePart.Text).text).jsonObject
+        val payload = failurePayload {
+            tool.executeWithContext(
+                executionContext(),
+                buildJsonObject {
+                    put("assistant_id", targetId.toString())
+                    put("task", "old protocol")
+                },
+            )
+        }
         assertEquals("request_required", payload["reason"]?.jsonPrimitive?.content)
         coVerify(exactly = 0) { coordinator.executeCall(any(), any(), any(), any(), any()) }
     }
@@ -145,22 +223,23 @@ class AssistantCallToolTest {
     fun `more than four attachments is rejected before coordinator starts a run`() = runTest {
         val coordinator = mockk<DelegationCoordinator>(relaxed = true)
         val tool = createTool(coordinator)
-        val result = tool.executeWithContext(
-            executionContext(),
-            buildJsonObject {
-                put("assistant_id", targetId.toString())
-                put("request", "Look at these")
-                put("attachments", buildJsonArray {
-                    add(JsonPrimitive("/upload/1.png"))
-                    add(JsonPrimitive("/upload/2.png"))
-                    add(JsonPrimitive("/upload/3.png"))
-                    add(JsonPrimitive("/upload/4.png"))
-                    add(JsonPrimitive("/upload/5.png"))
-                })
-            },
-        )
-        val payload = Json.parseToJsonElement((result.single() as UIMessagePart.Text).text).jsonObject
-        assertEquals("unavailable", payload["status"]?.jsonPrimitive?.content)
+        val payload = failurePayload {
+            tool.executeWithContext(
+                executionContext(),
+                buildJsonObject {
+                    put("assistant_id", targetId.toString())
+                    put("request", "Look at these")
+                    put("attachments", buildJsonArray {
+                        add(JsonPrimitive("/upload/1.png"))
+                        add(JsonPrimitive("/upload/2.png"))
+                        add(JsonPrimitive("/upload/3.png"))
+                        add(JsonPrimitive("/upload/4.png"))
+                        add(JsonPrimitive("/upload/5.png"))
+                    })
+                },
+            )
+        }
+        assertEquals("failed", payload["status"]?.jsonPrimitive?.content)
         assertEquals("invalid_attachments", payload["reason"]?.jsonPrimitive?.content)
         coVerify(exactly = 0) { coordinator.executeCall(any(), any(), any(), any(), any()) }
     }
@@ -169,19 +248,20 @@ class AssistantCallToolTest {
     fun `mixed non string attachments are rejected before coordinator starts a run`() = runTest {
         val coordinator = mockk<DelegationCoordinator>(relaxed = true)
         val tool = createTool(coordinator)
-        val result = tool.executeWithContext(
-            executionContext(),
-            buildJsonObject {
-                put("assistant_id", targetId.toString())
-                put("request", "Look at these")
-                put("attachments", buildJsonArray {
-                    add(JsonPrimitive("/upload/b.png"))
-                    add(JsonPrimitive(42))
-                })
-            },
-        )
-        val payload = Json.parseToJsonElement((result.single() as UIMessagePart.Text).text).jsonObject
-        assertEquals("unavailable", payload["status"]?.jsonPrimitive?.content)
+        val payload = failurePayload {
+            tool.executeWithContext(
+                executionContext(),
+                buildJsonObject {
+                    put("assistant_id", targetId.toString())
+                    put("request", "Look at these")
+                    put("attachments", buildJsonArray {
+                        add(JsonPrimitive("/upload/b.png"))
+                        add(JsonPrimitive(42))
+                    })
+                },
+            )
+        }
+        assertEquals("failed", payload["status"]?.jsonPrimitive?.content)
         assertEquals("invalid_attachments", payload["reason"]?.jsonPrimitive?.content)
         coVerify(exactly = 0) { coordinator.executeCall(any(), any(), any(), any(), any()) }
     }
@@ -190,7 +270,7 @@ class AssistantCallToolTest {
     fun `attachments are forwarded after dedup`() = runTest {
         val coordinator = mockk<DelegationCoordinator>()
         val tool = createTool(coordinator)
-        val expected = listOf(UIMessagePart.Text("done"))
+        val expected = completedOutput()
         val path = "/upload/b.png"
         coEvery {
             coordinator.executeCall(
@@ -242,7 +322,7 @@ class AssistantCallToolTest {
     fun `nonblank request delegates with caller and master context`() = runTest {
         val coordinator = mockk<DelegationCoordinator>()
         val tool = createTool(coordinator)
-        val expected = listOf(UIMessagePart.Text("done"))
+        val expected = completedOutput()
         coEvery {
             coordinator.executeCall(
                 callerAssistantId = callerId,
@@ -271,7 +351,7 @@ class AssistantCallToolTest {
     fun `extras are forwarded and unknown values dropped`() = runTest {
         val coordinator = mockk<DelegationCoordinator>()
         val tool = createTool(coordinator)
-        val expected = listOf(UIMessagePart.Text("done"))
+        val expected = completedOutput()
         coEvery {
             coordinator.executeCall(
                 callerAssistantId = callerId,

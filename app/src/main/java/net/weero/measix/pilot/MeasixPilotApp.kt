@@ -73,9 +73,6 @@ class MeasixPilotApp : Application(), WorkspaceDocumentsDependencies {
         // delete temp files
         deleteTempFiles()
 
-        // cleanup stale tool output files
-        cleanupToolOutputs()
-
         // cleanup workspace temp dirs (proot + rootfs /tmp)
         cleanupWorkspaceTempDirs()
 
@@ -99,21 +96,6 @@ class MeasixPilotApp : Application(), WorkspaceDocumentsDependencies {
             val dir = appTempFolder
             if (dir.exists()) {
                 dir.deleteRecursively()
-            }
-        }
-    }
-
-    private fun cleanupToolOutputs() {
-        get<AppScope>().launch(Dispatchers.IO) {
-            try {
-                val dir = File(filesDir, FileFolders.TOOL_OUTPUTS)
-                if (dir.exists()) {
-                    dir.deleteRecursively()
-                }
-            } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                Log.e(TAG, "cleanupToolOutputs failed", error)
             }
         }
     }

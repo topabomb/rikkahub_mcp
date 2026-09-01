@@ -10,7 +10,9 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.data.ai.tools.failToolResult
 
 internal const val ASK_USER_TOOL_NAME = "ask_user"
 internal const val MAX_ASK_USER_INPUT_CHARS = 16 * 1024
@@ -131,8 +133,8 @@ internal fun AskUserArgumentError.toErrorJson(): JsonObject = buildJsonObject {
     hint?.let { put("hint", it) }
 }
 
-internal fun AskUserArgumentError.toToolResult(): List<UIMessagePart> =
-    listOf(UIMessagePart.Text(toErrorJson().toString()))
+internal fun AskUserArgumentError.toToolResult(): Nothing =
+    failToolResult("invalid_arguments", "$field must be $expected")
 
 internal fun buildAskUserTool(): Tool = Tool(
     name = ASK_USER_TOOL_NAME,
@@ -189,7 +191,7 @@ internal fun buildAskUserTool(): Tool = Tool(
             required = listOf("questions")
         )
     },
-    needsApproval = { true },
+    interactionRequirement = { ToolInteractionRequirement.UserInput },
     validateArguments = { validateAskUserArguments(it)?.toErrorJson() },
     execute = { args ->
         validateAskUserArguments(args)?.toToolResult()

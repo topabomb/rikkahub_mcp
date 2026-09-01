@@ -18,7 +18,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolArgumentsException
+import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.core.ToolExecutionContext
+import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.core.ToolMetadataDelivery
 import me.rerere.ai.core.ToolResourceLease
 import me.rerere.ai.provider.Model
@@ -74,15 +76,22 @@ class ImageGenerationToolCompensationTest {
         val failure = assertThrows(ToolArgumentsException::class.java) { tool.parseArguments("{}", Json) }
         val replay = Json.parseToJsonElement((failure.output.single() as UIMessagePart.Text).text).jsonObject
         val domainFailure = requireNotNull(tool.validateArguments(buildJsonObject {}))
-        val executionFailure = Json.parseToJsonElement((failedResult("invalid_arguments").single() as UIMessagePart.Text).text)
+        val toolFailure = assertThrows(ToolExecutionFailure::class.java) { failedResult("invalid_arguments") }
+        val executionFailure = Json.parseToJsonElement((toolFailure.output.single() as UIMessagePart.Text).text)
         assertEquals(domainFailure, executionFailure)
         assertFalse(domainFailure.containsKey("type"))
         assertFalse(domainFailure.containsKey("error"))
         assertEquals(domainFailure, JsonObject(replay.filterKeys { it != "type" && it != "error" }))
         assertEquals("invalid_arguments", replay["error"]!!.jsonPrimitive.content)
         assertEquals("error", replay["type"]!!.jsonPrimitive.content)
-        assertFalse(tool.needsApproval(tool.parseArguments("""{"prompt":"a cat"}""", Json)))
-        assertTrue(tool.needsApproval(tool.parseArguments("""{"prompt":"a cat","set_as_background":true}""", Json)))
+        assertEquals(
+            ToolInteractionRequirement.None,
+            tool.interactionRequirement(tool.parseArguments("""{"prompt":"a cat"}""", Json)),
+        )
+        assertEquals(
+            ToolInteractionRequirement.Approval,
+            tool.interactionRequirement(tool.parseArguments("""{"prompt":"a cat","set_as_background":true}""", Json)),
+        )
         coVerify(exactly = 0) { coordinator.enqueue(any()) }
     }
 

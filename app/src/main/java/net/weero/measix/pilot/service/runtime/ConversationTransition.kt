@@ -2,13 +2,23 @@ package net.weero.measix.pilot.service.runtime
 
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ToolCallLocator
+import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.ui.MessageTerminalStatus
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.finishReasoning
+import net.weero.measix.pilot.data.ai.CheckpointKind
+import net.weero.measix.pilot.data.ai.ContextTrimmingPolicy
+import net.weero.measix.pilot.data.ai.estimateStableTextTokens
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefBackfill
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
+import net.weero.measix.pilot.data.ai.tools.ToolInteractionKind
+import net.weero.measix.pilot.data.ai.tools.ToolRuntimeMetadata
+import net.weero.measix.pilot.data.ai.tools.REGENERABLE_TOOL_OUTPUT_FOLDED_MARKER
+import net.weero.measix.pilot.data.ai.tools.buildToolOutputMarker
+import net.weero.measix.pilot.data.ai.tools.canonicalizeToolOutput
+import net.weero.measix.pilot.data.ai.tools.virtualLineCount
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.model.Conversation
@@ -108,7 +118,7 @@ internal object ConversationTransition {
             is ReplaceMessageTree -> current.copy(nodes = command.nodes)
             is BackfillAttachmentRefs -> backfillAttachmentRefs(current, command.backfills)
             is HeaderConversationCommand -> current.copy(header = applyHeader(current.header, command))
-            is UpdateToolApproval -> updateToolApproval(current, command)
+            is ResolveToolInteraction -> ResolveToolInteraction(current, command)
         }
         val next = reduced.copy(activeTurn = durableActiveTurn(current, reduced, command))
         return if (next == current) current else next
@@ -183,11 +193,10 @@ internal object ConversationTransition {
             turnId = command.turnId,
             assistantMessageId = command.assistantMessageId,
             messages = emptyList(),
-            latestAvailableContextCache = reduced.latestBranchContextCache(),
         )
         is HeaderConversationCommand,
         is CommitCheckpoint,
-        is UpdateToolApproval,
+        is ResolveToolInteraction,
         -> reduced.activeTurn
         is FinalizeTurn,
         is RecoverInterruptedTurn,
@@ -216,8 +225,13 @@ internal object ConversationTransition {
         val changedIndices = mutableListOf<Int>()
         val deletedNodeIds = mutableListOf<Uuid>()
         fun upsert(index: Int, node: MessageNode) {
-            changedNodes += node
-            changedIndices += index
+            val existing = changedIndices.indexOf(index)
+            if (existing >= 0) {
+                changedNodes[existing] = node
+            } else {
+                changedNodes += node
+                changedIndices += index
+            }
         }
         fun lastNodeDelta() {
             val index = maxOf(old.nodes.lastIndex, new.nodes.lastIndex)
@@ -242,13 +256,26 @@ internal object ConversationTransition {
             if (old.nodes.getOrNull(index)?.let { it.id == nodeId && it === node } == true) return
             upsert(index, node)
         }
+        fun selectedNodeByMessageId(messageId: Uuid) {
+            val index = new.nodes.indexOfFirst { it.currentMessage.id == messageId }
+            check(index >= 0) { "Selected checkpoint message is missing from the durable tree: $messageId" }
+            val node = new.nodes[index]
+            if (old.nodes.getOrNull(index) !== node) upsert(index, node)
+        }
         when (command) {
             is HeaderConversationCommand -> Unit
             is StartTurn,
-            is CommitCheckpoint,
             is FinalizeTurn,
             is AppendUserMessage,
             -> lastNodeDelta()
+            is CommitCheckpoint -> {
+                lastNodeDelta()
+                // 历史 Tool Output marker 不是 active last node；必须作为同一 mutation 的精确节点 delta 落库，
+                // 这样本事务才能同时建立 TOOL_OUTPUT durable reference，再允许 lease publish。
+                command.toolOutputCompactionPatches
+                    .filterNot { it.locator.messageId == command.handle.assistantMessageId }
+                    .forEach { patch -> selectedNodeByMessageId(patch.locator.messageId) }
+            }
             is RecoverInterruptedTurn -> {
                 val index = new.nodes.indexOfFirst { node ->
                     node.messages.any { it.id == command.assistantMessageId }
@@ -280,7 +307,7 @@ internal object ConversationTransition {
             is BackfillAttachmentRefs -> {
                 command.backfills.map { it.nodeId }.distinct().forEach(::nodeById)
             }
-            is UpdateToolApproval -> {
+            is ResolveToolInteraction -> {
                 val index = new.nodes.indexOfFirst { node ->
                     node.messages.any { it.id == command.messageId }
                 }
@@ -493,7 +520,7 @@ internal object ConversationTransition {
         if (command.closeInterruptedTools) {
             result = result.closePendingTools(command.handle.assistantMessageId, cancelledByUser = false)
         }
-        return result
+        return result.markAssistantFinishedAt(command.handle.assistantMessageId, command.finishedAt)
     }
 
     private fun recoverInterruptedTurn(
@@ -519,7 +546,16 @@ internal object ConversationTransition {
         if (command.closeInterruptedTools) {
             result = result.closePendingTools(command.assistantMessageId, cancelledByUser = false)
         }
-        return result
+        return result.markAssistantFinishedAt(command.assistantMessageId, command.finishedAt)
+    }
+
+    /** 所有终态统一覆盖中间 step 时间，确保消息 Total 表示完整 turn 生命周期。 */
+    private fun ConversationSnapshot.markAssistantFinishedAt(
+        messageId: Uuid,
+        finishedAt: kotlinx.datetime.LocalDateTime,
+    ): ConversationSnapshot {
+        val message = findMessage(messageId) ?: return this
+        return replaceMessageById(messageId, message.copy(finishedAt = finishedAt), requireLastNode = false)
     }
 
     private fun ConversationSnapshot.finishReasoning(messageId: Uuid): ConversationSnapshot {
@@ -620,12 +656,12 @@ internal object ConversationTransition {
         return if (nodes === current.nodes) current else current.copy(nodes = nodes)
     }
 
-    private fun updateToolApproval(
+    private fun ResolveToolInteraction(
         current: ConversationSnapshot,
-        command: UpdateToolApproval,
+        command: ResolveToolInteraction,
     ): ConversationSnapshot {
         val durableMessage = current.findMessage(command.messageId) ?: return current
-        val updatedDurableMessage = updateToolApproval(durableMessage, command) ?: return current
+        val updatedDurableMessage = ResolveToolInteraction(durableMessage, command) ?: return current
         val durable = current.replaceMessageById(
             messageId = command.messageId,
             replacement = updatedDurableMessage,
@@ -637,7 +673,7 @@ internal object ConversationTransition {
                 active
             } else {
                 val updatedActiveMessage = requireNotNull(
-                    updateToolApproval(active.messages[messageIndex], command)
+                    ResolveToolInteraction(active.messages[messageIndex], command)
                 ) { "active approval projection disagrees with its durable owner" }
                 val committedPhase = when (command.approvalState) {
                     ToolApprovalState.Approved -> ToolCallPhase.READY
@@ -662,14 +698,154 @@ internal object ConversationTransition {
         current: ConversationSnapshot,
         command: CommitCheckpoint,
     ): ConversationSnapshot {
-        val replaced = replaceMessages(current, command.handle.assistantMessageId, command.messages)
+        val patches = command.toolOutputCompactionPatches
+        require(patches.map { it.locator }.distinct().size == patches.size) {
+            "Tool Output compaction patches contain duplicate locators"
+        }
+        require(patches.isEmpty() || command.kind == CheckpointKind.STEP_COMPLETED) {
+            "Tool Output compaction patches are only valid on a completed Provider step"
+        }
+        val activePatches = patches.filter { it.locator.messageId == command.handle.assistantMessageId }
+        if (command.kind == CheckpointKind.STEP_COMPLETED) {
+            val activeSource = current.nodes.lastOrNull()?.currentMessage
+                ?.takeIf { it.id == command.handle.assistantMessageId }
+                ?: error("Active Tool Output compaction source is missing")
+            val expected = activePatches.fold(activeSource) { message, patch ->
+                applyToolOutputCompactionPatch(message, patch)
+            }
+            val projected = command.messages.lastOrNull()
+                ?.takeIf { it.id == command.handle.assistantMessageId }
+                ?: error("Active Tool Output compaction projection is missing")
+            activeSource.parts.filterIsInstance<UIMessagePart.Tool>().indices.forEach { toolOrdinal ->
+                require(toolAtOrdinal(projected, toolOrdinal) == toolAtOrdinal(expected, toolOrdinal)) {
+                    "Active Tool Output projection changed an existing Tool outside its typed patch"
+                }
+            }
+        }
+        var replaced = replaceMessages(current, command.handle.assistantMessageId, command.messages)
+        patches.filterNot { it.locator.messageId == command.handle.assistantMessageId }.forEach { patch ->
+            replaced = applyHistoricalToolOutputCompactionPatch(replaced, patch)
+        }
         val active = current.activeTurn ?: return replaced
         return replaced.copy(activeTurn = active.afterCheckpoint(command))
     }
 
-    private fun updateToolApproval(
+    /**
+     * 历史改写只接受 locator 指向的已消费纯文本 Tool Result，并只替换该 Tool 的 output/archive。
+     * 可归档文本必须携带新 Artifact；可再生回查结果只能写固定 marker，不得复制 payload。
+     * 任何正文、usage、时间、Tool 身份或其他 part 都没有进入命令协议，因而不能被顺带回写。
+     */
+    private fun applyHistoricalToolOutputCompactionPatch(
+        current: ConversationSnapshot,
+        patch: net.weero.measix.pilot.data.ai.ToolOutputCompactionPatch,
+    ): ConversationSnapshot {
+        val node = current.nodes.firstOrNull { it.currentMessage.id == patch.locator.messageId }
+            ?: error("Historical Tool Output patch is not on the selected branch: ${patch.locator.messageId}")
+        val message = node.currentMessage
+        require(message.role == MessageRole.ASSISTANT) {
+            "Historical Tool Output patch must target an Assistant message"
+        }
+        val updated = applyToolOutputCompactionPatch(message, patch)
+        return current.replaceMessageById(
+            patch.locator.messageId,
+            updated,
+            requireLastNode = false,
+        )
+    }
+
+    /** 对单条 Assistant 的一个 locator 应用并验证窄 Tool Output 压缩协议。 */
+    private fun applyToolOutputCompactionPatch(
         message: UIMessage,
-        command: UpdateToolApproval,
+        patch: net.weero.measix.pilot.data.ai.ToolOutputCompactionPatch,
+    ): UIMessage {
+        require(message.role == MessageRole.ASSISTANT) {
+            "Tool Output compaction patch must target an Assistant message"
+        }
+        var ordinal = 0
+        var matched = false
+        val updatedParts = message.parts.map { part ->
+            if (part !is UIMessagePart.Tool) return@map part
+            val currentOrdinal = ordinal++
+            if (currentOrdinal != patch.locator.toolOrdinal) return@map part
+            require(!matched) { "Tool Output compaction patch matched more than one Tool" }
+            val existingArchive = ToolRuntimeMetadata.archiveOf(part.metadata)
+            if (existingArchive != null) {
+                // 同一 checkpoint 在“durable 已提交、lease 发布结果未返回”后可能被恢复重放。
+                // 精确相同的 patch 必须幂等；不同归档仍是冲突，不能覆盖已有 durable 事实。
+                require(existingArchive == patch.archive && part.output == listOf(patch.marker)) {
+                    "Tool Output archive patch conflicts with the committed archive"
+                }
+                matched = true
+                return@map part
+            }
+            val outputPolicy = ToolRuntimeMetadata.outputPolicyOf(part.metadata)
+            if (patch.archive == null &&
+                outputPolicy == ToolOutputPolicy.REGENERABLE_TEXT.name &&
+                part.output == listOf(patch.marker) &&
+                patch.marker.text == REGENERABLE_TOOL_OUTPUT_FOLDED_MARKER
+            ) {
+                matched = true
+                return@map part
+            }
+            val expectedPolicy = if (patch.archive == null) {
+                ToolOutputPolicy.REGENERABLE_TEXT.name
+            } else {
+                ToolOutputPolicy.ARCHIVABLE_TEXT.name
+            }
+            require(
+                outputPolicy == expectedPolicy &&
+                    part.output.isNotEmpty() &&
+                    part.output.all { it is UIMessagePart.Text }
+            ) { "Tool Output patch target has the wrong compaction policy" }
+            val inlineText = part.output.filterIsInstance<UIMessagePart.Text>()
+                .joinToString("\n") { it.text }
+            require(
+                estimateStableTextTokens(inlineText) - estimateStableTextTokens(patch.marker.text) >=
+                    ContextTrimmingPolicy.TOOL_OUTPUT_MINIMUM_RESULT_NET_RECLAIM_ESTIMATED_TOKENS
+            ) {
+                "Tool Output patch is below the minimum estimated token reclaim"
+            }
+            val terminalStatus = ToolRuntimeMetadata.terminalStatusOf(part.metadata)
+            require(terminalStatus == "completed" || terminalStatus == "failed") {
+                "Tool Output patch target has no compactable terminal status"
+            }
+            val archive = patch.archive
+            val metadata = if (archive == null) {
+                require(patch.marker.text == REGENERABLE_TOOL_OUTPUT_FOLDED_MARKER) {
+                    "Regenerable Tool Output marker is invalid"
+                }
+                part.metadata
+            } else {
+                val canonical = canonicalizeToolOutput(inlineText)
+                require(archive.characters == canonical.length.toLong()) {
+                    "Tool Output archive character count does not match"
+                }
+                require(archive.lines == virtualLineCount(canonical)) {
+                    "Tool Output archive line count does not match"
+                }
+                require(patch.marker.text == buildToolOutputMarker(archive, terminalStatus, canonical)) {
+                    "Tool Output marker does not match the archive"
+                }
+                ToolRuntimeMetadata.withArchive(part.metadata, archive).also { archivedMetadata ->
+                    require(ToolRuntimeMetadata.archiveOf(archivedMetadata) == archive) {
+                        "Tool Output archive metadata is invalid"
+                    }
+                }
+            }
+            matched = true
+            part.copy(output = listOf(patch.marker), metadata = metadata)
+        }
+        require(matched) { "Tool Output patch locator does not resolve a Tool" }
+        return message.copy(parts = updatedParts)
+    }
+
+    private fun toolAtOrdinal(message: UIMessage, toolOrdinal: Int): UIMessagePart.Tool =
+        message.parts.filterIsInstance<UIMessagePart.Tool>().getOrNull(toolOrdinal)
+            ?: error("Tool Output patch locator does not resolve a projected Tool")
+
+    private fun ResolveToolInteraction(
+        message: UIMessage,
+        command: ResolveToolInteraction,
     ): UIMessage? {
         var ordinal = 0
         var matched = false
@@ -683,10 +859,24 @@ internal object ConversationTransition {
                 return@map part
             }
             if (part.approvalState !is ToolApprovalState.Pending) return null
+            require(!ToolRuntimeMetadata.isInvalid(part.metadata)) {
+                "pending tool interaction metadata is invalid"
+            }
+            val interaction = ToolRuntimeMetadata.interactionKindOf(part.metadata)
+            if (interaction != null && !command.decision.matches(interaction)) return null
             matched = true
             part.copy(approvalState = command.approvalState)
         }
         return if (matched) message.copy(parts = updatedParts) else null
+    }
+
+    /** reducer 在 durable 写入边界再次校验 typed 决策；旧消息缺 metadata 时由 Runtime 恢复重建。 */
+    private fun ToolUserDecision.matches(interaction: ToolInteractionKind): Boolean = when (this) {
+        ToolUserDecision.Approve,
+        is ToolUserDecision.Deny,
+        -> interaction == ToolInteractionKind.APPROVAL
+
+        is ToolUserDecision.Answer -> interaction == ToolInteractionKind.USER_INPUT
     }
 
     private fun emptyAssistantMessage(id: Uuid): UIMessage = UIMessage(

@@ -1551,6 +1551,7 @@
   <string name="chat_message_tool_phase_call_streaming">组装调用</string>
   <string name="chat_message_tool_phase_ready">待执行</string>
   <string name="chat_message_tool_phase_awaiting_approval">待授权</string>
+  <string name="chat_message_tool_phase_awaiting_input">待回答</string>
   <string name="chat_message_tool_phase_executing">执行中</string>
   <string name="chat_message_tool_phase_completed">已完成</string>
   <string name="chat_message_tool_phase_failed">失败</string>
@@ -1595,4 +1596,5 @@
   <string name="mcp_picker_manage_servers">管理 MCP 服务器</string>
   <string name="mcp_refresh_continuing">仍有 %1$d 个 MCP 服务器在后台刷新</string>
   <string name="mcp_enabled_tools_count">%1$d/%2$d 个工具</string>
+  <string name="chat_message_tool_output_archived_summary">已归档工具输出：%1$d 行，%2$d 个字符</string>
 </resources>

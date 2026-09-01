@@ -7,12 +7,13 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ProviderUsageSnapshot
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.Model
 import me.rerere.ai.util.json
-import kotlin.math.roundToInt
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
@@ -404,38 +405,6 @@ fun List<UIMessagePart>.isEmptyUIMessage(): Boolean {
 }
 
 /**
- * Fraction of the configured threshold kept immediately after a context trim.
- *
- * A lower ratio moves the trim point less often, improving prompt-cache reuse at
- * the cost of discarding more history at each step.
- */
-private const val CONTEXT_KEEP_RATIO = 0.5f
-
-/**
- * Limits conversation history with a stepped (hysteresis) strategy.
- *
- * Unlike a sliding window, the start point only moves after [limit] is crossed
- * by a full stride. Appending messages inside the same stride therefore keeps
- * the request prefix stable. The result starts at a user message whenever the
- * retained history contains one, so an assistant reply and its tool activity
- * are never detached from the user turn that caused them.
- *
- * [limit] is a message-count trimming threshold, not a token or model context
- * window limit. Values less than or equal to zero disable automatic trimming.
- */
-fun List<UIMessage>.limitContext(limit: Int): List<UIMessage> {
-    if (limit <= 0 || size <= limit) return this
-
-    val target = (limit * CONTEXT_KEEP_RATIO).roundToInt().coerceIn(1, limit)
-    val stride = (limit - target).coerceAtLeast(1)
-    val steppedStartIndex = (
-        ((size - limit) / stride + 1) * stride
-        ).coerceAtMost(lastIndex)
-
-    return subList(findUserTurnStart(steppedStartIndex), size)
-}
-
-/**
  * Finds the nearest user-message boundary at or before [startIndex].
  *
  * This is shared by request-time trimming and persistent conversation
@@ -619,6 +588,38 @@ fun UIMessage.replaySafeProjection(): UIMessage? {
         ),
     )
     return projected.takeIf { it.isValidToUpload() }
+}
+
+/**
+ * 返回最终消息投影中可保守确认会被 Provider 回放的 Tool Result ordinal。
+ * 普通协议使用完整安全前缀；Responses opaque 历史还要求本地结果能与原始 function_call 配对。
+ * 无法确认时宁可漏报，调用方不得把它解释成 serializer 的精确发送清单。
+ */
+fun UIMessage.confirmedReplayableToolOrdinals(): Set<Int> {
+    val completeParts = providerReplayProjection?.let { projection ->
+        parts.take(projection.completePartCount)
+    } ?: parts
+    val opaqueCallCounts = metadataAs<OpenAIResponseMetadata>()
+        ?.outputItemGroups
+        ?.flatten()
+        ?.mapNotNull { item ->
+            item["call_id"]?.jsonPrimitive?.contentOrNull?.takeIf {
+                item["type"]?.jsonPrimitive?.contentOrNull == "function_call"
+            }
+        }
+        ?.groupingBy { it }
+        ?.eachCount()
+        ?.toMutableMap()
+    return completeParts.filterIsInstance<UIMessagePart.Tool>().mapIndexedNotNull { ordinal, tool ->
+        val opaqueVisible = if (opaqueCallCounts == null) {
+            true
+        } else {
+            val remaining = opaqueCallCounts.getOrDefault(tool.toolCallId, 0)
+            if (remaining > 0) opaqueCallCounts[tool.toolCallId] = remaining - 1
+            remaining > 0
+        }
+        ordinal.takeIf { opaqueVisible && tool.hasReplayResult }
+    }.toSet()
 }
 
 /**

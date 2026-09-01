@@ -8,6 +8,9 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.core.ToolArgumentsException
+import me.rerere.ai.core.ToolInteractionRequirement
+import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolOutputPolicy
 import net.weero.measix.pilot.data.ai.mcp.McpAvailableTool
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
 import net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot
@@ -47,12 +50,12 @@ class GenerationToolSetFactoryMcpTest {
             mcpCapabilities = TurnMcpCapabilitySnapshot(tools = listOf(
                 availableTool(Uuid.random(), "remote", schema).copy(needsApproval = true),
             )),
-        ).single()
+        ).single { it.name == "mcp__server__remote" }
         assertEquals(schema, tool.parameters())
         assertThrows(ToolArgumentsException::class.java) { tool.parseArguments("[]", Json) }
         assertThrows(ToolArgumentsException::class.java) { tool.parseArguments("{", Json) }
         val arguments = tool.parseArguments("{}", Json)
-        assertTrue(tool.needsApproval(arguments))
+        assertEquals(ToolInteractionRequirement.Approval, tool.interactionRequirement(arguments))
         assertEquals("{}", arguments.toString())
     }
 
@@ -84,7 +87,8 @@ class GenerationToolSetFactoryMcpTest {
             ),
         )
 
-        assertEquals(listOf("mcp__server__valid_tool"), tools.map { it.name })
+        assertEquals(listOf("read_tool_output", "grep_tool_output", "mcp__server__valid_tool"), tools.map { it.name })
+        assertEquals(ToolOutputPolicy.ARCHIVABLE_TEXT, tools.single { it.name == "mcp__server__valid_tool" }.outputPolicy)
     }
 
     @Test
@@ -115,7 +119,36 @@ class GenerationToolSetFactoryMcpTest {
             ),
         )
 
-        assertEquals(listOf("mcp__safe__ok"), tools.map { it.name })
+        assertEquals(listOf("read_tool_output", "grep_tool_output", "mcp__safe__ok"), tools.map { it.name })
+    }
+
+    @Test
+    fun `additional tools cannot shadow reserved lookup names`() = runTest {
+        val localTools = mockk<LocalTools>()
+        every { localTools.getTools(any(), any(), any()) } returns emptyList()
+        val factory = GenerationToolSetFactory(
+            localTools = localTools,
+            conversationQueryService = mockk<ConversationQueryService>(),
+            skillManager = mockk<SkillManager>(),
+            workspaceApplicationService = mockk<WorkspaceApplicationService>(),
+            workspaceQueryService = mockk<WorkspaceQueryService>(),
+            mcpManager = mockk<McpRuntimeCoordinator>(),
+            providerManager = mockk<ProviderManager>(),
+            artifactStore = mockk<ArtifactStore>(),
+        )
+        val conflict = Tool("read_tool_output", "shadow", execute = { emptyList() })
+
+        val failure = runCatching {
+            factory.buildTools(
+                assistant = Assistant(),
+                settings = Settings(),
+                capabilityModel = null,
+                additionalToolsBeforeMcp = listOf(conflict),
+                mcpCapabilities = TurnMcpCapabilitySnapshot(tools = emptyList()),
+            )
+        }.exceptionOrNull()
+
+        assertTrue(failure is IllegalArgumentException)
     }
 
     private fun availableTool(

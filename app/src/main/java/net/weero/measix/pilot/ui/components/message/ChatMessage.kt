@@ -73,8 +73,8 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
-import net.weero.measix.pilot.service.runtime.ActiveContextCache
 import net.weero.measix.pilot.service.runtime.ToolCallPhase
+import net.weero.measix.pilot.service.runtime.ToolUserDecision
 import net.weero.measix.pilot.data.model.AssistantAffectScope
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.model.replaceRegexes
@@ -105,6 +105,7 @@ fun ChatMessage(
     masterConversationId: Uuid? = null,
     modifier: Modifier = Modifier,
     loading: Boolean = false,
+    turnFinished: Boolean = !loading,
     model: Model? = null,
     assistant: Assistant? = null,
     lastMessage: Boolean = false,
@@ -116,16 +117,13 @@ fun ChatMessage(
     onUpdate: (MessageNode) -> Unit,
     isFavorite: Boolean = false,
     onToggleFavorite: (() -> Unit)? = null,
-    onToolApproval: ((locator: ToolCallLocator, approved: Boolean, reason: String) -> Unit)? = null,
-    onToolAnswer: ((locator: ToolCallLocator, answer: String) -> Unit)? = null,
+    onToolDecision: ((locator: ToolCallLocator, decision: ToolUserDecision) -> Unit)? = null,
     onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
     toolCallPhases: Map<ToolCallLocator, ToolCallPhase> = emptyMap(),
     onShowTerminalError: ((UIMessage) -> Unit)? = null,
     readOnly: Boolean = false,
-    activeContextCache: ActiveContextCache? = null,
 ) {
     val message = node.messages[node.selectIndex]
-    val contextCache = activeContextCache?.forMessage(message.id)
     val settings = LocalSettings.current.displaySetting
     val chatFontFamily = LocalChatFontFamily.current ?: rememberChatFontFamily(settings)
     val textStyle = LocalTextStyle.current.copy(
@@ -193,8 +191,7 @@ fun ChatMessage(
                 annotations = message.annotations,
                 loading = loading,
                 model = model,
-                onToolApproval = if (readOnly) null else onToolApproval,
-                onToolAnswer = if (readOnly) null else onToolAnswer,
+                onToolDecision = if (readOnly) null else onToolDecision,
                 onSubAssistantAnswer = if (readOnly) null else onSubAssistantAnswer,
                 toolCallPhases = toolCallPhases,
                 onUserMessageClick = if (!readOnly && message.role == MessageRole.USER) onEdit else null,
@@ -221,7 +218,7 @@ fun ChatMessage(
         }
         val showEditedFiles = assistant?.workspaceId != null && editedFiles.isNotEmpty()
         val showUsage = settings.showTokenUsage &&
-            message.usage.toNerdLineDisplay(contextCache).hasCompactSummary
+            message.usage.toNerdLineDisplay().hasSummary
 
         if (showActions || showEditedFiles || showUsage) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -254,7 +251,7 @@ fun ChatMessage(
 
                 if (showUsage) {
                     ProvideTextStyle(textStyle) {
-                        ChatMessageNerdLine(message = message, contextCache = contextCache)
+                        ChatMessageNerdLine(message = message, turnFinished = turnFinished)
                     }
                 }
             }
@@ -387,8 +384,7 @@ private fun MessagePartsBlock(
     parts: List<UIMessagePart>,
     annotations: List<UIMessageAnnotation>,
     loading: Boolean,
-    onToolApproval: ((locator: ToolCallLocator, approved: Boolean, reason: String) -> Unit)? = null,
-    onToolAnswer: ((locator: ToolCallLocator, answer: String) -> Unit)? = null,
+    onToolDecision: ((locator: ToolCallLocator, decision: ToolUserDecision) -> Unit)? = null,
     onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
     toolCallPhases: Map<ToolCallLocator, ToolCallPhase>,
     onUserMessageClick: (() -> Unit)? = null,
@@ -461,8 +457,7 @@ private fun MessagePartsBlock(
                                         tool = step.tool,
                                         locator = locator,
                                         phase = toolCallPhases[locator],
-                                        onToolApproval = onToolApproval,
-                                        onToolAnswer = onToolAnswer,
+                                        onToolDecision = onToolDecision,
                                     )
                                 }
                             }
@@ -483,7 +478,7 @@ private fun MessagePartsBlock(
                             tool = streamedTool,
                             locator = locator,
                             phase = phase,
-                            onToolApproval = onToolApproval,
+                            onToolDecision = onToolDecision,
                         )
                     }
                 } else {
@@ -813,4 +808,5 @@ private val ToolCallPhase.isPreExecutionOrRunning: Boolean
     get() = this == ToolCallPhase.CALL_STREAMING ||
         this == ToolCallPhase.READY ||
         this == ToolCallPhase.AWAITING_APPROVAL ||
+        this == ToolCallPhase.AWAITING_INPUT ||
         this == ToolCallPhase.EXECUTING

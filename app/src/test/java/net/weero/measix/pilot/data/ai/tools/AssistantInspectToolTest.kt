@@ -14,6 +14,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
@@ -95,6 +96,16 @@ class AssistantInspectToolTest {
 
     private fun parseResult(parts: List<UIMessagePart>): JsonObject =
         json.parseToJsonElement((parts.first() as UIMessagePart.Text).text).jsonObject
+
+    private suspend fun failureResult(tool: Tool, arguments: JsonObject): JsonObject {
+        val failure = try {
+            tool.execute(arguments)
+            throw AssertionError("expected ToolExecutionFailure")
+        } catch (error: ToolExecutionFailure) {
+            error
+        }
+        return parseResult(failure.output)
+    }
 
     private fun args(
         assistantId: Uuid = targetId,
@@ -181,6 +192,7 @@ class AssistantInspectToolTest {
         coEvery {
             toolSetFactory.buildTools(
                 assistant = any(),
+                conversationId = any(),
                 settings = any(),
                 capabilityModel = any(),
                 workspaceCwd = any(),
@@ -284,20 +296,18 @@ class AssistantInspectToolTest {
     @Test
     fun `target is caller returns target_is_caller`() = runTest {
         val caller = caller(allowed = emptySet())
-        val result = parseResult(
-            inspectTool(createFactory(listOf(caller)), caller).execute(args(assistantId = callerId)),
+        val result = failureResult(
+            inspectTool(createFactory(listOf(caller)), caller), args(assistantId = callerId),
         )
-        assertEquals("target_is_caller", result["error"]!!.jsonPrimitive.content)
+        assertEquals("target_is_caller", result["reason"]!!.jsonPrimitive.content)
     }
 
     @Test
     fun `target not allowed returns target_not_allowed`() = runTest {
         val target = accessibleTarget()
         val caller = caller(allowed = emptySet())
-        val result = parseResult(
-            inspectTool(createFactory(listOf(caller, target)), caller).execute(args()),
-        )
-        assertEquals("target_not_allowed", result["error"]!!.jsonPrimitive.content)
+        val result = failureResult(inspectTool(createFactory(listOf(caller, target)), caller), args())
+        assertEquals("target_not_allowed", result["reason"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -311,8 +321,8 @@ class AssistantInspectToolTest {
         )
         val factory = createFactory(listOf(otherCaller, target))
         val caller = caller()
-        val result = parseResult(inspectTool(factory, caller).execute(args()))
-        assertEquals("tool_not_permitted", result["error"]!!.jsonPrimitive.content)
+        val result = failureResult(inspectTool(factory, caller), args())
+        assertEquals("tool_not_permitted", result["reason"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -329,8 +339,8 @@ class AssistantInspectToolTest {
             caller.copy(localTools = listOf(LocalToolOption.AssistantManagement)),
             Uuid.random(),
         ).single { it.name == "assistant_inspect" }
-        val result = parseResult(tool.execute(args()))
-        assertEquals("tool_not_permitted", result["error"]!!.jsonPrimitive.content)
+        val result = failureResult(tool, args())
+        assertEquals("tool_not_permitted", result["reason"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -346,9 +356,9 @@ class AssistantInspectToolTest {
     @Test
     fun `missing assistant_id returns invalid_arguments`() = runTest {
         val caller = caller()
-        val result = parseResult(
-            inspectTool(createFactory(listOf(caller)), caller).execute(buildJsonObject { }),
+        val result = failureResult(
+            inspectTool(createFactory(listOf(caller)), caller), buildJsonObject { },
         )
-        assertEquals("invalid_arguments", result["error"]!!.jsonPrimitive.content)
+        assertEquals("invalid_arguments", result["reason"]!!.jsonPrimitive.content)
     }
 }

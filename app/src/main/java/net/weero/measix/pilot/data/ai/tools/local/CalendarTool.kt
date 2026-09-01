@@ -21,7 +21,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.data.ai.tools.failToolResult
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -84,15 +86,10 @@ internal fun buildCalendarQueryTool(context: Context): Tool = Tool(
     },
     execute = { args ->
         if (!hasCalendarReadPermission(context)) {
-            val payload = buildJsonObject {
-                put("error", "NO_PERMISSION")
-                put(
-                    "message",
-                    "Calendar read permission is not granted. Please ask the user to enable " +
-                        "the calendar permission in the assistant's local tools settings."
-                )
-            }
-            return@Tool listOf(UIMessagePart.Text(payload.toString()))
+            failToolResult(
+                "no_permission",
+                "Calendar read permission is not granted. Ask the user to enable it in local tool settings.",
+            )
         }
 
         val params = args.jsonObject
@@ -123,19 +120,11 @@ internal fun buildCalendarQueryTool(context: Context): Tool = Tool(
                 else -> now.toLocalDate().plusDays(1).atStartOfDay(zone)
             }
         } catch (e: Exception) {
-            val payload = buildJsonObject {
-                put("error", "INVALID_TIME")
-                put("message", e.message ?: "Invalid time format for begin/end.")
-            }
-            return@Tool listOf(UIMessagePart.Text(payload.toString()))
+            failToolResult("invalid_time", e.message ?: "Invalid time format for begin/end.")
         }
 
         if (!startTime.isBefore(endTime)) {
-            val payload = buildJsonObject {
-                put("error", "INVALID_RANGE")
-                put("message", "begin must be earlier than end.")
-            }
-            return@Tool listOf(UIMessagePart.Text(payload.toString()))
+            failToolResult("invalid_range", "begin must be earlier than end.")
         }
 
         val startMs = startTime.toInstant().toEpochMilli()
@@ -241,7 +230,7 @@ internal sealed interface CalendarCreateParseResult {
             put("message", message)
         }
 
-        fun toToolResult(): List<UIMessagePart> = listOf(UIMessagePart.Text(toErrorJson().toString()))
+        fun toToolResult(): Nothing = failToolResult(error.lowercase(), message)
     }
 }
 
@@ -319,7 +308,7 @@ internal fun buildCalendarCreateTool(context: Context): Tool {
             Device timezone: '$zone' (UTC ${OffsetDateTime.now(zone).offset}).
             Requires Calendar permission; if missing, an error asks the user to enable it in local tools settings.
         """.trimIndent().replace("\n", " "),
-        needsApproval = { true },
+        interactionRequirement = { ToolInteractionRequirement.Approval },
         validateArguments = { args ->
             (parseCalendarCreateArguments(args, zone) as? CalendarCreateParseResult.Invalid)?.toErrorJson()
         },
@@ -367,24 +356,15 @@ internal fun buildCalendarCreateTool(context: Context): Tool {
                 is CalendarCreateParseResult.Valid -> parsed.event
             }
             if (!hasCalendarWritePermission(context)) {
-                val payload = buildJsonObject {
-                    put("error", "NO_PERMISSION")
-                    put(
-                        "message",
-                        "Calendar write permission is not granted. Please ask the user to enable " +
-                            "the calendar permission in the assistant's local tools settings."
-                    )
-                }
-                return@Tool listOf(UIMessagePart.Text(payload.toString()))
+                failToolResult(
+                    "no_permission",
+                    "Calendar write permission is not granted. Ask the user to enable it in local tool settings.",
+                )
             }
 
             val calendarId = getDefaultCalendarId(context)
             if (calendarId == null) {
-                val payload = buildJsonObject {
-                    put("error", "NO_CALENDAR")
-                    put("message", "No calendar account found on this device. Please add a calendar account first.")
-                }
-                return@Tool listOf(UIMessagePart.Text(payload.toString()))
+                failToolResult("no_calendar", "No calendar account is available on this device.")
             }
 
             val values = ContentValues().apply {
@@ -402,11 +382,7 @@ internal fun buildCalendarCreateTool(context: Context): Tool {
 
             val uri = context.contentResolver.insert(CalendarContract.Events.CONTENT_URI, values)
             if (uri == null) {
-                val payload = buildJsonObject {
-                    put("error", "INSERT_FAILED")
-                    put("message", "Failed to insert calendar event.")
-                }
-                return@Tool listOf(UIMessagePart.Text(payload.toString()))
+                failToolResult("insert_failed", "Failed to insert calendar event.")
             }
 
             val eventId = ContentUris.parseId(uri)

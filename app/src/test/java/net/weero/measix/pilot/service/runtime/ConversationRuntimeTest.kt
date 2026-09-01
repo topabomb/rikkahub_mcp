@@ -261,12 +261,12 @@ class ConversationRuntimeTest {
             )
         )
         rt.retainAwaitingApproval(handle)
-        assertEquals(ConversationTurnPhase.AWAITING_APPROVAL, rt.currentTurnPresentation().phase)
+        assertEquals(ConversationTurnPhase.AWAITING_USER, rt.currentTurnPresentation().phase)
 
-        rt.applyCommand(UpdateToolApproval(
+        rt.applyCommand(ResolveToolInteraction(
                 messageId = waiting.id,
                 toolOrdinal = 0,
-                approvalState = ToolApprovalState.Approved,
+                decision = ToolUserDecision.Approve,
                 handle = handle,
             )
         )
@@ -284,7 +284,7 @@ class ConversationRuntimeTest {
             ToolCallPhase.READY,
             rt.snapshot.value.activeTurn?.toolCallPhases?.get(ToolCallLocator(waiting.id, 0)),
         )
-        assertEquals(ConversationTurnPhase.AWAITING_APPROVAL, rt.currentTurnPresentation().phase)
+        assertEquals(ConversationTurnPhase.AWAITING_USER, rt.currentTurnPresentation().phase)
         rt.markRunning(handle)
         assertEquals(ConversationTurnPhase.GENERATING, rt.currentTurnPresentation().phase)
         scope.cancel()
@@ -319,14 +319,14 @@ class ConversationRuntimeTest {
         )
         val worker = requireNotNull(rt.currentWorker())
         rt.retainAwaitingApproval(handle)
-        assertEquals(ConversationTurnPhase.AWAITING_APPROVAL, rt.currentTurnPresentation().phase)
+        assertEquals(ConversationTurnPhase.AWAITING_USER, rt.currentTurnPresentation().phase)
         assertSame(worker, rt.currentWorker())
         assertEquals(handle.turnId, rt.currentGenerationTurnId())
 
-        rt.applyCommand(UpdateToolApproval(
+        rt.applyCommand(ResolveToolInteraction(
                 messageId = waiting.id,
                 toolOrdinal = 0,
-                approvalState = ToolApprovalState.Answered("keep going"),
+                decision = ToolUserDecision.Answer("keep going"),
                 handle = handle,
             )
         )
@@ -726,8 +726,8 @@ class ConversationRuntimeTest {
 
         val answered = ToolApprovalState.Answered("keep the current assistant")
         val denied = ToolApprovalState.Denied("background change rejected")
-        rt.applyCommand(UpdateToolApproval(waiting.id, 0, answered, handle))
-        rt.applyCommand(UpdateToolApproval(waiting.id, 1, denied, handle))
+        rt.applyCommand(ResolveToolInteraction(waiting.id, 0, ToolUserDecision.Answer("keep the current assistant"), handle))
+        rt.applyCommand(ResolveToolInteraction(waiting.id, 1, ToolUserDecision.Deny("background change rejected"), handle))
 
         val projected = rt.snapshot.value.currentMessages().last().getTools().map { it.approvalState }
         val durable = rt.snapshot.value.nodes.last().currentMessage.getTools().map { it.approvalState }

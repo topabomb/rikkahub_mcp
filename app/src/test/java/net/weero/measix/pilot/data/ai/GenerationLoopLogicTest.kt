@@ -2,70 +2,24 @@ package net.weero.measix.pilot.data.ai
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.add
-import kotlinx.serialization.json.addJsonObject
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
-import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
-import net.weero.measix.pilot.data.ai.tools.local.buildAskUserTool
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+/**
+ * Durable message-part semantics used by the generation loop. Gate behaviour itself is owned by
+ * ToolCallRuntimeGateTest; this file keeps only the message/ordinal data-model invariants.
+ */
 class GenerationLoopLogicTest {
 
     private val json = Json { encodeDefaults = true }
-
-    // region Tool approval state transition tests
-
-    @Test
-    fun `tool with Auto state and needsApproval should transition to Pending`() {
-        val tool = UIMessagePart.Tool(
-            toolCallId = "tc1",
-            toolName = "ask_user",
-            input = validAskUserInput(),
-            approvalState = ToolApprovalState.Auto
-        )
-        val updated = resolveToolApprovals(
-            toolsAwaitingReplayResult = listOf(tool),
-            toolDefinitions = buildToolIndex(listOf(toolDefinition("ask_user", needsApproval = true))),
-            nonInteractive = false,
-            interactiveToolNames = emptySet(),
-            json = json,
-        ).tools.single()
-
-        assertTrue(updated.isPending)
-        assertEquals(ToolApprovalState.Pending, updated.approvalState)
-    }
-
-    @Test
-    fun `tool with Auto state and no needsApproval should remain Auto`() {
-        val tool = UIMessagePart.Tool(
-            toolCallId = "tc1",
-            toolName = "search_web",
-            input = """{"query":"test"}""",
-            approvalState = ToolApprovalState.Auto
-        )
-        val updated = resolveToolApprovals(
-            toolsAwaitingReplayResult = listOf(tool),
-            toolDefinitions = buildToolIndex(listOf(toolDefinition("search_web", needsApproval = false))),
-            nonInteractive = false,
-            interactiveToolNames = emptySet(),
-            json = json,
-        ).tools.single()
-
-        assertFalse(updated.isPending)
-        assertEquals(ToolApprovalState.Auto, updated.approvalState)
-    }
 
     @Test
     fun `denied tool should produce error output`() {
@@ -76,22 +30,16 @@ class GenerationLoopLogicTest {
             approvalState = ToolApprovalState.Denied("Security concern")
         )
 
-        // Simulate the denied handler in GenerationLoop
-        val output = when (tool.approvalState) {
-            is ToolApprovalState.Denied -> {
-                val reason = (tool.approvalState as ToolApprovalState.Denied).reason
-                listOf(
-                    UIMessagePart.Text(
-                        json.encodeToString(
-                            buildJsonObject {
-                                put("error", JsonPrimitive("Tool execution denied by user. Reason: $reason"))
-                            }
-                        )
-                    )
+        val reason = (tool.approvalState as ToolApprovalState.Denied).reason
+        val output = listOf(
+            UIMessagePart.Text(
+                json.encodeToString(
+                    buildJsonObject {
+                        put("error", JsonPrimitive("Tool execution denied by user. Reason: $reason"))
+                    }
                 )
-            }
-            else -> emptyList()
-        }
+            )
+        )
 
         val executedTool = tool.copy(output = output)
         assertTrue(executedTool.hasReplayResult)
@@ -123,15 +71,8 @@ class GenerationLoopLogicTest {
             approvalState = ToolApprovalState.Answered("My name is Alice")
         )
 
-        val output = when (tool.approvalState) {
-            is ToolApprovalState.Answered -> {
-                val answer = (tool.approvalState as ToolApprovalState.Answered).answer
-                listOf(UIMessagePart.Text(answer))
-            }
-            else -> emptyList()
-        }
-
-        val executedTool = tool.copy(output = output)
+        val answer = (tool.approvalState as ToolApprovalState.Answered).answer
+        val executedTool = tool.copy(output = listOf(UIMessagePart.Text(answer)))
         assertTrue(executedTool.hasReplayResult)
         assertEquals("My name is Alice", (executedTool.output[0] as UIMessagePart.Text).text)
     }
@@ -217,7 +158,6 @@ class GenerationLoopLogicTest {
 
         val toolsAwaitingReplayResult = message.getTools().filter { !it.hasReplayResult }
         assertTrue(toolsAwaitingReplayResult.isEmpty())
-        // This should trigger "break" in the ReAct loop
     }
 
     @Test
@@ -250,29 +190,6 @@ class GenerationLoopLogicTest {
         assertEquals(1, executed.size)
         assertEquals("tc1", executed[0].toolCallId)
     }
-
-    @Test
-    fun `tool output truncation threshold check`() {
-        val maxOutputChars = 32 * 1024
-        val previewChars = 4 * 1024
-
-        // Small output should not be truncated
-        val smallOutput = "x".repeat(maxOutputChars - 1)
-        assertTrue(smallOutput.length <= maxOutputChars)
-
-        // Large output should be truncated
-        val largeOutput = "x".repeat(maxOutputChars + 1)
-        assertTrue(largeOutput.length > maxOutputChars)
-
-        // Preview should be smaller than full output
-        val preview = largeOutput.take(previewChars)
-        assertEquals(previewChars, preview.length)
-        assertTrue(preview.length < largeOutput.length)
-    }
-
-    // endregion
-
-    // region Message update after tool execution
 
     @Test
     fun `update message parts with executed tools`() {
@@ -328,269 +245,4 @@ class GenerationLoopLogicTest {
         assertEquals("result1", (updatedMessage.getTools()[0].output.single() as UIMessagePart.Text).text)
         assertEquals("result2", (updatedMessage.getTools()[1].output.single() as UIMessagePart.Text).text)
     }
-
-    @Test
-    fun `pending approval is a batch barrier for automatic tools`() {
-        val automatic = UIMessagePart.Tool(
-            toolCallId = "auto",
-            toolName = "get_time_info",
-            input = "{}",
-        )
-        val question = UIMessagePart.Tool(
-            toolCallId = "question",
-            toolName = "ask_user",
-            input = validAskUserInput(),
-        )
-
-        val resolution = resolveToolApprovals(
-            toolsAwaitingReplayResult = listOf(automatic, question),
-            toolDefinitions = buildToolIndex(listOf(
-                toolDefinition("get_time_info", needsApproval = false),
-                toolDefinition("ask_user", needsApproval = true),
-            )),
-            nonInteractive = false,
-            interactiveToolNames = emptySet(),
-            json = json,
-        )
-
-        assertTrue(resolution.hasPendingApproval)
-        assertFalse(resolution.tools[0].hasReplayResult)
-        assertEquals(ToolApprovalState.Pending, resolution.tools[1].approvalState)
-    }
-
-    @Test
-    fun `target mode exposes ask user but rejects other approval tools`() {
-        val question = UIMessagePart.Tool(
-            toolCallId = "question",
-            toolName = "ask_user",
-            input = validAskUserInput(),
-        )
-        val shell = UIMessagePart.Tool(
-            toolCallId = "shell",
-            toolName = "workspace_shell",
-            input = "{}",
-        )
-
-        val resolution = resolveToolApprovals(
-            toolsAwaitingReplayResult = listOf(question, shell),
-            toolDefinitions = buildToolIndex(listOf(
-                toolDefinition("ask_user", needsApproval = true),
-                toolDefinition("workspace_shell", needsApproval = true),
-            )),
-            nonInteractive = true,
-            interactiveToolNames = setOf("ask_user"),
-            json = json,
-        )
-
-        assertTrue(resolution.hasPendingApproval)
-        assertEquals(ToolApprovalState.Pending, resolution.tools[0].approvalState)
-        val rejected = resolution.tools[1]
-        assertTrue(rejected.hasReplayResult)
-        assertNotEquals(ToolApprovalState.Pending, rejected.approvalState)
-        val payload = json.parseToJsonElement(
-            (rejected.output.single() as UIMessagePart.Text).text
-        ).jsonObject
-        assertEquals("tool_not_permitted", payload["error"]!!.jsonPrimitive.content)
-        assertEquals("approval_unavailable", payload["reason"]!!.jsonPrimitive.content)
-    }
-
-    @Test
-    fun `non interactive approval rejection returns approval_unavailable structure`() {
-        val shell = UIMessagePart.Tool(
-            toolCallId = "shell",
-            toolName = "workspace_shell",
-            input = "{}",
-        )
-
-        val resolution = resolveToolApprovals(
-            toolsAwaitingReplayResult = listOf(shell),
-            toolDefinitions = buildToolIndex(listOf(
-                toolDefinition("workspace_shell", needsApproval = true),
-            )),
-            nonInteractive = true,
-            interactiveToolNames = emptySet(),
-            json = json,
-        )
-
-        assertFalse(resolution.hasPendingApproval)
-        val rejected = resolution.tools.single()
-        assertTrue(rejected.hasReplayResult)
-        assertNotEquals(ToolApprovalState.Pending, rejected.approvalState)
-        val payload = json.parseToJsonElement(
-            (rejected.output.single() as UIMessagePart.Text).text
-        ).jsonObject
-        assertEquals("tool_not_permitted", payload["error"]!!.jsonPrimitive.content)
-        assertEquals("approval_unavailable", payload["reason"]!!.jsonPrimitive.content)
-        assertEquals(
-            "Approval is required but unavailable in this run. Do not retry unchanged.",
-            payload["message"]!!.jsonPrimitive.content,
-        )
-    }
-
-    @Test
-    fun `non interactive mode does not reject tools that do not need approval`() {
-        val automatic = UIMessagePart.Tool(
-            toolCallId = "auto",
-            toolName = "get_time_info",
-            input = "{}",
-        )
-
-        val resolution = resolveToolApprovals(
-            toolsAwaitingReplayResult = listOf(automatic),
-            toolDefinitions = buildToolIndex(listOf(
-                toolDefinition("get_time_info", needsApproval = false),
-            )),
-            nonInteractive = true,
-            interactiveToolNames = emptySet(),
-            json = json,
-        )
-
-        assertFalse(resolution.hasPendingApproval)
-        val tool = resolution.tools.single()
-        assertFalse(tool.hasReplayResult)
-        assertEquals(ToolApprovalState.Auto, tool.approvalState)
-    }
-
-    @Test
-    fun `invalid ask_user arguments fail at the approval gate`() {
-        val tool = UIMessagePart.Tool(
-            toolCallId = "tc1",
-            toolName = "ask_user",
-            input = """
-                {"questions":[{"id":"retry_ask","question":"看到输入框了吗？","selection_type":"single","options":[{"value":"yes","label":"看到了"}]}]}
-            """.trimIndent(),
-            approvalState = ToolApprovalState.Auto,
-        )
-
-        val resolution = resolveToolApprovals(
-            toolsAwaitingReplayResult = listOf(tool),
-            toolDefinitions = buildToolIndex(listOf(buildAskUserTool())),
-            nonInteractive = false,
-            interactiveToolNames = emptySet(),
-            json = json,
-        )
-
-        val resolved = resolution.tools.single()
-        assertFalse(resolution.hasPendingApproval)
-        assertEquals(ToolApprovalState.Auto, resolved.approvalState)
-        assertTrue(resolved.hasReplayResult)
-        val output = (resolved.output.single() as UIMessagePart.Text).text
-        assertTrue(output.contains("invalid_arguments"))
-        assertTrue(output.contains("questions[0].options[0]"))
-    }
-
-    @Test
-    fun `already pending invalid ask_user is converted to a contract error`() {
-        val tool = UIMessagePart.Tool(
-            toolCallId = "tc1",
-            toolName = "ask_user",
-            input = """{"questions":[{"id":"q1","question":"Pick","selection_type":"single","options":[{"value":"a"}]}]}""",
-            approvalState = ToolApprovalState.Pending,
-        )
-
-        val resolution = resolveToolApprovals(
-            toolsAwaitingReplayResult = listOf(tool),
-            toolDefinitions = buildToolIndex(listOf(buildAskUserTool())),
-            nonInteractive = false,
-            interactiveToolNames = setOf("ask_user"),
-            json = json,
-        )
-
-        val resolved = resolution.tools.single()
-        assertFalse(resolution.hasPendingApproval)
-        assertTrue(resolved.hasReplayResult)
-        assertTrue((resolved.output.single() as UIMessagePart.Text).text.contains("invalid_arguments"))
-    }
-
-    @Test
-    fun `invalid ask_user in a mixed batch fails without blocking the valid question`() {
-        val invalid = UIMessagePart.Tool(
-            toolCallId = "bad",
-            toolName = "ask_user",
-            input = """{"questions":[{"id":"q1","question":"Pick","selection_type":"single","options":[{"value":"a"}]}]}""",
-        )
-        val valid = UIMessagePart.Tool(
-            toolCallId = "ok",
-            toolName = "ask_user",
-            input = buildJsonObject {
-                put("questions", buildJsonArray {
-                    addJsonObject {
-                        put("id", "q2")
-                        put("question", "Did you see the input field?")
-                        put("selection_type", "single")
-                        put("options", buildJsonArray {
-                            add("Yes")
-                            add("No")
-                        })
-                    }
-                })
-            }.toString(),
-        )
-
-        val resolution = resolveToolApprovals(
-            toolsAwaitingReplayResult = listOf(invalid, valid),
-            toolDefinitions = buildToolIndex(listOf(buildAskUserTool())),
-            nonInteractive = false,
-            interactiveToolNames = emptySet(),
-            json = json,
-        )
-
-        assertTrue(resolution.hasPendingApproval)
-        assertTrue(resolution.tools[0].hasReplayResult)
-        assertTrue((resolution.tools[0].output.single() as UIMessagePart.Text).text.contains("invalid_arguments"))
-        assertEquals(ToolApprovalState.Pending, resolution.tools[1].approvalState)
-        assertFalse(resolution.tools[1].hasReplayResult)
-    }
-
-    @Test
-    fun `valid ask_user arguments still enter HITL pending`() {
-        val args = buildJsonObject {
-            put("questions", buildJsonArray {
-                addJsonObject {
-                    put("id", "retry_ask")
-                    put("question", "Did you see the input field?")
-                    put("selection_type", "single")
-                    put("options", buildJsonArray {
-                        add("看到了弹窗")
-                        add("没看到弹窗")
-                    })
-                }
-            })
-        }
-        val tool = UIMessagePart.Tool(
-            toolCallId = "tc1",
-            toolName = "ask_user",
-            input = args.toString(),
-            approvalState = ToolApprovalState.Auto,
-        )
-
-        val resolution = resolveToolApprovals(
-            toolsAwaitingReplayResult = listOf(tool),
-            toolDefinitions = buildToolIndex(listOf(buildAskUserTool())),
-            nonInteractive = false,
-            interactiveToolNames = emptySet(),
-            json = json,
-        )
-
-        assertTrue(resolution.hasPendingApproval)
-        assertEquals(ToolApprovalState.Pending, resolution.tools.single().approvalState)
-    }
-
-    private fun validAskUserInput(): String = buildJsonObject {
-        put("questions", buildJsonArray {
-            addJsonObject {
-                put("id", "q1")
-                put("question", "Which one?")
-            }
-        })
-    }.toString()
-
-    private fun toolDefinition(name: String, needsApproval: Boolean) = Tool(
-        name = name,
-        description = name,
-        needsApproval = { needsApproval },
-        execute = { emptyList() },
-    )
-
-    // endregion
 }

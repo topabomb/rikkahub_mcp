@@ -260,7 +260,7 @@ S0.2 实施必须把该原则扩展为 realm-aware owner，而不是继续扩大
 | `filesDir/skills/<name>/` | `SKILL.md` 与附属文件 | 市场可按名覆盖或改名；助手只引用名字 |
 | `filesDir/upload/` | 用户上传与聊天附件 | 备份 |
 | `filesDir/fonts/` | 自定义聊天字体 | 偏好同步需带文件，或只同步主题、不带路径 |
-| `filesDir/tool_outputs/` | 工具超长输出落盘 | 不进配置同步 |
+| `filesDir/tool_outputs/` | `ArtifactStore` 管理的归档 Tool Result payload | 随数据库与 durable files 一起备份；不进配置下发 |
 | `filesDir/workspaces/<root>/` | Workspace Rootfs 与用户文件 | 备份或企业镜像；体积大 |
 | `filesDir/images/` | 文生图/编辑图的规范产物；元数据在 `GenMediaEntity` | 用户备份；不进配置下发或市场 |
 | `filesDir/jieba/` | FTS simple tokenizer 运行词典 | 可由应用资源重建，不同步 |

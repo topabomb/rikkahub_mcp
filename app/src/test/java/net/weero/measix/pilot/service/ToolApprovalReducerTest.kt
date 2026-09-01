@@ -6,6 +6,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import kotlinx.serialization.json.Json
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
+import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallPhase
 import net.weero.measix.pilot.data.ai.subassistant.buildInitialSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
@@ -14,9 +15,10 @@ import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
 import net.weero.measix.pilot.service.runtime.ConversationTransition
 import net.weero.measix.pilot.service.runtime.TurnHandle
-import net.weero.measix.pilot.service.runtime.UpdateToolApproval
+import net.weero.measix.pilot.service.runtime.ResolveToolInteraction
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.Assert.assertEquals
+import net.weero.measix.pilot.service.runtime.ToolUserDecision
 import org.junit.Test
 import kotlin.uuid.Uuid
 
@@ -26,12 +28,12 @@ class ToolApprovalReducerTest {
     private fun approval(
         messageId: Uuid,
         ordinal: Int,
-        state: ToolApprovalState,
+        decision: ToolUserDecision,
         conversationId: Uuid = Uuid.random(),
-    ) = UpdateToolApproval(
+    ) = ResolveToolInteraction(
         messageId = messageId,
         toolOrdinal = ordinal,
-        approvalState = state,
+        decision = decision,
         handle = TurnHandle(conversationId, 1, Uuid.random(), messageId),
     )
 
@@ -49,10 +51,10 @@ class ToolApprovalReducerTest {
             messageNodes = listOf(message.toMessageNode()),
         )
 
-        // HITL 审批走 UpdateToolApproval 命令（reducer 唯一路径）
+        // HITL 审批走 ResolveToolInteraction 命令（reducer 唯一路径）
         val updated = ConversationTransition.apply(
             conversation.toSnapshot(),
-            approval(message.id, 1, ToolApprovalState.Answered("answer")),
+            approval(message.id, 1, ToolUserDecision.Answer("answer")),
         )
 
         val tools = updated.currentMessages().last().getTools()
@@ -116,7 +118,7 @@ class ToolApprovalReducerTest {
         val snapshot = conversation.toSnapshot()
         val updated = ConversationTransition.apply(
             snapshot,
-            approval(Uuid.random(), 0, ToolApprovalState.Approved),
+            approval(Uuid.random(), 0, ToolUserDecision.Approve),
         )
         assertEquals(snapshot, updated)
     }
@@ -134,11 +136,11 @@ class ToolApprovalReducerTest {
 
         val afterFirst = ConversationTransition.apply(
             conversation.toSnapshot(),
-            approval(message.id, 0, ToolApprovalState.Answered("first"), conversation.id),
+            approval(message.id, 0, ToolUserDecision.Answer("first"), conversation.id),
         )
         val afterSecond = ConversationTransition.apply(
             afterFirst,
-            approval(message.id, 1, ToolApprovalState.Answered("second"), conversation.id),
+            approval(message.id, 1, ToolUserDecision.Answer("second"), conversation.id),
         )
 
         assertEquals(
@@ -245,6 +247,7 @@ class ToolApprovalReducerTest {
             targetNameSnapshot = "Reviewer",
         ).copy(
             state = SubAssistantCallState.RUNNING,
+            phase = SubAssistantCallPhase.AWAITING_USER,
             userInteraction = net.weero.measix.pilot.data.ai.subassistant.SubAssistantUserInteraction(
                 interactionId = interactionId,
                 messageId = Uuid.random().toString(),

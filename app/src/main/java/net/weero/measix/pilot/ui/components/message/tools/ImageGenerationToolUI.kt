@@ -114,7 +114,10 @@ internal fun resolveImageGenerationUiState(context: ToolUIContext): ImageGenerat
     val status = context.resultStatus()
     return when (context.phase) {
         ToolCallPhase.CALL_STREAMING -> ImageGenerationUiState.CallStreaming
-        ToolCallPhase.AWAITING_APPROVAL -> ImageGenerationUiState.AwaitingApproval
+        // generate_image 只可能等待授权审批；AWAITING_INPUT 对其不可达，投影为同一等待态。
+        ToolCallPhase.AWAITING_APPROVAL,
+        ToolCallPhase.AWAITING_INPUT,
+        -> ImageGenerationUiState.AwaitingApproval
         ToolCallPhase.DENIED -> ImageGenerationUiState.Denied
         ToolCallPhase.CANCELLED -> ImageGenerationUiState.Cancelled
         ToolCallPhase.INTERRUPTED -> ImageGenerationUiState.Interrupted

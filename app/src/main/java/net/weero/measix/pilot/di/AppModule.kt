@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.ai.tools.AssistantToolFactory
 import net.weero.measix.pilot.data.ai.tools.GenerationToolSetFactory
+import net.weero.measix.pilot.data.ai.tools.ToolOutputStore
 import net.weero.measix.pilot.data.ai.tools.local.ImageGenerationToolFactory
 import net.weero.measix.pilot.data.ai.tools.local.LocalTools
 import net.weero.measix.pilot.data.event.AppEventBus
@@ -198,6 +199,8 @@ val appModule = module {
         )
     }
 
+    single { ToolOutputStore(get()) }
+
     single {
         GenerationToolSetFactory(
             localTools = get(),
@@ -208,6 +211,7 @@ val appModule = module {
             mcpManager = get(),
             providerManager = get(),
             artifactStore = get(),
+            toolOutputStore = get(),
         )
     }
 

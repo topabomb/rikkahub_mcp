@@ -97,6 +97,7 @@ import kotlin.uuid.Uuid
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
+import net.weero.measix.pilot.service.runtime.ConversationCommandConflictException
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 import net.weero.measix.pilot.service.runtime.TurnPipelineFactory
 import net.weero.measix.pilot.service.runtime.TurnEngine
@@ -118,7 +119,11 @@ import net.weero.measix.pilot.service.runtime.ReplaceMessageTree
 import net.weero.measix.pilot.service.runtime.SelectNodeVariant
 import net.weero.measix.pilot.service.runtime.TruncateToNodeIndex
 import net.weero.measix.pilot.service.runtime.UpdateHeader
-import net.weero.measix.pilot.service.runtime.UpdateToolApproval
+import net.weero.measix.pilot.service.runtime.ResolveToolInteraction
+import net.weero.measix.pilot.service.runtime.ToolUserDecision
+import net.weero.measix.pilot.service.runtime.toApprovalState
+import net.weero.measix.pilot.data.ai.tools.ToolInteractionKind
+import net.weero.measix.pilot.data.ai.tools.ToolRuntimeMetadata
 
 private const val TAG = "MasterTurnCoordinator"
 
@@ -128,7 +133,7 @@ internal enum class MasterTurnEntry {
     START,
 
     /** Continues the existing approval-paused owner without mutating the message tree. */
-    CONTINUE_APPROVAL,
+    CONTINUE_USER_INTERACTION,
 }
 
 internal data class MasterTurnLaunchPolicy(
@@ -151,7 +156,7 @@ internal fun masterTurnLaunchPolicy(
         MasterTurnLaunchPolicy(runStructuralPreflight = true, reuseTtsQueue = false)
     }
 
-    MasterTurnEntry.CONTINUE_APPROVAL -> {
+    MasterTurnEntry.CONTINUE_USER_INTERACTION -> {
         check(messageRange == null) { "an approval continuation cannot use a message range" }
         val active = requireNotNull(snapshot.activeTurn) { "approval continuation has no active turn" }
         check(active.turnId == turnId) {
@@ -162,36 +167,41 @@ internal fun masterTurnLaunchPolicy(
 }
 
 /**
- * Approval decisions are continuations of the active durable turn. This orchestration seam owns
- * the exact approval command and makes it impossible for approve/deny to enter the new-turn
- * structural preflight path.
+ * User decisions are continuations of the active durable turn. This orchestration seam owns the
+ * exact interaction command and makes it impossible for approve/deny/answer to enter the new-turn
+ * structural preflight path. A decision whose type does not match the interaction the call paused
+ * for is rejected fail-closed; an Answer is never permission and an Approve is never an answer.
  */
-internal suspend fun applyToolApprovalDecision(
+internal suspend fun applyToolUserDecision(
     locator: ToolCallLocator,
-    approvalState: ToolApprovalState,
+    decision: ToolUserDecision,
     awaitPreviousGeneration: suspend () -> Unit,
     currentSnapshot: () -> ConversationSnapshot,
-    submit: suspend (UpdateToolApproval) -> Unit,
+    submit: suspend (ResolveToolInteraction) -> Unit,
     onMoreApprovalsPending: suspend () -> Unit,
     continueTurn: suspend (ActiveTurnState, MasterTurnEntry) -> Unit,
 ) {
     awaitPreviousGeneration()
     val before = currentSnapshot()
-    val pending = before.currentMessages()
+    val located = before.currentMessages()
         .firstOrNull { it.id == locator.messageId }
         ?.getTools()
         ?.getOrNull(locator.toolOrdinal)
-        ?.takeIf { it.approvalState == ToolApprovalState.Pending }
-        ?: return
-    check(!pending.hasReplayResult) { "tool with a replay result cannot accept an approval decision" }
+        ?: throw ConversationCommandConflictException("stale tool interaction locator: $locator")
+    val targetState = decision.toApprovalState()
+    if (located.approvalState == targetState) return
+    val pending = located.takeIf { it.approvalState == ToolApprovalState.Pending }
+        ?: throw ConversationCommandConflictException("tool interaction is no longer pending: $locator")
+    check(!pending.hasReplayResult) { "tool with a replay result cannot accept a user decision" }
+    requireDecisionMatchesInteraction(pending, decision)
 
     submit(
-        UpdateToolApproval(
+        ResolveToolInteraction(
             messageId = locator.messageId,
             toolOrdinal = locator.toolOrdinal,
-            approvalState = approvalState,
+            decision = decision,
             handle = before.activeTurn.let { owner ->
-                requireNotNull(owner) { "tool approval has no active turn owner" }
+                requireNotNull(owner) { "tool interaction has no active turn owner" }
                 TurnHandle(
                     conversationId = before.conversationId,
                     epoch = owner.epoch,
@@ -207,15 +217,38 @@ internal suspend fun applyToolApprovalDecision(
         .firstOrNull { it.id == locator.messageId }
         ?.getTools()
         ?.getOrNull(locator.toolOrdinal)
-    check(committed?.approvalState == approvalState) { "tool approval command was not committed" }
+    check(committed?.approvalState == targetState) {
+        "tool interaction command was not committed"
+    }
     if (after.currentMessages().lastOrNull()?.getTools()?.any { it.isPending } == true) {
         onMoreApprovalsPending()
         return
     }
     continueTurn(
         requireNotNull(after.activeTurn) { "decided tool has no owning active turn" },
-        MasterTurnEntry.CONTINUE_APPROVAL,
+        MasterTurnEntry.CONTINUE_USER_INTERACTION,
     )
+}
+
+/** Runtime metadata 存在时必须严格匹配；只有真正缺少保留键的旧 Pending 才走 legacy 恢复。 */
+private fun requireDecisionMatchesInteraction(
+    pending: UIMessagePart.Tool,
+    decision: ToolUserDecision,
+) {
+    check(!ToolRuntimeMetadata.isInvalid(pending.metadata)) {
+        "pending tool interaction metadata is invalid"
+    }
+    val kind = ToolRuntimeMetadata.interactionKindOf(pending.metadata) ?: return
+    val matches = when (decision) {
+        ToolUserDecision.Approve,
+        is ToolUserDecision.Deny,
+        -> kind == ToolInteractionKind.APPROVAL
+
+        is ToolUserDecision.Answer -> kind == ToolInteractionKind.USER_INPUT
+    }
+    check(matches) {
+        "decision ${decision::class.simpleName} does not match interaction $kind"
+    }
 }
 
 /**
@@ -493,28 +526,21 @@ class MasterTurnCoordinator(
         }
     }
 
-    // ---- 处理工具调用审批 ----
+    // ---- 处理工具审批与用户输入 ----
 
-    fun handleToolApproval(
+    fun submitToolDecision(
         conversationId: Uuid,
         locator: ToolCallLocator,
-        approved: Boolean,
-        reason: String = "",
-        answer: String? = null,
+        decision: ToolUserDecision,
     ) {
         val runtime = requireRuntime(conversationId)
         appScope.launch {
             try {
                 recoveryGate.awaitReady()
                 runtime.withToolApprovalLock {
-                    val newApprovalState = when {
-                        answer != null -> ToolApprovalState.Answered(answer)
-                        approved -> ToolApprovalState.Approved
-                        else -> ToolApprovalState.Denied(reason)
-                    }
-                    applyToolApprovalDecision(
+                    applyToolUserDecision(
                         locator = locator,
-                        approvalState = newApprovalState,
+                        decision = decision,
                         // Pending is emitted immediately before the Flow terminates. Joining the
                         // previous job guarantees its checkpoint is durable before the decision.
                         awaitPreviousGeneration = { runtime.awaitCurrentWorker() },
@@ -630,7 +656,7 @@ class MasterTurnCoordinator(
                     turnFinalization = turnFinalization,
                 )
 
-                MasterTurnEntry.CONTINUE_APPROVAL -> {
+                MasterTurnEntry.CONTINUE_USER_INTERACTION -> {
                     check(sourceMessages.lastOrNull()?.let(resumeFilter) == true) {
                         "active turn does not point to a resumable approval message"
                     }
@@ -712,6 +738,7 @@ class MasterTurnCoordinator(
                 } else {
                     toolSetFactory.buildTools(
                         assistant = currentAssistant,
+                        conversationId = conversationId,
                         settings = currentSettings,
                         capabilityModel = model,
                         workspaceCwd = snapshot.header.workspaceCwd,
@@ -750,6 +777,7 @@ class MasterTurnCoordinator(
             }
             generationLoop.run(
                 GenerationRequest(
+                    conversationId = conversationId,
                     settings = settings,
                     model = model,
                     reportProcessingText = runtime.processingReporter(),

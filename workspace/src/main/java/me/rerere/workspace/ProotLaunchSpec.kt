@@ -28,7 +28,6 @@ data class ProotLaunchSpec(
     companion object {
         const val WORKSPACE_DIR = WorkspaceManager.ROOTFS_WORKSPACE_DIR
         const val SKILLS_DIR = "/skills"
-        const val TOOL_OUTPUTS_DIR = "/tool_outputs"
         const val UPLOAD_DIR = "/upload"
         const val KERNEL_RELEASE = "4.14.0"
         const val PROOT_EXEC = "libproot_exec.so"
@@ -40,7 +39,6 @@ data class ProotLaunchSpec(
          */
         fun appBindMounts(appFilesDir: File): List<WorkspaceBindMount> = listOf(
             WorkspaceBindMount(File(appFilesDir, "skills").apply { mkdirs() }, SKILLS_DIR),
-            WorkspaceBindMount(File(appFilesDir, "tool_outputs").apply { mkdirs() }, TOOL_OUTPUTS_DIR),
             WorkspaceBindMount(File(appFilesDir, "upload").apply { mkdirs() }, UPLOAD_DIR),
         )
 

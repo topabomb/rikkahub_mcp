@@ -32,8 +32,8 @@ enum class ArtifactOrigin {
  * 受引用文件实体的注册行——聊天域与设置域的 artifact 注册表。
  *
  * 一行 = 一个被消息树或助手设置引用的本地文件（含生命周期状态与引用投影入口）。
- * 相册域的生成媒体 canonical 不在本表（由 gen_media 编目）；无引用需求的落盘
- * 文件（tool_outputs）也不在本表。
+ * 相册域的生成媒体 canonical 不在本表（由 gen_media 编目）；受消息 metadata 中
+ * TOOL_OUTPUT reference 保留的归档工具输出属于本表，由 Artifact 生命周期统一管理。
  */
 @Entity(
     tableName = "artifact",

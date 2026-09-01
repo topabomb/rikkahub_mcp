@@ -42,6 +42,7 @@ import net.weero.measix.pilot.service.ArtifactDraftScope
 import net.weero.measix.pilot.service.FavoriteService
 import net.weero.measix.pilot.service.runtime.ConversationSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
+import net.weero.measix.pilot.service.runtime.ToolUserDecision
 import net.weero.measix.pilot.ui.components.ai.SearchMode
 import net.weero.measix.pilot.ui.components.ai.searchModeEnablesBuiltIn
 import net.weero.measix.pilot.ui.components.ai.searchModeEnablesLocal
@@ -307,19 +308,11 @@ class ChatVM(
         masterTurnCoordinator.regenerateAtMessage(_conversationId, message, regenerateAssistantMsg)
     }
 
-    fun handleToolApproval(
+    fun submitToolDecision(
         locator: ToolCallLocator,
-        approved: Boolean,
-        reason: String = ""
+        decision: ToolUserDecision,
     ) {
-        masterTurnCoordinator.handleToolApproval(_conversationId, locator, approved, reason)
-    }
-
-    fun handleToolAnswer(
-        locator: ToolCallLocator,
-        answer: String,
-    ) {
-        masterTurnCoordinator.handleToolApproval(_conversationId, locator, approved = true, answer = answer)
+        masterTurnCoordinator.submitToolDecision(_conversationId, locator, decision)
     }
 
     fun handleSubAssistantAnswer(runId: String, interactionId: String, answer: String): Boolean =

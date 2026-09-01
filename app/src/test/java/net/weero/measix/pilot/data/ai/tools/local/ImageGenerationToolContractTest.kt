@@ -6,11 +6,13 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.imggen.ImageGenerationModelDescriptor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ImageGenerationToolContractTest {
@@ -82,7 +84,9 @@ class ImageGenerationToolContractTest {
 
     @Test
     fun `failed result always has text part`() {
-        val parts = failedResult("provider_error")
+        val parts = assertThrows(ToolExecutionFailure::class.java) {
+            failedResult("provider_error")
+        }.output
         assertEquals(1, parts.size)
         assertTrue(parts.single() is UIMessagePart.Text)
         assertTrue((parts.single() as UIMessagePart.Text).text.contains("provider_error"))
@@ -90,7 +94,9 @@ class ImageGenerationToolContractTest {
 
     @Test
     fun `failed result includes clipped detail when provided`() {
-        val parts = failedResult("rate_limited", "Please retry after 2 seconds.")
+        val parts = assertThrows(ToolExecutionFailure::class.java) {
+            failedResult("rate_limited", "Please retry after 2 seconds.")
+        }.output
         val json = Json.parseToJsonElement((parts.single() as UIMessagePart.Text).text).jsonObject
         assertEquals("failed", json["status"]?.jsonPrimitive?.content)
         assertEquals("rate_limited", json["reason"]?.jsonPrimitive?.content)

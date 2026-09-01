@@ -7,6 +7,6 @@ object FileFolders {
     const val SKILLS = "skills"
     const val FONTS = "fonts"
 
-    /** Tool outputs are ephemeral model context and are not managed artifacts. */
+    /** 归档 Tool Result 的受管 Artifact 目录：只经 ToolOutputStore scoped read 访问。 */
     const val TOOL_OUTPUTS = "tool_outputs"
 }

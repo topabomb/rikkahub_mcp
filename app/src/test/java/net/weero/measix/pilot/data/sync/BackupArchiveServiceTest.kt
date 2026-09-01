@@ -156,6 +156,21 @@ class BackupArchiveServiceTest {
     }
 
     @Test
+    fun `managed tool output artifact is restored with its database root`() = runTest {
+        val path = "tool_outputs/result.txt"
+        val stagedDb = File(work, "tool-output.sqlite")
+        createDatabase(stagedDb, "tool-output", artifactPath = path)
+        val archive = modernArchive(stagedDb, mapOf(path to "full result".toByteArray()))
+
+        service.stageRestore(archive, BackupSelection(true, true))
+        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+
+        assertEquals("tool-output", databaseMarker(context.getDatabasePath("measix_pilot")))
+        assertEquals("full result", File(context.filesDir, path).readText())
+        PendingBackupRestore.complete(context)
+    }
+
+    @Test
     fun `aggregate with a missing declared custom font is rejected`() = runTest {
         val stagedDb = File(work, "missing-font.sqlite")
         createDatabase(stagedDb, "new")
@@ -205,7 +220,7 @@ class BackupArchiveServiceTest {
 
     @Test
     fun `swap faults rollback and retry`() = runTest {
-        val swapPoints = listOf("measix_pilot.db", "upload", "images", "skills", "fonts")
+        val swapPoints = listOf("measix_pilot.db") + BackupArchiveService.DURABLE_DIRECTORIES
         val stagedDb = File(work, "new-template.sqlite")
         createDatabase(stagedDb, "new")
         swapPoints.forEach { faultPoint ->

@@ -2,6 +2,7 @@ package net.weero.measix.pilot.data.ai.tools
 
 import io.mockk.every
 import io.mockk.mockk
+import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.Provider
@@ -78,16 +79,20 @@ class ImageGenerationToolFactoryTest {
         val prompt = tool.systemPrompt(model, emptyList())
         assertTrue(prompt.contains("\"provider_type\":\"openai\""))
         assertTrue(prompt.contains("\"model_id\":\"gpt-image-1\""))
-        assertFalse(prompt.contains("apiKey"))
         assertFalse(
-            tool.needsApproval(
+            prompt.contains("apiKey")
+        )
+        assertEquals(
+            ToolInteractionRequirement.None,
+            tool.interactionRequirement(
                 kotlinx.serialization.json.buildJsonObject {
                     put("prompt", kotlinx.serialization.json.JsonPrimitive("cat"))
                 }
             )
         )
-        assertTrue(
-            tool.needsApproval(
+        assertEquals(
+            ToolInteractionRequirement.Approval,
+            tool.interactionRequirement(
                 kotlinx.serialization.json.buildJsonObject {
                     put("prompt", kotlinx.serialization.json.JsonPrimitive("cat"))
                     put("set_as_background", kotlinx.serialization.json.JsonPrimitive(true))

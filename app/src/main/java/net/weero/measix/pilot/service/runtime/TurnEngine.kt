@@ -147,12 +147,16 @@ class TurnEngine(
                 handle = handle,
                 kind = checkpoint.kind,
                 messages = checkpoint.messages,
+                toolOutputCompactionPatches = checkpoint.toolOutputCompactionPatches,
                 turnStatus = TurnExecutionStatus.RUNNING,
                 turnReason = null,
                 toolExecution = checkpoint.toolExecution.toToolExecutionEntity(handle.turnId),
                 toolResults = checkpoint.toolResults,
             ),
         )
+        // Durable checkpoint outranks later presentation delivery. A cancellation between commit
+        // and the next Messages chunk must finalize from the committed projection, never an older one.
+        latestMessages.set(checkpoint.messages)
     }
 
     /** 把 GenerationChunk 流绑定到提交协议（冷流，collect 触发执行）。 */

@@ -16,12 +16,15 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.ToolArgumentsException
+import me.rerere.ai.core.ToolExecutionFailure
+import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.ui.UIMessagePart
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class CalendarCreateToolTest {
@@ -45,8 +48,18 @@ class CalendarCreateToolTest {
         for (raw in invalid) {
             val args = Json.parseToJsonElement(raw)
             val rejection = requireNotNull(tool.validateArguments(args))
-            val execution = (tool.execute(args).single() as UIMessagePart.Text).text
-            assertEquals(rejection, Json.parseToJsonElement(execution))
+            val failure = try {
+                tool.execute(args)
+                throw AssertionError("expected ToolExecutionFailure")
+            } catch (error: ToolExecutionFailure) {
+                error
+            }
+            val execution = Json.parseToJsonElement((failure.output.single() as UIMessagePart.Text).text).jsonObject
+            assertEquals("failed", execution["status"]!!.jsonPrimitive.content)
+            assertEquals(
+                rejection["error"]!!.jsonPrimitive.content.lowercase(),
+                execution["reason"]!!.jsonPrimitive.content,
+            )
             assertNull(rejection["type"])
             try {
                 tool.parseArguments(raw, Json)
@@ -69,7 +82,7 @@ class CalendarCreateToolTest {
             put("start", "2026-08-31T10:00:00+08:00")
         }
         assertNull(tool.validateArguments(args))
-        assertTrue(tool.needsApproval(args))
+        assertEquals(ToolInteractionRequirement.Approval, tool.interactionRequirement(args))
         assertEquals(args, tool.parseArguments(args.toString(), Json))
         verify { context wasNot Called }
     }
@@ -120,8 +133,10 @@ class CalendarCreateToolTest {
             }
             val result = parseCalendarCreateArguments(args, zone) as CalendarCreateParseResult.Invalid
             assertEquals(error, result.error)
-            val json = Json.parseToJsonElement((result.toToolResult().single() as UIMessagePart.Text).text).jsonObject
-            assertEquals(error, json["error"]!!.jsonPrimitive.content)
+            val failure = assertThrows(ToolExecutionFailure::class.java) { result.toToolResult() }
+            val json = Json.parseToJsonElement((failure.output.single() as UIMessagePart.Text).text).jsonObject
+            assertEquals("failed", json["status"]!!.jsonPrimitive.content)
+            assertEquals(error.lowercase(), json["reason"]!!.jsonPrimitive.content)
         }
     }
 

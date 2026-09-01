@@ -348,7 +348,7 @@ class GenerationSideEffects(
 }
 
 /**
- * 需要用户立刻处理的注意力键：普通工具 Pending，以及子助手桥接的 ask_user。
+ * 需要用户立刻处理的注意力键：普通工具 Pending，以及子助手桥接的 typed UserInput。
  * 用于前台审批音效去重，避免同一交互重复播放。
  */
 internal fun collectUserAttentionKeys(
@@ -361,18 +361,17 @@ internal fun collectUserAttentionKeys(
             if (tool.isPending) {
                 keys += "tool:${message.id}:$ordinal"
             }
-            if (tool.toolName == "assistant_call") {
-                val metadata = tool.getSubAssistantCallMetadata(json)
-                val interaction = metadata?.userInteraction
-                if (
-                    metadata != null &&
-                    !metadata.state.isTerminal() &&
-                    interaction?.toolName == "ask_user"
-                ) {
-                    val interactionId = interaction.interactionId.takeIf { it.isNotBlank() }
-                    if (interactionId != null) {
-                        keys += "ask:$interactionId"
-                    }
+            val metadata = tool.getSubAssistantCallMetadata(json)
+            val interaction = metadata?.userInteraction
+            if (
+                metadata != null &&
+                !metadata.state.isTerminal() &&
+                metadata.phase == net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallPhase.AWAITING_USER &&
+                interaction != null
+            ) {
+                val interactionId = interaction.interactionId.takeIf { it.isNotBlank() }
+                if (interactionId != null) {
+                    keys += "ask:$interactionId"
                 }
             }
         }

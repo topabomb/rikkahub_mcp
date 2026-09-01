@@ -193,6 +193,11 @@ Target 每个模型 step 都重新构建工具集。有效工具能力是“调�
 
 `SubAssistantCallCard` 从通用 COT 分组中独立渲染 Target、request、状态、preview、交付物缩略图和 `ask_user`。缩略图只读 metadata 引用，不加载 Child；点击分区与 `ask_user` 一样不抢走整卡进详情。主卡片把图设为背景改当前 Master Assistant；详情里设为背景仍改 Target。失败或不可用时额外显示本地化 reason 和用户可见摘要：政策拒绝使用固定文案，不回显检查类型；其他失败从 Tool Result `detail` 取第一行并去掉异常类型前缀。整卡在 Child link 有效时进入 `SubAssistantDetail`。详情解析会同时校验 Master、run 唯一性、Target、父子关系和 task `UIMessage.id`；仅非终态且尚未写入 Child link 的 run 可以保持 Loading，不存在、歧义或已经终止但缺少 link 的 run 立即显示不可用。详情页只渲染 `ChatMessage(readOnly = true)`，不提供输入、编辑、删除、重生成、分支、收藏、分享或审批入口；终态条同样展示 reason 与用户摘要。子助手失败不会抬成 Master 整轮 `ErrorCard`。
 
+完成态 `assistant_call` 的单 Text 结果若信封完整且不含 `artifacts` manifest，模型读取后可进入通用 Tool Output 滚动归档；
+卡片和 Child 详情继续以 typed metadata/lineage 为事实源。带交付 manifest 或媒体的结果为保证 fork 路径改写与交付生命周期
+而保持 inline，非完成态、拒绝及无法解析结果同样 fail-closed 保留。子助手卡片仍以 Child 详情作为人类查看入口，不在卡片中
+增加归档正文界面；精确归档正文由模型通过 conversation-scoped `read_tool_output` / `grep_tool_output` 回查。
+
 ## 8. 恢复、分支与删除
 
 ### 启动恢复

@@ -24,6 +24,7 @@ internal enum class UsageDiagnostic {
 internal data class CompletedRequestUsage(
     val requestOrdinal: Int,
     val snapshot: ProviderUsageSnapshot?,
+    val inputCompleteness: UsageCompleteness,
     val coreCompleteness: UsageCompleteness,
     val cacheReadCompleteness: UsageCompleteness,
     val outcome: ProviderRequestOutcome,
@@ -60,18 +61,6 @@ internal class RequestUsageReducer(
         ).validated()
     }
 
-    fun preview(
-        providerRequestDurationMillis: Long,
-        timeToFirstOutputMillis: Long? = null,
-    ): CompletedRequestUsage {
-        check(!closed) { "request usage is already closed" }
-        return completed(
-            outcome = ProviderRequestOutcome.COMPLETED,
-            providerRequestDurationMillis = providerRequestDurationMillis,
-            timeToFirstOutputMillis = timeToFirstOutputMillis,
-        )
-    }
-
     fun close(
         outcome: ProviderRequestOutcome,
         providerRequestDurationMillis: Long,
@@ -99,6 +88,11 @@ internal class RequestUsageReducer(
             coreValues.any { it != null } -> UsageCompleteness.PARTIAL
             else -> UsageCompleteness.NONE
         }
+        val inputCompleteness = if (snapshot?.inputTokens != null) {
+            UsageCompleteness.COMPLETE
+        } else {
+            UsageCompleteness.NONE
+        }
         val cacheReadCompleteness = if (snapshot?.cacheReadInputTokens != null) {
             UsageCompleteness.COMPLETE
         } else {
@@ -107,6 +101,7 @@ internal class RequestUsageReducer(
         return CompletedRequestUsage(
             requestOrdinal = requestOrdinal,
             snapshot = snapshot,
+            inputCompleteness = inputCompleteness,
             coreCompleteness = coreCompleteness,
             cacheReadCompleteness = cacheReadCompleteness,
             outcome = outcome,
@@ -172,12 +167,26 @@ internal class TurnUsageAccumulator private constructor(
 
     fun nextRequestOrdinal(): Int = Math.addExact(lastAppliedOrdinal, 1)
 
-    fun preview(request: CompletedRequestUsage): TokenUsage {
-        val preview = aggregate(summary, request).usage
-        return preview.copy(
-            latestRequestContextTokens = summary?.latestRequestContextTokens,
-            latestRequestCacheReadInputTokens = summary?.latestRequestCacheReadInputTokens,
-        )
+    /** 请求发出前更新最终请求投影的估算长度；不把尚未关闭的请求计入累计值。 */
+    fun recordRequestStarted(estimatedContextTokens: Long): TokenUsage {
+        require(estimatedContextTokens >= 0) { "estimated context tokens must be non-negative" }
+        return updateSummary { baseline ->
+            baseline.copy(
+                latestRequestEstimatedContextTokens = estimatedContextTokens,
+                semanticsVersion = CURRENT_TOKEN_USAGE_SEMANTICS_VERSION,
+            )
+        }
+    }
+
+    /** 首个有效模型输出到达时刷新本次请求 TTFT；没有首个输出的请求不覆盖历史值。 */
+    fun recordFirstOutput(timeToFirstOutputMillis: Long): TokenUsage {
+        require(timeToFirstOutputMillis >= 0) { "TTFT must be non-negative" }
+        return updateSummary { baseline ->
+            baseline.copy(
+                latestRequestTimeToFirstOutputMillis = timeToFirstOutputMillis,
+                semanticsVersion = CURRENT_TOKEN_USAGE_SEMANTICS_VERSION,
+            )
+        }
     }
 
     fun apply(request: CompletedRequestUsage): AppliedTurnUsage {
@@ -195,6 +204,7 @@ internal class TurnUsageAccumulator private constructor(
         request: CompletedRequestUsage,
     ): AppliedTurnUsage {
         var coreOverflowed = false
+        var inputOverflowed = false
         var cacheReadOverflowed = false
         val diagnostics = linkedSetOf<UsageDiagnostic>()
 
@@ -216,11 +226,65 @@ internal class TurnUsageAccumulator private constructor(
         }
 
         val snapshot = request.snapshot
+        val baselineHasClosedRequestFacts = baseline?.let { usage ->
+            usage.observedProviderRequestCount != null ||
+                usage.inputTokens != null ||
+                usage.outputTokens != null ||
+                usage.totalTokens != null ||
+                usage.providerRequestDurationMillis != null
+        } == true
+        val requestInputTokens = snapshot?.inputTokens
+        val requestOutputTokens = snapshot?.outputTokens
+        val requestCacheReadTokens = snapshot?.cacheReadInputTokens
+        val requestContextTokens = if (requestInputTokens != null && requestOutputTokens != null) {
+            try {
+                Math.addExact(requestInputTokens, requestOutputTokens)
+            } catch (_: ArithmeticException) {
+                diagnostics += UsageDiagnostic.AGGREGATE_OVERFLOW
+                coreOverflowed = true
+                null
+            }
+        } else {
+            null
+        }
+        val requestOutputDurationMillis = request.timeToFirstOutputMillis?.let { ttft ->
+            (request.providerRequestDurationMillis - ttft).coerceAtLeast(0)
+        }
+        val requestCacheHitPercent = if (
+            requestInputTokens != null &&
+            requestInputTokens > 0L &&
+            requestCacheReadTokens != null &&
+            requestCacheReadTokens in 0L..requestInputTokens
+        ) {
+            requestCacheReadTokens.toDouble() / requestInputTokens * 100.0
+        } else {
+            null
+        }
+        val requestTokensPerSecond = if (
+            requestOutputTokens != null && requestOutputDurationMillis != null && requestOutputDurationMillis > 0L
+        ) {
+            requestOutputTokens.toDouble() / requestOutputDurationMillis * 1_000.0
+        } else {
+            null
+        }
+        // 旧记录已有请求却没有历史峰值时，后续请求不能冒充整轮峰值；未知必须持续传播。
+        val baselinePeakRequestContextTokens = baseline?.peakRequestContextTokens
+        val peakRequestContextTokens = when {
+            baselinePeakRequestContextTokens != null -> maxOf(
+                baselinePeakRequestContextTokens,
+                requestContextTokens ?: baselinePeakRequestContextTokens,
+            )
+            (baseline?.observedProviderRequestCount ?: 0) == 0 -> requestContextTokens
+            else -> null
+        }
         val updated = TokenUsage(
             inputTokens = add(
                 baseline?.inputTokens,
                 snapshot?.inputTokens,
-                onOverflow = { coreOverflowed = true },
+                onOverflow = {
+                    coreOverflowed = true
+                    inputOverflowed = true
+                },
             ),
             outputTokens = add(
                 baseline?.outputTokens,
@@ -240,8 +304,19 @@ internal class TurnUsageAccumulator private constructor(
                 snapshot?.totalTokens,
                 onOverflow = { coreOverflowed = true },
             ),
+            peakRequestContextTokens = peakRequestContextTokens,
+            // 四个 latest 字段来自同一个已收口请求并一起覆盖；缺失不能继承上一请求。
             latestRequestContextTokens = snapshot?.inputTokens,
+            latestRequestOutputTokens = snapshot?.outputTokens,
             latestRequestCacheReadInputTokens = snapshot?.cacheReadInputTokens,
+            latestRequestOutputDurationMillis = requestOutputDurationMillis,
+            latestRequestEstimatedContextTokens = baseline?.latestRequestEstimatedContextTokens,
+            latestRequestTimeToFirstOutputMillis = request.timeToFirstOutputMillis
+                ?: baseline?.latestRequestTimeToFirstOutputMillis,
+            latestRequestCacheHitPercent = requestCacheHitPercent
+                ?: baseline?.latestRequestCacheHitPercent,
+            latestRequestTokensPerSecond = requestTokensPerSecond
+                ?: baseline?.latestRequestTokensPerSecond,
             observedProviderRequestCount = Math.addExact(baseline?.observedProviderRequestCount ?: 0, 1),
             observedUsageReportedRequestCount = Math.addExact(
                 baseline?.observedUsageReportedRequestCount ?: 0,
@@ -254,14 +329,31 @@ internal class TurnUsageAccumulator private constructor(
             ),
             initialRequestTimeToFirstOutputMillis = baseline?.initialRequestTimeToFirstOutputMillis
                 ?: request.timeToFirstOutputMillis.takeIf {
-                    baseline == null && request.requestOrdinal == 1
+                    !baselineHasClosedRequestFacts && request.requestOrdinal == 1
                 },
-            coreCompleteness = combine(baseline?.coreCompleteness, request.coreCompleteness),
-            cacheReadCompleteness = combine(baseline?.cacheReadCompleteness, request.cacheReadCompleteness),
+            successfulToolOutputCompactionBatchCount =
+                baseline?.successfulToolOutputCompactionBatchCount,
+            inputCompleteness = combine(
+                baseline?.inputCompleteness.takeIf { baselineHasClosedRequestFacts },
+                request.inputCompleteness,
+            ),
+            coreCompleteness = combine(
+                baseline?.coreCompleteness.takeIf { baselineHasClosedRequestFacts },
+                request.coreCompleteness,
+            ),
+            cacheReadCompleteness = combine(
+                baseline?.cacheReadCompleteness.takeIf { baselineHasClosedRequestFacts },
+                request.cacheReadCompleteness,
+            ),
             semanticsVersion = CURRENT_TOKEN_USAGE_SEMANTICS_VERSION,
         )
         return AppliedTurnUsage(
             usage = updated.copy(
+                inputCompleteness = if (inputOverflowed) {
+                    updated.inputCompleteness.degrade()
+                } else {
+                    updated.inputCompleteness
+                },
                 coreCompleteness = if (coreOverflowed) {
                     updated.coreCompleteness.degrade()
                 } else {
@@ -289,6 +381,12 @@ internal class TurnUsageAccumulator private constructor(
             baseline == UsageCompleteness.NONE && request == UsageCompleteness.NONE -> UsageCompleteness.NONE
             else -> UsageCompleteness.PARTIAL
         }
+    }
+
+    private fun updateSummary(transform: (TokenUsage) -> TokenUsage): TokenUsage {
+        val updated = transform(summary ?: TokenUsage())
+        summary = updated
+        return updated
     }
 }
 

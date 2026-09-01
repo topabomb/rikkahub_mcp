@@ -16,6 +16,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolArgumentsException
+import me.rerere.ai.core.ToolExecutionFailure
+import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.datastore.Settings
@@ -91,11 +93,22 @@ class AssistantManageToolTest {
     private fun parseResult(parts: List<UIMessagePart>): JsonObject =
         json.parseToJsonElement((parts.first() as UIMessagePart.Text).text).jsonObject
 
+    private suspend fun failureResult(tool: Tool, arguments: kotlinx.serialization.json.JsonElement): JsonObject {
+        val failure = try {
+            tool.execute(arguments)
+            throw AssertionError("expected ToolExecutionFailure")
+        } catch (error: ToolExecutionFailure) {
+            error
+        }
+        return parseResult(failure.output)
+    }
+
     @Test
     fun `CREATE does not need approval but update and delete do`() {
         val tool = manageTool(createFactory(listOf(caller(), target())), caller())
-        assertFalse(
-            tool.needsApproval(
+        assertEquals(
+            ToolInteractionRequirement.None,
+            tool.interactionRequirement(
                 buildJsonObject {
                     put("action", "CREATE")
                     put("name", "Helper")
@@ -104,8 +117,9 @@ class AssistantManageToolTest {
                 },
             ),
         )
-        assertTrue(
-            tool.needsApproval(
+        assertEquals(
+            ToolInteractionRequirement.Approval,
+            tool.interactionRequirement(
                 buildJsonObject {
                     put("action", "UPDATE")
                     put("assistant_id", targetId.toString())
@@ -113,16 +127,23 @@ class AssistantManageToolTest {
                 },
             ),
         )
-        assertTrue(
-            tool.needsApproval(
+        assertEquals(
+            ToolInteractionRequirement.Approval,
+            tool.interactionRequirement(
                 buildJsonObject {
                     put("action", "DELETE")
                     put("assistant_id", targetId.toString())
                 },
             ),
         )
-        assertFalse(tool.needsApproval(buildJsonObject { }))
-        assertFalse(tool.needsApproval(buildJsonObject { put("action", "RENAME") }))
+        assertEquals(
+            ToolInteractionRequirement.None,
+            tool.interactionRequirement(buildJsonObject { }),
+        )
+        assertEquals(
+            ToolInteractionRequirement.None,
+            tool.interactionRequirement(buildJsonObject { put("action", "RENAME") }),
+        )
     }
 
 
@@ -153,9 +174,11 @@ class AssistantManageToolTest {
             val args = json.parseToJsonElement(raw)
             val expected = requireNotNull(tool.validateArguments(args))
             assertEquals("invalid_arguments", expected["error"]!!.jsonPrimitive.content)
-            assertEquals(expected, parseResult(tool.execute(args)))
+            val executionFailure = failureResult(tool, args)
+            assertEquals("failed", executionFailure["status"]!!.jsonPrimitive.content)
+            assertEquals("invalid_arguments", executionFailure["reason"]!!.jsonPrimitive.content)
             assertFalse(expected.containsKey("type"))
-            assertFalse(tool.needsApproval(args))
+            assertEquals(ToolInteractionRequirement.None, tool.interactionRequirement(args.jsonObject))
             try {
                 tool.parseArguments(raw, json)
                 throw AssertionError("invalid input must not reach approval")
@@ -178,8 +201,8 @@ class AssistantManageToolTest {
         }
 
         assertEquals(null, tool.validateArguments(args))
-        assertTrue(tool.needsApproval(args))
-        assertEquals("target_not_allowed", parseResult(tool.execute(args))["error"]!!.jsonPrimitive.content)
+        assertEquals(ToolInteractionRequirement.Approval, tool.interactionRequirement(args))
+        assertEquals("target_not_allowed", failureResult(tool, args)["reason"]!!.jsonPrimitive.content)
     }
 
     @Test

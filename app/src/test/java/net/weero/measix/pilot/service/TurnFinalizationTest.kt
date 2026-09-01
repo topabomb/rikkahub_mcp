@@ -213,7 +213,7 @@ class TurnFinalizationTest {
 
         runtime.installActiveRequest(turnId, kotlinx.coroutines.Job())
         runtime.retainAwaitingApproval(TurnHandle(conversationId, 7, turnId, assistant.id))
-        assertEquals(ConversationTurnPhase.AWAITING_APPROVAL, runtime.currentTurnPresentation().phase)
+        assertEquals(ConversationTurnPhase.AWAITING_USER, runtime.currentTurnPresentation().phase)
 
         val registry = mockk<ConversationRuntimeRegistry>()
         io.mockk.every { registry.findRuntime(conversationId) } returns runtime

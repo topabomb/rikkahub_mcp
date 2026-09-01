@@ -62,7 +62,6 @@ Rootfs 内的主要映射：
 |-------------|----------|----------|
 | `/workspace` | 当前 Workspace 的 `files/` | 模型与用户的主要工作目录 |
 | `/skills` | 应用级技能目录 | 跨 Workspace 共享 |
-| `/tool_outputs` | 大型工具输出目录 | 供模型用 shell 读取截断后的全文 |
 | `/upload` | 用户上传目录 | 提示词要求只读；需修改时先复制到 `/workspace` |
 | `/dev`、`/proc`、`/sys` | Android 对应目录 | 仅存在时挂载，不允许文件 API 直接读取 |
 
@@ -105,19 +104,21 @@ x86_64 设备必须使用 x86_64 PRoot 和 Rootfs，arm64 设备必须使用 arm
 
 ## 5. AI 工具
 
-注册名和默认审批语义如下。布尔值表示 `needsApproval`，不是“自动允许”：
+注册名和默认交互 requirement 如下。`None` 表示无需用户交互，`Approval` 表示执行前需要授权：
 
-| 工具 | 默认 `needsApproval` | 行为 |
+| 工具 | 默认 requirement | 行为 |
 |------|-------------------------|------|
-| `workspace_read_file` | `false` | 读取 UTF-8 文本或图片；单文件大小受限 |
-| `workspace_write_file` | `false` | 写入 UTF-8 文本并返回文件元数据 |
-| `workspace_edit_file` | `false` | 按 `old_text` / `new_text` 精确或宽松匹配替换，diff 只进入 UI metadata |
-| `workspace_shell` | `true` | 在 Rootfs 中执行任意 shell 命令 |
+| `workspace_read_file` | `None` | 读取 UTF-8 文本或图片；单文件大小受限 |
+| `workspace_write_file` | `None` | 写入 UTF-8 文本并返回文件元数据 |
+| `workspace_edit_file` | `None` | 按 `old_text` / `new_text` 精确或宽松匹配替换，diff 只进入 UI metadata |
+| `workspace_shell` | `Approval` | 在 Rootfs 中执行任意 shell 命令 |
 
 Workspace 实体可用 `toolApprovals` 对各工具覆盖默认值。参数先由 `WorkspaceToolArguments` 的纯解析器校验，缺字段或错误类型直接失败，不进入审批。即使用户关闭写入或编辑审批，只要规范化后的目标路径不在 `/workspace` 或 `/tmp`，仍强制审批；例如 `/tmp/../etc/config` 属于 `/etc`，不能按原字符串前缀放行。
 执行时 Manager 再次检查同一路径分类；区外写入必须携带从该调用已有审批决定派生的 `approvedByUser`，模型参数不能授予此能力。授权设置、会话审批和数据库结构保持既有协议。
 
-Target Run 沿用同一工具定义，但非交互审批策略会拒绝除 `ask_user` 之外的所有需审批工具。因此默认配置下，子助手可以直接读写安全根，却不能直接运行 `workspace_shell`；用户撤销 Workspace 或工具权限后，下一模型 step 会按运行快照与当前配置的交集移除能力。
+Target Run 沿用同一工具定义并显式使用 `ToolInteractionAvailability.USER_INPUT_ONLY`：typed `UserInput` 可暂停并桥接宿主，
+typed `Approval` 自动拒绝。因此默认配置下，子助手可以直接读写安全根，却不能直接运行 `workspace_shell`；用户撤销
+Workspace 或工具权限后，下一模型 step 会按运行快照与当前配置的交集移除能力。
 
 ### 文件工具
 
@@ -176,7 +177,7 @@ Workspace command 仍由 `WorkspaceApplicationService` 拥有；持久化列表/
 
 `WorkspaceApplicationService.installRootfs` 与 `deleteWorkspace` 必须在同一 Workspace command gate 内先 `closeWorkspace` 并等待全部创建 Job/PTY 收口，再调用 Repository。删除协议先把 durable shell 状态置为 `BROKEN`，再由 `WorkspaceManager` 将文件树移入可恢复暂存位置；Repository 在暂存目录同级写入仅含原 shell 状态与 Assistant→Workspace binding 的删除 journal，随后才清理 Assistant 引用。物理删除开始前，Settings 拒绝或进程中断会由 journal 回填仍为空的原 binding 并恢复暂存树；开始删除后 journal 进入终态删除阶段，递归删除失败也保持 `BROKEN`，因为失败可能已删除部分树，绝不将残余目录伪装为 READY。后续删除继续清理暂存树，或者在目录已删除后由 `WorkspaceDAO.deleteById` 确认删除一条 durable identity；只有这项确认后才能清 journal。任一步骤失败时 `BROKEN` 记录与 journal 都作为重试身份保留；后续删除必须幂等，不能发布成功或留下无 durable 身份的孤儿 Rootfs。Workspace 管理页通过 `WorkspaceApplicationService`/`WorkspaceQueryService` 操作，不直连 Repository。
 
-shell 工具与交互终端都消费同一份 `ProotLaunchSpec`：executable、loader、kernel spoof、`/workspace` bind、应用级 `/skills` `/tool_outputs` `/upload`、内核文件系统以及 `PWD` 都来自该值对象。二者只把 spec 交给各自进程 adapter，不再手写第二套 argv/env/bind。
+shell 工具与交互终端都消费同一份 `ProotLaunchSpec`：executable、loader、kernel spoof、`/workspace` bind、应用级 `/skills` `/upload`、内核文件系统以及 `PWD` 都来自该值对象。二者只把 spec 交给各自进程 adapter，不再手写第二套 argv/env/bind。受管 Tool Output 不挂载到 Rootfs；模型只能使用 conversation-scoped `read_tool_output` / `grep_tool_output` 回查。
 
 ## 8. Rootfs 安装与修补
 
