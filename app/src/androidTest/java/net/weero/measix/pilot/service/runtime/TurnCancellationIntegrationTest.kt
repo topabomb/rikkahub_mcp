@@ -127,6 +127,7 @@ class TurnCancellationIntegrationTest {
             messageFtsManager = MessageFtsManager(database),
             turnExecutionDAO = database.turnExecutionDao(),
             toolExecutionDAO = database.toolExecutionDao(),
+            modelContextDAO = database.conversationModelContextDao(),
             artifactStore = artifactStore,
         )
         val operationLocks = ConversationOperationLocks()
@@ -143,7 +144,6 @@ class TurnCancellationIntegrationTest {
             context = payloadContext,
             providerManager = ProviderManager(httpClient, payloadContext),
             json = Json,
-            memoryRepo = MemoryRepository(database.memoryDao()),
             attachmentResolver = AttachmentResolver(
                 artifactStore = artifactStore,
             ),
@@ -274,21 +274,11 @@ class TurnCancellationIntegrationTest {
         val conversationId = Uuid.random()
         val turnId = Uuid.random()
         val userMessage = UIMessage.user("Run ${tool.name}")
-        val assistantMessage = UIMessage(
-            role = MessageRole.ASSISTANT,
-            parts = listOf(
-                UIMessagePart.Tool(
-                    toolCallId = "call-${tool.name}",
-                    toolName = tool.name,
-                    input = "{}",
-                ),
-            ),
-        )
         val runtime = coordinator.create(
             Conversation(
                 id = conversationId,
                 assistantId = assistant.id,
-                messageNodes = listOf(userMessage.toMessageNode(), assistantMessage.toMessageNode()),
+                messageNodes = listOf(userMessage.toMessageNode()),
             ),
         )
         val fixture = RunningTurnFixture(
@@ -296,27 +286,43 @@ class TurnCancellationIntegrationTest {
             turnId = turnId,
             runtime = runtime,
         )
+        val requestContext = androidTestTurnRequestContext(
+            settings = settings,
+            model = model,
+            assistant = assistant,
+            tools = listOf(tool),
+        )
         val worker = appScope.launch(start = CoroutineStart.LAZY) {
             try {
-                assertSame(coroutineContext[Job], runtime.currentWorker())
-                val currentMessages = runtime.snapshot.value.currentMessages()
+                val activeWorker = requireNotNull(coroutineContext[Job])
+                assertSame(activeWorker, runtime.currentWorker())
+                runtime.bindTurnRequestContext(turnId, activeWorker, requestContext)
                 val started = TurnEngine.start(
                     commandCoordinator = coordinator,
                     runtime = runtime,
                     turnId = turnId,
-                    messages = currentMessages,
+                    modelContextCandidate = disclosureCandidate(),
                     turnFinalization = turnFinalization,
+                )
+                // 该 turn 的 owner Assistant slot 携带一个尚未回放结果的 ToolCall；
+                // GenerationLoop 直接进入执行阶段，不提前发起下一 step provider 请求。
+                val currentMessages = runtime.snapshot.value.currentMessages().dropLast(1) + UIMessage(
+                    id = started.assistantMessageId,
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(
+                        UIMessagePart.Tool(
+                            toolCallId = "call-${tool.name}",
+                            toolName = tool.name,
+                            input = "{}",
+                        ),
+                    ),
                 )
                 started.engine.bind(
                     generationLoop.run(
                         GenerationRequest(
                             conversationId = kotlin.uuid.Uuid.random(),
-                            settings = settings,
-                            model = model,
-                            mediaCapabilities = RequestMediaCapabilities.NONE,
+                            requestContext = requestContext,
                             messages = currentMessages,
-                            assistant = assistant,
-                            toolProvider = { listOf(tool) },
                             maxSteps = 1,
                             assistantMessageId = started.assistantMessageId,
                             onCheckpoint = { checkpoint -> onCheckpoint(started.engine, checkpoint) },

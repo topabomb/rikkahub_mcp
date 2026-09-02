@@ -4,7 +4,7 @@ import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.runtime.ConversationHeader
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -188,9 +188,9 @@ class AppendScrollContextTest {
         toolCallPhases = emptyMap(),
     )
 
-    private fun snapshot(nodes: List<MessageNode>): ConversationSnapshot {
+    private fun snapshot(nodes: List<MessageNode>): ConversationPresentationSnapshot {
         val conversationId = Uuid.random()
-        return ConversationSnapshot(
+        return ConversationPresentationSnapshot(
             conversationId = conversationId,
             header = ConversationHeader(
                 id = conversationId,

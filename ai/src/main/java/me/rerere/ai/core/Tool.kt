@@ -9,9 +9,8 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
-import me.rerere.ai.provider.Model
-import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import kotlin.uuid.Uuid
 
@@ -122,12 +121,47 @@ data class ToolExecutionContext(
     val approvedByUser: Boolean = false,
 )
 
+/**
+ * Provider 唯一可见的工具 wire 事实（权威方案 §7.6）：名称、描述、JSON Schema 与 System
+ * prompt contribution 都是装配时已物化的值，不含任何可执行闭包。由 [freeze] 在 START
+ * 装配时一次性生成；Provider step 与 adapter 不得再求值或回退到 [Tool]。
+ */
+@Serializable
+data class FrozenToolDefinition(
+    val name: String,
+    val description: String,
+    val parameters: JsonObject?,
+    val systemPromptContribution: String,
+)
+
+/**
+ * 物化 wire definition：这是 `parameters()` 的唯一求值点（§15：定义、排序与 Schema
+ * 在 Turn 内稳定，动态内容不得击穿缓存前缀）。执行闭包不经过这里。
+ */
+fun Tool.freeze(): FrozenToolDefinition {
+    val evaluatedParameters = parameters()
+    // Detach from a caller-owned mutable backing map so START bytes cannot change in place.
+    val frozenParameters = evaluatedParameters?.let {
+        Json.parseToJsonElement(it.toString()).jsonObject
+    }
+    return FrozenToolDefinition(
+        name = name,
+        description = description,
+        parameters = frozenParameters,
+        systemPromptContribution = systemPromptContribution,
+    )
+}
+
 @Serializable
 data class Tool(
     val name: String,
     val description: String,
     val parameters: () -> JsonObject? = { null },
-    val systemPrompt: (model: Model, messages: List<UIMessage>) -> String = { _, _ -> "" },
+    /**
+     * 该工具对 System prompt 的固定贡献。装配（= Turn START）时求值为字符串；
+     * 不得按 step、日期、请求消息或 live Settings 重算（§7.6、§10.2）。
+     */
+    val systemPromptContribution: String = "",
     /**
      * Pure function over already-validated arguments. It must not read Settings, databases,
      * files, network or request Android permissions; resource and permission re-validation

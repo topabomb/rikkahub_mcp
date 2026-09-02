@@ -311,6 +311,9 @@ internal fun buildToolOutputMarker(archive: ToolOutputArchive, terminalStatus: S
     append("[Archived tool result: ref=").append(archive.ref)
         .append("; status=").append(terminalStatus)
         .append("; lines=").append(archive.lines)
+        // 2026-9-2 15:01：追加 canonical 字符数，供模型评估回查成本；一致性校验与 token 估算
+        // 共用本 builder 自动跟随，历史已落库 marker 保持旧格式不变。
+        .append("; chars=").append(archive.characters)
     if (terminalStatus == "failed") {
         canonicalText.split('\n').lastOrNull { it.isNotBlank() }
             ?.takeLast(ToolOutputProtocolLimits.TOOL_OUTPUT_MARKER_TAIL_CHARS)

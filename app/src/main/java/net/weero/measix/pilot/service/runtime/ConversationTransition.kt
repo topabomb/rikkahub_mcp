@@ -10,6 +10,8 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.finishReasoning
 import net.weero.measix.pilot.data.ai.CheckpointKind
 import net.weero.measix.pilot.data.ai.ContextTrimmingPolicy
+import net.weero.measix.pilot.data.ai.DurableMessageLocator
+import net.weero.measix.pilot.data.ai.TurnModelContextProjection
 import net.weero.measix.pilot.data.ai.estimateStableTextTokens
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefBackfill
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
@@ -22,19 +24,22 @@ import net.weero.measix.pilot.data.ai.tools.virtualLineCount
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.model.ConversationModelContextApplicability
+import net.weero.measix.pilot.data.model.ConversationModelContextEntry
 import net.weero.measix.pilot.data.model.MessageNode
+import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
 import java.time.Instant
 import kotlin.uuid.Uuid
 
 internal sealed interface ConversationChange {
-    val snapshot: ConversationSnapshot
+    val snapshot: ConversationAggregateSnapshot
 
     data class DraftOnly(
-        override val snapshot: ConversationSnapshot,
+        override val snapshot: ConversationAggregateSnapshot,
     ) : ConversationChange
 
     data class Durable(
-        override val snapshot: ConversationSnapshot,
+        override val snapshot: ConversationAggregateSnapshot,
         val write: ConversationWrite,
     ) : ConversationChange
 }
@@ -53,6 +58,20 @@ internal data class ConversationHeaderChange(
 )
 
 /**
+ * [ConversationTransition.planStartTarget] 的结果：一次 `START` 将使用的目标 selected
+ * prefix、新 owner node/message 与因果 USER anchor。调用方把它逐项填入 StartTurn 命令，
+ * 锁内由同一函数复核。
+ */
+internal data class StartTurnTarget(
+    val assistantNodeId: Uuid,
+    val assistantMessageId: Uuid,
+    val anchorNodeId: Uuid,
+    val anchorMessageId: Uuid,
+    val selectedPrefixMessageIds: List<Uuid>,
+    val appendVariantToExistingAssistantNode: Boolean,
+)
+
+/**
  * Unique conversation command planner. It produces the next snapshot, the exact persistence
  * delta and execution facts together. The coordinator owns locks and IO; the repository owns
  * the Room transaction; the runtime only publishes after commit.
@@ -60,7 +79,7 @@ internal data class ConversationHeaderChange(
 internal object ConversationTransition {
 
     fun plan(
-        current: ConversationSnapshot,
+        current: ConversationAggregateSnapshot,
         command: ConversationCommand,
         nowMillis: Long,
     ): ConversationChange {
@@ -102,9 +121,9 @@ internal object ConversationTransition {
     }
 
     internal fun apply(
-        current: ConversationSnapshot,
+        current: ConversationAggregateSnapshot,
         command: ConversationCommand,
-    ): ConversationSnapshot {
+    ): ConversationAggregateSnapshot {
         val reduced = when (command) {
             is StartTurn -> startTurn(current, command)
             is CommitCheckpoint -> commitCheckpoint(current, command)
@@ -120,7 +139,20 @@ internal object ConversationTransition {
             is HeaderConversationCommand -> current.copy(header = applyHeader(current.header, command))
             is ResolveToolInteraction -> ResolveToolInteraction(current, command)
         }
-        val next = reduced.copy(activeTurn = durableActiveTurn(current, reduced, command))
+        // context 生命周期收口的唯一位置：node/variant 一旦被任何树命令删除，其 entry 即从
+        // aggregate 消失（DB 侧由同一 mutation 的显式 owner/anchor 删除与 FK cascade 对齐）。
+        // 选择变体不会剪枝——unselected owner 的 entry 保留，切回时恢复其 baseline（§14.2）。
+        val pruned = reduced.modelContextEntries.filter {
+            ConversationModelContextApplicability.stillExists(it, reduced.nodes)
+        }
+        val next = reduced.copy(
+            modelContextEntries = if (pruned.size == reduced.modelContextEntries.size) {
+                reduced.modelContextEntries
+            } else {
+                pruned
+            },
+            activeTurn = durableActiveTurn(current, reduced, command),
+        )
         return if (next == current) current else next
     }
 
@@ -164,7 +196,7 @@ internal object ConversationTransition {
     }
 
     private fun planDraft(
-        current: ConversationSnapshot,
+        current: ConversationAggregateSnapshot,
         command: ConversationCommand,
         nowMillis: Long,
     ): ConversationChange = when (command) {
@@ -184,8 +216,8 @@ internal object ConversationTransition {
     }
 
     private fun durableActiveTurn(
-        old: ConversationSnapshot,
-        reduced: ConversationSnapshot,
+        old: ConversationAggregateSnapshot,
+        reduced: ConversationAggregateSnapshot,
         command: ConversationCommand,
     ): ActiveTurnState? = when (command) {
         is StartTurn -> ActiveTurnState(
@@ -205,11 +237,11 @@ internal object ConversationTransition {
     }
 
     private fun stampActivity(
-        old: ConversationSnapshot,
-        snapshot: ConversationSnapshot,
+        old: ConversationAggregateSnapshot,
+        snapshot: ConversationAggregateSnapshot,
         command: ConversationCommand,
         nowMillis: Long,
-    ): ConversationSnapshot =
+    ): ConversationAggregateSnapshot =
         if (snapshot != old && command.updatesConversationActivity()) {
             snapshot.copy(header = snapshot.header.copy(updateAt = nowMillis))
         } else {
@@ -217,8 +249,8 @@ internal object ConversationTransition {
         }
 
     private fun mutationOf(
-        old: ConversationSnapshot,
-        new: ConversationSnapshot,
+        old: ConversationAggregateSnapshot,
+        new: ConversationAggregateSnapshot,
         command: ConversationCommand,
     ): ConversationMutation {
         val changedNodes = mutableListOf<MessageNode>()
@@ -328,6 +360,14 @@ internal object ConversationTransition {
                 }
             }
         }
+        // model-context 窄 delta（§12.2）：插入只来自 StartTurn 的判等结果；删除覆盖
+        // node 级（FK cascade 之外的 anchor 悬挂行）与 variant 级两种收口。
+        val oldContextOwners = old.modelContextEntries.mapTo(HashSet()) { it.ownerNodeId to it.ownerMessageId }
+        val insertedContextEntries = new.modelContextEntries.filter {
+            (it.ownerNodeId to it.ownerMessageId) !in oldContextOwners
+        }
+        val deletedContextEntries = old.modelContextEntries
+            .filterNot { ConversationModelContextApplicability.stillExists(it, new.nodes) }
         return ConversationMutation(
             conversationId = new.header.id,
             headerPatch = headerPatchFor(old.header, new.header, command),
@@ -335,6 +375,8 @@ internal object ConversationTransition {
             deletedNodeIds = deletedNodeIds,
             updateAt = new.header.updateAt,
             upsertedNodeIndices = changedIndices,
+            insertedModelContextEntries = insertedContextEntries,
+            deletedModelContextEntries = deletedContextEntries,
             indexForSearch = new.header.parentConversationId == null,
             searchMetadataChanged = new.header.title != old.header.title ||
                 new.header.updateAt != old.header.updateAt,
@@ -473,31 +515,178 @@ internal object ConversationTransition {
         updatedAt = nowMillis,
     )
 
-    private fun startTurn(current: ConversationSnapshot, command: StartTurn): ConversationSnapshot {
+    /**
+     * `START` 目标分支的唯一纯规划入口（权威方案 §12.2）。regenerate/edit 边界与"新 owner
+     * 是既有 Assistant node 的新 variant 还是新 node"都只在这里判定一次；调用方与锁内校验
+     * 共用同一个函数，不存在第二套"排除哪个 variant"的判断。
+     *
+     * 返回的 [StartTurnTarget.selectedPrefixMessageIds] 是结构变换后、新 owner 之前的目标
+     * selected branch；将被替换的 unselected Assistant variant 已被排除，因此 regenerate 后
+     * 它拥有的 baseline 自然退出比较（§7.5）。
+     *
+     * 没有因果 USER anchor 的树不能开始模型请求：fail-closed，不按 role 伪造。
+     */
+    internal fun planStartTarget(
+        current: ConversationAggregateSnapshot,
+        preallocatedAssistantNodeId: Uuid,
+        assistantMessageId: Uuid,
+    ): StartTurnTarget {
         if (current.nodes.isEmpty()) {
-            val node = MessageNode.of(emptyAssistantMessage(command.assistantMessageId))
-            return current.copy(nodes = listOf(node))
+            throw ConversationCommandConflictException(
+                "conversation ${current.conversationId} has no message tree to anchor a START",
+            )
         }
         val last = current.nodes.last()
         val lastMsg = last.currentMessage
-        if (command.resume && lastMsg.id == command.assistantMessageId && lastMsg.role == MessageRole.ASSISTANT) {
-            return current
+        check(assistantMessageId != lastMsg.id) {
+            "START owner variant collides with the selected message: $assistantMessageId"
         }
-        val nodes = current.nodes.toMutableList()
-        if (lastMsg.role == MessageRole.ASSISTANT && lastMsg.terminalStatus == null) {
-            val msg = emptyAssistantMessage(command.assistantMessageId)
-            nodes[nodes.lastIndex] = last.copy(messages = last.messages + msg, selectIndex = last.messages.size)
+        // 树末条是 Assistant 只可能来自 regenerate（新 turn / 编辑都会先提交 USER）：一律按
+        // §7.5 把将被替换的旧 variant 视为 unselected；terminalStatus 不豁免，failed /
+        // cancelled 的旧回答同样不得留在目标分支。
+        val appendVariantToExistingAssistantNode = lastMsg.role == MessageRole.ASSISTANT
+        val prefix = if (appendVariantToExistingAssistantNode) {
+            current.currentMessages().dropLast(1)
         } else {
-            nodes.add(MessageNode.of(emptyAssistantMessage(command.assistantMessageId)))
+            current.currentMessages()
         }
-        return current.copy(nodes = nodes)
+        val anchorIndex = prefix.indexOfLast { it.role == MessageRole.USER }
+        if (anchorIndex < 0) {
+            throw ConversationCommandConflictException(
+                "conversation ${current.conversationId} has no causal USER anchor for the new turn",
+            )
+        }
+        val anchor = prefix[anchorIndex]
+        val anchorNode = prefixNodeOf(current.nodes, anchor.id)
+            ?: throw ConversationCommandConflictException("causal USER anchor is off the tree: ${anchor.id}")
+        return StartTurnTarget(
+            assistantNodeId = if (appendVariantToExistingAssistantNode) last.id else preallocatedAssistantNodeId,
+            assistantMessageId = assistantMessageId,
+            anchorNodeId = anchorNode.id,
+            anchorMessageId = anchor.id,
+            selectedPrefixMessageIds = prefix.map { it.id },
+            appendVariantToExistingAssistantNode = appendVariantToExistingAssistantNode,
+        )
+    }
+
+    private fun prefixNodeOf(nodes: List<MessageNode>, messageId: Uuid): MessageNode? =
+        nodes.firstOrNull { node -> node.messages.any { it.id == messageId } }
+
+    /**
+     * Turn 启动时请求侧 model-context 投影的唯一入口（§7.3、§8.2）：
+     * branch = 当前 selected 消息序列（含 active owner 末条），entries 用唯一适用谓词过滤。
+     * 该 Turn 的所有 step、审批 continuation 与重试只复用这份结果，不重新判定。
+     */
+    internal fun projectTurnModelContext(
+        current: ConversationAggregateSnapshot,
+    ): TurnModelContextProjection {
+        val branch = current.currentMessages()
+        val locators = buildMap {
+            current.nodes.forEach { node ->
+                node.messages.forEach { message -> put(message.id, DurableMessageLocator(node.id, message.id)) }
+            }
+        }
+        return TurnModelContextProjection(
+            entries = current.modelContextEntries.filter {
+                ConversationModelContextApplicability.applicable(it, branch)
+            },
+            locators = locators,
+        )
+    }
+
+    /**
+     * 完整 StartTurn 命令的唯一构造入口（调用方与测试共用，杜绝手拼 anchor/token）。
+     * 锁内 plan 会重算目标分支；stale 计划在 [ConversationCommandCoordinator.startTurn]
+     * 一律 conflict。
+     */
+    internal fun buildStartTurnCommand(
+        current: ConversationAggregateSnapshot,
+        turnId: Uuid,
+        modelContextCandidate: String,
+        assistantNodeId: Uuid = Uuid.random(),
+        assistantMessageId: Uuid = Uuid.random(),
+        epoch: Long = 0L,
+    ): StartTurn {
+        val target = planStartTarget(current, assistantNodeId, assistantMessageId)
+        return StartTurn(
+            turnId = turnId,
+            assistantNodeId = target.assistantNodeId,
+            assistantMessageId = target.assistantMessageId,
+            anchorNodeId = target.anchorNodeId,
+            anchorMessageId = target.anchorMessageId,
+            expectedSelectedPrefixMessageIds = target.selectedPrefixMessageIds,
+            modelContextCandidate = modelContextCandidate,
+            epoch = epoch,
+        )
+    }
+
+    private fun startTurn(current: ConversationAggregateSnapshot, command: StartTurn): ConversationAggregateSnapshot {
+        val target = planStartTarget(current, command.assistantNodeId, command.assistantMessageId)
+        // 锁内 CAS：调用者拿到的 snapshot 与执行锁内的 committed snapshot 之间任何
+        // prefix variant / anchor 结构变化都在这里冲突，绝不接受 stale 计划（§17.3）。
+        if (target.selectedPrefixMessageIds != command.expectedSelectedPrefixMessageIds) {
+            throw ConversationCommandConflictException(
+                "START target selected branch changed after planStartTarget for conversation ${current.conversationId}",
+            )
+        }
+        if (target.anchorNodeId != command.anchorNodeId || target.anchorMessageId != command.anchorMessageId) {
+            throw ConversationCommandConflictException(
+                "START causal anchor changed after planStartTarget: ${command.anchorMessageId} -> ${target.anchorMessageId}",
+            )
+        }
+        if (target.assistantNodeId != command.assistantNodeId) {
+            throw ConversationCommandConflictException(
+                "START owner node identity changed after planStartTarget: ${command.assistantNodeId}",
+            )
+        }
+        // 命令协议只接受合法 canonical envelope；畸形内容不得进入 durable 历史（§12.2）。
+        ConversationDisclosureSnapshotService.requireCanonical(command.modelContextCandidate)
+
+        val slot = emptyAssistantMessage(command.assistantMessageId)
+        val nodes = current.nodes.toMutableList()
+        if (target.appendVariantToExistingAssistantNode) {
+            val last = nodes[nodes.lastIndex]
+            nodes[nodes.lastIndex] = last.copy(
+                messages = last.messages + slot,
+                selectIndex = last.messages.size,
+            )
+        } else {
+            nodes.add(
+                MessageNode(
+                    id = target.assistantNodeId,
+                    messages = listOf(slot),
+                    selectIndex = 0,
+                ),
+            )
+        }
+        // baseline 判等（§7.2）：目标分支上最近一份适用 Snapshot 的 content 与 candidate
+        // 逐字相同则不新增 row；变化才由新 owner 追加完整 baseline。
+        val branch = nodes.map { it.currentMessage }
+        val applicable = current.modelContextEntries.filter {
+            ConversationModelContextApplicability.applicable(it, branch)
+        }
+        val baseline = applicable.maxByOrNull { entry ->
+            branch.indexOfFirst { it.id == entry.ownerMessageId }
+        }
+        val entries = if (baseline?.content == command.modelContextCandidate) {
+            current.modelContextEntries
+        } else {
+            current.modelContextEntries + ConversationModelContextEntry(
+                ownerNodeId = target.assistantNodeId,
+                ownerMessageId = target.assistantMessageId,
+                anchorNodeId = target.anchorNodeId,
+                anchorMessageId = target.anchorMessageId,
+                content = command.modelContextCandidate,
+            )
+        }
+        return current.copy(nodes = nodes, modelContextEntries = entries)
     }
 
     private fun replaceMessages(
-        current: ConversationSnapshot,
+        current: ConversationAggregateSnapshot,
         assistantMessageId: Uuid,
         messages: List<UIMessage>,
-    ): ConversationSnapshot {
+    ): ConversationAggregateSnapshot {
         val message = messages.lastOrNull() ?: return current
         require(message.id == assistantMessageId) {
             "Checkpoint payload does not end with the active assistant message"
@@ -505,7 +694,7 @@ internal object ConversationTransition {
         return current.replaceMessageById(assistantMessageId, message, requireLastNode = true)
     }
 
-    private fun finalizeTurn(current: ConversationSnapshot, command: FinalizeTurn): ConversationSnapshot {
+    private fun finalizeTurn(current: ConversationAggregateSnapshot, command: FinalizeTurn): ConversationAggregateSnapshot {
         var result = current
         command.messages?.let { result = replaceMessages(result, command.handle.assistantMessageId, it) }
         result = result.finishReasoning(command.handle.assistantMessageId)
@@ -524,9 +713,9 @@ internal object ConversationTransition {
     }
 
     private fun recoverInterruptedTurn(
-        current: ConversationSnapshot,
+        current: ConversationAggregateSnapshot,
         command: RecoverInterruptedTurn,
-    ): ConversationSnapshot {
+    ): ConversationAggregateSnapshot {
         var result = current
         command.messages?.let { messages ->
             val message = requireNotNull(messages.lastOrNull { it.id == command.assistantMessageId }) {
@@ -550,15 +739,15 @@ internal object ConversationTransition {
     }
 
     /** 所有终态统一覆盖中间 step 时间，确保消息 Total 表示完整 turn 生命周期。 */
-    private fun ConversationSnapshot.markAssistantFinishedAt(
+    private fun ConversationAggregateSnapshot.markAssistantFinishedAt(
         messageId: Uuid,
         finishedAt: kotlinx.datetime.LocalDateTime,
-    ): ConversationSnapshot {
+    ): ConversationAggregateSnapshot {
         val message = findMessage(messageId) ?: return this
         return replaceMessageById(messageId, message.copy(finishedAt = finishedAt), requireLastNode = false)
     }
 
-    private fun ConversationSnapshot.finishReasoning(messageId: Uuid): ConversationSnapshot {
+    private fun ConversationAggregateSnapshot.finishReasoning(messageId: Uuid): ConversationAggregateSnapshot {
         val message = findMessage(messageId) ?: return this
         val unfinished = message.parts.any { it is UIMessagePart.Reasoning && it.finishedAt == null }
         return if (unfinished) replaceMessageById(messageId, message.finishReasoning(), false) else this
@@ -572,7 +761,7 @@ internal object ConversationTransition {
         else -> null
     }
 
-    private fun appendUser(current: ConversationSnapshot, command: AppendUserMessage): ConversationSnapshot =
+    private fun appendUser(current: ConversationAggregateSnapshot, command: AppendUserMessage): ConversationAggregateSnapshot =
         current.copy(
             nodes = current.nodes + MessageNode.of(command.message),
             header = current.header.copy(
@@ -585,7 +774,7 @@ internal object ConversationTransition {
             ),
         )
 
-    private fun editVariant(current: ConversationSnapshot, command: EditMessageVariant): ConversationSnapshot {
+    private fun editVariant(current: ConversationAggregateSnapshot, command: EditMessageVariant): ConversationAggregateSnapshot {
         val nodeIndex = current.nodes.indexOfFirst { it.id == command.nodeId }
         if (nodeIndex < 0) return current
         val node = current.nodes[nodeIndex]
@@ -601,7 +790,7 @@ internal object ConversationTransition {
         )
     }
 
-    private fun deleteMessage(current: ConversationSnapshot, command: DeleteMessage): ConversationSnapshot {
+    private fun deleteMessage(current: ConversationAggregateSnapshot, command: DeleteMessage): ConversationAggregateSnapshot {
         val targetNodeIndex = current.nodes.indexOfFirst { node ->
             node.messages.any { it.id == command.messageId }
         }
@@ -628,9 +817,9 @@ internal object ConversationTransition {
     }
 
     private fun selectNodeVariant(
-        current: ConversationSnapshot,
+        current: ConversationAggregateSnapshot,
         command: SelectNodeVariant,
-    ): ConversationSnapshot {
+    ): ConversationAggregateSnapshot {
         val nodeIndex = current.nodes.indexOfFirst { it.id == command.nodeId }
         if (nodeIndex < 0) return current
         val node = current.nodes[nodeIndex]
@@ -643,23 +832,23 @@ internal object ConversationTransition {
         )
     }
 
-    private fun truncateTo(current: ConversationSnapshot, nodeIndexInclusive: Int): ConversationSnapshot {
+    private fun truncateTo(current: ConversationAggregateSnapshot, nodeIndexInclusive: Int): ConversationAggregateSnapshot {
         if (nodeIndexInclusive >= current.nodes.size) return current
         return current.copy(nodes = current.nodes.subList(0, nodeIndexInclusive + 1))
     }
 
     private fun backfillAttachmentRefs(
-        current: ConversationSnapshot,
+        current: ConversationAggregateSnapshot,
         backfills: List<AttachmentRefBackfill>,
-    ): ConversationSnapshot {
+    ): ConversationAggregateSnapshot {
         val nodes = AttachmentRefs.applyBackfills(current.nodes, backfills)
         return if (nodes === current.nodes) current else current.copy(nodes = nodes)
     }
 
     private fun ResolveToolInteraction(
-        current: ConversationSnapshot,
+        current: ConversationAggregateSnapshot,
         command: ResolveToolInteraction,
-    ): ConversationSnapshot {
+    ): ConversationAggregateSnapshot {
         val durableMessage = current.findMessage(command.messageId) ?: return current
         val updatedDurableMessage = ResolveToolInteraction(durableMessage, command) ?: return current
         val durable = current.replaceMessageById(
@@ -695,9 +884,9 @@ internal object ConversationTransition {
     }
 
     private fun commitCheckpoint(
-        current: ConversationSnapshot,
+        current: ConversationAggregateSnapshot,
         command: CommitCheckpoint,
-    ): ConversationSnapshot {
+    ): ConversationAggregateSnapshot {
         val patches = command.toolOutputCompactionPatches
         require(patches.map { it.locator }.distinct().size == patches.size) {
             "Tool Output compaction patches contain duplicate locators"
@@ -736,9 +925,9 @@ internal object ConversationTransition {
      * 任何正文、usage、时间、Tool 身份或其他 part 都没有进入命令协议，因而不能被顺带回写。
      */
     private fun applyHistoricalToolOutputCompactionPatch(
-        current: ConversationSnapshot,
+        current: ConversationAggregateSnapshot,
         patch: net.weero.measix.pilot.data.ai.ToolOutputCompactionPatch,
-    ): ConversationSnapshot {
+    ): ConversationAggregateSnapshot {
         val node = current.nodes.firstOrNull { it.currentMessage.id == patch.locator.messageId }
             ?: error("Historical Tool Output patch is not on the selected branch: ${patch.locator.messageId}")
         val message = node.currentMessage
@@ -885,16 +1074,16 @@ internal object ConversationTransition {
         parts = emptyList(),
     )
 
-    private fun ConversationSnapshot.findMessage(messageId: Uuid): UIMessage? {
+    private fun ConversationAggregateSnapshot.findMessage(messageId: Uuid): UIMessage? {
         nodes.lastOrNull()?.messages?.firstOrNull { it.id == messageId }?.let { return it }
         return nodes.asSequence().flatMap { it.messages.asSequence() }.firstOrNull { it.id == messageId }
     }
 
-    private fun ConversationSnapshot.replaceMessageById(
+    private fun ConversationAggregateSnapshot.replaceMessageById(
         messageId: Uuid,
         replacement: UIMessage,
         requireLastNode: Boolean,
-    ): ConversationSnapshot {
+    ): ConversationAggregateSnapshot {
         val lastIndex = nodes.lastIndex
         val nodeIndex = if (lastIndex >= 0 && nodes[lastIndex].messages.any { it.id == messageId }) {
             lastIndex
@@ -913,12 +1102,12 @@ internal object ConversationTransition {
         return copy(nodes = updatedNodes)
     }
 
-    private fun ConversationSnapshot.markAssistantTerminalInternal(
+    private fun ConversationAggregateSnapshot.markAssistantTerminalInternal(
         messageId: Uuid?,
         status: MessageTerminalStatus,
         reason: String?,
         detail: String? = null,
-    ): ConversationSnapshot {
+    ): ConversationAggregateSnapshot {
         if (messageId == null) return this
         val message = findMessage(messageId)?.takeIf { it.role == MessageRole.ASSISTANT } ?: return this
         return replaceMessageById(
@@ -932,10 +1121,10 @@ internal object ConversationTransition {
         )
     }
 
-    private fun ConversationSnapshot.closePendingTools(
+    private fun ConversationAggregateSnapshot.closePendingTools(
         messageId: Uuid,
         cancelledByUser: Boolean,
-    ): ConversationSnapshot {
+    ): ConversationAggregateSnapshot {
         val message = findMessage(messageId) ?: return this
         val hasPending = message.parts.any { it is UIMessagePart.Tool && it.approvalState is ToolApprovalState.Pending }
         if (!hasPending) return this
@@ -969,7 +1158,7 @@ internal fun interruptPendingTool(tool: UIMessagePart.Tool): UIMessagePart.Tool 
 
 internal fun ConversationCommand.updatesConversationActivity(): Boolean = this !is HeaderConversationCommand
 
-internal fun ConversationSnapshot.materializeConversation(): Conversation = Conversation(
+internal fun ConversationAggregateSnapshot.materializeConversation(): Conversation = Conversation(
     id = conversationId,
     assistantId = header.assistantId,
     title = header.title,

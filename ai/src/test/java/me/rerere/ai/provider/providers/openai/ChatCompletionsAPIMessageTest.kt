@@ -15,6 +15,7 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.freeze
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
@@ -1442,7 +1443,7 @@ class ChatCompletionsAPIMessageTest {
                     displayName = "DeepSeek V4 Flash",
                     abilities = listOf(ModelAbility.REASONING, ModelAbility.TOOL),
                 ),
-                tools = listOf(tool),
+                tools = listOf(tool.freeze()),
             ),
             providerSetting = ProviderSetting.OpenAI(
                 baseUrl = "https://api.b.ai/v1",
@@ -1485,7 +1486,7 @@ class ChatCompletionsAPIMessageTest {
                     modelId = "deepseek-v4-flash",
                     abilities = listOf(ModelAbility.REASONING),
                 ),
-                tools = listOf(tool),
+                tools = listOf(tool.freeze()),
             ),
             TextGenerationParams(
                 model = Model(
@@ -1530,7 +1531,7 @@ class ChatCompletionsAPIMessageTest {
                     displayName = "Custom",
                     abilities = listOf(ModelAbility.REASONING, ModelAbility.TOOL),
                 ),
-                tools = listOf(tool),
+                tools = listOf(tool.freeze()),
             ),
             providerSetting = ProviderSetting.OpenAI(
                 baseUrl = "https://api.b.ai/v1",

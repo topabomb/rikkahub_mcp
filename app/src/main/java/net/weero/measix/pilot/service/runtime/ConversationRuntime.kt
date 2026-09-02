@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import me.rerere.ai.ui.UIMessage
+import net.weero.measix.pilot.data.ai.TurnModelContextProjection
 import net.weero.measix.pilot.data.model.Conversation
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -46,9 +47,9 @@ internal data class ActiveRequestPresentationFacts(
  * [ConversationCommandCoordinator]; this runtime only publishes snapshots, streaming
  * deltas and one private active request.
  */
-class ConversationRuntime(
+class ConversationRuntime internal constructor(
     val id: Uuid,
-    initial: ConversationSnapshot,
+    initial: ConversationAggregateSnapshot,
     private val scope: CoroutineScope,
     private val onIdle: (Uuid) -> Unit,
     private val idleTimeoutMs: Long = IDLE_TIMEOUT_MS,
@@ -70,17 +71,35 @@ class ConversationRuntime(
         val previousTurnId: Uuid? = null,
         handle: TurnHandle? = null,
         phase: ConversationTurnPhase = ConversationTurnPhase.PREPARING,
+        requestContext: TurnRequestContext? = null,
+        modelContextProjection: TurnModelContextProjection? = null,
     ) {
         private val _phase = AtomicReference(phase)
         private val _handle = AtomicReference(handle)
+        private val _requestContext = AtomicReference(requestContext)
+        private val _modelContextProjection = AtomicReference(modelContextProjection)
         private val _cancelReason = AtomicReference<String?>(null)
         private val _processingText = AtomicReference<String?>(null)
 
         val handle: TurnHandle? get() = _handle.get()
+        val requestContext: TurnRequestContext? get() = _requestContext.get()
+        val modelContextProjection: TurnModelContextProjection? get() = _modelContextProjection.get()
         val processingText: String? get() = _processingText.get()
         val workerIdentity: Int get() = System.identityHashCode(worker)
 
         fun presentationPhase(): ConversationTurnPhase = _phase.get()
+
+        fun bindRequestContext(context: TurnRequestContext) {
+            check(_requestContext.compareAndSet(null, context)) {
+                "request context is already bound for turn $turnId"
+            }
+        }
+
+        fun bindModelContextProjection(projection: TurnModelContextProjection) {
+            check(_modelContextProjection.compareAndSet(null, projection)) {
+                "model context projection is already bound for turn $turnId"
+            }
+        }
 
         fun peekCancelReason(): String? = _cancelReason.get()
 
@@ -141,8 +160,8 @@ class ConversationRuntime(
 
     // ---- snapshot 事实源 ----
 
-    /** UI 与内部读取的唯一订阅源 */
-    val snapshot: StateFlow<ConversationSnapshot> = _snapshot.asStateFlow()
+    /** internal 事实流；UI 订阅的是 ConversationPresentationSnapshot（见 ConversationQueryService）。 */
+    internal val snapshot: StateFlow<ConversationAggregateSnapshot> = _snapshot.asStateFlow()
 
     /**
      * 流式高频更新：非挂起、conflated、永不落库、不加锁。只更新 activeTurn 展示态。
@@ -165,16 +184,16 @@ class ConversationRuntime(
 
     internal fun nextTurnEpoch(): Long = turnEpoch.incrementAndGet()
 
-    internal fun publishDraft(snapshot: ConversationSnapshot) {
+    internal fun publishDraft(snapshot: ConversationAggregateSnapshot) {
         check(snapshot.header.newConversation) { "publishDraft requires a Draft snapshot" }
         check(_snapshot.value.header.newConversation) { "a Ready runtime cannot accept a Draft publish" }
         _snapshot.value = snapshot
     }
 
     internal fun publishCommitted(
-        old: ConversationSnapshot,
+        old: ConversationAggregateSnapshot,
         command: ConversationCommand,
-        committed: ConversationSnapshot,
+        committed: ConversationAggregateSnapshot,
     ) {
         _snapshot.update { latest ->
             when (command) {
@@ -237,6 +256,51 @@ class ConversationRuntime(
 
     internal fun currentWorker(): Job? = _activeRequest.value?.worker
 
+    /** Binds the immutable request context once to the exact worker that owns this Turn. */
+    internal fun bindTurnRequestContext(turnId: Uuid, worker: Job, context: TurnRequestContext) {
+        val current = _activeRequest.value
+        check(current != null && current.turnId == turnId && current.worker === worker) {
+            "request context owner does not match turn $turnId"
+        }
+        current.bindRequestContext(context)
+    }
+
+    /** Continuations and retries must reuse the context owned by their exact active worker. */
+    internal fun requireTurnRequestContext(turnId: Uuid, worker: Job): TurnRequestContext {
+        val current = _activeRequest.value
+        check(current != null && current.turnId == turnId && current.worker === worker) {
+            "request context owner does not match turn $turnId"
+        }
+        return requireNotNull(current.requestContext) { "request context is missing for turn $turnId" }
+    }
+
+    /**
+     * Binds the START-frozen model-context projection once, right after the StartTurn
+     * transaction commits. Continuations reuse it instead of re-evaluating the
+     * applicability predicate (权威方案 §7.3).
+     */
+    internal fun bindModelContextProjection(
+        turnId: Uuid,
+        worker: Job,
+        projection: TurnModelContextProjection,
+    ) {
+        val current = _activeRequest.value
+        check(current != null && current.turnId == turnId && current.worker === worker) {
+            "model context projection owner does not match turn $turnId"
+        }
+        current.bindModelContextProjection(projection)
+    }
+
+    internal fun requireTurnModelContextProjection(turnId: Uuid, worker: Job): TurnModelContextProjection {
+        val current = _activeRequest.value
+        check(current != null && current.turnId == turnId && current.worker === worker) {
+            "model context projection owner does not match turn $turnId"
+        }
+        return requireNotNull(current.modelContextProjection) {
+            "model context projection is missing for turn $turnId"
+        }
+    }
+
     internal fun activeRequestPresentationFacts(): ActiveRequestPresentationFacts? {
         val current = _activeRequest.value ?: return null
         return ActiveRequestPresentationFacts(
@@ -277,6 +341,8 @@ class ConversationRuntime(
         handle: TurnHandle? = null,
         phase: ConversationTurnPhase = ConversationTurnPhase.PREPARING,
         supersedeReason: String? = null,
+        requestContext: TurnRequestContext? = null,
+        modelContextProjection: TurnModelContextProjection? = null,
     ): InstalledActiveRequest {
         cancelIdleCheck()
         val previous = _activeRequest.value
@@ -291,6 +357,8 @@ class ConversationRuntime(
             previousTurnId = previous?.turnId,
             handle = handle,
             phase = phase,
+            requestContext = requestContext,
+            modelContextProjection = modelContextProjection,
         )
         ownedRequests[turnId] = installed
         publishActive(installed)
@@ -335,11 +403,19 @@ class ConversationRuntime(
                 "approval continuation ${handle.turnId} is not the current awaiting owner",
             )
         }
+        val context = requireNotNull(current.requestContext) {
+            "approval continuation ${handle.turnId} has no request context"
+        }
+        val projection = requireNotNull(current.modelContextProjection) {
+            "approval continuation ${handle.turnId} has no model context projection"
+        }
         return installActiveRequest(
             turnId = handle.turnId,
             worker = worker,
             handle = handle,
             phase = ConversationTurnPhase.PREPARING,
+            requestContext = context,
+            modelContextProjection = projection,
         )
     }
 
@@ -501,7 +577,9 @@ internal fun ActiveTurnState.matches(handle: TurnHandle): Boolean =
 private fun ActiveTurnState.sameOwner(other: ActiveTurnState): Boolean =
     epoch == other.epoch && turnId == other.turnId && assistantMessageId == other.assistantMessageId
 
-internal fun Conversation.toSnapshot(): ConversationSnapshot = ConversationSnapshot(
+internal fun Conversation.toSnapshot(
+    modelContextEntries: List<net.weero.measix.pilot.data.model.ConversationModelContextEntry> = emptyList(),
+): ConversationAggregateSnapshot = ConversationAggregateSnapshot(
     conversationId = id,
     header = ConversationHeader(
         id = id,
@@ -520,4 +598,6 @@ internal fun Conversation.toSnapshot(): ConversationSnapshot = ConversationSnaps
     ),
     nodes = messageNodes,
     activeTurn = null,
+    // durable context 只进入 internal aggregate，不进入 public Conversation。
+    modelContextEntries = modelContextEntries,
 )

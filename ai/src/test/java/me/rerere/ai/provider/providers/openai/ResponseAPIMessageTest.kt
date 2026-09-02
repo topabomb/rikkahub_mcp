@@ -13,6 +13,7 @@ import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.freeze
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.Model
@@ -1620,7 +1621,7 @@ class ResponseAPIMessageTest {
             abilities = listOf(ModelAbility.TOOL),
             tools = builtInTools
         ),
-        tools = tools
+        tools = tools.map { it.freeze() }
     )
 
     private fun createFunctionTool(name: String): Tool = Tool(

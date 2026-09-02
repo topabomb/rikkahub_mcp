@@ -1,5 +1,9 @@
 package net.weero.measix.pilot.service
 
+import net.weero.measix.pilot.test.generationRequestFixture
+
+import net.weero.measix.pilot.test.testPromptInputs
+
 import android.content.Context
 import io.mockk.coEvery
 import io.mockk.every
@@ -45,7 +49,7 @@ import net.weero.measix.pilot.service.runtime.ConversationCommand
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.FinalizeTurn
 import net.weero.measix.pilot.service.runtime.StreamingDeltaResult
 import net.weero.measix.pilot.service.runtime.TurnEngine
@@ -152,20 +156,20 @@ class TurnFinalizationAssistantCallTest {
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
-            memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
             toolOutputStore = io.mockk.mockk(relaxed = true),
         )
         val engine = TurnEngine(harness.coordinator, harness.runtime, harness.handle, harness.finalization)
         val callObserved = CompletableDeferred<Unit>()
         val collector = launch {
-            engine.bind(loop.run(GenerationRequest(
+            engine.bind(loop.run(generationRequestFixture(
                 conversationId = kotlin.uuid.Uuid.random(),
                 settings = Settings(providers = listOf(providerSetting)),
                 model = model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,
                 messages = harness.snapshot.currentMessages(),
                 assistant = Assistant(enableMemory = false, streamOutput = true),
+                promptInputs = testPromptInputs(),
                 assistantMessageId = assistant.id,
                 onCheckpoint = engine::onCheckpoint,
                 onMessagesObserved = engine::observeMessages,
@@ -232,7 +236,7 @@ class TurnFinalizationAssistantCallTest {
 
     private data class Harness(
         val handle: TurnHandle,
-        val snapshot: ConversationSnapshot,
+        val snapshot: ConversationAggregateSnapshot,
         val runtime: ConversationRuntime,
         val coordinator: ConversationCommandCoordinator,
         val finalization: TurnFinalization,

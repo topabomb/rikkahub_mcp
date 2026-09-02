@@ -15,11 +15,8 @@ import me.rerere.ai.provider.ProviderManager
 import me.rerere.common.http.AcceptLanguageBuilder
 import net.weero.measix.pilot.BuildConfig
 import net.weero.measix.pilot.data.ai.RequestLoggingInterceptor
-import net.weero.measix.pilot.data.ai.transformers.AssistantTemplateLoader
 import net.weero.measix.pilot.data.ai.GenerationLoop
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
-import net.weero.measix.pilot.data.ai.transformers.AssistantTemplateCacheInvalidator
-
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.fts.MessageFtsManager
@@ -32,6 +29,7 @@ import net.weero.measix.pilot.data.db.migrations.Migration_5_6
 import net.weero.measix.pilot.data.db.migrations.Migration_6_7
 import net.weero.measix.pilot.data.db.migrations.Migration_7_8
 import net.weero.measix.pilot.data.db.migrations.Migration_8_9
+import net.weero.measix.pilot.data.db.migrations.Migration_9_10
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
 import net.weero.measix.pilot.data.ai.mcp.McpCatalogStore
 import net.weero.measix.pilot.data.ai.mcp.OAuthCallbackKeepAlive
@@ -69,6 +67,7 @@ val dataSourceModule = module {
                 Migration_6_7,
                 Migration_7_8,
                 Migration_8_9,
+                Migration_9_10,
             )
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onOpen(db: SupportSQLiteDatabase) {
@@ -123,26 +122,13 @@ val dataSourceModule = module {
     }
 
     single {
-        AssistantTemplateLoader(settingsStore = get())
-    }
-
-    single {
         PebbleEngine.Builder()
-            .loader(get<AssistantTemplateLoader>())
             .defaultLocale(Locale.getDefault())
             .autoEscaping(false)
             .build()
     }
 
-    single(createdAtStart = true) {
-        AssistantTemplateCacheInvalidator(
-            appScope = get(),
-            settingsStore = get(),
-            engine = get(),
-        )
-    }
-
-    single { TemplateTransformer(engine = get(), settingsStore = get()) }
+    single { TemplateTransformer(engine = get()) }
 
     single {
         get<AppDatabase>().conversationDao()
@@ -193,6 +179,10 @@ val dataSourceModule = module {
     }
 
     single {
+        get<AppDatabase>().conversationModelContextDao()
+    }
+
+    single {
         MessageFtsManager(get())
     }
 
@@ -224,7 +214,6 @@ val dataSourceModule = module {
             context = get(),
             providerManager = get(),
             json = get(),
-            memoryRepo = get(),
             attachmentResolver = get(),
             toolOutputStore = get(),
         )

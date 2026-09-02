@@ -1,5 +1,9 @@
 package net.weero.measix.pilot.data.ai.transformers
 
+import net.weero.measix.pilot.service.runtime.resolveAssistantRequest
+
+import net.weero.measix.pilot.test.testPromptInputs
+
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -55,7 +59,7 @@ class AttachmentProjectionTransformerTest {
         type = ModelType.CHAT,
         inputModalities = listOf(Modality.TEXT),
     )
-    private val assistant = Assistant()
+    private val assistant = resolveAssistantRequest(Assistant())
     private val settings = Settings()
 
     init {
@@ -79,7 +83,7 @@ class AttachmentProjectionTransformerTest {
         context = context,
         model = model,
         assistant = assistant,
-        settings = settings,
+        promptInputs = testPromptInputs(),
         requestOrigins = RequestMessageOriginTracker(),
         mediaCapabilities = capabilities,
         registerUnpublishedResource = { error("projection transformer must not create resources") },
@@ -349,7 +353,7 @@ class AttachmentProjectionTransformerTest {
             context = context,
             model = visionModel,
             assistant = assistant,
-            settings = settings,
+            promptInputs = testPromptInputs(),
             requestOrigins = RequestMessageOriginTracker(),
             mediaCapabilities = RequestMediaCapabilities(
                 userImages = RequestImageSupport.STRUCTURED,

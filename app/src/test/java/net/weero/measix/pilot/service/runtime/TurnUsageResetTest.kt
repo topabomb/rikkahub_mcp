@@ -32,7 +32,13 @@ class TurnUsageResetTest {
 
         val started = ConversationTransition.apply(
             initial,
-            StartTurn(Uuid.random(), assistantMessageId, resume = false, epoch = 1),
+            ConversationTransition.buildStartTurnCommand(
+                current = initial,
+                turnId = Uuid.random(),
+                modelContextCandidate = disclosureCandidate(),
+                assistantMessageId = assistantMessageId,
+                epoch = 1,
+            ),
         )
 
         assertNull(started.nodes.last().currentMessage.usage)

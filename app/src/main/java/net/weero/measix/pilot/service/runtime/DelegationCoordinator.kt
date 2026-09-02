@@ -22,9 +22,8 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.TurnTerminalReasons
 import net.weero.measix.pilot.data.ai.GenerationLoop
-import net.weero.measix.pilot.data.ai.GenerationMemoryContext
 import net.weero.measix.pilot.data.ai.GenerationRequest
-import net.weero.measix.pilot.data.ai.resolveGenerationMemoryOwner
+import net.weero.measix.pilot.data.ai.resolveMemoryOwnerId
 import net.weero.measix.pilot.data.ai.mcp.McpServerCapabilityState
 import net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata
@@ -43,7 +42,6 @@ import net.weero.measix.pilot.data.ai.subassistant.validateDeliverableArtifacts
 import net.weero.measix.pilot.data.ai.subassistant.projectArtifactsForCaller
 import net.weero.measix.pilot.data.ai.subassistant.computeSubAssistantPreview
 import net.weero.measix.pilot.data.ai.subassistant.computeTerminalPreview
-import net.weero.measix.pilot.data.ai.subassistant.buildTargetStepTools
 import net.weero.measix.pilot.data.ai.subassistant.cloneLineagePrefix
 import net.weero.measix.pilot.data.ai.subassistant.findPreviousCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.classifySubAssistantFailure
@@ -62,6 +60,8 @@ import net.weero.measix.pilot.data.ai.subassistant.ReadinessResult
 import net.weero.measix.pilot.data.ai.subassistant.LineageDecision
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantDeliverableArtifact
 import net.weero.measix.pilot.data.ai.tools.GenerationToolSetFactory
+import net.weero.measix.pilot.data.ai.tools.buildMemoryTools
+import net.weero.measix.pilot.data.ai.tools.PendingInteraction
 import net.weero.measix.pilot.data.ai.tools.ToolInteractionAvailability
 import net.weero.measix.pilot.data.ai.tools.ToolInteractionKind
 import net.weero.measix.pilot.data.ai.tools.ToolRuntimeMetadata
@@ -76,7 +76,9 @@ import net.weero.measix.pilot.data.ai.transformers.AttachmentProjectionTransform
 import net.weero.measix.pilot.data.ai.transformers.Base64ImageToLocalFileTransformer
 import net.weero.measix.pilot.data.ai.transformers.DocumentAsPromptTransformer
 import net.weero.measix.pilot.data.ai.transformers.WorkspaceReminderTransformer
+import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.files.AttachmentCloner
 import net.weero.measix.pilot.data.files.ArtifactStore
@@ -85,11 +87,13 @@ import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.data.files.requireDiscarded
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.model.ConversationModelContextApplicability
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
+import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
 import net.weero.measix.pilot.service.SubAssistantRunGate
 import net.weero.measix.pilot.service.SubAssistantRunKey
 import net.weero.measix.pilot.service.TurnFinalization
@@ -125,7 +129,7 @@ class DelegationCoordinator(
     private val settingsStore: SettingsStore,
     private val memoryRepository: MemoryRepository,
     private val templateTransformer: TemplateTransformer,
-    workspaceRepository: WorkspaceRepository,
+    private val turnRequestContextFactory: TurnRequestContextFactory,
     private val artifactStore: ArtifactStore,
     private val toolArtifactRewriter: ToolArtifactRewriter,
     private val json: Json,
@@ -138,7 +142,7 @@ class DelegationCoordinator(
     // （run 内 artifact 重放仅 Master 侧需要），与 targetInput() 的固定清单一致。
     private val turnPipelineFactory = TurnPipelineFactory(
         templateTransformer = templateTransformer,
-        workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository),
+        workspaceReminderTransformer = WorkspaceReminderTransformer(),
         toolArtifactReplayTransformer = null,
         attachmentProjectionTransformer = AttachmentProjectionTransformer(artifactStore),
         base64ImageToLocalFileTransformer = Base64ImageToLocalFileTransformer(artifactStore),
@@ -158,6 +162,7 @@ class DelegationCoordinator(
     /** preflight 产物：放行（含 lease）或拒绝（含结果 parts）。 */
     private sealed interface Preflight {
         data class Ready(
+            val settings: Settings,
             val runSpec: net.weero.measix.pilot.data.ai.subassistant.SubAssistantRunSpec,
             val target: Assistant,
             val model: me.rerere.ai.provider.Model,
@@ -292,6 +297,7 @@ class DelegationCoordinator(
         }
 
         return Preflight.Ready(
+            settings = settings,
             runSpec = runSpec,
             target = target,
             model = runSpec.model,
@@ -463,6 +469,8 @@ class DelegationCoordinator(
         var runScope: CoroutineScope? = null
         var childConversationId: Uuid? = null
         var childTaskNodeId: Uuid? = null
+        var childTurnId: Uuid? = null
+        var childRunJob: Job? = null
         var runState: SubAssistantRunStateReducer? = null
         try {
             val materialized = materializeChild(
@@ -478,6 +486,7 @@ class DelegationCoordinator(
             childConversationId = child.childConversationId
             childTaskNodeId = child.childTaskNodeId
             val runJob = child.runJob
+            childRunJob = runJob
 
             // 调用↔Child 关系归位：本次工具执行的 durable 事实携带 child id
             // （崩溃恢复经 turn_execution(status) → child_conversation_id 定点收口）。
@@ -532,10 +541,11 @@ class DelegationCoordinator(
 
             // Durable link 成功后才把 lease Job 安装进 Child Runtime；否则失败补偿会被
             // active runtime 自己阻断，留下未关联 Child 与克隆 artifact。
-            val childTurnId = Uuid.random()
+            val installedChildTurnId = Uuid.random()
+            childTurnId = installedChildTurnId
             runtimeRegistry.installAndStartActiveRequest(
                 conversationId = childConversationId,
-                turnId = childTurnId,
+                turnId = installedChildTurnId,
                 worker = runJob,
             )
 
@@ -557,10 +567,15 @@ class DelegationCoordinator(
             runJob.ensureActive()
             val genResult = withContext(runJob) {
                 runTargetGeneration(
+                    settings = ready.settings,
                     target = target,
                     model = model,
+                    callerAssistantId = callerAssistantId,
+                    runSpec = ready.runSpec,
                     childConversationId = childConversationId,
                     childTaskNodeId = childTaskNodeId,
+                    childTurnId = installedChildTurnId,
+                    activeWorker = runJob,
                     execContext = execContext,
                     runId = ready.runId,
                     runState = runState,
@@ -599,12 +614,18 @@ class DelegationCoordinator(
                 reason = cancelReason,
             )
             try {
-                turnFinalization.finalizeSubAssistantRun(
-                    childConversationId = currentChild,
-                    reason = cancelReason,
-                    execContext = execContext,
-                    terminalMetadata = terminalMeta,
-                )
+                val ownedTurnId = childTurnId
+                if (ownedTurnId == null) {
+                    turnFinalization.finalizeUnstartedSubAssistantRun(execContext, terminalMeta)
+                } else {
+                    turnFinalization.finalizeSubAssistantRun(
+                        childConversationId = currentChild,
+                        childTurnId = ownedTurnId,
+                        reason = cancelReason,
+                        execContext = execContext,
+                        terminalMetadata = terminalMeta,
+                    )
+                }
             } catch (finalizationFailure: Exception) {
                 if (masterCancelled) {
                     e.addSuppressed(finalizationFailure)
@@ -634,12 +655,18 @@ class DelegationCoordinator(
                 reason = failureReason,
             )
             try {
-                turnFinalization.finalizeSubAssistantRun(
-                    childConversationId = currentChild,
-                    reason = failureReason,
-                    execContext = execContext,
-                    terminalMetadata = terminalMeta,
-                )
+                val ownedTurnId = childTurnId
+                if (ownedTurnId == null) {
+                    turnFinalization.finalizeUnstartedSubAssistantRun(execContext, terminalMeta)
+                } else {
+                    turnFinalization.finalizeSubAssistantRun(
+                        childConversationId = currentChild,
+                        childTurnId = ownedTurnId,
+                        reason = failureReason,
+                        execContext = execContext,
+                        terminalMetadata = terminalMeta,
+                    )
+                }
             } catch (finalizationFailure: Exception) {
                 finalizationFailure.addSuppressed(e)
                 throw finalizationFailure
@@ -657,6 +684,16 @@ class DelegationCoordinator(
         } finally {
             settingsWatcher?.cancel()
             runScope?.cancel()
+            val ownedChildId = childConversationId
+            val ownedTurnId = childTurnId
+            val ownedWorker = childRunJob
+            if (ownedChildId != null && ownedTurnId != null && ownedWorker != null) {
+                runtimeRegistry.findRuntime(ownedChildId)?.releaseActiveRequest(
+                    turnId = ownedTurnId,
+                    worker = ownedWorker,
+                    retainAwaitingOwner = false,
+                )
+            }
             ready.lease.close()
         }
     }
@@ -684,7 +721,7 @@ class DelegationCoordinator(
             execContext,
             extras,
         )
-        TurnOutcome.AwaitingApproval ->
+        is TurnOutcome.AwaitingApproval ->
             // 只有无法桥接 Pending ask_user 或达到交互上限时才会返回到这里。
             failedTerminal("approval_blocked", target, genResult, childTaskNodeId, runState, execContext, extras)
         TurnOutcome.Completed -> {
@@ -812,17 +849,22 @@ class DelegationCoordinator(
         userParts: List<UIMessagePart>,
         createdArtifacts: MutableList<OwnedArtifact>,
     ): Pair<Uuid, Uuid> {
-        val sourceConversation = conversationRepo.getConversationById(sourceChildId)
+        val sourceConversation = conversationRepo.getConversationSnapshotById(sourceChildId)
             ?: throw IllegalStateException("Source child conversation not found: $sourceChildId")
 
         // 只克隆所选 previous run 的前缀；源 Child 的后续 task 属于另一条分支。
         val newChildId = Uuid.random()
-        val sourcePrefix = cloneLineagePrefix(sourceConversation, throughTaskMessageId)
+        val sourcePrefix = cloneLineagePrefix(sourceConversation.nodes, throughTaskMessageId)
             ?: throw IllegalStateException("Source child lineage endpoint is invalid: $throughTaskMessageId")
         val copiedArtifacts = linkedMapOf<String, OwnedArtifact>()
+        // Child lineage clone 重建 node id、保留 message id：context entries 走唯一映射，
+        // 并按统一因果谓词过滤（§14.1）。
+        val clonedNodeIdMap = mutableMapOf<Uuid, Uuid>()
         val clonedNodes = sourcePrefix.map { node ->
+            val newNodeId = Uuid.random()
+            clonedNodeIdMap[node.id] = newNodeId
             node.copy(
-                id = Uuid.random(),
+                id = newNodeId,
                 messages = node.messages.map { message ->
                     message.copy(
                         parts = AttachmentCloner.cloneParts(
@@ -837,14 +879,31 @@ class DelegationCoordinator(
             )
         }
         val taskMessage = UIMessage(role = MessageRole.USER, parts = userParts)
-        val conversation = Conversation(
-            id = newChildId,
-            assistantId = target.id,
-            title = target.name,
-            messageNodes = clonedNodes + taskMessage.toMessageNode(),
-            parentConversationId = masterConversationId,
+        val snapshot = sourceConversation.copy(
+            conversationId = newChildId,
+            header = sourceConversation.header.copy(
+                id = newChildId,
+                assistantId = target.id,
+                title = target.name,
+                parentConversationId = masterConversationId,
+                isPinned = false,
+                folderId = null,
+                chatSuggestions = emptyList(),
+                customSystemPrompt = null,
+                modeInjectionIds = emptySet(),
+                workspaceCwd = null,
+                newConversation = false,
+            ),
+            nodes = clonedNodes + taskMessage.toMessageNode(),
+            activeTurn = null,
+            modelContextEntries = ConversationModelContextApplicability.remapForClone(
+                entries = sourceConversation.modelContextEntries,
+                nodeIdMap = clonedNodeIdMap,
+                messageIdMap = emptyMap(),
+                clonedBranchMessages = clonedNodes.map { it.currentMessage },
+            ),
         )
-        createOwnedChild(conversation)
+        createOwnedChild(snapshot)
 
         Log.i(TAG, "cloneChild: source=$sourceChildId, new=$newChildId, taskMsg=${taskMessage.id}")
         return newChildId to taskMessage.id
@@ -855,6 +914,23 @@ class DelegationCoordinator(
      * The random Child id is this operation's ownership token, so cancellation compensates that
      * exact aggregate before attachment ownership is released by the caller.
      */
+    private suspend fun createOwnedChild(snapshot: ConversationAggregateSnapshot) {
+        try {
+            commandCoordinator.createSnapshot(snapshot)
+        } catch (error: Throwable) {
+            if (error !is ConversationCommandConflictException) {
+                withContext(NonCancellable) {
+                    try {
+                        commandCoordinator.deleteOrThrow(snapshot.conversationId)
+                    } catch (cleanupFailure: Throwable) {
+                        error.addSuppressed(cleanupFailure)
+                    }
+                }
+            }
+            throw error
+        }
+    }
+
     private suspend fun createOwnedChild(conversation: Conversation) {
         try {
             commandCoordinator.create(conversation)
@@ -873,16 +949,20 @@ class DelegationCoordinator(
     }
 
     private suspend fun runTargetGeneration(
+        settings: Settings,
         target: Assistant,
         model: me.rerere.ai.provider.Model,
+        callerAssistantId: Uuid,
+        runSpec: net.weero.measix.pilot.data.ai.subassistant.SubAssistantRunSpec,
         childConversationId: Uuid,
         childTaskNodeId: Uuid,
+        childTurnId: Uuid,
+        activeWorker: kotlinx.coroutines.Job,
         execContext: ToolExecutionContext,
         runId: String,
         runState: SubAssistantRunStateReducer,
         turnTtsContext: TtsToolPlaybackContext? = null,
     ): TargetGenerationResult {
-        val settings = settingsStore.effectiveSettings.value.settings
         val runtime = commandCoordinator.load(childConversationId)
         val snapshot = runtime.snapshot.value
 
@@ -895,13 +975,22 @@ class DelegationCoordinator(
             sourceType = TtsPlaybackSource.SourceType.SUB_ASSISTANT,
         )
         val mediaCapabilities = generationLoop.resolveRequestMediaCapabilities(settings, model)
+        val providerSetting = model.findProvider(settings.providers) ?: error("Provider not found")
+        val promptInputs = turnRequestContextFactory.capturePromptInputs(
+            settings = settings,
+            assistant = target,
+            model = model,
+            conversationSystemPrompt = null,
+            conversationModeInjectionIds = target.modeInjectionIds,
+        )
+        val disclosureCandidate = ConversationDisclosureSnapshotService.captureCandidate(
+            settings = settings,
+            assistant = target,
+            memoryRepository = memoryRepository,
+        )
         val mcpCapabilities = toolSetFactory.prepareMcpCapabilities(target)
         targetMcpPreparationFailure(mcpCapabilities)?.let(::error)
-
-        // The run-start schema is the Target's immutable capability ceiling. Resource and
-        // configuration changes may remove or rebuild these names on later Provider steps,
-        // but may not introduce a name that this run did not expose at its start.
-        val runStartToolNames = toolSetFactory.buildTools(
+        val regularTools = toolSetFactory.buildTools(
             assistant = target,
             conversationId = childConversationId,
             settings = settings,
@@ -910,94 +999,93 @@ class DelegationCoordinator(
             runMode = ToolSetRunMode.TARGET,
             ttsPlaybackContext = ttsPlaybackContext,
             mcpCapabilities = mcpCapabilities,
-        ).mapTo(linkedSetOf()) { it.name }
-
-        // 每个 step 重新解析资源并应用“运行开始时的 Target 能力上限 ∩ 当前有效 Settings”。
-        // 所有工具（含 Attachment Inspection）遵循统一生效规则：配置变更从下一次工具集合构建开始生效。
-        val toolProvider: suspend () -> List<Tool> = {
-            val currentSettings = settingsStore.effectiveSettings.value.settings
-            val latestTarget = currentSettings.getAssistantById(target.id)
-            if (latestTarget == null) {
-                emptyList()
-            } else {
-                buildTargetStepTools(target, latestTarget, runStartToolNames) { effectiveTarget ->
-                    toolSetFactory.buildTools(
-                        assistant = effectiveTarget,
-                        conversationId = childConversationId,
-                        settings = currentSettings,
-                        capabilityModel = model,
-                        workspaceCwd = snapshot.header.workspaceCwd,
-                        runMode = ToolSetRunMode.TARGET,
-                        ttsPlaybackContext = ttsPlaybackContext,
-                        mcpCapabilities = mcpCapabilities,
-                    )
-                }
+        )
+        val memoryOwnerId = resolveMemoryOwnerId(target)
+        val tools = buildList {
+            if (memoryOwnerId != null) {
+                addAll(
+                    buildMemoryTools(
+                        onCreation = { content -> memoryRepository.addMemory(memoryOwnerId, content) },
+                        onUpdate = { id, content -> memoryRepository.updateContent(id, content, memoryOwnerId) },
+                        onDelete = { id -> memoryRepository.deleteMemory(id, memoryOwnerId) },
+                        isStillAllowed = {
+                            resolveMemoryOwnerId(
+                                settingsStore.effectiveSettings.value.settings.getAssistantById(target.id),
+                            ) == memoryOwnerId
+                        },
+                    ),
+                )
             }
+            addAll(regularTools)
         }
-        val targetMemoryContextProvider: suspend () -> GenerationMemoryContext? = {
-            val latestTarget = settingsStore.effectiveSettings.value.settings
-                .getAssistantById(target.id)
-            resolveGenerationMemoryOwner(latestTarget, target)?.let { ownerId ->
-                val currentMemories = if (ownerId == MemoryRepository.GLOBAL_MEMORY_ID) {
-                    memoryRepository.getGlobalMemories()
-                } else {
-                    memoryRepository.getMemoriesOfAssistant(ownerId)
-                }
-                GenerationMemoryContext(ownerId, currentMemories)
-            }
-        }
+        val credentialOwner = captureProviderCredentialOwner(
+            settings = settings,
+            model = model,
+            selectedProvider = providerSetting,
+        )
+        val requestContext = turnRequestContextFactory.create(
+            assistant = target,
+            model = model,
+            providerSetting = providerSetting,
+            providerTransportLease = ProviderTransportLease {
+                resolveProviderTransportOwner(
+                    settingsStore.effectiveSettings.value.settings,
+                    credentialOwner,
+                )
+            },
+            mediaCapabilities = mediaCapabilities,
+            promptInputs = promptInputs,
+            tools = tools,
+        )
+        // START admission is checked after all suspending preparation. Live state may revoke the
+        // run, but it cannot change the already frozen wire shape for an admitted START.
+        activeWorker.ensureActive()
+        resolveActiveRunStopReason(
+            settings = settingsStore.effectiveSettings.value.settings,
+            callerAssistantId = callerAssistantId,
+            targetAssistantId = target.id,
+            runSpec = runSpec,
+        )?.let { reason -> throw CancellationException(reason) }
+        activeWorker.ensureActive()
+        // Registry owns the exact run lease Job; withContext(runJob) may expose a child scope Job.
+        runtime.bindTurnRequestContext(childTurnId, activeWorker, requestContext)
 
+        // 只作为下一轮 GenerationLoop 的输入与 preview 投影源。暂停投影刻意不经流式通道，
+        // 因此它不能用于定位挂起交互；定位一律使用 TurnOutcome.AwaitingApproval.pending。
         var lastMessages = snapshot.currentMessages()
         var lastPreviewUpdate = 0L
         var outcome: TurnOutcome? = null
         var interactionCount = 0
 
-        // One sub-assistant run owns one durable turn and one epoch across every ask_user step.
+        // One SubAssistant Run owns one immutable context and one durable Child turn across ask_user continuations.
         val started = TurnEngine.start(
             commandCoordinator = commandCoordinator,
             runtime = runtime,
-            turnId = requireNotNull(runtime.currentGenerationTurnId()) {
-                "target generation has no installed active request"
-            },
-            messages = lastMessages,
+            turnId = childTurnId,
+            modelContextCandidate = disclosureCandidate,
             turnFinalization = turnFinalization,
         )
         val turnEngine = started.engine
         lastMessages = runtime.snapshot.value.currentMessages()
-
+        val modelContextProjection = ConversationTransition.projectTurnModelContext(runtime.snapshot.value)
         while (true) {
             outcome = null
             generationLoop.run(
                 GenerationRequest(
                     conversationId = childConversationId,
-                    settings = settings,
-                    model = model,
+                    requestContext = requestContext,
                     messages = lastMessages,
                     inputTransformers = turnPipelineFactory.targetInput(),
                     outputTransformers = turnPipelineFactory.targetOutput(),
-                    assistant = target,
-                    toolProvider = toolProvider,
-                    mediaCapabilities = mediaCapabilities,
                     interactionAvailability = ToolInteractionAvailability.USER_INPUT_ONLY,
-                    memoryContextProvider = targetMemoryContextProvider,
-                    memoryToolAllowed = { ownerId ->
-                        resolveGenerationMemoryOwner(
-                            settingsStore.effectiveSettings.value.settings.getAssistantById(target.id),
-                            target,
-                        ) == ownerId
-                    },
                     assistantMessageId = started.assistantMessageId,
+                    modelContextEntries = modelContextProjection.entries,
+                    durableMessageLocators = modelContextProjection.locators,
                     onMessagesObserved = turnEngine::observeMessages,
                     reportProcessingText = runtime.processingReporter(),
-                    conversationSystemPrompt = null, // Child 不设置对话级 System Prompt
-                    // Child does not inherit the Master's mode injection. Passing the Target IDs also
-                    // keeps Target injections active when allowConversationPromptInjection is enabled.
-                    conversationModeInjectionIds = target.modeInjectionIds,
-                    workspaceCwd = snapshot.header.workspaceCwd,
                     maxSteps = 256,
                     providerSessionId = childConversationId.toString(),
                     onCheckpoint = { checkpoint ->
-                        // checkpoint→CommitCheckpoint（delta + turn/tool 事实同事务落库）
                         lastMessages = checkpoint.messages
                         turnEngine.onCheckpoint(checkpoint)
                     },
@@ -1046,7 +1134,7 @@ class DelegationCoordinator(
                 else -> Unit
             }
 
-            if (outcome !is TurnOutcome.AwaitingApproval) break
+            val awaiting = outcome as? TurnOutcome.AwaitingApproval ?: break
             if (interactionCount++ >= MAX_SUB_ASSISTANT_INTERACTIONS) {
                 val limitOutcome = TurnOutcome.Incomplete(TurnTerminalReasons.INTERACTION_LIMIT)
                 outcome = limitOutcome
@@ -1061,7 +1149,7 @@ class DelegationCoordinator(
                 runtime = runtime,
                 childTaskNodeId = childTaskNodeId,
                 runId = runId,
-                messages = lastMessages,
+                pending = awaiting.pending,
                 execContext = execContext,
                 runState = runState,
             )
@@ -1078,24 +1166,25 @@ class DelegationCoordinator(
         runtime: ConversationRuntime,
         childTaskNodeId: Uuid,
         runId: String,
-        messages: List<UIMessage>,
+        pending: List<PendingInteraction>,
         execContext: ToolExecutionContext,
         runState: SubAssistantRunStateReducer,
     ): List<UIMessage> {
+        // 消息一律从 Runtime 的当前投影读取；暂停投影刻意不经流式通道，
+        // 因此调用方持有的任何消息快照都不能用于定位交互。
+        val messages = runtime.snapshot.value.currentMessages()
         val message = requireNotNull(messages.lastOrNull()) { "user-input continuation has no assistant message" }
-        // The Runtime captured the interaction kind in reserved metadata when the call paused;
-        // the bridge must not special-case the tool name.
-        val toolOrdinal = message.getTools().indexOfFirst { tool ->
-            !tool.hasReplayResult &&
-                tool.approvalState is ToolApprovalState.Pending &&
-                ToolRuntimeMetadata.interactionKindOf(tool.metadata) == ToolInteractionKind.USER_INPUT
-        }
-        check(toolOrdinal >= 0) { "AWAITING_APPROVAL has no pending user-input tool" }
-        val tool = message.getTools()[toolOrdinal]
+        // 定位直接来自 Runtime 在挂起当刻产出的 pending；不回消息里扫描，
+        // 不依赖 ToolRuntimeMetadata 是否已经落盘，也不按工具名特判。
+        val interaction = pending.firstOrNull { it.kind == ToolInteractionKind.USER_INPUT }
+            ?: error("AwaitingApproval carried no user-input interaction for run $runId")
+        val toolOrdinal = interaction.locator.toolOrdinal
+        val tool = message.getTools().getOrNull(toolOrdinal)
+            ?: error("pending user-input locator $toolOrdinal is outside the owning assistant message")
         val interactionId = "${runId}_${message.id}_$toolOrdinal"
         val answer = runGate.registerPendingInteraction(runId, interactionId)
 
-        val interaction = net.weero.measix.pilot.data.ai.subassistant.SubAssistantUserInteraction(
+        val userInteraction = net.weero.measix.pilot.data.ai.subassistant.SubAssistantUserInteraction(
             interactionId = interactionId,
             messageId = message.id.toString(),
             toolOrdinal = toolOrdinal,
@@ -1103,7 +1192,7 @@ class DelegationCoordinator(
             input = tool.input,
         )
         val waitingMetadata = runState.awaitUserInteraction(
-            interaction = interaction,
+            interaction = userInteraction,
             preview = computeSubAssistantPreview(messages, childTaskNodeId).ifEmpty { null },
         )
         reportSubAssistantMetadataPatch(json, execContext, waitingMetadata, delivery = ToolMetadataDelivery.CHECKPOINT)

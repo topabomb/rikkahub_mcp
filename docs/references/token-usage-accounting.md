@@ -53,15 +53,18 @@ Provider wire usage event
 - `latestRequestEstimatedContextTokens`：每次 Provider 请求发出前，对经过输入 transformer 的最终消息投影和工具 schema
   做出的稳定 token 粗估；请求一旦发出就刷新，不等待 Provider usage。
 - `latestRequestTimeToFirstOutputMillis`：本 turn 最近一次实际产生首个有效模型输出的请求 TTFT；无输出请求不覆盖旧值。
-- `latestRequestCacheHitPercent`：最近一次能由 Provider 明确 input 与 cache-read 计算出的命中率；缺字段时沿用本 turn 旧值。
-- `latestRequestTokensPerSecond`：最近一次能由 Provider 明确 output 与输出阶段时长计算出的吞吐率；缺字段时沿用本 turn 旧值。
+- `latestRequestCacheHitPercent`：只覆盖为最新一次已关闭请求的命中率，由该请求的 cache read 与 canonical input 得出；
+  缺字段写 `null`，不能继承上一请求。它与 `latestRequestContextTokens` 严格同属一次请求，因此命中率的分母始终是摘要
+  中显示的那个上下文值。
+- `latestRequestTokensPerSecond`：只覆盖为最新一次已关闭请求的吞吐率，由该请求的 output 与输出阶段时长得出；缺字段写
+  `null`，不能继承上一请求。
 - `observedProviderRequestCount`：当前 turn 中已经关闭并加入累计的 Provider 请求数。
 - `observedUsageReportedRequestCount`：上述请求中至少报告一个 usage 字段的请求数。
 - `providerRequestDurationMillis`：各 Provider 请求从发起到响应流关闭的墙钟时间之和，不包含工具执行和审批等待。
 - `initialRequestTimeToFirstOutputMillis`：本 turn 第一次 Provider 请求发起到首个有效模型输出 chunk 的时间；只记录 ordinal 1，后续请求不累计、不覆盖。
 - `successfulToolOutputCompactionBatchCount`：当前 turn 成功随 checkpoint 提交的 Tool Output 滚动裁剪批次数；一批替换多个结果仍只加一。
 - `inputCompleteness`、`coreCompleteness` 与 `cacheReadCompleteness`：输入、核心量与 cache-read 各自独立的完整性。
-- `semanticsVersion`：当前新记录为版本 5；缺少该字段的历史记录解释为版本 1。
+- `semanticsVersion`：当前新记录为版本 6；缺少该字段的历史记录解释为版本 1。
 
 所有加法使用 checked `Long`。负值、子集大于父项、可验证的 total 不一致或溢出不能被修成看似精确的数字；保留仍可证明的字段，记录 typed diagnostic，并只降低受影响的完整性。Provider 已报告的 total 不被公共层覆盖。
 
@@ -97,8 +100,10 @@ turn 聚合规则：
 - `totalTokens` 按各请求的权威 total 求和，不在 turn 末尾用累计 input + output 重写。
 - 已收口最新请求的 canonical input、output、cache read 和输出阶段 duration 一次性覆盖四个 `latestRequest*`
   审计字段；usage 没有报告的字段覆盖为 `null`，不能继承上一请求。
-- 第一行四个请求摘要各自只有一个刷新点：Context 在请求发送前刷新，TTFT 在首个有效输出到达时刷新，Cached 与 tok/s
-  在请求关闭且公式所需 Provider 字段明确时刷新。某项本次未触发就保留本 turn 旧值，不把缺失解释为零。
+- 摘要字段各自只有一个刷新点：上下文在请求关闭后刷新为该请求的 canonical input、在请求发送前刷新为稳定估算；TTFT 在
+  首个有效输出到达时刷新；Cached 与 tok/s 在请求关闭且公式所需 Provider 字段明确时刷新。Cached 与 tok/s 缺字段写
+  `null`，不继承上一请求；TTFT 表示最近一次实际产生首个有效模型输出的请求，无输出请求不覆盖旧值。任何摘要都不把缺失
+  解释为零。
 - `initialRequestTimeToFirstOutputMillis` 仍只记录本 turn 第一次请求，供历史/聚合审计；footer 使用每请求刷新的
   `latestRequestTimeToFirstOutputMillis`。
 - 没有 usage 的失败请求仍计入 `observedProviderRequestCount`，但不增加 `observedUsageReportedRequestCount`，并使相关 turn 完整性降级。
@@ -125,11 +130,12 @@ turn 聚合规则：
 | OpenAI Chat Completions | `prompt_tokens` | `completion_tokens` | `prompt_tokens_details.cached_tokens` / `cache_write_tokens`；Moonshot 顶层 `cached_tokens` 与 DeepSeek `prompt_cache_hit_tokens` 只按已识别 endpoint vendor 使用 | `total_tokens` 优先；缺失且 input/output 完整时安全推导 |
 | OpenAI Responses | `input_tokens` | `output_tokens` | `input_tokens_details.cached_tokens` / `cache_write_tokens` | `total_tokens` 优先；缺失且 input/output 完整时安全推导 |
 | Anthropic Messages | `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` | `output_tokens` | `cache_read_input_tokens` / `cache_creation_input_tokens` | 合并 `message_start` 与 `message_delta` 的互补快照后安全推导 canonical input + output |
-| Gemini generateContent | `promptTokenCount + toolUsePromptTokenCount` | `candidatesTokenCount + thoughtsTokenCount` | `cachedContentTokenCount` / 不提供 | Provider `totalTokenCount` |
+| Gemini generateContent | `promptTokenCount + toolUsePromptTokenCount` | `candidatesTokenCount + thoughtsTokenCount`（缺失时回退 `responseTokenCount`） | `cachedContentTokenCount` / 不提供 | Provider `totalTokenCount` |
 
 `response.completed`、`response.incomplete` 和 `response.failed` 使用同一个 Responses usage decoder。Anthropic 的
 `message_start` 与 `message_delta` 是同一请求的互补快照，不是两个请求。Gemini 的 tool-use 和 thoughts 已分别包含在
-canonical input/output 中，不能再次加入 total；其 Provider total 保持权威。
+canonical input/output 中，不能再次加入 total；其 Provider total 保持权威。Gemini 的 `cachedContentTokenCount`
+同时覆盖显式与隐式缓存命中，且是 `promptTokenCount` 的子集，因此命中率分母仍为 canonical input。
 
 ## 5. 完整性语义
 
@@ -176,26 +182,43 @@ unknown。旧记录可以继续解码，但 UI 不为 `LEGACY` 建立特殊显�
 
 ### 聊天消息底部
 
-`ChatMessageNerdLine` 是低对比度、无容器背景的两行紧凑 footer。首个 turn 尚未真正发起 Provider 请求时不显示：
+`ChatMessageNerdLine` 是低对比度、无容器背景的两行紧凑 footer，只在 owning Assistant 消息持有 turn usage 且第一行
+至少产生一项时显示；首个 turn 尚未真正发起 Provider 请求时不显示。
 
-- 第一行按顺序展示 `[Layers] x · [Database] y% · [Zap] z tok/s · [StopWatch] TTFT t`。只有容易产生歧义的
-  `tok/s` 单位与 `TTFT` 名称保留可见文字；Context 与 Cached 只显示图标和数值。成功裁剪批次数大于零时在末尾追加
-  `[Scissor] n`，只高亮 Scissor 图标，不显示 `Tool trims` 文字。
-- `Context` 是本次最终请求投影的发送前稳定估算；`Cached = Provider cacheRead / Provider input`；
-  `tok/s = Provider output /（首个模型输出到响应流关闭的输出阶段时间）`；TTFT 是每次请求的首输出等待时间。
-  cache write 不进入命中率，四项都不拿 turn 累计值代替。
-- 第二行默认为隐藏，点击摘要后以响应式项目展开，宽度不足时自动换行；Input、Output、Cached、Provider、Total
-  都只显示对应图标和数值，图标仍提供完整无障碍描述；只有图标难以准确表达的请求次数保留 `Req` 文字。项目语义为
-  `Input · Output · Cached · Provider · Total · Req`。Provider 只累计 Provider 请求墙钟；Total 使用 owning Assistant
-  消息 `createdAt` 到 `finishedAt`，包含工具、审批和用户输入等待。中间 Provider step 不具有 turn 终止权，只有
-  `FinalizeTurn` / `RecoverInterruptedTurn` 的终态提交会覆盖并冻结 `finishedAt`；Req 包括成功、失败和取消的已关闭请求。
-- 第一行尚未在本 turn 触发过的指标隐藏，触发后若后续请求缺少必需字段则沿用旧值；第二行 turn 累计公式缺少必需字段时显示 `—`。两者都不把缺失当零，
-  显式 cache read 零仍显示 `0.0%`。
-- 新 `START` 建立 `usage=null` 的 Assistant 槽，因此四个摘要与 Tool trims 都不继承上一 turn；审批继续复用原槽。
-  Provider 请求关闭时只原子推进 canonical 请求审计和第二行累计值。四个摘要按各自触发点刷新；Tool trims 表示当前 turn
-  截至此刻成功提交的滚动裁剪批次数，0 时隐藏，一批裁掉多个结果仍只计 1。turn 终态后数值冻结。
+第一行按关注度排列四项，前两项属于"最近一次已关闭的 Provider 请求"，后两项属于"本 turn"：
+
+- `[Layers] x`：上下文。取最近一次已关闭请求的 canonical input；尚无实测值时退回该请求发送前的稳定估算，并加 `~`
+  前缀与去饱和。估算只在 turn 首次请求尚未关闭时起作用，之后始终显示已验证的实测值。
+- `[Database] y%`：缓存命中率，等于同一请求的 `cacheRead / input`，因此分母就是它左边那个上下文值。**仅当上下文取
+  实测值时才显示**：上下文为估算时命中率只能来自更早的请求，分母对不上，因此隐藏。
+- `[Scissors] n`：本 turn 成功随 checkpoint 提交的滚动裁剪批次数，大于零才出现，出现即以主题主色高亮，一批裁掉多个
+  结果仍只计 1。
+- `[Clock] t`：本 turn 端到端耗时。`turnFinished` 为假时用 `now - createdAt` 每秒刷新；`FinalizeTurn` /
+  `RecoverInterruptedTurn` 冻结 `finishedAt` 后改用 `finishedAt - createdAt` 并停止刷新。它包含工具、审批和用户
+  输入等待，与下面第二行的 Provider 墙钟是两个不同的口径。
+
+第二行默认隐藏，点击第一行后以响应式项目展开，宽度不足时自动换行；全部项目有值才渲染，缺失时不占位。项目语义为
+`[Upload] Input · [Download] Output · [Database] Cached · [Cloud] Provider · [Layers] Peak · Req · [Zap] tok/s · TTFT`：
+
+- Input / Output / Cached 是本 turn 累计值，分别受 `inputCompleteness` / `coreCompleteness` /
+  `cacheReadCompleteness` 门控，非 `COMPLETE` 不显示数值。
+- Provider 只累计 Provider 请求墙钟，不含工具执行与审批等待。
+- Peak 是本 turn 已关闭请求 `input + output` 的最大值。
+- Req 包括成功、失败和取消的已关闭请求。
+- tok/s 与 TTFT 与第一行前两项同属最近一次请求，`tok/s = output / 输出阶段时间`，TTFT 是最近一次实际产生首个有效
+  模型输出的请求的等待时间。
+
+图标规则：含义唯一的项只显示图标与数值；与第一行同图标、或单位与缩写需要说明的项保留短文字，即 `Cached`、
+`Provider`、`Peak`、`tok/s`、`TTFT`、`Req`。所有图标仍提供完整无障碍描述。
+
+共性规则：
+
+- 全部项目都不把缺失当零；显式 cache read 零仍显示 `0.0%`。
+- 新 `START` 建立 `usage=null` 的 Assistant 槽，因此全部摘要与 Tool trims 都不继承上一 turn；审批继续复用原槽。
+- turn 终态后数值冻结；中间 Provider step 不具有 turn 终止权，只有 `FinalizeTurn` / `RecoverInterruptedTurn` 的
+  终态提交会覆盖并冻结 `finishedAt`。
 - 活动动效与等待审批继续由 `ChatList` 原有独立状态行显示；归属、28dp loading、主题主色、容器、审批标签和判断条件
-  均不改变，只收紧该行的上下留白。它不进入 usage footer，关闭 token 显示也不会隐藏 turn 活动状态。
+  均不改变。它不进入 usage footer，关闭 token 显示也不会隐藏 turn 活动状态。
 
 ### 上下文预警
 

@@ -2,6 +2,7 @@ package net.weero.measix.pilot.data.sync
 
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -11,6 +12,7 @@ import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import java.util.zip.ZipFile
 import kotlinx.coroutines.test.runTest
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
@@ -25,6 +27,10 @@ import net.weero.measix.pilot.data.ai.mcp.initialSnapshot
 import net.weero.measix.pilot.data.ai.mcp.mcpDefinitionDigest
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.APP_DATABASE_VERSION
+import net.weero.measix.pilot.data.db.entity.ConversationEntity
+import net.weero.measix.pilot.data.db.entity.ConversationModelContextEntity
+import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
+import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.utils.JsonInstant
@@ -187,6 +193,38 @@ class BackupArchiveServiceTest {
 
         assertTrue(failure is IllegalArgumentException || failure is IllegalStateException)
         assertFalse(File(context.noBackupFilesDir, "backup_restore/pending").exists())
+    }
+
+    @Test
+    fun `production settings-only backup excludes database files and disclosure state`() = runTest {
+        val settingsStore = mockk<SettingsStore>()
+        val artifactStore = mockk<ArtifactStore>()
+        val generatedMediaStore = mockk<GeneratedMediaStore>()
+        coEvery { settingsStore.snapshotLocal() } returns Settings(
+            chatModelId = kotlin.uuid.Uuid.parse("00000000-0000-0000-0000-000000000201"),
+            fastModelId = kotlin.uuid.Uuid.parse("00000000-0000-0000-0000-000000000202"),
+            imageGenerationModelId = kotlin.uuid.Uuid.parse("00000000-0000-0000-0000-000000000203"),
+            compressModelId = kotlin.uuid.Uuid.parse("00000000-0000-0000-0000-000000000204"),
+        )
+        coEvery { artifactStore.withLifecycleLock<Any>(any()) } coAnswers {
+            firstArg<suspend () -> Any>().invoke()
+        }
+        coEvery { generatedMediaStore.withPersistLock<Any>(any()) } coAnswers {
+            firstArg<suspend () -> Any>().invoke()
+        }
+        val localService = BackupArchiveService(
+            context, settingsStore, catalogStore, JsonInstant, mockk(), artifactStore, generatedMediaStore,
+        )
+
+        val archive = localService.prepare(BackupSelection(false, false))
+        ZipFile(archive).use { zip ->
+            val names = zip.entries().asSequence().map { it.name }.toList()
+            assertEquals(listOf("settings.json", "mcp_catalogs.json"), names)
+            val settingsJson = zip.getInputStream(zip.getEntry("settings.json")).bufferedReader().readText()
+            assertFalse(settingsJson.contains("modelContext", ignoreCase = true))
+            assertFalse(settingsJson.contains("disclosure", ignoreCase = true))
+        }
+        archive.delete()
     }
 
     @Test
@@ -404,6 +442,100 @@ class BackupArchiveServiceTest {
             }
         }
         return file
+    }
+
+    @Test
+    fun `valid Room v10 database reopens through DAO after durable v4 round trip`() = runTest {
+        val sourceName = "v10-context-${System.nanoTime()}"
+        val conversationId = "00000000-0000-0000-0000-000000000010"
+        val anchorNodeId = "00000000-0000-0000-0000-000000000011"
+        val ownerNodeId = "00000000-0000-0000-0000-000000000012"
+        val anchorMessageId = "00000000-0000-0000-0000-000000000013"
+        val ownerMessageId = "00000000-0000-0000-0000-000000000014"
+        val content = ConversationDisclosureSnapshotService.render(
+            ConversationDisclosureSnapshotService.Candidate(
+                assistant = Settings().assistants.first(),
+                allAssistants = Settings().assistants,
+                memories = emptyList(),
+            ),
+        )
+        val room = Room.databaseBuilder(context, AppDatabase::class.java, sourceName)
+            .allowMainThreadQueries()
+            .build()
+        room.conversationDao().insert(
+            ConversationEntity(
+                id = conversationId,
+                assistantId = Settings().assistants.first().id.toString(),
+                title = "backup context",
+                createAt = 1,
+                updateAt = 1,
+                chatSuggestions = "[]",
+                isPinned = false,
+            ),
+        )
+        val anchorMessage = me.rerere.ai.ui.UIMessage.user("request").copy(
+            id = kotlin.uuid.Uuid.parse(anchorMessageId),
+        )
+        val ownerMessage = me.rerere.ai.ui.UIMessage(
+            id = kotlin.uuid.Uuid.parse(ownerMessageId),
+            role = me.rerere.ai.core.MessageRole.ASSISTANT,
+            parts = listOf(me.rerere.ai.ui.UIMessagePart.Text("answer")),
+        )
+        room.messageNodeDao().insertAll(
+            listOf(
+                MessageNodeEntity(anchorNodeId, conversationId, 0, JsonInstant.encodeToString(listOf(anchorMessage)), 0),
+                MessageNodeEntity(ownerNodeId, conversationId, 1, JsonInstant.encodeToString(listOf(ownerMessage)), 0),
+            ),
+        )
+        room.conversationModelContextDao().insertOnce(
+            listOf(
+                ConversationModelContextEntity(
+                    ownerMessageId = ownerMessageId,
+                    ownerNodeId = ownerNodeId,
+                    anchorNodeId = anchorNodeId,
+                    anchorMessageId = anchorMessageId,
+                    content = content,
+                ),
+            ),
+        )
+        room.close()
+        val source = context.getDatabasePath(sourceName)
+        val archive = modernArchive(source, emptyMap())
+        ZipFile(archive).use { zip ->
+            val manifest = JsonInstant.decodeFromString<DurableBackupManifest>(
+                zip.getInputStream(zip.getEntry("backup_manifest")).bufferedReader().readText(),
+            )
+            assertEquals("rikkahub-durable-v4", manifest.version)
+            assertTrue(manifest.entries.any { it.path == "measix_pilot.db" })
+            assertFalse(manifest.entries.any { it.path.contains("disclosure") || it.path.contains("model_context") })
+        }
+
+        service.stageRestore(archive, BackupSelection(true, true))
+        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+        val restored = Room.databaseBuilder(context, AppDatabase::class.java, "measix_pilot")
+            .allowMainThreadQueries()
+            .build()
+        val entries = restored.conversationModelContextDao().getEntriesOfConversation(conversationId)
+        assertEquals(listOf(ownerMessageId), entries.map { it.ownerMessageId })
+        assertEquals(content, entries.single().content)
+        restored.close()
+        context.deleteDatabase(sourceName)
+    }
+
+    @Test
+    fun `v9 archive remains restorable for the Room v10 migration without database rewriting`() = runTest {
+        val source = File(work, "v9.sqlite")
+        createDatabase(source, "v9", version = 9)
+        val archive = modernArchive(source, emptyMap())
+
+        service.stageRestore(archive, BackupSelection(true, true))
+        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
+
+        val restored = context.getDatabasePath("measix_pilot")
+        assertEquals("v9", databaseMarker(restored))
+        SQLiteDatabase.openDatabase(restored.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+            assertEquals(9, db.version)
+        }
     }
 
     @Test

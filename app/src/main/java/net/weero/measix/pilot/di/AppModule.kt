@@ -202,6 +202,7 @@ val appModule = module {
     single { ToolOutputStore(get()) }
 
     single {
+        val settingsStore = get<net.weero.measix.pilot.data.datastore.SettingsStore>()
         GenerationToolSetFactory(
             localTools = get(),
             conversationQueryService = get(),
@@ -212,6 +213,7 @@ val appModule = module {
             providerManager = get(),
             artifactStore = get(),
             toolOutputStore = get(),
+            liveSettingsProvider = { settingsStore.effectiveSettings.value.settings },
         )
     }
 
@@ -237,6 +239,8 @@ val appModule = module {
         )
     }
 
+    single { net.weero.measix.pilot.service.runtime.TurnRequestContextFactory(workspaceRepository = get()) }
+
     single {
         DelegationCoordinator(
             generationLoop = get(),
@@ -247,7 +251,7 @@ val appModule = module {
             settingsStore = get(),
             memoryRepository = get(),
             templateTransformer = get(),
-            workspaceRepository = get(),
+            turnRequestContextFactory = get(),
             artifactStore = get(),
             toolArtifactRewriter = get(),
             json = get(),
@@ -350,7 +354,7 @@ val appModule = module {
             templateTransformer = get(),
             mcpManager = get(),
             toolSetFactory = get(),
-            workspaceRepository = get(),
+            turnRequestContextFactory = get(),
             assistantToolFactory = get(),
             delegationCoordinator = get(),
             turnFinalization = get(),

@@ -7,13 +7,13 @@ import androidx.compose.runtime.rememberUpdatedState
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
 import net.weero.measix.pilot.ui.context.LocalTTSState
 import net.weero.measix.pilot.utils.extractQuotedContentAsText
 import net.weero.measix.pilot.utils.removeBracketedContent
 
 @Composable
-fun TTSAutoPlay(vm: ChatVM, setting: Settings, snapshot: ConversationSnapshot) {
+fun TTSAutoPlay(vm: ChatVM, setting: Settings, snapshot: ConversationPresentationSnapshot) {
     // Auto-play TTS after generation completes
     val tts = LocalTTSState.current
     val updatedSetting by rememberUpdatedState(setting)
@@ -56,7 +56,7 @@ fun TTSAutoPlay(vm: ChatVM, setting: Settings, snapshot: ConversationSnapshot) {
 internal fun autoPlayReplacesWithinTurn(queueSessionId: String?, sequentialEnabled: Boolean): Boolean =
     queueSessionId == null || !sequentialEnabled
 
-internal fun shouldAutoPlayTts(conversationId: kotlin.uuid.Uuid, snapshot: ConversationSnapshot): Boolean {
+internal fun shouldAutoPlayTts(conversationId: kotlin.uuid.Uuid, snapshot: ConversationPresentationSnapshot): Boolean {
     if (snapshot.conversationId != conversationId) return false
     val lastMessage = snapshot.currentMessages().lastOrNull() ?: return false
     if (lastMessage.role != MessageRole.ASSISTANT) return false

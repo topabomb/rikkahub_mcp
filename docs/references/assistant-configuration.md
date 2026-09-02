@@ -120,7 +120,7 @@ S0.2 不下发 `localTools`、Skill、Workspace、custom headers/body、Regex、
 主会话的工具装配顺序是：搜索、本地工具、历史引用、Workspace、Skill、Assistant Tools、MCP。
 MCP 还必须与 definition 匹配的完整非空 LKG Catalog 和用户工具策略求交，连接健康不参与 schema 注入；Master/Target 在 run 开始时冻结
 `TurnMcpCapabilitySnapshot`，同一 run 不跟随远端目录通知漂移。
-`GenerationLoop` 在每个工具循环 step 再按当前记忆状态加入记忆工具。Target Run 会进一步过滤子助手管理/委托工具，并在 step 边界重验权限。
+Memory Tools 与其他工具一样在新 Turn START 前按固定 namespace 装配并冻结 definitions/bindings；同一 Turn 不按 step 重建。Target Run 进一步过滤子助手管理/委托工具；执行时仍重验权限、资源与 Memory namespace，撤销后 live fail-closed。
 `generate_image` 在 Assistant 已开启 `TextToImage`、且默认文生图模型当前有效时注册；Master 与 Target Run 同一规则。
 
 当前 Quick Message 点击调用 `ChatInputState.appendText(quickMessage.content)`，只向输入草稿追加内容，不触发发送或工具执行。

@@ -6,7 +6,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import me.rerere.ai.core.Tool
+import me.rerere.ai.core.FrozenToolDefinition
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderSetting
@@ -34,11 +34,11 @@ class ChatCompletionsAPIToolSchemaTest {
         val params = TextGenerationParams(
             model = Model(modelId = "grok", abilities = listOf(ModelAbility.TOOL)),
             tools = listOf(
-                Tool(
+                FrozenToolDefinition(
                     name = "calculate",
                     description = "calculate",
-                    parameters = { schema },
-                    execute = { emptyList() },
+                    parameters = schema,
+                    systemPromptContribution = "",
                 )
             ),
         )
@@ -67,11 +67,11 @@ class ChatCompletionsAPIToolSchemaTest {
         val params = TextGenerationParams(
             model = Model(modelId = "grok", abilities = listOf(ModelAbility.TOOL)),
             tools = listOf(
-                Tool(
+                FrozenToolDefinition(
                     name = "noParams",
                     description = "no params",
-                    parameters = { null },
-                    execute = { emptyList() },
+                    parameters = null,
+                    systemPromptContribution = "",
                 )
             ),
         )
@@ -97,11 +97,11 @@ class ChatCompletionsAPIToolSchemaTest {
         val params = TextGenerationParams(
             model = Model(modelId = "grok", abilities = listOf(ModelAbility.TOOL)),
             tools = listOf(
-                Tool(
+                FrozenToolDefinition(
                     name = "empty",
                     description = "empty",
-                    parameters = { emptyObject },
-                    execute = { emptyList() },
+                    parameters = emptyObject,
+                    systemPromptContribution = "",
                 )
             ),
         )
@@ -122,11 +122,11 @@ class ChatCompletionsAPIToolSchemaTest {
         val params = TextGenerationParams(
             model = Model(modelId = "grok", abilities = listOf(ModelAbility.TOOL)),
             tools = listOf(
-                Tool(
+                FrozenToolDefinition(
                     name = "noParams",
                     description = "no params",
-                    parameters = { null },
-                    execute = { emptyList() },
+                    parameters = null,
+                    systemPromptContribution = "",
                 )
             ),
         )
@@ -157,11 +157,11 @@ class ChatCompletionsAPIToolSchemaTest {
         val params = TextGenerationParams(
             model = Model(modelId = "grok", abilities = listOf(ModelAbility.TOOL)),
             tools = listOf(
-                Tool(
+                FrozenToolDefinition(
                     name = "calculate",
                     description = "calculate",
-                    parameters = { schema },
-                    execute = { emptyList() },
+                    parameters = schema,
+                    systemPromptContribution = "",
                 )
             ),
         )

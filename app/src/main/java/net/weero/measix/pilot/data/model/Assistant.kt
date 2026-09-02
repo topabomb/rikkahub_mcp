@@ -161,11 +161,16 @@ private fun compileRegexCached(pattern: String): Regex? {
 fun String.replaceRegexes(
     assistant: Assistant?,
     scope: AssistantAffectScope,
-    visual: Boolean = false
+    visual: Boolean = false,
+): String = replaceRegexes(assistant?.regexes.orEmpty(), scope, visual)
+
+fun String.replaceRegexes(
+    regexes: List<AssistantRegex>,
+    scope: AssistantAffectScope,
+    visual: Boolean = false,
 ): String {
-    if (assistant == null) return this
-    if (assistant.regexes.isEmpty()) return this
-    return assistant.regexes.fold(this) { acc, regex ->
+    if (regexes.isEmpty()) return this
+    return regexes.fold(this) { acc, regex ->
         if (regex.enabled && regex.visualOnly == visual && regex.affectingScope.contains(scope)) {
             val compiled = compileRegexCached(regex.findRegex) ?: return@fold acc
             try {

@@ -1,5 +1,9 @@
 package net.weero.measix.pilot.service.runtime
 
+import net.weero.measix.pilot.test.generationRequestFixture
+
+import net.weero.measix.pilot.test.testPromptInputs
+
 import android.content.Context
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -21,6 +25,7 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ProviderUsageSnapshot
 import me.rerere.ai.core.UsageCompleteness
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
@@ -41,8 +46,11 @@ import net.weero.measix.pilot.data.ai.FinishedReason
 import net.weero.measix.pilot.data.ai.GenerationCheckpoint
 import net.weero.measix.pilot.data.ai.GenerationChunk
 import net.weero.measix.pilot.data.ai.GenerationLoop
+import net.weero.measix.pilot.data.ai.ToolExecutionEventStatus
 import net.weero.measix.pilot.data.ai.GenerationRequest
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
+import net.weero.measix.pilot.data.ai.tools.PendingInteraction
+import net.weero.measix.pilot.data.ai.tools.ToolInteractionKind
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.model.Assistant
@@ -157,7 +165,7 @@ class TurnEngineTest {
         val harness = harness()
 
         val events = harness.engine.bind(
-            flowOf(GenerationChunk.Finished(FinishedReason.COMPLETED))
+            flowOf(GenerationChunk.Finished(FinishedReason.Completed))
         ).toListSafe()
 
         val finished = events.single() as TurnEvent.Finished
@@ -276,7 +284,7 @@ class TurnEngineTest {
 
         val thrown = runCatching {
             harness.engine.bind(
-                flowOf(GenerationChunk.Finished(FinishedReason.COMPLETED)),
+                flowOf(GenerationChunk.Finished(FinishedReason.Completed)),
             ).collect { }
         }.exceptionOrNull()
 
@@ -343,7 +351,7 @@ class TurnEngineTest {
                 )
             )
             harness.engine.bind(
-                flowOf(GenerationChunk.Finished(FinishedReason.COMPLETED))
+                flowOf(GenerationChunk.Finished(FinishedReason.Completed))
             ).collect { }
             return recorded
         }
@@ -355,7 +363,7 @@ class TurnEngineTest {
     }
 
     @Test
-    fun `approval continuation persists removed tool as failed on the same handle`() = runTest {
+    fun `approval continuation reuses frozen tool binding on the same handle`() = runTest {
         val harness = harness()
         val recorded = mutableListOf<ConversationCommand>()
         coEvery { harness.coordinator.executeOrThrow(any(), capture(recorded)) } returns Unit
@@ -369,7 +377,6 @@ class TurnEngineTest {
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
-            memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
             toolOutputStore = io.mockk.mockk(relaxed = true),
         )
@@ -400,22 +407,22 @@ class TurnEngineTest {
             ),
         )
 
+        val frozenRequest = generationRequestFixture(
+            conversationId = kotlin.uuid.Uuid.random(),
+            settings = settings,
+            model = model,
+            mediaCapabilities = RequestMediaCapabilities.NONE,
+            messages = listOf(waitingMessage),
+            assistant = assistant,
+            promptInputs = testPromptInputs(),
+            tools = listOf(tool),
+            maxSteps = 1,
+            assistantMessageId = waitingMessage.id,
+            onCheckpoint = harness.engine::onCheckpoint,
+            onMessagesObserved = harness.engine::observeMessages,
+        )
         val waitingEvents = harness.engine.bind(
-            generationLoop.run(
-                GenerationRequest(
-                    conversationId = kotlin.uuid.Uuid.random(),
-                    settings = settings,
-                    model = model,
-                    mediaCapabilities = RequestMediaCapabilities.NONE,
-                    messages = listOf(waitingMessage),
-                    assistant = assistant,
-                    toolProvider = { listOf(tool) },
-                    maxSteps = 1,
-                    assistantMessageId = waitingMessage.id,
-                    onCheckpoint = harness.engine::onCheckpoint,
-                    onMessagesObserved = harness.engine::observeMessages,
-                )
-            )
+            generationLoop.run(frozenRequest)
         ).toListSafe()
         assertTrue((waitingEvents.last() as TurnEvent.Finished).outcome is TurnOutcome.AwaitingApproval)
         val pendingMessage = recorded.filterIsInstance<CommitCheckpoint>()
@@ -434,41 +441,21 @@ class TurnEngineTest {
             },
         )
         harness.engine.bind(
-            generationLoop.run(
-                GenerationRequest(
-                    conversationId = kotlin.uuid.Uuid.random(),
-                    settings = settings,
-                    model = model,
-                    mediaCapabilities = RequestMediaCapabilities.NONE,
-                    messages = listOf(approvedMessage),
-                    assistant = assistant,
-                    toolProvider = { emptyList() },
-                    maxSteps = 1,
-                    assistantMessageId = approvedMessage.id,
-                    onCheckpoint = harness.engine::onCheckpoint,
-                    onMessagesObserved = harness.engine::observeMessages,
-                )
-            )
+            generationLoop.run(frozenRequest.copy(messages = listOf(approvedMessage)))
         ).toListSafe()
 
-        assertFalse(executed)
+        assertTrue(executed)
         val committedResult = recorded.filterIsInstance<CommitCheckpoint>()
             .asSequence()
             .flatMap { checkpoint -> checkpoint.messages.last().getTools().asSequence() }
-            .first { result ->
-                result.output.filterIsInstance<UIMessagePart.Text>()
-                    .any { it.text.contains("tool_not_available") }
-            }
-        assertTrue((committedResult.output.single() as UIMessagePart.Text).text.contains("tool_not_available"))
+            .first { result -> result.output.filterIsInstance<UIMessagePart.Text>().any { it.text == "executed" } }
+        assertEquals("executed", (committedResult.output.single() as UIMessagePart.Text).text)
 
         val checkpoints = recorded.filterIsInstance<CommitCheckpoint>()
-        assertTrue(checkpoints.mapNotNull { it.toolExecution }.isEmpty())
-        assertTrue(checkpoints.any { checkpoint ->
-            checkpoint.messages.last().getTools().any { result ->
-                result.output.filterIsInstance<UIMessagePart.Text>()
-                    .any { it.text.contains("tool_not_available") }
-            }
-        })
+        assertEquals(
+            listOf("STARTED", "COMPLETED"),
+            checkpoints.mapNotNull { it.toolExecution }.map { it.status.name },
+        )
         assertTrue(recorded.all { command ->
             when (command) {
                 is CommitCheckpoint -> command.handle == harness.handle
@@ -489,7 +476,18 @@ class TurnEngineTest {
             flow {
                 harness.engine.observeMessages(waitingMessages)
                 emit(GenerationChunk.Messages(waitingMessages))
-                emit(GenerationChunk.Finished(FinishedReason.AWAITING_APPROVAL))
+                emit(
+                    GenerationChunk.Finished(
+                        FinishedReason.AwaitingApproval(
+                            pending = listOf(
+                                PendingInteraction(
+                                    locator = ToolCallLocator(harness.handle.assistantMessageId, 0),
+                                    kind = ToolInteractionKind.USER_INPUT,
+                                ),
+                            ),
+                        ),
+                    )
+                )
             }
         ).collect { }
         harness.engine.onCheckpoint(
@@ -500,7 +498,7 @@ class TurnEngineTest {
             )
         )
         harness.engine.bind(
-            flowOf(GenerationChunk.Finished(FinishedReason.COMPLETED))
+            flowOf(GenerationChunk.Finished(FinishedReason.Completed))
         ).collect { }
 
         assertEquals(
@@ -604,14 +602,13 @@ class TurnEngineTest {
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
-            memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
             toolOutputStore = io.mockk.mockk(relaxed = true),
         )
         val assistant = Assistant(enableMemory = false, streamOutput = true)
         val pendingSeen = CompletableDeferred<Unit>()
         val collector = launch {
-            harness.engine.bind(generationLoop.run(GenerationRequest(
+            harness.engine.bind(generationLoop.run(generationRequestFixture(
                 conversationId = kotlin.uuid.Uuid.random(),
                 settings = Settings(providers = listOf(providerSetting)),
                 model = model,
@@ -622,6 +619,7 @@ class TurnEngineTest {
                     parts = emptyList(),
                 )),
                 assistant = assistant,
+                promptInputs = testPromptInputs(),
                 assistantMessageId = harness.handle.assistantMessageId,
                 tools = listOf(Tool(
                     name = "test_tool",

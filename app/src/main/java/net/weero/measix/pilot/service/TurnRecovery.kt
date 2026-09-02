@@ -16,7 +16,7 @@ import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationTransition
 import net.weero.measix.pilot.service.runtime.RecoverInterruptedTurn
 import net.weero.measix.pilot.service.runtime.ReplaceMessageTree
@@ -68,13 +68,13 @@ class TurnRecovery(
         val settings = settingsStore.effectiveSettings.value.settings
         // 定点加载候选 Master（每会话一次）
         val masters = masterIds.map { masterId ->
-            requireNotNull(conversationRepo.getConversationById(masterId)) {
+            requireNotNull(conversationRepo.getConversationSnapshotById(masterId)) {
                 "non-terminal execution references missing master conversation $masterId"
             }
         }
         // 仅加载被非终态调用引用的 Child（每 Child 一次）
         val metadataChildIds = masters.asSequence()
-            .flatMap { master -> master.messageNodes.asSequence() }
+            .flatMap { master -> master.nodes.asSequence() }
             .flatMap { node -> node.messages.asSequence() }
             .flatMap { message -> message.parts.filterIsInstance<UIMessagePart.Tool>().asSequence() }
             .mapNotNull { tool -> tool.getSubAssistantCallMetadata(json) }
@@ -87,7 +87,7 @@ class TurnRecovery(
             .map { Uuid.parse(it.execution.conversationId) }
             .toSet()
         val childrenById = (metadataChildIds + interruptedChildIds).mapNotNull { childId ->
-            conversationRepo.getConversationById(childId)?.let { childId to it }
+            conversationRepo.getConversationSnapshotById(childId)?.let { childId to it }
         }.toMap()
         interruptedChildIds.forEach { childId ->
             requireNotNull(childrenById[childId]) {
@@ -99,9 +99,9 @@ class TurnRecovery(
 
         masters.forEach { master ->
             val result = reconcileMasterSubAssistantCalls(
-                masterId = master.id,
-                masterAssistantId = master.assistantId,
-                masterNodes = master.messageNodes,
+                masterId = master.conversationId,
+                masterAssistantId = master.header.assistantId,
+                masterNodes = master.nodes,
                 settings = settings,
                 childrenById = childrenById,
                 json = json,
@@ -109,8 +109,8 @@ class TurnRecovery(
             result.childStopReasons.forEach { (childId, reason) ->
                 childStopReasons.putIfAbsent(childId, reason)
             }
-            if (result.masterNodes != master.messageNodes) {
-                submitRecoveredTree(master.id, result.masterNodes)
+            if (result.masterNodes != master.nodes) {
+                submitRecoveredTree(master.conversationId, result.masterNodes)
             }
         }
 
@@ -128,10 +128,10 @@ class TurnRecovery(
         val recoverable = conversationRepo.getRecoverableTurnExecutionsByConversation()
         recoverable.forEach { (conversationId, executions) ->
             // 会话级加载一次；DAO 已 JOIN 过滤 Child，任何域错配都视为完整性错误。
-            val initial = requireNotNull(conversationRepo.getConversationById(conversationId)) {
+            val initial = requireNotNull(conversationRepo.getConversationSnapshotById(conversationId)) {
                 "non-terminal execution references missing conversation $conversationId"
             }
-            check(initial.parentConversationId == null) {
+            check(initial.header.parentConversationId == null) {
                 "master recovery query returned child conversation $conversationId"
             }
             val runtime = commandCoordinator.load(conversationId)
@@ -206,10 +206,10 @@ class TurnRecovery(
 
     private suspend fun recoverInterruptedChildTurn(
         childId: Uuid,
-        child: Conversation,
+        child: ConversationAggregateSnapshot,
         reason: String,
     ) {
-        var snapshot = child.toSnapshot()
+        var snapshot = child
         conversationRepo.getTurnExecutions(childId)
             .filter {
                 it.status == TurnExecutionStatus.RUNNING ||
@@ -262,7 +262,7 @@ class TurnRecovery(
 
 // ---- 恢复域私有扩展 ----
 
-private fun ConversationSnapshot.locateAssistant(messageId: Uuid?): Pair<Int, UIMessage>? {
+private fun ConversationAggregateSnapshot.locateAssistant(messageId: Uuid?): Pair<Int, UIMessage>? {
     if (messageId == null) return null
     nodes.forEachIndexed { index, node ->
         val message = node.messages.firstOrNull { it.id == messageId && it.role == MessageRole.ASSISTANT }
@@ -271,11 +271,11 @@ private fun ConversationSnapshot.locateAssistant(messageId: Uuid?): Pair<Int, UI
     return null
 }
 
-private fun ConversationSnapshot.markAssistantTerminal(
+private fun ConversationAggregateSnapshot.markAssistantTerminal(
     messageId: Uuid?,
     status: MessageTerminalStatus,
     reason: String?,
-): ConversationSnapshot {
+): ConversationAggregateSnapshot {
     val located = locateAssistant(messageId) ?: return this
     val (nodeIndex, targetMessage) = located
     val marked = targetMessage.copy(terminalStatus = status, terminalReason = reason)

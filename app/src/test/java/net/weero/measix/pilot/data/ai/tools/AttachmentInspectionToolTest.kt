@@ -34,6 +34,8 @@ import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
+import net.weero.measix.pilot.service.runtime.captureProviderCredentialOwner
+import net.weero.measix.pilot.service.runtime.freezeProviderWireShape
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -118,12 +120,27 @@ class AttachmentInspectionToolTest {
         failure.output
     }
 
+    private fun inspectionTransport(
+        model: Model,
+        providerSetting: ProviderSetting,
+    ): AttachmentInspectionTransport {
+        val liveSettings = Settings(providers = listOf(providerSetting))
+        val locator = captureProviderCredentialOwner(liveSettings, model, providerSetting)
+        return AttachmentInspectionTransport(
+            frozenProviderShape = freezeProviderWireShape(providerSetting, model.copy(providerOverwrite = null)),
+            credentialLease = net.weero.measix.pilot.service.runtime.ProviderTransportLease {
+                net.weero.measix.pilot.service.runtime.resolveProviderTransportOwner(liveSettings, locator)
+            },
+            providerManager = providerManager,
+        )
+    }
+
     /** Resolve the inspection contract the same way createAttachmentInspectionTool does. */
     private fun resolveInspectionContract(model: Model): Triple<Model, ProviderSetting, Provider<ProviderSetting>> {
         val settings = settingsFor(model)
         val inspectionModel = settings.findModelById(settings.attachmentInspectionModelId)!!
         val providerSetting = inspectionModel.findProvider(settings.providers)!!
-        every { providerManager.getProviderByType(providerSetting) } returns provider
+        every { providerManager.getProviderByType(any()) } returns provider
         return Triple(inspectionModel, providerSetting, provider)
     }
 
@@ -133,8 +150,7 @@ class AttachmentInspectionToolTest {
         val result = failureResult { executeInspection(
             args = args(emptyList()),
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { ToolAttachmentResolution() },
         ) }
@@ -147,8 +163,7 @@ class AttachmentInspectionToolTest {
         val result = failureResult { executeInspection(
             args = args((1..5).map { "/upload/a.png" }),
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { ToolAttachmentResolution() },
         ) }
@@ -161,8 +176,7 @@ class AttachmentInspectionToolTest {
         val result = failureResult { executeInspection(
             args = args(listOf("https://example.com/a.png")),
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { error("resolver must not run") },
         ) }
@@ -178,8 +192,8 @@ class AttachmentInspectionToolTest {
             "/upload/../a.png", "/upload/%61.png", "/upload/sub/a.png",
         ).forEach { path ->
             val result = failureResult { executeInspection(
-                args = args(listOf(path)), inspectionModel = model, providerSetting = providerSetting,
-                provider = provider, mediaCapabilities = inspectionCapabilities,
+                args = args(listOf(path)), inspectionModel = model,
+                transport = inspectionTransport(model, providerSetting), mediaCapabilities = inspectionCapabilities,
                 resolveAttachments = { error("invalid paths must not reach resolver") },
             ) }
             assertEquals(path, AttachmentFailureReasons.INVALID_ATTACHMENTS, resultReason(result))
@@ -191,7 +205,7 @@ class AttachmentInspectionToolTest {
     fun `schema describes file paths from every disclosure source without internal identifiers`() {
         val settings = settingsFor(visionModel)
         every { providerManager.getProviderByType(any()) } returns provider
-        val tool = createAttachmentInspectionTool(settings, providerManager)
+        val tool = createAttachmentInspectionTool(settings, providerManager) { settings }
         val parameters = tool.parameters().toString()
         assertTrue(parameters.contains("/upload/<file>"))
         assertTrue(parameters.contains("[Attachment path=...]"))
@@ -225,16 +239,14 @@ class AttachmentInspectionToolTest {
         val malformedResult = failureResult { executeInspection(
             args = malformed,
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { error("resolver must not run") },
         ) }
         val blankResult = failureResult { executeInspection(
             args = blank,
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { error("resolver must not run") },
         ) }
@@ -258,16 +270,14 @@ class AttachmentInspectionToolTest {
         val objectResult = failureResult { executeInspection(
             args = objectRequest,
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { error("resolver must not run") },
         ) }
         val booleanResult = failureResult { executeInspection(
             args = booleanRequest,
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { error("resolver must not run") },
         ) }
@@ -283,7 +293,7 @@ class AttachmentInspectionToolTest {
             attachmentInspectionModelId = null,
         )
         val error = org.junit.Assert.assertThrows(IllegalStateException::class.java) {
-            createAttachmentInspectionTool(settings, providerManager)
+            createAttachmentInspectionTool(settings, providerManager) { settings }
         }
         assertTrue(error.message!!.contains("not configured"))
     }
@@ -295,7 +305,7 @@ class AttachmentInspectionToolTest {
             attachmentInspectionModelId = textModel.id,
         )
         val error = org.junit.Assert.assertThrows(IllegalStateException::class.java) {
-            createAttachmentInspectionTool(settings, providerManager)
+            createAttachmentInspectionTool(settings, providerManager) { settings }
         }
         assertTrue(error.message!!.contains("IMAGE"))
     }
@@ -304,11 +314,11 @@ class AttachmentInspectionToolTest {
     fun `construction fails fast when provider breaks image encoding contract`() {
         val settings = settingsFor(visionModel)
         val providerSetting = visionModel.findProvider(settings.providers)!!
-        every { providerManager.getProviderByType(providerSetting) } returns provider
+        every { providerManager.getProviderByType(any()) } returns provider
         every { provider.requestMediaCapabilities(providerSetting, visionModel) } returns RequestMediaCapabilities.NONE
 
         val error = org.junit.Assert.assertThrows(IllegalStateException::class.java) {
-            createAttachmentInspectionTool(settings, providerManager)
+            createAttachmentInspectionTool(settings, providerManager) { settings }
         }
 
         assertTrue(error.message!!.contains("Provider contract violation"))
@@ -320,8 +330,7 @@ class AttachmentInspectionToolTest {
         val result = failureResult { executeInspection(
             args = args(listOf("/upload/a.png")),
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = {
                 ToolAttachmentResolution(failureReason = AttachmentFailureReasons.ATTACHMENT_NOT_FOUND)
@@ -336,8 +345,7 @@ class AttachmentInspectionToolTest {
         val result = failureResult { executeInspection(
             args = args(listOf("/upload/a.png")),
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { ToolAttachmentResolution(parts = emptyList()) },
         ) }
@@ -350,7 +358,7 @@ class AttachmentInspectionToolTest {
         for (resolvedCount in listOf(1, 3)) {
             val result = failureResult { executeInspection(
                 args = args(listOf("/upload/u7km2n4p.png", "/upload/u7km2n4p.png")),
-                inspectionModel = model, providerSetting = providerSetting, provider = provider,
+                inspectionModel = model, transport = inspectionTransport(model, providerSetting),
                 mediaCapabilities = inspectionCapabilities,
                 resolveAttachments = {
                     ToolAttachmentResolution(parts = List(resolvedCount) { image("file:///tmp/u7km2n4p.png") })
@@ -371,8 +379,8 @@ class AttachmentInspectionToolTest {
             successChunk("comparison")
         }
         val result = executeInspection(
-            args = args(refs), inspectionModel = model, providerSetting = providerSetting,
-            provider = provider, mediaCapabilities = inspectionCapabilities,
+            args = args(refs), inspectionModel = model,
+            transport = inspectionTransport(model, providerSetting), mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { requested ->
                 assertEquals(refs, requested)
                 ToolAttachmentResolution(parts = listOf(image("file:///private/a.png"), image("file:///private/b.png")))
@@ -404,8 +412,7 @@ class AttachmentInspectionToolTest {
         val result = executeInspection(
             args = args(listOf("/upload/a.png")),
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { ToolAttachmentResolution(parts = listOf(image("a.png"))) },
         )
@@ -444,8 +451,7 @@ class AttachmentInspectionToolTest {
         executeInspection(
             args = args(listOf("/upload/shared.png")),
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = { ToolAttachmentResolution(parts = listOf(image)) },
         )
@@ -470,8 +476,7 @@ class AttachmentInspectionToolTest {
         val result = executeInspection(
             args = args(listOf("/upload/a.png")),
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = {
                 ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
@@ -497,8 +502,7 @@ class AttachmentInspectionToolTest {
         executeInspection(
             args = args(listOf("/upload/a.png")),
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = {
                 ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
@@ -520,8 +524,7 @@ class AttachmentInspectionToolTest {
         val result = failureResult { executeInspection(
             args = args(listOf("/upload/a.png")),
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = {
                 ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
@@ -546,8 +549,7 @@ class AttachmentInspectionToolTest {
         val result = failureResult { executeInspection(
             args = args(listOf("/upload/a.png")),
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = {
                 ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
@@ -568,8 +570,7 @@ class AttachmentInspectionToolTest {
         val result = failureResult { executeInspection(
             args = args(listOf("/upload/a.png")),
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = {
                 ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
@@ -590,8 +591,7 @@ class AttachmentInspectionToolTest {
             executeInspection(
                 args = args(listOf("/upload/a.png")),
                 inspectionModel = model,
-                providerSetting = providerSetting,
-                provider = provider,
+                transport = inspectionTransport(model, providerSetting),
                 mediaCapabilities = inspectionCapabilities,
                 resolveAttachments = {
                     ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))
@@ -625,8 +625,7 @@ class AttachmentInspectionToolTest {
                 ),
             ),
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = {
                 ToolAttachmentResolution(
@@ -648,6 +647,63 @@ class AttachmentInspectionToolTest {
     }
 
     @Test
+    fun `inspection transport refreshes only the exact owner secret and fails closed after revoke`() = runTest {
+        val startProvider = ProviderSetting.OpenAI(
+            models = listOf(visionModel),
+            apiKey = "start-secret",
+            baseUrl = "https://start.example/v1",
+        )
+        var liveSettings = Settings(providers = listOf(startProvider.copy(
+            apiKey = "rotated-secret",
+            baseUrl = "https://live-change.example/v1",
+        )))
+        val locator = captureProviderCredentialOwner(
+            Settings(providers = listOf(startProvider)),
+            visionModel,
+            startProvider,
+        )
+        val transport = AttachmentInspectionTransport(
+            frozenProviderShape = freezeProviderWireShape(startProvider, visionModel.copy(providerOverwrite = null)),
+            credentialLease = net.weero.measix.pilot.service.runtime.ProviderTransportLease {
+                net.weero.measix.pilot.service.runtime.resolveProviderTransportOwner(liveSettings, locator)
+            },
+            providerManager = providerManager,
+        )
+        var leasedProvider: ProviderSetting.OpenAI? = null
+        every { providerManager.getProviderByType(any()) } answers {
+            leasedProvider = firstArg() as ProviderSetting.OpenAI
+            provider
+        }
+        coEvery { provider.generateText(any(), any(), any()) } returns successChunk("ok")
+        val resolution: suspend (List<String>) -> ToolAttachmentResolution = {
+            ToolAttachmentResolution(parts = listOf(UIMessagePart.Image("file:///tmp/a.png")))
+        }
+
+        executeInspection(
+            args = args(listOf("/upload/a.png")),
+            inspectionModel = visionModel,
+            transport = transport,
+            mediaCapabilities = inspectionCapabilities,
+            resolveAttachments = resolution,
+        )
+        assertEquals("rotated-secret", leasedProvider?.apiKey)
+        assertEquals("https://start.example/v1", leasedProvider?.baseUrl)
+
+        liveSettings = Settings(providers = emptyList())
+        val failure = failureResult {
+            executeInspection(
+                args = args(listOf("/upload/a.png")),
+                inspectionModel = visionModel,
+                transport = transport,
+                mediaCapabilities = inspectionCapabilities,
+                resolveAttachments = resolution,
+            )
+        }
+        assertEquals(AttachmentFailureReasons.RUNTIME_ERROR, resultReason(failure))
+        coVerify(exactly = 1) { provider.generateText(any(), any(), any()) }
+    }
+
+    @Test
     fun `inspection call requests reasoningLevel auto`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         every { providerManager.getProviderByType(any()) } returns provider
@@ -662,8 +718,7 @@ class AttachmentInspectionToolTest {
         val result = executeInspection(
             args = args(listOf("/upload/a.png")),
             inspectionModel = model,
-            providerSetting = providerSetting,
-            provider = provider,
+            transport = inspectionTransport(model, providerSetting),
             mediaCapabilities = inspectionCapabilities,
             resolveAttachments = {
                 ToolAttachmentResolution(parts = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))

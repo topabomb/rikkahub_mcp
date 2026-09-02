@@ -5,7 +5,7 @@
 
 ## Subagent Collaboration
 
-At high-leverage points—especially before substantial refactors, cross-module or data-contract changes, and before declaring completion—seek an independent review in a separate context and, when practical, with a different model. The review may focus on architecture drift, duplicate mechanisms or sources of truth, unclear ownership, unstable contracts, unnecessary complexity, and material correctness or test gaps.
+Seek a review in a separate context using at most 2 subagents only at key leverage points (e.g., substantial refactors, cross-module/data-contract changes, and prior to completion). Do not delegate trivial checks or tasks you can investigate directly; handle straightforward verifications independently. The review should focus on architecture drift, duplicate mechanisms or sources of truth, unclear ownership, unstable contracts, unnecessary complexity, material correctness, test gaps, and redundant or low-value tests. Always explicitly instruct subagents to return concise, accurate, and high-signal feedback—delivering actionable findings with zero fluff.
 
 ## Commands and Verification
 
@@ -15,7 +15,7 @@ At high-leverage points—especially before substantial refactors, cross-module 
   `gradlew test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1`。
 - 设备、数据库 migration、Compose instrumentation 或真实系统集成行为使用
   `connectedDebugAndroidTest` 及对应真机/模拟器场景验证。构建或 JVM 通过不能表述为设备验收通过。
-- 新逻辑必须新增或更新测试；并发、取消、事务、恢复和所有权变更必须覆盖失败路径与竞态。
+- 只有在关键业务逻辑变动或数据结构变动或持久化变动时新增或更新测试；并发、取消、事务、恢复和所有权变更需验证覆盖失败路径与竞态；不追求测试的覆盖面，清理过时或低价值的测试用例。
 - 提交前检查 `git diff --check`、最终 diff、测试报告和工作树；不得把无关用户改动纳入或回退。
 
 ## Project Map
@@ -34,7 +34,9 @@ At high-leverage points—especially before substantial refactors, cross-module 
 
 核心实现导航：
 
-- 会话命令与 turn：`app/src/main/java/net/weero/measix/pilot/service/runtime/`、`MasterTurnCoordinator`、
+> 增加或调整核心语义或概念需同步下列内容
+
+- 会话命令与 turn：`MasterTurnCoordinator`、
   `TurnFinalization`、`TurnRecovery`。
 - Artifact：`ArtifactStore`、`ArtifactPayloadStore`、`ArtifactSettingsCoordinator`、`ArtifactUseCase`。
 - 生成媒体与文件管理：`GeneratedMediaStore`、`FileManagementApplicationService`、`FileManagementQueryService`。
@@ -43,7 +45,39 @@ At high-leverage points—especially before substantial refactors, cross-module 
 - UI 边界：`ConversationApplicationService`、`ConversationQueryService` 及专用 reader/query port。
 - 架构契约：`app/src/test/java/net/weero/measix/pilot/architecture/SingleWriterContractTest.kt` 与性能证据测试。
 
+## 核心约定 Core Rules
+
+### 1. Context window budget —— 第一优先级
+
+- 移动端必须主动控制每请求发送给 Provider 的 context window 长度。针对历史 tool output 的自动手段是
+  **rolling compaction**：step 提交后由 `ConversationContextPlanner.planPostStepCompaction` 产出计划
+  （阈值唯一来源是 `ContextTrimmingPolicy`），落盘由 `ToolOutputStore.stageCompaction` 执行；计划阶段不做任何文件或消息写入。
+- 压缩对象只限于"本次成功请求确实可见、且模型已消费的历史 inline tool result"。降级形态由 `ToolOutputPolicy` 决定，三者不得混用：
+  - `ARCHIVABLE_TEXT` → **archiving**：原文写入 artifact，消息内替换为 `[Archived tool result: ref=...]` marker，
+    模型可用 `read_tool_output` / `grep_tool_output` 回查。
+  - `REGENERABLE_TEXT` → **folding**：替换为固定 `REGENERABLE_TOOL_OUTPUT_FOLDED_MARKER`，内容可用原参数重新生成，不复制 payload。
+  - `PRESERVE` → 始终保留完整原始 output，不参与压缩。
+- 保护窗口内的最近批次与最近 token 不参与压缩；整批净回收不足时不得改写历史，避免为微小收益付出前缀代价。
+
+### 2. Prompt cache prefix —— 第二优先级
+
+- Provider 侧 prompt cache 命中依赖 request prefix 的稳定性（prefix stability）。改写历史 tool result 必然改写前缀，
+  因此前缀稳定性是仅次于长度控制的第二优先级；它不是长度控制的免死金牌。
+- 冲突裁决：
+  - 用户显式修改配置或消息、且明确知晓会破坏前缀 → 接受，属于用户意图。
+  - rolling compaction 自身改写历史 → 仅在预算触发、且只作用于已消费的历史 tool result 时允许，由此产生的前缀失效是预期代价。
+  - agent / assistant / sub-assistant 在自动生成链路中因工具调用破坏前缀 → 不可接受，不得以"影响面小"绕过。
+- 前缀稳定性由保护窗口与阈值调节，不得靠"不压缩"换取。
+
+### 3. 未实现边界
+
+- 会话级自动压缩（conversation-level compaction / history summarization）仍在 roadmap，当前未实现。它作用于历史消息层，
+  与已实现的 tool output rolling compaction 是两件事，不得混为一谈或互相冒充。
+
+
 ## Architecture Rules
+
+> 架构变动或约束调整时需同步以下内容
 
 - 每类 durable 事实只有一个 owner 和一个写协议。扩展既有 command、typed use case、projection 或状态机；
   禁止旁路 DAO/Repository 写入、服务定位器、整聚合回写和第二状态源。
@@ -78,7 +112,7 @@ At high-leverage points—especially before substantial refactors, cross-module 
 
 ## Persistent Data and Build Boundaries
 
-- 保持既有 Room/DataStore/文件数据结构稳定；结构变化必须提供显式 migration、schema 同构与数据保全测试。
+- 保持既有 Room/DataStore/文件数据结构稳定；结构变化必须提供显式 migration、schema 同构与数据保全测试，每次考虑更改数据结构时必须从长期稳定、符合项目演进方向的角度来规划。
 - Release 使用 AGP 9 optimization；运行时 keep rules 位于 `app/src/main/keepRules/rikkahub.keep`。
 - `android.r8.strictFullModeForKeepRules=false` 是当前依赖 consumer rules 的兼容要求，依赖确认兼容前不得删除。
 - APK ABI 为 `arm64-v8a` 与 `x86_64`，App Bundle 构建自动禁用 splits；Debug 包名带 `.debug`。

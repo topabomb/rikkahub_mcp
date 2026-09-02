@@ -103,7 +103,7 @@ import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.service.ConversationReadState
 import net.weero.measix.pilot.service.ConversationUiModel
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
 import net.weero.measix.pilot.service.runtime.ToolUserDecision
 import net.weero.measix.pilot.ui.theme.ProvideChatSurfacePolicy
@@ -467,7 +467,7 @@ private fun ChatPageContent(
     conversationUiModel: ConversationUiModel?,
     setting: Settings,
     navigationAction: ChatNavigationAction,
-    snapshot: ConversationSnapshot,
+    snapshot: ConversationPresentationSnapshot,
     favoriteNodeIds: Set<Uuid>,
     drawerState: DrawerState,
     navController: Navigator,
@@ -917,7 +917,7 @@ private fun ChatPageContent(
 private suspend fun LazyListState.scrollToAppendedItem(
     requestContext: AppendScrollContext,
     currentUiModel: () -> ConversationUiModel?,
-    expectedItemCount: (ConversationSnapshot, ConversationPresentation) -> Int,
+    expectedItemCount: (ConversationPresentationSnapshot, ConversationPresentation) -> Int,
     currentImeBottom: () -> Int,
 ) {
     val readyItemCount = snapshotFlow {
@@ -959,7 +959,7 @@ internal enum class AppendScrollStatus {
 }
 
 private data class AppendScrollObservation(
-    val snapshot: ConversationSnapshot,
+    val snapshot: ConversationPresentationSnapshot,
     val presentation: ConversationPresentation,
     val actualItemCount: Int,
     val expectedItemCount: Int,
@@ -968,7 +968,7 @@ private data class AppendScrollObservation(
 
 internal fun evaluateAppendScroll(
     requestContext: AppendScrollContext,
-    snapshot: ConversationSnapshot,
+    snapshot: ConversationPresentationSnapshot,
     presentation: ConversationPresentation,
     actualItemCount: Int,
     expectedItemCount: Int,
@@ -985,12 +985,12 @@ internal fun evaluateAppendScroll(
 }
 
 internal fun expectedChatListItemCount(
-    snapshot: ConversationSnapshot,
+    snapshot: ConversationPresentationSnapshot,
     loading: Boolean,
     readiness: ConversationReadiness,
     allowConversationSystemPrompt: Boolean,
 ): Int {
-    val nodeCount = snapshot.renderNodes.size
+    val nodeCount = snapshot.nodes.size
     val configurationItemCount = if (
         nodeCount == 0 || readiness.requiresProviderConfiguration || !readiness.canSend
     ) {
@@ -1010,17 +1010,17 @@ internal data class AppendScrollContext(
     val targetMessageId: Uuid,
     val existingNodes: List<Pair<Uuid, Int>>,
 ) {
-    fun matches(snapshot: ConversationSnapshot): Boolean =
+    fun matches(snapshot: ConversationPresentationSnapshot): Boolean =
         snapshot.conversationId == conversationId &&
                 snapshot.nodes.size >= existingNodes.size &&
                 snapshot.nodes.take(existingNodes.size).map { it.id to it.selectIndex } == existingNodes
 
-    fun hasTargetMessage(snapshot: ConversationSnapshot): Boolean =
+    fun hasTargetMessage(snapshot: ConversationPresentationSnapshot): Boolean =
         snapshot.nodes.any { node -> node.messages.any { it.id == targetMessageId } }
 
     companion object {
         fun from(
-            snapshot: ConversationSnapshot,
+            snapshot: ConversationPresentationSnapshot,
             targetMessageId: Uuid,
             turnId: Uuid,
         ) = AppendScrollContext(
@@ -1036,7 +1036,7 @@ internal data class AppendScrollContext(
 private fun ChatFilesPickerSheet(
     inputState: ChatInputState,
     setting: Settings,
-    snapshot: ConversationSnapshot,
+    snapshot: ConversationPresentationSnapshot,
     assistant: Assistant,
     vm: ChatVM,
     onUpdateAssistant: (Assistant) -> Unit,
@@ -1314,7 +1314,7 @@ private enum class ChatNavigationAction {
 private fun TopBar(
     settings: Settings,
     assistant: Assistant,
-    snapshot: ConversationSnapshot,
+    snapshot: ConversationPresentationSnapshot,
     navigationAction: ChatNavigationAction,
     onNavigationClick: () -> Unit,
     previewMode: Boolean,

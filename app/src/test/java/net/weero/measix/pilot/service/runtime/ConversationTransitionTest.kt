@@ -52,7 +52,7 @@ class ConversationTransitionTest {
         UIMessage(id = id, role = MessageRole.USER, parts = listOf(UIMessagePart.Text("q")))
 
     private data class HistoricalCompactionScenario(
-        val started: ConversationSnapshot,
+        val started: ConversationAggregateSnapshot,
         val historicalProjection: UIMessage,
         val activeReplacement: UIMessage,
         val command: CommitCheckpoint,
@@ -91,7 +91,13 @@ class ConversationTransitionTest {
         ).toSnapshot()
         val started = ConversationTransition.apply(
             base,
-            StartTurn(turnId = turnId, assistantMessageId = activeId, resume = false, epoch = 1),
+            ConversationTransition.buildStartTurnCommand(
+                current = base,
+                turnId = turnId,
+                modelContextCandidate = disclosureCandidate(),
+                assistantMessageId = activeId,
+                epoch = 1,
+            ),
         )
         val activeReplacement = started.nodes.last().currentMessage.copy(
             parts = listOf(UIMessagePart.Text("current step")),
@@ -140,7 +146,7 @@ class ConversationTransitionTest {
     }
 
     private data class ActiveCompactionScenario(
-        val started: ConversationSnapshot,
+        val started: ConversationAggregateSnapshot,
         val command: CommitCheckpoint,
     )
 
@@ -151,14 +157,21 @@ class ConversationTransitionTest {
         val conversationId = Uuid.random()
         val turnId = Uuid.random()
         val activeId = Uuid.random()
+        val baseSnapshot = Conversation.ofId(conversationId).copy(
+            messageNodes = listOf(
+                MessageNode.of(assistant(Uuid.random())),
+                MessageNode.of(user(Uuid.random())),
+            ),
+        ).toSnapshot()
         val started = ConversationTransition.apply(
-            Conversation.ofId(conversationId).copy(
-                messageNodes = listOf(
-                    MessageNode.of(assistant(Uuid.random())),
-                    MessageNode.of(user(Uuid.random())),
-                ),
-            ).toSnapshot(),
-            StartTurn(turnId = turnId, assistantMessageId = activeId, resume = false, epoch = 1),
+            baseSnapshot,
+            ConversationTransition.buildStartTurnCommand(
+                current = baseSnapshot,
+                turnId = turnId,
+                modelContextCandidate = disclosureCandidate(),
+                assistantMessageId = activeId,
+                epoch = 1,
+            ),
         )
         val markerTokens = estimateStableTextTokens(markerText)
         val inlineText = "x".repeat(((markerTokens + netReclaimEstimatedTokens) * 4).toInt())
@@ -213,61 +226,111 @@ class ConversationTransitionTest {
         )
     }
 
-    // ---- BeginTurn 新槽追加 / resume 幂等 ----
+    // ---- START 新 owner / anchor 语义 ----
 
     @Test
-    fun `empty conversation appends single assistant node`() {
+    fun `START on an empty tree fails closed without a causal USER`() {
         val c = Conversation.ofId(Uuid.random())
-        val assistantId = Uuid.random()
-        val r = ConversationTransition.apply(c.toSnapshot(), StartTurn(Uuid.random(), assistantId, resume = false))
-        assertEquals(1, r.nodes.size)
-        assertEquals(assistantId, r.nodes[0].messages.single().id)
-        assertEquals(MessageRole.ASSISTANT, r.nodes[0].messages.single().role)
+        assertThrows(ConversationCommandConflictException::class.java) {
+            ConversationTransition.buildStartTurnCommand(
+                c.toSnapshot(),
+                turnId = Uuid.random(),
+                modelContextCandidate = disclosureCandidate(),
+            )
+        }
     }
 
     @Test
-    fun `resume on same assistant message is idempotent`() {
+    fun `START after a user message appends a single assistant node anchored to it`() {
+        val userId = Uuid.random()
+        val userNode = MessageNode.of(user(userId))
+        val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(userNode))
+        val assistantId = Uuid.random()
+        val command = ConversationTransition.buildStartTurnCommand(
+            c.toSnapshot(),
+            turnId = Uuid.random(),
+            modelContextCandidate = disclosureCandidate(),
+            assistantMessageId = assistantId,
+        )
+        assertEquals(userId, command.anchorMessageId)
+        assertEquals(userNode.id, command.anchorNodeId)
+        assertEquals(listOf(userId), command.expectedSelectedPrefixMessageIds)
+        val r = ConversationTransition.apply(c.toSnapshot(), command)
+        assertEquals(2, r.nodes.size)
+        assertEquals(assistantId, r.nodes[1].messages.single().id)
+        assertEquals(MessageRole.ASSISTANT, r.nodes[1].messages.single().role)
+    }
+
+    @Test
+    fun `START on a non-terminal assistant adds a new variant instead of reusing the slot`() {
+        val userId = Uuid.random()
         val assistantId = Uuid.random()
         val node = MessageNode.of(assistant(assistantId))
-        val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
-        val r = ConversationTransition.apply(c.toSnapshot(), StartTurn(Uuid.random(), assistantId, resume = true))
-        // 幂等：不新增节点，节点数不变
-        assertEquals(1, r.nodes.size)
-        assertEquals(1, r.nodes[0].messages.size)
+        val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(MessageNode.of(user(userId)), node))
+        val replacementId = Uuid.random()
+        val command = ConversationTransition.buildStartTurnCommand(
+            c.toSnapshot(),
+            turnId = Uuid.random(),
+            modelContextCandidate = disclosureCandidate(),
+            assistantMessageId = replacementId,
+        )
+        // variant 追加：owner node 是既有 Assistant node，anchor 是其因果 USER。
+        assertEquals(node.id, command.assistantNodeId)
+        assertEquals(userId, command.anchorMessageId)
+        // 被替换的旧 Assistant variant 退出目标 prefix（regenerate 语义）。
+        assertEquals(listOf(userId), command.expectedSelectedPrefixMessageIds)
+
+        val r = ConversationTransition.apply(c.toSnapshot(), command)
+        assertEquals(2, r.nodes.size)
+        assertEquals(2, r.nodes[1].messages.size)
+        assertEquals(replacementId, r.nodes[1].currentMessage.id)
     }
 
     @Test
-    fun `resume uses the selected assistant variant`() {
-        val selectedId = Uuid.random()
-        val unselectedId = Uuid.random()
-        val node = MessageNode(
-            id = Uuid.random(),
-            messages = listOf(assistant(selectedId), assistant(unselectedId)),
-            selectIndex = 0,
-        )
-        val conversation = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
-
-        val reduced = ConversationTransition.apply(
-            conversation.toSnapshot(),
-            StartTurn(Uuid.random(), selectedId, resume = true),
-        )
-
-        assertSame(node, reduced.nodes.single())
-        assertEquals(0, reduced.nodes.single().selectIndex)
-    }
-
-    @Test
-    fun `non-resume with terminal assistant appends new node`() {
+    fun `START on a terminal assistant regenerates in place and unselects the old variant`() {
+        val userId = Uuid.random()
         val assistantId = Uuid.random()
         val finished = assistant(assistantId).copy(
             terminalStatus = MessageTerminalStatus.INCOMPLETE,
             terminalReason = "user_stop",
         )
-        val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(MessageNode.of(finished)))
-        val r = ConversationTransition.apply(c.toSnapshot(), StartTurn(Uuid.random(), assistantId, resume = false))
-        // 旧节点已终态 → 追加新节点
+        val node = MessageNode.of(finished)
+        val c = Conversation.ofId(Uuid.random())
+            .copy(messageNodes = listOf(MessageNode.of(user(userId)), node))
+        val replacementId = Uuid.random()
+        val command = ConversationTransition.buildStartTurnCommand(
+            c.toSnapshot(),
+            turnId = Uuid.random(),
+            modelContextCandidate = disclosureCandidate(),
+            assistantMessageId = replacementId,
+        )
+        // regenerate 语义不豁免终态：旧 variant 退出目标 prefix，新 variant 追加到同一 node。
+        assertEquals(node.id, command.assistantNodeId)
+        assertEquals(userId, command.anchorMessageId)
+        assertEquals(listOf(userId), command.expectedSelectedPrefixMessageIds)
+        val r = ConversationTransition.apply(c.toSnapshot(), command)
         assertEquals(2, r.nodes.size)
-        assertEquals(assistantId, r.nodes[1].messages.single().id)
+        assertEquals(2, r.nodes[1].messages.size)
+        assertEquals(replacementId, r.nodes[1].currentMessage.id)
+    }
+
+    @Test
+    fun `START conflicts when the target branch changed after planStartTarget`() {
+        val userId = Uuid.random()
+        val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(MessageNode.of(user(userId))))
+        val command = ConversationTransition.buildStartTurnCommand(
+            c.toSnapshot(),
+            turnId = Uuid.random(),
+            modelContextCandidate = disclosureCandidate(),
+        )
+        // 并发改成另一个 USER variant：锁内重算的 prefix token 不再匹配。
+        val racedUserId = Uuid.random()
+        val raced = c.copy(
+            messageNodes = listOf(MessageNode.of(user(racedUserId))),
+        ).toSnapshot()
+        assertThrows(ConversationCommandConflictException::class.java) {
+            ConversationTransition.apply(raced, command)
+        }
     }
 
     @Test
@@ -607,10 +670,19 @@ class ConversationTransitionTest {
     fun `regeneration failure before a chunk keeps the previous assistant variant`() {
         val conversationId = Uuid.random()
         val original = assistant(Uuid.random(), listOf(UIMessagePart.Text("completed answer")))
+        val userNode = MessageNode.of(user(Uuid.random()))
         val node = MessageNode.of(original)
-        val base = Conversation.ofId(conversationId).copy(messageNodes = listOf(node)).toSnapshot()
+        val base = Conversation.ofId(conversationId).copy(messageNodes = listOf(userNode, node)).toSnapshot()
         val replacementId = Uuid.random()
-        val started = ConversationTransition.apply(base, StartTurn(Uuid.random(), replacementId, resume = false))
+        val started = ConversationTransition.apply(
+            base,
+            ConversationTransition.buildStartTurnCommand(
+                current = base,
+                turnId = Uuid.random(),
+                modelContextCandidate = disclosureCandidate(),
+                assistantMessageId = replacementId,
+            ),
+        )
 
         val failed = ConversationTransition.apply(
             started,
@@ -623,10 +695,11 @@ class ConversationTransitionTest {
             ),
         )
 
-        assertEquals(2, failed.nodes.single().messages.size)
-        assertEquals(original, failed.nodes.single().messages.first())
-        assertEquals(replacementId, failed.nodes.single().currentMessage.id)
-        assertEquals(MessageTerminalStatus.FAILED, failed.nodes.single().currentMessage.terminalStatus)
+        val assistantNode = failed.nodes.last()
+        assertEquals(2, assistantNode.messages.size)
+        assertEquals(original, assistantNode.messages.first())
+        assertEquals(replacementId, assistantNode.currentMessage.id)
+        assertEquals(MessageTerminalStatus.FAILED, assistantNode.currentMessage.terminalStatus)
     }
 
     @Test

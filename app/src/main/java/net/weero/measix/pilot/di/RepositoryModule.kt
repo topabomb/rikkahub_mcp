@@ -25,7 +25,7 @@ val repositoryModule = module {
     single<DatabaseTransactionRunner> { RoomDatabaseTransactionRunner(get()) }
 
     single {
-        ConversationRepository(get(), get(), get(), get(), get(), get(), get(), get())
+        ConversationRepository(get(), get(), get(), get(), get(), get(), get(), get(), get())
     }
 
     single {

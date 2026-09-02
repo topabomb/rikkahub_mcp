@@ -316,7 +316,7 @@ class SubAssistantLineageResolverTest {
         assertEquals("run-1", (decision as LineageDecision.CloneChild).sourceRunId)
         assertEquals(taskMsg.id, (decision as LineageDecision.CloneChild).throughTaskMessageId)
 
-        val prefix = cloneLineagePrefix(child, taskMsg.id)!!
+        val prefix = cloneLineagePrefix(child.messageNodes, taskMsg.id)!!
         assertEquals(2, prefix.size)
         assertEquals("answer1", (prefix.last().currentMessage.parts.single() as UIMessagePart.Text).text)
     }
@@ -393,7 +393,7 @@ class SubAssistantLineageResolverTest {
             LineageDecision.CreateNewDueToError,
             resolveLineage(meta, child, masterConvId, targetId),
         )
-        assertEquals(null, cloneLineagePrefix(child, unselectedTask.id))
+        assertEquals(null, cloneLineagePrefix(child.messageNodes, unselectedTask.id))
     }
 
     private fun childForLineage(task: UIMessage, laterNode: net.weero.measix.pilot.data.model.MessageNode) =

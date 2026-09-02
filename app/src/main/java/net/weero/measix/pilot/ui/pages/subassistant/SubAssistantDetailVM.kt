@@ -26,7 +26,7 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ConversationDetailRead
 import net.weero.measix.pilot.service.SubAssistantDetailReader
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
 import kotlin.uuid.Uuid
 
 data class SubAssistantDetailLink(
@@ -48,7 +48,7 @@ internal fun mergeLiveSubAssistantDetailLink(
 
 internal fun isCurrentChildSnapshot(
     state: SubAssistantDetailUiState,
-    requestedChild: ConversationSnapshot,
+    requestedChild: ConversationPresentationSnapshot,
 ): Boolean {
     val ready = state as? SubAssistantDetailUiState.Ready ?: return false
     return ready.child.conversationId == requestedChild.conversationId && ready.child == requestedChild
@@ -61,7 +61,7 @@ internal sealed interface SubAssistantDetailLinkResult {
 }
 
 internal fun resolveSubAssistantDetailLink(
-    master: ConversationSnapshot,
+    master: ConversationPresentationSnapshot,
     runId: String,
     json: Json,
 ): SubAssistantDetailLinkResult {
@@ -70,7 +70,7 @@ internal fun resolveSubAssistantDetailLink(
     }
 
     val matches = buildList {
-        master.renderNodes.forEach { node ->
+        master.nodes.forEach { node ->
             node.messages.forEach { message ->
                 message.parts.filterIsInstance<UIMessagePart.Tool>().forEach { tool ->
                     if (tool.toolName != "assistant_call") return@forEach
@@ -117,7 +117,7 @@ internal fun resolveSubAssistantDetailLink(
 internal fun resolveSubAssistantTimeline(
     masterConversationId: Uuid,
     link: SubAssistantDetailLink,
-    child: ConversationSnapshot,
+    child: ConversationPresentationSnapshot,
 ): List<MessageNode>? {
     if (child.conversationId != link.childConversationId ||
         child.header.parentConversationId != masterConversationId ||
@@ -126,7 +126,7 @@ internal fun resolveSubAssistantTimeline(
         return null
     }
 
-    val nodes = child.renderNodes
+    val nodes = child.nodes
     val startIndex = nodes.indexOfFirst { node ->
         node.messages.getOrNull(node.selectIndex)?.let { selected ->
             selected.id == link.childTaskMessageId && selected.role == MessageRole.USER
@@ -147,7 +147,7 @@ sealed interface SubAssistantDetailUiState {
     data object Unavailable : SubAssistantDetailUiState
     data class Ready(
         val link: SubAssistantDetailLink,
-        val child: ConversationSnapshot,
+        val child: ConversationPresentationSnapshot,
         val timeline: List<MessageNode>,
         val attachmentPreviews: Map<String, String> = emptyMap(),
     ) : SubAssistantDetailUiState
@@ -287,7 +287,7 @@ class SubAssistantDetailVM(
         }
     }
 
-    private suspend fun updateReady(masterId: Uuid, link: SubAssistantDetailLink, child: ConversationSnapshot) {
+    private suspend fun updateReady(masterId: Uuid, link: SubAssistantDetailLink, child: ConversationPresentationSnapshot) {
         val timeline = resolveSubAssistantTimeline(masterId, link, child)
             ?: return markUnavailable()
         val previews = detailReader.attachmentPreviews(child)

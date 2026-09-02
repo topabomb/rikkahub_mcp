@@ -28,7 +28,7 @@ import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.FinalizeTurn
 import net.weero.measix.pilot.service.runtime.TurnHandle
 import net.weero.measix.pilot.service.runtime.interruptPendingTool
@@ -63,12 +63,12 @@ class TurnFinalization(
         }
     }
 
-    suspend fun closeOpenTools(
-        snapshot: ConversationSnapshot,
+    internal suspend fun closeOpenTools(
+        snapshot: ConversationAggregateSnapshot,
         messageId: Uuid,
         reason: String,
         cancelledByUser: Boolean = true,
-    ): ConversationSnapshot {
+    ): ConversationAggregateSnapshot {
         val located = requireNotNull(snapshot.locateAssistantMessage(messageId)) {
             "assistant message $messageId is not present in the owned conversation snapshot"
         }
@@ -97,8 +97,8 @@ class TurnFinalization(
      * The provider may have emitted messages after the last durable checkpoint, so this path must
      * use TurnEngine's accumulated messages instead of rereading the durable node as payload.
      */
-    suspend fun prepareOwnedTurnMessagesForFailure(
-        snapshot: ConversationSnapshot,
+    internal suspend fun prepareOwnedTurnMessagesForFailure(
+        snapshot: ConversationAggregateSnapshot,
         handle: TurnHandle,
         latestMessages: List<UIMessage>,
         reason: String,
@@ -239,16 +239,27 @@ class TurnFinalization(
         )
     }
 
-    /** Finalizes the Child and stages Caller metadata for its next result/turn terminal commit. */
+    /** Stages terminal Caller metadata when Child materialized but no Child Turn START was committed. */
+    suspend fun finalizeUnstartedSubAssistantRun(
+        execContext: ToolExecutionContext,
+        terminalMetadata: SubAssistantCallMetadata,
+    ) {
+        withTimeout(FINALIZATION_TIMEOUT_MS) {
+            reportSubAssistantMetadataPatch(json, execContext, terminalMetadata, delivery = ToolMetadataDelivery.DEFERRED)
+        }
+    }
+
+    /** Finalizes the exact Child Turn and stages Caller metadata for its next terminal commit. */
     suspend fun finalizeSubAssistantRun(
         childConversationId: Uuid,
+        childTurnId: Uuid,
         reason: String,
         execContext: ToolExecutionContext,
         terminalMetadata: SubAssistantCallMetadata,
     ) {
         val failures = finalizeInterruptedRunSafely(
             timeoutMillis = FINALIZATION_TIMEOUT_MS,
-            finalizeChild = { finalizeChild(childConversationId, reason) },
+            finalizeChild = { finalizeChild(childConversationId, childTurnId, reason) },
             finalizeMetadata = {
                 reportSubAssistantMetadataPatch(json, execContext, terminalMetadata, delivery = ToolMetadataDelivery.DEFERRED)
             },
@@ -262,11 +273,42 @@ class TurnFinalization(
         failures.throwIfAny(childConversationId, terminalMetadata.runId)
     }
 
-    suspend fun finalizeChild(childConversationId: Uuid, reason: String) {
+    /** Captures the current Child owner for lifecycle-driven tree mutation, then finalizes only that identity. */
+    suspend fun finalizeCurrentChild(childConversationId: Uuid, reason: String) {
+        if (conversationRepository.getConversationHeader(childConversationId) == null) return
+        val runtime = commandCoordinator.load(childConversationId)
+        val expectedTurnId = runtime.snapshot.value.activeTurn?.turnId
+        if (expectedTurnId == null) {
+            val recoverableFacts = conversationRepository.getTurnExecutions(childConversationId).filter {
+                it.status == TurnExecutionStatus.CREATED ||
+                    it.status == TurnExecutionStatus.RUNNING ||
+                    it.status == TurnExecutionStatus.AWAITING_APPROVAL
+            }
+            check(recoverableFacts.isEmpty()) {
+                "child $childConversationId has recoverable turn facts without an in-memory owner"
+            }
+            return
+        }
+        finalizeChild(childConversationId, expectedTurnId, reason)
+    }
+
+    /** Finalizes only the Child Turn owned by the caller; stale cleanup never targets a newer owner. */
+    suspend fun finalizeChild(childConversationId: Uuid, expectedTurnId: Uuid, reason: String) {
         if (conversationRepository.getConversationHeader(childConversationId) == null) return
         val runtime = commandCoordinator.load(childConversationId)
         val snapshot = runtime.snapshot.value
         val active = snapshot.activeTurn
+        if (active != null && active.turnId != expectedTurnId) {
+            val expected = conversationRepository.getTurnExecution(expectedTurnId.toString())
+            check(expected == null || expected.status !in setOf(
+                TurnExecutionStatus.CREATED,
+                TurnExecutionStatus.RUNNING,
+                TurnExecutionStatus.AWAITING_APPROVAL,
+            )) {
+                "stale Child cleanup lost owner for non-terminal turn $expectedTurnId"
+            }
+            return
+        }
         if (active != null) {
             val prepared = closeOpenTools(
                 snapshot = snapshot,
@@ -415,7 +457,7 @@ internal suspend fun finalizeInterruptedRunSafely(
     InterruptedRunFinalizationFailures(childFailure, metadataFailure)
 }
 
-private fun ConversationSnapshot.locateAssistantMessage(messageId: Uuid): Pair<Int, UIMessage>? {
+private fun ConversationAggregateSnapshot.locateAssistantMessage(messageId: Uuid): Pair<Int, UIMessage>? {
     nodes.forEachIndexed { index, node ->
         node.messages.firstOrNull { message ->
             message.id == messageId && message.role == MessageRole.ASSISTANT

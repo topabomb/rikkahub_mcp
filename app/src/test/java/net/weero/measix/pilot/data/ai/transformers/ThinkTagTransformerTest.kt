@@ -1,5 +1,9 @@
 package net.weero.measix.pilot.data.ai.transformers
 
+import net.weero.measix.pilot.service.runtime.resolveAssistantRequest
+
+import net.weero.measix.pilot.test.testPromptInputs
+
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import me.rerere.ai.core.MessageRole
@@ -21,8 +25,8 @@ class ThinkTagTransformerTest {
     private val ctx = TransformerContext(
         context = mockk<android.content.Context>(relaxed = true),
         model = Model(modelId = "test", displayName = "Test"),
-        assistant = Assistant(),
-        settings = Settings(),
+        assistant = resolveAssistantRequest(Assistant()),
+        promptInputs = testPromptInputs(),
         requestOrigins = RequestMessageOriginTracker(),
         registerUnpublishedResource = {},
     )

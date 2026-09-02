@@ -12,9 +12,15 @@ import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.model.AssistantMemory
-import net.weero.measix.pilot.utils.toLocalString
-import java.time.LocalDate
 
+/**
+ * memory_tool 的唯一注册入口。
+ *
+ * 工具定义必须是常量文本：名称、description、parameters schema 和列表排序共同构成 Provider
+ * 请求的可缓存前缀（Anthropic 的层级是 tools -> system -> messages，OpenAI 同样要求工具定义
+ * 稳定），任何日期、Memory 内容或其他 live disclosure 都会按日击穿整条前缀。当前时间由现有
+ * Time Reminder 上下文负责，不写进工具描述（权威方案 §10.2、§15）。
+ */
 fun buildMemoryTools(
     onCreation: suspend (String) -> AssistantMemory,
     onUpdate: suspend (Int, String) -> AssistantMemory,
@@ -28,7 +34,6 @@ fun buildMemoryTools(
             Merge similar records; prefer edit over create.
             Do not store sensitive personal attributes.
             Do not show memory content unless the user asks.
-            Today is ${LocalDate.now().toLocalString(true)}.
         """.trimIndent(),
         parameters = {
             InputSchema.Obj(

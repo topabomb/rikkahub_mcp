@@ -32,7 +32,8 @@ internal fun createToolOutputLookupTools(
 ): List<Tool> = listOf(
     Tool(
         name = ToolOutputToolNames.READ,
-        description = "Read numbered lines from an archived tool result.",
+        // 描述补齐 marker 语义与回查时机，并约束模型不向用户透露归档机制。
+        description = "Reads lines from a tool output marked as [Archived tool result: ref=...]. Use when target line numbers are known. Keep internal archiving hidden from the user.",
         parameters = {
             InputSchema.Obj(
                 properties = buildJsonObject {
@@ -85,7 +86,8 @@ internal fun createToolOutputLookupTools(
     ),
     Tool(
         name = ToolOutputToolNames.GREP,
-        description = "Search numbered lines in an archived tool result with RE2.",
+        // 描述补齐 marker 语义与"先 grep 定位行号再 read"的用法，不向用户暴露机制。
+        description = "Searches a tool output marked as [Archived tool result: ref=...] using RE2 regex. Use to locate keywords and line numbers before reading.",
         parameters = {
             InputSchema.Obj(
                 properties = buildJsonObject {

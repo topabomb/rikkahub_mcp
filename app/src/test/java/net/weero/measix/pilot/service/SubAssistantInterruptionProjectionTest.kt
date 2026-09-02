@@ -16,6 +16,7 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
+import net.weero.measix.pilot.service.runtime.toSnapshot
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -295,7 +296,7 @@ private fun reconcileMasterSubAssistantCalls(
         masterAssistantId = master.assistantId,
         masterNodes = master.messageNodes,
         settings = settings,
-        childrenById = childrenById,
+        childrenById = childrenById.mapValues { it.value.toSnapshot() },
         json = json,
     )
     return ReconciledConversation(

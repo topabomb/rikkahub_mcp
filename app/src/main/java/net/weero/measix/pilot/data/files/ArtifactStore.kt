@@ -83,6 +83,22 @@ data class ArtifactDeleteImpact(
 )
 
 /** 创建完成但尚未交给 durable message/Settings root 的 artifact 所有权令牌。 */
+internal suspend fun <T> discardArtifactBatch(
+    owned: List<T>,
+    discard: suspend (T) -> Unit,
+) {
+    var failure: Throwable? = null
+    owned.asReversed().forEach { artifact ->
+        try {
+            discard(artifact)
+        } catch (error: Throwable) {
+            val previous = failure
+            if (previous == null) failure = error else previous.addSuppressed(error)
+        }
+    }
+    failure?.let { throw it }
+}
+
 class OwnedArtifact internal constructor(
     val entity: ArtifactEntity,
     val uri: Uri,
@@ -588,9 +604,16 @@ class ArtifactStore(
         }
     }
 
-    fun unpublishedLease(owned: OwnedArtifact): ToolResourceLease = ToolResourceLease(
-        publish = { publishUnpublished(owned) },
-        discard = { discardUnpublished(owned).requireDiscarded("unpublished tool resource rollback") },
+    fun unpublishedLease(owned: OwnedArtifact): ToolResourceLease = unpublishedBatchLease(listOf(owned))
+
+    /** Transfers one transformed output batch only after every durable root and token validates. */
+    fun unpublishedBatchLease(owned: List<OwnedArtifact>): ToolResourceLease = ToolResourceLease(
+        publish = { publishAllUnpublished(owned) },
+        discard = {
+            discardArtifactBatch(owned) { artifact ->
+                discardUnpublished(artifact).requireDiscarded("unpublished tool resource rollback")
+            }
+        },
     )
 
     private suspend fun activateStaged(
@@ -747,10 +770,16 @@ class ArtifactStore(
         }
     }
 
-    suspend fun retainForUndo(conversations: List<Conversation>): ArtifactRetentionLease = withLifecycleLock {
-        val ids = conversations.flatMap { conversation ->
-            buildMutableReferencesForNodes(conversation.messageNodes).map(ArtifactReferenceEntity::artifactId)
-        }.toSet()
+    suspend fun retainForUndo(conversations: List<Conversation>): ArtifactRetentionLease =
+        retainNodesForUndo(conversations.map { it.messageNodes })
+
+    /** Retains aggregate message trees without exposing internal model context through Conversation. */
+    internal suspend fun retainNodesForUndo(
+        nodeGroups: List<List<net.weero.measix.pilot.data.model.MessageNode>>,
+    ): ArtifactRetentionLease = withLifecycleLock {
+        val ids = buildMutableReferencesForNodes(nodeGroups.flatten())
+            .map(ArtifactReferenceEntity::artifactId)
+            .toSet()
         retainIds(ids)
     }
 

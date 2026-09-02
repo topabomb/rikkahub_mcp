@@ -217,8 +217,8 @@ fun ChatMessage(
             editedWorkspaceFilePaths(message.parts)
         }
         val showEditedFiles = assistant?.workspaceId != null && editedFiles.isNotEmpty()
-        val showUsage = settings.showTokenUsage &&
-            message.usage.toNerdLineDisplay().hasSummary
+        // 完整门禁由 ChatMessageNerdLine 自己完成，这里只做轻量判断避免重复投影。
+        val showUsage = settings.showTokenUsage && message.usage != null
 
         if (showActions || showEditedFiles || showUsage) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {

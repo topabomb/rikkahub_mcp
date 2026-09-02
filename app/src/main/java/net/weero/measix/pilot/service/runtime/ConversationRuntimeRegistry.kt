@@ -86,7 +86,7 @@ class ConversationRuntimeRegistry(
             entry.state.value.runtimeOrNull()?.let { return@withLock it }
             entry.state.value = ConversationRuntimeState.Loading
             val conversation = try {
-                repository.getConversationById(conversationId)
+                repository.getConversationSnapshotById(conversationId)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -119,6 +119,21 @@ class ConversationRuntimeRegistry(
             }
         }
 
+    /** Installs an internal aggregate only after its create transaction has committed. */
+    internal suspend fun registerSnapshot(snapshot: ConversationAggregateSnapshot): ConversationRuntime =
+        operationLocks.withLock(snapshot.conversationId) {
+            val entry = entries.computeIfAbsent(snapshot.conversationId) { Entry() }
+            entry.loadMutex.withLock {
+                when (val current = entry.state.value) {
+                    is ConversationRuntimeState.Ready -> current.runtime
+                    is ConversationRuntimeState.Draft -> error(
+                        "durable runtime cannot replace a registered draft: ${snapshot.conversationId}",
+                    )
+                    else -> installReadyRuntime(entry, snapshot)
+                }
+            }
+        }
+
     /** Registers a non-durable new-chat draft. It is evicted without persistence when unused. */
     internal suspend fun installDraft(conversation: Conversation): ConversationRuntime =
         operationLocks.withLock(conversation.id) {
@@ -129,7 +144,7 @@ class ConversationRuntimeRegistry(
                     is ConversationRuntimeState.Ready -> error(
                         "draft cannot replace a durable runtime: ${conversation.id}",
                     )
-                    else -> installRuntime(entry, conversation, draft = true)
+                    else -> installRuntime(entry, conversation.toSnapshot(), draft = true)
                 }
             }
         }
@@ -223,9 +238,9 @@ class ConversationRuntimeRegistry(
      * Snapshot and turn presentation joined at the Runtime owner. Consumers that need to
      * correlate a receipt with its durable target must not combine two independent UI flows.
      */
-    fun getConversationUiFlow(
+    internal fun getConversationUiFlow(
         conversationId: Uuid,
-    ): Flow<Pair<ConversationSnapshot, ConversationPresentation>> =
+    ): Flow<Pair<ConversationAggregateSnapshot, ConversationPresentation>> =
         observeRuntimeState(conversationId).flatMapLatest { state ->
             state.runtimeOrNull()?.let { runtime ->
                 combine(runtime.snapshot, runtime.activeRequestRevision) { snapshot, _ ->
@@ -280,17 +295,22 @@ class ConversationRuntimeRegistry(
         jobs.joinAll()
     }
 
+    private fun installReadyRuntime(
+        entry: Entry,
+        snapshot: ConversationAggregateSnapshot,
+    ): ConversationRuntime = installRuntime(entry, snapshot, draft = false)
+
     private fun installReadyRuntime(entry: Entry, conversation: Conversation): ConversationRuntime =
-        installRuntime(entry, conversation, draft = false)
+        installRuntime(entry, conversation.toSnapshot(), draft = false)
 
     private fun installRuntime(
         entry: Entry,
-        conversation: Conversation,
+        snapshot: ConversationAggregateSnapshot,
         draft: Boolean,
     ): ConversationRuntime {
         val runtime = ConversationRuntime(
-            id = conversation.id,
-            initial = conversation.toSnapshot(),
+            id = snapshot.conversationId,
+            initial = snapshot,
             scope = appScope,
             onIdle = ::removeIdleRuntime,
             idleTimeoutMs = idleTimeoutMs,
@@ -302,7 +322,7 @@ class ConversationRuntimeRegistry(
         }
         _runtimesVersion.value++
         runtime.armIdleEviction()
-        Log.i(TAG, "runtime installed: ${conversation.id} (draft=$draft, active=${activeRuntimes().size})")
+        Log.i(TAG, "runtime installed: ${snapshot.conversationId} (draft=$draft, active=${activeRuntimes().size})")
         return runtime
     }
 

@@ -374,8 +374,18 @@ private fun AssistantPromptContent(
                                 ctx = TransformerContext(
                                     context = context,
                                     model = Model(modelId = "gpt-4o", displayName = "GPT-4o"),
-                                    assistant = assistant,
-                                    settings = settings,
+                                    assistant = net.weero.measix.pilot.service.runtime.resolveAssistantRequest(assistant),
+                                    promptInputs = net.weero.measix.pilot.service.runtime.freezeTurnPromptInputs(
+                                        settings = settings,
+                                        assistant = assistant,
+                                        model = Model(modelId = "gpt-4o", displayName = "GPT-4o"),
+                                        conversationSystemPrompt = null,
+                                        conversationModeInjectionIds = emptySet(),
+                                        workspaceReminder = null,
+                                        instant = kotlin.time.Clock.System.now(),
+                                        locale = java.util.Locale.getDefault(),
+                                        zoneId = java.time.ZoneId.systemDefault(),
+                                    ),
                                     // 预览没有"本次请求合成内容"，所有消息都按用户配置参与模板
                                     requestOrigins = RequestMessageOriginTracker(),
                                     registerUnpublishedResource = {

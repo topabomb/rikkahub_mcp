@@ -20,10 +20,19 @@ class ConversationRuntimePersistenceTest {
     fun `durable checkpoint is published only after persistence succeeds`() = runTest {
         val conversationId = Uuid.random()
         val scope = CoroutineScope(Job())
-        val runtime = runtime(conversationId, scope)
+        val runtime = seededRuntime(conversationId, scope)
         val persistedCommands = mutableListOf<ConversationCommand>()
         val assistantMessageId = Uuid.random()
-        applyCommand(runtime, StartTurn(Uuid.random(), assistantMessageId, false), persistedCommands)
+        applyCommand(
+            runtime,
+            ConversationTransition.buildStartTurnCommand(
+                current = runtime.snapshot.value,
+                turnId = Uuid.random(),
+                modelContextCandidate = disclosureCandidate(),
+                assistantMessageId = assistantMessageId,
+            ),
+            persistedCommands,
+        )
         val handle = runtime.snapshot.value.activeTurn.let { active ->
             requireNotNull(active)
             TurnHandle(runtime.id, active.epoch, active.turnId, active.assistantMessageId)
@@ -86,8 +95,16 @@ class ConversationRuntimePersistenceTest {
         )
         val mutations = mutableListOf<ConversationMutation>()
         val assistantMessageId = Uuid.random()
-        val start = StartTurn(Uuid.random(), assistantMessageId, false)
-        applyCommand(runtime, start, mutations = mutations)
+        applyCommand(
+            runtime,
+            ConversationTransition.buildStartTurnCommand(
+                current = runtime.snapshot.value,
+                turnId = Uuid.random(),
+                modelContextCandidate = disclosureCandidate(),
+                assistantMessageId = assistantMessageId,
+            ),
+            mutations = mutations,
+        )
         val handle = runtime.snapshot.value.activeTurn.let { active ->
             requireNotNull(active)
             TurnHandle(runtime.id, active.epoch, active.turnId, active.assistantMessageId)
@@ -141,7 +158,7 @@ class ConversationRuntimePersistenceTest {
         command: ConversationCommand,
         persistedCommands: MutableList<ConversationCommand>? = null,
         mutations: MutableList<ConversationMutation>? = null,
-    ): ConversationSnapshot {
+    ): ConversationAggregateSnapshot {
         val old = runtime.snapshot.value
         val planned = if (command is StartTurn) {
             command.copy(epoch = runtime.nextTurnEpoch())
@@ -162,6 +179,16 @@ class ConversationRuntimePersistenceTest {
     private fun runtime(id: Uuid, scope: CoroutineScope) = ConversationRuntime(
         id = id,
         initial = Conversation.ofId(id).toSnapshot(),
+        scope = scope,
+        onIdle = {},
+    )
+
+    /** START 必须锚定真实 USER：命令测试统一从带一条用户消息的树出发。 */
+    private fun seededRuntime(id: Uuid, scope: CoroutineScope) = ConversationRuntime(
+        id = id,
+        initial = Conversation.ofId(id).copy(
+            messageNodes = listOf(MessageNode.of(UIMessage.user("question"))),
+        ).toSnapshot(),
         scope = scope,
         onIdle = {},
     )

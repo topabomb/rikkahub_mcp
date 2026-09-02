@@ -149,7 +149,7 @@ class ImageGenerationToolFactory(
                     required = listOf("prompt"),
                 )
             },
-            systemPrompt = { _, _ -> imageGenerationSystemPrompt(capturedSelection.descriptor) },
+            systemPromptContribution = imageGenerationSystemPrompt(capturedSelection.descriptor),
             interactionRequirement = { args ->
                 if (parseGenerateImageArguments(args).getOrNull()?.setAsBackground == true) {
                     ToolInteractionRequirement.Approval

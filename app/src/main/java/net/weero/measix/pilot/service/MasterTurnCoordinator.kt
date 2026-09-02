@@ -48,11 +48,10 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.event.AppEvent
 import net.weero.measix.pilot.data.event.AppEventBus
 import net.weero.measix.pilot.data.ai.GenerationLoop
-import net.weero.measix.pilot.data.ai.GenerationMemoryContext
 import net.weero.measix.pilot.data.ai.GenerationRequest
 import net.weero.measix.pilot.data.ai.ToolExecutionEventStatus
 import net.weero.measix.pilot.data.ai.replaceToolsAtOrdinals
-import net.weero.measix.pilot.data.ai.resolveGenerationMemoryOwner
+import net.weero.measix.pilot.data.ai.resolveMemoryOwnerId
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.data.ai.tools.shouldUseExternalWebSearch
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
@@ -62,6 +61,7 @@ import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.parseAssistantCallExtrasFromInput
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
 import net.weero.measix.pilot.data.ai.tools.AssistantToolFactory
+import net.weero.measix.pilot.data.ai.tools.buildMemoryTools
 import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
 import net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
 import net.weero.measix.pilot.data.ai.tools.GenerationToolSetFactory
@@ -89,16 +89,16 @@ import net.weero.measix.pilot.data.model.replaceRegexes
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
-import net.weero.measix.pilot.utils.applyPlaceholders
 import java.time.Instant
 import java.util.Locale
 import kotlinx.datetime.LocalDateTime
 import kotlin.uuid.Uuid
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
+import net.weero.measix.pilot.service.runtime.ConversationTransition
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationCommandConflictException
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.TurnPipelineFactory
 import net.weero.measix.pilot.service.runtime.TurnEngine
 import net.weero.measix.pilot.service.runtime.TurnEvent
@@ -136,6 +136,19 @@ internal enum class MasterTurnEntry {
     CONTINUE_USER_INTERACTION,
 }
 
+/** Carries the one Settings snapshot only for a new START; continuation has no reconstruction input. */
+private sealed interface MasterTurnLaunch {
+    val entry: MasterTurnEntry
+
+    data class Start(val settings: Settings) : MasterTurnLaunch {
+        override val entry = MasterTurnEntry.START
+    }
+
+    data object Continue : MasterTurnLaunch {
+        override val entry = MasterTurnEntry.CONTINUE_USER_INTERACTION
+    }
+}
+
 internal data class MasterTurnLaunchPolicy(
     val runStructuralPreflight: Boolean,
     val reuseTtsQueue: Boolean,
@@ -147,7 +160,7 @@ internal data class MasterTurnLaunchPolicy(
  */
 internal fun masterTurnLaunchPolicy(
     entry: MasterTurnEntry,
-    snapshot: ConversationSnapshot,
+    snapshot: ConversationAggregateSnapshot,
     turnId: Uuid,
     messageRange: ClosedRange<Int>?,
 ): MasterTurnLaunchPolicy = when (entry) {
@@ -176,7 +189,7 @@ internal suspend fun applyToolUserDecision(
     locator: ToolCallLocator,
     decision: ToolUserDecision,
     awaitPreviousGeneration: suspend () -> Unit,
-    currentSnapshot: () -> ConversationSnapshot,
+    currentSnapshot: () -> ConversationAggregateSnapshot,
     submit: suspend (ResolveToolInteraction) -> Unit,
     onMoreApprovalsPending: suspend () -> Unit,
     continueTurn: suspend (ActiveTurnState, MasterTurnEntry) -> Unit,
@@ -297,7 +310,7 @@ class MasterTurnCoordinator(
     private val templateTransformer: TemplateTransformer,
     private val mcpManager: McpRuntimeCoordinator,
     private val toolSetFactory: GenerationToolSetFactory,
-    private val workspaceRepository: WorkspaceRepository,
+    private val turnRequestContextFactory: net.weero.measix.pilot.service.runtime.TurnRequestContextFactory,
     private val assistantToolFactory: AssistantToolFactory,
     private val delegationCoordinator: DelegationCoordinator,
     private val turnFinalization: TurnFinalization,
@@ -313,7 +326,7 @@ class MasterTurnCoordinator(
     private val titleCoordinator: ConversationTitleCoordinator,
 ) {
     // workspace 系统提示注入 (依赖 workspaceRepository, 故在类内构造)
-    private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
+    private val workspaceReminderTransformer = WorkspaceReminderTransformer()
     private val toolArtifactReplayTransformer = ToolArtifactReplayTransformer(toolArtifactRewriter)
 
     // Master/Target 共用管道装配（取代顶层 inputTransformers/outputTransformers val）
@@ -369,7 +382,7 @@ class MasterTurnCoordinator(
 
     // ---- 对话状态访问 ----
 
-    private fun liveSnapshot(conversationId: Uuid): ConversationSnapshot =
+    private fun liveSnapshot(conversationId: Uuid): ConversationAggregateSnapshot =
         runtimeRegistry.requireRuntime(conversationId).snapshot.value
 
     // ---- 发送消息 ----
@@ -422,9 +435,9 @@ class MasterTurnCoordinator(
                 }
                 artifactDraftScope?.publishCommittedReferences(processedContent)
 
-                // 开始补全
+                // USER preprocessing 与 START wire 共用同一 EffectiveSettingsSnapshot。
                 if (answer) {
-                    launchRun(conversationId, turnId = turnId)
+                    launchRun(conversationId, turnId = turnId, launch = MasterTurnLaunch.Start(settings))
                 }
 
                 _generationDoneFlow.emit(conversationId)
@@ -483,14 +496,26 @@ class MasterTurnCoordinator(
                     check(indexAt >= 0) { "Message not found: ${message.id}" }
                     commandCoordinator.executeOrThrow(conversationId, TruncateToNodeIndex(nodeIndexInclusive = indexAt))
                     subAssistantLifecycle.applyRetentionAfterTreeMutation(conversationId)
-                    launchRun(conversationId, turnId = turnId)
+                    val startSettings = settingsStore.effectiveSettings.first().settings
+                    launchRun(conversationId, turnId = turnId, launch = MasterTurnLaunch.Start(startSettings))
                 } else {
                     if (regenerateAssistantMsg) {
                         val nodeIndex = snapshot.nodes.indexOfFirst { node ->
                             node.messages.any { it.id == message.id }
                         }
                         check(nodeIndex >= 0) { "Message not found: ${message.id}" }
-                        launchRun(conversationId, turnId = turnId, messageRange = 0..<nodeIndex)
+                        // 保留目标 Assistant node 以追加新 variant；其后历史先通过唯一 truncate 协议删除。
+                        commandCoordinator.executeOrThrow(
+                            conversationId,
+                            TruncateToNodeIndex(nodeIndexInclusive = nodeIndex),
+                        )
+                        subAssistantLifecycle.applyRetentionAfterTreeMutation(conversationId)
+                        val startSettings = settingsStore.effectiveSettings.first().settings
+                        launchRun(
+                            conversationId,
+                            turnId = turnId,
+                            launch = MasterTurnLaunch.Start(startSettings),
+                        )
                     } else {
                         // 变更前的 stale run 已被收口，将结果树同步落库。
                         commandCoordinator.executeOrThrow(conversationId, ReplaceMessageTree(snapshot.nodes))
@@ -560,7 +585,7 @@ class MasterTurnCoordinator(
                                     launchRun(
                                         conversationId = conversationId,
                                         turnId = turnId,
-                                        entry = entry,
+                                        launch = MasterTurnLaunch.Continue,
                                     )
                                     _generationDoneFlow.emit(conversationId)
                                 } finally {
@@ -600,8 +625,9 @@ class MasterTurnCoordinator(
         conversationId: Uuid,
         turnId: Uuid,
         messageRange: ClosedRange<Int>? = null,
-        entry: MasterTurnEntry = MasterTurnEntry.START,
+        launch: MasterTurnLaunch,
     ) {
+        val entry = launch.entry
         // 用户可见地开始或继续 Master 生成后，请求平台保活；何时停止由 service 依据
         // conversationActivities 投影自决，这里只做单向请求，不读取任何运行结果。
         GenerationForegroundLifetime.ensureStarted(context)
@@ -614,11 +640,7 @@ class MasterTurnCoordinator(
         try {
             val runtime = requireRuntime(conversationId)
             startedRuntime = runtime
-            val settings = settingsStore.effectiveSettings.first().settings
             val initialSnapshot = liveSnapshot(conversationId)
-            val assistant = settings.getAssistantById(initialSnapshot.header.assistantId)
-                ?: settings.getCurrentAssistant()
-            generationSoundEnabled = settings.displaySetting.enableMessageGenerationSoundEffect
             val launchPolicy = masterTurnLaunchPolicy(entry, initialSnapshot, turnId, messageRange)
 
             if (launchPolicy.runStructuralPreflight) {
@@ -642,22 +664,166 @@ class MasterTurnCoordinator(
                 snapshot.currentMessages()
             }
             inFlightAssistantId = null
-            val resumeFilter: (UIMessage) -> Boolean = { message ->
-                message.role == MessageRole.ASSISTANT &&
-                    message.getTools().any { !it.hasReplayResult && it.approvalState.canResumeToolExecution() }
+            var startDisclosureCandidate: String? = null
+            val worker = requireNotNull(kotlinx.coroutines.currentCoroutineContext()[Job])
+            val requestContext = when (entry) {
+                MasterTurnEntry.START -> {
+                    val settings = (launch as MasterTurnLaunch.Start).settings
+                    val assistant = settings.getAssistantById(snapshot.header.assistantId)
+                        ?: settings.getCurrentAssistant()
+                    generationSoundEnabled = settings.displaySetting.enableMessageGenerationSoundEffect
+                    val model = settings.getChatModel(assistant)
+                        ?: error("No chat model is configured for assistant ${assistant.id}")
+                    val providerSetting = model.findProvider(settings.providers) ?: error("Provider not found")
+                    val mediaCapabilities = generationLoop.resolveRequestMediaCapabilities(settings, model)
+                    val promptInputs = turnRequestContextFactory.capturePromptInputs(
+                        settings = settings,
+                        assistant = assistant,
+                        model = model,
+                        conversationSystemPrompt = snapshot.header.customSystemPrompt,
+                        conversationModeInjectionIds = snapshot.header.modeInjectionIds,
+                    )
+                    startDisclosureCandidate = ConversationDisclosureSnapshotService.captureCandidate(
+                        settings = settings,
+                        assistant = assistant,
+                        memoryRepository = memoryRepository,
+                    )
+                    val mcpCapabilities = mcpManager.prepareTurnCapabilities(assistant)
+                    val unavailableMcp = mcpCapabilities.serverOutcomes.filter {
+                        it.state != net.weero.measix.pilot.data.ai.mcp.McpServerCapabilityState.READY
+                    }
+                    if (unavailableMcp.isNotEmpty()) {
+                        chatErrorStore.add(
+                            IllegalStateException(
+                                context.getString(
+                                    R.string.error_mcp_turn_capability_unavailable,
+                                    unavailableMcp.joinToString(", ") { it.serverName },
+                                ),
+                            ),
+                            conversationId,
+                            title = context.getString(R.string.error_title_tool_unavailable),
+                        )
+                    }
+                    senderName = if (assistant.useAssistantAvatar) {
+                        assistant.name.ifEmpty { context.getString(R.string.assistant_page_default_assistant) }
+                    } else {
+                        model.displayName
+                    }
+                    if (!model.abilities.contains(ModelAbility.TOOL) &&
+                        (shouldUseExternalWebSearch(assistant, model) || mcpCapabilities.tools.isNotEmpty())
+                    ) {
+                        chatErrorStore.add(
+                            IllegalStateException(context.getString(R.string.tools_warning)),
+                            conversationId,
+                            title = context.getString(R.string.error_title_tool_unavailable),
+                        )
+                    }
+                    val turnTtsContext = TtsToolPlaybackContext(
+                        sessionId = runtime.getTtsQueueSessionId(launchPolicy.reuseTtsQueue),
+                        assistantId = assistant.id,
+                        assistantName = assistant.name,
+                        sourceType = TtsPlaybackSource.SourceType.NORMAL,
+                    )
+                    val regularTools = toolSetFactory.buildTools(
+                        assistant = assistant,
+                        conversationId = conversationId,
+                        settings = settings,
+                        capabilityModel = model,
+                        workspaceCwd = snapshot.header.workspaceCwd,
+                        ttsPlaybackContext = turnTtsContext,
+                        mcpCapabilities = mcpCapabilities,
+                        additionalToolsBeforeMcp = assistantToolFactory.buildTools(
+                            callerAssistant = assistant,
+                            masterConversationId = conversationId,
+                            ttsPlaybackContext = turnTtsContext,
+                        ),
+                        onInvalidMcpServerNames = { invalidNames ->
+                            chatErrorStore.add(
+                                error = IllegalStateException(
+                                    context.getString(
+                                        R.string.error_mcp_invalid_server_name,
+                                        invalidNames.joinToString(", "),
+                                    ),
+                                ),
+                                conversationId = conversationId,
+                            )
+                        },
+                    )
+                    val memoryOwnerId = resolveMemoryOwnerId(assistant)
+                    val tools = buildList {
+                        if (memoryOwnerId != null) {
+                            addAll(
+                                buildMemoryTools(
+                                    onCreation = { content -> memoryRepository.addMemory(memoryOwnerId, content) },
+                                    onUpdate = { id, content -> memoryRepository.updateContent(id, content, memoryOwnerId) },
+                                    onDelete = { id -> memoryRepository.deleteMemory(id, memoryOwnerId) },
+                                    isStillAllowed = {
+                                        resolveMemoryOwnerId(
+                                            settingsStore.effectiveSettings.value.settings.getAssistantById(assistant.id),
+                                        ) == memoryOwnerId
+                                    },
+                                ),
+                            )
+                        }
+                        addAll(regularTools)
+                    }
+                    val credentialOwner = net.weero.measix.pilot.service.runtime.captureProviderCredentialOwner(
+                        settings = settings,
+                        model = model,
+                        selectedProvider = providerSetting,
+                    )
+                    val turnRequestContext = turnRequestContextFactory.create(
+                        assistant = assistant,
+                        model = model,
+                        providerSetting = providerSetting,
+                        providerTransportLease = net.weero.measix.pilot.service.runtime.ProviderTransportLease {
+                            net.weero.measix.pilot.service.runtime.resolveProviderTransportOwner(
+                                settingsStore.effectiveSettings.value.settings,
+                                credentialOwner,
+                            )
+                        },
+                        mediaCapabilities = mediaCapabilities,
+                        promptInputs = promptInputs,
+                        tools = tools,
+                    )
+                    runtime.bindTurnRequestContext(turnId, worker, turnRequestContext)
+                    turnRequestContext
+                }
+
+                MasterTurnEntry.CONTINUE_USER_INTERACTION ->
+                    runtime.requireTurnRequestContext(turnId, worker)
+            }
+            val assistant = requestContext.assistant
+            val model = requestContext.model.model
+            val displaySettings = settingsStore.effectiveSettings.value.settings
+            generationSoundEnabled = displaySettings.displaySetting.enableMessageGenerationSoundEffect
+            if (senderName == null) {
+                val currentAssistant = displaySettings.getAssistantById(assistant.id)
+                senderName = if (currentAssistant?.useAssistantAvatar == true) {
+                    assistant.name.ifEmpty { context.getString(R.string.assistant_page_default_assistant) }
+                } else {
+                    model.displayName
+                }
             }
             val started = when (entry) {
                 MasterTurnEntry.START -> TurnEngine.start(
                     commandCoordinator = commandCoordinator,
                     runtime = runtime,
                     turnId = turnId,
-                    messages = sourceMessages,
-                    resumeFilter = resumeFilter,
+                    modelContextCandidate = requireNotNull(startDisclosureCandidate) {
+                        "START disclosure candidate was not captured"
+                    },
                     turnFinalization = turnFinalization,
                 )
 
                 MasterTurnEntry.CONTINUE_USER_INTERACTION -> {
-                    check(sourceMessages.lastOrNull()?.let(resumeFilter) == true) {
+                    val resumableApprovalMessage = sourceMessages.lastOrNull()?.takeIf { message ->
+                        message.role == MessageRole.ASSISTANT &&
+                            message.getTools().any {
+                                !it.hasReplayResult && it.approvalState.canResumeToolExecution()
+                            }
+                    }
+                    check(resumableApprovalMessage != null) {
                         "active turn does not point to a resumable approval message"
                     }
                     TurnEngine.continueActive(
@@ -672,134 +838,41 @@ class MasterTurnCoordinator(
             val activeTurnEngine = started.engine
             turnEngine = activeTurnEngine
             inFlightAssistantId = started.assistantMessageId
-            val assistantSlot = started.resumableMessage ?: UIMessage(
-                id = started.assistantMessageId,
-                role = MessageRole.ASSISTANT,
-                parts = emptyList(),
-            )
-            val generationMessages = if (started.resumableMessage == null) sourceMessages + assistantSlot else sourceMessages
-            snapshot = liveSnapshot(conversationId)
-
-            val model = settings.getChatModel(assistant)
-                ?: error("No chat model is configured for assistant ${assistant.id}")
-            val mcpCapabilities = mcpManager.prepareTurnCapabilities(assistant)
-            val unavailableMcp = mcpCapabilities.serverOutcomes.filter {
-                it.state != net.weero.measix.pilot.data.ai.mcp.McpServerCapabilityState.READY
+            val modelContextProjection = when (entry) {
+                MasterTurnEntry.START -> {
+                    snapshot = liveSnapshot(conversationId)
+                    // START 的请求输入是提交后的 selected branch（与 Child 路径同一协议）：
+                    // regenerate 中被替换的旧 Assistant variant 已退出目标分支，不得把旧回答
+                    // 带进请求让模型“续写”。
+                    val projection = ConversationTransition.projectTurnModelContext(snapshot)
+                    runtime.bindModelContextProjection(turnId, worker, projection)
+                    projection
+                }
+                MasterTurnEntry.CONTINUE_USER_INTERACTION ->
+                    // 审批 / ask-user continuation 只复用 START 冻结的 projection（§7.3），
+                    // 不重新求值适用谓词。
+                    runtime.requireTurnModelContextProjection(turnId, worker)
             }
-            if (unavailableMcp.isNotEmpty()) {
-                chatErrorStore.add(
-                    IllegalStateException(
-                        context.getString(
-                            R.string.error_mcp_turn_capability_unavailable,
-                            unavailableMcp.joinToString(", ") { it.serverName },
-                        )
-                    ),
-                    conversationId,
-                    title = context.getString(R.string.error_title_tool_unavailable),
-                )
-            }
-            senderName = if (assistant.useAssistantAvatar) {
-                assistant.name.ifEmpty { context.getString(R.string.assistant_page_default_assistant) }
+            val generationMessages = if (started.resumableMessage == null) {
+                snapshot.currentMessages()
             } else {
-                model.displayName
+                sourceMessages
             }
-
-            // memory tool
-            if (!model.abilities.contains(ModelAbility.TOOL)) {
-                if (shouldUseExternalWebSearch(assistant, model) || mcpCapabilities.tools.isNotEmpty()) {
-                    chatErrorStore.add(
-                        IllegalStateException(context.getString(R.string.tools_warning)),
-                        conversationId,
-                        title = context.getString(R.string.error_title_tool_unavailable)
-                    )
-                }
-            }
-
-            snapshot = liveSnapshot(conversationId)
-
-            // start generating
-            // loop 声音反馈（生成副作用域：per-turn 去重器）
             val soundTracker = sideEffects.soundTracker()
-            // 每轮 Master Generation 创建一个 turn-level TtsToolPlaybackContext，
-            // 在整轮 turn 内被 Master 和所有 Target 共享。播放器以 sessionId 独占队列：
-            // 新 turn 替换旧队列；同一 turn 是否追加由顺序播放开关决定。
-            val turnTtsContext = TtsToolPlaybackContext(
-                sessionId = runtime.getTtsQueueSessionId(launchPolicy.reuseTtsQueue),
-                assistantId = assistant.id,
-                assistantName = assistant.name,
-                sourceType = TtsPlaybackSource.SourceType.NORMAL,
-            )
-            val mediaCapabilities = generationLoop.resolveRequestMediaCapabilities(settings, model)
-            val masterToolProvider: suspend () -> List<Tool> = {
-                val currentSettings = settingsStore.effectiveSettings.value.settings
-                val currentAssistant = currentSettings.getAssistantById(assistant.id)
-                if (currentAssistant == null) {
-                    emptyList()
-                } else {
-                    toolSetFactory.buildTools(
-                        assistant = currentAssistant,
-                        conversationId = conversationId,
-                        settings = currentSettings,
-                        capabilityModel = model,
-                        workspaceCwd = snapshot.header.workspaceCwd,
-                        ttsPlaybackContext = turnTtsContext,
-                        mcpCapabilities = mcpCapabilities,
-                        additionalToolsBeforeMcp = assistantToolFactory.buildTools(
-                            callerAssistant = currentAssistant,
-                            masterConversationId = conversationId,
-                            ttsPlaybackContext = turnTtsContext,
-                        ),
-                        onInvalidMcpServerNames = { invalidNames ->
-                            chatErrorStore.add(
-                                error = IllegalStateException(
-                                    context.getString(
-                                        R.string.error_mcp_invalid_server_name,
-                                        invalidNames.joinToString(", ")
-                                    )
-                                ),
-                                conversationId = conversationId,
-                            )
-                        },
-                    )
-                }
-            }
-            val masterMemoryContextProvider: suspend () -> GenerationMemoryContext? = {
-                val currentAssistant = settingsStore.effectiveSettings.value.settings
-                    .getAssistantById(assistant.id)
-                resolveGenerationMemoryOwner(currentAssistant)?.let { ownerId ->
-                    val currentMemories = if (ownerId == MemoryRepository.GLOBAL_MEMORY_ID) {
-                        memoryRepository.getGlobalMemories()
-                    } else {
-                        memoryRepository.getMemoriesOfAssistant(ownerId)
-                    }
-                    GenerationMemoryContext(ownerId, currentMemories)
-                }
-            }
             generationLoop.run(
                 GenerationRequest(
                     conversationId = conversationId,
-                    settings = settings,
-                    model = model,
+                    requestContext = requestContext,
                     reportProcessingText = runtime.processingReporter(),
                     messages = generationMessages,
-                    assistantMessageId = assistantSlot.id,
-                    assistant = assistant,
-                    conversationSystemPrompt = snapshot.header.customSystemPrompt,
-                    conversationModeInjectionIds = snapshot.header.modeInjectionIds,
-                    workspaceCwd = snapshot.header.workspaceCwd,
+                    assistantMessageId = started.assistantMessageId,
                     providerSessionId = conversationId.toString(),
                     inputTransformers = turnPipelineFactory.masterInput(),
                     outputTransformers = turnPipelineFactory.masterOutput(),
-                    toolProvider = masterToolProvider,
-                    mediaCapabilities = mediaCapabilities,
-                    memoryContextProvider = masterMemoryContextProvider,
-                    memoryToolAllowed = { ownerId ->
-                        resolveGenerationMemoryOwner(
-                            settingsStore.effectiveSettings.value.settings.getAssistantById(assistant.id)
-                        ) == ownerId
-                    },
                     onCheckpoint = activeTurnEngine::onCheckpoint,
                     onMessagesObserved = activeTurnEngine::observeMessages,
+                    modelContextEntries = modelContextProjection.entries,
+                    durableMessageLocators = modelContextProjection.locators,
                 )
             ).let { source ->
                 // 提交协议唯一实现——chunk→applyStreamingDelta（永不落库）、
@@ -829,7 +902,7 @@ class MasterTurnCoordinator(
                             }
 
                             // 前台声音反馈: 单步生成完成 + 工具待审批
-                            if (isForeground.value && settings.displaySetting.enableMessageGenerationSoundEffect) {
+                            if (isForeground.value && generationSoundEnabled) {
                                 soundTracker.onStreaming(event.lastMessage)
                             }
                         }
@@ -868,7 +941,7 @@ class MasterTurnCoordinator(
                 return
             }
 
-            if (isForeground.value && settings.displaySetting.enableMessageGenerationSoundEffect) {
+            if (isForeground.value && generationSoundEnabled) {
                 sideEffects.playTurnCompleteSound()
             }
 
@@ -969,9 +1042,12 @@ class MasterTurnCoordinator(
                     title = context.getString(R.string.error_title_generation),
                 )
             }
-            val pendingToolOrdinal = finalMessage?.getTools()?.indexOfFirst { it.isPending }
-                ?.takeIf { it >= 0 }
-            if (outcome is TurnOutcome.AwaitingApproval && finalMessage != null && pendingToolOrdinal != null) {
+            val pendingToolOrdinal = (outcome as? TurnOutcome.AwaitingApproval)
+                ?.pending
+                ?.firstOrNull()
+                ?.locator
+                ?.toolOrdinal
+            if (finalMessage != null && pendingToolOrdinal != null) {
                 appEventBus.emit(
                     AppEvent.ChatGenerationAwaitingApproval(
                         conversationId = conversationId,
@@ -996,5 +1072,5 @@ class MasterTurnCoordinator(
 
 /** Backfill plans are derived from durable nodes, never from the per-read rendering overlay. */
 internal fun planDurableAttachmentRefBackfills(
-    snapshot: ConversationSnapshot,
+    snapshot: ConversationAggregateSnapshot,
 ) = AttachmentRefs.planBackfills(snapshot.nodes)

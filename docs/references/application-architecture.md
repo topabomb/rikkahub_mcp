@@ -154,11 +154,14 @@ Turn 和 Tool execution 使用 insert-once 与合法状态 CAS。终态不可回
 
 工具参数契约归各 `Tool.validateArguments`，只做纯校验，不读取 Settings、数据库、文件或网络。
 `Tool.parseArguments` 是审批与执行共用的 JSON object 解析入口；空参数缓冲表示无参 object，非空损坏 JSON 不得替换为空 object。
-`GenerationToolSetFactory` 是每个 step 工具集合的装配 owner，并稳定注册 `read_tool_output` / `grep_tool_output`、拒绝保留名冲突。
-`GenerationLoop` 只编排 Provider step、整批交互屏障、执行顺序、streaming 和 checkpoint；同一个 step 工具索引交给
-`ToolCallRuntime` 完成 definition lookup、一次参数解析/纯校验、typed interaction gate、执行包装和结果规范化，不按工具名维护
-审批或校验特例。审批与 `ask_user` 分别使用 `Approval` / `UserInput` requirement 和 typed decision，但都只通过 Conversation
-command 写回原 ToolCall 并复用原 TurnHandle。
+`GenerationToolSetFactory` 是新 Turn START 前的工具装配 owner，并稳定注册 `read_tool_output` / `grep_tool_output`、拒绝保留名冲突。
+装配结果由 `freezeToolSet` 一次物化为有序 `FrozenToolDefinition` 与同名 `ToolExecutionBinding`；同一 Turn 的 Provider step、审批、
+`ask_user` 与重试复用该不可变集合，不重读 Settings 或重建 schema。`GenerationLoop` 只编排 Provider step、整批交互屏障、执行顺序、
+streaming 和 checkpoint；冻结的执行索引交给 `ToolCallRuntime` 完成 definition lookup、一次参数解析/纯校验、typed interaction gate、
+执行包装和结果规范化，不按工具名维护审批或校验特例。权限、资源与远端状态仍由实际执行 owner live fail-closed。审批与
+`ask_user` 分别使用 `Approval` / `UserInput` requirement 和 typed decision，但都只通过 Conversation command 写回原 ToolCall 并复用原 TurnHandle。
+Master 新消息的输入预处理与 START 请求装配共享同一份 Effective Settings；Child active request 由精确 `childTurnId + runJob` 拥有，
+取消/失败 finalization 与 finally release 都必须携带该身份，迟到清理不得读取并终结同一 Child conversation 中更新的 active Turn。
 
 `ConversationContextPlanner` 是请求窗口和成功 Provider step 后 Tool Result 压缩候选的唯一纯规划边界。普通历史裁剪只影响
 request projection；完整纯文本 Tool Result 只有被成功 `ModelStepReceipt` 保守确认已进入最终请求投影后才可压缩。

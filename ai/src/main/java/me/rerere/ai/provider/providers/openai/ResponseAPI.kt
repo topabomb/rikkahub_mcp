@@ -370,7 +370,7 @@ class ResponseAPI(
                                 // Responses 省略 strict 会尝试严格模式；显式 false 保持
                                 // Chat Completions 的非严格工具语义，避免已配置 JSON Schema 被隐式收紧。
                                 put("strict", false)
-                                put("parameters", normalizeToolParameters(tool.parameters()))
+                                put("parameters", normalizeToolParameters(tool.parameters))
                             })
                         }
                     }
@@ -631,6 +631,8 @@ class ResponseAPI(
         add(buildJsonObject {
             put("role", JsonPrimitive(role.name.lowercase()))
 
+            // 捷径要求恰好一个 Text part：disclosure 注入后 anchor USER 有多个 Text，
+            // 必须走结构化 content 才能完整保留 context + 原文 suffix 的顺序。
             if (parts.isOnlyTextPart()) {
                 put("content", (parts.first() as UIMessagePart.Text).text)
             } else {

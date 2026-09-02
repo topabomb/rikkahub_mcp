@@ -8,7 +8,7 @@ import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.runtime.CommitCheckpoint
 import net.weero.measix.pilot.service.runtime.ConversationChange
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationTransition
 import net.weero.measix.pilot.service.runtime.ConversationWrite
 import net.weero.measix.pilot.service.runtime.TurnHandle
@@ -92,7 +92,7 @@ class ArchitecturePerformanceEvidenceTest {
     }
 
     private fun buildLegacyCheckpointNodes(
-        old: ConversationSnapshot,
+        old: ConversationAggregateSnapshot,
         updated: UIMessage,
     ): List<MessageNode> = old.nodes.mapIndexed { index, node ->
         if (index == old.nodes.lastIndex) {

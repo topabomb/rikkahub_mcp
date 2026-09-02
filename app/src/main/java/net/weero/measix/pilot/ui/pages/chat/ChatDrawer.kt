@@ -68,7 +68,6 @@ import me.rerere.hugeicons.stroke.FolderAdd
 import me.rerere.hugeicons.stroke.Image02
 import me.rerere.hugeicons.stroke.InLove
 import me.rerere.hugeicons.stroke.LanguageCircle
-import me.rerere.hugeicons.stroke.LookTop
 import me.rerere.hugeicons.stroke.PencilEdit01
 import me.rerere.hugeicons.stroke.PanelLeftClose
 import me.rerere.hugeicons.stroke.Search01
@@ -374,21 +373,8 @@ fun ChatDrawerContent(
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp)
             ) {
-                DrawerAction(
-                    icon = {
-                        Icon(
-                            imageVector = HugeIcons.LookTop,
-                            contentDescription = stringResource(R.string.assistant_page_title)
-                        )
-                    },
-                    label = {
-                        Text(stringResource(R.string.assistant_page_title))
-                    },
-                    onClick = {
-                        navigateFromDrawer { navController.navigate(Screen.Assistant) }
-                    },
-                )
-
+                // 2026-9-2 15:01：移除底部"助手设置"入口——与 SettingPage 的助手列表入口重复，
+                // 助手管理仍可经头部助手选择器（onManageAssistant）进入；勿无故恢复。
                 Box {
                     DrawerAction(
                         icon = {

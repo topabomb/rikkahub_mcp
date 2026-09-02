@@ -19,8 +19,8 @@ class Base64ImageToLocalFileTransformer(
         previousProjection: UIMessage?,
     ): UIMessage {
         val persisted = artifactStore.persistBase64Images(message)
-        persisted.ownedArtifacts.forEach { owned ->
-            ctx.registerUnpublishedResource(artifactStore.unpublishedLease(owned))
+        if (persisted.ownedArtifacts.isNotEmpty()) {
+            ctx.registerUnpublishedResource(artifactStore.unpublishedBatchLease(persisted.ownedArtifacts))
         }
         return persisted.message
     }

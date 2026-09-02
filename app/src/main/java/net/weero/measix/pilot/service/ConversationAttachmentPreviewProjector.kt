@@ -13,7 +13,7 @@ import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.LocalToolPath
 import net.weero.measix.pilot.utils.JsonInstant
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
 
 /**
  * Query-side projection from attachment handles and disclosed upload paths to preview URLs.
@@ -29,7 +29,7 @@ class ConversationAttachmentPreviewProjector(
     /** Emits whenever managed upload metadata changes, invalidating any prior preview URL. */
     fun lifecycleChanges(): Flow<Unit> = artifactStore.observe().transform { emit(Unit) }
 
-    suspend fun project(snapshot: ConversationSnapshot): Map<String, String> {
+    suspend fun project(snapshot: ConversationPresentationSnapshot): Map<String, String> {
         val durable = projectMessages(snapshot.nodes.map { it.currentMessage })
         val active = snapshot.activeTurn ?: return durable
         val assistant = active.messages.lastOrNull { it.id == active.assistantMessageId }

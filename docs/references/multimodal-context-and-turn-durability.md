@@ -200,10 +200,7 @@ ToolCall 执行。Master 与 Target 都从当前有效 Settings 构建，配置�
 ```
 
 - 识别调用由 `AttachmentInspectionTool` 直接持有 Provider 请求边界，不经过 `GenerationLoop`；
-  工具构造时（`createAttachmentInspectionTool`）一次性解析并捕获 inspection model、
-  provider setting 与派生的 `RequestMediaCapabilities`，写入
-  `TextGenerationParams.mediaCapabilities`。执行时不再通过 Settings 重找模型，
-  也不再按 endpoint host 二次裁决图片能力；构造时仅断言 IMAGE 模型具有结构化 USER 图片编码映射。若远端实际不兼容，Provider 请求返回的
+  工具构造时（`createAttachmentInspectionTool`）一次性解析 inspection model，冻结无凭据的 Provider wire shape、exact credential-owner locator 与派生的 `RequestMediaCapabilities`。执行时只从该 exact owner 刷新 secret，不能重找模型或改变 endpoint/protocol/cache shape，owner 被删除、替换或复制时 fail-closed；也不按 endpoint host 二次裁决图片能力。构造时仅断言 IMAGE 模型具有结构化 USER 图片编码映射。若远端实际不兼容，Provider 请求返回的
   真实分类错误（如 `provider_error`）表达，而不是预先伪装为 `inspection_model_unavailable`。
   不得依赖参数默认值或把引用行当作识别输入。
 - paths 与产出 1:1、顺序稳定，重复路径保留对应图片位置；内部标签使用原请求路径。识图与委托入口均不接受 UUID、HTTP(S)、file URI、workspace 或越界路径，不提供旧参数兼容入口。
@@ -226,6 +223,13 @@ ToolCall 执行。Master 与 Target 都从当前有效 Settings 构建，配置�
 | `generate_image` 产出 | 成功时 Image part 落入本次 Tool.output 并盖章；下一个 step 的请求由投影管线回放（原图或引用行）。识别这张图 = 把它的 `file.path` 传给 `inspect_attachments` |
 | Target（`assistant_call`） | Child 拥有完整 Assistant 级 transformer 链 + 自己的 resolved model；入站只校验 path / 资产，视觉能力由 Target run 自己的投影与工具集表达；`AttachmentProjectionTransformer` 同样位于动态模板之后、Provider 序列化之前 |
 
+会话披露使用独立的 `conversation_model_context` durable 表：一条 entry 由 Assistant request variant 的
+`owner_message_id/owner_node_id` 拥有，并锚定其因果 USER 的 `anchor_message_id/anchor_node_id`。它不进入
+`ConversationEntity` 大 JSON，也不暴露给 Presentation/UI。每个新 START 在结构变换后的 selected branch 上生成 canonical candidate，
+仅在内容相对 retained baseline 变化时随同一个 `StartTurn` 原子插入；审批/ask-user continuation 不创建第二 entry。
+请求规划仍只有 `ConversationContextPlanner`：transformers 完成后，把选中的 canonical snapshots 聚合为第一个 part，
+与原用户 text/image/document/audio/video 组成一个 durable USER model turn，不伪造 ASSISTANT 或额外相邻 USER。
+
 ## 6. Turn / Tool 执行事实
 
 ### 6.1 实体与状态
@@ -240,7 +244,7 @@ Schema 见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and
 ### 6.2 checkpoint 与 finalize
 
 - `StartTurn` 单事务写 assistant 槽与 RUNNING turn fact，返回唯一 `TurnHandle`。
-- `CommitCheckpoint` 命令（`TurnEngine.onCheckpoint` 提交）：工具循环内以 Room 事务提交 changed-node delta、执行事实、artifact reference 与 FTS delta。
+- `CommitCheckpoint` 命令（`TurnEngine.onCheckpoint` 提交）：工具循环内以 Room 事务提交 changed-node delta、执行事实、artifact reference 与 FTS delta。`TOOL_RESULT_COMPLETED` 直接提交 output transformers 完成后的消息；只有该 durable root 已含本地资源引用才发布对应 lease，禁止发布资源却持久化 transform 前消息。同一次 base64 output transform 产生的多个 Artifact 只注册一个 `unpublishedBatchLease`，由 `ArtifactStore.publishAllUnpublished` 在交接前验证整批 durable roots 与 ownership token，不能逐项发布出半批状态。
 - `FinalizeTurn` 命令（`TurnEngine.bind` 在终态提交）：同一事务先收口 STARTED tool fact，再 CAS turn 终态；失败整体回滚。
 - 非成功 Master/Child 消息在同一 `FinalizeTurn` 中写入 `terminalStatus`、细分稳定 `terminalReason` 与可空的脱敏
   `terminalDetail`。详情属于消息 JSON，不改变 Room 表结构；它用于进程重启后重新打开诊断，不参与状态机或 Provider 回放。

@@ -32,6 +32,7 @@ import net.weero.measix.pilot.service.runtime.ConversationHeaderPatch
 import net.weero.measix.pilot.service.runtime.ConversationMutation
 import net.weero.measix.pilot.service.runtime.ExecutionFacts
 import net.weero.measix.pilot.service.runtime.TurnExecutionOperation
+import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -82,6 +83,7 @@ class ConversationRepositoryTreeIntegrationTest {
             messageFtsManager = MessageFtsManager(database),
             turnExecutionDAO = database.turnExecutionDao(),
             toolExecutionDAO = database.toolExecutionDao(),
+            modelContextDAO = database.conversationModelContextDao(),
             artifactStore = artifactStore,
         )
     }
@@ -108,7 +110,7 @@ class ConversationRepositoryTreeIntegrationTest {
         val master = conversation(masterId, assistantId, null, part)
         val child = conversation(Uuid.random(), assistantId, masterId, part)
 
-        repository.insertConversationTree(master, listOf(child))
+        repository.insertConversationTree(master.toSnapshot(), listOf(child.toSnapshot()))
 
         assertNotNull(repository.getConversationById(master.id))
         assertNotNull(repository.getConversationById(child.id))

@@ -95,6 +95,7 @@ class CheckpointWriteAmplificationTest {
             messageFtsManager = mockk<MessageFtsManager>(relaxed = true),
             turnExecutionDAO = database.turnExecutionDao(),
             toolExecutionDAO = database.toolExecutionDao(),
+            modelContextDAO = database.conversationModelContextDao(),
             artifactStore = artifactStore,
         )
         val conversationId = Uuid.random()
@@ -159,6 +160,7 @@ class CheckpointWriteAmplificationTest {
                 messageFtsManager = mockk(relaxed = true),
                 turnExecutionDAO = database.turnExecutionDao(),
                 toolExecutionDAO = database.toolExecutionDao(),
+                modelContextDAO = database.conversationModelContextDao(),
                 artifactStore = mockk(relaxed = true),
             ).conversationToConversationEntity(Conversation.ofId(conversationId)),
         )
@@ -179,6 +181,7 @@ class CheckpointWriteAmplificationTest {
             messageFtsManager = mockk(relaxed = true),
             turnExecutionDAO = failingTurns,
             toolExecutionDAO = database.toolExecutionDao(),
+            modelContextDAO = database.conversationModelContextDao(),
             artifactStore = artifactStore,
         )
         val assistantNode = MessageNode.of(

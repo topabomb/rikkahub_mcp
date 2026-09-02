@@ -1,11 +1,11 @@
-﻿package net.weero.measix.pilot.data.ai.transformers
+package net.weero.measix.pilot.data.ai.transformers
 
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.data.ai.SyntheticMessageKind
 import net.weero.measix.pilot.data.model.InjectionPosition
-import net.weero.measix.pilot.data.model.PromptInjection
+import net.weero.measix.pilot.service.runtime.ResolvedPromptInjection
 import kotlin.uuid.Uuid
 
 /**
@@ -20,9 +20,7 @@ object PromptInjectionTransformer : InputMessageTransformer {
     ): List<UIMessage> {
         val transformed = transformMessages(
             messages = messages,
-            assistant = ctx.assistant,
-            modeInjections = ctx.settings.modeInjections,
-            conversationModeInjectionIds = ctx.conversationModeInjectionIds,
+            injections = ctx.promptInputs.promptInjections,
         )
         if (transformed === messages) return messages
         // 注入产生的新消息，以及被注入内容改写过的既有 System，都是本次请求的合成内容
@@ -31,7 +29,7 @@ object PromptInjectionTransformer : InputMessageTransformer {
         }
         transformed.forEach { message ->
             if (originalById[message.id] !== message) {
-                ctx.requestOrigins.markSynthetic(message)
+                ctx.requestOrigins.markSynthetic(message, SyntheticMessageKind.PROMPT_INJECTION)
             }
         }
         return transformed
@@ -43,53 +41,13 @@ object PromptInjectionTransformer : InputMessageTransformer {
  */
 internal fun transformMessages(
     messages: List<UIMessage>,
-    assistant: Assistant,
-    modeInjections: List<PromptInjection.ModeInjection>,
-    conversationModeInjectionIds: Set<Uuid> = emptySet(),
+    injections: List<ResolvedPromptInjection>,
 ): List<UIMessage> {
-    // 收集所有需要注入的内容
-    val injections = collectInjections(
+    if (injections.isEmpty()) return messages
+    return applyInjections(
         messages = messages,
-        assistant = assistant,
-        modeInjections = modeInjections,
-        conversationModeInjectionIds = conversationModeInjectionIds,
+        byPosition = injections.sortedByDescending { it.priority }.groupBy { it.position },
     )
-
-    if (injections.isEmpty()) {
-        return messages
-    }
-
-    // 按位置和优先级分组
-    val byPosition = injections
-        .sortedByDescending { it.priority }
-        .groupBy { it.position }
-
-    // 应用注入
-    return applyInjections(messages, byPosition)
-}
-
-/**
- * 收集需要注入的内容
- */
-internal fun collectInjections(
-    messages: List<UIMessage>,
-    assistant: Assistant,
-    modeInjections: List<PromptInjection.ModeInjection>,
-    conversationModeInjectionIds: Set<Uuid> = emptySet(),
-): List<PromptInjection> {
-    val injections = mutableListOf<PromptInjection>()
-    val effectiveModeInjectionIds = if (assistant.allowConversationPromptInjection) {
-        conversationModeInjectionIds
-    } else {
-        assistant.modeInjectionIds
-    }
-
-    // 获取关联的 ModeInjection
-    modeInjections
-        .filter { it.enabled && effectiveModeInjectionIds.contains(it.id) }
-        .forEach { injections.add(it) }
-
-    return injections
 }
 
 /**
@@ -97,7 +55,7 @@ internal fun collectInjections(
  */
 internal fun applyInjections(
     messages: List<UIMessage>,
-    byPosition: Map<InjectionPosition, List<PromptInjection>>
+    byPosition: Map<InjectionPosition, List<ResolvedPromptInjection>>
 ): List<UIMessage> {
     val result = messages.toMutableList()
 
@@ -196,7 +154,7 @@ internal fun applyInjections(
     return result
 }
 
-private fun createMergedInjectionMessages(injections: List<PromptInjection>): List<UIMessage> {
+private fun createMergedInjectionMessages(injections: List<ResolvedPromptInjection>): List<UIMessage> {
     return injections
         .groupBy { it.role }
         .map { (role, grouped) ->

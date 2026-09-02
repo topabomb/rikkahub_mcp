@@ -313,10 +313,10 @@ internal class TurnUsageAccumulator private constructor(
             latestRequestEstimatedContextTokens = baseline?.latestRequestEstimatedContextTokens,
             latestRequestTimeToFirstOutputMillis = request.timeToFirstOutputMillis
                 ?: baseline?.latestRequestTimeToFirstOutputMillis,
-            latestRequestCacheHitPercent = requestCacheHitPercent
-                ?: baseline?.latestRequestCacheHitPercent,
-            latestRequestTokensPerSecond = requestTokensPerSecond
-                ?: baseline?.latestRequestTokensPerSecond,
+            // 命中率与吞吐率只属于最近一次已关闭请求：缺字段写 null，不能继承上一请求。
+            // 否则它们的分母会与摘要里显示的上下文（始终不继承）错位到不同请求。
+            latestRequestCacheHitPercent = requestCacheHitPercent,
+            latestRequestTokensPerSecond = requestTokensPerSecond,
             observedProviderRequestCount = Math.addExact(baseline?.observedProviderRequestCount ?: 0, 1),
             observedUsageReportedRequestCount = Math.addExact(
                 baseline?.observedUsageReportedRequestCount ?: 0,

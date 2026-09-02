@@ -36,13 +36,14 @@ ConversationApplicationService / MasterTurnCoordinator
   ├─ 结束上一 turn，并收口需要保留的工具/Child 结果
   ├─ 预处理用户消息与稳定附件引用
   ├─ AppendUserMessage durable command：用户消息与首轮本地标题同事务
+  ├─ 从一次 EffectiveSettingsSnapshot 捕获 prompt/disclosure/MCP/tools 与不可变 TurnRequestContext
   └─ TurnEngine.start
-       └─ StartTurn 单事务：assistant 槽 + RUNNING turn fact
+       └─ StartTurn 单事务：assistant 槽 + RUNNING turn fact + 可选 model-context entry
             │
             ▼
        GenerationLoop.run
          ├─ ConversationContextPlanner.planRequest：replay-safe 后按完整 USER 轮次裁剪，只改变本次请求
-         ├─ System / Memory / Tool prompt
+         ├─ 稳定 System / frozen Tool prompt 与 context-first USER projection
          ├─ Input Transformers
          ├─ Provider stream
          ├─ Output Transformers
@@ -54,6 +55,7 @@ ConversationApplicationService / MasterTurnCoordinator
          ├─ Messages：TurnHandle/epoch 校验后更新纯内存 activeTurn
          ├─ Checkpoint：CommitCheckpoint durable command
          └─ Finished/异常/取消：FinalizeTurn durable command + sealed TurnOutcome
+              （AwaitingApproval 携带 pending locator 列表，消费者不再回消息里扫描）
 ```
 
 `MasterTurnCoordinator.sendMessage` 在安装唯一 generation Job 时返回 `SendMessageReceipt`。receipt 中的
@@ -83,12 +85,22 @@ Runtime 不发布未提交状态。Streaming 是唯一先发布且不落库的�
 更新同一最新消息槽，再发布 lease。交接开始前检查取消；已经取得结果/资源所有权后的这一小段提交不可取消，
 完成后继续传播取消。提交前取消或提交失败不会把随后被回滚的 local URI 交给终态消息；
 checkpoint 成功后即使 lease 发布失败，终态仍使用已有 durable root 的消息，不退回提交前的内容。
+Tool Result 的 output transformers 若生成受管文件引用，`TOOL_RESULT_COMPLETED` 必须提交变换后的消息本身，再发布 lease；禁止用 raw result 建 durable checkpoint 却发布只被 presentation 引用的资源。
 `TurnOutcome.fromFailure` 是 Master/Target 共用的失败分类点：Provider 失败使用 `ProviderFailureKind.reason` 作为细分稳定码，
 并把 `classifyProviderFailure().detail` 的脱敏诊断随 `FinalizeTurn.terminalDetail` 写入 owning Assistant 消息 JSON；
 `INCOMPLETE` 保留独立状态与 `provider_incomplete` / limit reason。Turn execution 与消息仍共享同一终态提交，不增加
 UI 状态表或第二写入口。没有终态事件便关闭的流同样收口为 `INCOMPLETE`，不能遗留 RUNNING execution。
 
 ## 请求构建与 Transformer
+
+每个新 START 只读取并沿整条装配链传递一个 `EffectiveSettingsSnapshot`；新 USER 的输入预处理与该 START 的 Assistant/Model/wire 解析使用同一份 Settings，不能在 `launchRun` 再取第二份。
+`ConversationCommandCoordinator.startTurn` 是 START 的唯一 durable 入口：assistant 槽、`turn_execution` 与 model-context entry 由同一个
+Room 事务提交，只有 `repository.commit` 成功后才 `publishCommitted` 发布 Runtime snapshot；提交抛错时不发布任何投影，
+已提交的 USER 与既有分支保持不变（`ConversationStartAtomicityTest` 与 `ConversationCommandCoordinatorTest` 分别锁定事务回滚与不发布语义）。
+START 只建立一个进程内 `TurnRequestContext`：它保存 resolved Assistant/Model、不可变 Provider wire shape、media capability、
+`FrozenTurnPromptInputs`、有序 `FrozenToolDefinition` 与同名 execution bindings。`GenerationRequest` 只携带该 context、消息、固定 pipeline
+和 checkpoint callback；Provider step、审批/`ask_user` continuation 与重试不得重读 Settings、Workspace、模板或时钟来改变模型可见请求。
+Provider API key、Google service-account key/email 等不进入 context。START 以 `ProviderCredentialOwnerLocator` 精确区分顶层 catalog provider 与 model `providerOverwrite` owner；`ProviderTransportLease` 每次请求只从该 exact owner 刷新凭据，并与冻结 endpoint、协议选择、cache 选项和 selected model 组合为临时 transport setting。移动/复制 model id、替换 overwrite owner、owner 重复或 provider identity/type 漂移均 fail-closed，不能重新执行 live model/provider 选择。
 
 `GenerationLoop.generateInternal()` 固定执行：
 
@@ -118,8 +130,9 @@ usage 只归产生请求的 owning Assistant 消息。Master 与每个 Child 各
 
 ## 工具装配与执行
 
-`MasterTurnCoordinator` 通过 `GenerationToolSetFactory` 装配 Search、Local、Conversation、Workspace、Skill、
-Assistant、MCP 与按需附件识别工具；Memory Tool 在每个工具循环 step 按最新状态加入。MCP 连接生命周期由
+`MasterTurnCoordinator` 通过 `GenerationToolSetFactory` 在 START 前装配 Search、Local、Conversation、Workspace、Skill、
+Assistant、MCP 与按需附件识别工具；Memory Tool 同期按固定 owner namespace 加入。全部 definitions/bindings 物化一次并在 Turn 内复用，
+实际执行仍重验权限、资源、Memory namespace 与远端状态。MCP 连接生命周期由
 `McpRuntimeCoordinator` 编排的 per-server `McpServerRuntime` 持有，已验证目录由 `McpCatalogStore` 持久化。Master 与每个 Target
 在 run 开始时只为所选 server 做有界并行 preflight；匹配的 durable LKG 可立即捕获，只有缺少目录的 server 才等待
 连接。随后固定一次 `TurnMcpCapabilitySnapshot`，后续 step 复用同一 catalog revision。用户手工刷新与远端
@@ -267,8 +280,8 @@ durable command 继续被 `ApplicationRecoveryGate` 阻断；`retry()` 重新执
 与恢复仍由 Runtime/TurnEngine 唯一拥有。Android 15+ dataSync 的 `onTimeout(startId, fgsType)` 会先立即
 `stopSelf(startId)` 释放平台配额，再由 AppScope 经 application command 请求停止所有 projected active Master turn。
 
-恢复查询只读取非终态 execution 索引。Child/tool 先收口，再提交 owning turn 终态；健康数据库不加载 Conversation 树。
-非终态 execution 若已失去 owning Assistant 消息，恢复进入 `Failed`，不发布会话、也不补偿写入 turn/tool 事实；消息载荷损坏同样保持 fail-closed。
+恢复查询只读取非终态 execution 索引。命中候选后，`TurnRecovery` 与 SubAssistant retention 只能通过 `getConversationSnapshotById` / `getChildConversationSnapshots` 装载 validated aggregate，不能从公共 `Conversation` 重建一个丢失 model context 的 snapshot。Child/tool 先收口，再提交 owning turn 终态；健康数据库不加载 Conversation 树。
+非终态 execution 若已失去 owning Assistant 消息，或 context 的 owner/anchor/message role/canonical envelope 损坏，恢复进入 `Failed`，不发布会话、也不补偿写入 turn/tool 事实；消息载荷损坏同样保持 fail-closed。
 正常 supersede/cancel 属于 `TurnFinalization`，Child lineage/retention/delete 属于 `SubAssistantLifecycle`，
 `TurnRecovery` 只负责进程恢复。
 

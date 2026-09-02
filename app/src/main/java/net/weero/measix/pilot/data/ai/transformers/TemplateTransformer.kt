@@ -1,29 +1,25 @@
 package net.weero.measix.pilot.data.ai.transformers
 
 import io.pebbletemplates.pebble.PebbleEngine
-import io.pebbletemplates.pebble.loader.Loader
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.utils.toLocalDate
 import net.weero.measix.pilot.utils.toLocalTime
-import java.io.Reader
-import java.io.StringReader
 import java.io.StringWriter
 import kotlin.time.toJavaInstant
 
 class TemplateTransformer(
     private val engine: PebbleEngine,
-    private val settingsStore: SettingsStore
 ) : InputMessageTransformer {
     override suspend fun transform(
         ctx: TransformerContext,
         messages: List<UIMessage>,
     ): List<UIMessage> {
-        val template = engine.getTemplate(ctx.assistant.id.toString())
-        val timeZone = TimeZone.currentSystemDefault()
+        val templateText = ctx.promptInputs.messageTemplate ?: "{{ message }}"
+        val template = engine.getLiteralTemplate(templateText)
+        val timeZone = TimeZone.of(ctx.promptInputs.zoneId)
         return messages.map { message ->
             // 本次请求由管线合成的内容（System、时间提醒、模式注入、Workspace 提醒）不是用户消息，
             // 不应被用户的 messageTemplate 二次包裹。
@@ -54,45 +50,5 @@ class TemplateTransformer(
                 }
             )
         }
-    }
-}
-
-internal data class AssistantTemplateCacheKey(
-    val assistantId: String,
-    val template: String,
-)
-
-internal class AssistantTemplateLoader(
-    private val settingsStore: SettingsStore,
-) : Loader<AssistantTemplateCacheKey> {
-    override fun getReader(cacheKey: AssistantTemplateCacheKey?): Reader? {
-        return cacheKey?.template?.let(::StringReader)
-    }
-
-    override fun setCharset(charset: String?) {}
-
-    override fun setPrefix(prefix: String?) {}
-
-    override fun setSuffix(suffix: String?) {}
-
-    override fun resolveRelativePath(
-        relativePath: String?,
-        anchorPath: String?
-    ): String? {
-        return relativePath
-    }
-
-    override fun createCacheKey(templateName: String?): AssistantTemplateCacheKey? {
-        val assistant = settingsStore.effectiveSettings.value.settings.assistants
-            .find { it.id.toString() == templateName }
-            ?: return null
-        return AssistantTemplateCacheKey(
-            assistantId = assistant.id.toString(),
-            template = assistant.messageTemplate,
-        )
-    }
-
-    override fun resourceExists(templateName: String?): Boolean {
-        return settingsStore.effectiveSettings.value.settings.assistants.any { it.id.toString() == templateName }
     }
 }

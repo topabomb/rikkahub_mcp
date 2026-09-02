@@ -16,6 +16,7 @@ import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.freeze
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
@@ -536,7 +537,7 @@ class GoogleProviderMessageTest {
                     abilities = listOf(ModelAbility.TOOL),
                     tools = setOf(BuiltInTools.Search),
                 ),
-                tools = listOf(tool),
+                tools = listOf(tool.freeze()),
             ),
         )
 

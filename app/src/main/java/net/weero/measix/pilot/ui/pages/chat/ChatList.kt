@@ -97,7 +97,7 @@ import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ChatError
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
 import net.weero.measix.pilot.service.runtime.ToolUserDecision
@@ -128,7 +128,7 @@ private const val ScrollBottomKey = "ScrollBottomKey"
 @Composable
 internal fun ChatList(
     innerPadding: PaddingValues,
-    snapshot: ConversationSnapshot,
+    snapshot: ConversationPresentationSnapshot,
     favoriteNodeIds: Set<Uuid>,
     state: LazyListState,
     turnPresentation: ConversationPresentation,
@@ -222,7 +222,7 @@ internal fun ChatList(
 @Composable
 private fun ChatListNormal(
     innerPadding: PaddingValues,
-    snapshot: ConversationSnapshot,
+    snapshot: ConversationPresentationSnapshot,
     favoriteNodeIds: Set<Uuid>,
     state: LazyListState,
     turnPresentation: ConversationPresentation,
@@ -315,9 +315,9 @@ private fun ChatListNormal(
             .flatMap { it.models }
             .associateBy { it.id }
     }
-    // 消息列表数据源来自 snapshot.renderNodes（未变节点引用相同；流式期间
+    // 消息列表数据源来自 snapshot.nodes（未变节点引用相同；流式期间
     // 仅末节点由 activeTurn 覆盖 → Compose skip 生效）。key = node.id 不变。
-    val snapshotNodes = snapshot.renderNodes
+    val snapshotNodes = snapshot.nodes
     val snapshotNodesUpdated by rememberUpdatedState(snapshotNodes)
     val lastMessageIndex = snapshotNodes.lastIndex
     val isEmptyConversation = snapshotNodes.isEmpty()
@@ -733,7 +733,7 @@ private fun buildHighlightedText(
 @Composable
 private fun ChatListPreview(
     innerPadding: PaddingValues,
-    snapshot: ConversationSnapshot,
+    snapshot: ConversationPresentationSnapshot,
     settings: Settings,
     hazeState: HazeState,
     animatedVisibilityScope: AnimatedVisibilityScope,
@@ -742,7 +742,7 @@ private fun ChatListPreview(
     var searchQuery by remember { mutableStateOf("") }
 
     // 过滤消息，同时保留原始 index 避免后续 O(n) indexOf 查找
-    val renderNodes = snapshot.renderNodes
+    val renderNodes = snapshot.nodes
     val filteredMessages = remember(renderNodes, searchQuery) {
         val nodes = renderNodes
         if (searchQuery.isBlank()) {

@@ -8,6 +8,8 @@ import net.weero.measix.pilot.data.ai.subassistant.buildInitialSubAssistantCallM
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.model.ConversationModelContextEntry
+import net.weero.measix.pilot.service.runtime.toSnapshot
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
@@ -24,15 +26,28 @@ class SubAssistantForkTest {
     private val childId = Uuid.random()
     private val task1 = user("task 1")
     private val task2 = user("task 2")
-    private val child = Conversation(
+    private val answer1 = assistant("answer 1")
+    private val answer2 = assistant("answer 2")
+    private val childConversation = Conversation(
         id = childId,
         assistantId = targetId,
         parentConversationId = sourceMasterId,
         messageNodes = listOf(
             task1.toMessageNode(),
-            assistant("answer 1").toMessageNode(),
+            answer1.toMessageNode(),
             task2.toMessageNode(),
-            assistant("answer 2").toMessageNode(),
+            answer2.toMessageNode(),
+        ),
+    )
+    private val child = childConversation.toSnapshot(
+        modelContextEntries = listOf(
+            ConversationModelContextEntry(
+                ownerNodeId = childConversation.messageNodes[1].id,
+                ownerMessageId = answer1.id,
+                anchorNodeId = childConversation.messageNodes[0].id,
+                anchorMessageId = task1.id,
+                content = "snapshot-1",
+            ),
         ),
     )
 
@@ -47,21 +62,26 @@ class SubAssistantForkTest {
             source.id,
             copiedNodes,
             newMasterId,
-            mapOf(child.id to child),
+            mapOf(child.conversationId to child),
             json,
         )
 
         assertEquals(1, result.children.size)
         val forkedChild = result.children.single()
-        assertEquals(newMasterId, forkedChild.parentConversationId)
-        assertEquals(2, forkedChild.messageNodes.size)
-        assertEquals("answer 1", text(forkedChild.messageNodes.last().currentMessage))
-        assertTrue(forkedChild.messageNodes.none { text(it.currentMessage) == "task 2" })
+        assertEquals(newMasterId, forkedChild.header.parentConversationId)
+        assertEquals(2, forkedChild.nodes.size)
+        assertEquals("answer 1", text(forkedChild.nodes.last().currentMessage))
+        assertTrue(forkedChild.nodes.none { text(it.currentMessage) == "task 2" })
+        val context = forkedChild.modelContextEntries.single()
+        assertEquals(forkedChild.nodes[0].id, context.anchorNodeId)
+        assertEquals(forkedChild.nodes[0].currentMessage.id, context.anchorMessageId)
+        assertEquals(forkedChild.nodes[1].id, context.ownerNodeId)
+        assertEquals(forkedChild.nodes[1].currentMessage.id, context.ownerMessageId)
 
         val metadata = result.masterNodes.single().currentMessage.getTools().single()
             .getSubAssistantCallMetadata(json)!!
         assertNotEquals("run-1", metadata.runId)
-        assertEquals(forkedChild.id.toString(), metadata.childConversationId)
+        assertEquals(forkedChild.conversationId.toString(), metadata.childConversationId)
         assertNotEquals(task1.id.toString(), metadata.childTaskNodeId)
         assertNull(metadata.previousRunId)
     }
@@ -76,7 +96,7 @@ class SubAssistantForkTest {
             source.id,
             source.messageNodes.map { it.copy(id = Uuid.random()) },
             Uuid.random(),
-            mapOf(child.id to child),
+            mapOf(child.conversationId to child),
             json,
         )
 
@@ -84,7 +104,7 @@ class SubAssistantForkTest {
             .map { it.getSubAssistantCallMetadata(json)!! }
         assertEquals(metadata[0].runId, metadata[1].previousRunId)
         assertEquals(metadata[0].childConversationId, metadata[1].childConversationId)
-        assertEquals(4, result.children.single().messageNodes.size)
+        assertEquals(4, result.children.single().nodes.size)
     }
 
     private fun call(

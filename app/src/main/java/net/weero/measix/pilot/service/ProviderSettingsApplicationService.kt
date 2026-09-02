@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.map
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.freeze
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
@@ -136,7 +137,7 @@ class ProviderSettingsApplicationService(
                 UIMessage.system("You are a helpful assistant"),
                 UIMessage.user("Use the get_current_time tool."),
             ),
-            params = params(model).copy(tools = listOf(testTool)),
+            params = params(model).copy(tools = listOf(testTool.freeze())),
         )
         val message = response.choices.firstOrNull()?.message
         val call = message?.parts?.filterIsInstance<UIMessagePart.Tool>()?.firstOrNull()

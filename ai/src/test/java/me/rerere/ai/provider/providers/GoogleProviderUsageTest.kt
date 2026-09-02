@@ -70,4 +70,41 @@ class GoogleProviderUsageTest {
         assertEquals(0L, zero.toolUseInputTokens)
         assertEquals(0L, zero.totalTokens)
     }
+
+    @Test
+    fun `usage accepts responseTokenCount as the candidate token field`() {
+        val usage = provider.parseUsageMeta(
+            Json.parseToJsonElement(
+                """
+                {
+                  "promptTokenCount": 27,
+                  "responseTokenCount": 45,
+                  "totalTokenCount": 72
+                }
+                """.trimIndent()
+            ).jsonObject
+        )!!
+
+        assertEquals(27L, usage.inputTokens)
+        assertEquals(45L, usage.outputTokens)
+        assertEquals(72L, usage.totalTokens)
+    }
+
+    @Test
+    fun `usage prefers candidatesTokenCount when both token fields are present`() {
+        val usage = provider.parseUsageMeta(
+            Json.parseToJsonElement(
+                """
+                {
+                  "promptTokenCount": 27,
+                  "candidatesTokenCount": 45,
+                  "responseTokenCount": 90,
+                  "totalTokenCount": 72
+                }
+                """.trimIndent()
+            ).jsonObject
+        )!!
+
+        assertEquals(45L, usage.outputTokens)
+    }
 }

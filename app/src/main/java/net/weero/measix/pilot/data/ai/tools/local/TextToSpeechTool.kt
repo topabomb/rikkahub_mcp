@@ -45,11 +45,11 @@ internal fun buildTextToSpeechTool(
             Returns immediately; playback continues in the background.
             Provide natural speech text without markdown.
         """.trimIndent().replace("\n", " "),
-        systemPrompt = { _, _ ->
-            settingsStore.effectiveSettings.value.settings.getSelectedTTSProvider()
-                ?.let { ttsManager.getPromptGuidance(it) }
-                .orEmpty()
-        },
+        // 装配（START）时求值一次：同 Turn 内切换 TTS Provider 不得改写已冻结的 System 前缀。
+        systemPromptContribution = settingsStore.effectiveSettings.value.settings
+            .getSelectedTTSProvider()
+            ?.let { ttsManager.getPromptGuidance(it) }
+            .orEmpty(),
         parameters = {
             InputSchema.Obj(
                 properties = buildJsonObject {

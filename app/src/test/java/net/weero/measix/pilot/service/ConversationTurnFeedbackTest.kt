@@ -14,6 +14,7 @@ import net.weero.measix.pilot.service.runtime.ActiveTurnState
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
 import net.weero.measix.pilot.service.runtime.ToolCallPhase
+import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
@@ -189,7 +190,10 @@ class ConversationTurnFeedbackTest {
         activeTurn: ActiveTurnState? = active,
         phases: Map<ToolCallLocator, ToolCallPhase> = emptyMap(),
     ) = ConversationUiModel(
-        snapshot = Conversation.ofId(Uuid.random(), Uuid.random()).toSnapshot().copy(activeTurn = activeTurn),
+        snapshot = Conversation.ofId(Uuid.random(), Uuid.random())
+            .toSnapshot()
+            .toPresentationSnapshot()
+            .copy(activeTurn = activeTurn),
         presentation = ConversationPresentation(requestId, phase, null, phases),
     )
 }

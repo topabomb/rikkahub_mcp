@@ -7,6 +7,7 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.core.ToolOutputPolicy
+import me.rerere.ai.core.freeze
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.OpenAIResponseMetadata
@@ -15,8 +16,11 @@ import me.rerere.ai.ui.ProviderReplayProjection
 import me.rerere.ai.ui.toMetadata
 import net.weero.measix.pilot.data.ai.tools.REGENERABLE_TOOL_OUTPUT_FOLDED_MARKER
 import net.weero.measix.pilot.data.ai.tools.ToolRuntimeMetadata
+import net.weero.measix.pilot.data.model.ConversationModelContextEntry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -26,19 +30,19 @@ class ConversationContextPlannerTest {
     @Test
     fun `request plan preserves disabled and threshold histories`() {
         val messages = alternating(10)
-        assertEquals(messages, planner.planRequest(messages, 0).messages)
-        assertEquals(messages, planner.planRequest(messages, 10).messages)
-        assertEquals(emptyList<UIMessage>(), planner.planRequest(emptyList(), 10).messages)
+        assertEquals(messages, planner.planRequest(messages, messageLimit = 0).messages)
+        assertEquals(messages, planner.planRequest(messages, messageLimit = 10).messages)
+        assertEquals(emptyList<UIMessage>(), planner.planRequest(emptyList(), messageLimit = 10).messages)
     }
 
     @Test
     fun `request plan keeps stable complete user turn boundaries`() {
         val messages = alternating(30)
-        val starts = (11..14).map { size -> planner.planRequest(messages.take(size), 10).messages.first() }
+        val starts = (11..14).map { size -> planner.planRequest(messages.take(size), messageLimit = 10).messages.first() }
         assertEquals(1, starts.distinct().size)
         assertEquals(MessageRole.USER, starts.first().role)
         assertEquals(messages[4], starts.first())
-        assertEquals(messages[10], planner.planRequest(messages.take(15), 10).messages.first())
+        assertEquals(messages[10], planner.planRequest(messages.take(15), messageLimit = 10).messages.first())
     }
 
     @Test
@@ -48,7 +52,7 @@ class ConversationContextPlannerTest {
             UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool("x", "result"))),
             UIMessage.assistant("final"), UIMessage.user("new"),
         )
-        assertEquals(messages.subList(2, messages.size), planner.planRequest(messages, 4).messages)
+        assertEquals(messages.subList(2, messages.size), planner.planRequest(messages, messageLimit = 4).messages)
     }
 
     @Test
@@ -368,7 +372,7 @@ class ConversationContextPlannerTest {
             estimateStableTextTokens("abcde") +
             estimateStableTextTokens(schema.toString())
 
-        assertEquals(expected, planner.estimateRequestContextTokens(messages, tools))
+        assertEquals(expected, planner.estimateRequestContextTokens(messages, tools.map { it.freeze() }))
     }
 
     @Test
@@ -523,4 +527,194 @@ class ConversationContextPlannerTest {
     }
 
     private fun messageList(message: UIMessage) = listOf(message)
+
+    // ---- model-context projection（权威方案 §8.2 / §8.3 / §8.4）----
+
+    private fun contextEntry(anchor: UIMessage, content: String): ConversationModelContextEntry =
+        ConversationModelContextEntry(
+            ownerNodeId = kotlin.uuid.Uuid.random(),
+            ownerMessageId = kotlin.uuid.Uuid.random(),
+            anchorNodeId = kotlin.uuid.Uuid.random(),
+            anchorMessageId = anchor.id,
+            content = content,
+        )
+
+    private fun locatorsFor(messages: List<UIMessage>): Map<kotlin.uuid.Uuid, DurableMessageLocator> {
+        val node = kotlin.uuid.Uuid.random()
+        return messages.associate { it.id to DurableMessageLocator(node, it.id) }
+    }
+
+    @Test
+    fun `baseline before the retained window projects onto the first real USER`() {
+        val branch = alternating(5) // u0 a1 u2 a3 u4
+        val window = branch.subList(2, branch.size)
+        val plan = planner.planRequest(
+            durableMessages = branch,
+            durableLocators = locatorsFor(branch),
+            modelContextEntries = listOf(contextEntry(branch[0], "SNAPSHOT-1")),
+            messageLimit = 3,
+        )
+        assertEquals(window.map { it.id }, plan.messages.map { it.id })
+        assertEquals(listOf(window.first().id to "SNAPSHOT-1"), plan.contextProjections.map { it.anchorMessageId to it.content })
+    }
+
+    /**
+     * 回归锁：replay projection 会丢弃空白等不可上传消息，窗口对齐必须以投影后列表为基准；
+     * 用未投影 branch 推导窗口起点会把“分支里存在空白消息”放大成每次请求都失败。
+     */
+    @Test
+    fun `blank durable messages dropped by replay projection do not break window alignment`() {
+        val branch = alternating(5)
+        val blank = UIMessage(
+            id = kotlin.uuid.Uuid.random(),
+            role = MessageRole.USER,
+            parts = listOf(UIMessagePart.Text("   ")),
+        )
+        val plan = planner.planRequest(
+            durableMessages = branch + blank,
+            durableLocators = locatorsFor(branch + blank),
+            modelContextEntries = listOf(contextEntry(branch[0], "SNAPSHOT-1")),
+            messageLimit = 3,
+        )
+        assertTrue(plan.messages.none { it.id == blank.id })
+        assertEquals("SNAPSHOT-1", plan.contextProjections.single().content)
+    }
+
+    @Test
+    fun `anchor dropped by replay projection fails closed instead of guessing`() {
+        val blank = UIMessage(
+            id = kotlin.uuid.Uuid.random(),
+            role = MessageRole.USER,
+            parts = listOf(UIMessagePart.Text(" ")),
+        )
+        val branch = listOf(blank) + alternating(4)
+        assertThrows(IllegalStateException::class.java) {
+            planner.planRequest(
+                durableMessages = branch,
+                durableLocators = locatorsFor(branch),
+                modelContextEntries = listOf(contextEntry(blank, "SNAPSHOT-BLANK")),
+                messageLimit = 3,
+            )
+        }
+    }
+
+    @Test
+    fun `later in-window snapshots keep their own anchors and older baselines drop`() {
+        val branch = alternating(5)
+        val e1 = contextEntry(branch[0], "SNAPSHOT-U0")
+        val e2 = contextEntry(branch[2], "SNAPSHOT-U2")
+        val e3 = contextEntry(branch[4], "SNAPSHOT-U4")
+        val plan = planner.planRequest(
+            durableMessages = branch,
+            durableLocators = locatorsFor(branch),
+            modelContextEntries = listOf(e1, e2, e3),
+            messageLimit = 3,
+        )
+        // 窗口 [u2 a3 u4]：baseline = anchor 不晚于第一条真实 USER 的最近一条 = e2；
+        // e1 早于 baseline 不发送；e3 保持在自身 anchor 前。
+        assertEquals(
+            listOf(branch[2].id to "SNAPSHOT-U2", branch[4].id to "SNAPSHOT-U4"),
+            plan.contextProjections.map { it.anchorMessageId to it.content },
+        )
+    }
+
+    @Test
+    fun `snapshots without entries produce no projections`() {
+        val branch = alternating(5)
+        val plan = planner.planRequest(
+            durableMessages = branch,
+            durableLocators = locatorsFor(branch),
+            modelContextEntries = emptyList(),
+            messageLimit = 3,
+        )
+        assertTrue(plan.contextProjections.isEmpty())
+    }
+
+    @Test
+    fun `active context with missing durable locator fails closed`() {
+        val branch = alternating(5)
+        val locators = locatorsFor(branch).minus(branch[2].id)
+        assertThrows(IllegalArgumentException::class.java) {
+            planner.planRequest(
+                durableMessages = branch,
+                durableLocators = locators,
+                modelContextEntries = listOf(contextEntry(branch[0], "SNAPSHOT-1")),
+                messageLimit = 3,
+            )
+        }
+    }
+
+    @Test
+    fun `projections attach as the first parts of the anchor USER keeping user parts`() {
+        val originals = listOf(
+            UIMessagePart.Text("hello"),
+            UIMessagePart.Image("image://x"),
+            UIMessagePart.Document("file://document", "document.pdf", "application/pdf"),
+            UIMessagePart.Audio("file://audio"),
+            UIMessagePart.Video("file://video"),
+        )
+        val anchor = UIMessage(role = MessageRole.USER, parts = originals)
+        val result = planner.applyContextProjections(
+            transformedMessages = listOf(UIMessage.system("s"), anchor),
+            projections = listOf(
+                ModelContextProjection(anchor.id, "SNAPSHOT-A"),
+                ModelContextProjection(anchor.id, "SNAPSHOT-B"),
+            ),
+            originsByMessageId = mapOf(anchor.id to RequestMessageOrigin.Durable(DurableMessageLocator(kotlin.uuid.Uuid.random(), anchor.id))),
+        )
+        assertEquals(
+            listOf("SNAPSHOT-A", "SNAPSHOT-B", "hello"),
+            result.last().parts.filterIsInstance<UIMessagePart.Text>().map { it.text },
+        )
+        assertEquals(originals, result.last().parts.drop(2))
+        originals.forEachIndexed { index, part ->
+            assertSame(part, result.last().parts[index + 2])
+        }
+    }
+
+    @Test
+    fun `projections fail when the retained anchor is missing after transforms`() {
+        val anchor = UIMessage.user("dropped")
+        assertThrows(IllegalStateException::class.java) {
+            planner.applyContextProjections(
+                transformedMessages = emptyList(),
+                projections = listOf(ModelContextProjection(anchor.id, "SNAPSHOT")),
+                originsByMessageId = mapOf(anchor.id to RequestMessageOrigin.Durable(DurableMessageLocator(kotlin.uuid.Uuid.random(), anchor.id))),
+            )
+        }
+    }
+
+    @Test
+    fun `projections fail when transforms duplicate a durable anchor identity`() {
+        val anchor = UIMessage.user("durable")
+        assertThrows(IllegalStateException::class.java) {
+            planner.applyContextProjections(
+                transformedMessages = listOf(anchor, anchor.copy(parts = listOf(UIMessagePart.Text("duplicate")))),
+                projections = listOf(ModelContextProjection(anchor.id, "SNAPSHOT")),
+                originsByMessageId = mapOf(
+                    anchor.id to RequestMessageOrigin.Durable(DurableMessageLocator(kotlin.uuid.Uuid.random(), anchor.id)),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `projections never attach to synthetic or non-USER messages`() {
+        val synthetic = UIMessage.user("time reminder")
+        val assistant = UIMessage.assistant("answer")
+        assertThrows(IllegalStateException::class.java) {
+            planner.applyContextProjections(
+                transformedMessages = listOf(synthetic),
+                projections = listOf(ModelContextProjection(synthetic.id, "SNAPSHOT")),
+                originsByMessageId = mapOf(synthetic.id to RequestMessageOrigin.Synthetic(SyntheticMessageKind.TIME_REMINDER)),
+            )
+        }
+        assertThrows(IllegalStateException::class.java) {
+            planner.applyContextProjections(
+                transformedMessages = listOf(assistant),
+                projections = listOf(ModelContextProjection(assistant.id, "SNAPSHOT")),
+                originsByMessageId = mapOf(assistant.id to RequestMessageOrigin.Durable(DurableMessageLocator(kotlin.uuid.Uuid.random(), assistant.id))),
+            )
+        }
+    }
 }

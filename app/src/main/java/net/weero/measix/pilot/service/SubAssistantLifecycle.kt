@@ -5,7 +5,7 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.ReplaceMessageTree
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import kotlin.uuid.Uuid
@@ -21,22 +21,24 @@ class SubAssistantLifecycle(
 ) {
     suspend fun applyRetentionAfterTreeMutation(masterConversationId: Uuid) {
         val master = runtimeRegistry.findRuntime(masterConversationId)?.snapshot?.value
-            ?: conversationRepository.getConversationById(masterConversationId)?.toSnapshot()
+            ?: conversationRepository.getConversationSnapshotById(masterConversationId)
             ?: return
-        val children = conversationRepository.getChildConversations(master.conversationId).associateBy { it.id }
+        val children = conversationRepository.getChildConversationSnapshots(master.conversationId)
+            .associateBy { it.conversationId }
         val plan = planSubAssistantRetention(master.conversationId, master.nodes, children, json)
 
         plan.truncatedChildren.forEach { child ->
-            commandCoordinator.executeOrThrow(child.id, ReplaceMessageTree(child.messageNodes))
+            commandCoordinator.executeOrThrow(child.conversationId, ReplaceMessageTree(child.nodes))
         }
-        plan.deletedChildren.forEach { child ->
-            commandCoordinator.deleteOrThrow(child.id)
+        plan.deletedChildIds.forEach { childId ->
+            commandCoordinator.deleteOrThrow(childId)
         }
     }
 
-    suspend fun finalizeRunsBeforeTreeMutation(master: ConversationSnapshot): ConversationSnapshot {
+    internal suspend fun finalizeRunsBeforeTreeMutation(master: ConversationAggregateSnapshot): ConversationAggregateSnapshot {
         require(master.header.parentConversationId == null)
-        val children = conversationRepository.getChildConversations(master.conversationId).associateBy { it.id }
+        val children = conversationRepository.getChildConversationSnapshots(master.conversationId)
+            .associateBy { it.conversationId }
         val result = reconcileMasterSubAssistantCalls(
             masterId = master.conversationId,
             masterAssistantId = master.header.assistantId,
@@ -49,7 +51,7 @@ class SubAssistantLifecycle(
             commandCoordinator.executeOrThrow(master.conversationId, ReplaceMessageTree(result.masterNodes))
         }
         result.childStopReasons.forEach { (childId, reason) ->
-            if (children[childId] != null) turnFinalization.finalizeChild(childId, reason)
+            if (children[childId] != null) turnFinalization.finalizeCurrentChild(childId, reason)
         }
         (children.keys - result.referencedChildIds).forEach { orphanId ->
             commandCoordinator.deleteOrThrow(orphanId)

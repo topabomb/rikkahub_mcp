@@ -112,8 +112,8 @@ class RecoveryCostDecouplingTest {
         coEvery { repo.getNonTerminalTurnExecutionsWithScope() } returns listOf(
             ScopedTurnExecution(turn, isChild = true, parentConversationId = masterId.toString())
         )
-        coEvery { repo.getConversationById(masterId) } returns master
-        coEvery { repo.getConversationById(childId) } returns child
+        coEvery { repo.getConversationSnapshotById(masterId) } returns master.toSnapshot()
+        coEvery { repo.getConversationSnapshotById(childId) } returns child.toSnapshot()
         coEvery { repo.getTurnExecutions(childId) } returns listOf(turn)
         coEvery { repo.getToolExecutions(turn.turnId) } returns emptyList()
         every { settingsStore.effectiveSettings } returns MutableStateFlow(Settings().toEffectiveSettingsSnapshot())

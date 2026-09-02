@@ -130,6 +130,53 @@ class TurnFinalizationTest {
     }
 
     @Test
+    fun `stale Child cleanup never finalizes a newer active turn`() = runTest {
+        val conversationId = Uuid.random()
+        val staleTurnId = Uuid.random()
+        val newerTurnId = Uuid.random()
+        val newerAssistant = UIMessage.assistant("newer output")
+        val base = Conversation.ofId(conversationId).copy(
+            messageNodes = listOf(MessageNode.of(UIMessage.user("task")), MessageNode.of(newerAssistant)),
+        ).toSnapshot()
+        val runtime = ConversationRuntime(
+            id = conversationId,
+            initial = base.copy(
+                activeTurn = ActiveTurnState(
+                    epoch = 9,
+                    turnId = newerTurnId,
+                    assistantMessageId = newerAssistant.id,
+                    messages = base.currentMessages(),
+                ),
+            ),
+            scope = this,
+            onIdle = {},
+        )
+        val repository = mockk<ConversationRepository>()
+        val coordinator = mockk<ConversationCommandCoordinator>()
+        coEvery { repository.getConversationHeader(conversationId) } returns mockk(relaxed = true)
+        coEvery { repository.getTurnExecution(staleTurnId.toString()) } returns TurnExecutionEntity(
+            turnId = staleTurnId.toString(),
+            conversationId = conversationId.toString(),
+            assistantMessageId = Uuid.random().toString(),
+            status = TurnExecutionStatus.CANCELLED,
+            reason = "superseded",
+            createdAt = 1,
+            updatedAt = 2,
+        )
+        coEvery { coordinator.load(conversationId) } returns runtime
+
+        TurnFinalization(
+            conversationRepository = repository,
+            runtimeRegistry = mockk(relaxed = true),
+            commandCoordinator = coordinator,
+            json = Json,
+        ).finalizeChild(conversationId, staleTurnId, "late_cleanup")
+
+        coVerify(exactly = 0) { coordinator.executeOrThrow(any(), any()) }
+        assertEquals(newerTurnId, runtime.snapshot.value.activeTurn?.turnId)
+    }
+
+    @Test
     fun `late cancellation never overwrites a completed turn`() = runTest {
         val conversationId = Uuid.random()
         val turnId = Uuid.random()

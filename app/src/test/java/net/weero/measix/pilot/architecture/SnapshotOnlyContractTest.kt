@@ -4,7 +4,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 
-/** Runtime exposes one authoritative state shape: ConversationSnapshot. */
+/** Runtime exposes one authoritative state shape: ConversationAggregateSnapshot. */
 class SnapshotOnlyContractTest {
 
     private val srcDir: File = File("src/main/java/net/weero/measix/pilot")
@@ -43,12 +43,47 @@ class SnapshotOnlyContractTest {
     }
 
     @Test
-    fun `ConversationSnapshot has no conversation projection getter`() {
+    fun `presentation and query ports do not expose aggregate model context`() {
+        val presentation = File(srcDir, "service/runtime/ConversationPresentation.kt").readText()
+        val query = File(srcDir, "service/ConversationQueryService.kt").readText()
+        val publicQueryShapes = query.substringAfter("data class ConversationSummary").substringBefore("class ConversationQueryService")
+        val conversation = File(srcDir, "data/model/Conversation.kt").readText()
+        val entry = File(srcDir, "data/model/ConversationModelContextEntry.kt").readText()
+        assertTrue(!conversation.contains("modelContextEntries"))
+        assertTrue(entry.contains("internal data class ConversationModelContextEntry"))
+        assertTrue(!presentation.contains("val modelContextEntries"))
+        assertTrue(!publicQueryShapes.contains("ConversationAggregateSnapshot"))
+        assertTrue(!publicQueryShapes.contains("ConversationModelContextEntry"))
+    }
+
+    @Test
+    fun `UI sources cannot import aggregate context or runtime owners`() {
+        val uiRoot = File(srcDir, "ui")
+        val forbidden = listOf(
+            "ConversationAggregateSnapshot",
+            "ConversationModelContextEntry",
+            "ConversationModelContextDAO",
+            "ConversationRepository",
+            "ConversationRuntimeRegistry",
+        )
+        val violations = uiRoot.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .flatMap { file ->
+                val imports = file.readLines().filter { it.startsWith("import ") }
+                forbidden.asSequence().filter { name -> imports.any { it.endsWith(".$name") } }
+                    .map { file.path to it }
+            }
+            .toList()
+        assertTrue("UI leaked internal conversation owners: $violations", violations.isEmpty())
+    }
+
+    @Test
+    fun `ConversationAggregateSnapshot has no conversation projection getter`() {
         val commandsFile = File(srcDir, "service/runtime/ConversationCommands.kt")
         assertTrue("ConversationCommands.kt 应存在", commandsFile.isFile)
         val text = commandsFile.readText()
         assertTrue(
-            "ConversationSnapshot 不得提供 Conversation 兼容投影 getter",
+            "ConversationAggregateSnapshot 不得提供 Conversation 兼容投影 getter",
             !text.contains("val conversation: Conversation"),
         )
     }

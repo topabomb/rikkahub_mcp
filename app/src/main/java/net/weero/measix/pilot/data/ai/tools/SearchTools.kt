@@ -10,10 +10,8 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.utils.JsonInstantPretty
-import net.weero.measix.pilot.utils.toLocalString
 import me.rerere.search.SearchService
 import me.rerere.search.SearchServiceOptions
-import java.time.LocalDate
 import kotlin.uuid.Uuid
 
 fun createSearchTools(settings: Settings): Set<Tool> {
@@ -28,7 +26,6 @@ fun createSearchTools(settings: Settings): Set<Tool> {
                 name = "search_web",
                 description = """
                     Search the web for current or specific facts. Use focused keywords; run multiple searches if needed.
-                    Today is ${LocalDate.now().toLocalString(true)}.
                     Cite with `[citation,domain](id)` after the sentence.
                     If images help, embed 2–4 from `images[]` at the start of the reply; never invent urls.
                     """.trimIndent(),

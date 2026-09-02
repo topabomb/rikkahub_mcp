@@ -7,25 +7,28 @@
 > [`multimodal-context-and-turn-durability.md`](multimodal-context-and-turn-durability.md)。
 
 相关实现：`GenerationLoop.generateInternal()`、`PlaceholderTransformer`、
-`TemplateTransformer`、`AssistantCatalogBuilder`、`AssistantToolFactory`、
+`TemplateTransformer`、`AssistantToolFactory`、
 `WorkspaceReminderTransformer`、`ToolArtifactReplayTransformer`、
 `TimeReminderTransformer`、`AttachmentProjectionTransformer`、
-`AttachmentInspectionTool`、`buildMemoryPrompt()`。
+`AttachmentInspectionTool`、`ConversationDisclosureSnapshotService`、
+`TurnRequestContextFactory`。
 
 ---
 
 ## 1. 一次请求里的上下文顺序
 
-`generateInternal()` 先拼 System，再跑 Input Transformer。Master 当前装配顺序为：
+`generateInternal()` 使用 START 时冻结的 `TurnRequestContext`（`FrozenTurnPromptInputs` +
+`FrozenToolDefinition`）装配请求；同一 Turn 的所有 step、审批与重试逐字复用。Master 当前装配顺序为：
 
 ```text
-System
+System（合成消息，标记 SyntheticMessageKind.SYSTEM_PROMPT）
   1. Assistant.systemPrompt
      （allowConversationSystemPrompt 且会话 customSystemPrompt 非空时，用会话提示覆盖）
-  2. **Memories** + JSON     ← assistant.enableMemory
-  3. 各 Tool.systemPrompt()  ← 按当前 step 的工具列表，空串不产生有效段落
+  2. 各 FrozenToolDefinition.systemPromptContribution ← START 装配时求值一次并冻结
+  3. 请求携带 Disclosure Snapshot 时追加固定 MODEL_RULES（ConversationDisclosureSnapshotService）
 
-随后 Input Transformer：
+Durable 消息（selected branch → replay-safe projection → messageLimit 窗口）
+随后 Input Transformer（只消费 FrozenTurnPromptInputs，不在 transform 时重读 Settings / 时钟）：
   TimeReminderTransformer
   PromptInjectionTransformer
   PlaceholderTransformer      ← 替换 {{char}} / {{description}} 等
@@ -35,14 +38,18 @@ System
   ToolArtifactReplayTransformer ← 先按 artifact metadata 重写历史 Tool Result 路径与 Image URL
   AttachmentProjectionTransformer ← 最后按本次模型能力投影附件：可读 IMAGE 时保留图片并前插
                                   input=native 事实；不可读时只保留 input=reference_only 事实
+Transformer 全部完成后：
+  ConversationContextPlanner.applyContextProjections 把 Disclosure Snapshot 作为 anchor USER
+  turn 的第一个 Text part 注入；不经过任何模板、占位符、提醒或附件投影改写。
 ```
 
 Target 复用相同模型可见语义，但 Transformer 装配由 `DelegationCoordinator` 独立负责；完整顺序见
 [`chat-generation-pipeline.md`](chat-generation-pipeline.md) 与
 [`sub-assistant-multimodal.md`](sub-assistant-multimodal.md)。
 
-工具 schema（name、description、parameters）随 `TextGenerationParams.tools` 另发，与 System 同屏。
-同一事实只应出现在一个落点：正在做那个动作的工具句或字段上，不在 Catalog 与工具句之间复读。
+工具 schema（name、description、parameters）是 START 时 `Tool.freeze()` 物化的
+`FrozenToolDefinition.parameters`，随 `TextGenerationParams.tools` 另发，与 System 同屏。
+同一事实只应出现在一个落点：正在做那个动作的工具句或字段上，不在 Snapshot 与工具句之间复读。
 
 ---
 
@@ -70,7 +77,9 @@ Target 复用相同模型可见语义，但 Transformer 装配由 `DelegationCoo
 | `{{device_info}}` | 品牌与型号 |
 
 已移除的 `{{cur_time}}` / `{{cur_datetime}}` 降级为 `{{cur_date}}` 的值。
-提示词页变量芯片来自 `DefaultPlaceholderProvider`。
+请求管线的占位符值由 `TurnRequestContextFactory` 在 START 时求值并冻结（`placeholderValues`），
+跨日 / 切换 Locale / 时区不改变本 Turn 的替换结果；`DefaultPlaceholderProvider` 只服务
+提示词页的变量芯片展示。
 
 ### 2.2 `TemplateTransformer`（Pebble `messageTemplate`）
 
@@ -87,42 +96,31 @@ Target 复用相同模型可见语义，但 Transformer 装配由 `DelegationCoo
 
 ---
 
-## 3. 动态注入
+## 3. 静态注入与 Disclosure Snapshot
 
-### 3.1 记忆 `buildMemoryPrompt()`
+### 3.1 记忆：Disclosure Snapshot 的 memory section
 
-每个 Provider step 从该 step 的 `GenerationMemoryContext` 追加。Master 读取当前 Assistant 的记忆开关、namespace 与内容；Target 只能在 run 开始已启用且 namespace 未改变时继续读取。Memory Tool 与提示词共用同一 context，执行前还会按捕获的 owner 重验写权限。
+动态 Memory System 注入已删除。Memory 内容的唯一披露路径是每次新 `START` 前由
+`ConversationDisclosureSnapshotService.captureCandidate()` 从固定 effective-settings 快照与一次
+`ORDER BY id ASC` 的有序 Memory 查询渲染的 canonical Snapshot；内容变化才随新 Assistant owner
+追加 entry（见 [`chat-generation-pipeline.md`](chat-generation-pipeline.md)）。memory section
+形状（`enabled` / `scope` / `header` / `rows`）由该 service 的 canonical renderer 唯一定义。
 
-```text
-**Memories**
-[{"id":1,"content":"..."}]
-```
+`memory_tool` 的执行仍是 live owner 语义：写入前按最新有效配置重验 owner 与写权限；
+Snapshot 中是否存在某条 Memory 不代表它仍可写，也不妨碍按真实 ID 操作新 Memory。
 
-JSON 由 `JsonInstantPretty` 编码。
+### 3.2 子助手：Disclosure Snapshot 的 sub_assistants section
 
-### 3.2 子助手 Catalog `buildCatalogPrompt()`
+`assistant_manage` / `assistant_call` 的动态 Catalog systemPrompt 已删除。可见子助手集合
+（`id` / `name` / `description`）作为 canonical Snapshot 的 `sub_assistants` section 披露；
+`mode` 由 caller 的 `AssistantManagement` / `AssistantDelegation` 开关决定，关闭时是固定
+`disabled` 形状。列表来自 `SubAssistantAccessPolicy.accessibleSubAssistants()`，排除 caller，
+保持 `Settings.assistants` 顺序。详细配置继续由 `assistant_inspect` 按需读取。
 
-`LocalToolOption.AssistantManagement` 或 `AssistantDelegation` 开启时注入一次：
+执行期不信任 Snapshot：三个 Assistant 工具都会从最新 Settings 与 `SubAssistantAccessPolicy`
+重算访问范围；本 Turn 内经 `assistant_manage` 成功创建的 Target 按 live policy 即可调用。
 
-- 两者都开：由 `assistant_manage.systemPrompt()` 注入，`assistant_call` 返回空串
-- 仅管理：`assistant_manage`
-- 仅委托：`assistant_call`
-
-三种 `CatalogMode` 前缀相同。列表来自 `SubAssistantAccessPolicy.accessibleSubAssistants()`，
-排除 caller，保持 `Settings.assistants` 顺序。`name` / `description` 中的 `<` `>` `&` 编成
-JSON Unicode escape。
-
-```text
-<sub_assistant_catalog>
-Sub-assistants (sub-agents).
-{"header":["id","name","description"],"rows":[["uuid","名称","路由描述"]]}
-</sub_assistant_catalog>
-```
-
-空列表仍是同一 `header` 与 `"rows":[]`。执行期不信任 Catalog，三个 Assistant 工具都会从最新
-Settings 重算访问范围。
-
-### 3.3 技能 `use_skill.systemPrompt()`
+### 3.3 技能 `use_skill` contribution
 
 `SkillFrontmatterParser` 使用 SnakeYAML `SafeConstructor` 和 loader limits（禁止重复键、限制 alias/nesting depth/collection size/code points）解析 `SKILL.md` frontmatter，返回 typed `SkillDocument(frontmatter: SkillFrontmatter, body: String)` 或 typed parse error。`SkillFrontmatter` 只含 `name`、`description`、`compatibility`；`allowedTools` 已删除（无执行消费者，保留会形成假权限协议）。
 
@@ -140,9 +138,10 @@ Settings 重算访问范围。
 </available_skills>
 ```
 
-### 3.4 TTS `text_to_speech.systemPrompt()`
+### 3.4 TTS `text_to_speech` contribution
 
-当前选中 TTS Provider 的 `TTSManager.getPromptGuidance()`；无指导时为空串。
+当前选中 TTS Provider 的 `TTSManager.getPromptGuidance()`；无指导时为空串。该值在 START 装配时
+求值一次并冻结为 `FrozenToolDefinition.systemPromptContribution`。
 
 ### 3.5 工作区 `WorkspaceReminderTransformer`
 
@@ -183,16 +182,17 @@ Settings 重算访问范围。
 ## 5. 工具描述与参数
 
 主会话的基础工具装配顺序见 `MasterTurnCoordinator` / `GenerationToolSetFactory`：搜索、Local Tools、最近会话、Workspace、技能、
-Assistant Tools、MCP；运行时 `inspect_attachments` 由 `GenerationToolSetFactory` 按 resolved model 与设置条件加入；记忆工具由 `GenerationLoop` 在每个 step 按当前记忆状态加入。
+Assistant Tools、MCP；运行时 `inspect_attachments` 由 `GenerationToolSetFactory` 按 START 解析的 model 与设置条件加入；Memory Tools
+同样由 Master/Target owner 在 START 前按该 Assistant 的固定 namespace 装配，不进入 System。
 主/子 run 必须显式传入实际 resolved model；`assistant_inspect` 显式解析目标助手的配置模型。
 不允许用缺省或可空模型开启更宽的工具集。`AssistantToolFactory` 的委派与工具集依赖均为必填构造参数。
-Target Run 的动态集合由 `GenerationToolSetFactory` 重建，并永久过滤 `assistant_manage`、
-`assistant_inspect`、`assistant_call` 以及历史名 `assistant_memory_list`，
-保留并桥接 `ask_user`。`generate_image` 不再永久过滤：Target 已开启 `TextToImage` 且默认文生图模型可解析时才会注册。Target 启动时额外捕获一次实际工具名集合；后续 step 可按最新设置重建或撤销其中的工具，但不能引入启动时不存在的名字。附件识别模型不单独冻结。
+Target Run 在 START 前只装配一次工具集合，并永久过滤 `assistant_manage`、`assistant_inspect`、`assistant_call` 以及历史名
+`assistant_memory_list`，保留并桥接 `ask_user`。`generate_image` 不再永久过滤：Target 已开启 `TextToImage` 且默认文生图模型可解析时才会注册。
 
-每个 Provider step 只构建一次不可变 `toolsByName`，在发请求前拒绝空名和重名；该索引同时服务 schema、审批与执行。
-Master/Target 都在下一 step 读取当前有效 Settings，Target 仍应用 run 开始能力上限。配置撤销后，待审批、恢复或历史
-ToolCall 不会复活旧工具，而是在审批前返回 `tool_not_available` 并提交 `FAILED` 结果。
+`freezeToolSet` 在 START 前拒绝空名和重名，并从同一有序列表物化 Provider 唯一可见的 `FrozenToolDefinition` 与执行专用
+`ToolExecutionBinding` 索引。`Tool.freeze()` 在唯一求值点立即将 parameters JSON serialize→parse，脱离工具可能持有的 mutable backing map；`systemPromptContribution` 同时按值捕获。Master/Target 的后续 Provider step、审批 continuation 与 `ask_user` continuation 都复用同一对象；
+配置变化只影响下一次新 START。工具执行前仍由 owner 重验权限、文件/Workspace/MCP 资源、Memory namespace 与远端状态，撤销时
+live fail-closed，但不得借此改写当前 Turn 的工具名称、描述、Schema 或顺序。
 所有工具先校验合法 JSON object，再调用自身纯参数校验；空参数缓冲按无参 `{}` 解释，非空损坏 JSON 不当成空 object，也不先询问用户。
 纯参数校验只返回领域错误，`ToolArgumentsException` 保留其字段并补齐 `error` 与 `type:"error"`。工具撤销或审批不可用
 同样带标准错误标记，使历史重读仍显示 FAILED；未执行的拒绝不创建 `tool_execution` 记录或伪造 STARTED。
@@ -204,8 +204,9 @@ ToolCall 不会复活旧工具，而是在审批前返回 `tool_not_available` �
 
 启用：`shouldUseExternalWebSearch(assistant, model)`。助手打开外挂搜索，且当前模型未带 `BuiltInTools.Search`。
 
+描述同样是常量文本，不再内嵌当前日期（与 `memory_tool` 同一条缓存约束）。
+
 > Search the web for current or specific facts. Use focused keywords; run multiple searches if needed.
-> Today is \<local date\>.
 > Cite with `[citation,domain](id)` after the sentence.
 > If images help, embed 2–4 from `images[]` at the start of the reply; never invent urls.
 
@@ -236,7 +237,7 @@ ToolCall 不会复活旧工具，而是在审批前返回 `tool_not_available` �
 > Generate one image from a text prompt, show it to the user, and return a local path that follow-up tools can use.
 > Failures return a stable reason and a short detail when available.
 
-`Tool.systemPrompt()` 只在实际注册时注入当前非敏感配置，字段由
+`text_to_image` 的 `systemPromptContribution` 只在 START 注册时注入当前非敏感配置，字段由
 `ImageGenerationModelDescriptor` 统一生成：`provider_type`、`provider_name`、`model_id`、
 `model_name`。不含 API key、base URL、custom headers/body，也不声明 Chat 模型是否具有视觉能力。
 图片是否回传给下一 step 由请求级附件投影和 Provider 适配共同决定。
@@ -440,7 +441,7 @@ read：`{"text":"..."}`。write：`{"success":true}`。
 
 成功结果：`{"success":true,"event_id":N,"start":"...","end":"..."}`。`start`/`end` 是解析后的规范时间。
 
-创建工具在每个 step 装配时捕获设备时区，参数校验与执行共用该快照。必填项、字段类型和时间范围在审批前校验；
+创建工具在 START 装配时捕获设备时区，同一 Turn 的参数校验与执行共用该快照。必填项、字段类型和时间范围在审批前校验；
 系统权限检查、日历选择和实际插入仍属于执行阶段，参数错误不会触发授权或系统权限访问。
 
 ### `eval_javascript`
@@ -458,11 +459,15 @@ read：`{"text":"..."}`。write：`{"success":true}`。
 
 启用：`assistant.enableMemory`。由 `GenerationLoop` 按 owner namespace 构建。
 
+描述是常量文本：工具名称、描述、Schema 与列表排序共同构成 Provider 请求的可缓存前缀，
+描述里没有当前日期（原先的 `Today is ...` 会让整条前缀每天被击穿一次）。
+当前时间只由 `TimeReminderTransformer` 与 `{{cur_date}}` 负责。
+Memory 行的顺序由 DAO 的 `ORDER BY id ASC` 固定，读取路径不再依赖 SQLite 的默认返回次序。
+
 > Store long-term notes across conversations (create/edit/delete).
 > Merge similar records; prefer edit over create.
 > Do not store sensitive personal attributes.
 > Do not show memory content unless the user asks.
-> Today is \<local date\>.
 
 | 参数 | description |
 |------|-------------|

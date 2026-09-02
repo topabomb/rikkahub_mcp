@@ -41,8 +41,7 @@ class LocalTools(
             tools.add(clipboardTool)
         }
         if (options.contains(LocalToolOption.Tts)) {
-            // 每轮生成创建一个 TtsToolPlaybackContext，
-            // toolProvider 在不同 LLM step 重建 Tool 时复用这个 context。
+            // 每个 Turn 捕获一个 TtsToolPlaybackContext；冻结后的执行 binding 在全部 step 复用。
             tools.add(buildTextToSpeechTool(eventBus, ttsManager, settingsStore, ttsPlaybackContext))
         }
         if (options.contains(LocalToolOption.AskUser)) {

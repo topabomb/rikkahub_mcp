@@ -3,6 +3,7 @@ package me.rerere.ai.provider
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import me.rerere.ai.core.FrozenToolDefinition
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
@@ -128,7 +129,8 @@ data class TextGenerationParams(
     val temperature: Float? = null,
     val topP: Float? = null,
     val maxTokens: Int? = null,
-    val tools: List<Tool> = emptyList(),
+    /** Provider 只能看到 Turn 装配时冻结的 wire 定义（§7.6）；可执行 Tool 永不进入请求。 */
+    val tools: List<FrozenToolDefinition> = emptyList(),
     val reasoningLevel: ReasoningLevel = ReasoningLevel.OFF,
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBody: List<CustomBody> = emptyList(),

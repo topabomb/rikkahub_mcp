@@ -4,19 +4,24 @@ import kotlinx.serialization.json.Json
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.subassistant.cloneLineagePrefix
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
-import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
+import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import kotlin.uuid.Uuid
 
+internal data class TruncatedChildTree(
+    val conversationId: Uuid,
+    val nodes: List<MessageNode>,
+)
+
 internal data class SubAssistantRetentionPlan(
-    val truncatedChildren: List<Conversation>,
-    val deletedChildren: List<Conversation>,
+    val truncatedChildren: List<TruncatedChildTree>,
+    val deletedChildIds: List<Uuid>,
 )
 
 internal fun planSubAssistantRetention(
     masterId: Uuid,
     masterNodes: List<MessageNode>,
-    children: Map<Uuid, Conversation>,
+    children: Map<Uuid, ConversationAggregateSnapshot>,
     json: Json,
 ): SubAssistantRetentionPlan {
     val metadata = masterNodes
@@ -29,25 +34,25 @@ internal fun planSubAssistantRetention(
     val tasksByChild = metadata
         .filter { it.runId.isNotBlank() && runCounts[it.runId] == 1 }
         .mapNotNull { call ->
-            val child = resolveValidChildLineage(masterId, call, children) ?: return@mapNotNull null
+            val child = resolveValidChildSnapshotLineage(masterId, call, children) ?: return@mapNotNull null
             val taskId = call.childTaskNodeId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
                 ?: return@mapNotNull null
-            child.id to taskId
+            child.conversationId to taskId
         }
         .groupBy({ it.first }, { it.second })
 
     val retained = tasksByChild.mapNotNull { (childId, taskIds) ->
         val child = children[childId] ?: return@mapNotNull null
-        val longestPrefix = taskIds.mapNotNull { cloneLineagePrefix(child, it) }
+        val longestPrefix = taskIds.mapNotNull { cloneLineagePrefix(child.nodes, it) }
             .maxByOrNull { it.size }
             ?: return@mapNotNull null
-        child.copy(messageNodes = longestPrefix)
+        TruncatedChildTree(child.conversationId, longestPrefix)
     }
-    val retainedIds = retained.mapTo(mutableSetOf()) { it.id }
+    val retainedIds = retained.mapTo(mutableSetOf()) { it.conversationId }
     return SubAssistantRetentionPlan(
         truncatedChildren = retained.filter { retainedChild ->
-            retainedChild.messageNodes != children[retainedChild.id]?.messageNodes
+            retainedChild.nodes != children[retainedChild.conversationId]?.nodes
         },
-        deletedChildren = children.filterKeys { it !in retainedIds }.values.toList(),
+        deletedChildIds = children.keys.filter { it !in retainedIds },
     )
 }

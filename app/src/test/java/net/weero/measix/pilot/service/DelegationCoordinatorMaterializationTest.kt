@@ -7,6 +7,8 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.slot
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
@@ -21,6 +23,7 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.ai.GenerationLoop
+import net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot
 import net.weero.measix.pilot.data.ai.attachments.AttachmentFailureReasons
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolveResult
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
@@ -45,6 +48,7 @@ import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.data.repository.WorkspaceRepository
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
+import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.DelegationCoordinator
@@ -116,19 +120,15 @@ class DelegationCoordinatorMaterializationTest {
     }
 
     @Test
-    fun `publication failure after child link commit retains child and linked terminal metadata`() = runTest {
+    fun `publication failure after child link commit retains linked child`() = runTest {
         val owned = mockk<OwnedArtifact>(relaxed = true)
         every { owned.uri.toString() } returns "file:///tmp/copied.png"
         val harness = harness(AttachmentResolveResult.Success(emptyList()), cloneArtifact = owned)
-        val created = slot<Conversation>()
-        coEvery { harness.commandCoordinator.create(capture(created)) } returns mockk<ConversationRuntime>()
         var linkCommitted = false
         coEvery { harness.artifactStore.publishAllUnpublished(listOf(owned)) } coAnswers {
             assertTrue(linkCommitted)
             error("publication failed")
         }
-        val terminalMetadata = slot<SubAssistantCallMetadata>()
-        coEvery { harness.turnFinalization.finalizeSubAssistantRun(any(), any(), any(), capture(terminalMetadata)) } just Runs
         val patches = mutableListOf<JsonObject>()
         val result = harness.coordinator.executeCall(
             callerAssistantId = callerId, masterConversationId = masterId, targetAssistantId = targetId,
@@ -143,13 +143,56 @@ class DelegationCoordinatorMaterializationTest {
             attachments = emptyList(),
         )
 
-        assertTrue(result.filterIsInstance<UIMessagePart.Text>().single().text.contains("failed"))
+        val failureText = result.filterIsInstance<UIMessagePart.Text>().single().text
+        assertTrue(failureText, failureText.contains("publication failed"))
         assertEquals(1, patches.size)
-        assertEquals(created.captured.id.toString(), terminalMetadata.captured.childConversationId)
-        assertEquals(SubAssistantCallState.FAILED, terminalMetadata.captured.state)
+        coVerify(exactly = 1) { harness.artifactStore.copyFilePreservingOrigin(any(), any(), any(), any()) }
         coVerify(exactly = 1) { harness.artifactStore.publishAllUnpublished(listOf(owned)) }
         coVerify(exactly = 0) { harness.commandCoordinator.deleteOrThrow(any()) }
         coVerify(exactly = 0) { harness.artifactStore.discardUnpublished(any()) }
+    }
+
+    @Test
+    fun `revocation while Child preparation is suspended prevents START admission`() = runTest {
+        val preparationEntered = CompletableDeferred<Unit>()
+        val resumePreparation = CompletableDeferred<Unit>()
+        val harness = harness(
+            resolveResult = AttachmentResolveResult.Success(emptyList()),
+            preparationGate = preparationEntered to resumePreparation,
+        )
+        val childRuntime = mockk<ConversationRuntime>(relaxed = true)
+        val created = slot<Conversation>()
+        coEvery { harness.commandCoordinator.create(capture(created)) } coAnswers {
+            every { childRuntime.id } returns created.captured.id
+            every { childRuntime.snapshot } returns MutableStateFlow(created.captured.toSnapshot())
+            childRuntime
+        }
+        coEvery { harness.commandCoordinator.load(any()) } returns childRuntime
+
+        val execution = async {
+            harness.coordinator.executeCall(
+                callerAssistantId = callerId,
+                masterConversationId = masterId,
+                targetAssistantId = targetId,
+                task = "prepare then revoke",
+                execContext = executionContext(),
+                attachments = emptyList(),
+            )
+        }
+        preparationEntered.await()
+        val current = harness.settingsFlow.value.settings
+        val caller = current.assistants.single { it.id == callerId }
+        harness.settingsFlow.value = current.copy(
+            assistants = current.assistants.map {
+                if (it.id == callerId) caller.copy(allowedSubAssistantIds = emptySet()) else it
+            },
+        ).toEffectiveSettingsSnapshot()
+        resumePreparation.complete(Unit)
+
+        val result = execution.await()
+        assertTrue(result.filterIsInstance<UIMessagePart.Text>().single().text.contains("target_access_revoked"))
+        coVerify(exactly = 0) { childRuntime.bindTurnRequestContext(any(), any(), any()) }
+        coVerify(exactly = 0) { harness.commandCoordinator.startTurn(any(), any()) }
     }
 
     @Test
@@ -185,7 +228,11 @@ class DelegationCoordinatorMaterializationTest {
         registerUnpublishedResource = { },
     )
 
-    private fun harness(resolveResult: AttachmentResolveResult, cloneArtifact: OwnedArtifact? = null): Harness {
+    private fun harness(
+        resolveResult: AttachmentResolveResult,
+        cloneArtifact: OwnedArtifact? = null,
+        preparationGate: Pair<CompletableDeferred<Unit>, CompletableDeferred<Unit>>? = null,
+    ): Harness {
         val modelId = Uuid.random()
         val model = Model(
             id = modelId,
@@ -206,7 +253,7 @@ class DelegationCoordinatorMaterializationTest {
             chatModelId = modelId,
         )
         val settingsStore = mockk<SettingsStore>()
-        every { settingsStore.effectiveSettings } returns MutableStateFlow(
+        val settingsFlow = MutableStateFlow(
             Settings(
                 assistants = listOf(caller, target),
                 assistantId = callerId,
@@ -214,6 +261,7 @@ class DelegationCoordinatorMaterializationTest {
                 providers = listOf(ProviderSetting.OpenAI(models = listOf(model))),
             ).toEffectiveSettingsSnapshot(),
         )
+        every { settingsStore.effectiveSettings } returns settingsFlow
         val resolver = mockk<AttachmentResolver>()
         val readHeld = java.util.concurrent.atomic.AtomicBoolean(false)
         coEvery { resolver.withImages<Any?>(any(), any()) } coAnswers {
@@ -257,22 +305,32 @@ class DelegationCoordinatorMaterializationTest {
             every { runtime.snapshot } returns MutableStateFlow(master.toSnapshot())
             every { runtimeRegistry.findRuntime(masterId) } returns runtime
             coEvery { conversationRepo.getConversationById(source.id) } returns source
+            coEvery { conversationRepo.getConversationSnapshotById(source.id) } returns source.toSnapshot()
+            coEvery { commandCoordinator.createSnapshot(any()) } returns mockk<ConversationRuntime>()
             val originalRef = LocalArtifactRef(relativePath = "upload/source.png", mimeType = "image/png")
             coEvery { artifactStore.resolveManagedReference(any()) } returns originalRef
             every { artifactStore.file(originalRef) } returns sourceFile
             coEvery { artifactStore.copyFilePreservingOrigin(any(), any(), any(), any()) } returns cloneArtifact
         }
         val turnFinalization = mockk<TurnFinalization>(relaxed = true)
+        val toolSetFactory = mockk<GenerationToolSetFactory>(relaxed = true)
+        if (preparationGate != null) {
+            coEvery { toolSetFactory.prepareMcpCapabilities(any()) } coAnswers {
+                preparationGate.first.complete(Unit)
+                preparationGate.second.await()
+                TurnMcpCapabilitySnapshot.EMPTY
+            }
+        }
         val coordinator = DelegationCoordinator(
             generationLoop = mockk<GenerationLoop>(relaxed = true),
             conversationRepo = conversationRepo,
             runtimeRegistry = runtimeRegistry,
             commandCoordinator = commandCoordinator,
-            toolSetFactory = mockk<GenerationToolSetFactory>(relaxed = true),
+            toolSetFactory = toolSetFactory,
             settingsStore = settingsStore,
             memoryRepository = mockk<MemoryRepository>(relaxed = true),
             templateTransformer = mockk<TemplateTransformer>(relaxed = true),
-            workspaceRepository = mockk<WorkspaceRepository>(relaxed = true),
+            turnRequestContextFactory = mockk(relaxed = true),
             artifactStore = artifactStore,
             toolArtifactRewriter = mockk<ToolArtifactRewriter>(relaxed = true),
             json = JsonInstant,
@@ -281,7 +339,7 @@ class DelegationCoordinatorMaterializationTest {
             turnFinalization = turnFinalization,
             runGate = SubAssistantRunGate(),
         )
-        return Harness(coordinator, commandCoordinator, artifactStore, turnFinalization, readHeld)
+        return Harness(coordinator, commandCoordinator, artifactStore, turnFinalization, readHeld, settingsFlow)
     }
 
     private data class Harness(
@@ -290,5 +348,6 @@ class DelegationCoordinatorMaterializationTest {
         val artifactStore: ArtifactStore,
         val turnFinalization: TurnFinalization,
         val readHeld: java.util.concurrent.atomic.AtomicBoolean,
+        val settingsFlow: MutableStateFlow<net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot>,
     )
 }

@@ -40,8 +40,9 @@ import net.weero.measix.pilot.service.ConversationViewLease
 import net.weero.measix.pilot.service.ArtifactUseCase
 import net.weero.measix.pilot.service.ArtifactDraftScope
 import net.weero.measix.pilot.service.FavoriteService
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
+import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.ToolUserDecision
 import net.weero.measix.pilot.ui.components.ai.SearchMode
 import net.weero.measix.pilot.ui.components.ai.searchModeEnablesBuiltIn
@@ -76,7 +77,7 @@ class ChatVM(
         .stateIn(viewModelScope, SharingStarted.Eagerly, ConversationReadState.Loading)
 
     // 唯一内部事实流（nodes + activeTurn + header）；仅 Ready 状态产生 snapshot 投影。
-    val snapshot: StateFlow<ConversationSnapshot?> = conversationState
+    val snapshot: StateFlow<ConversationPresentationSnapshot?> = conversationState
         .map { state -> (state as? ConversationReadState.Ready)?.snapshot }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
@@ -84,7 +85,7 @@ class ChatVM(
         .observeNodeIds(_conversationId)
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
 
-    fun currentSnapshot(): ConversationSnapshot = requireNotNull(snapshot.value)
+    fun currentSnapshot(): ConversationPresentationSnapshot = requireNotNull(snapshot.value)
 
     // 聊天输入状态 - 保存在 ViewModel 中避免 TransactionTooLargeException
     val inputState = ChatInputState()
@@ -269,7 +270,7 @@ class ChatVM(
     fun handleCompressContext(additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int): Job {
         return viewModelScope.launch {
             conversationApplicationService.compress(
-                currentSnapshot(),
+                _conversationId,
                 additionalPrompt,
                 targetTokens,
                 keepRecentMessages

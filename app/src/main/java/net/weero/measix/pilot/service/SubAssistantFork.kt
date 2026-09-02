@@ -6,13 +6,14 @@ import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.cloneLineagePrefix
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
-import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
+import net.weero.measix.pilot.data.model.ConversationModelContextApplicability
 import net.weero.measix.pilot.data.model.MessageNode
 import kotlin.uuid.Uuid
 
 internal data class ForkedSubAssistantTree(
     val masterNodes: List<MessageNode>,
-    val children: List<Conversation>,
+    val children: List<ConversationAggregateSnapshot>,
 )
 
 private data class ForkOccurrence(
@@ -23,7 +24,7 @@ private data class ForkOccurrence(
 )
 
 private data class ForkedChild(
-    val conversation: Conversation,
+    val snapshot: ConversationAggregateSnapshot,
     val messageIdMap: Map<Uuid, Uuid>,
 )
 
@@ -31,7 +32,7 @@ internal fun forkSubAssistantTree(
     sourceMasterId: Uuid,
     copiedMasterNodes: List<MessageNode>,
     newMasterId: Uuid,
-    sourceChildren: Map<Uuid, Conversation>,
+    sourceChildren: Map<Uuid, ConversationAggregateSnapshot>,
     json: Json,
 ): ForkedSubAssistantTree {
     val occurrences = buildList {
@@ -52,44 +53,60 @@ internal fun forkSubAssistantTree(
         if (occurrence.metadata.runId.isBlank() || oldRunCounts[occurrence.metadata.runId] != 1) {
             null
         } else {
-            resolveValidChildLineage(sourceMasterId, occurrence.metadata, sourceChildren)
+            resolveValidChildSnapshotLineage(sourceMasterId, occurrence.metadata, sourceChildren)
         }
     }
     val forkedChildren = validChildByOccurrence
         .filterValues { it != null }
         .entries
-        .groupBy { it.value!!.id }
+        .groupBy { it.value!!.conversationId }
         .mapNotNull { (sourceChildId, entries) ->
             val sourceChild = sourceChildren[sourceChildId] ?: return@mapNotNull null
             val longestPrefix = entries.mapNotNull { entry ->
                 val taskId = entry.key.metadata.childTaskNodeId
                     ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
                     ?: return@mapNotNull null
-                cloneLineagePrefix(sourceChild, taskId)
+                cloneLineagePrefix(sourceChild.nodes, taskId)
             }.maxByOrNull { it.size } ?: return@mapNotNull null
 
             val messageIdMap = longestPrefix
                 .flatMap { it.messages }
                 .associate { it.id to Uuid.random() }
+            // Child clone 同时重建 node id 与 message id：context entries 必须经唯一的
+            // node/message 映射重定向，并按统一因果谓词过滤（权威方案 §14.1）。
+            val nodeIdMap = mutableMapOf<Uuid, Uuid>()
             val clonedNodes = longestPrefix.map { node ->
+                val newNodeId = Uuid.random()
+                nodeIdMap[node.id] = newNodeId
                 node.copy(
-                    id = Uuid.random(),
+                    id = newNodeId,
                     messages = node.messages.map { message ->
                         message.copy(id = messageIdMap.getValue(message.id))
                     },
                 )
             }
+            val newChildId = Uuid.random()
             sourceChildId to ForkedChild(
-                conversation = sourceChild.copy(
-                    id = Uuid.random(),
-                    messageNodes = clonedNodes,
-                    parentConversationId = newMasterId,
-                    isPinned = false,
-                    folderId = null,
-                    chatSuggestions = emptyList(),
-                    customSystemPrompt = null,
-                    modeInjectionIds = emptySet(),
-                    workspaceCwd = null,
+                snapshot = sourceChild.copy(
+                    conversationId = newChildId,
+                    header = sourceChild.header.copy(
+                        id = newChildId,
+                        parentConversationId = newMasterId,
+                        isPinned = false,
+                        folderId = null,
+                        chatSuggestions = emptyList(),
+                        customSystemPrompt = null,
+                        modeInjectionIds = emptySet(),
+                        workspaceCwd = null,
+                    ),
+                    nodes = clonedNodes,
+                    activeTurn = null,
+                    modelContextEntries = ConversationModelContextApplicability.remapForClone(
+                        entries = sourceChild.modelContextEntries,
+                        nodeIdMap = nodeIdMap,
+                        messageIdMap = messageIdMap,
+                        clonedBranchMessages = clonedNodes.map { it.currentMessage },
+                    ),
                 ),
                 messageIdMap = messageIdMap,
             )
@@ -102,12 +119,12 @@ internal fun forkSubAssistantTree(
     val replacements = occurrences.associate { occurrence ->
         val old = occurrence.metadata
         val sourceChild = validChildByOccurrence[occurrence]
-        val forkedChild = sourceChild?.let { forkedChildren[it.id] }
+        val forkedChild = sourceChild?.let { forkedChildren[it.conversationId] }
         val oldTaskId = old.childTaskNodeId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
         val updated = old.copy(
             runId = newRunIds.getValue(occurrence),
             previousRunId = old.previousRunId?.let(uniqueOldRunMap::get),
-            childConversationId = forkedChild?.conversation?.id?.toString(),
+            childConversationId = forkedChild?.snapshot?.conversationId?.toString(),
             childTaskNodeId = oldTaskId?.let { forkedChild?.messageIdMap?.get(it) }?.toString(),
         )
         Triple(occurrence.nodeIndex, occurrence.messageIndex, occurrence.partIndex) to updated
@@ -130,6 +147,6 @@ internal fun forkSubAssistantTree(
     }
     return ForkedSubAssistantTree(
         masterNodes = remappedNodes,
-        children = forkedChildren.values.map { it.conversation },
+        children = forkedChildren.values.map { it.snapshot },
     )
 }

@@ -12,7 +12,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolArgumentsException
 import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolCallLocator
@@ -49,6 +48,18 @@ enum class ToolInteractionKind {
     APPROVAL,
     USER_INPUT,
 }
+
+/**
+ * 一个已经挂起的用户交互及其在 owning 消息中的稳定地址。
+ *
+ * 由 [ToolCallRuntime.prepareBatch] 在判定挂起的那一刻产出：那时手里同时有 ordinal 与种类，
+ * 不需要任何下游消费者回消息里扫描重建。
+ */
+@Serializable
+data class PendingInteraction(
+    val locator: ToolCallLocator,
+    val kind: ToolInteractionKind,
+)
 
 /** A Provider tool call together with its position inside the owning Assistant message. */
 internal data class LocatedToolCall(
@@ -93,7 +104,7 @@ internal data class PreparedToolCall(
     val locator: ToolCallLocator,
     val executionId: String,
     val source: UIMessagePart.Tool,
-    val definition: Tool,
+    val definition: ToolExecutionBinding,
     val arguments: JsonObject,
     val interaction: ToolInteractionRequirement,
     val approvedByUser: Boolean,
@@ -106,11 +117,14 @@ internal data class ToolBatchPreparation(
     val replacements: Map<Int, UIMessagePart.Tool>,
     /** Rejections that already carry a Provider replay result and need a FAILED fact. */
     val immediateResults: List<ToolResultEvent>,
-    /** Non-empty means the whole batch waits; no executable call runs before all are decided. */
-    val pendingInteractions: Set<ToolInteractionKind>,
+    /** 已挂起的交互，按 ordinal 升序；非空表示整批等待，所有调用决策完成前不执行任何可执行调用。 */
+    val pending: List<PendingInteraction>,
     /** Remaining unresolved calls in message ordinal order. */
     val resolvedCalls: List<ResolvedToolCall>,
-)
+) {
+    /** 本批等待的交互种类（去重，保持首次出现顺序），供只需分支判断的调用方使用。 */
+    val kinds: Set<ToolInteractionKind> get() = pending.mapTo(linkedSetOf()) { it.kind }
+}
 
 /**
  * Capabilities the generation owner hands to one execution. The Runtime assembles them into a
@@ -142,26 +156,15 @@ internal class ToolRuntimeInfrastructureException(cause: Throwable) : RuntimeExc
 internal class ToolCallRuntime(
     private val json: Json,
 ) {
-    /** 构造确定性的 step 工具索引；请求前拒绝空名和重复名。 */
-    fun buildIndex(tools: List<Tool>): Map<String, Tool> {
-        val map = LinkedHashMap<String, Tool>(tools.size)
-        for (tool in tools) {
-            require(tool.name.isNotBlank()) { "Tool name must not be blank" }
-            require(tool.name !in map) { "Duplicate tool name: ${tool.name}" }
-            map[tool.name] = tool
-        }
-        return map.toMap()
-    }
-
     fun prepareBatch(
         messageId: Uuid,
         calls: List<LocatedToolCall>,
-        toolIndex: Map<String, Tool>,
+        toolIndex: Map<String, ToolExecutionBinding>,
         availability: ToolInteractionAvailability,
     ): ToolBatchPreparation {
         val replacements = LinkedHashMap<Int, UIMessagePart.Tool>()
         val immediateResults = mutableListOf<ToolResultEvent>()
-        val pendingInteractions = linkedSetOf<ToolInteractionKind>()
+        val pending = mutableListOf<PendingInteraction>()
         val resolvedCalls = mutableListOf<ResolvedToolCall>()
         val currentBatchOrdinal = calls.minOfOrNull(LocatedToolCall::ordinal) ?: 0
 
@@ -334,7 +337,10 @@ internal class ToolCallRuntime(
                             wasPending = true,
                         )
                     } else {
-                        pendingInteractions += currentKind
+                        pending += PendingInteraction(
+                            locator = ToolCallLocator(messageId, call.ordinal),
+                            kind = currentKind,
+                        )
                     }
                 }
 
@@ -352,7 +358,10 @@ internal class ToolCallRuntime(
 
                     availability.allows(requirement) -> {
                         val kind = requireNotNull(pendingKind)
-                        pendingInteractions += kind
+                        pending += PendingInteraction(
+                            locator = ToolCallLocator(messageId, call.ordinal),
+                            kind = kind,
+                        )
                         replacements[call.ordinal] = tool.copy(
                             approvalState = ToolApprovalState.Pending,
                             metadata = ToolRuntimeMetadata.withInteraction(
@@ -417,7 +426,7 @@ internal class ToolCallRuntime(
         return ToolBatchPreparation(
             replacements = replacements,
             immediateResults = immediateResults,
-            pendingInteractions = pendingInteractions,
+            pending = pending,
             resolvedCalls = resolvedCalls,
         )
     }
@@ -426,7 +435,7 @@ internal class ToolCallRuntime(
         messageId: Uuid,
         call: LocatedToolCall,
         tool: UIMessagePart.Tool,
-        definition: Tool,
+        definition: ToolExecutionBinding,
         args: JsonObject,
         requirement: ToolInteractionRequirement,
         approvedByUser: Boolean,
@@ -483,7 +492,7 @@ internal class ToolCallRuntime(
         )
         return try {
             val output = ensureProviderReplayResult(
-                call.definition.executeWithContext(context, call.arguments),
+                call.definition.execute(context, call.arguments),
                 emptyStatus = EmptyToolResultStatus.COMPLETED,
             )
             ToolCallOutcome(

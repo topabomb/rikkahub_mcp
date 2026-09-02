@@ -139,6 +139,7 @@ modelcontextprotocol-kotlin-sdk = { module = "io.modelcontextprotocol:kotlin-sdk
 pebble = { module = "io.pebbletemplates:pebble", version.ref = "pebble" }
 diffutils = { module = "io.github.java-diff-utils:java-diff-utils", version.ref = "diffutils" }
 mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
+mockk-android = { module = "io.mockk:mockk-android", version.ref = "mockk" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines-test" }
 androidx-browser = { group = "androidx.browser", name = "browser", version.ref = "browser" }
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }

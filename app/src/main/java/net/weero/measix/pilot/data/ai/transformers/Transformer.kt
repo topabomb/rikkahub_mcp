@@ -5,15 +5,20 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.core.ToolResourceLease
 import me.rerere.ai.ui.UIMessage
-import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.data.ai.DurableMessageLocator
+import net.weero.measix.pilot.data.ai.RequestMessageOrigin
+import net.weero.measix.pilot.data.ai.SyntheticMessageKind
+import net.weero.measix.pilot.service.runtime.FrozenTurnPromptInputs
+import net.weero.measix.pilot.service.runtime.ResolvedAssistantRequest
 import kotlin.uuid.Uuid
 
 /**
- * 单次请求内"本次请求自己合成"的消息身份集合。
+ * 单次请求内每条消息的唯一来源登记表（权威方案 §8.1）。
  *
  * System、时间提醒、模式注入与 Workspace 提醒都是管线为本次请求生成或改写的内容，
- * 它们不能再被用户的 messageTemplate 二次包裹。
+ * 它们不能再被用户的 messageTemplate 二次包裹；model-context 注入则只允许落在
+ * Durable USER 消息上。来源必须在内容出现时显式登记：进入 transformers 前由 Planner
+ * 登记 selected durable message ID → locator，注入型 transformer 登记 Synthetic(kind)。
  *
  * 这个事实刻意**不进入** [UIMessage]：UIMessage 是持久化、Provider 与 UI 共用的模型，
  * 任何 `isSynthetic` 字段都会在 copy、反序列化、fork 与 replay 之后依赖偶然的对象路径，
@@ -21,26 +26,34 @@ import kotlin.uuid.Uuid
  * 不序列化、不跨请求缓存、不是能力或状态源。
  */
 class RequestMessageOriginTracker {
-    private val syntheticIds = mutableSetOf<Uuid>()
+    private val origins = mutableMapOf<Uuid, RequestMessageOrigin>()
 
-    fun markSynthetic(messageId: Uuid) {
-        syntheticIds += messageId
+    /** transformers 前登记 selected durable 消息的精确位置。 */
+    fun markDurable(messageId: Uuid, locator: DurableMessageLocator) {
+        origins[messageId] = RequestMessageOrigin.Durable(locator)
     }
 
-    fun markSynthetic(message: UIMessage) {
-        syntheticIds += message.id
+    fun markSynthetic(messageId: Uuid, kind: SyntheticMessageKind) {
+        origins[messageId] = RequestMessageOrigin.Synthetic(kind)
+    }
+
+    fun markSynthetic(message: UIMessage, kind: SyntheticMessageKind) {
+        markSynthetic(message.id, kind)
     }
 
     fun isSynthetic(message: UIMessage): Boolean = isSynthetic(message.id)
 
-    fun isSynthetic(messageId: Uuid): Boolean = messageId in syntheticIds
+    fun isSynthetic(messageId: Uuid): Boolean = origins[messageId] is RequestMessageOrigin.Synthetic
+
+    /** transformers 完成后冻结的来源表；只读，不作为可变状态暴露。 */
+    fun frozenOrigins(): Map<Uuid, RequestMessageOrigin> = origins.toMap()
 
     /** 标记 [source] 中不存在于 [before] 的新增消息，供"注入型" transformer 复用。 */
-    fun markNewMessages(before: List<UIMessage>, source: List<UIMessage>) {
+    fun markNewMessages(before: List<UIMessage>, source: List<UIMessage>, kind: SyntheticMessageKind) {
         if (before.size == source.size && before === source) return
         val knownIds = before.mapTo(HashSet(before.size)) { it.id }
         source.forEach { message ->
-            if (message.id !in knownIds) markSynthetic(message.id)
+            if (message.id !in knownIds) markSynthetic(message.id, kind)
         }
     }
 }
@@ -48,12 +61,10 @@ class RequestMessageOriginTracker {
 class TransformerContext(
     val context: Context,
     val model: Model,
-    val assistant: Assistant,
-    val settings: Settings,
+    val assistant: ResolvedAssistantRequest,
+    val promptInputs: FrozenTurnPromptInputs,
     val requestOrigins: RequestMessageOriginTracker,
-    val conversationModeInjectionIds: Set<Uuid> = emptySet(),
     val reportProcessingText: (String?) -> Unit = {},
-    val workspaceCwd: String? = null,
     val mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
     val registerUnpublishedResource: (ToolResourceLease) -> Unit,
 )
@@ -108,12 +119,10 @@ suspend fun List<UIMessage>.transforms(
     transformers: List<MessageTransformer>,
     context: Context,
     model: Model,
-    assistant: Assistant,
-    settings: Settings,
+    assistant: ResolvedAssistantRequest,
+    promptInputs: FrozenTurnPromptInputs,
     requestOrigins: RequestMessageOriginTracker,
-    conversationModeInjectionIds: Set<Uuid> = emptySet(),
     reportProcessingText: (String?) -> Unit = {},
-    workspaceCwd: String? = null,
     mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
     registerUnpublishedResource: (ToolResourceLease) -> Unit,
 ): List<UIMessage> {
@@ -121,11 +130,9 @@ suspend fun List<UIMessage>.transforms(
         context = context,
         model = model,
         assistant = assistant,
-        settings = settings,
+        promptInputs = promptInputs,
         requestOrigins = requestOrigins,
-        conversationModeInjectionIds = conversationModeInjectionIds,
         reportProcessingText = reportProcessingText,
-        workspaceCwd = workspaceCwd,
         mediaCapabilities = mediaCapabilities,
         registerUnpublishedResource = registerUnpublishedResource,
     )

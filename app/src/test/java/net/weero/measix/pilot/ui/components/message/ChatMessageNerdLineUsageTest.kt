@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.ui.components.message
 
+import kotlin.time.Instant
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 import me.rerere.ai.core.CURRENT_TOKEN_USAGE_SEMANTICS_VERSION
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.core.UsageCompleteness
@@ -12,121 +15,136 @@ import java.util.Locale
 
 class ChatMessageNerdLineUsageTest {
     @Test
-    fun `summary uses triggered request snapshots while details use turn totals`() {
-        val display = completeUsage().toNerdLineDisplay()
+    fun `first request in flight shows estimated context and hides cache hit`() {
+        val display = TokenUsage(
+            latestRequestEstimatedContextTokens = 30_000,
+            semanticsVersion = CURRENT_TOKEN_USAGE_SEMANTICS_VERSION,
+        ).toNerdLineDisplay()!!
 
-        assertEquals(10_000L, display.latestContextTokens)
-        assertEquals(90.0, display.latestCacheHitPercent!!, 0.0001)
-        assertEquals(428.5714285714, display.latestTokensPerSecond!!, 0.0001)
-        assertEquals(500L, display.latestTtftMillis)
-        assertEquals(
-            "10K · 90.0% · 428.6 tok/s · TTFT 500ms · 2",
-            display.summaryText(),
-        )
-        assertEquals(
-            "Input 52K · Output 3K · Cached 30K · Provider 7s · Total 30s · Req 3",
-            display.detailsText(30_000),
-        )
+        assertEquals(30_000L, display.context!!.tokens)
+        assertFalse(display.context.exact)
+        assertNull(display.cacheHitPercent)
+        assertEquals("~30K · 5s", display.summaryText("5s"))
+        val context = display.summaryItems("5s").single { it.icon == UsageSummaryIcon.CONTEXT }
+        assertTrue(context.muted)
+        assertFalse(context.highlighted)
     }
 
     @Test
-    fun `raw latest request accounting does not replace independently triggered summaries`() {
-        val changedLatest = completeUsage().copy(
-            latestRequestContextTokens = 1_000,
-            latestRequestOutputTokens = 20,
-            latestRequestCacheReadInputTokens = 0,
-            latestRequestOutputDurationMillis = 100,
-        ).toNerdLineDisplay()
+    fun `closed request shows exact context with its own cache hit rate`() {
+        val display = closedTurn().toNerdLineDisplay()!!
 
-        assertEquals(
-            "10K · 90.0% · 428.6 tok/s · TTFT 500ms · 2",
-            changedLatest.summaryText(),
-        )
+        assertEquals(28_000L, display.context!!.tokens)
+        assertTrue(display.context.exact)
+        assertEquals(90.0, display.cacheHitPercent!!, 0.0001)
+        assertEquals("28K · 90.0% · 2 · 45s", display.summaryText("45s"))
+        val context = display.summaryItems("45s").single { it.icon == UsageSummaryIcon.CONTEXT }
+        assertFalse(context.muted)
     }
 
     @Test
-    fun `partial turn totals do not hide a complete latest request`() {
-        val display = completeUsage().copy(
+    fun `cache hit percent denominator is the displayed context`() {
+        val usage = closedTurn()
+        val display = usage.toNerdLineDisplay()!!
+        val expected = usage.latestRequestCacheReadInputTokens!!.toDouble() /
+            display.context!!.tokens * 100.0
+
+        assertEquals(expected, display.cacheHitPercent!!, 0.0001)
+    }
+
+    @Test
+    fun `stale cache hit is never paired with an estimated context`() {
+        // 第二次请求未报告 usage：账本把命中率写为 null，上下文回落到本次请求的估算。
+        val display = TokenUsage(
+            latestRequestEstimatedContextTokens = 35_000,
+            latestRequestContextTokens = null,
+            latestRequestCacheHitPercent = null,
+            latestRequestTimeToFirstOutputMillis = 500,
+            observedProviderRequestCount = 2,
             inputCompleteness = UsageCompleteness.PARTIAL,
             coreCompleteness = UsageCompleteness.PARTIAL,
             cacheReadCompleteness = UsageCompleteness.PARTIAL,
-        ).toNerdLineDisplay()
+            semanticsVersion = CURRENT_TOKEN_USAGE_SEMANTICS_VERSION,
+        ).toNerdLineDisplay()!!
 
-        assertEquals(10_000L, display.latestContextTokens)
-        assertEquals(90.0, display.latestCacheHitPercent!!, 0.0001)
-        assertEquals(428.5714285714, display.latestTokensPerSecond!!, 0.0001)
+        assertFalse(display.context!!.exact)
+        assertEquals("~35K · 12s", display.summaryText("12s"))
+        // 即使残留旧值，估算上下文也不允许配对出无法验算的比例。
+        val withStalePercent = display.copy(cacheHitPercent = 90.0)
+        assertEquals("~35K · 12s", withStalePercent.summaryText("12s"))
+    }
+
+    @Test
+    fun `trim batches appear only when non zero and are highlighted`() {
+        val withTrims = closedTurn(trims = 2).toNerdLineDisplay()!!
+        val metric = withTrims.summaryItems("45s").single { it.icon == UsageSummaryIcon.TRIM }
+        assertEquals("2", metric.text)
+        assertTrue(metric.highlighted)
+        assertFalse(metric.muted)
+
+        val zero = closedTurn(trims = 0).toNerdLineDisplay()!!
+        assertTrue(zero.summaryItems("45s").none { it.icon == UsageSummaryIcon.TRIM })
+        val absent = closedTurn(trims = null).toNerdLineDisplay()!!
+        assertTrue(absent.summaryItems("45s").none { it.icon == UsageSummaryIcon.TRIM })
+    }
+
+    @Test
+    fun `second line lists turn totals first then latest request performance`() {
+        val display = closedTurn().toNerdLineDisplay()!!
+
         assertEquals(
-            "10K · 90.0% · 428.6 tok/s · TTFT 500ms · 2",
-            display.summaryText(),
+            "52K · 3K · Cached 30K · Provider 12s · Peak 35K · Req 3 · tok/s 428.6 · TTFT 500ms",
+            display.detailsText(),
         )
-        assertEquals(
-            "Input — · Output — · Cached — · Provider 7s · Total — · Req 3",
-            display.detailsText(null),
-        )
-    }
-
-    @Test
-    fun `missing triggered summary fields remain unknown rather than inheriting totals`() {
-        val display = completeUsage().copy(
-            latestRequestEstimatedContextTokens = null,
-            latestRequestCacheHitPercent = null,
-            latestRequestTokensPerSecond = null,
-            latestRequestTimeToFirstOutputMillis = null,
-        ).toNerdLineDisplay()
-
-        assertNull(display.latestContextTokens)
-        assertNull(display.latestCacheHitPercent)
-        assertNull(display.latestTokensPerSecond)
-        assertEquals("2", display.summaryText())
-    }
-
-    @Test
-    fun `zero tool trims are hidden and empty turn has no footer`() {
-        val zero = completeUsage().copy(successfulToolOutputCompactionBatchCount = 0).toNerdLineDisplay()
-        assertFalse(zero.summaryItems().any { it.icon == UsageSummaryIcon.TRIM })
-        assertTrue(zero.hasSummary)
-        assertFalse((null as TokenUsage?).toNerdLineDisplay().hasSummary)
-    }
-
-    @Test
-    fun `missing cache or throughput trigger hides the whole metric`() {
-        val noCache = completeUsage().copy(latestRequestCacheHitPercent = null).toNerdLineDisplay()
-        val noThroughput = completeUsage().copy(latestRequestTokensPerSecond = null).toNerdLineDisplay()
-
-        assertEquals("10K · 428.6 tok/s · TTFT 500ms · 2", noCache.summaryText())
-        assertEquals("10K · 90.0% · TTFT 500ms · 2", noThroughput.summaryText())
-    }
-
-    @Test
-    fun `only ambiguous first line metrics retain visible words`() {
-        val items = completeUsage().toNerdLineDisplay().summaryItems()
-
-        assertEquals("10K", items[0].text)
-        assertEquals("90.0%", items[1].text)
-        assertEquals("428.6 tok/s", items[2].text)
-        assertEquals("TTFT 500ms", items[3].text)
-        assertEquals(UsageSummaryIcon.TRIM, items.last().icon)
-        assertEquals("2", items.last().text)
-        assertTrue(items.last().highlighted)
-        assertTrue(items.dropLast(1).none { it.highlighted })
-    }
-
-    @Test
-    fun `second line uses icons except for ambiguous request count`() {
-        val items = completeUsage().toNerdLineDisplay().detailItems(30_000)
-
         assertEquals(
             listOf(
                 UsageDetailIcon.INPUT,
                 UsageDetailIcon.OUTPUT,
                 UsageDetailIcon.CACHED,
                 UsageDetailIcon.PROVIDER,
-                UsageDetailIcon.TOTAL,
-                null,
+                UsageDetailIcon.CONTEXT,
+                UsageDetailIcon.REQUESTS,
+                UsageDetailIcon.SPEED,
+                UsageDetailIcon.TTFT,
             ),
-            items.map { it.icon },
+            display.detailItems().map { it.icon },
         )
-        assertEquals("Req", items.last().label)
+    }
+
+    @Test
+    fun `partial turn totals are omitted while latest request performance stays`() {
+        val display = closedTurn().copy(
+            inputCompleteness = UsageCompleteness.PARTIAL,
+            coreCompleteness = UsageCompleteness.PARTIAL,
+            cacheReadCompleteness = UsageCompleteness.PARTIAL,
+        ).toNerdLineDisplay()!!
+
+        assertEquals("28K · 90.0% · 2 · 45s", display.summaryText("45s"))
+        assertEquals(
+            "Provider 12s · Peak 35K · Req 3 · tok/s 428.6 · TTFT 500ms",
+            display.detailsText(),
+        )
+    }
+
+    @Test
+    fun `empty usage renders only the turn elapsed time`() {
+        val display = TokenUsage(
+            semanticsVersion = CURRENT_TOKEN_USAGE_SEMANTICS_VERSION,
+        ).toNerdLineDisplay()!!
+
+        assertNull(display.context)
+        assertEquals("7s", display.summaryText("7s"))
+        assertTrue(display.detailItems().isEmpty())
+        assertNull((null as TokenUsage?).toNerdLineDisplay())
+    }
+
+    @Test
+    fun `elapsed text ticks whole seconds in flight and keeps precision when finished`() {
+        val created = localDateTime(0)
+
+        assertEquals("12s", elapsedText(created, null, 12_400, turnFinished = false))
+        assertEquals("45.2s", elapsedText(created, localDateTime(45_200), 0, turnFinished = true))
+        assertNull(elapsedText(created, null, 0, turnFinished = true))
     }
 
     @Test
@@ -150,25 +168,31 @@ class ChatMessageNerdLineUsageTest {
         }
     }
 
-    private fun completeUsage() = TokenUsage(
+    private fun localDateTime(epochMillis: Long) =
+        Instant.fromEpochMilliseconds(epochMillis).toLocalDateTime(TimeZone.currentSystemDefault())
+
+    private fun closedTurn(
+        trims: Int? = 2,
+        cacheHitPercent: Double? = 90.0,
+    ) = TokenUsage(
         inputTokens = 52_000,
         outputTokens = 3_000,
         cacheReadInputTokens = 30_000,
         totalTokens = 55_000,
-        peakRequestContextTokens = 30_500,
-        latestRequestContextTokens = 10_000,
+        peakRequestContextTokens = 35_000,
+        latestRequestContextTokens = 28_000,
         latestRequestOutputTokens = 600,
-        latestRequestCacheReadInputTokens = 9_000,
+        latestRequestCacheReadInputTokens = 25_200,
         latestRequestOutputDurationMillis = 1_400,
-        latestRequestEstimatedContextTokens = 10_000,
+        latestRequestEstimatedContextTokens = 30_000,
         latestRequestTimeToFirstOutputMillis = 500,
-        latestRequestCacheHitPercent = 90.0,
+        latestRequestCacheHitPercent = cacheHitPercent,
         latestRequestTokensPerSecond = 428.5714285714,
         observedProviderRequestCount = 3,
         observedUsageReportedRequestCount = 3,
-        providerRequestDurationMillis = 7_000,
+        providerRequestDurationMillis = 12_000,
         initialRequestTimeToFirstOutputMillis = 500,
-        successfulToolOutputCompactionBatchCount = 2,
+        successfulToolOutputCompactionBatchCount = trims,
         inputCompleteness = UsageCompleteness.COMPLETE,
         coreCompleteness = UsageCompleteness.COMPLETE,
         cacheReadCompleteness = UsageCompleteness.COMPLETE,

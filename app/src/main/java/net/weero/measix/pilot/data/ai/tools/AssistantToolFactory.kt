@@ -17,12 +17,10 @@ import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.ai.subassistant.CatalogMode
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantAccessPolicy
 import net.weero.measix.pilot.data.ai.attachments.AttachmentFailureReasons
 import net.weero.measix.pilot.data.ai.attachments.MAX_ASSISTANT_CALL_ATTACHMENTS
 import net.weero.measix.pilot.data.ai.subassistant.AttachmentParseResult
-import net.weero.measix.pilot.data.ai.subassistant.buildCatalogPrompt
 import net.weero.measix.pilot.data.ai.subassistant.buildSubAssistantCallResult
 import net.weero.measix.pilot.data.ai.subassistant.parseAssistantCallAttachments
 import net.weero.measix.pilot.data.ai.subassistant.parseAssistantCallExtras
@@ -86,15 +84,15 @@ internal fun parseAssistantManageArguments(args: kotlinx.serialization.json.Json
 }
 
 /**
- * 构建三个 Assistant Tools 及 Catalog。
+ * 构建三个 Assistant Tools。
  * 捕获当前 Master Conversation 上下文（callerAssistantId、masterConversationId）。
  *
  * - [AssistantManagement] → [TOOL_ASSISTANT_MANAGE] + [TOOL_ASSISTANT_INSPECT]
  * - [AssistantDelegation] → [TOOL_ASSISTANT_CALL]
  *
- * Catalog 通过 [Tool.systemPrompt] 动态注入：
- * - management 存在时由 [TOOL_ASSISTANT_MANAGE] 负责完整 Catalog；
- * - 只有 delegation 时由 [TOOL_ASSISTANT_CALL] 提供 callable Catalog。
+ * 子助手 Catalog 不再经工具 System Prompt 动态注入：可见集合只由
+ * ConversationDisclosureSnapshotService 在每次新 START 写入 canonical Snapshot（§11.2）；
+ * 执行时授权仍由 SubAssistantAccessPolicy 按 live Settings fail-closed（§11.3）。
  */
 class AssistantToolFactory(
     private val settingsStore: SettingsStore,
@@ -120,14 +118,13 @@ class AssistantToolFactory(
 
         return buildList {
             if (enableManagement) {
-                add(buildAssistantManageTool(callerAssistant.id, enableDelegation))
+                add(buildAssistantManageTool(callerAssistant.id))
                 add(buildAssistantInspectTool(callerAssistant.id, masterConversationId))
             }
             if (enableDelegation) {
                 add(buildAssistantCallTool(
                     callerAssistantId = callerAssistant.id,
                     masterConversationId = masterConversationId,
-                    enableManagement = enableManagement,
                     ttsPlaybackContext = ttsPlaybackContext,
                 ))
             }
@@ -138,7 +135,6 @@ class AssistantToolFactory(
 
     private fun buildAssistantManageTool(
         callerAssistantId: Uuid,
-        enableDelegation: Boolean,
     ): Tool = Tool(
         name = TOOL_ASSISTANT_MANAGE,
         description = "Create, update, or delete a sub-assistant (sub-agent). New ones join your allowed list.",
@@ -172,18 +168,6 @@ class AssistantToolFactory(
                     })
                 },
                 required = listOf("action"),
-            )
-        },
-        systemPrompt = { _, _ ->
-            // management 存在时负责完整 Catalog
-            val settings = settingsStore.effectiveSettings.value.settings
-            val caller = settings.assistants.find { it.id == callerAssistantId } ?: return@Tool ""
-            val mode = if (enableDelegation) CatalogMode.BOTH else CatalogMode.MANAGEMENT_ONLY
-            buildCatalogPrompt(
-                caller = caller,
-                allAssistants = settings.assistants,
-                mode = mode,
-                json = json,
             )
         },
         validateArguments = { args ->
@@ -321,7 +305,6 @@ class AssistantToolFactory(
                 required = listOf("assistant_id"),
             )
         },
-        systemPrompt = { _, _ -> "" },
         execute = { args ->
             executeAssistantInspect(args, callerAssistantId, masterConversationId)
         },
@@ -453,7 +436,6 @@ class AssistantToolFactory(
     private fun buildAssistantCallTool(
         callerAssistantId: Uuid,
         masterConversationId: Uuid,
-        enableManagement: Boolean,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
     ): Tool = Tool(
         name = TOOL_ASSISTANT_CALL,
@@ -512,20 +494,6 @@ class AssistantToolFactory(
                     })
                 },
                 required = listOf("assistant_id", "request"),
-            )
-        },
-        systemPrompt = { _, _ ->
-            // 只有 delegation 时由 assistant_call 提供 callable Catalog
-            // management 同时开启时由 assistant_manage 负责，这里不重复注入
-            if (enableManagement) return@Tool ""
-
-            val settings = settingsStore.effectiveSettings.value.settings
-            val caller = settings.assistants.find { it.id == callerAssistantId } ?: return@Tool ""
-            buildCatalogPrompt(
-                caller = caller,
-                allAssistants = settings.assistants,
-                mode = CatalogMode.DELEGATION_ONLY,
-                json = json,
             )
         },
         contextualExecute = { args ->

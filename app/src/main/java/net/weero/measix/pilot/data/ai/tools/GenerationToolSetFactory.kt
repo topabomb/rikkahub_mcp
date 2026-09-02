@@ -45,6 +45,7 @@ class GenerationToolSetFactory(
     private val providerManager: ProviderManager,
     private val artifactStore: ArtifactStore,
     private val toolOutputStore: ToolOutputStore = ToolOutputStore(artifactStore),
+    private val liveSettingsProvider: () -> Settings = { error("live Settings provider is unavailable") },
 ) {
 
     fun captureMcpCapabilities(assistant: Assistant): TurnMcpCapabilitySnapshot =
@@ -57,7 +58,7 @@ class GenerationToolSetFactory(
      * 构建指定 Assistant 的工具集（不含 Memory Tools，那些由 GenerationLoop 内部添加）。
      *
      * @param assistant 目标助手
-     * @param settings 当前 step 构建时的有效设置快照
+     * @param settings START 装配时的有效设置快照；产物作为 FrozenToolDefinition 同 Turn 冻结
      * @param capabilityModel 本次 run 的实际模型，或非运行时检查中显式解析的配置模型。
      * @param workspaceCwd 工作目录（可覆盖会话级别）
      * @param runMode Target Run 时过滤 Assistant Tools；ask_user 保留给 Coordinator 桥接
@@ -83,7 +84,7 @@ class GenerationToolSetFactory(
             }
 
             if (shouldInjectAttachmentInspection(settings)) {
-                add(createAttachmentInspectionTool(settings, providerManager))
+                add(createAttachmentInspectionTool(settings, providerManager, liveSettingsProvider))
             }
 
             val localToolOptions = if (runMode == ToolSetRunMode.TARGET) {

@@ -67,7 +67,7 @@ data class TokenUsage(
 )
 
 const val LEGACY_TOKEN_USAGE_SEMANTICS_VERSION = 1
-const val CURRENT_TOKEN_USAGE_SEMANTICS_VERSION = 5
+const val CURRENT_TOKEN_USAGE_SEMANTICS_VERSION = 6
 
 internal fun sumTokenCountsOrNull(vararg counts: Long?): Long? {
     if (counts.any { it == null }) return null

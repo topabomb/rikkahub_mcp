@@ -1,81 +1,87 @@
-﻿package net.weero.measix.pilot.data.ai.transformers
+package net.weero.measix.pilot.data.ai.transformers
 
-import kotlin.time.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
-import net.weero.measix.pilot.utils.toLocalDateTime
+import net.weero.measix.pilot.data.ai.SyntheticMessageKind
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 import java.time.format.TextStyle
 import java.util.Locale
+import kotlin.time.Instant
 import kotlin.time.toJavaInstant
 
-private const val TIME_GAP_THRESHOLD_SECONDS = 3600L // 1 小时
+private const val TIME_GAP_THRESHOLD_SECONDS = 3600L
 
-/**
- * 时间提醒注入转换器
- *
- * 在时间间隔较大的消息之前自动注入 <time_reminder>，帮助 AI 了解对话的时间间隔
- */
+/** Injects time-gap reminders using only the Turn's frozen timezone and locale. */
 object TimeReminderTransformer : InputMessageTransformer {
-    override suspend fun transform(
-        ctx: TransformerContext,
-        messages: List<UIMessage>,
-    ): List<UIMessage> {
-        if (!ctx.assistant.enableTimeReminder) return messages
-        val transformed = applyTimeReminder(messages)
-        ctx.requestOrigins.markNewMessages(before = messages, source = transformed)
+    override suspend fun transform(ctx: TransformerContext, messages: List<UIMessage>): List<UIMessage> {
+        if (!ctx.promptInputs.enableTimeReminder) return messages
+        val transformed = applyTimeReminder(
+            messages = messages,
+            zoneId = ctx.promptInputs.zoneId,
+            localeTag = ctx.promptInputs.localeTag,
+        )
+        ctx.requestOrigins.markNewMessages(
+            before = messages,
+            source = transformed,
+            kind = SyntheticMessageKind.TIME_REMINDER,
+        )
         return transformed
     }
 }
 
-internal fun applyTimeReminder(messages: List<UIMessage>): List<UIMessage> {
+internal fun applyTimeReminder(
+    messages: List<UIMessage>,
+    zoneId: String,
+    localeTag: String,
+): List<UIMessage> {
     val result = mutableListOf<UIMessage>()
-    val tz = TimeZone.currentSystemDefault()
-
+    val timeZone = TimeZone.of(zoneId)
+    val javaZone = ZoneId.of(zoneId)
+    val locale = Locale.forLanguageTag(localeTag)
     var firstUserFound = false
-    for (i in messages.indices) {
-        val current = messages[i]
+    for (index in messages.indices) {
+        val current = messages[index]
         if (current.role == MessageRole.USER) {
-            val currInstant = current.createdAt.toInstant(tz)
+            val currentInstant = current.createdAt.toInstant(timeZone)
             if (!firstUserFound) {
                 firstUserFound = true
-                result.add(buildTimeReminderMessage(null, currInstant))
+                result += buildTimeReminderMessage(null, currentInstant, javaZone, locale)
             } else {
-                val previous = messages[i - 1]
-                val prevInstant = previous.createdAt.toInstant(tz)
-                val gapSeconds = (currInstant - prevInstant).inWholeSeconds
-
+                val previousInstant = messages[index - 1].createdAt.toInstant(timeZone)
+                val gapSeconds = (currentInstant - previousInstant).inWholeSeconds
                 if (gapSeconds > TIME_GAP_THRESHOLD_SECONDS) {
-                    result.add(buildTimeReminderMessage(gapSeconds, currInstant))
+                    result += buildTimeReminderMessage(gapSeconds, currentInstant, javaZone, locale)
                 }
             }
         }
-        result.add(current)
+        result += current
     }
-
     return result
 }
 
-private fun buildTimeReminderMessage(gapSeconds: Long?, instant: Instant): UIMessage {
-    val javaInstant = instant.toJavaInstant()
-    val dayOfWeek = javaInstant.atZone(ZoneId.systemDefault()).dayOfWeek
-        .getDisplayName(TextStyle.FULL, Locale.getDefault())
-    val timeStr = javaInstant.toLocalDateTime()
-    val content = if (gapSeconds != null) {
-        val gapText = formatGap(gapSeconds)
-        "<time_reminder>Current time: $dayOfWeek, $timeStr ($gapText since last message)</time_reminder>"
+private fun buildTimeReminderMessage(
+    gapSeconds: Long?,
+    instant: Instant,
+    zoneId: ZoneId,
+    locale: Locale,
+): UIMessage {
+    val local = instant.toJavaInstant().atZone(zoneId)
+    val dayOfWeek = local.dayOfWeek.getDisplayName(TextStyle.FULL, locale)
+    val time = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM).withLocale(locale).format(local)
+    val content = if (gapSeconds == null) {
+        "<time_reminder>Current time: $dayOfWeek, $time</time_reminder>"
     } else {
-        "<time_reminder>Current time: $dayOfWeek, $timeStr</time_reminder>"
+        "<time_reminder>Current time: $dayOfWeek, $time (${formatGap(gapSeconds)} since last message)</time_reminder>"
     }
     return UIMessage.user(content)
 }
 
-private fun formatGap(seconds: Long): String {
-    return when {
-        seconds < 3600 -> "${seconds / 60} min"
-        seconds < 86400 -> "${seconds / 3600} h"
-        else -> "${seconds / 86400} d"
-    }
+private fun formatGap(seconds: Long): String = when {
+    seconds < 3600 -> "${seconds / 60} min"
+    seconds < 86400 -> "${seconds / 3600} h"
+    else -> "${seconds / 86400} d"
 }

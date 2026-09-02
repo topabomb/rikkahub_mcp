@@ -6,6 +6,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
+import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -17,7 +18,7 @@ class TTSAutoPlayTest {
     fun `auto play ignores completion events from another conversation`() {
         val conversation = conversationWith(UIMessage.assistant("current"))
 
-        assertFalse(shouldAutoPlayTts(Uuid.random(), conversation.toSnapshot()))
+        assertFalse(shouldAutoPlayTts(Uuid.random(), conversation.toSnapshot().toPresentationSnapshot()))
     }
 
     @Test
@@ -35,14 +36,14 @@ class TTSAutoPlayTest {
         )
         val conversation = conversationWith(pending)
 
-        assertFalse(shouldAutoPlayTts(conversation.id, conversation.toSnapshot()))
+        assertFalse(shouldAutoPlayTts(conversation.id, conversation.toSnapshot().toPresentationSnapshot()))
     }
 
     @Test
     fun `auto play accepts completed assistant response in current conversation`() {
         val conversation = conversationWith(UIMessage.assistant("done"))
 
-        assertTrue(shouldAutoPlayTts(conversation.id, conversation.toSnapshot()))
+        assertTrue(shouldAutoPlayTts(conversation.id, conversation.toSnapshot().toPresentationSnapshot()))
     }
 
     @Test
@@ -61,7 +62,7 @@ class TTSAutoPlayTest {
         )
         val conversation = conversationWith(spoken)
 
-        assertFalse(shouldAutoPlayTts(conversation.id, conversation.toSnapshot()))
+        assertFalse(shouldAutoPlayTts(conversation.id, conversation.toSnapshot().toPresentationSnapshot()))
     }
 
     @Test

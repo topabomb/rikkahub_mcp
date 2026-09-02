@@ -31,7 +31,7 @@ class WorkspaceToolArgumentsTest {
     ): ToolBatchPreparation = runtime.prepareBatch(
         messageId = Uuid.random(),
         calls = calls.mapIndexed { ordinal, tool -> LocatedToolCall(ordinal, tool) },
-        toolIndex = runtime.buildIndex(tools),
+        toolIndex = freezeToolSet(tools).bindingsByName,
         availability = ToolInteractionAvailability.FULL,
     )
 
@@ -49,7 +49,7 @@ class WorkspaceToolArgumentsTest {
         val tools = createWorkspaceTools("workspace", mockk(), emptyMap(), mockk())
         val missingPath = UIMessagePart.Tool("bad", "workspace_write_file", """{"text":"x"}""")
         val rejected = pendingBatch(tools, listOf(missingPath))
-        assertTrue(rejected.pendingInteractions.isEmpty())
+        assertTrue(rejected.pending.isEmpty())
         assertTrue(rejected.immediateResults.isNotEmpty())
         val output = (rejected.replacements.getValue(0).output.single() as UIMessagePart.Text).text
         assertTrue(output.contains("invalid_arguments"))
@@ -57,10 +57,10 @@ class WorkspaceToolArgumentsTest {
 
         val safe = UIMessagePart.Tool("safe", "workspace_write_file", """{"path":"/tmp/x","text":"x"}""")
         val outside = UIMessagePart.Tool("outside", "workspace_write_file", """{"path":"/tmp/../etc/x","text":"x"}""")
-        assertTrue(pendingBatch(tools, listOf(safe)).pendingInteractions.isEmpty())
+        assertTrue(pendingBatch(tools, listOf(safe)).pending.isEmpty())
         assertEquals(
             setOf(ToolInteractionKind.APPROVAL),
-            pendingBatch(tools, listOf(outside)).pendingInteractions,
+            pendingBatch(tools, listOf(outside)).kinds,
         )
     }
 

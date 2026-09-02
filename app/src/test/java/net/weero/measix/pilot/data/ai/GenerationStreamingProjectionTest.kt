@@ -1,5 +1,9 @@
 package net.weero.measix.pilot.data.ai
 
+import net.weero.measix.pilot.service.runtime.resolveAssistantRequest
+
+import net.weero.measix.pilot.test.testPromptInputs
+
 import android.content.Context
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
@@ -93,8 +97,8 @@ class GenerationStreamingProjectionTest {
     private fun transformerContext(assistant: Assistant) = TransformerContext(
         context = mockk<Context>(relaxed = true),
         model = Model(modelId = "test", displayName = "Test"),
-        assistant = assistant,
-        settings = Settings(),
+        assistant = resolveAssistantRequest(assistant),
+        promptInputs = testPromptInputs(),
         requestOrigins = RequestMessageOriginTracker(),
         registerUnpublishedResource = {},
     )

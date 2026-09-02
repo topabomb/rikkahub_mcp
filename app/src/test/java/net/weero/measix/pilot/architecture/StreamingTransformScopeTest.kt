@@ -1,5 +1,9 @@
 package net.weero.measix.pilot.architecture
 
+import net.weero.measix.pilot.test.generationRequestFixture
+
+import net.weero.measix.pilot.test.testPromptInputs
+
 import android.content.Context
 import io.mockk.coEvery
 import io.mockk.every
@@ -113,7 +117,6 @@ class StreamingTransformScopeTest {
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
-            memoryRepo = mockk<MemoryRepository>(relaxed = true),
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
             toolOutputStore = io.mockk.mockk(relaxed = true),
         )
@@ -121,7 +124,7 @@ class StreamingTransformScopeTest {
         val userMessage = UIMessage.user("hello")
 
         val chunks = handler.run(
-            GenerationRequest(
+            generationRequestFixture(
             conversationId = kotlin.uuid.Uuid.random(),
             settings = Settings(providers = listOf(providerSetting), assistants = listOf(assistant)),
             model = model,
@@ -130,6 +133,7 @@ class StreamingTransformScopeTest {
             inputTransformers = emptyList(),
             outputTransformers = listOf(counting),
             assistant = assistant,
+            promptInputs = testPromptInputs(),
             assistantMessageId = assistantMessage.id,
             maxSteps = 1,
             )

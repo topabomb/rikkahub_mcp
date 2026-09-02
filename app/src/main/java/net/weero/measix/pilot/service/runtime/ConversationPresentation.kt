@@ -7,6 +7,7 @@ import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.ai.CheckpointKind
 import net.weero.measix.pilot.data.ai.ToolResultEventStatus
 import net.weero.measix.pilot.data.ai.tools.ToolInteractionKind
@@ -14,6 +15,53 @@ import net.weero.measix.pilot.data.ai.tools.ToolRuntimeMetadata
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.utils.JsonInstant
 import kotlin.uuid.Uuid
+
+/**
+ * 用户可见的会话投影（权威方案 §3.2）。它可以重建、不参与写协议，并且结构上不含 model
+ * context：aggregate 的 modelContextEntries 在这里没有对应字段，所以 UI 不是被提醒不要读
+ * 某个字段，而是根本拿不到（§17.7）。
+ *
+ * [nodes] 已经是合并后的渲染列表：未变节点保持与 aggregate 同一实例引用（structural
+ * sharing 到 Compose skip），流式期间只有末节点被 [activeTurn] 覆盖。合并规则只存在于本
+ * 文件的 [toPresentationSnapshot]，aggregate 不再提供 renderNodes。
+ */
+data class ConversationPresentationSnapshot(
+    val conversationId: Uuid,
+    val header: ConversationHeader,
+    val nodes: List<MessageNode>,
+    val activeTurn: ActiveTurnState?,
+) {
+    /**
+     * 与 aggregate 的 internal currentMessages() 逐项等价：末节点在 [nodes] 里已被
+     * [activeTurn] 覆盖，因此这里只需要线性投影，不存在第二份合并规则。
+     */
+    fun currentMessages(): List<UIMessage> = nodes.map { it.currentMessage }
+}
+
+/**
+ * aggregate 到 presentation 的唯一 projector。方向单一：presentation 永不回写 durable 事实，
+ * 也不向调用方暴露 aggregate 引用。
+ */
+internal fun ConversationAggregateSnapshot.toPresentationSnapshot(): ConversationPresentationSnapshot {
+    val turn = activeTurn
+    val rendered = if (turn == null || turn.messages.isEmpty() || nodes.isEmpty()) {
+        nodes
+    } else {
+        val lastIndex = nodes.lastIndex
+        nodes.mapIndexed { index, node ->
+            if (index != lastIndex) node else node.copy(
+                messages = listOf(turn.messages.last()),
+                selectIndex = 0,
+            )
+        }
+    }
+    return ConversationPresentationSnapshot(
+        conversationId = conversationId,
+        header = header,
+        nodes = rendered,
+        activeTurn = activeTurn,
+    )
+}
 
 /**
  * Stable presentation phase of one tool call inside an active Assistant message.
@@ -79,7 +127,7 @@ data class ConversationPresentation(
 
 internal fun resolveConversationPresentation(
     active: ActiveRequestPresentationFacts?,
-    snapshot: ConversationSnapshot,
+    snapshot: ConversationAggregateSnapshot,
     lastTerminatedRequestTurnId: Uuid? = null,
 ): ConversationPresentation {
     val requestPhase = active?.phase
@@ -215,7 +263,11 @@ internal fun ActiveTurnState.afterCheckpoint(command: CommitCheckpoint): ActiveT
             }
         }
     }
-    return copy(toolCallPhases = phases)
+    // 2026-9-2 15:01 修复 "tool interaction is no longer pending"：此前只同步 toolCallPhases，
+    // messages 停留在流式投影（暂停工具仍是 Auto 旧版），而 currentMessages() 末条取自
+    // turn.messages.last()，用户决策会读到非 Pending 状态而误报。checkpoint 携带的 messages
+    // 是 committed 权威投影，activeTurn 必须一并对齐；勿回退为仅同步 phases。
+    return copy(messages = command.messages, toolCallPhases = phases)
 }
 
 fun resolveToolCallPhase(tool: UIMessagePart.Tool, activePhase: ToolCallPhase?): ToolCallPhase =

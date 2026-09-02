@@ -16,10 +16,11 @@ import net.weero.measix.pilot.data.repository.FolderRepository
 import net.weero.measix.pilot.data.model.Folder
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeState
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
+import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
+import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
-import net.weero.measix.pilot.service.runtime.toSnapshot
 import java.time.Instant
 import kotlin.uuid.Uuid
 
@@ -36,7 +37,7 @@ data class ConversationSummary(
 
 /** Snapshot and process-local presentation observed from one Runtime projection. */
 data class ConversationUiModel(
-    val snapshot: ConversationSnapshot,
+    val snapshot: ConversationPresentationSnapshot,
     val presentation: ConversationPresentation,
     val attachmentPreviews: Map<String, String> = emptyMap(),
 ) {
@@ -45,7 +46,7 @@ data class ConversationUiModel(
 
 sealed interface ConversationReadState {
     data object Loading : ConversationReadState
-    data class Ready(val snapshot: ConversationSnapshot) : ConversationReadState
+    data class Ready(val snapshot: ConversationPresentationSnapshot) : ConversationReadState
     data object Missing : ConversationReadState
     data class Failed(val error: Throwable) : ConversationReadState
 }
@@ -77,8 +78,8 @@ class ConversationQueryService(
     fun observeConversation(conversationId: Uuid): Flow<ConversationReadState> =
         runtimeRegistry.observeRuntimeState(conversationId).flatMapLatest { state ->
             when (state) {
-                is ConversationRuntimeState.Draft -> state.runtime.snapshot.map(ConversationReadState::Ready)
-                is ConversationRuntimeState.Ready -> state.runtime.snapshot.map(ConversationReadState::Ready)
+                is ConversationRuntimeState.Draft -> state.runtime.snapshot.map { it.toPresentationSnapshot() }.map(ConversationReadState::Ready)
+                is ConversationRuntimeState.Ready -> state.runtime.snapshot.map { it.toPresentationSnapshot() }.map(ConversationReadState::Ready)
                 ConversationRuntimeState.Loading -> flowOf(ConversationReadState.Loading)
                 ConversationRuntimeState.Missing -> flowOf(ConversationReadState.Missing)
                 is ConversationRuntimeState.Failed -> flowOf(ConversationReadState.Failed(state.error))
@@ -91,7 +92,8 @@ class ConversationQueryService(
     fun conversationUiModel(conversationId: Uuid): Flow<ConversationUiModel> =
         runtimeRegistry.getConversationUiFlow(conversationId)
             .combine(attachmentPreviewProjector.lifecycleChanges()) { joined, _ -> joined }
-            .mapLatest { (snapshot, presentation) ->
+            .mapLatest { (aggregate, presentation) ->
+                val snapshot = aggregate.toPresentationSnapshot()
                 ConversationUiModel(
                     snapshot = snapshot,
                     presentation = presentation,
@@ -99,7 +101,7 @@ class ConversationQueryService(
                 )
             }
 
-    suspend fun attachmentPreviews(snapshot: ConversationSnapshot): Map<String, String> =
+    suspend fun attachmentPreviews(snapshot: ConversationPresentationSnapshot): Map<String, String> =
         attachmentPreviewProjector.project(snapshot)
 
     /** Re-emits query models when ArtifactStore invalidates or removes a referenced payload. */
@@ -132,11 +134,15 @@ class ConversationQueryService(
     fun foldersOfAssistant(assistantId: Uuid): Flow<List<Folder>> =
         folderRepository.getFoldersOfAssistant(assistantId)
 
-    suspend fun snapshot(conversationId: Uuid): ConversationSnapshot? =
+    /**
+     * internal 聚合读端口：只有 command / turn planning 需要它（含 model context）。
+     * UI 读端口是 [observeConversation] 与 [conversationUiModel]，它们只给 presentation。
+     */
+    internal suspend fun aggregateSnapshot(conversationId: Uuid): ConversationAggregateSnapshot? =
         runtimeRegistry.findRuntime(conversationId)?.snapshot?.value
-            ?: repository.getConversationById(conversationId)?.toSnapshot()
+            ?: repository.getConversationSnapshotById(conversationId)
 
-    internal fun residentSnapshot(conversationId: Uuid): StateFlow<ConversationSnapshot>? =
+    internal fun residentAggregate(conversationId: Uuid): StateFlow<ConversationAggregateSnapshot>? =
         runtimeRegistry.findRuntime(conversationId)?.snapshot
 
     suspend fun count(): Int = repository.countConversations()
@@ -175,18 +181,21 @@ internal fun mergeConversationActivities(
     }
 
 data class ConversationDetailRead(
-    val initial: ConversationSnapshot,
-    val updates: Flow<ConversationSnapshot>?,
+    val initial: ConversationPresentationSnapshot,
+    val updates: Flow<ConversationPresentationSnapshot>?,
 )
 
 class SubAssistantDetailReader(private val queryService: ConversationQueryService) {
     suspend fun read(conversationId: Uuid): ConversationDetailRead? {
-        val resident = queryService.residentSnapshot(conversationId)
-        val initial = resident?.value ?: queryService.snapshot(conversationId) ?: return null
-        return ConversationDetailRead(initial = initial, updates = resident)
+        val resident = queryService.residentAggregate(conversationId)
+        val initial = resident?.value ?: queryService.aggregateSnapshot(conversationId) ?: return null
+        return ConversationDetailRead(
+            initial = initial.toPresentationSnapshot(),
+            updates = resident?.map { it.toPresentationSnapshot() },
+        )
     }
 
-    suspend fun attachmentPreviews(snapshot: ConversationSnapshot): Map<String, String> =
+    suspend fun attachmentPreviews(snapshot: ConversationPresentationSnapshot): Map<String, String> =
         queryService.attachmentPreviews(snapshot)
 
     fun attachmentPreviewChanges(): Flow<Unit> = queryService.attachmentPreviewChanges()

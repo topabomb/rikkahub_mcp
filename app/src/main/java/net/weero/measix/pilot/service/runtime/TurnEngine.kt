@@ -16,6 +16,7 @@ import net.weero.measix.pilot.data.ai.CheckpointKind
 import net.weero.measix.pilot.data.ai.FinishedReason
 import net.weero.measix.pilot.data.ai.GenerationChunk
 import net.weero.measix.pilot.data.ai.ToolExecutionEvent
+import net.weero.measix.pilot.data.ai.tools.PendingInteraction
 import net.weero.measix.pilot.data.ai.transformers.AttachmentProjectionTransformer
 import net.weero.measix.pilot.data.ai.transformers.Base64ImageToLocalFileTransformer
 import net.weero.measix.pilot.data.ai.transformers.DocumentAsPromptTransformer
@@ -55,7 +56,7 @@ class TurnEngine(
     private val handle: TurnHandle,
     private val turnFinalization: TurnFinalization,
 ) {
-    /** turn 骨架启动结果：槽位 id + 可复用的既有 assistant 消息（null = 新建槽）。 */
+    /** turn 骨架启动结果：新 Assistant owner slot id（START 恒新建；continuation 携带活动消息）。 */
     data class StartedTurn(
         val engine: TurnEngine,
         val assistantMessageId: Uuid,
@@ -63,35 +64,34 @@ class TurnEngine(
     )
 
     /**
-     * turn 生命周期骨架唯一实现（Master 与 Target 共用）：
-     * resumable 槽探测 → StartTurn 单事务打开 assistant 槽并写入 RUNNING 事实 →
-     * 构造并返回持有唯一 TurnHandle 的 engine。
+     * turn 生命周期骨架唯一实现（Master 与 Target 共用）。
      *
-     * @param messages 生成输入（resumable 探测基于其末条消息）
-     * @param resumeFilter 末条 assistant 消息可复用判定（Master 含审批恢复语义；
-     *   默认为 Target 语义：存在未执行工具即可复用）
-     * @param turnFinalization 取消/失败终态在提交前的唯一 Application IO
+     * `START` 没有 slot 复用分支：每个新 Turn 预生成全新的 Assistant node/message，由
+     * [ConversationTransition.planStartTarget] 得到结构变换后的目标 selected branch 与因果
+     * USER anchor，随 [StartTurn] 在同一事务提交 Assistant slot、turn_execution 与可选
+     * model-context entry。审批 / ask-user 恢复走 [continueActive]，保留原 handle。
+     *
+     * @param modelContextCandidate 本次 START 捕获的完整 canonical Disclosure candidate
      */
     companion object {
         suspend fun start(
             commandCoordinator: ConversationCommandCoordinator,
             runtime: ConversationRuntime,
             turnId: Uuid,
-            messages: List<UIMessage>,
-            resumeFilter: (UIMessage) -> Boolean = { message ->
-                message.role == me.rerere.ai.core.MessageRole.ASSISTANT &&
-                    message.getTools().any { !it.hasReplayResult }
-            },
+            modelContextCandidate: String,
             turnFinalization: TurnFinalization,
         ): StartedTurn {
-            val resumable = messages.lastOrNull()?.takeIf(resumeFilter)
-            val slotId = resumable?.id ?: Uuid.random()
-            val handle = commandCoordinator.startTurn(runtime.id, turnId, slotId, resume = resumable != null)
+            val command = ConversationTransition.buildStartTurnCommand(
+                current = runtime.snapshot.value,
+                turnId = turnId,
+                modelContextCandidate = modelContextCandidate,
+            )
+            val handle = commandCoordinator.startTurn(runtime.id, command)
             runtime.markRunning(handle)
             return StartedTurn(
                 engine = TurnEngine(commandCoordinator, runtime, handle, turnFinalization),
-                assistantMessageId = slotId,
-                resumableMessage = resumable,
+                assistantMessageId = command.assistantMessageId,
+                resumableMessage = null,
             )
         }
 
@@ -348,7 +348,17 @@ sealed interface TurnOutcome {
         override val terminalDetail: String? = null
     }
 
-    data object AwaitingApproval : TurnOutcome {
+    /**
+     * 因等待用户交互而暂停。[pending] 非空且按 ordinal 升序；消费者直接用 locator 定位，
+     * 不回消息里扫描，也不依赖 `ToolRuntimeMetadata` 是否已经落盘。
+     */
+    data class AwaitingApproval(
+        val pending: List<PendingInteraction>,
+    ) : TurnOutcome {
+        init {
+            require(pending.isNotEmpty()) { "AwaitingApproval requires pending interactions" }
+        }
+
         override val status = TurnExecutionStatus.AWAITING_APPROVAL
         override val terminalReason: String? = null
         override val terminalDetail: String? = null
@@ -376,9 +386,9 @@ sealed interface TurnOutcome {
 
     companion object {
         fun fromFinishedReason(reason: FinishedReason): TurnOutcome = when (reason) {
-            FinishedReason.COMPLETED -> Completed
-            FinishedReason.AWAITING_APPROVAL -> AwaitingApproval
-            FinishedReason.STEP_LIMIT_REACHED -> Incomplete(TurnTerminalReasons.TOOL_LOOP_LIMIT)
+            FinishedReason.Completed -> Completed
+            is FinishedReason.AwaitingApproval -> AwaitingApproval(reason.pending)
+            FinishedReason.StepLimitReached -> Incomplete(TurnTerminalReasons.TOOL_LOOP_LIMIT)
         }
 
         fun fromFailure(error: Throwable): TurnOutcome {

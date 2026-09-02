@@ -3,6 +3,7 @@ package net.weero.measix.pilot.data.ai.tools
 import io.mockk.every
 import io.mockk.mockk
 import me.rerere.ai.core.ToolInteractionRequirement
+import me.rerere.ai.core.freeze
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.Provider
@@ -76,7 +77,7 @@ class ImageGenerationToolFactoryTest {
         )
         assertNotNull(tool)
         assertEquals(GENERATE_IMAGE_TOOL_NAME, tool!!.name)
-        val prompt = tool.systemPrompt(model, emptyList())
+        val prompt = tool.freeze().systemPromptContribution
         assertTrue(prompt.contains("\"provider_type\":\"openai\""))
         assertTrue(prompt.contains("\"model_id\":\"gpt-image-1\""))
         assertFalse(

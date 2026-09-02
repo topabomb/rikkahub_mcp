@@ -38,7 +38,7 @@ class ToolCallRuntimeGateTest {
     ): ToolBatchPreparation = runtime.prepareBatch(
         messageId = messageId,
         calls = calls.mapIndexed { ordinal, tool -> LocatedToolCall(ordinal, tool) },
-        toolIndex = runtime.buildIndex(definitions),
+        toolIndex = freezeToolSet(definitions).bindingsByName,
         availability = availability,
     )
 
@@ -54,7 +54,7 @@ class ToolCallRuntimeGateTest {
                     val call = UIMessagePart.Tool("id", validatedTool.name, input, approvalState = state)
                     val preparation = prepare(listOf(call), listOf(validatedTool), availability)
                     val result = listOf(call).after(preparation).single()
-                    assertTrue(preparation.pendingInteractions.isEmpty())
+                    assertTrue(preparation.pending.isEmpty())
                     assertFalse(result.isPending)
                     assertTrue(result.hasReplayResult)
                     val text = (result.output.single() as UIMessagePart.Text).text
@@ -107,7 +107,7 @@ class ToolCallRuntimeGateTest {
         assertEquals("yes", (answeredResult.output.single() as UIMessagePart.Text).text)
         assertEquals("denied", ToolRuntimeMetadata.terminalStatusOf(deniedResult.metadata))
         assertEquals("answered", ToolRuntimeMetadata.terminalStatusOf(answeredResult.metadata))
-        assertTrue(preparation.pendingInteractions.isEmpty())
+        assertTrue(preparation.pending.isEmpty())
     }
 
     @Test
@@ -116,7 +116,7 @@ class ToolCallRuntimeGateTest {
         val preparation = prepare(listOf(call), emptyList())
         val result = listOf(call).after(preparation).single()
         assertFalse(result.isPending)
-        assertTrue(preparation.pendingInteractions.isEmpty())
+        assertTrue(preparation.pending.isEmpty())
         assertTrue((result.output.single() as UIMessagePart.Text).text.contains("tool_not_available"))
         assertEquals(ToolCallPhase.FAILED, resolveToolCallPhase(result, null))
     }
@@ -126,7 +126,7 @@ class ToolCallRuntimeGateTest {
         val valid = UIMessagePart.Tool("ask", "ask_user", """{"questions":[{"id":"q","question":"Continue?"}]}""")
         val bad = UIMessagePart.Tool("bad", "validated", "{}", approvalState = ToolApprovalState.Pending)
         val preparation = prepare(listOf(bad, valid), listOf(validatedTool, buildAskUserTool()))
-        assertEquals(setOf(ToolInteractionKind.USER_INPUT), preparation.pendingInteractions)
+        assertEquals(setOf(ToolInteractionKind.USER_INPUT), preparation.kinds)
         val updated = listOf(bad, valid).after(preparation)
         assertFalse(updated[0].isPending)
         assertEquals(ToolArgumentsException(failure).output, updated[0].output)
@@ -159,7 +159,7 @@ class ToolCallRuntimeGateTest {
         val executable = preparation.resolvedCalls.single() as ResolvedToolCall.Executable
         assertTrue(executable.call.approvedByUser)
         assertEquals(call, executable.call.source)
-        assertTrue(preparation.pendingInteractions.isEmpty())
+        assertTrue(preparation.pending.isEmpty())
     }
 
     @Test
@@ -187,7 +187,7 @@ class ToolCallRuntimeGateTest {
             listOf(buildAskUserTool()),
             ToolInteractionAvailability.USER_INPUT_ONLY,
         )
-        assertEquals(setOf(ToolInteractionKind.USER_INPUT), bridged.pendingInteractions)
+        assertEquals(setOf(ToolInteractionKind.USER_INPUT), bridged.kinds)
     }
 
     @Test
@@ -204,7 +204,7 @@ class ToolCallRuntimeGateTest {
             listOf(approval, buildAskUserTool()),
             ToolInteractionAvailability.NONE,
         )
-        assertTrue(preparation.pendingInteractions.isEmpty())
+        assertTrue(preparation.pending.isEmpty())
         assertTrue(preparation.resolvedCalls.isEmpty())
         val first = preparation.replacements.getValue(0)
         val second = preparation.replacements.getValue(1)
@@ -254,7 +254,7 @@ class ToolCallRuntimeGateTest {
         listOf(none, approval).forEach { definition ->
             val preparation = prepare(listOf(call), listOf(definition))
             assertTrue(preparation.resolvedCalls.isEmpty())
-            assertTrue(preparation.pendingInteractions.isEmpty())
+            assertTrue(preparation.pending.isEmpty())
             assertTrue(
                 (preparation.replacements.getValue(0).output.single() as UIMessagePart.Text).text
                     .contains("interaction_state_invalid"),
@@ -277,9 +277,9 @@ class ToolCallRuntimeGateTest {
             listOf(autoCall, gateCall),
             listOf(automatic, approval),
         )
-        // The batch barrier is enforced by the loop: a non-empty pendingInteractions means no
+        // The batch barrier is enforced by the loop: a non-empty pending means no
         // resolved call may execute this round, even the automatic one.
-        assertEquals(setOf(ToolInteractionKind.APPROVAL), preparation.pendingInteractions)
+        assertEquals(setOf(ToolInteractionKind.APPROVAL), preparation.kinds)
         assertTrue(preparation.replacements.getValue(1).isPending)
     }
 
@@ -319,10 +319,10 @@ class ToolCallRuntimeGateTest {
         val resumed = runtime.prepareBatch(
             messageId = messageId,
             calls = decided,
-            toolIndex = runtime.buildIndex(listOf(automatic, approval)),
+            toolIndex = freezeToolSet(listOf(automatic, approval)).bindingsByName,
             availability = ToolInteractionAvailability.FULL,
         )
-        assertTrue(resumed.pendingInteractions.isEmpty())
+        assertTrue(resumed.pending.isEmpty())
         assertEquals(
             listOf(0, 0),
             resumed.resolvedCalls.filterIsInstance<ResolvedToolCall.Executable>()
@@ -341,7 +341,7 @@ class ToolCallRuntimeGateTest {
         val prepared = prepare(original, listOf(automatic))
         val durable = original.after(prepared)
 
-        assertTrue(prepared.pendingInteractions.isEmpty())
+        assertTrue(prepared.pending.isEmpty())
         assertEquals(setOf(0, 1), prepared.replacements.keys)
         assertEquals(0, ToolRuntimeMetadata.resultBatchOrdinalOf(durable[0].metadata))
         assertEquals(0, ToolRuntimeMetadata.resultBatchOrdinalOf(durable[1].metadata))
@@ -349,7 +349,7 @@ class ToolCallRuntimeGateTest {
         val resumed = runtime.prepareBatch(
             messageId = messageId,
             calls = listOf(LocatedToolCall(1, durable[1])),
-            toolIndex = runtime.buildIndex(listOf(automatic)),
+            toolIndex = freezeToolSet(listOf(automatic)).bindingsByName,
             availability = ToolInteractionAvailability.FULL,
         )
         assertEquals(

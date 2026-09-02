@@ -5,6 +5,8 @@ import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.Model
+import net.weero.measix.pilot.data.ai.tools.PendingInteraction
+import net.weero.measix.pilot.data.ai.tools.ToolInteractionKind
 import net.weero.measix.pilot.service.runtime.TurnOutcome
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -29,7 +31,9 @@ class GenerationSideEffectsTest {
     @Test
     fun `only completed turns launch completion side effects`() {
         assertTrue(shouldLaunchCompletionSideEffects(TurnOutcome.Completed))
-        assertFalse(shouldLaunchCompletionSideEffects(TurnOutcome.AwaitingApproval))
+        assertFalse(shouldLaunchCompletionSideEffects(TurnOutcome.AwaitingApproval(
+            listOf(PendingInteraction(me.rerere.ai.core.ToolCallLocator(kotlin.uuid.Uuid.random(), 0), ToolInteractionKind.APPROVAL)),
+        )))
         assertFalse(shouldLaunchCompletionSideEffects(TurnOutcome.Incomplete("step_limit")))
         assertFalse(shouldLaunchCompletionSideEffects(null))
     }

@@ -503,7 +503,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                                 add(buildJsonObject {
                                     put("name", JsonPrimitive(tool.name))
                                     put("description", JsonPrimitive(tool.description))
-                                    tool.parameters()?.let { schema ->
+                                    tool.parameters?.let { schema ->
                                         put(
                                             key = "parametersJsonSchema",
                                             element = schema.removeElements(listOf("\$schema")),
@@ -977,7 +977,8 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
         val promptTokens = jsonObject["promptTokenCount"]?.jsonPrimitiveOrNull?.longOrNull
         val thoughtTokens = jsonObject["thoughtsTokenCount"]?.jsonPrimitiveOrNull?.longOrNull
-        val candidatesTokens = jsonObject["candidatesTokenCount"]?.jsonPrimitiveOrNull?.longOrNull
+        val candidatesTokens = (jsonObject["candidatesTokenCount"] ?: jsonObject["responseTokenCount"])
+            ?.jsonPrimitiveOrNull?.longOrNull
         val toolUseInputTokens = jsonObject["toolUsePromptTokenCount"]?.jsonPrimitiveOrNull?.longOrNull
         return ProviderUsageSnapshot(
             inputTokens = promptTokens?.let { sumTokenCountsOrNull(it, toolUseInputTokens ?: 0L) },

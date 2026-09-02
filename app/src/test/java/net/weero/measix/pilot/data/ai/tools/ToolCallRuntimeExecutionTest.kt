@@ -190,7 +190,7 @@ class ToolCallRuntimeExecutionTest {
         val preparation = runtime.prepareBatch(
             messageId = Uuid.random(),
             calls = listOf(LocatedToolCall(0, source)),
-            toolIndex = runtime.buildIndex(listOf(tool)),
+            toolIndex = freezeToolSet(listOf(tool)).bindingsByName,
             availability = ToolInteractionAvailability.FULL,
         )
         return (preparation.resolvedCalls.single() as ResolvedToolCall.Executable).call

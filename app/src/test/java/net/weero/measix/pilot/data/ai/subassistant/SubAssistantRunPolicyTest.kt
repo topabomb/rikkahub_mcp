@@ -615,60 +615,6 @@ class SubAssistantRunPolicyTest {
         assertEquals(listOf("valid_tool"), filtered.map { it.name })
     }
 
-    @Test
-    fun `active target tools use snapshot and latest capability intersection`() {
-        val originalWorkspace = Uuid.random()
-        val replacementWorkspace = Uuid.random()
-        val retainedMcp = Uuid.random()
-        val revokedMcp = Uuid.random()
-        val newlyGrantedMcp = Uuid.random()
-        val snapshot = makeAssistant().copy(
-            enableWebSearch = true,
-            enableRecentChatsReference = true,
-            localTools = listOf(LocalToolOption.TimeInfo, LocalToolOption.Tts),
-            mcpServers = setOf(retainedMcp, revokedMcp),
-            workspaceId = originalWorkspace,
-            enabledSkills = setOf("retained", "revoked"),
-        )
-        val latest = snapshot.copy(
-            enableWebSearch = false,
-            localTools = listOf(LocalToolOption.TimeInfo, LocalToolOption.Calendar),
-            mcpServers = setOf(retainedMcp, newlyGrantedMcp),
-            workspaceId = replacementWorkspace,
-            enabledSkills = setOf("retained", "new"),
-        )
-
-        val effective = intersectTargetToolCapabilities(snapshot, latest)
-
-        assertFalse(effective.enableWebSearch)
-        assertTrue(effective.enableRecentChatsReference)
-        assertEquals(listOf(LocalToolOption.TimeInfo), effective.localTools)
-        assertEquals(setOf(retainedMcp), effective.mcpServers)
-        assertEquals(null, effective.workspaceId)
-        assertEquals(setOf("retained"), effective.enabledSkills)
-    }
-
-    @Test
-    fun `active target step rebuild applies Assistant and tool-name ceilings`() = runTest {
-        val retained = Tool(name = "retained", description = "", execute = { emptyList() })
-        val newlyAvailable = Tool(name = "newly_available", description = "", execute = { emptyList() })
-        val snapshot = makeAssistant().copy(enableWebSearch = false)
-        val latest = snapshot.copy(enableWebSearch = true)
-        var effectiveAssistant: Assistant? = null
-
-        val effective = buildTargetStepTools(
-            snapshot = snapshot,
-            latest = latest,
-            runStartToolNames = setOf(retained.name),
-        ) { assistant ->
-            effectiveAssistant = assistant
-            listOf(newlyAvailable, retained)
-        }
-
-        assertFalse(requireNotNull(effectiveAssistant).enableWebSearch)
-        assertEquals(listOf(retained.name), effective.map { it.name })
-    }
-
     // ---- buildToolCreatedAssistant ----
 
     @Test

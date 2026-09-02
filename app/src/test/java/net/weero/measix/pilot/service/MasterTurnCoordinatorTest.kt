@@ -15,11 +15,12 @@ import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.service.runtime.ActiveTurnState
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationTransition
 import net.weero.measix.pilot.service.runtime.TurnHandle
 import net.weero.measix.pilot.service.runtime.ResolveToolInteraction
 import net.weero.measix.pilot.service.runtime.ToolUserDecision
+import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -31,7 +32,7 @@ class MasterTurnCoordinatorTest {
     private fun approvalSnapshot(
         approvalState: ToolApprovalState,
         metadata: JsonObject? = null,
-    ): Pair<Uuid, ConversationSnapshot> {
+    ): Pair<Uuid, ConversationAggregateSnapshot> {
         val turnId = Uuid.random()
         val message = UIMessage(
             id = Uuid.random(),
@@ -64,8 +65,9 @@ class MasterTurnCoordinatorTest {
     fun `fresh approval overlay never creates a false attachment backfill`() {
         val (_, snapshot) = approvalSnapshot(ToolApprovalState.Pending)
 
-        // renderNodes is intentionally a fresh per-read overlay; its identity is never a write signal.
-        assertTrue(snapshot.renderNodes !== snapshot.renderNodes)
+        // UI 合并只是 projection 层的每次新覆盖；durable backfill 规划只读 aggregate nodes。
+        val presentation = snapshot.toPresentationSnapshot()
+        assertTrue(presentation.nodes.last() !== snapshot.nodes.last())
         assertTrue(planDurableAttachmentRefBackfills(snapshot).isEmpty())
     }
 

@@ -34,6 +34,8 @@ import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.service.ApplicationRecoveryGate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -138,7 +140,7 @@ class ConversationCommandCoordinatorTest {
         val before = runtime.snapshot.value
         runtime.publishCommitted(
             before,
-            StartTurn(Uuid.random(), Uuid.random(), resume = false, epoch = 1L),
+            StartTurn(turnId = Uuid.random(), assistantNodeId = Uuid.random(), assistantMessageId = Uuid.random(), anchorNodeId = Uuid.random(), anchorMessageId = Uuid.random(), expectedSelectedPrefixMessageIds = emptyList(), modelContextCandidate = "", epoch = 1L),
             before.copy(
                 activeTurn = ActiveTurnState(
                     epoch = 1L,
@@ -215,8 +217,8 @@ class ConversationCommandCoordinatorTest {
         val loadCaptured = CompletableDeferred<Unit>()
         val releaseLoad = CompletableDeferred<Unit>()
         val repository = mockk<ConversationRepository>()
-        coEvery { repository.getConversationById(id) } coAnswers {
-            val captured = durable.get()
+        coEvery { repository.getConversationSnapshotById(id) } coAnswers {
+            val captured = durable.get().toSnapshot()
             loadCaptured.complete(Unit)
             releaseLoad.await()
             captured
@@ -356,8 +358,8 @@ class ConversationCommandCoordinatorTest {
 
         val failure = runCatching {
             coordinator.createTree(
-                Conversation.ofId(masterId),
-                listOf(Conversation.ofId(childId).copy(parentConversationId = masterId)),
+                Conversation.ofId(masterId).toSnapshot(),
+                listOf(Conversation.ofId(childId).copy(parentConversationId = masterId).toSnapshot()),
             )
         }.exceptionOrNull()
 
@@ -388,7 +390,7 @@ class ConversationCommandCoordinatorTest {
     fun `corrupt aggregate load publishes Failed and never Ready`() = runTest {
         val id = Uuid.random()
         val repository = mockk<ConversationRepository>()
-        coEvery { repository.getConversationById(id) } throws
+        coEvery { repository.getConversationSnapshotById(id) } throws
             ConversationPayloadException("invalid message payload")
         val appScope = AppScope(Dispatchers.Default)
         val registry = ConversationRuntimeRegistry(appScope, repository, ConversationOperationLocks())
@@ -406,7 +408,10 @@ class ConversationCommandCoordinatorTest {
     fun `start turn persists slot and running fact in one transaction call`() = runTest {
         val id = Uuid.random()
         val scope = CoroutineScope(Job())
-        val runtime = ConversationRuntime(id, Conversation.ofId(id).toSnapshot(), scope, {})
+        val conversation = Conversation.ofId(id).copy(
+            messageNodes = listOf(MessageNode.of(UIMessage.user("question"))),
+        )
+        val runtime = ConversationRuntime(id, conversation.toSnapshot(), scope, {})
         val registry = mockk<ConversationRuntimeRegistry>()
         val repository = mockk<ConversationRepository>()
         coEvery { registry.loadRuntime(id) } returns runtime
@@ -418,7 +423,15 @@ class ConversationCommandCoordinatorTest {
         val assistantId = Uuid.random()
         runtime.installActiveRequest(turnId, Job())
 
-        val handle = coordinator.startTurn(id, turnId, assistantId, resume = false)
+        val handle = coordinator.startTurn(
+            id,
+            ConversationTransition.buildStartTurnCommand(
+                current = runtime.snapshot.value,
+                turnId = turnId,
+                modelContextCandidate = disclosureCandidate(),
+                assistantMessageId = assistantId,
+            ),
+        )
 
         assertEquals(turnId, handle.turnId)
         val mutate = write.captured as ConversationWrite.Mutate
@@ -427,6 +440,52 @@ class ConversationCommandCoordinatorTest {
         assertEquals(TurnExecutionStatus.RUNNING, mutate.executionFacts?.turn?.status)
         assertEquals(assistantId.toString(), mutate.executionFacts?.turn?.assistantMessageId)
         assertEquals(123L, mutate.executionFacts?.turn?.createdAt)
+        // 首次 START 的目标分支没有历史 entry：candidate 必然构成新 baseline，随同一事务插入。
+        assertEquals(
+            listOf(assistantId),
+            mutate.mutation.insertedModelContextEntries.map { it.ownerMessageId },
+        )
+        coVerify(exactly = 1) { repository.commit(any()) }
+        scope.cancel()
+    }
+
+    /**
+     * §17.3「entry 写失败不得发布 StartTurn Runtime snapshot；已提交 USER 保留」：
+     * durable commit 抛错时，Runtime 仍停留在 USER-only 树，没有 activeTurn，也没有 Assistant slot。
+     */
+    @Test
+    fun `failed START commit publishes nothing and keeps the committed user message`() = runTest {
+        val id = Uuid.random()
+        val scope = CoroutineScope(Job())
+        val userNode = MessageNode.of(UIMessage.user("question"))
+        val conversation = Conversation.ofId(id).copy(messageNodes = listOf(userNode))
+        val runtime = ConversationRuntime(id, conversation.toSnapshot(), scope, {})
+        val registry = mockk<ConversationRuntimeRegistry>()
+        val repository = mockk<ConversationRepository>()
+        coEvery { registry.loadRuntime(id) } returns runtime
+        every { registry.isDraft(id) } returns false
+        coEvery { repository.commit(any()) } throws IllegalStateException("model context row conflicts")
+        val coordinator = coordinator(registry, repository)
+        val turnId = Uuid.random()
+        runtime.installActiveRequest(turnId, Job())
+        val before = runtime.snapshot.value
+
+        val failure = runCatching {
+            coordinator.startTurn(
+                id,
+                ConversationTransition.buildStartTurnCommand(
+                    current = before,
+                    turnId = turnId,
+                    modelContextCandidate = disclosureCandidate(),
+                    assistantMessageId = Uuid.random(),
+                ),
+            )
+        }.exceptionOrNull()
+
+        assertNotNull(failure)
+        assertEquals(before, runtime.snapshot.value)
+        assertNull(runtime.snapshot.value.activeTurn)
+        assertEquals(listOf(userNode.id), runtime.snapshot.value.nodes.map { it.id })
         coVerify(exactly = 1) { repository.commit(any()) }
         scope.cancel()
     }
@@ -435,7 +494,10 @@ class ConversationCommandCoordinatorTest {
     fun `rejected start turn does not consume epoch`() = runTest {
         val id = Uuid.random()
         val scope = CoroutineScope(Job())
-        val runtime = ConversationRuntime(id, Conversation.ofId(id).toSnapshot(), scope, {})
+        val conversation = Conversation.ofId(id).copy(
+            messageNodes = listOf(MessageNode.of(UIMessage.user("question"))),
+        )
+        val runtime = ConversationRuntime(id, conversation.toSnapshot(), scope, {})
         val registry = mockk<ConversationRuntimeRegistry>()
         val repository = mockk<ConversationRepository>()
         coEvery { registry.loadRuntime(id) } returns runtime
@@ -444,18 +506,27 @@ class ConversationCommandCoordinatorTest {
         val coordinator = coordinator(registry, repository)
         val turnId = Uuid.random()
         val assistantId = Uuid.random()
+        val command = ConversationTransition.buildStartTurnCommand(
+            current = runtime.snapshot.value,
+            turnId = turnId,
+            modelContextCandidate = disclosureCandidate(),
+            assistantMessageId = assistantId,
+        )
 
         val rejected = runCatching {
-            coordinator.startTurn(id, turnId, assistantId, resume = false)
+            coordinator.startTurn(id, command)
         }.exceptionOrNull()
 
         assertTrue(rejected is ConversationCommandConflictException)
         coVerify(exactly = 0) { repository.commit(any()) }
 
         runtime.installActiveRequest(turnId, Job())
-        val handle = coordinator.startTurn(id, turnId, assistantId, resume = false)
+        val handle = coordinator.startTurn(id, command)
 
         assertEquals(1L, handle.epoch)
+        // 发布的 durable activeTurn 必须携带同一 epoch：否则首个 checkpoint 的 owner 校验
+        // 就会拒绝，turn 永远无法提交。
+        assertEquals(1L, runtime.snapshot.value.activeTurn?.epoch)
         scope.cancel()
     }
 
@@ -486,17 +557,17 @@ class ConversationCommandCoordinatorTest {
         every { registry.findRuntime(rootId) } returns null
         every { registry.findRuntime(childId) } returns null
         coEvery { registry.evictRuntime(any()) } returns Unit
-        coEvery { repository.getConversationById(rootId) } returns root
+        coEvery { repository.getConversationSnapshotById(rootId) } returns root.toSnapshot()
         coEvery { repository.getConversationHeader(rootId) } returns root.toSnapshot().header
         coEvery { repository.getChildConversationIds(rootId) } returns listOf(childId)
-        coEvery { repository.getChildConversations(rootId) } returns listOf(child)
+        coEvery { repository.getChildConversationSnapshots(rootId) } returns listOf(child.toSnapshot())
         coEvery { repository.deleteConversation(rootId) } returns Unit
         val coordinator = coordinator(registry, repository)
 
         val deleted = coordinator.deleteCapturingTree(rootId)
 
-        assertEquals(root, deleted.root)
-        assertEquals(listOf(child), deleted.children)
+        assertEquals(root.toSnapshot(), deleted.root)
+        assertEquals(listOf(child.toSnapshot()), deleted.children)
         coVerify(exactly = 1) { repository.deleteConversation(rootId) }
         coVerify(exactly = 1) { registry.evictRuntime(rootId) }
         coVerify(exactly = 1) { registry.evictRuntime(childId) }
@@ -561,7 +632,16 @@ class ConversationCommandCoordinatorTest {
         val handle = TurnHandle(runtime.id, 1L, oldTurnId, assistant.id)
         runtime.publishCommitted(
             runtime.snapshot.value,
-            StartTurn(oldTurnId, assistant.id, resume = false, epoch = 1L),
+            StartTurn(
+                turnId = oldTurnId,
+                assistantNodeId = Uuid.random(),
+                assistantMessageId = assistant.id,
+                anchorNodeId = Uuid.random(),
+                anchorMessageId = Uuid.random(),
+                expectedSelectedPrefixMessageIds = emptyList(),
+                modelContextCandidate = "",
+                epoch = 1L,
+            ),
             runtime.snapshot.value.copy(
                 activeTurn = ActiveTurnState(
                     epoch = 1L,

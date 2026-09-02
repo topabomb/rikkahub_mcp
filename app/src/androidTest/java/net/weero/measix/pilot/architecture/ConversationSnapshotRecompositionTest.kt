@@ -14,7 +14,8 @@ import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.service.runtime.ActiveTurnState
 import net.weero.measix.pilot.service.runtime.ConversationHeader
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
+import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -36,7 +37,7 @@ class ConversationSnapshotRecompositionTest {
             add(UIMessage.assistant("initial").copy(id = assistantMessageId).toMessageNode())
         }
         var snapshot by mutableStateOf(
-            ConversationSnapshot(
+            ConversationAggregateSnapshot(
                 conversationId = conversationId,
                 header = header(conversationId),
                 nodes = nodes,
@@ -54,7 +55,7 @@ class ConversationSnapshotRecompositionTest {
 
         compose.setContent {
             MeasuredHeader(snapshot.header, compositions)
-            val rendered = snapshot.renderNodes
+            val rendered = snapshot.toPresentationSnapshot().nodes
             MeasuredNode("history", rendered.first(), compositions)
             MeasuredNode("active", rendered.last(), compositions)
         }

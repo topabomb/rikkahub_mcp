@@ -169,7 +169,7 @@ class TokenUsageAccountingTest {
     }
 
     @Test
-    fun `request summaries refresh only at their own triggers and otherwise carry within the turn`() {
+    fun `latest request derived summaries reset together while observed ttft persists`() {
         val accumulator = TurnUsageAccumulator.from(null)
 
         val sent = accumulator.recordRequestStarted(1_234)
@@ -199,10 +199,13 @@ class TokenUsageAccountingTest {
             .close(ProviderRequestOutcome.FAILED, providerRequestDurationMillis = 15)
         val second = accumulator.apply(missing).usage
 
+        // 估算值属于最新一次请求，不受累计缺失影响。
         assertEquals(2_345L, second.latestRequestEstimatedContextTokens)
+        // TTFT 表示最近一次实际观测到首个输出的请求，无输出请求不覆盖旧值。
         assertEquals(10L, second.latestRequestTimeToFirstOutputMillis)
-        assertEquals(50.0, second.latestRequestCacheHitPercent!!, 0.0)
-        assertEquals(200.0, second.latestRequestTokensPerSecond!!, 0.0)
+        // 命中率与吞吐率只属于最近一次已关闭请求，缺失必须传播，不能沿用上一请求的值。
+        assertNull(second.latestRequestCacheHitPercent)
+        assertNull(second.latestRequestTokensPerSecond)
         assertEquals(2, second.observedProviderRequestCount)
     }
 

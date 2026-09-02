@@ -38,7 +38,7 @@ class TurnRecoveryTest {
         val coordinator = mockk<ConversationCommandCoordinator>(relaxed = true)
         coEvery { repository.getRecoverableTurnExecutionsByConversation() } returns
             mapOf(conversationId to listOf(execution))
-        coEvery { repository.getConversationById(conversationId) } returns conversation
+        coEvery { repository.getConversationSnapshotById(conversationId) } returns conversation.toSnapshot()
         val scope = CoroutineScope(Job())
         coEvery { coordinator.load(conversationId) } returns
             ConversationRuntime(conversationId, conversation.toSnapshot(), scope, {})

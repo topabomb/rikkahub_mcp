@@ -31,6 +31,7 @@ import net.weero.measix.pilot.data.files.OwnedArtifact
 import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
+import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
@@ -465,5 +466,5 @@ class ConversationAttachmentPreviewProjectorTest {
         id = Uuid.random(),
         assistantId = DEFAULT_ASSISTANT_ID,
         messages = messages.map(UIMessage::toMessageNode),
-    ).toSnapshot()
+    ).toSnapshot().toPresentationSnapshot()
 }

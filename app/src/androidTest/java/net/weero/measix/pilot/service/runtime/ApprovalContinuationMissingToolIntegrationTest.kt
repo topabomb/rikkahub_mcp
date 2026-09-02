@@ -103,6 +103,7 @@ class ApprovalContinuationMissingToolIntegrationTest {
             messageFtsManager = MessageFtsManager(database),
             turnExecutionDAO = database.turnExecutionDao(),
             toolExecutionDAO = database.toolExecutionDao(),
+            modelContextDAO = database.conversationModelContextDao(),
             artifactStore = artifactStore,
         )
         val operationLocks = ConversationOperationLocks()
@@ -130,7 +131,7 @@ class ApprovalContinuationMissingToolIntegrationTest {
     }
 
     @Test
-    fun approvedToolRemovedBeforeContinuationPersistsFailedResultWithoutExecutionOnOriginalTurn() = runBlocking {
+    fun approvalContinuationReusesFrozenToolBindingOnOriginalTurn() = runBlocking {
         val model = Model(modelId = "test-model", displayName = "Test Model")
         val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
         val assistant = Assistant(chatModelId = model.id, enableMemory = false)
@@ -144,7 +145,6 @@ class ApprovalContinuationMissingToolIntegrationTest {
             context = context,
             providerManager = ProviderManager(httpClient, context),
             json = Json,
-            memoryRepo = MemoryRepository(database.memoryDao()),
             attachmentResolver = AttachmentResolver(
                 artifactStore = artifactStore,
             ),
@@ -162,7 +162,6 @@ class ApprovalContinuationMissingToolIntegrationTest {
             ),
         )
         var toolExecuted = false
-        var toolAvailable = true
         val revocableTool = Tool(
             name = "revocable_tool",
             description = "Requires approval before execution.",
@@ -172,21 +171,33 @@ class ApprovalContinuationMissingToolIntegrationTest {
                 listOf(UIMessagePart.Text("executed"))
             },
         )
-        val toolProvider: suspend () -> List<Tool> = {
-            if (toolAvailable) listOf(revocableTool) else emptyList()
-        }
+        val requestContext = androidTestTurnRequestContext(
+            settings = settings,
+            model = model,
+            assistant = assistant,
+            tools = listOf(revocableTool),
+        )
 
         var startedTurn: TurnEngine.StartedTurn? = null
         var initialFailure: Throwable? = null
         val initialWorker = appScope.launch(start = CoroutineStart.LAZY) {
             try {
-                assertSame(coroutineContext[Job], runtime.currentWorker())
+                val worker = requireNotNull(coroutineContext[Job])
+                assertSame(worker, runtime.currentWorker())
+                runtime.bindTurnRequestContext(turnId, worker, requestContext)
                 val started = TurnEngine.start(
                     commandCoordinator = coordinator,
                     runtime = runtime,
                     turnId = turnId,
-                    messages = listOf(userMessage),
+                    modelContextCandidate = disclosureCandidate(),
                     turnFinalization = turnFinalization,
+                )
+                // 与 MasterTurnCoordinator.launchRun 同一协议：START 提交后立即绑定冻结
+                // projection，审批续接才能复用同一引用。
+                runtime.bindModelContextProjection(
+                    turnId,
+                    worker,
+                    ConversationTransition.projectTurnModelContext(runtime.snapshot.value),
                 )
                 startedTurn = started
                 val waitingMessage = UIMessage(
@@ -205,12 +216,8 @@ class ApprovalContinuationMissingToolIntegrationTest {
                     generationLoop.run(
                         GenerationRequest(
                             conversationId = kotlin.uuid.Uuid.random(),
-                            settings = settings,
-                            model = model,
-                            mediaCapabilities = RequestMediaCapabilities.NONE,
+                            requestContext = requestContext,
                             messages = listOf(userMessage, waitingMessage),
-                            assistant = assistant,
-                            toolProvider = toolProvider,
                             maxSteps = 1,
                             assistantMessageId = waitingMessage.id,
                             onCheckpoint = started.engine::onCheckpoint,
@@ -275,10 +282,11 @@ class ApprovalContinuationMissingToolIntegrationTest {
                     turnId = owner.turnId,
                     assistantMessageId = owner.assistantMessageId,
                 )
-                toolAvailable = false
                 val worker = appScope.launch(start = CoroutineStart.LAZY) {
                     try {
-                        assertSame(coroutineContext[Job], runtime.currentWorker())
+                        val activeWorker = requireNotNull(coroutineContext[Job])
+                        assertSame(activeWorker, runtime.currentWorker())
+                        assertSame(requestContext, runtime.requireTurnRequestContext(turnId, activeWorker))
                         val approvedMessages = runtime.snapshot.value.currentMessages()
                         assertEquals(
                             ToolApprovalState.Approved,
@@ -296,12 +304,8 @@ class ApprovalContinuationMissingToolIntegrationTest {
                             generationLoop.run(
                                 GenerationRequest(
                                     conversationId = kotlin.uuid.Uuid.random(),
-                                    settings = settings,
-                                    model = model,
-                                    mediaCapabilities = RequestMediaCapabilities.NONE,
+                                    requestContext = requestContext,
                                     messages = approvedMessages,
-                                    assistant = assistant,
-                                    toolProvider = toolProvider,
                                     maxSteps = 1,
                                     assistantMessageId = continuation.assistantMessageId,
                                     onCheckpoint = { checkpoint ->
@@ -335,24 +339,23 @@ class ApprovalContinuationMissingToolIntegrationTest {
         continuationFailure?.let { throw AssertionError("approval continuation worker failed", it) }
         assertNull(runtime.currentWorker())
 
-        assertFalse(toolExecuted)
-        assertTrue(executionStatuses.isEmpty())
+        assertTrue(toolExecuted)
+        assertEquals(listOf("STARTED", "COMPLETED"), executionStatuses.map { it.name })
         val turns = repository.getTurnExecutions(conversationId)
         assertEquals(1, turns.size)
         assertEquals(turnId.toString(), turns.single().turnId)
         assertEquals(started.assistantMessageId.toString(), turns.single().assistantMessageId)
+        // maxSteps=1 被已批准的工具执行消耗，本 fixture 没有后续 Provider 应答，Turn 以 INCOMPLETE 收口；
+        // 本用例锁定的是 continuation 复用同一 turn/assistant 与冻结 binding，而非终态为 COMPLETED。
         assertEquals(TurnExecutionStatus.INCOMPLETE, turns.single().status)
 
         val executions = repository.getToolExecutions(turnId.toString())
-        assertTrue(executions.isEmpty())
+        assertEquals(1, executions.size)
 
         val reloaded = requireNotNull(repository.getConversationById(conversationId))
         val durableTool = reloaded.currentMessages.last().getTools().single()
-        assertTrue(
-            durableTool.output.filterIsInstance<UIMessagePart.Text>()
-                .single().text.contains("tool_not_available"),
-        )
-        assertEquals(ToolCallPhase.FAILED, resolveToolCallPhase(durableTool, null))
+        assertEquals("executed", durableTool.output.filterIsInstance<UIMessagePart.Text>().single().text)
+        assertEquals(ToolCallPhase.COMPLETED, resolveToolCallPhase(durableTool, null))
         assertEquals(runtime.snapshot.value.currentMessages().last().getTools().single(), durableTool)
         assertNull(runtime.snapshot.value.activeTurn)
     }

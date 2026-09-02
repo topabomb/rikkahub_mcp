@@ -21,9 +21,15 @@ import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
+import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
+import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.test.testTurnRequestContext
 import net.weero.measix.pilot.data.ai.CheckpointKind
 import net.weero.measix.pilot.data.ai.ToolResultEvent
+import net.weero.measix.pilot.data.ai.TurnModelContextProjection
 import net.weero.measix.pilot.data.ai.ToolResultEventStatus
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.model.Conversation
@@ -31,11 +37,13 @@ import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
+import net.weero.measix.pilot.service.applyToolUserDecision
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import kotlin.uuid.Uuid
 
@@ -53,7 +61,7 @@ class ConversationRuntimeTest {
 
     private val commandLock = Mutex()
 
-    private suspend fun ConversationRuntime.applyCommand(command: ConversationCommand): ConversationSnapshot =
+    private suspend fun ConversationRuntime.applyCommand(command: ConversationCommand): ConversationAggregateSnapshot =
         commandLock.withLock {
             val old = snapshot.value
             if (command is StartTurn) {
@@ -74,25 +82,37 @@ class ConversationRuntimeTest {
     private suspend fun ConversationRuntime.startTurn(
         turnId: Uuid,
         assistantMessageId: Uuid,
-        resume: Boolean = false,
     ): TurnHandle {
         if (currentGenerationTurnId() != turnId) {
             installActiveRequest(turnId, Job())
         }
-        applyCommand(StartTurn(turnId, assistantMessageId, resume))
+        // START 必须锚定真实 USER：空树先落一条用户消息，模拟首个 durable 边界。
+        if (snapshot.value.nodes.isEmpty()) {
+            applyCommand(AppendUserMessage(user("anchor")))
+        }
+        applyCommand(
+            ConversationTransition.buildStartTurnCommand(
+                current = snapshot.value,
+                turnId = turnId,
+                modelContextCandidate = disclosureCandidate(),
+                assistantMessageId = assistantMessageId,
+            ),
+        )
         val active = requireNotNull(snapshot.value.activeTurn)
         val handle = TurnHandle(id, active.epoch, active.turnId, active.assistantMessageId)
         markRunning(handle)
         return handle
     }
 
-    private fun runtime(scope: CoroutineScope, onIdle: () -> Unit = {}): ConversationRuntime =
-        ConversationRuntime(
-            id = Uuid.random(),
-            initial = Conversation.ofId(Uuid.random(), assistantId = DEFAULT_ASSISTANT_ID).toSnapshot(),
+    private fun runtime(scope: CoroutineScope, onIdle: () -> Unit = {}): ConversationRuntime {
+        val conversationId = Uuid.random()
+        return ConversationRuntime(
+            id = conversationId,
+            initial = Conversation.ofId(conversationId, assistantId = DEFAULT_ASSISTANT_ID).toSnapshot(),
             scope = scope,
             onIdle = { onIdle() },
         )
+    }
 
     @Test
     fun `concurrent submits have no lost updates`() = runTest {
@@ -234,6 +254,87 @@ class ConversationRuntimeTest {
     }
 
     @Test
+    fun `request context binds once and approval continuation preserves the same reference`() = runTest {
+        val scope = CoroutineScope(Job())
+        val rt = runtime(scope)
+        val turnId = Uuid.random()
+        val handle = rt.startTurn(turnId, Uuid.random())
+        val initialWorker = requireNotNull(rt.currentWorker())
+        val model = Model(modelId = "model", displayName = "Model")
+        val provider = ProviderSetting.OpenAI(models = listOf(model))
+        val assistant = Assistant(enableMemory = false)
+        val context = testTurnRequestContext(
+            settings = Settings(providers = listOf(provider), assistants = listOf(assistant)),
+            model = model,
+            assistant = assistant,
+        )
+
+        rt.bindTurnRequestContext(turnId, initialWorker, context)
+        val projection = TurnModelContextProjection(entries = emptyList(), locators = emptyMap())
+        rt.bindModelContextProjection(turnId, initialWorker, projection)
+        assertSame(context, rt.requireTurnRequestContext(turnId, initialWorker))
+        assertSame(projection, rt.requireTurnModelContextProjection(turnId, initialWorker))
+        assertThrows(IllegalStateException::class.java) {
+            rt.bindTurnRequestContext(turnId, initialWorker, context)
+        }
+        assertThrows(IllegalStateException::class.java) {
+            rt.bindModelContextProjection(turnId, initialWorker, projection)
+        }
+        assertThrows(IllegalStateException::class.java) {
+            rt.requireTurnRequestContext(Uuid.random(), initialWorker)
+        }
+        assertThrows(IllegalStateException::class.java) {
+            rt.requireTurnRequestContext(turnId, Job())
+        }
+
+        rt.retainAwaitingApproval(handle)
+        val continuationWorker = Job()
+        rt.continueAwaitingApproval(handle, continuationWorker)
+        assertSame(context, rt.requireTurnRequestContext(turnId, continuationWorker))
+        assertSame(projection, rt.requireTurnModelContextProjection(turnId, continuationWorker))
+        scope.cancel()
+    }
+
+    @Test
+    fun `cancelled Child owner releases only by exact turn and worker identity`() = runTest {
+        val scope = CoroutineScope(Job())
+        val rt = runtime(scope)
+        val turnId = Uuid.random()
+        val worker = Job()
+        rt.installActiveRequest(turnId, worker)
+        val model = Model(modelId = "model", displayName = "Model")
+        val provider = ProviderSetting.OpenAI(models = listOf(model))
+        val assistant = Assistant(enableMemory = false)
+        val context = testTurnRequestContext(
+            settings = Settings(providers = listOf(provider), assistants = listOf(assistant)),
+            model = model,
+            assistant = assistant,
+        )
+        rt.bindTurnRequestContext(turnId, worker, context)
+        rt.requestCancel(turnId, "target_access_revoked")
+        assertEquals(ConversationTurnPhase.STOPPING, rt.currentTurnPresentation().phase)
+
+        rt.releaseActiveRequest(turnId, Job(), retainAwaitingOwner = false)
+        assertSame(context, rt.requireTurnRequestContext(turnId, worker))
+        rt.releaseActiveRequest(turnId, worker, retainAwaitingOwner = false)
+        assertEquals(null, rt.currentWorker())
+        scope.cancel()
+    }
+
+    @Test
+    fun `approval continuation fails closed when request context is missing`() = runTest {
+        val scope = CoroutineScope(Job())
+        val rt = runtime(scope)
+        val handle = rt.startTurn(Uuid.random(), Uuid.random())
+        rt.retainAwaitingApproval(handle)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            rt.continueAwaitingApproval(handle, Job())
+        }
+        scope.cancel()
+    }
+
+    @Test
     fun `tool approval updates the durable tree without replacing the active turn owner`() = runTest {
         val scope = CoroutineScope(Job())
         val rt = runtime(scope)
@@ -287,6 +388,94 @@ class ConversationRuntimeTest {
         assertEquals(ConversationTurnPhase.AWAITING_USER, rt.currentTurnPresentation().phase)
         rt.markRunning(handle)
         assertEquals(ConversationTurnPhase.GENERATING, rt.currentTurnPresentation().phase)
+        scope.cancel()
+    }
+
+    /**
+     * 回归（2026-9-2 15:01）：生产里 HITL 的真实顺序是"流式先投递 Auto 版本，AWAITING_APPROVAL
+     * checkpoint 才带来 Pending 版本"。afterCheckpoint 此前只同步 toolCallPhases，activeTurn
+     * 的 messages 停留在 Auto 版本，而 currentMessages() 末条取自 turn.messages.last()，
+     * applyToolUserDecision 因此读到非 Pending 并抛 "tool interaction is no longer pending"。
+     * 勿删除本用例（相邻用例流式与 checkpoint 同为 Pending 版本，覆盖不到这条路径）。
+     */
+    @Test
+    fun `awaiting approval checkpoint replaces the streamed Auto tool with its Pending version`() = runTest {
+        val scope = CoroutineScope(Job())
+        val rt = runtime(scope)
+        val handle = rt.startTurn(Uuid.random(), Uuid.random())
+        val streamed = UIMessage(
+            id = handle.assistantMessageId,
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "approval",
+                    toolName = "approval_tool",
+                    input = "{}",
+                    // 流式版本：provider 尚未落 HITL 状态，工具仍是 Auto。
+                    approvalState = ToolApprovalState.Auto,
+                )
+            ),
+        )
+        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, listOf(streamed)))
+
+        val pending = streamed.copy(
+            parts = listOf(
+                (streamed.parts.single() as UIMessagePart.Tool).copy(
+                    approvalState = ToolApprovalState.Pending,
+                )
+            ),
+        )
+        rt.applyCommand(CommitCheckpoint(
+                handle = handle,
+                kind = CheckpointKind.AWAITING_APPROVAL,
+                messages = listOf(pending),
+                turnStatus = TurnExecutionStatus.AWAITING_APPROVAL,
+                turnReason = null,
+                toolExecution = null,
+            )
+        )
+        rt.retainAwaitingApproval(handle)
+
+        val locator = ToolCallLocator(handle.assistantMessageId, 0)
+        // 决策路径读到的必须是 checkpoint 提交的 Pending 版本，而不是流式的 Auto 版本。
+        assertEquals(
+            ToolApprovalState.Pending,
+            rt.snapshot.value.currentMessages().last().getTools().single().approvalState,
+        )
+        assertEquals(
+            ToolCallPhase.AWAITING_APPROVAL,
+            rt.snapshot.value.activeTurn?.toolCallPhases?.get(locator),
+        )
+
+        // 走与生产同一条 applyToolUserDecision：非 Pending 会在定位阶段就抛冲突异常，
+        // 能提交即证明投影已对齐 checkpoint 的 committed 版本。
+        val submitted = mutableListOf<ResolveToolInteraction>()
+        var continuedTurnId: Uuid? = null
+        applyToolUserDecision(
+            locator = locator,
+            decision = ToolUserDecision.Approve,
+            awaitPreviousGeneration = {},
+            currentSnapshot = { rt.snapshot.value },
+            submit = { command ->
+                submitted += command
+                rt.applyCommand(command)
+            },
+            onMoreApprovalsPending = { error("single approval must continue its turn") },
+            continueTurn = { active, _ -> continuedTurnId = active.turnId },
+        )
+
+        assertEquals(1, submitted.size)
+        assertEquals(
+            ToolApprovalState.Approved,
+            rt.snapshot.value.currentMessages().last().getTools().single().approvalState,
+        )
+        assertEquals(
+            ToolApprovalState.Approved,
+            rt.snapshot.value.nodes.last().currentMessage.getTools().single().approvalState,
+        )
+        assertEquals(ToolCallPhase.READY, rt.snapshot.value.activeTurn?.toolCallPhases?.get(locator))
+        assertEquals(handle.turnId, rt.snapshot.value.activeTurn?.turnId)
+        assertEquals(handle.turnId, continuedTurnId)
         scope.cancel()
     }
 

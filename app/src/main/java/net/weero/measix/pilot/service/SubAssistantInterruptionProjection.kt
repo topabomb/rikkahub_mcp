@@ -62,7 +62,7 @@ internal fun reconcileMasterSubAssistantCalls(
     masterAssistantId: Uuid,
     masterNodes: List<MessageNode>,
     settings: Settings,
-    childrenById: Map<Uuid, Conversation>,
+    childrenById: Map<Uuid, net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot>,
     json: Json,
 ): SubAssistantReconciliation {
     val occurrences = buildList {
@@ -89,9 +89,9 @@ internal fun reconcileMasterSubAssistantCalls(
         val validChild = if (duplicateOrBlankRun) {
             null
         } else {
-            resolveValidChildLineage(masterId, metadata, childrenById)
+            resolveValidChildSnapshotLineage(masterId, metadata, childrenById)
         }
-        if (validChild != null) referenced += validChild.id
+        if (validChild != null) referenced += validChild.conversationId
 
         if (!metadata.state.isTerminal()) {
             val reason = if (duplicateOrBlankRun) {
@@ -100,13 +100,13 @@ internal fun reconcileMasterSubAssistantCalls(
                 resolveInterruptionReason(masterAssistantId, metadata, settings, validChild)
             }
             if (validChild != null) {
-                childReasons[validChild.id] = chooseMoreSpecificStopReason(
-                    childReasons[validChild.id],
+                childReasons[validChild.conversationId] = chooseMoreSpecificStopReason(
+                    childReasons[validChild.conversationId],
                     reason,
                 )
             }
             val taskId = metadata.childTaskNodeId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
-            val childMessages = validChild?.currentMessages.orEmpty()
+            val childMessages = validChild?.currentMessages().orEmpty()
             val outputs = collectSubAssistantCallOutputs(
                 messages = childMessages,
                 childTaskNodeId = taskId,
@@ -167,6 +167,26 @@ internal fun reconcileMasterSubAssistantCalls(
     )
 }
 
+internal fun resolveValidChildSnapshotLineage(
+    masterId: Uuid,
+    metadata: SubAssistantCallMetadata,
+    childrenById: Map<Uuid, net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot>,
+): net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot? {
+    val childId = metadata.childConversationId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+        ?: return null
+    val targetId = runCatching { Uuid.parse(metadata.targetAssistantId) }.getOrNull() ?: return null
+    val taskId = metadata.childTaskNodeId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+        ?: return null
+    val child = childrenById[childId] ?: return null
+    if (child.header.parentConversationId != masterId || child.header.assistantId != targetId) return null
+    val hasSelectedTask = child.nodes.any { node ->
+        node.selectIndex in node.messages.indices &&
+            node.currentMessage.id == taskId &&
+            node.currentMessage.role == MessageRole.USER
+    }
+    return child.takeIf { hasSelectedTask }
+}
+
 internal fun resolveValidChildLineage(
     masterId: Uuid,
     metadata: SubAssistantCallMetadata,
@@ -191,7 +211,7 @@ internal fun resolveInterruptionReason(
     masterAssistantId: Uuid,
     metadata: SubAssistantCallMetadata,
     settings: Settings,
-    validChild: Conversation?,
+    validChild: net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot?,
 ): String {
     val targetId = runCatching { Uuid.parse(metadata.targetAssistantId) }.getOrNull()
         ?: return "target_removed"

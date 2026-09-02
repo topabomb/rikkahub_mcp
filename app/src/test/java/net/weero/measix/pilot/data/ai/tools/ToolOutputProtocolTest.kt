@@ -53,7 +53,7 @@ class ToolOutputProtocolTest {
         assertTrue("tail=\"" in marker)
         assertTrue(marker.length < 300)
         assertEquals(
-            "[Archived tool result: ref=7; status=completed; lines=300]",
+            "[Archived tool result: ref=7; status=completed; lines=300; chars=40000]",
             buildToolOutputMarker(archive, "completed", "ok"),
         )
         assertThrows(IllegalArgumentException::class.java) {

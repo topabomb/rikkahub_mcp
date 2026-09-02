@@ -387,8 +387,9 @@ BackupReminderConfig { enabled=false, intervalDays=7, lastBackupTime=0 }
 
 当前手工备份格式是 `rikkahub-durable-v4`：包含 `settings.json`、独立的 `mcp_catalogs.json`、`VACUUM INTO` 得到的 Room
 snapshot、manifest，以及 `upload/images/skills/fonts` 四个 durable 目录；不包含
-`workspaces/tool_outputs/managed_configuration`。恢复仍接受 v3，并从旧 Settings 中一次性提取完整 MCP schema 后写入独立
-Catalog；空或不完整目录不迁移。ZIP 未加密、未签名，manifest 的 SHA-256 只提供完整性。Manifest 仍声明
+`workspaces/tool_outputs/managed_configuration`。Room v10 的 `conversation_model_context` 随 `measix_pilot.db` 整体备份和恢复，
+不增加 disclosure sidecar 或新 manifest 版本；settings-only 备份不携带会话 context。恢复仍接受 v3，并从旧 Settings 中一次性提取完整 MCP schema 后写入独立
+Catalog；空或不完整目录不迁移。`SettingsPersistenceContractTest` 用 `settings-golden.json` 锁定 `settings.json` 的逐字载荷（含 Provider/Model 覆盖、Assistant 枚举、显示设置、S3/WebDAV、TTS/ASR、模式注入与备份配置的默认值与嵌套表示），并另锁顶层字段顺序、Preferences key 名称/Boolean-String-Int-Float 类型清单，明确排除 disclosure/model-context 字段；`BackupArchiveServiceTest` 通过生产 `prepare` 验证 settings-only ZIP 只有 settings 与独立 Catalog。`BackupRestoreMigrationIntegrationTest` 在设备上覆盖两条链路：真实 v9 snapshot 封装为 durable-v4，经 `stageRestore`、冷启动文件交换和生产 migration 链打开为 v10 并装载历史 aggregate；以及已含 canonical context 行的 v10 库整体备份后换回，仍由生产 migration 链打开并经 Repository 逐字读回该 entry。ZIP 未加密、未签名，manifest 的 SHA-256 只提供完整性。Manifest 仍声明
 `allowBackup=true`，所以企业 credential 设计还必须单独审计 Android
 Auto Backup/设备迁移规则，不能只验证手工 ZIP。
 
@@ -413,6 +414,7 @@ CrashHandler 的独立 `crash_handler` SharedPreferences 保存 `crashed` 和截
 
 - `WorkspaceEntity`：`id/name/root/shellStatus/toolApprovals/createdAt/updatedAt/lastAccessAt`；
 - `ConversationEntity`：以 `assistantId` 固定会话归属，并可保存 `customSystemPrompt`、`modeInjectionIds`、`workspaceCwd`；
+- `conversation_model_context`：由 Assistant request variant 拥有、锚定因果 USER 的 canonical 会话披露事实；不属于 Settings、UI 投影或独立导出域；
 - `FolderEntity`：`id/assistantId/name/sortIndex/createAt`，作为某个 Assistant 下的 Local 会话分组；
 - Workspace shell 状态和时间戳是生命周期状态，`toolApprovals` 是 Local 用户覆盖；
 - 会话覆盖只有在 Assistant 对应 allow 字段开启时才生效。

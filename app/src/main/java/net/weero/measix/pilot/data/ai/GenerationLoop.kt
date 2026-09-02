@@ -21,7 +21,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
-import me.rerere.ai.core.Tool
+import me.rerere.ai.core.FrozenToolDefinition
 import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolMetadataDelivery
 import me.rerere.ai.core.ToolResourceLease
@@ -51,22 +51,21 @@ import net.weero.measix.pilot.data.ai.transformers.ThinkTagTransformer
 import net.weero.measix.pilot.data.ai.transformers.TransformerContext
 import net.weero.measix.pilot.data.ai.transformers.transforms
 import net.weero.measix.pilot.data.ai.tools.LocatedToolCall
+import net.weero.measix.pilot.data.ai.tools.PendingInteraction
 import net.weero.measix.pilot.data.ai.tools.ResolvedToolCall
 import net.weero.measix.pilot.data.ai.tools.ToolCallRuntime
 import net.weero.measix.pilot.data.ai.tools.ToolExecutionHooks
 import net.weero.measix.pilot.data.ai.tools.ToolInteractionAvailability
 import net.weero.measix.pilot.data.ai.tools.ToolOutputArchive
 import net.weero.measix.pilot.data.ai.tools.ToolRuntimeMetadata
-import net.weero.measix.pilot.data.ai.tools.buildMemoryTools
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.model.Assistant
-import net.weero.measix.pilot.data.model.AssistantMemory
+import net.weero.measix.pilot.data.model.ConversationModelContextEntry
 import net.weero.measix.pilot.data.model.effectiveContextMessageLimit
 import net.weero.measix.pilot.data.repository.MemoryRepository
-import net.weero.measix.pilot.utils.applyPlaceholders
-import java.util.Locale
+import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
 import kotlin.time.Clock
 import kotlin.time.TimeSource
 import kotlin.coroutines.coroutineContext
@@ -184,10 +183,28 @@ sealed interface GenerationChunk {
 }
 
 @Serializable
-enum class FinishedReason {
-    @SerialName("completed") COMPLETED,
-    @SerialName("awaiting_approval") AWAITING_APPROVAL,
-    @SerialName("step_limit_reached") STEP_LIMIT_REACHED,
+sealed interface FinishedReason {
+    @Serializable
+    @SerialName("completed")
+    data object Completed : FinishedReason
+
+    /**
+     * 因等待用户交互而暂停。[pending] 由 Runtime 在判定挂起的那一刻产出，非空，
+     * 因此下游消费者无需回消息里扫描重建定位。
+     */
+    @Serializable
+    @SerialName("awaiting_approval")
+    data class AwaitingApproval(
+        val pending: List<PendingInteraction>,
+    ) : FinishedReason {
+        init {
+            require(pending.isNotEmpty()) { "AWAITING_APPROVAL requires pending interactions" }
+        }
+    }
+
+    @Serializable
+    @SerialName("step_limit_reached")
+    data object StepLimitReached : FinishedReason
 }
 
 @Serializable
@@ -262,55 +279,28 @@ data class ToolResultEvent(
     val status: ToolResultEventStatus,
 )
 
-data class GenerationMemoryContext(
-    val ownerId: String,
-    val memories: List<AssistantMemory>,
-)
-
-/**
- * Resolve the only Memory owner allowed for the next Provider step.
- * A null ceiling is the Master policy (latest Settings may enable or switch scope); a Target
- * ceiling forbids enabling Memory mid-run or changing its namespace.
- */
-internal fun resolveGenerationMemoryOwner(
-    latest: Assistant?,
-    runStartCeiling: Assistant? = null,
-): String? {
-    if (latest?.enableMemory != true) return null
-    if (
-        runStartCeiling != null &&
-        (!runStartCeiling.enableMemory || latest.useGlobalMemory != runStartCeiling.useGlobalMemory)
-    ) {
-        return null
-    }
-    return if (latest.useGlobalMemory) MemoryRepository.GLOBAL_MEMORY_ID else latest.id.toString()
+/** Resolves the Memory namespace captured at START and rechecked before each live write. */
+internal fun resolveMemoryOwnerId(assistant: Assistant?): String? {
+    if (assistant?.enableMemory != true) return null
+    return if (assistant.useGlobalMemory) MemoryRepository.GLOBAL_MEMORY_ID else assistant.id.toString()
 }
 
-data class GenerationRequest(
+internal data class GenerationRequest(
     val conversationId: Uuid,
-    val settings: Settings,
-    val model: Model,
-    /** The immutable wire-container contract selected for this run. */
-    val mediaCapabilities: RequestMediaCapabilities,
+    /** The only model-visible configuration source for every step of this durable Turn. */
+    val requestContext: net.weero.measix.pilot.service.runtime.TurnRequestContext,
     val messages: List<UIMessage>,
-    val assistant: Assistant,
     val inputTransformers: List<InputMessageTransformer> = emptyList(),
     val outputTransformers: List<OutputMessageTransformer> = emptyList(),
-    val memories: List<AssistantMemory>? = null,
-    val tools: List<Tool> = emptyList(),
     val maxSteps: Int = 256,
     val reportProcessingText: (String?) -> Unit = {},
-    val conversationSystemPrompt: String? = null,
-    val conversationModeInjectionIds: Set<Uuid> = emptySet(),
-    val workspaceCwd: String? = null,
-    val toolProvider: (suspend () -> List<Tool>)? = null,
     /** Which user interactions this run may pause for; replaces the old name-whitelist policy. */
     val interactionAvailability: ToolInteractionAvailability = ToolInteractionAvailability.FULL,
-    /** Re-resolved once per Provider step; null removes Memory tools and memory prompt. */
-    val memoryContextProvider: (suspend () -> GenerationMemoryContext?)? = null,
-    /** Final write-time guard for the owner captured by [memoryContextProvider]. */
-    val memoryToolAllowed: suspend (ownerId: String) -> Boolean = { true },
     val assistantMessageId: Uuid? = null,
+    /** Turn START 提交的 disclosure baseline（冻结适用集合）；Provider step 不重新捕获。 */
+    val modelContextEntries: List<ConversationModelContextEntry> = emptyList(),
+    /** message ID → durable 树位置；Planner 的 Durable origin 唯一来源。 */
+    val durableMessageLocators: Map<Uuid, DurableMessageLocator> = emptyMap(),
     /** Synchronous handoff to the turn owner; independent of cancellable presentation delivery. */
     val onMessagesObserved: (List<UIMessage>) -> Unit = {},
     val onCheckpoint: suspend (GenerationCheckpoint) -> Unit = {},
@@ -321,7 +311,6 @@ class GenerationLoop(
     private val context: Context,
     private val providerManager: ProviderManager,
     private val json: Json,
-    private val memoryRepo: MemoryRepository,
     private val attachmentResolver: AttachmentResolver,
     private val toolOutputStore: net.weero.measix.pilot.data.ai.tools.ToolOutputStore,
 ) {
@@ -333,44 +322,30 @@ class GenerationLoop(
             .requestMediaCapabilities(providerSetting, model)
     }
 
-    fun run(request: GenerationRequest): Flow<GenerationChunk> {
+    internal fun run(request: GenerationRequest): Flow<GenerationChunk> {
         val conversationId = request.conversationId
-        val tools = request.tools
-        val toolProvider = request.toolProvider ?: { tools }
-        val settings = request.settings
-        val model = request.model
+        val turnContext = request.requestContext
+        val model = turnContext.model.model
+        val frozenProvider = turnContext.model.providerShape
+        val assistant = turnContext.assistant
+        val promptInputs = turnContext.promptInputs
+        val toolsByName = turnContext.toolBindingsByName
+        val toolDefinitions = turnContext.toolDefinitions
         val inputTransformers = request.inputTransformers
         val outputTransformers = request.outputTransformers
-        val assistant = request.assistant
-        val defaultMemoryOwnerId = if (assistant.useGlobalMemory) {
-            MemoryRepository.GLOBAL_MEMORY_ID
-        } else {
-            assistant.id.toString()
-        }
-        val memoryContextProvider = request.memoryContextProvider ?: {
-            if (assistant.enableMemory) {
-                GenerationMemoryContext(defaultMemoryOwnerId, request.memories.orEmpty())
-            } else {
-                null
-            }
-        }
         val maxSteps = request.maxSteps
         val reportProcessingText = request.reportProcessingText
-        val conversationSystemPrompt = request.conversationSystemPrompt
-        val conversationModeInjectionIds = request.conversationModeInjectionIds
-        val workspaceCwd = request.workspaceCwd
         val interactionAvailability = request.interactionAvailability
-        val memoryToolAllowed = request.memoryToolAllowed
         val assistantMessageId = request.assistantMessageId
         val onCheckpoint = request.onCheckpoint
         val providerSessionId = request.providerSessionId
+        val modelContextEntries = request.modelContextEntries
+        val durableMessageLocators = request.durableMessageLocators
         return channelFlow {
         val unpublishedResources = UnpublishedResourceScope()
         var generationFailure: Throwable? = null
         try {
-        val provider = model.findProvider(settings.providers) ?: error("Provider not found")
-        val providerImpl = providerManager.getProviderByType(provider)
-        val mediaCapabilities = request.mediaCapabilities
+        val mediaCapabilities = turnContext.mediaCapabilities
 
         var messages: List<UIMessage> = request.messages
         request.onMessagesObserved(messages)
@@ -420,7 +395,7 @@ class GenerationLoop(
         }
 
         // 跟踪循环退出原因，默认 step_limit_reached
-        var finishReason = FinishedReason.STEP_LIMIT_REACHED
+        var finishReason: FinishedReason = FinishedReason.StepLimitReached
 
         // 流式/终态输出变换不参与请求来源跟踪；请求级 tracker 只属于 generateInternal 的输入链。
         val outputOrigins = RequestMessageOriginTracker()
@@ -429,7 +404,7 @@ class GenerationLoop(
             context = context,
             model = model,
             assistant = assistant,
-            settings = settings,
+            promptInputs = promptInputs,
             requestOrigins = outputOrigins,
             mediaCapabilities = mediaCapabilities,
             registerUnpublishedResource = unpublishedResources::register,
@@ -470,43 +445,19 @@ class GenerationLoop(
             Log.i(TAG, "streamText: start step #$stepIndex (${model.id})")
             latestStreamingProjection = null
 
-            // 每个 step 重新解析工具
-            val stepTools = toolProvider()
-            val memoryContext = memoryContextProvider()
-                ?.takeIf { context -> memoryToolAllowed(context.ownerId) }
-
-            val toolsInternal = buildList {
-                Log.i(TAG, "generateInternal: build tools($assistant)")
-                if (memoryContext != null) {
-                    buildMemoryTools(
-                        onCreation = { content ->
-                            memoryRepo.addMemory(memoryContext.ownerId, content)
-                        },
-                        onUpdate = { id, content ->
-                            memoryRepo.updateContent(id, content, memoryContext.ownerId)
-                        },
-                        onDelete = { id ->
-                            memoryRepo.deleteMemory(id, memoryContext.ownerId)
-                        },
-                        isStillAllowed = { memoryToolAllowed(memoryContext.ownerId) },
-                    ).let(this::addAll)
-                }
-                addAll(stepTools)
-            }
-
-            // Deterministic tool index. Built before the Provider request so duplicate or
-            // empty names are rejected up front, and tool lookup at execution time never
-            // falls back to a linear scan that can leak internal exceptions to the model.
-            val toolsByName = toolCallRuntime.buildIndex(toolsInternal)
-
             var toolsAwaitingReplayResult = messages.lastOrNull()?.getTools()?.filter { !it.hasReplayResult }.orEmpty()
 
             // 没有上一轮待处理 ToolCall 时才请求模型；审批恢复时绝不提前发起下一 step。
             if (toolsAwaitingReplayResult.isEmpty()) {
                 send(GenerationChunk.Phase("preparing"))
+                val provider = net.weero.measix.pilot.service.runtime.mergeProviderTransportCredentials(
+                    frozen = frozenProvider,
+                    live = turnContext.model.transportLease.acquire(),
+                )
+                val providerImpl = providerManager.getProviderByType(provider)
                 val receipt = generateInternal(
                     assistant = assistant,
-                    settings = settings,
+                    promptInputs = promptInputs,
                     messages = messages,
                     onUpdateMessages = { updatedMessages ->
                         // Publish the turn-owned raw projection before the first suspension so
@@ -518,7 +469,7 @@ class GenerationLoop(
                             context = context,
                             model = model,
                             assistant = assistant,
-                            settings = settings,
+                            promptInputs = promptInputs,
                             requestOrigins = outputOrigins,
                             registerUnpublishedResource = unpublishedResources::register,
                         )
@@ -528,19 +479,16 @@ class GenerationLoop(
                     model = model,
                     providerImpl = providerImpl,
                     provider = provider,
-                    tools = toolsInternal,
-                    memoryEnabled = memoryContext != null,
-                    memories = memoryContext?.memories.orEmpty(),
+                    toolDefinitions = toolDefinitions,
                     stream = assistant.streamOutput,
                     reportProcessingText = reportProcessingText,
-                    conversationSystemPrompt = conversationSystemPrompt,
-                    conversationModeInjectionIds = conversationModeInjectionIds,
-                    workspaceCwd = workspaceCwd,
                     assistantMessageId = assistantMessageId,
                     registerUnpublishedResource = unpublishedResources::register,
                     mediaCapabilities = mediaCapabilities,
                     onPhase = { phase -> send(GenerationChunk.Phase(phase)) },
                     providerSessionId = providerSessionId,
+                    modelContextEntries = modelContextEntries,
+                    durableLocators = durableMessageLocators,
                 )
                 messages = finishStreamingLast(messages)
                 messages = messages.slice(0 until messages.lastIndex) + messages.last().copy(
@@ -573,7 +521,7 @@ class GenerationLoop(
                 toolsAwaitingReplayResult = messages.last().getTools().filter { !it.hasReplayResult }
                 if (toolsAwaitingReplayResult.isEmpty()) {
                     // no tool calls, generation completed
-                    finishReason = FinishedReason.COMPLETED
+                    finishReason = FinishedReason.Completed
                     break
                 }
             }
@@ -606,14 +554,14 @@ class GenerationLoop(
                 publishMessages(transformStreamingLast(messages))
             }
 
-            if (preparation.pendingInteractions.isNotEmpty()) {
+            if (preparation.pending.isNotEmpty()) {
                 if (preparation.immediateResults.isEmpty()) {
                     // TurnEngine must durably commit this exact private projection as AWAITING
                     // before any presentation observer can see the Pending state.
                     request.onMessagesObserved(messages)
                 }
                 Log.i(TAG, "generateText: waiting for all tool user interactions")
-                finishReason = FinishedReason.AWAITING_APPROVAL
+                finishReason = FinishedReason.AwaitingApproval(preparation.pending)
                 break
             }
 
@@ -744,7 +692,7 @@ class GenerationLoop(
                     context = context,
                     model = model,
                     assistant = assistant,
-                    settings = settings,
+                    promptInputs = promptInputs,
                     requestOrigins = outputOrigins,
                     registerUnpublishedResource = unpublishedResources::register,
                 )
@@ -770,9 +718,11 @@ class GenerationLoop(
                         )
                     ),
                     publishResources = true,
+                    checkpointMessages = presentationMessages,
                 )
+                messages = presentationMessages
                 // Clear the committed EXECUTING projection even when no provider chunk follows.
-                publishMessages(presentationMessages)
+                publishMessages(messages)
             }
 
             send(GenerationChunk.Phase("between_steps"))
@@ -798,27 +748,24 @@ class GenerationLoop(
     }
 
     private suspend fun generateInternal(
-        assistant: Assistant,
-        settings: Settings,
+        assistant: net.weero.measix.pilot.service.runtime.ResolvedAssistantRequest,
+        promptInputs: net.weero.measix.pilot.service.runtime.FrozenTurnPromptInputs,
         messages: List<UIMessage>,
         onUpdateMessages: suspend (List<UIMessage>) -> Unit,
         transformers: List<MessageTransformer>,
         model: Model,
         providerImpl: Provider<ProviderSetting>,
         provider: ProviderSetting,
-        tools: List<Tool>,
-        memoryEnabled: Boolean,
-        memories: List<AssistantMemory>,
+        toolDefinitions: List<FrozenToolDefinition>,
         stream: Boolean,
         reportProcessingText: (String?) -> Unit = {},
-        conversationSystemPrompt: String? = null,
-        conversationModeInjectionIds: Set<Uuid> = emptySet(),
-        workspaceCwd: String? = null,
         assistantMessageId: Uuid? = null,
         registerUnpublishedResource: (ToolResourceLease) -> Unit,
         mediaCapabilities: RequestMediaCapabilities,
         onPhase: (suspend (String) -> Unit)? = null,
         providerSessionId: String? = null,
+        modelContextEntries: List<ConversationModelContextEntry> = emptyList(),
+        durableLocators: Map<Uuid, DurableMessageLocator> = emptyMap(),
     ): ModelStepReceipt {
         val requestPlan = contextPlanner.planRequest(
             durableMessages = messages.filterNot { message ->
@@ -826,39 +773,43 @@ class GenerationLoop(
                     message.role == MessageRole.ASSISTANT &&
                     message.parts.isEmpty()
             },
-            messageLimit = assistant.effectiveContextMessageLimit(),
+            durableLocators = durableLocators,
+            modelContextEntries = modelContextEntries,
+            messageLimit = assistant.contextMessageLimit,
         )
         val contextMessages = requestPlan.messages
         val system = buildString {
-            val effectiveSystemPrompt =
-                if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
-                    conversationSystemPrompt
-                } else {
-                    assistant.systemPrompt
-                }
+            val effectiveSystemPrompt = promptInputs.conversationSystemPrompt ?: assistant.systemPrompt
             if (effectiveSystemPrompt.isNotBlank()) {
                 append(effectiveSystemPrompt)
             }
 
-            // 记忆
-            if (memoryEnabled) {
+            // Memory 内容不再进入 System：唯一披露路径是 START 提交的 canonical Snapshot（§10.1）。
+
+            // 工具prompt：只使用装配时冻结的 contribution（§7.6），不按 step 重新求值。
+            toolDefinitions.forEach { definition ->
                 appendLine()
-                append(buildMemoryPrompt(memories = memories))
+                append(definition.systemPromptContribution)
             }
 
-            // 工具prompt
-            tools.forEach { tool ->
+            // 请求携带 Snapshot 时才追加 §6.3 固定规则；规则本身无任何动态内容。
+            if (requestPlan.contextProjections.isNotEmpty()) {
                 appendLine()
-                append(tool.systemPrompt(model, contextMessages))
+                append(ConversationDisclosureSnapshotService.MODEL_RULES)
             }
         }
         // 本次请求唯一的来源跟踪器：System 与后续注入内容由管线合成，不能被 messageTemplate 包裹。
         // 只标记本次新建的 System；preset 等 durable SYSTEM 消息仍是用户配置，保持原模板行为。
         val requestOrigins = RequestMessageOriginTracker()
+        // 唯一 origin 表的 durable 半边在此登记；transformers 完成后 frozenOrigins 是
+        // Durable + Synthetic 的完整来源事实（§8.1）。
+        requestPlan.originsByMessageId.forEach { (messageId, origin) ->
+            (origin as? RequestMessageOrigin.Durable)?.let { requestOrigins.markDurable(messageId, it.locator) }
+        }
         val requestMessages = buildList {
             if (system.isNotBlank()) {
                 val systemMessage = UIMessage.system(prompt = system)
-                requestOrigins.markSynthetic(systemMessage)
+                requestOrigins.markSynthetic(systemMessage, SyntheticMessageKind.SYSTEM_PROMPT)
                 add(systemMessage)
             }
             val durableById = messages.associateBy(UIMessage::id)
@@ -872,24 +823,30 @@ class GenerationLoop(
                 )
             })
         }
-        val internalMessages = requestMessages.transforms(
+        val transformedMessages = requestMessages.transforms(
             transformers = transformers,
             context = context,
             model = model,
             assistant = assistant,
-            settings = settings,
+            promptInputs = promptInputs,
             requestOrigins = requestOrigins,
-            conversationModeInjectionIds = conversationModeInjectionIds,
             reportProcessingText = reportProcessingText,
-            workspaceCwd = workspaceCwd,
             mediaCapabilities = mediaCapabilities,
             registerUnpublishedResource = registerUnpublishedResource,
         ).replaySafeProjection()
 
+        // §8.3 步骤 6：context part 在全部 input transformers 之后注入，只附着 Durable USER；
+        // Token estimate 与 receipt 使用包含 context 的最终 projection。
+        val internalMessages = contextPlanner.applyContextProjections(
+            transformedMessages = transformedMessages,
+            projections = requestPlan.contextProjections,
+            originsByMessageId = requestOrigins.frozenOrigins(),
+        )
+
         val pendingReceipt = contextPlanner.receiptOf(internalMessages)
         val estimatedRequestContextTokens = contextPlanner.estimateRequestContextTokens(
             providerMessages = internalMessages,
-            tools = tools,
+            tools = toolDefinitions,
         )
         var messages: List<UIMessage> = messages
         val turnUsage = TurnUsageAccumulator.from(messages.lastOrNull()?.usage)
@@ -906,7 +863,7 @@ class GenerationLoop(
             temperature = assistant.temperature,
             topP = assistant.topP,
             maxTokens = assistant.maxTokens,
-            tools = tools,
+            tools = toolDefinitions,
             reasoningLevel = assistant.reasoningLevel,
             customHeaders = buildList {
                 addAll(assistant.customHeaders)

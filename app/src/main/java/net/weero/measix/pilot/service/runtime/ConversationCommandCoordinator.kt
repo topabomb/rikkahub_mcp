@@ -37,6 +37,23 @@ class ConversationCommandCoordinator(
             runtime
         } }
 
+    internal suspend fun createSnapshot(snapshot: ConversationAggregateSnapshot): ConversationRuntime =
+        gated { operationLocks.withLock(snapshot.conversationId) {
+            val runtime = withContext(NonCancellable) {
+                if (
+                    registry.findRuntime(snapshot.conversationId) != null ||
+                    repository.existsConversationById(snapshot.conversationId)
+                ) {
+                    throw ConversationCommandConflictException(
+                        "conversation already exists: ${snapshot.conversationId}",
+                    )
+                }
+                repository.insertConversationSnapshot(snapshot)
+                registry.registerSnapshot(snapshot)
+            }
+            runtime
+        } }
+
     suspend fun loadOrRegisterDraft(conversation: Conversation): ConversationRuntime =
         gated { operationLocks.withLocks(conversation.lockIds()) {
             if (repository.existsConversationById(conversation.id)) {
@@ -46,26 +63,25 @@ class ConversationCommandCoordinator(
             }
         } }
 
-    suspend fun createTree(
-        master: Conversation,
-        children: List<Conversation>,
-    ): ConversationRuntime = gated { operationLocks.withLocks(listOf(master.id) + children.map { it.id }) {
-        val runtime = withContext(NonCancellable) {
-            val ids = buildSet {
-                add(master.id)
-                children.forEach { add(it.id) }
+    internal suspend fun createTree(
+        master: ConversationAggregateSnapshot,
+        children: List<ConversationAggregateSnapshot>,
+    ): ConversationRuntime = gated {
+        val ids = listOf(master.conversationId) + children.map { it.conversationId }
+        operationLocks.withLocks(ids) {
+            val runtime = withContext(NonCancellable) {
+                if (
+                    ids.distinct().size != children.size + 1 ||
+                    ids.any { registry.findRuntime(it) != null || repository.existsConversationById(it) }
+                ) {
+                    throw ConversationCommandConflictException("fork conversation id already exists or is duplicated")
+                }
+                repository.insertConversationTree(master, children)
+                registry.registerSnapshot(master)
             }
-            if (
-                ids.size != children.size + 1 ||
-                ids.any { registry.findRuntime(it) != null || repository.existsConversationById(it) }
-            ) {
-                throw ConversationCommandConflictException("fork conversation id already exists or is duplicated")
-            }
-            repository.insertConversationTree(master, children)
-            registry.registerRuntime(master)
+            runtime
         }
-        runtime
-    } }
+    }
 
     suspend fun delete(conversationId: Uuid): ConversationDeletionResult = try {
         gated {
@@ -96,19 +112,19 @@ class ConversationCommandCoordinator(
         val lockIds = deletionLockIds(conversationId)
         operationLocks.withLocks(lockIds) {
             ensureNotActive(conversationId)
-            val root = repository.getConversationById(conversationId)
+            val root = repository.getConversationSnapshotById(conversationId)
                 ?: throw ConversationNotFoundException(conversationId)
-            val children = if (root.parentConversationId == null) {
-                repository.getChildConversations(root.id)
+            val children = if (root.header.parentConversationId == null) {
+                repository.getChildConversationSnapshots(root.conversationId)
             } else {
                 emptyList()
             }
-            check(children.all { it.id in lockIds }) { "conversation lineage changed outside command boundary" }
-            children.forEach { ensureNotActive(it.id) }
+            check(children.all { it.conversationId in lockIds }) { "conversation lineage changed outside command boundary" }
+            children.forEach { ensureNotActive(it.conversationId) }
             val deleted = DeletedConversationTree(root, children)
             beforeDelete(deleted)
             repository.deleteConversation(conversationId)
-            (children.map { it.id } + conversationId).forEach { id -> registry.evictRuntime(id) }
+            (children.map { it.conversationId } + conversationId).forEach { id -> registry.evictRuntime(id) }
             deleted
         }
     }
@@ -224,36 +240,36 @@ class ConversationCommandCoordinator(
         }
     }
 
-    suspend fun startTurn(
-        conversationId: Uuid,
-        turnId: Uuid,
-        assistantMessageId: Uuid,
-        resume: Boolean,
-    ): TurnHandle = gated { operationLocks.withLock(conversationId) {
-        check(!registry.isDraft(conversationId)) {
-            "a turn cannot start before the first user message materializes the draft"
+    /**
+     * `START` 的唯一 durable 入口：锁内由 [ConversationTransition] 重算目标 selected
+     * prefix，与命令携带的 expected token 逐项相同才继续；随后在同一 Room 事务提交
+     * Assistant slot、turn_execution 与可选 model-context entry。任何一步失败都不发布
+     * Runtime snapshot。epoch 由本入口唯一分配。
+     */
+    internal suspend fun startTurn(conversationId: Uuid, command: StartTurn): TurnHandle = gated {
+        operationLocks.withLock(conversationId) {
+            check(!registry.isDraft(conversationId)) {
+                "a turn cannot start before the first user message materializes the draft"
+            }
+            val runtime = registry.loadRuntime(conversationId)
+            runtime.acquireLease().use {
+                val current = runtime.snapshot.value
+                // Identity check does not consume epoch; a rejected START must not advance it.
+                validateConversationCommandOwner(
+                    runtime.id,
+                    current,
+                    command,
+                    runtime.currentGenerationTurnId(),
+                )
+                // epoch 必须在 plan 之前分配：plan 产生的 durable activeTurn 携带同一 epoch，
+                // 发布的 snapshot 与返回的 TurnHandle 才能互相匹配（否则首个 checkpoint 即被拒）。
+                val started = command.copy(epoch = runtime.nextTurnEpoch())
+                val change = ConversationTransition.plan(current, started, nowMillis())
+                commitAndPublish(runtime, current, started, change)
+                TurnHandle(runtime.id, started.epoch, started.turnId, started.assistantMessageId)
+            }
         }
-        val runtime = registry.loadRuntime(conversationId)
-        runtime.acquireLease().use {
-            val current = runtime.snapshot.value
-            // Identity check does not consume epoch; a rejected START must not advance it.
-            validateConversationCommandOwner(
-                runtime.id,
-                current,
-                StartTurn(turnId, assistantMessageId, resume),
-                runtime.currentGenerationTurnId(),
-            )
-            val command = StartTurn(
-                turnId = turnId,
-                assistantMessageId = assistantMessageId,
-                resume = resume,
-                epoch = runtime.nextTurnEpoch(),
-            )
-            val change = ConversationTransition.plan(current, command, nowMillis())
-            commitAndPublish(runtime, current, command, change)
-            TurnHandle(runtime.id, command.epoch, turnId, assistantMessageId)
-        }
-    } }
+    }
 
     private suspend fun applyResidentCommand(
         runtime: ConversationRuntime,
@@ -283,7 +299,7 @@ class ConversationCommandCoordinator(
 
     private suspend fun commitAndPublish(
         runtime: ConversationRuntime,
-        old: ConversationSnapshot,
+        old: ConversationAggregateSnapshot,
         command: ConversationCommand,
         change: ConversationChange,
         promoteDraft: Boolean = false,
@@ -318,7 +334,7 @@ class ConversationCommandCoordinator(
 
 internal fun validateConversationCommandOwner(
     conversationId: Uuid,
-    snapshot: ConversationSnapshot,
+    snapshot: ConversationAggregateSnapshot,
     command: ConversationCommand,
     activeRequestTurnId: Uuid? = null,
 ) {
@@ -395,8 +411,8 @@ sealed interface ConversationCommandResult {
 class ConversationCommandConflictException(message: String) : IllegalStateException(message)
 
 internal data class DeletedConversationTree(
-    val root: Conversation,
-    val children: List<Conversation>,
+    val root: ConversationAggregateSnapshot,
+    val children: List<ConversationAggregateSnapshot>,
 )
 
 sealed interface ConversationDeletionResult {

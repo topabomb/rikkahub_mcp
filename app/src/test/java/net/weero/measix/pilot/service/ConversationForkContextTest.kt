@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import me.rerere.ai.ui.UIMessage
+import net.weero.measix.pilot.data.model.ConversationModelContextEntry
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
@@ -26,7 +27,7 @@ import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeLease
 import net.weero.measix.pilot.service.runtime.ConversationHeader
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import kotlin.uuid.Uuid
@@ -71,8 +72,22 @@ class ConversationForkContextTest {
         val sourceId = Uuid.random()
         val assistantId = Uuid.random()
         val folderId = Uuid.random()
-        val message = UIMessage.user("fork here")
-        val snapshot = ConversationSnapshot(
+        val anchor = UIMessage.user("fork here")
+        val owner = UIMessage.assistant("answer")
+        val futureAnchor = UIMessage.user("future")
+        val futureOwner = UIMessage.assistant("future answer")
+        val anchorNode = MessageNode.of(anchor)
+        val ownerNode = MessageNode.of(owner)
+        val futureAnchorNode = MessageNode.of(futureAnchor)
+        val futureOwnerNode = MessageNode.of(futureOwner)
+        val copiedContent = ConversationDisclosureSnapshotService.render(
+            ConversationDisclosureSnapshotService.Candidate(
+                assistant = Assistant(id = assistantId),
+                allAssistants = emptyList(),
+                memories = emptyList(),
+            ),
+        )
+        val snapshot = ConversationAggregateSnapshot(
             conversationId = sourceId,
             header = ConversationHeader(
                 id = sourceId,
@@ -89,19 +104,35 @@ class ConversationForkContextTest {
                 createAt = 1,
                 updateAt = 1,
             ),
-            nodes = listOf(MessageNode.of(message)),
+            nodes = listOf(anchorNode, ownerNode, futureAnchorNode, futureOwnerNode),
+            modelContextEntries = listOf(
+                ConversationModelContextEntry(
+                    ownerNodeId = ownerNode.id,
+                    ownerMessageId = owner.id,
+                    anchorNodeId = anchorNode.id,
+                    anchorMessageId = anchor.id,
+                    content = copiedContent,
+                ),
+                ConversationModelContextEntry(
+                    ownerNodeId = futureOwnerNode.id,
+                    ownerMessageId = futureOwner.id,
+                    anchorNodeId = futureAnchorNode.id,
+                    anchorMessageId = futureAnchor.id,
+                    content = copiedContent,
+                ),
+            ),
             activeTurn = null,
         )
         val runtime = mockk<ConversationRuntime>()
         every { runtime.snapshot } returns MutableStateFlow(snapshot)
         val commandCoordinator = mockk<ConversationCommandCoordinator>()
         coEvery { commandCoordinator.load(sourceId) } returns runtime
-        val created = slot<Conversation>()
+        val created = slot<ConversationAggregateSnapshot>()
         coEvery { commandCoordinator.createTree(capture(created), any()) } returns runtime
         val lifecycle = mockk<SubAssistantLifecycle>()
         coEvery { lifecycle.finalizeRunsBeforeTreeMutation(snapshot) } returns snapshot
         val repository = mockk<ConversationRepository>()
-        coEvery { repository.getChildConversations(sourceId) } returns emptyList()
+        coEvery { repository.getChildConversationSnapshots(sourceId) } returns emptyList()
         val artifactStore = mockk<ArtifactStore>(relaxed = true)
 
         val service = ConversationApplicationService(
@@ -121,10 +152,18 @@ class ConversationForkContextTest {
             titleCoordinator = mockk<ConversationTitleCoordinator>(),
         )
 
-        service.forkAtMessage(sourceId, message.id)
+        service.forkAtMessage(sourceId, owner.id)
 
-        assertEquals(folderId, created.captured.folderId)
-        assertEquals("src/main", created.captured.workspaceCwd)
+        val fork = created.captured
+        assertEquals(folderId, fork.header.folderId)
+        assertEquals("src/main", fork.header.workspaceCwd)
+        assertEquals(1, fork.modelContextEntries.size)
+        val copiedEntry = fork.modelContextEntries.single()
+        assertEquals(fork.nodes[0].id, copiedEntry.anchorNodeId)
+        assertEquals(anchor.id, copiedEntry.anchorMessageId)
+        assertEquals(fork.nodes[1].id, copiedEntry.ownerNodeId)
+        assertEquals(owner.id, copiedEntry.ownerMessageId)
+        assertEquals(copiedContent, copiedEntry.content)
         coVerify(exactly = 1) { commandCoordinator.createTree(any(), emptyList()) }
     }
 

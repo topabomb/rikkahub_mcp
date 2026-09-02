@@ -47,9 +47,13 @@ Target.allowAsSubAssistant
 
 关闭 `allowAsSubAssistant` 时，`AssistantDetailVM` 通过 `SettingsStore.updateLocal` 同时关闭全局可见，并从所有 Assistant 的允许列表移除该 ID。Local shadow 落盘成功后才由 `SettingsStore` 发布新的有效配置快照，避免内存状态领先于持久化状态。
 
-### Catalog
+### 披露
 
-`AssistantCatalogBuilder` 从当前 Settings 和 `SubAssistantAccessPolicy` 动态构建 Catalog。Catalog 使用带 `header` 与 `rows` 的紧凑 JSON，并置于 `<sub_assistant_catalog>` 边界中；执行期仍重新读取 Settings，不把提示词中的 Catalog 当作授权凭据。
+动态 Catalog systemPrompt 已删除。可见子助手集合（`id` / `name` / `description`）由
+`ConversationDisclosureSnapshotService` 渲染为 Disclosure Snapshot 的 `sub_assistants` section，
+在每次新 `START` 前捕获，内容变化才随新 Assistant owner 追加；执行期仍重新读取 Settings 并用
+`SubAssistantAccessPolicy` 重算访问范围，不把 Snapshot 当作授权凭据。详细配置由
+`assistant_inspect` 按需读取。
 
 `AssistantManagement` 与 `AssistantDelegation` 是独立 Local Tool 权限。前者注册 `assistant_manage`、`assistant_inspect`，后者注册 `assistant_call`。工具创建的新 Target 会原子加入 Caller 的 `allowedSubAssistantIds`。
 
@@ -65,7 +69,7 @@ Target.allowAsSubAssistant
 
 | 组件 | 职责 |
 |------|------|
-| `AssistantToolFactory` | 注册 Assistant 工具、构建动态 Catalog、把 `assistant_call` 交给 Coordinator |
+| `AssistantToolFactory` | 注册 Assistant 工具、构建 START 时冻结的路由 Catalog、把 `assistant_call` 交给 Coordinator |
 | `AssistantManagementService` | Assistant CRUD、授权更新、删除 tombstone 与恢复清理 |
 | `DelegationCoordinator` | 四阶段编排（preflight → materialize Child → run → terminal）、ask_user 桥接和卡片 Phase；不实现第二套提交或恢复协议 |
 | `SubAssistantRunGate` | scoped run lease 与 pending ask_user 并发所有者；原始 release 不向调用方暴露 |
@@ -126,7 +130,8 @@ Master ToolCall
   -> 用最新 Settings 做写入前重验
   -> 解析 attachments 为本地资产；能力判定留给 Target 请求级投影
   -> 新建 / 复用 / 克隆 Child，并追加 USER（Text(request) + 原始 Image parts）
-  -> 强制提交 Child、tool STARTED 与 childConversationId 关系
+  -> 提交 Caller tool STARTED 与 childConversationId 关系
+  -> 捕获 disclosure/MCP/tools/TurnRequestContext，并以精确 childTurnId 提交 Child StartTurn
   -> Target GenerationLoop 循环
   -> 持久化 Child、更新 phase/preview、桥接 ask_user
   -> 提取 final result，写入终态 metadata 与 Tool Result
@@ -143,8 +148,10 @@ Lineage 决策完成后先获取 `(masterConversationId, targetAssistantId)` lea
 同一 Master/Target 串行，不同 Master 独立运行；图片读取完成、失败或取消均释放保留，不新增持久化结构。
 
 Child clone 创建的历史附件由 `DelegationCoordinator` 持有到关联提交：先原子提交 Master metadata 与执行事实的 Child link，
-再发布该批 `OwnedArtifact`。关联失败才补偿未关联 Child；关联成功后的资源发布失败保留 Child 和已有引用，
-进入带原 Child/run 身份的失败终态，不能误删已关联 Child。该批资源不交给通用 Tool Result lease 作用域。
+再发布该批 `OwnedArtifact`。关联失败才补偿未关联 Child；关联成功后的资源发布失败保留 Child 和已有引用。
+如果 disclosure/MCP/tool/context 准备在 Child `StartTurn` 前失败，真实 USER 与 link 保留，只提交 Caller 失败 metadata，绝不伪造 Child START；
+已 START 的取消/失败则必须携带原 `childTurnId`，`TurnFinalization` 只收口匹配的 active owner，迟到清理不能终结更新的 Child Turn。
+finally 同样只以原 `childTurnId + runJob` 释放 active request 与 context。该批资源不交给通用 Tool Result lease 作用域。
 
 ### Lineage
 
@@ -169,7 +176,7 @@ Target 复用通用 `GenerationLoop`，不是独立的简化模型循环。它�
 
 ## 6. Target 工具与运行中撤权
 
-Target 每个模型 step 都重新构建工具集。有效工具能力是“调用开始时的 Target 快照”与“当前持久化 Target 配置”的交集：Web Search、Recent Chats、Local Tools、MCP、Workspace 和 Skills 可以在下一 step 被撤销，但运行中新增配置不会给当前 Run 增权。
+Target 在新 Child Turn 的 START 前，从同一份有效 Settings、Target、resolved model 与 MCP capability snapshot 装配一次工具集合，并物化有序 Provider definitions 与同名 execution bindings。后续模型 step、`ask_user` continuation 与网络重试复用同一 `TurnRequestContext`；运行中配置变化不增删当前 Run 的工具 schema，只影响下一次新 START。
 
 以下边界始终成立：
 
@@ -178,12 +185,19 @@ Target 每个模型 step 都重新构建工具集。有效工具能力是“调�
   `tool_not_permitted` + `approval_unavailable`。`approval_unavailable` 表示“需要审批但当前
   运行环境无法提供审批，不要原样重试”，是 ToolCall 级可恢复错误，不会终止整个 Run。
 - `ask_user` 由 Coordinator 按 Child `messageId + toolOrdinal` 持久化到 Master 卡片；回答也用 `run_id + interaction_id` 精确匹配，防止重复或过期提交。
+- Target run 暂停时，`TurnOutcome.AwaitingApproval` 携带 `pending: List<PendingInteraction>`（每项为
+  `ToolCallLocator` + `ToolInteractionKind`，按 ordinal 升序、非空）。Coordinator 直接消费这份列表定位
+  待应答工具，**不扫描消息、不读取 `ToolRuntimeMetadata`**。一批存在多个挂起交互时逐个处理，
+  每轮 `ask_user` 续跑重新跑一次 Target GenerationLoop。
+- 暂停投影只经 `onMessagesObserved` 交 durable 槽，**刻意不发 `GenerationChunk.Messages`**（避免 UI 在
+  「流式」与「暂停」之间抖动）。因此任何依赖流式快照定位交互的写法都拿不到挂起状态；
+  Coordinator 侧的 `lastMessages` 仅作为下一轮 GenerationLoop 的输入，不得用于定位交互。
 - `ask_user` 只接受满足 Schema 数量和大小上限的完整 JSON 入参；无效或过大的入参会在进入等待态前失败，不会截断后持久化。交互轮次上限与模型 step 上限使用不同终态 reason。
 - `recent_chats` 与 `conversation_search` 都限定为 Target 自己的顶层会话，不允许借 Target Run 搜索其他 Assistant 或内部 Child。
 - Memory Tool 在每次执行前重验 Target 仍启用记忆且 local/global namespace 没有改变；撤销后返回 `tool_not_permitted`。
 - Settings watcher 持续检查 Target 删除/停用、Caller 访问撤销和 RunSpec 模型失效，并取消当前 Run。
 
-工具列表按 step 形成快照。同一批 ToolCall 先完成 Pending 判定，再按原 `toolOrdinal` 串行执行；不会在同批尚有待确认调用时抢先执行自动工具。
+工具列表在 START 形成不可变快照。同一批 ToolCall 先完成 Pending 判定，再按原 `toolOrdinal` 串行执行；不会在同批尚有待确认调用时抢先执行自动工具。执行时权限、资源和远端状态仍 live fail-closed。
 
 ## 7. 状态、预览与只读详情
 

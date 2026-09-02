@@ -475,7 +475,7 @@ class ChatCompletionsAPI(
                             put("function", buildJsonObject {
                                 put("name", tool.name)
                                 put("description", tool.description)
-                                put("parameters", normalizeToolParameters(tool.parameters()))
+                                put("parameters", normalizeToolParameters(tool.parameters))
                             })
                         })
                     }
@@ -713,6 +713,8 @@ class ChatCompletionsAPI(
             }
             put("role", JsonPrimitive(role))
 
+            // 捷径要求恰好一个 Text part：disclosure 注入后 anchor USER 有多个 Text，
+            // 必须走结构化 content 才能完整保留 context + 原文 suffix 的顺序。
             if (message.parts.isOnlyTextPart()) {
                 put("content", message.parts.filterIsInstance<UIMessagePart.Text>().first().text)
             } else {

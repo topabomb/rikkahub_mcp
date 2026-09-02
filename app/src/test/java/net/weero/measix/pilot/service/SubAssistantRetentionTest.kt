@@ -8,6 +8,7 @@ import net.weero.measix.pilot.data.ai.subassistant.buildInitialSubAssistantCallM
 import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
+import net.weero.measix.pilot.service.runtime.toSnapshot
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -37,17 +38,17 @@ class SubAssistantRetentionTest {
     fun `removing last referenced run truncates unreferenced child tail`() {
         val master = master(call("run-1", task1.id))
 
-        val plan = planSubAssistantRetention(master.id, master.messageNodes, mapOf(child.id to child), json)
+        val plan = planSubAssistantRetention(master.id, master.messageNodes, mapOf(child.id to child.toSnapshot()), json)
 
-        assertTrue(plan.deletedChildren.isEmpty())
-        assertEquals(2, plan.truncatedChildren.single().messageNodes.size)
+        assertTrue(plan.deletedChildIds.isEmpty())
+        assertEquals(2, plan.truncatedChildren.single().nodes.size)
     }
 
     @Test
     fun `later retained run keeps its real intermediate history`() {
         val master = master(call("run-2", task2.id, previousRunId = "run-1"))
 
-        val plan = planSubAssistantRetention(master.id, master.messageNodes, mapOf(child.id to child), json)
+        val plan = planSubAssistantRetention(master.id, master.messageNodes, mapOf(child.id to child.toSnapshot()), json)
 
         assertTrue(plan.truncatedChildren.isEmpty())
     }
@@ -56,10 +57,10 @@ class SubAssistantRetentionTest {
     fun `child with no remaining valid references is deleted`() {
         val master = Conversation(id = masterId, assistantId = Uuid.random(), messageNodes = emptyList())
 
-        val plan = planSubAssistantRetention(master.id, master.messageNodes, mapOf(child.id to child), json)
+        val plan = planSubAssistantRetention(master.id, master.messageNodes, mapOf(child.id to child.toSnapshot()), json)
 
         assertTrue(plan.truncatedChildren.isEmpty())
-        assertEquals(listOf(child.id), plan.deletedChildren.map { it.id })
+        assertEquals(listOf(child.id), plan.deletedChildIds)
     }
 
     private fun call(

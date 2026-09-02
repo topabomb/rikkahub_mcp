@@ -421,7 +421,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                         add(buildJsonObject {
                             put("name", tool.name)
                             put("description", tool.description)
-                            tool.parameters()?.let { put("input_schema", it) }
+                            tool.parameters?.let { put("input_schema", it) }
                             if (providerSetting.promptCaching && index == params.tools.lastIndex) {
                                 put("cache_control", cacheControlEphemeral(providerSetting.promptCacheTtl))
                             }

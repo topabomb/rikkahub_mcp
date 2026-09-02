@@ -6,8 +6,8 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import me.rerere.ai.core.FrozenToolDefinition
 import me.rerere.ai.core.InputSchema
-import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.ClaudePromptCacheTtl
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
@@ -47,14 +47,12 @@ class ClaudeProviderPromptCacheTest {
         return method.invoke(provider, providerSetting, messages, params, stream) as JsonObject
     }
 
-    private fun dummyTool(): Tool {
-        return Tool(
-            name = "dummy_tool",
-            description = "dummy",
-            parameters = { InputSchema.Obj(properties = JsonObject(emptyMap())) },
-            execute = { emptyList() }
-        )
-    }
+    private fun dummyTool(): FrozenToolDefinition = FrozenToolDefinition(
+        name = "dummy_tool",
+        description = "dummy",
+        parameters = InputSchema.Obj(properties = JsonObject(emptyMap())),
+        systemPromptContribution = "",
+    )
 
     @Test
     fun `Claude tool preserves JSON Schema definitions and references`() {
@@ -73,11 +71,11 @@ class ClaudeProviderPromptCacheTest {
             params = TextGenerationParams(
                 model = Model(modelId = "claude-test", abilities = listOf(ModelAbility.TOOL)),
                 tools = listOf(
-                    Tool(
+                    FrozenToolDefinition(
                         name = "lookup",
                         description = "lookup",
-                        parameters = { schema },
-                        execute = { emptyList() },
+                        parameters = schema,
+                        systemPromptContribution = "",
                     )
                 ),
             ),

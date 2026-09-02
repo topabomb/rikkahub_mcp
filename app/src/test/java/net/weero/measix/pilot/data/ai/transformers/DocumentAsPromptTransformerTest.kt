@@ -1,5 +1,9 @@
 package net.weero.measix.pilot.data.ai.transformers
 
+import net.weero.measix.pilot.service.runtime.resolveAssistantRequest
+
+import net.weero.measix.pilot.test.testPromptInputs
+
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -21,14 +25,13 @@ import java.io.File
 class DocumentAsPromptTransformerTest {
     private val context = mockk<android.content.Context>(relaxed = true)
     private val model = mockk<Model>(relaxed = true)
-    private val assistant = mockk<Assistant>(relaxed = true)
-    private val settings = mockk<Settings>(relaxed = true)
+    private val assistant = Assistant()
 
     private fun contextFor() = TransformerContext(
         context = context,
         model = model,
-        assistant = assistant,
-        settings = settings,
+        assistant = resolveAssistantRequest(assistant),
+        promptInputs = testPromptInputs(),
         requestOrigins = RequestMessageOriginTracker(),
         registerUnpublishedResource = {},
     )

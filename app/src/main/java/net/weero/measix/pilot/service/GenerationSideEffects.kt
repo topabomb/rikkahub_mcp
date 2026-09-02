@@ -26,7 +26,7 @@ import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.UpdateHeader
 import net.weero.measix.pilot.service.runtime.ReplaceMessageTree
 import net.weero.measix.pilot.service.runtime.TurnOutcome
@@ -145,8 +145,8 @@ class GenerationSideEffects(
 
     // ---- 生成标题 ----
 
-    suspend fun generateTitle(
-        snapshot: ConversationSnapshot,
+    internal suspend fun generateTitle(
+        snapshot: ConversationAggregateSnapshot,
         force: Boolean = false,
     ) {
         val conversationId = snapshot.conversationId
@@ -215,7 +215,7 @@ class GenerationSideEffects(
 
     // ---- 生成建议 ----
 
-    suspend fun generateSuggestion(snapshot: ConversationSnapshot) {
+    internal suspend fun generateSuggestion(snapshot: ConversationAggregateSnapshot) {
         val conversationId = snapshot.conversationId
         try {
             val settings = settingsStore.effectiveSettings.value.settings
@@ -253,8 +253,8 @@ class GenerationSideEffects(
 
     // ---- 压缩对话历史 ----
 
-    suspend fun compressConversation(
-        snapshot: ConversationSnapshot,
+    internal suspend fun compressConversation(
+        snapshot: ConversationAggregateSnapshot,
         additionalPrompt: String,
         targetTokens: Int,
         keepRecentMessages: Int = 32

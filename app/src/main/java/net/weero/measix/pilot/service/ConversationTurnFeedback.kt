@@ -6,7 +6,7 @@ import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallPhase
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
 import net.weero.measix.pilot.service.runtime.ToolCallPhase
 import net.weero.measix.pilot.utils.JsonInstant
@@ -21,7 +21,7 @@ data class ConversationTurnFeedback(
 )
 
 internal fun projectConversationTurnFeedback(
-    snapshot: ConversationSnapshot,
+    snapshot: ConversationPresentationSnapshot,
     presentation: ConversationPresentation,
 ): ConversationTurnFeedback? {
     val phase = presentation.phase

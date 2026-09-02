@@ -1,5 +1,9 @@
 package net.weero.measix.pilot.data.ai.transformers
 
+import net.weero.measix.pilot.service.runtime.resolveAssistantRequest
+
+import net.weero.measix.pilot.test.testPromptInputs
+
 import io.mockk.coEvery
 import io.mockk.mockk
 import io.pebbletemplates.pebble.PebbleEngine
@@ -14,6 +18,9 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
+import net.weero.measix.pilot.data.ai.DurableMessageLocator
+import net.weero.measix.pilot.data.ai.RequestMessageOrigin
+import net.weero.measix.pilot.data.ai.SyntheticMessageKind
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.InjectionPosition
 import net.weero.measix.pilot.data.model.PromptInjection
@@ -37,14 +44,10 @@ class RequestMessageOriginTest {
     private val wrapTemplate = "PREFIX[{{ message }}]SUFFIX"
 
     private fun engine() = PebbleEngine.Builder()
-        .loader(FixedTemplateLoader(wrapTemplate))
         .autoEscaping(false)
         .build()
 
-    private fun templateTransformer() = TemplateTransformer(
-        engine = engine(),
-        settingsStore = mockk<SettingsStore>(relaxed = true),
-    )
+    private fun templateTransformer() = TemplateTransformer(engine = engine())
 
     private fun assistant(
         enableTimeReminder: Boolean = false,
@@ -59,13 +62,15 @@ class RequestMessageOriginTest {
     private fun context(
         tracker: RequestMessageOriginTracker,
         assistant: Assistant = assistant(),
-        settings: Settings = Settings(),
+        promptInputs: net.weero.measix.pilot.service.runtime.FrozenTurnPromptInputs = testPromptInputs(
+            messageTemplate = wrapTemplate,
+        ),
     ) = mockk<android.content.Context>(relaxed = true).let { androidContext ->
         TransformerContext(
             context = androidContext,
             model = Model(modelId = "test", displayName = "Test"),
-            assistant = assistant,
-            settings = settings,
+            assistant = resolveAssistantRequest(assistant),
+            promptInputs = promptInputs,
             requestOrigins = tracker,
             registerUnpublishedResource = { error("no resources expected in this pipeline") },
         )
@@ -80,7 +85,7 @@ class RequestMessageOriginTest {
     fun `system message built for this request is not wrapped by the template`() = runTest {
         val tracker = RequestMessageOriginTracker()
         val system = UIMessage.system("You are a helpful assistant")
-        tracker.markSynthetic(system)
+        tracker.markSynthetic(system, SyntheticMessageKind.SYSTEM_PROMPT)
         val messages = listOf(system, UIMessage.user("hello"))
 
         val result = templateTransformer().transform(context(tracker), messages)
@@ -92,7 +97,11 @@ class RequestMessageOriginTest {
     @Test
     fun `time reminder injection is not wrapped by the template`() = runTest {
         val tracker = RequestMessageOriginTracker()
-        val ctx = context(tracker, assistant = assistant(enableTimeReminder = true))
+        val ctx = context(
+            tracker,
+            assistant = assistant(enableTimeReminder = true),
+            promptInputs = testPromptInputs(messageTemplate = wrapTemplate, enableTimeReminder = true),
+        )
         val messages = listOf(UIMessage.user("hello"))
 
         val afterReminder = TimeReminderTransformer.transform(ctx, messages)
@@ -121,11 +130,22 @@ class RequestMessageOriginTest {
                 injectDepth = 1,
                 role = MessageRole.USER,
             )
-            val settings = Settings(modeInjections = listOf(injection))
             val ctx = context(
                 tracker,
                 assistant = assistant(modeInjectionIds = setOf(injectionId)),
-                settings = settings,
+                promptInputs = testPromptInputs(
+                    messageTemplate = wrapTemplate,
+                    promptInjections = listOf(
+                        net.weero.measix.pilot.service.runtime.ResolvedPromptInjection(
+                            id = injection.id,
+                            priority = injection.priority,
+                            position = injection.position,
+                            content = injection.content,
+                            injectDepth = injection.injectDepth,
+                            role = injection.role,
+                        ),
+                    ),
+                ),
             )
             val messages = listOf(UIMessage.system("system"), UIMessage.user("hello"))
 
@@ -148,17 +168,15 @@ class RequestMessageOriginTest {
     fun `workspace reminder follows the production template ordering`() = runTest {
         val tracker = RequestMessageOriginTracker()
         val workspaceId = Uuid.random()
-        val repository = mockk<WorkspaceRepository>()
-        coEvery { repository.getById(workspaceId.toString()) } returns WorkspaceEntity(
-            id = workspaceId.toString(),
-            name = "ws",
-            root = "ws-root",
-            shellStatus = "READY",
-            createdAt = 0L,
-            updatedAt = 0L,
+        val transformer = WorkspaceReminderTransformer()
+        val ctx = context(
+            tracker,
+            assistant = assistant(workspaceId = workspaceId),
+            promptInputs = testPromptInputs(
+                messageTemplate = wrapTemplate,
+                workspaceReminder = "<workspace>frozen</workspace>",
+            ),
         )
-        val transformer = WorkspaceReminderTransformer(workspaceRepository = repository)
-        val ctx = context(tracker, assistant = assistant(workspaceId = workspaceId))
         val messages = listOf(UIMessage.system("system"), UIMessage.user("hello"))
 
         // TurnPipelineFactory 的真实顺序是 Template → WorkspaceReminder：durable System 先按
@@ -198,17 +216,36 @@ class RequestMessageOriginTest {
     fun `copied messages keep their synthetic identity`() = runTest {
         val tracker = RequestMessageOriginTracker()
         val system = UIMessage.system("system")
-        tracker.markSynthetic(system)
+        tracker.markSynthetic(system, SyntheticMessageKind.SYSTEM_PROMPT)
         val copied = system.copy(parts = system.parts + UIMessagePart.Text(" more"))
 
         assertTrue(tracker.isSynthetic(copied))
     }
 
     @Test
+    fun `durable registration is explicit and frozen origins carry both halves`() = runTest {
+        val tracker = RequestMessageOriginTracker()
+        val user = UIMessage.user("hello")
+        val system = UIMessage.system("system")
+        val locator = DurableMessageLocator(nodeId = Uuid.random(), messageId = user.id)
+        tracker.markDurable(user.id, locator)
+        tracker.markSynthetic(system, SyntheticMessageKind.SYSTEM_PROMPT)
+
+        assertFalse(tracker.isSynthetic(user))
+        assertEquals(
+            mapOf(
+                user.id to RequestMessageOrigin.Durable(locator),
+                system.id to RequestMessageOrigin.Synthetic(SyntheticMessageKind.SYSTEM_PROMPT),
+            ),
+            tracker.frozenOrigins(),
+        )
+    }
+
+    @Test
     fun `trackers do not leak between requests`() = runTest {
         val first = RequestMessageOriginTracker()
         val systemOfFirst = UIMessage.system("system")
-        first.markSynthetic(systemOfFirst)
+        first.markSynthetic(systemOfFirst, SyntheticMessageKind.SYSTEM_PROMPT)
 
         val second = RequestMessageOriginTracker()
         assertFalse(second.isSynthetic(systemOfFirst))

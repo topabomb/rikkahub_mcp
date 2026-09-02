@@ -25,19 +25,17 @@ fun createSkillTools(
             description = """
                 Load a skill's instructions when the user's request matches an available skill.
             """.trimIndent(),
-            systemPrompt = { _, _ ->
-                buildString {
-                    appendLine("**Skills**")
-                    appendLine("<available_skills>")
-                    available.forEach { skill ->
-                        appendLine("  <skill>")
-                        appendLine("    <name>${skill.name}</name>")
-                        appendLine("    <description>${skill.description}</description>")
-                        appendLine("  </skill>")
-                    }
-                    append("</available_skills>")
-                    appendLine()
+            systemPromptContribution = buildString {
+                appendLine("**Skills**")
+                appendLine("<available_skills>")
+                available.forEach { skill ->
+                    appendLine("  <skill>")
+                    appendLine("    <name>${skill.name}</name>")
+                    appendLine("    <description>${skill.description}</description>")
+                    appendLine("  </skill>")
                 }
+                append("</available_skills>")
+                appendLine()
             },
             parameters = {
                 InputSchema.Obj(

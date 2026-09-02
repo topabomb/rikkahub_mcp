@@ -32,6 +32,11 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.files.LocalToolPath
+import net.weero.measix.pilot.service.runtime.ProviderCredentialOwnerLocator
+import net.weero.measix.pilot.service.runtime.captureProviderCredentialOwner
+import net.weero.measix.pilot.service.runtime.freezeProviderWireShape
+import net.weero.measix.pilot.service.runtime.mergeProviderTransportCredentials
+import net.weero.measix.pilot.service.runtime.resolveProviderTransportOwner
 
 const val ATTACHMENT_INSPECTION_TOOL_NAME = "inspect_attachments"
 
@@ -62,9 +67,16 @@ private const val INSPECTION_SYSTEM_INSTRUCTION =
  * 构造阶段只断言 Provider 已遵守 IMAGE 模型必须提供结构化 USER 图片编码的静态契约；
  * 远端真实不兼容由 Provider 请求返回的分类错误表达。
  */
+internal data class AttachmentInspectionTransport(
+    val frozenProviderShape: net.weero.measix.pilot.service.runtime.FrozenProviderWireShape,
+    val credentialLease: net.weero.measix.pilot.service.runtime.ProviderTransportLease,
+    val providerManager: ProviderManager,
+)
+
 fun createAttachmentInspectionTool(
     settings: Settings,
     providerManager: ProviderManager,
+    liveSettingsProvider: () -> Settings,
 ): Tool {
     // Resolve and capture at construction time. shouldInjectAttachmentInspection already
     // validated these facts; this is the single owner boundary for the inspection contract.
@@ -77,6 +89,16 @@ fun createAttachmentInspectionTool(
     }
     val provider = providerManager.getProviderByType(providerSetting)
     val mediaCapabilities = provider.requestMediaCapabilities(providerSetting, inspectionModel)
+    val frozenInspectionModel = inspectionModel.copy(providerOverwrite = null)
+    val frozenProviderShape = freezeProviderWireShape(providerSetting, frozenInspectionModel)
+    val credentialOwner = captureProviderCredentialOwner(settings, inspectionModel, providerSetting)
+    val transport = AttachmentInspectionTransport(
+        frozenProviderShape = frozenProviderShape,
+        credentialLease = net.weero.measix.pilot.service.runtime.ProviderTransportLease {
+            resolveProviderTransportOwner(liveSettingsProvider(), credentialOwner)
+        },
+        providerManager = providerManager,
+    )
     check(mediaCapabilities.userImages == RequestImageSupport.STRUCTURED) {
         "Provider contract violation: IMAGE model cannot encode structured USER images"
     }
@@ -134,9 +156,8 @@ fun createAttachmentInspectionTool(
         contextualExecute = { args ->
             executeInspection(
                 args = args,
-                inspectionModel = inspectionModel,
-                providerSetting = providerSetting,
-                provider = provider,
+                inspectionModel = frozenInspectionModel,
+                transport = transport,
                 mediaCapabilities = mediaCapabilities,
                 resolveAttachments = this.resolveAttachments,
             )
@@ -151,8 +172,7 @@ fun createAttachmentInspectionTool(
 internal suspend fun executeInspection(
     args: kotlinx.serialization.json.JsonElement,
     inspectionModel: Model,
-    providerSetting: ProviderSetting,
-    provider: Provider<ProviderSetting>,
+    transport: AttachmentInspectionTransport,
     mediaCapabilities: RequestMediaCapabilities,
     resolveAttachments: suspend (paths: List<String>) -> ToolAttachmentResolution,
 ): List<UIMessagePart> {
@@ -199,6 +219,11 @@ internal suspend fun executeInspection(
     }
 
     return try {
+        val providerSetting = mergeProviderTransportCredentials(
+            transport.frozenProviderShape,
+            transport.credentialLease.acquire(),
+        )
+        val provider = transport.providerManager.getProviderByType(providerSetting)
         val result = provider.generateText(
             providerSetting = providerSetting,
             messages = listOf(
@@ -232,7 +257,7 @@ internal suspend fun executeInspection(
         val classified = classifyProviderFailure(e)
         Log.w(
             TAG,
-            "Attachment inspection failed: provider=${providerSetting::class.simpleName}, " +
+            "Attachment inspection failed: provider=${transport.frozenProviderShape::class.simpleName}, " +
                 "model=${inspectionModel.modelId}, reason=${classified.kind.reason}",
             e,
         )

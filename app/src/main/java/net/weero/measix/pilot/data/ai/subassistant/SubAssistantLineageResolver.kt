@@ -160,26 +160,26 @@ fun resolveLineage(
  * Message IDs and opaque metadata are preserved; callers regenerate MessageNode IDs.
  */
 fun cloneLineagePrefix(
-    source: Conversation,
+    sourceNodes: List<net.weero.measix.pilot.data.model.MessageNode>,
     throughTaskMessageId: Uuid,
 ): List<net.weero.measix.pilot.data.model.MessageNode>? {
-    val startIndex = source.messageNodes.indexOfFirst { node ->
+    val startIndex = sourceNodes.indexOfFirst { node ->
         node.selectIndex in node.messages.indices &&
             node.currentMessage.id == throughTaskMessageId &&
             node.currentMessage.role == me.rerere.ai.core.MessageRole.USER
     }
     if (startIndex < 0) return null
 
-    val nextTaskOffset = source.messageNodes
+    val nextTaskOffset = sourceNodes
         .drop(startIndex + 1)
         .indexOfFirst { node ->
             node.selectIndex in node.messages.indices &&
                 node.currentMessage.role == me.rerere.ai.core.MessageRole.USER
         }
     val endExclusive = if (nextTaskOffset < 0) {
-        source.messageNodes.size
+        sourceNodes.size
     } else {
         startIndex + 1 + nextTaskOffset
     }
-    return source.messageNodes.subList(0, endExclusive)
+    return sourceNodes.subList(0, endExclusive)
 }

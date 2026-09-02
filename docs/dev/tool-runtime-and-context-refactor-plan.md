@@ -374,12 +374,27 @@ data class ToolBatchPreparation(
     val replacements: Map<Int, UIMessagePart.Tool>,
     val immediateResults: List<ToolResultEvent>,
     val executableCalls: List<PreparedToolCall>,
-    val pendingInteractions: Set<ToolInteractionKind>,
+    /** 按 ordinal 升序；非空即本批等待，且已经携带精确地址与交互种类。 */
+    val pending: List<PendingInteraction>,
+) {
+    /** 本批等待的交互种类（去重，保持首次出现顺序），供只读判断使用。 */
+    val kinds: Set<ToolInteractionKind> get() = pending.mapTo(linkedSetOf()) { it.kind }
+}
+
+/** 一个已经挂起的用户交互；由 prepareBatch 在判定当刻产出，不做任何事后推断。 */
+data class PendingInteraction(
+    val locator: ToolCallLocator,
+    val kind: ToolInteractionKind,
 )
 ```
 
-只要 `pendingInteractions` 非空，本轮不得执行任何 `executableCalls`。例如同一 Provider step 返回 A 自动、
+只要 `pending` 非空，本轮不得执行任何 `executableCalls`。例如同一 Provider step 返回 A 自动、
 B 审批、C 自动时，A/B/C 都先不执行；B 决策完成后重新准备整个未完成批次，再按 ordinal 执行 A → B → C。
+
+**暂停必须自携带地址。** Runtime 判定挂起的那一刻手里就有 `ordinal` 与 `kind`，因此 `pending`
+直接给出 `ToolCallLocator`，而不是只给出一个种类集合让下游回消息里扫描重建。任何"我在等"的信号
+（[`FinishedReason.AwaitingApproval`](#finishedreason) 与 `TurnOutcome.AwaitingApproval`）都必须透传
+这份列表；消费者一律用 locator 定位，不再扫描消息，也不再依赖 `ToolRuntimeMetadata` 是否已经落盘。
 
 ### 6.4 通用执行顺序
 
@@ -1092,7 +1107,7 @@ for (step in 0 until maxSteps) {
     applyReplacements(batch.replacements)
     commitImmediateResults(batch.immediateResults)
 
-    if (batch.pendingInteractions.isNotEmpty()) {
+    if (batch.pending.isNotEmpty()) {
         finishAwaitingUser()
         break
     }

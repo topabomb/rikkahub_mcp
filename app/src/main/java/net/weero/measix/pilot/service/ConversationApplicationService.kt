@@ -19,6 +19,7 @@ import net.weero.measix.pilot.data.files.requireDiscarded
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantAffectScope
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.model.ConversationModelContextApplicability
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.model.replaceRegexes
 import net.weero.measix.pilot.data.repository.ConversationRepository
@@ -27,7 +28,7 @@ import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationCommandConflictException
 import net.weero.measix.pilot.service.runtime.ConversationNotFoundException
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
-import net.weero.measix.pilot.service.runtime.ConversationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.DeleteMessage
 import net.weero.measix.pilot.service.runtime.EditMessageVariant
 import net.weero.measix.pilot.service.runtime.MoveToAssistant
@@ -69,8 +70,8 @@ class ConversationApplicationService(
 
     /** Opaque undo capability containing the complete cascade-deleted lineage. */
     class RestoreToken internal constructor(
-        internal val root: Conversation,
-        internal val children: List<Conversation>,
+        internal val root: ConversationAggregateSnapshot,
+        internal val children: List<ConversationAggregateSnapshot>,
         private val artifactRetention: ArtifactRetentionLease,
     ) : AutoCloseable {
         override fun close() = artifactRetention.close()
@@ -122,13 +123,18 @@ class ConversationApplicationService(
         sideEffects.generateTitle(commandCoordinator.load(conversationId).snapshot.value, force)
     }
 
+    /**
+     * 显式压缩入口。UI 只交 conversationId：internal aggregate（含 model context）由本 service 自己
+     * 解析，不让 durable 事实穿过 presentation 边界（§3.2、§17.7）。
+     */
     suspend fun compress(
-        snapshot: ConversationSnapshot,
+        conversationId: Uuid,
         additionalPrompt: String,
         targetTokens: Int,
         keepRecentMessages: Int,
     ): Result<Unit> {
         recoveryGate.awaitReady()
+        val snapshot = commandCoordinator.load(conversationId).snapshot.value
         return sideEffects.compressConversation(snapshot, additionalPrompt, targetTokens, keepRecentMessages)
     }
 
@@ -193,9 +199,12 @@ class ConversationApplicationService(
         var retention: ArtifactRetentionLease? = null
         try {
             val deleted = commandCoordinator.deleteCapturingTree(conversationId) { tree ->
-                retention = artifactStore.retainForUndo(listOf(tree.root) + tree.children)
+                retention = artifactStore.retainNodesForUndo(
+                    (listOf(tree.root) + tree.children).map { it.nodes },
+                )
             }
-            (deleted.children.map { it.id } + deleted.root.id).forEach(sideEffects::clearTitleTracking)
+            (deleted.children.map { it.conversationId } + deleted.root.conversationId)
+                .forEach(sideEffects::clearTitleTracking)
             return RestoreToken(deleted.root, deleted.children, requireNotNull(retention))
         } catch (error: Throwable) {
             retention?.close()
@@ -207,7 +216,7 @@ class ConversationApplicationService(
         recoveryGate.awaitReady()
         try {
             if (token.children.isEmpty()) {
-                commandCoordinator.create(token.root)
+                commandCoordinator.createSnapshot(token.root)
             } else {
                 commandCoordinator.createTree(token.root, token.children)
             }
@@ -303,9 +312,12 @@ class ConversationApplicationService(
         var primaryFailure: Throwable? = null
         val copiedArtifacts = linkedMapOf<String, OwnedArtifact>()
         try {
+            val copiedNodeIdMap = mutableMapOf<Uuid, Uuid>()
             val copiedNodes = current.nodes.subList(0, targetIndex + 1).map { node ->
+                val newNodeId = Uuid.random()
+                copiedNodeIdMap[node.id] = newNodeId
                 node.copy(
-                    id = Uuid.random(),
+                    id = newNodeId,
                     messages = node.messages.map { message ->
                         message.copy(parts = cloneParts(message.parts, owned, copiedArtifacts))
                     },
@@ -313,7 +325,8 @@ class ConversationApplicationService(
             }
             val forkId = Uuid.random()
             forkIdForCleanup = forkId
-            val sourceChildren = conversationRepo.getChildConversations(current.conversationId).associateBy { it.id }
+            val sourceChildren = conversationRepo.getChildConversationSnapshots(current.conversationId)
+                .associateBy { it.conversationId }
             val tree = forkSubAssistantTree(
                 sourceMasterId = current.conversationId,
                 copiedMasterNodes = copiedNodes,
@@ -321,20 +334,29 @@ class ConversationApplicationService(
                 sourceChildren = sourceChildren,
                 json = json,
             )
-            val fork = Conversation(
-                id = forkId,
-                assistantId = current.header.assistantId,
-                messageNodes = tree.masterNodes,
-                customSystemPrompt = current.header.customSystemPrompt,
-                modeInjectionIds = current.header.modeInjectionIds,
-                // Fork inherits the master's organization (folderId) and Workspace context
-                // (workspaceCwd) from the committed header, not from renderNodes or page state.
-                folderId = current.header.folderId,
-                workspaceCwd = current.header.workspaceCwd,
+            val fork = current.copy(
+                conversationId = forkId,
+                header = current.header.copy(
+                    id = forkId,
+                    title = "",
+                    isPinned = false,
+                    chatSuggestions = emptyList(),
+                    parentConversationId = null,
+                    newConversation = false,
+                ),
+                nodes = tree.masterNodes,
+                activeTurn = null,
+                // Master fork 保留 message id、重建 node id：context entries 经唯一映射。
+                modelContextEntries = ConversationModelContextApplicability.remapForClone(
+                    entries = current.modelContextEntries,
+                    nodeIdMap = copiedNodeIdMap,
+                    messageIdMap = emptyMap(),
+                    clonedBranchMessages = tree.masterNodes.map { it.currentMessage },
+                ),
             )
             val children = tree.children.map { child ->
                 child.copy(
-                    messageNodes = child.messageNodes.map { node ->
+                    nodes = child.nodes.map { node ->
                         node.copy(messages = node.messages.map { message ->
                             message.copy(parts = cloneParts(message.parts, owned, copiedArtifacts))
                         })
@@ -345,7 +367,7 @@ class ConversationApplicationService(
             commandCoordinator.createTree(fork, children)
             artifactStore.publishAllUnpublished(owned)
             committed = true
-            return fork.id
+            return fork.conversationId
         } catch (error: Throwable) {
             primaryFailure = error
             if (createAttempted && error !is ConversationCommandConflictException) {
@@ -408,7 +430,7 @@ class ConversationApplicationService(
         copiedArtifacts,
     )
 
-    private suspend fun liveSnapshot(conversationId: Uuid): ConversationSnapshot =
+    private suspend fun liveSnapshot(conversationId: Uuid): ConversationAggregateSnapshot =
         commandCoordinator.load(conversationId).snapshot.value
 }
 
