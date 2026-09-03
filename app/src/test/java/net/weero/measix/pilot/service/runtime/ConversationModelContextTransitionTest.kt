@@ -6,6 +6,8 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.model.ConversationModelContextApplicability
+import net.weero.measix.pilot.data.model.ConversationModelContextEntry
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
 import net.weero.measix.pilot.service.DisclosureContentException
@@ -191,6 +193,83 @@ class ConversationModelContextTransitionTest {
     }
 
     @Test
+    fun `edit-and-resend truncates later history then re-anchors START on the new USER variant`() {
+        var snapshot = Conversation.ofId(Uuid.random())
+            .copy(messageNodes = listOf(userNode("u1"))).toSnapshot()
+        val firstAssistant = Uuid.random()
+        val firstCandidate = stableCandidate(1)
+        snapshot = finalize(startAt(snapshot, firstAssistant, firstCandidate), firstAssistant)
+        snapshot = ConversationTransition.apply(snapshot, AppendUserMessage(UIMessage.user("u2")))
+        val laterAssistant = Uuid.random()
+        snapshot = finalize(startAt(snapshot, laterAssistant, stableCandidate(2)), laterAssistant)
+
+        val firstUserNode = snapshot.nodes.first()
+        val truncated = ConversationTransition.apply(snapshot, TruncateToNodeIndex(0))
+        assertTrue(truncated.modelContextEntries.isEmpty())
+        assertEquals(1, truncated.nodes.size)
+
+        val editedUser = UIMessage.user("u1 edited")
+        val edited = ConversationTransition.apply(
+            truncated,
+            EditMessageVariant(firstUserNode.id, editedUser),
+        )
+        assertTrue(
+            "pure edit after truncate must not invent a context row",
+            edited.modelContextEntries.isEmpty(),
+        )
+
+        val replacement = Uuid.random()
+        val regeneratedCandidate = stableCandidate(3)
+        val started = startAt(edited, replacement, regeneratedCandidate)
+        val inserted = started.modelContextEntries.single()
+        assertEquals(replacement, inserted.ownerMessageId)
+        assertEquals(editedUser.id, inserted.anchorMessageId)
+        assertEquals(regeneratedCandidate, inserted.content)
+        assertEquals(firstUserNode.id, started.nodes.first().id)
+        assertEquals(editedUser.id, started.nodes.first().currentMessage.id)
+    }
+
+    @Test
+    fun `pure USER edit without START keeps historical entries and does not insert`() {
+        val candidate = stableCandidate(1)
+        val userNode = userNode("u1")
+        var snapshot = Conversation.ofId(Uuid.random())
+            .copy(messageNodes = listOf(userNode)).toSnapshot()
+        val original = Uuid.random()
+        snapshot = finalize(startAt(snapshot, original, candidate), original)
+
+        val mutation = plan(snapshot, EditMessageVariant(userNode.id, UIMessage.user("u1 edited")))
+        assertTrue(mutation.insertedModelContextEntries.isEmpty())
+        assertTrue(mutation.deletedModelContextEntries.isEmpty())
+        val after = ConversationTransition.apply(
+            snapshot,
+            EditMessageVariant(userNode.id, UIMessage.user("u1 edited")),
+        )
+        assertEquals(snapshot.modelContextEntries, after.modelContextEntries)
+    }
+
+    @Test
+    fun `assistant edit does not change model context rows`() {
+        var snapshot = Conversation.ofId(Uuid.random())
+            .copy(messageNodes = listOf(userNode("u1"))).toSnapshot()
+        val assistantId = Uuid.random()
+        snapshot = finalize(startAt(snapshot, assistantId, stableCandidate(1)), assistantId)
+        val assistantNode = snapshot.nodes.last()
+
+        val mutation = plan(
+            snapshot,
+            EditMessageVariant(assistantNode.id, UIMessage.assistant("rewritten")),
+        )
+        assertTrue(mutation.insertedModelContextEntries.isEmpty())
+        assertTrue(mutation.deletedModelContextEntries.isEmpty())
+        val after = ConversationTransition.apply(
+            snapshot,
+            EditMessageVariant(assistantNode.id, UIMessage.assistant("rewritten")),
+        )
+        assertEquals(snapshot.modelContextEntries, after.modelContextEntries)
+    }
+
+    @Test
     fun `switching assistant variant keeps durable rows and re-anchors applicability`() {
         var snapshot = Conversation.ofId(Uuid.random())
             .copy(messageNodes = listOf(userNode("u1"))).toSnapshot()
@@ -215,17 +294,59 @@ class ConversationModelContextTransitionTest {
         val branch = after.nodes.map { it.currentMessage }
         val byOwner = after.modelContextEntries.associateBy { it.ownerMessageId }
         assertTrue(
-            net.weero.measix.pilot.data.model.ConversationModelContextApplicability.applicable(
+            ConversationModelContextApplicability.applicable(
                 byOwner.getValue(firstAssistant),
                 branch,
             ),
         )
         assertTrue(
-            !net.weero.measix.pilot.data.model.ConversationModelContextApplicability.applicable(
+            !ConversationModelContextApplicability.applicable(
                 byOwner.getValue(secondAssistant),
                 branch,
             ),
         )
+    }
+
+    @Test
+    fun `remapForClone keeps unselected owner baselines on the copied tree`() {
+        val user = UIMessage.user("u1")
+        val first = UIMessage.assistant("a1")
+        val second = UIMessage.assistant("a2")
+        val userNode = MessageNode.of(user)
+        val assistantNode = MessageNode(messages = listOf(first, second), selectIndex = 1)
+        val firstEntry = ConversationModelContextEntry(
+            ownerNodeId = assistantNode.id,
+            ownerMessageId = first.id,
+            anchorNodeId = userNode.id,
+            anchorMessageId = user.id,
+            content = stableCandidate(1),
+        )
+        val secondEntry = firstEntry.copy(
+            ownerMessageId = second.id,
+            content = stableCandidate(2),
+        )
+        val nodeIdMap = mapOf(userNode.id to Uuid.random(), assistantNode.id to Uuid.random())
+        val cloned = listOf(
+            userNode.copy(id = nodeIdMap.getValue(userNode.id)),
+            assistantNode.copy(id = nodeIdMap.getValue(assistantNode.id)),
+        )
+
+        val remapped = ConversationModelContextApplicability.remapForClone(
+            entries = listOf(firstEntry, secondEntry),
+            nodeIdMap = nodeIdMap,
+            messageIdMap = emptyMap(),
+            clonedNodes = cloned,
+        )
+
+        assertEquals(setOf(first.id, second.id), remapped.map { it.ownerMessageId }.toSet())
+        val selectedBranch = cloned.map { it.currentMessage }
+        val byOwner = remapped.associateBy { it.ownerMessageId }
+        assertTrue(ConversationModelContextApplicability.applicable(byOwner.getValue(second.id), selectedBranch))
+        assertTrue(!ConversationModelContextApplicability.applicable(byOwner.getValue(first.id), selectedBranch))
+        val switched = cloned.map { node ->
+            if (node.id == nodeIdMap.getValue(assistantNode.id)) node.copy(selectIndex = 0) else node
+        }.map { it.currentMessage }
+        assertTrue(ConversationModelContextApplicability.applicable(byOwner.getValue(first.id), switched))
     }
 
     @Test

@@ -351,7 +351,7 @@ class ConversationApplicationService(
                     entries = current.modelContextEntries,
                     nodeIdMap = copiedNodeIdMap,
                     messageIdMap = emptyMap(),
-                    clonedBranchMessages = tree.masterNodes.map { it.currentMessage },
+                    clonedNodes = tree.masterNodes,
                 ),
             )
             val children = tree.children.map { child ->

@@ -225,8 +225,13 @@ ToolCall 执行。Master 与 Target 都从当前有效 Settings 构建，配置�
 
 会话披露使用独立的 `conversation_model_context` durable 表：一条 entry 由 Assistant request variant 的
 `owner_message_id/owner_node_id` 拥有，并锚定其因果 USER 的 `anchor_message_id/anchor_node_id`。它不进入
-`ConversationEntity` 大 JSON，也不暴露给 Presentation/UI。每个新 START 在结构变换后的 selected branch 上生成 canonical candidate，
+`ConversationEntity` 大 JSON，也不暴露给 Presentation/UI。打开会话只验证 envelope 形状（未知 format、非法 JSON、
+错误角色与重复 owner 仍 fail-closed），不把已提交 bytes 再做 canonical round-trip；逐字 canonical 只在 render 与
+`StartTurn` 写入时强制。每个新 START 在结构变换后的 selected branch 上生成 canonical candidate，
 仅在内容相对 retained baseline 变化时随同一个 `StartTurn` 原子插入；审批/ask-user continuation 不创建第二 entry。
+Fork / Child clone 按复制后的整棵 node 树 remap entry，未选中但已被复制的 Assistant owner 仍带走 baseline。
+Master 与 Child 都在 `StartTurn` 提交后把 `TurnModelContextProjection` 绑到该 Turn 的 active worker；continuation 只复用同一引用。
+编辑 USER 后发送会截断到该 USER 并走新的 `START`；纯编辑（长按发送）只提交新 USER variant，不创建 entry。
 请求规划仍只有 `ConversationContextPlanner`：transformers 完成后，把选中的 canonical snapshots 聚合为第一个 part，
 与原用户 text/image/document/audio/video 组成一个 durable USER model turn，不伪造 ASSISTANT 或额外相邻 USER。
 
@@ -329,9 +334,9 @@ terminal messages 按完整 Provider step 原子回放：
 归档 Tool Result 不建立新表或第二 checkpoint。执行完成的完整 output 先随 `TOOL_RESULT_COMPLETED` 持久化；下一次成功
 Provider 请求从最终 request projection 生成保守 `ModelStepReceipt` 后，planner 才可选择历史 `ARCHIVABLE_TEXT` 或
 `REGENERABLE_TEXT` 纯文本结果。inline Tool 文本达到 48K estimated tokens 才启动，尽量降到 16K，整批至少预计净回收
-24K estimated tokens；单结果净回收至少 512 estimated tokens。最近两个 typed tool-call 批次和最近 4K estimated tokens
-受保护，不额外冻结整个已完成 USER turn。估算按每个 Tool Result 独立计算：ASCII code point 总数除以 4 并向上取整，
-其他 code point 各计 1。
+24K estimated tokens；单结果净回收至少 128 estimated tokens。最近两个 typed tool-call 批次和最近 8K estimated tokens
+受保护，不额外冻结整个已完成 USER turn。估算按每个 Tool Result 独立计算：ASCII 字母与空白约每 4 个 code point 1 token，
+连续 ASCII 数字段约每 3 位 1 token，连续 ASCII 符号段约每 2 个 1 token，其他 Unicode code point 各计 1。
 `ToolOutputStore` 对 `ARCHIVABLE_TEXT` 创建 unpublished `tool_outputs` Artifact，并写稳定 marker 与
 `tool_runtime.archive.artifact`；对 `REGENERABLE_TEXT` 只写固定 folded marker，不创建 Artifact。历史 marker 通过 locator、marker
 与可空 archive 的 `toolOutputCompactionPatches` typed delta 和当前 Assistant 一起由 `STEP_COMPLETED` 同事务写入；该 delta

@@ -335,6 +335,33 @@ class ConversationRuntimeTest {
     }
 
     @Test
+    fun `approval continuation fails closed when model context projection is missing`() = runTest {
+        val scope = CoroutineScope(Job())
+        val rt = runtime(scope)
+        val turnId = Uuid.random()
+        val handle = rt.startTurn(turnId, Uuid.random())
+        val worker = requireNotNull(rt.currentWorker())
+        val model = Model(modelId = "model", displayName = "Model")
+        val provider = ProviderSetting.OpenAI(models = listOf(model))
+        val assistant = Assistant(enableMemory = false)
+        rt.bindTurnRequestContext(
+            turnId,
+            worker,
+            testTurnRequestContext(
+                settings = Settings(providers = listOf(provider), assistants = listOf(assistant)),
+                model = model,
+                assistant = assistant,
+            ),
+        )
+        rt.retainAwaitingApproval(handle)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            rt.continueAwaitingApproval(handle, Job())
+        }
+        scope.cancel()
+    }
+
+    @Test
     fun `tool approval updates the durable tree without replacing the active turn owner`() = runTest {
         val scope = CoroutineScope(Job())
         val rt = runtime(scope)

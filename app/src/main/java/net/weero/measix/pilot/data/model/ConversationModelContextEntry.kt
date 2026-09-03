@@ -67,20 +67,22 @@ internal object ConversationModelContextApplicability {
     }
 
     /**
-     * Fork / Child clone 的唯一 entry 映射（权威方案 §14.1）。
+     * Fork / Child clone 的唯一 entry 映射（权威方案 §14.1、§14.2）。
      *
      * 不得假设 Master 与 Child 的 clone 路径永远保留 message ID：node 必须显式在
      * [nodeIdMap] 中（复制不到的 node 直接落选）；message 未在 [messageIdMap] 声明时按
-     * clone 路径"保留原 id"处理，entry 是否真的还成立由同一个 [applicable] 因果谓词在
-     * 克隆后的 selected branch 上裁决——owner Assistant 与 anchor USER 都被复制且映射后
-     * 仍满足谓词，才允许进入 Fork。Fork 点之后的 entry 因 owner/anchor 不在被复制前缀内
-     * 而自然落选。
+     * clone 路径"保留原 id"处理。
+     *
+     * 适用性在**被复制的整棵节点树**上判定，而不是只看当前 selected `currentMessages`：
+     * 被复制但当时未选中的 Assistant owner 仍要带走它的 baseline，否则 Fork 后切回该
+     * variant 会丢掉历史基线。判定时把该 owner / anchor variant 临时放到对应 node 上，
+     * 再交给同一个 [applicable] 因果谓词；Fork 点之后因 node 不在 map 中而自然落选。
      */
     fun remapForClone(
         entries: List<ConversationModelContextEntry>,
         nodeIdMap: Map<Uuid, Uuid>,
         messageIdMap: Map<Uuid, Uuid>,
-        clonedBranchMessages: List<UIMessage>,
+        clonedNodes: List<MessageNode>,
     ): List<ConversationModelContextEntry> {
         if (entries.isEmpty()) return emptyList()
         return entries.mapNotNull { entry ->
@@ -92,7 +94,29 @@ internal object ConversationModelContextApplicability {
                 anchorNodeId = anchorNodeId,
                 anchorMessageId = messageIdMap[entry.anchorMessageId] ?: entry.anchorMessageId,
             )
-            mapped.takeIf { applicable(it, clonedBranchMessages) }
+            mapped.takeIf { applicableOnCopiedTree(it, clonedNodes) }
         }
+    }
+
+    /**
+     * 在已复制的 node 树上评估 [applicable]：owner / anchor variant 只要还在对应 node 的
+     * messages 里，就按“选中它们”构造 branch，其它 node 保持原 selectIndex。
+     */
+    fun applicableOnCopiedTree(
+        entry: ConversationModelContextEntry,
+        nodes: List<MessageNode>,
+    ): Boolean {
+        val ownerNodeIndex = nodes.indexOfFirst { it.id == entry.ownerNodeId }
+        if (ownerNodeIndex < 0) return false
+        val anchorNodeIndex = nodes.indexOfFirst { it.id == entry.anchorNodeId }
+        if (anchorNodeIndex < 0) return false
+        val branch = nodes.mapIndexed { index, node ->
+            when (index) {
+                ownerNodeIndex -> node.messages.firstOrNull { it.id == entry.ownerMessageId } ?: return false
+                anchorNodeIndex -> node.messages.firstOrNull { it.id == entry.anchorMessageId } ?: return false
+                else -> node.currentMessage
+            }
+        }
+        return applicable(entry, branch)
     }
 }

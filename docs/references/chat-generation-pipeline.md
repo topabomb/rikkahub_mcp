@@ -61,6 +61,9 @@ ConversationApplicationService / MasterTurnCoordinator
 `MasterTurnCoordinator.sendMessage` 在安装唯一 generation Job 时返回 `SendMessageReceipt`。receipt 中的
 `userMessageId` 是本次 `AppendUserMessage` 的稳定身份，不代表 durable 提交已经成功；UI 只可用它观察
 `ConversationSnapshot.nodes` 中的目标消息并协调滚动等临时表现，不能据此提前发布消息或持有 Runtime Job。
+编辑已有 USER 并发送走 `editAndResend`：截断到该 USER node、提交新 USER variant，再按变换后的目标分支
+`START`；receipt 的 `userMessageId` 是这个新 variant。纯编辑（长按发送）与编辑 Assistant 只走
+`editMessage`，不创建 model-context entry、不启动 turn。
 
 `StartTurn`、`CommitCheckpoint` 与 `FinalizeTurn` 均执行：
 
@@ -106,7 +109,7 @@ Provider API key、Google service-account key/email 等不进入 context。START
 
 1. 对非成功历史建立 replay-safe projection，再按配置执行请求级裁剪；完整历史不变。
 2. 从同一份上下文构建 Tool system prompt。
-3. 组装 Assistant/会话 System、Memory 与 Tool prompt。
+3. 组装 Assistant/会话 System 与冻结的 Tool prompt；动态 Memory / 子助手 Catalog 不进入 System，只作为 START 提交的 Disclosure Snapshot 出现在因果 USER 的第一个 part。
 4. 运行 `TurnPipelineFactory` 提供的 Input Transformer。
 5. 构建模型、采样、输出上限、自定义 Header/Body 与工具参数。
 6. 每次真实 Provider 调用建立一个 request usage reducer，合并 chunk，并按字段 presence 覆盖该请求的 usage snapshot。
@@ -222,9 +225,10 @@ Master 的 `FAILED` / `INCOMPLETE` 由 `ChatErrorStore` 投影为当前会话底
 `ConversationContextPlanner` 同时负责请求窗口和成功 Provider step 后的 Tool Result 压缩候选。完整工具结果先经
 `TOOL_RESULT_COMPLETED` durable checkpoint 保存，并且只有被成功 `ModelStepReceipt` 保守确认进入最终 Provider 请求投影后，
 才允许压缩。inline Tool 文本达到 48K estimated tokens 才触发，按 16K 低水位、24K 整批最小净回收量、最近两个 typed
-批次和最近 4K estimated tokens 保护规则选择；不额外冻结整个已完成 USER turn。候选必须有显式 `completed` / `failed`
-终态，且 `originalEstimatedTokens - markerEstimatedTokens >= 512`。估算规则按每个 Tool Result 独立计算：ASCII code point
-总数除以 4 并向上取整，其他 code point 各计 1；全部生产阈值只来自 `ContextTrimmingPolicy.kt`，Provider input token 与 cache 命中百分比
+批次和最近 8K estimated tokens 保护规则选择；不额外冻结整个已完成 USER turn。候选必须有显式 `completed` / `failed`
+终态，且 `originalEstimatedTokens - markerEstimatedTokens >= 128`。估算规则按每个 Tool Result 独立计算：ASCII 字母与空白约每 4 个
+code point 1 token，连续 ASCII 数字段约每 3 位 1 token，连续 ASCII 符号段约每 2 个 1 token，其他 Unicode code point 各计 1；
+全部生产阈值只来自 `ContextTrimmingPolicy.kt`，Provider input token 与 cache 命中百分比
 都不参与决策。`PRESERVE`、混合媒体、Provider opaque replay、已归档结果与 `denied` / `answered` 不参与。
 回查工具结果标为 `REGENERABLE_TEXT`，满足同一滚动规则时只折叠固定 marker，不创建新的 Artifact。
 一次执行只要登记过 unpublished Artifact，Runtime 对成功和失败结果都强制 `PRESERVE`，不把产物交付引用交给 planner 猜测。

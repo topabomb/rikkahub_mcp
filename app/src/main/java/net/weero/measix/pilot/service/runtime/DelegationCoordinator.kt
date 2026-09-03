@@ -900,7 +900,7 @@ class DelegationCoordinator(
                 entries = sourceConversation.modelContextEntries,
                 nodeIdMap = clonedNodeIdMap,
                 messageIdMap = emptyMap(),
-                clonedBranchMessages = clonedNodes.map { it.currentMessage },
+                clonedNodes = clonedNodes,
             ),
         )
         createOwnedChild(snapshot)
@@ -1067,7 +1067,12 @@ class DelegationCoordinator(
         )
         val turnEngine = started.engine
         lastMessages = runtime.snapshot.value.currentMessages()
-        val modelContextProjection = ConversationTransition.projectTurnModelContext(runtime.snapshot.value)
+        runtime.bindModelContextProjection(
+            childTurnId,
+            activeWorker,
+            ConversationTransition.projectTurnModelContext(runtime.snapshot.value),
+        )
+        val modelContextProjection = runtime.requireTurnModelContextProjection(childTurnId, activeWorker)
         while (true) {
             outcome = null
             generationLoop.run(

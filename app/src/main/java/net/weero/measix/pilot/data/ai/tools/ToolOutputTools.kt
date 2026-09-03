@@ -23,7 +23,7 @@ internal object ToolOutputToolNames {
 }
 
 /**
- * 归档 Tool Result 的回查工具。输出严格有界（16 KiB），并与其他纯文本结果一样在
+ * 归档 Tool Result 的回查工具。输出严格有界（32 KiB），并与其他纯文本结果一样在
  * 被模型成功消费后参与统一滚动压缩；折叠时不再复制为新的 Artifact。
  */
 internal fun createToolOutputLookupTools(

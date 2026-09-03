@@ -9,8 +9,6 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.text.InlineTextContent
-import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -28,11 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.Placeholder
-import androidx.compose.ui.text.PlaceholderVerticalAlign
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.toJavaLocalDateTime
@@ -100,62 +94,24 @@ fun ChatMessageNerdLine(
                 modifier = modifier.padding(horizontal = 4.dp).animateContentSize(),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                Text(
+                FlowRow(
                     modifier = Modifier.clickable { expanded = !expanded },
-                    text = buildAnnotatedString {
-                        summaryItems.forEachIndexed { index, metric ->
-                            if (index > 0) append(" · ")
-                            appendInlineContent(summaryMetricInlineId(index))
-                            append('\u00a0')
-                            append(metric.text)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    itemVerticalAlignment = Alignment.CenterVertically,
+                ) {
+                    summaryItems.forEachIndexed { index, metric ->
+                        if (index > 0) {
+                            Text("·", maxLines = 1, softWrap = false)
                         }
-                        append(' ')
-                        appendInlineContent(SUMMARY_TOGGLE_INLINE_ID)
-                    },
-                    inlineContent = buildMap {
-                        summaryItems.forEachIndexed { index, metric ->
-                            put(
-                                summaryMetricInlineId(index),
-                                InlineTextContent(
-                                    placeholder = summaryIconPlaceholder(),
-                                ) {
-                                    Icon(
-                                        imageVector = when (metric.icon) {
-                                            UsageSummaryIcon.CONTEXT -> HugeIcons.Layers01
-                                            UsageSummaryIcon.CACHED -> HugeIcons.Database
-                                            UsageSummaryIcon.TRIM -> HugeIcons.Scissor
-                                            UsageSummaryIcon.TOTAL -> HugeIcons.Clock02
-                                        },
-                                        contentDescription = metric.icon.description,
-                                        modifier = Modifier.size(12.dp),
-                                        tint = when {
-                                            metric.highlighted -> MaterialTheme.colorScheme.primary
-                                            metric.muted -> LocalContentColor.current.copy(
-                                                alpha = LocalContentColor.current.alpha * 0.6f,
-                                            )
-
-                                            else -> LocalContentColor.current
-                                        },
-                                    )
-                                },
-                            )
-                        }
-                        put(SUMMARY_TOGGLE_INLINE_ID, InlineTextContent(
-                            placeholder = Placeholder(
-                                width = 12.sp,
-                                height = 12.sp,
-                                placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter,
-                            ),
-                        ) {
-                            Icon(
-                                imageVector = HugeIcons.ArrowDown01,
-                                contentDescription = if (expanded) "Collapse usage" else "Expand usage",
-                                modifier = Modifier.size(12.dp).rotate(if (expanded) 180f else 0f),
-                            )
-                        })
-                    },
-                    softWrap = true,
-                )
+                        UsageSummaryItem(metric)
+                    }
+                    Icon(
+                        imageVector = HugeIcons.ArrowDown01,
+                        contentDescription = if (expanded) "Collapse usage" else "Expand usage",
+                        modifier = Modifier.size(12.dp).rotate(if (expanded) 180f else 0f),
+                    )
+                }
                 AnimatedVisibility(visible = expanded) {
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -170,18 +126,40 @@ fun ChatMessageNerdLine(
     }
 }
 
-/** 摘要尾部的展开图标使用 inline content，保证始终紧贴最后一个统计项。 */
-private const val SUMMARY_TOGGLE_INLINE_ID = "usage-summary-toggle"
+/**
+ * 摘要项：与第二行 [UsageDetailItem] 同构。
+ *
+ * Icon 与文字放在同一个 Row 内按 CenterVertically 居中，不走 inline content：
+ * inline placeholder 用 sp 而 Icon 用 dp，系统字体缩放非 1.0 时两者不等，
+ * 图标会在 placeholder 方框内顶部对齐而整体偏上。
+ */
+@Composable
+private fun UsageSummaryItem(metric: UsageSummaryMetric) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(1.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = when (metric.icon) {
+                UsageSummaryIcon.CONTEXT -> HugeIcons.Layers01
+                UsageSummaryIcon.CACHED -> HugeIcons.Database
+                UsageSummaryIcon.TRIM -> HugeIcons.Scissor
+                UsageSummaryIcon.TOTAL -> HugeIcons.Clock02
+            },
+            contentDescription = metric.icon.description,
+            modifier = Modifier.size(12.dp),
+            tint = when {
+                metric.highlighted -> MaterialTheme.colorScheme.primary
+                metric.muted -> LocalContentColor.current.copy(
+                    alpha = LocalContentColor.current.alpha * 0.6f,
+                )
 
-private fun summaryMetricInlineId(index: Int): String = "usage-summary-metric-$index"
-
-private fun summaryIconPlaceholder() = Placeholder(
-    width = 12.sp,
-    height = 12.sp,
-    // 对齐到文字自身的垂直中心（ascent..descent 中点），而不是行框中心；
-    // labelSmall 的 lineHeight 大于字号，用 Center 会让图标明显偏上。
-    placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter,
-)
+                else -> LocalContentColor.current
+            },
+        )
+        Text(metric.text, maxLines = 1, softWrap = false)
+    }
+}
 
 /**
  * 本 turn 端到端耗时。turn 未终态时用当前时刻计时并取整到秒，终态后使用冻结的
@@ -220,17 +198,24 @@ internal data class NerdLineUsageDisplay(
     val inputTokens: Long?,
     val outputTokens: Long?,
     val cacheReadTokens: Long?,
-    val peakContextTokens: Long?,
     val providerDurationMillis: Long?,
     val requestCount: Int?,
     val tokensPerSecond: Double?,
     val ttftMillis: Long?,
 ) {
     /**
-     * 第一行：上下文与命中率属于最近一次已关闭请求，裁剪批次与耗时属于本 turn。
+     * 第一行四项，分两种粒度，各自内部自洽：
      *
-     * 命中率只在上下文取实测值时出现：上下文为估算时命中率只能来自更早的请求，
-     * 分母会对不上，因此隐藏而不是显示一个无法验算的比例。
+     * - `▤` 上下文是**状态量**：最近一次请求的输入有多大。它只能取单请求——累计输入没有"上下文多大"
+     *   的含义。取不到实测 input 时退回该请求发送前的估算，加 `~` 前缀并去饱和，绝不把估算当实测。
+     * - `⬡` 命中率是**效率量**：本 turn 累计 cache read ÷ 累计 input。它的分子分母就是第二行的
+     *   `⬡ Cached` 与 `⬆ Input`，两者可见时它才可见，因此随时可验算；任一缺失则一起缺席。
+     *   用累计而不是"最近一次请求"，是因为单请求值只反映最后一次，前面全崩也可能照样显示高值，
+     *   反而更容易误导；累计值随每个已关闭请求推进并收敛，更能代表整轮。
+     * - `✂` 裁剪批次数与 `⏱` 本 turn 耗时同样是 turn 级总结。
+     *
+     * 因此 `▤` 与 `⬡` 不需要共用锚点：一个回答"现在多大"，一个回答"这轮省了多少"；
+     * 命中率的分母不在它旁边，而在展开后的第二行。
      */
     internal fun summaryItems(elapsedText: String?): List<UsageSummaryMetric> = buildList {
         context?.let { ctx ->
@@ -245,11 +230,9 @@ internal data class NerdLineUsageDisplay(
                     muted = !ctx.exact,
                 ),
             )
-            if (ctx.exact) {
-                cacheHitPercent?.let {
-                    add(UsageSummaryMetric("${it.formatCachePercent()}%", UsageSummaryIcon.CACHED))
-                }
-            }
+        }
+        cacheHitPercent?.let {
+            add(UsageSummaryMetric("${it.formatCachePercent()}%", UsageSummaryIcon.CACHED))
         }
         trimBatches?.takeIf { it > 0 }?.let {
             add(UsageSummaryMetric(it.toString(), UsageSummaryIcon.TRIM, highlighted = true))
@@ -260,7 +243,12 @@ internal data class NerdLineUsageDisplay(
     internal fun summaryText(elapsedText: String?): String =
         summaryItems(elapsedText).joinToString(" · ") { it.text }
 
-    /** 第二行：本 turn 累计在前，最近一次请求的性能在后；缺失项不占位。 */
+    /**
+     * 第二行：本 turn 累计在前，最近一次请求的性能在后；缺失项不占位。
+     *
+     * `⚡ tok/s` 与 `TTFT` 是单请求指标（速度无法累计）：前者取最近一次已关闭请求；
+     * 后者取最近一次**实际产生首个有效模型输出**的请求，空输出请求不覆盖旧值。
+     */
     internal fun detailItems(): List<UsageDetailMetric> = buildList {
         inputTokens?.let {
             add(UsageDetailMetric(value = it.formatTokenCount(), icon = UsageDetailIcon.INPUT))
@@ -273,9 +261,6 @@ internal data class NerdLineUsageDisplay(
         }
         providerDurationMillis?.let {
             add(UsageDetailMetric(value = it.formatMillis(), icon = UsageDetailIcon.PROVIDER, label = "Provider"))
-        }
-        peakContextTokens?.let {
-            add(UsageDetailMetric(value = it.formatTokenCount(), icon = UsageDetailIcon.CONTEXT, label = "Peak"))
         }
         requestCount?.let {
             add(UsageDetailMetric(value = it.toString(), icon = UsageDetailIcon.REQUESTS, label = "Req"))
@@ -312,7 +297,6 @@ internal enum class UsageDetailIcon(val description: String) {
     OUTPUT("Output"),
     CACHED("Cached"),
     PROVIDER("Provider"),
-    CONTEXT("Peak"),
     REQUESTS("Requests"),
     SPEED("Output speed"),
     TTFT("Time to first token"),
@@ -342,7 +326,6 @@ private fun UsageDetailItem(metric: UsageDetailMetric) {
                     UsageDetailIcon.OUTPUT -> HugeIcons.Download04
                     UsageDetailIcon.CACHED -> HugeIcons.Database
                     UsageDetailIcon.PROVIDER -> HugeIcons.Cloud
-                    UsageDetailIcon.CONTEXT -> HugeIcons.Layers01
                     UsageDetailIcon.SPEED -> HugeIcons.Zap
                     UsageDetailIcon.REQUESTS -> HugeIcons.Repeat
                     UsageDetailIcon.TTFT -> HugeIcons.StopWatch
@@ -358,20 +341,32 @@ private fun UsageDetailItem(metric: UsageDetailMetric) {
 
 /**
  * 从一个 turn-owned TokenUsage 原子投影两行统计。
- * 第一行前两项属于最近一次已关闭请求，后两项属于本 turn；第二行以 turn 累计为主。
+ *
+ * 粒度分工与 [NerdLineUsageDisplay.summaryItems] 的注释一致：上下文是状态量，取最近一次请求；
+ * 命中率是效率量，取本 turn 累计；裁剪批次与耗时同为 turn 级。
  */
 internal fun TokenUsage?.toNerdLineDisplay(): NerdLineUsageDisplay? {
     if (this == null) return null
     val context = latestRequestContextTokens?.let { NerdLineContext(tokens = it, exact = true) }
         ?: latestRequestEstimatedContextTokens?.let { NerdLineContext(tokens = it, exact = false) }
+    // 命中率的分子分母就是第二行的 Cached 与 Input。三者共用同一组 completeness 门控，
+    // 因此要么一起可见（用户可当场验算 Cached ÷ Input），要么一起缺席，不会出现有比例却无分母。
+    val exactInput = inputTokens.takeIf { inputCompleteness == UsageCompleteness.COMPLETE }
+    val exactCache = cacheReadInputTokens.takeIf { cacheReadCompleteness == UsageCompleteness.COMPLETE }
+    val turnCacheHitPercent = if (
+        exactInput != null && exactInput > 0L && exactCache != null && exactCache <= exactInput
+    ) {
+        exactCache.toDouble() / exactInput * 100.0
+    } else {
+        null
+    }
     return NerdLineUsageDisplay(
         context = context,
-        cacheHitPercent = latestRequestCacheHitPercent,
+        cacheHitPercent = turnCacheHitPercent,
         trimBatches = successfulToolOutputCompactionBatchCount,
-        inputTokens = inputTokens.takeIf { inputCompleteness == UsageCompleteness.COMPLETE },
+        inputTokens = exactInput,
         outputTokens = outputTokens.takeIf { coreCompleteness == UsageCompleteness.COMPLETE },
-        cacheReadTokens = cacheReadInputTokens.takeIf { cacheReadCompleteness == UsageCompleteness.COMPLETE },
-        peakContextTokens = peakRequestContextTokens,
+        cacheReadTokens = exactCache,
         providerDurationMillis = providerRequestDurationMillis,
         requestCount = observedProviderRequestCount,
         tokensPerSecond = latestRequestTokensPerSecond,

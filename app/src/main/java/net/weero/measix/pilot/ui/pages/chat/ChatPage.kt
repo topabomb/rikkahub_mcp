@@ -77,6 +77,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.common.android.appTempFolder
@@ -665,10 +666,33 @@ private fun ChatPageContent(
                                 return@ChatInput
                             }
                             if (inputState.isEditing()) {
+                                val editingMessageId = inputState.editingMessage!!
+                                val contents = inputState.getContents()
+                                val editingRole = snapshot.nodes
+                                    .firstOrNull { node -> node.messages.any { it.id == editingMessageId } }
+                                    ?.messages
+                                    ?.firstOrNull { it.id == editingMessageId }
+                                    ?.role
+                                if (editingRole == MessageRole.USER) {
+                                    scope.launch {
+                                        vm.handleMessageEditAndSend(contents, editingMessageId)?.let { receipt ->
+                                            inputState.clearInput()
+                                            requestAppendScroll(
+                                                AppendScrollContext.from(
+                                                    snapshot = snapshot,
+                                                    targetMessageId = receipt.userMessageId,
+                                                    turnId = receipt.turnId,
+                                                ),
+                                            )
+                                        }
+                                    }
+                                    return@ChatInput
+                                }
                                 vm.handleMessageEdit(
-                                    parts = inputState.getContents(),
-                                    messageId = inputState.editingMessage!!,
+                                    parts = contents,
+                                    messageId = editingMessageId,
                                 )
+                                inputState.clearInput()
                             } else {
                                 val contents = inputState.getContents()
                                 scope.launch {
@@ -685,7 +709,6 @@ private fun ChatPageContent(
                                 }
                                 return@ChatInput
                             }
-                            inputState.clearInput()
                         },
                         onLongSendClick = {
                             if (!readiness.canSend) {

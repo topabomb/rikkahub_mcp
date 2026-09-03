@@ -75,8 +75,9 @@ Provider wire usage event
 1. 流式事件按字段 presence 覆盖当前请求快照；字段缺失表示本事件不更新该字段，显式 `0` 必须覆盖旧值。
    携带 usage 的事件即使没有 choices/candidates 也必须进入 reducer，包括 Chat 最终 usage-only chunk、Responses
    completed/incomplete/failed terminal event 和 Gemini usage-only event。
-2. `GenerationLoop` 在调用 Provider 前，对最终 `internalMessages`、工具名称、描述与 JSON schema 做稳定粗估：ASCII code point
-   按每 4 个约 1 token、其他 Unicode code point 各约 1 token，并加入固定消息/part/schema 开销；媒体使用固定占位，不按
+2. `GenerationLoop` 在调用 Provider 前，对最终 `internalMessages`、工具名称、描述与 JSON schema 做稳定粗估：ASCII 字母与空白
+   约每 4 个 code point 1 token，连续 ASCII 数字段约每 3 位 1 token，连续 ASCII 符号段约每 2 个 1 token，其他 Unicode
+   code point 各约 1 token，并加入固定消息/part/schema 开销；媒体使用固定占位，不按
    base64 字符数计算。该估值只服务 Context 摘要和上下文预警，不冒充 Provider 计费 token。估值先写入 owning Assistant
    的 turn-owned 投影，再发起 Provider 调用，因此第一条请求真正发起后 footer 即可显示。
 3. 首个 Text、Reasoning、Tool 或媒体 payload 到达时刷新该请求 TTFT；空协议事件和 usage-only 事件不触发。流式 usage
@@ -185,12 +186,14 @@ unknown。旧记录可以继续解码，但 UI 不为 `LEGACY` 建立特殊显�
 `ChatMessageNerdLine` 是低对比度、无容器背景的两行紧凑 footer，只在 owning Assistant 消息持有 turn usage 且第一行
 至少产生一项时显示；首个 turn 尚未真正发起 Provider 请求时不显示。
 
-第一行按关注度排列四项，前两项属于"最近一次已关闭的 Provider 请求"，后两项属于"本 turn"：
+第一行按关注度排列四项，分两种粒度：第一项是状态量（只能取单请求），后三项是 turn 级总结。
 
 - `[Layers] x`：上下文。取最近一次已关闭请求的 canonical input；尚无实测值时退回该请求发送前的稳定估算，并加 `~`
   前缀与去饱和。估算只在 turn 首次请求尚未关闭时起作用，之后始终显示已验证的实测值。
-- `[Database] y%`：缓存命中率，等于同一请求的 `cacheRead / input`，因此分母就是它左边那个上下文值。**仅当上下文取
-  实测值时才显示**：上下文为估算时命中率只能来自更早的请求，分母对不上，因此隐藏。
+- `[Database] y%`：缓存命中率，等于本 turn 累计 cache read ÷ 累计 input，也就是第二行 `Cached` 与 `Input` 之比。
+  用累计而不是"最近一次请求"，是因为单请求值只反映最后一次，前面全部未命中也可能照样显示高值；累计值随每个已关闭
+  请求推进并收敛。它与分子分母共用同一组 completeness 门控，因此要么一起可见（可当场验算），要么一起缺席，不会
+  出现有比例却无分母。`latestRequestCacheHitPercent` 只作审计字段，footer 不读取。
 - `[Scissors] n`：本 turn 成功随 checkpoint 提交的滚动裁剪批次数，大于零才出现，出现即以主题主色高亮，一批裁掉多个
   结果仍只计 1。
 - `[Clock] t`：本 turn 端到端耗时。`turnFinished` 为假时用 `now - createdAt` 每秒刷新；`FinalizeTurn` /
@@ -198,18 +201,17 @@ unknown。旧记录可以继续解码，但 UI 不为 `LEGACY` 建立特殊显�
   输入等待，与下面第二行的 Provider 墙钟是两个不同的口径。
 
 第二行默认隐藏，点击第一行后以响应式项目展开，宽度不足时自动换行；全部项目有值才渲染，缺失时不占位。项目语义为
-`[Upload] Input · [Download] Output · [Database] Cached · [Cloud] Provider · [Layers] Peak · Req · [Zap] tok/s · TTFT`：
+`[Upload] Input · [Download] Output · [Database] Cached · [Cloud] Provider · Req · [Zap] tok/s · TTFT`：
 
 - Input / Output / Cached 是本 turn 累计值，分别受 `inputCompleteness` / `coreCompleteness` /
-  `cacheReadCompleteness` 门控，非 `COMPLETE` 不显示数值。
+  `cacheReadCompleteness` 门控，非 `COMPLETE` 不显示数值；Cached 同时是第一行命中率的分子。
 - Provider 只累计 Provider 请求墙钟，不含工具执行与审批等待。
-- Peak 是本 turn 已关闭请求 `input + output` 的最大值。
 - Req 包括成功、失败和取消的已关闭请求。
-- tok/s 与 TTFT 与第一行前两项同属最近一次请求，`tok/s = output / 输出阶段时间`，TTFT 是最近一次实际产生首个有效
-  模型输出的请求的等待时间。
+- `tok/s` 与 `TTFT` 是单请求指标（速度无法累计）：`tok/s = 该请求 output / 输出阶段时间`，取最近一次已关闭请求；
+  TTFT 取最近一次**实际产生首个有效模型输出**的请求，空输出请求不覆盖旧值。
 
 图标规则：含义唯一的项只显示图标与数值；与第一行同图标、或单位与缩写需要说明的项保留短文字，即 `Cached`、
-`Provider`、`Peak`、`tok/s`、`TTFT`、`Req`。所有图标仍提供完整无障碍描述。
+`Provider`、`tok/s`、`TTFT`、`Req`。所有图标仍提供完整无障碍描述。
 
 共性规则：
 

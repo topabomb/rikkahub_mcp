@@ -472,6 +472,94 @@ class MasterTurnCoordinator(
         )
     }
 
+    /**
+     * 编辑已有 USER 并重新发送：先截断到该 USER node、再提交新 USER variant，然后按
+     * 结构变换后的目标分支走新的 `START`（权威方案 §7.5）。纯编辑不启动模型请求时
+     * 走 [ConversationApplicationService.editMessage]，不得调用本方法。
+     */
+    suspend fun editAndResend(
+        conversationId: Uuid,
+        messageId: Uuid,
+        content: List<UIMessagePart>,
+        artifactDraftScope: ArtifactDraftScope? = null,
+    ): SendMessageReceipt? {
+        if (content.isEmptyInputMessage()) return null
+
+        val runtime = requireRuntime(conversationId)
+        val turnId = Uuid.random()
+        val userMessageId = Uuid.random()
+        val job = appScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                recoveryGate.awaitReady()
+                runtime.awaitPreviousWorker(turnId)
+                turnFinalization.finalizeSupersededTurn(conversationId, runtime.previousTurnId(turnId))
+
+                val snapshot = subAssistantLifecycle.finalizeRunsBeforeTreeMutation(runtime.snapshot.value)
+                val nodeIndex = snapshot.nodes.indexOfFirst { node ->
+                    node.messages.any { it.id == messageId }
+                }
+                check(nodeIndex >= 0) { "Message not found: $messageId" }
+                val target = snapshot.nodes[nodeIndex]
+                val edited = target.messages.first { it.id == messageId }
+                check(edited.role == MessageRole.USER) {
+                    "edit-and-resend requires a USER message: $messageId"
+                }
+
+                val settings = settingsStore.effectiveSettings.first().settings
+                val assistant = settings.getAssistantById(snapshot.header.assistantId)
+                    ?: settings.getCurrentAssistant()
+                val processedContent = preprocessUserInputParts(content, assistant)
+
+                commandCoordinator.executeOrThrow(
+                    conversationId,
+                    TruncateToNodeIndex(nodeIndexInclusive = nodeIndex),
+                )
+                subAssistantLifecycle.applyRetentionAfterTreeMutation(conversationId)
+                commandCoordinator.executeOrThrow(
+                    conversationId,
+                    EditMessageVariant(
+                        nodeId = target.id,
+                        variant = UIMessage(
+                            id = userMessageId,
+                            role = MessageRole.USER,
+                            parts = processedContent,
+                        ),
+                    ),
+                )
+                artifactDraftScope?.publishCommittedReferences(processedContent)
+                launchRun(conversationId, turnId = turnId, launch = MasterTurnLaunch.Start(settings))
+                _generationDoneFlow.emit(conversationId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                chatErrorStore.add(e, conversationId, title = context.getString(R.string.error_title_send_message))
+            } finally {
+                if (!runtime.isAwaitingApproval(turnId)) {
+                    runtime.releaseActiveRequest(turnId, coroutineContext[Job])
+                }
+            }
+        }
+        try {
+            runtimeRegistry.installAndStartActiveRequest(
+                conversationId = conversationId,
+                turnId = turnId,
+                worker = job,
+                supersedeReason = TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN,
+            )
+        } catch (e: CancellationException) {
+            job.cancel()
+            throw e
+        } catch (e: Exception) {
+            job.cancel()
+            throw e
+        }
+        return SendMessageReceipt(
+            conversationId = conversationId,
+            turnId = turnId,
+            userMessageId = userMessageId,
+        )
+    }
+
     // ---- 重新生成消息 ----
 
     fun regenerateAtMessage(

@@ -300,6 +300,7 @@ class ConversationContextPlannerTest {
                 highWatermarkEstimatedTokens = 1,
                 lowWatermarkEstimatedTokens = 0,
                 minimumBatchNetReclaimEstimatedTokens = 1,
+                minimumResultNetReclaimEstimatedTokens = 600,
                 protectedRecentBatches = 0,
                 protectedRecentEstimatedTokens = 0,
             ),
@@ -313,7 +314,7 @@ class ConversationContextPlannerTest {
     }
 
     @Test
-    fun `per result threshold accepts exactly 512 estimated tokens of net reclaim`() {
+    fun `per result threshold accepts exactly the policy minimum of net reclaim`() {
         val minimum = ContextTrimmingPolicy.TOOL_OUTPUT_MINIMUM_RESULT_NET_RECLAIM_ESTIMATED_TOKENS
         val markerTokens = estimateStableTextTokens(REGENERABLE_TOOL_OUTPUT_FOLDED_MARKER)
         val below = "b".repeat(((markerTokens + minimum - 1) * 4).toInt())
@@ -348,6 +349,10 @@ class ConversationContextPlannerTest {
         assertEquals(2, estimateStableTextTokens("中文"))
         assertEquals(1, estimateStableTextTokens("😀"))
         assertEquals(3, estimateStableTextTokens("abcd中😀"))
+        // 连续数字按最多 3 位一段，逗号会切断数字段；随机浮点不能再按全文 ÷4。
+        assertEquals(2, estimateStableTextTokens("1234"))
+        assertEquals(5, estimateStableTextTokens("1,2,3"))
+        assertEquals(8, estimateStableTextTokens("0.1234567890123456"))
     }
 
     @Test

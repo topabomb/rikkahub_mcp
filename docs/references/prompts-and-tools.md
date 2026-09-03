@@ -644,23 +644,23 @@ content、`structured_content` 或经裁剪的 message；调用承诺后未取�
 两者都不表示工具返回时立即裁剪。归档内容由 `ToolOutputStore` 通过 `ArtifactStore` 保存为 `TOOL_OUTPUT` reference；
 可再生结果只留下 `[Derived tool result folded]`，原 Tool 输入仍保留。`PRESERVE`、混合媒体和 Provider opaque replay 始终完整保留。
 所有工具结果都经过同一 Planner，但只有 runtime metadata 为可压缩纯文本、显式 `completed` / `failed`，且
-`originalEstimatedTokens - markerEstimatedTokens >= 512` 时才成为候选；`denied`、`answered` 和缺失终态不压缩。
+`originalEstimatedTokens - markerEstimatedTokens >= 128` 时才成为候选；`denied`、`answered` 和缺失终态不压缩。
 只要调用登记过 unpublished Artifact，Runtime 会在成功和失败收口时统一强制 `PRESERVE`；文生图、MCP/Workspace 图片以及
 带 `artifacts` manifest 的 `assistant_call` 不依赖普通文本候选规则保存交付引用。
 `assistant_call` 静态默认仍为 `PRESERVE`；只有单 Text、`status=completed`、`assistant_name` / `content` 为字符串且没有
 `artifacts` manifest 的结果，才会在 Runtime 收口时解析为 `ARCHIVABLE_TEXT`。带交付 manifest、混合媒体、非完成态或
 损坏结果继续保留。
 压缩只由 inline Tool 文本达到 48K estimated tokens 触发，尽量降到 16K，整批至少净回收 24K estimated tokens；
-最近两个 typed 批次和最近 4K estimated tokens 受保护，不额外冻结整个已完成 USER turn。估算规则按每个 Tool Result
-独立计算：ASCII code point 总数除以 4 并向上取整，其他 Unicode code point 各计 1 token。阈值只来自 `ContextTrimmingPolicy.kt`，
+最近两个 typed 批次和最近 8K estimated tokens 受保护，不额外冻结整个已完成 USER turn。估算规则按每个 Tool Result
+独立计算：ASCII 字母与空白约每 4 个 code point 1 token，连续 ASCII 数字段约每 3 位 1 token，连续 ASCII 符号段约每 2 个 1 token，其他 Unicode code point 各计 1。阈值只来自 `ContextTrimmingPolicy.kt`，
 Provider input token 与 cache 百分比都不参与决策。
 
-`read_tool_output` 与 `grep_tool_output` 始终随 Master 和 Target 注册，均为无交互、`REGENERABLE_TEXT`、16 KiB 有界结果。
+`read_tool_output` 与 `grep_tool_output` 始终随 Master 和 Target 注册，均为无交互、`REGENERABLE_TEXT`、32 KiB 有界结果。
 它们接受 marker 中的正整数 `ref`，但每次读取仍必须验证当前 conversation 的 `TOOL_OUTPUT` reference；
 `read_tool_output` 使用 `start` / `limit`，每次最多 500 个稳定虚拟行；超长物理行按最多 4096 个 Unicode code point
 切分，不会拆开 emoji 等辅助平面字符。`grep_tool_output` 使用 RE2/J 逐行匹配，
 支持常用分组、交替、字符类、锚点和量词，不支持 lookaround 与 backreference；`context` 最多 5，`limit` 最多 100。
-成功结果为带编号的短小纯文本，不回显 ref、pattern 或可选入参，最终 UTF-8 输出不超过 16 KiB。其结果仍参与滚动压缩，
+成功结果为带编号的短小纯文本，不回显 ref、pattern 或可选入参，最终 UTF-8 输出不超过 32 KiB。其结果仍参与滚动压缩，
 但折叠不创建新 Artifact 或 ref，避免形成读取切片的复制链。
 ref 不授予权限，也不会暴露 relative path、`file://` 或 App 私有路径。原 ref 对应的归档正文保持不可变；回查结果满足
 统一阈值后只折叠 marker，不再归档，不建立复制链或递归读取协议。

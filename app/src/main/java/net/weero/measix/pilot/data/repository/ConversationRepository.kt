@@ -804,7 +804,8 @@ class ConversationRepository(
  *  - owner / anchor node 都属于本 Conversation（nodes 就是该 Conversation 的装载结果）；
  *  - owner message 属于 owner node 且角色是 ASSISTANT；
  *  - anchor message 属于 anchor node 且角色是 USER；
- *  - content 是本 App 支持的 canonical Disclosure envelope；
+ *  - content 是本 App 支持的 Disclosure envelope（type / format / 固定形状）；
+ *    装载不做 encode round-trip，逐字 canonical 由 StartTurn 写入时强制；
  *  - 同一 ownerMessageId 不承载两份不同 content。
  *
  * 不写库、不修复、不丢弃：损坏的 context 让 Conversation 无法 Ready，而不是被当作没有
@@ -814,7 +815,7 @@ internal fun mapModelContextEntries(
     rows: List<ConversationModelContextEntity>,
     nodes: List<MessageNode>,
     conversationId: String,
-    validateContent: (String) -> Unit = { ConversationDisclosureSnapshotService.requireCanonical(it) },
+    validateContent: (String) -> Unit = { ConversationDisclosureSnapshotService.requireDurableEnvelope(it) },
 ): List<ConversationModelContextEntry> {
     if (rows.isEmpty()) return emptyList()
     val duplicateMessageIds = nodes.flatMap { it.messages }.groupingBy { it.id }.eachCount()

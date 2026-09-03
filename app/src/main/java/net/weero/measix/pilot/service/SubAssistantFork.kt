@@ -105,7 +105,7 @@ internal fun forkSubAssistantTree(
                         entries = sourceChild.modelContextEntries,
                         nodeIdMap = nodeIdMap,
                         messageIdMap = messageIdMap,
-                        clonedBranchMessages = clonedNodes.map { it.currentMessage },
+                        clonedNodes = clonedNodes,
                     ),
                 ),
                 messageIdMap = messageIdMap,

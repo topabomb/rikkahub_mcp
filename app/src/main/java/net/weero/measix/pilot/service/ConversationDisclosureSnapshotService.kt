@@ -151,14 +151,34 @@ object ConversationDisclosureSnapshotService {
     }
 
     /**
-     * 校验一份持久化 content 是否是本 App 可发送的 canonical envelope，并返回其 format。
+     * 装载期校验：type / 整数 format / 固定 JSON 形状合法，未知 format fail-closed。
      *
-     * 装载与 StartTurn 提交共用这一条判定：任何不匹配都以 [DisclosureContentException]
-     * fail-closed（§12.3、§13.6）。
+     * 历史 entry 永不改写（§13.6），因此打开会话只验证协议形状，不再做 encode round-trip。
+     * 逐字 canonical 仍由 [requireCanonical] 在 render 与 `StartTurn` 提交时强制。
+     */
+    fun requireDurableEnvelope(content: String): Int {
+        requireWithinRequestCapability(content)
+        return validateEnvelope(parseEnvelope(content))
+    }
+
+    /**
+     * 校验一份即将提交的 content 是否是本 App 可发送的 canonical envelope，并返回其 format。
+     *
+     * StartTurn 提交与 renderer 自检走这一条：形状非法或 bytes 非 canonical 都以
+     * [DisclosureContentException] fail-closed（§12.3、§13.6）。
      */
     fun requireCanonical(content: String): Int {
         requireWithinRequestCapability(content)
         val root = parseEnvelope(content)
+        val format = validateEnvelope(root)
+        val normalized = canonicalJson.encodeToString(JsonObject.serializer(), root)
+        if (normalized != content) {
+            throw DisclosureContentException("disclosure content is not in canonical byte form")
+        }
+        return format
+    }
+
+    private fun validateEnvelope(root: JsonObject): Int {
         requireKeyOrder(root, TOP_LEVEL_KEYS, "envelope")
         val type = requireString(root, "type", "envelope")
         if (type != CONTENT_TYPE) {
@@ -170,10 +190,6 @@ object ConversationDisclosureSnapshotService {
         }
         validateMemory(requireObject(root, "memory", "envelope"))
         validateSubAssistants(requireObject(root, "sub_assistants", "envelope"))
-        val normalized = canonicalJson.encodeToString(JsonObject.serializer(), root)
-        if (normalized != content) {
-            throw DisclosureContentException("disclosure content is not in canonical byte form")
-        }
         return format
     }
 

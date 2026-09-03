@@ -192,6 +192,7 @@ class DelegationCoordinatorMaterializationTest {
         val result = execution.await()
         assertTrue(result.filterIsInstance<UIMessagePart.Text>().single().text.contains("target_access_revoked"))
         coVerify(exactly = 0) { childRuntime.bindTurnRequestContext(any(), any(), any()) }
+        coVerify(exactly = 0) { childRuntime.bindModelContextProjection(any(), any(), any()) }
         coVerify(exactly = 0) { harness.commandCoordinator.startTurn(any(), any()) }
     }
 

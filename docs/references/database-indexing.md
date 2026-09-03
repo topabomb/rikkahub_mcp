@@ -8,6 +8,7 @@
 | --- | --- |
 | `ConversationEntity` | `(assistant_id, parent_conversation_id, is_pinned, update_at)` 支持助手列表与最近会话；`(assistant_id, parent_conversation_id, folder_id, is_pinned, update_at)` 支持未归档分页；`(folder_id, parent_conversation_id, is_pinned, update_at)` 支持文件夹分页；`(parent_conversation_id, is_pinned, update_at)` 支持置顶列表、子会话查找与外键级联 |
 | `message_node` | `(conversation_id, node_index)` 按会话读取有序消息节点，同时覆盖会话外键 |
+| `conversation_model_context` | 主键 `(owner_node_id, owner_message_id)` 覆盖按 owner 点查与 insert-once；`(anchor_node_id)` 覆盖按因果 USER node 收口。按会话装载走 `owner_node_id JOIN message_node` 并按 `message_node.conversation_id` 过滤，由 `message_node(conversation_id, node_index)` 覆盖，不在 context 行重复保存 `conversation_id` |
 | `MemoryEntity` | `(assistant_id)` 支持按助手读取记忆 |
 | `GenMediaEntity` | `(path)` 支持文件名查重；`(create_at)` 支持图库时间排序与清理候选 |
 | `artifact` | 保留 `relative_path` 唯一索引；`(folder, created_at)` 支持分目录列表与清理；`(state, created_at)` 支持生命周期候选。目录查询的状态条件可作为剩余过滤，不破坏全状态清理的时间顺序 |
@@ -27,6 +28,8 @@
 
 `Migration_8_9` 仅创建普通索引并移除被复合索引或既有唯一索引覆盖的冗余普通索引。表、列、默认值、主键、外键、唯一约束和行值均不变；文件、GUID、附件 metadata、Settings 和备份 manifest 不改写。图库路径索引不是唯一索引，历史重复路径不会阻止升级。
 
+`Migration_9_10` 只新增 `conversation_model_context` 及其 `anchor_node_id` 索引，不扫描或回填历史会话。
+
 迁移由 Room 在事务内执行，新安装直接使用同构 schema。备份校验接受受支持的历史数据库，恢复后由同一 Room migration 链升级，不为旧文件名引入额外读取路径。
 
-架构相关入口：`AppDatabase`、`DataSourceModule`、各 `*Entity` / `*DAO`、`Migration_8_9`、`BackupArchiveService`。迁移验证覆盖历史链、新旧 schema、数据与约束保全，并用 Android SQLite 的 `EXPLAIN QUERY PLAN` 检查主要查询的索引和排序行为；查询计划验证不等于设备耗时基准。
+架构相关入口：`AppDatabase`、`DataSourceModule`、各 `*Entity` / `*DAO`、`Migration_8_9`、`Migration_9_10`、`BackupArchiveService`。迁移验证覆盖历史链、新旧 schema、数据与约束保全，并用 Android SQLite 的 `EXPLAIN QUERY PLAN` 检查主要查询的索引和排序行为；查询计划验证不等于设备耗时基准。

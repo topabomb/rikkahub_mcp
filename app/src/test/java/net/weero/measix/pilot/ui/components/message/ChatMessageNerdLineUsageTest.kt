@@ -15,7 +15,7 @@ import java.util.Locale
 
 class ChatMessageNerdLineUsageTest {
     @Test
-    fun `first request in flight shows estimated context and hides cache hit`() {
+    fun `first request in flight shows estimated context and no turn totals yet`() {
         val display = TokenUsage(
             latestRequestEstimatedContextTokens = 30_000,
             semanticsVersion = CURRENT_TOKEN_USAGE_SEMANTICS_VERSION,
@@ -23,6 +23,7 @@ class ChatMessageNerdLineUsageTest {
 
         assertEquals(30_000L, display.context!!.tokens)
         assertFalse(display.context.exact)
+        // 还没有已关闭请求，累计 input / cache read 都未知，命中率不可用。
         assertNull(display.cacheHitPercent)
         assertEquals("~30K · 5s", display.summaryText("5s"))
         val context = display.summaryItems("5s").single { it.icon == UsageSummaryIcon.CONTEXT }
@@ -31,47 +32,51 @@ class ChatMessageNerdLineUsageTest {
     }
 
     @Test
-    fun `closed request shows exact context with its own cache hit rate`() {
+    fun `closed turn shows exact context and the turn wide cache hit rate`() {
         val display = closedTurn().toNerdLineDisplay()!!
 
         assertEquals(28_000L, display.context!!.tokens)
         assertTrue(display.context.exact)
-        assertEquals(90.0, display.cacheHitPercent!!, 0.0001)
-        assertEquals("28K · 90.0% · 2 · 45s", display.summaryText("45s"))
+        // 累计 30_000 / 52_000 = 57.7%
+        assertEquals(57.7, display.cacheHitPercent!!, 0.05)
+        assertEquals("28K · 57.7% · 2 · 45s", display.summaryText("45s"))
         val context = display.summaryItems("45s").single { it.icon == UsageSummaryIcon.CONTEXT }
         assertFalse(context.muted)
     }
 
     @Test
-    fun `cache hit percent denominator is the displayed context`() {
-        val usage = closedTurn()
-        val display = usage.toNerdLineDisplay()!!
-        val expected = usage.latestRequestCacheReadInputTokens!!.toDouble() /
-            display.context!!.tokens * 100.0
+    fun `cache hit rate comes from turn totals not from the latest request value`() {
+        // lastRequestCacheHitPercent 是审计字段，UI 不得使用它：整轮可能远差于最后一次。
+        val display = closedTurn(latestRequestCacheHitPercent = 90.0).toNerdLineDisplay()!!
 
-        assertEquals(expected, display.cacheHitPercent!!, 0.0001)
+        assertEquals(57.7, display.cacheHitPercent!!, 0.05)
+        assertFalse(display.summaryText("45s").contains("90.0%"))
     }
 
     @Test
-    fun `stale cache hit is never paired with an estimated context`() {
-        // 第二次请求未报告 usage：账本把命中率写为 null，上下文回落到本次请求的估算。
-        val display = TokenUsage(
-            latestRequestEstimatedContextTokens = 35_000,
-            latestRequestContextTokens = null,
-            latestRequestCacheHitPercent = null,
-            latestRequestTimeToFirstOutputMillis = 500,
-            observedProviderRequestCount = 2,
-            inputCompleteness = UsageCompleteness.PARTIAL,
-            coreCompleteness = UsageCompleteness.PARTIAL,
-            cacheReadCompleteness = UsageCompleteness.PARTIAL,
-            semanticsVersion = CURRENT_TOKEN_USAGE_SEMANTICS_VERSION,
-        ).toNerdLineDisplay()!!
+    fun `cache hit rate denominator is the turn input shown on the second line`() {
+        val display = closedTurn().toNerdLineDisplay()!!
 
-        assertFalse(display.context!!.exact)
-        assertEquals("~35K · 12s", display.summaryText("12s"))
-        // 即使残留旧值，估算上下文也不允许配对出无法验算的比例。
-        val withStalePercent = display.copy(cacheHitPercent = 90.0)
-        assertEquals("~35K · 12s", withStalePercent.summaryText("12s"))
+        val denominator = display.inputTokens
+        val numerator = display.cacheReadTokens
+        assertEquals(52_000L, denominator)
+        assertEquals(30_000L, numerator)
+        assertEquals(numerator!!.toDouble() / denominator!! * 100.0, display.cacheHitPercent!!, 0.0001)
+    }
+
+    @Test
+    fun `cache hit rate is absent whenever its numerator or denominator is unavailable`() {
+        val withoutInput = closedTurn().copy(
+            inputCompleteness = UsageCompleteness.PARTIAL,
+        ).toNerdLineDisplay()!!
+        assertNull(withoutInput.cacheHitPercent)
+        assertNull(withoutInput.inputTokens)
+
+        val withoutCacheRead = closedTurn().copy(
+            cacheReadCompleteness = UsageCompleteness.PARTIAL,
+        ).toNerdLineDisplay()!!
+        assertNull(withoutCacheRead.cacheHitPercent)
+        assertNull(withoutCacheRead.cacheReadTokens)
     }
 
     @Test
@@ -93,7 +98,7 @@ class ChatMessageNerdLineUsageTest {
         val display = closedTurn().toNerdLineDisplay()!!
 
         assertEquals(
-            "52K · 3K · Cached 30K · Provider 12s · Peak 35K · Req 3 · tok/s 428.6 · TTFT 500ms",
+            "52K · 3K · Cached 30K · Provider 12s · Req 3 · tok/s 428.6 · TTFT 500ms",
             display.detailsText(),
         )
         assertEquals(
@@ -102,7 +107,6 @@ class ChatMessageNerdLineUsageTest {
                 UsageDetailIcon.OUTPUT,
                 UsageDetailIcon.CACHED,
                 UsageDetailIcon.PROVIDER,
-                UsageDetailIcon.CONTEXT,
                 UsageDetailIcon.REQUESTS,
                 UsageDetailIcon.SPEED,
                 UsageDetailIcon.TTFT,
@@ -119,11 +123,9 @@ class ChatMessageNerdLineUsageTest {
             cacheReadCompleteness = UsageCompleteness.PARTIAL,
         ).toNerdLineDisplay()!!
 
-        assertEquals("28K · 90.0% · 2 · 45s", display.summaryText("45s"))
-        assertEquals(
-            "Provider 12s · Peak 35K · Req 3 · tok/s 428.6 · TTFT 500ms",
-            display.detailsText(),
-        )
+        // 命中率随分子分母一起消失，不留下无法验算的比例。
+        assertEquals("28K · 2 · 45s", display.summaryText("45s"))
+        assertEquals("Provider 12s · Req 3 · tok/s 428.6 · TTFT 500ms", display.detailsText())
     }
 
     @Test
@@ -173,7 +175,7 @@ class ChatMessageNerdLineUsageTest {
 
     private fun closedTurn(
         trims: Int? = 2,
-        cacheHitPercent: Double? = 90.0,
+        latestRequestCacheHitPercent: Double? = 90.0,
     ) = TokenUsage(
         inputTokens = 52_000,
         outputTokens = 3_000,
@@ -186,7 +188,7 @@ class ChatMessageNerdLineUsageTest {
         latestRequestOutputDurationMillis = 1_400,
         latestRequestEstimatedContextTokens = 30_000,
         latestRequestTimeToFirstOutputMillis = 500,
-        latestRequestCacheHitPercent = cacheHitPercent,
+        latestRequestCacheHitPercent = latestRequestCacheHitPercent,
         latestRequestTokensPerSecond = 428.5714285714,
         observedProviderRequestCount = 3,
         observedUsageReportedRequestCount = 3,

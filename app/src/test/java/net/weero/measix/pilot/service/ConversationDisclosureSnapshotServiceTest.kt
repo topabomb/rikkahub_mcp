@@ -220,6 +220,20 @@ class ConversationDisclosureSnapshotServiceTest {
             ConversationDisclosureSnapshotService.requireCanonical(future)
         }
         assertTrue(error.message!!.contains("unsupported disclosure format 2"))
+        assertThrows(DisclosureContentException::class.java) {
+            ConversationDisclosureSnapshotService.requireDurableEnvelope(future)
+        }
+    }
+
+    @Test
+    fun `load validator accepts a supported envelope without requiring renderer byte identity`() {
+        val canonical = render(candidate())
+        val spaced = canonical.replace("\",\"format\"", "\", \"format\"")
+        assertEquals(1, ConversationDisclosureSnapshotService.requireDurableEnvelope(canonical))
+        assertThrows(DisclosureContentException::class.java) {
+            ConversationDisclosureSnapshotService.requireCanonical(spaced)
+        }
+        assertEquals(1, ConversationDisclosureSnapshotService.requireDurableEnvelope(spaced))
     }
 
     @Test

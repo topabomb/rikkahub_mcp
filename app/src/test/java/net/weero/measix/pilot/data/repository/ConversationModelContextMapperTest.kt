@@ -3,7 +3,9 @@ package net.weero.measix.pilot.data.repository
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.db.entity.ConversationModelContextEntity
+import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.MessageNode
+import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
@@ -76,6 +78,24 @@ class ConversationModelContextMapperTest {
                 {},
             )
         }
+    }
+
+    @Test
+    fun `load mapper accepts a supported envelope that is not renderer-canonical bytes`() {
+        val canonical = ConversationDisclosureSnapshotService.render(
+            ConversationDisclosureSnapshotService.Candidate(
+                assistant = Assistant(enableMemory = false, localTools = emptyList()),
+                allAssistants = emptyList(),
+                memories = emptyList(),
+            ),
+        )
+        val spaced = canonical.replace("\",\"format\"", "\", \"format\"")
+        val mapped = mapModelContextEntries(
+            rows = listOf(row(content = spaced)),
+            nodes = listOf(anchorNode, ownerNode),
+            conversationId = "conversation",
+        ).single()
+        assertEquals(spaced, mapped.content)
     }
 
     @Test

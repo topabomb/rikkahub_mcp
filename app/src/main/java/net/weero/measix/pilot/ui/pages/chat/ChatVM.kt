@@ -267,6 +267,10 @@ class ChatVM(
         }
     }
 
+    /** 编辑 USER 后发送：截断到该消息并启动新的 START；receipt 身份是新的 USER variant。 */
+    suspend fun handleMessageEditAndSend(parts: List<UIMessagePart>, messageId: Uuid) =
+        masterTurnCoordinator.editAndResend(_conversationId, messageId, parts, artifactDraftScope)
+
     fun handleCompressContext(additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int): Job {
         return viewModelScope.launch {
             conversationApplicationService.compress(

@@ -123,7 +123,7 @@ class ConversationStartAtomicityTest {
             entries = listOf(committed.context),
             nodeIdMap = nodeIdMap,
             messageIdMap = emptyMap(),
-            clonedBranchMessages = clonedNodes.map { it.currentMessage },
+            clonedNodes = clonedNodes,
         )
         assertEquals(listOf(committed.context.content), clonedEntries.map { it.content })
 

@@ -195,7 +195,9 @@ class SingleWriterContractTest {
         assertTrue(nerdLine.contains("mutableStateOf(false)"))
         assertTrue(nerdLine.contains("AnimatedVisibility(visible = expanded)"))
         assertTrue(nerdLine.contains("FlowRow("))
-        assertTrue(nerdLine.contains("appendInlineContent(SUMMARY_TOGGLE_INLINE_ID)"))
+        assertTrue(nerdLine.contains("UsageSummaryItem(metric)"))
+        assertTrue(nerdLine.contains("HugeIcons.ArrowDown01"))
+        assertFalse(nerdLine.contains("appendInlineContent"))
         assertFalse(nerdLine.contains("Modifier.weight(1f)"))
         val notificationManager = sourceRoot.resolve("service/ChatNotificationManager.kt").readText()
         assertFalse(
