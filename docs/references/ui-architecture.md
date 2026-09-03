@@ -250,21 +250,91 @@ verticalPaneSplit(windowWidthDp, fallbackListWidthDp, hingeBounds):
 不能把引导卡片旁路到 Assistant 或全局设置页。该 Sheet 的标题左对齐，右侧“管理 MCP 服务器”按钮关闭 Sheet 后导航到
 `Screen.SettingMcp`；即使尚未登记 Server 或所有 Server 都已禁用，Sheet 仍显示空状态和这个管理入口。
 
-> **例外**：全屏图片查看器（`ImagePreviewDialog`）是刻意不经过 `AdaptiveModal` 的全屏 `Dialog`
-> （`usePlatformDefaultWidth = false`、`decorFitsSystemWindows = false`），宽度和系统栏布局均显式配置，不依赖平台默认测量。
-> 纯黑背景与图片手势层铺满窗口；页码、操作栏、信息面板和 Toast 单独应用 `safeDrawing`，避开系统栏与屏幕缺口。
-> 查看器保留自身的点按/竖直拖拽关闭、缩放平移与多图翻页交互。
-> 相册式浏览需要完整的屏幕空间与手势域，不适配半屏 Sheet / 有界卡片的弹层约定。
-> 场景差异通过 `extraActions` / `overlay` 与 `LocalImagePreviewActions` /
-> `LocalImagePreviewOverlay` 注入（如设为背景、确认框、助手选择器），查看器不理解助手或页面。
-> 仅当宿主场景本身具有独立删除语义时才传入 `ImagePreviewDeleteAction`。查看器统一承载
-> 确认、执行中、失败提示和相册页序列更新，typed suspend action 仍由宿主调用既有领域删除
-> API；成功删除中间项后显示原下一项，删除末项后显示新末项，清空后关闭。聊天消息图片等
-> 只能随上层实体删除的内容不传该 action，避免查看器建立旁路文件删除协议。
-> Toast 画在 Dialog 窗口内，进行中与结果共用同一 toast id，避免被全屏层挡住应用根 `Toaster`。
-> 决策依据见 [`docs/dev/image-viewer-upgrade-plan.md`](../dev/image-viewer-upgrade-plan.md)。
+全屏图片查看器不走 `AdaptiveModal`，契约见 §4.8。
 
-### 4.8 AdaptiveDialogContainer
+### 4.8 全屏图片查看器
+
+全局唯一大图查看器是 `ImagePreviewDialog`。它是全屏 `Dialog`（`usePlatformDefaultWidth = false`、
+`decorFitsSystemWindows = false`），不套用 `AdaptiveModal`：相册式浏览需要完整屏幕与手势域，半屏 Sheet /
+有界卡片会与缩放、翻页和竖直拖拽关闭冲突。纯黑背景与图片手势层铺满窗口；页码、操作栏、信息面板和 Toast
+单独应用 `safeDrawing`。
+
+```kotlin
+@Composable
+fun ImagePreviewDialog(
+    images: List<String>,
+    onDismissRequest: () -> Unit,
+    initialIndex: Int = 0,
+    extraActions: List<ImagePreviewAction> = emptyList(),
+    deleteAction: ImagePreviewDeleteAction? = null,
+    overlay: (@Composable () -> Unit)? = null,
+)
+```
+
+空列表立即 `onDismissRequest()`，不组合 0 页查看器。`initialIndex` 收敛到合法页。查看器只做浏览、保存、
+信息面板，以及调用方注入的轻量动作；它不理解助手、Gallery 或文件管理差异，也不直连删除 owner。
+
+#### 手势
+
+| 手势 | 行为 |
+|------|------|
+| 单指左右滑 | 翻页（库 `ImagePager`） |
+| 双指捏合 / 双击 | 缩放 / 还原 |
+| 放大后单指拖动 | 平移 |
+| 单击 | 关闭（`PagerGestureScope.onTap`） |
+| 系统返回 | 关闭 |
+| 未放大时竖直拖拽 | 拖拽关闭 |
+
+竖直拖拽关闭在父层以 `PointerEventPass.Initial` 检测：当前页 `scale == 1`、单指、`|dy| > slop` 且
+`|dy| > |dx| * 1.5`（`VERTICAL_DOMINANCE_RATIO`）。向上或向下都允许。页尚未组合完成时不触发。
+判定为竖直拖拽后消费指针；水平滑动不消费，翻页/捏合/双击不受影响。`pointerInput` 必须位于
+`graphicsLayer` 之外，避免坐标被图层逆变换。
+
+跟手反馈：`translationY = dy`，`translationX = dx / 2`，`scale = 1 - progress * 0.35`，
+背景透明度 `1 - progress * 0.75`，底部栏与页码按 `1 - 2 * progress` 淡出。释放时
+`|dy| > 容器高 * 0.2` 或同向 `|velocityY| > 2000 px/s` 则沿拖动方向滑出后关闭，否则 spring 回弹。
+多指按下或手势取消立即回弹。
+
+#### 视觉与反馈
+
+- 页码：`TopCenter`，仅 `images.size > 1` 时显示 `n / m`。
+- 底部按钮组：信息 → 保存 → `extraActions` → 可选删除，`BottomCenter`。
+- Dialog 内自建 `Toaster` 并覆盖 `LocalToaster`。进行中与结果共用同一 toast id；应用根 `Toaster`
+  在全屏 Dialog 下层会被挡住。
+- 信息面板只读头不解码像素：`classifyImageSource` 按 url 前缀与应用目录推断来源；本地/内联图取
+  分辨率与 MIME；网络图不发请求。面板打开时拖拽关闭早退。
+
+#### 相册与入口
+
+聊天内按**会话级时序相册**聚合，不按单条消息或单个工具 output 分组。宿主
+（`ChatList` / `SubAssistantDetailPage` / `AssistantPromptPage`）提供稳定
+`LocalConversationImages: () -> List<String>`，点击期求值当前分支消息顺序 × 消息内 part 顺序；
+`collectMessageImageUrls` 收集顶层 Image 与 `Tool.output` 中的 Image，过滤
+`isImagePartLoading`（空白 url 或 base64 空壳）。`ZoomableAsyncImage` 打开时求值相册，命中则从该张
+浏览整本，未命中或为空则单图打开。Markdown/HTML 正文图不在 part 层，仍单张打开。助手背景、聊天背景
+和附件 chips 是装饰 / 输入态，不接入查看器。Workspace 详情 IMAGE 维持单张，不注入设背景。
+
+其余入口把当前可见集合传入查看器：文生图当次结果（1–4 张，两两一行）、Gallery 已加载快照、
+文件管理 Upload Tab 的 `image/*` 与文生图 Tab 的全部产物。非图片 Upload 项不可点开。
+
+#### 调用方注入
+
+| 通道 | 职责 |
+|------|------|
+| `ImagePreviewAction` / `LocalImagePreviewActions` | 查看器只画按钮，把当前页 url 与 Dialog 内 Toaster 交回调用方 |
+| `LocalImagePreviewOverlay` | 确认框 / 助手选择器，盖在全屏查看器之上 |
+| `rememberImageBackgroundHost` | 设为背景：物化本地文件后由 `AssistantBackgroundService.replaceUserSelectedBackground` 拷独立副本。聊天相关入口助手已知，跳过选择器；文生图橱窗与文件管理先弹 `AssistantPickerSheet`。助手确定后一律再确认一次 |
+| `ImagePreviewDeleteAction` | 仅当宿主已有独立删除语义时传入。查看器承载确认、执行中、失败提示和相册页序列更新；typed suspend action 仍调用既有领域删除 API。成功删除中间项后显示原下一项，删除末项后显示新末项，清空后关闭。聊天消息图片不传该 action |
+
+#### 已知限制与非目标
+
+- 库的单击回调约 270ms 延迟以区分双击：单击后立刻竖直拖拽时，延迟关闭可能在拖拽中触发。
+- 查看器宿主若是 LazyColumn item，流式自动滚动把宿主滚出视口会使 Dialog 随组合销毁而关闭。
+- 不提供共享元素转场、长按菜单、分享按钮或宽屏键鼠翻页；复制 prompt 留在文生图卡片，不进入查看器。
+
+消息区相册收集见 [消息渲染管线](message-rendering-pipeline.md)。
+
+### 4.9 AdaptiveDialogContainer
 
 全屏 Dialog 容器，解决 Compose 平台 outside-click 无法检测自定义全屏 Dialog 外部点击的问题。采用**显式 scrim 双层方案**：
 
@@ -636,6 +706,8 @@ Tabletop、无效或多个铰链，以及 Dialog 的 scrim、内容区和底部�
 - 会话栏折叠/展开、单栏抽屉、宽屏 Dialog 与窄屏 BottomSheet
 - 切换会话助手后标题、模型、搜索、推理、快捷消息及实际请求模型保持一致
 - 设置等非聊天页面在宽屏下仍沿用原有全屏布局
+- 聊天会话相册从被点图片翻页、Markdown 正文图仍单张、文生图 1–4 张结果与 Gallery/文件管理集合浏览
+- 查看器单击关闭、未放大竖直拖拽关闭、放大后只平移、保存/设背景 Toast 画在 Dialog 内
 
 ---
 

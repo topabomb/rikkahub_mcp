@@ -1,7 +1,6 @@
 # MCP 架构与生命周期
 
-本文描述当前 MCP 实现的 owner、状态边界和确定性协议。问题复盘与验证记录见
-`docs/dev/mcp-lifecycle-analysis.md`。
+本文描述当前 MCP 实现的 owner、状态边界和确定性协议。
 
 ## 1. 不变量
 
@@ -78,7 +77,7 @@ session 的 catalog refresh 共用一个全局 semaphore，最多 4 路并行；
 
 ## 4. 发现与目录提交
 
-`fetchCatalogCandidate()` 从空 cursor 开始执行 `tools/list` 并遍历全部 `nextCursor`：
+`McpCatalogDiscovery.fetchCandidate()` 从空 cursor 开始执行 `tools/list` 并遍历全部 `nextCursor`：
 
 1. server 必须声明 tools capability；
 2. 最多 64 页、4096 个工具；
@@ -159,7 +158,7 @@ Assistant 选择
 客户端不通过局部扫描 `required` 或忽略 `$ref` 的自制校验器建立第二份参数契约。
 
 本地 definition/policy typed command 与 `tools/call` 的不可撤销调用承诺共享
-`McpRuntimeCoordinator.configurationInvocationCommitMutex`，形成唯一线性化顺序：配置提交先取得门时，最终 admission 读取新配置并拒绝；
+`McpRuntimeCoordinator.withConfigurationMutation()`，形成唯一线性化顺序：配置提交先取得门时，最终 admission 读取新配置并拒绝；
 调用先取得门时，该 invocation 已进入 in-flight，随后配置变化只影响后续调用和披露。SDK 不暴露“首个 HTTP 字节已写出”的
 精确边界，因此上层不把本地承诺伪称为“请求已经发送”；承诺后未取得完整结果的 transport/timeout 失败都保守报告
 `status=unknown`，客户端不得自动重放。

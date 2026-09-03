@@ -117,7 +117,7 @@ UIMessage.parts[]
 > 文生图工具详情可复制完整提示词，「调用详情」展开后与默认工具卡共用 `ToolCallJsonDetails`。
 > 流式 loading 占位（空白 url 或 base64 空壳，由 `isImagePartLoading` 判定）被过滤并
 > 渲染为 shimmer 方块、不参与点击。Markdown/HTML 正文图不在 part 层，仍单张打开。
-> 查看器交互规范见 [`docs/dev/image-viewer-upgrade-plan.md`](../dev/image-viewer-upgrade-plan.md)。
+> 查看器手势、注入槽与非聊天入口见 [界面架构](ui-architecture.md) §4.8。
 
 > 用户消息（`MessageRole.USER`）的 Text 额外包一层 `Surface`（primaryContainer 气泡）；
 > 助手消息可选气泡（`showAssistantBubble` 设置项）。
@@ -231,10 +231,10 @@ HighlightCodeBlock(code, language, completeCodeBlock)
   ├─ canInlinePreview = completeCodeBlock && language ∈ {html, svg}
   │    └─ canInlinePreview && previewMode → CodeBlockPreview (WebView 内联预览)
   │         默认预览模式，可切换"代码/预览"
-  │         └─ 全屏: Screen.WebView(base64(content))
+  │         └─ 全屏: WebViewContentCache.store → Screen.WebView(contentId)
   │
   ├─ completeCodeBlock && language == "mermaid" → Mermaid (WebView 渲染)
-  │    └─ 全屏: Screen.WebView(base64(html))
+  │    └─ 全屏: WebViewContentCache.store → Screen.WebView(contentId)
   │
   └─ 其他（或代码块未闭合）→ 原生 HighlightText (语法高亮)
         ├─ autoWrap + showLineNumbers → 逐行渲染 (CodeBlockWithLineNumbersWrapped)
@@ -368,7 +368,7 @@ WebViewState
 
 ## 8. 全屏 WebView 页面
 
-`WebViewPage.kt` 接收 `url` 或 base64 编码的 `content`，提供完整的 WebView 浏览体验：
+`WebViewPage.kt` 接收 `url` 或 `WebViewContentCache` 的 `contentId`，提供完整的 WebView 浏览体验：
 
 - `Scaffold` + `TopAppBar`（标题 / 刷新 / 前进 / 更多操作）
 - `BackHandler` 处理 WebView 内部后退导航

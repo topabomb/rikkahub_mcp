@@ -44,7 +44,7 @@
 
 ### 新增
 
-- 新增 V2 减法重构方案 `docs/dev/application-architecture-v2-plan.md`：冻结目标架构、删除账本、行数硬门禁、UI 保真矩阵与 Phase A-F 实施计划，作为后续版本重构的依据
+- 新增 V2 减法重构方案：冻结目标架构、删除账本、行数硬门禁、UI 保真矩阵与 Phase A-F 实施计划
 - 发送链路引入 `SendMessageReceipt`：发送请求被 Runtime 接受即返回稳定身份（含目标消息 id），不冒充 durable 成功
 - 会话 Runtime Core：`ConversationRuntime`、`ConversationReducer`、`ConversationCommandCoordinator` 与 `TurnEngine` 形成唯一命令、快照、流式投影和终态提交链；新聊天以非持久化 Draft 开始，首条消息单事务建库并晋升 Ready
 - Artifact 领域模型：数据库 v6 将 `managed_files` 收敛为 `artifact`，增加引用投影、来源和生命周期状态；`ArtifactStore` 统一负责登记、发布、引用、删除、恢复与孤儿 GC
@@ -416,7 +416,7 @@
 
 - MCP SDK 0.13.0 → 0.14.0
 - MCP UI 文本统一为"MCP"，Loading 指示器修复为按配置精确匹配
-- MCP OAuth 健壮性增强（Job 自杀修复、连接泄露修复、清除授权立即断开），详见 `docs/dev/mcp-lifecycle-analysis.md` 第十四章
+- MCP OAuth 健壮性增强（Job 自杀修复、连接泄露修复、清除授权立即断开）
 - 压缩上下文对话框保留消息数改为手动输入（OutlinedNumberInput 替换分段按钮）
 - Compose BOM 2026.06.00→2026.06.01、Material3 1.5.0-alpha22→1.5.0-alpha23、Navigation3 1.1.2→1.1.4
 - 预存偏离对齐：material3AdaptiveNav3 1.3.0-beta02→1.3.0-rc01、lifecycleViewmodelNav3 2.10.0→2.11.0、lifecycleRuntimeKtx 2.10.0→2.11.0
@@ -462,8 +462,6 @@
 ## 0.0.7（versionCode 7）— 2026-06-27/28
 
 ### MCP 生命周期架构级重构
-
-> 详细技术分析见 `docs/dev/mcp-lifecycle-analysis.md`，本节为功能摘要。
 
 **三条恢复链**覆盖移动端全部场景：① settings 变更 → add/remove Client；② `ProcessLifecycleOwner.onStart` → syncAll 健康检查；③ `ConnectivityManager.NetworkCallback.onAvailable` → syncAll（WiFi↔蜂窝切换，比 transport.onClose 快 10-30s）。
 

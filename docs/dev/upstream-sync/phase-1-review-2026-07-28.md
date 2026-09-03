@@ -22,7 +22,7 @@
 
 - [original-architecture.md](../original-architecture.md)：Fork 前架构历史基线，冻结不改。
 - [fork-simplification-plan.md](../fork-simplification-plan.md)：0.0.1 → 0.0.2 精简目标和落地记录，冻结不改。
-- [mcp-lifecycle-analysis.md](../mcp-lifecycle-analysis.md)：当前 MCP 生命周期实现与后续优化依据。
+- [mcp-architecture.md](../../references/mcp-architecture.md)：MCP 生命周期、目录与 UI 投影。
 - [upstream-sync.md](../upstream-sync.md)：同步方法、原则、检查点和各批摘要的唯一总账。
 - 下文“九批范围闭合”表逐批链接到第 1～9 批记录；每份记录保存该批的逐提交分析、适配与验证证据。
 
@@ -141,11 +141,11 @@ Skills、记忆与备份等核心能力；继续拒绝赞助商、无关 Provide
 | release baseline profiles | 清除旧签名遗留规则；新 `limitContext` 不手工伪造 profile，等待下次设备采样 |
 | `gradle/libs.versions.toml` | 仅 material3 alpha23→alpha24，编译链验证覆盖 |
 | `LICENSE` | 纯 AGPL-3.0，与上游 blob 一致 |
-| `McpManager.kt`、`mcp-lifecycle-analysis.md` | 代码注释和当前 5 次快速重连→Dormant 30 次→Error 一致 |
+| `McpManager.kt` | 代码注释与 5 次快速重连→Dormant 30 次→Error 一致 |
 | 第九批 9 个新增/扩展测试文件 | 覆盖 rootfs 路径、Response tools、Moonshot thinking、usage 方言、Skills 目录、K3 能力/图标边界、阶梯裁剪与旧字段兼容 |
 | `Migration_1_2.kt`、`Migration_1_2_Test.kt` | 迁移目标对齐 v1/v2 导出 schema 的 `ConversationEntity`；测试使用当前 SQLite 冲突参数，并在模拟器上验证 schema 与旧数据 |
 | `highlight`/`material3`/`search` 构建脚本、`speech` 仪器测试 | 补齐 AndroidX Test 依赖，测试包路径、namespace 和 packageName 断言一致 |
-| `chat-generation-pipeline.md`、当时的 context-management 决策 | 生成链路按本地工具/MCP/通知结构同步；缓存、压缩和 token/window 边界现见 `docs/references/request-context.md` |
+| `chat-generation-pipeline.md` | 生成链路按本地工具/MCP/通知结构同步；缓存、压缩和 token/window 见 [`request-context.md`](../../references/request-context.md) |
 | `changelog.md`、`upstream-sync.md`、batch 1～9 文档 | 版本、范围、计数、状态与当前 Git 证据统一 |
 
 ### 4.5 0.0.11 本地收口：搜索与会话入口

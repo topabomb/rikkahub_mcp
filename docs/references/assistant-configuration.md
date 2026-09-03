@@ -180,6 +180,8 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 | `Clipboard` | `clipboard_tool` |
 | `ScreenTime` | `get_screen_time` |
 | `Calendar` | `calendar_query`、`calendar_create` |
+| `AssistantManagement` | `assistant_manage`、`assistant_inspect` |
+| `AssistantDelegation` | `assistant_call` |
 | `TextToImage` | `generate_image`（默认图片模型有效时；Master 与 Target 均可） |
 
 工具是否需要审批由具体 `Tool.needsApproval` 决定，而不是由枚举统一决定。`generate_image` 仅在 `set_as_background=true` 时审批。Target 非交互下该审批仍返回 `tool_not_permitted`。

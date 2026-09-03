@@ -118,7 +118,8 @@ Workspace 实体可用 `toolApprovals` 对各工具覆盖默认值。参数先�
 
 Target Run 沿用同一工具定义并显式使用 `ToolInteractionAvailability.USER_INPUT_ONLY`：typed `UserInput` 可暂停并桥接宿主，
 typed `Approval` 自动拒绝。因此默认配置下，子助手可以直接读写安全根，却不能直接运行 `workspace_shell`；用户撤销
-Workspace 或工具权限后，下一模型 step 会按运行快照与当前配置的交集移除能力。
+Workspace 或工具权限后，当前 Turn 的 Provider schema 仍使用 START 时冻结的 `FrozenToolDefinition`；
+执行时 `WorkspaceApplicationService.executeTool` 按当前配置 live fail-closed。下一 `START` 才从装配结果里撤下该工具。
 
 ### 文件工具
 

@@ -325,8 +325,8 @@ data URI，保留压缩、方向和格式转换规则，不落盘或复制文件
 识图模型接收固定独立 System instruction、按序 `[Image N path=...]` 与 Image、最后的 request；不携带主会话历史。
 
 识别调用内部以 `reasoningLevel = AUTO`（Provider 使用模型默认推理档）发起，不表达「关闭
-推理」——`OFF` 在 Gemini 3 系列上会映射为 `thinkingLevel = "minimal"`，Gemini 3.7 Flash
-不支持该档位（显式设置返回 API 校验错误）。Provider 异常经统一分类器 `classifyProviderFailure`
+推理」——`OFF` 在 `GEMINI_3_NO_MINIMAL_THINKING`（3.1 Pro 全形态与 3.7 Flash）上映射为
+`thinkingLevel = "low"`，其余 Gemini 3 系列映射为 `"minimal"`。Provider 异常经统一分类器 `classifyProviderFailure`
 映射为细分 `reason` 并附 sanitized `detail` 诊断文本（与 `generate_image` / `assistant_call`
 的失败契约一致）；原始异常写入 logcat。
 

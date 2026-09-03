@@ -17,7 +17,7 @@ Work（一个 Conversation）
 
 | 语义 | 运行时对象 | Durable fact |
 | --- | --- | --- |
-| Conversation | `ConversationRuntime`、`ConversationSnapshot`、`ConversationCommand` | conversation header、message tree 与 `conversation_model_context` |
+| Conversation | `ConversationRuntime`、`ConversationAggregateSnapshot`、`ConversationCommand` | conversation header、message tree 与 `conversation_model_context` |
 | Turn | `TurnEngine`、`TurnHandle`、`TurnOutcome` | `turn_execution` |
 | Step | `GenerationChunk.Phase`、checkpoint | 只在 checkpoint 后形成执行事实 |
 | Tool Execution | `ToolExecutionContext`、`ToolCallPhase` | Tool message part 与 `tool_execution` |
@@ -128,13 +128,13 @@ validate owner/epoch
 
 持久化失败必须向调用方传播，并且不能发布 next snapshot。Streaming projection 是唯一允许先发布且不落库的会话状态；它必须携带 `TurnHandle` 并校验 epoch、turnId 与 assistantMessageId。旧 turn 的迟到 delta 必须被拒绝。
 
-Header command 不清除 active turn。与 active owner 冲突的结构命令必须显式拒绝或先由正常终态协议收口。Durable 领域逻辑只读取 `ConversationSnapshot.nodes`；`renderNodes` 只用于 UI 显示投影，其对象身份没有持久化语义。
+Header command 不清除 active turn。与 active owner 冲突的结构命令必须显式拒绝或先由正常终态协议收口。Durable 领域逻辑只读取 `ConversationAggregateSnapshot.nodes`。UI 显示列表是 `ConversationPresentationSnapshot.nodes`（`toPresentationSnapshot()` 合并末节点 streaming）；aggregate 不再提供 `renderNodes`，禁止以显示列表对象身份推断写入。
 
 Non-resident command 仍经过同一个 `ConversationCommandCoordinator` 锁与语义，不得退回 Repository fallback。轻量 header command 不为写入装载完整 message tree。
 
 ## Turn、工具与审批
 
-Master 与 Target 共用 `TurnEngine` 和同一套 chunk-to-checkpoint 协议。`StartTurn` 在一个事务中创建 assistant 槽和 RUNNING turn fact；checkpoint 只写 changed nodes；`FinalizeTurn` 同事务关闭遗留的 STARTED tools 并提交不可逆的 turn 终态。
+Master 与 Target 共用 `TurnEngine` 和同一套 chunk-to-checkpoint 协议。`StartTurn` 在一个事务中创建 assistant 槽、RUNNING turn fact 和可选的 `conversation_model_context`；checkpoint 只写 changed nodes；`FinalizeTurn` 同事务关闭遗留的 STARTED tools 并提交不可逆的 turn 终态。
 
 Token usage 沿用同一 message/turn 写协议，唯一 durable 结果是 owning Assistant 消息的 `TokenUsage`。Adapter、request
 reducer、turn accumulator、Master/Child 隔离、历史兼容和消费者边界见
@@ -205,15 +205,15 @@ Child 在保留作用域内提交原文件引用。读取本身不创建磁盘�
 
 `SubAssistantLifecycle` 拥有 lineage、retention、fork 与删除；`TurnFinalization` 拥有正常运行中的 stop 和 supersede；`TurnRecovery` 只处理进程恢复。三者不得互相吸收职责或通过整树兼容写入收口。
 
-启动恢复由 `ApplicationRecoveryCoordinator` 以固定顺序执行：Settings → Artifact → GeneratedMedia → reference projection → FTS projection → Child/Master turn → Assistant cleanup。任一步失败进入 `Failed`，durable command 保持关闭；retry 重跑同一幂等顺序。文件 command/query port 同样先等待这一全局门禁，页面不能在 tombstone 与孤儿 payload 收口前读取或删除托管文件。
+启动恢复由 `ApplicationRecoveryCoordinator.recoverNow()` 固定为：pending backup restore → Settings/`effectiveSettings`（`BLOCKED` fail-closed）→ Artifact reconcile → GeneratedMedia reconcile → reference projection → FTS projection → Child run recovery → Master turn recovery → pending assistant deletion → post-recovery maintenance → pending backup complete。任一步失败进入 `Failed`，durable command 保持关闭；retry 重跑同一幂等顺序。文件 command/query port 同样先等待这一全局门禁，页面不能在 tombstone 与孤儿 payload 收口前读取或删除托管文件。
 
 恢复只查询非终态 execution 索引，健康会话不加载 message tree。非终态 execution 缺少 owning Assistant message 是持久化完整性错误；恢复进入 `Failed`，不发布会话、也不补偿写入 turn/tool facts。消息 payload 损坏同样保持 fail-closed。
 
 ## Query、UI 与标题
 
-会话 UI 只消费 `ConversationReadState`、`ConversationSnapshot`、`ConversationSummary`、`ConversationPresentation` 或专用 UiModel。页面对同一 snapshot 建立一个权威订阅；UI 不从 Runtime Job、布尔值或 Tool output 推断活动状态。
+会话 UI 只消费 `ConversationReadState`（Ready 携带 `ConversationPresentationSnapshot`）、`ConversationUiModel`、`ConversationSummary`、`ConversationPresentation`。页面对同一 snapshot 建立一个权威订阅；UI 不从 Runtime Job、布尔值或 Tool output 推断活动状态，也拿不到 aggregate 的 `modelContextEntries`。
 
-`ConversationPresentation` 区分 idle、generating、awaiting approval 与 stopping。审批暂停仍属于 active turn，通知协议将其表达为可回到会话处理的待审批态，不得误报为“生成完成”。`STOPPING` 期间隐藏审批、回答与子助手交互入口，避免向已在收口的 owner 提交竞态命令。Tool 卡片从首个调用 delta 起可查看；不完整 JSON 显示原始片段，不能等 output 出现才开放详情。
+`ConversationPresentation.phase` 为 `IDLE` / `PREPARING` / `GENERATING` / `AWAITING_USER` / `STOPPING`。`AWAITING_USER` 覆盖审批与 `ask_user`；per-call `ToolCallPhase` 区分 `AWAITING_APPROVAL` 与 `AWAITING_INPUT`。durable `TurnExecutionStatus` 仍使用历史名 `AWAITING_APPROVAL`。用户交互暂停仍属于 active turn，通知协议将其表达为可回到会话处理的待处理态，不得误报为“生成完成”。`STOPPING` 期间隐藏审批、回答与子助手交互入口，避免向已在收口的 owner 提交竞态命令。Tool 卡片从首个调用 delta 起可查看；不完整 JSON 显示原始片段，不能等 output 出现才开放详情。
 
 `ConversationTitleCoordinator` 统一确定性本地标题、模型标题 phase、token、重试与手动写入。模型请求携带 expected title，并以 `UpdateTitleIfCurrent` CAS 提交；CAS 的成功语义是 expected title 匹配，与新旧文本是否相同无关，相同值无需写库但仍收口为 resolved。手动标题和模型提交共享串行边界，手动提交会使活动和排队 token 失效。异步结果与 force 请求都不能覆盖请求发出后产生的手动标题。
 
@@ -249,10 +249,12 @@ Child 在保留作用域内提交原文件引用。读取本身不创建磁盘�
 | 子助手 owner、lineage、retention 与恢复 | [`sub-assistant-architecture.md`](sub-assistant-architecture.md) |
 | 子助手多模态输入输出 | [`sub-assistant-multimodal.md`](sub-assistant-multimodal.md) |
 | Assistant 配置 | [`assistant-configuration.md`](assistant-configuration.md) |
+| Android 配置目录与企业下发边界 | [`android-configuration-architecture.md`](android-configuration-architecture.md) |
 | MCP 生命周期、目录与 UI 投影 | [`mcp-architecture.md`](mcp-architecture.md) |
 | Provider 线协议 | [`protocol-reference.md`](protocol-reference.md) |
+| Token usage、缓存命中与累计口径 | [`token-usage-accounting.md`](token-usage-accounting.md) |
 | 模型可见 prompts 与工具结果 | [`prompts-and-tools.md`](prompts-and-tools.md) |
-| Compose 导航、布局与主题 | [`ui-architecture.md`](ui-architecture.md) |
+| Compose 导航、布局、主题与图片查看器 | [`ui-architecture.md`](ui-architecture.md) |
 | 消息渲染 | [`message-rendering-pipeline.md`](message-rendering-pipeline.md) |
 | 数据库查询索引与迁移边界 | [`database-indexing.md`](database-indexing.md) |
 | Workspace/PRoot | [`workspace-architecture.md`](workspace-architecture.md) |

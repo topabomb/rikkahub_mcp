@@ -90,7 +90,8 @@ Seek a review in a separate context using at most 2 subagents only at key levera
 - 新聊天是非持久化 Draft；首条 `AppendUserMessage` 单事务建库并原位晋升 Ready。空 Draft 不得进入数据库、
   会话列表或启动 turn。
 - 新 turn 的 `START` 与用户交互后的 `CONTINUE_USER_INTERACTION` 是不同协议。继续流程保留原 `TurnHandle`，不得清理树、
-  回填附件或创建第二 turn。durable 流程只读取 `snapshot.nodes`；`renderNodes` 只用于显示，禁止以对象身份推断写入。
+  回填附件或创建第二 turn。durable 流程只读取 `ConversationAggregateSnapshot.nodes`；UI 只消费
+  `ConversationPresentationSnapshot.nodes`，禁止以显示列表对象身份推断写入。
 - 工具装配、调用拼接、就绪、审批、执行和终态使用 typed phase。`UIMessagePart.Tool.hasReplayResult` / `Tool.output`
   只表示 Provider 可回放结果，不能充当 active 运行状态或详情门禁；执行阶段只随已提交 checkpoint 推进，metadata 只细化领域子阶段。
 - 工具参数由 `Tool.parseArguments` 与工具自身纯校验在审批前检查；可用性、审批与执行共用同一 step 工具索引。
@@ -106,7 +107,7 @@ Seek a review in a separate context using at most 2 subagents only at key levera
 - 内部 `attachment:<uuid>` 的索引只归 `AttachmentReferenceLookup`；对外只披露真实 `/upload` 路径。
   路径读取由 `ArtifactStore` 校验受管文件，不要求当前分支引用，也不依赖 Workspace。UI 不扫描消息 metadata、
   不解析子助手 payload，也不直连 Artifact。
-- 启动恢复按 Settings → Artifact → GeneratedMedia → projection → turn/assistant cleanup 固定顺序 fail-closed；
+- 启动恢复按 pending backup restore → Settings → Artifact → GeneratedMedia → projection → turn/assistant cleanup → post-recovery maintenance 固定顺序 fail-closed；
   损坏或不完整聚合不得伪装 Ready。破坏性操作使用可恢复状态机与幂等/CAS，不以日志、空列表或 best-effort 代表成功。
 - 架构迁移必须在同一交付中物理删除旧 facade、fallback、deprecated 转发、兼容白名单、过渡命名和无调用协议；
   同步更新静态契约测试与参考文档，不保留双路径。
@@ -138,7 +139,7 @@ Seek a review in a separate context using at most 2 subagents only at key levera
 | Provider 线协议 | `docs/references/protocol-reference.md` |
 | Token usage、缓存命中、累计与统计口径 | `docs/references/token-usage-accounting.md` |
 | 模型可见 prompts 与工具结果 | `docs/references/prompts-and-tools.md` |
-| Compose 导航、布局与主题 | `docs/references/ui-architecture.md` |
+| Compose 导航、布局、主题与图片查看器 | `docs/references/ui-architecture.md` |
 | Markdown/代码/Mermaid/LaTeX 渲染 | `docs/references/message-rendering-pipeline.md` |
 | Workspace/PRoot | `docs/references/workspace-architecture.md` |
 | 更新与发布机制 | `docs/references/update-mechanism.md` |
@@ -155,7 +156,7 @@ Seek a review in a separate context using at most 2 subagents only at key levera
   `app/build.gradle.kts` 的 `versionCode`/`versionName`；默认保持不变。
 - `docs/dev/upstream-sync.md` 是上游同步总账，其中包括了工作流说明和方法论，执行同步时注意架构的变迁，引入上游变更要合理整合到本项目架构。每次同步都先 fetch，按上一批冻结点续查，并追加本批摘要。
 
-`docs/dev/` 为开发过程文档：`original-architecture.md`、`fork-simplification-plan.md` 是 Fork 时的冻结归档；不作为当前架构规则来源。
+`docs/dev/` 为开发过程文档：`original-architecture.md`、`fork-simplification-plan.md` 是 Fork 时的冻结归档；不作为当前架构规则来源。Gemini 后续范围见 `google-gemini-protocol-correction-plan.md`。
 
 ## Code and Localization Conventions
 

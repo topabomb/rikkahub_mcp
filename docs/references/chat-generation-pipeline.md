@@ -11,10 +11,10 @@
 | 类型 | 职责 |
 | --- | --- |
 | `ConversationApplicationService` | 用户会话命令、创建、删除、fork、压缩入口；不直接实现 Runtime 或 Room 写协议 |
-| `ConversationQueryService` | UI 读端口；活动会话返回显式 Loading/Ready/Missing/Failed 的 `ConversationReadState`，Ready 携带 `ConversationSnapshot`；列表返回不含消息树的 `ConversationSummary` |
+| `ConversationQueryService` | UI 读端口；活动会话返回显式 Loading/Ready/Missing/Failed 的 `ConversationReadState`，Ready 携带 `ConversationPresentationSnapshot`；列表返回不含消息树的 `ConversationSummary` |
 | `MasterTurnCoordinator` | Master turn 输入、工具与副作用编排；不实现第二套持久化协议 |
 | `ConversationCommandCoordinator` | resident/non-resident durable command 唯一入口；按 conversationId 串行化，并受恢复门禁保护。`execute()` 把身份/缺失冲突映射为 `Conflict`，事务失败映射为 `Failure` |
-| `ConversationRuntime` | 已提交 `ConversationSnapshot` 的唯一事实流、私有 `ActiveTurnRuntime` 请求状态机与纯内存 streaming projection。durable CAS 仍只用 `TurnHandle` |
+| `ConversationRuntime` | 已提交 `ConversationAggregateSnapshot` 的唯一事实流、私有 `ActiveTurnRuntime` 请求状态机与纯内存 streaming projection。durable CAS 仍只用 `TurnHandle` |
 | `ConversationRuntimeRegistry` | `Loading/Draft/Ready/Missing/Failed` 生命周期、引用与生成 Job；Draft 只服务未发送首条消息的新聊天，首消息事务后晋升 Ready；禁止伪造 durable 会话 |
 | `ConversationTransition` | 唯一 command planner：同时产生 snapshot、delta mutation 与 execution facts；未变化节点保持引用 |
 | `TurnEngine` / `TurnPipelineFactory` | Master/Target 共用的 start、checkpoint、stream 与非空 `TurnOutcome` 协议；固定 Transformer 顺序 |
@@ -62,7 +62,7 @@ ConversationApplicationService / MasterTurnCoordinator
 
 `MasterTurnCoordinator.sendMessage` 在安装唯一 generation Job 时返回 `SendMessageReceipt`。receipt 中的
 `userMessageId` 是本次 `AppendUserMessage` 的稳定身份，不代表 durable 提交已经成功；UI 只可用它观察
-`ConversationSnapshot.nodes` 中的目标消息并协调滚动等临时表现，不能据此提前发布消息或持有 Runtime Job。
+`ConversationPresentationSnapshot.nodes` 中的目标消息并协调滚动等临时表现，不能据此提前发布消息或持有 Runtime Job。
 编辑已有 USER 并发送走 `editAndResend`：截断到该 USER node、提交新 USER variant，再按变换后的目标分支
 `START`；receipt 的 `userMessageId` 是这个新 variant。纯编辑（长按发送）与编辑 Assistant 只走
 `editMessage`，不创建 model-context entry、不启动 turn。
@@ -166,7 +166,7 @@ Runtime 仅在事务提交成功后发布该投影；因此 UI、Master resume �
 不进入审批或执行。`ask_user`、生图等领域校验属于工具定义，循环不维护工具名特判。
 无效或已撤销的 Pending 调用清除等待态，并通过既有 `TOOL_RESULT_COMPLETED` 提交 FAILED 结果；同批其余合法 Pending
 仍形成审批屏障。`TOOL_RESULT_COMPLETED` 的 RUNNING snapshot 与流式 Messages 不得包含新打上的 Pending：失败替换先
-提交，Pending 只进入随后的 `AWAITING_APPROVAL` 投影，且不经流式 Messages。用户已 Denied/Answered 的决定不被参数错误覆盖；Approved 不重复审批。执行仍使用同一解析入口，
+提交，Pending 只进入随后的 `AWAITING_USER` 投影，且不经流式 Messages。用户已 Denied/Answered 的决定不被参数错误覆盖；Approved 不重复审批。执行仍使用同一解析入口，
 实际文件、权限、配置与远端状态只在原执行 owner 内复核。未执行的拒绝不创建 `tool_execution` 行。
 纯校验返回结构化领域错误，由 `ToolArgumentsException` 保留原字段并补齐标准 `error` / `type: error`；
 通用 JSON 错误为 `invalid_arguments`。撤销或审批不可用的 Runtime 拒绝同样携带标准错误标记，重读历史仍显示 FAILED；
@@ -186,11 +186,11 @@ Master 生成入口显式区分 `MasterTurnEntry.START` 与 `CONTINUE_USER_INTER
 `applyToolUserDecision` 提交唯一 `ResolveToolInteraction`，再只在本次 `locator.messageId` 的 assistant 上判断是否还有
 Pending：有则继续等待，无则进入 CONTINUE_USER_INTERACTION，只复用既有 `TurnHandle` 并调用
 `TurnEngine.continueActive()`，不得再次执行结构预检或提交树命令。
-结构预检只读取 durable `ConversationSnapshot.nodes`；`renderNodes` 是每次读取都可能新建的显示投影，不能作为持久化输入，
-也不能用列表引用身份判断是否需要写入。
+结构预检只读取 durable `ConversationAggregateSnapshot.nodes`。UI 显示列表是 `ConversationPresentationSnapshot.nodes`，
+不能作为持久化输入，也不能用列表引用身份判断是否需要写入。
 
 `ActiveTurnState.toolCallPhases` 是运行中工具卡片的唯一阶段投影，仍由同一 Runtime snapshot 发布。Provider 首次流出
-Tool part 时为 `CALL_STREAMING`；`STEP_COMPLETED` 提交后转为 `READY` 或 `AWAITING_APPROVAL`；`STARTED` execution fact
+Tool part 时为 `CALL_STREAMING`；`STEP_COMPLETED` 提交后转为 `READY`、`AWAITING_APPROVAL` 或 `AWAITING_INPUT`；`STARTED` execution fact
 与结果 checkpoint 提交后依次转为 `EXECUTING` 和终态，同一生成流在这两类影响通知的 checkpoint 后补发 presentation tick，使通知投影即使没有后续 Provider chunk 也只观察已提交阶段。Live Update 对文本增量保留节流，但执行 ordinal 从空到有、从有到空或在工具间切换时立即发布，不能被文本节流窗口吞掉。工具 output 只表示 Provider 可回放结果，不表示执行中状态。
 因此卡片从首次 Tool delta 起即可打开：参数 JSON 尚未闭合时显示原始片段，文生图执行期间显示其 metadata 提供的
 queued/generating/persisting/setting-background 子阶段。崩溃恢复、停止和抛异常/超时的标准结果封套分别投影为
@@ -198,8 +198,8 @@ queued/generating/persisting/setting-background 子阶段。崩溃恢复、停�
 `COMPLETED`，其业务结果由对应 renderer（例如图片生成失败原因）独立呈现。
 
 会话页和 Drawer 不读取 Runtime 的 coroutine Job。`ConversationPresentation` 从私有 active request 与 durable
-snapshot 派生 `IDLE`、`PREPARING`、`GENERATING`、`AWAITING_APPROVAL`、`STOPPING`；审批暂停仍属于同一 turn owner，底部使用不同颜色和问询图标保持明确的
-用户注意力提示，且文件夹/消息树结构操作继续受 active owner 保护。`STOPPING` 期间不再提供工具审批、问题回答或 Target 交互入口。后台通知将 `AWAITING_APPROVAL` 保留为独立可操作状态，只有 `Completed` 终态才发送“已完成”通知，失败、取消和 incomplete 只清理 live update。流式增量可用有界 `tryEmit` 降压，但待审批与终态使用可挂起 `emit`，不得因 buffer 满遗留 ongoing 通知；应用进入前台时撤销已跟踪的 live/待审批通知。完成工具卡片保留 `COMPLETED` 事实，但隐藏常驻
+snapshot 派生 `IDLE`、`PREPARING`、`GENERATING`、`AWAITING_USER`、`STOPPING`；用户交互暂停仍属于同一 turn owner，底部使用不同颜色和问询图标保持明确的
+用户注意力提示，且文件夹/消息树结构操作继续受 active owner 保护。`STOPPING` 期间不再提供工具审批、问题回答或 Target 交互入口。后台通知将 `AWAITING_USER` 保留为独立可操作状态，只有 `Completed` 终态才发送“已完成”通知，失败、取消和 incomplete 只清理 live update。流式增量可用有界 `tryEmit` 降压，但待处理与终态使用可挂起 `emit`，不得因 buffer 满遗留 ongoing 通知；应用进入前台时撤销已跟踪的 live/待处理通知。完成工具卡片保留 `COMPLETED` 事实，但隐藏常驻
 状态文字；失败、拒绝、回答、取消和中断仍显示简短终态。
 
 `ConversationUiModel.turnFeedback` 由 `projectConversationTurnFeedback` 只读派生，不建立新的运行事实。
@@ -279,9 +279,10 @@ UI 的保留数量是最低值，`targetTokens` 只写入摘要提示，不是�
 `ConversationRuntime` 的 `snapshot` 只包含已经提交的事实；Header command 不清除 active turn，冲突树命令显式结束或
 拒绝当前 owner。Runtime 无页面引用且无活跃 Job 后可由 Registry 清理，不存在 `pendingPersist` 或下一命令重试协议。
 
-启动顺序由 `ApplicationRecoveryCoordinator` 固定为：Settings ready → artifact reconcile → generated media reconcile →
-reference projection → FTS projection → Child run recovery → Master turn recovery → pending assistant deletion。任一步失败进入 `Failed(error)`，所有
-durable command 继续被 `ApplicationRecoveryGate` 阻断；`retry()` 重新执行同一幂等顺序。
+启动顺序由 `ApplicationRecoveryCoordinator.recoverNow()` 固定为：pending backup restore → Settings/`effectiveSettings`
+（`BLOCKED` fail-closed）→ artifact reconcile → generated media reconcile → reference projection → FTS projection →
+Child run recovery → Master turn recovery → pending assistant deletion → post-recovery maintenance → pending backup complete。
+任一步失败进入 `Failed(error)`，所有 durable command 继续被 `ApplicationRecoveryGate` 阻断；`retry()` 重新执行同一幂等顺序。
 
 用户可见发起/继续 Master turn 后，`GenerationForegroundLifetime.ensureStarted` 请求 Android 保活；
 `ChatGenerationForegroundService` 只消费 `ConversationQueryService.conversationActivities()`，只要存在

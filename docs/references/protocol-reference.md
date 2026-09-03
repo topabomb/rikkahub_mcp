@@ -342,9 +342,25 @@ Gemini 支持的 `enum`。grounding metadata 转为 `UIMessageAnnotation.UrlCita
   不在 finish reason 校验时丢失已返回的 partial 响应；
 - 请求体、原始 SSE body、opaque signature 和 base64 媒体不得写入日志。
 
-未知 Part 类型显式失败并只报告字段名，不静默删除，也不把完整原始 payload 放入诊断。当前客户端 function-call
-增量仍只接受完整 `args` object；会启用 partial args、多候选或新输出模态的 custom body path 被 ownership 拒绝，
-直到对应 decoder 明确实现。
+`GoogleProvider.parseMessagePart()` 只接受 `text`（含空 text + signature、`thought=true` 的 Reasoning）、
+完整 object `functionCall`（`name` 非空），以及 `mimeType` 以 `image/` 开头的 `inlineData`。其他 Part 字段
+显式失败并只报告排序后的字段名，不写入原始 payload。当前客户端 function-call 增量仍只接受完整 `args` object；
+会启用 partial args、多候选或新输出模态的 custom body path 被 ownership 拒绝，直到对应 decoder 明确实现。
+
+### 未实现边界
+
+下列能力尚未落地。未知 union 与会改变 decoder 形状的 custom body 继续 fail-closed，不得用猜测、私有旁路
+或把 Gemini Part 泛化为 OpenAI `reasoning_content` 提前开通。范围见
+[`google-gemini-protocol-correction-plan.md`](../dev/google-gemini-protocol-correction-plan.md)。
+
+- **精确 thinking profile**：没有独立的 `GeminiThinkingProfile` registry。2.5 使用 `thinkingBudget`，
+  3 系列使用 `thinkingLevel`，仍由 `GoogleProvider` 与 `ModelRegistry.GEMINI_3_SERIES` /
+  `GEMINI_3_NO_MINIMAL_THINKING` 分支决定。未知模型省略显式 thinking 控制。后续若建立单一 profile，
+  应删除这些散落分支，由 registry/model definition 提供事实。
+- **ordered Part envelope**：没有 Google 专属有序 Part decoder。server-side tool、code execution、
+  partial function args 与未知 Part union 只报告字段名并失败。完成前 UIMessage 仍是展示投影，不能静默丢弃未知 union。
+- **原生 audio/video/document**：公共 `RequestMediaCapabilities` 只声明原生图片。恢复原生媒体必须同一变更
+  扩展 `Modality` / capability、Artifact 真实 MIME、所有 Provider 声明、投影/serializer/测试与 UI。
 
 ## 8. ModelRegistry 的职责
 

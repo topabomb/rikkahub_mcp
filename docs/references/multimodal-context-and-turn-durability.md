@@ -266,7 +266,7 @@ Schema 见 [../dev/persistent-records-and-sync.md](../dev/persistent-records-and
 - `ToolExecutionContext` 以 `messageId + toolOrdinal` 作为工具执行在 Assistant 消息内的唯一 locator（`toolCallId` 只供 Provider 协议使用，重试后会变）。
 - 工具产生副作用（文件、数据库、外部调用）前必须先落 `STARTED`——副作用可观测时 DB 中必有记录。
 - 同一 Assistant 消息的多个 ToolCall 在审批屏障结束后按 Tool ordinal 串行处理。
-- Master 的新 turn 启动与用户交互继续使用不同 typed entry：只有 START 可在 active turn 建立前执行消息树清理和附件引用回填；批准、拒绝与回答由 `applyToolUserDecision` 提交决定后只进入 `CONTINUE_USER_INTERACTION` 继续原 owner，不执行结构维护。回填计划只从 durable nodes 生成精确 part-path assignment，显示用 `renderNodes` 不参与持久化判断。
+- Master 的新 turn 启动与用户交互继续使用不同 typed entry：只有 START 可在 active turn 建立前执行消息树清理和附件引用回填；批准、拒绝与回答由 `applyToolUserDecision` 提交决定后只进入 `CONTINUE_USER_INTERACTION` 继续原 owner，不执行结构维护。回填计划只从 durable `ConversationAggregateSnapshot.nodes` 生成精确 part-path assignment，`ConversationPresentationSnapshot.nodes` 不参与持久化判断。
 
 ### 6.4 终态收口
 
