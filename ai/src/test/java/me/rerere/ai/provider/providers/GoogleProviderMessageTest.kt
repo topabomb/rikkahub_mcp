@@ -131,6 +131,40 @@ class GoogleProviderMessageTest {
     }
 
     @Test
+    fun `adjacent user contents merge into one alternating turn`() {
+        val result = invokeBuildContents(
+            listOf(
+                UIMessage.user("reminder"),
+                UIMessage.user("follow-up"),
+                UIMessage.assistant("ok"),
+            ),
+        ).map { it.jsonObject }
+
+        assertEquals(listOf("user", "model"), result.map { it["role"]?.jsonPrimitive?.content })
+        val userParts = result[0]["parts"]!!.jsonArray.map { it.jsonObject["text"]?.jsonPrimitive?.content }
+        assertEquals(listOf("reminder", "follow-up"), userParts)
+    }
+
+    @Test
+    fun `function response and following user merge into one user content`() {
+        val result = invokeBuildContents(
+            listOf(
+                UIMessage.user("search"),
+                UIMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(createExecutedTool("call_1", "search", """{"q":"x"}""", "hits")),
+                ),
+                UIMessage.user("thanks"),
+            ),
+        ).map { it.jsonObject }
+
+        assertEquals(listOf("user", "model", "user"), result.map { it["role"]?.jsonPrimitive?.content })
+        val lastParts = result[2]["parts"]!!.jsonArray.map { it.jsonObject }
+        assertTrue(lastParts.first().containsKey("functionResponse"))
+        assertEquals("thanks", lastParts.last()["text"]?.jsonPrimitive?.content)
+    }
+
+    @Test
     fun `multi-round tool calls should produce functionCall followed by functionResponse`() {
         // Scenario: Multiple rounds of tool calls
         val assistantMessage = UIMessage(

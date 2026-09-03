@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonArrayBuilder
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -725,7 +726,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         modelId: String,
         sourceProfile: String,
     ): JsonArray {
-        return buildJsonArray {
+        val contents = buildJsonArray {
             messages
                 .filter { it.role != MessageRole.SYSTEM && it.isValidToUpload() }
                 .forEach { message ->
@@ -736,6 +737,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     }
                 }
         }
+        return mergeAdjacentSameRoleContents(contents)
     }
 
     private fun JsonArrayBuilder.addModelMessage(
@@ -787,6 +789,35 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 put("role", "model")
                 putJsonArray("parts") { partsBuffer.forEach { add(it) } }
             })
+        }
+    }
+
+    private fun mergeAdjacentSameRoleContents(contents: JsonArray): JsonArray {
+        if (contents.size <= 1) return contents
+        return buildJsonArray {
+            var currentRole: String? = null
+            val mergedParts = ArrayList<JsonElement>()
+            fun flush() {
+                val role = currentRole ?: return
+                add(buildJsonObject {
+                    put("role", role)
+                    putJsonArray("parts") { mergedParts.forEach { add(it) } }
+                })
+                mergedParts.clear()
+            }
+            contents.forEach { element ->
+                val obj = element.jsonObject
+                val role = obj["role"]?.jsonPrimitive?.content
+                val parts = obj["parts"]?.jsonArray ?: JsonArray(emptyList())
+                if (role != null && role == currentRole) {
+                    mergedParts.addAll(parts)
+                } else {
+                    flush()
+                    currentRole = role
+                    mergedParts.addAll(parts)
+                }
+            }
+            flush()
         }
     }
 

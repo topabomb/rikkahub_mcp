@@ -108,6 +108,7 @@ class GenerationLoopFlowTest {
             )),
         )
         val checkpoints = mutableListOf<GenerationCheckpoint>()
+        val observed = mutableListOf<List<UIMessage>>()
         val request = generationRequestFixture(
             conversationId = kotlin.uuid.Uuid.random(),
             settings = harness.settings,
@@ -118,6 +119,7 @@ class GenerationLoopFlowTest {
             promptInputs = testPromptInputs(),
             tools = listOf(buildAskUserTool(), approved, automatic),
             maxSteps = 1,
+            onMessagesObserved = { observed += it },
             onCheckpoint = checkpoints::add,
         )
         val first = harness.handler.run(request).toList()
@@ -127,9 +129,16 @@ class GenerationLoopFlowTest {
         assertEquals(listOf(1), firstPending.map { it.locator.toolOrdinal })
         assertEquals(initial.last().id, firstPending.single().locator.messageId)
         assertTrue(executed.isEmpty())
-        val awaiting = first.filterIsInstance<GenerationChunk.Messages>().last().messages
-        assertFalse(awaiting.last().getTools()[0].isPending)
-        assertTrue(awaiting.last().getTools()[0].hasReplayResult)
+        val resultCheckpoint = checkpoints.single { it.kind == CheckpointKind.TOOL_RESULT_COMPLETED }
+        val resultTools = resultCheckpoint.messages.last().getTools()
+        assertFalse(resultTools[0].isPending)
+        assertTrue(resultTools[0].hasReplayResult)
+        assertFalse(resultTools[1].isPending)
+        first.filterIsInstance<GenerationChunk.Messages>().forEach { chunk ->
+            assertFalse(chunk.messages.last().getTools()[1].isPending)
+        }
+        val awaiting = observed.last()
+        assertTrue(awaiting.last().getTools()[1].isPending)
         assertTrue(checkpoints.none { it.toolExecution != null })
         assertEquals(listOf(ToolResultEventStatus.FAILED), checkpoints.flatMap { it.toolResults }.map { it.status })
 
@@ -219,6 +228,7 @@ class GenerationLoopFlowTest {
         )
         val harness = createProviderHarness(responseMessage = toolMessage)
         val resultCheckpoints = mutableListOf<GenerationCheckpoint>()
+        val observed = mutableListOf<List<UIMessage>>()
 
         val chunks = harness.handler.run(
             generationRequestFixture(
@@ -231,6 +241,7 @@ class GenerationLoopFlowTest {
                 promptInputs = testPromptInputs(),
                 tools = listOf(approvalTool, buildAskUserTool()),
                 maxSteps = 1,
+                onMessagesObserved = { observed += it },
                 onCheckpoint = { checkpoint ->
                     if (checkpoint.kind == CheckpointKind.TOOL_RESULT_COMPLETED) {
                         resultCheckpoints += checkpoint
@@ -243,6 +254,14 @@ class GenerationLoopFlowTest {
         assertEquals(null, committed.toolExecution)
         assertEquals(listOf(0), committed.toolResults.map(ToolResultEvent::toolOrdinal))
         assertEquals(ToolResultEventStatus.FAILED, committed.toolResults.single().status)
+        val resultTools = committed.messages.last().getTools()
+        assertTrue(resultTools[0].hasReplayResult)
+        assertFalse(resultTools[1].isPending)
+        chunks.filterIsInstance<GenerationChunk.Messages>().forEach { chunk ->
+            val tools = chunk.messages.last().getTools()
+            if (tools.size > 1) assertFalse(tools[1].isPending)
+        }
+        assertTrue(observed.last().last().getTools()[1].isPending)
         val finished = chunks.filterIsInstance<GenerationChunk.Finished>().single()
         val pending = (finished.reason as FinishedReason.AwaitingApproval).pending
         assertEquals(listOf(ToolInteractionKind.APPROVAL), pending.map { it.kind })

@@ -4,7 +4,6 @@ import net.weero.measix.pilot.service.runtime.FrozenTurnPromptInputs
 import net.weero.measix.pilot.service.runtime.ResolvedPromptInjection
 import java.time.ZoneId
 import java.util.Locale
-import kotlin.time.Instant
 
 fun testPromptInputs(
     messageTemplate: String? = "{{ message }}",
@@ -16,7 +15,6 @@ fun testPromptInputs(
     messageTemplate = messageTemplate,
     promptInjections = promptInjections,
     workspaceReminder = workspaceReminder,
-    turnInstant = Instant.fromEpochMilliseconds(0),
     localeTag = Locale.US.toLanguageTag(),
     zoneId = ZoneId.of("UTC").id,
     conversationSystemPrompt = null,

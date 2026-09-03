@@ -540,9 +540,13 @@ class GenerationLoop(
                 availability = interactionAvailability,
             )
 
-            if (preparation.replacements.isNotEmpty()) {
+            val pendingOrdinals = preparation.pending.map { it.locator.toolOrdinal }.toSet()
+            val resultReplacements = preparation.replacements.filterKeys { it !in pendingOrdinals }
+            val pendingReplacements = preparation.replacements.filterKeys { it in pendingOrdinals }
+
+            if (resultReplacements.isNotEmpty()) {
                 messages = messages.dropLast(1) +
-                    messages.last().replaceToolsAtOrdinals(preparation.replacements)
+                    messages.last().replaceToolsAtOrdinals(resultReplacements)
             }
 
             if (preparation.immediateResults.isNotEmpty()) {
@@ -550,16 +554,17 @@ class GenerationLoop(
                     kind = CheckpointKind.TOOL_RESULT_COMPLETED,
                     toolResults = preparation.immediateResults,
                 )
-                // Edge projections may only observe tool state after the durable checkpoint commits.
-                publishMessages(transformStreamingLast(messages))
+                if (preparation.pending.isEmpty()) {
+                    publishMessages(transformStreamingLast(messages))
+                }
             }
 
             if (preparation.pending.isNotEmpty()) {
-                if (preparation.immediateResults.isEmpty()) {
-                    // TurnEngine must durably commit this exact private projection as AWAITING
-                    // before any presentation observer can see the Pending state.
-                    request.onMessagesObserved(messages)
+                if (pendingReplacements.isNotEmpty()) {
+                    messages = messages.dropLast(1) +
+                        messages.last().replaceToolsAtOrdinals(pendingReplacements)
                 }
+                request.onMessagesObserved(messages)
                 Log.i(TAG, "generateText: waiting for all tool user interactions")
                 finishReason = FinishedReason.AwaitingApproval(preparation.pending)
                 break

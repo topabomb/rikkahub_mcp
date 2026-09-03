@@ -214,4 +214,29 @@ class DisclosureContextGeminiTest {
         )
         assertTrue(wire.entriesWithRole("model").none { it.toString().contains(SNAPSHOT) })
     }
+
+    @Test
+    fun `adjacent synthetic user merges with snapshot-bearing user and stays alternating`() {
+        val wire = provider.buildContents(
+            messages = listOf(
+                UIMessage.system("Stable system prompt"),
+                UIMessage.user("time reminder"),
+                injectedUserTurn(),
+                UIMessage.assistant("answer"),
+            ),
+            mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED),
+            modelId = "gemini-test",
+            sourceProfile = "google:developer:test.example.com",
+        )
+        assertEquals(
+            listOf("user", "model"),
+            wire.map { it.jsonObject.field("role")?.content },
+        )
+        val userParts = wire.entriesWithRole("user").single()
+            .getValue("parts").let { it as JsonArray }
+            .map { it.jsonObject }
+        assertEquals("time reminder", userParts[0].field("text")?.content)
+        assertEquals(SNAPSHOT, userParts[1].field("text")?.content)
+        assertEquals(ORIGINAL, userParts[2].field("text")?.content)
+    }
 }

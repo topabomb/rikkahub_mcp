@@ -120,7 +120,6 @@ fun freezeTurnPromptInputs(
         messageTemplate = assistant.messageTemplate,
         promptInjections = injections,
         workspaceReminder = workspaceReminder,
-        turnInstant = instant,
         localeTag = locale.toLanguageTag(),
         zoneId = zoneId.id,
         conversationSystemPrompt = conversationSystemPrompt

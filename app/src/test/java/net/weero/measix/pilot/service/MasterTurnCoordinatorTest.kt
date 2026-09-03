@@ -147,6 +147,45 @@ class MasterTurnCoordinatorTest {
     }
 
     @Test
+    fun `remaining pending on the decided assistant waits instead of continuing`() = runTest {
+        val turnId = Uuid.random()
+        val message = UIMessage(
+            id = Uuid.random(),
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool("c1", "generate_image", "{}", approvalState = ToolApprovalState.Pending),
+                UIMessagePart.Tool("c2", "generate_image", "{}", approvalState = ToolApprovalState.Pending),
+            ),
+        )
+        var current = Conversation.ofId(Uuid.random(), DEFAULT_ASSISTANT_ID)
+            .copy(messageNodes = listOf(message.toMessageNode()))
+            .toSnapshot()
+            .copy(
+                activeTurn = ActiveTurnState(
+                    epoch = 1L,
+                    turnId = turnId,
+                    assistantMessageId = message.id,
+                    messages = listOf(message),
+                ),
+            )
+        var morePending = false
+        var continued = false
+
+        applyToolUserDecision(
+            locator = ToolCallLocator(message.id, 0),
+            decision = ToolUserDecision.Approve,
+            awaitPreviousGeneration = {},
+            currentSnapshot = { current },
+            submit = { command -> current = ConversationTransition.apply(current, command) },
+            onMoreApprovalsPending = { morePending = true },
+            continueTurn = { _, _ -> continued = true },
+        )
+
+        assertTrue(morePending)
+        assertFalse(continued)
+    }
+
+    @Test
     fun `malformed runtime metadata cannot reach the decision command`() = runTest {
         val metadata = buildJsonObject {
             put("tool_runtime", Json.parseToJsonElement("""{"version":2,"interaction":"approval"}"""))

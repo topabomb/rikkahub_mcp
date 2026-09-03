@@ -226,14 +226,13 @@ internal suspend fun applyToolUserDecision(
     )
 
     val after = currentSnapshot()
-    val committed = after.currentMessages()
-        .firstOrNull { it.id == locator.messageId }
-        ?.getTools()
-        ?.getOrNull(locator.toolOrdinal)
+    val assistant = after.currentMessages().firstOrNull { it.id == locator.messageId }
+        ?: throw ConversationCommandConflictException("stale tool interaction locator: $locator")
+    val committed = assistant.getTools().getOrNull(locator.toolOrdinal)
     check(committed?.approvalState == targetState) {
         "tool interaction command was not committed"
     }
-    if (after.currentMessages().lastOrNull()?.getTools()?.any { it.isPending } == true) {
+    if (assistant.getTools().any { it.isPending }) {
         onMoreApprovalsPending()
         return
     }

@@ -11,7 +11,6 @@ import net.weero.measix.pilot.data.model.AssistantMemory
 import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
 import java.time.ZoneId
 import java.util.Locale
-import kotlin.time.Instant
 import kotlin.uuid.Uuid
 
 /**
@@ -49,7 +48,6 @@ internal fun androidTestTurnRequestContext(
         messageTemplate = "{{ message }}",
         promptInjections = emptyList(),
         workspaceReminder = null,
-        turnInstant = Instant.fromEpochMilliseconds(0),
         localeTag = Locale.US.toLanguageTag(),
         zoneId = ZoneId.of("UTC").id,
         conversationSystemPrompt = null,

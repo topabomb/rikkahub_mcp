@@ -11,7 +11,6 @@ import me.rerere.ai.provider.RequestMediaCapabilities
 import net.weero.measix.pilot.data.ai.tools.ToolExecutionBinding
 import net.weero.measix.pilot.data.model.AssistantRegex
 import net.weero.measix.pilot.data.model.InjectionPosition
-import kotlin.time.Instant
 import kotlin.uuid.Uuid
 
 /** One immutable, process-local source for every model-visible value used by a durable Turn. */
@@ -69,7 +68,6 @@ data class ResolvedPromptInjection(
     val role: MessageRole,
 )
 
-/** Inputs consumed by request transformers; all clock, locale, Settings and Workspace reads happen before START. */
 /**
  * Inputs consumed by request transformers; all clock, locale, Settings and Workspace reads happen before START.
  *
@@ -80,7 +78,6 @@ data class FrozenTurnPromptInputs(
     val messageTemplate: String?,
     val promptInjections: List<ResolvedPromptInjection>,
     val workspaceReminder: String?,
-    val turnInstant: Instant,
     val localeTag: String,
     val zoneId: String,
     val conversationSystemPrompt: String?,
