@@ -57,6 +57,11 @@ UIMessage
 
 `UIMessagePart.Tool` 同时保存调用参数、审批状态和执行结果。Provider 序列化时再展开为各自的 tool call/result 结构，数据库不会插入独立的持久化 `MessageRole.TOOL`。
 
+Disclosure Snapshot 是因果 USER turn 的第一个 Text part，其后保持用户原始 parts 同序；OpenAI、Claude 和 Gemini
+都编码这一个合法 USER turn，不伪造 ASSISTANT，也不把 Snapshot 提升为 System / Developer。为何不是相邻两条
+USER，见 [`request-context.md`](request-context.md)。形状与注入时机见
+[`prompts-and-tools.md`](prompts-and-tools.md)。
+
 生成图片在解析源头就必须是可渲染 URL。Chat Completions 保留完整 `data:` URI，Gemini 使用真实 mime 组装 `data:<mime>;base64,<payload>`。合并层只把无前缀的 base64 碎片追加到当前图片，不会给已经完整的 URL 再补 `image/png` 前缀，也不会把两张完整图片拼成一条。
 
 通用 Provider 可使用 `groupPartsByToolBoundary()` 重建 assistant/tool 步骤。Gemini 不能只靠相邻 Tool 推断：
@@ -296,6 +301,10 @@ TOOL 能力，不发送 thinking。
 ## 7. Google Gemini
 
 `GoogleProvider` 使用 `systemInstruction`、`contents[].parts`、`functionCall` 和 `functionResponse`。认证支持 AI Studio API key、Vertex API key 与 Service Account OAuth。
+`buildContents` 在编完 `contents` 后合并相邻同 `role` 的项（`parts` 按序拼接）。这是 Gemini 要求 `user` / `model`
+交替的线协议规范化，不是请求规划层的 USER 合并。TimeReminder、USER 角色注入，以及 `functionResponse` 后紧跟
+下一条 USER，都在这一处收口。contents 级合并只拼接已编码的 parts 数组，不把两个 Part 合成一个，因此带
+`thoughtSignature` 的 Part 仍保持独立。
 
 ### Thinking 与签名
 

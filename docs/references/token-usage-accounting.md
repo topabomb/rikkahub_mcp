@@ -2,7 +2,8 @@
 
 本文档是 Token 用量语义、所有权、累计、持久化和展示口径的当前权威参考。Provider 的其他请求与回放规则见
 [`protocol-reference.md`](protocol-reference.md)，会话提交协议见
-[`chat-generation-pipeline.md`](chat-generation-pipeline.md)，UI 通用边界见
+[`chat-generation-pipeline.md`](chat-generation-pipeline.md)，请求上下文策略见
+[`request-context.md`](request-context.md)，UI 通用边界见
 [`ui-architecture.md`](ui-architecture.md)。
 
 ## 1. 事实层级与唯一所有者

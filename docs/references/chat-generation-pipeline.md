@@ -1,7 +1,8 @@
 # 消息生成链路
 
 > 本文档以当前实现为准，说明用户命令、生成流、持久化与恢复的唯一链路。总体 owner 与分层边界见
-> [`application-architecture.md`](application-architecture.md)，附件与执行事实细节见
+> [`application-architecture.md`](application-architecture.md)，请求上下文策略见
+> [`request-context.md`](request-context.md)，附件与执行事实细节见
 > [`multimodal-context-and-turn-durability.md`](multimodal-context-and-turn-durability.md)，子助手扩展见
 > [`sub-assistant-architecture.md`](sub-assistant-architecture.md)。
 
@@ -43,8 +44,9 @@ ConversationApplicationService / MasterTurnCoordinator
             ▼
        GenerationLoop.run
          ├─ ConversationContextPlanner.planRequest：replay-safe 后按完整 USER 轮次裁剪，只改变本次请求
-         ├─ 稳定 System / frozen Tool prompt 与 context-first USER projection
+         ├─ 稳定 System / frozen Tool prompt
          ├─ Input Transformers
+         ├─ applyContextProjections：Snapshot 作为因果 USER 第一 part
          ├─ Provider stream
          ├─ Output Transformers
          └─ 工具循环与 awaited checkpoint
@@ -108,10 +110,10 @@ Provider API key、Google service-account key/email 等不进入 context。START
 `GenerationLoop.generateInternal()` 固定执行：
 
 1. 对非成功历史建立 replay-safe projection，再按配置执行请求级裁剪；完整历史不变。
-2. 从同一份上下文构建 Tool system prompt。
-3. 组装 Assistant/会话 System 与冻结的 Tool prompt；动态 Memory / 子助手 Catalog 不进入 System，只作为 START 提交的 Disclosure Snapshot 出现在因果 USER 的第一个 part。
-4. 运行 `TurnPipelineFactory` 提供的 Input Transformer。
-5. 构建模型、采样、输出上限、自定义 Header/Body 与工具参数。
+2. 从同一份 `RequestContextPlan` 组装 Assistant/会话 System 与冻结的 Tool prompt；动态 Memory / 子助手 Catalog 不进入 System。请求携带 Snapshot 时追加固定 `MODEL_RULES`。
+3. 运行 `TurnPipelineFactory` 提供的 Input Transformer；不重读 Settings、时钟、Locale 或 Workspace。
+4. `applyContextProjections` 把选中 Snapshot 作为因果 USER 的第一个 Text part 注入，不经过模板、占位符、提醒或附件投影。
+5. 构建模型、采样、输出上限、自定义 Header/Body 与冻结工具参数，并对最终投影做 token estimate。
 6. 每次真实 Provider 调用建立一个 request usage reducer，合并 chunk，并按字段 presence 覆盖该请求的 usage snapshot。
 7. 正常、失败或取消关闭请求后，将它恰好一次加入 turn usage；流式投影可预览，checkpoint/终态仍只持久化 owning Assistant 消息。
 
@@ -163,7 +165,8 @@ Runtime 仅在事务提交成功后发布该投影；因此 UI、Master resume �
 `validateArguments`。Provider 的空参数缓冲按无参 `{}` 解释；非空坏 JSON、非 object 或工具参数错误直接返回失败，
 不进入审批或执行。`ask_user`、生图等领域校验属于工具定义，循环不维护工具名特判。
 无效或已撤销的 Pending 调用清除等待态，并通过既有 `TOOL_RESULT_COMPLETED` 提交 FAILED 结果；同批其余合法 Pending
-仍形成审批屏障。用户已 Denied/Answered 的决定不被参数错误覆盖；Approved 不重复审批。执行仍使用同一解析入口，
+仍形成审批屏障。`TOOL_RESULT_COMPLETED` 的 RUNNING snapshot 与流式 Messages 不得包含新打上的 Pending：失败替换先
+提交，Pending 只进入随后的 `AWAITING_APPROVAL` 投影，且不经流式 Messages。用户已 Denied/Answered 的决定不被参数错误覆盖；Approved 不重复审批。执行仍使用同一解析入口，
 实际文件、权限、配置与远端状态只在原执行 owner 内复核。未执行的拒绝不创建 `tool_execution` 行。
 纯校验返回结构化领域错误，由 `ToolArgumentsException` 保留原字段并补齐标准 `error` / `type: error`；
 通用 JSON 错误为 `invalid_arguments`。撤销或审批不可用的 Runtime 拒绝同样携带标准错误标记，重读历史仍显示 FAILED；
@@ -180,7 +183,8 @@ checkpoint 交接。未提交的文件引用不会提前进入显示或取消终
 
 Master 生成入口显式区分 `MasterTurnEntry.START` 与 `CONTINUE_USER_INTERACTION`。START 在尚无 active turn 时完成建议清理、
 无效消息清理和附件引用精确回填，再由 `TurnEngine.start()` 建立 owner；批准、拒绝和回答都由
-`applyToolUserDecision` 提交唯一 `ResolveToolInteraction` 后进入 CONTINUE_USER_INTERACTION，只复用既有 `TurnHandle` 并调用
+`applyToolUserDecision` 提交唯一 `ResolveToolInteraction`，再只在本次 `locator.messageId` 的 assistant 上判断是否还有
+Pending：有则继续等待，无则进入 CONTINUE_USER_INTERACTION，只复用既有 `TurnHandle` 并调用
 `TurnEngine.continueActive()`，不得再次执行结构预检或提交树命令。
 结构预检只读取 durable `ConversationSnapshot.nodes`；`renderNodes` 是每次读取都可能新建的显示投影，不能作为持久化输入，
 也不能用列表引用身份判断是否需要写入。
@@ -257,6 +261,7 @@ conversation 的 `TOOL_OUTPUT` reference 回查；UI 只显示消息中的 durab
 
 ## 上下文与压缩
 
+四层如何叠加、优先级与明确不做的边界见 [`request-context.md`](request-context.md)。
 `Assistant.contextMessageLimit` 只控制本次 Provider 请求。裁剪从完整 USER 轮次边界开始，不改 durable history。
 
 Provider 只返回开头 `<think>` 文本时，`ThinkTagTransformer` 在 Master/Target 共用 output pipeline 以最后一个已执行 Tool 为边界，只把当前 assistant→tool step 的首个非空 `Text` 拆成 `Reasoning` 与回答正文。只有当前 step 已有 Provider 原生 Reasoning 时才禁用该 fallback；已完成 step 的 Reasoning 不得抑制后续 step。闭合标签到达时立即冻结当前 step reasoning 的 `finishedAt`，后续累计正文 chunk 只从上一投影的同一 step 复用首次闭合时间；流结束只为当前 step 未闭合标签补时间。`GenerationLoop` 的 phase 判定同样基于累计 raw message 的当前 step，同一标签内文本只发布 `reasoning_streaming`，标签后的正文出现后才发布 `answer_streaming`；终态提交保留各 step 闭合标签首次投影的完成时间。
@@ -265,8 +270,9 @@ Provider 只返回开头 `<think>` 文本时，`ThinkTagTransformer` 在 Master/
 累计 input 猜测。它与前述 Tool Output 滚动压缩共用估算口径，但预警只读取最近一次实际发送请求的快照，不参与压缩决策。
 
 显式压缩由 `ConversationApplicationService.compress()` 进入 `GenerationSideEffects.compressConversation()`：生成摘要，
-保留指定的最近完整轮次，再以 durable tree command 替换历史。它是用户触发、持久化且不可撤销的操作，不自动挂到
-发送链路。
+保留指定的最近完整轮次，再以 durable tree command 替换历史。保留切点与超过 256 条时的分块中点都回退到 USER；
+UI 的保留数量是最低值，`targetTokens` 只写入摘要提示，不是本地硬校验。它是用户触发、持久化且不可撤销的操作，
+不自动挂到发送链路。
 
 ## Runtime 与恢复
 

@@ -103,7 +103,7 @@ Skills、记忆与备份等核心能力；继续拒绝赞助商、无关 Provide
 
 结构判断：本地适配的消息阈值只是默认关闭的请求级启发式，不冒充 token/window 管理；手动摘要
 继续显式、可预期地改写历史。当前职责边界清楚，统一 token 预算仍是下一阶段中风险架构任务，
-方案见 [`context-management.md`](../context-management.md)。
+现行策略见 [`request-context.md`](../../references/request-context.md)。
 
 ### 4.2 Skills、Workspace 与文件系统
 
@@ -145,7 +145,7 @@ Skills、记忆与备份等核心能力；继续拒绝赞助商、无关 Provide
 | 第九批 9 个新增/扩展测试文件 | 覆盖 rootfs 路径、Response tools、Moonshot thinking、usage 方言、Skills 目录、K3 能力/图标边界、阶梯裁剪与旧字段兼容 |
 | `Migration_1_2.kt`、`Migration_1_2_Test.kt` | 迁移目标对齐 v1/v2 导出 schema 的 `ConversationEntity`；测试使用当前 SQLite 冲突参数，并在模拟器上验证 schema 与旧数据 |
 | `highlight`/`material3`/`search` 构建脚本、`speech` 仪器测试 | 补齐 AndroidX Test 依赖，测试包路径、namespace 和 packageName 断言一致 |
-| `chat-generation-pipeline.md`、`context-management.md` | 生成链路按本地工具/MCP/通知结构同步；缓存、压缩和 token/window 的当前边界有明确决策 |
+| `chat-generation-pipeline.md`、当时的 context-management 决策 | 生成链路按本地工具/MCP/通知结构同步；缓存、压缩和 token/window 边界现见 `docs/references/request-context.md` |
 | `changelog.md`、`upstream-sync.md`、batch 1～9 文档 | 版本、范围、计数、状态与当前 Git 证据统一 |
 
 ### 4.5 0.0.11 本地收口：搜索与会话入口

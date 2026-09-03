@@ -179,11 +179,12 @@ Turn / Tool 执行事实（CommitCheckpoint / FinalizeTurn 命令 → Conversati
 模型图片能力唯一来源于 `Model.inputModalities`；`RequestMediaCapabilities` 负责协议容器映射，不负责禁止按需读取。
 不按 endpoint host 再次否决 IMAGE 能力；真实远端不兼容由 Provider 分类失败表达。
 
-每个 Provider step 开始时只构建一次确定性工具集合；同一集合同时用于该 step 的 schema、审批解析和紧随其后的
-ToolCall 执行。Master 与 Target 都从当前有效 Settings 构建，配置变更从下一次 step 构建起生效；Target 额外应用
-启动时捕获的实际工具名集合与 Assistant 字段交集，因此只能维持、重建或撤销启动时已有的名字，不能在 run 内新增。审批继续、恢复或历史 ToolCall
-若已不在当前集合，统一通过结果 checkpoint 持久化带标准错误标记的 `tool_not_available`，不恢复已撤销工具。
-未实际执行的拒绝只有消息中的失败结果，不创建 `tool_execution` 记录或伪造 STARTED 阶段。
+工具集合在每个新 `START` 时从那一份 Effective Settings 冻结为有序 `FrozenToolDefinition` 与同名
+`ToolExecutionBinding`；同一 Turn 的后续 Provider step、审批 / `ask_user` continuation 与重试复用这套
+wire 与执行索引，不得重读 Settings 来增删名称、改 Schema 或改顺序。执行前仍由 owner 对权限、资源与远端
+状态 live fail-closed。审批继续、恢复或历史 ToolCall 若已不在该冻结集合，统一通过结果 checkpoint 持久化
+带标准错误标记的 `tool_not_available`，不恢复已撤销工具。未实际执行的拒绝只有消息中的失败结果，不创建
+`tool_execution` 记录或伪造 STARTED 阶段。配置变化只影响下一次新 `START`。
 
 ### 4.2 附件解析接口（`ToolExecutionContext.resolveAttachments`）
 
@@ -232,8 +233,12 @@ ToolCall 执行。Master 与 Target 都从当前有效 Settings 构建，配置�
 Fork / Child clone 按复制后的整棵 node 树 remap entry，未选中但已被复制的 Assistant owner 仍带走 baseline。
 Master 与 Child 都在 `StartTurn` 提交后把 `TurnModelContextProjection` 绑到该 Turn 的 active worker；continuation 只复用同一引用。
 编辑 USER 后发送会截断到该 USER 并走新的 `START`；纯编辑（长按发送）只提交新 USER variant，不创建 entry。
+regenerate 同一 USER 创建新 Assistant owner，不复制 USER；旧 owner 先退出目标分支再判等，相同 live
+content 也可能由新 owner 重新落一条 entry，避免丢掉基线。
 请求规划仍只有 `ConversationContextPlanner`：transformers 完成后，把选中的 canonical snapshots 聚合为第一个 part，
 与原用户 text/image/document/audio/video 组成一个 durable USER model turn，不伪造 ASSISTANT 或额外相邻 USER。
+完整 candidate 超过 renderer 的 256KiB UTF-8 上限时 `StartTurn` fail-closed，不得写入截断信封。
+四层请求策略见 [`request-context.md`](request-context.md)。
 
 ## 6. Turn / Tool 执行事实
 
@@ -362,4 +367,4 @@ fail-closed。fork 的节点引用同一 Artifact；删除任一会话只移除�
 | 向 Tool 暴露会话消息或内部 id | 识图工具只拿 `resolveAttachments` 只读能力；对外附件位置只有 `/upload` 的 path，Workspace 路径另归工作区工具 |
 | 工具副作用前未写 `STARTED` | 副作用可观测时 DB 必须已有记录，否则恢复后无法判定 |
 | 把 `toolCallId` 当持久 locator | 重试后 id 会变；用 `messageId + toolOrdinal` |
-| Target run 内期望设置变更立即生效 | 配置变更在下一 step 构建生效，且不能超出 run 启动时工具名与 Assistant 字段上限；撤权信号按运行期规则处理 |
+| Target run 内期望设置变更立即生效 | 工具集合在 Child `START` 时冻结；本 Turn 的后续 step / continuation 不重读 Settings 改 wire。撤权在执行期 live fail-closed，配置变化只影响下一次新 `START` |

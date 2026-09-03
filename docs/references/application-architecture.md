@@ -17,7 +17,7 @@ Work（一个 Conversation）
 
 | 语义 | 运行时对象 | Durable fact |
 | --- | --- | --- |
-| Conversation | `ConversationRuntime`、`ConversationSnapshot`、`ConversationCommand` | conversation header 与 message tree |
+| Conversation | `ConversationRuntime`、`ConversationSnapshot`、`ConversationCommand` | conversation header、message tree 与 `conversation_model_context` |
 | Turn | `TurnEngine`、`TurnHandle`、`TurnOutcome` | `turn_execution` |
 | Step | `GenerationChunk.Phase`、checkpoint | 只在 checkpoint 后形成执行事实 |
 | Tool Execution | `ToolExecutionContext`、`ToolCallPhase` | Tool message part 与 `tool_execution` |
@@ -163,15 +163,12 @@ streaming 和 checkpoint；冻结的执行索引交给 `ToolCallRuntime` 完成 
 Master 新消息的输入预处理与 START 请求装配共享同一份 Effective Settings；Child active request 由精确 `childTurnId + runJob` 拥有，
 取消/失败 finalization 与 finally release 都必须携带该身份，迟到清理不得读取并终结同一 Child conversation 中更新的 active Turn。
 
-`ConversationContextPlanner` 是请求窗口和成功 Provider step 后 Tool Result 压缩候选的唯一纯规划边界。普通历史裁剪只影响
-request projection；完整纯文本 Tool Result 只有被成功 `ModelStepReceipt` 保守确认已进入最终请求投影后才可压缩。
-压缩由 48K inline estimated-token 高水位触发，按 16K 低水位和 24K 整批最小净回收量选择；单结果必须净回收至少
-128 estimated tokens。最近两个 typed 批次和最近 8K estimated tokens 受保护，不额外冻结整个已完成 USER turn。
-稳定估算按每个 Tool Result 独立计算：ASCII 字母与空白约每 4 个 code point 1 token，连续 ASCII 数字段约每 3 位 1 token，连续 ASCII 符号段约每 2 个 1 token，其他 Unicode code point 各计 1；生产阈值统一定义在
-`ContextTrimmingPolicy.kt`，不由 Provider input token 或 cache 命中率驱动。`ToolOutputStore` 对 `ARCHIVABLE_TEXT` 复用
-`ArtifactStore`、`ArtifactReferenceType.TOOL_OUTPUT` 和 unpublished lease，在 `STEP_COMPLETED` checkpoint 建立 root 后发布；
-对 `REGENERABLE_TEXT` 只折叠固定 marker，不创建 Artifact。模型只能通过 conversation-scoped read/grep query capability
-读取归档正文，UI 不接触 DAO、relative path 或私有文件。
+`ConversationContextPlanner` 是请求窗口和成功 Provider step 后 Tool Result 压缩候选的唯一纯规划边界。
+条数窗口、滚动压缩、Disclosure Snapshot 与手动语义摘要如何叠加，见
+[`request-context.md`](request-context.md)。生产阈值只来自 `ContextTrimmingPolicy.kt`；
+`ToolOutputStore` 对 `ARCHIVABLE_TEXT` 复用 `ArtifactStore` 与 unpublished lease，对
+`REGENERABLE_TEXT` 只折叠固定 marker。模型只能通过 conversation-scoped read/grep 回查归档正文，
+UI 不接触 DAO、relative path 或私有文件。
 参数失败或工具撤销直接提交 FAILED 结果，不创建 `tool_execution` 记录或制造 STARTED 执行事实；旧 Pending 同时退出等待。
 纯参数校验返回领域 `JsonObject`；`ToolArgumentsException` 保留领域字段并统一补齐 `error` / `type: error`，
 确保无 active turn 的历史投影仍是失败。该标记不添加到工具正常执行返回的业务失败中。
@@ -247,6 +244,7 @@ Child 在保留作用域内提交原文件引用。读取本身不创建磁盘�
 | 领域 | 文档 |
 | --- | --- |
 | 会话、Runtime、生成、审批、工具与标题 | [`chat-generation-pipeline.md`](chat-generation-pipeline.md) |
+| 请求上下文：条数窗口、滚动压缩、披露与摘要 | [`request-context.md`](request-context.md) |
 | 多模态、附件、Artifact 与 Turn durability | [`multimodal-context-and-turn-durability.md`](multimodal-context-and-turn-durability.md) |
 | 子助手 owner、lineage、retention 与恢复 | [`sub-assistant-architecture.md`](sub-assistant-architecture.md) |
 | 子助手多模态输入输出 | [`sub-assistant-multimodal.md`](sub-assistant-multimodal.md) |

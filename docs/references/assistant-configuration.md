@@ -71,7 +71,7 @@ S0.2 不下发 `localTools`、Skill、Workspace、custom headers/body、Regex、
 | `maxTokens` | `null` | 输出 token 上限，不是输入上下文窗口 |
 | `reasoningLevel` | `AUTO` | `OFF`、`AUTO`、`LOW`、`MEDIUM`、`HIGH`、`XHIGH`、`MAX`；实际线协议映射由 Provider 决定 |
 | `streamOutput` | `true` | 选择流式或一次性生成入口 |
-| `contextMessageLimit` | `0` | 消息数阶梯裁剪阈值；`0` 禁用，正值归一化到 `MIN_CONTEXT_MESSAGE_LIMIT..MAX_CONTEXT_MESSAGE_LIMIT` |
+| `contextMessageLimit` | `0` | 消息数阶梯裁剪阈值；`0` 禁用，正值归一化到 `MIN_CONTEXT_MESSAGE_LIMIT..MAX_CONTEXT_MESSAGE_LIMIT`。不是 token/window 上限。台阶算法与请求级叠加见 [请求上下文](request-context.md) |
 
 `ReasoningLevel` 同时携带通用 `budgetTokens` 和 `effort`，但这不是所有 Provider 的直接线格式。
 协议实现必须按模型能力和端点转换，详见 [协议层参考](protocol-reference.md)。

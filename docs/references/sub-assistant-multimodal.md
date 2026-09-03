@@ -131,8 +131,8 @@ Target 的 `generate_image` 仍要求启用 `TextToImage` 且文生图模型可�
 `shouldInjectAttachmentInspection(settings)` 只检查已配置识图模型存在、Provider 可用且声明 IMAGE 输入。
 当前模型是否能看图、当前请求是否带图、有没有 READY Workspace 都不构成额外限制。
 
-Master/Target 每个 Provider step 使用同一确定性工具集合供 schema、审批与执行。Target 仍遵守启动工具名上限
-和 Assistant 字段交集；配置撤销后不复活旧工具，待执行调用按 `tool_not_available` 失败。
+Master/Target 在各自新 `START` 时冻结同一套 `FrozenToolDefinition` 与执行索引，供该 Turn 全部 step 的
+schema、审批与执行。配置撤销后不复活旧工具，待执行调用按 `tool_not_available` 失败。
 
 `inspect_attachments` 接收 1–4 张图片路径和非空 request。与委托的去重语义不同，识图保持每个输入位置，
 包括重复路径，以确保多图比较的顺序确定。读取调用 `AttachmentResolver.readImages(paths)`：

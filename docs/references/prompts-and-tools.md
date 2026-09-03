@@ -5,6 +5,7 @@
 > 工具名使用 `Tool(name = "...")` 的注册名。
 > 附件身份、请求投影与 Turn/Tool 持久化不变量见
 > [`multimodal-context-and-turn-durability.md`](multimodal-context-and-turn-durability.md)。
+> 条数窗口、滚动压缩与 Snapshot 如何叠加见 [`request-context.md`](request-context.md)。
 
 相关实现：`GenerationLoop.generateInternal()`、`PlaceholderTransformer`、
 `TemplateTransformer`、`AssistantToolFactory`、
@@ -28,7 +29,7 @@ System（合成消息，标记 SyntheticMessageKind.SYSTEM_PROMPT）
   3. 请求携带 Disclosure Snapshot 时追加固定 MODEL_RULES（ConversationDisclosureSnapshotService）
 
 Durable 消息（selected branch → replay-safe projection → messageLimit 窗口）
-随后 Input Transformer（只消费 FrozenTurnPromptInputs，不在 transform 时重读 Settings / 时钟）：
+随后 Input Transformer（不在 transform 时重读 Settings / 时钟 / Locale / Workspace）：
   TimeReminderTransformer
   PromptInjectionTransformer
   PlaceholderTransformer      ← 替换 {{char}} / {{description}} 等
@@ -104,7 +105,8 @@ Target 复用相同模型可见语义，但 Transformer 装配由 `DelegationCoo
 `ConversationDisclosureSnapshotService.captureCandidate()` 从固定 effective-settings 快照与一次
 `ORDER BY id ASC` 的有序 Memory 查询渲染的 canonical Snapshot；内容变化才随新 Assistant owner
 追加 entry（见 [`chat-generation-pipeline.md`](chat-generation-pipeline.md)）。memory section
-形状（`enabled` / `scope` / `header` / `rows`）由该 service 的 canonical renderer 唯一定义。
+形状（`enabled` / `scope` / `header` / `rows`）由该 service 的 canonical renderer 唯一定义；关闭时仍输出
+固定形状，不写日期、Locale 或 revision，相同业务数据必须逐字相同。
 
 `memory_tool` 的执行仍是 live owner 语义：写入前按最新有效配置重验 owner 与写权限；
 Snapshot 中是否存在某条 Memory 不代表它仍可写，也不妨碍按真实 ID 操作新 Memory。

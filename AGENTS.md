@@ -68,6 +68,7 @@ Seek a review in a separate context using at most 2 subagents only at key levera
   - rolling compaction 自身改写历史 → 仅在预算触发、且只作用于已消费的历史 tool result 时允许，由此产生的前缀失效是预期代价。
   - agent / assistant / sub-assistant 在自动生成链路中因工具调用破坏前缀 → 不可接受，不得以"影响面小"绕过。
 - 前缀稳定性由保护窗口与阈值调节，不得靠"不压缩"换取。
+- 条数窗口、滚动压缩、Disclosure 与手动摘要如何叠加见 `docs/references/request-context.md`。
 
 ### 3. 未实现边界
 
@@ -88,7 +89,7 @@ Seek a review in a separate context using at most 2 subagents only at key levera
   吞掉 `CancellationException`。
 - 新聊天是非持久化 Draft；首条 `AppendUserMessage` 单事务建库并原位晋升 Ready。空 Draft 不得进入数据库、
   会话列表或启动 turn。
-- 新 turn 的 `START` 与审批后的 `CONTINUE_APPROVAL` 是不同协议。继续流程保留原 `TurnHandle`，不得清理树、
+- 新 turn 的 `START` 与用户交互后的 `CONTINUE_USER_INTERACTION` 是不同协议。继续流程保留原 `TurnHandle`，不得清理树、
   回填附件或创建第二 turn。durable 流程只读取 `snapshot.nodes`；`renderNodes` 只用于显示，禁止以对象身份推断写入。
 - 工具装配、调用拼接、就绪、审批、执行和终态使用 typed phase。`UIMessagePart.Tool.hasReplayResult` / `Tool.output`
   只表示 Provider 可回放结果，不能充当 active 运行状态或详情门禁；执行阶段只随已提交 checkpoint 推进，metadata 只细化领域子阶段。
@@ -127,6 +128,7 @@ Seek a review in a separate context using at most 2 subagents only at key levera
 | 应用总体架构、所有者与边界 | `docs/references/application-architecture.md` |
 | Room 索引、查询覆盖与迁移边界 | `docs/references/database-indexing.md` |
 | 会话、Runtime、turn、审批与标题 | `docs/references/chat-generation-pipeline.md` |
+| 请求上下文：条数窗口、滚动压缩、披露与摘要 | `docs/references/request-context.md` |
 | 多模态、附件、Artifact、Turn/Tool durability | `docs/references/multimodal-context-and-turn-durability.md` |
 | 子助手 owner、lineage、retention、恢复 | `docs/references/sub-assistant-architecture.md` |
 | 子助手多模态输入输出 | `docs/references/sub-assistant-multimodal.md` |

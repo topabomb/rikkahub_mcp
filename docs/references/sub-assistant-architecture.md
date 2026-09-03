@@ -53,7 +53,7 @@ Target.allowAsSubAssistant
 `ConversationDisclosureSnapshotService` 渲染为 Disclosure Snapshot 的 `sub_assistants` section，
 在每次新 `START` 前捕获，内容变化才随新 Assistant owner 追加；执行期仍重新读取 Settings 并用
 `SubAssistantAccessPolicy` 重算访问范围，不把 Snapshot 当作授权凭据。详细配置由
-`assistant_inspect` 按需读取。
+`assistant_inspect` 按需读取。请求级叠加见 [`request-context.md`](request-context.md)。
 
 `AssistantManagement` 与 `AssistantDelegation` 是独立 Local Tool 权限。前者注册 `assistant_manage`、`assistant_inspect`，后者注册 `assistant_call`。工具创建的新 Target 会原子加入 Caller 的 `allowedSubAssistantIds`。
 
