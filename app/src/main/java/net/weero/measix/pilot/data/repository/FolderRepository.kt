@@ -20,8 +20,11 @@ class FolderRepository(
             .map { list -> list.map { it.toFolder() } }
     }
 
-    suspend fun createFolder(assistantId: ConfigurationReference, name: String): Folder {
+    suspend fun getFolder(id: Uuid): Folder? = folderDAO.getFolderById(id.toString())?.toFolder()
+
+    suspend fun createFolder(scope: ConfigurationScope, assistantId: ConfigurationReference, name: String): Folder {
         val folder = Folder(
+            scope = scope,
             assistantId = assistantId,
             name = name,
             createAt = Instant.now(),

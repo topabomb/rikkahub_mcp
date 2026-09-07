@@ -321,6 +321,8 @@ Portal 本地读取存在两项需要架构侧确认的 Android 平台限制：
 
 ## 10. 完整变更清单与批次
 
+C4 的文件夹命令已接入原选择授权：目录和分页使用 RealmSelection，保存原 Session 与选择版本；快速切域往返后旧行、旧弹窗均不可恢复授权，新目录不能给旧行补发权限。创建显式落在原域并复核助手准入；移动验证根会话、主体、助手和两端选择，删除在完整成员锁内先检查在途 turn，失败保留文件夹供重试。UI 不再在提交时重读当前助手，也不提前假报删除成功。未改变 Room/DataStore schema；普通会话命令、START/继续及退出收口仍待完成。本批 22 项定向 JVM 测试通过；完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 10 分 39 秒内通过，App 1,917 项无失败或跳过，lint 为 0 errors、272 warnings、5 hints，Workspace 的 11 项 Windows 跳过项仍保留。Pixel_10_Pro_Fold / Android 17 上的 ConfigurationScopePersistenceTest 两项 instrumentation 在 4 分 59 秒内通过，包含真实 FolderRepository 创建、跨主体目录过滤、数据库重开及重命名/删除保全。独立审查已关闭新目录给旧分页行重新授权的缺口；真实 Pager 测试验证旧源全部失效及行的选择版本变化，不依赖内部重建次数。完整 JVM 汇总保存在 `app/build/reports/enterprise/folder-access-full-gate.json`。这些结果不代替 Compose 文件夹交互、Portal/扫码/媒体或完整企业域验收，版本保持 0.0.19。
+
 C4 的聊天页面打开已接入原域授权：可序列化请求明确区分 NewDraft/OpenExisting，先验证选中主体与 Session，再在会话锁内检查 header，已有聊天缺失不回退新建。页面在 lease 成功后才订阅投影、收藏、错误和创建导入作用域；退出重登或切域使旧 lease 失效。Session owner 的进程内 selectionRevision 防止快速切出再切回被 StateFlow 合并而复活页面，不推进配置或 Feed 版本。Draft 首消息提交后保持原 Runtime/导航项，恢复不重放 preset 或分享输入。页面回收同时清理未提交输入，重试不能复用旧导入 owner 的附件。
 
 启动、通知、历史、搜索、收藏、分享与助手切换已使用明确请求；不可用页提供重试和新建按钮。最近聊天归 ScopedUserPreferences，旧 SharedPreferences 键在 DataStore 成功提交后一次性清理并归个人域；空 Draft 不保存最近 ID，个人设置更新保全企业偏好。普通按 ID 命令、START/继续、文件授权及正式企业入口仍按 C4/C6/U1 继续，不以页面检查代替执行授权。

@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -225,6 +226,31 @@ internal class EnterpriseSessionController(
         if (!allowsDataAccess(manifest, access)) fail("enterprise_data_access_unavailable")
         access
     }
+
+    /** Capture the pair under the owner lock; independently emitted flows are only wake-up signals. */
+    fun observeSelectedRealmSelection(): Flow<RealmSelection?> =
+        combine(observeSelectedRealmAccess(), selectionRevision) { _, _ -> Unit }.map {
+            mutex.withLock {
+                val published = state.value
+                val manifest = (published as? EnterpriseState.Available)?.manifest
+                val access = when {
+                    published is EnterpriseState.Failed -> RealmAccess.Personal
+                    manifest == null -> null
+                    manifest.selectedScope == ConfigurationScope.Personal -> RealmAccess.Personal
+                    else -> manifest.session?.let { session ->
+                        RealmAccess.Enterprise(session.identity.scope, session.id)
+                            .takeIf { allowsDataAccess(manifest, it) }
+                    }
+                }
+                access?.let { RealmSelection(it, selectionRevision.value) }
+            }
+        }.distinctUntilChanged()
+
+    suspend fun <T> withSelectedRealmSelection(selection: RealmSelection, operation: suspend () -> T): T =
+        withSelectedRealmAccess(selection.access) {
+            if (selection.revision != selectionRevision.value) fail("enterprise_selection_revoked")
+            operation()
+        }
 
     /** UI directory subscriptions follow the selected realm; expiry revokes the original session. */
     fun observeSelectedRealmAccess(): Flow<RealmAccess?> = state.flatMapLatest { published ->

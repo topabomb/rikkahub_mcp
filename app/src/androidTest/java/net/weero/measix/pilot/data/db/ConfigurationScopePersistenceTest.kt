@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import me.rerere.common.configuration.EnterpriseAuthority
@@ -81,4 +82,42 @@ class ConfigurationScopePersistenceTest {
             context.deleteDatabase(name)
         }
     }
+    @Test
+    fun foldersCreatedByRepositoryRetainScopeAcrossReopen() = runBlocking(Dispatchers.IO) {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "configuration-scope-folder-repository"
+        val assistant = me.rerere.common.configuration.ConfigurationReference.random()
+        val scopes = listOf(
+            ConfigurationScope.Personal,
+            ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "dep_example"), "alice"),
+            ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "dep_example"), "bob"),
+            ConfigurationScope.Enterprise(EnterpriseAuthority("platform:example", "dep_example"), "alice"),
+        )
+        context.deleteDatabase(name)
+        fun open() = Room.databaseBuilder(context, AppDatabase::class.java, name).build()
+        try {
+            val writer = open()
+            val ids = try {
+                val repository = net.weero.measix.pilot.data.repository.FolderRepository(writer.folderDao(), writer.conversationDao())
+                scopes.map { repository.createFolder(it, assistant, "same-name").id }
+            } finally { writer.close() }
+            val reader = open()
+            try {
+                val repository = net.weero.measix.pilot.data.repository.FolderRepository(reader.folderDao(), reader.conversationDao())
+                scopes.forEachIndexed { index, scope ->
+                    val folder = requireNotNull(repository.getFolder(ids[index]))
+                    assertEquals(scope, folder.scope)
+                    assertEquals(assistant, folder.assistantId)
+                    assertEquals(listOf(ids[index]), repository.getFoldersOfAssistant(scope, assistant).first().map { it.id })
+                }
+                repository.renameFolder(ids[1], "changed")
+                repository.deleteEmptyFolder(ids[2])
+                assertEquals("same-name", repository.getFolder(ids[0])?.name)
+                assertEquals("changed", repository.getFolder(ids[1])?.name)
+                assertEquals(null, repository.getFolder(ids[2]))
+                assertEquals("same-name", repository.getFolder(ids[3])?.name)
+            } finally { reader.close() }
+        } finally { context.deleteDatabase(name) }
+    }
+
 }

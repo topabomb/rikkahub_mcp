@@ -5,6 +5,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.ExecutionStateConflictException
 import net.weero.measix.pilot.service.ApplicationRecoveryGate
@@ -25,6 +26,22 @@ class ConversationCommandCoordinator(
 ) {
     suspend fun load(conversationId: Uuid): ConversationRuntime =
         operationLocks.withLock(conversationId) { registry.loadRuntime(conversationId) }
+
+    /** Authorize headers before loading any tree, under the same boundary used by all writes. */
+    internal suspend fun <T> withRootHeaders(
+        scope: ConfigurationScope,
+        conversationIds: Collection<Uuid>,
+        operation: suspend (List<ConversationHeader>) -> T,
+    ): T = gated { operationLocks.withLocks(conversationIds) {
+        val headers = conversationIds.map { id ->
+            val header = registry.findRuntime(id)?.durable?.header ?: repository.getConversationHeader(id)
+                ?: throw ConversationNotFoundException(id)
+            check(header.scope == scope) { "conversation_scope_mismatch" }
+            check(header.parentConversationId == null) { "child_conversation_requires_detail_access" }
+            header
+        }
+        operation(headers)
+    } }
 
     suspend fun create(conversation: Conversation): ConversationRuntime =
         gated { operationLocks.withLocks(conversation.lockIds()) {

@@ -38,6 +38,20 @@ ConversationTurnService / SubAssistantRunCoordinator
 `ConversationPresentationSnapshot`，不持有 Repository、Runtime Registry 或 worker Job。
 `ConversationAggregateSnapshot` 保存 header、nodes 与 model-context entries；streaming 不进入它。
 
+## 会话文件夹命令
+
+`ConversationQueryService.foldersOfAssistant` 发布 `ConversationFolderDirectory`，即使目录为空也保留原助手及
+`RealmSelection`。抽屉在打开创建、重命名、删除或移动界面时固定此授权；确认不重新读取全局选中域。
+分页行携带自身原选择，移动时必须与目标目录一致。工具使用的只读会话摘要不带当前 UI 选择，不能据此执行文件夹移动。
+
+文件夹写入沿 `ConversationApplicationService` → 原 Session/选择锁 → `ConversationCommandCoordinator.withRootHeaders`
+的既有会话锁执行。先检查完整 scope、根会话和助手，之后才提交原 `UpdateHeader`，不加载非驻留消息树。
+创建通过配置 resolver 验证助手当前可用，并显式把域传给 `FolderRepository`；整理历史文件夹不要求助手仍可执行。
+
+删除取得完整成员锁集合，在任何 detach 前复查成员与活动 turn；任一成员仍在运行则拒绝整个操作。
+每次 detach 仍是原会话命令事务。某次提交失败时保留文件夹，重试只处理剩余成员；全部清空后才删除 metadata。
+UI 等待命令结果后关闭对话框，错误可见，取消继续传播。本协议不表示其他普通会话命令已全部接入域授权。
+
 ## Turn、Step 与工具事实
 
 一个 Assistant message variant 对应一个 Turn。发送、regenerate、编辑 USER 后重发与 Child task

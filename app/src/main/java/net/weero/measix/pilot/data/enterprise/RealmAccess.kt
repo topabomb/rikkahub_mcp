@@ -19,3 +19,10 @@ sealed interface RealmAccess {
         internal val sessionId: String,
     ) : RealmAccess
 }
+
+/** A rendered selection cannot regain authority after leaving and returning to the same session. */
+@ConsistentCopyVisibility
+data class RealmSelection internal constructor(
+    internal val access: RealmAccess,
+    internal val revision: Long,
+)

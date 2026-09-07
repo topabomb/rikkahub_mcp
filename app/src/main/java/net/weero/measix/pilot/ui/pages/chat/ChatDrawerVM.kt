@@ -17,13 +17,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.model.Folder
+import net.weero.measix.pilot.service.ConversationSummary
+import net.weero.measix.pilot.service.ConversationFolderAccess
+import net.weero.measix.pilot.service.ConversationFolderDirectory
 import net.weero.measix.pilot.service.ConversationApplicationService
 import net.weero.measix.pilot.service.ConversationActivity
 import net.weero.measix.pilot.service.ConversationQueryService
@@ -49,9 +50,9 @@ class ChatDrawerVM(
     val selectedFolderId: StateFlow<Uuid?> = _selectedFolderId.asStateFlow()
 
     // 当前助手的文件夹列表（Room Flow，增删改自动刷新）
-    val folders: StateFlow<List<Folder>> = assistantIdFlow
+    val folderDirectory: StateFlow<ConversationFolderDirectory?> = assistantIdFlow
         .flatMapLatest { conversationQueryService.foldersOfAssistant(it) }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     val conversationActivities: StateFlow<Map<Uuid, Set<ConversationActivity>>> =
         conversationQueryService.conversationActivities()
@@ -129,7 +130,7 @@ class ChatDrawerVM(
     init {
         // A shared personal assistant does not make a folder selection portable across realms.
         viewModelScope.launch {
-            combine(assistantIdFlow, conversationQueryService.observeCurrentAccess()) { assistant, access ->
+            combine(assistantIdFlow, conversationQueryService.observeCurrentSelection()) { assistant, access ->
                 assistant to access
             }.collect {
                 _selectedFolderId.value = null
@@ -147,44 +148,19 @@ class ChatDrawerVM(
         _selectedFolderId.value = folderId
     }
 
-    fun createFolder(name: String) {
-        val trimmed = name.trim()
-        if (trimmed.isEmpty()) return
-        viewModelScope.launch {
-            val assistantId = assistantIdFlow.first()
-            conversationApplicationService.createFolder(assistantId, trimmed)
-        }
+    suspend fun createFolder(access: ConversationFolderAccess, name: String) =
+        conversationApplicationService.createFolder(access, name)
+
+    suspend fun renameFolder(access: ConversationFolderAccess, folderId: Uuid, name: String) =
+        conversationApplicationService.renameFolder(access, folderId, name)
+
+    suspend fun deleteFolder(access: ConversationFolderAccess, folderId: Uuid) {
+        conversationApplicationService.deleteFolder(access, folderId)
+        if (_selectedFolderId.value == folderId) _selectedFolderId.value = null
     }
 
-    fun renameFolder(folderId: Uuid, name: String) {
-        val trimmed = name.trim()
-        if (trimmed.isEmpty()) return
-        viewModelScope.launch {
-            conversationApplicationService.renameFolder(folderId, trimmed)
-        }
-    }
-
-    /**
-     * 删除文件夹。若文件夹内有正在生成回复的会话，拒绝删除并返回 false（UI 层据此提示用户）。
-     */
-    fun deleteFolder(folderId: Uuid): Boolean {
-        if (conversationApplicationService.hasActiveConversationTurnInFolder(folderId)) {
-            return false
-        }
-        viewModelScope.launch {
-            conversationApplicationService.deleteFolder(folderId)
-            if (_selectedFolderId.value == folderId) {
-                _selectedFolderId.value = null
-            }
-        }
-        return true
-    }
-
-    fun moveConversationToFolder(conversationId: Uuid, folderId: Uuid?) {
-        viewModelScope.launch {
-            conversationApplicationService.moveToFolder(conversationId, folderId)
-        }
-    }
+    suspend fun moveConversationToFolder(access: ConversationFolderAccess, conversation: ConversationSummary, folderId: Uuid?) =
+        conversationApplicationService.moveToFolder(access, conversation, folderId)
 
     private fun getDateLabel(date: LocalDate): String {
         val today = LocalDate.now()

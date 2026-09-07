@@ -2,6 +2,7 @@ package net.weero.measix.pilot.service
 
 import androidx.paging.PagingSource
 import androidx.paging.PagingState
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore
@@ -26,7 +27,7 @@ class SelectedRealmPagingSourceTest {
         val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
         val packet = exampleEnterprisePackage()
         sessions.enrollFixture(packet)
-        val access = sessions.captureSelectedRealmAccess()
+        val access = sessions.observeSelectedRealmSelection().first { it != null }!!
         val delegate = Source()
         val page = SelectedRealmPagingSource(delegate, sessions, access)
         assertTrue(page.load(params) is PagingSource.LoadResult.Page)
@@ -34,9 +35,11 @@ class SelectedRealmPagingSourceTest {
         assertTrue(page.load(params) is PagingSource.LoadResult.Error)
         assertEquals(1, delegate.loads)
         sessions.switchToEnterprise()
+        assertTrue(page.load(params) is PagingSource.LoadResult.Error)
+        assertEquals(1, delegate.loads)
         sessions.finishExit(requireNotNull(sessions.beginExit()))
         sessions.enrollFixture(packet)
-        assertNotEquals(access, sessions.captureSelectedRealmAccess())
+        assertNotEquals(access, sessions.observeSelectedRealmSelection().first { it != null }!!)
         assertTrue(page.load(params) is PagingSource.LoadResult.Error)
         assertEquals(1, delegate.loads)
     }
@@ -46,7 +49,7 @@ class SelectedRealmPagingSourceTest {
         val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())) { now }
         val state = sessions.enrollFixture(exampleEnterprisePackage())
         val delegate = Source()
-        val page = SelectedRealmPagingSource(delegate, sessions, sessions.captureSelectedRealmAccess())
+        val page = SelectedRealmPagingSource(delegate, sessions, sessions.observeSelectedRealmSelection().first { it != null }!!)
         now = requireNotNull(state.manifest.session).expiresAtMillis
         assertTrue(page.load(params) is PagingSource.LoadResult.Error)
         assertEquals(0, delegate.loads)
@@ -55,7 +58,7 @@ class SelectedRealmPagingSourceTest {
     @Test fun `invalidation is mutual and cancellation is not converted to load error`() = runTest {
         val sessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
         sessions.recover()
-        val access = sessions.captureSelectedRealmAccess()
+        val access = sessions.observeSelectedRealmSelection().first { it != null }!!
         val delegate = Source()
         val page = SelectedRealmPagingSource(delegate, sessions, access)
         page.invalidate()

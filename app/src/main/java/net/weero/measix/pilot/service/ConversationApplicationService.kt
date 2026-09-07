@@ -207,36 +207,59 @@ class ConversationApplicationService internal constructor(
         return sideEffects.compressConversation(snapshot, additionalPrompt, targetTokens, keepRecentMessages)
     }
 
-    suspend fun moveToFolder(conversationId: Uuid, folderId: Uuid?) {
-        commandCoordinator.executeOrThrow(
-            conversationId,
-            UpdateHeader(
-                folderId = folderId?.let(OptionalFolderId::SetTo) ?: OptionalFolderId.Clear,
-            ),
-        )
-    }
-
-    fun hasActiveConversationTurnInFolder(folderId: Uuid): Boolean =
-        runtimeRegistry.activeRuntimes().any { runtime ->
-            runtime.currentTurnPresentation().isActive && runtime.durable.header.folderId == folderId
+    suspend fun moveToFolder(access: ConversationFolderAccess, conversation: ConversationSummary, folderId: Uuid?) =
+        withFolderAccess(access) {
+            check(conversation.selection == access.selection) { "conversation_selection_mismatch" }
+            val conversationId = conversation.id
+            folderId?.let { requireFolder(access, it) }
+            commandCoordinator.withRootHeaders(access.selection.access.scope, listOf(conversationId)) { headers ->
+                check(headers.single().assistantId == access.assistantId) { "conversation_assistant_mismatch" }
+                commandCoordinator.executeOrThrow(conversationId, UpdateHeader(
+                    folderId = folderId?.let(OptionalFolderId::SetTo) ?: OptionalFolderId.Clear,
+                ))
+            }
         }
 
-    suspend fun deleteFolder(folderId: Uuid) {
-        recoveryGate.awaitReady()
-        folderRepository.getConversationIds(folderId).forEach { conversationId ->
-            commandCoordinator.executeOrThrow(conversationId, UpdateHeader(folderId = OptionalFolderId.Clear))
+    suspend fun deleteFolder(access: ConversationFolderAccess, folderId: Uuid) = withFolderAccess(access) {
+        requireFolder(access, folderId)
+        val ids = folderRepository.getConversationIds(folderId)
+        commandCoordinator.withRootHeaders(access.selection.access.scope, ids) { headers ->
+            check(folderRepository.getConversationIds(folderId).toSet() == ids.toSet()) { "folder_membership_changed" }
+            check(headers.all { it.assistantId == access.assistantId && it.folderId == folderId }) { "folder_membership_mismatch" }
+            if (ids.any { runtimeRegistry.findRuntime(it)?.currentTurnPresentation()?.isActive == true }) {
+                throw ConversationFolderBusyException()
+            }
+            // A failed detach leaves the folder present. Retrying only detaches its remaining members.
+            ids.forEach { commandCoordinator.executeOrThrow(it, UpdateHeader(folderId = OptionalFolderId.Clear)) }
+            folderRepository.deleteEmptyFolder(folderId)
         }
-        folderRepository.deleteEmptyFolder(folderId)
     }
 
-    suspend fun createFolder(assistantId: ConfigurationReference, name: String) {
-        recoveryGate.awaitReady()
-        folderRepository.createFolder(assistantId, name)
+    suspend fun createFolder(access: ConversationFolderAccess, name: String) = withFolderAccess(access) {
+        val trimmed = name.trim().also { require(it.isNotEmpty()) { "folder_name_required" } }
+        settingsStore.withResolvedConfiguration(access.selection.access.scope, sessions.state.value) { configuration ->
+            check(configuration.selection(ConfigurationCategory.ASSISTANT, access.assistantId).isAvailable) {
+                "conversation_assistant_unavailable"
+            }
+        }
+        folderRepository.createFolder(access.selection.access.scope, access.assistantId, trimmed)
+        Unit
     }
 
-    suspend fun renameFolder(folderId: Uuid, name: String) {
+    suspend fun renameFolder(access: ConversationFolderAccess, folderId: Uuid, name: String) = withFolderAccess(access) {
+        requireFolder(access, folderId)
+        val trimmed = name.trim().also { require(it.isNotEmpty()) { "folder_name_required" } }
+        folderRepository.renameFolder(folderId, trimmed)
+    }
+
+    private suspend fun requireFolder(access: ConversationFolderAccess, id: Uuid) {
+        val folder = requireNotNull(folderRepository.getFolder(id)) { "folder_not_found" }
+        check(folder.scope == access.selection.access.scope && folder.assistantId == access.assistantId) { "folder_scope_mismatch" }
+    }
+
+    private suspend fun <T> withFolderAccess(access: ConversationFolderAccess, operation: suspend () -> T): T {
         recoveryGate.awaitReady()
-        folderRepository.renameFolder(folderId, name)
+        return sessions.withSelectedRealmSelection(access.selection, operation)
     }
 
     suspend fun createForDiagnostics(
@@ -501,6 +524,8 @@ class ConversationApplicationService internal constructor(
     private suspend fun liveSnapshot(conversationId: Uuid): ConversationAggregateSnapshot =
         commandCoordinator.load(conversationId).durable
 }
+
+class ConversationFolderBusyException internal constructor() : IllegalStateException("folder_has_active_conversation")
 
 internal fun preprocessUserInputParts(
     parts: List<UIMessagePart>,

@@ -55,6 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.paging.compose.collectAsLazyPagingItems
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -76,6 +77,9 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.service.ConversationFolderAccess
+import net.weero.measix.pilot.service.ConversationFolderBusyException
+import net.weero.measix.pilot.service.ConversationFolderDirectory
 import net.weero.measix.pilot.service.ConversationSummary
 import net.weero.measix.pilot.data.model.Folder
 import net.weero.measix.pilot.service.ConversationQueryService
@@ -122,7 +126,8 @@ fun ChatDrawerContent(
     val drawerVm: ChatDrawerVM = koinViewModel(viewModelStoreOwner = activity)
 
     val conversations = drawerVm.conversations.collectAsLazyPagingItems()
-    val folders by drawerVm.folders.collectAsStateWithLifecycle()
+    val folderDirectory = drawerVm.folderDirectory.collectAsStateWithLifecycle().value
+    val folders = folderDirectory?.folders.orEmpty()
     val selectedFolderId by drawerVm.selectedFolderId.collectAsStateWithLifecycle()
     val conversationListState = rememberLazyListState(
         initialFirstVisibleItemIndex = drawerVm.scrollIndex,
@@ -172,9 +177,31 @@ fun ChatDrawerContent(
     var showMoveToFolderSheet by remember { mutableStateOf(false) }
     var conversationToMoveFolder by remember { mutableStateOf<ConversationSummary?>(null) }
     val folderSheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden)
-    var showCreateFolderDialog by remember { mutableStateOf(false) }
-    var folderToRename by remember { mutableStateOf<Folder?>(null) }
-    var folderToDelete by remember { mutableStateOf<Folder?>(null) }
+    var createFolderAccess by remember { mutableStateOf<ConversationFolderAccess?>(null) }
+    var moveFolderDirectory by remember { mutableStateOf<ConversationFolderDirectory?>(null) }
+    var folderToRename by remember { mutableStateOf<Pair<ConversationFolderAccess, Folder>?>(null) }
+    var folderToDelete by remember { mutableStateOf<Pair<ConversationFolderAccess, Folder>?>(null) }
+
+    var folderOperationRunning by remember { mutableStateOf(false) }
+    val folderFailureText = stringResource(R.string.error_title_operation)
+    val folderBusyText = stringResource(R.string.chat_page_delete_folder_generating)
+    val runFolderOperation: (suspend () -> Unit) -> Unit = { operation ->
+        if (!folderOperationRunning) {
+            folderOperationRunning = true
+            scope.launch {
+                try {
+                    operation()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    android.util.Log.e("ChatDrawer", "Folder command failed", error)
+                    toaster.show(if (error is ConversationFolderBusyException) folderBusyText else folderFailureText, type = ToastType.Warning)
+                } finally {
+                    folderOperationRunning = false
+                }
+            }
+        }
+    }
 
     // Menu popup 状态
     var showMenuPopup by remember { mutableStateOf(false) }
@@ -288,12 +315,13 @@ fun ChatDrawerContent(
             )
 
             FolderBar(
+                access = folderDirectory?.access,
                 folders = folders,
                 selectedFolderId = selectedFolderId,
                 onSelect = { drawerVm.selectFolder(it) },
-                onCreate = { showCreateFolderDialog = true },
-                onRename = { folderToRename = it },
-                onDelete = { folderToDelete = it },
+                onCreate = { createFolderAccess = folderDirectory?.access },
+                onRename = { folder -> folderToRename = folderDirectory?.access?.let { it to folder } },
+                onDelete = { folder -> folderToDelete = folderDirectory?.access?.let { it to folder } },
             )
 
             ConversationList(
@@ -332,7 +360,8 @@ fun ChatDrawerContent(
                 },
                 onMoveToFolder = {
                     conversationToMoveFolder = it
-                    showMoveToFolderSheet = true
+                    moveFolderDirectory = folderDirectory
+                    showMoveToFolderSheet = folderDirectory != null
                 }
             )
 
@@ -489,10 +518,11 @@ fun ChatDrawerContent(
 
     // 移动到文件夹 Bottom Sheet
     if (showMoveToFolderSheet) {
+        val directory = requireNotNull(moveFolderDirectory)
         val doMove: (Uuid?) -> Unit = { folderId ->
             conversationToMoveFolder?.let { conversation ->
-                drawerVm.moveConversationToFolder(conversation.id, folderId)
-                scope.launch {
+                runFolderOperation {
+                    drawerVm.moveConversationToFolder(directory.access, conversation, folderId)
                     folderSheetState.hide()
                     showMoveToFolderSheet = false
                     conversationToMoveFolder = null
@@ -549,7 +579,7 @@ fun ChatDrawerContent(
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    items(folders) { folder ->
+                    items(directory.folders) { folder ->
                         val isCurrent = folder.id == conversationToMoveFolder?.folderId
                         Surface(
                             onClick = { doMove(folder.id) },
@@ -585,10 +615,10 @@ fun ChatDrawerContent(
     }
 
     // 新建文件夹对话框
-    if (showCreateFolderDialog) {
+    createFolderAccess?.let { access ->
         var name by remember { mutableStateOf("") }
         AlertDialog(
-            onDismissRequest = { showCreateFolderDialog = false },
+            onDismissRequest = { createFolderAccess = null },
             title = { Text(stringResource(R.string.chat_page_create_folder)) },
             text = {
                 OutlinedTextField(
@@ -602,14 +632,16 @@ fun ChatDrawerContent(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        drawerVm.createFolder(name)
-                        showCreateFolderDialog = false
+                        runFolderOperation {
+                            drawerVm.createFolder(access, name)
+                            createFolderAccess = null
+                        }
                     },
-                    enabled = name.isNotBlank()
+                    enabled = !folderOperationRunning && name.isNotBlank()
                 ) { Text(stringResource(R.string.chat_page_save)) }
             },
             dismissButton = {
-                TextButton(onClick = { showCreateFolderDialog = false }) {
+                TextButton(onClick = { createFolderAccess = null }) {
                     Text(stringResource(R.string.chat_page_cancel))
                 }
             }
@@ -617,7 +649,7 @@ fun ChatDrawerContent(
     }
 
     // 重命名文件夹对话框
-    folderToRename?.let { folder ->
+    folderToRename?.let { (access, folder) ->
         var name by remember(folder.id) { mutableStateOf(folder.name) }
         AlertDialog(
             onDismissRequest = { folderToRename = null },
@@ -633,10 +665,12 @@ fun ChatDrawerContent(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        drawerVm.renameFolder(folder.id, name)
-                        folderToRename = null
+                        runFolderOperation {
+                            drawerVm.renameFolder(access, folder.id, name)
+                            folderToRename = null
+                        }
                     },
-                    enabled = name.isNotBlank()
+                    enabled = !folderOperationRunning && name.isNotBlank()
                 ) { Text(stringResource(R.string.chat_page_save)) }
             },
             dismissButton = {
@@ -648,8 +682,7 @@ fun ChatDrawerContent(
     }
 
     // 删除文件夹确认
-    folderToDelete?.let { folder ->
-        val deleteFolderGeneratingText = stringResource(R.string.chat_page_delete_folder_generating)
+    folderToDelete?.let { (access, folder) ->
         AlertDialog(
             onDismissRequest = { folderToDelete = null },
             title = { Text(stringResource(R.string.chat_page_delete_folder)) },
@@ -657,11 +690,10 @@ fun ChatDrawerContent(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        if (drawerVm.deleteFolder(folder.id)) {
+                        runFolderOperation {
+                            drawerVm.deleteFolder(access, folder.id)
                             folderToDelete = null
                             conversations.refresh()
-                        } else {
-                            toaster.show(deleteFolderGeneratingText, type = ToastType.Warning)
                         }
                     }
                 ) { Text(stringResource(R.string.chat_page_delete)) }
@@ -875,6 +907,7 @@ private fun AssistantItem(
 
 @Composable
 private fun FolderBar(
+    access: ConversationFolderAccess?,
     folders: List<Folder>,
     selectedFolderId: Uuid?,
     onSelect: (Uuid?) -> Unit,
@@ -898,7 +931,7 @@ private fun FolderBar(
             )
         }
         items(folders, key = { it.id }) { folder ->
-            var menuExpanded by remember { mutableStateOf(false) }
+            var menuExpanded by remember(access) { mutableStateOf(false) }
             Box {
                 FolderChip(
                     label = folder.name,

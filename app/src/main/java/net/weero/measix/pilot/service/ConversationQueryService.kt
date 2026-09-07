@@ -25,6 +25,7 @@ import kotlinx.coroutines.CancellationException
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
 import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.db.fts.MessageSearchSort
 import net.weero.measix.pilot.data.repository.ConversationListRecord
 import net.weero.measix.pilot.data.repository.ConversationRepository
@@ -50,6 +51,19 @@ data class ConversationSummary(
     val isPinned: Boolean,
     val createAt: Instant,
     val updateAt: Instant,
+    internal val selection: RealmSelection?,
+)
+
+/** Original authority of an assistant's rendered folder directory, including an empty directory. */
+@ConsistentCopyVisibility
+data class ConversationFolderAccess internal constructor(
+    internal val selection: RealmSelection,
+    internal val assistantId: ConfigurationReference,
+)
+
+data class ConversationFolderDirectory(
+    val access: ConversationFolderAccess,
+    val folders: List<Folder>,
 )
 
 /** Snapshot and process-local presentation observed from one Runtime projection. */
@@ -74,7 +88,7 @@ enum class ConversationActivity {
     TITLE_GENERATION,
 }
 
-private fun ConversationListRecord.toSummary() = ConversationSummary(
+private fun ConversationListRecord.toSummary(selection: RealmSelection?) = ConversationSummary(
     id = id,
     assistantId = assistantId,
     title = title,
@@ -82,6 +96,7 @@ private fun ConversationListRecord.toSummary() = ConversationSummary(
     isPinned = isPinned,
     createAt = createAt,
     updateAt = updateAt,
+    selection = selection,
 )
 
 /** UI read port: persisted/resident 选择被封装在 service 边界内。 */
@@ -104,10 +119,15 @@ class ConversationQueryService internal constructor(
         emitAll(sessions.observeSelectedRealmAccess())
     }
 
-    private fun <T> selectedRows(empty: T, query: (RealmAccess) -> Flow<T>): Flow<T> =
-        observeCurrentAccess().flatMapLatest { access ->
+    fun observeCurrentSelection(): Flow<RealmSelection?> = flow {
+        recoveryGate.awaitReady()
+        emitAll(sessions.observeSelectedRealmSelection())
+    }
+
+    private fun <T> selectedRows(empty: T, query: (RealmSelection) -> Flow<T>): Flow<T> =
+        observeCurrentSelection().flatMapLatest { access ->
             if (access == null) flowOf(empty) else query(access)
-                .map { rows -> sessions.withSelectedRealmAccess(access) { rows } }
+                .map { rows -> sessions.withSelectedRealmSelection(access) { rows } }
                 .onStart { emit(empty) }
                 .catch { error ->
                     if (error is CancellationException) throw error
@@ -217,21 +237,21 @@ class ConversationQueryService internal constructor(
     }
 
     fun unfiledPaging(assistantId: ConfigurationReference): Flow<PagingData<ConversationSummary>> =
-        observeCurrentAccess().flatMapLatest { access ->
+        observeCurrentSelection().flatMapLatest { access ->
             if (access == null) flowOf(PagingData.empty()) else paging(access) {
-                repository.unfiledPagingSource(access.scope, assistantId)
+                repository.unfiledPagingSource(access.access.scope, assistantId)
             }
         }
 
     fun folderPaging(folderId: Uuid): Flow<PagingData<ConversationSummary>> =
-        observeCurrentAccess().flatMapLatest { access ->
+        observeCurrentSelection().flatMapLatest { access ->
             if (access == null) flowOf(PagingData.empty()) else paging(access) {
-                repository.folderPagingSource(access.scope, folderId)
+                repository.folderPagingSource(access.access.scope, folderId)
             }
         }
 
     private fun paging(
-        access: RealmAccess,
+        access: RealmSelection,
         source: () -> PagingSource<Int, LightConversationEntity>,
     ): Flow<PagingData<ConversationSummary>> = flow {
         val owner = Any()
@@ -259,6 +279,7 @@ class ConversationQueryService internal constructor(
                         isPinned = row.isPinned,
                         createAt = Instant.ofEpochMilli(row.createAt),
                         updateAt = Instant.ofEpochMilli(row.updateAt),
+                        selection = access,
                     )
                 }
             })
@@ -273,16 +294,33 @@ class ConversationQueryService internal constructor(
 
     fun conversationsOfAssistant(assistantId: ConfigurationReference): Flow<List<ConversationSummary>> =
         selectedRows(emptyList()) { access ->
-            repository.getConversationsOfAssistant(access.scope, assistantId).map { list -> list.map { it.toSummary() } }
+            repository.getConversationsOfAssistant(access.access.scope, assistantId).map { list -> list.map { it.toSummary(access) } }
         }
 
     fun pinnedConversations(): Flow<List<ConversationSummary>> =
         selectedRows(emptyList()) { access ->
-            repository.getPinnedConversations(access.scope).map { list -> list.map { it.toSummary() } }
+            repository.getPinnedConversations(access.access.scope).map { list -> list.map { it.toSummary(access) } }
         }
 
-    fun foldersOfAssistant(assistantId: ConfigurationReference): Flow<List<Folder>> =
-        selectedRows(emptyList()) { access -> folderRepository.getFoldersOfAssistant(access.scope, assistantId) }
+    fun foldersOfAssistant(assistantId: ConfigurationReference): Flow<ConversationFolderDirectory?> = flow {
+        recoveryGate.awaitReady()
+        emitAll(sessions.observeSelectedRealmSelection().flatMapLatest { selection ->
+            if (selection == null) flowOf(null) else flow<ConversationFolderDirectory?> {
+                val source = sessions.withSelectedRealmSelection(selection) {
+                    folderRepository.getFoldersOfAssistant(selection.access.scope, assistantId)
+                }
+                emitAll(source.map { folders ->
+                    sessions.withSelectedRealmSelection(selection) {
+                        ConversationFolderDirectory(ConversationFolderAccess(selection, assistantId), folders)
+                    }
+                })
+            }.onStart { emit(null) }.catch { error ->
+                if (error is CancellationException) throw error
+                if (error !is EnterpriseConfigurationException) Log.e("ConversationQuery", "Folder query failed", error)
+                emit(null)
+            }
+        })
+    }
 
     /**
      * internal 聚合读端口：只有 command / turn planning 需要它（含 model context）。
@@ -308,7 +346,7 @@ class ConversationQueryService internal constructor(
         assistantId: ConfigurationReference,
         limit: Int,
     ): List<ConversationSummary> =
-        read(access) { repository.getRecentConversationRecords(access.scope, assistantId, limit).map { it.toSummary() } }
+        read(access) { repository.getRecentConversationRecords(access.scope, assistantId, limit).map { it.toSummary(null) } }
 
     suspend fun searchMessagesOfAssistant(
         access: RealmAccess,
