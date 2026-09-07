@@ -29,6 +29,7 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.core.ProviderUsageSnapshot
 import me.rerere.ai.core.sumTokenCountsOrNull
 import me.rerere.ai.core.ReasoningLevel
@@ -60,6 +61,7 @@ import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.parseErrorDetail
 import me.rerere.ai.util.stringSafe
 import me.rerere.ai.util.toHeaders
+import kotlin.uuid.Uuid
 import me.rerere.common.http.await
 import me.rerere.common.http.jsonArrayOrNull
 import me.rerere.common.http.jsonObjectOrNull
@@ -100,7 +102,7 @@ class ChatCompletionsAPI(
 ) : OpenAIImpl {
     override suspend fun generateText(
         providerSetting: ProviderSetting.OpenAI,
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         params: TextGenerationParams,
     ): MessageChunk = withContext(Dispatchers.IO) {
         val requestBody =
@@ -158,7 +160,7 @@ class ChatCompletionsAPI(
 
     override suspend fun streamText(
         providerSetting: ProviderSetting.OpenAI,
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         params: TextGenerationParams,
     ): Flow<MessageChunk> = callbackFlow {
         val requestBody = buildChatCompletionRequest(
@@ -255,7 +257,7 @@ class ChatCompletionsAPI(
 
 
     internal fun buildChatCompletionRequest(
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         params: TextGenerationParams,
         providerSetting: ProviderSetting.OpenAI,
         stream: Boolean = false,
@@ -507,7 +509,7 @@ class ChatCompletionsAPI(
     }
 
     internal fun buildMessages(
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         replayPolicy: ChatReasoningReplayPolicy,
         mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
         useDeveloperRoleForSystemMessages: Boolean = false,
@@ -528,7 +530,7 @@ class ChatCompletionsAPI(
     }
 
     private fun JsonArrayBuilder.addAssistantMessages(
-        message: UIMessage,
+        message: ModelRequestMessage,
         replayPolicy: ChatReasoningReplayPolicy,
         mediaCapabilities: RequestMediaCapabilities,
     ) {
@@ -584,7 +586,7 @@ class ChatCompletionsAPI(
                         add(buildJsonObject {
                             put("role", "tool")
                             put("name", tool.toolName)
-                            put("tool_call_id", tool.toolCallId)
+                            put("tool_call_id", tool.providerCallId)
                             put("content", tool.toToolResultContent(mediaCapabilities))
                         })
                     }
@@ -685,7 +687,7 @@ class ChatCompletionsAPI(
                 put("tool_calls", buildJsonArray {
                     tools.forEach { tool ->
                         add(buildJsonObject {
-                            put("id", tool.toolCallId)
+                            put("id", tool.providerCallId)
                             put("type", "function")
                             put("function", buildJsonObject {
                                 put("name", tool.toolName)
@@ -700,7 +702,7 @@ class ChatCompletionsAPI(
     }
 
     private fun JsonArrayBuilder.addNonAssistantMessage(
-        message: UIMessage,
+        message: ModelRequestMessage,
         useDeveloperRoleForSystemMessages: Boolean,
         mediaCapabilities: RequestMediaCapabilities,
     ) {
@@ -870,9 +872,8 @@ class ChatCompletionsAPI(
                             reasoning = reasoning.orEmpty(),
                             createdAt = Clock.System.now(),
                             finishedAt = null,
-                        ).also { part ->
-                            part.metadata = reasoningMetadata
-                        }
+                            metadata = reasoningMetadata,
+                        )
                     )
                 }
                 if (content.isNotEmpty()) add(UIMessagePart.Text(content))
@@ -902,7 +903,9 @@ class ChatCompletionsAPI(
                     val arguments = function?.get("arguments")?.jsonPrimitive?.contentOrNull
                     add(
                         UIMessagePart.Tool(
-                            toolCallId = toolCallId ?: "",
+                            localCallId = Uuid.NIL,
+                            stepId = Uuid.NIL,
+                            providerCallId = toolCallId ?: "",
                             toolName = toolName ?: "",
                             input = arguments ?: "",
                             output = emptyList()

@@ -31,7 +31,7 @@ import net.weero.measix.pilot.service.ApplicationRecoveryGate
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationOperationLocks
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
-import net.weero.measix.pilot.service.runtime.ConversationTransition
+import net.weero.measix.pilot.service.runtime.TurnTransition
 import net.weero.measix.pilot.service.runtime.ConversationMutation
 import net.weero.measix.pilot.service.runtime.ConversationHeaderPatch
 import net.weero.measix.pilot.service.runtime.ExecutionFacts
@@ -103,7 +103,7 @@ class ConversationStartAtomicityTest {
     }
 
     /**
-     * §14.1 / §17.3：Master fork 保留 message id、只重建 node id。克隆 Conversation 必须拥有
+     * Master fork 保留 message id、只重建 node id。克隆 Conversation 必须拥有
      * 自己的 context rows——同 (ownerMessageId, content) 绝不能被 DAO 误判为幂等重放而静默跳过。
      */
     @Test
@@ -170,7 +170,7 @@ class ConversationStartAtomicityTest {
         val failure = runCatching { repository.applyMutation(conflictMutation, conflictFacts) }.exceptionOrNull()
 
         assertNotNull(failure)
-        assertEquals(2, database.messageNodeDao().getNodesOfConversation(conversationId.toString()).size)
+        assertEquals(2, database.messageNodeDao().getNodeHeadersOfConversation(conversationId.toString()).size)
         assertNull(database.turnExecutionDao().getById(conflictingTurnId.toString()))
         assertEquals(
             committed.context.content,
@@ -182,9 +182,9 @@ class ConversationStartAtomicityTest {
     }
 
     /**
-     * §17.3 端到端成功路径：START 经唯一的 `ConversationCommandCoordinator.startTurn`，
+     * 端到端成功路径：START 经唯一的 `ConversationCommandCoordinator.startTurn`，
      * Assistant slot、turn_execution 与 model-context entry 在同一个 Room 事务落库，
-     * 并且只有提交成功后 Runtime snapshot 才携带 activeTurn 与新节点。
+     * 并且只有提交成功后 Runtime snapshot 才携带当前 Turn 的流式投影与新节点。
      */
     @Test
     fun `coordinator START commits slot turn fact and context together then publishes`() = runTest {
@@ -205,13 +205,13 @@ class ConversationStartAtomicityTest {
         val runtime = coordinator.load(conversationId)
         val turnId = Uuid.random()
         val assistantMessageId = Uuid.random()
-        runtime.installActiveRequest(turnId, Job())
+        runtime.installTurnWorker(turnId, Job())
         val candidate = canonicalContent()
 
         coordinator.startTurn(
             conversationId,
-            ConversationTransition.buildStartTurnCommand(
-                current = runtime.snapshot.value,
+            TurnTransition.buildStartTurnCommand(
+                current = runtime.durable,
                 turnId = turnId,
                 modelContextCandidate = candidate,
                 assistantMessageId = assistantMessageId,
@@ -219,9 +219,9 @@ class ConversationStartAtomicityTest {
         )
 
         val published = runtime.snapshot.value
-        assertEquals(assistantMessageId, published.activeTurn?.assistantMessageId)
-        assertEquals(2, published.nodes.size)
-        assertEquals(listOf(candidate), published.modelContextEntries.map { it.content })
+        assertEquals(assistantMessageId, published.stream?.assistantMessageId)
+        assertEquals(2, published.durable.nodes.size)
+        assertEquals(listOf(candidate), published.durable.modelContextEntries.map { it.content })
         assertEquals(
             TurnExecutionStatus.RUNNING,
             database.turnExecutionDao().getById(turnId.toString())?.status,
@@ -229,11 +229,11 @@ class ConversationStartAtomicityTest {
         assertEquals(
             candidate,
             database.conversationModelContextDao().findByOwner(
-                published.nodes.last().id.toString(),
+                published.durable.nodes.last().id.toString(),
                 assistantMessageId.toString(),
             )?.content,
         )
-        assertEquals(2, database.messageNodeDao().getNodesOfConversation(conversationId.toString()).size)
+        assertEquals(2, database.messageNodeDao().getNodeHeadersOfConversation(conversationId.toString()).size)
         appScope.cancel()
     }
 

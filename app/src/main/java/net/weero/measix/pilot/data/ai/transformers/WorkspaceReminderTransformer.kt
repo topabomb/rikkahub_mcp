@@ -3,7 +3,7 @@ package net.weero.measix.pilot.data.ai.transformers
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.ai.SyntheticMessageKind
+import net.weero.measix.pilot.data.ai.request.SyntheticMessageKind
 import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
 import me.rerere.workspace.WorkspaceShellStatus
 

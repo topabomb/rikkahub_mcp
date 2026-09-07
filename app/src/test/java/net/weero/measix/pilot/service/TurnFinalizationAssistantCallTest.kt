@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.service
+import net.weero.measix.pilot.service.turn.TurnFinalizer
 
-import net.weero.measix.pilot.test.generationRequestFixture
+import net.weero.measix.pilot.test.turnRunInputsFixture
 
 import net.weero.measix.pilot.test.testPromptInputs
 
@@ -29,8 +30,7 @@ import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.ai.GenerationLoop
-import net.weero.measix.pilot.data.ai.GenerationRequest
+import net.weero.measix.pilot.service.turn.TurnRunner
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
 import net.weero.measix.pilot.data.ai.subassistant.buildInitialSubAssistantCallMetadata
@@ -44,16 +44,16 @@ import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
-import net.weero.measix.pilot.service.runtime.ActiveTurnState
+import net.weero.measix.pilot.service.runtime.TurnStreamProjection
 import net.weero.measix.pilot.service.runtime.ConversationCommand
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
-import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeSnapshot
+import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.FinalizeTurn
 import net.weero.measix.pilot.service.runtime.StreamingDeltaResult
-import net.weero.measix.pilot.service.runtime.TurnEngine
-import net.weero.measix.pilot.service.runtime.TurnEvent
+import net.weero.measix.pilot.service.turn.TurnCommitter
 import net.weero.measix.pilot.service.runtime.TurnHandle
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.Assert.assertEquals
@@ -66,11 +66,11 @@ class TurnFinalizationAssistantCallTest {
     @Test
     fun `call without metadata can be interrupted before a child link is committed`() = runTest {
         for (status in listOf(null, ToolExecutionStatus.STARTED)) {
-            val call = UIMessagePart.Tool("call", "assistant_call", "{\"task\":\"partial")
+            val call = UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call", toolName = "assistant_call", input = "{\"task\":\"partial")
             val assistant = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(call))
             val harness = harness(assistant, status)
 
-            val prepared = harness.prepare(assistant).last().getTools().single()
+            val prepared = harness.prepare(assistant).getTools().single()
 
             assertEquals(call.input, prepared.input)
             assertNull(prepared.metadata)
@@ -82,7 +82,7 @@ class TurnFinalizationAssistantCallTest {
     @Test
     fun `committed child link rejects absent malformed or mismatched run metadata`() = runTest {
         val linkedChild = Uuid.random().toString()
-        val bareCall = UIMessagePart.Tool("call", "assistant_call", "{}")
+        val bareCall = UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call", toolName = "assistant_call", input = "{}")
         val mismatched = bareCall.mergeSubAssistantCallMetadata(
             Json,
             buildInitialSubAssistantCallMetadata("run", Uuid.random(), "Target").copy(
@@ -109,7 +109,7 @@ class TurnFinalizationAssistantCallTest {
 
     @Test
     fun `malformed metadata and terminal execution are not treated as an unstarted call`() = runTest {
-        val bareCall = UIMessagePart.Tool("call", "assistant_call", "{}")
+        val bareCall = UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call", toolName = "assistant_call", input = "{}")
         val cases = listOf(
             bareCall.copy(metadata = JsonObject(mapOf("sub_assistant_call" to JsonPrimitive("invalid")))) to null,
             bareCall to ToolExecutionStatus.COMPLETED,
@@ -143,7 +143,7 @@ class TurnFinalizationAssistantCallTest {
                 choices = listOf(UIMessageChoice(
                     index = 0,
                     delta = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(
-                        UIMessagePart.Tool("call", "assistant_call", "{\"task\":\"partial"),
+                        UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call", toolName = "assistant_call", input = "{\"task\":\"partial"),
                     )),
                     message = null,
                     finishReason = null,
@@ -152,32 +152,37 @@ class TurnFinalizationAssistantCallTest {
             ))
             awaitCancellation()
         }
-        val loop = GenerationLoop(
+        val loop = TurnRunner(
             context = mockk<Context>(relaxed = true),
             providerManager = providerManager,
             json = Json,
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
             toolOutputStore = io.mockk.mockk(relaxed = true),
         )
-        val engine = TurnEngine(harness.coordinator, harness.runtime, harness.handle, harness.finalization)
+        val turnCommitter = TurnCommitter(harness.coordinator, harness.runtime, harness.handle, harness.finalization)
         val callObserved = CompletableDeferred<Unit>()
         val collector = launch {
-            engine.bind(loop.run(generationRequestFixture(
+            loop.run(turnRunInputsFixture(
                 conversationId = kotlin.uuid.Uuid.random(),
                 settings = Settings(providers = listOf(providerSetting)),
                 model = model,
                 mediaCapabilities = RequestMediaCapabilities.NONE,
-                messages = harness.snapshot.currentMessages(),
+                messages = harness.snapshot.toPresentationSnapshot().currentMessages(),
                 assistant = Assistant(enableMemory = false, streamOutput = true),
                 promptInputs = testPromptInputs(),
                 assistantMessageId = assistant.id,
-                onCheckpoint = engine::onCheckpoint,
-                onMessagesObserved = engine::observeMessages,
-            ))).collect { event ->
-                if (event is TurnEvent.Streaming && event.lastMessage?.getTools()?.isNotEmpty() == true) {
-                    callObserved.complete(Unit)
-                }
-            }
+                handle = harness.handle,
+                onCheckpoint = turnCommitter::onCheckpoint,
+                onAssistantObserved = turnCommitter::observeAssistant,
+                onStreamDelta = { message ->
+                    turnCommitter.publishStream(message)
+                    if (message.getTools().isNotEmpty()) {
+                        callObserved.complete(Unit)
+                    }
+                },
+                onResult = turnCommitter::commitRunResult,
+                cancelReason = { harness.runtime.peekCancelReason(harness.handle.turnId) },
+            ))
         }
         callObserved.await()
         collector.cancelAndJoin()
@@ -185,7 +190,7 @@ class TurnFinalizationAssistantCallTest {
         assertTrue(collector.isCancelled)
         val finalized = harness.commands.single() as FinalizeTurn
         assertEquals(TurnExecutionStatus.CANCELLED, finalized.terminalStatus)
-        val message = finalized.messages!!.last()
+        val message = finalized.assistantMessage!!
         assertTrue(message.getTools().single().hasReplayResult)
         assertNull(message.getTools().single().metadata)
         assertEquals(100L, message.usage!!.latestRequestContextTokens)
@@ -199,16 +204,21 @@ class TurnFinalizationAssistantCallTest {
     ): Harness {
         val conversationId = Uuid.random()
         val handle = TurnHandle(conversationId, 1, Uuid.random(), assistant.id)
+        val callTool = assistant.getTools().firstOrNull()
         val base = Conversation.ofId(conversationId).copy(messageNodes = listOf(
             MessageNode.of(UIMessage.user("question")),
             MessageNode.of(assistant),
         )).toSnapshot()
-        val snapshot = base.copy(activeTurn = ActiveTurnState(
-            handle.epoch, handle.turnId, assistant.id, base.currentMessages(),
-        ))
+        val snapshot = ConversationRuntimeSnapshot(
+            durable = base,
+            stream = TurnStreamProjection(
+                handle.epoch, handle.turnId, assistant.id, assistant,
+            ),
+        )
         val runtime = mockk<ConversationRuntime>()
         every { runtime.id } returns conversationId
         every { runtime.snapshot } returns MutableStateFlow(snapshot)
+        every { runtime.durable } returns base
         every { runtime.applyStreamingDelta(any(), any()) } returns StreamingDeltaResult.APPLIED
         every { runtime.peekCancelReason(any()) } returns "user_stop"
         val repository = mockk<ConversationRepository>(relaxed = true)
@@ -217,7 +227,8 @@ class TurnFinalizationAssistantCallTest {
             executionStatus?.let { status -> ToolExecutionEntity(
                 executionId = "execution",
                 turnId = handle.turnId.toString(),
-                toolOrdinal = 0,
+                stepId = (callTool?.stepId ?: Uuid.random()).toString(),
+                localCallId = (callTool?.localCallId ?: Uuid.random()).toString(),
                 status = status,
                 reason = null,
                 childConversationId = linkedChild,
@@ -230,20 +241,20 @@ class TurnFinalizationAssistantCallTest {
         coEvery { coordinator.executeOrThrow(conversationId, capture(commands)) } returns Unit
         val registry = mockk<ConversationRuntimeRegistry>()
         every { registry.findRuntime(any()) } returns null
-        val finalization = TurnFinalization(repository, registry, coordinator, Json)
+        val finalization = TurnFinalizer(repository, registry, coordinator, Json)
         return Harness(handle, snapshot, runtime, coordinator, finalization, commands)
     }
 
     private data class Harness(
         val handle: TurnHandle,
-        val snapshot: ConversationAggregateSnapshot,
+        val snapshot: ConversationRuntimeSnapshot,
         val runtime: ConversationRuntime,
         val coordinator: ConversationCommandCoordinator,
-        val finalization: TurnFinalization,
+        val finalization: TurnFinalizer,
         val commands: List<ConversationCommand>,
     ) {
-        suspend fun prepare(assistant: UIMessage): List<UIMessage> = finalization.prepareOwnedTurnMessagesForFailure(
-            snapshot, handle, snapshot.currentMessages().dropLast(1) + assistant, "user_stop", true,
-        )
+        suspend fun prepare(assistant: UIMessage): UIMessage = finalization.prepareOwnedAssistantForFailure(
+            snapshot, handle, assistant, "user_stop", true,
+        )!!
     }
 }

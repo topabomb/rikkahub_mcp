@@ -3,7 +3,7 @@
 > 本文档以 Measix Pilot 当前代码为准，描述 LLM 回复内容从 `UIMessage.parts` 到最终像素的完整渲染管线，
 > 涵盖各内容类型的渲染方式、WebView 的生命周期/交互/布局机制。
 >
-> **相关文档**：[界面架构参考](ui-architecture.md) | [消息生成链路](chat-generation-pipeline.md)
+> **相关文档**：[界面架构参考](ui-architecture.md) | [Turn/Step 执行链路](turn-step-execution.md)
 
 ---
 
@@ -145,7 +145,7 @@ Text part 在传入 `MarkdownBlock` 之前，先经过 `replaceRegexes()` 处理
 - `ReasoningStep` → `ChatMessageReasoningStep`（推理文本）
 - `ToolStep` → `ChatMessageToolStep`（工具调用卡片，含输入/输出/审批）
 
-折叠只隐藏普通的早期步骤。`ToolApprovalState.Pending` 的 Tool step 与 `generate_image` 都被固定
+折叠只隐藏普通的早期步骤。`isPending`（`ToolInteractionState.AwaitingApproval` / `AwaitingInput`）的 Tool step 与 `generate_image` 都被固定
 展示，且不计入隐藏数量。前者保证 HITL 审批不会被「再显示 N 步」收走；后者保证穿插在搜索/读写/
 shell 中间的文生图结果仍留在时间线原位。`generate_image` 不拆成 `SubAssistantCallBlock`：它没有
 Child 会话身份和导航，只是普通 Tool step。

@@ -11,7 +11,7 @@ import kotlin.uuid.Uuid
  * 它是 append-only 的会话事实，随消息历史一起被裁剪、Fork 和删除；不是 `MessageNode`，
  * 也不是隐藏 `UIMessage`，因此不进入 `message_node.messages`、FTS、UI 投影或备份 mapper。
  *
- * 身份模型（权威方案 §5.1）：
+ * 身份模型：
  * - [ownerNodeId] / [ownerMessageId] —— 拥有本条目的那次 durable Assistant request variant。
  *   owner variant 被选中、或仍是 active turn owner 时，条目才适用于请求；切换 Assistant
  *   variant 不会读到旧 owner 的条目。
@@ -21,7 +21,7 @@ import kotlin.uuid.Uuid
  *   （`type` / `format`）只存在于该 JSON envelope 内，表与 domain 不重复保存 kind / format。
  *
  * 两个 message ID 位于 `message_node.messages` JSON 内，数据库无法对 JSON 内 variant 建
- * FK，因此归属与角色由 Repository mapper 装载时校验并 fail-closed（权威方案 §12.3）。
+ * FK，因此归属与角色由 Repository mapper 装载时校验并 fail-closed。
  */
 internal data class ConversationModelContextEntry(
     val ownerNodeId: Uuid,
@@ -32,7 +32,7 @@ internal data class ConversationModelContextEntry(
 )
 
 /**
- * 模型上下文条目的唯一适用谓词（权威方案 §5.1、§8.2）。
+ * 模型上下文条目的唯一适用谓词。
  *
  * START 判等、请求组装、Fork 过滤和裁剪必须共用这一个判定，不得各自猜测：
  *  - owner Assistant variant 在给定 selected branch 上（active owner 由调用方作为分支末条
@@ -67,7 +67,7 @@ internal object ConversationModelContextApplicability {
     }
 
     /**
-     * Fork / Child clone 的唯一 entry 映射（权威方案 §14.1、§14.2）。
+     * Fork / Child clone 的唯一 entry 映射。
      *
      * 不得假设 Master 与 Child 的 clone 路径永远保留 message ID：node 必须显式在
      * [nodeIdMap] 中（复制不到的 node 直接落选）；message 未在 [messageIdMap] 声明时按

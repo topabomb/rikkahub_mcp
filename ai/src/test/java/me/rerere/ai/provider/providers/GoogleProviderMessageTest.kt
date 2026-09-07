@@ -1,5 +1,7 @@
 package me.rerere.ai.provider.providers
-
+import me.rerere.ai.testsupport.executedTool
+import me.rerere.ai.testsupport.canonicalMultiRoundToolTurn
+import kotlin.uuid.Uuid
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -14,6 +16,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.testsupport.toModelRequests
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.freeze
@@ -62,7 +65,7 @@ class GoogleProviderMessageTest {
         messages: List<UIMessage>,
         mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
     ): JsonArray = provider.buildContents(
-        messages = messages,
+        messages = messages.toModelRequests(),
         mediaCapabilities = mediaCapabilities,
         modelId = testModelId,
         sourceProfile = testSourceProfile,
@@ -72,7 +75,7 @@ class GoogleProviderMessageTest {
         messages: List<UIMessage>,
         params: TextGenerationParams,
     ): JsonObject = provider.buildCompletionRequestBody(
-        messages = messages,
+        messages = messages.toModelRequests(),
         params = params,
         sourceProfile = testSourceProfile,
     )
@@ -82,7 +85,7 @@ class GoogleProviderMessageTest {
         params: TextGenerationParams,
         sourceProfile: String,
     ): JsonObject = provider.buildCompletionRequestBody(
-        messages = messages,
+        messages = messages.toModelRequests(),
         params = params,
         sourceProfile = sourceProfile,
     )
@@ -106,7 +109,7 @@ class GoogleProviderMessageTest {
                 parts = listOf(
                     UIMessagePart.Text(assistantFact),
                     UIMessagePart.Tool(
-                        toolCallId = "call_1",
+                        localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call_1",
                         toolName = "generate_image",
                         input = "{}",
                         output = listOf(UIMessagePart.Text(toolFact)),
@@ -152,7 +155,7 @@ class GoogleProviderMessageTest {
                 UIMessage.user("search"),
                 UIMessage(
                     role = MessageRole.ASSISTANT,
-                    parts = listOf(createExecutedTool("call_1", "search", """{"q":"x"}""", "hits")),
+                    parts = listOf(executedTool("call_1", "search", """{"q":"x"}""", "hits")),
                 ),
                 UIMessage.user("thanks"),
             ),
@@ -166,22 +169,7 @@ class GoogleProviderMessageTest {
 
     @Test
     fun `multi-round tool calls should produce functionCall followed by functionResponse`() {
-        // Scenario: Multiple rounds of tool calls
-        val assistantMessage = UIMessage(
-            role = MessageRole.ASSISTANT,
-            parts = listOf(
-                UIMessagePart.Text("Let me search"),
-                createExecutedTool("call_1", "search", """{"query": "test"}""", "Search result"),
-                UIMessagePart.Text("Now calculating"),
-                createExecutedTool("call_2", "calculate", """{"expr": "2+2"}""", "4"),
-                UIMessagePart.Text("The answer is 4")
-            )
-        )
-
-        val messages = listOf(
-            UIMessage.user("Calculate something"),
-            assistantMessage
-        )
+        val messages = canonicalMultiRoundToolTurn()
 
         val result = invokeBuildContents(messages)
 
@@ -229,7 +217,7 @@ class GoogleProviderMessageTest {
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Text("Using tool"),
-                createExecutedTool("call_abc", "my_tool", "{}", "Tool output")
+                executedTool("call_abc", "my_tool", "{}", "Tool output")
             )
         )
 
@@ -310,9 +298,9 @@ class GoogleProviderMessageTest {
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Text("Running multiple tools"),
-                createExecutedTool("call_1", "tool_a", "{}", "Result A"),
-                createExecutedTool("call_2", "tool_b", "{}", "Result B"),
-                createExecutedTool("call_3", "tool_c", "{}", "Result C"),
+                executedTool("call_1", "tool_a", "{}", "Result A"),
+                executedTool("call_2", "tool_b", "{}", "Result B"),
+                executedTool("call_3", "tool_c", "{}", "Result C"),
                 UIMessagePart.Text("All done")
             )
         )
@@ -375,10 +363,10 @@ class GoogleProviderMessageTest {
             parts = listOf(
                 UIMessagePart.Reasoning(reasoning = "Step 1: Search"),
                 UIMessagePart.Text("Searching..."),
-                createExecutedTool("call_1", "search", "{}", "Found data"),
+                executedTool("call_1", "search", "{}", "Found data"),
                 UIMessagePart.Reasoning(reasoning = "Step 2: Analyze"),
                 UIMessagePart.Text("Analyzing..."),
-                createExecutedTool("call_2", "analyze", "{}", "Analysis done"),
+                executedTool("call_2", "analyze", "{}", "Analysis done"),
                 UIMessagePart.Reasoning(reasoning = "Step 3: Present"),
                 UIMessagePart.Text("Results")
             )
@@ -460,11 +448,11 @@ class GoogleProviderMessageTest {
                 role = MessageRole.ASSISTANT,
                 parts = listOf(
                     UIMessagePart.Text("Starting"),
-                    createExecutedTool("step1", "init", "{}", "initialized"),
+                    executedTool("step1", "init", "{}", "initialized"),
                     UIMessagePart.Text("Processing"),
-                    createExecutedTool("step2", "process", """{"data": "x"}""", "processed"),
+                    executedTool("step2", "process", """{"data": "x"}""", "processed"),
                     UIMessagePart.Text("Finalizing"),
-                    createExecutedTool("step3", "finalize", "{}", "done"),
+                    executedTool("step3", "finalize", "{}", "done"),
                     UIMessagePart.Text("Task completed")
                 )
             )
@@ -501,7 +489,7 @@ class GoogleProviderMessageTest {
         val assistantMessage = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
-                createExecutedTool("call_1", "my_tool", """{"input": "test"}""", "Expected output value")
+                executedTool("call_1", "my_tool", """{"input": "test"}""", "Expected output value")
             )
         )
 
@@ -710,7 +698,7 @@ class GoogleProviderMessageTest {
         }) as UIMessagePart.Tool
         val executed = parsed.copy(output = listOf(UIMessagePart.Text("result")))
 
-        assertEquals("server_call_1", parsed.toolCallId)
+        assertEquals("server_call_1", parsed.providerCallId)
         assertEquals("server_call_1", parsed.metadataAs<GoogleThoughtMetadata>()?.functionCallId)
 
         val contents = invokeBuildContents(listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(executed))))
@@ -729,7 +717,7 @@ class GoogleProviderMessageTest {
 
     @Test
     fun `adjacent tools from distinct gemini response steps remain sequential`() {
-        fun tool(id: String, step: String) = createExecutedTool(id, "lookup", "{}", id).copy(
+        fun tool(id: String, step: String) = executedTool(id, "lookup", "{}", id).copy(
             metadata = GoogleThoughtMetadata(
                 functionCallId = id,
                 thoughtSignature = "signature-$id",
@@ -754,7 +742,7 @@ class GoogleProviderMessageTest {
 
     @Test
     fun `parallel tools from one gemini response step remain one envelope`() {
-        fun tool(id: String) = createExecutedTool(id, "lookup", "{}", id).copy(
+        fun tool(id: String) = executedTool(id, "lookup", "{}", id).copy(
             metadata = GoogleThoughtMetadata(
                 functionCallId = id,
                 thoughtSignature = if (id == "call-1") "signature" else null,
@@ -836,7 +824,7 @@ class GoogleProviderMessageTest {
     @Test
     fun `tool delta metadata merge preserves prior gemini signature and call id`() {
         val first = UIMessagePart.Tool(
-            toolCallId = "call-1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call-1",
             toolName = "lookup",
             input = "{",
             metadata = GoogleThoughtMetadata(
@@ -846,7 +834,7 @@ class GoogleProviderMessageTest {
             ).toMetadata(),
         )
         val delta = UIMessagePart.Tool(
-            toolCallId = "call-1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call-1",
             toolName = "",
             input = "}",
             metadata = GoogleThoughtMetadata(providerStepId = "step-1").toMetadata(),
@@ -969,20 +957,6 @@ class GoogleProviderMessageTest {
 
     // ==================== Helper Functions ====================
 
-    private fun createExecutedTool(
-        callId: String,
-        name: String,
-        input: String,
-        output: String
-    ): UIMessagePart.Tool {
-        return UIMessagePart.Tool(
-            toolCallId = callId,
-            toolName = name,
-            input = input,
-            output = listOf(UIMessagePart.Text(output))
-        )
-    }
-
     // ==================== Custom Body Ownership Tests ====================
 
     private fun invokeBuildRequestBodyWithCustomBody(
@@ -999,7 +973,7 @@ class GoogleProviderMessageTest {
         )
         val messages = listOf(UIMessage.user("hello"))
         return provider.buildCompletionRequestBody(
-            messages = messages,
+            messages = messages.toModelRequests(),
             params = params,
             sourceProfile = testSourceProfile,
         )
@@ -1121,3 +1095,4 @@ class GoogleProviderMessageTest {
         }
     }
 }
+

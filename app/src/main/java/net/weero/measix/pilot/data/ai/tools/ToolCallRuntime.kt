@@ -7,7 +7,6 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -21,17 +20,18 @@ import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.core.ToolMetadataDelivery
 import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.core.ToolResourceLease
+import me.rerere.ai.ui.ToolInteractionState
+import me.rerere.ai.ui.ToolResultStatus
+import me.rerere.ai.ui.ToolRuntimeState
 import me.rerere.ai.ui.UIMessagePart
-import me.rerere.ai.ui.ToolApprovalState
-import net.weero.measix.pilot.data.ai.ToolResultEvent
-import net.weero.measix.pilot.data.ai.ToolResultEventStatus
+import net.weero.measix.pilot.data.ai.ToolResultFact
 import kotlin.uuid.Uuid
 
 /** Tool Runtime 的稳定 Logcat tag。 */
 private const val TAG = "ToolCallRuntime"
 
 /** Which user interactions the current run can actually pause for. */
-enum class ToolInteractionAvailability {
+enum class TurnInteractionCapability {
     /** Master session: approval and user input can both suspend for the user. */
     FULL,
 
@@ -42,26 +42,23 @@ enum class ToolInteractionAvailability {
     NONE,
 }
 
-/** Stable interaction taxonomy shared by the gate, presentation and the decision command. */
-enum class ToolInteractionKind {
-    NONE,
-    APPROVAL,
-    USER_INPUT,
-}
-
 /**
- * 一个已经挂起的用户交互及其在 owning 消息中的稳定地址。
+ * 一个已经挂起的用户交互及其稳定 locator。
  *
- * 由 [ToolCallRuntime.prepareBatch] 在判定挂起的那一刻产出：那时手里同时有 ordinal 与种类，
- * 不需要任何下游消费者回消息里扫描重建。
+ * 由 [ToolCallRuntime.prepareBatch] 在判定挂起的那一刻产出：那时手里同时有 locator 与交互状态，
+ * 不需要任何下游消费者回消息里扫描重建。[interaction] 只会是 [ToolInteractionState.AwaitingApproval]
+ * 或 [ToolInteractionState.AwaitingInput]。
  */
 @Serializable
-data class PendingInteraction(
+data class PendingToolInteraction(
     val locator: ToolCallLocator,
-    val kind: ToolInteractionKind,
-)
+    val interaction: ToolInteractionState,
+) {
+    val requiresApproval: Boolean get() = interaction is ToolInteractionState.AwaitingApproval
+    val requiresUserInput: Boolean get() = interaction is ToolInteractionState.AwaitingInput
+}
 
-/** A Provider tool call together with its position inside the owning Assistant message. */
+/** A Provider tool call together with its transient position inside the owning Assistant message. */
 internal data class LocatedToolCall(
     val ordinal: Int,
     val tool: UIMessagePart.Tool,
@@ -108,23 +105,18 @@ internal data class PreparedToolCall(
     val arguments: JsonObject,
     val interaction: ToolInteractionRequirement,
     val approvedByUser: Boolean,
-    /** 同一 Provider tool-call 批次共享其首个 Tool ordinal，作为稳定且无需第二计数器的批次身份。 */
-    val resultBatchOrdinal: Int,
 )
 
 internal data class ToolBatchPreparation(
-    /** Updated Tool parts (Pending state, rejections with replay results) keyed by ordinal. */
-    val replacements: Map<Int, UIMessagePart.Tool>,
+    /** Updated Tool parts (pending state, rejections with replay results) keyed by stable localCallId. */
+    val replacements: Map<Uuid, UIMessagePart.Tool>,
     /** Rejections that already carry a Provider replay result and need a FAILED fact. */
-    val immediateResults: List<ToolResultEvent>,
-    /** 已挂起的交互，按 ordinal 升序；非空表示整批等待，所有调用决策完成前不执行任何可执行调用。 */
-    val pending: List<PendingInteraction>,
-    /** Remaining unresolved calls in message ordinal order. */
+    val immediateResults: List<ToolResultFact>,
+    /** 已挂起的交互，按消息内顺序；非空表示整批等待，所有调用决策完成前不执行任何可执行调用。 */
+    val pending: List<PendingToolInteraction>,
+    /** Remaining unresolved calls in message order. */
     val resolvedCalls: List<ResolvedToolCall>,
-) {
-    /** 本批等待的交互种类（去重，保持首次出现顺序），供只需分支判断的调用方使用。 */
-    val kinds: Set<ToolInteractionKind> get() = pending.mapTo(linkedSetOf()) { it.kind }
-}
+)
 
 /**
  * Capabilities the generation owner hands to one execution. The Runtime assembles them into a
@@ -135,14 +127,15 @@ internal data class ToolExecutionHooks(
     val reportMetadata: suspend (JsonObject, ToolMetadataDelivery) -> Unit,
     val reportChildConversation: suspend (String) -> Unit,
     val registerUnpublishedResource: (ToolResourceLease) -> Unit,
-
 )
 
 internal data class ToolCallOutcome(
     val output: List<UIMessagePart>,
     val executionFailed: Boolean,
-    /** Runtime-owned metadata merged into the Tool part before the result checkpoint. */
-    val runtimeMetadata: JsonObject,
+    /** Typed terminal fact merged into the Tool part before the result checkpoint. */
+    val resultStatus: ToolResultStatus,
+    /** Typed output policy resolved once at completion; drives rolling-compaction eligibility. */
+    val outputPolicy: ToolOutputPolicy,
 )
 
 /** Unexpected failure of a Runtime-owned capability handed to a Tool; never a Tool result. */
@@ -160,55 +153,31 @@ internal class ToolCallRuntime(
         messageId: Uuid,
         calls: List<LocatedToolCall>,
         toolIndex: Map<String, ToolExecutionBinding>,
-        availability: ToolInteractionAvailability,
+        availability: TurnInteractionCapability,
     ): ToolBatchPreparation {
-        val replacements = LinkedHashMap<Int, UIMessagePart.Tool>()
-        val immediateResults = mutableListOf<ToolResultEvent>()
-        val pending = mutableListOf<PendingInteraction>()
+        val replacements = LinkedHashMap<Uuid, UIMessagePart.Tool>()
+        val immediateResults = mutableListOf<ToolResultFact>()
+        val pending = mutableListOf<PendingToolInteraction>()
         val resolvedCalls = mutableListOf<ResolvedToolCall>()
-        val currentBatchOrdinal = calls.minOfOrNull(LocatedToolCall::ordinal) ?: 0
 
         for (call in calls) {
             val tool = call.tool
             val definition = toolIndex[tool.toolName]
-            val capturedKind = ToolRuntimeMetadata.interactionKindOf(tool.metadata)
-            val resultBatchOrdinal = ToolRuntimeMetadata.resultBatchOrdinalOf(tool.metadata)
-                ?: currentBatchOrdinal
-
-            fun terminalMetadata(
-                interaction: ToolInteractionKind,
-                terminalStatus: String,
-            ): JsonObject = ToolRuntimeMetadata.applyTo(
-                tool.metadata,
-                ToolRuntimeMetadata.forResult(
-                    interaction = interaction,
-                    outputPolicy = definition?.outputPolicy?.name
-                        ?: ToolRuntimeMetadata.outputPolicyOf(tool.metadata)
-                        ?: ToolOutputPolicy.PRESERVE.name,
-                    terminalStatus = terminalStatus,
-                    resultBatchOrdinal = resultBatchOrdinal,
-                ),
-            )
+            val locator = ToolCallLocator(messageId, tool.stepId, tool.localCallId)
+            val capturedRequirement = tool.interactionState.capturedRequirement()
 
             fun reject(output: List<UIMessagePart>, wasPending: Boolean) {
-                replacements[call.ordinal] = tool.copy(
+                replacements[tool.localCallId] = tool.copy(
                     output = output,
-                    approvalState = if (wasPending) ToolApprovalState.Auto else tool.approvalState,
-                    metadata = terminalMetadata(
-                        interaction = ToolRuntimeMetadata.interactionKindOf(tool.metadata)
-                            ?: ToolInteractionKind.NONE,
-                        terminalStatus = "failed",
-                    ),
+                    interactionState = if (wasPending) ToolInteractionState.NotRequired else tool.interactionState,
+                    resultStatus = ToolResultStatus.FAILED,
+                    runtimeState = ToolRuntimeState(definition?.outputPolicy ?: ToolOutputPolicy.PRESERVE),
                 )
-                immediateResults += ToolResultEvent(
-                    messageId = messageId,
-                    toolOrdinal = call.ordinal,
-                    status = ToolResultEventStatus.FAILED,
-                )
+                immediateResults += ToolResultFact(locator = locator, status = ToolResultStatus.FAILED)
             }
 
             fun resolveDenied() {
-                val reason = (tool.approvalState as ToolApprovalState.Denied).reason
+                val reason = (tool.interactionState as ToolInteractionState.Denied).reason
                 resolvedCalls += ResolvedToolCall.Denied(
                     ordinal = call.ordinal,
                     result = tool.copy(
@@ -227,48 +196,36 @@ internal class ToolCallRuntime(
                                 ),
                             ),
                         ),
-                        metadata = terminalMetadata(ToolInteractionKind.APPROVAL, "denied"),
+                        resultStatus = ToolResultStatus.DENIED,
+                        runtimeState = ToolRuntimeState(definition?.outputPolicy ?: tool.runtimeState.outputPolicy),
                     ),
                 )
             }
 
             fun resolveAnswered() {
-                val answer = (tool.approvalState as ToolApprovalState.Answered).answer
+                val answer = (tool.interactionState as ToolInteractionState.Answered).answer
                 resolvedCalls += ResolvedToolCall.Answered(
                     ordinal = call.ordinal,
                     result = tool.copy(
                         output = listOf(UIMessagePart.Text(answer)),
-                        metadata = terminalMetadata(ToolInteractionKind.USER_INPUT, "answered"),
+                        resultStatus = ToolResultStatus.ANSWERED,
+                        runtimeState = ToolRuntimeState(definition?.outputPolicy ?: tool.runtimeState.outputPolicy),
                     ),
                 )
             }
 
-            if (ToolRuntimeMetadata.isInvalid(tool.metadata)) {
-                reject(
-                    rejectionEnvelope(ToolGateRejection.INTERACTION_STATE_INVALID, tool.toolName),
-                    wasPending = tool.approvalState is ToolApprovalState.Pending,
-                )
-                continue
-            }
-
-            // 已提交的拒绝/回答是可回放事实。metadata 足以证明类型时，不再依赖当前工具定义；
-            // 老消息缺 metadata 时才继续用当前 definition 与参数严格重建。
-            when (tool.approvalState) {
-                is ToolApprovalState.Denied -> if (capturedKind != null) {
-                    if (capturedKind == ToolInteractionKind.APPROVAL) resolveDenied()
-                    else reject(
-                        rejectionEnvelope(ToolGateRejection.INTERACTION_STATE_INVALID, tool.toolName),
-                        wasPending = false,
-                    )
+            // 已提交的拒绝/回答是可回放事实。typed interactionState 足以证明类型时，
+            // 不再依赖当前工具定义；只有状态与类型不符时才失败关闭。
+            when (tool.interactionState) {
+                is ToolInteractionState.Denied -> if (capturedRequirement != null) {
+                    if (capturedRequirement == ToolInteractionRequirement.Approval) resolveDenied()
+                    else reject(rejectionEnvelope(ToolGateRejection.INTERACTION_STATE_INVALID, tool.toolName), wasPending = false)
                     continue
                 }
 
-                is ToolApprovalState.Answered -> if (capturedKind != null) {
-                    if (capturedKind == ToolInteractionKind.USER_INPUT) resolveAnswered()
-                    else reject(
-                        rejectionEnvelope(ToolGateRejection.INTERACTION_STATE_INVALID, tool.toolName),
-                        wasPending = false,
-                    )
+                is ToolInteractionState.Answered -> if (capturedRequirement != null) {
+                    if (capturedRequirement == ToolInteractionRequirement.UserInput) resolveAnswered()
+                    else reject(rejectionEnvelope(ToolGateRejection.INTERACTION_STATE_INVALID, tool.toolName), wasPending = false)
                     continue
                 }
 
@@ -289,7 +246,7 @@ internal class ToolCallRuntime(
                             }.toString(),
                         ),
                     ),
-                    wasPending = tool.approvalState is ToolApprovalState.Pending,
+                    wasPending = tool.isPending,
                 )
                 continue
             }
@@ -297,55 +254,29 @@ internal class ToolCallRuntime(
             val args = try {
                 definition.parseArguments(tool.input, json)
             } catch (rejection: ToolArgumentsException) {
-                reject(rejection.output, wasPending = tool.approvalState is ToolApprovalState.Pending)
+                reject(rejection.output, wasPending = tool.isPending)
                 continue
             }
 
             val requirement = definition.interactionRequirement(args)
-            val pendingKind = requirement.pendingKindOrNull()
-            val currentKind = pendingKind ?: ToolInteractionKind.NONE
+            val pendingRequirement = requirement.takeIf { it != ToolInteractionRequirement.None }
+            val currentRequirement = pendingRequirement ?: ToolInteractionRequirement.None
 
-            when (tool.approvalState) {
-                is ToolApprovalState.Denied -> {
-                    if (currentKind != ToolInteractionKind.APPROVAL) {
-                        reject(
-                            rejectionEnvelope(ToolGateRejection.INTERACTION_STATE_INVALID, tool.toolName),
-                            wasPending = false,
-                        )
-                    } else {
-                        resolveDenied()
-                    }
-                }
-
-                is ToolApprovalState.Answered -> {
-                    if (currentKind != ToolInteractionKind.USER_INPUT) {
-                        reject(
-                            rejectionEnvelope(ToolGateRejection.INTERACTION_STATE_INVALID, tool.toolName),
-                            wasPending = false,
-                        )
-                    } else {
-                        resolveAnswered()
-                    }
-                }
-
-                ToolApprovalState.Pending -> {
-                    if (currentKind == ToolInteractionKind.NONE ||
-                        capturedKind != null && capturedKind != currentKind
+            when (tool.interactionState) {
+                ToolInteractionState.AwaitingApproval,
+                ToolInteractionState.AwaitingInput,
+                -> {
+                    if (pendingRequirement == null ||
+                        capturedRequirement != null && capturedRequirement != pendingRequirement
                     ) {
-                        reject(
-                            rejectionEnvelope(ToolGateRejection.INTERACTION_STATE_INVALID, tool.toolName),
-                            wasPending = true,
-                        )
+                        reject(rejectionEnvelope(ToolGateRejection.INTERACTION_STATE_INVALID, tool.toolName), wasPending = true)
                     } else {
-                        pending += PendingInteraction(
-                            locator = ToolCallLocator(messageId, call.ordinal),
-                            kind = currentKind,
-                        )
+                        pending += PendingToolInteraction(locator = locator, interaction = tool.interactionState)
                     }
                 }
 
-                ToolApprovalState.Auto -> when {
-                    capturedKind != null && capturedKind != currentKind -> reject(
+                ToolInteractionState.NotRequired -> when {
+                    capturedRequirement != null && capturedRequirement != currentRequirement -> reject(
                         rejectionEnvelope(ToolGateRejection.INTERACTION_STATE_INVALID, tool.toolName),
                         wasPending = false,
                     )
@@ -353,23 +284,18 @@ internal class ToolCallRuntime(
                     requirement == ToolInteractionRequirement.None -> resolvedCalls += executable(
                         messageId, call, tool, definition, args, requirement,
                         approvedByUser = false,
-                        resultBatchOrdinal = resultBatchOrdinal,
                     )
 
                     availability.allows(requirement) -> {
-                        val kind = requireNotNull(pendingKind)
-                        pending += PendingInteraction(
-                            locator = ToolCallLocator(messageId, call.ordinal),
-                            kind = kind,
-                        )
-                        replacements[call.ordinal] = tool.copy(
-                            approvalState = ToolApprovalState.Pending,
-                            metadata = ToolRuntimeMetadata.withInteraction(
-                                metadata = tool.metadata,
-                                interaction = kind,
-                                outputPolicy = definition.outputPolicy.name,
-                                resultBatchOrdinal = resultBatchOrdinal,
-                            ),
+                        val awaiting = when (requirement) {
+                            ToolInteractionRequirement.Approval -> ToolInteractionState.AwaitingApproval
+                            ToolInteractionRequirement.UserInput -> ToolInteractionState.AwaitingInput
+                            else -> error("requirement already handled above")
+                        }
+                        pending += PendingToolInteraction(locator = locator, interaction = awaiting)
+                        replacements[tool.localCallId] = tool.copy(
+                            interactionState = awaiting,
+                            runtimeState = ToolRuntimeState(definition.outputPolicy),
                         )
                     }
 
@@ -386,40 +312,32 @@ internal class ToolCallRuntime(
                     )
                 }
 
-                ToolApprovalState.Approved -> {
-                    if (currentKind != ToolInteractionKind.APPROVAL ||
-                        capturedKind != null && capturedKind != ToolInteractionKind.APPROVAL
+                ToolInteractionState.Approved -> {
+                    if (currentRequirement != ToolInteractionRequirement.Approval ||
+                        capturedRequirement != null && capturedRequirement != ToolInteractionRequirement.Approval
                     ) {
-                        reject(
-                            rejectionEnvelope(ToolGateRejection.INTERACTION_STATE_INVALID, tool.toolName),
-                            wasPending = false,
-                        )
+                        reject(rejectionEnvelope(ToolGateRejection.INTERACTION_STATE_INVALID, tool.toolName), wasPending = false)
                     } else {
                         resolvedCalls += executable(
                             messageId, call, tool, definition, args, requirement,
                             approvedByUser = true,
-                            resultBatchOrdinal = resultBatchOrdinal,
                         )
                     }
                 }
 
+                is ToolInteractionState.Denied, is ToolInteractionState.Answered -> Unit
             }
         }
 
-        // 首个 STARTED checkpoint 必须一次固化整批所有可执行调用的批次身份；否则进程在批内中断后，
-        // 剩余调用会用新的最小 ordinal 重新分批，破坏 recent-batch 保护与归档确定性。
+        // 首个 STARTED checkpoint 必须一次固化整批所有可执行调用的输出策略；否则进程在批内中断后，
+        // 剩余调用会用不同的策略重新分批，破坏 recent-batch 保护与归档确定性。
         resolvedCalls.filterIsInstance<ResolvedToolCall.Executable>().forEach { resolved ->
             val prepared = resolved.call
             val preparedSource = prepared.source.copy(
-                metadata = ToolRuntimeMetadata.withInteraction(
-                    metadata = prepared.source.metadata,
-                    interaction = prepared.interaction.toKind(),
-                    outputPolicy = prepared.definition.outputPolicy.name,
-                    resultBatchOrdinal = prepared.resultBatchOrdinal,
-                ),
+                runtimeState = ToolRuntimeState(prepared.definition.outputPolicy),
             )
             if (preparedSource != prepared.source) {
-                replacements.putIfAbsent(resolved.ordinal, preparedSource)
+                replacements.putIfAbsent(preparedSource.localCallId, preparedSource)
             }
         }
 
@@ -439,20 +357,18 @@ internal class ToolCallRuntime(
         args: JsonObject,
         requirement: ToolInteractionRequirement,
         approvedByUser: Boolean,
-        resultBatchOrdinal: Int,
     ): ResolvedToolCall.Executable {
-        val executionId = "${messageId}_${call.ordinal}".replace(Regex("[^A-Za-z0-9_-]"), "_")
+        val executionId = "tool:${tool.localCallId}"
         return ResolvedToolCall.Executable(
             ordinal = call.ordinal,
             call = PreparedToolCall(
-                locator = ToolCallLocator(messageId, call.ordinal),
+                locator = ToolCallLocator(messageId, tool.stepId, tool.localCallId),
                 executionId = executionId,
                 source = tool,
                 definition = definition,
                 arguments = args,
                 interaction = requirement,
                 approvedByUser = approvedByUser,
-                resultBatchOrdinal = resultBatchOrdinal,
             ),
         )
     }
@@ -467,9 +383,8 @@ internal class ToolCallRuntime(
     ): ToolCallOutcome {
         var registeredArtifact = false
         val context = ToolExecutionContext(
-            messageId = call.locator.messageId,
-            toolOrdinal = call.locator.toolOrdinal,
-            toolCallId = call.source.toolCallId,
+            locator = call.locator,
+            providerCallId = call.source.providerCallId,
             reportMetadata = { patch, delivery ->
                 runtimeCapability { hooks.reportMetadata(patch, delivery) }
             },
@@ -498,15 +413,12 @@ internal class ToolCallRuntime(
             ToolCallOutcome(
                 output = output,
                 executionFailed = false,
-                runtimeMetadata = runtimeMetadata(
-                    call = call,
-                    terminalStatus = "completed",
-                    outputPolicy = if (registeredArtifact) {
-                        ToolOutputPolicy.PRESERVE
-                    } else {
-                        resolveSuccessfulOutputPolicy(call, output)
-                    },
-                ),
+                resultStatus = ToolResultStatus.COMPLETED,
+                outputPolicy = if (registeredArtifact) {
+                    ToolOutputPolicy.PRESERVE
+                } else {
+                    resolveSuccessfulOutputPolicy(call, output)
+                },
             )
         } catch (failure: ToolExecutionFailure) {
             ToolCallOutcome(
@@ -515,11 +427,8 @@ internal class ToolCallRuntime(
                     emptyStatus = EmptyToolResultStatus.FAILED,
                 ),
                 executionFailed = true,
-                runtimeMetadata = runtimeMetadata(
-                    call,
-                    "failed",
-                    outputPolicy = artifactSafeOutputPolicy(call, registeredArtifact),
-                ),
+                resultStatus = ToolResultStatus.FAILED,
+                outputPolicy = artifactSafeOutputPolicy(call, registeredArtifact),
             )
         } catch (timeout: TimeoutCancellationException) {
             // 外层 Turn/collector 超时属于取消，只有工具内部子超时且父协程仍 active 才归一化为工具失败。
@@ -532,11 +441,8 @@ internal class ToolCallRuntime(
                     ),
                 ),
                 executionFailed = true,
-                runtimeMetadata = runtimeMetadata(
-                    call,
-                    "failed",
-                    outputPolicy = artifactSafeOutputPolicy(call, registeredArtifact),
-                ),
+                resultStatus = ToolResultStatus.FAILED,
+                outputPolicy = artifactSafeOutputPolicy(call, registeredArtifact),
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -552,26 +458,11 @@ internal class ToolCallRuntime(
                     ),
                 ),
                 executionFailed = true,
-                runtimeMetadata = runtimeMetadata(
-                    call,
-                    "failed",
-                    outputPolicy = artifactSafeOutputPolicy(call, registeredArtifact),
-                ),
+                resultStatus = ToolResultStatus.FAILED,
+                outputPolicy = artifactSafeOutputPolicy(call, registeredArtifact),
             )
         }
     }
-
-    private fun runtimeMetadata(
-        call: PreparedToolCall,
-        terminalStatus: String?,
-        outputPolicy: ToolOutputPolicy = call.definition.outputPolicy,
-    ): JsonObject =
-        ToolRuntimeMetadata.forResult(
-            interaction = call.interaction.toKind(),
-            outputPolicy = outputPolicy.name,
-            terminalStatus = terminalStatus,
-            resultBatchOrdinal = call.resultBatchOrdinal,
-        )
 
     /** 任何已登记产物都要求完整保留结果；成功或失败不能把交付引用变成可归档文本。 */
     private fun artifactSafeOutputPolicy(
@@ -618,22 +509,30 @@ internal fun ensureProviderReplayResult(
     listOf(UIMessagePart.Text(fallback))
 }
 
-private fun ToolInteractionAvailability.allows(requirement: ToolInteractionRequirement): Boolean = when {
+private fun TurnInteractionCapability.allows(requirement: ToolInteractionRequirement): Boolean = when {
     requirement == ToolInteractionRequirement.None -> true
-    this == ToolInteractionAvailability.FULL -> true
+    this == TurnInteractionCapability.FULL -> true
     requirement == ToolInteractionRequirement.UserInput &&
-        this == ToolInteractionAvailability.USER_INPUT_ONLY -> true
+        this == TurnInteractionCapability.USER_INPUT_ONLY -> true
     else -> false
 }
 
-private fun ToolInteractionRequirement.pendingKindOrNull(): ToolInteractionKind? = when (this) {
-    ToolInteractionRequirement.Approval -> ToolInteractionKind.APPROVAL
-    ToolInteractionRequirement.UserInput -> ToolInteractionKind.USER_INPUT
-    ToolInteractionRequirement.None -> null
-}
+/**
+ * The interaction kind already recorded on a Tool part, derived from its typed [ToolInteractionState].
+ * `NotRequired` records no interaction and yields null, matching the "no captured interaction" case.
+ */
+private fun ToolInteractionState.capturedRequirement(): ToolInteractionRequirement? = when (this) {
+    ToolInteractionState.AwaitingApproval,
+    ToolInteractionState.Approved,
+    is ToolInteractionState.Denied,
+    -> ToolInteractionRequirement.Approval
 
-private fun ToolInteractionRequirement.toKind(): ToolInteractionKind =
-    pendingKindOrNull() ?: ToolInteractionKind.NONE
+    ToolInteractionState.AwaitingInput,
+    is ToolInteractionState.Answered,
+    -> ToolInteractionRequirement.UserInput
+
+    ToolInteractionState.NotRequired -> null
+}
 
 private fun rejectionEnvelope(rejection: ToolGateRejection, toolName: String): List<UIMessagePart> {
     val (reason, message) = when (rejection) {
@@ -657,162 +556,3 @@ private fun rejectionEnvelope(rejection: ToolGateRejection, toolName: String): L
         ),
     )
 }
-
-/**
- * Codec for the Runtime-reserved `tool_runtime` metadata namespace. Only the ToolCallRuntime,
- * the conversation reducer path and presentation projectors may read or write it; tool-owned
- * metadata patches containing the reserved key are rejected before merging.
- */
-@Serializable
-data class ToolOutputArchiveRef(
-    val relativePath: String,
-    val mimeType: String,
-)
-
-/** Stable archive descriptor embedded in tool_runtime metadata; the only model-visible handle is `ref`. */
-@Serializable
-data class ToolOutputArchive(
-    val ref: Long,
-    val artifact: ToolOutputArchiveRef,
-    val characters: Long,
-    val lines: Int,
-)
-
-@Serializable
-internal data class ToolRuntimeMetadata(
-    val version: Int = 1,
-    val interaction: String? = null,
-    val outputPolicy: String? = null,
-    val terminalStatus: String? = null,
-    val resultBatchOrdinal: Int? = null,
-    val archive: ToolOutputArchive? = null,
-) {
-    companion object {
-        /** Tool part metadata 中由 Runtime 独占的保留键。 */
-        const val METADATA_KEY = "tool_runtime"
-        /** 持久化的授权审批交互枚举值。 */
-        const val INTERACTION_APPROVAL = "approval"
-        /** 持久化的用户输入交互枚举值。 */
-        const val INTERACTION_USER_INPUT = "user_input"
-
-        // v1 metadata 是运行时判定依据；未知字段必须失败关闭，避免新旧协议被静默混用。
-        private val codec = Json { encodeDefaults = false }
-
-        fun interactionKindOf(metadata: JsonObject?): ToolInteractionKind? =
-            read(metadata)?.interaction?.let {
-                when (it) {
-                    INTERACTION_APPROVAL -> ToolInteractionKind.APPROVAL
-                    INTERACTION_USER_INPUT -> ToolInteractionKind.USER_INPUT
-                    else -> ToolInteractionKind.NONE
-                }
-            }
-
-        fun withInteraction(
-            metadata: JsonObject?,
-            interaction: ToolInteractionKind,
-            outputPolicy: String,
-            resultBatchOrdinal: Int? = null,
-        ): JsonObject = merge(
-            metadata,
-            ToolRuntimeMetadata(
-                interaction = interaction.encode(),
-                outputPolicy = outputPolicy,
-                resultBatchOrdinal = resultBatchOrdinal,
-            ),
-        )
-
-        fun completed(interaction: ToolInteractionKind, outputPolicy: String): JsonObject =
-            forResult(interaction, outputPolicy, terminalStatus = "completed")
-
-        fun forResult(
-            interaction: ToolInteractionKind,
-            outputPolicy: String,
-            terminalStatus: String?,
-            resultBatchOrdinal: Int? = null,
-        ): JsonObject = codec.encodeToJsonElement(
-            ToolRuntimeMetadata.serializer(),
-            ToolRuntimeMetadata(
-                interaction = interaction.encode(),
-                outputPolicy = outputPolicy,
-                terminalStatus = terminalStatus,
-                resultBatchOrdinal = resultBatchOrdinal,
-            ),
-        ).jsonObject()
-
-        /** Places a Runtime-owned metadata object under the reserved key of a Tool part. */
-        fun applyTo(metadata: JsonObject?, runtimeMetadata: JsonObject): JsonObject =
-            JsonObject((metadata ?: JsonObject(emptyMap())) + (METADATA_KEY to runtimeMetadata))
-
-        fun requireToolOwnedPatch(patch: JsonObject): JsonObject {
-            require(METADATA_KEY !in patch) { "Tool metadata patch contains reserved key: $METADATA_KEY" }
-            return patch
-        }
-
-        /** Attaches the archive handle to an existing tool part metadata; staging is single-shot. */
-        fun withArchive(metadata: JsonObject?, archive: ToolOutputArchive): JsonObject = merge(
-            metadata,
-            ToolRuntimeMetadata(archive = archive),
-        )
-
-        fun archiveOf(metadata: JsonObject?): ToolOutputArchive? =
-            read(metadata)?.archive?.takeIf { it.ref > 0 && it.artifact.relativePath.isNotBlank() }
-
-        fun terminalStatusOf(metadata: JsonObject?): String? = read(metadata)?.terminalStatus
-
-        fun outputPolicyOf(metadata: JsonObject?): String? = read(metadata)?.outputPolicy
-
-        fun resultBatchOrdinalOf(metadata: JsonObject?): Int? =
-            read(metadata)?.resultBatchOrdinal?.takeIf { it >= 0 }
-
-        /** key 存在但不符合当前 v1 schema 时必须 fail-closed，不能伪装成旧消息缺 metadata。 */
-        fun isInvalid(metadata: JsonObject?): Boolean =
-            metadata?.containsKey(METADATA_KEY) == true && read(metadata) == null
-
-        private fun read(metadata: JsonObject?): ToolRuntimeMetadata? =
-            (metadata?.get(METADATA_KEY) as? JsonObject)?.let(::readFromObject)
-
-        private fun readFromObject(value: JsonObject): ToolRuntimeMetadata? = runCatching {
-            codec.decodeFromJsonElement(ToolRuntimeMetadata.serializer(), value)
-        }.getOrNull()?.takeIf { runtime ->
-            runtime.version == 1 &&
-                runtime.interaction in setOf(null, INTERACTION_APPROVAL, INTERACTION_USER_INPUT, "none") &&
-                runtime.outputPolicy?.let { policy ->
-                    ToolOutputPolicy.entries.any { it.name == policy }
-                } != false &&
-                runtime.terminalStatus in setOf(null, "completed", "failed", "denied", "answered") &&
-                runtime.resultBatchOrdinal?.let { it >= 0 } != false &&
-                runtime.archive?.let { archive ->
-                    val relativePath = archive.artifact.relativePath.replace('\\', '/')
-                    archive.ref > 0 &&
-                        relativePath == archive.artifact.relativePath &&
-                        relativePath.startsWith("tool_outputs/") &&
-                        relativePath.split('/').none { it.isBlank() || it == "." || it == ".." } &&
-                        archive.artifact.mimeType == "text/plain" &&
-                        archive.characters >= 0 &&
-                        archive.lines >= 0
-                } != false
-        }
-
-        private fun merge(metadata: JsonObject?, value: ToolRuntimeMetadata): JsonObject {
-            val existing = read(metadata)
-            val merged = ToolRuntimeMetadata(
-                version = 1,
-                interaction = value.interaction ?: existing?.interaction,
-                outputPolicy = value.outputPolicy ?: existing?.outputPolicy,
-                terminalStatus = value.terminalStatus ?: existing?.terminalStatus,
-                resultBatchOrdinal = value.resultBatchOrdinal ?: existing?.resultBatchOrdinal,
-                archive = value.archive ?: existing?.archive,
-            )
-            val encoded = codec.encodeToJsonElement(ToolRuntimeMetadata.serializer(), merged).jsonObject()
-            return JsonObject((metadata ?: JsonObject(emptyMap())) + (METADATA_KEY to encoded))
-        }
-
-        private fun ToolInteractionKind.encode(): String = when (this) {
-            ToolInteractionKind.APPROVAL -> INTERACTION_APPROVAL
-            ToolInteractionKind.USER_INPUT -> INTERACTION_USER_INPUT
-            ToolInteractionKind.NONE -> "none"
-        }
-    }
-}
-
-private fun JsonElement.jsonObject(): JsonObject = this as JsonObject

@@ -8,7 +8,7 @@
 
 ## 1. 职责与边界
 
-`assistant_call` 是同步委托。Target 在独立 Child Conversation 中复用正常的 `GenerationLoop`、
+`assistant_call` 是同步委托。Target 在独立 Child Conversation 中复用正常的 `TurnRunner`、
 Transformer、Provider 和 checkpoint。Target 不读取 Master 历史，只接收 `request` 与显式指定的附件；
 Child 可以继续使用自己的历史，但不继承 Master 的 `workspaceCwd`。
 
@@ -224,7 +224,7 @@ artifact_omitted: Int = 0
   Image URL、artifact metadata 和模型清单中的 path；与按需读取无关。
 - 已知附件工具顶层 attachments 中已复制资源的路径同步重绑定；不为输入数组额外复制文件，
   不猜文件名、不加源路径别名。未知工具/字段、正文和内部 UUID 保持原规则。
-- clone 创建的资源由 DelegationCoordinator 持有到 Child link 提交后发布；关联前失败补偿，
+- clone 创建的资源由 SubAssistantRunCoordinator 持有到 Child link 提交后发布；关联前失败补偿，
   关联后失败保留已关联 Child 与引用并进入失败终态。普通路径读取不加入这批创建资源。
 
 ## 8. 关键实现与验证边界
@@ -235,9 +235,9 @@ artifact_omitted: Int = 0
 | `LocalToolPath` | upload 文件路径语法 |
 | `ArtifactStore.withUploadImages` / `ArtifactPayloadStore.readBytes` | 生命周期读取保护 / 有界磁盘 IO |
 | `AttachmentResolver` | path → 识图内存输入或受保护 Child 文件输入 |
-| `AttachmentInspectionTool` / `GenerationToolSetFactory` | 显式识图与工具可用性 |
+| `AttachmentInspectionTool` / `TurnToolSetFactory` | 显式识图与工具可用性 |
 | `AttachmentProjectionTransformer` | 原来源容器内的请求级图片投影 |
-| `AssistantToolFactory` / `DelegationCoordinator` | 委托参数、run/Child 编排与交接 |
+| `AssistantToolFactory` / `SubAssistantRunCoordinator` | 委托参数、run/Child 编排与交接 |
 | `SubAssistantResultProjection` / `buildSubAssistantArtifactManifest` | 交付物提取、内容选择与模型清单 |
 | `AttachmentCloner` / `ConversationAttachmentPreviewProjector` | 正常复制重绑定 / 只读 UI 预览 |
 

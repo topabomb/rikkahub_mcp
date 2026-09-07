@@ -15,7 +15,28 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
 
+/**
+ * Stable transcript behavior on [UIMessage] / [UIMessagePart]: visibility, replay-safe projection,
+ * media handling and pure metadata normalization. Streaming chunk-merge lives in the app
+ * `StepOutputAccumulatorTest`; the retired `handleMessageChunk` free function is gone.
+ */
 class MessageTest {
+
+    private fun toolPart(
+        providerCallId: String = "call-1",
+        name: String = "search",
+        input: String = "{}",
+        output: List<UIMessagePart> = emptyList(),
+        interaction: ToolInteractionState = ToolInteractionState.NotRequired,
+    ): UIMessagePart.Tool = UIMessagePart.Tool(
+        localCallId = Uuid.random(),
+        stepId = Uuid.random(),
+        providerCallId = providerCallId,
+        toolName = name,
+        input = input,
+        output = output,
+        interactionState = interaction,
+    )
 
     @Test
     fun `findUserTurnStart should preserve complete turns`() {
@@ -23,26 +44,19 @@ class MessageTest {
             UIMessage.user("First question"),
             UIMessage.assistant("First answer"),
             UIMessage.user("Second question"),
-            UIMessage.assistant("Second answer")
+            UIMessage.assistant("Second answer"),
         )
-
         assertEquals(2, messages.findUserTurnStart(3))
         assertEquals(2, messages.findUserTurnStart(2))
         assertEquals(0, emptyList<UIMessage>().findUserTurnStart(3))
     }
 
-    // ==================== isValidToUpload Tests ====================
-
     @Test
     fun `isValidToUpload should be true for non-empty reasoning with empty text`() {
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = listOf(
-                UIMessagePart.Reasoning(reasoning = "thinking"),
-                UIMessagePart.Text("")
-            )
+            parts = listOf(UIMessagePart.Reasoning(reasoning = "thinking"), UIMessagePart.Text("")),
         )
-
         assertTrue(message.isValidToUpload())
     }
 
@@ -50,220 +64,26 @@ class MessageTest {
     fun `isValidToUpload should be false for blank reasoning with empty text`() {
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = listOf(
-                UIMessagePart.Reasoning(reasoning = "   "),
-                UIMessagePart.Text("")
-            )
+            parts = listOf(UIMessagePart.Reasoning(reasoning = "   "), UIMessagePart.Text("")),
         )
-
         assertFalse(message.isValidToUpload())
     }
 
     @Test
     fun `isValidToUpload should be true for non-empty text`() {
-        val message = UIMessage(
-            role = MessageRole.ASSISTANT,
-            parts = listOf(UIMessagePart.Text("ok"))
-        )
-
+        val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("ok")))
         assertTrue(message.isValidToUpload())
     }
 
     @Test
     fun `isValidToUpload should keep tool-only message valid`() {
-        val message = UIMessage(
-            role = MessageRole.ASSISTANT,
-            parts = listOf(
-                UIMessagePart.Tool(
-                    toolCallId = "call-1",
-                    toolName = "search",
-                    input = """{"q":"hello"}"""
-                )
-            )
-        )
-
+        val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(toolPart(name = "search", input = """{"q":"hello"}""")))
         assertTrue(message.isValidToUpload())
     }
 
     @Test
-    fun `current assistant step should normalize out of order tool content and reasoning deltas`() {
-        var messages = listOf(UIMessage.user("Use a tool"))
-
-        messages = messages.handleMessageChunk(
-            assistantChunk(
-                UIMessagePart.Tool(
-                    toolCallId = "call-1",
-                    toolName = "lookup",
-                    input = "{}",
-                )
-            )
-        )
-        messages = messages.handleMessageChunk(assistantChunk(UIMessagePart.Text("Calling lookup")))
-        messages = messages.handleMessageChunk(
-            assistantChunk(UIMessagePart.Reasoning(reasoning = "Need lookup"))
-        )
-
-        val parts = messages.last().parts
-        assertEquals(3, parts.size)
-        assertTrue(parts[0] is UIMessagePart.Reasoning)
-        assertTrue(parts[1] is UIMessagePart.Text)
-        assertTrue(parts[2] is UIMessagePart.Tool)
-        assertEquals("Need lookup", (parts[0] as UIMessagePart.Reasoning).reasoning)
-        assertEquals("Calling lookup", (parts[1] as UIMessagePart.Text).text)
-    }
-
-    @Test
-    fun `normalizing current assistant step should not move completed tool history`() {
-        val completedTool = UIMessagePart.Tool(
-            toolCallId = "call-1",
-            toolName = "first",
-            input = "{}",
-            output = listOf(UIMessagePart.Text("first result")),
-        )
-        var messages = listOf(
-            UIMessage.user("Use tools"),
-            UIMessage(
-                role = MessageRole.ASSISTANT,
-                parts = listOf(
-                    UIMessagePart.Reasoning(reasoning = "First reasoning"),
-                    UIMessagePart.Text("First content"),
-                    completedTool,
-                ),
-            ),
-        )
-
-        messages = messages.handleMessageChunk(
-            assistantChunk(
-                UIMessagePart.Tool(
-                    toolCallId = "call-2",
-                    toolName = "second",
-                    input = "{}",
-                )
-            )
-        )
-        messages = messages.handleMessageChunk(assistantChunk(UIMessagePart.Text("Second content")))
-        messages = messages.handleMessageChunk(
-            assistantChunk(UIMessagePart.Reasoning(reasoning = "Second reasoning"))
-        )
-
-        val parts = messages.last().parts
-        assertEquals(
-            listOf(
-                UIMessagePart.Reasoning::class,
-                UIMessagePart.Text::class,
-                UIMessagePart.Tool::class,
-                UIMessagePart.Reasoning::class,
-                UIMessagePart.Text::class,
-                UIMessagePart.Tool::class,
-            ),
-            parts.map { it::class },
-        )
-        assertEquals("call-1", (parts[2] as UIMessagePart.Tool).toolCallId)
-        assertEquals("call-2", (parts[5] as UIMessagePart.Tool).toolCallId)
-    }
-
-    @Test
-    fun `blank tool delta should not merge into a completed tool step`() {
-        val completedTool = UIMessagePart.Tool(
-            toolCallId = "call-1",
-            toolName = "first",
-            input = "{}",
-            output = listOf(UIMessagePart.Text("first result")),
-        )
-        var messages = listOf(
-            UIMessage.user("Use another tool"),
-            UIMessage(role = MessageRole.ASSISTANT, parts = listOf(completedTool)),
-        )
-
-        messages = messages.handleMessageChunk(
-            assistantChunk(
-                UIMessagePart.Tool(
-                    toolCallId = "",
-                    toolName = "second",
-                    input = "{",
-                )
-            )
-        )
-
-        val tools = messages.last().parts.filterIsInstance<UIMessagePart.Tool>()
-        assertEquals(2, tools.size)
-        assertEquals(completedTool, tools[0])
-        assertEquals("second", tools[1].toolName)
-    }
-
-    @Test
-    fun `reused nonblank tool id should not mutate a completed tool step`() {
-        val completedTool = UIMessagePart.Tool(
-            toolCallId = "reused-id",
-            toolName = "first",
-            input = "{}",
-            output = listOf(UIMessagePart.Text("first result")),
-        )
-        var messages = listOf(
-            UIMessage.user("Use another tool"),
-            UIMessage(role = MessageRole.ASSISTANT, parts = listOf(completedTool)),
-        )
-
-        messages = messages.handleMessageChunk(
-            assistantChunk(
-                UIMessagePart.Tool(
-                    toolCallId = "reused-id",
-                    toolName = "second",
-                    input = "[",
-                )
-            )
-        )
-        messages = messages.handleMessageChunk(
-            assistantChunk(UIMessagePart.Tool(toolCallId = "reused-id", toolName = "", input = "]"))
-        )
-
-        val tools = messages.last().parts.filterIsInstance<UIMessagePart.Tool>()
-        assertEquals(2, tools.size)
-        assertEquals(completedTool, tools[0])
-        assertEquals("second", tools[1].toolName)
-        assertEquals("[]", tools[1].input)
-    }
-
-    @Test
-    fun `complete image urls should not be prefixed or concatenated`() {
-        var messages = listOf(UIMessage.user("Draw two images"))
-
-        messages = messages.handleMessageChunk(
-            assistantChunk(UIMessagePart.Image(url = "data:image/jpeg;base64,AAA"))
-        )
-        messages = messages.handleMessageChunk(
-            assistantChunk(UIMessagePart.Image(url = "data:image/png;base64,BBB"))
-        )
-
-        val images = messages.last().parts.filterIsInstance<UIMessagePart.Image>()
-        assertEquals(2, images.size)
-        assertEquals("data:image/jpeg;base64,AAA", images[0].url)
-        assertEquals("data:image/png;base64,BBB", images[1].url)
-    }
-
-    @Test
-    fun `android content and resource image urls should not be prefixed or concatenated`() {
-        var messages = listOf(UIMessage.user("Show local images"))
-
-        messages = messages.handleMessageChunk(
-            assistantChunk(UIMessagePart.Image(url = "content://media/external/images/media/1"))
-        )
-        messages = messages.handleMessageChunk(
-            assistantChunk(UIMessagePart.Image(url = "android.resource://net.weero.measix.pilot/drawable/icon"))
-        )
-
-        val images = messages.last().parts.filterIsInstance<UIMessagePart.Image>()
-        assertEquals(2, images.size)
-        assertEquals("content://media/external/images/media/1", images[0].url)
-        assertEquals("android.resource://net.weero.measix.pilot/drawable/icon", images[1].url)
-        assertEquals(
-            "content://media/external/images/media/1",
-            renderableImageUrl("content://media/external/images/media/1"),
-        )
-        assertEquals(
-            "android.resource://net.weero.measix.pilot/drawable/icon",
-            renderableImageUrl("android.resource://net.weero.measix.pilot/drawable/icon"),
-        )
+    fun `complete image urls are recognized and renderable`() {
+        assertEquals("content://media/external/images/media/1", renderableImageUrl("content://media/external/images/media/1"))
         assertTrue(isCompleteImageUrl("content://media/external/images/media/1"))
         assertTrue(isCompleteImageUrl("android.resource://net.weero.measix.pilot/drawable/icon"))
     }
@@ -272,29 +92,13 @@ class MessageTest {
     fun `hasBase64Part walks nested tool output`() {
         val nested = UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = listOf(
-                UIMessagePart.Tool(
-                    toolCallId = "c1",
-                    toolName = "generate_image",
-                    input = "{}",
-                    output = listOf(UIMessagePart.Image(url = "data:image/png;base64,AAA")),
-                )
-            ),
+            parts = listOf(toolPart(name = "generate_image", output = listOf(UIMessagePart.Image(url = "data:image/png;base64,AAA")))),
         )
-        val topLevel = UIMessage.assistant("ok").copy(
-            parts = listOf(UIMessagePart.Image(url = "data:image/png;base64,BBB")),
+        val topLevel = UIMessage.assistant("ok").copy(parts = listOf(UIMessagePart.Image(url = "data:image/png;base64,BBB")))
+        val clean = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(toolPart(name = "generate_image", output = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")))),
         )
-        val clean = UIMessage.assistant("ok").copy(
-            parts = listOf(
-                UIMessagePart.Tool(
-                    toolCallId = "c1",
-                    toolName = "generate_image",
-                    input = "{}",
-                    output = listOf(UIMessagePart.Image(url = "file:///tmp/a.png")),
-                )
-            ),
-        )
-
         assertTrue(nested.hasBase64Part())
         assertTrue(topLevel.hasBase64Part())
         assertFalse(clean.hasBase64Part())
@@ -302,29 +106,15 @@ class MessageTest {
         assertFalse(strippedMessage.hasBase64Part())
         val placeholder = strippedMessage.getTools().single().output.single()
         assertTrue(placeholder is UIMessagePart.Text)
-        assertEquals(
-            MessageMediaFailureReason.PERSISTENCE_FAILED,
-            placeholder.mediaFailureMetadataOrNull()?.reason,
-        )
+        assertEquals(MessageMediaFailureReason.PERSISTENCE_FAILED, placeholder.mediaFailureMetadataOrNull()?.reason)
         assertEquals(1, strippedMessage.parts.countMediaPersistenceFailures())
     }
 
     @Test
     fun `replay safe projection removes terminal draft protocol state and keeps paired facts`() {
-        val mediaFailure = mediaPersistenceFailurePart(
-            UIMessagePart.Image(url = "data:image/png;base64,broken"),
-        )
-        val openTool = UIMessagePart.Tool(
-            toolCallId = "open-call",
-            toolName = "unfinished_tool",
-            input = "{",
-        )
-        val completedTool = UIMessagePart.Tool(
-            toolCallId = "done-call",
-            toolName = "generate_image",
-            input = "{}",
-            output = listOf(mediaFailure),
-        )
+        val mediaFailure = mediaPersistenceFailurePart(UIMessagePart.Image(url = "data:image/png;base64,broken"))
+        val openTool = toolPart(providerCallId = "open-call", name = "unfinished_tool", input = "{")
+        val completedTool = toolPart(providerCallId = "done-call", name = "generate_image", output = listOf(mediaFailure))
         val terminal = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
@@ -339,31 +129,21 @@ class MessageTest {
             terminalReason = TurnTerminalReasons.PROVIDER_FAILED,
             terminalDetail = "sanitized provider detail",
         )
-
         val projected = listOf(terminal).replaySafeProjection().single()
-
-        assertEquals(null, projected.providerMetadata)
-        assertEquals(null, projected.terminalStatus)
-        assertEquals(null, projected.terminalReason)
-        assertEquals(null, projected.terminalDetail)
+        assertNull(projected.providerMetadata)
+        assertNull(projected.terminalStatus)
+        assertNull(projected.terminalReason)
+        assertNull(projected.terminalDetail)
         assertTrue(projected.parts.none { it is UIMessagePart.Reasoning })
-        assertTrue(projected.parts.none { it === openTool })
         assertTrue(projected.toText().contains("partial answer"))
         assertTrue(projected.toText().contains("did not complete"))
-        // Fail-closed: openTool (unsafe) is before completedTool, so the entire
-        // message is an incomplete tail — no tools survive projection.
         assertTrue(projected.getTools().isEmpty())
         assertEquals(0, projected.parts.countMediaPersistenceFailures())
     }
 
     @Test
     fun `terminal replay projection preserves reasoning in complete steps and drops tail reasoning`() {
-        val completedTool = UIMessagePart.Tool(
-            toolCallId = "call-1",
-            toolName = "search",
-            input = "{}",
-            output = listOf(UIMessagePart.Text("result")),
-        )
+        val completedTool = toolPart(name = "search", output = listOf(UIMessagePart.Text("result")))
         val terminal = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
@@ -377,16 +157,12 @@ class MessageTest {
             terminalReason = TurnTerminalReasons.PROVIDER_FAILED,
             terminalDetail = "detail",
         )
-
         val projected = terminal.replaySafeProjection()!!
         val projection = projected.providerReplayProjection
         assertNotNull(projection)
         assertTrue(projection!!.hasIncompleteTail)
-        // The complete prefix is: Reasoning, Text, Tool = 3 parts
         assertEquals(3, projection.completePartCount)
-        // The complete prefix must retain reasoning
         assertTrue(projected.parts.take(3).any { it is UIMessagePart.Reasoning })
-        // The tail must not contain reasoning
         val tailParts = projected.parts.drop(3)
         assertTrue(tailParts.none { it is UIMessagePart.Reasoning })
         assertTrue(tailParts.any { it is UIMessagePart.Text && it.text.contains("Partial final answer") })
@@ -396,14 +172,10 @@ class MessageTest {
     fun `terminal replay with only partial reasoning and text has zero complete prefix`() {
         val terminal = UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = listOf(
-                UIMessagePart.Reasoning(reasoning = "unfinished"),
-                UIMessagePart.Text("partial"),
-            ),
+            parts = listOf(UIMessagePart.Reasoning(reasoning = "unfinished"), UIMessagePart.Text("partial")),
             terminalStatus = MessageTerminalStatus.INCOMPLETE,
             terminalReason = TurnTerminalReasons.PROVIDER_INCOMPLETE,
         )
-
         val projected = terminal.replaySafeProjection()!!
         val projection = projected.providerReplayProjection!!
         assertEquals(0, projection.completePartCount)
@@ -421,8 +193,7 @@ class MessageTest {
                 sourceProfile = "google:developer:example",
                 providerStepId = "step-1",
             ).toMetadata().forEach { (key, value) -> put(key, value) }
-            AttachmentProjectionTextMetadata(attachmentProjectionText = true)
-                .toMetadata().forEach { (key, value) -> put(key, value) }
+            AttachmentProjectionTextMetadata(attachmentProjectionText = true).toMetadata().forEach { (key, value) -> put(key, value) }
         }
         val imageMetadata = GoogleThoughtMetadata(
             thoughtSignature = "image-signature",
@@ -438,7 +209,6 @@ class MessageTest {
             ),
             terminalStatus = MessageTerminalStatus.INCOMPLETE,
         )
-
         val projected = terminal.replaySafeProjection()!!
         val text = projected.parts.filterIsInstance<UIMessagePart.Text>().first()
         val image = projected.parts.filterIsInstance<UIMessagePart.Image>().single()
@@ -449,23 +219,9 @@ class MessageTest {
 
     @Test
     fun `terminal replay fail-closed at unsafe tool boundary drops subsequent steps`() {
-        val safeTool = UIMessagePart.Tool(
-            toolCallId = "safe-1",
-            toolName = "search",
-            input = "{}",
-            output = listOf(UIMessagePart.Text("ok")),
-        )
-        val unsafeTool = UIMessagePart.Tool(
-            toolCallId = "unsafe",
-            toolName = "broken",
-            input = "{invalid",
-        )
-        val laterSafeTool = UIMessagePart.Tool(
-            toolCallId = "later-safe",
-            toolName = "search2",
-            input = "{}",
-            output = listOf(UIMessagePart.Text("ok2")),
-        )
+        val safeTool = toolPart(providerCallId = "safe-1", name = "search", output = listOf(UIMessagePart.Text("ok")))
+        val unsafeTool = toolPart(providerCallId = "unsafe", name = "broken", input = "{invalid")
+        val laterSafeTool = toolPart(providerCallId = "later-safe", name = "search2", output = listOf(UIMessagePart.Text("ok2")))
         val terminal = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
@@ -481,26 +237,17 @@ class MessageTest {
             terminalStatus = MessageTerminalStatus.FAILED,
             terminalReason = TurnTerminalReasons.PROVIDER_FAILED,
         )
-
         val projected = terminal.replaySafeProjection()!!
         val projection = projected.providerReplayProjection!!
-        // Complete prefix ends at the safe tool (index 2), everything after is tail
         assertEquals(3, projection.completePartCount)
         assertTrue(projection.hasIncompleteTail)
-        // laterSafeTool must not appear in the projected parts (fail-closed)
-        assertTrue(projected.parts.none { it is UIMessagePart.Tool && it.toolCallId == "later-safe" })
-        // safeTool must still be present
-        assertTrue(projected.parts.any { it is UIMessagePart.Tool && it.toolCallId == "safe-1" })
+        assertTrue(projected.parts.none { it is UIMessagePart.Tool && it.providerCallId == "later-safe" })
+        assertTrue(projected.parts.any { it is UIMessagePart.Tool && it.providerCallId == "safe-1" })
     }
 
     @Test
     fun `terminal replay keeps complete prefix reasoning for deepseek v4 strict history`() {
-        val completedTool = UIMessagePart.Tool(
-            toolCallId = "call-1",
-            toolName = "search",
-            input = "{}",
-            output = listOf(UIMessagePart.Text("result")),
-        )
+        val completedTool = toolPart(name = "search", output = listOf(UIMessagePart.Text("result")))
         val terminal = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
@@ -513,11 +260,9 @@ class MessageTest {
             terminalStatus = MessageTerminalStatus.FAILED,
             terminalReason = TurnTerminalReasons.PROVIDER_FAILED,
         )
-
         val projected = terminal.replaySafeProjection()!!
         val projection = projected.providerReplayProjection!!
         val completePrefix = projected.parts.take(projection.completePartCount)
-        // Complete prefix must contain the reasoning
         assertTrue(completePrefix.any { it is UIMessagePart.Reasoning })
     }
 
@@ -525,235 +270,57 @@ class MessageTest {
     fun `provider replay projection is not persisted through serialization`() {
         val terminal = UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = listOf(
-                UIMessagePart.Text("partial"),
-            ),
+            parts = listOf(UIMessagePart.Text("partial")),
             terminalStatus = MessageTerminalStatus.FAILED,
             terminalReason = TurnTerminalReasons.PROVIDER_FAILED,
         )
-
         val projected = terminal.replaySafeProjection()!!
         assertNotNull(projected.providerReplayProjection)
-
         val restored = json.decodeFromString<UIMessage>(json.encodeToString(projected))
         assertNull(restored.providerReplayProjection)
-    }
-
-    @Test
-    fun `assistant chunk uses stable requested id and preserves an existing placeholder id`() {
-        val requestedId = Uuid.random()
-        var messages = listOf(UIMessage.user("hello"))
-
-        messages = messages.handleMessageChunk(
-            chunk = assistantChunk(UIMessagePart.Text("first")),
-            assistantMessageId = requestedId,
-        )
-        assertEquals(requestedId, messages.last().id)
-
-        messages = messages.handleMessageChunk(
-            chunk = assistantChunk(UIMessagePart.Text(" second")),
-            assistantMessageId = Uuid.random(),
-        )
-        assertEquals(requestedId, messages.last().id)
-        assertEquals("first second", messages.last().toText())
     }
 
     @Test
     fun `media failure placeholder survives message serialization`() {
         val original = UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = listOf(
-                mediaPersistenceFailurePart(
-                    UIMessagePart.Image(url = "data:image/png;base64,broken"),
-                )
-            ),
+            parts = listOf(mediaPersistenceFailurePart(UIMessagePart.Image(url = "data:image/png;base64,broken"))),
         )
-
         val restored = json.decodeFromString<UIMessage>(json.encodeToString(original))
-
-        assertEquals(
-            MessageMediaFailureReason.PERSISTENCE_FAILED,
-            restored.parts.single().mediaFailureMetadataOrNull()?.reason,
-        )
+        assertEquals(MessageMediaFailureReason.PERSISTENCE_FAILED, restored.parts.single().mediaFailureMetadataOrNull()?.reason)
         assertEquals(MessageMediaKind.IMAGE, restored.parts.single().mediaFailureMetadataOrNull()?.mediaKind)
-    }
-
-    @Test
-    fun `raw image fragments should append to the current data uri`() {
-        var messages = listOf(UIMessage.user("Stream an image"))
-
-        messages = messages.handleMessageChunk(assistantChunk(UIMessagePart.Image(url = "AAA")))
-        messages = messages.handleMessageChunk(assistantChunk(UIMessagePart.Image(url = "BBB")))
-
-        val images = messages.last().parts.filterIsInstance<UIMessagePart.Image>()
-        assertEquals(1, images.size)
-        assertEquals("data:image/png;base64,AAABBB", images[0].url)
     }
 
     @Test
     fun `openrouter reasoning details merge same id and append new items`() {
         val first = buildJsonArray {
-            add(buildJsonObject {
-                put("id", "rd-1")
-                put("type", "reasoning.text")
-                put("text", "hid")
-            })
+            add(buildJsonObject { put("id", "rd-1"); put("type", "reasoning.text"); put("text", "hid") })
         }
         val second = buildJsonArray {
-            add(buildJsonObject {
-                put("id", "rd-1")
-                put("type", "reasoning.text")
-                put("text", "den")
-            })
-            add(buildJsonObject {
-                put("id", "rd-2")
-                put("type", "reasoning.summary")
-                put("text", "sum")
-            })
+            add(buildJsonObject { put("id", "rd-1"); put("type", "reasoning.text"); put("text", "den") })
+            add(buildJsonObject { put("id", "rd-2"); put("type", "reasoning.summary"); put("text", "sum") })
         }
-
         assertEquals(first, mergeOpenRouterReasoningDetails(first, null))
         assertEquals(
             buildJsonArray {
-                add(buildJsonObject {
-                    put("id", "rd-1")
-                    put("type", "reasoning.text")
-                    put("text", "hidden")
-                })
-                add(buildJsonObject {
-                    put("id", "rd-2")
-                    put("type", "reasoning.summary")
-                    put("text", "sum")
-                })
+                add(buildJsonObject { put("id", "rd-1"); put("type", "reasoning.text"); put("text", "hidden") })
+                add(buildJsonObject { put("id", "rd-2"); put("type", "reasoning.summary"); put("text", "sum") })
             },
             mergeOpenRouterReasoningDetails(first, second),
         )
     }
 
     @Test
-    fun `openrouter reasoning details should accumulate across streamed chunks`() {
-        var messages = listOf(UIMessage.user("Plan then call a tool"))
-
-        messages = messages.handleMessageChunk(
-            assistantChunk(
-                reasoningWithDetails(
-                    text = "hidden ",
-                    details = buildJsonArray {
-                        add(buildJsonObject {
-                            put("id", "rd-1")
-                            put("type", "reasoning.text")
-                            put("text", "hidden ")
-                            put("index", 0)
-                        })
-                    },
-                )
-            )
-        )
-        messages = messages.handleMessageChunk(
-            assistantChunk(
-                reasoningWithDetails(
-                    text = "plan",
-                    details = buildJsonArray {
-                        add(buildJsonObject {
-                            put("id", "rd-1")
-                            put("type", "reasoning.text")
-                            put("text", "plan")
-                            put("index", 0)
-                        })
-                        add(buildJsonObject {
-                            put("id", "rd-2")
-                            put("type", "reasoning.summary")
-                            put("text", "summary")
-                            put("index", 1)
-                        })
-                    },
-                )
-            )
-        )
-        messages = messages.handleMessageChunk(
-            assistantChunk(
-                UIMessagePart.Tool(
-                    toolCallId = "call-1",
-                    toolName = "lookup",
-                    input = "{}",
-                )
-            )
-        )
-
-        val reasoning = messages.last().parts.filterIsInstance<UIMessagePart.Reasoning>().single()
-        assertEquals("hidden plan", reasoning.reasoning)
-        assertEquals(
-            buildJsonArray {
-                add(buildJsonObject {
-                    put("id", "rd-1")
-                    put("type", "reasoning.text")
-                    put("text", "hidden plan")
-                    put("index", 0)
-                })
-                add(buildJsonObject {
-                    put("id", "rd-2")
-                    put("type", "reasoning.summary")
-                    put("text", "summary")
-                    put("index", 1)
-                })
-            },
-            reasoning.metadataAs<OpenRouterReasoningMetadata>()?.reasoningDetails,
-        )
-    }
-
-    private fun reasoningWithDetails(
-        text: String,
-        details: kotlinx.serialization.json.JsonArray,
-    ): UIMessagePart.Reasoning {
-        return UIMessagePart.Reasoning(reasoning = text).also { part ->
-            part.metadata = OpenRouterReasoningMetadata(reasoningDetails = details).toMetadata()
-        }
-    }
-
-    private fun assistantChunk(vararg parts: UIMessagePart) = MessageChunk(
-        id = "chunk",
-        model = "test-model",
-        choices = listOf(
-            UIMessageChoice(
-                index = 0,
-                delta = UIMessage(role = MessageRole.ASSISTANT, parts = parts.toList()),
-                message = null,
-                finishReason = null,
-            )
-        ),
-    )
-
-    private fun createAlternatingMessages(count: Int): List<UIMessage> = List(count) { index ->
-        if (index % 2 == 0) {
-            UIMessage.user("Question $index")
-        } else {
-            UIMessage.assistant("Answer $index")
-        }
-    }
-
-    // ==================== UI 可见性 Tests ====================
-
-    private fun toolPart(
-        name: String = "search_web",
-        output: List<UIMessagePart> = emptyList(),
-    ): UIMessagePart.Tool = UIMessagePart.Tool(
-        toolCallId = "call-1",
-        toolName = name,
-        input = "{}",
-        output = output,
-    )
-
-    @Test
     fun `isEmptyUIMessage treats a tool call as visible content`() {
-        // 待审批、执行中、已完成都只是工具生命周期，工具卡片本身始终可见
         listOf(
-            ToolApprovalState.Auto,
-            ToolApprovalState.Pending,
-            ToolApprovalState.Approved,
-            ToolApprovalState.Denied("denied"),
-            ToolApprovalState.Answered("yes"),
+            ToolInteractionState.NotRequired,
+            ToolInteractionState.AwaitingApproval,
+            ToolInteractionState.AwaitingInput,
+            ToolInteractionState.Approved,
+            ToolInteractionState.Denied("denied"),
+            ToolInteractionState.Answered("yes"),
         ).forEach { state ->
-            val parts = listOf(toolPart().copy(approvalState = state))
+            val parts = listOf(toolPart(interaction = state))
             assertFalse("tool in state $state must be visible", parts.isEmptyUIMessage())
         }
     }
@@ -762,7 +329,6 @@ class MessageTest {
     fun `isEmptyUIMessage keeps replay-safe input emptiness separate`() {
         val parts = listOf(toolPart())
         assertFalse(parts.isEmptyUIMessage())
-        // 工具调用不是用户输入内容，语义不同的另一个判定不受影响
         assertTrue(parts.isEmptyInputMessage())
     }
 
@@ -778,10 +344,7 @@ class MessageTest {
 
     @Test
     fun `isEmptyUIMessage is false when any part is visible`() {
-        val parts = listOf(
-            UIMessagePart.Text(""),
-            toolPart(),
-        )
+        val parts = listOf(UIMessagePart.Text(""), toolPart())
         assertFalse(parts.isEmptyUIMessage())
     }
 }

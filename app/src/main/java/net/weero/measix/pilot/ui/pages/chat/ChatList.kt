@@ -99,8 +99,8 @@ import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
-import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
-import net.weero.measix.pilot.service.runtime.ToolUserDecision
+import net.weero.measix.pilot.service.runtime.TurnLivePhase
+import net.weero.measix.pilot.service.runtime.ToolInteractionDecision
 import net.weero.measix.pilot.ui.components.ai.ApprovalRequiredIndicator
 import net.weero.measix.pilot.ui.adaptive.AdaptiveLayoutDefaults
 import net.weero.measix.pilot.ui.components.message.ChatMessage
@@ -157,7 +157,7 @@ internal fun ChatList(
     onSwitchAssistant: () -> Unit,
     onManageAssistant: () -> Unit,
     onMemoryClick: () -> Unit,
-    onToolDecision: ((locator: ToolCallLocator, decision: ToolUserDecision) -> Unit)? = null,
+    onToolDecision: ((locator: ToolCallLocator, decision: ToolInteractionDecision) -> Unit)? = null,
     onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
     onToggleFavorite: ((MessageNode) -> Unit)? = null,
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
@@ -250,7 +250,7 @@ private fun ChatListNormal(
     onManageAssistant: () -> Unit,
     onMemoryClick: () -> Unit,
     animatedVisibilityScope: AnimatedVisibilityScope,
-    onToolDecision: ((locator: ToolCallLocator, decision: ToolUserDecision) -> Unit)? = null,
+    onToolDecision: ((locator: ToolCallLocator, decision: ToolInteractionDecision) -> Unit)? = null,
     onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
     onToggleFavorite: ((MessageNode) -> Unit)? = null,
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
@@ -316,7 +316,7 @@ private fun ChatListNormal(
             .associateBy { it.id }
     }
     // 消息列表数据源来自 snapshot.nodes（未变节点引用相同；流式期间
-    // 仅末节点由 activeTurn 覆盖 → Compose skip 生效）。key = node.id 不变。
+    // 仅末节点由流式投影覆盖 → Compose skip 生效）。key = node.id 不变。
     val snapshotNodes = snapshot.nodes
     val snapshotNodesUpdated by rememberUpdatedState(snapshotNodes)
     val lastMessageIndex = snapshotNodes.lastIndex
@@ -486,7 +486,7 @@ private fun ChatListNormal(
                                     },
                                     onToolDecision = onToolDecision,
                                     onSubAssistantAnswer = onSubAssistantAnswer,
-                                    toolCallPhases = turnPresentation.toolCallPhases,
+                                    toolLivePhases = turnPresentation.toolLivePhases,
                                     lastMessage = index == lastMessageIndex,
                                 )
                             }
@@ -512,7 +512,7 @@ private fun ChatListNormal(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                if (turnPresentation.phase == ConversationTurnPhase.AWAITING_USER) {
+                                if (turnPresentation.phase == TurnLivePhase.AWAITING_USER) {
                                     ApprovalRequiredIndicator(
                                         showLabel = true,
                                     )
@@ -522,7 +522,7 @@ private fun ChatListNormal(
                                     )
                                 }
                                 AnimatedVisibility(
-                                    visible = turnPresentation.phase == ConversationTurnPhase.GENERATING &&
+                                    visible = turnPresentation.isWorking &&
                                         turnPresentation.processingText != null,
                                 ) {
                                     Text(

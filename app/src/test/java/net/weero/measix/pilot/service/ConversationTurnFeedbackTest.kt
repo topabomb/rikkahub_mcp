@@ -10,10 +10,11 @@ import net.weero.measix.pilot.data.ai.subassistant.SubAssistantUserInteraction
 import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
-import net.weero.measix.pilot.service.runtime.ActiveTurnState
+import net.weero.measix.pilot.service.runtime.TurnStreamProjection
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
-import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
-import net.weero.measix.pilot.service.runtime.ToolCallPhase
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeSnapshot
+import net.weero.measix.pilot.service.runtime.TurnLivePhase
+import net.weero.measix.pilot.service.runtime.ToolLivePhase
 import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import net.weero.measix.pilot.utils.JsonInstant
@@ -27,11 +28,11 @@ import kotlin.uuid.Uuid
 class ConversationTurnFeedbackTest {
     private val turnId = Uuid.random()
     private val message = UIMessage.assistant("stream")
-    private val active = ActiveTurnState(1, turnId, message.id, listOf(message))
+    private val active = TurnStreamProjection(1, turnId, message.id, message)
 
     @Test
     fun `idle and stopping suppress even pending interactions`() {
-        listOf(ConversationTurnPhase.IDLE, ConversationTurnPhase.STOPPING).forEach { phase ->
+        listOf<TurnLivePhase?>(null, TurnLivePhase.STOPPING).forEach { phase ->
             assertNull(model(phase = phase).turnFeedback)
         }
     }
@@ -47,18 +48,18 @@ class ConversationTurnFeedbackTest {
     fun `preparing request works before assistant exists and ignores old turn parts`() {
         val requestId = Uuid.random()
         listOf(null, active).forEach { previous ->
-            val feedback = requireNotNull(model(ConversationTurnPhase.PREPARING, requestId, previous).turnFeedback)
+            val feedback = requireNotNull(model(TurnLivePhase.PREPARING, requestId, previous).turnFeedback)
             assertEquals(requestId, feedback.turnId)
             assertNull(feedback.outputCharacters)
             assertFalse(feedback.awaitingUser)
         }
-        assertNull(model(ConversationTurnPhase.PREPARING, requestId = null).turnFeedback)
+        assertNull(model(TurnLivePhase.PREPARING, requestId = null).turnFeedback)
     }
 
     @Test
-    fun `output comes only from the owning assistant and ignores history and unrelated projections`() {
+    fun `output comes only from the owning assistant and ignores durable history`() {
         val unrelated = UIMessage.assistant("not this assistant")
-        val original = model(activeTurn = active.copy(messages = listOf(message, unrelated)))
+        val original = model(activeTurn = active)
         assertEquals(6L, requireNotNull(original.turnFeedback).outputCharacters)
         val changed = original.copy(
             snapshot = original.snapshot.copy(
@@ -72,24 +73,24 @@ class ConversationTurnFeedbackTest {
 
     @Test
     fun `approval uses committed phases and may have no live request`() {
-        val tool = UIMessagePart.Tool(toolCallId = "approval", toolName = "test", input = "{}")
+        val tool = UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "approval", toolName = "test", input = "{}")
         val pending = message.copy(parts = listOf(tool))
-        val phases = mapOf(ToolCallLocator(message.id, 0) to ToolCallPhase.AWAITING_APPROVAL)
+        val phases = mapOf(ToolCallLocator(message.id, tool.stepId, tool.localCallId) to ToolLivePhase.AWAITING_APPROVAL)
         val feedback = requireNotNull(model(
-            ConversationTurnPhase.AWAITING_USER,
+            TurnLivePhase.AWAITING_USER,
             requestId = null,
-            activeTurn = active.copy(messages = listOf(pending)),
+            activeTurn = active.copy(assistantMessage = pending),
             phases = phases,
         ).turnFeedback)
         assertTrue(feedback.awaitingUser)
-        assertEquals(setOf("tool:${message.id}:0"), feedback.attentionKeys)
-        assertTrue(requireNotNull(model(ConversationTurnPhase.AWAITING_USER).turnFeedback).awaitingUser)
+        assertEquals(setOf("tool:${message.id}:${tool.localCallId}"), feedback.attentionKeys)
+        assertTrue(requireNotNull(model(TurnLivePhase.AWAITING_USER).turnFeedback).awaitingUser)
     }
 
     @Test
     fun `executing child waiting for a valid answer overrides generating work feedback`() {
         val tool = childTool(childMetadata())
-        val feedback = childFeedback(tool, ToolCallPhase.EXECUTING)
+        val feedback = childFeedback(tool, ToolLivePhase.EXECUTING)
         assertTrue(feedback.awaitingUser)
         assertEquals(setOf("ask:question-1"), feedback.attentionKeys)
     }
@@ -97,7 +98,7 @@ class ConversationTurnFeedbackTest {
     @Test
     fun `historical uncommitted and terminal child interactions cannot stop active work`() {
         val tool = childTool(childMetadata())
-        listOf(ToolCallPhase.CALL_STREAMING, ToolCallPhase.READY, ToolCallPhase.COMPLETED).forEach {
+        listOf(ToolLivePhase.CALL_STREAMING, ToolLivePhase.READY, ToolLivePhase.COMPLETED).forEach {
             assertFalse(childFeedback(tool, it).awaitingUser)
         }
         listOf(
@@ -107,26 +108,26 @@ class ConversationTurnFeedbackTest {
             childMetadata().copy(userInteraction = null),
             childMetadata().copy(userInteraction = childMetadata().userInteraction!!.copy(interactionId = " ")),
         ).forEach { metadata ->
-            assertFalse(childFeedback(childTool(metadata), ToolCallPhase.EXECUTING).awaitingUser)
+            assertFalse(childFeedback(childTool(metadata), ToolLivePhase.EXECUTING).awaitingUser)
         }
         // typed 子阶段与 interaction 才是语义 owner，显示名称变化不应抹掉已提交等待态。
         assertTrue(childFeedback(
             childTool(childMetadata().copy(
                 userInteraction = childMetadata().userInteraction!!.copy(toolName = "other"),
             )),
-            ToolCallPhase.EXECUTING,
+            ToolLivePhase.EXECUTING,
         ).awaitingUser)
-        assertTrue(childFeedback(tool.copy(toolName = "other"), ToolCallPhase.EXECUTING).awaitingUser)
-        assertFalse(childFeedback(tool.copy(metadata = null), ToolCallPhase.EXECUTING).awaitingUser)
+        assertTrue(childFeedback(tool.copy(toolName = "other"), ToolLivePhase.EXECUTING).awaitingUser)
+        assertFalse(childFeedback(tool.copy(metadata = null), ToolLivePhase.EXECUTING).awaitingUser)
     }
 
     @Test
     fun `approval continuation does not reclassify retained metadata as a new wait during preparation`() {
         val tool = childTool(childMetadata())
         val feedback = requireNotNull(model(
-            ConversationTurnPhase.PREPARING,
-            activeTurn = active.copy(messages = listOf(message.copy(parts = listOf(tool)))),
-            phases = mapOf(ToolCallLocator(message.id, 0) to ToolCallPhase.EXECUTING),
+            TurnLivePhase.PREPARING,
+            activeTurn = active.copy(assistantMessage = message.copy(parts = listOf(tool))),
+            phases = mapOf(ToolCallLocator(message.id, tool.stepId, tool.localCallId) to ToolLivePhase.EXECUTING),
         ).turnFeedback)
         assertFalse(feedback.awaitingUser)
         assertTrue(feedback.attentionKeys.isEmpty())
@@ -138,32 +139,28 @@ class ConversationTurnFeedbackTest {
         val parts = listOf(
             UIMessagePart.Text("answer"),
             UIMessagePart.Reasoning("think"),
-            UIMessagePart.Tool("call", "tool", "{}", output = listOf(UIMessagePart.Text("x".repeat(1_000)))),
+            UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call", toolName = "tool", input = "{}", output = listOf(UIMessagePart.Text("x".repeat(1_000)))),
             UIMessagePart.Image("https://example.test/image.png"),
         )
-        val original = model(activeTurn = active.copy(messages = listOf(message.copy(parts = parts))))
+        val original = model(activeTurn = active.copy(assistantMessage = message.copy(parts = parts)))
         assertEquals(13L, requireNotNull(original.turnFeedback).outputCharacters)
         val tool = childTool(childMetadata())
         assertEquals(
-            childFeedback(tool, ToolCallPhase.EXECUTING).outputCharacters,
-            childFeedback(tool.copy(metadata = null), ToolCallPhase.EXECUTING).outputCharacters,
+            childFeedback(tool, ToolLivePhase.EXECUTING).outputCharacters,
+            childFeedback(tool.copy(metadata = null), ToolLivePhase.EXECUTING).outputCharacters,
         )
     }
 
     @Test
     fun `committed owning slot supplies output baseline before streaming including reused messages`() {
-        val initial = model(activeTurn = active.copy(messages = emptyList()))
+        val initial = model(activeTurn = active.copy(assistantMessage = null))
         assertNull(requireNotNull(initial.turnFeedback).outputCharacters)
         val committed = initial.copy(snapshot = initial.snapshot.copy(nodes = listOf(MessageNode.of(message))))
         assertEquals(6L, requireNotNull(committed.turnFeedback).outputCharacters)
-        val streamed = committed.copy(snapshot = committed.snapshot.copy(activeTurn = active))
+        val streamed = committed.copy(snapshot = committed.snapshot.copy(stream = active))
         assertEquals(committed.turnFeedback, streamed.turnFeedback)
         val unrelated = initial.copy(snapshot = initial.snapshot.copy(nodes = listOf(MessageNode.of(UIMessage.assistant("other")))))
         assertNull(requireNotNull(unrelated.turnFeedback).outputCharacters)
-        val missingOwner = committed.copy(snapshot = committed.snapshot.copy(
-            activeTurn = active.copy(messages = listOf(UIMessage.assistant("wrong owner"))),
-        ))
-        assertNull(requireNotNull(missingOwner.turnFeedback).outputCharacters)
     }
 
     private fun childMetadata() = SubAssistantCallMetadata(
@@ -172,28 +169,28 @@ class ConversationTurnFeedbackTest {
         targetNameSnapshot = "child",
         state = SubAssistantCallState.RUNNING,
         phase = SubAssistantCallPhase.AWAITING_USER,
-        userInteraction = SubAssistantUserInteraction("question-1", "child-message", 0, "ask_user", "{}"),
+        userInteraction = SubAssistantUserInteraction("question-1", "child-message", "call-1", "ask_user", "{}"),
     )
 
     private fun childTool(metadata: SubAssistantCallMetadata) = UIMessagePart.Tool(
-        toolCallId = "child", toolName = "assistant_call", input = "{}",
+        localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "child", toolName = "assistant_call", input = "{}",
     ).mergeSubAssistantCallMetadata(JsonInstant, metadata)
 
-    private fun childFeedback(tool: UIMessagePart.Tool, phase: ToolCallPhase) = requireNotNull(model(
-        activeTurn = active.copy(messages = listOf(message.copy(parts = listOf(tool)))),
-        phases = mapOf(ToolCallLocator(message.id, 0) to phase),
+    private fun childFeedback(tool: UIMessagePart.Tool, phase: ToolLivePhase) = requireNotNull(model(
+        activeTurn = active.copy(assistantMessage = message.copy(parts = listOf(tool))),
+        phases = mapOf(ToolCallLocator(message.id, tool.stepId, tool.localCallId) to phase),
     ).turnFeedback)
 
     private fun model(
-        phase: ConversationTurnPhase = ConversationTurnPhase.GENERATING,
+        phase: TurnLivePhase? = TurnLivePhase.MODEL_STREAMING,
         requestId: Uuid? = turnId,
-        activeTurn: ActiveTurnState? = active,
-        phases: Map<ToolCallLocator, ToolCallPhase> = emptyMap(),
+        activeTurn: TurnStreamProjection? = active,
+        phases: Map<ToolCallLocator, ToolLivePhase> = emptyMap(),
     ) = ConversationUiModel(
-        snapshot = Conversation.ofId(Uuid.random(), Uuid.random())
-            .toSnapshot()
-            .toPresentationSnapshot()
-            .copy(activeTurn = activeTurn),
+        snapshot = ConversationRuntimeSnapshot(
+            durable = Conversation.ofId(Uuid.random(), Uuid.random()).toSnapshot(),
+            stream = activeTurn,
+        ).toPresentationSnapshot(),
         presentation = ConversationPresentation(requestId, phase, null, phases),
     )
 }

@@ -49,6 +49,11 @@ UIMessage
 `providerReplayProjection` 只存在于 `replaySafeProjection()` 返回的投影对象，不写回 Conversation、Room、备份或 UI durable 状态。
 详见 [多模态上下文与 Turn 持久化](multimodal-context-and-turn-durability.md)。
 
+Provider 不直接消费 `UIMessage`。app 层 `RequestAssembler` 把最终 durable 投影一次性转换为 `ModelRequestMessage`
+（`role` / `parts`（已丢弃 `UIMessagePart.Step`）/ `modelId` / `providerMetadata` / `providerReplayProjection`），
+它是 `Provider.generateText` / `streamText` 与全部线协议 adapter 的唯一请求输入；durable-only 字段
+（`id` / `createdAt` / `usage` / `terminalStatus` 等）不进入 Provider。装配链见 [`request-context.md`](request-context.md)。
+
 ### Token usage 规范模型
 
 线协议 Adapter 只把单次 Provider 请求的 wire usage 归一化为 `ProviderUsageSnapshot`；它不读取历史消息、不跨请求
@@ -106,7 +111,7 @@ host
 独立文生图走同一 OpenAI-compatible host 的 `/images/generations` 与 `/images/edits`。HTTP 失败通过 `formatProviderHttpError()` 变成带 `statusCode` / `errorCode` / `errorType` 的 `HttpException`。
 OpenAI Images 使用 `error.code`（如 `moderation_blocked`、`content_policy_violation`、`rate_limit_exceeded`、`credit_balance_exhausted`、`invalid_api_key`）；
 xAI Imagine 使用相同信封或顶层 `code`/`message`，并可能在 200 响应里用 `respect_moderation=false` 标记审核未通过。
-分类与工具回传见 [`chat-generation-pipeline.md`](chat-generation-pipeline.md) 与 [`prompts-and-tools.md`](prompts-and-tools.md)。
+分类与工具回传见 [`turn-step-execution.md`](turn-step-execution.md) 与 [`prompts-and-tools.md`](prompts-and-tools.md)。
 
 ## 4. Chat Completions
 

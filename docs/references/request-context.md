@@ -2,7 +2,7 @@
 
 本文档是请求级上下文策略的当前总览：条数窗口、Tool Result 滚动压缩、Disclosure Snapshot 与
 用户触发的语义摘要如何叠在同一次 Provider 请求上。Turn / checkpoint 协议见
-[`chat-generation-pipeline.md`](chat-generation-pipeline.md)，模型看见的文案与工具形状见
+[`turn-step-execution.md`](turn-step-execution.md)，模型看见的文案与工具形状见
 [`prompts-and-tools.md`](prompts-and-tools.md)，披露表与 Artifact 见
 [`multimodal-context-and-turn-durability.md`](multimodal-context-and-turn-durability.md)，
 用量与估算口径见 [`token-usage-accounting.md`](token-usage-accounting.md)，条数旋钮见
@@ -33,7 +33,7 @@ Presentation / FTS / UI。
 `40..512`，UI 重新打开开关写入默认 `80`。持久化仍保存原始字段；导入或异常备份不会绕过该归一化。
 旧 `contextMessageSize` 已删除，由 `ignoreUnknownKeys` 忽略，不会静默打开新策略。
 
-超限时 `ConversationContextPlanner` 内部 `limitContext` 按 50% 保留比例一次前移较大步幅，再
+超限时 `RequestContextPlanner` 内部 `limitContext` 按 50% 保留比例一次前移较大步幅，再
 `findUserTurnStart()` 回退到完整 USER 轮次。工具调用与结果在同一个 `UIMessagePart.Tool` 里，因此
 可靠边界是最近的 USER，而不是按 `toolCallId` 向前配对未执行 Tool。旧逐条滑动窗口每增加一条消息就
 挪起点，会持续打断从请求开头建立的提示缓存。
@@ -43,8 +43,8 @@ Presentation / FTS / UI。
 
 ### 1.2 滚动压缩
 
-生产阈值只来自 `ContextTrimmingPolicy`。完整规则、marker、Artifact 与 receipt 见
-[`chat-generation-pipeline.md`](chat-generation-pipeline.md)
+生产阈值只来自 `ContextBudget`。完整规则、marker、Artifact 与 receipt 见
+[`turn-step-execution.md`](turn-step-execution.md)
 与 [`multimodal-context-and-turn-durability.md`](multimodal-context-and-turn-durability.md)。
 
 ### 1.3 Disclosure Snapshot
@@ -66,11 +66,11 @@ entry，不会丢基线。
 
 `ConversationApplicationService.compress()` 是用户触发、持久化且不可撤销的摘要，切点对齐完整
 USER 轮次，与滚动压缩、条数窗口独立。分块与 `targetTokens` 语义见
-[`chat-generation-pipeline.md`](chat-generation-pipeline.md)。
+[`turn-step-execution.md`](turn-step-execution.md)。
 
 ## 2. 组装顺序
 
-`ConversationContextPlanner` 是唯一纯规划边界。每次真实 Provider 调用：
+请求前由 `RequestContextPlanner` 纯规划，请求成功后由 `ToolOutputCompactionPlanner` 纯规划压缩。每次真实 Provider 调用：
 
 ```text
 durable selected branch
@@ -78,15 +78,15 @@ durable selected branch
   → limitContext（条数窗口，对齐完整 USER 轮次）
   → Input Transformers（不重读 Settings / 时钟 / Locale / Workspace）
   → applyContextProjections：把选中 Snapshot 作为 durable USER 的第一个 Text part
-  → 发送
-  → 成功后再 planPostStepCompaction（只认本次 receipt 里仍 inline 的 Tool Result）
+  → RequestAssembler.assemble：丢弃 Step，产出 ModelRequestMessage（Provider 唯一输入）与保守 receipt  → 发送 ModelRequestMessage
+  → 成功后再由 ToolOutputCompactionPlanner.planAfterSuccessfulRequest（只认本次 receipt 里仍 inline 的 Tool Result）
 ```
 
 `limitContext` 是 planner 内部函数，不是 `List<UIMessage>` 公共 API。System / 冻结 Tool prompt 与
 Provider 请求共用同一份 `RequestContextPlan`。Snapshot 在 transformers 之后注入，因此不经过
 messageTemplate、Placeholder、Time / Workspace Reminder、DocumentAsPrompt 或附件投影。
 
-`GenerationLoop.generateInternal` 在发请求前对最终投影做 `estimateRequestContextTokens`；压缩水位
+`StepRunner.generateInternal` 在发请求前对最终投影做 `estimateRequestContextTokens`；压缩水位
 用同一条 `estimateStableTextTokens`，但只加本次可见的 inline tool 正文，不看整包请求估算或
 Provider `input_tokens`。`ChatSizeChecker` 的预警读取最近一次发送前估算，也不参与压缩决策。
 
@@ -108,7 +108,7 @@ Provider `input_tokens`。`ChatSizeChecker` 的预警读取最近一次发送前
 
 - `TemplateTransformer` 使用每条消息的 `createdAt`，不用当前时间重写历史。
 - `TimeReminderTransformer` / Placeholder / Workspace reminder 消费 START 时冻结的
-  `FrozenTurnPromptInputs`，审批跨日或改 Locale 不改本 Turn。
+  `TurnPromptSnapshot`，审批跨日或改 Locale 不改本 Turn。
 - 阶梯内的历史起点稳定；工具结果只改变当前尾部。
 - Tool 的 name / description / Schema / 顺序在 START 时冻结为 `FrozenToolDefinition`，不得含日期、
   Memory 或 Catalog。
@@ -172,9 +172,10 @@ Gemini `contents` 在编码后合并相邻同 role，见 [`protocol-reference.md
 
 | 边界 | 符号 |
 | --- | --- |
-| 规划 | `ConversationContextPlanner.planRequest` / `planPostStepCompaction` / `applyContextProjections` |
+| 请求前规划 | `RequestContextPlanner.planRequest` / `applyContextProjections` |
+| 压缩规划 | `ToolOutputCompactionPlanner.planAfterSuccessfulRequest` |
 | 冻结投影 | `TurnModelContextProjection`、`DurableMessageLocator` |
-| 预算 | `ContextTrimmingPolicy`、`estimateStableTextTokens` |
+| 预算 | `ContextBudget`、`estimateStableTextTokens` |
 | 归档 | `ToolOutputStore.stageCompaction`，回查 `read_tool_output` / `grep_tool_output` |
 | 披露 | `ConversationDisclosureSnapshotService`，表 `conversation_model_context` |
 | 适用谓词 | `ConversationModelContextApplicability` |

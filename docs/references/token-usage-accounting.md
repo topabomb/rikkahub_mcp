@@ -2,7 +2,7 @@
 
 本文档是 Token 用量语义、所有权、累计、持久化和展示口径的当前权威参考。Provider 的其他请求与回放规则见
 [`protocol-reference.md`](protocol-reference.md)，会话提交协议见
-[`chat-generation-pipeline.md`](chat-generation-pipeline.md)，请求上下文策略见
+[`turn-step-execution.md`](turn-step-execution.md)，请求上下文策略见
 [`request-context.md`](request-context.md)，UI 通用边界见
 [`ui-architecture.md`](ui-architecture.md)。
 
@@ -13,7 +13,7 @@ Provider wire usage event
   → ProviderUsageSnapshot          单请求、协议无关快照
   → RequestUsageReducer            单请求 presence overlay 与 close-once
   → CompletedRequestUsage          已关闭请求事实
-  → TurnUsageAccumulator           owning Assistant turn 内按 ordinal 累计
+  → TurnUsageAccumulator           owning Assistant turn 内按 step 顺序累计
   → UIMessage.usage: TokenUsage    唯一 durable 结果
   → Nerd line / ChatSizeChecker / Stats query
 ```
@@ -76,7 +76,7 @@ Provider wire usage event
 1. 流式事件按字段 presence 覆盖当前请求快照；字段缺失表示本事件不更新该字段，显式 `0` 必须覆盖旧值。
    携带 usage 的事件即使没有 choices/candidates 也必须进入 reducer，包括 Chat 最终 usage-only chunk、Responses
    completed/incomplete/failed terminal event 和 Gemini usage-only event。
-2. `GenerationLoop` 在调用 Provider 前，对最终 `internalMessages`、工具名称、描述与 JSON schema 做稳定粗估：ASCII 字母与空白
+2. `StepRunner.generateInternal` 在调用 Provider 前，对最终 `internalMessages`、工具名称、描述与 JSON schema 做稳定粗估：ASCII 字母与空白
    约每 4 个 code point 1 token，连续 ASCII 数字段约每 3 位 1 token，连续 ASCII 符号段约每 2 个 1 token，其他 Unicode
    code point 各约 1 token，并加入固定消息/part/schema 开销；媒体使用固定占位，不按
    base64 字符数计算。该估值只服务 Context 摘要和上下文预警，不冒充 Provider 计费 token。估值先写入 owning Assistant
@@ -84,13 +84,13 @@ Provider wire usage event
 3. 首个 Text、Reasoning、Tool 或媒体 payload 到达时刷新该请求 TTFT；空协议事件和 usage-only 事件不触发。流式 usage
    仍只进入当前 `RequestUsageReducer`，不提前改写累计账本。
 4. 正常、失败和取消都在 Provider 调用的 `finally` 路径关闭请求；一个 reducer 只能关闭一次。
-   `GenerationLoop.run()` 的 `channelFlow` 使用 rendezvous 容量：允许 Transformer 子协程安全发布；当 Provider 抛出失败或
-   取消且下游仍 active 时，带最终 usage 的消息投影被下游接收后才传播原异常，不能让缓冲在异常收口时丢弃已观测 usage。
-   若 collector/turn 已从外部取消，则不承诺最终 UI 投影交付，取消仍立即传播。
-   `GenerationRequest.onMessagesObserved` 在可取消 Transformer 和消息发送前同步交接已关闭 usage，
-   `TurnEngine.observeMessages` 更新唯一 turn-owned 最新消息槽；`bind` 不再另存或回写消息副本。
-   因而真实 worker/collector `Job.cancel()` 仍以请求关闭后的计数、完整性、latest 字段与耗时提交终态，
-   不依赖取消后的 UI 投影交付，也不向已取消 channel 强行发送。
+   `TurnRunner.run()` 是挂起函数，把流式投影、阶段、checkpoint、草稿交接与终态分别同步回调到 `TurnRunInputs` 的汇；
+   汇按调用顺序执行，loop 不会跑到投影之前，因此 Provider 抛出失败或取消时，带最终 usage 的消息投影已在异常收口前
+   同步交接，不存在缓冲在收口时丢弃已观测 usage 的可能。若 turn 已从外部取消，则不承诺最终 UI 投影交付，取消仍立即传播。
+   `TurnRunInputs.onAssistantObserved` 在可取消 Transformer 和消息发送前同步交接已关闭 usage，
+   `TurnCommitter.observeAssistant` 更新唯一 turn-owned Assistant 槽。
+   因而真实 worker `Job.cancel()` 仍以请求关闭后的计数、完整性、latest 字段与耗时提交终态，
+   不依赖取消后的 UI 投影交付。
 5. `TurnUsageAccumulator.apply()` 只接受下一个连续 ordinal，因此一次请求最多累计一次，重复或跳号立即失败。
 6. checkpoint 成功后，该 turn 累计值才成为后续 step 或审批继续的 durable baseline。
 
@@ -111,7 +111,7 @@ turn 聚合规则：
 - 没有 usage 的失败请求仍计入 `observedProviderRequestCount`，但不增加 `observedUsageReportedRequestCount`，并使相关 turn 完整性降级。
 - Provider 内容已经返回时，即使随后失败、取消或响应 incomplete，已收到的 usage 仍随原 turn 收口；取消异常继续传播。
 - Google / Responses 的非流式 HTTP 成功但协议失败响应先解码可用内容和 usage，再抛出携带该快照的
-  `ProviderResponseException`。`GenerationLoop` 先接收快照，再沿原失败链关闭请求；不执行失败响应中的工具。
+  `ProviderResponseException`。`TurnRunner` 先接收快照，再沿原失败链关闭请求；不执行失败响应中的工具。
   其他 `generateText` 调用者仍收到异常，不会把 partial 响应当成成功。
 - `CONTINUE_USER_INTERACTION` 从原 Assistant 消息的已提交 usage 恢复，不创建第二 turn，也不重复加入 checkpoint 前的请求。
 - 非空 Tool Output 滚动裁剪批次把 marker、可选 archive metadata 与 trim count 的 `+1` 放入同一个 checkpoint；计划为空、提交失败或
@@ -154,8 +154,8 @@ canonical input/output 中，不能再次加入 total；其 Provider total 保�
 
 ## 6. Master 与 Child 隔离
 
-usage owner 是实际发起请求的 Assistant 消息。Master 与每个 Child 使用独立的 `ConversationRuntime`、`TurnEngine` 和
-`GenerationLoop.run()` 局部 accumulator：
+usage owner 是实际发起请求的 Assistant 消息。Master 与每个 Child 使用独立的 `ConversationRuntime`、`TurnCommitter` 和
+每次运行新建的 `TurnRunState.accumulator`：
 
 - Target usage 只写 Child Assistant 消息，并在子助手详情中显示。
 - 子助手工具结果只向 Master 返回文本和附件投影，不复制 Child 的 message usage。
@@ -245,8 +245,8 @@ Stats 表示“当前数据库仍保留的 Provider usage”，不是账户终�
 | Canonical usage model / request snapshot | `ai/src/main/java/me/rerere/ai/core/Usage.kt` |
 | 四线协议 adapter | `ai/src/main/java/me/rerere/ai/provider/providers/openai/ChatCompletionsAPI.kt`、`ResponseAPI.kt`、`provider/providers/ClaudeProvider.kt`、`GoogleProvider.kt` |
 | Request reducer / turn accumulator | `app/src/main/java/net/weero/measix/pilot/data/ai/TokenUsageAccounting.kt` |
-| Provider 请求循环 | `app/src/main/java/net/weero/measix/pilot/data/ai/GenerationLoop.kt` |
-| Checkpoint / continue owner | `app/src/main/java/net/weero/measix/pilot/service/runtime/TurnEngine.kt` |
+| Provider 请求循环 | `app/src/main/java/net/weero/measix/pilot/service/turn/TurnRunner.kt`（多 Step 循环）、`StepRunner.kt`（单 Step 采样与 Provider 请求）、`TurnRunState.kt`（per-run accumulator 与 checkpoint 写协议） |
+| Checkpoint / continue owner | `app/src/main/java/net/weero/measix/pilot/service/turn/TurnCommitter.kt` |
 | 紧凑底栏与上下文预警 | `app/src/main/java/net/weero/measix/pilot/ui/components/message/ChatMessageNerdLine.kt`、`ui/pages/chat/ChatSizeChecker.kt` |
 | Stats durable SQL 投影 | `app/src/main/java/net/weero/measix/pilot/data/db/dao/MessageNodeDAO.kt` |
 | Stats query / UI 投影 | `app/src/main/java/net/weero/measix/pilot/service/StatsQueryService.kt`、`ui/pages/stats/StatsVM.kt`、`StatsPage.kt` |

@@ -17,7 +17,6 @@ sealed interface ThinkingStep {
 
     data class ToolStep(
         val tool: UIMessagePart.Tool,
-        val toolOrdinal: Int,
     ) : ThinkingStep
 }
 
@@ -26,7 +25,7 @@ sealed interface ThinkingStep {
  */
 sealed interface MessagePartBlock {
     data class ThinkingBlock(val steps: List<ThinkingStep>) : MessagePartBlock
-    data class SubAssistantCallBlock(val tool: UIMessagePart.Tool, val toolOrdinal: Int) : MessagePartBlock
+    data class SubAssistantCallBlock(val tool: UIMessagePart.Tool) : MessagePartBlock
     data class ContentBlock(val part: UIMessagePart, val index: Int) : MessagePartBlock
 }
 
@@ -40,7 +39,6 @@ private const val TOOL_ASSISTANT_CALL = "assistant_call"
 fun List<UIMessagePart>.groupMessageParts(): List<MessagePartBlock> {
     val result = mutableListOf<MessagePartBlock>()
     var currentThinkingSteps = mutableListOf<ThinkingStep>()
-    var toolOrdinal = 0
 
     fun flushThinkingSteps() {
         if (currentThinkingSteps.isNotEmpty()) {
@@ -55,14 +53,18 @@ fun List<UIMessagePart>.groupMessageParts(): List<MessagePartBlock> {
                 currentThinkingSteps.add(ThinkingStep.ReasoningStep(part))
             }
 
+            is UIMessagePart.Step -> {
+                // Step 是结构标记，不渲染；它只界定模型采样边界。
+                flushThinkingSteps()
+            }
+
             is UIMessagePart.Tool -> {
-                val currentToolOrdinal = toolOrdinal++
                 if (part.toolName == TOOL_ASSISTANT_CALL) {
                     // assistant_call 从 COT 中拆出，独立渲染
                     flushThinkingSteps()
-                    result.add(MessagePartBlock.SubAssistantCallBlock(part, currentToolOrdinal))
+                    result.add(MessagePartBlock.SubAssistantCallBlock(part))
                 } else {
-                    currentThinkingSteps.add(ThinkingStep.ToolStep(part, currentToolOrdinal))
+                    currentThinkingSteps.add(ThinkingStep.ToolStep(part))
                 }
             }
 

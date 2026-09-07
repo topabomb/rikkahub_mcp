@@ -1,4 +1,6 @@
 package net.weero.measix.pilot.service
+import net.weero.measix.pilot.service.subassistant.SubAssistantLifecycle
+import net.weero.measix.pilot.service.turn.TurnFinalizer
 
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -27,6 +29,7 @@ import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeLease
 import net.weero.measix.pilot.service.runtime.ConversationHeader
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -121,10 +124,12 @@ class ConversationForkContextTest {
                     content = copiedContent,
                 ),
             ),
-            activeTurn = null,
         )
         val runtime = mockk<ConversationRuntime>()
-        every { runtime.snapshot } returns MutableStateFlow(snapshot)
+        every { runtime.snapshot } returns MutableStateFlow(
+            ConversationRuntimeSnapshot(durable = snapshot, stream = null),
+        )
+        every { runtime.durable } returns snapshot
         val commandCoordinator = mockk<ConversationCommandCoordinator>()
         coEvery { commandCoordinator.load(sourceId) } returns runtime
         val created = slot<ConversationAggregateSnapshot>()
@@ -146,7 +151,7 @@ class ConversationForkContextTest {
             sideEffects = mockk<GenerationSideEffects>(),
             artifactStore = artifactStore,
             artifactUseCase = mockk<ArtifactUseCase>(),
-            turnFinalization = mockk<TurnFinalization>(relaxed = true),
+            turnFinalizer = mockk<TurnFinalizer>(relaxed = true),
             json = Json,
             toolArtifactRewriter = mockk<ToolArtifactRewriter>(),
             titleCoordinator = mockk<ConversationTitleCoordinator>(),
@@ -182,7 +187,7 @@ class ConversationForkContextTest {
         sideEffects = mockk(),
         artifactStore = mockk(),
         artifactUseCase = mockk(),
-        turnFinalization = mockk(),
+        turnFinalizer = mockk(),
         json = Json,
         toolArtifactRewriter = mockk(),
         titleCoordinator = mockk(),

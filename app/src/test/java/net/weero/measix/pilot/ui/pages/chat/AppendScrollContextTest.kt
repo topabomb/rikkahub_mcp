@@ -5,7 +5,7 @@ import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.runtime.ConversationHeader
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
-import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
+import net.weero.measix.pilot.service.runtime.TurnLivePhase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -112,7 +112,7 @@ class AppendScrollContextTest {
     }
 
     @Test
-    fun `released active request without the target message invalidates the wait`() {
+    fun `released active turn without the target message invalidates the wait`() {
         val before = snapshot(nodes = listOf(MessageNode.of(UIMessage.user("first"))))
         val turnId = Uuid.random()
         val context = AppendScrollContext.from(before, Uuid.random(), turnId)
@@ -123,10 +123,10 @@ class AppendScrollContextTest {
                 requestContext = context,
                 snapshot = before,
                 presentation = ConversationPresentation(
-                    activeRequestTurnId = null,
-                    phase = ConversationTurnPhase.IDLE,
+                    activeTurnId = null,
+                    phase = null,
                     processingText = null,
-                    toolCallPhases = emptyMap(),
+                    toolLivePhases = emptyMap(),
                     lastTerminatedRequestTurnId = turnId,
                 ),
                 actualItemCount = 4,
@@ -161,10 +161,10 @@ class AppendScrollContextTest {
         val turnId = Uuid.random()
         val context = AppendScrollContext.from(before, Uuid.random(), turnId)
         val ended = ConversationPresentation(
-            activeRequestTurnId = null,
-            phase = ConversationTurnPhase.IDLE,
+            activeTurnId = null,
+            phase = null,
             processingText = null,
-            toolCallPhases = emptyMap(),
+            toolLivePhases = emptyMap(),
             lastTerminatedRequestTurnId = turnId,
         )
 
@@ -182,10 +182,10 @@ class AppendScrollContextTest {
     }
 
     private fun preparing(turnId: Uuid) = ConversationPresentation(
-        activeRequestTurnId = turnId,
-        phase = ConversationTurnPhase.PREPARING,
+        activeTurnId = turnId,
+        phase = TurnLivePhase.PREPARING,
         processingText = null,
-        toolCallPhases = emptyMap(),
+        toolLivePhases = emptyMap(),
     )
 
     private fun snapshot(nodes: List<MessageNode>): ConversationPresentationSnapshot {
@@ -208,7 +208,7 @@ class AppendScrollContextTest {
                 updateAt = 1,
             ),
             nodes = nodes,
-            activeTurn = null,
+            stream = null,
         )
     }
 }

@@ -71,21 +71,21 @@ Target.allowAsSubAssistant
 |------|------|
 | `AssistantToolFactory` | 注册 Assistant 工具、构建 START 时冻结的路由 Catalog、把 `assistant_call` 交给 Coordinator |
 | `AssistantManagementService` | Assistant CRUD、授权更新、删除 tombstone 与恢复清理 |
-| `DelegationCoordinator` | 四阶段编排（preflight → materialize Child → run → terminal）、ask_user 桥接和卡片 Phase；不实现第二套提交或恢复协议 |
+| `SubAssistantRunCoordinator` | 四阶段编排（preflight → materialize Child → run → terminal）、ask_user 桥接和卡片 Phase；不实现第二套提交或恢复协议 |
 | `SubAssistantRunGate` | scoped run lease 与 pending ask_user 并发所有者；原始 release 不向调用方暴露 |
 | `SubAssistantLifecycle` | lineage、retention、Child 删除和普通树变更前的 run 收口 |
-| `TurnFinalization` | 正常 stop/supersede 与中断结果的强制终态写入 |
+| `TurnFinalizer` | 正常 stop/supersede 与中断结果的强制终态写入 |
 | `TurnRecovery` | 只处理进程恢复：按非终态 execution 定点收口 Master、Child 与工具事实 |
 | `ApplicationRecoveryCoordinator` | 唯一启动顺序与 fail-closed 写门禁 |
 | `SubAssistantResultProjection` | 子助手输出/结果形状/入站投影纯函数（final answer 提取、Tool Result 构建、metadata patch、任务预处理） |
-| `TurnEngine` / `TurnPipelineFactory` | Master 与 Target 共用的 turn 骨架（`TurnEngine.start`）与 chunk→CommitCheckpoint→FinalizeTurn 提交协议、输入/输出管道 |
+| `TurnCommitter` / `TurnPipelineFactory` | Master 与 Target 共用的 turn 骨架（`TurnCommitter.start`）与 TurnCheckpoint→FinalizeTurn 提交协议、输入/输出管道 |
 | `SubAssistantAccessPolicy` | 统一计算发现、管理和调用的有效访问范围 |
 | `SubAssistantRunPolicy` | 模型解析、运行中停止条件和 Target 工具边界 |
 | `SubAssistantLineageResolver` | 在 Master 当前分支上决定新建、复用或克隆 Child |
 | `SubAssistantRunStateReducer` | 串行维护单次 Run 的完整 metadata 快照和单向状态转换 |
 | `ConversationRuntimeRegistry` | 为 Master 与 Child 提供同一套 Runtime、Job 和状态流生命周期 |
-| `GenerationLoop` | 通用模型循环、Tool locator、审批策略、phase/checkpoint/finished 事件 |
-| `GenerationToolSetFactory` | 按 Assistant、资源和 Run Mode 统一装配工具 |
+| `TurnRunner` | 通用模型循环、Tool locator、审批策略、phase/checkpoint/finished 事件 |
+| `TurnToolSetFactory` | 按 Assistant、资源和 Run Mode 统一装配工具 |
 
 ## 4. 持久化模型
 
@@ -123,7 +123,7 @@ metadata 的交付使用共用 `ToolMetadataDelivery`：phase/preview 为流式�
 
 ```text
 Master ToolCall
-  -> 精确定位 messageId + toolOrdinal
+  -> 精确定位 ToolCallLocator(assistantMessageId, stepId, localCallId)
   -> preflight 与 RunSpec
   -> 解析当前分支 lineage
   -> 获取 Master + Target lease
@@ -131,8 +131,8 @@ Master ToolCall
   -> 解析 attachments 为本地资产；能力判定留给 Target 请求级投影
   -> 新建 / 复用 / 克隆 Child，并追加 USER（Text(request) + 原始 Image parts）
   -> 提交 Caller tool STARTED 与 childConversationId 关系
-  -> 捕获 disclosure/MCP/tools/TurnRequestContext，并以精确 childTurnId 提交 Child StartTurn
-  -> Target GenerationLoop 循环
+  -> 捕获 disclosure/MCP/tools/TurnContext，并以精确 childTurnId 提交 Child StartTurn
+  -> Target TurnRunner 循环
   -> 持久化 Child、更新 phase/preview、桥接 ask_user
   -> 提取 final result，写入终态 metadata 与 Tool Result
   -> 释放 lease，Master 继续 Tool Loop
@@ -147,15 +147,15 @@ Lineage 决策完成后先获取 `(masterConversationId, targetAssistantId)` lea
 不要求 Master 当前分支引用，不复制输入文件。路径或文件不可用才阻断创建，Target 是否 native 由请求投影决定。
 同一 Master/Target 串行，不同 Master 独立运行；图片读取完成、失败或取消均释放保留，不新增持久化结构。
 
-Child clone 创建的历史附件由 `DelegationCoordinator` 持有到关联提交：先原子提交 Master metadata 与执行事实的 Child link，
+Child clone 创建的历史附件由 `SubAssistantRunCoordinator` 持有到关联提交：先原子提交 Master metadata 与执行事实的 Child link，
 再发布该批 `OwnedArtifact`。关联失败才补偿未关联 Child；关联成功后的资源发布失败保留 Child 和已有引用。
 如果 disclosure/MCP/tool/context 准备在 Child `StartTurn` 前失败，真实 USER 与 link 保留，只提交 Caller 失败 metadata，绝不伪造 Child START；
-已 START 的取消/失败则必须携带原 `childTurnId`，`TurnFinalization` 只收口匹配的 active owner，迟到清理不能终结更新的 Child Turn。
+已 START 的取消/失败则必须携带原 `childTurnId`，`TurnFinalizer` 只收口匹配的 active owner，迟到清理不能终结更新的 Child Turn。
 finally 同样只以原 `childTurnId + runJob` 释放 active request 与 context。该批资源不交给通用 Tool Result lease 作用域。
 
 ### Lineage
 
-`findPreviousCallMetadata` 只查看 Master 当前选中分支，并从当前 `messageId + toolOrdinal` 向前寻找同一 Target 最近的终态调用：
+`findPreviousCallMetadata` 只查看 Master 当前选中分支，并从当前 `ToolCallLocator(assistantMessageId, stepId, localCallId)` 向前寻找同一 Target 最近的终态调用：
 
 - 没有有效前序调用时新建 Child。
 - 前序 Run 仍位于 Child 尾部时复用 Child，并追加新的 USER（Text + 本次 Image parts）。
@@ -164,9 +164,9 @@ finally 同样只以原 `childTurnId + runJob` 释放 active request 与 context
 
 ### Target 生成
 
-Target 复用通用 `GenerationLoop`，不是独立的简化模型循环。它应用 Target 的 System Prompt、记忆、输入/输出 Transformer、模式注入、上下文裁剪、Provider 协议和 checkpoint 机制。Child 不继承 Master 的会话级 System Prompt、模式选择或聊天历史。
+Target 复用通用 `TurnRunner`，不是独立的简化模型循环。它应用 Target 的 System Prompt、记忆、输入/输出 Transformer、模式注入、上下文裁剪、Provider 协议和 checkpoint 机制。Child 不继承 Master 的会话级 System Prompt、模式选择或聊天历史。
 
-`GenerationLoop` 通过 `GenerationChunk.Messages`、`Phase` 与 `Finished` 向 Coordinator 报告流式状态；durability 走 awaited `onCheckpoint`。工具执行使用 `ToolExecutionContext(messageId, toolOrdinal)`；Provider 的 `toolCallId` 只作为协议数据保留，不能作为本地唯一键。
+`TurnRunner` 通过 `TurnRunInputs` 的 `onStreamDelta`、`onPhase` 与 `onResult` 汇向 Coordinator 报告流式状态与运行结果；durability 走 awaited `onCheckpoint`。工具执行使用 `ToolExecutionContext`，其 `locator: ToolCallLocator(assistantMessageId, stepId, localCallId)` 是唯一身份；Provider 的 `toolCallId` 只作为协议数据保留，不能作为本地唯一键。
 
 ### 结果提取
 
@@ -176,7 +176,7 @@ Target 复用通用 `GenerationLoop`，不是独立的简化模型循环。它�
 
 ## 6. Target 工具与运行中撤权
 
-Target 在新 Child Turn 的 START 前，从同一份有效 Settings、Target、resolved model 与 MCP capability snapshot 装配一次工具集合，并物化有序 Provider definitions 与同名 execution bindings。后续模型 step、`ask_user` continuation 与网络重试复用同一 `TurnRequestContext`；运行中配置变化不增删当前 Run 的工具 schema，只影响下一次新 START。
+Target 在新 Child Turn 的 START 前，从同一份有效 Settings、Target、resolved model 与 MCP capability snapshot 装配一次工具集合，并物化有序 Provider definitions 与同名 execution bindings。后续模型 step、`ask_user` continuation 与网络重试复用同一 `TurnContext`；运行中配置变化不增删当前 Run 的工具 schema，只影响下一次新 START。
 
 以下边界始终成立：
 
@@ -184,20 +184,20 @@ Target 在新 Child Turn 的 START 前，从同一份有效 Settings、Target、
 - 除 `ask_user` 外，所有需审批工具在非交互 Target 模式自动拒绝，返回
   `tool_not_permitted` + `approval_unavailable`。`approval_unavailable` 表示“需要审批但当前
   运行环境无法提供审批，不要原样重试”，是 ToolCall 级可恢复错误，不会终止整个 Run。
-- `ask_user` 由 Coordinator 按 Child `messageId + toolOrdinal` 持久化到 Master 卡片；回答也用 `run_id + interaction_id` 精确匹配，防止重复或过期提交。
-- Target run 暂停时，`TurnOutcome.AwaitingApproval` 携带 `pending: List<PendingInteraction>`（每项为
-  `ToolCallLocator` + `ToolInteractionKind`，按 ordinal 升序、非空）。Coordinator 直接消费这份列表定位
-  待应答工具，**不扫描消息、不读取 `ToolRuntimeMetadata`**。一批存在多个挂起交互时逐个处理，
-  每轮 `ask_user` 续跑重新跑一次 Target GenerationLoop。
-- 暂停投影只经 `onMessagesObserved` 交 durable 槽，**刻意不发 `GenerationChunk.Messages`**（避免 UI 在
+- `ask_user` 由 Coordinator 按 Child `ToolCallLocator(assistantMessageId, stepId, localCallId)` 持久化到 Master 卡片；回答也用 `run_id + interaction_id` 精确匹配，防止重复或过期提交。
+- Target run 暂停时，`TurnPause` 携带 `pendingInteractions: List<PendingToolInteraction>`（每项为
+  `ToolCallLocator` + `ToolInteractionState`，按 transcript 调用顺序、非空）。Coordinator 直接消费这份列表定位
+  待应答工具，**不扫描消息、不依赖任何已落盘的运行时元数据**。一批存在多个挂起交互时逐个处理，
+  每轮 `ask_user` 续跑重新跑一次 Target TurnRunner。
+- 暂停投影只经 `onAssistantObserved` 交 durable 槽，**刻意不发 `onStreamDelta`**（避免 UI 在
   「流式」与「暂停」之间抖动）。因此任何依赖流式快照定位交互的写法都拿不到挂起状态；
-  Coordinator 侧的 `lastMessages` 仅作为下一轮 GenerationLoop 的输入，不得用于定位交互。
+  Coordinator 侧的 `lastMessages` 仅作为下一轮 TurnRunner 的输入，不得用于定位交互。
 - `ask_user` 只接受满足 Schema 数量和大小上限的完整 JSON 入参；无效或过大的入参会在进入等待态前失败，不会截断后持久化。交互轮次上限与模型 step 上限使用不同终态 reason。
 - `recent_chats` 与 `conversation_search` 都限定为 Target 自己的顶层会话，不允许借 Target Run 搜索其他 Assistant 或内部 Child。
 - Memory Tool 在每次执行前重验 Target 仍启用记忆且 local/global namespace 没有改变；撤销后返回 `tool_not_permitted`。
 - Settings watcher 持续检查 Target 删除/停用、Caller 访问撤销和 RunSpec 模型失效，并取消当前 Run。
 
-工具列表在 START 形成不可变快照。同一批 ToolCall 先完成 Pending 判定，再按原 `toolOrdinal` 串行执行；不会在同批尚有待确认调用时抢先执行自动工具。执行时权限、资源和远端状态仍 live fail-closed。
+工具列表在 START 形成不可变快照。同一批 ToolCall 先完成 Pending 判定，再按 transcript 调用顺序串行执行；不会在同批尚有待确认调用时抢先执行自动工具。执行时权限、资源和远端状态仍 live fail-closed。
 
 ## 7. 状态、预览与只读详情
 
@@ -246,7 +246,7 @@ Fork 顶层会话时，`forkSubAssistantTree` 同时复制有效 Child，重建 
 `ConversationRuntimeRegistry` 保证一个 Conversation ID 对应一个 Runtime，并显式暴露 `Loading/Draft/Ready/Missing/Failed`；Draft 仅用于尚未发送首条消息的普通新聊天，Child 不使用 Draft。持久化 Child 只能经 `loadRuntime()` 安装已读取的 Ready Snapshot；不存在默认 Assistant 或空树占位。页面引用归零但 Job 活跃时 Runtime 继续保留；生成结束且空闲后再清理。
 
 停止 Master、删除 Target、撤销访问、模型失效、回答等待中断或应用恢复都会取消 Target Job。正常运行中的中断由
-`TurnFinalization` 在 `NonCancellable` 收尾区分别尝试 Child 终态提交与 Master metadata 准备；两侧都执行，
+`TurnFinalizer` 在 `NonCancellable` 收尾区分别尝试 Child 终态提交与 Master metadata 准备；两侧都执行，
 任一失败向调用方传播并保留双侧诊断。Master metadata 随工具结果提交；Master 自身已经取消时，由 owning turn 的
 `FinalizeTurn` 收口，不向已取消的显示通道发送终态。lease 与交互等待器由 `SubAssistantRunGate.withLease` 释放。
 
@@ -256,7 +256,7 @@ Fork 顶层会话时，`forkSubAssistantTree` 同时复制有效 Child，重建 
 
 - 修改访问规则时，必须同步检查 UI 候选、Catalog、三个 Assistant 工具、preflight、运行中 watcher、恢复和测试。
 - 修改 metadata 时，必须保持 merge 语义、向后兼容默认值，以及 fork/recovery/detail resolver 的一致性。
-- 修改工具执行定位时，只能使用 `messageId + toolOrdinal`；不能退回 Provider `toolCallId`。
+- 修改工具执行定位时，只能使用 `ToolCallLocator(assistantMessageId, stepId, localCallId)`；不能退回 Provider `toolCallId`，也不得把 ordinal 当身份。
 - 修改 Child 持久化时，必须覆盖 Room migration、顶层查询过滤、事务删除、文件保留和分支复制。
 - 修改 Target 生成时，应优先复用通用 Generation Pipeline；任何差异都要作为明确的 Run Mode policy 表达。
 - 修改用户可见文案时，必须同步所有支持的 locale。

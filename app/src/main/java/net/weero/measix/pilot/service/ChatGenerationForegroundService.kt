@@ -40,7 +40,7 @@ internal fun shouldKeepGenerationForeground(
 /**
  * 生成期保活的 Android 生命周期消费者。
  *
- * 它**不是**生成事实的 owner：`ConversationRuntime` / `TurnEngine` 仍是生成、取消、终态与恢复的
+ * 它**不是**生成事实的 owner：`ConversationRuntime` / `TurnCommitter` 仍是生成、取消、终态与恢复的
  * 唯一权威。本 service 只把"当前是否存在正在生成的 Master turn"这一只读投影转换成 Android 前台
  * 服务语义，让系统在网络流期间把应用视为用户可见的持续工作。
  *

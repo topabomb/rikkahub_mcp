@@ -8,6 +8,8 @@ import me.rerere.ai.core.ToolArgumentsException
 import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.ToolOutputArchive
+import me.rerere.ai.ui.ToolOutputArchiveRef
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -81,7 +83,7 @@ class ToolOutputProtocolTest {
         assertFalse("ref=" in read)
         assertTrue("1: 值\\\"1" in read)
         assertFalse(read.trimStart().startsWith("{"))
-        assertTrue(read.toByteArray(Charsets.UTF_8).size <= net.weero.measix.pilot.data.ai.ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_RESPONSE_BYTES)
+        assertTrue(read.toByteArray(Charsets.UTF_8).size <= ToolOutputProtocol.TOOL_OUTPUT_MAX_RESPONSE_BYTES)
 
         val emptyPage = formatReadResult(
             ToolOutputReadResult.Success(

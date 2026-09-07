@@ -1,4 +1,6 @@
 package net.weero.measix.pilot.service
+import net.weero.measix.pilot.service.subassistant.SubAssistantRunGate
+import net.weero.measix.pilot.service.subassistant.SubAssistantRunKey
 
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CompletableDeferred

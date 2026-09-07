@@ -12,6 +12,7 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.findUserTurnStart
 import net.weero.measix.pilot.AppScope
@@ -29,7 +30,8 @@ import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.UpdateHeader
 import net.weero.measix.pilot.service.runtime.ReplaceMessageTree
-import net.weero.measix.pilot.service.runtime.TurnOutcome
+import net.weero.measix.pilot.service.turn.TurnOutcome
+import net.weero.measix.pilot.service.turn.TurnRunResult
 import net.weero.measix.pilot.utils.SoundEffectPlayer
 import net.weero.measix.pilot.utils.applyPlaceholders
 import net.weero.measix.pilot.utils.runCatchingPreservingCancellation
@@ -137,7 +139,7 @@ class GenerationSideEffects(
         val providerHandler = providerManager.getProviderByType(provider)
         val result = providerHandler.generateText(
             providerSetting = provider,
-            messages = listOf(UIMessage.user(prompt)),
+            messages = listOf(ModelRequestMessage.user(prompt)),
             params = backgroundTextGenerationParams(model),
         )
         return result.choices.getOrNull(0)?.message?.toText()
@@ -206,7 +208,7 @@ class GenerationSideEffects(
             val retry = titleCoordinator.end(token)
             if (!cancelled && retry != null) {
                 launchWithConversationReference(conversationId) {
-                    val latest = commandCoordinator.load(conversationId).snapshot.value
+                    val latest = commandCoordinator.load(conversationId).durable
                     generateTitle(latest, force = retry.force)
                 }
             }
@@ -357,9 +359,9 @@ internal fun collectUserAttentionKeys(
 ): Set<String> {
     val keys = linkedSetOf<String>()
     messages.forEach { message ->
-        message.getTools().forEachIndexed { ordinal, tool ->
+        message.getTools().forEach { tool ->
             if (tool.isPending) {
-                keys += "tool:${message.id}:$ordinal"
+                keys += "tool:${message.id}:${tool.localCallId}"
             }
             val metadata = tool.getSubAssistantCallMetadata(json)
             val interaction = metadata?.userInteraction
@@ -379,8 +381,8 @@ internal fun collectUserAttentionKeys(
     return keys
 }
 
-internal fun shouldLaunchCompletionSideEffects(outcome: TurnOutcome?): Boolean {
-    return outcome is TurnOutcome.Completed
+internal fun shouldLaunchCompletionSideEffects(result: TurnRunResult): Boolean {
+    return result is TurnOutcome.Completed
 }
 
 internal fun backgroundTextGenerationParams(

@@ -1,11 +1,11 @@
 package net.weero.measix.pilot.data.ai.transformers
+import net.weero.measix.pilot.service.turn.ResolvedPromptInjection
 
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.ai.SyntheticMessageKind
+import net.weero.measix.pilot.data.ai.request.SyntheticMessageKind
 import net.weero.measix.pilot.data.model.InjectionPosition
-import net.weero.measix.pilot.service.runtime.ResolvedPromptInjection
 import kotlin.uuid.Uuid
 
 /**

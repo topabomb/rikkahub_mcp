@@ -12,6 +12,7 @@ import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -185,8 +186,11 @@ class ConversationDAOIntegrationTest {
             }
         }
 
-        assertEquals(listOf(original), messageNodeDao.getNodesOfConversation(first.id))
-        assertEquals(emptyList<MessageNodeEntity>(), messageNodeDao.getNodesOfConversation(second.id))
+        // The rejected cross-conversation upsert must not relocate or drop the original node.
+        val firstHeaders = messageNodeDao.getNodeHeadersOfConversation(first.id)
+        assertEquals(listOf("shared-node-id"), firstHeaders.map { it.id })
+        assertEquals(0, firstHeaders.single().nodeIndex)
+        assertTrue(messageNodeDao.getNodeHeadersOfConversation(second.id).isEmpty())
     }
 
     private suspend fun loadIds(source: PagingSource<Int, LightConversationEntity>): List<String> {

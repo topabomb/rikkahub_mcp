@@ -22,6 +22,7 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.AssistantManagementService
+import net.weero.measix.pilot.service.runtime.TurnKind
 import net.weero.measix.pilot.service.MemoryItem
 import net.weero.measix.pilot.service.MemoryListResult
 import net.weero.measix.pilot.utils.JsonInstant
@@ -40,7 +41,7 @@ class AssistantInspectToolTest {
     private fun createFactory(
         assistants: List<Assistant>,
         memoryResult: Result<MemoryListResult>? = null,
-        toolSetFactory: GenerationToolSetFactory = mockk(relaxed = true),
+        toolSetFactory: TurnToolSetFactory = mockk(relaxed = true),
     ): AssistantToolFactory {
         val caller = assistants.find { it.id == callerId } ?: Assistant(id = callerId, name = "Caller")
         val settings = Settings(
@@ -60,7 +61,7 @@ class AssistantInspectToolTest {
             settingsStore = settingsStore,
             assistantManagementService = managementService,
             json = json,
-            delegationCoordinator = mockk(relaxed = true),
+            subAssistantRunCoordinator = mockk(relaxed = true),
             toolSetFactory = toolSetFactory,
         )
     }
@@ -186,7 +187,7 @@ class AssistantInspectToolTest {
     fun `tools section lists names without descriptions and adds memory_tool`() = runTest {
         val target = accessibleTarget(enableMemory = true)
         val caller = caller()
-        val toolSetFactory = mockk<GenerationToolSetFactory>()
+        val toolSetFactory = mockk<TurnToolSetFactory>()
         every { toolSetFactory.captureMcpCapabilities(any()) } returns
             net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot.EMPTY
         coEvery {
@@ -196,7 +197,7 @@ class AssistantInspectToolTest {
                 settings = any(),
                 capabilityModel = any(),
                 workspaceCwd = any(),
-                runMode = ToolSetRunMode.TARGET,
+                turnKind = TurnKind.SUB_ASSISTANT,
                 ttsPlaybackContext = any(),
                 additionalToolsBeforeMcp = any(),
                 mcpCapabilities = any(),

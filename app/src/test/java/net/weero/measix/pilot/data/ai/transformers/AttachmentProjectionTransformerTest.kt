@@ -1,6 +1,6 @@
 package net.weero.measix.pilot.data.ai.transformers
 
-import net.weero.measix.pilot.service.runtime.resolveAssistantRequest
+import net.weero.measix.pilot.service.turn.resolveTurnAssistantSnapshot
 
 import net.weero.measix.pilot.test.testPromptInputs
 
@@ -59,7 +59,7 @@ class AttachmentProjectionTransformerTest {
         type = ModelType.CHAT,
         inputModalities = listOf(Modality.TEXT),
     )
-    private val assistant = resolveAssistantRequest(Assistant())
+    private val assistant = resolveTurnAssistantSnapshot(Assistant())
     private val settings = Settings()
 
     init {
@@ -303,7 +303,7 @@ class AttachmentProjectionTransformerTest {
     fun `tool output image fact stays inside tool result`() = runTest {
         val ref = AttachmentRefs.format(Uuid.random())
         val tool = UIMessagePart.Tool(
-            toolCallId = "call",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call",
             toolName = "generate_image",
             input = "{}",
             output = listOf(stampedImage(ref)),
@@ -359,8 +359,6 @@ class AttachmentProjectionTransformerTest {
                 userImages = RequestImageSupport.STRUCTURED,
                 assistantImages = RequestImageSupport.OPAQUE_REPLAY_ONLY,
                 toolOutputImages = RequestImageSupport.NONE,
-                opaqueReplayWireFormat = OpenAIResponseWireFormat.OPENAI,
-                opaqueReplaySourceProfile = OpenAIResponseSourceProfile.OPENAI,
             ),
             registerUnpublishedResource = { error("projection transformer must not create resources") },
         )
@@ -379,7 +377,7 @@ class AttachmentProjectionTransformerTest {
         val toolRef = AttachmentRefs.format(Uuid.random())
         val directRef = AttachmentRefs.format(Uuid.random())
         val tool = UIMessagePart.Tool(
-            toolCallId = "call",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call",
             toolName = "generate_image",
             input = "{}",
             output = listOf(stampedImage(toolRef, "tool.png")),
@@ -489,7 +487,7 @@ class AttachmentProjectionTransformerTest {
                 role = MessageRole.ASSISTANT,
                 parts = listOf(
                     UIMessagePart.Tool(
-                        toolCallId = "image-call", toolName = "generate_image", input = "{}",
+                        localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "image-call", toolName = "generate_image", input = "{}",
                         output = listOf(toolImage),
                     ),
                     assistantImage,

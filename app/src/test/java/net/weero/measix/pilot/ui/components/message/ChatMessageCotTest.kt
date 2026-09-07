@@ -1,10 +1,11 @@
 package net.weero.measix.pilot.ui.components.message
 
 import me.rerere.ai.core.MessageRole
+import kotlin.uuid.Uuid
 import me.rerere.ai.ui.MessageTerminalStatus
 import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.ui.UIMessage
-import me.rerere.ai.ui.ToolApprovalState
+import me.rerere.ai.ui.ToolInteractionState
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.mediaPersistenceFailurePart
 import me.rerere.ai.util.ProviderFailureKind
@@ -22,10 +23,10 @@ class ChatMessageCotTest {
         id: String = name,
         pending: Boolean = false,
     ) = UIMessagePart.Tool(
-        toolCallId = id,
+        localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = id,
         toolName = name,
         input = "{}",
-        approvalState = if (pending) ToolApprovalState.Pending else ToolApprovalState.Auto,
+        interactionState = if (pending) ToolInteractionState.AwaitingApproval else ToolInteractionState.NotRequired,
     )
 
     @Test
@@ -48,12 +49,12 @@ class ChatMessageCotTest {
     @Test
     fun `collapsed timeline keeps interleaved generate_image and pending tools`() {
         val steps = listOf(
-            ThinkingStep.ToolStep(tool("search_web", "s1"), 0),
-            ThinkingStep.ToolStep(tool(GENERATE_IMAGE_TOOL_NAME, "img"), 1),
-            ThinkingStep.ToolStep(tool("read_file", "r1"), 2),
-            ThinkingStep.ToolStep(tool("search_web", "s2", pending = true), 3),
-            ThinkingStep.ToolStep(tool("write_file", "w1"), 4),
-            ThinkingStep.ToolStep(tool("shell", "sh"), 5),
+            ThinkingStep.ToolStep(tool("search_web", "s1")),
+            ThinkingStep.ToolStep(tool(GENERATE_IMAGE_TOOL_NAME, "img")),
+            ThinkingStep.ToolStep(tool("read_file", "r1")),
+            ThinkingStep.ToolStep(tool("search_web", "s2", pending = true)),
+            ThinkingStep.ToolStep(tool("write_file", "w1")),
+            ThinkingStep.ToolStep(tool("shell", "sh")),
         )
 
         val visible = selectCollapsedSteps(
@@ -68,15 +69,30 @@ class ChatMessageCotTest {
         )
         assertEquals(
             listOf("img", "s2", "w1", "sh"),
-            visible.filterIsInstance<ThinkingStep.ToolStep>().map { it.tool.toolCallId },
+            visible.filterIsInstance<ThinkingStep.ToolStep>().map { it.tool.providerCallId },
         )
     }
 
     @Test
+    fun `collapsed timeline does not duplicate pinned tail steps`() {
+        val completed = ThinkingStep.ToolStep(tool("search_web"))
+        val pinned = ThinkingStep.ToolStep(tool("read_file", pending = true))
+        val steps = listOf(completed, pinned)
+
+        val visible = selectCollapsedSteps(
+            steps = steps,
+            collapsedVisibleCount = 2,
+            keepVisible = { it.shouldStayVisibleWhenCollapsed() },
+        )
+
+        assertEquals(steps, visible)
+    }
+
+    @Test
     fun `ordinary completed tools are not pinned`() {
-        val search = ThinkingStep.ToolStep(tool("search_web"), 0)
-        val image = ThinkingStep.ToolStep(tool(GENERATE_IMAGE_TOOL_NAME), 1)
-        val pending = ThinkingStep.ToolStep(tool("read_file", pending = true), 2)
+        val search = ThinkingStep.ToolStep(tool("search_web"))
+        val image = ThinkingStep.ToolStep(tool(GENERATE_IMAGE_TOOL_NAME))
+        val pending = ThinkingStep.ToolStep(tool("read_file", pending = true))
         val reasoning = ThinkingStep.ReasoningStep(UIMessagePart.Reasoning("think"))
 
         assertFalse(search.shouldStayVisibleWhenCollapsed())

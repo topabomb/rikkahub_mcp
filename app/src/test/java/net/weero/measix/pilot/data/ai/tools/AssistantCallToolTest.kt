@@ -15,6 +15,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.ToolAttachmentResolution
+import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.core.ToolOutputPolicy
@@ -25,7 +26,7 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.AssistantManagementService
-import net.weero.measix.pilot.service.runtime.DelegationCoordinator
+import net.weero.measix.pilot.service.subassistant.SubAssistantRunCoordinator
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -48,7 +49,7 @@ class AssistantCallToolTest {
         description = "Target",
     )
 
-    private fun createTool(coordinator: DelegationCoordinator): me.rerere.ai.core.Tool {
+    private fun createTool(coordinator: SubAssistantRunCoordinator): me.rerere.ai.core.Tool {
         val effectiveSettings = MutableStateFlow(
             Settings(
                 assistants = listOf(caller, target),
@@ -61,15 +62,14 @@ class AssistantCallToolTest {
             settingsStore = settingsStore,
             assistantManagementService = mockk<AssistantManagementService>(relaxed = true),
             json = Json,
-            delegationCoordinator = coordinator,
+            subAssistantRunCoordinator = coordinator,
             toolSetFactory = mockk(relaxed = true),
         ).buildTools(caller, masterConversationId).single { it.name == "assistant_call" }
     }
 
     private fun executionContext() = ToolExecutionContext(
-        messageId = Uuid.random(),
-        toolOrdinal = 0,
-        toolCallId = "provider-call",
+        locator = ToolCallLocator(Uuid.random(), Uuid.random(), Uuid.random()),
+        providerCallId = "provider-call",
         reportMetadata = { _, _ -> },
         resolveAttachments = { ToolAttachmentResolution(failureReason = "not_used") },
         reportChildConversation = { },
@@ -184,7 +184,7 @@ class AssistantCallToolTest {
 
     @Test
     fun `blank request is rejected before coordinator starts a run`() = runTest {
-        val coordinator = mockk<DelegationCoordinator>(relaxed = true)
+        val coordinator = mockk<SubAssistantRunCoordinator>(relaxed = true)
         val tool = createTool(coordinator)
 
         val payload = failurePayload {
@@ -203,7 +203,7 @@ class AssistantCallToolTest {
 
     @Test
     fun `obsolete task argument is not accepted as request`() = runTest {
-        val coordinator = mockk<DelegationCoordinator>(relaxed = true)
+        val coordinator = mockk<SubAssistantRunCoordinator>(relaxed = true)
         val tool = createTool(coordinator)
 
         val payload = failurePayload {
@@ -221,7 +221,7 @@ class AssistantCallToolTest {
 
     @Test
     fun `more than four attachments is rejected before coordinator starts a run`() = runTest {
-        val coordinator = mockk<DelegationCoordinator>(relaxed = true)
+        val coordinator = mockk<SubAssistantRunCoordinator>(relaxed = true)
         val tool = createTool(coordinator)
         val payload = failurePayload {
             tool.executeWithContext(
@@ -246,7 +246,7 @@ class AssistantCallToolTest {
 
     @Test
     fun `mixed non string attachments are rejected before coordinator starts a run`() = runTest {
-        val coordinator = mockk<DelegationCoordinator>(relaxed = true)
+        val coordinator = mockk<SubAssistantRunCoordinator>(relaxed = true)
         val tool = createTool(coordinator)
         val payload = failurePayload {
             tool.executeWithContext(
@@ -268,7 +268,7 @@ class AssistantCallToolTest {
 
     @Test
     fun `attachments are forwarded after dedup`() = runTest {
-        val coordinator = mockk<DelegationCoordinator>()
+        val coordinator = mockk<SubAssistantRunCoordinator>()
         val tool = createTool(coordinator)
         val expected = completedOutput()
         val path = "/upload/b.png"
@@ -320,7 +320,7 @@ class AssistantCallToolTest {
 
     @Test
     fun `nonblank request delegates with caller and master context`() = runTest {
-        val coordinator = mockk<DelegationCoordinator>()
+        val coordinator = mockk<SubAssistantRunCoordinator>()
         val tool = createTool(coordinator)
         val expected = completedOutput()
         coEvery {
@@ -349,7 +349,7 @@ class AssistantCallToolTest {
 
     @Test
     fun `extras are forwarded and unknown values dropped`() = runTest {
-        val coordinator = mockk<DelegationCoordinator>()
+        val coordinator = mockk<SubAssistantRunCoordinator>()
         val tool = createTool(coordinator)
         val expected = completedOutput()
         coEvery {

@@ -1,5 +1,6 @@
 package me.rerere.ai.provider.providers
 
+import kotlin.uuid.Uuid
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -342,7 +343,7 @@ class ProviderMessageUtilsTest {
 
     private fun createExecutedTool(callId: String, name: String): UIMessagePart.Tool {
         return UIMessagePart.Tool(
-            toolCallId = callId,
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = callId,
             toolName = name,
             input = "{}",
             output = listOf(UIMessagePart.Text("Result from $name"))
@@ -351,7 +352,7 @@ class ProviderMessageUtilsTest {
 
     private fun createUnexecutedTool(callId: String, name: String): UIMessagePart.Tool {
         return UIMessagePart.Tool(
-            toolCallId = callId,
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = callId,
             toolName = name,
             input = "{}",
             output = emptyList()

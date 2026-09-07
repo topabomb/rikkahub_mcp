@@ -1,4 +1,7 @@
 package net.weero.measix.pilot.service.runtime
+import net.weero.measix.pilot.service.turn.TurnCommitter
+import net.weero.measix.pilot.service.turn.androidTestTurnContext
+import net.weero.measix.pilot.service.turn.disclosureCandidate
 
 import android.content.Context
 import android.content.ContextWrapper
@@ -12,12 +15,14 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.Tool
@@ -29,10 +34,11 @@ import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.ui.MessageTerminalStatus
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.TurnTerminalReasons
 import net.weero.measix.pilot.AppScope
-import net.weero.measix.pilot.data.ai.CheckpointKind
-import net.weero.measix.pilot.data.ai.GenerationLoop
-import net.weero.measix.pilot.data.ai.GenerationRequest
+import net.weero.measix.pilot.service.turn.TurnRunner
+import net.weero.measix.pilot.service.turn.TurnOutcome
+import net.weero.measix.pilot.service.turn.TurnRunInputs
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
@@ -52,7 +58,7 @@ import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.service.ApplicationRecoveryGate
-import net.weero.measix.pilot.service.TurnFinalization
+import net.weero.measix.pilot.service.turn.TurnFinalizer
 import okhttp3.OkHttpClient
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -77,8 +83,8 @@ class TurnCancellationIntegrationTest {
     private lateinit var repository: ConversationRepository
     private lateinit var registry: ConversationRuntimeRegistry
     private lateinit var coordinator: ConversationCommandCoordinator
-    private lateinit var turnFinalization: TurnFinalization
-    private lateinit var generationLoop: GenerationLoop
+    private lateinit var turnFinalizer: TurnFinalizer
+    private lateinit var turnRunner: TurnRunner
     private lateinit var httpClient: OkHttpClient
     private val workers = mutableListOf<Job>()
 
@@ -138,9 +144,9 @@ class TurnCancellationIntegrationTest {
             recoveryGate = ApplicationRecoveryGate().apply { ready() },
             operationLocks = operationLocks,
         )
-        turnFinalization = TurnFinalization(repository, registry, coordinator, Json)
+        turnFinalizer = TurnFinalizer(repository, registry, coordinator, Json)
         httpClient = OkHttpClient()
-        generationLoop = GenerationLoop(
+        turnRunner = TurnRunner(
             context = payloadContext,
             providerManager = ProviderManager(httpClient, payloadContext),
             json = Json,
@@ -179,7 +185,7 @@ class TurnCancellationIntegrationTest {
             tool = tool,
             onCheckpoint = { engine, checkpoint ->
                 engine.onCheckpoint(checkpoint)
-                if (checkpoint.kind == CheckpointKind.TOOL_RESULT_COMPLETED) {
+                if (checkpoint is ToolResultCheckpoint) {
                     checkpointCommitted.complete(Unit)
                     releaseCheckpoint.await()
                 }
@@ -206,7 +212,7 @@ class TurnCancellationIntegrationTest {
         assertTrue(artifactStore.file(owned.localRef).isFile)
         assertTrue(database.artifactReferenceDao().existsByArtifactId(artifact.id))
         assertEquals(ToolExecutionStatus.COMPLETED, repository.getToolExecutions(fixture.turnId.toString()).single().status)
-        assertNull(fixture.runtime.snapshot.value.activeTurn)
+        assertNull(fixture.runtime.snapshot.value.stream)
     }
 
     @Test
@@ -242,7 +248,7 @@ class TurnCancellationIntegrationTest {
             part is UIMessagePart.Image && part.url == owned.uri.toString()
         })
         assertEquals(ToolExecutionStatus.CANCELLED, repository.getToolExecutions(fixture.turnId.toString()).single().status)
-        assertNull(fixture.runtime.snapshot.value.activeTurn)
+        assertNull(fixture.runtime.snapshot.value.stream)
     }
 
     private fun artifactTool(
@@ -268,7 +274,7 @@ class TurnCancellationIntegrationTest {
 
     private suspend fun startResumedToolTurn(
         tool: Tool,
-        onCheckpoint: suspend (TurnEngine, net.weero.measix.pilot.data.ai.GenerationCheckpoint) -> Unit =
+        onCheckpoint: suspend (TurnCommitter, net.weero.measix.pilot.service.runtime.TurnCheckpoint) -> Unit =
             { engine, checkpoint -> engine.onCheckpoint(checkpoint) },
     ): RunningTurnFixture {
         val conversationId = Uuid.random()
@@ -286,62 +292,81 @@ class TurnCancellationIntegrationTest {
             turnId = turnId,
             runtime = runtime,
         )
-        val requestContext = androidTestTurnRequestContext(
+        val turnContext = androidTestTurnContext(
             settings = settings,
             model = model,
             assistant = assistant,
             tools = listOf(tool),
         )
         val worker = appScope.launch(start = CoroutineStart.LAZY) {
+            var turnCommitter: TurnCommitter? = null
             try {
                 val activeWorker = requireNotNull(coroutineContext[Job])
                 assertSame(activeWorker, runtime.currentWorker())
-                runtime.bindTurnRequestContext(turnId, activeWorker, requestContext)
-                val started = TurnEngine.start(
+                runtime.bindTurnContext(turnId, activeWorker, turnContext)
+                val started = TurnCommitter.start(
                     commandCoordinator = coordinator,
                     runtime = runtime,
                     turnId = turnId,
                     modelContextCandidate = disclosureCandidate(),
-                    turnFinalization = turnFinalization,
+                    turnFinalizer = turnFinalizer,
                 )
+                turnCommitter = started.turnCommitter
                 // 该 turn 的 owner Assistant slot 携带一个尚未回放结果的 ToolCall；
-                // GenerationLoop 直接进入执行阶段，不提前发起下一 step provider 请求。
-                val currentMessages = runtime.snapshot.value.currentMessages().dropLast(1) + UIMessage(
+                // TurnRunner 直接进入执行阶段，不提前发起下一 step provider 请求。
+                val currentMessages = runtime.snapshot.value.toPresentationSnapshot().currentMessages().dropLast(1) + UIMessage(
                     id = started.assistantMessageId,
                     role = MessageRole.ASSISTANT,
                     parts = listOf(
                         UIMessagePart.Tool(
-                            toolCallId = "call-${tool.name}",
+                            localCallId = Uuid.random(),
+                            stepId = Uuid.random(),
+                            providerCallId = "call-${tool.name}",
                             toolName = tool.name,
                             input = "{}",
+                            output = emptyList(),
                         ),
                     ),
                 )
-                started.engine.bind(
-                    generationLoop.run(
-                        GenerationRequest(
-                            conversationId = kotlin.uuid.Uuid.random(),
-                            requestContext = requestContext,
-                            messages = currentMessages,
-                            maxSteps = 1,
-                            assistantMessageId = started.assistantMessageId,
-                            onCheckpoint = { checkpoint -> onCheckpoint(started.engine, checkpoint) },
-                            onMessagesObserved = started.engine::observeMessages,
-                        ),
+                turnRunner.run(
+                    TurnRunInputs(
+                        turnContext = turnContext,
+                        handle = started.handle,
+                        messages = currentMessages,
+                        maxSteps = 1,
+                        assistantMessageId = started.assistantMessageId,
+                        onCheckpoint = { checkpoint -> onCheckpoint(started.turnCommitter, checkpoint) },
+                        onAssistantObserved = started.turnCommitter::observeAssistant,
+                        onStreamDelta = started.turnCommitter::publishStream,
+                        onResult = started.turnCommitter::commitRunResult,
+                        cancelReason = { runtime.peekCancelReason(turnId) },
                     ),
-                ).toList()
+                )
             } catch (cancelled: CancellationException) {
+                // TurnRunner 只对生成循环内观察到的取消落终态；循环正常退出后才观察到的取消由 owner 收口
+                // （生产路径见 ConversationTurnService 的 finalizeOwnerFailure）。本测试直接驱动 worker，
+                // 故在此复刻 owner 的取消兜底，使 durable turn 以 CANCELLED 收口而非泄漏为 RUNNING。
+                turnCommitter?.let { committer ->
+                    val outcome = TurnOutcome.Cancelled(
+                        runtime.peekCancelReason(turnId) ?: TurnTerminalReasons.USER_STOP,
+                    )
+                    try {
+                        withContext(NonCancellable) { committer.finalizeOwnerFailure(outcome) }
+                    } catch (finalizationError: Exception) {
+                        cancelled.addSuppressed(finalizationError)
+                    }
+                }
                 throw cancelled
             } catch (error: Throwable) {
                 fixture.failure = error
                 throw error
             } finally {
-                runtime.releaseActiveRequest(turnId, coroutineContext[Job])
+                runtime.releaseTurnWorker(turnId, coroutineContext[Job])
             }
         }
         fixture.worker = worker
         workers += worker
-        registry.installAndStartActiveRequest(conversationId, turnId, worker)
+        registry.installAndStartTurnWorker(conversationId, turnId, worker)
         return fixture
     }
 

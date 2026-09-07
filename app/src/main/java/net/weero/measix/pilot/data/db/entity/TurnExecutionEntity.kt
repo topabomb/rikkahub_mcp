@@ -7,9 +7,8 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 
 enum class TurnExecutionStatus {
-    CREATED,
     RUNNING,
-    AWAITING_APPROVAL,
+    AWAITING_USER,
     COMPLETED,
     CANCELLED,
     FAILED,

@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.data.ai.subassistant
 
 import kotlinx.serialization.json.Json
+import kotlin.uuid.Uuid
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.HttpException
 import me.rerere.ai.util.ProviderFailureKind
@@ -166,7 +167,7 @@ class SubAssistantRuntimeErrorTest {
     @Test
     fun `parses detail from tool output json`() {
         val tool = UIMessagePart.Tool(
-            toolCallId = "call",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call",
             toolName = "assistant_call",
             input = "{}",
             output = listOf(

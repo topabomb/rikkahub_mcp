@@ -92,8 +92,6 @@ internal fun openAIRequestMediaCapabilities(
         } else {
             RequestImageSupport.NONE
         },
-        opaqueReplayWireFormat = profile.wireFormat,
-        opaqueReplaySourceProfile = profile.sourceProfile,
     )
 }
 

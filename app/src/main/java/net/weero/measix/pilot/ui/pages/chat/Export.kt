@@ -304,8 +304,8 @@ private suspend fun exportToMarkdown(
                     is UIMessagePart.Tool -> {
                         append("**Tool**: `${part.toolName}`")
                         appendLine()
-                        if (part.toolCallId.isNotBlank()) {
-                            append("- Call ID: `${part.toolCallId}`")
+                        if (part.providerCallId.isNotBlank()) {
+                            append("- Call ID: `${part.providerCallId}`")
                             appendLine()
                         }
 

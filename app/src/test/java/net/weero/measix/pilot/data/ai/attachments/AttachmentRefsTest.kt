@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.data.ai.attachments
 
 import kotlinx.serialization.json.JsonObject
+import kotlin.uuid.Uuid
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -80,7 +81,7 @@ class AttachmentRefsTest {
     fun `planned backfill stamps only the addressed nested tool image`() {
         val image = UIMessagePart.Image(url = "file:///tmp/tool.png")
         val tool = UIMessagePart.Tool(
-            toolCallId = "c1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "c1",
             toolName = "generate_image",
             input = "{}",
             output = listOf(image),

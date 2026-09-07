@@ -4,7 +4,7 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
-import net.weero.measix.pilot.data.ai.SyntheticMessageKind
+import net.weero.measix.pilot.data.ai.request.SyntheticMessageKind
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle

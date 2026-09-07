@@ -108,7 +108,7 @@ class ConversationRuntimeRegistry(
             entry.loadMutex.withLock {
                 when (val current = entry.state.value) {
                     is ConversationRuntimeState.Ready -> {
-                        check(current.runtime.snapshot.value.header.id == conversation.id)
+                        check(current.runtime.snapshot.value.durable.header.id == conversation.id)
                         current.runtime
                     }
                     is ConversationRuntimeState.Draft -> error(
@@ -181,17 +181,17 @@ class ConversationRuntimeRegistry(
         expected.acquireLease()
     }
 
-    internal suspend fun installAndStartActiveRequest(
+    internal suspend fun installAndStartTurnWorker(
         conversationId: Uuid,
         turnId: Uuid,
         worker: Job,
         handle: TurnHandle? = null,
-        phase: ConversationTurnPhase = ConversationTurnPhase.PREPARING,
+        phase: TurnLivePhase = TurnLivePhase.PREPARING,
         supersedeReason: String? = null,
-    ): InstalledActiveRequest = operationLocks.withLock(conversationId) {
+    ): InstalledTurnWorker = operationLocks.withLock(conversationId) {
         val runtime = findRuntime(conversationId)
             ?: error("conversation runtime is not resident: $conversationId")
-        val installed = runtime.installActiveRequest(
+        val installed = runtime.installTurnWorker(
             turnId = turnId,
             worker = worker,
             handle = handle,
@@ -203,20 +203,20 @@ class ConversationRuntimeRegistry(
     }
 
     /**
-     * Continues an approval-paused request under the conversation operation lock.
+     * Continues a user-paused turn under the conversation operation lock.
      * A newer START that already replaced the owner is rejected without cancelling it.
      */
-    internal suspend fun installAndStartApprovalContinuation(
+    internal suspend fun installAndStartUserInteractionContinuation(
         conversationId: Uuid,
         handle: TurnHandle,
         worker: Job,
-    ): InstalledActiveRequest = operationLocks.withLock(conversationId) {
+    ): InstalledTurnWorker = operationLocks.withLock(conversationId) {
         check(handle.conversationId == conversationId) {
-            "approval continuation ${handle.turnId} belongs to ${handle.conversationId}"
+            "user-interaction continuation ${handle.turnId} belongs to ${handle.conversationId}"
         }
         val runtime = findRuntime(conversationId)
             ?: error("conversation runtime is not resident: $conversationId")
-        val installed = runtime.continueAwaitingApproval(handle, worker)
+        val installed = runtime.continueAwaitingUser(handle, worker)
         worker.start()
         installed
     }
@@ -224,9 +224,9 @@ class ConversationRuntimeRegistry(
     fun getTurnPresentationFlow(conversationId: Uuid): Flow<ConversationPresentation> =
         observeRuntimeState(conversationId).flatMapLatest { state ->
             state.runtimeOrNull()?.let { runtime ->
-                combine(runtime.activeRequestRevision, runtime.snapshot) { _, snapshot ->
+                combine(runtime.activeTurnRevision, runtime.snapshot) { _, snapshot ->
                     resolveConversationPresentation(
-                        runtime.activeRequestPresentationFacts(),
+                        runtime.activeTurnPresentationFacts(),
                         snapshot,
                         runtime.lastTerminatedRequestTurnId(),
                     )
@@ -240,12 +240,12 @@ class ConversationRuntimeRegistry(
      */
     internal fun getConversationUiFlow(
         conversationId: Uuid,
-    ): Flow<Pair<ConversationAggregateSnapshot, ConversationPresentation>> =
+    ): Flow<Pair<ConversationRuntimeSnapshot, ConversationPresentation>> =
         observeRuntimeState(conversationId).flatMapLatest { state ->
             state.runtimeOrNull()?.let { runtime ->
-                combine(runtime.snapshot, runtime.activeRequestRevision) { snapshot, _ ->
+                combine(runtime.snapshot, runtime.activeTurnRevision) { snapshot, _ ->
                     snapshot to resolveConversationPresentation(
-                        runtime.activeRequestPresentationFacts(),
+                        runtime.activeTurnPresentationFacts(),
                         snapshot,
                         runtime.lastTerminatedRequestTurnId(),
                     )
@@ -260,9 +260,9 @@ class ConversationRuntimeRegistry(
                 flowOf(emptyMap())
             } else {
                 combine(current.map { runtime ->
-                    combine(runtime.activeRequestRevision, runtime.snapshot) { _, snapshot ->
+                    combine(runtime.activeTurnRevision, runtime.snapshot) { _, snapshot ->
                         runtime.id to resolveConversationPresentation(
-                            runtime.activeRequestPresentationFacts(),
+                            runtime.activeTurnPresentationFacts(),
                             snapshot,
                             runtime.lastTerminatedRequestTurnId(),
                         )
@@ -287,7 +287,7 @@ class ConversationRuntimeRegistry(
 
     suspend fun cancelGenerationsForAssistant(assistantId: Uuid, reason: String) {
         val jobs = activeRuntimes()
-            .filter { it.snapshot.value.header.assistantId == assistantId }
+            .filter { it.snapshot.value.durable.header.assistantId == assistantId }
             .mapNotNull { runtime ->
                 runtime.cancelActiveGeneration(reason)
             }

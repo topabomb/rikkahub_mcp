@@ -3,7 +3,7 @@ package net.weero.measix.pilot.service
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
-import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
+import net.weero.measix.pilot.service.runtime.TurnLivePhase
 import kotlin.uuid.Uuid
 
 class ConversationActivityProjectionTest {
@@ -27,22 +27,22 @@ class ConversationActivityProjectionTest {
             mergeConversationActivities(
                 turnPresentations = mapOf(
                     responseOnly to ConversationPresentation(
-                        activeRequestTurnId = responseOnly,
-                        phase = ConversationTurnPhase.GENERATING,
+                        activeTurnId = responseOnly,
+                        phase = TurnLivePhase.MODEL_STREAMING,
                         processingText = null,
-                        toolCallPhases = emptyMap(),
+                        toolLivePhases = emptyMap(),
                     ),
                     approvalOnly to ConversationPresentation(
-                        activeRequestTurnId = approvalOnly,
-                        phase = ConversationTurnPhase.AWAITING_USER,
+                        activeTurnId = approvalOnly,
+                        phase = TurnLivePhase.AWAITING_USER,
                         processingText = null,
-                        toolCallPhases = emptyMap(),
+                        toolLivePhases = emptyMap(),
                     ),
                     both to ConversationPresentation(
-                        activeRequestTurnId = both,
-                        phase = ConversationTurnPhase.AWAITING_USER,
+                        activeTurnId = both,
+                        phase = TurnLivePhase.AWAITING_USER,
                         processingText = null,
-                        toolCallPhases = emptyMap(),
+                        toolLivePhases = emptyMap(),
                     ),
                 ),
                 titleGenerationIds = setOf(both, titleOnly),

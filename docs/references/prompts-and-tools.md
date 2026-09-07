@@ -7,18 +7,18 @@
 > [`multimodal-context-and-turn-durability.md`](multimodal-context-and-turn-durability.md)。
 > 条数窗口、滚动压缩与 Snapshot 如何叠加见 [`request-context.md`](request-context.md)。
 
-相关实现：`GenerationLoop.generateInternal()`、`PlaceholderTransformer`、
+相关实现：`StepRunner.generateInternal()`、`PlaceholderTransformer`、
 `TemplateTransformer`、`AssistantToolFactory`、
 `WorkspaceReminderTransformer`、`ToolArtifactReplayTransformer`、
 `TimeReminderTransformer`、`AttachmentProjectionTransformer`、
 `AttachmentInspectionTool`、`ConversationDisclosureSnapshotService`、
-`TurnRequestContextFactory`。
+`TurnContextFactory`。
 
 ---
 
 ## 1. 一次请求里的上下文顺序
 
-`generateInternal()` 使用 START 时冻结的 `TurnRequestContext`（`FrozenTurnPromptInputs` +
+`generateInternal()` 使用 START 时冻结的 `TurnContext`（`TurnPromptSnapshot` +
 `FrozenToolDefinition`）装配请求；同一 Turn 的所有 step、审批与重试逐字复用。Master 当前装配顺序为：
 
 ```text
@@ -40,12 +40,12 @@ Durable 消息（selected branch → replay-safe projection → messageLimit 窗
   AttachmentProjectionTransformer ← 最后按本次模型能力投影附件：可读 IMAGE 时保留图片并前插
                                   input=native 事实；不可读时只保留 input=reference_only 事实
 Transformer 全部完成后：
-  ConversationContextPlanner.applyContextProjections 把 Disclosure Snapshot 作为 anchor USER
+  RequestContextPlanner.applyContextProjections 把 Disclosure Snapshot 作为 anchor USER
   turn 的第一个 Text part 注入；不经过任何模板、占位符、提醒或附件投影改写。
 ```
 
-Target 复用相同模型可见语义，但 Transformer 装配由 `DelegationCoordinator` 独立负责；完整顺序见
-[`chat-generation-pipeline.md`](chat-generation-pipeline.md) 与
+Target 复用相同模型可见语义，但 Transformer 装配由 `SubAssistantRunCoordinator` 独立负责；完整顺序见
+[`turn-step-execution.md`](turn-step-execution.md) 与
 [`sub-assistant-multimodal.md`](sub-assistant-multimodal.md)。
 
 工具 schema（name、description、parameters）是 START 时 `Tool.freeze()` 物化的
@@ -78,7 +78,7 @@ Target 复用相同模型可见语义，但 Transformer 装配由 `DelegationCoo
 | `{{device_info}}` | 品牌与型号 |
 
 已移除的 `{{cur_time}}` / `{{cur_datetime}}` 降级为 `{{cur_date}}` 的值。
-请求管线的占位符值由 `TurnRequestContextFactory` 在 START 时求值并冻结（`placeholderValues`），
+请求管线的占位符值由 `TurnContextFactory` 在 START 时求值并冻结（`placeholderValues`），
 跨日 / 切换 Locale / 时区不改变本 Turn 的替换结果；`DefaultPlaceholderProvider` 只服务
 提示词页的变量芯片展示。
 
@@ -104,7 +104,7 @@ Target 复用相同模型可见语义，但 Transformer 装配由 `DelegationCoo
 动态 Memory System 注入已删除。Memory 内容的唯一披露路径是每次新 `START` 前由
 `ConversationDisclosureSnapshotService.captureCandidate()` 从固定 effective-settings 快照与一次
 `ORDER BY id ASC` 的有序 Memory 查询渲染的 canonical Snapshot；内容变化才随新 Assistant owner
-追加 entry（见 [`chat-generation-pipeline.md`](chat-generation-pipeline.md)）。memory section
+追加 entry（见 [`turn-step-execution.md`](turn-step-execution.md)）。memory section
 形状（`enabled` / `scope` / `header` / `rows`）由该 service 的 canonical renderer 唯一定义；关闭时仍输出
 固定形状，不写日期、Locale 或 revision，相同业务数据必须逐字相同。
 
@@ -183,8 +183,8 @@ Snapshot 中是否存在某条 Memory 不代表它仍可写，也不妨碍按真
 
 ## 5. 工具描述与参数
 
-主会话的基础工具装配顺序见 `MasterTurnCoordinator` / `GenerationToolSetFactory`：搜索、Local Tools、最近会话、Workspace、技能、
-Assistant Tools、MCP；运行时 `inspect_attachments` 由 `GenerationToolSetFactory` 按 START 解析的 model 与设置条件加入；Memory Tools
+主会话的基础工具装配顺序见 `ConversationTurnService` / `TurnToolSetFactory`：搜索、Local Tools、最近会话、Workspace、技能、
+Assistant Tools、MCP；运行时 `inspect_attachments` 由 `TurnToolSetFactory` 按 START 解析的 model 与设置条件加入；Memory Tools
 同样由 Master/Target owner 在 START 前按该 Assistant 的固定 namespace 装配，不进入 System。
 主/子 run 必须显式传入实际 resolved model；`assistant_inspect` 显式解析目标助手的配置模型。
 不允许用缺省或可空模型开启更宽的工具集。`AssistantToolFactory` 的委派与工具集依赖均为必填构造参数。
@@ -231,7 +231,7 @@ live fail-closed，但不得借此改写当前 Turn 的工具名称、描述、S
 启用：`LocalToolOption.TextToImage` 已开，并且
 `Settings.imageGenerationModelId` 能解析到启用 Provider 上、客户端声明支持文生图的
 `ModelType.IMAGE` 模型。默认不加入 `DEFAULT_ASSISTANT_LOCAL_TOOLS`。Master 与 Target Run
-（含 `assistant_inspect` 的 `ToolSetRunMode.TARGET`）在配置满足时都会注册。
+（含 `assistant_inspect` 的注入按 `TurnKind.SUB_ASSISTANT` 判定）在配置满足时都会注册。
 `set_as_background=true` 仍须审批；Target 非交互下自动拒绝，返回
 `tool_not_permitted` + `approval_unavailable`，语义为“需要审批但当前运行环境无法
 提供审批，不要原样重试”。该错误只拒绝当前 ToolCall，Target 可调整参数后继续运行。
@@ -330,7 +330,7 @@ data URI，保留压缩、方向和格式转换规则，不落盘或复制文件
 映射为细分 `reason` 并附 sanitized `detail` 诊断文本（与 `generate_image` / `assistant_call`
 的失败契约一致）；原始异常写入 logcat。
 
-识别调用由工具自身持有 Provider 请求边界，不经过 `GenerationLoop`。工具构造时
+识别调用由工具自身持有 Provider 请求边界，不经过 `TurnRunner`。工具构造时
 （`createAttachmentInspectionTool`）一次性解析并捕获 inspection model、provider setting
 与派生的 `RequestMediaCapabilities`，写入 `TextGenerationParams.mediaCapabilities`。
 执行时不再通过 Settings 重找模型，也不再按 endpoint host 二次裁决图片能力。构造时仅断言 Provider 遵守
@@ -459,7 +459,7 @@ read：`{"text":"..."}`。write：`{"success":true}`。
 
 ### `memory_tool`
 
-启用：`assistant.enableMemory`。由 `GenerationLoop` 按 owner namespace 构建。
+启用：`assistant.enableMemory`。由 `TurnRunner` 按 owner namespace 构建。
 
 描述是常量文本：工具名称、描述、Schema 与列表排序共同构成 Provider 请求的可缓存前缀，
 描述里没有当前日期（原先的 `Today is ...` 会让整条前缀每天被击穿一次）。
@@ -637,12 +637,12 @@ content、`structured_content` 或经裁剪的 message；调用承诺后未取�
 
 ## 6. 工具输出归档与回查
 
-所有本地、Workspace、Memory、Assistant 与 MCP 工具先由 `GenerationToolSetFactory` 装配，再统一经过
+所有本地、Workspace、Memory、Assistant 与 MCP 工具先由 `TurnToolSetFactory` 装配，再统一经过
 `ToolCallRuntime.prepareBatch` / `execute`。Runtime 对同一连续调用只解析一次 JSON object，并集中处理 definition lookup、
-纯参数校验、typed interaction gate、timeout/异常/空结果规范化；`GenerationLoop` 只编排 Provider step、批次屏障、顺序和 checkpoint。
+纯参数校验、typed interaction gate、timeout/异常/空结果规范化；生成循环（`TurnRunner` 多 Step 编排、`StepRunner` 采样、`ToolBatchRunner` 批次）只编排 Provider step、批次屏障、顺序和 checkpoint。
 
 `ToolOutputPolicy.ARCHIVABLE_TEXT` 表示纯文本结果在一次成功 Provider 请求实际读取后可由
-`ConversationContextPlanner` 滚动归档；`REGENERABLE_TEXT` 表示派生文本可滚动折叠，但不得复制为新 Artifact。
+`ToolOutputCompactionPlanner` 滚动归档；`REGENERABLE_TEXT` 表示派生文本可滚动折叠，但不得复制为新 Artifact。
 两者都不表示工具返回时立即裁剪。归档内容由 `ToolOutputStore` 通过 `ArtifactStore` 保存为 `TOOL_OUTPUT` reference；
 可再生结果只留下 `[Derived tool result folded]`，原 Tool 输入仍保留。`PRESERVE`、混合媒体和 Provider opaque replay 始终完整保留。
 所有工具结果都经过同一 Planner，但只有 runtime metadata 为可压缩纯文本、显式 `completed` / `failed`，且
@@ -654,7 +654,7 @@ content、`structured_content` 或经裁剪的 message；调用承诺后未取�
 损坏结果继续保留。
 压缩只由 inline Tool 文本达到 48K estimated tokens 触发，尽量降到 16K，整批至少净回收 24K estimated tokens；
 最近两个 typed 批次和最近 8K estimated tokens 受保护，不额外冻结整个已完成 USER turn。估算规则按每个 Tool Result
-独立计算：ASCII 字母与空白约每 4 个 code point 1 token，连续 ASCII 数字段约每 3 位 1 token，连续 ASCII 符号段约每 2 个 1 token，其他 Unicode code point 各计 1。阈值只来自 `ContextTrimmingPolicy.kt`，
+独立计算：ASCII 字母与空白约每 4 个 code point 1 token，连续 ASCII 数字段约每 3 位 1 token，连续 ASCII 符号段约每 2 个 1 token，其他 Unicode code point 各计 1。阈值只来自 `ContextBudget.kt`，
 Provider input token 与 cache 百分比都不参与决策。
 
 `read_tool_output` 与 `grep_tool_output` 始终随 Master 和 Target 注册，均为无交互、`REGENERABLE_TEXT`、32 KiB 有界结果。

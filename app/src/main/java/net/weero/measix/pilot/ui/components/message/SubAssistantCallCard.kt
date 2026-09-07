@@ -38,7 +38,7 @@ import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import me.rerere.ai.ui.ToolApprovalState
+import me.rerere.ai.ui.ToolInteractionState
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
@@ -49,7 +49,7 @@ import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.data.ai.subassistant.fallbackSubAssistantOutputText
-import net.weero.measix.pilot.service.runtime.ToolCallPhase
+import net.weero.measix.pilot.service.runtime.ToolLivePhase
 import net.weero.measix.pilot.data.ai.subassistant.parseRuntimeErrorDetailFromToolOutput
 import net.weero.measix.pilot.data.ai.subassistant.parseSubAssistantToolResultFields
 import net.weero.measix.pilot.data.ai.subassistant.resolveSubAssistantErrorBody
@@ -402,15 +402,17 @@ fun SubAssistantCallCard(
                                 fontWeight = FontWeight.Medium,
                             )
                             val askTool = UIMessagePart.Tool(
-                                toolCallId = interaction.interactionId,
+                                localCallId = Uuid.NIL,
+                                stepId = Uuid.NIL,
+                                providerCallId = interaction.interactionId,
                                 toolName = interaction.toolName,
                                 input = interaction.input,
-                                approvalState = ToolApprovalState.Pending,
+                                interactionState = ToolInteractionState.AwaitingInput,
                             )
                             ChainOfThought(steps = listOf(askTool)) { pendingTool ->
                                 AskUserToolStep(
                                     tool = pendingTool,
-                                    phase = ToolCallPhase.AWAITING_INPUT,
+                                    phase = ToolLivePhase.AWAITING_INPUT,
                                     onAnswer = onAnswer?.let { callback ->
                                         { answer ->
                                             callback(metadata.runId, interaction.interactionId, answer)

@@ -31,7 +31,7 @@ private const val LIVE_UPDATE_NOTIFICATION_THROTTLE_MS = 1000L
 
 private data class LiveUpdateNotificationState(
     val sentAt: Long,
-    val executingToolOrdinal: Int?,
+    val executingToolLocalCallId: Uuid?,
 )
 
 /**
@@ -71,7 +71,7 @@ class ChatNotificationManager(
             eventBus.events.collect { event ->
                 when (event) {
                     is AppEvent.ChatGenerationUpdate -> handleGenerationUpdate(event)
-                    is AppEvent.ChatGenerationAwaitingApproval -> handleAwaitingApproval(event)
+                    is AppEvent.ChatGenerationAwaitingUser -> handleAwaitingUser(event)
                     is AppEvent.ChatGenerationEnded -> handleGenerationEnded(event)
                     else -> {}
                 }
@@ -88,7 +88,7 @@ class ChatNotificationManager(
 
             val now = SystemClock.elapsedRealtime()
             val previous = liveUpdateStates[event.conversationId]
-            val committedToolPhaseChanged = previous?.executingToolOrdinal != event.executingToolOrdinal
+            val committedToolPhaseChanged = previous?.executingToolLocalCallId != event.executingToolLocalCallId
             if (!committedToolPhaseChanged &&
                 previous != null &&
                 now - previous.sentAt < LIVE_UPDATE_NOTIFICATION_THROTTLE_MS
@@ -97,14 +97,14 @@ class ChatNotificationManager(
             }
             liveUpdateStates[event.conversationId] = LiveUpdateNotificationState(
                 sentAt = now,
-                executingToolOrdinal = event.executingToolOrdinal,
+                executingToolLocalCallId = event.executingToolLocalCallId,
             )
 
             sendLiveUpdateNotification(
                 event.conversationId,
                 event.lastMessage,
                 event.senderName,
-                event.executingToolOrdinal,
+                event.executingToolLocalCallId,
             )
         }
     }
@@ -121,7 +121,7 @@ class ChatNotificationManager(
         }
     }
 
-    private fun handleAwaitingApproval(event: AppEvent.ChatGenerationAwaitingApproval) {
+    private fun handleAwaitingUser(event: AppEvent.ChatGenerationAwaitingUser) {
         synchronized(notificationStateLock) {
             liveUpdateStates.remove(event.conversationId)
             val displaySetting = settingsStore.effectiveSettings.value.settings.displaySetting
@@ -133,7 +133,7 @@ class ChatNotificationManager(
                 return
             }
             val pendingTool = event.lastMessage.parts.filterIsInstance<UIMessagePart.Tool>()
-                .getOrNull(event.pendingToolOrdinal)
+                .firstOrNull { it.localCallId == event.pendingToolLocalCallId }
             val toolName = pendingTool?.toolName?.substringAfterLast("__").orEmpty()
             activeLiveNotifications += event.conversationId
             context.sendNotification(
@@ -184,11 +184,11 @@ class ChatNotificationManager(
         conversationId: Uuid,
         lastMessage: UIMessage,
         senderName: String,
-        executingToolOrdinal: Int?,
+        executingToolLocalCallId: Uuid?,
     ) {
         val (chipText, statusText, contentText) = determineNotificationContent(
             parts = lastMessage.parts,
-            executingToolOrdinal = executingToolOrdinal,
+            executingToolLocalCallId = executingToolLocalCallId,
         )
 
         activeLiveNotifications += conversationId
@@ -211,10 +211,12 @@ class ChatNotificationManager(
 
     private fun determineNotificationContent(
         parts: List<UIMessagePart>,
-        executingToolOrdinal: Int?,
+        executingToolLocalCallId: Uuid?,
     ): Triple<String, String, String> {
         val lastReasoning = parts.filterIsInstance<UIMessagePart.Reasoning>().lastOrNull()
-        val executingTool = executingToolOrdinal?.let(parts.filterIsInstance<UIMessagePart.Tool>()::getOrNull)
+        val executingTool = executingToolLocalCallId?.let { id ->
+            parts.filterIsInstance<UIMessagePart.Tool>().firstOrNull { it.localCallId == id }
+        }
         val lastText = parts.filterIsInstance<UIMessagePart.Text>().lastOrNull()
 
         return when {

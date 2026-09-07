@@ -215,7 +215,7 @@ class SubAssistantRunStateReducerTest {
         val interaction = SubAssistantUserInteraction(
             interactionId = "interaction-1",
             messageId = Uuid.random().toString(),
-            toolOrdinal = 1,
+            localCallId = "call-1",
             toolName = "ask_user",
             input = "{}",
         )
@@ -243,7 +243,7 @@ class SubAssistantRunStateReducerTest {
             interaction = SubAssistantUserInteraction(
                 interactionId = "interaction-1",
                 messageId = Uuid.random().toString(),
-                toolOrdinal = 0,
+                localCallId = "call-0",
                 toolName = "ask_user",
                 input = "{}",
             ),

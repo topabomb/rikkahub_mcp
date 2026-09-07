@@ -1,19 +1,19 @@
 package net.weero.measix.pilot.data.ai.transformers
+import net.weero.measix.pilot.service.turn.TurnAssistantSnapshot
+import net.weero.measix.pilot.service.turn.TurnPromptSnapshot
 
 import android.content.Context
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.core.ToolResourceLease
 import me.rerere.ai.ui.UIMessage
-import net.weero.measix.pilot.data.ai.DurableMessageLocator
-import net.weero.measix.pilot.data.ai.RequestMessageOrigin
-import net.weero.measix.pilot.data.ai.SyntheticMessageKind
-import net.weero.measix.pilot.service.runtime.FrozenTurnPromptInputs
-import net.weero.measix.pilot.service.runtime.ResolvedAssistantRequest
+import net.weero.measix.pilot.data.ai.request.DurableMessageLocator
+import net.weero.measix.pilot.data.ai.request.RequestMessageOrigin
+import net.weero.measix.pilot.data.ai.request.SyntheticMessageKind
 import kotlin.uuid.Uuid
 
 /**
- * 单次请求内每条消息的唯一来源登记表（权威方案 §8.1）。
+ * 单次请求内每条消息的唯一来源登记表。
  *
  * System、时间提醒、模式注入与 Workspace 提醒都是管线为本次请求生成或改写的内容，
  * 它们不能再被用户的 messageTemplate 二次包裹；model-context 注入则只允许落在
@@ -61,8 +61,8 @@ class RequestMessageOriginTracker {
 class TransformerContext(
     val context: Context,
     val model: Model,
-    val assistant: ResolvedAssistantRequest,
-    val promptInputs: FrozenTurnPromptInputs,
+    val assistant: TurnAssistantSnapshot,
+    val promptInputs: TurnPromptSnapshot,
     val requestOrigins: RequestMessageOriginTracker,
     val reportProcessingText: (String?) -> Unit = {},
     val mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
@@ -92,8 +92,8 @@ interface OutputMessageTransformer : MessageTransformer
 /**
  * 流式变换器：只处理 active assistant 消息（流式期间最后一条）。
  *
- * 历史消息在流式期间 immutable——由 GenerationLoop 保证 `dropLast(1)` 部分逐 chunk
- * 零次进入本接口（由 StreamingTransformScopeTest 锁定）。
+ * 历史消息在流式期间 immutable——由 TurnRunner 保证 `dropLast(1)` 部分逐 chunk
+ * 零次进入本接口（由 TurnStreamProjectionTest 锁定）。
  *
  * 与请求级 [OutputMessageTransformer.transform] 的分工：
  *  - [transformStreaming]：每个流式 chunk 对最新累积消息的最后一条做视觉变换
@@ -119,8 +119,8 @@ suspend fun List<UIMessage>.transforms(
     transformers: List<MessageTransformer>,
     context: Context,
     model: Model,
-    assistant: ResolvedAssistantRequest,
-    promptInputs: FrozenTurnPromptInputs,
+    assistant: TurnAssistantSnapshot,
+    promptInputs: TurnPromptSnapshot,
     requestOrigins: RequestMessageOriginTracker,
     reportProcessingText: (String?) -> Unit = {},
     mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,

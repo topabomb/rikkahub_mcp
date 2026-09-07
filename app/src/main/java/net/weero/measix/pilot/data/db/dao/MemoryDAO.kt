@@ -11,7 +11,7 @@ import net.weero.measix.pilot.data.db.entity.MemoryEntity
  * Memory 的唯一查询入口。
  *
  * 四条读取路径一律 `ORDER BY id ASC`：Memory 的插入顺序就是它的领域顺序，而
- * Disclosure Snapshot 的 canonical content 必须对同一业务数据逐字复现（权威方案 §6.2）。
+ * Disclosure Snapshot 的 canonical content 必须对同一业务数据逐字复现。
  * 未显式排序时 SQLite 不保证返回次序，同一份 Memory 可能渲染出不同 bytes 并追加伪 entry。
  * `getAllMemories*` 跨 owner 聚合，仍按全局 id 升序：分组由调用方按 assistant_id 完成，
  * 不改变行内次序。

@@ -1,12 +1,14 @@
 package net.weero.measix.pilot.data.ai.tools
 
 import kotlinx.serialization.encodeToString
+import kotlin.uuid.Uuid
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.put
+import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.core.Tool
@@ -17,8 +19,9 @@ import org.junit.Test
 
 class FrozenToolSetTest {
     @Test
-    fun `assembly evaluates schema once and preserves ordered one-to-one names`() {
+    fun `assembly evaluates schema and prompt contribution once and preserves ordered one-to-one names`() {
         var evaluations = 0
+        var promptEvaluations = 0
         val first = Tool(
             name = "first",
             description = "one",
@@ -26,13 +29,17 @@ class FrozenToolSetTest {
                 evaluations++
                 buildJsonObject { put("revision", evaluations) }
             },
+            systemPromptContribution = "prompt ${++promptEvaluations}",
             execute = { emptyList() },
         )
         val second = Tool(name = "second", description = "two", execute = { emptyList() })
 
         val frozen = freezeToolSet(listOf(first, second))
+        repeat(5) { kotlinx.serialization.json.Json.encodeToString(frozen.definitions) }
 
         assertEquals(1, evaluations)
+        assertEquals(1, promptEvaluations)
+        assertEquals("prompt 1", frozen.definitions.first().systemPromptContribution)
         assertEquals(listOf("first", "second"), frozen.definitions.map { it.name })
         assertEquals(listOf("first", "second"), frozen.bindingsByName.keys.toList())
         assertEquals("1", frozen.definitions.first().parameters?.get("revision").toString())
@@ -42,22 +49,28 @@ class FrozenToolSetTest {
     @Test
     fun `frozen definition bytes remain stable after live schema changes until the next START`() {
         var revision = 1
-        val tool = Tool(
+        var prompt = "first prompt"
+        // Each START re-assembles the Tool (as buildTools does); a frozen turn never recomputes.
+        fun assemble() = Tool(
             name = "dynamic",
             description = "stable",
             parameters = { buildJsonObject { put("revision", revision) } },
-            systemPromptContribution = "stable prompt",
+            systemPromptContribution = prompt,
             execute = { emptyList() },
         )
-        val turn = freezeToolSet(listOf(tool))
+        val turn = freezeToolSet(listOf(assemble()))
         val firstStepBytes = Json.encodeToString(turn.definitions)
 
         revision = 2
+        prompt = "next START prompt"
         val laterStepBytes = Json.encodeToString(turn.definitions)
-        val nextTurnBytes = Json.encodeToString(freezeToolSet(listOf(tool)).definitions)
+        val nextTurn = freezeToolSet(listOf(assemble()))
 
         assertEquals(firstStepBytes, laterStepBytes)
-        assertEquals(false, firstStepBytes == nextTurnBytes)
+        assertEquals(false, firstStepBytes == Json.encodeToString(nextTurn.definitions))
+        // The next START captures the tool-owned changes the frozen turn deliberately held back.
+        assertEquals(JsonPrimitive(2), nextTurn.definitions.single().parameters?.get("revision"))
+        assertEquals("next START prompt", nextTurn.definitions.single().systemPromptContribution)
     }
 
     @Test
@@ -71,9 +84,7 @@ class FrozenToolSetTest {
         val definitionBytes = Json.encodeToString(frozen.definitions)
         executionValue = "second"
         val context = ToolExecutionContext(
-            messageId = kotlin.uuid.Uuid.random(),
-            toolOrdinal = 0,
-            toolCallId = "call",
+            locator = ToolCallLocator(kotlin.uuid.Uuid.random(), Uuid.random(), Uuid.random()), providerCallId = "call",
             reportMetadata = { _, _ -> },
             resolveAttachments = { ToolAttachmentResolution() },
             reportChildConversation = {},

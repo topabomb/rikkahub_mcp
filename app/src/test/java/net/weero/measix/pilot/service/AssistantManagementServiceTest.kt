@@ -15,7 +15,7 @@ import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
-import net.weero.measix.pilot.service.runtime.DelegationCoordinator
+import net.weero.measix.pilot.service.subassistant.SubAssistantRunCoordinator
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -99,7 +99,7 @@ class AssistantManagementServiceTest {
         assertFalse(env.settings.value.assistants.single().allowedSubAssistantIds.contains(target.id))
         assertTrue(env.settings.value.pendingAssistantDeletions.isEmpty())
         coVerifyOrder {
-            env.delegation.cancelRunsForAssistant(target.id)
+            env.coordinator.cancelRunsForAssistant(target.id)
             env.registry.cancelGenerationsForAssistant(target.id, "assistant_removed")
             env.memory.deleteMemoriesOfAssistant(target.id.toString())
             env.conversations.deleteOfAssistantFromPendingCleanup(target.id)
@@ -148,7 +148,7 @@ class AssistantManagementServiceTest {
         env.service.performPendingDeletionCleanupDuringRecovery()
 
         assertTrue(env.settings.value.pendingAssistantDeletions.isEmpty())
-        coVerify(exactly = 0) { env.delegation.cancelRunsForAssistant(any()) }
+        coVerify(exactly = 0) { env.coordinator.cancelRunsForAssistant(any()) }
         coVerify(exactly = 0) { env.conversations.deleteOfAssistantFromPendingCleanup(any()) }
     }
 
@@ -165,7 +165,7 @@ class AssistantManagementServiceTest {
         val artifacts = mockk<ArtifactStore>(relaxed = true)
         val memory = mockk<MemoryRepository>(relaxed = true)
         val registry = mockk<ConversationRuntimeRegistry>(relaxed = true)
-        val delegation = mockk<DelegationCoordinator>(relaxed = true)
+        val coordinator = mockk<SubAssistantRunCoordinator>(relaxed = true)
         val conversations = mockk<ConversationApplicationService>(relaxed = true)
         val recoveryGate = mockk<ApplicationRecoveryGate>(relaxed = true)
 
@@ -183,7 +183,7 @@ class AssistantManagementServiceTest {
             memoryRepository = memory,
             artifactStore = artifacts,
             runtimeRegistry = registry,
-            delegationCoordinator = delegation,
+            subAssistantRunCoordinator = coordinator,
             recoveryGate = recoveryGate,
             conversationApplicationService = conversations,
         )

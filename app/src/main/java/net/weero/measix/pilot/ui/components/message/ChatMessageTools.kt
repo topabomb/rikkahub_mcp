@@ -51,18 +51,17 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.ToolCallLocator
-import me.rerere.ai.ui.ToolApprovalState
+import me.rerere.ai.ui.ToolInteractionState
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.BubbleChatQuestion
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Tick01
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.ai.tools.ToolRuntimeMetadata
-import net.weero.measix.pilot.service.runtime.ToolCallPhase
-import net.weero.measix.pilot.service.runtime.ToolUserDecision
+import net.weero.measix.pilot.service.runtime.ToolLivePhase
+import net.weero.measix.pilot.service.runtime.ToolInteractionDecision
 import net.weero.measix.pilot.service.runtime.isBusy
-import net.weero.measix.pilot.service.runtime.resolveToolCallPhase
+import net.weero.measix.pilot.service.runtime.resolveToolLivePhase
 import net.weero.measix.pilot.ui.components.message.tools.ArchivedToolOutputDetails
 import net.weero.measix.pilot.ui.components.message.tools.ToolOutputProjection
 import net.weero.measix.pilot.ui.components.message.tools.ToolUIContext
@@ -82,18 +81,18 @@ private const val ASK_USER_TOOL_NAME = "ask_user"
 fun ChainOfThoughtScope.ChatMessageToolStep(
     tool: UIMessagePart.Tool,
     locator: ToolCallLocator,
-    phase: ToolCallPhase? = null,
-    onToolDecision: ((locator: ToolCallLocator, decision: ToolUserDecision) -> Unit)? = null,
+    phase: ToolLivePhase? = null,
+    onToolDecision: ((locator: ToolCallLocator, decision: ToolInteractionDecision) -> Unit)? = null,
 ) {
     // ask_user 是交互式问答流程, 不走注册式渲染框架。这是 UI Renderer 特化；
     // 交互门控由 typed phase 决定，不在此处解释审批语义。
     if (tool.toolName == ASK_USER_TOOL_NAME) {
         AskUserToolStep(
             tool = tool,
-            phase = resolveToolCallPhase(tool, phase),
+            phase = resolveToolLivePhase(tool, phase),
             onAnswer = onToolDecision?.let { callback ->
                 { answer ->
-                    callback(locator, ToolUserDecision.Answer(answer))
+                    callback(locator, ToolInteractionDecision.Answer(answer))
                     true
                 }
             },
@@ -105,17 +104,17 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     // Tool.output is already a provider replay projection. Local media is resolved by the
     // conversation query projection, never by a UI-side ArtifactStore read.
     val displayTool = tool
-    val resolvedPhase = resolveToolCallPhase(displayTool, phase)
+    val resolvedPhase = resolveToolLivePhase(displayTool, phase)
     val parsedArguments = remember(displayTool.input) {
         runCatching { JsonInstant.parseToJsonElement(displayTool.input.ifBlank { "{}" }) }
     }
     // Archived 投影只读 Runtime metadata，不解析工具名，也不自动读取归档正文。
     val outputProjection = remember(displayTool) {
-        ToolRuntimeMetadata.archiveOf(displayTool.metadata)?.let { archive ->
+        displayTool.runtimeState.archive?.let { archive ->
             ToolOutputProjection.Archived(
                 characters = archive.characters,
                 lines = archive.lines,
-                terminalStatus = ToolRuntimeMetadata.terminalStatusOf(displayTool.metadata) ?: "completed",
+                terminalStatus = displayTool.resultStatus?.wireName ?: "completed",
             )
         } ?: ToolOutputProjection.Inline(displayTool.output)
     }
@@ -141,8 +140,8 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     var showResult by remember { mutableStateOf(false) }
     var showDenyDialog by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(true) }
-    val isAwaitingApproval = resolvedPhase == ToolCallPhase.AWAITING_APPROVAL
-    val isDenied = displayTool.approvalState is ToolApprovalState.Denied
+    val isAwaitingApproval = resolvedPhase == ToolLivePhase.AWAITING_APPROVAL
+    val isDenied = displayTool.interactionState is ToolInteractionState.Denied
     val images = displayTool.output.filterIsInstance<UIMessagePart.Image>()
     val isArchived = outputProjection is ToolOutputProjection.Archived
 
@@ -172,13 +171,13 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                     text = renderer.title(context),
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.shimmer(isLoading = resolvedPhase == ToolCallPhase.CALL_STREAMING),
+                    modifier = Modifier.shimmer(isLoading = resolvedPhase == ToolLivePhase.CALL_STREAMING),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (resolvedPhase != ToolCallPhase.COMPLETED) {
+                if (resolvedPhase != ToolLivePhase.COMPLETED) {
                     Text(
-                        text = stringResource(toolCallPhaseString(resolvedPhase)),
+                        text = stringResource(toolLivePhaseString(resolvedPhase)),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -206,7 +205,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                         )
                     }
                     FilledTonalIconButton(
-                        onClick = { onToolDecision(locator, ToolUserDecision.Approve) },
+                        onClick = { onToolDecision(locator, ToolInteractionDecision.Approve) },
                         modifier = Modifier.size(32.dp),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(
                             containerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -268,7 +267,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                         }
                     }
                     if (isDenied) {
-                        val reason = (displayTool.approvalState as ToolApprovalState.Denied).reason
+                        val reason = (displayTool.interactionState as ToolInteractionState.Denied).reason
                         Text(
                             text = stringResource(R.string.chat_message_tool_denied) +
                                 if (reason.isNotBlank()) ": $reason" else "",
@@ -288,7 +287,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             onDismiss = { showDenyDialog = false },
             onConfirm = { reason ->
                 showDenyDialog = false
-                onToolDecision(locator, ToolUserDecision.Deny(reason))
+                onToolDecision(locator, ToolInteractionDecision.Deny(reason))
             }
         )
     }
@@ -333,13 +332,13 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
 @Composable
 internal fun ChainOfThoughtScope.AskUserToolStep(
     tool: UIMessagePart.Tool,
-    phase: ToolCallPhase,
+    phase: ToolLivePhase,
     onAnswer: ((answer: String) -> Boolean)?,
 ) {
     // 控件只服从严格投影出的 typed phase；持久化 payload 仅在 ANSWERED 阶段读取。
-    val isPending = phase == ToolCallPhase.AWAITING_INPUT
-    val answeredState = (tool.approvalState as? ToolApprovalState.Answered)
-        ?.takeIf { phase == ToolCallPhase.ANSWERED }
+    val isPending = phase == ToolLivePhase.AWAITING_INPUT
+    val answeredState = (tool.interactionState as? ToolInteractionState.Answered)
+        ?.takeIf { phase == ToolLivePhase.ANSWERED }
     val arguments = tool.inputAsJson()
 
     // Parse questions from arguments
@@ -358,10 +357,10 @@ internal fun ChainOfThoughtScope.AskUserToolStep(
     }
 
     // Track answers for text/single questions
-    val answers = remember(tool.toolCallId, tool.input) { mutableStateMapOf<String, String>() }
+    val answers = remember(tool.localCallId, tool.input) { mutableStateMapOf<String, String>() }
     // Track selected options for multi questions
-    val multiAnswers = remember(tool.toolCallId, tool.input) { mutableStateMapOf<String, Set<String>>() }
-    var submitted by remember(tool.toolCallId, tool.input) { mutableStateOf(false) }
+    val multiAnswers = remember(tool.localCallId, tool.input) { mutableStateMapOf<String, Set<String>>() }
+    var submitted by remember(tool.localCallId, tool.input) { mutableStateOf(false) }
 
     val firstQuestion = questions.firstOrNull()?.question ?: "..."
 
@@ -390,7 +389,7 @@ internal fun ChainOfThoughtScope.AskUserToolStep(
                 ),
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.secondary,
-                modifier = Modifier.shimmer(isLoading = phase == ToolCallPhase.CALL_STREAMING),
+                modifier = Modifier.shimmer(isLoading = phase == ToolLivePhase.CALL_STREAMING),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -551,18 +550,18 @@ internal fun ChainOfThoughtScope.AskUserToolStep(
     )
 }
 
-private fun toolCallPhaseString(phase: ToolCallPhase): Int = when (phase) {
-    ToolCallPhase.CALL_STREAMING -> R.string.chat_message_tool_phase_call_streaming
-    ToolCallPhase.READY -> R.string.chat_message_tool_phase_ready
-    ToolCallPhase.AWAITING_APPROVAL -> R.string.chat_message_tool_phase_awaiting_approval
-    ToolCallPhase.AWAITING_INPUT -> R.string.chat_message_tool_phase_awaiting_input
-    ToolCallPhase.EXECUTING -> R.string.chat_message_tool_phase_executing
-    ToolCallPhase.COMPLETED -> R.string.chat_message_tool_phase_completed
-    ToolCallPhase.FAILED -> R.string.chat_message_tool_phase_failed
-    ToolCallPhase.CANCELLED -> R.string.chat_message_tool_phase_cancelled
-    ToolCallPhase.INTERRUPTED -> R.string.chat_message_tool_phase_interrupted
-    ToolCallPhase.DENIED -> R.string.chat_message_tool_phase_denied
-    ToolCallPhase.ANSWERED -> R.string.chat_message_tool_phase_answered
+private fun toolLivePhaseString(phase: ToolLivePhase): Int = when (phase) {
+    ToolLivePhase.CALL_STREAMING -> R.string.chat_message_tool_phase_call_streaming
+    ToolLivePhase.READY -> R.string.chat_message_tool_phase_ready
+    ToolLivePhase.AWAITING_APPROVAL -> R.string.chat_message_tool_phase_awaiting_approval
+    ToolLivePhase.AWAITING_INPUT -> R.string.chat_message_tool_phase_awaiting_input
+    ToolLivePhase.EXECUTING -> R.string.chat_message_tool_phase_executing
+    ToolLivePhase.COMPLETED -> R.string.chat_message_tool_phase_completed
+    ToolLivePhase.FAILED -> R.string.chat_message_tool_phase_failed
+    ToolLivePhase.CANCELLED -> R.string.chat_message_tool_phase_cancelled
+    ToolLivePhase.INTERRUPTED -> R.string.chat_message_tool_phase_interrupted
+    ToolLivePhase.DENIED -> R.string.chat_message_tool_phase_denied
+    ToolLivePhase.ANSWERED -> R.string.chat_message_tool_phase_answered
 }
 
 private data class AskUserQuestion(

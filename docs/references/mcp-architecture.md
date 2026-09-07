@@ -32,7 +32,7 @@ MCP 的“工具能力”和“当前能否连通”是两类正交事实：
 | OAuth 网络流程、refresh single-flight 与 Settings CAS | `McpOAuthCoordinator` | AppScope + Settings | `McpServerRuntime` / invocation admission |
 | transport/client 创建与完整分页发现 | `McpProtocolClientFactory` / `McpCatalogDiscovery` | 无状态 | `McpServerRuntime` |
 | 已承诺工具调用和结果/Artifact 补偿 | `McpToolCallExecutor` | invocation 内存 | Coordinator |
-| 单个 run 的 Provider 工具集合 | `TurnMcpCapabilitySnapshot` | run 内存 | `GenerationToolSetFactory` |
+| 单个 run 的 Provider 工具集合 | `TurnMcpCapabilitySnapshot` | run 内存 | `TurnToolSetFactory` |
 | UI command / joined read model | `McpApplicationService` / `McpQueryService` | 无独立状态 | Compose / ViewModel |
 
 `McpCommonOptions.toolPolicies` 只保存工具名、enable 和 needsApproval。远端 description/input schema 不写回
@@ -166,7 +166,7 @@ Assistant 选择
 持有 slot mutex 执行 I/O，因此不会把不同 server 的网络操作重新串行化。
 
 `McpRuntimeCoordinator.callTool()` 先从对应 `McpServerRuntime` 取得冻结 invocation lease，再由 `McpToolCallExecutor` 执行。
-失败使用 `ToolExecutionFailure` 向 GenerationLoop 返回稳定的 Agent 可见结果，并把 durable tool terminal 记录为 FAILED。
+失败使用 `ToolExecutionFailure` 向 TurnRunner 返回稳定的 Agent 可见结果，并把 durable tool terminal 记录为 FAILED。
 Agent 只看见 `status + reason + 必要 message`：
 
 - `unavailable/tool_unavailable`：本地 definition、policy 或工具已经明确撤销；

@@ -1,4 +1,7 @@
 package net.weero.measix.pilot.service
+import net.weero.measix.pilot.service.turn.TurnFinalizer
+import net.weero.measix.pilot.service.subassistant.SubAssistantLifecycle
+import net.weero.measix.pilot.service.subassistant.forkSubAssistantTree
 
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
@@ -61,7 +64,7 @@ class ConversationApplicationService(
     private val sideEffects: GenerationSideEffects,
     private val artifactStore: ArtifactStore,
     private val artifactUseCase: ArtifactUseCase,
-    private val turnFinalization: TurnFinalization,
+    private val turnFinalizer: TurnFinalizer,
     private val json: Json,
     private val toolArtifactRewriter: ToolArtifactRewriter,
     private val titleCoordinator: ConversationTitleCoordinator,
@@ -120,12 +123,12 @@ class ConversationApplicationService(
 
     suspend fun generateTitle(conversationId: Uuid, force: Boolean = false) {
         recoveryGate.awaitReady()
-        sideEffects.generateTitle(commandCoordinator.load(conversationId).snapshot.value, force)
+        sideEffects.generateTitle(commandCoordinator.load(conversationId).durable, force)
     }
 
     /**
      * 显式压缩入口。UI 只交 conversationId：internal aggregate（含 model context）由本 service 自己
-     * 解析，不让 durable 事实穿过 presentation 边界（§3.2、§17.7）。
+     * 解析，不让 durable 事实穿过 presentation 边界。
      */
     suspend fun compress(
         conversationId: Uuid,
@@ -134,7 +137,7 @@ class ConversationApplicationService(
         keepRecentMessages: Int,
     ): Result<Unit> {
         recoveryGate.awaitReady()
-        val snapshot = commandCoordinator.load(conversationId).snapshot.value
+        val snapshot = commandCoordinator.load(conversationId).durable
         return sideEffects.compressConversation(snapshot, additionalPrompt, targetTokens, keepRecentMessages)
     }
 
@@ -149,7 +152,7 @@ class ConversationApplicationService(
 
     fun hasActiveConversationTurnInFolder(folderId: Uuid): Boolean =
         runtimeRegistry.activeRuntimes().any { runtime ->
-            runtime.currentTurnPresentation().isActive && runtime.snapshot.value.header.folderId == folderId
+            runtime.currentTurnPresentation().isActive && runtime.durable.header.folderId == folderId
         }
 
     suspend fun deleteFolder(folderId: Uuid) {
@@ -195,7 +198,7 @@ class ConversationApplicationService(
 
     suspend fun deleteForUndo(conversationId: Uuid): RestoreToken {
         recoveryGate.awaitReady()
-        turnFinalization.stopTurn(conversationId)
+        turnFinalizer.stopTurn(conversationId)
         var retention: ArtifactRetentionLease? = null
         try {
             val deleted = commandCoordinator.deleteCapturingTree(conversationId) { tree ->
@@ -231,7 +234,7 @@ class ConversationApplicationService(
         conversationId: Uuid,
         authority: DeleteAuthority,
     ) {
-        turnFinalization.stopTurn(conversationId)
+        turnFinalizer.stopTurn(conversationId)
         deletePersistedConversation(conversationId, authority)
     }
 
@@ -266,7 +269,7 @@ class ConversationApplicationService(
 
     suspend fun stopGeneration(conversationId: Uuid) {
         recoveryGate.awaitReady()
-        turnFinalization.stopTurn(conversationId)
+        turnFinalizer.stopTurn(conversationId)
     }
 
     suspend fun togglePin(conversationId: Uuid) {
@@ -300,7 +303,7 @@ class ConversationApplicationService(
     }
 
     suspend fun forkAtMessage(conversationId: Uuid, messageId: Uuid): Uuid {
-        turnFinalization.stopTurn(conversationId)
+        turnFinalizer.stopTurn(conversationId)
         val current = subAssistantLifecycle.finalizeRunsBeforeTreeMutation(liveSnapshot(conversationId))
         val targetIndex = current.nodes.indexOfFirst { node -> node.messages.any { it.id == messageId } }
         if (targetIndex < 0) throw NoSuchElementException("Message not found")
@@ -345,7 +348,6 @@ class ConversationApplicationService(
                     newConversation = false,
                 ),
                 nodes = tree.masterNodes,
-                activeTurn = null,
                 // Master fork 保留 message id、重建 node id：context entries 经唯一映射。
                 modelContextEntries = ConversationModelContextApplicability.remapForClone(
                     entries = current.modelContextEntries,
@@ -403,7 +405,7 @@ class ConversationApplicationService(
     }
 
     suspend fun deleteMessage(conversationId: Uuid, messageId: Uuid, failIfMissing: Boolean = true) {
-        turnFinalization.stopTurn(conversationId)
+        turnFinalizer.stopTurn(conversationId)
         subAssistantLifecycle.finalizeRunsBeforeTreeMutation(liveSnapshot(conversationId))
         val runtime = runtimeRegistry.requireRuntime(conversationId)
         val before = runtime.snapshot.value
@@ -431,7 +433,7 @@ class ConversationApplicationService(
     )
 
     private suspend fun liveSnapshot(conversationId: Uuid): ConversationAggregateSnapshot =
-        commandCoordinator.load(conversationId).snapshot.value
+        commandCoordinator.load(conversationId).durable
 }
 
 internal fun preprocessUserInputParts(

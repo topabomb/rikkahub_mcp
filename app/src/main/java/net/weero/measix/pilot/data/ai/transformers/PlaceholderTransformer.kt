@@ -9,7 +9,7 @@ import net.weero.measix.pilot.R
 
 /**
  * 提示词页变量芯片的展示元数据。占位符 **值** 的唯一请求侧来源是
- * `TurnRequestContextFactory` 在 START 时冻结的 `placeholderValues`；这里不保留第二套
+ * `TurnContextFactory` 在 START 时冻结的 `placeholderValues`；这里不保留第二套
  * 取值逻辑，避免芯片列表与冻结值漂移。
  */
 data class PlaceholderInfo(

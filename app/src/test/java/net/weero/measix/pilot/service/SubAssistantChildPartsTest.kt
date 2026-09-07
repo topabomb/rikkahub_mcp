@@ -53,7 +53,7 @@ class SubAssistantChildPartsTest {
                 put("other", buildJsonObject { put("attachments", JsonArray(listOf(JsonPrimitive(sourcePath)))) })
             }.toString()
             val originals = listOf("inspect_attachments", "assistant_call").map { name ->
-                UIMessagePart.Tool(toolCallId = name, toolName = name, input = input)
+                UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = name, toolName = name, input = input)
             }
 
             val cloned = fixture.clone(originals).map { it as UIMessagePart.Tool }
@@ -84,7 +84,7 @@ class SubAssistantChildPartsTest {
                     UIMessagePart.Image(fixture.sourceRef.fileUri(fixture.filesDir)),
                 ) as UIMessagePart.Image
                 var tool = UIMessagePart.Tool(
-                    toolCallId = toolName,
+                    localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = toolName,
                     toolName = toolName,
                     input = input,
                     output = listOf(image),
@@ -104,7 +104,7 @@ class SubAssistantChildPartsTest {
                             JsonInstant, "completed", "Target", "done", artifacts = metadata.artifacts,
                         )),
                         UIMessagePart.Tool(
-                            toolCallId = "nested-inspection", toolName = "inspect_attachments", input = input,
+                            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "nested-inspection", toolName = "inspect_attachments", input = input,
                         ),
                     )).mergeSubAssistantCallMetadata(JsonInstant, metadata)
                 }
@@ -154,7 +154,7 @@ class SubAssistantChildPartsTest {
                 "inspect_attachments" to """{ "request": "$sourcePath" }""",
                 "inspect_attachments" to "{",
             ).mapIndexed { index, (name, input) ->
-                UIMessagePart.Tool(toolCallId = index.toString(), toolName = name, input = input)
+                UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = index.toString(), toolName = name, input = input)
             }
 
             val cloned = fixture.clone(untouched).map { it as UIMessagePart.Tool }
@@ -174,7 +174,7 @@ class SubAssistantChildPartsTest {
             val sourcePath = fixture.sourceRef.toolPath()!!
             coEvery { fixture.store.resolveToolPath(sourcePath) } throws cancelled
             val tool = UIMessagePart.Tool(
-                toolCallId = "inspection", toolName = "inspect_attachments",
+                localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "inspection", toolName = "inspect_attachments",
                 input = """{"attachments":["$sourcePath"]}""",
             )
 
@@ -267,7 +267,7 @@ class SubAssistantChildPartsTest {
         coEvery { store.copyFilePreservingOrigin(source, "image/png", "source.png", any()) } returns owned
         val rewriter = ToolArtifactRewriter(filesDir, store)
         val tool = UIMessagePart.Tool(
-            toolCallId = "tool",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tool",
             toolName = "generate_image",
             input = "{}",
             output = listOf(UIMessagePart.Image(sourceRef.fileUri(filesDir))),
@@ -325,7 +325,7 @@ class SubAssistantChildPartsTest {
     fun `clone copy of tool output preserves nested ref`() = runTest {
         val ref = AttachmentRefs.format(Uuid.random())
         val tool = UIMessagePart.Tool(
-            toolCallId = "t",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "t",
             toolName = "generate_image",
             input = "{}",
             output = listOf(
@@ -360,7 +360,7 @@ class SubAssistantChildPartsTest {
         } returns owned
         val rewriter = ToolArtifactRewriter(filesDir, artifactStore)
         val tool = UIMessagePart.Tool(
-            toolCallId = "t",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "t",
             toolName = "generate_image",
             input = "{}",
             output = listOf(UIMessagePart.Image(url = sourceRef.fileUri(filesDir))),
@@ -389,7 +389,7 @@ class SubAssistantChildPartsTest {
         coEvery { artifactStore.materialize(sourceRef) } returns null
         val rewriter = ToolArtifactRewriter(filesDir, artifactStore)
         val tool = UIMessagePart.Tool(
-            toolCallId = "t",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "t",
             toolName = "generate_image",
             input = "{}",
             output = listOf(UIMessagePart.Image(url = sourceRef.fileUri(filesDir))),
@@ -443,7 +443,7 @@ class SubAssistantChildPartsTest {
             ),
         )
         val tool = UIMessagePart.Tool(
-            toolCallId = "assistant-call",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "assistant-call",
             toolName = "assistant_call",
             input = "{}",
             output = listOf(
@@ -465,7 +465,7 @@ class SubAssistantChildPartsTest {
                     }.toString(),
                 ),
                 UIMessagePart.Tool(
-                    toolCallId = "nested-result",
+                    localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "nested-result",
                     toolName = "nested",
                     input = "{}",
                     output = listOf(
@@ -548,7 +548,7 @@ class SubAssistantChildPartsTest {
                 artifacts = metadata.artifacts,
             )
             val tool = UIMessagePart.Tool(
-                toolCallId = "call",
+                localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call",
                 toolName = "assistant_call",
                 input = "{}",
                 output = listOf(UIMessagePart.Text(outputText)),
@@ -601,7 +601,7 @@ class SubAssistantChildPartsTest {
             ),
         )
         val tool = UIMessagePart.Tool(
-            toolCallId = "assistant-call-stale",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "assistant-call-stale",
             toolName = "assistant_call",
             input = "{}",
             output = listOf(
@@ -665,7 +665,7 @@ class SubAssistantChildPartsTest {
             ),
         )
         val tool = UIMessagePart.Tool(
-            toolCallId = "assistant-call-null-artifact",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "assistant-call-null-artifact",
             toolName = "assistant_call",
             input = "{}",
             output = listOf(

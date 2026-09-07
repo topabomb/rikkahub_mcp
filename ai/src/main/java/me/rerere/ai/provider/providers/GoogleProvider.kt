@@ -48,6 +48,7 @@ import me.rerere.ai.provider.providers.vertex.ServiceAccountTokenProvider
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.GoogleThoughtMetadata
 import me.rerere.ai.ui.MessageChunk
+import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessageChoice
@@ -183,7 +184,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
     override suspend fun generateText(
         providerSetting: ProviderSetting.Google,
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         params: TextGenerationParams,
     ): MessageChunk = withContext(Dispatchers.IO) {
         val replaySourceProfile = googleReplaySourceProfile(providerSetting)
@@ -258,7 +259,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
     override suspend fun streamText(
         providerSetting: ProviderSetting.Google,
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         params: TextGenerationParams,
     ): Flow<MessageChunk> = callbackFlow {
         val replaySourceProfile = googleReplaySourceProfile(providerSetting)
@@ -415,7 +416,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
     }.buffer(Channel.UNLIMITED)
 
     internal fun buildCompletionRequestBody(
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         params: TextGenerationParams,
         sourceProfile: String,
     ): JsonObject = buildJsonObject {
@@ -664,7 +665,9 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 val functionCallId = functionCall["id"]?.jsonPrimitive?.contentOrNull
                 val thoughtSignature = jsonObject["thoughtSignature"]?.jsonPrimitive?.contentOrNull
                 UIMessagePart.Tool(
-                    toolCallId = functionCallId ?: Uuid.random().toString(),
+                    localCallId = Uuid.NIL,
+                    stepId = Uuid.NIL,
+                    providerCallId = functionCallId ?: Uuid.random().toString(),
                     toolName = functionName,
                     input = json.encodeToString(functionArgs),
                     output = emptyList(),
@@ -721,7 +724,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
     }
 
     internal fun buildContents(
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         mediaCapabilities: RequestMediaCapabilities,
         modelId: String,
         sourceProfile: String,
@@ -741,7 +744,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
     }
 
     private fun JsonArrayBuilder.addModelMessage(
-        message: UIMessage,
+        message: ModelRequestMessage,
         mediaCapabilities: RequestMediaCapabilities,
         modelId: String,
         sourceProfile: String,
@@ -822,7 +825,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
     }
 
     private fun JsonArrayBuilder.addUserMessage(
-        message: UIMessage,
+        message: ModelRequestMessage,
         mediaCapabilities: RequestMediaCapabilities,
     ) {
         add(buildJsonObject {

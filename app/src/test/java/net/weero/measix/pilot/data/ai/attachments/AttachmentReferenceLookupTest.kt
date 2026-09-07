@@ -43,7 +43,7 @@ class AttachmentReferenceLookupTest {
         val ref = AttachmentRefs.format(Uuid.random())
         val managed = LocalArtifactRef(relativePath = "upload/generated.png", mimeType = "image/png")
         val tool = UIMessagePart.Tool(
-            toolCallId = "call",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call",
             toolName = "assistant_call",
             input = "{}",
         ).mergeSubAssistantCallMetadata(

@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.data.repository
 
 import kotlinx.serialization.json.add
+import kotlin.uuid.Uuid
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -46,7 +47,7 @@ class ConversationFileReferencesTest {
                     role = MessageRole.ASSISTANT,
                     parts = listOf(
                         UIMessagePart.Tool(
-                            toolCallId = "t1",
+                            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "t1",
                             toolName = "workspace_read_file",
                             input = "{}",
                             output = listOf(
@@ -113,7 +114,7 @@ class ConversationFileReferencesTest {
                     role = MessageRole.ASSISTANT,
                     parts = listOf(
                         UIMessagePart.Tool(
-                            toolCallId = "t1",
+                            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "t1",
                             toolName = "assistant_call",
                             input = "{}",
                             output = listOf(UIMessagePart.Text("{}")),

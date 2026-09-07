@@ -100,7 +100,7 @@ class CollectMessageImageUrlsTest {
         toolCallId: String,
         vararg outputs: UIMessagePart,
     ) = UIMessagePart.Tool(
-        toolCallId = toolCallId,
+        localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = toolCallId,
         toolName = "generate_image",
         input = "{}",
         output = outputs.toList(),

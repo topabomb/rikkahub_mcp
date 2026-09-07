@@ -6,7 +6,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 /**
  * v9 → v10：唯一新增 `conversation_model_context` 表与 anchor node 索引。
  *
- * additive-only（权威方案 §13.1）：
+ * additive-only：
  * - 不扫描历史 Conversation，不为旧会话生成 Snapshot；
  * - 不重写 `ConversationEntity`、`message_node.messages` 或 Memory 行；
  * - 不增加默认 context 行。

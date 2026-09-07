@@ -17,10 +17,11 @@ import net.weero.measix.pilot.data.model.Folder
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeState
 import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
-import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
+import net.weero.measix.pilot.service.runtime.TurnLivePhase
 import java.time.Instant
 import kotlin.uuid.Uuid
 
@@ -139,10 +140,10 @@ class ConversationQueryService(
      * UI 读端口是 [observeConversation] 与 [conversationUiModel]，它们只给 presentation。
      */
     internal suspend fun aggregateSnapshot(conversationId: Uuid): ConversationAggregateSnapshot? =
-        runtimeRegistry.findRuntime(conversationId)?.snapshot?.value
+        runtimeRegistry.findRuntime(conversationId)?.snapshot?.value?.durable
             ?: repository.getConversationSnapshotById(conversationId)
 
-    internal fun residentAggregate(conversationId: Uuid): StateFlow<ConversationAggregateSnapshot>? =
+    internal fun residentRuntimeSnapshot(conversationId: Uuid): StateFlow<ConversationRuntimeSnapshot>? =
         runtimeRegistry.findRuntime(conversationId)?.snapshot
 
     suspend fun count(): Int = repository.countConversations()
@@ -167,14 +168,15 @@ internal fun mergeConversationActivities(
     (turnPresentations.keys + titleGenerationIds).associateWith { conversationId ->
         buildSet {
             when (turnPresentations[conversationId]?.phase) {
-                ConversationTurnPhase.GENERATING,
-                ConversationTurnPhase.PREPARING,
-                ConversationTurnPhase.STOPPING,
+                TurnLivePhase.PREPARING,
+                TurnLivePhase.MODEL_WAITING,
+                TurnLivePhase.MODEL_STREAMING,
+                TurnLivePhase.TOOL_PREPARING,
+                TurnLivePhase.TOOL_EXECUTING,
+                TurnLivePhase.STOPPING,
                 -> add(ConversationActivity.RESPONSE_GENERATION)
-                ConversationTurnPhase.AWAITING_USER -> add(ConversationActivity.APPROVAL_REQUIRED)
-                ConversationTurnPhase.IDLE,
-                null,
-                -> Unit
+                TurnLivePhase.AWAITING_USER -> add(ConversationActivity.APPROVAL_REQUIRED)
+                null -> Unit
             }
             if (conversationId in titleGenerationIds) add(ConversationActivity.TITLE_GENERATION)
         }
@@ -187,8 +189,10 @@ data class ConversationDetailRead(
 
 class SubAssistantDetailReader(private val queryService: ConversationQueryService) {
     suspend fun read(conversationId: Uuid): ConversationDetailRead? {
-        val resident = queryService.residentAggregate(conversationId)
-        val initial = resident?.value ?: queryService.aggregateSnapshot(conversationId) ?: return null
+        val resident = queryService.residentRuntimeSnapshot(conversationId)
+        val initial = resident?.value
+            ?: queryService.aggregateSnapshot(conversationId)?.let { ConversationRuntimeSnapshot(it, null) }
+            ?: return null
         return ConversationDetailRead(
             initial = initial.toPresentationSnapshot(),
             updates = resident?.map { it.toPresentationSnapshot() },

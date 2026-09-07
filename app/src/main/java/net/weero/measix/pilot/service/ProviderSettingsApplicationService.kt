@@ -3,6 +3,7 @@ package net.weero.measix.pilot.service
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.map
+import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.freeze
 import me.rerere.ai.provider.Model
@@ -134,8 +135,8 @@ class ProviderSettingsApplicationService(
         val response = providerManager.getProviderByType(setting).generateText(
             providerSetting = setting,
             messages = listOf(
-                UIMessage.system("You are a helpful assistant"),
-                UIMessage.user("Use the get_current_time tool."),
+                ModelRequestMessage.system("You are a helpful assistant"),
+                ModelRequestMessage.user("Use the get_current_time tool."),
             ),
             params = params(model).copy(tools = listOf(testTool.freeze())),
         )
@@ -171,8 +172,8 @@ class ProviderSettingsApplicationService(
 
     private companion object {
         val TEST_MESSAGES = listOf(
-            UIMessage.system("You are a helpful assistant"),
-            UIMessage.user("hello"),
+            ModelRequestMessage.system("You are a helpful assistant"),
+            ModelRequestMessage.user("hello"),
         )
     }
 

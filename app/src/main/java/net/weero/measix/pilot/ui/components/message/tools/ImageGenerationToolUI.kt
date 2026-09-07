@@ -42,7 +42,7 @@ import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.ArrowUp01
 import me.rerere.hugeicons.stroke.Copy01
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.service.runtime.ToolCallPhase
+import net.weero.measix.pilot.service.runtime.ToolLivePhase
 import net.weero.measix.pilot.data.ai.tools.local.GENERATE_IMAGE_TOOL_NAME
 import net.weero.measix.pilot.data.ai.tools.local.ImageGenerationToolMetadata
 import net.weero.measix.pilot.data.imggen.imageGenerationFailureStringRes
@@ -113,23 +113,23 @@ internal fun resolveImageGenerationUiState(context: ToolUIContext): ImageGenerat
     val metadata = context.imageGenerationMetadata()
     val status = context.resultStatus()
     return when (context.phase) {
-        ToolCallPhase.CALL_STREAMING -> ImageGenerationUiState.CallStreaming
+        ToolLivePhase.CALL_STREAMING -> ImageGenerationUiState.CallStreaming
         // generate_image 只可能等待授权审批；AWAITING_INPUT 对其不可达，投影为同一等待态。
-        ToolCallPhase.AWAITING_APPROVAL,
-        ToolCallPhase.AWAITING_INPUT,
+        ToolLivePhase.AWAITING_APPROVAL,
+        ToolLivePhase.AWAITING_INPUT,
         -> ImageGenerationUiState.AwaitingApproval
-        ToolCallPhase.DENIED -> ImageGenerationUiState.Denied
-        ToolCallPhase.CANCELLED -> ImageGenerationUiState.Cancelled
-        ToolCallPhase.INTERRUPTED -> ImageGenerationUiState.Interrupted
-        ToolCallPhase.READY -> ImageGenerationUiState.Queued
-        ToolCallPhase.ANSWERED -> ImageGenerationUiState.Completed
-        ToolCallPhase.EXECUTING -> when (metadata?.phase) {
+        ToolLivePhase.DENIED -> ImageGenerationUiState.Denied
+        ToolLivePhase.CANCELLED -> ImageGenerationUiState.Cancelled
+        ToolLivePhase.INTERRUPTED -> ImageGenerationUiState.Interrupted
+        ToolLivePhase.READY -> ImageGenerationUiState.Queued
+        ToolLivePhase.ANSWERED -> ImageGenerationUiState.Completed
+        ToolLivePhase.EXECUTING -> when (metadata?.phase) {
             "setting_background" -> ImageGenerationUiState.SettingBackground
             "persisting" -> ImageGenerationUiState.Persisting
             else -> ImageGenerationUiState.Generating
         }
-        ToolCallPhase.FAILED -> ImageGenerationUiState.Failed(context.resultReason() ?: metadata?.reason)
-        ToolCallPhase.COMPLETED -> when {
+        ToolLivePhase.FAILED -> ImageGenerationUiState.Failed(context.resultReason() ?: metadata?.reason)
+        ToolLivePhase.COMPLETED -> when {
             status == "failed" || metadata?.status == "failed" || metadata?.phase == "failed" ->
                 ImageGenerationUiState.Failed(context.resultReason() ?: metadata?.reason)
             context.fileIsUnavailable() ->
@@ -214,10 +214,10 @@ object ImageGenerationToolUI : ToolUIRenderer {
             ?.jsonPrimitiveOrNull
             ?.contentOrNull
         val backgroundPending = requestedBackground && context.resultStatus() == null && when (context.phase) {
-            ToolCallPhase.CALL_STREAMING,
-            ToolCallPhase.READY,
-            ToolCallPhase.AWAITING_APPROVAL,
-            ToolCallPhase.EXECUTING,
+            ToolLivePhase.CALL_STREAMING,
+            ToolLivePhase.READY,
+            ToolLivePhase.AWAITING_APPROVAL,
+            ToolLivePhase.EXECUTING,
             -> true
 
             else -> false

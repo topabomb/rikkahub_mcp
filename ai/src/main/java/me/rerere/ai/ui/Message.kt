@@ -50,200 +50,6 @@ data class UIMessage(
     @Transient
     val providerReplayProjection: ProviderReplayProjection? = null,
 ) {
-    private fun appendChunk(chunk: MessageChunk): UIMessage {
-        val choice = chunk.choices.getOrNull(0)
-        val message = choice?.delta ?: choice?.message
-        return message?.let { delta ->
-            /*
-             * 一个 UIMessage 会承载同一用户轮次中的多次 assistant -> tool 子步骤，已执行 Tool
-             * 就是这些步骤之间的边界。流式协议并不保证 reasoning/content/tool_calls 总在同一
-             * delta 中到达，因此当前未完成步骤不能简单按 delta 到达顺序追加：DeepSeek 要求
-             * reasoning_content、content 与 tool_calls 在下一次请求中仍属于同一 assistant 消息。
-             *
-             * 这里仅规范化“最后一个已执行 Tool 之后”的当前步骤，保持既有存储结构和历史步骤
-             * 不变，并确保当前步骤始终为 Reasoning -> Content -> pending Tool(s)。
-             */
-            fun List<UIMessagePart>.currentStepStart(): Int =
-                indexOfLast { it is UIMessagePart.Tool && it.hasReplayResult } + 1
-
-            fun List<UIMessagePart>.firstPendingToolIndex(stepStart: Int): Int {
-                val relativeIndex = subList(stepStart, size).indexOfFirst {
-                    it is UIMessagePart.Tool && !it.hasReplayResult
-                }
-                return if (relativeIndex >= 0) stepStart + relativeIndex else size
-            }
-
-            fun List<UIMessagePart>.insertAt(index: Int, part: UIMessagePart): List<UIMessagePart> =
-                toMutableList().apply { add(index, part) }
-
-            fun UIMessagePart.hasProviderPartBoundary(): Boolean {
-                val googleMetadata = metadataAs<GoogleThoughtMetadata>()
-                val claudeMetadata = metadataAs<ClaudeReasoningMetadata>()
-                return googleMetadata?.thoughtSignature != null ||
-                        googleMetadata?.inlineData != null ||
-                        claudeMetadata?.redactedData != null
-            }
-
-            // Handle Parts
-            var newParts = delta.parts.fold(parts) { acc, deltaPart ->
-                when (deltaPart) {
-                    is UIMessagePart.Text -> {
-                        // Skip empty text deltas
-                        if (deltaPart.text.isEmpty() && deltaPart.metadata == null) {
-                            acc
-                        } else {
-                            val stepStart = acc.currentStepStart()
-                            val insertIndex = acc.firstPendingToolIndex(stepStart)
-                            val lastPart = acc.getOrNull(insertIndex - 1)
-                            if (lastPart is UIMessagePart.Text &&
-                                !lastPart.hasProviderPartBoundary() &&
-                                !deltaPart.hasProviderPartBoundary()
-                            ) {
-                                // 合并当前步骤的文本，即使 Tool delta 已先到达也不能把文本放到 Tool 后面。
-                                acc.mapIndexed { index, part ->
-                                    if (index == insertIndex - 1) {
-                                        lastPart.copy(text = lastPart.text + deltaPart.text)
-                                    } else {
-                                        part
-                                    }
-                                }
-                            } else {
-                                acc.insertAt(insertIndex, deltaPart)
-                            }
-                        }
-                    }
-
-                    is UIMessagePart.Image -> {
-                        val stepStart = acc.currentStepStart()
-                        val insertIndex = acc.firstPendingToolIndex(stepStart)
-                        val lastPart = acc.getOrNull(insertIndex - 1)
-                        val incomingComplete = isCompleteImageUrl(deltaPart.url)
-                        if (lastPart is UIMessagePart.Image &&
-                            !lastPart.hasProviderPartBoundary() &&
-                            !deltaPart.hasProviderPartBoundary() &&
-                            !incomingComplete
-                        ) {
-                            // Raw fragments continue the current image. Complete URLs are new images.
-                            acc.mapIndexed { index, part ->
-                                if (index == insertIndex - 1) {
-                                    lastPart.copy(
-                                        url = lastPart.url + deltaPart.url,
-                                        metadata = deltaPart.metadata ?: lastPart.metadata
-                                    )
-                                } else {
-                                    part
-                                }
-                            }
-                        } else {
-                            acc.insertAt(
-                                insertIndex,
-                                UIMessagePart.Image(
-                                    url = renderableImageUrl(deltaPart.url),
-                                    metadata = deltaPart.metadata,
-                                )
-                            )
-                        }
-                    }
-
-                    is UIMessagePart.Reasoning -> {
-                        // Skip empty reasoning deltas
-                        if (deltaPart.reasoning.isEmpty() && deltaPart.metadata == null) {
-                            acc
-                        } else {
-                            val stepStart = acc.currentStepStart()
-                            val reasoningIndex = (acc.lastIndex downTo stepStart).firstOrNull { index ->
-                                acc[index] is UIMessagePart.Reasoning
-                            }
-                            if (reasoningIndex != null &&
-                                !acc[reasoningIndex].hasProviderPartBoundary() &&
-                                !deltaPart.hasProviderPartBoundary()
-                            ) {
-                                val existing = acc[reasoningIndex] as UIMessagePart.Reasoning
-                                acc.mapIndexed { index, part ->
-                                    if (index == reasoningIndex) {
-                                        UIMessagePart.Reasoning(
-                                            reasoning = existing.reasoning + deltaPart.reasoning,
-                                            createdAt = existing.createdAt,
-                                            finishedAt = null,
-                                        ).also {
-                                            it.metadata = mergeReasoningPartMetadata(
-                                                existing.metadata,
-                                                deltaPart.metadata,
-                                            )
-                                        }
-                                    } else {
-                                        part
-                                    }
-                                }
-                            } else {
-                                // Reasoning 属于整个 assistant 工具步骤，必须位于该步骤内容和 Tool 之前。
-                                val insertIndex = reasoningIndex?.plus(1) ?: stepStart
-                                acc.insertAt(insertIndex, deltaPart)
-                            }
-                        }
-                    }
-
-                    is UIMessagePart.Tool -> {
-                        if (deltaPart.toolCallId.isBlank()) {
-                            // A blank-ID delta continues the latest pending tool in this assistant step.
-                            // Never cross an executed Tool boundary: that would mutate an earlier request's history.
-                            val stepStart = acc.currentStepStart()
-                            val lastTool = acc.subList(stepStart, acc.size)
-                                .lastOrNull { it is UIMessagePart.Tool && !it.hasReplayResult } as? UIMessagePart.Tool
-                            if (lastTool != null) {
-                                acc.map { part ->
-                                    if (part === lastTool) part.merge(deltaPart) else part
-                                }
-                            } else {
-                                acc + deltaPart.copy()
-                            }
-                        } else {
-                            // Has ID - only merge inside the current assistant step. Some compatible
-                            // services reuse ids; an old executed Tool must remain immutable history.
-                            val stepStart = acc.currentStepStart()
-                            val existingIndex = (stepStart until acc.size).firstOrNull { index ->
-                                (acc[index] as? UIMessagePart.Tool)?.toolCallId == deltaPart.toolCallId
-                            }
-                            if (existingIndex == null) {
-                                acc + deltaPart.copy()
-                            } else {
-                                acc.mapIndexed { index, part ->
-                                    if (index == existingIndex) {
-                                        (part as UIMessagePart.Tool).merge(deltaPart)
-                                    } else part
-                                }
-                            }
-                        }
-                    }
-
-                    else -> {
-                        println("delta part append not supported: $deltaPart")
-                        acc
-                    }
-                }
-            }
-            // Handle Reasoning End
-            if (parts.filterIsInstance<UIMessagePart.Reasoning>()
-                    .isNotEmpty() && delta.parts.filterIsInstance<UIMessagePart.Reasoning>()
-                    .isEmpty()
-            ) {
-                newParts = newParts.map { part ->
-                    if (part is UIMessagePart.Reasoning && part.finishedAt == null) {
-                        part.copy(finishedAt = Clock.System.now())
-                    } else part
-                }
-            }
-            // Handle annotations
-            val newAnnotations = delta.annotations.ifEmpty {
-                annotations
-            }
-            copy(
-                parts = newParts,
-                annotations = newAnnotations,
-                providerMetadata = mergeMessageMetadata(providerMetadata, delta.providerMetadata),
-            )
-        } ?: this
-    }
 
     fun summaryAsText(maxLength: Int = Int.MAX_VALUE): String {
         val text = "[${role.name}]: " + parts.joinToString(separator = "\n") { part ->
@@ -255,26 +61,11 @@ data class UIMessage(
         return if (text.length > maxLength) text.take(maxLength) + "..." else text
     }
 
-    fun toText() = parts.joinToString(separator = "\n") { part ->
-        when (part) {
-            is UIMessagePart.Text -> part.text
-            else -> ""
-        }
-    }
+    fun toText() = partsToText(parts)
 
     fun getTools() = parts.filterIsInstance<UIMessagePart.Tool>()
 
-    fun isValidToUpload() = parts.any { part ->
-        when (part) {
-            is UIMessagePart.Text -> part.text.isNotBlank()
-            is UIMessagePart.Image -> part.url.isNotBlank()
-            is UIMessagePart.Video -> part.url.isNotBlank()
-            is UIMessagePart.Audio -> part.url.isNotBlank()
-            is UIMessagePart.Document -> part.url.isNotBlank()
-            is UIMessagePart.Reasoning -> part.reasoning.isNotBlank()
-            else -> true
-        }
-    }
+    fun isValidToUpload() = partsAreValidToUpload(parts)
 
     inline fun <reified P : UIMessagePart> hasPart(): Boolean {
         return parts.any {
@@ -287,10 +78,6 @@ data class UIMessage(
     fun withoutUnpersistableBase64(): UIMessage {
         if (!hasBase64Part()) return this
         return copy(parts = stripUnpersistableBase64(parts))
-    }
-
-    operator fun plus(chunk: MessageChunk): UIMessage {
-        return this.appendChunk(chunk)
     }
 
     companion object {
@@ -312,7 +99,7 @@ data class UIMessage(
 }
 
 /** True for a finished image URL; raw base64 fragments return false so they can be concatenated. */
-internal fun isCompleteImageUrl(url: String): Boolean {
+fun isCompleteImageUrl(url: String): Boolean {
     val value = url.trim()
     return value.startsWith("data:", ignoreCase = true) ||
         value.startsWith("http://", ignoreCase = true) ||
@@ -322,47 +109,10 @@ internal fun isCompleteImageUrl(url: String): Boolean {
         value.startsWith("android.resource:", ignoreCase = true)
 }
 
-internal fun renderableImageUrl(url: String, mimeType: String = "image/png"): String {
+fun renderableImageUrl(url: String, mimeType: String = "image/png"): String {
     val value = url.trim()
     if (value.isEmpty() || isCompleteImageUrl(value)) return value
     return "data:$mimeType;base64,$value"
-}
-
-/**
- * 处理MessageChunk合并
- *
- * @receiver 已有消息列表
- * @param chunk 消息chunk
- * @param model 模型, 可以不传，如果传了，会把模型id写入到消息，标记是哪个模型输出的消息
- * @return 新消息列表
- */
-fun List<UIMessage>.handleMessageChunk(
-    chunk: MessageChunk,
-    model: Model? = null,
-    assistantMessageId: Uuid? = null,
-): List<UIMessage> {
-    require(this.isNotEmpty()) {
-        "messages must not be empty"
-    }
-    val choice = chunk.choices.getOrNull(0) ?: return this
-    val message = choice.delta ?: choice.message ?: return this
-    if (this.last().role != message.role) {
-        val messageId = if (message.role == MessageRole.ASSISTANT) {
-            assistantMessageId ?: Uuid.random()
-        } else {
-            Uuid.random()
-        }
-        val nextMessage = UIMessage(
-            id = messageId,
-            modelId = model?.id,
-            role = message.role,
-            parts = emptyList(),
-        ) + chunk
-        return this + nextMessage
-    } else {
-        val last = this.last() + chunk
-        return this.dropLast(1) + last
-    }
 }
 
 /**
@@ -484,6 +234,28 @@ object TurnTerminalReasons {
     const val TOOL_LOOP_LIMIT = "tool_loop_limit"
     const val INTERACTION_LIMIT = "interaction_limit"
     const val PROCESS_RESTARTED = "process_restarted"
+    const val TURN_CONTEXT_MATERIALIZE = "turn_context_materialize"
+}
+
+/** Shared part-level predicate behind `UIMessage.isValidToUpload` and `ModelRequestMessage.isValidToUpload`. */
+fun partsAreValidToUpload(parts: List<UIMessagePart>): Boolean = parts.any { part ->
+    when (part) {
+        is UIMessagePart.Text -> part.text.isNotBlank()
+        is UIMessagePart.Image -> part.url.isNotBlank()
+        is UIMessagePart.Video -> part.url.isNotBlank()
+        is UIMessagePart.Audio -> part.url.isNotBlank()
+        is UIMessagePart.Document -> part.url.isNotBlank()
+        is UIMessagePart.Reasoning -> part.reasoning.isNotBlank()
+        else -> true
+    }
+}
+
+/** Shared part-level projection behind `UIMessage.toText` and `ModelRequestMessage.toText`. */
+fun partsToText(parts: List<UIMessagePart>): String = parts.joinToString(separator = "\n") { part ->
+    when (part) {
+        is UIMessagePart.Text -> part.text
+        else -> ""
+    }
 }
 
 fun partsContainBase64(parts: List<UIMessagePart>): Boolean = parts.any { part ->
@@ -614,8 +386,8 @@ fun UIMessage.confirmedReplayableToolOrdinals(): Set<Int> {
         val opaqueVisible = if (opaqueCallCounts == null) {
             true
         } else {
-            val remaining = opaqueCallCounts.getOrDefault(tool.toolCallId, 0)
-            if (remaining > 0) opaqueCallCounts[tool.toolCallId] = remaining - 1
+            val remaining = opaqueCallCounts.getOrDefault(tool.providerCallId, 0)
+            if (remaining > 0) opaqueCallCounts[tool.providerCallId] = remaining - 1
             remaining > 0
         }
         ordinal.takeIf { opaqueVisible && tool.hasReplayResult }
@@ -739,7 +511,7 @@ private fun List<UIMessagePart>.replaySafeTailParts(): List<UIMessagePart> = map
 }
 
 private fun UIMessagePart.Tool.hasReplaySafeEnvelope(): Boolean {
-    if (toolCallId.isBlank() || toolName.isBlank()) return false
+    if (providerCallId.isBlank() || toolName.isBlank()) return false
     return runCatching {
         json.parseToJsonElement(input.ifBlank { "{}" })
     }.isSuccess
@@ -769,7 +541,7 @@ fun UIMessage.finishPendingTools(
     transform: (UIMessagePart.Tool) -> UIMessagePart.Tool
 ): UIMessage {
     val updatedParts = parts.map { part ->
-        if (part is UIMessagePart.Tool && !part.hasReplayResult && part.approvalState is ToolApprovalState.Pending) {
+        if (part is UIMessagePart.Tool && !part.hasReplayResult && part.isPending) {
             transform(part)
         } else {
             part
@@ -787,15 +559,15 @@ fun UIMessage.finishPendingTools(
 }
 
 /**
- * 标记执行中断的工具（output 为空但 approvalState 非 Pending）。
+ * 标记执行中断的工具（output 为空但非等待用户）。
  * 用于超时/异常导致工具执行被中断但未被正常清理的场景。
- * 保留原 approvalState（不标记为 Denied），仅填充中断标记 output。
+ * 保留原 interactionState（不标记为 Denied），仅填充中断标记 output。
  */
 fun UIMessage.finishInterruptedTools(
     transform: (UIMessagePart.Tool) -> UIMessagePart.Tool
 ): UIMessage {
     val updatedParts = parts.map { part ->
-        if (part is UIMessagePart.Tool && !part.hasReplayResult && part.approvalState !is ToolApprovalState.Pending) {
+        if (part is UIMessagePart.Tool && !part.hasReplayResult && !part.isPending) {
             transform(part)
         } else {
             part

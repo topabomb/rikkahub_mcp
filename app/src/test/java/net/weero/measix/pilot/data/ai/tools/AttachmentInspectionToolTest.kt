@@ -12,6 +12,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolExecutionFailure
@@ -373,7 +374,7 @@ class AttachmentInspectionToolTest {
     fun `short and historical file paths preserve exact paths in ordered image labels`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val refs = listOf("/upload/abc123.png", "/upload/11111111-1111-1111-1111-111111111111.png")
-        var sent = emptyList<UIMessage>()
+        var sent = emptyList<ModelRequestMessage>()
         coEvery { provider.generateText(any(), any(), any()) } answers {
             sent = secondArg()
             successChunk("comparison")
@@ -400,7 +401,7 @@ class AttachmentInspectionToolTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         every { providerManager.getProviderByType(any()) } returns provider
         var calls = 0
-        var sent: List<UIMessage>? = null
+        var sent: List<ModelRequestMessage>? = null
         coEvery {
             provider.generateText(any(), any(), any<TextGenerationParams>())
         } answers {
@@ -440,7 +441,7 @@ class AttachmentInspectionToolTest {
             },
         ) as UIMessagePart.Image
         every { providerManager.getProviderByType(any()) } returns provider
-        var sent: List<UIMessage>? = null
+        var sent: List<ModelRequestMessage>? = null
         coEvery {
             provider.generateText(any(), any(), any<TextGenerationParams>())
         } answers {
@@ -491,7 +492,7 @@ class AttachmentInspectionToolTest {
     fun `inspection call sends native image into USER request`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         every { providerManager.getProviderByType(any()) } returns provider
-        var sent: List<UIMessage>? = null
+        var sent: List<ModelRequestMessage>? = null
         coEvery {
             provider.generateText(any(), any(), any<TextGenerationParams>())
         } answers {
@@ -608,7 +609,7 @@ class AttachmentInspectionToolTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         every { providerManager.getProviderByType(any()) } returns provider
         var calls = 0
-        var sent: List<UIMessage>? = null
+        var sent: List<ModelRequestMessage>? = null
         coEvery {
             provider.generateText(any(), any(), any<TextGenerationParams>())
         } answers {

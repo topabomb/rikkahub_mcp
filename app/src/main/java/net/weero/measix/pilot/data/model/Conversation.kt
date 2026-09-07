@@ -10,7 +10,6 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.InstantSerializer
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
 import net.weero.measix.pilot.data.db.entity.ArtifactReferenceType
-import net.weero.measix.pilot.data.ai.tools.ToolRuntimeMetadata
 import java.time.Instant
 import kotlin.uuid.Uuid
 
@@ -187,12 +186,12 @@ private fun UIMessagePart.toolMetadataReferenceTokens(): List<String> {
 }
 
 /**
- * tool_runtime.archive.artifact 的相对路径：已归档 Tool Result 的唯一 durable 句柄，
+ * runtimeState.archive.artifact 的相对路径：已归档 Tool Result 的唯一 durable 句柄，
  * 引用类型为 TOOL_OUTPUT，与附件生命周期分开。
  */
 private fun UIMessagePart.toolOutputArchiveReferences(): List<MessageArtifactReference> {
     if (this !is UIMessagePart.Tool) return emptyList()
-    val archive = ToolRuntimeMetadata.archiveOf(this.metadata) ?: return emptyList()
+    val archive = this.runtimeState.archive ?: return emptyList()
     return listOf(
         MessageArtifactReference(
             token = archive.artifact.relativePath,
@@ -216,7 +215,7 @@ internal fun List<UIMessage>.collectFileUrlStrings(): Set<String> =
 /**
  * 会话引用的全部 artifact token，按语义分类：
  *  - 媒体 part URL 与 Tool.metadata 交付物 → ATTACHMENT；
- *  - tool_runtime.archive.artifact → TOOL_OUTPUT。
+ *  - runtimeState.archive.artifact → TOOL_OUTPUT。
  * 文件清理的保留判定与 artifact_reference 投影共用这一份规则。
  */
 internal fun List<UIMessage>.collectArtifactReferences(): List<MessageArtifactReference> =

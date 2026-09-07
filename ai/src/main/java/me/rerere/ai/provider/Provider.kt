@@ -5,15 +5,12 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import me.rerere.ai.core.FrozenToolDefinition
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.ImageGenSize
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
-import me.rerere.ai.ui.OpenAIResponseMetadata
-import me.rerere.ai.ui.OpenAIResponseSourceProfile
-import me.rerere.ai.ui.OpenAIResponseWireFormat
-import me.rerere.ai.ui.UIMessage
 
 // 提供商实现
 // 采用无状态设计，使用时除了需要传入需要的参数外，还需要传入provider setting作为参数
@@ -54,13 +51,13 @@ interface Provider<T : ProviderSetting> {
 
     suspend fun generateText(
         providerSetting: T,
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         params: TextGenerationParams,
     ): MessageChunk
 
     suspend fun streamText(
         providerSetting: T,
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         params: TextGenerationParams,
     ): Flow<MessageChunk>
 
@@ -98,8 +95,6 @@ data class RequestMediaCapabilities(
     val userImages: RequestImageSupport = RequestImageSupport.NONE,
     val assistantImages: RequestImageSupport = RequestImageSupport.NONE,
     val toolOutputImages: RequestImageSupport = RequestImageSupport.NONE,
-    val opaqueReplayWireFormat: OpenAIResponseWireFormat? = null,
-    val opaqueReplaySourceProfile: OpenAIResponseSourceProfile? = null,
 ) {
     companion object {
         val NONE = RequestMediaCapabilities()
@@ -111,16 +106,6 @@ data class RequestMediaCapabilities(
             role == MessageRole.ASSISTANT -> assistantImages
             else -> userImages
         }
-
-    fun opaqueReplayEligible(metadata: OpenAIResponseMetadata?): Boolean {
-        if (assistantImages != RequestImageSupport.OPAQUE_REPLAY_ONLY) return false
-        val metadata = metadata ?: return false
-        val expectedWire = opaqueReplayWireFormat ?: return false
-        val expectedSource = opaqueReplaySourceProfile ?: return false
-        if (metadata.wireFormat != expectedWire) return false
-        if (metadata.outputItemGroups.none { it.isNotEmpty() }) return false
-        return metadata.sourceProfile == null || metadata.sourceProfile == expectedSource
-    }
 }
 
 @Serializable
@@ -129,7 +114,7 @@ data class TextGenerationParams(
     val temperature: Float? = null,
     val topP: Float? = null,
     val maxTokens: Int? = null,
-    /** Provider 只能看到 Turn 装配时冻结的 wire 定义（§7.6）；可执行 Tool 永不进入请求。 */
+    /** Provider 只能看到 Turn 装配时冻结的 wire 定义；可执行 Tool 永不进入请求。 */
     val tools: List<FrozenToolDefinition> = emptyList(),
     val reasoningLevel: ReasoningLevel = ReasoningLevel.OFF,
     val customHeaders: List<CustomHeader> = emptyList(),

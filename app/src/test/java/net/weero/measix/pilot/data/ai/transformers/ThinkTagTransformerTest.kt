@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.data.ai.transformers
 
-import net.weero.measix.pilot.service.runtime.resolveAssistantRequest
+import net.weero.measix.pilot.service.turn.resolveTurnAssistantSnapshot
+import kotlin.uuid.Uuid
 
 import net.weero.measix.pilot.test.testPromptInputs
 
@@ -25,7 +26,7 @@ class ThinkTagTransformerTest {
     private val ctx = TransformerContext(
         context = mockk<android.content.Context>(relaxed = true),
         model = Model(modelId = "test", displayName = "Test"),
-        assistant = resolveAssistantRequest(Assistant()),
+        assistant = resolveTurnAssistantSnapshot(Assistant()),
         promptInputs = testPromptInputs(),
         requestOrigins = RequestMessageOriginTracker(),
         registerUnpublishedResource = {},
@@ -116,7 +117,7 @@ class ThinkTagTransformerTest {
     @Test
     fun `reasoning from a completed tool step does not suppress current step fallback`() = runTest {
         val completedTool = UIMessagePart.Tool(
-            toolCallId = "call-1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call-1",
             toolName = "lookup",
             input = "{}",
             output = listOf(UIMessagePart.Text("result")),
@@ -150,7 +151,7 @@ class ThinkTagTransformerTest {
         val priorClosedAt = Instant.fromEpochMilliseconds(100)
         val currentClosedAt = Instant.fromEpochMilliseconds(200)
         val completedTool = UIMessagePart.Tool(
-            toolCallId = "call-1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call-1",
             toolName = "lookup",
             input = "{}",
             output = listOf(UIMessagePart.Text("result")),

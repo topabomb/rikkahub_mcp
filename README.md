@@ -88,7 +88,7 @@ common/       通用工具
 | [消息渲染管线](docs/references/message-rendering-pipeline.md) | UIMessage.parts 到像素的完整渲染管线、Markdown 双路径、WebView 封装 |
 | [助手配置参考](docs/references/assistant-configuration.md) | Assistant 字段、默认模板、解析/持久化规则与配置消费边界 |
 | [Android 配置架构与企业下发清单](docs/references/android-configuration-architecture.md) | Android 完整配置目录、持久化/引用架构、企业下发边界与 S0.2 Snapshot 映射 |
-| [消息生成链路](docs/references/chat-generation-pipeline.md) | 从用户发送到模型回复落盘的完整数据流 |
+| [Turn/Step 执行链路](docs/references/turn-step-execution.md) | 从用户发送到模型回复落盘的完整数据流 |
 | [多模态与持久化](docs/references/multimodal-context-and-turn-durability.md) | 附件身份、文件路径、请求投影与 Turn/Tool 持久化 |
 | [AI 协议参考](docs/references/protocol-reference.md) | 四类基础协议规范、Provider 差异映射、模型级适配 |
 | [Token 与缓存统计](docs/references/token-usage-accounting.md) | 请求、turn 累计、上下文与缓存展示口径 |

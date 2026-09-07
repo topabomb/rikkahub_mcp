@@ -32,7 +32,7 @@ import me.rerere.common.http.jsonObjectOrNull
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Tools
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.service.runtime.ToolCallPhase
+import net.weero.measix.pilot.service.runtime.ToolLivePhase
 import net.weero.measix.pilot.service.runtime.isBusy
 import net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
@@ -58,7 +58,7 @@ data class ToolUIContext(
     /** 输出文本部件解析出的 JSON；Provider 回放结果尚未形成时为 null。 */
     val content: JsonElement?,
     /** Call assembly, approval and execution are deliberately distinct. */
-    val phase: ToolCallPhase,
+    val phase: ToolLivePhase,
     /** Inline 保持现有 renderer；Archived 只展示 durable 裁剪摘要。 */
     val outputProjection: ToolOutputProjection = ToolOutputProjection.Inline(tool.output),
 )

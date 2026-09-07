@@ -5,9 +5,11 @@ import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.Model
-import net.weero.measix.pilot.data.ai.tools.PendingInteraction
-import net.weero.measix.pilot.data.ai.tools.ToolInteractionKind
-import net.weero.measix.pilot.service.runtime.TurnOutcome
+import me.rerere.ai.ui.UIMessage
+import net.weero.measix.pilot.data.ai.tools.PendingToolInteraction
+import me.rerere.ai.ui.ToolInteractionState
+import net.weero.measix.pilot.service.turn.TurnOutcome
+import net.weero.measix.pilot.service.turn.TurnPause
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -30,11 +32,10 @@ class GenerationSideEffectsTest {
 
     @Test
     fun `only completed turns launch completion side effects`() {
-        assertTrue(shouldLaunchCompletionSideEffects(TurnOutcome.Completed))
-        assertFalse(shouldLaunchCompletionSideEffects(TurnOutcome.AwaitingApproval(
-            listOf(PendingInteraction(me.rerere.ai.core.ToolCallLocator(kotlin.uuid.Uuid.random(), 0), ToolInteractionKind.APPROVAL)),
+        assertTrue(shouldLaunchCompletionSideEffects(TurnOutcome.Completed(assistantMessage = UIMessage.assistant("done"))))
+        assertFalse(shouldLaunchCompletionSideEffects(TurnPause(
+            listOf(PendingToolInteraction(me.rerere.ai.core.ToolCallLocator(kotlin.uuid.Uuid.random(), kotlin.uuid.Uuid.random(), kotlin.uuid.Uuid.random()), ToolInteractionState.AwaitingApproval)),
         )))
         assertFalse(shouldLaunchCompletionSideEffects(TurnOutcome.Incomplete("step_limit")))
-        assertFalse(shouldLaunchCompletionSideEffects(null))
     }
 }

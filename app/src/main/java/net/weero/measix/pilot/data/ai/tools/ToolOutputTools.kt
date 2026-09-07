@@ -11,7 +11,6 @@ import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.ai.ToolOutputProtocolLimits
 
 /** 内置保留名：回查工具始终注册，动态/MCP 工具占用同名在装配阶段拒绝。 */
 internal object ToolOutputToolNames {
@@ -49,8 +48,8 @@ internal fun createToolOutputLookupTools(
                         put("type", "integer")
                         put(
                             "description",
-                            "Lines to read, 1..${ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_READ_LINES}. " +
-                                "Default ${ToolOutputProtocolLimits.TOOL_OUTPUT_DEFAULT_READ_LINES}.",
+                            "Lines to read, 1..${ToolOutputProtocol.TOOL_OUTPUT_MAX_READ_LINES}. " +
+                                "Default ${ToolOutputProtocol.TOOL_OUTPUT_DEFAULT_READ_LINES}.",
                         )
                     })
                 },
@@ -66,7 +65,7 @@ internal fun createToolOutputLookupTools(
                 args,
                 "limit",
                 1,
-                ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_READ_LINES,
+                ToolOutputProtocol.TOOL_OUTPUT_MAX_READ_LINES,
             )?.let { return@validate it }
             null
         },
@@ -75,7 +74,7 @@ internal fun createToolOutputLookupTools(
             val ref = requireNotNull((args["ref"] as JsonPrimitive).longOrNull)
             val startLine = (args["start"] as? JsonPrimitive)?.intOrNull ?: 1
             val lineCount = (args["limit"] as? JsonPrimitive)?.intOrNull
-                ?: ToolOutputProtocolLimits.TOOL_OUTPUT_DEFAULT_READ_LINES
+                ?: ToolOutputProtocol.TOOL_OUTPUT_DEFAULT_READ_LINES
             when (val result = store.read(conversationId, ref, startLine, lineCount)) {
                 ToolOutputReadResult.Unavailable -> failToolResult("archive_unavailable")
                 is ToolOutputReadResult.Success -> listOf(
@@ -100,7 +99,7 @@ internal fun createToolOutputLookupTools(
                         put(
                             "description",
                             "RE2 regular expression matched per line; lookaround and backreferences are unsupported. " +
-                                "At most ${ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_PATTERN_CHARS} characters.",
+                                "At most ${ToolOutputProtocol.TOOL_OUTPUT_MAX_PATTERN_CHARS} characters.",
                         )
                     })
                     put("ignore_case", buildJsonObject {
@@ -111,14 +110,14 @@ internal fun createToolOutputLookupTools(
                         put("type", "integer")
                         put(
                             "description",
-                            "Context lines, 0..${ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_CONTEXT_LINES}. Default 0.",
+                            "Context lines, 0..${ToolOutputProtocol.TOOL_OUTPUT_MAX_CONTEXT_LINES}. Default 0.",
                         )
                     })
                     put("limit", buildJsonObject {
                         put("type", "integer")
                         put(
                             "description",
-                            "Matches, 1..${ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_GREP_MATCHES}. Default 20.",
+                            "Matches, 1..${ToolOutputProtocol.TOOL_OUTPUT_MAX_GREP_MATCHES}. Default 20.",
                         )
                     })
                 },
@@ -131,23 +130,23 @@ internal fun createToolOutputLookupTools(
             positiveLongField(args, "ref", required = true)?.let { return@validate it }
             val pattern = (args["pattern"] as? JsonPrimitive)?.takeIf { it.isString }?.content
             if (pattern.isNullOrBlank()) return@validate rejection("invalid_arguments", "pattern must be a non-blank string")
-            if (pattern.length > ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_PATTERN_CHARS) {
+            if (pattern.length > ToolOutputProtocol.TOOL_OUTPUT_MAX_PATTERN_CHARS) {
                 return@validate rejection(
                     "invalid_arguments",
-                    "pattern exceeds ${ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_PATTERN_CHARS} characters",
+                    "pattern exceeds ${ToolOutputProtocol.TOOL_OUTPUT_MAX_PATTERN_CHARS} characters",
                 )
             }
             intInRange(
                 args,
                 "context",
                 0,
-                ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_CONTEXT_LINES,
+                ToolOutputProtocol.TOOL_OUTPUT_MAX_CONTEXT_LINES,
             )?.let { return@validate it }
             intInRange(
                 args,
                 "limit",
                 1,
-                ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_GREP_MATCHES,
+                ToolOutputProtocol.TOOL_OUTPUT_MAX_GREP_MATCHES,
             )?.let { return@validate it }
             booleanField(args, "ignore_case")?.let { return@validate it }
             null
@@ -198,7 +197,7 @@ internal fun formatGrepResult(result: ToolOutputGrepResult.Success): String = bu
 }.also(::requireBoundedToolOutputText)
 
 private fun requireBoundedToolOutputText(text: String) {
-    check(text.toByteArray(Charsets.UTF_8).size <= ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_RESPONSE_BYTES) {
+    check(text.toByteArray(Charsets.UTF_8).size <= ToolOutputProtocol.TOOL_OUTPUT_MAX_RESPONSE_BYTES) {
         "Tool Output lookup response exceeded its protocol byte limit"
     }
 }

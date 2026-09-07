@@ -6,7 +6,7 @@
 > Android 映射总览见 [Android 配置架构与企业下发边界](android-configuration-architecture.md)。
 
 本文说明 `Assistant` 的持久化字段、默认值、解析规则和配置消费边界。完整生成过程见
-[消息生成链路](chat-generation-pipeline.md)，模型可见提示与工具契约见
+[Turn/Step 执行链路](turn-step-execution.md)，模型可见提示与工具契约见
 [提示词、上下文注入与工具描述](prompts-and-tools.md)，子助手运行语义见
 [子助手架构与执行流程参考](sub-assistant-architecture.md)。
 
@@ -255,9 +255,9 @@ Memory Seed、Starter 和 Enterprise Local Memory 分 owner。实施时必须替
 
 `Assistant` 数据模型定义持久字段与默认语义；Settings 的 Local shadow、受管快照、有效读模型、读取物化和提交规则归
 Settings owner。会话助手归属只经 `ConversationApplicationService` 迁移；模型 readiness 与主生成工具装配归
-`MasterTurnCoordinator` 和 `GenerationToolSetFactory`；请求映射、工具循环与 Transformer 归 `GenerationLoop`；助手的
+`ConversationTurnService` 和 `TurnToolSetFactory`；请求映射、工具循环与 Transformer 归 `TurnRunner` / `StepRunner` / `ToolBatchRunner`；助手的
 创建、修改和删除归 `AssistantManagementService`。子助手的运行过滤、执行与恢复分别归 `SubAssistantRunPolicy`、
-`DelegationCoordinator`、`TurnRecovery` 和 `ApplicationRecoveryCoordinator`。
+`SubAssistantRunCoordinator`、`TurnRecovery` 和 `ApplicationRecoveryCoordinator`。
 
 UI 和 Provider adapter 只能消费上述 typed 配置与有效读模型，不能成为第二 owner。当前不存在的 S0.2 owner 不能冒充
 已实现能力，包括 ClientRealm、Enterprise Binding/Session、Snapshot v2 generated DTO、Managed Memory Seed store、
@@ -274,6 +274,6 @@ Starter projection 和 Enterprise Update/Portal；它们落地时必须在同一
 | Assistant 数据模型 | `app/src/main/java/net/weero/measix/pilot/data/model/Assistant.kt` |
 | Local shadow 与 effective owner | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsStore.kt`、`EffectiveSettings.kt` |
 | 读取物化、写规则与提交 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsNormalization.kt`、`SettingsWriteRules.kt`、`SettingsCommit.kt` |
-| 会话归属与生成装配 | `app/src/main/java/net/weero/measix/pilot/service/ConversationApplicationService.kt`、`MasterTurnCoordinator.kt`、`data/ai/GenerationLoop.kt`、`data/ai/tools/GenerationToolSetFactory.kt` |
+| 会话归属与生成装配 | `app/src/main/java/net/weero/measix/pilot/service/ConversationApplicationService.kt`、`ConversationTurnService.kt`、`service/turn/TurnRunner.kt`、`service/turn/StepRunner.kt`、`service/turn/ToolBatchRunner.kt`、`service/turn/TurnRunState.kt`、`data/ai/tools/TurnToolSetFactory.kt` |
 | 助手管理工具 | `app/src/main/java/net/weero/measix/pilot/service/AssistantManagementService.kt`、`data/ai/tools/AssistantToolFactory.kt` |
-| 子助手策略与执行 | `app/src/main/java/net/weero/measix/pilot/data/ai/subassistant/SubAssistantRunPolicy.kt`、`service/runtime/DelegationCoordinator.kt` |
+| 子助手策略与执行 | `app/src/main/java/net/weero/measix/pilot/data/ai/subassistant/SubAssistantRunPolicy.kt`、`service/subassistant/SubAssistantRunCoordinator.kt` |

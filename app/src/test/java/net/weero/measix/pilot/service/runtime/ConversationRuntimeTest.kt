@@ -20,24 +20,23 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
-import me.rerere.ai.ui.ToolApprovalState
+import me.rerere.ai.ui.ToolInteractionState
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
-import net.weero.measix.pilot.test.testTurnRequestContext
-import net.weero.measix.pilot.data.ai.CheckpointKind
-import net.weero.measix.pilot.data.ai.ToolResultEvent
-import net.weero.measix.pilot.data.ai.TurnModelContextProjection
-import net.weero.measix.pilot.data.ai.ToolResultEventStatus
+import net.weero.measix.pilot.test.testTurnContext
+import net.weero.measix.pilot.data.ai.ToolResultFact
+import net.weero.measix.pilot.data.ai.request.TurnModelContextProjection
+import me.rerere.ai.ui.ToolResultStatus
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
-import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
+import net.weero.measix.pilot.data.ai.ToolExecutionFact
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
-import net.weero.measix.pilot.service.applyToolUserDecision
+import net.weero.measix.pilot.service.applyToolInteractionDecision
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
@@ -59,23 +58,29 @@ class ConversationRuntimeTest {
     private fun user(text: String): UIMessage =
         UIMessage(id = Uuid.random(), role = MessageRole.USER, parts = listOf(UIMessagePart.Text(text)))
 
+    // Deterministic call identity so tests can reference a tool by its position within a message.
+    private val stepId = Uuid.random()
+    private fun stableId(ordinal: Int): Uuid =
+        Uuid.parse("00000000-0000-0000-0000-" + ordinal.toLong().toString(16).padStart(12, '0'))
+    private fun loc(messageId: Uuid, ordinal: Int) = ToolCallLocator(messageId, stepId, stableId(ordinal))
+
     private val commandLock = Mutex()
 
     private suspend fun ConversationRuntime.applyCommand(command: ConversationCommand): ConversationAggregateSnapshot =
         commandLock.withLock {
-            val old = snapshot.value
+            val old = snapshot.value.durable
             if (command is StartTurn) {
                 val started = command.copy(epoch = nextTurnEpoch())
-                validateConversationCommandOwner(id, old, started, currentGenerationTurnId())
+                validateConversationCommandOwner(id, snapshot.value.stream, started, currentGenerationTurnId())
                 val change = ConversationTransition.plan(old, started, old.header.updateAt)
                 val snapshot = (change as ConversationChange.Durable).snapshot
-                publishCommitted(old, started, snapshot)
+                publishCommitted(started, snapshot)
                 return@withLock snapshot
             }
-            validateConversationCommandOwner(id, old, command, currentGenerationTurnId())
+            validateConversationCommandOwner(id, snapshot.value.stream, command, currentGenerationTurnId())
             val change = ConversationTransition.plan(old, command, old.header.updateAt)
             val snapshot = (change as ConversationChange.Durable).snapshot
-            publishCommitted(old, command, snapshot)
+            publishCommitted(command, snapshot)
             snapshot
         }
 
@@ -84,21 +89,21 @@ class ConversationRuntimeTest {
         assistantMessageId: Uuid,
     ): TurnHandle {
         if (currentGenerationTurnId() != turnId) {
-            installActiveRequest(turnId, Job())
+            installTurnWorker(turnId, Job())
         }
         // START 必须锚定真实 USER：空树先落一条用户消息，模拟首个 durable 边界。
-        if (snapshot.value.nodes.isEmpty()) {
+        if (snapshot.value.durable.nodes.isEmpty()) {
             applyCommand(AppendUserMessage(user("anchor")))
         }
         applyCommand(
-            ConversationTransition.buildStartTurnCommand(
-                current = snapshot.value,
+            TurnTransition.buildStartTurnCommand(
+                current = snapshot.value.durable,
                 turnId = turnId,
                 modelContextCandidate = disclosureCandidate(),
                 assistantMessageId = assistantMessageId,
             ),
         )
-        val active = requireNotNull(snapshot.value.activeTurn)
+        val active = requireNotNull(snapshot.value.stream)
         val handle = TurnHandle(id, active.epoch, active.turnId, active.assistantMessageId)
         markRunning(handle)
         return handle
@@ -125,9 +130,9 @@ class ConversationRuntimeTest {
             }
         }
         jobs.awaitAll()
-        assertEquals(n, rt.snapshot.value.nodes.size)
+        assertEquals(n, rt.snapshot.value.durable.nodes.size)
         // 每条用户消息都保留
-        val texts = rt.snapshot.value.nodes.map { it.messages.single().toText() }
+        val texts = rt.snapshot.value.durable.nodes.map { it.messages.single().toText() }
         (0 until n).forEach { i ->
             assertTrue("msg-$i present", texts.contains("msg-$i"))
         }
@@ -147,10 +152,10 @@ class ConversationRuntimeTest {
             role = MessageRole.ASSISTANT,
             parts = listOf(UIMessagePart.Text("streamed")),
         )
-        // applyStreamingDelta 直接更新 activeTurn（无 DB 调用，纯内存）
-        rt.applyStreamingDelta(handle, listOf(streamingText))
-        // currentMessages() 读取入口能看到流式内容（activeTurn 覆盖末节点）
-        val last = rt.snapshot.value.currentMessages().lastOrNull()
+        // applyStreamingDelta 直接更新流式投影（无 DB 调用，纯内存）
+        rt.applyStreamingDelta(handle, streamingText)
+        // currentMessages() 读取入口能看到流式内容（流式投影覆盖末节点）
+        val last = rt.snapshot.value.toPresentationSnapshot().currentMessages().lastOrNull()
         assertNotNull(last)
         assertEquals(assistantId, last?.id)
         assertEquals("streamed", last?.toText())
@@ -171,21 +176,21 @@ class ConversationRuntimeTest {
         val turnId = Uuid.random()
         val assistantId = Uuid.random()
         val handle = rt.startTurn(turnId, assistantId)
-        assertEquals(2, rt.snapshot.value.nodes.size)
-        assertSame(userNode, rt.snapshot.value.nodes[0])
-        assertEquals(MessageRole.ASSISTANT, rt.snapshot.value.nodes[1].messages.single().role)
+        assertEquals(2, rt.snapshot.value.durable.nodes.size)
+        assertSame(userNode, rt.snapshot.value.durable.nodes[0])
+        assertEquals(MessageRole.ASSISTANT, rt.snapshot.value.durable.nodes[1].messages.single().role)
 
         rt.applyStreamingDelta(
             handle,
-            listOf(UIMessage(id = assistantId, role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("delta")))),
+            UIMessage(id = assistantId, role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("delta"))),
         )
-        // currentMessages 读取入口：activeTurn 覆盖末节点，未污染用户节点
-        val current = rt.snapshot.value.currentMessages()
+        // currentMessages 读取入口：流式投影覆盖末节点，未污染用户节点
+        val current = rt.snapshot.value.toPresentationSnapshot().currentMessages()
         assertEquals(MessageRole.USER, current[0].role)
         assertEquals("child task", current[0].toText())
         assertEquals(MessageRole.ASSISTANT, current.last().role)
         assertEquals("delta", current.last().toText())
-        assertSame(userNode, rt.snapshot.value.nodes[0])
+        assertSame(userNode, rt.snapshot.value.durable.nodes[0])
         scope.cancel()
     }
 
@@ -194,15 +199,15 @@ class ConversationRuntimeTest {
         val scope = CoroutineScope(Job())
         val rt = runtime(scope)
         val handle = rt.startTurn(Uuid.random(), Uuid.random())
-        val old = rt.snapshot.value
+        val old = rt.snapshot.value.durable
         val command = UpdateHeader(title = "renamed")
         val committed = (ConversationTransition.plan(old, command, old.header.updateAt) as ConversationChange.Durable).snapshot
         val delta = UIMessage.assistant("latest").copy(id = handle.assistantMessageId)
-        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, listOf(delta)))
-        rt.publishCommitted(old, command, committed)
+        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, delta))
+        rt.publishCommitted(command, committed)
 
-        assertEquals("renamed", rt.snapshot.value.header.title)
-        assertEquals("latest", rt.snapshot.value.currentMessages().last().toText())
+        assertEquals("renamed", rt.snapshot.value.durable.header.title)
+        assertEquals("latest", rt.snapshot.value.toPresentationSnapshot().currentMessages().last().toText())
         scope.cancel()
     }
 
@@ -227,16 +232,16 @@ class ConversationRuntimeTest {
         val scope = CoroutineScope(Job())
         val rt = runtime(scope)
         val first = rt.startTurn(Uuid.random(), Uuid.random())
-        rt.applyCommand(FinalizeTurn(first, null, TurnExecutionStatus.COMPLETED, null, false))
+        rt.applyCommand(FinalizeTurn(first, null, TurnExecutionStatus.COMPLETED, null))
         val second = rt.startTurn(Uuid.random(), Uuid.random())
 
         assertEquals(
             StreamingDeltaResult.STALE_TURN,
-            rt.applyStreamingDelta(first, listOf(UIMessage.assistant("stale"))),
+            rt.applyStreamingDelta(first, UIMessage.assistant("stale")),
         )
         val current = UIMessage.assistant("current").copy(id = second.assistantMessageId)
-        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(second, listOf(current)))
-        assertEquals("current", rt.snapshot.value.currentMessages().last().toText())
+        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(second, current))
+        assertEquals("current", rt.snapshot.value.toPresentationSnapshot().currentMessages().last().toText())
         scope.cancel()
     }
 
@@ -248,8 +253,8 @@ class ConversationRuntimeTest {
 
         rt.applyCommand(TogglePinned)
 
-        assertTrue(rt.snapshot.value.header.isPinned)
-        assertEquals(handle.turnId, rt.snapshot.value.activeTurn?.turnId)
+        assertTrue(rt.snapshot.value.durable.header.isPinned)
+        assertEquals(handle.turnId, rt.snapshot.value.stream?.turnId)
         scope.cancel()
     }
 
@@ -263,34 +268,34 @@ class ConversationRuntimeTest {
         val model = Model(modelId = "model", displayName = "Model")
         val provider = ProviderSetting.OpenAI(models = listOf(model))
         val assistant = Assistant(enableMemory = false)
-        val context = testTurnRequestContext(
+        val context = testTurnContext(
             settings = Settings(providers = listOf(provider), assistants = listOf(assistant)),
             model = model,
             assistant = assistant,
         )
 
-        rt.bindTurnRequestContext(turnId, initialWorker, context)
+        rt.bindTurnContext(turnId, initialWorker, context)
         val projection = TurnModelContextProjection(entries = emptyList(), locators = emptyMap())
         rt.bindModelContextProjection(turnId, initialWorker, projection)
-        assertSame(context, rt.requireTurnRequestContext(turnId, initialWorker))
+        assertSame(context, rt.requireTurnContext(turnId, initialWorker))
         assertSame(projection, rt.requireTurnModelContextProjection(turnId, initialWorker))
         assertThrows(IllegalStateException::class.java) {
-            rt.bindTurnRequestContext(turnId, initialWorker, context)
+            rt.bindTurnContext(turnId, initialWorker, context)
         }
         assertThrows(IllegalStateException::class.java) {
             rt.bindModelContextProjection(turnId, initialWorker, projection)
         }
         assertThrows(IllegalStateException::class.java) {
-            rt.requireTurnRequestContext(Uuid.random(), initialWorker)
+            rt.requireTurnContext(Uuid.random(), initialWorker)
         }
         assertThrows(IllegalStateException::class.java) {
-            rt.requireTurnRequestContext(turnId, Job())
+            rt.requireTurnContext(turnId, Job())
         }
 
-        rt.retainAwaitingApproval(handle)
+        rt.retainAwaitingUser(handle)
         val continuationWorker = Job()
-        rt.continueAwaitingApproval(handle, continuationWorker)
-        assertSame(context, rt.requireTurnRequestContext(turnId, continuationWorker))
+        rt.continueAwaitingUser(handle, continuationWorker)
+        assertSame(context, rt.requireTurnContext(turnId, continuationWorker))
         assertSame(projection, rt.requireTurnModelContextProjection(turnId, continuationWorker))
         scope.cancel()
     }
@@ -301,22 +306,22 @@ class ConversationRuntimeTest {
         val rt = runtime(scope)
         val turnId = Uuid.random()
         val worker = Job()
-        rt.installActiveRequest(turnId, worker)
+        rt.installTurnWorker(turnId, worker)
         val model = Model(modelId = "model", displayName = "Model")
         val provider = ProviderSetting.OpenAI(models = listOf(model))
         val assistant = Assistant(enableMemory = false)
-        val context = testTurnRequestContext(
+        val context = testTurnContext(
             settings = Settings(providers = listOf(provider), assistants = listOf(assistant)),
             model = model,
             assistant = assistant,
         )
-        rt.bindTurnRequestContext(turnId, worker, context)
+        rt.bindTurnContext(turnId, worker, context)
         rt.requestCancel(turnId, "target_access_revoked")
-        assertEquals(ConversationTurnPhase.STOPPING, rt.currentTurnPresentation().phase)
+        assertEquals(TurnLivePhase.STOPPING, rt.currentTurnPresentation().phase)
 
-        rt.releaseActiveRequest(turnId, Job(), retainAwaitingOwner = false)
-        assertSame(context, rt.requireTurnRequestContext(turnId, worker))
-        rt.releaseActiveRequest(turnId, worker, retainAwaitingOwner = false)
+        rt.releaseTurnWorker(turnId, Job(), retainAwaitingOwner = false)
+        assertSame(context, rt.requireTurnContext(turnId, worker))
+        rt.releaseTurnWorker(turnId, worker, retainAwaitingOwner = false)
         assertEquals(null, rt.currentWorker())
         scope.cancel()
     }
@@ -326,10 +331,10 @@ class ConversationRuntimeTest {
         val scope = CoroutineScope(Job())
         val rt = runtime(scope)
         val handle = rt.startTurn(Uuid.random(), Uuid.random())
-        rt.retainAwaitingApproval(handle)
+        rt.retainAwaitingUser(handle)
 
         assertThrows(IllegalArgumentException::class.java) {
-            rt.continueAwaitingApproval(handle, Job())
+            rt.continueAwaitingUser(handle, Job())
         }
         scope.cancel()
     }
@@ -344,19 +349,19 @@ class ConversationRuntimeTest {
         val model = Model(modelId = "model", displayName = "Model")
         val provider = ProviderSetting.OpenAI(models = listOf(model))
         val assistant = Assistant(enableMemory = false)
-        rt.bindTurnRequestContext(
+        rt.bindTurnContext(
             turnId,
             worker,
-            testTurnRequestContext(
+            testTurnContext(
                 settings = Settings(providers = listOf(provider), assistants = listOf(assistant)),
                 model = model,
                 assistant = assistant,
             ),
         )
-        rt.retainAwaitingApproval(handle)
+        rt.retainAwaitingUser(handle)
 
         assertThrows(IllegalArgumentException::class.java) {
-            rt.continueAwaitingApproval(handle, Job())
+            rt.continueAwaitingUser(handle, Job())
         }
         scope.cancel()
     }
@@ -371,58 +376,56 @@ class ConversationRuntimeTest {
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Tool(
-                    toolCallId = "approval",
+                    localCallId = stableId(0), stepId = stepId, providerCallId = "approval",
                     toolName = "approval_tool",
                     input = "{}",
-                    approvalState = ToolApprovalState.Pending,
+                    interactionState = ToolInteractionState.AwaitingApproval,
                 )
             ),
         )
-        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, listOf(waiting)))
-        rt.applyCommand(CommitCheckpoint(
-                handle = handle,
-                kind = net.weero.measix.pilot.data.ai.CheckpointKind.AWAITING_APPROVAL,
-                messages = listOf(waiting),
-                turnStatus = TurnExecutionStatus.AWAITING_APPROVAL,
-                turnReason = null,
-                toolExecution = null,
+        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, waiting))
+        rt.applyCommand(ModelResponseCheckpoint(
+                turn = handle,
+                step = StepHandle(stepId),
+                assistantMessage = waiting,
+                turnStatus = TurnExecutionStatus.AWAITING_USER,
             )
         )
-        rt.retainAwaitingApproval(handle)
-        assertEquals(ConversationTurnPhase.AWAITING_USER, rt.currentTurnPresentation().phase)
+        rt.retainAwaitingUser(handle)
+        assertEquals(TurnLivePhase.AWAITING_USER, rt.currentTurnPresentation().phase)
 
         rt.applyCommand(ResolveToolInteraction(
                 messageId = waiting.id,
-                toolOrdinal = 0,
-                decision = ToolUserDecision.Approve,
+                stepId = stepId, localCallId = stableId(0),
+                decision = ToolInteractionDecision.Approve,
                 handle = handle,
             )
         )
 
-        assertEquals(handle.turnId, rt.snapshot.value.activeTurn?.turnId)
+        assertEquals(handle.turnId, rt.snapshot.value.stream?.turnId)
         assertEquals(
-            ToolApprovalState.Approved,
-            rt.snapshot.value.currentMessages().last().getTools().single().approvalState,
+            ToolInteractionState.Approved,
+            rt.snapshot.value.toPresentationSnapshot().currentMessages().last().getTools().single().interactionState,
         )
         assertEquals(
-            ToolApprovalState.Approved,
-            rt.snapshot.value.nodes.last().currentMessage.getTools().single().approvalState,
+            ToolInteractionState.Approved,
+            rt.snapshot.value.durable.nodes.last().currentMessage.getTools().single().interactionState,
         )
         assertEquals(
-            ToolCallPhase.READY,
-            rt.snapshot.value.activeTurn?.toolCallPhases?.get(ToolCallLocator(waiting.id, 0)),
+            ToolLivePhase.READY,
+            rt.snapshot.value.stream?.toolLivePhases?.get(loc(waiting.id, 0)),
         )
-        assertEquals(ConversationTurnPhase.AWAITING_USER, rt.currentTurnPresentation().phase)
+        assertEquals(TurnLivePhase.AWAITING_USER, rt.currentTurnPresentation().phase)
         rt.markRunning(handle)
-        assertEquals(ConversationTurnPhase.GENERATING, rt.currentTurnPresentation().phase)
+        assertEquals(TurnLivePhase.PREPARING, rt.currentTurnPresentation().phase)
         scope.cancel()
     }
 
     /**
      * 回归（2026-9-2 15:01）：生产里 HITL 的真实顺序是"流式先投递 Auto 版本，AWAITING_APPROVAL
-     * checkpoint 才带来 Pending 版本"。afterCheckpoint 此前只同步 toolCallPhases，activeTurn
-     * 的 messages 停留在 Auto 版本，而 currentMessages() 末条取自 turn.messages.last()，
-     * applyToolUserDecision 因此读到非 Pending 并抛 "tool interaction is no longer pending"。
+     * checkpoint 才带来 Pending 版本"。afterCheckpoint 此前只同步 toolLivePhases，流式投影
+     * 的 assistantMessage 停留在 Auto 版本，而 currentMessages() 末条取自 stream.assistantMessage，
+     * applyToolInteractionDecision 因此读到非 Pending 并抛 "tool interaction is no longer pending"。
      * 勿删除本用例（相邻用例流式与 checkpoint 同为 Pending 版本，覆盖不到这条路径）。
      */
     @Test
@@ -435,52 +438,50 @@ class ConversationRuntimeTest {
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Tool(
-                    toolCallId = "approval",
+                    localCallId = stableId(0), stepId = stepId, providerCallId = "approval",
                     toolName = "approval_tool",
                     input = "{}",
                     // 流式版本：provider 尚未落 HITL 状态，工具仍是 Auto。
-                    approvalState = ToolApprovalState.Auto,
+                    interactionState = ToolInteractionState.NotRequired,
                 )
             ),
         )
-        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, listOf(streamed)))
+        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, streamed))
 
         val pending = streamed.copy(
             parts = listOf(
                 (streamed.parts.single() as UIMessagePart.Tool).copy(
-                    approvalState = ToolApprovalState.Pending,
+                    interactionState = ToolInteractionState.AwaitingApproval,
                 )
             ),
         )
-        rt.applyCommand(CommitCheckpoint(
-                handle = handle,
-                kind = CheckpointKind.AWAITING_APPROVAL,
-                messages = listOf(pending),
-                turnStatus = TurnExecutionStatus.AWAITING_APPROVAL,
-                turnReason = null,
-                toolExecution = null,
+        rt.applyCommand(ModelResponseCheckpoint(
+                turn = handle,
+                step = StepHandle(stepId),
+                assistantMessage = pending,
+                turnStatus = TurnExecutionStatus.AWAITING_USER,
             )
         )
-        rt.retainAwaitingApproval(handle)
+        rt.retainAwaitingUser(handle)
 
-        val locator = ToolCallLocator(handle.assistantMessageId, 0)
+        val locator = loc(handle.assistantMessageId, 0)
         // 决策路径读到的必须是 checkpoint 提交的 Pending 版本，而不是流式的 Auto 版本。
         assertEquals(
-            ToolApprovalState.Pending,
-            rt.snapshot.value.currentMessages().last().getTools().single().approvalState,
+            ToolInteractionState.AwaitingApproval,
+            rt.snapshot.value.toPresentationSnapshot().currentMessages().last().getTools().single().interactionState,
         )
         assertEquals(
-            ToolCallPhase.AWAITING_APPROVAL,
-            rt.snapshot.value.activeTurn?.toolCallPhases?.get(locator),
+            ToolLivePhase.AWAITING_APPROVAL,
+            rt.snapshot.value.stream?.toolLivePhases?.get(locator),
         )
 
-        // 走与生产同一条 applyToolUserDecision：非 Pending 会在定位阶段就抛冲突异常，
+        // 走与生产同一条 applyToolInteractionDecision：非 Pending 会在定位阶段就抛冲突异常，
         // 能提交即证明投影已对齐 checkpoint 的 committed 版本。
         val submitted = mutableListOf<ResolveToolInteraction>()
         var continuedTurnId: Uuid? = null
-        applyToolUserDecision(
+        applyToolInteractionDecision(
             locator = locator,
-            decision = ToolUserDecision.Approve,
+            decision = ToolInteractionDecision.Approve,
             awaitPreviousGeneration = {},
             currentSnapshot = { rt.snapshot.value },
             submit = { command ->
@@ -493,21 +494,21 @@ class ConversationRuntimeTest {
 
         assertEquals(1, submitted.size)
         assertEquals(
-            ToolApprovalState.Approved,
-            rt.snapshot.value.currentMessages().last().getTools().single().approvalState,
+            ToolInteractionState.Approved,
+            rt.snapshot.value.toPresentationSnapshot().currentMessages().last().getTools().single().interactionState,
         )
         assertEquals(
-            ToolApprovalState.Approved,
-            rt.snapshot.value.nodes.last().currentMessage.getTools().single().approvalState,
+            ToolInteractionState.Approved,
+            rt.snapshot.value.durable.nodes.last().currentMessage.getTools().single().interactionState,
         )
-        assertEquals(ToolCallPhase.READY, rt.snapshot.value.activeTurn?.toolCallPhases?.get(locator))
-        assertEquals(handle.turnId, rt.snapshot.value.activeTurn?.turnId)
+        assertEquals(ToolLivePhase.READY, rt.snapshot.value.stream?.toolLivePhases?.get(locator))
+        assertEquals(handle.turnId, rt.snapshot.value.stream?.turnId)
         assertEquals(handle.turnId, continuedTurnId)
         scope.cancel()
     }
 
     @Test
-    fun `same-worker approval wait resumes without replacing the active request`() = runTest {
+    fun `same-worker approval wait resumes without replacing the active turn`() = runTest {
         val scope = CoroutineScope(Job())
         val rt = runtime(scope)
         val handle = rt.startTurn(Uuid.random(), Uuid.random())
@@ -516,40 +517,62 @@ class ConversationRuntimeTest {
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Tool(
-                    toolCallId = "ask",
+                    localCallId = stableId(0), stepId = stepId, providerCallId = "ask",
                     toolName = "ask_user",
                     input = "{}",
-                    approvalState = ToolApprovalState.Pending,
+                    interactionState = ToolInteractionState.AwaitingApproval,
                 )
             ),
         )
-        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, listOf(waiting)))
-        rt.applyCommand(CommitCheckpoint(
-                handle = handle,
-                kind = CheckpointKind.AWAITING_APPROVAL,
-                messages = listOf(waiting),
-                turnStatus = TurnExecutionStatus.AWAITING_APPROVAL,
-                turnReason = null,
-                toolExecution = null,
+        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, waiting))
+        rt.applyCommand(ModelResponseCheckpoint(
+                turn = handle,
+                step = StepHandle(stepId),
+                assistantMessage = waiting,
+                turnStatus = TurnExecutionStatus.AWAITING_USER,
             )
         )
         val worker = requireNotNull(rt.currentWorker())
-        rt.retainAwaitingApproval(handle)
-        assertEquals(ConversationTurnPhase.AWAITING_USER, rt.currentTurnPresentation().phase)
+        rt.retainAwaitingUser(handle)
+        assertEquals(TurnLivePhase.AWAITING_USER, rt.currentTurnPresentation().phase)
         assertSame(worker, rt.currentWorker())
         assertEquals(handle.turnId, rt.currentGenerationTurnId())
 
         rt.applyCommand(ResolveToolInteraction(
                 messageId = waiting.id,
-                toolOrdinal = 0,
-                decision = ToolUserDecision.Answer("keep going"),
+                stepId = stepId, localCallId = stableId(0),
+                decision = ToolInteractionDecision.Answer("keep going"),
                 handle = handle,
             )
         )
         rt.markRunning(handle)
-        assertEquals(ConversationTurnPhase.GENERATING, rt.currentTurnPresentation().phase)
+        assertEquals(TurnLivePhase.PREPARING, rt.currentTurnPresentation().phase)
         assertSame(worker, rt.currentWorker())
-        assertEquals(handle.turnId, rt.snapshot.value.activeTurn?.turnId)
+        assertEquals(handle.turnId, rt.snapshot.value.stream?.turnId)
+        scope.cancel()
+    }
+
+    @Test
+    fun `loop live phase advances the session and respects stopping and worker identity`() = runTest {
+        val scope = CoroutineScope(Job())
+        val rt = runtime(scope)
+        val handle = rt.startTurn(Uuid.random(), Uuid.random())
+        val identity = System.identityHashCode(requireNotNull(rt.currentWorker()))
+
+        rt.updateLivePhase(handle.turnId, identity, TurnLivePhase.MODEL_WAITING)
+        assertEquals(TurnLivePhase.MODEL_WAITING, rt.currentTurnPresentation().phase)
+        // 非当前 worker 的迟到阶段事件被忽略，不推进。
+        rt.updateLivePhase(handle.turnId, identity + 1, TurnLivePhase.TOOL_EXECUTING)
+        assertEquals(TurnLivePhase.MODEL_WAITING, rt.currentTurnPresentation().phase)
+        rt.updateLivePhase(handle.turnId, identity, TurnLivePhase.TOOL_PREPARING)
+        assertEquals(TurnLivePhase.TOOL_PREPARING, rt.currentTurnPresentation().phase)
+        rt.updateLivePhase(handle.turnId, identity, TurnLivePhase.TOOL_EXECUTING)
+        assertEquals(TurnLivePhase.TOOL_EXECUTING, rt.currentTurnPresentation().phase)
+        // 取消是终态方向：loop 阶段不得把 STOPPING 拉回生成态。
+        rt.captureAndRequestStop("user_stop")
+        assertEquals(TurnLivePhase.STOPPING, rt.currentTurnPresentation().phase)
+        rt.updateLivePhase(handle.turnId, identity, TurnLivePhase.MODEL_STREAMING)
+        assertEquals(TurnLivePhase.STOPPING, rt.currentTurnPresentation().phase)
         scope.cancel()
     }
 
@@ -569,26 +592,23 @@ class ConversationRuntimeTest {
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Tool(
-                    toolCallId = "image",
+                    localCallId = stableId(1), stepId = stepId, providerCallId = "image",
                     toolName = "generate_image",
                     input = "{}",
-                    approvalState = ToolApprovalState.Pending,
+                    interactionState = ToolInteractionState.AwaitingApproval,
                 ),
             ),
         )
-        val streamed = listOf(user, waiting)
-        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, streamed))
-        rt.applyCommand(CommitCheckpoint(
-                handle = handle,
-                kind = CheckpointKind.AWAITING_APPROVAL,
-                messages = streamed,
-                turnStatus = TurnExecutionStatus.AWAITING_APPROVAL,
-                turnReason = null,
-                toolExecution = null,
+        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, waiting))
+        rt.applyCommand(ModelResponseCheckpoint(
+                turn = handle,
+                step = StepHandle(stepId),
+                assistantMessage = waiting,
+                turnStatus = TurnExecutionStatus.AWAITING_USER,
             )
         )
 
-        val backfills = AttachmentRefs.planBackfills(rt.snapshot.value.nodes)
+        val backfills = AttachmentRefs.planBackfills(rt.snapshot.value.durable.nodes)
         assertEquals(1, backfills.size)
         val failure = runCatching {
             rt.applyCommand(BackfillAttachmentRefs(backfills))
@@ -596,12 +616,12 @@ class ConversationRuntimeTest {
 
         assertTrue(failure is ConversationCommandConflictException)
         assertTrue(failure?.message?.contains("requires the active turn to finish first") == true)
-        assertEquals(null, AttachmentRefs.getRef(rt.snapshot.value.nodes.first().currentMessage.parts.single()))
+        assertEquals(null, AttachmentRefs.getRef(rt.snapshot.value.durable.nodes.first().currentMessage.parts.single()))
         assertEquals(
-            ToolApprovalState.Pending,
-            rt.snapshot.value.activeTurn?.messages?.last()?.getTools()?.single()?.approvalState,
+            ToolInteractionState.AwaitingApproval,
+            rt.snapshot.value.stream?.assistantMessage?.getTools()?.single()?.interactionState,
         )
-        assertEquals(handle.turnId, rt.snapshot.value.activeTurn?.turnId)
+        assertEquals(handle.turnId, rt.snapshot.value.stream?.turnId)
         scope.cancel()
     }
 
@@ -615,12 +635,12 @@ class ConversationRuntimeTest {
             parts = listOf(UIMessagePart.Image("file:///legacy.png")),
         )
         rt.applyCommand(AppendUserMessage(user))
-        val backfills = AttachmentRefs.planBackfills(rt.snapshot.value.nodes)
+        val backfills = AttachmentRefs.planBackfills(rt.snapshot.value.durable.nodes)
 
         rt.applyCommand(BackfillAttachmentRefs(backfills))
 
-        assertNotNull(AttachmentRefs.getRef(rt.snapshot.value.nodes.single().currentMessage.parts.single()))
-        assertEquals(null, rt.snapshot.value.activeTurn)
+        assertNotNull(AttachmentRefs.getRef(rt.snapshot.value.durable.nodes.single().currentMessage.parts.single()))
+        assertEquals(null, rt.snapshot.value.stream)
         scope.cancel()
     }
 
@@ -629,55 +649,51 @@ class ConversationRuntimeTest {
         val scope = CoroutineScope(Job())
         val rt = runtime(scope)
         val handle = rt.startTurn(Uuid.random(), Uuid.random())
-        val locator = ToolCallLocator(handle.assistantMessageId, 0)
+        val locator = loc(handle.assistantMessageId, 0)
         val assembling = UIMessage(
             id = handle.assistantMessageId,
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Tool(
-                    toolCallId = "call-1",
+                    localCallId = stableId(0), stepId = stepId, providerCallId = "call-1",
                     toolName = "generate_image",
                     input = "{\"prompt\":\"sky",
                 ),
             ),
         )
 
-        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, listOf(assembling)))
-        assertEquals(ToolCallPhase.CALL_STREAMING, rt.snapshot.value.activeTurn?.toolCallPhases?.get(locator))
+        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, assembling))
+        assertEquals(ToolLivePhase.CALL_STREAMING, rt.snapshot.value.stream?.toolLivePhases?.get(locator))
 
         val ready = assembling.copy(
             parts = listOf((assembling.parts.single() as UIMessagePart.Tool).copy(input = "{\"prompt\":\"sky\"}")),
         )
-        rt.applyCommand(CommitCheckpoint(
-                handle = handle,
-                kind = CheckpointKind.STEP_COMPLETED,
-                messages = listOf(ready),
+        rt.applyCommand(ModelResponseCheckpoint(
+                turn = handle,
+                step = StepHandle(stepId),
+                assistantMessage = ready,
                 turnStatus = TurnExecutionStatus.RUNNING,
-                turnReason = null,
-                toolExecution = null,
             )
         )
-        assertEquals(ToolCallPhase.READY, rt.snapshot.value.activeTurn?.toolCallPhases?.get(locator))
+        assertEquals(ToolLivePhase.READY, rt.snapshot.value.stream?.toolLivePhases?.get(locator))
 
-        val startedFact = ToolExecutionEntity(
+        val startedFact = ToolExecutionFact(
             executionId = "execution-1",
-            turnId = handle.turnId.toString(),
-            toolOrdinal = 0,
+            assistantMessageId = handle.assistantMessageId,
+            stepId = stepId,
+            localCallId = stableId(0),
+            providerCallId = "call-1",
+            toolName = "generate_image",
             status = ToolExecutionStatus.STARTED,
-            reason = null,
-            createdAt = 1L,
-            updatedAt = 1L,
         )
-        rt.applyCommand(CommitCheckpoint(
-                handle = handle,
-                kind = CheckpointKind.TOOL_EXECUTION_STARTED,
-                messages = listOf(ready),
-                turnStatus = TurnExecutionStatus.RUNNING,
-                turnReason = null,
+        rt.applyCommand(ToolExecutionStartedCheckpoint(
+                turn = handle,
+                step = StepHandle(stepId),
+                assistantMessage = ready,
                 toolExecution = startedFact,
             )
         )
-        assertEquals(ToolCallPhase.EXECUTING, rt.snapshot.value.activeTurn?.toolCallPhases?.get(locator))
+        assertEquals(ToolLivePhase.EXECUTING, rt.snapshot.value.stream?.toolLivePhases?.get(locator))
 
         val result = ready.copy(
             parts = listOf(
@@ -686,150 +702,22 @@ class ConversationRuntimeTest {
                 ),
             ),
         )
-        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, listOf(result)))
+        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, result))
         assertEquals(
-            ToolCallPhase.EXECUTING,
-            rt.snapshot.value.activeTurn?.toolCallPhases?.get(locator),
+            ToolLivePhase.EXECUTING,
+            rt.snapshot.value.stream?.toolLivePhases?.get(locator),
         )
 
-        rt.applyCommand(CommitCheckpoint(
-                handle = handle,
-                kind = CheckpointKind.TOOL_RESULT_COMPLETED,
-                messages = listOf(result),
-                turnStatus = TurnExecutionStatus.RUNNING,
-                turnReason = null,
+        rt.applyCommand(ToolResultCheckpoint(
+                turn = handle,
+                step = StepHandle(stepId),
+                assistantMessage = result,
                 toolExecution = startedFact.copy(status = ToolExecutionStatus.COMPLETED),
-                toolResults = listOf(ToolResultEvent(result.id, 0, ToolResultEventStatus.COMPLETED)),
+                toolResults = listOf(ToolResultFact(loc(result.id, 0), ToolResultStatus.COMPLETED)),
             )
         )
-        assertEquals(ToolCallPhase.COMPLETED, rt.snapshot.value.activeTurn?.toolCallPhases?.get(locator))
+        assertEquals(ToolLivePhase.COMPLETED, rt.snapshot.value.stream?.toolLivePhases?.get(locator))
         scope.cancel()
-    }
-
-    @Test
-    fun `streamed approval and output cannot advance lifecycle before a checkpoint`() {
-        val assistantId = Uuid.random()
-        val state = ActiveTurnState(
-            epoch = 1,
-            turnId = Uuid.random(),
-            assistantMessageId = assistantId,
-            messages = emptyList(),
-        )
-        val streamed = UIMessage(
-            id = assistantId,
-            role = MessageRole.ASSISTANT,
-            parts = listOf(
-                UIMessagePart.Tool(
-                    toolCallId = "call",
-                    toolName = "generate_image",
-                    input = "{}",
-                    output = listOf(UIMessagePart.Text("{\"status\":\"completed\"}")),
-                    approvalState = ToolApprovalState.Pending,
-                ),
-            ),
-        )
-
-        val projected = state.withStreamingMessages(listOf(streamed))
-
-        assertEquals(
-            ToolCallPhase.CALL_STREAMING,
-            projected.toolCallPhases[ToolCallLocator(assistantId, 0)],
-        )
-    }
-
-    @Test
-    fun `result without execution advances only from typed committed result fact`() {
-        val assistantId = Uuid.random()
-        val handle = TurnHandle(
-            conversationId = Uuid.random(),
-            epoch = 1L,
-            turnId = Uuid.random(),
-            assistantMessageId = assistantId,
-        )
-        val initial = ActiveTurnState(
-            epoch = handle.epoch,
-            turnId = handle.turnId,
-            assistantMessageId = assistantId,
-            messages = emptyList(),
-        )
-        val toolMessage = UIMessage(
-            id = assistantId,
-            role = MessageRole.ASSISTANT,
-            parts = listOf(UIMessagePart.Tool("call", "generate_image", "{}")),
-        )
-        val ready = initial.withStreamingMessages(listOf(toolMessage)).afterCheckpoint(
-            CommitCheckpoint(
-                handle = handle,
-                kind = CheckpointKind.STEP_COMPLETED,
-                messages = listOf(toolMessage),
-                turnStatus = TurnExecutionStatus.RUNNING,
-                turnReason = null,
-                toolExecution = null,
-            )
-        )
-        val failedMessage = toolMessage.copy(
-            parts = listOf(
-                (toolMessage.parts.single() as UIMessagePart.Tool).copy(
-                    output = listOf(UIMessagePart.Text("{\"status\":\"failed\"}")),
-                )
-            )
-        )
-        val streamed = ready.withStreamingMessages(listOf(failedMessage))
-        val locator = ToolCallLocator(assistantId, 0)
-        assertEquals(ToolCallPhase.READY, streamed.toolCallPhases[locator])
-
-        val committed = streamed.afterCheckpoint(
-            CommitCheckpoint(
-                handle = handle,
-                kind = CheckpointKind.TOOL_RESULT_COMPLETED,
-                messages = listOf(failedMessage),
-                turnStatus = TurnExecutionStatus.RUNNING,
-                turnReason = null,
-                toolExecution = null,
-                toolResults = listOf(ToolResultEvent(assistantId, 0, ToolResultEventStatus.FAILED)),
-            )
-        )
-
-        assertEquals(ToolCallPhase.FAILED, committed.toolCallPhases[locator])
-
-        val invalidOrdinal = runCatching {
-            streamed.afterCheckpoint(
-                CommitCheckpoint(
-                    handle = handle,
-                    kind = CheckpointKind.TOOL_RESULT_COMPLETED,
-                    messages = listOf(failedMessage),
-                    turnStatus = TurnExecutionStatus.RUNNING,
-                    turnReason = null,
-                    toolExecution = null,
-                    toolResults = listOf(ToolResultEvent(assistantId, 1, ToolResultEventStatus.FAILED)),
-                )
-            )
-        }.exceptionOrNull()
-        assertTrue(invalidOrdinal?.message?.contains("missing tool ordinal") == true)
-
-        val execution = ToolExecutionEntity(
-            executionId = "execution",
-            turnId = handle.turnId.toString(),
-            toolOrdinal = 0,
-            status = ToolExecutionStatus.COMPLETED,
-            reason = null,
-            createdAt = 1L,
-            updatedAt = 1L,
-        )
-        val conflictingStatus = runCatching {
-            streamed.afterCheckpoint(
-                CommitCheckpoint(
-                    handle = handle,
-                    kind = CheckpointKind.TOOL_RESULT_COMPLETED,
-                    messages = listOf(failedMessage),
-                    turnStatus = TurnExecutionStatus.RUNNING,
-                    turnReason = null,
-                    toolExecution = execution,
-                    toolResults = listOf(ToolResultEvent(assistantId, 0, ToolResultEventStatus.FAILED)),
-                )
-            )
-        }.exceptionOrNull()
-        assertTrue(conflictingStatus?.message?.contains("conflicting terminal statuses") == true)
     }
 
     @Test
@@ -841,42 +729,38 @@ class ConversationRuntimeTest {
             id = handle.assistantMessageId,
             role = MessageRole.ASSISTANT,
             parts = listOf(
-                UIMessagePart.Tool(toolCallId = "call-1", toolName = "first", input = "{}"),
-                UIMessagePart.Tool(toolCallId = "call-2", toolName = "second", input = "{}"),
+                UIMessagePart.Tool(localCallId = stableId(0), stepId = stepId, providerCallId = "call-1", toolName = "first", input = "{}"),
+                UIMessagePart.Tool(localCallId = stableId(1), stepId = stepId, providerCallId = "call-2", toolName = "second", input = "{}"),
             ),
         )
-        val first = ToolCallLocator(message.id, 0)
-        val second = ToolCallLocator(message.id, 1)
-        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, listOf(message)))
-        rt.applyCommand(CommitCheckpoint(
-                handle = handle,
-                kind = CheckpointKind.STEP_COMPLETED,
-                messages = listOf(message),
+        val first = loc(message.id, 0)
+        val second = loc(message.id, 1)
+        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, message))
+        rt.applyCommand(ModelResponseCheckpoint(
+                turn = handle,
+                step = StepHandle(stepId),
+                assistantMessage = message,
                 turnStatus = TurnExecutionStatus.RUNNING,
-                turnReason = null,
-                toolExecution = null,
             )
         )
-        val secondExecution = ToolExecutionEntity(
+        val secondExecution = ToolExecutionFact(
             executionId = "execution-2",
-            turnId = handle.turnId.toString(),
-            toolOrdinal = 1,
+            assistantMessageId = handle.assistantMessageId,
+            stepId = stepId,
+            localCallId = stableId(1),
+            providerCallId = "call-2",
+            toolName = "second",
             status = ToolExecutionStatus.STARTED,
-            reason = null,
-            createdAt = 1L,
-            updatedAt = 1L,
         )
-        rt.applyCommand(CommitCheckpoint(
-                handle = handle,
-                kind = CheckpointKind.TOOL_EXECUTION_STARTED,
-                messages = listOf(message),
-                turnStatus = TurnExecutionStatus.RUNNING,
-                turnReason = null,
+        rt.applyCommand(ToolExecutionStartedCheckpoint(
+                turn = handle,
+                step = StepHandle(stepId),
+                assistantMessage = message,
                 toolExecution = secondExecution,
             )
         )
-        assertEquals(ToolCallPhase.READY, rt.snapshot.value.activeTurn?.toolCallPhases?.get(first))
-        assertEquals(ToolCallPhase.EXECUTING, rt.snapshot.value.activeTurn?.toolCallPhases?.get(second))
+        assertEquals(ToolLivePhase.READY, rt.snapshot.value.stream?.toolLivePhases?.get(first))
+        assertEquals(ToolLivePhase.EXECUTING, rt.snapshot.value.stream?.toolLivePhases?.get(second))
 
         val failedMessage = message.copy(
             parts = message.parts.mapIndexed { index, part ->
@@ -887,21 +771,18 @@ class ConversationRuntimeTest {
                 }
             }
         )
-        rt.applyCommand(CommitCheckpoint(
-                handle = handle,
-                kind = CheckpointKind.TOOL_RESULT_COMPLETED,
-                messages = listOf(failedMessage),
-                turnStatus = TurnExecutionStatus.RUNNING,
-                turnReason = null,
+        rt.applyCommand(ToolResultCheckpoint(
+                turn = handle,
+                step = StepHandle(stepId),
+                assistantMessage = failedMessage,
                 toolExecution = secondExecution.copy(
                     status = ToolExecutionStatus.FAILED,
-                    reason = "provider_error",
                 ),
-                toolResults = listOf(ToolResultEvent(message.id, 1, ToolResultEventStatus.FAILED)),
+                toolResults = listOf(ToolResultFact(loc(message.id, 1), ToolResultStatus.FAILED)),
             )
         )
-        assertEquals(ToolCallPhase.READY, rt.snapshot.value.activeTurn?.toolCallPhases?.get(first))
-        assertEquals(ToolCallPhase.FAILED, rt.snapshot.value.activeTurn?.toolCallPhases?.get(second))
+        assertEquals(ToolLivePhase.READY, rt.snapshot.value.stream?.toolLivePhases?.get(first))
+        assertEquals(ToolLivePhase.FAILED, rt.snapshot.value.stream?.toolLivePhases?.get(second))
         scope.cancel()
     }
 
@@ -915,48 +796,46 @@ class ConversationRuntimeTest {
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Tool(
-                    toolCallId = "question",
+                    localCallId = stableId(0), stepId = stepId, providerCallId = "question",
                     toolName = "ask_user",
                     input = "{}",
-                    approvalState = ToolApprovalState.Pending,
+                    interactionState = ToolInteractionState.AwaitingInput,
                 ),
                 UIMessagePart.Tool(
-                    toolCallId = "image",
+                    localCallId = stableId(1), stepId = stepId, providerCallId = "image",
                     toolName = "generate_image",
                     input = "{}",
-                    approvalState = ToolApprovalState.Pending,
+                    interactionState = ToolInteractionState.AwaitingApproval,
                 ),
             ),
         )
-        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, listOf(waiting)))
-        rt.applyCommand(CommitCheckpoint(
-                handle = handle,
-                kind = net.weero.measix.pilot.data.ai.CheckpointKind.AWAITING_APPROVAL,
-                messages = listOf(waiting),
-                turnStatus = TurnExecutionStatus.AWAITING_APPROVAL,
-                turnReason = null,
-                toolExecution = null,
+        assertEquals(StreamingDeltaResult.APPLIED, rt.applyStreamingDelta(handle, waiting))
+        rt.applyCommand(ModelResponseCheckpoint(
+                turn = handle,
+                step = StepHandle(stepId),
+                assistantMessage = waiting,
+                turnStatus = TurnExecutionStatus.AWAITING_USER,
             )
         )
-        rt.retainAwaitingApproval(handle)
+        rt.retainAwaitingUser(handle)
 
-        val answered = ToolApprovalState.Answered("keep the current assistant")
-        val denied = ToolApprovalState.Denied("background change rejected")
-        rt.applyCommand(ResolveToolInteraction(waiting.id, 0, ToolUserDecision.Answer("keep the current assistant"), handle))
-        rt.applyCommand(ResolveToolInteraction(waiting.id, 1, ToolUserDecision.Deny("background change rejected"), handle))
+        val answered = ToolInteractionState.Answered("keep the current assistant")
+        val denied = ToolInteractionState.Denied("background change rejected")
+        rt.applyCommand(ResolveToolInteraction(waiting.id, stepId, stableId(0), ToolInteractionDecision.Answer("keep the current assistant"), handle))
+        rt.applyCommand(ResolveToolInteraction(waiting.id, stepId, stableId(1), ToolInteractionDecision.Deny("background change rejected"), handle))
 
-        val projected = rt.snapshot.value.currentMessages().last().getTools().map { it.approvalState }
-        val durable = rt.snapshot.value.nodes.last().currentMessage.getTools().map { it.approvalState }
+        val projected = rt.snapshot.value.toPresentationSnapshot().currentMessages().last().getTools().map { it.interactionState }
+        val durable = rt.snapshot.value.durable.nodes.last().currentMessage.getTools().map { it.interactionState }
         assertEquals(listOf(answered, denied), projected)
         assertEquals(projected, durable)
         assertEquals(
             mapOf(
-                ToolCallLocator(waiting.id, 0) to ToolCallPhase.ANSWERED,
-                ToolCallLocator(waiting.id, 1) to ToolCallPhase.DENIED,
+                loc(waiting.id, 0) to ToolLivePhase.ANSWERED,
+                loc(waiting.id, 1) to ToolLivePhase.DENIED,
             ),
-            rt.snapshot.value.activeTurn?.toolCallPhases,
+            rt.snapshot.value.stream?.toolLivePhases,
         )
-        assertEquals(handle.turnId, rt.snapshot.value.activeTurn?.turnId)
+        assertEquals(handle.turnId, rt.snapshot.value.stream?.turnId)
         scope.cancel()
     }
 
@@ -966,8 +845,8 @@ class ConversationRuntimeTest {
         val rt = runtime(scope)
         val result = rt.applyCommand(AppendUserMessage(user("hello")))
         assertEquals(1, result.nodes.size)
-        assertEquals(1, rt.snapshot.value.nodes.size)
-        assertEquals(rt.snapshot.value, result)
+        assertEquals(1, rt.snapshot.value.durable.nodes.size)
+        assertEquals(rt.snapshot.value.durable, result)
         scope.cancel()
     }
 
@@ -1012,8 +891,8 @@ class ConversationRuntimeTest {
         val replacementJob = Job()
 
         runCurrent()
-        rt.installActiveRequest(Uuid.random(), firstJob)
-        rt.installActiveRequest(Uuid.random(), replacementJob)
+        rt.installTurnWorker(Uuid.random(), firstJob)
+        rt.installTurnWorker(Uuid.random(), replacementJob)
         assertSame(replacementJob, rt.currentWorker())
 
         cleanupGate.complete(Unit)
@@ -1063,8 +942,8 @@ class ConversationRuntimeTest {
         val replacementJob = Job()
 
         runCurrent()
-        rt.installActiveRequest(firstTurn, firstJob)
-        rt.installActiveRequest(secondTurn, replacementJob, supersedeReason = "superseded_by_new_turn")
+        rt.installTurnWorker(firstTurn, firstJob)
+        rt.installTurnWorker(secondTurn, replacementJob, supersedeReason = "superseded_by_new_turn")
 
         assertEquals(secondTurn, rt.currentGenerationTurnId())
         assertEquals("superseded_by_new_turn", rt.peekCancelReason(firstTurn))
@@ -1088,12 +967,12 @@ class ConversationRuntimeTest {
         val rt = runtime(this)
         val turnId = Uuid.random()
         val worker = Job()
-        rt.installActiveRequest(turnId, worker)
+        rt.installTurnWorker(turnId, worker)
 
-        rt.releaseActiveRequest(turnId, worker)
+        rt.releaseTurnWorker(turnId, worker)
 
         val presentation = rt.currentTurnPresentation()
-        assertEquals(ConversationTurnPhase.IDLE, presentation.phase)
+        assertEquals(null, presentation.phase)
         assertEquals(turnId, presentation.lastTerminatedRequestTurnId)
     }
 
@@ -1102,11 +981,11 @@ class ConversationRuntimeTest {
         val rt = runtime(this)
         val firstTurn = Uuid.random()
         val secondTurn = Uuid.random()
-        rt.installActiveRequest(firstTurn, Job())
-        rt.installActiveRequest(secondTurn, Job())
+        rt.installTurnWorker(firstTurn, Job())
+        rt.installTurnWorker(secondTurn, Job())
 
         assertEquals(firstTurn, rt.currentTurnPresentation().lastTerminatedRequestTurnId)
-        assertEquals(secondTurn, rt.currentTurnPresentation().activeRequestTurnId)
+        assertEquals(secondTurn, rt.currentTurnPresentation().activeTurnId)
     }
 
 }

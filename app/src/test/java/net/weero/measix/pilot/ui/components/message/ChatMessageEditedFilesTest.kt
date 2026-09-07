@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.ui.components.message
 
-import me.rerere.ai.ui.ToolApprovalState
+import me.rerere.ai.ui.ToolInteractionState
+import kotlin.uuid.Uuid
 import me.rerere.ai.ui.UIMessagePart
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -55,8 +56,8 @@ class ChatMessageEditedFilesTest {
         val parts = listOf(
             write("{}", resultWithError),
             write("{}", resultWithFailure),
-            write("{}", writeResult("/workspace/denied.txt")).copy(approvalState = ToolApprovalState.Denied("No")),
-            write("{}", writeResult("/workspace/pending.txt")).copy(approvalState = ToolApprovalState.Pending),
+            write("{}", writeResult("/workspace/denied.txt")).copy(interactionState = ToolInteractionState.Denied("No")),
+            write("{}", writeResult("/workspace/pending.txt")).copy(interactionState = ToolInteractionState.AwaitingApproval),
             write("{}", """{"error":"User denied the tool call"}"""),
         )
         assertTrue(editedWorkspaceFilePaths(parts).isEmpty())
@@ -86,7 +87,7 @@ class ChatMessageEditedFilesTest {
     }
 
     private fun write(input: String, output: String) = UIMessagePart.Tool(
-        toolCallId = "write", toolName = "workspace_write_file", input = input,
+        localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "write", toolName = "workspace_write_file", input = input,
         output = listOf(UIMessagePart.Text(output)),
     )
 

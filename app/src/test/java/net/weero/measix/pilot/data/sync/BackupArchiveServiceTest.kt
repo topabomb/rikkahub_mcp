@@ -445,7 +445,7 @@ class BackupArchiveServiceTest {
     }
 
     @Test
-    fun `valid Room v10 database reopens through DAO after durable v4 round trip`() = runTest {
+    fun `valid Room database reopens through DAO after durable v5 round trip`() = runTest {
         val sourceName = "v10-context-${System.nanoTime()}"
         val conversationId = "00000000-0000-0000-0000-000000000010"
         val anchorNodeId = "00000000-0000-0000-0000-000000000011"
@@ -505,7 +505,7 @@ class BackupArchiveServiceTest {
             val manifest = JsonInstant.decodeFromString<DurableBackupManifest>(
                 zip.getInputStream(zip.getEntry("backup_manifest")).bufferedReader().readText(),
             )
-            assertEquals("rikkahub-durable-v4", manifest.version)
+            assertEquals("rikkahub-durable-v5", manifest.version)
             assertTrue(manifest.entries.any { it.path == "measix_pilot.db" })
             assertFalse(manifest.entries.any { it.path.contains("disclosure") || it.path.contains("model_context") })
         }
@@ -520,40 +520,6 @@ class BackupArchiveServiceTest {
         assertEquals(content, entries.single().content)
         restored.close()
         context.deleteDatabase(sourceName)
-    }
-
-    @Test
-    fun `v9 archive remains restorable for the Room v10 migration without database rewriting`() = runTest {
-        val source = File(work, "v9.sqlite")
-        createDatabase(source, "v9", version = 9)
-        val archive = modernArchive(source, emptyMap())
-
-        service.stageRestore(archive, BackupSelection(true, true))
-        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
-
-        val restored = context.getDatabasePath("measix_pilot")
-        assertEquals("v9", databaseMarker(restored))
-        SQLiteDatabase.openDatabase(restored.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
-            assertEquals(9, db.version)
-        }
-    }
-
-    @Test
-    fun `v8 archive remains restorable without rewriting its database or filenames`() = runTest {
-        val path = "upload/809278de-6677-4bc1-9249-d94c85b0930c.png"
-        val source = File(work, "v8.sqlite")
-        createDatabase(source, "v8", artifactPath = path, version = 8)
-        val archive = modernArchive(source, mapOf(path to byteArrayOf(1, 2, 3)))
-
-        service.stageRestore(archive, BackupSelection(true, true))
-        PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
-
-        val restored = context.getDatabasePath("measix_pilot")
-        assertEquals("v8", databaseMarker(restored))
-        SQLiteDatabase.openDatabase(restored.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
-            assertEquals(8, db.version)
-        }
-        assertArrayEquals(byteArrayOf(1, 2, 3), File(context.filesDir, path).readBytes())
     }
 
     @Test

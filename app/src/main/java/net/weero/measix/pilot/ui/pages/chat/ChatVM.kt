@@ -30,7 +30,7 @@ import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ChatError
 import net.weero.measix.pilot.service.ChatErrorStore
 import net.weero.measix.pilot.service.terminalChatError
-import net.weero.measix.pilot.service.MasterTurnCoordinator
+import net.weero.measix.pilot.service.ConversationTurnService
 import net.weero.measix.pilot.service.ConversationApplicationService
 import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.service.ConversationReadState
@@ -43,7 +43,7 @@ import net.weero.measix.pilot.service.FavoriteService
 
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
-import net.weero.measix.pilot.service.runtime.ToolUserDecision
+import net.weero.measix.pilot.service.runtime.ToolInteractionDecision
 import net.weero.measix.pilot.ui.components.ai.SearchMode
 import net.weero.measix.pilot.ui.components.ai.searchModeEnablesBuiltIn
 import net.weero.measix.pilot.ui.components.ai.searchModeEnablesLocal
@@ -58,7 +58,7 @@ class ChatVM(
     id: String,
     private val context: Application,
     private val settingsStore: SettingsStore,
-    private val masterTurnCoordinator: MasterTurnCoordinator,
+    private val turnService: ConversationTurnService,
     private val conversationApplicationService: ConversationApplicationService,
     private val conversationQueryService: ConversationQueryService,
     val updateChecker: UpdateChecker,
@@ -76,7 +76,7 @@ class ChatVM(
         .observeConversation(_conversationId)
         .stateIn(viewModelScope, SharingStarted.Eagerly, ConversationReadState.Loading)
 
-    // 唯一内部事实流（nodes + activeTurn + header）；仅 Ready 状态产生 snapshot 投影。
+    // 唯一内部事实流（presentation：durable nodes + header + 流式投影）；仅 Ready 状态产生投影。
     val snapshot: StateFlow<ConversationPresentationSnapshot?> = conversationState
         .map { state -> (state as? ConversationReadState.Ready)?.snapshot }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -166,7 +166,7 @@ class ChatVM(
     }
 
     // 生成完成
-    val generationDoneFlow: SharedFlow<Uuid> = masterTurnCoordinator.generationDoneFlow
+    val generationDoneFlow: SharedFlow<Uuid> = turnService.generationDoneFlow
 
     fun getTtsQueueSessionId(conversationId: Uuid): String? =
         conversationQueryService.ttsQueueSessionId(conversationId)
@@ -257,7 +257,7 @@ class ChatVM(
      * @return 已接受请求的稳定消息身份；空输入返回 null，receipt 不代表 durable 提交已经成功
      */
     suspend fun handleMessageSend(content: List<UIMessagePart>, answer: Boolean = true) =
-        masterTurnCoordinator.sendMessage(_conversationId, content, answer, artifactDraftScope)
+        turnService.sendMessage(_conversationId, content, answer, artifactDraftScope)
 
     fun handleMessageEdit(parts: List<UIMessagePart>, messageId: Uuid) {
         if (parts.isEmptyInputMessage()) return
@@ -269,7 +269,7 @@ class ChatVM(
 
     /** 编辑 USER 后发送：截断到该消息并启动新的 START；receipt 身份是新的 USER variant。 */
     suspend fun handleMessageEditAndSend(parts: List<UIMessagePart>, messageId: Uuid) =
-        masterTurnCoordinator.editAndResend(_conversationId, messageId, parts, artifactDraftScope)
+        turnService.editAndResend(_conversationId, messageId, parts, artifactDraftScope)
 
     fun handleCompressContext(additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int): Job {
         return viewModelScope.launch {
@@ -310,18 +310,18 @@ class ChatVM(
         message: UIMessage,
         regenerateAssistantMsg: Boolean = true
     ) {
-        masterTurnCoordinator.regenerateAtMessage(_conversationId, message, regenerateAssistantMsg)
+        turnService.regenerateAtMessage(_conversationId, message, regenerateAssistantMsg)
     }
 
     fun submitToolDecision(
         locator: ToolCallLocator,
-        decision: ToolUserDecision,
+        decision: ToolInteractionDecision,
     ) {
-        masterTurnCoordinator.submitToolDecision(_conversationId, locator, decision)
+        turnService.submitToolDecision(_conversationId, locator, decision)
     }
 
     fun handleSubAssistantAnswer(runId: String, interactionId: String, answer: String): Boolean =
-        masterTurnCoordinator.handleSubAssistantAnswer(runId, interactionId, answer)
+        turnService.handleSubAssistantAnswer(runId, interactionId, answer)
 
     fun stopGeneration() {
         viewModelScope.launch {

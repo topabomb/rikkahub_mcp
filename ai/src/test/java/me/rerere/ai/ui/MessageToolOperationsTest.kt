@@ -6,6 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.uuid.Uuid
 
 class MessageToolOperationsTest {
 
@@ -16,12 +17,12 @@ class MessageToolOperationsTest {
             parts = listOf(
                 UIMessagePart.Text("Hello"),
                 UIMessagePart.Tool(
-                    toolCallId = "tc1",
+                    localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
                     toolName = "search_web",
                     input = """{"query":"test"}"""
                 ),
                 UIMessagePart.Tool(
-                    toolCallId = "tc2",
+                    localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc2",
                     toolName = "eval_javascript",
                     input = """{"code":"1+1"}"""
                 )
@@ -48,7 +49,7 @@ class MessageToolOperationsTest {
     @Test
     fun `hasReplayResult is true when tool has output`() {
         val tool = UIMessagePart.Tool(
-            toolCallId = "tc1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
             toolName = "search_web",
             input = """{"query":"test"}""",
             output = listOf(UIMessagePart.Text("result"))
@@ -59,7 +60,7 @@ class MessageToolOperationsTest {
     @Test
     fun `hasReplayResult is false when tool has no output`() {
         val tool = UIMessagePart.Tool(
-            toolCallId = "tc1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
             toolName = "search_web",
             input = """{"query":"test"}"""
         )
@@ -69,10 +70,10 @@ class MessageToolOperationsTest {
     @Test
     fun `isPending is true when approval state is Pending`() {
         val tool = UIMessagePart.Tool(
-            toolCallId = "tc1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
             toolName = "ask_user",
             input = """{"question":"?"}""",
-            approvalState = ToolApprovalState.Pending
+            interactionState = ToolInteractionState.AwaitingApproval
         )
         assertTrue(tool.isPending)
     }
@@ -80,10 +81,10 @@ class MessageToolOperationsTest {
     @Test
     fun `isPending is false when approval state is Auto`() {
         val tool = UIMessagePart.Tool(
-            toolCallId = "tc1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
             toolName = "search_web",
             input = """{"query":"test"}""",
-            approvalState = ToolApprovalState.Auto
+            interactionState = ToolInteractionState.NotRequired
         )
         assertFalse(tool.isPending)
     }
@@ -91,10 +92,10 @@ class MessageToolOperationsTest {
     @Test
     fun `canResumeResultAssembly is true for unexecuted approved tool`() {
         val tool = UIMessagePart.Tool(
-            toolCallId = "tc1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
             toolName = "ask_user",
             input = """{"question":"?"}""",
-            approvalState = ToolApprovalState.Approved
+            interactionState = ToolInteractionState.Approved
         )
         assertTrue(tool.canResumeResultAssembly)
     }
@@ -102,10 +103,10 @@ class MessageToolOperationsTest {
     @Test
     fun `canResumeResultAssembly is true for unexecuted denied tool`() {
         val tool = UIMessagePart.Tool(
-            toolCallId = "tc1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
             toolName = "ask_user",
             input = """{"question":"?"}""",
-            approvalState = ToolApprovalState.Denied("no")
+            interactionState = ToolInteractionState.Denied("no")
         )
         assertTrue(tool.canResumeResultAssembly)
     }
@@ -113,10 +114,10 @@ class MessageToolOperationsTest {
     @Test
     fun `canResumeResultAssembly is true for unexecuted answered tool`() {
         val tool = UIMessagePart.Tool(
-            toolCallId = "tc1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
             toolName = "ask_user",
             input = """{"question":"?"}""",
-            approvalState = ToolApprovalState.Answered("yes")
+            interactionState = ToolInteractionState.Answered("yes")
         )
         assertTrue(tool.canResumeResultAssembly)
     }
@@ -124,11 +125,11 @@ class MessageToolOperationsTest {
     @Test
     fun `canResumeResultAssembly is false for executed tool`() {
         val tool = UIMessagePart.Tool(
-            toolCallId = "tc1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
             toolName = "search_web",
             input = """{"query":"test"}""",
             output = listOf(UIMessagePart.Text("result")),
-            approvalState = ToolApprovalState.Approved
+            interactionState = ToolInteractionState.Approved
         )
         assertFalse(tool.canResumeResultAssembly)
     }
@@ -136,10 +137,10 @@ class MessageToolOperationsTest {
     @Test
     fun `canResumeResultAssembly is false for pending tool`() {
         val tool = UIMessagePart.Tool(
-            toolCallId = "tc1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
             toolName = "ask_user",
             input = """{"question":"?"}""",
-            approvalState = ToolApprovalState.Pending
+            interactionState = ToolInteractionState.AwaitingApproval
         )
         assertFalse(tool.canResumeResultAssembly)
     }
@@ -147,10 +148,10 @@ class MessageToolOperationsTest {
     @Test
     fun `canResumeResultAssembly is false for auto tool`() {
         val tool = UIMessagePart.Tool(
-            toolCallId = "tc1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
             toolName = "search_web",
             input = """{"query":"test"}""",
-            approvalState = ToolApprovalState.Auto
+            interactionState = ToolInteractionState.NotRequired
         )
         assertFalse(tool.canResumeResultAssembly)
     }
@@ -158,7 +159,7 @@ class MessageToolOperationsTest {
     @Test
     fun `inputAsJson parses valid JSON`() {
         val tool = UIMessagePart.Tool(
-            toolCallId = "tc1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
             toolName = "search_web",
             input = """{"query":"hello world"}"""
         )
@@ -173,7 +174,7 @@ class MessageToolOperationsTest {
     @Test
     fun `inputAsJson handles blank input`() {
         val tool = UIMessagePart.Tool(
-            toolCallId = "tc1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
             toolName = "search_web",
             input = ""
         )
@@ -184,12 +185,12 @@ class MessageToolOperationsTest {
     @Test
     fun `tool copy with updated approval state`() {
         val original = UIMessagePart.Tool(
-            toolCallId = "tc1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
             toolName = "ask_user",
             input = """{"question":"?"}""",
-            approvalState = ToolApprovalState.Auto
+            interactionState = ToolInteractionState.NotRequired
         )
-        val updated = original.copy(approvalState = ToolApprovalState.Pending)
+        val updated = original.copy(interactionState = ToolInteractionState.AwaitingApproval)
         assertTrue(updated.isPending)
         assertFalse(updated.hasReplayResult)
     }
@@ -197,7 +198,7 @@ class MessageToolOperationsTest {
     @Test
     fun `tool copy with output marks as executed`() {
         val original = UIMessagePart.Tool(
-            toolCallId = "tc1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tc1",
             toolName = "eval_javascript",
             input = """{"code":"1+1"}"""
         )
@@ -216,16 +217,16 @@ class MessageToolOperationsTest {
     @Test
     fun `finishPendingTools should only process Pending tools`() {
         val pendingTool = UIMessagePart.Tool(
-            toolCallId = "pending",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "pending",
             toolName = "ask_user",
             input = """{"question":"?"}""",
-            approvalState = ToolApprovalState.Pending
+            interactionState = ToolInteractionState.AwaitingApproval
         )
         val autoTool = UIMessagePart.Tool(
-            toolCallId = "auto",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "auto",
             toolName = "search_web",
             input = """{"query":"test"}""",
-            approvalState = ToolApprovalState.Auto  // 未执行但非 Pending（超时中断场景）
+            interactionState = ToolInteractionState.NotRequired  // 未执行但非 Pending（超时中断场景）
         )
 
         val message = UIMessage(
@@ -236,30 +237,30 @@ class MessageToolOperationsTest {
         val updated = message.finishPendingTools { tool ->
             tool.copy(
                 output = listOf(UIMessagePart.Text("cancelled")),
-                approvalState = ToolApprovalState.Denied("cancelled")
+                interactionState = ToolInteractionState.Denied("cancelled")
             )
         }
 
-        val updatedPending = updated.parts.filterIsInstance<UIMessagePart.Tool>().find { it.toolCallId == "pending" }!!
-        val updatedAuto = updated.parts.filterIsInstance<UIMessagePart.Tool>().find { it.toolCallId == "auto" }!!
+        val updatedPending = updated.parts.filterIsInstance<UIMessagePart.Tool>().find { it.providerCallId == "pending" }!!
+        val updatedAuto = updated.parts.filterIsInstance<UIMessagePart.Tool>().find { it.providerCallId == "auto" }!!
 
         // Pending 工具应被处理
         assertTrue(updatedPending.hasReplayResult)
-        assertTrue(updatedPending.approvalState is ToolApprovalState.Denied)
+        assertTrue(updatedPending.interactionState is ToolInteractionState.Denied)
 
         // Auto 工具不应被处理（保留原状态）
         assertFalse(updatedAuto.hasReplayResult)
-        assertTrue(updatedAuto.approvalState is ToolApprovalState.Auto)
+        assertTrue(updatedAuto.interactionState is ToolInteractionState.NotRequired)
     }
 
     @Test
     fun `finishPendingTools should not process executed tools`() {
         val executedTool = UIMessagePart.Tool(
-            toolCallId = "executed",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "executed",
             toolName = "search_web",
             input = """{"query":"test"}""",
             output = listOf(UIMessagePart.Text("result")),
-            approvalState = ToolApprovalState.Pending  // Pending 但已执行
+            interactionState = ToolInteractionState.AwaitingApproval  // Pending 但已执行
         )
 
         val message = UIMessage(
@@ -270,19 +271,19 @@ class MessageToolOperationsTest {
         val updated = message.finishPendingTools { tool ->
             tool.copy(
                 output = listOf(UIMessagePart.Text("should not happen")),
-                approvalState = ToolApprovalState.Denied("should not happen")
+                interactionState = ToolInteractionState.Denied("should not happen")
             )
         }
 
         val tool = updated.parts.filterIsInstance<UIMessagePart.Tool>().first()
         assertEquals("result", (tool.output.first() as UIMessagePart.Text).text)
-        assertTrue(tool.approvalState is ToolApprovalState.Pending)
+        assertTrue(tool.interactionState is ToolInteractionState.AwaitingApproval)
     }
 
     @Test
     fun `finishPendingTools should return same message when no changes`() {
         val executedTool = UIMessagePart.Tool(
-            toolCallId = "executed",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "executed",
             toolName = "search_web",
             input = """{"query":"test"}""",
             output = listOf(UIMessagePart.Text("result"))
@@ -307,10 +308,10 @@ class MessageToolOperationsTest {
     @Test
     fun `finishInterruptedTools should process Auto tools without output`() {
         val autoTool = UIMessagePart.Tool(
-            toolCallId = "auto",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "auto",
             toolName = "mcp__space__bash",
             input = """{"command":"ls"}""",
-            approvalState = ToolApprovalState.Auto  // 超时中断，output 为空
+            interactionState = ToolInteractionState.NotRequired  // 超时中断，output 为空
         )
 
         val message = UIMessage(
@@ -326,17 +327,17 @@ class MessageToolOperationsTest {
 
         val tool = updated.parts.filterIsInstance<UIMessagePart.Tool>().first()
         assertTrue(tool.hasReplayResult)
-        // approvalState 应保持不变（不标记为 Denied）
-        assertTrue(tool.approvalState is ToolApprovalState.Auto)
+        // interactionState 应保持不变（不标记为 Denied）
+        assertTrue(tool.interactionState is ToolInteractionState.NotRequired)
     }
 
     @Test
     fun `finishInterruptedTools should process Approved tools without output`() {
         val approvedTool = UIMessagePart.Tool(
-            toolCallId = "approved",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "approved",
             toolName = "workspace_shell",
             input = """{"command":"rm -rf /"}""",
-            approvalState = ToolApprovalState.Approved  // 用户已批准但执行被中断
+            interactionState = ToolInteractionState.Approved  // 用户已批准但执行被中断
         )
 
         val message = UIMessage(
@@ -352,16 +353,16 @@ class MessageToolOperationsTest {
 
         val tool = updated.parts.filterIsInstance<UIMessagePart.Tool>().first()
         assertTrue(tool.hasReplayResult)
-        assertTrue(tool.approvalState is ToolApprovalState.Approved)
+        assertTrue(tool.interactionState is ToolInteractionState.Approved)
     }
 
     @Test
     fun `finishInterruptedTools should NOT process Pending tools`() {
         val pendingTool = UIMessagePart.Tool(
-            toolCallId = "pending",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "pending",
             toolName = "ask_user",
             input = """{"question":"?"}""",
-            approvalState = ToolApprovalState.Pending
+            interactionState = ToolInteractionState.AwaitingApproval
         )
 
         val message = UIMessage(
@@ -377,17 +378,17 @@ class MessageToolOperationsTest {
 
         val tool = updated.parts.filterIsInstance<UIMessagePart.Tool>().first()
         assertFalse(tool.hasReplayResult)
-        assertTrue(tool.approvalState is ToolApprovalState.Pending)
+        assertTrue(tool.interactionState is ToolInteractionState.AwaitingApproval)
     }
 
     @Test
     fun `finishInterruptedTools should NOT process executed tools`() {
         val executedTool = UIMessagePart.Tool(
-            toolCallId = "executed",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "executed",
             toolName = "search_web",
             input = """{"query":"test"}""",
             output = listOf(UIMessagePart.Text("result")),
-            approvalState = ToolApprovalState.Auto
+            interactionState = ToolInteractionState.NotRequired
         )
 
         val message = UIMessage(
@@ -406,16 +407,16 @@ class MessageToolOperationsTest {
     fun `finishInterruptedTools and finishPendingTools should be complementary`() {
         // 同一条消息中同时有 Pending 和 Auto 中断的工具
         val pendingTool = UIMessagePart.Tool(
-            toolCallId = "pending",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "pending",
             toolName = "ask_user",
             input = """{"question":"?"}""",
-            approvalState = ToolApprovalState.Pending
+            interactionState = ToolInteractionState.AwaitingApproval
         )
         val autoTool = UIMessagePart.Tool(
-            toolCallId = "auto",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "auto",
             toolName = "mcp__space__bash",
             input = """{"command":"ls"}""",
-            approvalState = ToolApprovalState.Auto  // 超时中断
+            interactionState = ToolInteractionState.NotRequired  // 超时中断
         )
 
         val message = UIMessage(
@@ -427,7 +428,7 @@ class MessageToolOperationsTest {
         val afterPending = message.finishPendingTools { tool ->
             tool.copy(
                 output = listOf(UIMessagePart.Text("cancelled by user")),
-                approvalState = ToolApprovalState.Denied("cancelled")
+                interactionState = ToolInteractionState.Denied("cancelled")
             )
         }
 
@@ -438,15 +439,15 @@ class MessageToolOperationsTest {
             )
         }
 
-        val finalPending = afterInterrupted.parts.filterIsInstance<UIMessagePart.Tool>().find { it.toolCallId == "pending" }!!
-        val finalAuto = afterInterrupted.parts.filterIsInstance<UIMessagePart.Tool>().find { it.toolCallId == "auto" }!!
+        val finalPending = afterInterrupted.parts.filterIsInstance<UIMessagePart.Tool>().find { it.providerCallId == "pending" }!!
+        val finalAuto = afterInterrupted.parts.filterIsInstance<UIMessagePart.Tool>().find { it.providerCallId == "auto" }!!
 
         // pendingTool: 被标记为 Denied
         assertTrue(finalPending.hasReplayResult)
-        assertTrue(finalPending.approvalState is ToolApprovalState.Denied)
+        assertTrue(finalPending.interactionState is ToolInteractionState.Denied)
 
-        // autoTool: 被标记为中断，但 approvalState 保持 Auto（不是 Denied）
+        // autoTool: 被标记为中断，但 interactionState 保持 Auto（不是 Denied）
         assertTrue(finalAuto.hasReplayResult)
-        assertTrue(finalAuto.approvalState is ToolApprovalState.Auto)
+        assertTrue(finalAuto.interactionState is ToolInteractionState.NotRequired)
     }
 }

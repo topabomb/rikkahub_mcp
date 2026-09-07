@@ -31,6 +31,8 @@ import net.weero.measix.pilot.data.files.OwnedArtifact
 import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
+import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeSnapshot
 import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import net.weero.measix.pilot.utils.JsonInstant
@@ -50,7 +52,7 @@ class ConversationAttachmentPreviewProjectorTest {
         coEvery { store.resolveImagePreviewForFile(file) } returns "file:///D:/managed/abc123.png"
         for (toolName in listOf("inspect_attachments", "assistant_call")) {
             val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Tool(
-                toolCallId = "call", toolName = toolName,
+                localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call", toolName = toolName,
                 input = """{"attachments":["/upload/abc123.png"],"request":"read this"}""",
             )))
             val snapshot = snapshotOf(listOf(message))
@@ -61,7 +63,7 @@ class ConversationAttachmentPreviewProjectorTest {
         }
         coEvery { store.resolveToolPath("/upload/abc123.png") } returns null
         val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Tool(
-            toolCallId = "call", toolName = "inspect_attachments",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call", toolName = "inspect_attachments",
             input = """{"attachments":["/upload/abc123.png"]}""",
         )))
         assertTrue(ConversationAttachmentPreviewProjector(store).project(snapshotOf(listOf(message))).isEmpty())
@@ -72,10 +74,10 @@ class ConversationAttachmentPreviewProjectorTest {
         val store = mockk<ArtifactStore>()
         val messages = listOf(
             UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Tool(
-                toolCallId = "unknown", toolName = "other", input = """{"attachments":["/upload/abc123.png"]}""",
+                localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "unknown", toolName = "other", input = """{"attachments":["/upload/abc123.png"]}""",
             ))),
             UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Tool(
-                toolCallId = "bad", toolName = "inspect_attachments",
+                localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "bad", toolName = "inspect_attachments",
                 input = """{"attachments":["/upload/../private.png","attachment:123","https://example.com/a.png"]}""",
             ))),
         )
@@ -97,7 +99,7 @@ class ConversationAttachmentPreviewProjectorTest {
             val sourceImage = stampedImage(sourceRef.fileUri(filesDir), stableRef)
             val sourcePath = sourceRef.toolPath()!!
             val inspection = UIMessagePart.Tool(
-                toolCallId = "inspection", toolName = "inspect_attachments",
+                localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "inspection", toolName = "inspect_attachments",
                 input = """{"attachments":["$sourcePath"],"request":"Read the image"}""",
                 output = listOf(UIMessagePart.Text("Image inspected")),
             )
@@ -162,7 +164,7 @@ class ConversationAttachmentPreviewProjectorTest {
             ),
         ) as UIMessagePart.Image
         val tool = UIMessagePart.Tool(
-            toolCallId = "child",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "child",
             toolName = "assistant_call",
             input = "{}",
             output = listOf(outputImage),
@@ -207,7 +209,7 @@ class ConversationAttachmentPreviewProjectorTest {
             LocalArtifactRef(relativePath = "upload/direct.png", mimeType = "image/png")
         coEvery { store.resolveImagePreviewForArtifact(managed) } returns AttachmentRefs.fileToFileUrl(artifactFile)
         val subAssistantTool = UIMessagePart.Tool(
-            toolCallId = "child",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "child",
             toolName = "assistant_call",
             input = "{}",
         ).mergeSubAssistantCallMetadata(
@@ -258,7 +260,7 @@ class ConversationAttachmentPreviewProjectorTest {
                 role = MessageRole.ASSISTANT,
                 parts = listOf(
                     UIMessagePart.Tool(
-                        toolCallId = "generate",
+                        localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "generate",
                         toolName = "generate_image",
                         input = "{}",
                         output = listOf(
@@ -359,7 +361,7 @@ class ConversationAttachmentPreviewProjectorTest {
         val ref = AttachmentRefs.format(Uuid.random())
         val managed = LocalArtifactRef(relativePath = "upload/managed.png", mimeType = "image/png")
         val tool = UIMessagePart.Tool(
-            toolCallId = "assistant-call",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "assistant-call",
             toolName = "assistant_call",
             input = "{}",
         ).mergeSubAssistantCallMetadata(
@@ -462,9 +464,12 @@ class ConversationAttachmentPreviewProjectorTest {
         AttachmentRefs.mergeMetadata(null, mapOf(AttachmentRefs.METADATA_KEY to kotlinx.serialization.json.JsonPrimitive(ref))),
     )
 
-    private fun snapshotOf(messages: List<UIMessage>) = Conversation.ofId(
-        id = Uuid.random(),
-        assistantId = DEFAULT_ASSISTANT_ID,
-        messages = messages.map(UIMessage::toMessageNode),
-    ).toSnapshot().toPresentationSnapshot()
+    private fun snapshotOf(messages: List<UIMessage>): ConversationPresentationSnapshot {
+        val durable = Conversation.ofId(
+            id = Uuid.random(),
+            assistantId = DEFAULT_ASSISTANT_ID,
+            messages = messages.map(UIMessage::toMessageNode),
+        ).toSnapshot()
+        return ConversationRuntimeSnapshot(durable = durable, stream = null).toPresentationSnapshot()
+    }
 }

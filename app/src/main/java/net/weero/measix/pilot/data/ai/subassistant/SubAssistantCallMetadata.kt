@@ -79,7 +79,7 @@ enum class SubAssistantCallPhase {
 data class SubAssistantUserInteraction(
     @SerialName("interaction_id") val interactionId: String,
     @SerialName("message_id") val messageId: String,
-    @SerialName("tool_ordinal") val toolOrdinal: Int,
+    @SerialName("local_call_id") val localCallId: String,
     @SerialName("tool_name") val toolName: String,
     @SerialName("input") val input: String,
 )
@@ -89,7 +89,7 @@ data class SubAssistantUserInteraction(
  */
 @Serializable
 data class SubAssistantCallMetadata(
-    @SerialName("schema_version") val schemaVersion: Int = 1,
+    @SerialName("schema_version") val schemaVersion: Int = 2,
     @SerialName("run_id") val runId: String,
     @SerialName("previous_run_id") val previousRunId: String? = null,
     @SerialName("target_assistant_id") val targetAssistantId: String,

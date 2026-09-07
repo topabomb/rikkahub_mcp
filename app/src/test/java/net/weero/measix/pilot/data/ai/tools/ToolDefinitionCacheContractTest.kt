@@ -1,10 +1,6 @@
 package net.weero.measix.pilot.data.ai.tools
 
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import me.rerere.ai.core.Tool
-import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.mcp.McpCommonOptions
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
 import net.weero.measix.pilot.data.datastore.Settings
@@ -12,14 +8,13 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Test
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import kotlin.uuid.Uuid
 
 /**
- * 权威方案 §17.9 缓存契约：工具定义只在 START 装配一次，且定义里不得出现任何 live disclosure。
+ * 缓存契约：工具定义只在 START 装配一次，且定义里不得出现任何 live disclosure。
  *
  * 断言对象是**真实工具**（`buildMemoryTools` / `createSearchTools`）与其真实冻结产物
  * `FrozenToolDefinition` 的序列化 bytes——只有被实际读取的 live 源才能证明解耦，
@@ -103,54 +98,6 @@ class ToolDefinitionCacheContractTest {
         assertFalse(serialized.contains("sentinel.example"))
         val today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
         assertFalse("$serialized must not embed the current date", serialized.contains(today))
-    }
-
-    @Test
-    fun `parameters and prompt contribution are evaluated once per START and never per step`() {
-        var parameterEvaluations = 0
-        var promptEvaluations = 0
-        val tool = Tool(
-            name = "counted",
-            description = "counted tool",
-            parameters = {
-                parameterEvaluations++
-                buildJsonObject { put("type", "object") }
-            },
-            systemPromptContribution = "prompt ${++promptEvaluations}",
-            execute = { listOf(UIMessagePart.Text("ok")) },
-        )
-
-        val frozen = freezeToolSet(listOf(tool))
-        repeat(5) { bytes(frozen) }
-
-        assertEquals(1, parameterEvaluations)
-        assertEquals(1, promptEvaluations)
-        assertEquals("prompt 1", frozen.definitions.single().systemPromptContribution)
-    }
-
-    @Test
-    fun `same START keeps frozen bytes while the next assembly captures tool-owned changes`() {
-        var revision = 1
-        var prompt = "first prompt"
-        // 每次 START 都重新装配 Tool（与 buildTools 一致）；已冻结的 Turn 永不重算。
-        fun assemble(): Tool = Tool(
-            name = "dynamic",
-            description = "stable",
-            parameters = { buildJsonObject { put("revision", revision) } },
-            systemPromptContribution = prompt,
-            execute = { listOf(UIMessagePart.Text("ok")) },
-        )
-        val activeTurn = freezeToolSet(listOf(assemble()))
-        val activeBytes = bytes(activeTurn)
-
-        revision = 2
-        prompt = "next START prompt"
-        assertEquals(activeBytes, bytes(activeTurn))
-
-        val nextStart = freezeToolSet(listOf(assemble()))
-        assertNotEquals(activeBytes, bytes(nextStart))
-        assertEquals(JsonPrimitive(2), nextStart.definitions.single().parameters?.get("revision"))
-        assertEquals("next START prompt", nextStart.definitions.single().systemPromptContribution)
     }
 
     @Test

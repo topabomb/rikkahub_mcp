@@ -543,16 +543,10 @@ class ImageGenerationCoordinatorTest {
         result.join()
         advanceUntilIdle()
         assertTrue(result.getCompletionExceptionOrNull() is kotlinx.coroutines.CancellationException)
-        val leftovers = withContext(Dispatchers.IO) {
-            var remaining = completedImageFiles(filesDir)
-            var spins = 0
-            while (remaining.isNotEmpty() && spins < 20) {
-                Thread.sleep(10)
-                remaining = completedImageFiles(filesDir)
-                spins++
-            }
-            remaining
-        }
+        // The image is atomically renamed from .pending to its final name before insertMedia runs
+        // (that is where `entered` fires), so once the caller job has joined there is no async
+        // cleanup left to wait for: the committed media file is already durable on disk.
+        val leftovers = withContext(Dispatchers.IO) { completedImageFiles(filesDir) }
         assertEquals(1, leftovers.size)
         verify(exactly = 1) { repository.insertMedia(any()) }
         filesDir.deleteRecursively()

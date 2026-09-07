@@ -14,10 +14,18 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.ui.UIMessagePart
 import kotlin.uuid.Uuid
 
+/**
+ * The stable, ordinal-free address of one Tool Call inside a durable Assistant message.
+ *
+ * Identity is `(assistantMessageId, stepId, localCallId)`: a call is located by its owning
+ * Assistant message, the Step that requested it, and its own local call id. Positional ordinals
+ * are never identity — they are only a transient streaming cursor inside the accumulator.
+ */
 @Serializable
 data class ToolCallLocator(
-    val messageId: Uuid,
-    val toolOrdinal: Int,
+    val assistantMessageId: Uuid,
+    val stepId: Uuid,
+    val localCallId: Uuid,
 )
 
 /**
@@ -99,17 +107,16 @@ enum class ToolMetadataDelivery {
  * 通用工具执行上下文，提供 metadata 回写能力。
  * 不引入 App 的 Conversation 类型，保持 ai 模块的平台无关性。
  *
- * [messageId] + [toolOrdinal] 是本次执行在当前 ASSISTANT message 中的内部精确 locator；
- * [toolCallId] 保留给 Provider 协议，不能作为内存更新的唯一键。
+ * [locator] 是本次执行的稳定身份 `(assistantMessageId, stepId, localCallId)`；
+ * [providerCallId] 保留给 Provider 协议回放关联，不能作为内存更新的唯一键。
  *
  * 工具获得的是执行时的资源访问能力，不是 Agent 的完整会话状态：
  * [resolveAttachments] 按文件路径批量读取图片内容，不要求当前会话已引用文件，
  * 也不依赖 Workspace；Runtime 委托文件 owner 校验并读取。
  */
 data class ToolExecutionContext(
-    val messageId: Uuid,
-    val toolOrdinal: Int,
-    val toolCallId: String,
+    val locator: ToolCallLocator,
+    val providerCallId: String,
     val reportMetadata: suspend (patch: JsonObject, delivery: ToolMetadataDelivery) -> Unit,
     /** 按受管文件路径读取请求级图片内容，不创建持久化副本。 */
     val resolveAttachments: suspend (paths: List<String>) -> ToolAttachmentResolution,
@@ -122,7 +129,7 @@ data class ToolExecutionContext(
 )
 
 /**
- * Provider 唯一可见的工具 wire 事实（权威方案 §7.6）：名称、描述、JSON Schema 与 System
+ * Provider 唯一可见的工具 wire 事实：名称、描述、JSON Schema 与 System
  * prompt contribution 都是装配时已物化的值，不含任何可执行闭包。由 [freeze] 在 START
  * 装配时一次性生成；Provider step 与 adapter 不得再求值或回退到 [Tool]。
  */
@@ -135,7 +142,7 @@ data class FrozenToolDefinition(
 )
 
 /**
- * 物化 wire definition：这是 `parameters()` 的唯一求值点（§15：定义、排序与 Schema
+ * 物化 wire definition：这是 `parameters()` 的唯一求值点（定义、排序与 Schema
  * 在 Turn 内稳定，动态内容不得击穿缓存前缀）。执行闭包不经过这里。
  */
 fun Tool.freeze(): FrozenToolDefinition {
@@ -159,7 +166,7 @@ data class Tool(
     val parameters: () -> JsonObject? = { null },
     /**
      * 该工具对 System prompt 的固定贡献。装配（= Turn START）时求值为字符串；
-     * 不得按 step、日期、请求消息或 live Settings 重算（§7.6、§10.2）。
+     * 不得按 step、日期、请求消息或 live Settings 重算。
      */
     val systemPromptContribution: String = "",
     /**

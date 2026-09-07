@@ -1,7 +1,8 @@
 package net.weero.measix.pilot.service
+import net.weero.measix.pilot.service.turn.finishInterruptedToolAfterGenerationStop
 
 import me.rerere.ai.core.MessageRole
-import me.rerere.ai.ui.ToolApprovalState
+import me.rerere.ai.ui.ToolInteractionState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import kotlinx.serialization.json.Json
@@ -18,32 +19,36 @@ import net.weero.measix.pilot.service.runtime.TurnHandle
 import net.weero.measix.pilot.service.runtime.ResolveToolInteraction
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.Assert.assertEquals
-import net.weero.measix.pilot.service.runtime.ToolUserDecision
+import net.weero.measix.pilot.service.runtime.ToolInteractionDecision
 import org.junit.Test
 import kotlin.uuid.Uuid
 
 class ToolApprovalReducerTest {
     private val json = Json { encodeDefaults = true }
+    private val stepId = Uuid.random()
 
     private fun approval(
         messageId: Uuid,
-        ordinal: Int,
-        decision: ToolUserDecision,
+        localCallId: Uuid,
+        decision: ToolInteractionDecision,
         conversationId: Uuid = Uuid.random(),
     ) = ResolveToolInteraction(
         messageId = messageId,
-        toolOrdinal = ordinal,
+        stepId = stepId,
+        localCallId = localCallId,
         decision = decision,
         handle = TurnHandle(conversationId, 1, Uuid.random(), messageId),
     )
 
     @Test
-    fun `approval locator updates only selected ordinal when provider ids repeat`() {
+    fun `approval locator updates only the selected call when provider ids repeat`() {
+        val firstId = Uuid.random()
+        val secondId = Uuid.random()
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
-                pendingTool("duplicate"),
-                pendingTool("duplicate"),
+                pendingTool(firstId, "duplicate"),
+                pendingTool(secondId, "duplicate"),
             ),
         )
         val conversation = Conversation(
@@ -51,20 +56,20 @@ class ToolApprovalReducerTest {
             messageNodes = listOf(message.toMessageNode()),
         )
 
-        // HITL 审批走 ResolveToolInteraction 命令（reducer 唯一路径）
+        // HITL 审批走 ResolveToolInteraction 命令（reducer 唯一路径），按 localCallId 精确定位。
         val updated = ConversationTransition.apply(
             conversation.toSnapshot(),
-            approval(message.id, 1, ToolUserDecision.Answer("answer")),
+            approval(message.id, secondId, ToolInteractionDecision.Answer("answer")),
         )
 
         val tools = updated.currentMessages().last().getTools()
-        assertEquals(ToolApprovalState.Pending, tools[0].approvalState)
-        assertEquals(ToolApprovalState.Answered("answer"), tools[1].approvalState)
+        assertEquals(ToolInteractionState.AwaitingInput, tools[0].interactionState)
+        assertEquals(ToolInteractionState.Answered("answer"), tools[1].interactionState)
     }
 
     @Test
     fun `attention keys include pending tools and bridged ask_user`() {
-        val pending = pendingTool("ask")
+        val pending = pendingTool(Uuid.random(), "ask")
         val assistantCall = runningCallWithAskUser("ask-42")
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
@@ -74,11 +79,11 @@ class ToolApprovalReducerTest {
         val keys = collectUserAttentionKeys(listOf(message), json)
 
         assertEquals(
-            setOf("tool:${message.id}:0", "ask:ask-42"),
+            setOf("tool:${message.id}:${pending.localCallId}", "ask:ask-42"),
             keys,
         )
         assertEquals(
-            setOf("tool:${message.id}:0", "ask:ask-42"),
+            setOf("tool:${message.id}:${pending.localCallId}", "ask:ask-42"),
             collectUserAttentionKeys(listOf(message), json),
         )
     }
@@ -107,7 +112,7 @@ class ToolApprovalReducerTest {
     fun `stale message locator cannot mutate current branch`() {
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = listOf(pendingTool("id")),
+            parts = listOf(pendingTool(Uuid.random(), "id")),
         )
         val conversation = Conversation(
             assistantId = DEFAULT_ASSISTANT_ID,
@@ -118,16 +123,18 @@ class ToolApprovalReducerTest {
         val snapshot = conversation.toSnapshot()
         val updated = ConversationTransition.apply(
             snapshot,
-            approval(Uuid.random(), 0, ToolUserDecision.Approve),
+            approval(Uuid.random(), Uuid.random(), ToolInteractionDecision.Approve),
         )
         assertEquals(snapshot, updated)
     }
 
     @Test
     fun `multiple pending decisions compose without losing an earlier answer`() {
+        val firstId = Uuid.random()
+        val secondId = Uuid.random()
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = listOf(pendingTool("duplicate"), pendingTool("duplicate")),
+            parts = listOf(pendingTool(firstId, "duplicate"), pendingTool(secondId, "duplicate")),
         )
         val conversation = Conversation(
             assistantId = DEFAULT_ASSISTANT_ID,
@@ -136,16 +143,16 @@ class ToolApprovalReducerTest {
 
         val afterFirst = ConversationTransition.apply(
             conversation.toSnapshot(),
-            approval(message.id, 0, ToolUserDecision.Answer("first"), conversation.id),
+            approval(message.id, firstId, ToolInteractionDecision.Answer("first"), conversation.id),
         )
         val afterSecond = ConversationTransition.apply(
             afterFirst,
-            approval(message.id, 1, ToolUserDecision.Answer("second"), conversation.id),
+            approval(message.id, secondId, ToolInteractionDecision.Answer("second"), conversation.id),
         )
 
         assertEquals(
-            listOf(ToolApprovalState.Answered("first"), ToolApprovalState.Answered("second")),
-            afterSecond.currentMessages().last().getTools().map { it.approvalState },
+            listOf(ToolInteractionState.Answered("first"), ToolInteractionState.Answered("second")),
+            afterSecond.currentMessages().last().getTools().map { it.interactionState },
         )
     }
 
@@ -158,10 +165,10 @@ class ToolApprovalReducerTest {
             targetNameSnapshot = "Reviewer",
         ).copy(state = SubAssistantCallState.RUNNING)
         val tool = UIMessagePart.Tool(
-            toolCallId = "call-1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call-1",
             toolName = "assistant_call",
             input = "{}",
-            approvalState = ToolApprovalState.Auto,
+            interactionState = ToolInteractionState.NotRequired,
         ).mergeSubAssistantCallMetadata(json, metadata)
 
         val stopped = finishInterruptedToolAfterGenerationStop(tool, json, "user_cancelled")
@@ -179,10 +186,10 @@ class ToolApprovalReducerTest {
     @Test
     fun `interrupted assistant call without metadata fails closed`() {
         val tool = UIMessagePart.Tool(
-            toolCallId = "call-missing-metadata",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call-missing-metadata",
             toolName = "assistant_call",
             input = "{}",
-            approvalState = ToolApprovalState.Auto,
+            interactionState = ToolInteractionState.NotRequired,
         )
 
         val failure = runCatching {
@@ -251,16 +258,16 @@ class ToolApprovalReducerTest {
             userInteraction = net.weero.measix.pilot.data.ai.subassistant.SubAssistantUserInteraction(
                 interactionId = interactionId,
                 messageId = Uuid.random().toString(),
-                toolOrdinal = 0,
+                localCallId = Uuid.random().toString(),
                 toolName = "ask_user",
                 input = "{}",
             ),
         )
         return UIMessagePart.Tool(
-            toolCallId = "call-ask",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call-ask",
             toolName = "assistant_call",
             input = "{}",
-            approvalState = ToolApprovalState.Auto,
+            interactionState = ToolInteractionState.NotRequired,
         ).mergeSubAssistantCallMetadata(json, metadata)
     }
 
@@ -275,10 +282,10 @@ class ToolApprovalReducerTest {
             childTaskNodeId = childTaskId.toString(),
         )
         return UIMessagePart.Tool(
-            toolCallId = "call-1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call-1",
             toolName = "assistant_call",
             input = input,
-            approvalState = ToolApprovalState.Auto,
+            interactionState = ToolInteractionState.NotRequired,
         ).mergeSubAssistantCallMetadata(json, metadata)
     }
 
@@ -290,13 +297,13 @@ class ToolApprovalReducerTest {
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Tool(
-                    toolCallId = "s1",
+                    localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "s1",
                     toolName = "search_web",
                     input = "{}",
                     output = listOf(UIMessagePart.Text("ok")),
                 ),
                 UIMessagePart.Tool(
-                    toolCallId = "t1",
+                    localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "t1",
                     toolName = "text_to_speech",
                     input = """{"text":"Spoken answer."}""",
                     output = listOf(UIMessagePart.Text("""{"success":true}""")),
@@ -305,10 +312,10 @@ class ToolApprovalReducerTest {
         ),
     )
 
-    private fun pendingTool(id: String) = UIMessagePart.Tool(
-        toolCallId = id,
+    private fun pendingTool(localCallId: Uuid, providerCallId: String) = UIMessagePart.Tool(
+        localCallId = localCallId, stepId = stepId, providerCallId = providerCallId,
         toolName = "ask_user",
         input = "{}",
-        approvalState = ToolApprovalState.Pending,
+        interactionState = ToolInteractionState.AwaitingInput,
     )
 }

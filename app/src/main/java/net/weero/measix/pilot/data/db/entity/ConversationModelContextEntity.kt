@@ -7,7 +7,7 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
- * `conversation_model_context` —— 模型上下文条目的唯一 durable 落点（权威方案 §5.2）。
+ * `conversation_model_context` —— 模型上下文条目的唯一 durable 落点。
  *
  * 独立表而不是给 [ConversationEntity] 加大 JSON 列：Conversation 是列表、最近会话、Child、
  * 删除和 header 查询的热行，不应携带可能很大的 Memory/Catalog 文本；条目是随历史追加与删除

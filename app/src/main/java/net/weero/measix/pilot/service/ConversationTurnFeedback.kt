@@ -7,8 +7,8 @@ import net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
-import net.weero.measix.pilot.service.runtime.ConversationTurnPhase
-import net.weero.measix.pilot.service.runtime.ToolCallPhase
+import net.weero.measix.pilot.service.runtime.TurnLivePhase
+import net.weero.measix.pilot.service.runtime.ToolLivePhase
 import net.weero.measix.pilot.utils.JsonInstant
 import kotlin.uuid.Uuid
 
@@ -25,36 +25,33 @@ internal fun projectConversationTurnFeedback(
     presentation: ConversationPresentation,
 ): ConversationTurnFeedback? {
     val phase = presentation.phase
-    if (phase == ConversationTurnPhase.IDLE || phase == ConversationTurnPhase.STOPPING) return null
+    if (phase == null || phase == TurnLivePhase.STOPPING) return null
 
-    val requestId = presentation.activeRequestTurnId
-    val active = snapshot.activeTurn
+    val requestId = presentation.activeTurnId
+    val active = snapshot.stream
     // A durable unfinished turn alone is not evidence of a running request.
-    if (phase != ConversationTurnPhase.AWAITING_USER && requestId == null) return null
-    if (phase != ConversationTurnPhase.PREPARING &&
+    if (phase != TurnLivePhase.AWAITING_USER && requestId == null) return null
+    if (phase != TurnLivePhase.PREPARING &&
         (active == null || (requestId != null && requestId != active.turnId))
     ) return null
 
     val turnId = requestId ?: active?.turnId ?: return null
     val message = active?.takeIf { it.turnId == turnId }?.let { turn ->
-        if (turn.messages.isEmpty()) {
-            // StartTurn publishes the committed slot before its first streaming projection.
-            snapshot.nodes.lastOrNull()?.currentMessage?.takeIf { it.id == turn.assistantMessageId }
-        } else {
-            turn.messages.lastOrNull { it.id == turn.assistantMessageId }
-        }
+        // StartTurn 在首个流式投影前只提交了空 slot：草稿为 null 时读 committed 末节点。
+        turn.assistantMessage
+            ?: snapshot.nodes.lastOrNull()?.currentMessage?.takeIf { it.id == turn.assistantMessageId }
     }
     val attentionKeys = buildSet {
-        if (phase != ConversationTurnPhase.PREPARING) {
-            message?.getTools()?.forEachIndexed { ordinal, tool ->
-                val locator = ToolCallLocator(message.id, ordinal)
-                val toolPhase = presentation.toolCallPhases[locator]
-                if (phase == ConversationTurnPhase.AWAITING_USER &&
-                    toolPhase == ToolCallPhase.AWAITING_APPROVAL
+        if (phase != TurnLivePhase.PREPARING) {
+            message?.getTools()?.forEach { tool ->
+                val locator = ToolCallLocator(message.id, tool.stepId, tool.localCallId)
+                val toolPhase = presentation.toolLivePhases[locator]
+                if (phase == TurnLivePhase.AWAITING_USER &&
+                    toolPhase == ToolLivePhase.AWAITING_APPROVAL
                 ) {
-                    add("tool:${message.id}:$ordinal")
+                    add("tool:${message.id}:${tool.localCallId}")
                 }
-                if (toolPhase == ToolCallPhase.EXECUTING) {
+                if (toolPhase == ToolLivePhase.EXECUTING) {
                     val metadata = tool.getSubAssistantCallMetadata(JsonInstant)
                     val interaction = metadata?.userInteraction
                     if (metadata?.state == SubAssistantCallState.RUNNING &&
@@ -78,7 +75,7 @@ internal fun projectConversationTurnFeedback(
                 else -> 0L
             }
         },
-        awaitingUser = phase == ConversationTurnPhase.AWAITING_USER || attentionKeys.isNotEmpty(),
+        awaitingUser = phase == TurnLivePhase.AWAITING_USER || attentionKeys.isNotEmpty(),
         attentionKeys = attentionKeys,
     )
 }

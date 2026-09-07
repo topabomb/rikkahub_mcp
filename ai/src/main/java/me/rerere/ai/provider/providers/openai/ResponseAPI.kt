@@ -44,6 +44,7 @@ import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.OpenAIReasoningMetadata
 import me.rerere.ai.ui.OpenAIResponseMetadata
 import me.rerere.ai.ui.OpenAIResponseWireFormat
+import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
@@ -60,6 +61,7 @@ import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.parseErrorDetail
 import me.rerere.ai.util.stringSafe
 import me.rerere.ai.util.toHeaders
+import kotlin.uuid.Uuid
 import me.rerere.common.http.await
 import me.rerere.common.http.jsonObjectOrNull
 import me.rerere.common.http.jsonArrayOrNull
@@ -113,7 +115,7 @@ class ResponseAPI(
 ) : OpenAIImpl {
     override suspend fun generateText(
         providerSetting: ProviderSetting.OpenAI,
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         params: TextGenerationParams
     ): MessageChunk {
         val requestBody = buildRequestBody(
@@ -164,7 +166,7 @@ class ResponseAPI(
 
     override suspend fun streamText(
         providerSetting: ProviderSetting.OpenAI,
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         params: TextGenerationParams
     ): Flow<MessageChunk> = callbackFlow {
         // 每个 SSE 请求独立维护 item_id -> call_id 映射。OpenAI 的 fc_* 输出项 ID
@@ -282,7 +284,7 @@ class ResponseAPI(
 
     internal fun buildRequestBody(
         providerSetting: ProviderSetting.OpenAI,
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         params: TextGenerationParams,
         stream: Boolean
     ): JsonObject {
@@ -402,7 +404,7 @@ class ResponseAPI(
     }
 
     internal fun buildMessages(
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         endpointProfile: ResponseEndpointProfile = ResponseEndpointProfile.OPENAI,
         mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
     ) = buildJsonArray {
@@ -421,7 +423,7 @@ class ResponseAPI(
     }
 
     private fun JsonArrayBuilder.addAssistantItems(
-        message: UIMessage,
+        message: ModelRequestMessage,
         endpointProfile: ResponseEndpointProfile,
         mediaCapabilities: RequestMediaCapabilities,
     ) {
@@ -525,7 +527,7 @@ class ResponseAPI(
                     group.tools.forEach { tool ->
                         add(buildJsonObject {
                             put("type", "function_call")
-                            put("call_id", tool.toolCallId)
+                            put("call_id", tool.providerCallId)
                             put("name", tool.toolName)
                             // 使用 inputAsJson() 归一化，避免流式中断导致的残缺 JSON 被发送
                             put("arguments", tool.inputAsJson().toString())
@@ -550,14 +552,14 @@ class ResponseAPI(
      * phase/status 和未知 item 均保持服务端原始 JSON，从而不会因 UI 当前不认识它们而丢失协议状态。
      */
     private fun JsonArrayBuilder.addPreservedResponseItems(
-        message: UIMessage,
+        message: ModelRequestMessage,
         outputItemGroups: List<List<JsonObject>>,
         endpointProfile: ResponseEndpointProfile,
         mediaCapabilities: RequestMediaCapabilities,
     ) {
         val toolsByCallId = message.parts
             .filterIsInstance<UIMessagePart.Tool>()
-            .groupBy { it.toolCallId }
+            .groupBy { it.providerCallId }
         val consumedToolsByCallId = mutableMapOf<String, Int>()
         outputItemGroups.forEach { outputItems ->
             outputItems.forEach { item -> add(item) }
@@ -582,7 +584,7 @@ class ResponseAPI(
     ) {
         add(buildJsonObject {
             put("type", "function_call_output")
-            put("call_id", tool.toolCallId)
+            put("call_id", tool.providerCallId)
             val images = tool.output.filterIsInstance<UIMessagePart.Image>()
             if (images.isEmpty()) {
                 val textOutput = tool.output.filterIsInstance<UIMessagePart.Text>()
@@ -612,7 +614,7 @@ class ResponseAPI(
     }
 
     private fun JsonArrayBuilder.addUserItems(
-        message: UIMessage,
+        message: ModelRequestMessage,
         mediaCapabilities: RequestMediaCapabilities,
     ) {
         val contentParts = message.parts.filter { it is UIMessagePart.Text || it is UIMessagePart.Image }
@@ -738,7 +740,9 @@ class ResponseAPI(
                                     parts = listOf(
                                         UIMessagePart.Tool(
                                             // UIMessagePart.Tool 持久化的是协议关联 ID；item_id 只用于定位 SSE 输出项。
-                                            toolCallId = callId,
+                                            localCallId = Uuid.NIL,
+                                            stepId = Uuid.NIL,
+                                            providerCallId = callId,
                                             toolName = item["name"]?.jsonPrimitive?.content ?: "",
                                             input = item["arguments"]?.jsonPrimitive?.content
                                                 ?: "",
@@ -878,7 +882,9 @@ class ResponseAPI(
                                 role = MessageRole.ASSISTANT,
                                 parts = listOf(
                                     UIMessagePart.Tool(
-                                        toolCallId = toolCallId,
+                                        localCallId = Uuid.NIL,
+                                        stepId = Uuid.NIL,
+                                        providerCallId = toolCallId,
                                         toolName = "",
                                         input = arguments,
                                         output = emptyList()
@@ -928,7 +934,9 @@ class ResponseAPI(
                                 role = MessageRole.ASSISTANT,
                                 parts = listOf(
                                     UIMessagePart.Tool(
-                                        toolCallId = toolCallId,
+                                        localCallId = Uuid.NIL,
+                                        stepId = Uuid.NIL,
+                                        providerCallId = toolCallId,
                                         toolName = "",
                                         input = delta,
                                         output = emptyList(),
@@ -1087,7 +1095,9 @@ class ResponseAPI(
                         output["arguments"]?.jsonPrimitive?.content ?: error("arguments not found")
                     parts.add(
                         UIMessagePart.Tool(
-                            toolCallId = callId,
+                            localCallId = Uuid.NIL,
+                            stepId = Uuid.NIL,
+                            providerCallId = callId,
                             toolName = name,
                             input = arguments,
                             output = emptyList()
@@ -1205,7 +1215,7 @@ class ResponseAPI(
         }
     }
 
-    private fun UIMessage.hasReplayableResponseState(
+    private fun ModelRequestMessage.hasReplayableResponseState(
         endpointProfile: ResponseEndpointProfile,
     ): Boolean {
         val responseMetadata = metadataAs<OpenAIResponseMetadata>()

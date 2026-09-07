@@ -1,65 +1,59 @@
 package net.weero.measix.pilot.service.runtime
 
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.core.ToolCallLocator
-import me.rerere.ai.ui.ToolApprovalState
+import me.rerere.ai.ui.ToolInteractionState
+import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.model.MessageNode
-import net.weero.measix.pilot.data.ai.CheckpointKind
-import net.weero.measix.pilot.data.ai.ToolResultEventStatus
-import net.weero.measix.pilot.data.ai.tools.ToolInteractionKind
-import net.weero.measix.pilot.data.ai.tools.ToolRuntimeMetadata
 import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
-import net.weero.measix.pilot.utils.JsonInstant
 import kotlin.uuid.Uuid
 
 /**
- * 用户可见的会话投影（权威方案 §3.2）。它可以重建、不参与写协议，并且结构上不含 model
+ * 用户可见的会话投影。它可以重建、不参与写协议，并且结构上不含 model
  * context：aggregate 的 modelContextEntries 在这里没有对应字段，所以 UI 不是被提醒不要读
- * 某个字段，而是根本拿不到（§17.7）。
+ * 某个字段，而是根本拿不到。
  *
  * [nodes] 已经是合并后的渲染列表：未变节点保持与 aggregate 同一实例引用（structural
- * sharing 到 Compose skip），流式期间只有末节点被 [activeTurn] 覆盖。合并规则只存在于本
+ * sharing 到 Compose skip），流式期间只有末节点被 [stream] 覆盖。合并规则只存在于本
  * 文件的 [toPresentationSnapshot]，aggregate 不再提供 renderNodes。
  */
 data class ConversationPresentationSnapshot(
     val conversationId: Uuid,
     val header: ConversationHeader,
     val nodes: List<MessageNode>,
-    val activeTurn: ActiveTurnState?,
+    val stream: TurnStreamProjection?,
 ) {
     /**
      * 与 aggregate 的 internal currentMessages() 逐项等价：末节点在 [nodes] 里已被
-     * [activeTurn] 覆盖，因此这里只需要线性投影，不存在第二份合并规则。
+     * [stream] 覆盖，因此这里只需要线性投影，不存在第二份合并规则。
      */
     fun currentMessages(): List<UIMessage> = nodes.map { it.currentMessage }
 }
 
 /**
  * aggregate 到 presentation 的唯一 projector。方向单一：presentation 永不回写 durable 事实，
- * 也不向调用方暴露 aggregate 引用。
+ * 也不向调用方暴露 aggregate 引用。durable 树与流式草稿在此合并，历史节点保持共享引用。
  */
-internal fun ConversationAggregateSnapshot.toPresentationSnapshot(): ConversationPresentationSnapshot {
-    val turn = activeTurn
-    val rendered = if (turn == null || turn.messages.isEmpty() || nodes.isEmpty()) {
-        nodes
+internal fun ConversationRuntimeSnapshot.toPresentationSnapshot(): ConversationPresentationSnapshot {
+    val turn = stream
+    val draft = turn?.assistantMessage
+    val rendered = if (draft == null || durable.nodes.isEmpty()) {
+        durable.nodes
     } else {
-        val lastIndex = nodes.lastIndex
-        nodes.mapIndexed { index, node ->
+        val lastIndex = durable.nodes.lastIndex
+        durable.nodes.mapIndexed { index, node ->
             if (index != lastIndex) node else node.copy(
-                messages = listOf(turn.messages.last()),
+                messages = listOf(draft),
                 selectIndex = 0,
             )
         }
     }
     return ConversationPresentationSnapshot(
-        conversationId = conversationId,
-        header = header,
+        conversationId = durable.conversationId,
+        header = durable.header,
         nodes = rendered,
-        activeTurn = activeTurn,
+        stream = stream,
     )
 }
 
@@ -71,7 +65,7 @@ internal fun ConversationAggregateSnapshot.toPresentationSnapshot(): Conversatio
  * protocol output. Keeping that distinction in the Runtime projection prevents UI code from
  * treating `output.isEmpty()` as the meaning of every in-flight state.
  */
-enum class ToolCallPhase {
+enum class ToolLivePhase {
     CALL_STREAMING,
     READY,
     AWAITING_APPROVAL,
@@ -85,85 +79,108 @@ enum class ToolCallPhase {
     ANSWERED,
 }
 
-val ToolCallPhase.isBusy: Boolean
-    get() = this == ToolCallPhase.CALL_STREAMING || this == ToolCallPhase.EXECUTING
+val ToolLivePhase.isBusy: Boolean
+    get() = this == ToolLivePhase.CALL_STREAMING || this == ToolLivePhase.EXECUTING
 
 /**
  * Turn-level display state. [AWAITING_USER] covers both authorization approval and user-input
- * collection; the per-call [ToolCallPhase] distinguishes them. The durable Room encoding keeps
+ * collection; the per-call [ToolLivePhase] distinguishes them. The durable Room encoding keeps
  * its historical AWAITING_APPROVAL name — this projection is the application-level meaning.
+ *
+ * 没有 IDLE 值：没有 active presentation（[ConversationPresentation.phase] 为 null）即 idle。
  */
-enum class ConversationTurnPhase {
-    IDLE,
+enum class TurnLivePhase {
     PREPARING,
-    GENERATING,
+    MODEL_WAITING,
+    MODEL_STREAMING,
+    TOOL_PREPARING,
     AWAITING_USER,
+    TOOL_EXECUTING,
     STOPPING,
 }
 
 /**
- * UI-facing turn runtime. It is derived from the private active request and durable
+ * loop 的字符串阶段词汇 → 进程内 [TurnLivePhase]。reasoning/answer 在 Turn 级合并为
+ * [TurnLivePhase.MODEL_STREAMING]（子助手卡片仍保留更细的 SubAssistantCallPhase）。
+ * 未知词汇返回 null（不改变当前 phase），绝不合并回一个笼统的 GENERATING。
+ */
+internal fun turnLivePhaseOf(phase: String): TurnLivePhase? = when (phase) {
+    "preparing" -> TurnLivePhase.PREPARING
+    "model_waiting" -> TurnLivePhase.MODEL_WAITING
+    "reasoning_streaming", "answer_streaming" -> TurnLivePhase.MODEL_STREAMING
+    "tool_preparing" -> TurnLivePhase.TOOL_PREPARING
+    "tool_executing" -> TurnLivePhase.TOOL_EXECUTING
+    "between_steps" -> TurnLivePhase.PREPARING
+    else -> null
+}
+
+/**
+ * UI-facing turn runtime. It is derived from the private active turn and durable
  * snapshot, never persisted, and is not a write protocol.
  */
 data class ConversationPresentation(
-    val activeRequestTurnId: Uuid?,
-    val phase: ConversationTurnPhase,
+    val activeTurnId: Uuid?,
+    val phase: TurnLivePhase?,
     val processingText: String?,
-    val toolCallPhases: Map<ToolCallLocator, ToolCallPhase>,
+    val toolLivePhases: Map<ToolCallLocator, ToolLivePhase>,
     /** Latest terminated request identity, used to close a receipt wait without timing guesses. */
     val lastTerminatedRequestTurnId: Uuid? = null,
 ) {
-    val isActive: Boolean get() = phase != ConversationTurnPhase.IDLE
+    val isActive: Boolean get() = phase != null
+
+    /** 正在推进的生成阶段（含等待模型与工具准备/执行），不含等待用户或正在停止。 */
+    val isWorking: Boolean
+        get() = phase != null && phase != TurnLivePhase.AWAITING_USER && phase != TurnLivePhase.STOPPING
 
     companion object {
         val IDLE = ConversationPresentation(
-            activeRequestTurnId = null,
-            phase = ConversationTurnPhase.IDLE,
+            activeTurnId = null,
+            phase = null,
             processingText = null,
-            toolCallPhases = emptyMap(),
+            toolLivePhases = emptyMap(),
         )
     }
 }
 
 internal fun resolveConversationPresentation(
-    active: ActiveRequestPresentationFacts?,
-    snapshot: ConversationAggregateSnapshot,
+    active: ActiveTurnPresentationFacts?,
+    snapshot: ConversationRuntimeSnapshot,
     lastTerminatedRequestTurnId: Uuid? = null,
 ): ConversationPresentation {
     val requestPhase = active?.phase
-    val durable = snapshot.activeTurn
+    val stream = snapshot.stream
     val phase = when {
         requestPhase != null -> requestPhase
-        durable == null -> ConversationTurnPhase.IDLE
-        durable.toolCallPhases.values.any {
-            it == ToolCallPhase.AWAITING_APPROVAL || it == ToolCallPhase.AWAITING_INPUT
-        } -> ConversationTurnPhase.AWAITING_USER
-        else -> ConversationTurnPhase.GENERATING
+        stream == null -> null
+        stream.toolLivePhases.values.any {
+            it == ToolLivePhase.AWAITING_APPROVAL || it == ToolLivePhase.AWAITING_INPUT
+        } -> TurnLivePhase.AWAITING_USER
+        else -> TurnLivePhase.MODEL_STREAMING
     }
     val joined = active?.handle?.takeIf { handle ->
-        durable != null &&
-            durable.turnId == handle.turnId &&
-            durable.epoch == handle.epoch
+        stream != null &&
+            stream.turnId == handle.turnId &&
+            stream.epoch == handle.epoch
     }
-    val toolCallPhases = when {
-        joined != null -> durable?.toolCallPhases.orEmpty()
-        requestPhase == ConversationTurnPhase.PREPARING ||
-            requestPhase == ConversationTurnPhase.STOPPING -> emptyMap()
-        durable != null && active == null -> durable.toolCallPhases
+    val toolLivePhases = when {
+        joined != null -> stream?.toolLivePhases.orEmpty()
+        requestPhase == TurnLivePhase.PREPARING ||
+            requestPhase == TurnLivePhase.STOPPING -> emptyMap()
+        stream != null && active == null -> stream.toolLivePhases
         else -> emptyMap()
     }
     return ConversationPresentation(
-        activeRequestTurnId = active?.turnId,
+        activeTurnId = active?.turnId,
         phase = phase,
         processingText = active?.processingText,
-        toolCallPhases = toolCallPhases,
+        toolLivePhases = toolLivePhases,
         lastTerminatedRequestTurnId = lastTerminatedRequestTurnId,
     )
 }
 
 internal fun ConversationRuntime.currentTurnPresentation(): ConversationPresentation =
     resolveConversationPresentation(
-        activeRequestPresentationFacts(),
+        activeTurnPresentationFacts(),
         snapshot.value,
         lastTerminatedRequestTurnId(),
     )
@@ -173,85 +190,88 @@ internal fun ConversationRuntime.currentTurnPresentation(): ConversationPresenta
  * committed phases are retained while metadata/output deltas arrive; terminal output therefore
  * cannot make a running tool look completed before its checkpoint commits.
  */
-internal fun ActiveTurnState.withStreamingMessages(nextMessages: List<UIMessage>): ActiveTurnState {
-    val assistant = nextMessages.lastOrNull { it.id == assistantMessageId }
-        ?: return copy(messages = nextMessages, toolCallPhases = emptyMap())
-    val nextPhases = assistant.getTools().mapIndexed { ordinal, _ ->
-        val locator = ToolCallLocator(assistantMessageId, ordinal)
-        val current = toolCallPhases[locator]
-        locator to (current ?: ToolCallPhase.CALL_STREAMING)
-    }.toMap()
+internal fun TurnStreamProjection.withStreamingAssistant(assistant: UIMessage): TurnStreamProjection {
+    require(assistant.id == assistantMessageId) {
+        "streaming assistant ${assistant.id} does not match the owning assistant $assistantMessageId"
+    }
+    val nextPhases = assistant.getTools().associate { tool ->
+        val locator = ToolCallLocator(assistantMessageId, tool.stepId, tool.localCallId)
+        locator to (toolLivePhases[locator] ?: ToolLivePhase.CALL_STREAMING)
+    }
     return copy(
-        messages = nextMessages,
-        toolCallPhases = nextPhases,
+        assistantMessage = assistant,
+        toolLivePhases = nextPhases,
     )
 }
 
 /** Advances the active UI projection only from an already committed checkpoint command. */
-internal fun ActiveTurnState.afterCheckpoint(command: CommitCheckpoint): ActiveTurnState {
-    val assistant = command.messages.lastOrNull { it.id == assistantMessageId } ?: return this
-    val phases = toolCallPhases.toMutableMap()
+internal fun TurnStreamProjection.afterCheckpoint(command: TurnCheckpoint): TurnStreamProjection {
+    val assistant = command.assistantMessage.takeIf { it.id == assistantMessageId } ?: return this
+    val phases = toolLivePhases.toMutableMap()
     fun setReadyPhases() {
-        assistant.getTools().forEachIndexed { ordinal, tool ->
-            val locator = ToolCallLocator(assistantMessageId, ordinal)
+        assistant.getTools().forEach { tool ->
+            val locator = ToolCallLocator(assistantMessageId, tool.stepId, tool.localCallId)
+            val existing = phases[locator]
             val phase = when {
-                tool.approvalState is ToolApprovalState.Pending -> pendingPhaseOf(tool)
-                tool.approvalState is ToolApprovalState.Denied -> ToolCallPhase.DENIED
-                tool.approvalState is ToolApprovalState.Answered -> ToolCallPhase.ANSWERED
-                phases[locator] == ToolCallPhase.FAILED -> ToolCallPhase.FAILED
-                phases[locator] == ToolCallPhase.CANCELLED -> ToolCallPhase.CANCELLED
-                phases[locator] == ToolCallPhase.INTERRUPTED -> ToolCallPhase.INTERRUPTED
-                phases[locator] == ToolCallPhase.COMPLETED -> ToolCallPhase.COMPLETED
-                else -> ToolCallPhase.READY
+                tool.isPending -> pendingPhaseOf(tool)
+                tool.interactionState is ToolInteractionState.Denied -> ToolLivePhase.DENIED
+                tool.interactionState is ToolInteractionState.Answered -> ToolLivePhase.ANSWERED
+                existing == ToolLivePhase.FAILED || existing == ToolLivePhase.CANCELLED ||
+                    existing == ToolLivePhase.INTERRUPTED || existing == ToolLivePhase.COMPLETED -> existing
+                else -> ToolLivePhase.READY
             }
             phases[locator] = phase
         }
     }
-    when (command.kind) {
-        CheckpointKind.STEP_COMPLETED,
-        CheckpointKind.AWAITING_APPROVAL,
-        -> setReadyPhases()
+    when (command) {
+        is ModelResponseCheckpoint -> setReadyPhases()
 
-        CheckpointKind.TOOL_EXECUTION_STARTED,
-        CheckpointKind.TOOL_STATE_CHANGED,
+        is ToolExecutionStartedCheckpoint,
+        is ToolExecutionUpdatedCheckpoint,
         -> command.toolExecution?.let { execution ->
             if (execution.status == ToolExecutionStatus.STARTED) {
-                phases[ToolCallLocator(assistantMessageId, execution.toolOrdinal)] = ToolCallPhase.EXECUTING
+                phases[ToolCallLocator(assistantMessageId, execution.stepId, execution.localCallId)] =
+                    ToolLivePhase.EXECUTING
             }
         }
 
-        CheckpointKind.TOOL_RESULT_COMPLETED -> {
+        is ToolResultCheckpoint -> {
             require(command.toolResults.isNotEmpty()) {
                 "tool-result checkpoint requires typed result facts"
             }
-            require(command.toolResults.map { it.toolOrdinal }.distinct().size == command.toolResults.size) {
-                "tool-result checkpoint contains duplicate tool ordinals"
+            require(command.toolResults.map { it.locator }.distinct().size == command.toolResults.size) {
+                "tool-result checkpoint contains duplicate tool locators"
             }
             val tools = assistant.getTools()
             command.toolResults.forEach { result ->
-                require(result.messageId == assistantMessageId) {
+                require(result.locator.assistantMessageId == assistantMessageId) {
                     "tool-result checkpoint targets a different assistant message"
                 }
-                require(result.toolOrdinal in tools.indices) {
-                    "tool-result checkpoint targets a missing tool ordinal"
-                }
-                require(tools[result.toolOrdinal].hasReplayResult) {
+                val target = tools.firstOrNull {
+                    it.stepId == result.locator.stepId && it.localCallId == result.locator.localCallId
+                } ?: error("tool-result checkpoint targets a missing tool call")
+                require(target.hasReplayResult) {
                     "tool-result checkpoint requires a Provider replay result"
                 }
-                phases[ToolCallLocator(result.messageId, result.toolOrdinal)] = when (result.status) {
-                    ToolResultEventStatus.COMPLETED -> ToolCallPhase.COMPLETED
-                    ToolResultEventStatus.FAILED -> ToolCallPhase.FAILED
-                    ToolResultEventStatus.DENIED -> ToolCallPhase.DENIED
-                    ToolResultEventStatus.ANSWERED -> ToolCallPhase.ANSWERED
+                phases[result.locator] = when (result.status) {
+                    ToolResultStatus.COMPLETED -> ToolLivePhase.COMPLETED
+                    ToolResultStatus.FAILED -> ToolLivePhase.FAILED
+                    ToolResultStatus.DENIED -> ToolLivePhase.DENIED
+                    ToolResultStatus.ANSWERED -> ToolLivePhase.ANSWERED
+                    ToolResultStatus.CANCELLED -> ToolLivePhase.CANCELLED
+                    ToolResultStatus.INTERRUPTED -> ToolLivePhase.INTERRUPTED
+                    ToolResultStatus.UNKNOWN -> ToolLivePhase.FAILED
                 }
             }
             command.toolExecution?.let { execution ->
-                require(command.toolResults.size == 1 && command.toolResults.single().toolOrdinal == execution.toolOrdinal) {
+                require(command.toolResults.size == 1 &&
+                    command.toolResults.single().locator.localCallId == execution.localCallId
+                ) {
                     "tool execution and result checkpoint target different tools"
                 }
                 val expected = when (execution.status) {
-                    ToolExecutionStatus.COMPLETED -> ToolResultEventStatus.COMPLETED
-                    ToolExecutionStatus.FAILED -> ToolResultEventStatus.FAILED
+                    ToolExecutionStatus.COMPLETED -> ToolResultStatus.COMPLETED
+                    ToolExecutionStatus.FAILED -> ToolResultStatus.FAILED
                     ToolExecutionStatus.STARTED,
                     ToolExecutionStatus.CANCELLED,
                     ToolExecutionStatus.UNKNOWN,
@@ -263,56 +283,61 @@ internal fun ActiveTurnState.afterCheckpoint(command: CommitCheckpoint): ActiveT
             }
         }
     }
-    // 2026-9-2 15:01 修复 "tool interaction is no longer pending"：此前只同步 toolCallPhases，
-    // messages 停留在流式投影（暂停工具仍是 Auto 旧版），而 currentMessages() 末条取自
-    // turn.messages.last()，用户决策会读到非 Pending 状态而误报。checkpoint 携带的 messages
-    // 是 committed 权威投影，activeTurn 必须一并对齐；勿回退为仅同步 phases。
-    return copy(messages = command.messages, toolCallPhases = phases)
+    // 修复 "tool interaction is no longer pending"：此前只同步 toolLivePhases，草稿的
+    // Assistant 停留在流式版本（暂停工具仍是旧版），用户决策会读到非 Pending 状态而误报。
+    // checkpoint 携带的 Assistant 是 committed 权威投影，流式草稿必须一并对齐；勿回退为仅同步 phases。
+    return copy(assistantMessage = assistant, toolLivePhases = phases)
 }
-
-fun resolveToolCallPhase(tool: UIMessagePart.Tool, activePhase: ToolCallPhase?): ToolCallPhase =
-    activePhase ?: when {
-        ToolRuntimeMetadata.isInvalid(tool.metadata) -> ToolCallPhase.FAILED
-        ToolRuntimeMetadata.terminalStatusOf(tool.metadata) == "completed" -> ToolCallPhase.COMPLETED
-        ToolRuntimeMetadata.terminalStatusOf(tool.metadata) == "failed" -> ToolCallPhase.FAILED
-        ToolRuntimeMetadata.terminalStatusOf(tool.metadata) == "denied" -> ToolCallPhase.DENIED
-        ToolRuntimeMetadata.terminalStatusOf(tool.metadata) == "answered" -> ToolCallPhase.ANSWERED
-        tool.approvalState is ToolApprovalState.Pending -> pendingPhaseOf(tool)
-        tool.approvalState is ToolApprovalState.Denied -> ToolCallPhase.DENIED
-        tool.approvalState is ToolApprovalState.Answered -> ToolCallPhase.ANSWERED
-        else -> tool.resultTerminalPhase() ?: if (tool.hasReplayResult) {
-            ToolCallPhase.COMPLETED
-        } else {
-            ToolCallPhase.READY
-        }
-    }
 
 /**
- * A paused call shows the interaction the Runtime captured when it paused. Calls without that
- * metadata predate the typed protocol; authorization approval is the safe default projection.
+ * 用户在审批/输入暂停点做出决策后，把该决策同步到流式草稿：durable reducer 已提交权威
+ * 消息，这里让在途草稿的末条 Assistant 与相位一起对齐，避免下一个 delta 到达前草稿仍显示
+ * Pending。相位映射与 durable reducer 保持一致。
  */
-private fun pendingPhaseOf(tool: UIMessagePart.Tool): ToolCallPhase =
-    when (ToolRuntimeMetadata.interactionKindOf(tool.metadata)) {
-        ToolInteractionKind.USER_INPUT -> ToolCallPhase.AWAITING_INPUT
-        else -> ToolCallPhase.AWAITING_APPROVAL
+internal fun TurnStreamProjection.afterResolve(command: ResolveToolInteraction): TurnStreamProjection {
+    val assistant = assistantMessage?.takeIf { it.id == command.messageId } ?: return this
+    val updatedMessage = TurnTransition.resolveToolInteractionInMessage(assistant, command)
+        ?: return this
+    val committedPhase = when (command.interaction) {
+        ToolInteractionState.Approved -> ToolLivePhase.READY
+        is ToolInteractionState.Denied -> ToolLivePhase.DENIED
+        is ToolInteractionState.Answered -> ToolLivePhase.ANSWERED
+        else -> error("approval command contains a non-terminal decision")
+    }
+    return copy(
+        assistantMessage = updatedMessage,
+        toolLivePhases = toolLivePhases + (
+            ToolCallLocator(command.messageId, command.stepId, command.localCallId) to committedPhase
+        ),
+    )
+}
+
+fun resolveToolLivePhase(tool: UIMessagePart.Tool, activePhase: ToolLivePhase?): ToolLivePhase =
+    activePhase ?: when {
+        tool.resultStatus != null -> phaseOfResultStatus(requireNotNull(tool.resultStatus))
+        tool.isPending -> pendingPhaseOf(tool)
+        tool.interactionState is ToolInteractionState.Denied -> ToolLivePhase.DENIED
+        tool.interactionState is ToolInteractionState.Answered -> ToolLivePhase.ANSWERED
+        else -> if (tool.hasReplayResult) ToolLivePhase.COMPLETED else ToolLivePhase.READY
     }
 
-private fun UIMessagePart.Tool.resultTerminalPhase(): ToolCallPhase? {
-    if (!hasReplayResult) return null
-    val result = runCatching {
-        JsonInstant.parseToJsonElement(
-            output.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text },
-        ).jsonObject
-    }.getOrNull() ?: return null
-    fun stringField(name: String): String? = (result[name] as? JsonPrimitive)?.contentOrNull
-    return when {
-        stringField("status") == "cancelled" -> ToolCallPhase.CANCELLED
-        stringField("status") == "interrupted" -> ToolCallPhase.INTERRUPTED
-        stringField("status") in setOf("failed", "stopped", "unavailable") -> ToolCallPhase.FAILED
-        result["error"] != null && stringField("type") == "error" ->
-            ToolCallPhase.FAILED
-        result["error"] != null && stringField("type") == "timeout" ->
-            ToolCallPhase.FAILED
-        else -> null
-    }
+private fun phaseOfResultStatus(status: ToolResultStatus): ToolLivePhase = when (status) {
+    ToolResultStatus.COMPLETED -> ToolLivePhase.COMPLETED
+    ToolResultStatus.FAILED -> ToolLivePhase.FAILED
+    ToolResultStatus.DENIED -> ToolLivePhase.DENIED
+    ToolResultStatus.ANSWERED -> ToolLivePhase.ANSWERED
+    ToolResultStatus.CANCELLED -> ToolLivePhase.CANCELLED
+    ToolResultStatus.INTERRUPTED -> ToolLivePhase.INTERRUPTED
+    ToolResultStatus.UNKNOWN -> ToolLivePhase.FAILED
 }
+
+/**
+ * A paused call shows the interaction the Runtime captured when it paused: the typed
+ * [ToolInteractionState] distinguishes authorization approval from user-input collection.
+ */
+private fun pendingPhaseOf(tool: UIMessagePart.Tool): ToolLivePhase =
+    when (tool.interactionState) {
+        ToolInteractionState.AwaitingInput -> ToolLivePhase.AWAITING_INPUT
+        ToolInteractionState.AwaitingApproval -> ToolLivePhase.AWAITING_APPROVAL
+        else -> error("pendingPhaseOf requires a pending interaction, got ${tool.interactionState}")
+    }

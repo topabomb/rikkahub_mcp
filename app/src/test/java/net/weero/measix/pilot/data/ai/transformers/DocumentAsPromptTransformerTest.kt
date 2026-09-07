@@ -1,6 +1,6 @@
 package net.weero.measix.pilot.data.ai.transformers
 
-import net.weero.measix.pilot.service.runtime.resolveAssistantRequest
+import net.weero.measix.pilot.service.turn.resolveTurnAssistantSnapshot
 
 import net.weero.measix.pilot.test.testPromptInputs
 
@@ -30,7 +30,7 @@ class DocumentAsPromptTransformerTest {
     private fun contextFor() = TransformerContext(
         context = context,
         model = model,
-        assistant = resolveAssistantRequest(assistant),
+        assistant = resolveTurnAssistantSnapshot(assistant),
         promptInputs = testPromptInputs(),
         requestOrigins = RequestMessageOriginTracker(),
         registerUnpublishedResource = {},

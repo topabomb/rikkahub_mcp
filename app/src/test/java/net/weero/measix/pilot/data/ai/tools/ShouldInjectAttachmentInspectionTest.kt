@@ -15,6 +15,7 @@ import net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot
 import net.weero.measix.pilot.data.ai.tools.local.LocalTools
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.service.runtime.TurnKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -93,7 +94,7 @@ class ShouldInjectAttachmentInspectionTest {
         every { providerManager.getProviderByType(any()) } returns adapter
         val localTools = mockk<LocalTools>()
         every { localTools.getTools(any(), any(), any()) } returns emptyList()
-        val factory = GenerationToolSetFactory(
+        val factory = TurnToolSetFactory(
             localTools = localTools,
             conversationQueryService = mockk(),
             skillManager = mockk(),
@@ -105,12 +106,12 @@ class ShouldInjectAttachmentInspectionTest {
         )
 
         listOf(inspection, model(listOf(Modality.TEXT)), null).forEach { currentModel ->
-            ToolSetRunMode.entries.forEach { mode ->
+            TurnKind.entries.forEach { mode ->
                 val tools = factory.buildTools(
                     assistant = Assistant(workspaceId = null),
                     settings = settings,
                     capabilityModel = currentModel,
-                    runMode = mode,
+                    turnKind = mode,
                     mcpCapabilities = TurnMcpCapabilitySnapshot(tools = emptyList()),
                 )
                 assertEquals(listOf("read_tool_output", "grep_tool_output", ATTACHMENT_INSPECTION_TOOL_NAME), tools.map { it.name })

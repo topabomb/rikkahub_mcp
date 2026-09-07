@@ -9,6 +9,7 @@ import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.testsupport.toModelRequests
 import me.rerere.ai.util.KeyRoulette
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
@@ -36,7 +37,7 @@ class ChatCompletionsAPIMoonshotTest {
             reasoningLevel = reasoningLevel,
         )
         return api.buildChatCompletionRequest(
-            messages = listOf(UIMessage.user("hi")),
+            messages = listOf(UIMessage.user("hi")).toModelRequests(),
             params = params,
             providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.moonshot.cn/v1"),
             stream = true,

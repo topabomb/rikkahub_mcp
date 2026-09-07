@@ -54,14 +54,14 @@ class SubAssistantFinalAnswerTest {
     )
 
     private fun executedTool(name: String = "search") = UIMessagePart.Tool(
-        toolCallId = Uuid.random().toString(),
+        localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = Uuid.random().toString(),
         toolName = name,
         input = "{}",
         output = listOf(UIMessagePart.Text("tool result")),
     )
 
     private fun pendingTool(name: String = "search") = UIMessagePart.Tool(
-        toolCallId = Uuid.random().toString(),
+        localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = Uuid.random().toString(),
         toolName = name,
         input = "{}",
     )
@@ -299,18 +299,18 @@ class SubAssistantFinalAnswerTest {
     @Test
     fun `tts texts follow call order and skip blank input`() {
         val spoken = UIMessagePart.Tool(
-            toolCallId = "tts-1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tts-1",
             toolName = "text_to_speech",
             input = """{"text":"Hello there."}""",
             output = listOf(UIMessagePart.Text("""{"success":true}""")),
         )
         val blank = UIMessagePart.Tool(
-            toolCallId = "tts-2",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tts-2",
             toolName = "text_to_speech",
             input = """{"text":"  "}""",
         )
         val second = UIMessagePart.Tool(
-            toolCallId = "tts-3",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tts-3",
             toolName = "text_to_speech",
             input = """{"text":"Second line."}""",
         )
@@ -335,7 +335,7 @@ class SubAssistantFinalAnswerTest {
             assistantMessage(
                 executedTool("search_web"),
                 UIMessagePart.Tool(
-                    toolCallId = "tts-1",
+                    localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tts-1",
                     toolName = "text_to_speech",
                     input = """{"text":"Hello there."}""",
                 ),
@@ -435,7 +435,7 @@ class SubAssistantFinalAnswerTest {
             assistantMessage(
                 UIMessagePart.Text("Working"),
                 UIMessagePart.Tool(
-                    toolCallId = "g1",
+                    localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "g1",
                     toolName = "generate_image",
                     input = "{}",
                     output = listOf(

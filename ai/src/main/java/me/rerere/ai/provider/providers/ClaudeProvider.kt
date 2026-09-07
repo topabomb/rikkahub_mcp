@@ -44,6 +44,7 @@ import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
+import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.ClaudeReasoningMetadata
@@ -192,7 +193,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
 
     override suspend fun generateText(
         providerSetting: ProviderSetting.Claude,
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         params: TextGenerationParams
     ): MessageChunk = withContext(Dispatchers.IO) {
         val requestBody = buildMessageRequest(providerSetting, messages, params)
@@ -239,7 +240,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
 
     override suspend fun streamText(
         providerSetting: ProviderSetting.Claude,
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         params: TextGenerationParams
     ): Flow<MessageChunk> = callbackFlow {
         val requestBody = buildMessageRequest(providerSetting, messages, params, stream = true)
@@ -353,7 +354,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
 
     private fun buildMessageRequest(
         providerSetting: ProviderSetting.Claude,
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         params: TextGenerationParams,
         stream: Boolean = false
     ): JsonObject {
@@ -441,7 +442,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
     }
 
     private fun buildMessages(
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         promptCaching: Boolean,
         promptCacheTtl: ClaudePromptCacheTtl,
         mediaCapabilities: RequestMediaCapabilities,
@@ -502,7 +503,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
     }
 
     private fun JsonArrayBuilder.addAssistantMessage(
-        message: UIMessage,
+        message: ModelRequestMessage,
         mediaCapabilities: RequestMediaCapabilities,
     ) {
         val groups = groupPartsByToolBoundary(message.parts)
@@ -548,7 +549,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
     }
 
     private fun JsonArrayBuilder.addUserMessage(
-        message: UIMessage,
+        message: ModelRequestMessage,
         mediaCapabilities: RequestMediaCapabilities,
     ) {
         add(buildJsonObject {
@@ -601,7 +602,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
 
     private fun UIMessagePart.Tool.toToolUseBlock() = buildJsonObject {
         put("type", "tool_use")
-        put("id", toolCallId)
+        put("id", providerCallId)
         put("name", toolName)
         put("input", inputAsJson())
     }
@@ -610,7 +611,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         mediaCapabilities: RequestMediaCapabilities,
     ) = buildJsonObject {
         put("type", "tool_result")
-        put("tool_use_id", toolCallId)
+        put("tool_use_id", providerCallId)
         putJsonArray("content") {
             output.mapNotNull { it.toContentBlock(mediaCapabilities.toolOutputImages) }.forEach { add(it) }
         }
@@ -635,15 +636,14 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     val thinking = block["thinking"]?.jsonPrimitive?.contentOrNull ?: ""
                     val signature = block["signature"]?.jsonPrimitive?.contentOrNull
                     if (thinking.isNotEmpty() || signature != null) {
-                        val reasoning = UIMessagePart.Reasoning(
-                            reasoning = thinking,
-                            createdAt = Clock.System.now(),
-                            finishedAt = null
+                        parts.add(
+                            UIMessagePart.Reasoning(
+                                reasoning = thinking,
+                                createdAt = Clock.System.now(),
+                                finishedAt = null,
+                                metadata = signature?.let { ClaudeReasoningMetadata(signature = it).toMetadata() },
+                            )
                         )
-                        if (signature != null) {
-                            reasoning.metadata = ClaudeReasoningMetadata(signature = signature).toMetadata()
-                        }
-                        parts.add(reasoning)
                     }
                 }
 
@@ -667,7 +667,9 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     val input = block["input"]?.jsonObject ?: JsonObject(emptyMap())
                     parts.add(
                         UIMessagePart.Tool(
-                            toolCallId = id,
+                            localCallId = Uuid.NIL,
+                            stepId = Uuid.NIL,
+                            providerCallId = id,
                             toolName = name,
                             input = if (input.isEmpty()) "" else json.encodeToString(input),
                             output = emptyList()
@@ -679,7 +681,9 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     val input = block["partial_json"]?.jsonPrimitive?.contentOrNull
                     parts.add(
                         UIMessagePart.Tool(
-                            toolCallId = "",
+                            localCallId = Uuid.NIL,
+                            stepId = Uuid.NIL,
+                            providerCallId = "",
                             toolName = "",
                             input = input ?: "",
                             output = emptyList()
@@ -733,9 +737,9 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
  * remain untouched for persistence compatibility.
  */
 internal fun stripClaudeThinkingFromOtherModels(
-    messages: List<UIMessage>,
+    messages: List<ModelRequestMessage>,
     activeModelId: Uuid,
-): List<UIMessage> = messages.map { message ->
+): List<ModelRequestMessage> = messages.map { message ->
     if (message.role == MessageRole.ASSISTANT &&
         message.modelId != null &&
         message.modelId != activeModelId

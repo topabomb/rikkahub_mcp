@@ -1,5 +1,6 @@
 package me.rerere.ai.provider.providers
-
+import me.rerere.ai.testsupport.executedTool
+import me.rerere.ai.testsupport.canonicalMultiRoundToolTurn
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -14,6 +15,8 @@ import me.rerere.ai.provider.ClaudePromptCacheTtl
 import me.rerere.ai.provider.RequestImageSupport
 import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.ui.ClaudeReasoningMetadata
+import me.rerere.ai.testsupport.toModelRequest
+import me.rerere.ai.testsupport.toModelRequests
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
@@ -63,7 +66,7 @@ class ClaudeProviderMessageTest {
         method.isAccessible = true
         return method.invoke(
             provider,
-            messages,
+            messages.toModelRequests(),
             false,
             ClaudePromptCacheTtl.FIVE_MINUTES,
             mediaCapabilities,
@@ -88,7 +91,7 @@ class ClaudeProviderMessageTest {
                 parts = listOf(
                     UIMessagePart.Text(assistantFact),
                     UIMessagePart.Tool(
-                        toolCallId = "call_1",
+                        localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call_1",
                         toolName = "generate_image",
                         input = "{}",
                         output = listOf(UIMessagePart.Text(toolFact)),
@@ -115,22 +118,7 @@ class ClaudeProviderMessageTest {
 
     @Test
     fun `multi-round tool calls should produce tool_use followed by tool_result`() {
-        // Scenario: Multiple rounds of tool calls
-        val assistantMessage = UIMessage(
-            role = MessageRole.ASSISTANT,
-            parts = listOf(
-                UIMessagePart.Text("Let me search"),
-                createExecutedTool("call_1", "search", """{"query": "test"}""", "Search result"),
-                UIMessagePart.Text("Now calculating"),
-                createExecutedTool("call_2", "calculate", """{"expr": "2+2"}""", "4"),
-                UIMessagePart.Text("The answer is 4")
-            )
-        )
-
-        val messages = listOf(
-            UIMessage.user("Calculate something"),
-            assistantMessage
-        )
+        val messages = canonicalMultiRoundToolTurn()
 
         val result = invokeBuildMessages(messages)
 
@@ -180,7 +168,7 @@ class ClaudeProviderMessageTest {
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Text("Using tool"),
-                createExecutedTool("call_abc", "my_tool", "{}", "Tool output")
+                executedTool("call_abc", "my_tool", "{}", "Tool output")
             )
         )
 
@@ -264,10 +252,10 @@ class ClaudeProviderMessageTest {
             parts = listOf(
                 UIMessagePart.Reasoning(reasoning = "Step 1: Search for info"),
                 UIMessagePart.Text("Searching..."),
-                createExecutedTool("call_1", "search", "{}", "Found data"),
+                executedTool("call_1", "search", "{}", "Found data"),
                 UIMessagePart.Reasoning(reasoning = "Step 2: Analyze the data"),
                 UIMessagePart.Text("Analyzing..."),
-                createExecutedTool("call_2", "analyze", "{}", "Analysis complete"),
+                executedTool("call_2", "analyze", "{}", "Analysis complete"),
                 UIMessagePart.Reasoning(reasoning = "Step 3: Present results"),
                 UIMessagePart.Text("Here are the results")
             )
@@ -329,9 +317,9 @@ class ClaudeProviderMessageTest {
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Text("Running multiple tools"),
-                createExecutedTool("call_1", "tool_a", "{}", "Result A"),
-                createExecutedTool("call_2", "tool_b", "{}", "Result B"),
-                createExecutedTool("call_3", "tool_c", "{}", "Result C"),
+                executedTool("call_1", "tool_a", "{}", "Result A"),
+                executedTool("call_2", "tool_b", "{}", "Result B"),
+                executedTool("call_3", "tool_c", "{}", "Result C"),
                 UIMessagePart.Text("All done")
             )
         )
@@ -460,29 +448,15 @@ class ClaudeProviderMessageTest {
             ),
         )
 
-        val stripped = stripClaudeThinkingFromOtherModels(listOf(message), activeModelId).single()
+        val stripped = stripClaudeThinkingFromOtherModels(listOf(message.toModelRequest()), activeModelId).single()
         assertTrue(stripped.parts.none { it is UIMessagePart.Reasoning })
         assertEquals("visible answer", (stripped.parts.single() as UIMessagePart.Text).text)
 
-        val unchanged = stripClaudeThinkingFromOtherModels(listOf(message), oldModelId).single()
+        val unchanged = stripClaudeThinkingFromOtherModels(listOf(message.toModelRequest()), oldModelId).single()
         assertTrue(unchanged.parts.first() is UIMessagePart.Reasoning)
     }
 
     // ==================== Helper Functions ====================
-
-    private fun createExecutedTool(
-        callId: String,
-        name: String,
-        input: String,
-        output: String
-    ): UIMessagePart.Tool {
-        return UIMessagePart.Tool(
-            toolCallId = callId,
-            toolName = name,
-            input = input,
-            output = listOf(UIMessagePart.Text(output))
-        )
-    }
 
     // ==================== Custom Body Ownership Tests ====================
 
@@ -511,7 +485,7 @@ class ClaudeProviderMessageTest {
             Boolean::class.javaPrimitiveType,
         )
         method.isAccessible = true
-        return method.invoke(provider, providerSetting, messages, params, false) as JsonObject
+        return method.invoke(provider, providerSetting, messages.toModelRequests(), params, false) as JsonObject
     }
 
     @org.junit.Test
@@ -558,3 +532,4 @@ class ClaudeProviderMessageTest {
         assertTrue(body.containsKey("metadata"))
     }
 }
+

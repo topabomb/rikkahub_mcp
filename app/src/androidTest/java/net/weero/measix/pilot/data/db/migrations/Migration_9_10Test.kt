@@ -30,7 +30,7 @@ import org.junit.runner.RunWith
 import kotlin.uuid.Uuid
 
 /**
- * Room migration 验收（§17.1）。
+ * Room migration 验收。
  *
  * v9 -> v10 必须纯 additive：历史行逐字保留、新表为空、fresh 与 migrated schema 同构，
  * 且 owner / anchor node 与整个 Conversation 的删除都能真正收口 context 行。
@@ -284,7 +284,7 @@ class Migration_9_10Test {
     }
 
     /**
-     * 装载查询是 §5.2 归属规则的唯一实现：Conversation 由 owner node 反推，顺序来自消息树。
+     * 装载查询是归属规则的唯一实现：Conversation 由 owner node 反推，顺序来自消息树。
      * 这里同时证明 anchor 指向别的 Conversation 不会把该条目算进那个 Conversation。
      */
     @Test
@@ -337,12 +337,12 @@ class Migration_9_10Test {
     }
 
     /**
-     * §17.1 要求 fail-closed 的是**装载**而不是 DAO 约束：迁移后的 v10 上，跨 Conversation 的
+     * 要求 fail-closed 的是**装载**而不是 DAO 约束：迁移后的 v10 上，跨 Conversation 的
      * anchor 与角色错误的 owner 都必须让 Repository 装载抛错，而不是静默把 context 当作不存在。
      */
     @Test
     fun repositoryLoadFailsClosedOnCrossConversationAnchorAndWrongOwnerRole() = runBlocking {
-        withMigratedV10Database { db ->
+        withMigratedToCurrentSchemaDatabase { db ->
             seedNodes(db)
             db.conversationDao().insert(
                 ConversationEntity(
@@ -391,19 +391,19 @@ class Migration_9_10Test {
         artifactStore = mockk<ArtifactStore>(relaxed = true),
     )
 
-    /** 真实 v9 → v10 迁移产物，再按生产前提启用 FK，用于验证迁移后 schema 上的装载语义。 */
-    private suspend fun withMigratedV10Database(block: suspend (AppDatabase) -> Unit) {
-        val name = "migration-v9-v10-repository-load"
+    /** 真实 v9 → v10 → v11 迁移产物，再按生产前提启用 FK，用于验证当前 schema 上的装载语义。 */
+    private suspend fun withMigratedToCurrentSchemaDatabase(block: suspend (AppDatabase) -> Unit) {
+        val name = "migration-v9-v11-repository-load"
         context.deleteDatabase(name)
         helper.createDatabase(name, 9).close()
         helper.runMigrationsAndValidate(name, 10, true, Migration_9_10).close()
         val db = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(Migration_9_10)
+            .addMigrations(Migration_9_10, Migration_10_11)
             .allowMainThreadQueries()
             .build()
         try {
             db.openHelper.writableDatabase.execSQL("PRAGMA foreign_keys = ON")
-            assertEquals(10, db.openHelper.readableDatabase.version)
+            assertEquals(11, db.openHelper.readableDatabase.version)
             block(db)
         } finally {
             db.close()

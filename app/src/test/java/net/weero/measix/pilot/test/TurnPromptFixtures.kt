@@ -1,7 +1,7 @@
 package net.weero.measix.pilot.test
 
-import net.weero.measix.pilot.service.runtime.FrozenTurnPromptInputs
-import net.weero.measix.pilot.service.runtime.ResolvedPromptInjection
+import net.weero.measix.pilot.service.turn.TurnPromptSnapshot
+import net.weero.measix.pilot.service.turn.ResolvedPromptInjection
 import java.time.ZoneId
 import java.util.Locale
 
@@ -11,7 +11,7 @@ fun testPromptInputs(
     workspaceReminder: String? = null,
     enableTimeReminder: Boolean = false,
     placeholderValues: Map<String, String> = emptyMap(),
-): FrozenTurnPromptInputs = FrozenTurnPromptInputs(
+): TurnPromptSnapshot = TurnPromptSnapshot(
     messageTemplate = messageTemplate,
     promptInjections = promptInjections,
     workspaceReminder = workspaceReminder,

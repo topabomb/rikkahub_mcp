@@ -42,7 +42,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.longOrNull
-import me.rerere.ai.ui.ToolApprovalState
+import me.rerere.ai.ui.ToolInteractionState
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.File02
@@ -252,7 +252,7 @@ internal fun editedWorkspaceFilePaths(parts: List<UIMessagePart>): List<String> 
 /** A completed file mutation is described by its result, never inferred from requested arguments. */
 private fun successfulWorkspaceFilePath(tool: UIMessagePart.Tool): String? {
     if (tool.toolName !in WORKSPACE_FILE_TOOL_NAMES ||
-        tool.approvalState is ToolApprovalState.Denied || tool.approvalState is ToolApprovalState.Pending
+        tool.interactionState is ToolInteractionState.Denied || tool.isPending
     ) return null
     val text = (tool.output.singleOrNull() as? UIMessagePart.Text)?.text ?: return null
     val result = try {

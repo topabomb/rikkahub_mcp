@@ -16,6 +16,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.core.ToolAttachmentResolution
 import me.rerere.ai.core.ToolArgumentsException
 import me.rerere.ai.core.ToolExecutionFailure
@@ -161,9 +162,7 @@ class ImageGenerationToolCompensationTest {
         val result = runCatching {
             tool.executeWithContext(
                 ToolExecutionContext(
-                    messageId = Uuid.random(),
-                    toolOrdinal = 0,
-                    toolCallId = "call",
+                    locator = ToolCallLocator(Uuid.random(), Uuid.random(), Uuid.random()), providerCallId = "call",
                     reportMetadata = { _, _ -> },
                     resolveAttachments = { ToolAttachmentResolution(failureReason = "not_used") },
                     reportChildConversation = { },
@@ -231,9 +230,7 @@ class ImageGenerationToolCompensationTest {
         val metadataPatches = mutableListOf<Pair<JsonObject, ToolMetadataDelivery>>()
         val parts = tool.executeWithContext(
             ToolExecutionContext(
-                messageId = Uuid.random(),
-                toolOrdinal = 0,
-                toolCallId = "call",
+                locator = ToolCallLocator(Uuid.random(), Uuid.random(), Uuid.random()), providerCallId = "call",
                 reportMetadata = { patch, delivery -> metadataPatches += patch to delivery },
                 resolveAttachments = { ToolAttachmentResolution(failureReason = "not_used") },
                 reportChildConversation = { },

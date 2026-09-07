@@ -39,7 +39,7 @@ class SubAssistantPreviewReducerTest {
             parts = listOf(
                 UIMessagePart.Text(text),
                 UIMessagePart.Tool(
-                    toolCallId = "call_${Uuid.random()}",
+                    localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call_${Uuid.random()}",
                     toolName = toolName,
                     input = "{}",
                 ),

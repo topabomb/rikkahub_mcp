@@ -6,6 +6,11 @@ import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.data.datastore.Settings
 import kotlin.uuid.Uuid
 
+/** Live transport credentials are leased without allowing Settings to change the frozen wire shape. */
+internal fun interface ProviderTransportLease {
+    suspend fun acquire(): ProviderSetting
+}
+
 /** Immutable provider options that may affect one Turn's request wire shape. */
 internal sealed interface FrozenProviderWireShape {
     val id: Uuid

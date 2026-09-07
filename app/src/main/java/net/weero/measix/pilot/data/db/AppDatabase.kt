@@ -35,12 +35,14 @@ import net.weero.measix.pilot.utils.JsonInstant
 
 /**
  * Room schema 版本。新增表/列只允许 additive migration，且必须同步
- * `app/schemas/.../<version>.json`、`DataSourceModule` 的迁移注册与对应 `Migration_N_MTest`。
+ * `app/schemas/.../<version>.json`、`AppDatabaseFactory.createAppDatabase` 的迁移注册与对应 `Migration_N_MTest`。
  *
- * v10：唯一新增 `conversation_model_context`（模型上下文条目的 durable 落点）。
- * Settings/DataStore、Memory 表结构与 `rikkahub-durable-v4` 备份 manifest 不随该版本变化。
+ * v11：V3 Turn/Step/Tool typed transcript。`message_node` 新增 `transcript_schema`；
+ * `tool_execution` 以 `step_id` + `local_call_id` 取代 `tool_ordinal` 并新增 Child 链列；
+ * `turn_execution.status` 文本 `AWAITING_APPROVAL`→`AWAITING_USER`、`CREATED` 收口为 `INTERRUPTED`。
+ * 历史 `messages` payload 由 `Migration_10_11` 经 `LegacyTurnTranscriptMigrator` 逐行转换。
  */
-const val APP_DATABASE_VERSION = 10
+const val APP_DATABASE_VERSION = 11
 
 @Database(
     entities = [

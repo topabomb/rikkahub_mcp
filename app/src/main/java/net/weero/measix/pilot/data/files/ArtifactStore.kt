@@ -1191,7 +1191,7 @@ class ArtifactStore(
 
     /**
      * 节点引用解析（typed）：引用 token = file:// URL + Tool.metadata 的 LocalArtifactRef
-     * 相对路径 + tool_runtime.archive.artifact（collectArtifactReferences）。URL 转 filesDir
+     * 相对路径 + runtimeState.archive.artifact（collectArtifactReferences）。URL 转 filesDir
      * 相对路径，相对路径 token 直用；引用类型按来源语义登记（ATTACHMENT / TOOL_OUTPUT），
      * metadata-only 引用（generate_image artifact 等）同样登记、阻止 GC 回收。
      */

@@ -12,12 +12,9 @@ import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
 
 @Dao
 interface MessageNodeDAO {
-    @Query("SELECT * FROM message_node WHERE conversation_id = :conversationId ORDER BY node_index ASC")
-    suspend fun getNodesOfConversation(conversationId: String): List<MessageNodeEntity>
-
     @Query(
         "SELECT id, node_index AS nodeIndex, select_index AS selectIndex, " +
-            "length(messages) AS messagesLength FROM message_node " +
+            "length(messages) AS messagesLength, transcript_schema AS transcriptSchema FROM message_node " +
             "WHERE conversation_id = :conversationId ORDER BY node_index ASC"
     )
     suspend fun getNodeHeadersOfConversation(conversationId: String): List<MessageNodePayloadHeader>
@@ -104,6 +101,7 @@ data class MessageNodePayloadHeader(
     val nodeIndex: Int,
     val selectIndex: Int,
     val messagesLength: Int,
+    val transcriptSchema: Int,
 )
 
 class MessagePayloadReadException(message: String) : IllegalStateException(message)
@@ -113,6 +111,13 @@ suspend fun MessageNodeDAO.readMessagesPayload(
     header: MessageNodePayloadHeader,
     owner: String,
 ): String {
+    // Fail-closed transcript gate for every reader: a node not on the current V3 schema is corrupt
+    // and must never be decoded as V3, whether it is loaded for runtime or a recovery projection.
+    if (header.transcriptSchema != MessageNodeEntity.TRANSCRIPT_SCHEMA_VERSION) {
+        throw MessagePayloadReadException(
+            "unsupported transcript schema ${header.transcriptSchema}: $owner, node=${header.id}",
+        )
+    }
     var consumedCharacters = 0
     var startOneBased = 1
     val payload = buildString(header.messagesLength) {

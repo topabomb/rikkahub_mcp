@@ -1,4 +1,6 @@
 package net.weero.measix.pilot.ui.pages.assistant.detail
+import net.weero.measix.pilot.service.turn.freezeTurnPromptSnapshot
+import net.weero.measix.pilot.service.turn.resolveTurnAssistantSnapshot
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowDown01
@@ -374,8 +376,8 @@ private fun AssistantPromptContent(
                                 ctx = TransformerContext(
                                     context = context,
                                     model = Model(modelId = "gpt-4o", displayName = "GPT-4o"),
-                                    assistant = net.weero.measix.pilot.service.runtime.resolveAssistantRequest(assistant),
-                                    promptInputs = net.weero.measix.pilot.service.runtime.freezeTurnPromptInputs(
+                                    assistant = net.weero.measix.pilot.service.turn.resolveTurnAssistantSnapshot(assistant),
+                                    promptInputs = net.weero.measix.pilot.service.turn.freezeTurnPromptSnapshot(
                                         settings = settings,
                                         assistant = assistant,
                                         model = Model(modelId = "gpt-4o", displayName = "GPT-4o"),

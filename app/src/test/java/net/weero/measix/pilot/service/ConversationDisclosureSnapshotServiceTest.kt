@@ -18,7 +18,7 @@ import java.util.TimeZone
 import kotlin.uuid.Uuid
 
 /**
- * 权威方案 §17.4 canonical content 验收：Snapshot 必须是对同一业务数据逐字复现的完整
+ * Canonical content 验收：Snapshot 必须是对同一业务数据逐字复现的完整
  * baseline；数据内容不能破坏结构；时钟 / Locale / 时区不参与渲染；任何非法 envelope
  * 都必须 fail-closed，而不是被静默当作“没有 context”。
  */

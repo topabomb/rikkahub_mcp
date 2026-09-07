@@ -1,35 +1,21 @@
 package net.weero.measix.pilot.di
 
-import androidx.room.Room
-import androidx.room.RoomDatabase
-import androidx.sqlite.db.SupportSQLiteDatabase
 import android.content.Context
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.http.HttpHeaders
 import io.pebbletemplates.pebble.PebbleEngine
-import io.requery.android.database.sqlite.RequerySQLiteOpenHelperFactory
-import io.requery.android.database.sqlite.SQLiteCustomExtension
 import kotlinx.serialization.json.Json
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.common.http.AcceptLanguageBuilder
 import net.weero.measix.pilot.BuildConfig
 import net.weero.measix.pilot.data.ai.RequestLoggingInterceptor
-import net.weero.measix.pilot.data.ai.GenerationLoop
+import net.weero.measix.pilot.service.turn.TurnRunner
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.fts.MessageFtsManager
-import net.weero.measix.pilot.data.db.fts.SimpleDictManager
-import net.weero.measix.pilot.data.db.migrations.Migration_1_2
-import net.weero.measix.pilot.data.db.migrations.Migration_2_3
-import net.weero.measix.pilot.data.db.migrations.Migration_3_4
-import net.weero.measix.pilot.data.db.migrations.Migration_4_5
-import net.weero.measix.pilot.data.db.migrations.Migration_5_6
-import net.weero.measix.pilot.data.db.migrations.Migration_6_7
-import net.weero.measix.pilot.data.db.migrations.Migration_7_8
-import net.weero.measix.pilot.data.db.migrations.Migration_8_9
-import net.weero.measix.pilot.data.db.migrations.Migration_9_10
+import net.weero.measix.pilot.data.db.createAppDatabase
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
 import net.weero.measix.pilot.data.ai.mcp.McpCatalogStore
 import net.weero.measix.pilot.data.ai.mcp.OAuthCallbackKeepAlive
@@ -56,69 +42,7 @@ val dataSourceModule = module {
 
     single {
         val context: Context = get()
-        Room.databaseBuilder(context, AppDatabase::class.java, "measix_pilot")
-            .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-            .addMigrations(
-                Migration_1_2,
-                Migration_2_3,
-                Migration_3_4,
-                Migration_4_5,
-                Migration_5_6,
-                Migration_6_7,
-                Migration_7_8,
-                Migration_8_9,
-                Migration_9_10,
-            )
-            .addCallback(object : RoomDatabase.Callback() {
-                override fun onOpen(db: SupportSQLiteDatabase) {
-                    // FK 约束运行时启用（每个连接）：v7 自引用 CASCADE（孤儿 child
-                    // 结构性不可能）与 message_node / artifact_reference 的级联清理
-                    // 依赖此开关。onOpen 晚于 onUpgrade → 迁移期间 FK 保持 OFF，
-                    // Migration_6_7 的表重建安全（DROP TABLE 的隐式 DELETE 不级联）。
-                    db.execSQL("PRAGMA foreign_keys = ON")
-                    val dictDir = SimpleDictManager.extractDict(context)
-                    val cursor = db.query("SELECT jieba_dict(?)", arrayOf(dictDir.absolutePath))
-                    cursor.use {
-                        if (it.moveToFirst()) {
-                            val result = it.getString(0)
-                            val success = result?.trimEnd('/') == dictDir.absolutePath.trimEnd('/')
-                            if (!success) {
-                                android.util.Log.e(
-                                    "DataSourceModule",
-                                    "jieba_dict failed: $result, path=${dictDir.absolutePath}"
-                                )
-                            }
-                        }
-                    }
-                    db.execSQL(
-                        """
-                        CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
-                            text,
-                            node_id UNINDEXED,
-                            message_id UNINDEXED,
-                            conversation_id UNINDEXED,
-                            title UNINDEXED,
-                            update_at UNINDEXED,
-                            tokenize = 'simple'
-                        )
-                        """.trimIndent()
-                    )
-                }
-            })
-            .openHelperFactory(
-                RequerySQLiteOpenHelperFactory(
-                    listOf(
-                RequerySQLiteOpenHelperFactory.ConfigurationOptions { options ->
-                    options.customExtensions.add(
-                        SQLiteCustomExtension(
-                            context.applicationInfo.nativeLibraryDir + "/libsimple",
-                            null
-                        )
-                    )
-                    options
-                }
-            )))
-            .build()
+        createAppDatabase(context, "measix_pilot")
     }
 
     single {
@@ -210,7 +134,7 @@ val dataSourceModule = module {
     single { McpQueryService(settingsStore = get(), coordinator = get(), scope = get()) }
 
     single {
-        GenerationLoop(
+        TurnRunner(
             context = get(),
             providerManager = get(),
             json = get(),

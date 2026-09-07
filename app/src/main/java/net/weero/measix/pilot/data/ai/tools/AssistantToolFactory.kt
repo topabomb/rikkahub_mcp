@@ -35,7 +35,8 @@ import net.weero.measix.pilot.data.model.normalizeDescription
 import net.weero.measix.pilot.utils.jsonPrimitiveOrNull
 import net.weero.measix.pilot.service.AssistantDeletionResult
 import net.weero.measix.pilot.service.AssistantManagementService
-import net.weero.measix.pilot.service.runtime.DelegationCoordinator
+import net.weero.measix.pilot.service.subassistant.SubAssistantRunCoordinator
+import net.weero.measix.pilot.service.runtime.TurnKind
 import kotlin.uuid.Uuid
 
 private const val TOOL_ASSISTANT_MANAGE = "assistant_manage"
@@ -91,17 +92,17 @@ internal fun parseAssistantManageArguments(args: kotlinx.serialization.json.Json
  * - [AssistantDelegation] → [TOOL_ASSISTANT_CALL]
  *
  * 子助手 Catalog 不再经工具 System Prompt 动态注入：可见集合只由
- * ConversationDisclosureSnapshotService 在每次新 START 写入 canonical Snapshot（§11.2）；
- * 执行时授权仍由 SubAssistantAccessPolicy 按 live Settings fail-closed（§11.3）。
+ * ConversationDisclosureSnapshotService 在每次新 START 写入 canonical Snapshot；
+ * 执行时授权仍由 SubAssistantAccessPolicy 按 live Settings fail-closed。
  */
 class AssistantToolFactory(
     private val settingsStore: SettingsStore,
     private val assistantManagementService: AssistantManagementService,
     private val json: Json,
     /** 子助手调用的唯一执行协调器。 */
-    private val delegationCoordinator: DelegationCoordinator,
-    /** 提供 Target Run 可注册工具名；memory_tool 由 GenerationLoop 另加，listing 时需补上。 */
-    private val toolSetFactory: GenerationToolSetFactory,
+    private val subAssistantRunCoordinator: SubAssistantRunCoordinator,
+    /** 提供 Target Run 可注册工具名；memory_tool 由 TurnRunner 另加，listing 时需补上。 */
+    private val toolSetFactory: TurnToolSetFactory,
 ) {
     /**
      * 按 caller Assistant 的 LocalTool 配置构建工具。
@@ -408,7 +409,7 @@ class AssistantToolFactory(
             conversationId = masterConversationId,
             settings = settings,
             capabilityModel = settings.getChatModel(target),
-            runMode = ToolSetRunMode.TARGET,
+            turnKind = TurnKind.SUB_ASSISTANT,
             mcpCapabilities = toolSetFactory.captureMcpCapabilities(target),
         ).map { it.name }
         return buildList {
@@ -532,7 +533,7 @@ class AssistantToolFactory(
 
     /**
      * assistant_call 执行入口。
-     * 通过 DelegationCoordinator 实现完整 Target 执行。
+     * 通过 SubAssistantRunCoordinator 实现完整 Target 执行。
      */
     private suspend fun executeAssistantCall(
         callerAssistantId: Uuid,
@@ -556,7 +557,7 @@ class AssistantToolFactory(
             is AttachmentParseResult.Ok -> parsed.paths
         }
 
-        val output = delegationCoordinator.executeCall(
+        val output = subAssistantRunCoordinator.executeCall(
             callerAssistantId = callerAssistantId,
             masterConversationId = masterConversationId,
             targetAssistantId = targetId,

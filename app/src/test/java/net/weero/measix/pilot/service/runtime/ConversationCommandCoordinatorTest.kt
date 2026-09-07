@@ -24,7 +24,7 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.TurnTerminalReasons
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
-import me.rerere.ai.ui.ToolApprovalState
+import me.rerere.ai.ui.ToolInteractionState
 import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
@@ -102,7 +102,7 @@ class ConversationCommandCoordinatorTest {
 
         assertTrue(coordinator.updateTitleIfCurrent(id, expectedTitle = "Local", title = "Local"))
 
-        assertEquals("Local", runtime.snapshot.value.header.title)
+        assertEquals("Local", runtime.snapshot.value.durable.header.title)
         coVerify(exactly = 0) { repository.commit(any()) }
         scope.cancel()
     }
@@ -139,16 +139,8 @@ class ConversationCommandCoordinatorTest {
         val coordinator = coordinator(registry, repository)
         val before = runtime.snapshot.value
         runtime.publishCommitted(
-            before,
             StartTurn(turnId = Uuid.random(), assistantNodeId = Uuid.random(), assistantMessageId = Uuid.random(), anchorNodeId = Uuid.random(), anchorMessageId = Uuid.random(), expectedSelectedPrefixMessageIds = emptyList(), modelContextCandidate = "", epoch = 1L),
-            before.copy(
-                activeTurn = ActiveTurnState(
-                    epoch = 1L,
-                    turnId = Uuid.random(),
-                    assistantMessageId = Uuid.random(),
-                    messages = emptyList(),
-                ),
-            ),
+            before.durable,
         )
 
         val result = coordinator.execute(conversation.id, AppendUserMessage(UIMessage.user("blocked")))
@@ -174,8 +166,9 @@ class ConversationCommandCoordinatorTest {
                 id,
                 ResolveToolInteraction(
                     Uuid.random(),
-                    0,
-                    net.weero.measix.pilot.service.runtime.ToolUserDecision.Approve,
+                    Uuid.random(),
+                    Uuid.random(),
+                    net.weero.measix.pilot.service.runtime.ToolInteractionDecision.Approve,
                     TurnHandle(id, 1, Uuid.random(), Uuid.random()),
                 ),
             )
@@ -244,7 +237,7 @@ class ConversationCommandCoordinatorTest {
         val runtime = loading.await()
         updating.await()
         assertEquals("new", durable.get().title)
-        assertEquals("new", runtime.snapshot.value.header.title)
+        assertEquals("new", runtime.snapshot.value.durable.header.title)
         appScope.cancel()
     }
 
@@ -274,8 +267,8 @@ class ConversationCommandCoordinatorTest {
 
         coVerify(exactly = 0) { repository.insertConversation(any()) }
         assertTrue(registry.isDraft(id))
-        assertEquals("configured draft", draft.snapshot.value.header.title)
-        assertEquals(updatedAssistantId, draft.snapshot.value.header.assistantId)
+        assertEquals("configured draft", draft.snapshot.value.durable.header.title)
+        assertEquals(updatedAssistantId, draft.snapshot.value.durable.header.assistantId)
 
         coordinator.executeOrThrow(id, AppendUserMessage(UIMessage.user("first")))
 
@@ -285,7 +278,7 @@ class ConversationCommandCoordinatorTest {
         assertEquals("configured draft", inserted.title)
         assertEquals(updatedAssistantId, inserted.assistantId)
         assertEquals("first", inserted.messageNodes.single().currentMessage.toText())
-        assertEquals("first", draft.snapshot.value.nodes.single().currentMessage.toText())
+        assertEquals("first", draft.snapshot.value.durable.nodes.single().currentMessage.toText())
         appScope.cancel()
     }
 
@@ -421,12 +414,12 @@ class ConversationCommandCoordinatorTest {
         val coordinator = coordinator(registry, repository, now = 123L)
         val turnId = Uuid.random()
         val assistantId = Uuid.random()
-        runtime.installActiveRequest(turnId, Job())
+        runtime.installTurnWorker(turnId, Job())
 
         val handle = coordinator.startTurn(
             id,
-            ConversationTransition.buildStartTurnCommand(
-                current = runtime.snapshot.value,
+            TurnTransition.buildStartTurnCommand(
+                current = runtime.durable,
                 turnId = turnId,
                 modelContextCandidate = disclosureCandidate(),
                 assistantMessageId = assistantId,
@@ -450,8 +443,8 @@ class ConversationCommandCoordinatorTest {
     }
 
     /**
-     * §17.3「entry 写失败不得发布 StartTurn Runtime snapshot；已提交 USER 保留」：
-     * durable commit 抛错时，Runtime 仍停留在 USER-only 树，没有 activeTurn，也没有 Assistant slot。
+     * entry 写失败不得发布 StartTurn Runtime snapshot；已提交 USER 保留：
+     * durable commit 抛错时，Runtime 仍停留在 USER-only 树，没有流式投影，也没有 Assistant slot。
      */
     @Test
     fun `failed START commit publishes nothing and keeps the committed user message`() = runTest {
@@ -467,14 +460,14 @@ class ConversationCommandCoordinatorTest {
         coEvery { repository.commit(any()) } throws IllegalStateException("model context row conflicts")
         val coordinator = coordinator(registry, repository)
         val turnId = Uuid.random()
-        runtime.installActiveRequest(turnId, Job())
+        runtime.installTurnWorker(turnId, Job())
         val before = runtime.snapshot.value
 
         val failure = runCatching {
             coordinator.startTurn(
                 id,
-                ConversationTransition.buildStartTurnCommand(
-                    current = before,
+                TurnTransition.buildStartTurnCommand(
+                    current = before.durable,
                     turnId = turnId,
                     modelContextCandidate = disclosureCandidate(),
                     assistantMessageId = Uuid.random(),
@@ -484,8 +477,8 @@ class ConversationCommandCoordinatorTest {
 
         assertNotNull(failure)
         assertEquals(before, runtime.snapshot.value)
-        assertNull(runtime.snapshot.value.activeTurn)
-        assertEquals(listOf(userNode.id), runtime.snapshot.value.nodes.map { it.id })
+        assertNull(runtime.snapshot.value.stream)
+        assertEquals(listOf(userNode.id), runtime.snapshot.value.durable.nodes.map { it.id })
         coVerify(exactly = 1) { repository.commit(any()) }
         scope.cancel()
     }
@@ -506,8 +499,8 @@ class ConversationCommandCoordinatorTest {
         val coordinator = coordinator(registry, repository)
         val turnId = Uuid.random()
         val assistantId = Uuid.random()
-        val command = ConversationTransition.buildStartTurnCommand(
-            current = runtime.snapshot.value,
+        val command = TurnTransition.buildStartTurnCommand(
+            current = runtime.durable,
             turnId = turnId,
             modelContextCandidate = disclosureCandidate(),
             assistantMessageId = assistantId,
@@ -520,13 +513,13 @@ class ConversationCommandCoordinatorTest {
         assertTrue(rejected is ConversationCommandConflictException)
         coVerify(exactly = 0) { repository.commit(any()) }
 
-        runtime.installActiveRequest(turnId, Job())
+        runtime.installTurnWorker(turnId, Job())
         val handle = coordinator.startTurn(id, command)
 
         assertEquals(1L, handle.epoch)
-        // 发布的 durable activeTurn 必须携带同一 epoch：否则首个 checkpoint 的 owner 校验
+        // 发布的流式投影必须携带同一 epoch：否则首个 checkpoint 的 owner 校验
         // 就会拒绝，turn 永远无法提交。
-        assertEquals(1L, runtime.snapshot.value.activeTurn?.epoch)
+        assertEquals(1L, runtime.snapshot.value.stream?.epoch)
         scope.cancel()
     }
 
@@ -600,23 +593,23 @@ class ConversationCommandCoordinatorTest {
         }.awaitAll()
 
         assertEquals(1, maximum.get())
-        assertEquals(100, runtime.snapshot.value.nodes.size)
-        val text = runtime.snapshot.value.nodes.map { it.currentMessage.toText() }.toSet()
+        assertEquals(100, runtime.snapshot.value.durable.nodes.size)
+        val text = runtime.snapshot.value.durable.nodes.map { it.currentMessage.toText() }.toSet()
         assertFalse((0 until 100).any { "message-$it" !in text })
         scope.cancel()
     }
 
     @Test
-    fun `stale approval continuation cannot cancel a newer active request`() = runTest {
+    fun `stale approval continuation cannot cancel a newer active turn`() = runTest {
         val conversation = Conversation.ofId(Uuid.random())
         val assistant = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Tool(
-                    toolCallId = "approval",
+                    localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "approval",
                     toolName = "approval_tool",
                     input = "{}",
-                    approvalState = ToolApprovalState.Pending,
+                    interactionState = ToolInteractionState.AwaitingApproval,
                 ),
             ),
         )
@@ -628,10 +621,9 @@ class ConversationCommandCoordinatorTest {
         val runtime = registry.registerRuntime(conversation.copy(messageNodes = snapshot.nodes))
         val oldTurnId = Uuid.random()
         val oldJob = appScope.launch(start = CoroutineStart.LAZY) { awaitCancellation() }
-        registry.installAndStartActiveRequest(runtime.id, oldTurnId, oldJob)
+        registry.installAndStartTurnWorker(runtime.id, oldTurnId, oldJob)
         val handle = TurnHandle(runtime.id, 1L, oldTurnId, assistant.id)
         runtime.publishCommitted(
-            runtime.snapshot.value,
             StartTurn(
                 turnId = oldTurnId,
                 assistantNodeId = Uuid.random(),
@@ -642,20 +634,13 @@ class ConversationCommandCoordinatorTest {
                 modelContextCandidate = "",
                 epoch = 1L,
             ),
-            runtime.snapshot.value.copy(
-                activeTurn = ActiveTurnState(
-                    epoch = 1L,
-                    turnId = oldTurnId,
-                    assistantMessageId = assistant.id,
-                    messages = listOf(assistant),
-                ),
-            ),
+            runtime.durable,
         )
-        runtime.retainAwaitingApproval(handle)
+        runtime.retainAwaitingUser(handle)
 
         val newTurnId = Uuid.random()
         val newJob = appScope.launch(start = CoroutineStart.LAZY) { awaitCancellation() }
-        registry.installAndStartActiveRequest(
+        registry.installAndStartTurnWorker(
             conversationId = runtime.id,
             turnId = newTurnId,
             worker = newJob,
@@ -666,7 +651,7 @@ class ConversationCommandCoordinatorTest {
 
         val staleJob = appScope.launch(start = CoroutineStart.LAZY) { awaitCancellation() }
         val rejected = runCatching {
-            registry.installAndStartApprovalContinuation(runtime.id, handle, staleJob)
+            registry.installAndStartUserInteractionContinuation(runtime.id, handle, staleJob)
         }.exceptionOrNull()
 
         assertTrue(rejected is ConversationCommandConflictException)

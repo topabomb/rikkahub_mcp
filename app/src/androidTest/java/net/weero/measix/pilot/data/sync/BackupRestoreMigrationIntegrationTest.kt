@@ -1,7 +1,7 @@
 package net.weero.measix.pilot.data.sync
 
 import android.content.Context
-import androidx.room.Room
+import android.database.sqlite.SQLiteDatabase
 import androidx.room.testing.MigrationTestHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
@@ -22,6 +22,8 @@ import net.weero.measix.pilot.data.ai.mcp.McpCatalogStore
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.AppDatabase
+import net.weero.measix.pilot.data.db.APP_DATABASE_VERSION
+import net.weero.measix.pilot.data.db.createAppDatabase
 import net.weero.measix.pilot.data.db.entity.ConversationModelContextEntity
 import net.weero.measix.pilot.data.db.fts.MessageFtsManager
 import net.weero.measix.pilot.data.db.migrations.Migration_1_2
@@ -85,7 +87,7 @@ class BackupRestoreMigrationIntegrationTest {
     }
 
     @Test
-    fun durableV4Db9RestoreMigratesAndLoadsThroughRepository() = runBlocking {
+    fun durableV4Db9RestoreUpgradesStagingToV11AndLoadsThroughRepository() = runBlocking {
         val anchor = UIMessage.user("preserved request").copy(id = anchorMessageId)
         val owner = UIMessage(
             id = ownerMessageId,
@@ -122,15 +124,19 @@ class BackupRestoreMigrationIntegrationTest {
         )
 
         service.stageRestore(archive, BackupSelection(true, true))
+        // The pre-v11 aggregate is carried to the current schema inside staging/pending —
+        // before any swap — by the same Room chain, and its transcripts are already V3.
+        val pendingDb = File(PendingBackupRestore.pendingDir(context), "measix_pilot.db")
+        SQLiteDatabase.openDatabase(pendingDb.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { staged ->
+            assertEquals(APP_DATABASE_VERSION, staged.version)
+            staged.rawQuery("SELECT transcript_schema FROM message_node", null).use { c ->
+                while (c.moveToNext()) assertEquals(3, c.getInt(0))
+            }
+        }
         PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
-        val database = Room.databaseBuilder(context, AppDatabase::class.java, "measix_pilot")
-            .addMigrations(
-                Migration_1_2, Migration_2_3, Migration_3_4, Migration_4_5, Migration_5_6,
-                Migration_6_7, Migration_7_8, Migration_8_9, Migration_9_10,
-            )
-            .build()
+        val database = createAppDatabase(context, "measix_pilot")
         try {
-            assertEquals(10, database.openHelper.readableDatabase.version)
+            assertEquals(APP_DATABASE_VERSION, database.openHelper.readableDatabase.version)
             assertTrue(database.conversationModelContextDao().getEntriesOfConversation(conversationId.toString()).isEmpty())
             val artifactStore = mockk<ArtifactStore>(relaxed = true)
             val repository = ConversationRepository(
@@ -147,7 +153,9 @@ class BackupRestoreMigrationIntegrationTest {
             val restored = repository.getConversationSnapshotById(conversationId)
             assertNotNull(restored)
             assertEquals(listOf("preserved request", "preserved answer"), restored!!.currentMessages().map {
-                (it.parts.single() as UIMessagePart.Text).text
+                // v11 transcript carries a leading Step part on the assistant message; the assertion
+                // targets the preserved Text content, so select the Text part rather than the sole part.
+                it.parts.filterIsInstance<UIMessagePart.Text>().single().text
             })
             val content = ConversationDisclosureSnapshotService.render(
                 ConversationDisclosureSnapshotService.Candidate(
@@ -175,7 +183,7 @@ class BackupRestoreMigrationIntegrationTest {
     }
 
     /**
-     * §17.2「v4 + db10 round-trip 保留 context rows」的设备级证据：备份一个已含 context 行的 v10
+     * v4 + db10 round-trip 保留 context rows 的设备级证据：备份一个已含 context 行的 v10
      * 数据库，经生产 stageRestore/bootstrap 换回，再用生产 migration 链打开，canonical bytes 必须逐字保留。
      */
     @Test
@@ -244,16 +252,20 @@ class BackupRestoreMigrationIntegrationTest {
                 artifactStore = mockk(),
                 generatedMediaStore = mockk<GeneratedMediaStore>(),
             ).stageRestore(v10Archive, BackupSelection(true, true))
+            // The v10 aggregate is upgraded to v11 in staging before the swap; the disclosure
+            // context rows are durable content and must survive the transcript conversion byte-for-byte.
+            val pendingDb = File(PendingBackupRestore.pendingDir(context), "measix_pilot.db")
+            SQLiteDatabase.openDatabase(pendingDb.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { staged ->
+                assertEquals(APP_DATABASE_VERSION, staged.version)
+                staged.rawQuery("SELECT transcript_schema FROM message_node", null).use { c ->
+                    while (c.moveToNext()) assertEquals(3, c.getInt(0))
+                }
+            }
             PendingBackupRestore.bootstrapBeforeDatabaseOpen(context)
 
-            val database = Room.databaseBuilder(context, AppDatabase::class.java, "measix_pilot")
-                .addMigrations(
-                    Migration_1_2, Migration_2_3, Migration_3_4, Migration_4_5, Migration_5_6,
-                    Migration_6_7, Migration_7_8, Migration_8_9, Migration_9_10,
-                )
-                .build()
+            val database = createAppDatabase(context, "measix_pilot")
             try {
-                assertEquals(10, database.openHelper.readableDatabase.version)
+                assertEquals(APP_DATABASE_VERSION, database.openHelper.readableDatabase.version)
                 val repository = ConversationRepository(
                     conversationDAO = database.conversationDao(),
                     messageNodeDAO = database.messageNodeDao(),

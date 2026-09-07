@@ -18,7 +18,7 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 /**
- * model-context entry 的原子命令语义验收（权威方案 §17.3、§17.5、§7.5、§14.2）：
+ * model-context entry 的原子命令语义验收：
  * insert-once、baseline 判等、regenerate 排除旧 owner、variant 删除与截断收口。
  * 全部经由纯 Transition，不触碰 IO。
  */
@@ -38,7 +38,7 @@ class ConversationModelContextTransitionTest {
         assistantMessageId: Uuid,
         candidate: String,
     ): ConversationAggregateSnapshot {
-        val command = ConversationTransition.buildStartTurnCommand(
+        val command = TurnTransition.buildStartTurnCommand(
             current = current,
             turnId = Uuid.random(),
             modelContextCandidate = candidate,
@@ -48,20 +48,18 @@ class ConversationModelContextTransitionTest {
     }
 
     private fun finalize(snapshot: ConversationAggregateSnapshot, assistantMessageId: Uuid): ConversationAggregateSnapshot {
-        val active = requireNotNull(snapshot.activeTurn) { "no active turn to finalize" }
         return ConversationTransition.apply(
             snapshot,
             FinalizeTurn(
                 handle = TurnHandle(
                     conversationId = snapshot.conversationId,
-                    epoch = active.epoch,
-                    turnId = active.turnId,
+                    epoch = 0,
+                    turnId = Uuid.random(),
                     assistantMessageId = assistantMessageId,
                 ),
-                messages = null,
+                assistantMessage = null,
                 terminalStatus = TurnExecutionStatus.COMPLETED,
                 terminalReason = null,
-                closeInterruptedTools = false,
                 finishedAt = turnFinishedAt,
             ),
         )
@@ -74,7 +72,7 @@ class ConversationModelContextTransitionTest {
         val candidate = stableCandidate(1)
         val assistantId = Uuid.random()
 
-        val mutation = plan(base, ConversationTransition.buildStartTurnCommand(
+        val mutation = plan(base, TurnTransition.buildStartTurnCommand(
             current = base,
             turnId = Uuid.random(),
             modelContextCandidate = candidate,
@@ -98,7 +96,7 @@ class ConversationModelContextTransitionTest {
         snapshot = finalize(snapshot, firstAssistant)
 
         snapshot = ConversationTransition.apply(snapshot, AppendUserMessage(UIMessage.user("u2")))
-        val command = ConversationTransition.buildStartTurnCommand(
+        val command = TurnTransition.buildStartTurnCommand(
             current = snapshot,
             turnId = Uuid.random(),
             modelContextCandidate = candidate,
@@ -141,9 +139,9 @@ class ConversationModelContextTransitionTest {
 
         // 未收口的旧 Assistant variant 正是 baseline owner；regenerate 不复制 USER，
         // 旧 owner 先退出目标分支，相同 live content 相对更早 baseline 判定为变化，
-        // 由新 owner 重新落一条，不会丢基线（§7.5）。
+        // 由新 owner 重新落一条，不会丢基线。
         val replacement = Uuid.random()
-        val command = ConversationTransition.buildStartTurnCommand(
+        val command = TurnTransition.buildStartTurnCommand(
             current = snapshot,
             turnId = Uuid.random(),
             modelContextCandidate = candidate,
@@ -174,7 +172,7 @@ class ConversationModelContextTransitionTest {
         val editedUser = UIMessage.user("u1 edited")
         snapshot = ConversationTransition.apply(snapshot, EditMessageVariant(userNode.id, editedUser))
         val replacement = Uuid.random()
-        val command = ConversationTransition.buildStartTurnCommand(
+        val command = TurnTransition.buildStartTurnCommand(
             current = snapshot,
             turnId = Uuid.random(),
             modelContextCandidate = candidate,
@@ -184,7 +182,7 @@ class ConversationModelContextTransitionTest {
 
         snapshot = ConversationTransition.apply(snapshot, command)
         // 旧 entry（anchor=被替换前的 USER variant）不再适用于目标分支：相同 live content
-        // 也必须由新 owner 重新落一条完整 baseline，绝不丢基线（§7.5）。
+        // 也必须由新 owner 重新落一条完整 baseline，绝不丢基线。
         assertEquals(2, snapshot.modelContextEntries.size)
         val latest = snapshot.modelContextEntries.last()
         assertEquals(replacement, latest.ownerMessageId)
@@ -437,7 +435,7 @@ class ConversationModelContextTransitionTest {
     fun `a malformed candidate cannot enter the durable command`() {
         val snapshot = Conversation.ofId(Uuid.random())
             .copy(messageNodes = listOf(userNode("u1"))).toSnapshot()
-        val command = ConversationTransition.buildStartTurnCommand(
+        val command = TurnTransition.buildStartTurnCommand(
             current = snapshot,
             turnId = Uuid.random(),
             modelContextCandidate = "{\"type\":\"user_request\"}",

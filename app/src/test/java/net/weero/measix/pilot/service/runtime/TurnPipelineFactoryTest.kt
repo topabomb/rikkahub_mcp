@@ -1,4 +1,5 @@
 package net.weero.measix.pilot.service.runtime
+import net.weero.measix.pilot.service.turn.TurnPipelineFactory
 
 import io.mockk.mockk
 import net.weero.measix.pilot.data.ai.transformers.AttachmentProjectionTransformer
@@ -19,14 +20,14 @@ import org.junit.Test
 
 /**
  * TurnPipelineFactory 装配等价性测试。
- * 锁定 Master/Target 输入与共享输出的装配顺序。
+ * 锁定单一 owner 下按 TurnKind 给出的输入顺序与共享输出顺序。
  */
 class TurnPipelineFactoryTest {
 
-    private fun factory(toolArtifactReplay: Boolean = true): TurnPipelineFactory = TurnPipelineFactory(
+    private fun factory(): TurnPipelineFactory = TurnPipelineFactory(
         templateTransformer = mockk<TemplateTransformer>(relaxed = true),
         workspaceReminderTransformer = mockk<WorkspaceReminderTransformer>(relaxed = true),
-        toolArtifactReplayTransformer = if (toolArtifactReplay) mockk<ToolArtifactReplayTransformer>(relaxed = true) else null,
+        toolArtifactReplayTransformer = mockk<ToolArtifactReplayTransformer>(relaxed = true),
         attachmentProjectionTransformer = AttachmentProjectionTransformer(mockk<ArtifactStore>(relaxed = true)),
         base64ImageToLocalFileTransformer = Base64ImageToLocalFileTransformer(mockk<ArtifactStore>(relaxed = true)),
         documentAsPromptTransformer = DocumentAsPromptTransformer(mockk<ArtifactStore>(relaxed = true)),
@@ -46,22 +47,20 @@ class TurnPipelineFactoryTest {
     }
 
     @Test
-    fun `shared output matches documented order`() {
-        val f = factory()
+    fun `output matches documented order`() {
         assertEquals(
             listOf(
                 ThinkTagTransformer::class,
                 Base64ImageToLocalFileTransformer::class,
                 RegexOutputTransformer::class,
             ),
-            f.masterOutput().map { it::class },
+            factory().output().map { it::class },
         )
     }
 
     @Test
-    fun `masterInput appends template workspace and replay then projection`() {
-        val f = factory(toolArtifactReplay = true)
-        val classes = f.masterInput().map { it::class }
+    fun `USER input appends template workspace replay then projection`() {
+        val classes = factory().input(TurnKind.USER).map { it::class }
         assertEquals(
             listOf(
                 TimeReminderTransformer::class,
@@ -78,17 +77,9 @@ class TurnPipelineFactoryTest {
     }
 
     @Test
-    fun `masterInput omits replay when null`() {
-        val f = factory(toolArtifactReplay = false)
-        val classes = f.masterInput().map { it::class }
+    fun `SUB_ASSISTANT input omits artifact replay`() {
+        val classes = factory().input(TurnKind.SUB_ASSISTANT).map { it::class }
         assertTrue(ToolArtifactReplayTransformer::class !in classes)
-        assertEquals(7, classes.size)
-    }
-
-    @Test
-    fun `targetInput matches target policy order`() {
-        val f = factory(toolArtifactReplay = false)
-        val classes = f.targetInput().map { it::class }
         assertEquals(
             listOf(
                 TimeReminderTransformer::class,
@@ -101,11 +92,5 @@ class TurnPipelineFactoryTest {
             ),
             classes,
         )
-    }
-
-    @Test
-    fun `targetOutput equals masterOutput`() {
-        val f = factory()
-        assertEquals(f.masterOutput().map { it::class }, f.targetOutput().map { it::class })
     }
 }

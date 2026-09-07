@@ -1,11 +1,13 @@
 package net.weero.measix.pilot.ui.pages.chat
 
 import me.rerere.ai.core.MessageRole
-import me.rerere.ai.ui.ToolApprovalState
+import me.rerere.ai.ui.ToolInteractionState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.toMessageNode
+import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeSnapshot
 import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.Assert.assertFalse
@@ -18,7 +20,7 @@ class TTSAutoPlayTest {
     fun `auto play ignores completion events from another conversation`() {
         val conversation = conversationWith(UIMessage.assistant("current"))
 
-        assertFalse(shouldAutoPlayTts(Uuid.random(), conversation.toSnapshot().toPresentationSnapshot()))
+        assertFalse(shouldAutoPlayTts(Uuid.random(), conversation.presentation()))
     }
 
     @Test
@@ -27,23 +29,23 @@ class TTSAutoPlayTest {
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Tool(
-                    toolCallId = "call-1",
+                    localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call-1",
                     toolName = "ask_user",
                     input = "{}",
-                    approvalState = ToolApprovalState.Pending,
+                    interactionState = ToolInteractionState.AwaitingApproval,
                 )
             ),
         )
         val conversation = conversationWith(pending)
 
-        assertFalse(shouldAutoPlayTts(conversation.id, conversation.toSnapshot().toPresentationSnapshot()))
+        assertFalse(shouldAutoPlayTts(conversation.id, conversation.presentation()))
     }
 
     @Test
     fun `auto play accepts completed assistant response in current conversation`() {
         val conversation = conversationWith(UIMessage.assistant("done"))
 
-        assertTrue(shouldAutoPlayTts(conversation.id, conversation.toSnapshot().toPresentationSnapshot()))
+        assertTrue(shouldAutoPlayTts(conversation.id, conversation.presentation()))
     }
 
     @Test
@@ -53,7 +55,7 @@ class TTSAutoPlayTest {
             parts = listOf(
                 UIMessagePart.Text("The answer is 42."),
                 UIMessagePart.Tool(
-                    toolCallId = "tts-1",
+                    localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "tts-1",
                     toolName = "text_to_speech",
                     input = """{"text":"The answer is 42."}""",
                     output = listOf(UIMessagePart.Text("""{"success":true}""")),
@@ -62,7 +64,7 @@ class TTSAutoPlayTest {
         )
         val conversation = conversationWith(spoken)
 
-        assertFalse(shouldAutoPlayTts(conversation.id, conversation.toSnapshot().toPresentationSnapshot()))
+        assertFalse(shouldAutoPlayTts(conversation.id, conversation.presentation()))
     }
 
     @Test
@@ -76,4 +78,7 @@ class TTSAutoPlayTest {
         val id = Uuid.random()
         return Conversation.ofId(id).copy(messageNodes = listOf(message.toMessageNode()))
     }
+
+    private fun Conversation.presentation(): ConversationPresentationSnapshot =
+        ConversationRuntimeSnapshot(durable = toSnapshot(), stream = null).toPresentationSnapshot()
 }

@@ -65,6 +65,7 @@ object AttachmentRefs {
         is UIMessagePart.Video -> part.copy(metadata = metadata)
         is UIMessagePart.Reasoning -> part.copy(metadata = metadata)
         is UIMessagePart.Tool -> part.copy(metadata = metadata)
+        is UIMessagePart.Step -> part.copy(metadata = metadata)
     }
 
     /**

@@ -235,7 +235,7 @@ class ConversationCommandCoordinator(
 
     private fun ensureNotActive(conversationId: Uuid) {
         val runtime = registry.findRuntime(conversationId) ?: return
-        if (runtime.isGenerating || runtime.snapshot.value.activeTurn != null) {
+        if (runtime.isGenerating || runtime.snapshot.value.stream != null) {
             throw ConversationCommandConflictException("cannot delete active conversation: $conversationId")
         }
     }
@@ -257,15 +257,15 @@ class ConversationCommandCoordinator(
                 // Identity check does not consume epoch; a rejected START must not advance it.
                 validateConversationCommandOwner(
                     runtime.id,
-                    current,
+                    current.stream,
                     command,
                     runtime.currentGenerationTurnId(),
                 )
-                // epoch 必须在 plan 之前分配：plan 产生的 durable activeTurn 携带同一 epoch，
+                // epoch 必须在 plan 之前分配：plan 产生的 durable 携带同一 epoch，
                 // 发布的 snapshot 与返回的 TurnHandle 才能互相匹配（否则首个 checkpoint 即被拒）。
                 val started = command.copy(epoch = runtime.nextTurnEpoch())
-                val change = ConversationTransition.plan(current, started, nowMillis())
-                commitAndPublish(runtime, current, started, change)
+                val change = ConversationTransition.plan(current.durable, started, nowMillis())
+                commitAndPublish(runtime, started, change)
                 TurnHandle(runtime.id, started.epoch, started.turnId, started.assistantMessageId)
             }
         }
@@ -279,16 +279,15 @@ class ConversationCommandCoordinator(
         require(command !is StartTurn) { "use startTurn so the caller receives the TurnHandle" }
         val current = runtime.snapshot.value
         if (!draft) {
-            validateConversationCommandOwner(runtime.id, current, command, runtime.currentGenerationTurnId())
+            validateConversationCommandOwner(runtime.id, current.stream, command, runtime.currentGenerationTurnId())
         }
         val titleCasMatched = command !is UpdateTitleIfCurrent ||
-            current.header.title == command.expectedTitle
-        val change = ConversationTransition.plan(current, command, nowMillis())
+            current.durable.header.title == command.expectedTitle
+        val change = ConversationTransition.plan(current.durable, command, nowMillis())
         when (change) {
             is ConversationChange.DraftOnly -> runtime.publishDraft(change.snapshot)
             is ConversationChange.Durable -> commitAndPublish(
                 runtime = runtime,
-                old = current,
                 command = command,
                 change = change,
                 promoteDraft = change.write is ConversationWrite.MaterializeDraft,
@@ -299,7 +298,6 @@ class ConversationCommandCoordinator(
 
     private suspend fun commitAndPublish(
         runtime: ConversationRuntime,
-        old: ConversationAggregateSnapshot,
         command: ConversationCommand,
         change: ConversationChange,
         promoteDraft: Boolean = false,
@@ -309,7 +307,7 @@ class ConversationCommandCoordinator(
         coroutineContext.ensureActive()
         withContext(NonCancellable) {
             commitDurable(durable.write)
-            runtime.publishCommitted(old, command, durable.snapshot)
+            runtime.publishCommitted(command, durable.snapshot)
             if (promoteDraft) registry.promoteDraft(runtime.id, runtime)
         }
     }
@@ -334,38 +332,38 @@ class ConversationCommandCoordinator(
 
 internal fun validateConversationCommandOwner(
     conversationId: Uuid,
-    snapshot: ConversationAggregateSnapshot,
+    activeTurn: TurnStreamProjection?,
     command: ConversationCommand,
-    activeRequestTurnId: Uuid? = null,
+    activeTurnId: Uuid? = null,
 ) {
     fun requireActiveIdentity(turnId: Uuid) {
-        if (activeRequestTurnId == null || activeRequestTurnId != turnId) {
+        if (activeTurnId == null || activeTurnId != turnId) {
             throw ConversationCommandConflictException(
-                "active request $activeRequestTurnId does not own command $turnId",
+                "active turn $activeTurnId does not own command $turnId",
             )
         }
     }
     when (command) {
         is StartTurn -> {
             requireActiveIdentity(command.turnId)
-            if (snapshot.activeTurn != null) {
+            if (activeTurn != null) {
                 throw ConversationCommandConflictException(
                     "conversation $conversationId already has an active turn",
                 )
             }
         }
-        is CommitCheckpoint -> {
-            requireActiveIdentity(command.handle.turnId)
+        is TurnCheckpoint -> {
+            requireActiveIdentity(command.turn.turnId)
             if (
-                command.handle.conversationId != conversationId ||
-                snapshot.activeTurn?.matches(command.handle) != true
+                command.turn.conversationId != conversationId ||
+                activeTurn?.matches(command.turn) != true
             ) {
-                throw ConversationCommandConflictException("stale checkpoint for turn ${command.handle.turnId}")
+                throw ConversationCommandConflictException("stale checkpoint for turn ${command.turn.turnId}")
             }
         }
         is FinalizeTurn -> if (
             command.handle.conversationId != conversationId ||
-            snapshot.activeTurn?.matches(command.handle) != true
+            activeTurn?.matches(command.handle) != true
         ) {
             throw ConversationCommandConflictException("stale finalization for turn ${command.handle.turnId}")
         }
@@ -375,15 +373,15 @@ internal fun validateConversationCommandOwner(
             requireActiveIdentity(handle.turnId)
             if (
                 handle.conversationId != conversationId ||
-                snapshot.activeTurn?.matches(handle) != true
+                activeTurn?.matches(handle) != true
             ) {
                 throw ConversationCommandConflictException("stale tool approval for turn ${handle.turnId}")
             }
         }
-        is RecoverInterruptedTurn -> if (snapshot.activeTurn != null) {
+        is RecoverInterruptedTurn -> if (activeTurn != null) {
             throw ConversationCommandConflictException("recovery cannot overwrite an active turn")
         }
-        else -> if (snapshot.activeTurn != null) {
+        else -> if (activeTurn != null) {
             throw ConversationCommandConflictException(
                 "tree command ${command::class.simpleName} requires the active turn to finish first",
             )

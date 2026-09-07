@@ -10,6 +10,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
+import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.util.json
 import me.rerere.common.http.jsonObjectOrNull
 import me.rerere.common.http.jsonPrimitiveOrNull
@@ -167,6 +168,10 @@ inline fun <reified T : MessageMetadata> UIMessage.metadataAs(): T? = providerMe
     runCatching { json.decodeFromJsonElement<T>(it) }.getOrNull()
 }
 
+inline fun <reified T : MessageMetadata> ModelRequestMessage.metadataAs(): T? = providerMetadata?.let {
+    runCatching { json.decodeFromJsonElement<T>(it) }.getOrNull()
+}
+
 /**
  * 将类型化的 [PartMetadata] 编码为 metadata [JsonObject]
  *
@@ -183,7 +188,7 @@ inline fun <reified T : Metadata> T.toMetadata(): JsonObject =
  * OpenRouter 把 reasoning_details 拆成增量 delta。合并层必须拼回完整有序序列，
  * 否则工具续轮只会带回最后一片，既丢 details 也会挡住 reasoning_content 兜底。
  */
-internal fun mergeReasoningPartMetadata(
+fun mergeReasoningPartMetadata(
     existing: JsonObject?,
     incoming: JsonObject?,
 ): JsonObject? {
@@ -297,7 +302,7 @@ private fun mergeOpenRouterReasoningItem(existing: JsonObject, incoming: JsonObj
     }
 }
 
-internal fun mergeMessageMetadata(current: JsonObject?, incoming: JsonObject?): JsonObject? {
+fun mergeMessageMetadata(current: JsonObject?, incoming: JsonObject?): JsonObject? {
     if (incoming == null) return current
     if (current == null) return incoming
 

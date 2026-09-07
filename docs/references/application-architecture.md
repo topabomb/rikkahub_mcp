@@ -18,12 +18,12 @@ Work（一个 Conversation）
 | 语义 | 运行时对象 | Durable fact |
 | --- | --- | --- |
 | Conversation | `ConversationRuntime`、`ConversationAggregateSnapshot`、`ConversationCommand` | conversation header、message tree 与 `conversation_model_context` |
-| Turn | `TurnEngine`、`TurnHandle`、`TurnOutcome` | `turn_execution` |
-| Step | `GenerationChunk.Phase`、checkpoint | 只在 checkpoint 后形成执行事实 |
-| Tool Execution | `ToolExecutionContext`、`ToolCallPhase` | Tool message part 与 `tool_execution` |
+| Turn | `TurnCommitter`、`TurnHandle`、`TurnOutcome`（终态）、`TurnPause`（暂停） | `turn_execution` |
+| Step | `StepRunner`、`TurnRunState`、checkpoint | 只在 checkpoint 后形成执行事实 |
+| Tool Execution | `ToolExecutionContext`、`ToolLivePhase` | Tool message part 与 `tool_execution` |
 | Tool User Interaction | `ResolveToolInteraction` | Tool message part 与 execution status |
 | Artifact | `ArtifactStore`、`OwnedArtifact`、`ToolResourceLease` | artifact metadata、reference 与 payload |
-| Sub-Agent Run | `DelegationCoordinator`、`SubAssistantLifecycle` | Child Conversation 与 `sub_assistant_call` metadata |
+| Sub-assistant Run | `SubAssistantRunCoordinator`、`SubAssistantLifecycle` | Child Conversation 与 `sub_assistant_call` metadata |
 
 `Runtime`、`Turn`、`Artifact` 是当前会话架构命名。会话运行时领域不得再以 Session/SessionRegistry 指代 `ConversationRuntime`/`ConversationRuntimeRegistry`；除读取历史持久化结构的 migration/backup 边界外，Artifact 领域不得重新引入 ManagedFile 旧语义或兼容门面。TTS queue session、Terminal session 等其他领域的独立 session 语义不受此约束。
 
@@ -67,12 +67,12 @@ Application 层负责编排，不建立第二套数据协议。Repository 只执
 | Conversation durable command | `ConversationCommandCoordinator` | `ConversationApplicationService` 与领域 coordinator |
 | Resident snapshot 与私有 active request | `ConversationRuntime` | `ConversationRuntimeRegistry`；UI 只读 `ConversationPresentation` |
 | Conversation 事务持久化 | `ConversationRepository` | Coordinator 产生的 mutation 与 execution fact |
-| Turn start、checkpoint、terminal | `TurnEngine` | Master 与 Target coordinator |
+| Turn start、checkpoint、terminal | `TurnCommitter` | Master 与 Target coordinator |
 | 单请求 usage 归一化 | 各线协议 Adapter | `ProviderUsageSnapshot`；不累计历史或 turn |
-| Turn token 累计与完整性 | `RequestUsageReducer` / `TurnUsageAccumulator` | `GenerationLoop`；唯一 durable 结果是 owning Assistant 消息的 `TokenUsage` |
-| 正常 stop、supersede、finalize | `TurnFinalization` | turn 编排层 |
+| Turn token 累计与完整性 | `RequestUsageReducer` / `TurnUsageAccumulator` | `StepRunner.generateInternal`；唯一 durable 结果是 owning Assistant 消息的 `TokenUsage` |
+| 正常 stop、supersede、finalize | `TurnFinalizer` | turn 编排层 |
 | 进程中断恢复 | `TurnRecovery` | `ApplicationRecoveryCoordinator` |
-| 子助手 lineage、retention、delete | `SubAssistantLifecycle` | `DelegationCoordinator` 与 application 层 |
+| 子助手 lineage、retention、delete | `SubAssistantLifecycle` | `SubAssistantRunCoordinator` 与 application 层 |
 | Artifact metadata、引用、状态机 | `ArtifactStore` | `ArtifactUseCase` 与领域服务 |
 | Artifact payload IO | `ArtifactPayloadStore` | 仅由 `ArtifactStore` 调用 |
 | Settings 图片 roots | `ArtifactSettingsCoordinator` | 头像与背景 typed operation |
@@ -134,38 +134,38 @@ Non-resident command 仍经过同一个 `ConversationCommandCoordinator` 锁与�
 
 ## Turn、工具与审批
 
-Master 与 Target 共用 `TurnEngine` 和同一套 chunk-to-checkpoint 协议。`StartTurn` 在一个事务中创建 assistant 槽、RUNNING turn fact 和可选的 `conversation_model_context`；checkpoint 只写 changed nodes；`FinalizeTurn` 同事务关闭遗留的 STARTED tools 并提交不可逆的 turn 终态。
+Master 与 Target 共用 `TurnCommitter` 和同一套 `TurnRunInputs` 汇与 checkpoint 提交协议。`StartTurn` 在一个事务中创建 assistant 槽、RUNNING turn fact 和可选的 `conversation_model_context`；checkpoint 只写 changed nodes；`FinalizeTurn` 同事务关闭遗留的 STARTED tools 并提交不可逆的 turn 终态。
 
 Token usage 沿用同一 message/turn 写协议，唯一 durable 结果是 owning Assistant 消息的 `TokenUsage`。Adapter、request
 reducer、turn accumulator、Master/Child 隔离、历史兼容和消费者边界见
 [`token-usage-accounting.md`](token-usage-accounting.md)。
 
-Turn 和 Tool execution 使用 insert-once 与合法状态 CAS。终态不可回退，重复同终态幂等，非法转换返回明确冲突。失败或取消的终态准备必须消费 TurnEngine 累积的最新 turn-owned messages；该投影可能包含最后一次 checkpoint 后的 delta，不能用 durable nodes 覆盖。准备阶段校验完整 `TurnHandle`，关闭未完成工具后由同一个 `FinalizeTurn` 原子提交。取消必须传播；`NonCancellable` 只用于已经取得所有权的终态提交或补偿收口，完成后仍重新抛出原始 `CancellationException`。
+Turn 和 Tool execution 使用 insert-once 与合法状态 CAS。终态不可回退，重复同终态幂等，非法转换返回明确冲突。失败或取消的终态准备必须消费 TurnCommitter 累积的最新 turn-owned messages；该投影可能包含最后一次 checkpoint 后的 delta，不能用 durable nodes 覆盖。准备阶段校验完整 `TurnHandle`，关闭未完成工具后由同一个 `FinalizeTurn` 原子提交。取消必须传播；`NonCancellable` 只用于已经取得所有权的终态提交或补偿收口，完成后仍重新抛出原始 `CancellationException`。
 
-工具调用按 typed phase 区分调用流、就绪、等待审批、执行和终态。`UIMessagePart.Tool.hasReplayResult` / `Tool.output` 只表示 Provider 可回放结果，不能作为 active 执行中状态、active 完成状态或详情点击门禁。active phase 只能随已提交 checkpoint 的 `ToolExecutionEntity` 或 typed `ToolResultEvent` 推进；影响通知的工具执行与结果 checkpoint 成功后，同一生成流发布 presentation tick，通知等边缘投影只消费提交后 phase。没有 active turn 的历史消息可从 durable replay result 形成静态终态展示，但该静态投影不反向驱动运行态。metadata 只细化领域子阶段。
+工具调用按 typed phase 区分调用流、就绪、等待审批、执行和终态。`UIMessagePart.Tool.hasReplayResult` / `Tool.output` 只表示 Provider 可回放结果，不能作为 active 执行中状态、active 完成状态或详情点击门禁。active phase 只能随已提交 checkpoint 的 `ToolExecutionFact` 或 typed `ToolResultFact` 推进；影响通知的工具执行与结果 checkpoint 成功后，同一生成流发布 presentation tick，通知等边缘投影只消费提交后 phase。没有 active turn 的历史消息可从 durable replay result 形成静态终态展示，但该静态投影不反向驱动运行态。metadata 只细化领域子阶段。
 
 新 turn 的 `START` 与用户交互后的 `CONTINUE_USER_INTERACTION` 是不同入口：
 
-- `START` 只在没有 active owner 时做结构预检，并由 `TurnEngine.start` 建立新的 `TurnHandle`。
+- `START` 只在没有 active owner 时做结构预检，并由 `TurnCommitter.start` 建立新的 `TurnHandle`。
 - Approve、deny 与 answer 只提交一个 `ResolveToolInteraction`，然后以 `CONTINUE_USER_INTERACTION` 继续原 owner。
 - Continue 不得再次清理树、回填附件、建立第二 turn 或轮换该 turn 的 TTS session。
 
-审批屏障以 `messageId + toolOrdinal` 定位 ToolCall；Pending 全部解决后再按 ordinal 串行执行。Provider 的 toolCallId 只保留为协议数据，不作为本地唯一键。
+审批屏障以 `ToolCallLocator(assistantMessageId, stepId, localCallId)` 定位 ToolCall；Pending 全部解决后再按 transcript 调用顺序串行执行。Provider 的 toolCallId 只保留为协议数据，不作为本地唯一键。
 
 工具参数契约归各 `Tool.validateArguments`，只做纯校验，不读取 Settings、数据库、文件或网络。
 `Tool.parseArguments` 是审批与执行共用的 JSON object 解析入口；空参数缓冲表示无参 object，非空损坏 JSON 不得替换为空 object。
-`GenerationToolSetFactory` 是新 Turn START 前的工具装配 owner，并稳定注册 `read_tool_output` / `grep_tool_output`、拒绝保留名冲突。
+`TurnToolSetFactory` 是新 Turn START 前的工具装配 owner，并稳定注册 `read_tool_output` / `grep_tool_output`、拒绝保留名冲突。
 装配结果由 `freezeToolSet` 一次物化为有序 `FrozenToolDefinition` 与同名 `ToolExecutionBinding`；同一 Turn 的 Provider step、审批、
-`ask_user` 与重试复用该不可变集合，不重读 Settings 或重建 schema。`GenerationLoop` 只编排 Provider step、整批交互屏障、执行顺序、
+`ask_user` 与重试复用该不可变集合，不重读 Settings 或重建 schema。生成循环（`TurnRunner` 多 Step 编排、`StepRunner` 单 Step 采样、`ToolBatchRunner` 批次门控与串行执行）只编排 Provider step、整批交互屏障、执行顺序、
 streaming 和 checkpoint；冻结的执行索引交给 `ToolCallRuntime` 完成 definition lookup、一次参数解析/纯校验、typed interaction gate、
 执行包装和结果规范化，不按工具名维护审批或校验特例。权限、资源与远端状态仍由实际执行 owner live fail-closed。审批与
 `ask_user` 分别使用 `Approval` / `UserInput` requirement 和 typed decision，但都只通过 Conversation command 写回原 ToolCall 并复用原 TurnHandle。
 Master 新消息的输入预处理与 START 请求装配共享同一份 Effective Settings；Child active request 由精确 `childTurnId + runJob` 拥有，
 取消/失败 finalization 与 finally release 都必须携带该身份，迟到清理不得读取并终结同一 Child conversation 中更新的 active Turn。
 
-`ConversationContextPlanner` 是请求窗口和成功 Provider step 后 Tool Result 压缩候选的唯一纯规划边界。
+`RequestContextPlanner` 负责请求窗口，`ToolOutputCompactionPlanner` 负责成功 Provider step 后的 Tool Result 压缩候选，二者都是纯规划边界。
 条数窗口、滚动压缩、Disclosure Snapshot 与手动语义摘要如何叠加，见
-[`request-context.md`](request-context.md)。生产阈值只来自 `ContextTrimmingPolicy.kt`；
+[`request-context.md`](request-context.md)。生产阈值只来自 `ContextBudget.kt`；
 `ToolOutputStore` 对 `ARCHIVABLE_TEXT` 复用 `ArtifactStore` 与 unpublished lease，对
 `REGENERABLE_TEXT` 只折叠固定 marker。模型只能通过 conversation-scoped read/grep 回查归档正文，
 UI 不接触 DAO、relative path 或私有文件。
@@ -201,9 +201,9 @@ Child 在保留作用域内提交原文件引用。读取本身不创建磁盘�
 
 ## 子助手与恢复
 
-子助手不是第二套生成引擎。`DelegationCoordinator` 只编排 preflight → materialize Child → run → terminal；Child、Tool STARTED 与 childConversationId 关系必须在 Target 启动前强制提交，失败时补偿 Child 与未发布 Artifact。并发所有权使用 `SubAssistantRunGate.withLease` 的结构化作用域。
+子助手不是第二套生成引擎。`SubAssistantRunCoordinator` 只编排 preflight → materialize Child → run → terminal；Child、Tool STARTED 与 childConversationId 关系必须在 Target 启动前强制提交，失败时补偿 Child 与未发布 Artifact。并发所有权使用 `SubAssistantRunGate.withLease` 的结构化作用域。
 
-`SubAssistantLifecycle` 拥有 lineage、retention、fork 与删除；`TurnFinalization` 拥有正常运行中的 stop 和 supersede；`TurnRecovery` 只处理进程恢复。三者不得互相吸收职责或通过整树兼容写入收口。
+`SubAssistantLifecycle` 拥有 lineage、retention、fork 与删除；`TurnFinalizer` 拥有正常运行中的 stop 和 supersede；`TurnRecovery` 只处理进程恢复。三者不得互相吸收职责或通过整树兼容写入收口。
 
 启动恢复由 `ApplicationRecoveryCoordinator.recoverNow()` 固定为：pending backup restore → Settings/`effectiveSettings`（`BLOCKED` fail-closed）→ Artifact reconcile → GeneratedMedia reconcile → reference projection → FTS projection → Child run recovery → Master turn recovery → pending assistant deletion → post-recovery maintenance → pending backup complete。任一步失败进入 `Failed`，durable command 保持关闭；retry 重跑同一幂等顺序。文件 command/query port 同样先等待这一全局门禁，页面不能在 tombstone 与孤儿 payload 收口前读取或删除托管文件。
 
@@ -213,7 +213,7 @@ Child 在保留作用域内提交原文件引用。读取本身不创建磁盘�
 
 会话 UI 只消费 `ConversationReadState`（Ready 携带 `ConversationPresentationSnapshot`）、`ConversationUiModel`、`ConversationSummary`、`ConversationPresentation`。页面对同一 snapshot 建立一个权威订阅；UI 不从 Runtime Job、布尔值或 Tool output 推断活动状态，也拿不到 aggregate 的 `modelContextEntries`。
 
-`ConversationPresentation.phase` 为 `IDLE` / `PREPARING` / `GENERATING` / `AWAITING_USER` / `STOPPING`。`AWAITING_USER` 覆盖审批与 `ask_user`；per-call `ToolCallPhase` 区分 `AWAITING_APPROVAL` 与 `AWAITING_INPUT`。durable `TurnExecutionStatus` 仍使用历史名 `AWAITING_APPROVAL`。用户交互暂停仍属于 active turn，通知协议将其表达为可回到会话处理的待处理态，不得误报为“生成完成”。`STOPPING` 期间隐藏审批、回答与子助手交互入口，避免向已在收口的 owner 提交竞态命令。Tool 卡片从首个调用 delta 起可查看；不完整 JSON 显示原始片段，不能等 output 出现才开放详情。
+`ConversationPresentation.phase` 为 `TurnLivePhase`：`PREPARING` / `MODEL_WAITING` / `MODEL_STREAMING` / `TOOL_PREPARING` / `AWAITING_USER` / `TOOL_EXECUTING` / `STOPPING`，无 active presentation（phase 为 null）即 idle。生成子阶段由 loop 的 typed 阶段事件推进（`turnLivePhaseOf` 把 reasoning/answer 流式合并为 `MODEL_STREAMING`），`AWAITING_USER` 与 `STOPPING` 只由 durable checkpoint（`markAwaitingUser`）与取消（`requestCancel`）拥有，loop 阶段不得覆盖。`AWAITING_USER` 覆盖审批与 `ask_user`；per-call `ToolLivePhase` 区分 `AWAITING_APPROVAL` 与 `AWAITING_INPUT`。durable `TurnExecutionStatus` 用 `AWAITING_USER` 记录用户交互暂停（Migration_10_11 已将历史 `AWAITING_APPROVAL` 令牌改写为 `AWAITING_USER`）。用户交互暂停仍属于 active turn，通知协议将其表达为可回到会话处理的待处理态，不得误报为“生成完成”。`STOPPING` 期间隐藏审批、回答与子助手交互入口，避免向已在收口的 owner 提交竞态命令。Tool 卡片从首个调用 delta 起可查看；不完整 JSON 显示原始片段，不能等 output 出现才开放详情。
 
 `ConversationTitleCoordinator` 统一确定性本地标题、模型标题 phase、token、重试与手动写入。模型请求携带 expected title，并以 `UpdateTitleIfCurrent` CAS 提交；CAS 的成功语义是 expected title 匹配，与新旧文本是否相同无关，相同值无需写库但仍收口为 resolved。手动标题和模型提交共享串行边界，手动提交会使活动和排队 token 失效。异步结果与 force 请求都不能覆盖请求发出后产生的手动标题。
 
@@ -243,7 +243,7 @@ Child 在保留作用域内提交原文件引用。读取本身不创建磁盘�
 
 | 领域 | 文档 |
 | --- | --- |
-| 会话、Runtime、生成、审批、工具与标题 | [`chat-generation-pipeline.md`](chat-generation-pipeline.md) |
+| 会话、Runtime、生成、审批、工具与标题 | [`turn-step-execution.md`](turn-step-execution.md) |
 | 请求上下文：条数窗口、滚动压缩、披露与摘要 | [`request-context.md`](request-context.md) |
 | 多模态、附件、Artifact 与 Turn durability | [`multimodal-context-and-turn-durability.md`](multimodal-context-and-turn-durability.md) |
 | 子助手 owner、lineage、retention 与恢复 | [`sub-assistant-architecture.md`](sub-assistant-architecture.md) |

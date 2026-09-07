@@ -27,20 +27,20 @@ class DisclosureContentException(message: String) : IllegalStateException(messag
 /**
  * 会话披露快照（Disclosure Snapshot）的唯一 canonical renderer 与 envelope 协议所有者。
  *
- * 职责边界（权威方案 §12.1）：只从**一份已固定的 effective-settings 读模型**与**一次已按 id
+ * 职责边界：只从**一份已固定的 effective-settings 读模型**与**一次已按 id
  * 升序的 Memory 查询结果**构造 canonical content；不读库、不写库、不读 Settings、不读时钟。
  * 捕获时机、baseline 判等与持久化分别属于 Turn Coordinator 与 Conversation aggregate。
  *
  * 内容协议只有两个事实：envelope 内的 `type` 与整数 `format`。表与 domain 不重复保存
  * kind / format；format 演进时下一次新 START 因 bytes 不同自然追加新 entry，已提交 entry
- * 永不后台改写（§13.6）。
+ * 永不后台改写。
  *
  * 使用紧凑 canonical JSON 而不是 XML wrapper，因此名称、描述与 Memory 内容只需标准 JSON
- * string escaping 即不可能伪造闭合边界（§6.1、§6.2）。
+ * string escaping 即不可能伪造闭合边界。
  */
 object ConversationDisclosureSnapshotService {
 
-    /** envelope 的 `type` 值，也是 System 固定规则向模型解释该数据时使用的名字（§6.3）。 */
+    /** envelope 的 `type` 值，也是 System 固定规则向模型解释该数据时使用的名字。 */
     const val CONTENT_TYPE: String = "conversation_disclosure_snapshot"
 
     /** renderer 当前唯一生成的 format。 */
@@ -50,12 +50,12 @@ object ConversationDisclosureSnapshotService {
     const val MAX_CANONICAL_CONTENT_UTF8_BYTES: Int = 256 * 1024
 
     /** 本 App 明确支持的 durable format 集合。未知 format 必须 fail-closed：静默忽略等于让
-     * 模型基线凭空消失。停止支持一个已落库 format 前必须提供显式数据迁移（§13.6）。
+     * 模型基线凭空消失。停止支持一个已落库 format 前必须提供显式数据迁移。
      */
     val SUPPORTED_FORMATS: Set<Int> = setOf(CURRENT_FORMAT)
 
     /**
-     * §6.3 的固定模型规则：请求携带 Snapshot 时唯一允许进入 System / Developer 的披露说明。
+     * 固定模型规则：请求携带 Snapshot 时唯一允许进入 System / Developer 的披露说明。
      * 只解释 Snapshot 的语义优先级，不引入任何动态内容，保证缓存前缀稳定。
      */
     const val MODEL_RULES: String =
@@ -115,7 +115,7 @@ object ConversationDisclosureSnapshotService {
      * scope 策略（global / local），与工具写权限的 owner 解析同源但不共享 live 重读。
      *
      * Master 与 Child 都只经由此入口捕获；调用方拿到结果后交给 `StartTurn` 命令，本服务
-     * 不接触 durable 写协议（§12.1）。
+     * 不接触 durable 写协议。
      */
     suspend fun captureCandidate(
         settings: Settings,
@@ -135,7 +135,7 @@ object ConversationDisclosureSnapshotService {
     }
 
     /**
-     * 渲染 canonical content。相同业务数据 + 相同 format 必须逐字相同（§6.2）：
+     * 渲染 canonical content。相同业务数据 + 相同 format 必须逐字相同：
      *  - 不写入捕获时间、日期、Locale、随机值、revision 或进程内 generation；
      *  - 不按字符数或 token 静默裁掉 rows——完整 baseline 才是一个有效 Snapshot；
      *  - 关闭的 section 仍输出固定形状，避免"键消失"成为第二种状态编码。
@@ -153,7 +153,7 @@ object ConversationDisclosureSnapshotService {
     /**
      * 装载期校验：type / 整数 format / 固定 JSON 形状合法，未知 format fail-closed。
      *
-     * 历史 entry 永不改写（§13.6），因此打开会话只验证协议形状，不再做 encode round-trip。
+     * 历史 entry 永不改写，因此打开会话只验证协议形状，不再做 encode round-trip。
      * 逐字 canonical 仍由 [requireCanonical] 在 render 与 `StartTurn` 提交时强制。
      */
     fun requireDurableEnvelope(content: String): Int {
@@ -165,7 +165,7 @@ object ConversationDisclosureSnapshotService {
      * 校验一份即将提交的 content 是否是本 App 可发送的 canonical envelope，并返回其 format。
      *
      * StartTurn 提交与 renderer 自检走这一条：形状非法或 bytes 非 canonical 都以
-     * [DisclosureContentException] fail-closed（§12.3、§13.6）。
+     * [DisclosureContentException] fail-closed。
      */
     fun requireCanonical(content: String): Int {
         requireWithinRequestCapability(content)
@@ -237,7 +237,7 @@ object ConversationDisclosureSnapshotService {
         val entries = if (mode == SUB_ASSISTANTS_MODE_DISABLED) {
             emptyList()
         } else {
-            // 唯一访问公式仍只在 SubAssistantAccessPolicy 计算一次；Snapshot 不是授权（§11.3）。
+            // 唯一访问公式仍只在 SubAssistantAccessPolicy 计算一次；Snapshot 不是授权。
             SubAssistantAccessPolicy.accessibleSubAssistants(candidate.assistant, candidate.allAssistants)
         }
         return buildJsonObject {

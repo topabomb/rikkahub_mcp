@@ -14,7 +14,7 @@ class ModelContextConflictException(message: String) : IllegalStateException(mes
 /**
  * `conversation_model_context` 的唯一 DAO。
  *
- * 写入只有 insert-once 一种语义（权威方案 §12.2）：**不使用** `@Upsert`、`@Update` 或
+ * 写入只有 insert-once 一种语义：**不使用** `@Upsert`、`@Update` 或
  * `OnConflictStrategy.REPLACE`。key 是 (owner_node_id, owner_message_id)：Fork / Child clone
  * 保留 message id、只重建 node id，因此唯一性与幂等域都以 owner node 为作用域。
  * - 首次 key 插入成功；

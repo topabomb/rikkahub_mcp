@@ -1,21 +1,12 @@
 package net.weero.measix.pilot.service.runtime
 
-import kotlinx.datetime.LocalDateTime
-import kotlinx.datetime.TimeZone
-import kotlinx.datetime.toLocalDateTime
 import me.rerere.ai.core.ToolCallLocator
-import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefBackfill
-import net.weero.measix.pilot.data.ai.CheckpointKind
-import net.weero.measix.pilot.data.ai.ToolOutputCompactionPatch
-import net.weero.measix.pilot.data.ai.ToolResultEvent
 import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
-import net.weero.measix.pilot.data.db.entity.TurnExecutionStatus
 import net.weero.measix.pilot.data.model.ConversationModelContextEntry
 import net.weero.measix.pilot.data.model.MessageNode
-import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
 /**
@@ -29,75 +20,6 @@ sealed interface ConversationCommand
 
 /** Header-only commands share one [ConversationTransition.applyHeader] implementation. */
 internal sealed interface HeaderConversationCommand : ConversationCommand
-
-/**
- * 一次新的 `START`：唯一能打开 Assistant request owner、原子提交 turn_execution 与可选
- * model-context entry 的 durable command（权威方案 §12.2）。
- *
- * 每个 StartTurn 都创建新的 Assistant owner；没有 slot 复用分支——审批 / ask-user
- * continuation 只走 `continueActive` 并保留原 handle，进程恢复只收口旧 Turn。
- * 因此一个 owner message 永远只对应一次 START 请求语义。
- *
- * 命令始终携带完整 canonical candidate，而不是调用者判定好的 nullable entry：执行锁内
- * [ConversationTransition] 重新计算目标 selected prefix（token 不同即 conflict），相同才对
- * 当前适用 baseline 做 exact-content comparison 并决定是否插入——branch CAS 与判等属于
- * 同一个纯 Transition / transaction 计划，不存在 stale null。
- */
-internal data class StartTurn(
-    val turnId: Uuid,
-    /** 预生成：新 owner node（variant 追加场景由 planStartTarget 解析为既有 Assistant node）。 */
-    val assistantNodeId: Uuid,
-    /** 预生成的 owner Assistant message variant。 */
-    val assistantMessageId: Uuid,
-    /** 该请求实际使用的因果 USER variant（entry 在 model view 中位于它之前）。 */
-    val anchorNodeId: Uuid,
-    val anchorMessageId: Uuid,
-    /** 调用者经 [ConversationTransition.planStartTarget] 得到的目标 selected prefix；锁内逐项复核。 */
-    val expectedSelectedPrefixMessageIds: List<Uuid>,
-    /** 合法 canonical Disclosure envelope；内容相对目标分支 baseline 变化才追加 entry。 */
-    val modelContextCandidate: String,
-    val epoch: Long = 0L,
-) : ConversationCommand
-
-/**
- * checkpoint 持久化：提交时点完整 currentMessages + turn/tool 执行事实。
- */
-data class CommitCheckpoint(
-    val handle: TurnHandle,
-    val kind: CheckpointKind,
-    val messages: List<UIMessage>,        // checkpoint 时点完整 currentMessages
-    val turnStatus: TurnExecutionStatus,
-    val turnReason: String?,
-    val toolExecution: ToolExecutionEntity?,
-    val toolResults: List<ToolResultEvent> = emptyList(),
-    /** 与当前 Assistant 消息同事务提交的全部 Tool Output 窄压缩 patch。 */
-    val toolOutputCompactionPatches: List<ToolOutputCompactionPatch> = emptyList(),
-) : ConversationCommand
-
-/** 终态收口（finishReasoning / closeOpenTools / markAssistantTerminal 在 reducer 内纯变换） */
-data class FinalizeTurn(
-    val handle: TurnHandle,
-    val messages: List<UIMessage>?,       // null = 仅终态收口，不替换消息
-    val terminalStatus: TurnExecutionStatus,   // COMPLETED / CANCELLED / FAILED / INCOMPLETE / INTERRUPTED
-    val terminalReason: String?,
-    val closeInterruptedTools: Boolean,   // 崩溃恢复场景：关闭未完工具
-    val terminalDetail: String? = null,
-    /** owning turn 的稳定终止时间；用于 durable Total，而不是复用中间 Provider step 的完成时间。 */
-    val finishedAt: LocalDateTime =
-        Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()),
-) : ConversationCommand
-
-/** Process-recovery-only command. Normal turn owners must use [FinalizeTurn] with their handle. */
-data class RecoverInterruptedTurn(
-    val turnId: Uuid,
-    val assistantMessageId: Uuid,
-    val messages: List<UIMessage>?,
-    val terminalReason: String,
-    val closeInterruptedTools: Boolean,
-    /** 恢复收口的稳定终止时间。 */
-    val finishedAt: LocalDateTime =
-        Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()),
-) : ConversationCommand
 
 /** Appends the user message and, for the first user turn, its deterministic local title atomically. */
 data class AppendUserMessage(
@@ -150,40 +72,6 @@ data class MoveToAssistant(val assistantId: Uuid) : HeaderConversationCommand
 /** Atomically flips the committed pin state inside the coordinator's per-conversation lock. */
 data object TogglePinned : HeaderConversationCommand
 
-/** The user's typed decision for one paused tool call. */
-sealed interface ToolUserDecision {
-    /** Permission granted for an Approval interaction. */
-    data object Approve : ToolUserDecision
-
-    /** Permission refused for an Approval interaction. */
-    data class Deny(val reason: String = "") : ToolUserDecision
-
-    /** Content collected for a UserInput interaction; the answer is the replay result. */
-    data class Answer(val answer: String) : ToolUserDecision
-}
-
-/** Durable encoding of a terminal user decision on the Tool message part. */
-internal fun ToolUserDecision.toApprovalState(): ToolApprovalState = when (this) {
-    ToolUserDecision.Approve -> ToolApprovalState.Approved
-    is ToolUserDecision.Deny -> ToolApprovalState.Denied(reason)
-    is ToolUserDecision.Answer -> ToolApprovalState.Answered(answer)
-}
-
-/** A terminal HITL decision addressed by the owning message and stable tool ordinal. */
-data class ResolveToolInteraction(
-    val messageId: Uuid,
-    val toolOrdinal: Int,
-    val decision: ToolUserDecision,
-    val handle: TurnHandle,
-) : ConversationCommand {
-    init {
-        require(toolOrdinal >= 0) { "tool interaction ordinal must be non-negative" }
-    }
-
-    /** The durable encoding stays `ToolApprovalState`; it is not a second source of truth. */
-    val approvalState: ToolApprovalState = decision.toApprovalState()
-}
-
 // ---- 三态包装（同文件） ----
 sealed interface OptionalFolderId {
     data object Keep : OptionalFolderId
@@ -222,9 +110,9 @@ internal data class ConversationMutation(
     /** Child conversations are durable but intentionally excluded from the user search index. */
     val indexForSearch: Boolean = true,
     /**
-     * 本次命令追加的 append-only 模型上下文条目（权威方案 §12.2 窄 delta）。
-     * 只有 StartTurn 能填它：Draft materialization、普通 append、编辑与纯变体选择都必须为空，
-     * 因为 context 只随一次真实 START 的 Assistant slot 原子提交。
+     * 本次命令追加的 append-only 模型上下文条目。只有 StartTurn 能填它：Draft materialization、
+     * 普通 append、编辑与纯变体选择都必须为空，因为 context 只随一次真实 START 的 Assistant slot
+     * 原子提交。
      */
     val insertedModelContextEntries: List<ConversationModelContextEntry> = emptyList(),
     /**
@@ -294,32 +182,13 @@ data class ConversationHeader(
     val updateAt: Long,
 )
 
-data class ActiveTurnState(
-    val epoch: Long,
-    val turnId: Uuid,
-    val assistantMessageId: Uuid,
-    val messages: List<UIMessage>,
-    val toolCallPhases: Map<ToolCallLocator, ToolCallPhase> = emptyMap(),
-)
-
-data class TurnHandle(
-    val conversationId: Uuid,
-    val epoch: Long,
-    val turnId: Uuid,
-    val assistantMessageId: Uuid,
-)
-
-enum class StreamingDeltaResult {
-    APPLIED,
-    STALE_TURN,
-}
-
 /**
- * 会话唯一 durable 事实源（权威方案 §12.2）：header 与 nodes 分离（UpdateHeader 不再触碰
- * nodes），流式期间仅 activeTurn 变化（nodes 引用共享）。
+ * 会话唯一 durable 事实源：header 与 nodes 分离，UpdateHeader 只改 header。这里只有
+ * 已提交树，不含任何运行态——流式草稿与 active turn 身份在 [ConversationRuntimeSnapshot.stream]，
+ * durable 提交只换 nodes，与只换 stream 的在途 delta 彼此独立。
  *
  * internal 是边界要求，不是可见性偏好：只有 command / runtime / request planning 读它，
- * UI 必须拿 [ConversationPresentationSnapshot]（§3.2、§17.7）。否则 modelContextEntries 会
+ * UI 必须拿 [ConversationPresentationSnapshot]。否则 modelContextEntries 会
  * 随 aggregate 一起泄漏成第二事实源，靠“约定 UI 不读某个字段”维持边界。
  *
  * [modelContextEntries] 是 append-only 模型上下文（Disclosure Snapshot baseline）：不进入
@@ -329,18 +198,10 @@ internal data class ConversationAggregateSnapshot(
     val conversationId: Uuid,
     val header: ConversationHeader,
     val nodes: List<MessageNode>,
-    val activeTurn: ActiveTurnState?,
     val modelContextEntries: List<ConversationModelContextEntry> = emptyList(),
 ) {
     /**
-     * 命令语义读取入口：当前选中消息序列（末 assistant 消息由 activeTurn 覆盖）。
-     * 调用时一次 O(N) 派生——仅用于 turn 边界低频点，流式高频路径禁用。
+     * 命令语义读取入口：当前选中消息序列，纯 durable 树（不含流式草稿）。
      */
-    fun currentMessages(): List<UIMessage> {
-        val turn = activeTurn
-        if (turn == null || turn.messages.isEmpty() || nodes.isEmpty()) {
-            return nodes.map { it.currentMessage }
-        }
-        return nodes.subList(0, nodes.lastIndex).map { it.currentMessage } + turn.messages.last()
-    }
+    fun currentMessages(): List<UIMessage> = nodes.map { it.currentMessage }
 }

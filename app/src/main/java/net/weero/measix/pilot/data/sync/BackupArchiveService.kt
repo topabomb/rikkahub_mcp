@@ -34,6 +34,7 @@ import net.weero.measix.pilot.data.ai.mcp.migrateLegacyMcpSettingsDocument
 import net.weero.measix.pilot.data.ai.mcp.validated
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.APP_DATABASE_VERSION
+import net.weero.measix.pilot.data.db.createAppDatabase
 import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.BackupSnapshotBarrier
@@ -206,6 +207,12 @@ class BackupArchiveService(
                             if (modern) validateModernManifest(staging, archiveFiles)
                             normalizeAndValidateDatabase(staging)
                             if (modern) validateModernAggregate(staging) else validateLegacyAggregate(staging)
+                            // A pre-v11 aggregate must be carried to the current schema by the
+                            // same Room chain (including Migration_10_11) inside staging and verified
+                            // before it may be published. An un-upgraded database is never swapped into
+                            // live for Room to migrate on first open; a failed upgrade deletes staging and
+                            // leaves the original live database untouched.
+                            upgradeStagingDatabaseToCurrentSchema(staging)
                             validateSettingsPayloadRoots(staging, restoredSettings.settings)
                             DURABLE_DIRECTORIES.forEach { File(staging, it).mkdirs() }
                             File(staging, AGGREGATE_MARKER).writeText("1", Charsets.UTF_8)
@@ -310,6 +317,40 @@ class BackupArchiveService(
         File(staging, "$DATABASE_ENTRY-wal").delete()
         File(staging, "$DATABASE_ENTRY-shm").delete()
         validateDatabase(main)
+    }
+
+    /**
+     * Carry a pre-current staging database forward through the same Room migration chain the
+     * app opens with — including `Migration_10_11` and its [net.weero.measix.pilot.data.db.transcript.LegacyTurnTranscriptMigrator]
+     * transcript conversion — and fail closed unless it lands exactly on [APP_DATABASE_VERSION]. A
+     * database already at the current version is left untouched: its transcripts are already V3 and
+     * must never be re-converted. Any failure propagates so the caller discards staging and keeps the
+     * original live database, never swapping an un-upgraded or half-upgraded aggregate into live.
+     */
+    private fun upgradeStagingDatabaseToCurrentSchema(staging: File) {
+        val main = File(staging, DATABASE_ENTRY)
+        val current = SQLiteDatabase.openDatabase(main.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { it.version }
+        if (current >= APP_DATABASE_VERSION) return
+        val database = createAppDatabase(context, main.absolutePath)
+        try {
+            val upgraded = database.openHelper.writableDatabase.version
+            check(upgraded == APP_DATABASE_VERSION) {
+                "Restore staging upgrade did not reach schema version $APP_DATABASE_VERSION (got $upgraded)"
+            }
+        } finally {
+            database.close()
+        }
+        // The Room upgrade opens staging in WAL mode; fold and remove the sidecars exactly as
+        // normalizeAndValidateDatabase does, so PendingBackupRestore's single-file rename never strands
+        // -wal/-shm content behind the swapped database.
+        val checkpoint = SQLiteDatabase.openDatabase(main.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+        try {
+            checkpoint.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null).use { it.moveToFirst() }
+        } finally {
+            checkpoint.close()
+        }
+        File(staging, "$DATABASE_ENTRY-wal").delete()
+        File(staging, "$DATABASE_ENTRY-shm").delete()
     }
 
     private fun validateDatabase(file: File) {
@@ -491,8 +532,9 @@ class BackupArchiveService(
         internal const val SETTINGS_ENTRY = "settings.json"
         internal const val MCP_CATALOGS_ENTRY = "mcp_catalogs.json"
         internal const val MANIFEST_ENTRY = "backup_manifest"
-        internal const val MANIFEST_VERSION = "rikkahub-durable-v4"
-        internal val SUPPORTED_MANIFEST_VERSIONS = setOf("rikkahub-durable-v3", MANIFEST_VERSION)
+        internal const val MANIFEST_VERSION = "rikkahub-durable-v5"
+        internal val SUPPORTED_MANIFEST_VERSIONS =
+            setOf("rikkahub-durable-v3", "rikkahub-durable-v4", MANIFEST_VERSION)
         internal const val DATABASE_ENTRY = "measix_pilot.db"
         internal const val LEGACY_WAL_ENTRY = "measix_pilot-wal"
         internal const val LEGACY_SHM_ENTRY = "measix_pilot-shm"

@@ -10,18 +10,22 @@ interface ToolExecutionDAO {
     /** Atomically creates STARTED only while the owning turn is active; no turn pre-read. */
     @Query(
         "INSERT OR IGNORE INTO tool_execution " +
-            "(execution_id, turn_id, tool_ordinal, status, reason, child_conversation_id, created_at, updated_at) " +
-            "SELECT :executionId, :turnId, :toolOrdinal, 'STARTED', :reason, :childConversationId, " +
-            ":createdAt, :updatedAt " +
+            "(execution_id, turn_id, step_id, local_call_id, status, reason, child_conversation_id, " +
+            "child_turn_id, sub_assistant_run_id, created_at, updated_at) " +
+            "SELECT :executionId, :turnId, :stepId, :localCallId, 'STARTED', :reason, :childConversationId, " +
+            ":childTurnId, :subAssistantRunId, :createdAt, :updatedAt " +
             "WHERE EXISTS (SELECT 1 FROM turn_execution WHERE turn_id = :turnId " +
-            "AND status IN ('RUNNING', 'AWAITING_APPROVAL'))"
+            "AND status IN ('RUNNING', 'AWAITING_USER'))"
     )
     suspend fun insertStartedIfTurnActive(
         executionId: String,
         turnId: String,
-        toolOrdinal: Int,
+        stepId: String,
+        localCallId: String,
         reason: String?,
         childConversationId: String?,
+        childTurnId: String?,
+        subAssistantRunId: String?,
         createdAt: Long,
         updatedAt: Long,
     ): Long
@@ -29,27 +33,33 @@ interface ToolExecutionDAO {
     /** Updates a repeated STARTED checkpoint only while both tool and owning turn remain active. */
     @Query(
         "UPDATE tool_execution SET reason = :reason, " +
-            "child_conversation_id = COALESCE(child_conversation_id, :childConversationId), updated_at = :updatedAt " +
-            "WHERE execution_id = :executionId AND turn_id = :turnId AND tool_ordinal = :toolOrdinal " +
+            "child_conversation_id = COALESCE(child_conversation_id, :childConversationId), " +
+            "child_turn_id = COALESCE(child_turn_id, :childTurnId), " +
+            "sub_assistant_run_id = COALESCE(sub_assistant_run_id, :subAssistantRunId), updated_at = :updatedAt " +
+            "WHERE execution_id = :executionId AND turn_id = :turnId AND local_call_id = :localCallId " +
             "AND status = 'STARTED' " +
             "AND (:childConversationId IS NULL OR child_conversation_id IS NULL " +
             "OR child_conversation_id = :childConversationId) " +
             "AND EXISTS (SELECT 1 FROM turn_execution " +
-            "WHERE turn_id = :turnId AND status IN ('RUNNING', 'AWAITING_APPROVAL'))"
+            "WHERE turn_id = :turnId AND status IN ('RUNNING', 'AWAITING_USER'))"
     )
     suspend fun updateStartedIfTurnActive(
         executionId: String,
         turnId: String,
-        toolOrdinal: Int,
+        localCallId: String,
         reason: String?,
         childConversationId: String?,
+        childTurnId: String?,
+        subAssistantRunId: String?,
         updatedAt: Long,
     ): Int
 
     @Query(
         "UPDATE tool_execution SET status = :targetStatus, reason = :reason, " +
-            "child_conversation_id = COALESCE(child_conversation_id, :childConversationId), updated_at = :updatedAt " +
-            "WHERE execution_id = :executionId AND turn_id = :turnId AND tool_ordinal = :toolOrdinal " +
+            "child_conversation_id = COALESCE(child_conversation_id, :childConversationId), " +
+            "child_turn_id = COALESCE(child_turn_id, :childTurnId), " +
+            "sub_assistant_run_id = COALESCE(sub_assistant_run_id, :subAssistantRunId), updated_at = :updatedAt " +
+            "WHERE execution_id = :executionId AND turn_id = :turnId AND local_call_id = :localCallId " +
             "AND status IN (:sourceStatuses) " +
             "AND ((:childConversationId IS NULL AND child_conversation_id IS NULL) " +
             "OR child_conversation_id = :childConversationId)"
@@ -57,11 +67,13 @@ interface ToolExecutionDAO {
     suspend fun transition(
         executionId: String,
         turnId: String,
-        toolOrdinal: Int,
+        localCallId: String,
         sourceStatuses: List<ToolExecutionStatus>,
         targetStatus: ToolExecutionStatus,
         reason: String?,
         childConversationId: String?,
+        childTurnId: String?,
+        subAssistantRunId: String?,
         updatedAt: Long,
     ): Int
 
@@ -79,7 +91,7 @@ interface ToolExecutionDAO {
     @Query("SELECT * FROM tool_execution WHERE execution_id = :executionId")
     suspend fun getById(executionId: String): ToolExecutionEntity?
 
-    @Query("SELECT * FROM tool_execution WHERE turn_id = :turnId ORDER BY created_at ASC, tool_ordinal ASC")
+    @Query("SELECT * FROM tool_execution WHERE turn_id = :turnId ORDER BY created_at ASC, local_call_id ASC")
     suspend fun getByTurnId(turnId: String): List<ToolExecutionEntity>
 
 }

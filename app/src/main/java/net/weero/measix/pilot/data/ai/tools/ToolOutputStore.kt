@@ -9,11 +9,11 @@ import kotlin.uuid.Uuid
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.core.ToolResourceLease
+import me.rerere.ai.ui.ToolOutputArchive
+import me.rerere.ai.ui.ToolOutputArchiveRef
 import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.ai.ToolOutputCompactionPlan
-import net.weero.measix.pilot.data.ai.ContextTrimmingPolicy
-import net.weero.measix.pilot.data.ai.ToolOutputProtocolLimits
-import net.weero.measix.pilot.data.ai.estimateStableTextTokens
+import net.weero.measix.pilot.data.ai.request.ContextBudget
+import net.weero.measix.pilot.data.ai.request.estimateStableTextTokens
 import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.FileFolders
@@ -74,7 +74,7 @@ class ToolOutputStore(private val artifactStore: ArtifactStore) {
                     candidate.netReclaimEstimatedTokens ==
                         candidate.originalEstimatedTokens - candidate.markerEstimatedTokens &&
                         candidate.netReclaimEstimatedTokens >=
-                        ContextTrimmingPolicy.TOOL_OUTPUT_MINIMUM_RESULT_NET_RECLAIM_ESTIMATED_TOKENS
+                        ContextBudget.TOOL_OUTPUT_MINIMUM_RESULT_NET_RECLAIM_ESTIMATED_TOKENS
                 ) {
                     "Tool output compaction candidate net reclaim does not match"
                 }
@@ -145,9 +145,9 @@ class ToolOutputStore(private val artifactStore: ArtifactStore) {
     suspend fun read(conversationId: Uuid, ref: Long, startLine: Int, lineCount: Int): ToolOutputReadResult {
         if (ref <= 0) return ToolOutputReadResult.Unavailable
         val from = startLine.coerceAtLeast(1)
-        val requested = lineCount.coerceIn(1, ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_READ_LINES)
-        val contentByteLimit = ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_RESPONSE_BYTES -
-            ToolOutputProtocolLimits.TOOL_OUTPUT_RESPONSE_FORMAT_RESERVE_BYTES
+        val requested = lineCount.coerceIn(1, ToolOutputProtocol.TOOL_OUTPUT_MAX_READ_LINES)
+        val contentByteLimit = ToolOutputProtocol.TOOL_OUTPUT_MAX_RESPONSE_BYTES -
+            ToolOutputProtocol.TOOL_OUTPUT_RESPONSE_FORMAT_RESERVE_BYTES
         val scanContext = currentCoroutineContext()
         val scanned = artifactStore.withToolOutputText(conversationId, ref) { reader ->
             var total = 0
@@ -184,20 +184,20 @@ class ToolOutputStore(private val artifactStore: ArtifactStore) {
         maxMatches: Int,
     ): ToolOutputGrepResult {
         if (pattern.isBlank()) return ToolOutputGrepResult.InvalidPattern
-        if (pattern.length > ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_PATTERN_CHARS) {
+        if (pattern.length > ToolOutputProtocol.TOOL_OUTPUT_MAX_PATTERN_CHARS) {
             return ToolOutputGrepResult.InvalidPattern
         }
         if (ref <= 0) return ToolOutputGrepResult.Unavailable
-        val context = contextLines.coerceIn(0, ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_CONTEXT_LINES)
-        val matchLimit = maxMatches.coerceIn(1, ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_GREP_MATCHES)
+        val context = contextLines.coerceIn(0, ToolOutputProtocol.TOOL_OUTPUT_MAX_CONTEXT_LINES)
+        val matchLimit = maxMatches.coerceIn(1, ToolOutputProtocol.TOOL_OUTPUT_MAX_GREP_MATCHES)
         val regex = try {
             Pattern.compile(pattern, if (ignoreCase) Pattern.CASE_INSENSITIVE else 0)
         } catch (_: Exception) {
             return ToolOutputGrepResult.InvalidPattern
         }
         val scanContext = currentCoroutineContext()
-        val contentByteLimit = ToolOutputProtocolLimits.TOOL_OUTPUT_MAX_RESPONSE_BYTES -
-            ToolOutputProtocolLimits.TOOL_OUTPUT_RESPONSE_FORMAT_RESERVE_BYTES
+        val contentByteLimit = ToolOutputProtocol.TOOL_OUTPUT_MAX_RESPONSE_BYTES -
+            ToolOutputProtocol.TOOL_OUTPUT_RESPONSE_FORMAT_RESERVE_BYTES
         val scanned = artifactStore.withToolOutputText(conversationId, ref) { reader ->
             val preceding = ArrayDeque<ToolOutputLine>(context)
             val blocks = mutableListOf<ToolOutputGrepBlock>()
@@ -316,7 +316,7 @@ internal fun buildToolOutputMarker(archive: ToolOutputArchive, terminalStatus: S
         .append("; chars=").append(archive.characters)
     if (terminalStatus == "failed") {
         canonicalText.split('\n').lastOrNull { it.isNotBlank() }
-            ?.takeLast(ToolOutputProtocolLimits.TOOL_OUTPUT_MARKER_TAIL_CHARS)
+            ?.takeLast(ToolOutputProtocol.TOOL_OUTPUT_MARKER_TAIL_CHARS)
             ?.replace('"', '\'')?.replace('\t', ' ')?.let { append("; tail=\"").append(it).append('"') }
     }
     append(']')
@@ -344,7 +344,7 @@ internal fun canonicalizeToolOutput(raw: String): String = ANSI_PATTERN.matcher(
     raw.replace("\r\n", "\n").replace('\r', '\n')
 ).replaceAll("")
 internal fun virtualLinesOf(physicalLine: String): List<String> =
-    if (physicalLine.codePointCount(0, physicalLine.length) <= ToolOutputProtocolLimits.TOOL_OUTPUT_VIRTUAL_LINE_CHARS) {
+    if (physicalLine.codePointCount(0, physicalLine.length) <= ToolOutputProtocol.TOOL_OUTPUT_VIRTUAL_LINE_CHARS) {
         listOf(physicalLine)
     } else {
         buildList {
@@ -353,7 +353,7 @@ internal fun virtualLinesOf(physicalLine: String): List<String> =
             while (remainingCodePoints > 0) {
                 val chunkCodePoints = minOf(
                     remainingCodePoints,
-                    ToolOutputProtocolLimits.TOOL_OUTPUT_VIRTUAL_LINE_CHARS,
+                    ToolOutputProtocol.TOOL_OUTPUT_VIRTUAL_LINE_CHARS,
                 )
                 val end = physicalLine.offsetByCodePoints(start, chunkCodePoints)
                 add(physicalLine.substring(start, end))

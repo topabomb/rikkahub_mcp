@@ -648,7 +648,7 @@ ChatList (LazyColumn)
 
 文本从 `MarkdownBlock` 进入；无 HTML 时走 Markdown AST，含 HTML 时转入 `MarkdownNew` 的 DOM
 路径。工具审批和 Target 卡片必须保留在 Part 的语义位置。节点级细节统一见
-[消息渲染管线](message-rendering-pipeline.md)，生成侧见 [消息生成链路](chat-generation-pipeline.md)。
+[消息渲染管线](message-rendering-pipeline.md)，生成侧见 [Turn/Step 执行链路](turn-step-execution.md)。
 
 `ChatMessageNerdLine` 使用低对比度单行摘要与最多两行展开详情。聊天列表顶层 item 间距和同一消息主要区块均为 4dp，
 统计详情与芯片换行使用 2dp；被动统计摘要不再叠加纵向 padding。消息末尾的操作栏、Workspace 产出文件与 usage 组成一个
@@ -682,7 +682,7 @@ loading/审批状态行不改变归属、组件或判断，只将自身上下留
 | AttachmentProjectionTransformer | 按本次请求的 `RequestMediaCapabilities` 投影附件，固定为最后一个 input transformer |
 
 顺序由 `TurnPipelineFactory` 唯一定义；Master 额外在附件投影之前装配 `ToolArtifactReplayTransformer`，Target 不装配它。附件之后不得再运行会新增、移动或删除媒体 part 的 transformer。完整生成链路见
-[消息生成链路](chat-generation-pipeline.md)，投影语义见 [多模态上下文与 Turn 持久化](multimodal-context-and-turn-durability.md)。
+[Turn/Step 执行链路](turn-step-execution.md)，投影语义见 [多模态上下文与 Turn 持久化](multimodal-context-and-turn-durability.md)。
 
 ### 输出管道（OutputMessageTransformer）
 

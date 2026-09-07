@@ -260,10 +260,13 @@ class ConversationRepositoryTreeIntegrationTest {
 
         val childId = Uuid.random().toString()
         val executionId = Uuid.random().toString()
+        val stepId = Uuid.random().toString()
+        val localCallId = Uuid.random().toString()
         val tool = ToolExecutionEntity(
             executionId = executionId,
             turnId = turnId.toString(),
-            toolOrdinal = 2,
+            stepId = stepId,
+            localCallId = localCallId,
             status = ToolExecutionStatus.STARTED,
             reason = null,
             childConversationId = childId,
@@ -273,7 +276,7 @@ class ConversationRepositoryTreeIntegrationTest {
         repository.applyMutation(mutation, ExecutionFacts(null, tool))
         listOf(
             tool.copy(turnId = Uuid.random().toString(), status = ToolExecutionStatus.COMPLETED),
-            tool.copy(toolOrdinal = 3, status = ToolExecutionStatus.COMPLETED),
+            tool.copy(localCallId = Uuid.random().toString(), status = ToolExecutionStatus.COMPLETED),
             tool.copy(childConversationId = null, status = ToolExecutionStatus.COMPLETED),
             tool.copy(childConversationId = Uuid.random().toString(), status = ToolExecutionStatus.COMPLETED),
         ).forEach { conflicting ->
@@ -327,7 +330,8 @@ class ConversationRepositoryTreeIntegrationTest {
         val tool = ToolExecutionEntity(
             executionId = Uuid.random().toString(),
             turnId = turnId.toString(),
-            toolOrdinal = 0,
+            stepId = Uuid.random().toString(),
+            localCallId = Uuid.random().toString(),
             status = ToolExecutionStatus.STARTED,
             reason = null,
             createdAt = 11L,
@@ -362,7 +366,8 @@ class ConversationRepositoryTreeIntegrationTest {
         val tool = ToolExecutionEntity(
             executionId = Uuid.random().toString(),
             turnId = turnId.toString(),
-            toolOrdinal = 0,
+            stepId = Uuid.random().toString(),
+            localCallId = Uuid.random().toString(),
             status = ToolExecutionStatus.STARTED,
             reason = null,
             createdAt = 11L,
@@ -371,12 +376,13 @@ class ConversationRepositoryTreeIntegrationTest {
         // Fault injection: emulate a dangling STARTED row beside an already-terminal turn.
         database.openHelper.writableDatabase.execSQL(
             "INSERT INTO tool_execution " +
-                "(execution_id, turn_id, tool_ordinal, status, reason, child_conversation_id, created_at, updated_at) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "(execution_id, turn_id, step_id, local_call_id, status, reason, child_conversation_id, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             arrayOf<Any?>(
                 tool.executionId,
                 tool.turnId,
-                tool.toolOrdinal,
+                tool.stepId,
+                tool.localCallId,
                 tool.status.name,
                 tool.reason,
                 tool.childConversationId,

@@ -258,67 +258,6 @@ class MessageMetadataTest {
     }
 
     @Test
-    fun `signed empty text part remains a separate streaming boundary`() {
-        val initial = UIMessage(role = MessageRole.ASSISTANT, parts = emptyList())
-        fun chunk(part: UIMessagePart) = MessageChunk(
-            id = "chunk",
-            model = "gemini-3-pro",
-            choices = listOf(
-                UIMessageChoice(
-                    index = 0,
-                    delta = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(part)),
-                    message = null,
-                    finishReason = null,
-                )
-            ),
-        )
-
-        val merged = initial + chunk(UIMessagePart.Text("answer")) + chunk(
-            UIMessagePart.Text(
-                text = "",
-                metadata = GoogleThoughtMetadata(thoughtSignature = "signature").toMetadata(),
-            )
-        )
-
-        assertEquals(2, merged.parts.size)
-        assertEquals("answer", (merged.parts[0] as UIMessagePart.Text).text)
-        assertEquals(
-            "signature",
-            merged.parts[1].metadataAs<GoogleThoughtMetadata>()?.thoughtSignature,
-        )
-    }
-
-    @Test
-    fun `redacted claude reasoning remains separate from visible thinking`() {
-        val initial = UIMessage(role = MessageRole.ASSISTANT, parts = emptyList())
-        fun chunk(part: UIMessagePart) = MessageChunk(
-            id = "chunk",
-            model = "claude",
-            choices = listOf(
-                UIMessageChoice(
-                    index = 0,
-                    delta = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(part)),
-                    message = null,
-                    finishReason = null,
-                )
-            ),
-        )
-
-        val merged = initial + chunk(UIMessagePart.Reasoning("visible thinking")) + chunk(
-            UIMessagePart.Reasoning(
-                reasoning = "",
-                metadata = ClaudeReasoningMetadata(redactedData = "opaque").toMetadata(),
-            )
-        )
-
-        assertEquals(2, merged.parts.filterIsInstance<UIMessagePart.Reasoning>().size)
-        assertEquals(
-            "opaque",
-            merged.parts.last().metadataAs<ClaudeReasoningMetadata>()?.redactedData,
-        )
-    }
-
-    @Test
     fun `diff metadata round trip`() {
         val diff = "--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n-old\n+new"
         val part = UIMessagePart.Text(

@@ -73,8 +73,8 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
-import net.weero.measix.pilot.service.runtime.ToolCallPhase
-import net.weero.measix.pilot.service.runtime.ToolUserDecision
+import net.weero.measix.pilot.service.runtime.ToolLivePhase
+import net.weero.measix.pilot.service.runtime.ToolInteractionDecision
 import net.weero.measix.pilot.data.model.AssistantAffectScope
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.model.replaceRegexes
@@ -117,9 +117,9 @@ fun ChatMessage(
     onUpdate: (MessageNode) -> Unit,
     isFavorite: Boolean = false,
     onToggleFavorite: (() -> Unit)? = null,
-    onToolDecision: ((locator: ToolCallLocator, decision: ToolUserDecision) -> Unit)? = null,
+    onToolDecision: ((locator: ToolCallLocator, decision: ToolInteractionDecision) -> Unit)? = null,
     onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
-    toolCallPhases: Map<ToolCallLocator, ToolCallPhase> = emptyMap(),
+    toolLivePhases: Map<ToolCallLocator, ToolLivePhase> = emptyMap(),
     onShowTerminalError: ((UIMessage) -> Unit)? = null,
     readOnly: Boolean = false,
 ) {
@@ -193,7 +193,7 @@ fun ChatMessage(
                 model = model,
                 onToolDecision = if (readOnly) null else onToolDecision,
                 onSubAssistantAnswer = if (readOnly) null else onSubAssistantAnswer,
-                toolCallPhases = toolCallPhases,
+                toolLivePhases = toolLivePhases,
                 onUserMessageClick = if (!readOnly && message.role == MessageRole.USER) onEdit else null,
             )
         }
@@ -384,9 +384,9 @@ private fun MessagePartsBlock(
     parts: List<UIMessagePart>,
     annotations: List<UIMessageAnnotation>,
     loading: Boolean,
-    onToolDecision: ((locator: ToolCallLocator, decision: ToolUserDecision) -> Unit)? = null,
+    onToolDecision: ((locator: ToolCallLocator, decision: ToolInteractionDecision) -> Unit)? = null,
     onSubAssistantAnswer: ((runId: String, interactionId: String, answer: String) -> Boolean)? = null,
-    toolCallPhases: Map<ToolCallLocator, ToolCallPhase>,
+    toolLivePhases: Map<ToolCallLocator, ToolLivePhase>,
     onUserMessageClick: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
@@ -451,12 +451,12 @@ private fun MessagePartsBlock(
                             }
 
                             is ThinkingStep.ToolStep -> {
-                                key(messageId, step.toolOrdinal) {
-                                    val locator = ToolCallLocator(messageId, step.toolOrdinal)
+                                key(messageId, step.tool.localCallId) {
+                                    val locator = ToolCallLocator(messageId, step.tool.stepId, step.tool.localCallId)
                                     ChatMessageToolStep(
                                         tool = step.tool,
                                         locator = locator,
-                                        phase = toolCallPhases[locator],
+                                        phase = toolLivePhases[locator],
                                         onToolDecision = onToolDecision,
                                     )
                                 }
@@ -466,9 +466,9 @@ private fun MessagePartsBlock(
                 }
             }
 
-            is MessagePartBlock.SubAssistantCallBlock -> key(messageId, block.toolOrdinal) {
-                val locator = ToolCallLocator(messageId, block.toolOrdinal)
-                val phase = toolCallPhases[locator]
+            is MessagePartBlock.SubAssistantCallBlock -> key(messageId, block.tool.localCallId) {
+                val locator = ToolCallLocator(messageId, block.tool.stepId, block.tool.localCallId)
+                val phase = toolLivePhases[locator]
                 if (
                     block.tool.getSubAssistantCallMetadata(JsonInstant) == null &&
                     phase?.isPreExecutionOrRunning == true
@@ -804,9 +804,9 @@ private fun resolveManagedMediaFile(
     return attachmentPreview(ref)?.let(AttachmentRefs::parseFileUrl)
 }
 
-private val ToolCallPhase.isPreExecutionOrRunning: Boolean
-    get() = this == ToolCallPhase.CALL_STREAMING ||
-        this == ToolCallPhase.READY ||
-        this == ToolCallPhase.AWAITING_APPROVAL ||
-        this == ToolCallPhase.AWAITING_INPUT ||
-        this == ToolCallPhase.EXECUTING
+private val ToolLivePhase.isPreExecutionOrRunning: Boolean
+    get() = this == ToolLivePhase.CALL_STREAMING ||
+        this == ToolLivePhase.READY ||
+        this == ToolLivePhase.AWAITING_APPROVAL ||
+        this == ToolLivePhase.AWAITING_INPUT ||
+        this == ToolLivePhase.EXECUTING

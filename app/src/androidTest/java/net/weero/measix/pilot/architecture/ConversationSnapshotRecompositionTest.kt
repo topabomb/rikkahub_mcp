@@ -12,9 +12,10 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.model.toMessageNode
-import net.weero.measix.pilot.service.runtime.ActiveTurnState
+import net.weero.measix.pilot.service.runtime.TurnStreamProjection
 import net.weero.measix.pilot.service.runtime.ConversationHeader
 import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeSnapshot
 import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -37,15 +38,17 @@ class ConversationSnapshotRecompositionTest {
             add(UIMessage.assistant("initial").copy(id = assistantMessageId).toMessageNode())
         }
         var snapshot by mutableStateOf(
-            ConversationAggregateSnapshot(
-                conversationId = conversationId,
-                header = header(conversationId),
-                nodes = nodes,
-                activeTurn = ActiveTurnState(
+            ConversationRuntimeSnapshot(
+                durable = ConversationAggregateSnapshot(
+                    conversationId = conversationId,
+                    header = header(conversationId),
+                    nodes = nodes,
+                ),
+                stream = TurnStreamProjection(
                     epoch = 1,
                     turnId = Uuid.random(),
                     assistantMessageId = assistantMessageId,
-                    messages = listOf(UIMessage.assistant("initial").copy(id = assistantMessageId)),
+                    assistantMessage = UIMessage.assistant("initial").copy(id = assistantMessageId),
                 ),
             )
         )
@@ -54,7 +57,7 @@ class ConversationSnapshotRecompositionTest {
         val movedFolderId = Uuid.random()
 
         compose.setContent {
-            MeasuredHeader(snapshot.header, compositions)
+            MeasuredHeader(snapshot.durable.header, compositions)
             val rendered = snapshot.toPresentationSnapshot().nodes
             MeasuredNode("history", rendered.first(), compositions)
             MeasuredNode("active", rendered.last(), compositions)
@@ -66,10 +69,12 @@ class ConversationSnapshotRecompositionTest {
 
         compose.runOnUiThread {
             snapshot = snapshot.copy(
-                header = snapshot.header.copy(
-                    title = "renamed",
-                    assistantId = switchedAssistantId,
-                    folderId = movedFolderId,
+                durable = snapshot.durable.copy(
+                    header = snapshot.durable.header.copy(
+                        title = "renamed",
+                        assistantId = switchedAssistantId,
+                        folderId = movedFolderId,
+                    )
                 )
             )
         }
@@ -81,8 +86,8 @@ class ConversationSnapshotRecompositionTest {
 
         compose.runOnUiThread {
             snapshot = snapshot.copy(
-                activeTurn = requireNotNull(snapshot.activeTurn).copy(
-                    messages = listOf(UIMessage.assistant("delta").copy(id = assistantMessageId)),
+                stream = requireNotNull(snapshot.stream).copy(
+                    assistantMessage = UIMessage.assistant("delta").copy(id = assistantMessageId),
                 )
             )
         }

@@ -31,9 +31,8 @@ class ConversationAttachmentPreviewProjector(
 
     suspend fun project(snapshot: ConversationPresentationSnapshot): Map<String, String> {
         val durable = projectMessages(snapshot.nodes.map { it.currentMessage })
-        val active = snapshot.activeTurn ?: return durable
-        val assistant = active.messages.lastOrNull { it.id == active.assistantMessageId }
-            ?: return durable
+        val active = snapshot.stream ?: return durable
+        val assistant = active.assistantMessage ?: return durable
         val overlay = projectMessages(listOf(assistant))
         return if (overlay.isEmpty()) durable else durable + overlay
     }

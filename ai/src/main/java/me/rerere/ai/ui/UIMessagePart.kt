@@ -4,43 +4,11 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.util.json
 import kotlin.time.Clock
 import kotlin.time.Instant
-
-@Serializable
-sealed class ToolApprovalState {
-    @Serializable
-    @SerialName("auto")
-    data object Auto : ToolApprovalState()
-
-    @Serializable
-    @SerialName("pending")
-    data object Pending : ToolApprovalState()
-
-    @Serializable
-    @SerialName("approved")
-    data object Approved : ToolApprovalState()
-
-    @Serializable
-    @SerialName("denied")
-    data class Denied(val reason: String = "") : ToolApprovalState()
-
-    @Serializable
-    @SerialName("answered")
-    data class Answered(val answer: String) : ToolApprovalState()
-}
-
-fun ToolApprovalState.canResumeToolExecution(): Boolean {
-    return when (this) {
-        ToolApprovalState.Approved -> true
-        is ToolApprovalState.Denied -> true
-        is ToolApprovalState.Answered -> true
-        ToolApprovalState.Auto,
-        ToolApprovalState.Pending,
-            -> false
-    }
-}
+import kotlin.uuid.Uuid
 
 @Serializable
 sealed class UIMessagePart {
@@ -50,28 +18,28 @@ sealed class UIMessagePart {
     @SerialName("text")
     data class Text(
         val text: String,
-        override var metadata: JsonObject? = null
+        override val metadata: JsonObject? = null
     ) : UIMessagePart()
 
     @Serializable
     @SerialName("image")
     data class Image(
         val url: String,
-        override var metadata: JsonObject? = null
+        override val metadata: JsonObject? = null
     ) : UIMessagePart()
 
     @Serializable
     @SerialName("video")
     data class Video(
         val url: String,
-        override var metadata: JsonObject? = null
+        override val metadata: JsonObject? = null
     ) : UIMessagePart()
 
     @Serializable
     @SerialName("audio")
     data class Audio(
         val url: String,
-        override var metadata: JsonObject? = null
+        override val metadata: JsonObject? = null
     ) : UIMessagePart()
 
     @Serializable
@@ -80,7 +48,7 @@ sealed class UIMessagePart {
         val url: String,
         val fileName: String,
         val mime: String = "text/*",
-        override var metadata: JsonObject? = null
+        override val metadata: JsonObject? = null
     ) : UIMessagePart()
 
     @Serializable
@@ -89,18 +57,42 @@ sealed class UIMessagePart {
         val reasoning: String,
         val createdAt: Instant = Clock.System.now(),
         val finishedAt: Instant? = Clock.System.now(),
-        override var metadata: JsonObject? = null
+        override val metadata: JsonObject? = null
+    ) : UIMessagePart()
+
+    /**
+     * One logical model sampling plus the full Tool batch its response requested. A committed
+     * Assistant Turn is an ordered sequence of these; the Step boundary is explicit, never inferred
+     * from "the last Tool without a result".
+     *
+     * The Step part is a durable transcript fact: it is never rendered, never enters FTS, and is
+     * dropped when the app-layer `RequestAssembler` converts the projection into `ModelRequestMessage`.
+     */
+    @Serializable
+    @SerialName("step")
+    data class Step(
+        val stepId: Uuid,
+        val ordinal: Int,
+        val startedAt: Instant,
+        val modelResult: StepModelResult? = null,
+        val outcome: StepOutcome? = null,
+        val finishedAt: Instant? = null,
+        override val metadata: JsonObject? = null,
     ) : UIMessagePart()
 
     @Serializable
     @SerialName("tool")
     data class Tool(
-        val toolCallId: String,
+        val localCallId: Uuid,
+        val stepId: Uuid,
+        val providerCallId: String,
         val toolName: String,
         val input: String,
         val output: List<UIMessagePart> = emptyList(),
-        val approvalState: ToolApprovalState = ToolApprovalState.Auto,
-        override var metadata: JsonObject? = null
+        val interactionState: ToolInteractionState = ToolInteractionState.NotRequired,
+        val resultStatus: ToolResultStatus? = null,
+        val runtimeState: ToolRuntimeState = ToolRuntimeState(ToolOutputPolicy.ARCHIVABLE_TEXT),
+        override val metadata: JsonObject? = null,
     ) : UIMessagePart() {
         /**
          * Whether a provider-replayable tool result exists.
@@ -111,11 +103,20 @@ sealed class UIMessagePart {
          */
         val hasReplayResult: Boolean get() = output.isNotEmpty()
 
-        /** Whether the tool is pending user approval */
-        val isPending: Boolean get() = approvalState is ToolApprovalState.Pending
+        /** Whether the call is paused for a user gate (approval or user-input collection). */
+        val isPending: Boolean
+            get() = interactionState is ToolInteractionState.AwaitingApproval ||
+                interactionState is ToolInteractionState.AwaitingInput
 
-        /** Whether a resolved approval can resume assembly of the Provider replay result. */
-        val canResumeResultAssembly: Boolean get() = !hasReplayResult && approvalState.canResumeToolExecution()
+        /** Whether a resolved gate can resume assembly of the Provider replay result. */
+        val canResumeResultAssembly: Boolean
+            get() = !hasReplayResult && when (interactionState) {
+                ToolInteractionState.Approved,
+                is ToolInteractionState.Denied,
+                is ToolInteractionState.Answered,
+                -> true
+                else -> false
+            }
 
         /** Replay/display projection for partial input; execution must use Tool.parseArguments. */
         fun inputAsJson(): JsonElement = runCatching {
@@ -124,11 +125,15 @@ sealed class UIMessagePart {
 
         fun merge(other: Tool): Tool {
             return Tool(
-                toolCallId = toolCallId,
+                localCallId = localCallId,
+                stepId = stepId,
+                providerCallId = providerCallId.ifBlank { other.providerCallId },
                 toolName = toolName + other.toolName,
                 input = input + other.input,
                 output = output + other.output,
-                approvalState = approvalState,
+                interactionState = interactionState,
+                resultStatus = resultStatus ?: other.resultStatus,
+                runtimeState = runtimeState,
                 metadata = mergePartMetadata(metadata, other.metadata),
             )
         }

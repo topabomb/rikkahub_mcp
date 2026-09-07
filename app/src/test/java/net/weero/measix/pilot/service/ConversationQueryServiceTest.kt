@@ -16,6 +16,7 @@ import net.weero.measix.pilot.data.repository.FolderRepository
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeState
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationTransition
 import net.weero.measix.pilot.service.runtime.StartTurn
 import net.weero.measix.pilot.service.runtime.TurnHandle
@@ -45,7 +46,9 @@ class ConversationQueryServiceTest {
     fun `ready runtime projects its live snapshot without a nullable fallback`() = runTest {
         val conversation = Conversation.ofId(Uuid.random(), Uuid.random())
         val runtime = mockk<ConversationRuntime>()
-        every { runtime.snapshot } returns MutableStateFlow(conversation.toSnapshot())
+        every { runtime.snapshot } returns MutableStateFlow(
+            ConversationRuntimeSnapshot(durable = conversation.toSnapshot(), stream = null),
+        )
         val service = service(MutableStateFlow(ConversationRuntimeState.Ready(runtime)))
 
         val observed = service.observeConversation(conversation.id).first()

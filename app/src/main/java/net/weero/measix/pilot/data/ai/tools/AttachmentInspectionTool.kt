@@ -9,6 +9,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolAttachmentResolution
@@ -22,7 +23,6 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestImageSupport
 import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.provider.TextGenerationParams
-import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.classifyProviderFailure
 import net.weero.measix.pilot.data.ai.attachments.AttachmentFailureReasons
@@ -227,8 +227,8 @@ internal suspend fun executeInspection(
         val result = provider.generateText(
             providerSetting = providerSetting,
             messages = listOf(
-                UIMessage.system(INSPECTION_SYSTEM_INSTRUCTION),
-                UIMessage(role = MessageRole.USER, parts = userParts),
+                ModelRequestMessage.system(INSPECTION_SYSTEM_INSTRUCTION),
+                ModelRequestMessage(role = MessageRole.USER, parts = userParts),
             ),
             params = TextGenerationParams(
                 model = inspectionModel,

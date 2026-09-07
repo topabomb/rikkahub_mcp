@@ -108,7 +108,7 @@ class SubAssistantCallMetadataTest {
         }
 
         val tool = UIMessagePart.Tool(
-            toolCallId = "call_1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call_1",
             toolName = "assistant_call",
             input = "{}",
             metadata = existingMetadata,
@@ -137,7 +137,7 @@ class SubAssistantCallMetadataTest {
     @Test
     fun `merge creates metadata when null`() {
         val tool = UIMessagePart.Tool(
-            toolCallId = "call_1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call_1",
             toolName = "assistant_call",
             input = "{}",
             metadata = null,
@@ -159,7 +159,7 @@ class SubAssistantCallMetadataTest {
     @Test
     fun `getSubAssistantCallMetadata returns null when not present`() {
         val tool = UIMessagePart.Tool(
-            toolCallId = "call_1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call_1",
             toolName = "assistant_call",
             input = "{}",
             metadata = buildJsonObject { put("functionCallId", "abc") },
@@ -170,7 +170,7 @@ class SubAssistantCallMetadataTest {
     @Test
     fun `getSubAssistantCallMetadata returns null for corrupted data`() {
         val tool = UIMessagePart.Tool(
-            toolCallId = "call_1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call_1",
             toolName = "assistant_call",
             input = "{}",
             metadata = buildJsonObject {

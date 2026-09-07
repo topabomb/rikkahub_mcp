@@ -4,7 +4,7 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.model.InjectionPosition
-import net.weero.measix.pilot.service.runtime.ResolvedPromptInjection
+import net.weero.measix.pilot.service.turn.ResolvedPromptInjection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -72,7 +72,7 @@ class PromptInjectionTransformerTest {
             UIMessage.user("question"),
             UIMessage(
                 role = MessageRole.ASSISTANT,
-                parts = listOf(UIMessagePart.Tool("call", "lookup", "{}")),
+                parts = listOf(UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call", toolName = "lookup", input = "{}")),
             ),
             UIMessage.user("next"),
         )

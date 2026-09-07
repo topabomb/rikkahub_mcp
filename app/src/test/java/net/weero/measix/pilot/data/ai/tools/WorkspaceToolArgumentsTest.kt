@@ -32,7 +32,7 @@ class WorkspaceToolArgumentsTest {
         messageId = Uuid.random(),
         calls = calls.mapIndexed { ordinal, tool -> LocatedToolCall(ordinal, tool) },
         toolIndex = freezeToolSet(tools).bindingsByName,
-        availability = ToolInteractionAvailability.FULL,
+        availability = TurnInteractionCapability.FULL,
     )
 
     @Test
@@ -47,21 +47,18 @@ class WorkspaceToolArgumentsTest {
     @Test
     fun assembledToolsRejectMissingPathBeforeApprovalAndHonorNormalizedPolicy() = runTest {
         val tools = createWorkspaceTools("workspace", mockk(), emptyMap(), mockk())
-        val missingPath = UIMessagePart.Tool("bad", "workspace_write_file", """{"text":"x"}""")
+        val missingPath = UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "bad", toolName = "workspace_write_file", input = """{"text":"x"}""")
         val rejected = pendingBatch(tools, listOf(missingPath))
         assertTrue(rejected.pending.isEmpty())
         assertTrue(rejected.immediateResults.isNotEmpty())
-        val output = (rejected.replacements.getValue(0).output.single() as UIMessagePart.Text).text
+        val output = (rejected.replacements.getValue(missingPath.localCallId).output.single() as UIMessagePart.Text).text
         assertTrue(output.contains("invalid_arguments"))
         assertTrue(output.contains("path is required"))
 
-        val safe = UIMessagePart.Tool("safe", "workspace_write_file", """{"path":"/tmp/x","text":"x"}""")
-        val outside = UIMessagePart.Tool("outside", "workspace_write_file", """{"path":"/tmp/../etc/x","text":"x"}""")
+        val safe = UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "safe", toolName = "workspace_write_file", input = """{"path":"/tmp/x","text":"x"}""")
+        val outside = UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "outside", toolName = "workspace_write_file", input = """{"path":"/tmp/../etc/x","text":"x"}""")
         assertTrue(pendingBatch(tools, listOf(safe)).pending.isEmpty())
-        assertEquals(
-            setOf(ToolInteractionKind.APPROVAL),
-            pendingBatch(tools, listOf(outside)).kinds,
-        )
+        assertTrue(pendingBatch(tools, listOf(outside)).pending.single().requiresApproval)
     }
 
     @Test

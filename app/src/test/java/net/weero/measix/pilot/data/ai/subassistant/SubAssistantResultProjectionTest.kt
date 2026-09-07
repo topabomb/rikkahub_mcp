@@ -101,7 +101,7 @@ class SubAssistantResultProjectionTest {
                 task("search"),
                 assistant(
                     UIMessagePart.Tool(
-                        toolCallId = "s1",
+                        localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "s1",
                         toolName = "search_web",
                         input = "{}",
                         output = listOf(env.image(env.png, searchRef)),
@@ -385,7 +385,7 @@ class SubAssistantResultProjectionTest {
             artifact,
         )
         return UIMessagePart.Tool(
-            toolCallId = "g1",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "g1",
             toolName = GENERATE_IMAGE_TOOL_NAME,
             input = "{}",
             output = listOf(
@@ -413,5 +413,78 @@ class SubAssistantResultProjectionTest {
         fun cleanup() {
             filesDir.deleteRecursively()
         }
+    }
+
+    // ── projectArtifactsForCaller：Image 交付物投影为 native parts（原 SubAssistantArtifactProjectionTest）──
+
+    private val artifactRef = AttachmentRefs.format(Uuid.parse("11111111-1111-1111-1111-111111111111"))
+    private val imageArtifact = SubAssistantDeliverableArtifact(
+        ref = artifactRef,
+        type = ARTIFACT_TYPE_IMAGE,
+        mime = "image/png",
+        fileUrl = "file:///tmp/a.png",
+    )
+
+    @Test
+    fun `without extras no parts are projected`() = runTest {
+        val projection = projectArtifactsForCaller(
+            artifacts = listOf(imageArtifact),
+            extras = emptySet(),
+        )
+        assertTrue(projection.extraParts.isEmpty())
+    }
+
+    @Test
+    fun `extras append native image parts with stable ref`() = runTest {
+        val projection = projectArtifactsForCaller(
+            artifacts = listOf(imageArtifact),
+            extras = setOf(ASSISTANT_CALL_EXTRA_ARTIFACTS),
+        )
+        assertEquals(1, projection.extraParts.size)
+        val part = projection.extraParts.single() as UIMessagePart.Image
+        assertEquals("file:///tmp/a.png", part.url)
+        assertEquals(artifactRef, AttachmentRefs.getRef(part))
+    }
+
+    @Test
+    fun `multiple image artifacts keep order`() = runTest {
+        val second = imageArtifact.copy(
+            ref = AttachmentRefs.format(Uuid.parse("22222222-2222-2222-2222-222222222222")),
+            fileUrl = "file:///tmp/b.png",
+        )
+        val projection = projectArtifactsForCaller(
+            artifacts = listOf(imageArtifact, second),
+            extras = setOf(ASSISTANT_CALL_EXTRA_ARTIFACTS),
+        )
+        assertEquals(2, projection.extraParts.size)
+        val urls = projection.extraParts.map { (it as UIMessagePart.Image).url }
+        assertEquals(listOf("file:///tmp/a.png", "file:///tmp/b.png"), urls)
+    }
+
+    @Test
+    fun `non image artifacts are not projected as parts`() = runTest {
+        val document = SubAssistantDeliverableArtifact(
+            ref = AttachmentRefs.format(Uuid.parse("33333333-3333-3333-3333-333333333333")),
+            type = ARTIFACT_TYPE_DOCUMENT,
+            mime = "application/pdf",
+            fileUrl = "file:///tmp/a.pdf",
+        )
+        val projection = projectArtifactsForCaller(
+            artifacts = listOf(imageArtifact, document),
+            extras = setOf(ASSISTANT_CALL_EXTRA_ARTIFACTS),
+        )
+        // 只有 Image 交付物投影 native parts；document 的引用保留在 metadata artifacts。
+        assertEquals(1, projection.extraParts.size)
+        assertTrue(projection.extraParts.all { it is UIMessagePart.Image })
+    }
+
+    @Test
+    fun `image artifact without file url is skipped`() = runTest {
+        val dangling = imageArtifact.copy(fileUrl = null)
+        val projection = projectArtifactsForCaller(
+            artifacts = listOf(dangling),
+            extras = setOf(ASSISTANT_CALL_EXTRA_ARTIFACTS),
+        )
+        assertTrue(projection.extraParts.isEmpty())
     }
 }

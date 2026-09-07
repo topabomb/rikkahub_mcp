@@ -17,8 +17,8 @@ import net.weero.measix.pilot.data.datastore.toEffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
-import net.weero.measix.pilot.service.SubAssistantRunGate
-import net.weero.measix.pilot.service.TurnRecovery
+import net.weero.measix.pilot.service.subassistant.SubAssistantRunGate
+import net.weero.measix.pilot.service.turn.TurnRecovery
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import kotlin.uuid.Uuid

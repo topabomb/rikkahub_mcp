@@ -1,6 +1,6 @@
 package net.weero.measix.pilot.data.ai.transformers
 
-import net.weero.measix.pilot.service.runtime.resolveAssistantRequest
+import net.weero.measix.pilot.service.turn.resolveTurnAssistantSnapshot
 
 import net.weero.measix.pilot.test.testPromptInputs
 
@@ -18,9 +18,9 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
-import net.weero.measix.pilot.data.ai.DurableMessageLocator
-import net.weero.measix.pilot.data.ai.RequestMessageOrigin
-import net.weero.measix.pilot.data.ai.SyntheticMessageKind
+import net.weero.measix.pilot.data.ai.request.DurableMessageLocator
+import net.weero.measix.pilot.data.ai.request.RequestMessageOrigin
+import net.weero.measix.pilot.data.ai.request.SyntheticMessageKind
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.InjectionPosition
 import net.weero.measix.pilot.data.model.PromptInjection
@@ -62,14 +62,14 @@ class RequestMessageOriginTest {
     private fun context(
         tracker: RequestMessageOriginTracker,
         assistant: Assistant = assistant(),
-        promptInputs: net.weero.measix.pilot.service.runtime.FrozenTurnPromptInputs = testPromptInputs(
+        promptInputs: net.weero.measix.pilot.service.turn.TurnPromptSnapshot = testPromptInputs(
             messageTemplate = wrapTemplate,
         ),
     ) = mockk<android.content.Context>(relaxed = true).let { androidContext ->
         TransformerContext(
             context = androidContext,
             model = Model(modelId = "test", displayName = "Test"),
-            assistant = resolveAssistantRequest(assistant),
+            assistant = resolveTurnAssistantSnapshot(assistant),
             promptInputs = promptInputs,
             requestOrigins = tracker,
             registerUnpublishedResource = { error("no resources expected in this pipeline") },
@@ -136,7 +136,7 @@ class RequestMessageOriginTest {
                 promptInputs = testPromptInputs(
                     messageTemplate = wrapTemplate,
                     promptInjections = listOf(
-                        net.weero.measix.pilot.service.runtime.ResolvedPromptInjection(
+                        net.weero.measix.pilot.service.turn.ResolvedPromptInjection(
                             id = injection.id,
                             priority = injection.priority,
                             position = injection.position,

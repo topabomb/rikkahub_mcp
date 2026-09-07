@@ -36,22 +36,23 @@ Seek a review in a separate context using at most 2 subagents only at key levera
 
 > 增加或调整核心语义或概念需同步下列内容
 
-- 会话命令与 turn：`MasterTurnCoordinator`、
-  `TurnFinalization`、`TurnRecovery`。
+- 会话命令与 turn：`ConversationTurnService`、
+  `TurnFinalizer`、`TurnRecovery`。
 - Artifact：`ArtifactStore`、`ArtifactPayloadStore`、`ArtifactSettingsCoordinator`、`ArtifactUseCase`。
 - 生成媒体与文件管理：`GeneratedMediaStore`、`FileManagementApplicationService`、`FileManagementQueryService`。
 - MCP：`McpServerRuntime`、`McpRuntimeCoordinator`、`McpCatalogStore`、`McpOAuthCoordinator`。
-- 子助手：`DelegationCoordinator`、`SubAssistantLifecycle`、`SubAssistantRunGate`。
+- 子助手：`SubAssistantRunCoordinator`、`SubAssistantLifecycle`、`SubAssistantRunGate`。
 - UI 边界：`ConversationApplicationService`、`ConversationQueryService` 及专用 reader/query port。
-- 架构契约：`app/src/test/java/net/weero/measix/pilot/architecture/SingleWriterContractTest.kt` 与性能证据测试。
+- 架构契约：`app/src/test/java/net/weero/measix/pilot/architecture/` 下的 `ArchitectureDependencyTest`、
+  `RetiredSurfaceContractTest`、`TurnStepProtocolContractTest`（共享扫描器 `ArchitectureSources.kt`）与性能证据测试。
 
 ## 核心约定 Core Rules
 
 ### 1. Context window budget —— 第一优先级
 
 - 移动端必须主动控制每请求发送给 Provider 的 context window 长度。针对历史 tool output 的自动手段是
-  **rolling compaction**：step 提交后由 `ConversationContextPlanner.planPostStepCompaction` 产出计划
-  （阈值唯一来源是 `ContextTrimmingPolicy`），落盘由 `ToolOutputStore.stageCompaction` 执行；计划阶段不做任何文件或消息写入。
+  **rolling compaction**：step 提交后由 `ToolOutputCompactionPlanner.planAfterSuccessfulRequest` 产出计划
+  （阈值唯一来源是 `ContextBudget`），落盘由 `ToolOutputStore.stageCompaction` 执行；计划阶段不做任何文件或消息写入。
 - 压缩对象只限于"本次成功请求确实可见、且模型已消费的历史 inline tool result"。降级形态由 `ToolOutputPolicy` 决定，三者不得混用：
   - `ARCHIVABLE_TEXT` → **archiving**：原文写入 artifact，消息内替换为 `[Archived tool result: ref=...]` marker，
     模型可用 `read_tool_output` / `grep_tool_output` 回查。
@@ -83,7 +84,7 @@ Seek a review in a separate context using at most 2 subagents only at key levera
 - 每类 durable 事实只有一个 owner 和一个写协议。扩展既有 command、typed use case、projection 或状态机；
   禁止旁路 DAO/Repository 写入、服务定位器、整聚合回写和第二状态源。
 - `ConversationCommandCoordinator`、`ConversationRuntimeRegistry`、`ConversationRuntime`、
-  `ConversationTransition` 与 `TurnEngine` 构成唯一会话命令、snapshot 与 turn 链。事务成功后才发布 durable 状态；
+  `ConversationTransition` 与 `TurnCommitter` 构成唯一会话命令、snapshot 与 turn 链。事务成功后才发布 durable 状态；
   streaming projection 是唯一允许先发布且不落库的会话态。
 - 取消必须传播。`NonCancellable` 只用于已经取得明确所有权的终态提交或补偿收口；不得用 `runCatching`
   吞掉 `CancellationException`。
@@ -127,8 +128,9 @@ Seek a review in a separate context using at most 2 subagents only at key levera
 | Topic | Reference |
 | --- | --- |
 | 应用总体架构、所有者与边界 | `docs/references/application-architecture.md` |
+| 测试分层、owner、确定性与验证命令 | `docs/references/testing-strategy.md` |
 | Room 索引、查询覆盖与迁移边界 | `docs/references/database-indexing.md` |
-| 会话、Runtime、turn、审批与标题 | `docs/references/chat-generation-pipeline.md` |
+| 会话、Runtime、turn、审批与标题 | `docs/references/turn-step-execution.md` |
 | 请求上下文：条数窗口、滚动压缩、披露与摘要 | `docs/references/request-context.md` |
 | 多模态、附件、Artifact、Turn/Tool durability | `docs/references/multimodal-context-and-turn-durability.md` |
 | 子助手 owner、lineage、retention、恢复 | `docs/references/sub-assistant-architecture.md` |

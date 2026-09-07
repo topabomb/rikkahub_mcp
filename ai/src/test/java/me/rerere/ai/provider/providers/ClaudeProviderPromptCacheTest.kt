@@ -14,6 +14,7 @@ import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.testsupport.toModelRequests
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -44,7 +45,7 @@ class ClaudeProviderPromptCacheTest {
             Boolean::class.javaPrimitiveType!!
         )
         method.isAccessible = true
-        return method.invoke(provider, providerSetting, messages, params, stream) as JsonObject
+        return method.invoke(provider, providerSetting, messages.toModelRequests(), params, stream) as JsonObject
     }
 
     private fun dummyTool(): FrozenToolDefinition = FrozenToolDefinition(

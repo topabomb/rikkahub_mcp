@@ -55,9 +55,8 @@ import kotlin.uuid.Uuid
 class ExecutionStateConflictException(message: String) : IllegalStateException(message)
 
 private val RECOVERABLE_TURN_STATUSES = listOf(
-    TurnExecutionStatus.CREATED,
     TurnExecutionStatus.RUNNING,
-    TurnExecutionStatus.AWAITING_APPROVAL,
+    TurnExecutionStatus.AWAITING_USER,
 )
 
 class ConversationRepository(
@@ -175,7 +174,7 @@ class ConversationRepository(
 
     /**
      * 随整棵 Conversation 原子落库的 context entries（Fork / undo-restore 携带历史 entries）。
-     * 走同一条 insert-once 主键语义；entries 均来自已通过 §12.3 校验的装载结果。
+     * 走同一条 insert-once 主键语义；entries 均来自已通过校验的装载结果。
      */
     private suspend fun saveModelContextEntries(entries: List<ConversationModelContextEntry>) {
         if (entries.isEmpty()) return
@@ -306,7 +305,7 @@ class ConversationRepository(
                 if (nodeEntities.isNotEmpty()) {
                     messageNodeDAO.upsertAll(nodeEntities)
                 }
-                // §12.2 事务顺序：node 删除与 upsert 之后、执行事实之前收口 context。
+                // 事务顺序：node 删除与 upsert 之后、执行事实之前收口 context。
                 // deleted 列表携带消失 entry 的完整事实：按 (owner_node_id, owner_message_id)
                 // 主键精确删除（Fork / Child clone 会在其他 Conversation 保留相同 message id）；
                 // node 级消失同时由 FK cascade 闭合。插入只走 insert-once，同 key 不同行
@@ -383,9 +382,8 @@ class ConversationRepository(
         TurnExecutionStatus.INCOMPLETE,
         TurnExecutionStatus.INTERRUPTED,
         -> true
-        TurnExecutionStatus.CREATED,
         TurnExecutionStatus.RUNNING,
-        TurnExecutionStatus.AWAITING_APPROVAL,
+        TurnExecutionStatus.AWAITING_USER,
         -> false
     }
 
@@ -416,26 +414,24 @@ class ConversationRepository(
         val sourceStatuses = when (operation) {
             TurnExecutionOperation.START -> error("handled above")
             TurnExecutionOperation.RECOVER -> listOf(
-                TurnExecutionStatus.CREATED,
                 TurnExecutionStatus.RUNNING,
-                TurnExecutionStatus.AWAITING_APPROVAL,
+                TurnExecutionStatus.AWAITING_USER,
             )
             TurnExecutionOperation.ADVANCE -> when (execution.status) {
                 TurnExecutionStatus.RUNNING -> listOf(
                     TurnExecutionStatus.RUNNING,
-                    TurnExecutionStatus.AWAITING_APPROVAL,
+                    TurnExecutionStatus.AWAITING_USER,
                 )
-                TurnExecutionStatus.AWAITING_APPROVAL -> listOf(
+                TurnExecutionStatus.AWAITING_USER -> listOf(
                     TurnExecutionStatus.RUNNING,
-                    TurnExecutionStatus.AWAITING_APPROVAL,
+                    TurnExecutionStatus.AWAITING_USER,
                 )
                 TurnExecutionStatus.COMPLETED,
                 TurnExecutionStatus.CANCELLED,
                 TurnExecutionStatus.FAILED,
                 TurnExecutionStatus.INCOMPLETE,
                 TurnExecutionStatus.INTERRUPTED,
-                -> listOf(TurnExecutionStatus.RUNNING, TurnExecutionStatus.AWAITING_APPROVAL)
-                TurnExecutionStatus.CREATED -> emptyList()
+                -> listOf(TurnExecutionStatus.RUNNING, TurnExecutionStatus.AWAITING_USER)
             }
         }
         val changed = if (sourceStatuses.isEmpty()) {
@@ -470,9 +466,12 @@ class ConversationRepository(
             if (toolExecutionDAO.insertStartedIfTurnActive(
                     executionId = execution.executionId,
                     turnId = execution.turnId,
-                    toolOrdinal = execution.toolOrdinal,
+                    stepId = execution.stepId,
+                    localCallId = execution.localCallId,
                     reason = execution.reason,
                     childConversationId = execution.childConversationId,
+                    childTurnId = execution.childTurnId,
+                    subAssistantRunId = execution.subAssistantRunId,
                     createdAt = execution.createdAt,
                     updatedAt = execution.updatedAt,
                 ) != -1L
@@ -480,9 +479,11 @@ class ConversationRepository(
             if (toolExecutionDAO.updateStartedIfTurnActive(
                     executionId = execution.executionId,
                     turnId = execution.turnId,
-                    toolOrdinal = execution.toolOrdinal,
+                    localCallId = execution.localCallId,
                     reason = execution.reason,
                     childConversationId = execution.childConversationId,
+                    childTurnId = execution.childTurnId,
+                    subAssistantRunId = execution.subAssistantRunId,
                     updatedAt = execution.updatedAt,
                 ) == 1
             ) return
@@ -495,18 +496,20 @@ class ConversationRepository(
         val changed = toolExecutionDAO.transition(
             executionId = execution.executionId,
             turnId = execution.turnId,
-            toolOrdinal = execution.toolOrdinal,
+            localCallId = execution.localCallId,
             sourceStatuses = listOf(ToolExecutionStatus.STARTED),
             targetStatus = execution.status,
             reason = execution.reason,
             childConversationId = execution.childConversationId,
+            childTurnId = execution.childTurnId,
+            subAssistantRunId = execution.subAssistantRunId,
             updatedAt = execution.updatedAt,
         )
         if (changed == 1) return
         val current = toolExecutionDAO.getById(execution.executionId)
         if (current?.status == execution.status &&
             current.turnId == execution.turnId &&
-            current.toolOrdinal == execution.toolOrdinal &&
+            current.localCallId == execution.localCallId &&
             current.reason == execution.reason &&
             current.childConversationId == execution.childConversationId
         ) return
@@ -724,7 +727,7 @@ class ConversationRepository(
         )
 
     /**
-     * 模型上下文的唯一装载入口（§12.3）：先取归属本 Conversation 的行，再交给 mapper 校验
+     * 模型上下文的唯一装载入口：先取归属本 Conversation 的行，再交给 mapper 校验
      * owner / anchor node 与 variant identity。任何不一致都抛出，不静默当作没有 context。
      */
     private suspend fun loadModelContextEntries(
@@ -797,7 +800,7 @@ class ConversationRepository(
 }
 
 /**
- * 模型上下文行的 Repository mapper（权威方案 §5.2、§12.3）。
+ * 模型上下文行的 Repository mapper。
  *
  * 数据库 FK 只能保证 owner / anchor 两个 **node** 存在；两个 message ID 位于 message_node 的
  * messages JSON 内，无法建 FK，因此下列语义事实只能在这里校验，并且必须 fail-closed：

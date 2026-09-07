@@ -10,6 +10,8 @@ import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.model.toMessageNode
+import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
+import net.weero.measix.pilot.service.runtime.ConversationRuntimeSnapshot
 import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import org.junit.Assert.assertEquals
@@ -57,7 +59,7 @@ class SubAssistantDetailResolverTest {
             reason = "runtime_error",
         )
         val tool = UIMessagePart.Tool(
-            toolCallId = "fail",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "fail",
             toolName = "assistant_call",
             input = """{"assistant_id":"$targetId","request":"Review this"}""",
             output = listOf(
@@ -130,7 +132,7 @@ class SubAssistantDetailResolverTest {
             targetNameSnapshot = "Reviewer",
         ).copy(state = SubAssistantCallState.STARTING)
         val tool = UIMessagePart.Tool(
-            toolCallId = "pending",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "pending",
             toolName = "assistant_call",
             input = """{"assistant_id":"$targetId","request":"Review this"}""",
         ).mergeSubAssistantCallMetadata(json, metadata)
@@ -153,7 +155,7 @@ class SubAssistantDetailResolverTest {
             state = SubAssistantCallState.RUNNING,
         )
         val tool = UIMessagePart.Tool(
-            toolCallId = "malformed",
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "malformed",
             toolName = "assistant_call",
             input = "{}",
         ).mergeSubAssistantCallMetadata(json, metadata)
@@ -215,7 +217,7 @@ class SubAssistantDetailResolverTest {
             reason = "runtime_error",
         )
         return UIMessagePart.Tool(
-            toolCallId = runId,
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = runId,
             toolName = "assistant_call",
             input = """{"assistant_id":"$targetId","request":"Review this"}""",
             output = listOf(
@@ -237,7 +239,7 @@ class SubAssistantDetailResolverTest {
             state = SubAssistantCallState.COMPLETED,
         )
         return UIMessagePart.Tool(
-            toolCallId = runId,
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = runId,
             toolName = "assistant_call",
             input = """{"assistant_id":"$targetId","request":"Review this"}""",
             output = listOf(UIMessagePart.Text("done")),
@@ -248,12 +250,15 @@ class SubAssistantDetailResolverTest {
         id = masterId,
         assistantId = callerId,
         messageNodes = listOf(UIMessage(role = MessageRole.ASSISTANT, parts = tools).toMessageNode()),
-    ).toSnapshot().toPresentationSnapshot()
+    ).presentation()
 
     private fun childWithNodes(vararg messages: UIMessage) = Conversation(
         id = childId,
         assistantId = targetId,
         messageNodes = messages.map { it.toMessageNode() },
         parentConversationId = masterId,
-    ).toSnapshot().toPresentationSnapshot()
+    ).presentation()
+
+    private fun Conversation.presentation(): ConversationPresentationSnapshot =
+        ConversationRuntimeSnapshot(durable = toSnapshot(), stream = null).toPresentationSnapshot()
 }

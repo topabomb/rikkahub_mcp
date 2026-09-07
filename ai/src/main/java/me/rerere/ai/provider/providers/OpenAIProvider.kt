@@ -32,7 +32,7 @@ import me.rerere.ai.provider.images.moderationBlockedImageException
 import me.rerere.ai.provider.images.parseImageGenerationResponseBody
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
-import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.util.CustomBodyReservedKeyException
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.RequestBodyOwnership
@@ -131,7 +131,7 @@ class OpenAIProvider(
 
     override suspend fun streamText(
         providerSetting: ProviderSetting.OpenAI,
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         params: TextGenerationParams
     ): Flow<MessageChunk> = if (providerSetting.useResponseApi) {
         responseAPI.streamText(
@@ -149,7 +149,7 @@ class OpenAIProvider(
 
     override suspend fun generateText(
         providerSetting: ProviderSetting.OpenAI,
-        messages: List<UIMessage>,
+        messages: List<ModelRequestMessage>,
         params: TextGenerationParams
     ): MessageChunk = if (providerSetting.useResponseApi) {
         responseAPI.generateText(

@@ -1,10 +1,12 @@
 package net.weero.measix.pilot.di
+import net.weero.measix.pilot.service.turn.TurnContextFactory
+import net.weero.measix.pilot.service.turn.TurnPipelineFactory
 
 import android.content.Context
 import kotlinx.serialization.json.Json
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.ai.tools.AssistantToolFactory
-import net.weero.measix.pilot.data.ai.tools.GenerationToolSetFactory
+import net.weero.measix.pilot.data.ai.tools.TurnToolSetFactory
 import net.weero.measix.pilot.data.ai.tools.ToolOutputStore
 import net.weero.measix.pilot.data.ai.tools.local.ImageGenerationToolFactory
 import net.weero.measix.pilot.data.ai.tools.local.LocalTools
@@ -15,6 +17,11 @@ import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.data.imggen.ImageGenerationCoordinator
 import net.weero.measix.pilot.data.imggen.ImageGenerationSelectionResolver
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
+import net.weero.measix.pilot.data.ai.transformers.WorkspaceReminderTransformer
+import net.weero.measix.pilot.data.ai.transformers.ToolArtifactReplayTransformer
+import net.weero.measix.pilot.data.ai.transformers.AttachmentProjectionTransformer
+import net.weero.measix.pilot.data.ai.transformers.Base64ImageToLocalFileTransformer
+import net.weero.measix.pilot.data.ai.transformers.DocumentAsPromptTransformer
 import net.weero.measix.pilot.service.AssistantManagementService
 import net.weero.measix.pilot.service.ArtifactUseCase
 import net.weero.measix.pilot.service.FileManagementApplicationService
@@ -25,7 +32,7 @@ import net.weero.measix.pilot.service.ApplicationRecoveryCoordinator
 import net.weero.measix.pilot.service.ApplicationRecoveryGate
 import net.weero.measix.pilot.service.ChatNotificationManager
 import net.weero.measix.pilot.service.BackupRestoreApplicationService
-import net.weero.measix.pilot.service.MasterTurnCoordinator
+import net.weero.measix.pilot.service.ConversationTurnService
 import net.weero.measix.pilot.service.ProviderSettingsApplicationService
 import net.weero.measix.pilot.service.ConversationApplicationService
 import net.weero.measix.pilot.service.ConversationAttachmentPreviewProjector
@@ -34,12 +41,12 @@ import net.weero.measix.pilot.service.CustomChatFontService
 import net.weero.measix.pilot.service.SearchIndexMaintenanceService
 import net.weero.measix.pilot.service.ChatErrorStore
 import net.weero.measix.pilot.service.GenerationSideEffects
-import net.weero.measix.pilot.service.SubAssistantRunGate
+import net.weero.measix.pilot.service.subassistant.SubAssistantRunGate
 import net.weero.measix.pilot.service.SubAssistantDetailReader
-import net.weero.measix.pilot.service.SubAssistantLifecycle
+import net.weero.measix.pilot.service.subassistant.SubAssistantLifecycle
 import net.weero.measix.pilot.service.StatsQueryService
-import net.weero.measix.pilot.service.TurnFinalization
-import net.weero.measix.pilot.service.TurnRecovery
+import net.weero.measix.pilot.service.turn.TurnFinalizer
+import net.weero.measix.pilot.service.turn.TurnRecovery
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.FavoriteModelService
@@ -49,7 +56,7 @@ import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import net.weero.measix.pilot.service.workspace.WorkspaceTerminalRuntime
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
 import net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher
-import net.weero.measix.pilot.service.runtime.DelegationCoordinator
+import net.weero.measix.pilot.service.subassistant.SubAssistantRunCoordinator
 import net.weero.measix.pilot.utils.EmojiData
 import net.weero.measix.pilot.utils.EmojiUtils
 import net.weero.measix.pilot.utils.JsonInstant
@@ -155,7 +162,7 @@ val appModule = module {
         SoundEffectPlayer(get())
     }
 
-    // 生成通知与业务解耦：MasterTurnCoordinator 只发事件，通知由这里消费；
+    // 生成通知与业务解耦：ConversationTurnService 只发事件，通知由这里消费；
     // createdAtStart 保证进程启动即订阅，否则后台生成的事件会因无订阅者而丢失
     single(createdAtStart = true) {
         ChatNotificationManager(
@@ -172,7 +179,7 @@ val appModule = module {
             memoryRepository = get(),
             artifactStore = get(),
             runtimeRegistry = get(),
-            delegationCoordinator = get(),
+            subAssistantRunCoordinator = get(),
             recoveryGate = get(),
             conversationApplicationService = get(),
         )
@@ -203,7 +210,7 @@ val appModule = module {
 
     single {
         val settingsStore = get<net.weero.measix.pilot.data.datastore.SettingsStore>()
-        GenerationToolSetFactory(
+        TurnToolSetFactory(
             localTools = get(),
             conversationQueryService = get(),
             skillManager = get(),
@@ -239,25 +246,36 @@ val appModule = module {
         )
     }
 
-    single { net.weero.measix.pilot.service.runtime.TurnRequestContextFactory(workspaceRepository = get()) }
+    single { net.weero.measix.pilot.service.turn.TurnContextFactory(workspaceRepository = get()) }
 
     single {
-        DelegationCoordinator(
-            generationLoop = get(),
+        TurnPipelineFactory(
+            templateTransformer = get(),
+            workspaceReminderTransformer = WorkspaceReminderTransformer(),
+            toolArtifactReplayTransformer = ToolArtifactReplayTransformer(get()),
+            attachmentProjectionTransformer = AttachmentProjectionTransformer(get()),
+            base64ImageToLocalFileTransformer = Base64ImageToLocalFileTransformer(get()),
+            documentAsPromptTransformer = DocumentAsPromptTransformer(get()),
+        )
+    }
+
+    single {
+        SubAssistantRunCoordinator(
+            turnRunner = get(),
             conversationRepo = get(),
             runtimeRegistry = get(),
             commandCoordinator = get(),
             toolSetFactory = get(),
             settingsStore = get(),
             memoryRepository = get(),
-            templateTransformer = get(),
-            turnRequestContextFactory = get(),
+            turnPipelineFactory = get(),
+            turnContextFactory = get(),
             artifactStore = get(),
             toolArtifactRewriter = get(),
             json = get(),
             attachmentResolver = get(),
             context = get(),
-            turnFinalization = get(),
+            turnFinalizer = get(),
             runGate = get(),
         )
     }
@@ -267,7 +285,7 @@ val appModule = module {
             settingsStore = get(),
             assistantManagementService = get(),
             json = get(),
-            delegationCoordinator = get(),
+            subAssistantRunCoordinator = get(),
             toolSetFactory = get(),
         )
     }
@@ -306,7 +324,7 @@ val appModule = module {
     }
 
     single {
-        TurnFinalization(
+        TurnFinalizer(
             conversationRepository = get(),
             runtimeRegistry = get(),
             commandCoordinator = get(),
@@ -320,7 +338,7 @@ val appModule = module {
             runtimeRegistry = get(),
             commandCoordinator = get(),
             settingsStore = get(),
-            turnFinalization = get(),
+            turnFinalizer = get(),
             json = get(),
         )
     }
@@ -344,29 +362,27 @@ val appModule = module {
     }
 
     single {
-        MasterTurnCoordinator(
+        ConversationTurnService(
             context = get(),
             appScope = get(),
             appEventBus = get(),
             settingsStore = get(),
             memoryRepository = get(),
-            generationLoop = get(),
-            templateTransformer = get(),
+            turnRunner = get(),
+            turnPipelineFactory = get(),
             mcpManager = get(),
             toolSetFactory = get(),
-            turnRequestContextFactory = get(),
+            turnContextFactory = get(),
             assistantToolFactory = get(),
-            delegationCoordinator = get(),
-            turnFinalization = get(),
+            subAssistantRunCoordinator = get(),
+            turnFinalizer = get(),
             subAssistantLifecycle = get(),
             runtimeRegistry = get(),
             commandCoordinator = get(),
             recoveryGate = get(),
             chatErrorStore = get(),
             sideEffects = get(),
-            artifactStore = get(),
             artifactUseCase = get(),
-            toolArtifactRewriter = get(),
             titleCoordinator = get(),
         )
     }
@@ -383,7 +399,7 @@ val appModule = module {
             sideEffects = get(),
             artifactStore = get(),
             artifactUseCase = get(),
-            turnFinalization = get(),
+            turnFinalizer = get(),
             json = get(),
             toolArtifactRewriter = get(),
             titleCoordinator = get(),
