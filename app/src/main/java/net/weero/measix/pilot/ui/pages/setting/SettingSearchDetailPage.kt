@@ -56,11 +56,11 @@ import me.rerere.search.SearchResult
 import me.rerere.search.SearchService
 import me.rerere.search.SearchServiceOptions
 import org.koin.androidx.compose.koinViewModel
-import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
 
 @Composable
 fun SettingSearchDetailPage(
-    serviceId: Uuid,
+    serviceId: ConfigurationReference,
     vm: SettingVM = koinViewModel()
 ) {
     val settings by vm.settings.collectAsStateWithLifecycle()

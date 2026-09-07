@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.attachments
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -50,7 +52,7 @@ class AttachmentReferenceLookupTest {
             JsonInstant,
             SubAssistantCallMetadata(
                 runId = Uuid.random().toString(),
-                targetAssistantId = Uuid.random().toString(),
+                targetAssistantId = ConfigurationReference.random().toString(),
                 targetNameSnapshot = "Image assistant",
                 state = SubAssistantCallState.COMPLETED,
                 artifacts = listOf(

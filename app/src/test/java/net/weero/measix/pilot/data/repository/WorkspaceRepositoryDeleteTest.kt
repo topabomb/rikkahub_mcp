@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.repository
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.coVerifyOrder
@@ -213,7 +215,7 @@ class WorkspaceRepositoryDeleteTest {
     @Test
     fun `startup restores a journaled workspace binding after interrupted compensation`() = runTest {
         val workspaceId = Uuid.random()
-        val assistantId = Uuid.random()
+        val assistantId = ConfigurationReference.random()
         val rootDir = Files.createTempDirectory("workspace-recovery").toFile()
         try {
             val dao = mockk<WorkspaceDAO>()

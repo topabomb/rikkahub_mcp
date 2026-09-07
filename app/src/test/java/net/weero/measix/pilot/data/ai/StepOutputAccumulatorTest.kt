@@ -1,4 +1,5 @@
 package net.weero.measix.pilot.data.ai
+
 import net.weero.measix.pilot.service.turn.StepOutputAccumulator
 
 import kotlinx.serialization.json.buildJsonArray
@@ -344,10 +345,10 @@ class StepOutputAccumulatorTest {
 
     @Test
     fun `sampling preserves the START-preopened Step identity`() {
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
         val preopenedStepId = Uuid.random()
         val started = UIMessage(
-            id = assistantId,
+            id = assistantMessageId,
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Step(stepId = preopenedStepId, ordinal = 0, startedAt = kotlin.time.Instant.DISTANT_PAST),

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.setting
 
+import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Package01
 import me.rerere.hugeicons.stroke.Connect
@@ -127,11 +128,10 @@ import net.weero.measix.pilot.utils.plus
 import org.koin.androidx.compose.koinViewModel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
-import kotlin.uuid.Uuid
 
 @Composable
 fun SettingProviderDetailPage(
-    id: Uuid,
+    id: ConfigurationReference,
     providerSettingsVM: ProviderSettingsVM = koinViewModel(parameters = { org.koin.core.parameter.parametersOf(id) }),
 ) {
     val providerSettingsState by providerSettingsVM.state.collectAsStateWithLifecycle()
@@ -264,7 +264,7 @@ private fun SettingProviderConfigPage(
     providerSettingsState: ProviderSettingsUiState,
     onOpenConnectionTest: (ProviderSetting) -> Unit,
     onDismissConnectionTest: () -> Unit,
-    onSelectConnectionModel: (Uuid?) -> Unit,
+    onSelectConnectionModel: (ConfigurationReference?) -> Unit,
     onRunConnectionTest: () -> Unit,
     onEdit: (ProviderSetting) -> Unit,
     onDelete: () -> Unit
@@ -389,11 +389,11 @@ private fun SettingProviderModelPage(
     onLoadModelCatalog: () -> Unit,
     applyRegistryCapabilities: (Model) -> Model,
     onAddModel: (Model) -> Unit,
-    onRemoveModel: (Uuid) -> Unit,
+    onRemoveModel: (ConfigurationReference) -> Unit,
     onEditModel: (Model) -> Unit,
     onAddModels: (List<Model>) -> Unit,
     onRemoveModelsByModelIds: (Set<String>) -> Unit,
-    onMoveModel: (Uuid, Uuid) -> Unit,
+    onMoveModel: (ConfigurationReference, ConfigurationReference) -> Unit,
 ) {
     LaunchedEffect(provider) {
         onLoadModelCatalog()
@@ -417,11 +417,11 @@ private fun ModelList(
     modelCatalog: UiState<List<Model>>,
     applyRegistryCapabilities: (Model) -> Model,
     onAddModel: (Model) -> Unit,
-    onRemoveModel: (Uuid) -> Unit,
+    onRemoveModel: (ConfigurationReference) -> Unit,
     onEditModel: (Model) -> Unit,
     onAddModels: (List<Model>) -> Unit,
     onRemoveModelsByModelIds: (Set<String>) -> Unit,
-    onMoveModel: (Uuid, Uuid) -> Unit,
+    onMoveModel: (ConfigurationReference, ConfigurationReference) -> Unit,
 ) {
     val modelList = (modelCatalog as? UiState.Success)?.data.orEmpty()
     var expanded by rememberSaveable { mutableStateOf(true) }
@@ -471,10 +471,10 @@ private fun ModelList(
                     }
                 }
             } else {
-                items(providerSetting.models, key = { it.id }) { item ->
+                items(providerSetting.models, key = { it.id.toString() }) { item ->
                     ReorderableItem(
                         state = reorderableLazyListState,
-                        key = item.id
+                        key = item.id.toString()
                     ) { isDragging ->
                         ModelCard(
                             model = item,
@@ -1488,7 +1488,7 @@ private fun ProviderOverrideSettings(
             Button(
                 onClick = {
                     editingProvider = parentProvider?.copyProvider(
-                        id = Uuid.random(),
+                        id = ConfigurationReference.random(),
                         builtIn = false,
                         models = emptyList(), // 这里必须设置为空，不然会导致循环依赖JSON
                         description = {},

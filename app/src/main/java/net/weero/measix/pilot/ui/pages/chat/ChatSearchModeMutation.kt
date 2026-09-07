@@ -1,14 +1,14 @@
 package net.weero.measix.pilot.ui.pages.chat
 
+import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.ai.provider.BuiltInTools
 import net.weero.measix.pilot.data.datastore.Settings
-import kotlin.uuid.Uuid
 
 /** 在最新 Assistant / Model 上应用搜索模式，避免用页面快照整份覆盖模型其它字段。 */
 internal fun applySearchMode(
     settings: Settings,
-    assistantId: Uuid,
-    modelId: Uuid?,
+    assistantId: ConfigurationReference,
+    modelId: ConfigurationReference?,
     enableWebSearch: Boolean,
     enableBuiltIn: Boolean,
 ): Settings = settings.copy(

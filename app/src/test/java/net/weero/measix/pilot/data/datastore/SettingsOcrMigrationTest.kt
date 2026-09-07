@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.data.datastore
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
@@ -18,18 +21,17 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class SettingsOcrMigrationTest {
     private val visionModel = Model(
-        id = Uuid.parse("11111111-1111-1111-1111-111111111111"),
+        id = ConfigurationReference.parse("11111111-1111-1111-1111-111111111111"),
         modelId = "vision",
         displayName = "Vision",
         type = ModelType.CHAT,
         inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
     )
     private val textModel = Model(
-        id = Uuid.parse("22222222-2222-2222-2222-222222222222"),
+        id = ConfigurationReference.parse("22222222-2222-2222-2222-222222222222"),
         modelId = "text",
         displayName = "Text",
         type = ModelType.CHAT,
@@ -67,7 +69,7 @@ class SettingsOcrMigrationTest {
     @Test
     fun `legacy random uuid without matching model does not migrate`() {
         val prefs = prefsOf(
-            Pair(LEGACY_OCR_MODEL, Uuid.random().toString()),
+            Pair(LEGACY_OCR_MODEL, ConfigurationReference.random().toString()),
         )
         val wrote = migrateOcrPreferences(prefs, providersWith(visionModel))
         assertFalse(wrote)
@@ -109,7 +111,7 @@ class SettingsOcrMigrationTest {
 
     @Test
     fun `legacy backup json maps ocrModelId to attachmentInspectionModelId`() {
-        val raw = """{"chatModelId":"${Uuid.random()}","ocrModelId":"${visionModel.id}","ocrPrompt":"p","titlePrompt":"t"}"""
+        val raw = """{"chatModelId":"${ConfigurationReference.random()}","ocrModelId":"${visionModel.id}","ocrPrompt":"p","titlePrompt":"t"}"""
         val patched = JsonInstant.parseToJsonElement(migrateLegacySettingsJson(raw)) as kotlinx.serialization.json.JsonObject
         assertEquals(visionModel.id.toString(), patched["attachmentInspectionModelId"]?.let { (it as kotlinx.serialization.json.JsonPrimitive).content })
         assertNull(patched["ocrModelId"])
@@ -127,7 +129,7 @@ class SettingsOcrMigrationTest {
 
     @Test
     fun `modern backup json is unchanged`() {
-        val raw = """{"chatModelId":"${Uuid.random()}","titlePrompt":"t"}"""
+        val raw = """{"chatModelId":"${ConfigurationReference.random()}","titlePrompt":"t"}"""
         assertEquals(raw, migrateLegacySettingsJson(raw))
     }
 
@@ -159,8 +161,8 @@ class SettingsOcrMigrationTest {
 
     @Test
     fun `search selection migration preserves the selected service identity across reordering`() = runTest {
-        val first = SearchServiceOptions.BingLocalOptions(Uuid.parse("11111111-1111-1111-1111-111111111111"))
-        val second = SearchServiceOptions.TavilyOptions(Uuid.parse("22222222-2222-2222-2222-222222222222"))
+        val first = SearchServiceOptions.BingLocalOptions(ConfigurationReference.parse("11111111-1111-1111-1111-111111111111"))
+        val second = SearchServiceOptions.TavilyOptions(ConfigurationReference.parse("22222222-2222-2222-2222-222222222222"))
         val prefs = prefsOf(
             kotlin.Pair(SettingsStore.SEARCH_SERVICES, JsonInstant.encodeToString(listOf(first, second))),
         ).also { it[SettingsStore.LEGACY_SEARCH_SELECTED] = 1 }

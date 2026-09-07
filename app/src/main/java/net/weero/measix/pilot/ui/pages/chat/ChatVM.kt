@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.chat
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.app.Application
 import android.net.Uri
 import android.util.Log
@@ -40,7 +41,6 @@ import net.weero.measix.pilot.service.ConversationViewLease
 import net.weero.measix.pilot.service.ArtifactUseCase
 import net.weero.measix.pilot.service.ArtifactDraftScope
 import net.weero.measix.pilot.service.FavoriteService
-
 import net.weero.measix.pilot.service.runtime.ConversationPresentation
 import net.weero.measix.pilot.service.runtime.ConversationPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.ToolInteractionDecision
@@ -201,7 +201,7 @@ class ChatVM(
         if (previousAvatar != Avatar.Image(committedUri.toString())) artifactUseCase.maintainStorage()
     }
 
-    fun updateSearchMode(assistantId: Uuid, model: Model?, mode: SearchMode) {
+    fun updateSearchMode(assistantId: ConfigurationReference, model: Model?, mode: SearchMode) {
         viewModelScope.launch {
             val enableWebSearch = searchModeEnablesLocal(mode)
             val enableBuiltIn = searchModeEnablesBuiltIn(mode)
@@ -345,11 +345,11 @@ class ChatVM(
         }
     }
 
-    fun moveConversationToAssistant(targetAssistantId: Uuid) {
+    fun moveConversationToAssistant(targetAssistantId: ConfigurationReference) {
         moveConversationToAssistant(_conversationId, targetAssistantId)
     }
 
-    fun moveConversationToAssistant(conversationId: Uuid, targetAssistantId: Uuid) {
+    fun moveConversationToAssistant(conversationId: Uuid, targetAssistantId: ConfigurationReference) {
         viewModelScope.launch {
             conversationApplicationService.moveToAssistant(conversationId, targetAssistantId)
             if (conversationId == _conversationId) {
@@ -380,7 +380,7 @@ class ChatVM(
         }
     }
 
-    fun updateModeInjectionIds(ids: Set<Uuid>) {
+    fun updateModeInjectionIds(ids: Set<ConfigurationReference>) {
         viewModelScope.launch {
             conversationApplicationService.updateModeInjectionIds(_conversationId, ids)
         }

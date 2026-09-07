@@ -1,8 +1,9 @@
 package net.weero.measix.pilot.data.ai.subassistant
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.model.Assistant
-import kotlin.uuid.Uuid
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -15,10 +16,10 @@ import org.junit.Test
  */
 class SubAssistantAccessPolicyTest {
     private fun makeAssistant(
-        id: Uuid = Uuid.random(),
+        id: ConfigurationReference = ConfigurationReference.random(),
         allowSub: Boolean = true,
         globallyVisible: Boolean = false,
-        allowedIds: Set<Uuid> = emptySet(),
+        allowedIds: Set<ConfigurationReference> = emptySet(),
         subTools: Boolean = false,
     ) = Assistant(
         id = id,
@@ -86,7 +87,7 @@ class SubAssistantAccessPolicyTest {
 
     @Test
     fun `invalid ID in allowed list ignored`() {
-        val ghostId = Uuid.random()
+        val ghostId = ConfigurationReference.random()
         val caller = makeAssistant(allowSub = false, allowedIds = setOf(ghostId), subTools = true)
         val all = listOf(caller)
         val result = SubAssistantAccessPolicy.accessibleSubAssistants(caller, all)

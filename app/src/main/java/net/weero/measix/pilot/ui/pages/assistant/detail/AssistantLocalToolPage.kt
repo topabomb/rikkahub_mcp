@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.assistant.detail
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -62,9 +63,8 @@ import net.weero.measix.pilot.utils.openUsageAccessSettings
 import org.koin.compose.koinInject
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
-import kotlin.uuid.Uuid
 
-internal fun eligibleSubAssistantIds(settings: net.weero.measix.pilot.data.datastore.Settings, callerId: Uuid): Set<Uuid> =
+internal fun eligibleSubAssistantIds(settings: net.weero.measix.pilot.data.datastore.Settings, callerId: ConfigurationReference): Set<ConfigurationReference> =
     settings.assistants
         .asSequence()
         .filter { it.id != callerId && it.allowAsSubAssistant }

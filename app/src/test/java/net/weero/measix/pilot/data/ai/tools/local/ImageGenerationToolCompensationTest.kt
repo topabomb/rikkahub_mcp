@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.tools.local
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -57,7 +59,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ImageGenerationToolCompensationTest {
-    private val ownerId = Uuid.random()
+    private val ownerId = ConfigurationReference.random()
     private val model = Model(modelId = "gpt-image-1", displayName = "GPT Image", type = ModelType.IMAGE)
     private val providerSetting = ProviderSetting.OpenAI(name = "OpenAI", models = listOf(model))
 

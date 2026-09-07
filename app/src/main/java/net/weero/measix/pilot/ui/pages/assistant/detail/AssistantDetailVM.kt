@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.assistant.detail
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -13,7 +14,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.data.datastore.Settings
@@ -30,7 +30,6 @@ import net.weero.measix.pilot.data.model.Tag
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
-import kotlin.uuid.Uuid
 
 private const val TAG = "AssistantDetailVM"
 
@@ -42,7 +41,7 @@ class AssistantDetailVM(
     private val skillManager: SkillManager,
     workspaceQueryService: WorkspaceQueryService,
 ) : ViewModel() {
-    private val assistantId = Uuid.parse(id)
+    private val assistantId = ConfigurationReference.parse(id)
 
     private val _lockedSettingsChanges = MutableSharedFlow<SettingsLockedException>(extraBufferCapacity = 1)
     val lockedSettingsChanges = _lockedSettingsChanges.asSharedFlow()
@@ -114,7 +113,7 @@ class AssistantDetailVM(
             initialValue = emptyList(),
         )
 
-    fun updateTags(tagIds: List<Uuid>, tags: List<Tag>) {
+    fun updateTags(tagIds: List<ConfigurationReference>, tags: List<Tag>) {
         viewModelScope.launch {
             runSettingsChange {
                 settingsStore.updateLocal { currentSettings ->

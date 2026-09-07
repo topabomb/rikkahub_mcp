@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.data.ai.tools
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
@@ -26,7 +29,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class TurnToolSetFactoryMcpTest {
     @Test
@@ -48,7 +50,7 @@ class TurnToolSetFactoryMcpTest {
         val tool = factory.buildTools(
             assistant = Assistant(), settings = Settings(), capabilityModel = null,
             mcpCapabilities = TurnMcpCapabilitySnapshot(tools = listOf(
-                availableTool(Uuid.random(), "remote", schema).copy(needsApproval = true),
+                availableTool(ConfigurationReference.random(), "remote", schema).copy(needsApproval = true),
             )),
         ).single { it.name == "mcp__server__remote" }
         assertEquals(schema, tool.parameters())
@@ -73,7 +75,7 @@ class TurnToolSetFactoryMcpTest {
             providerManager = mockk<ProviderManager>(),
             artifactStore = mockk<ArtifactStore>(),
         )
-        val serverId = Uuid.random()
+        val serverId = ConfigurationReference.random()
         val schema = buildJsonObject { put("type", "object") }
         val tools = factory.buildTools(
             assistant = Assistant(),
@@ -112,9 +114,9 @@ class TurnToolSetFactoryMcpTest {
             capabilityModel = null,
             mcpCapabilities = TurnMcpCapabilitySnapshot(
                 tools = listOf(
-                    availableTool(Uuid.random(), "c", schema, serverName = "a__b"),
-                    availableTool(Uuid.random(), "b__c", schema, serverName = "a"),
-                    availableTool(Uuid.random(), "ok", schema, serverName = "safe"),
+                    availableTool(ConfigurationReference.random(), "c", schema, serverName = "a__b"),
+                    availableTool(ConfigurationReference.random(), "b__c", schema, serverName = "a"),
+                    availableTool(ConfigurationReference.random(), "ok", schema, serverName = "safe"),
                 )
             ),
         )
@@ -152,7 +154,7 @@ class TurnToolSetFactoryMcpTest {
     }
 
     private fun availableTool(
-        serverId: Uuid,
+        serverId: ConfigurationReference,
         name: String,
         schema: kotlinx.serialization.json.JsonObject,
         serverName: String = "server",

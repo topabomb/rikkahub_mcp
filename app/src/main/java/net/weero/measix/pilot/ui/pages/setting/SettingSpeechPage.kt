@@ -346,10 +346,10 @@ private fun TTSProviderList(
                 path = "defaults/selectedTTSProviderId",
             )
         }
-        items(settings.ttsProviders, key = { it.id }) { provider ->
+        items(settings.ttsProviders, key = { it.id.toString() }) { provider ->
             ReorderableItem(
                 state = reorderableState,
-                key = provider.id
+                key = provider.id.toString()
             ) { isDragging ->
                 TTSProviderItem(
                     modifier = Modifier
@@ -488,10 +488,10 @@ private fun ASRProviderList(
                 path = "defaults/selectedASRProviderId",
             )
         }
-        items(settings.asrProviders, key = { it.id }) { provider ->
+        items(settings.asrProviders, key = { it.id.toString() }) { provider ->
             ReorderableItem(
                 state = reorderableState,
-                key = provider.id
+                key = provider.id.toString()
             ) { isDragging ->
                 ASRProviderItem(
                     modifier = Modifier

@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ui
+package net.weero.measix.pilot.ui.components.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -35,14 +35,14 @@ import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.Cancel01
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.model.Tag
-import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
 
 @Composable
 fun TagsInput(
-    value: List<Uuid>,
+    value: List<ConfigurationReference>,
     tags: List<Tag>,
     modifier: Modifier = Modifier,
-    onValueChange: (value: List<Uuid>, tags: List<Tag>) -> Unit,
+    onValueChange: (value: List<ConfigurationReference>, tags: List<Tag>) -> Unit,
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
 
@@ -184,7 +184,7 @@ fun TagsInput(
                             showError = true
                         } else {
                             // 创建新标签
-                            val newTag = Tag(id = Uuid.random(), name = trimmedName)
+                            val newTag = Tag(id = ConfigurationReference.random(), name = trimmedName)
                             onValueChange(value + newTag.id, tags + newTag)
                             showAddDialog = false
                             tagName = ""

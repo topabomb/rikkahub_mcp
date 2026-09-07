@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import io.mockk.every
 import io.mockk.coEvery
 import io.mockk.mockk
@@ -44,7 +46,7 @@ class ConversationQueryServiceTest {
 
     @Test
     fun `ready runtime projects its live snapshot without a nullable fallback`() = runTest {
-        val conversation = Conversation.ofId(Uuid.random(), Uuid.random())
+        val conversation = Conversation.ofId(Uuid.random(), ConfigurationReference.random())
         val runtime = mockk<ConversationRuntime>()
         every { runtime.snapshot } returns MutableStateFlow(
             ConversationRuntimeSnapshot(durable = conversation.toSnapshot(), stream = null),

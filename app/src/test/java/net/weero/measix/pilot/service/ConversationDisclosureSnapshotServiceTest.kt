@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
@@ -15,7 +17,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Locale
 import java.util.TimeZone
-import kotlin.uuid.Uuid
 
 /**
  * Canonical content 验收：Snapshot 必须是对同一业务数据逐字复现的完整
@@ -24,8 +25,8 @@ import kotlin.uuid.Uuid
  */
 class ConversationDisclosureSnapshotServiceTest {
 
-    private val callerId = Uuid.parse("11111111-1111-1111-1111-111111111111")
-    private val reviewerId = Uuid.parse("b2410000-0000-0000-0000-000000000001")
+    private val callerId = ConfigurationReference.parse("11111111-1111-1111-1111-111111111111")
+    private val reviewerId = ConfigurationReference.parse("b2410000-0000-0000-0000-000000000001")
 
     private val caller = Assistant(
         id = callerId,
@@ -64,6 +65,17 @@ class ConversationDisclosureSnapshotServiceTest {
     private fun JsonObject.rows(): List<JsonElement> = getValue("rows").jsonArray.toList()
 
     @Test
+    fun `enterprise child identities survive durable disclosure validation`() {
+        val enterpriseId = ConfigurationReference.parse("managed~local~example~deployment~assistant_reviewer")
+        val content = render(candidate(all = listOf(caller, reviewer.copy(id = enterpriseId))))
+        assertEquals(enterpriseId.toString(), rows(envelope(content), "sub_assistants").single().jsonArray[0].jsonPrimitive.content)
+        assertEquals(1, ConversationDisclosureSnapshotService.requireDurableEnvelope(content))
+        assertThrows(DisclosureContentException::class.java) {
+            ConversationDisclosureSnapshotService.requireDurableEnvelope(content.replace(enterpriseId.toString(), "managed~broken"))
+        }
+    }
+
+    @Test
     fun `canonical golden content matches the specified envelope byte for byte`() {
         val golden = "{\"type\":\"conversation_disclosure_snapshot\",\"format\":1," +
             "\"memory\":{\"enabled\":true,\"scope\":\"local\",\"header\":[\"id\",\"content\"]," +
@@ -92,7 +104,7 @@ class ConversationDisclosureSnapshotServiceTest {
     @Test
     fun `sub assistant rows keep settings order and exclude the caller`() {
         val earlier = reviewer.copy(
-            id = Uuid.parse("b2410000-0000-0000-0000-000000000002"),
+            id = ConfigurationReference.parse("b2410000-0000-0000-0000-000000000002"),
             name = "Earlier in settings order",
         )
         val rows = rows(envelope(render(candidate(all = listOf(caller, earlier, reviewer)))), "sub_assistants")

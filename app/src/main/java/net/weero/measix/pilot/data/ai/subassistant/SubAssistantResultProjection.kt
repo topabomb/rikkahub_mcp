@@ -1,7 +1,7 @@
 package net.weero.measix.pilot.data.ai.subassistant
 
+import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.service.turn.TurnRunPhase
-
 import java.io.File
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -445,7 +445,7 @@ internal fun buildSubAssistantCallResultParts(
 internal suspend fun buildUnavailableCallResult(
     json: kotlinx.serialization.json.Json,
     execContext: me.rerere.ai.core.ToolExecutionContext,
-    targetAssistantId: Uuid,
+    targetAssistantId: ConfigurationReference,
     assistantName: String,
     reason: String,
     runId: String = Uuid.random().toString(),
@@ -472,7 +472,7 @@ internal suspend fun buildClassifiedFailureResult(
     json: kotlinx.serialization.json.Json,
     error: Exception,
     execContext: me.rerere.ai.core.ToolExecutionContext,
-    targetAssistantId: Uuid,
+    targetAssistantId: ConfigurationReference,
     assistantName: String,
     extras: Set<String>,
     runId: String,

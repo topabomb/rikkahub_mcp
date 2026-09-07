@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.service.runtime
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -243,7 +246,7 @@ class ConversationCommandCoordinatorTest {
     @Test
     fun `draft header edits remain in memory and first user message materializes the complete aggregate`() = runTest {
         val id = Uuid.random()
-        val updatedAssistantId = Uuid.random()
+        val updatedAssistantId = ConfigurationReference.random()
         val repository = mockk<ConversationRepository>()
         val write = slot<ConversationWrite>()
         coEvery { repository.existsConversationById(id) } returns false
@@ -412,7 +415,7 @@ class ConversationCommandCoordinatorTest {
         coEvery { repository.commit(capture(write)) } returns true
         val coordinator = coordinator(registry, repository, now = 123L)
         val turnId = Uuid.random()
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
         runtime.installTurnWorker(turnId, Job())
 
         val handle = coordinator.startTurn(
@@ -421,20 +424,20 @@ class ConversationCommandCoordinatorTest {
                 current = runtime.durable,
                 turnId = turnId,
                 modelContextCandidate = disclosureCandidate(),
-                assistantMessageId = assistantId,
+                assistantMessageId = assistantMessageId,
             ),
         )
 
         assertEquals(turnId, handle.turnId)
         val mutate = write.captured as ConversationWrite.Mutate
         assertEquals(1, mutate.mutation.upsertedNodes.size)
-        assertEquals(assistantId, mutate.mutation.upsertedNodes.single().currentMessage.id)
+        assertEquals(assistantMessageId, mutate.mutation.upsertedNodes.single().currentMessage.id)
         assertEquals(TurnExecutionStatus.RUNNING, mutate.executionFacts?.turn?.status)
-        assertEquals(assistantId.toString(), mutate.executionFacts?.turn?.assistantMessageId)
+        assertEquals(assistantMessageId.toString(), mutate.executionFacts?.turn?.assistantMessageId)
         assertEquals(123L, mutate.executionFacts?.turn?.createdAt)
         // 首次 START 的目标分支没有历史 entry：candidate 必然构成新 baseline，随同一事务插入。
         assertEquals(
-            listOf(assistantId),
+            listOf(assistantMessageId),
             mutate.mutation.insertedModelContextEntries.map { it.ownerMessageId },
         )
         coVerify(exactly = 1) { repository.commit(any()) }
@@ -497,12 +500,12 @@ class ConversationCommandCoordinatorTest {
         coEvery { repository.commit(any()) } returns true
         val coordinator = coordinator(registry, repository)
         val turnId = Uuid.random()
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
         val command = TurnTransition.buildStartTurnCommand(
             current = runtime.durable,
             turnId = turnId,
             modelContextCandidate = disclosureCandidate(),
-            assistantMessageId = assistantId,
+            assistantMessageId = assistantMessageId,
         )
 
         val rejected = runCatching {

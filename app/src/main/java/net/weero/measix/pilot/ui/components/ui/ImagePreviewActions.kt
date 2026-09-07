@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.ui
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -31,7 +32,6 @@ import net.weero.measix.pilot.ui.components.ai.AssistantPickerSheet
 import org.koin.compose.koinInject
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration
-import kotlin.uuid.Uuid
 
 /**
  * 查看器底部栏的调用方动作。差异化逻辑留在调用方:
@@ -71,7 +71,7 @@ internal fun backgroundFailureMessage(context: Context, reason: String?): String
 
 internal suspend fun applyImageAsBackground(
     url: String,
-    assistantId: Uuid,
+    assistantId: ConfigurationReference,
     backgroundService: AssistantBackgroundService,
 ): BackgroundUpdateResult = backgroundService.replaceUserSelectedBackground(assistantId, url)
 
@@ -81,7 +81,7 @@ internal fun assistantDisplayName(name: String?, fallback: String): String =
 private data class PendingBackgroundChoice(
     val url: String,
     val toaster: ToasterState,
-    val assistantId: Uuid,
+    val assistantId: ConfigurationReference,
     val assistantName: String,
 )
 
@@ -104,7 +104,7 @@ class ImageBackgroundHost(
 @Composable
 fun rememberImageBackgroundHost(
     settings: Settings,
-    assistantId: Uuid? = null,
+    assistantId: ConfigurationReference? = null,
 ): ImageBackgroundHost {
     val context = LocalContext.current
     val backgroundService: AssistantBackgroundService = koinInject()
@@ -219,7 +219,7 @@ internal fun setBackgroundWithFeedback(
     scope: CoroutineScope,
     context: Context,
     url: String,
-    assistantId: Uuid,
+    assistantId: ConfigurationReference,
     assistantName: String,
     toaster: ToasterState,
     backgroundService: AssistantBackgroundService,

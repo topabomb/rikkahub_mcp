@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service.runtime
 
+
 import kotlinx.datetime.LocalDateTime
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
@@ -74,17 +75,17 @@ class ConversationModelContextTransitionTest {
         val user = userNode("first")
         val base = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(user)).toSnapshot()
         val candidate = stableCandidate(1)
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
 
         val mutation = plan(base, TurnTransition.buildStartTurnCommand(
             current = base,
             turnId = Uuid.random(),
             modelContextCandidate = candidate,
-            assistantMessageId = assistantId,
+            assistantMessageId = assistantMessageId,
         ))
 
         val inserted = mutation.insertedModelContextEntries.single()
-        assertEquals(assistantId, inserted.ownerMessageId)
+        assertEquals(assistantMessageId, inserted.ownerMessageId)
         assertEquals(user.currentMessage.id, inserted.anchorMessageId)
         assertEquals(candidate, inserted.content)
         assertTrue(mutation.deletedModelContextEntries.isEmpty())
@@ -254,8 +255,8 @@ class ConversationModelContextTransitionTest {
     fun `assistant edit does not change model context rows`() {
         var snapshot = Conversation.ofId(Uuid.random())
             .copy(messageNodes = listOf(userNode("u1"))).toSnapshot()
-        val assistantId = Uuid.random()
-        snapshot = finalize(startAt(snapshot, assistantId, stableCandidate(1)), assistantId)
+        val assistantMessageId = Uuid.random()
+        snapshot = finalize(startAt(snapshot, assistantMessageId, stableCandidate(1)), assistantMessageId)
         val assistantNode = snapshot.nodes.last()
 
         val mutation = plan(
@@ -358,14 +359,14 @@ class ConversationModelContextTransitionTest {
         var snapshot = Conversation.ofId(Uuid.random())
             .copy(messageNodes = listOf(MessageNode(messages = listOf(oldAnchor, newAnchor), selectIndex = 1)))
             .toSnapshot()
-        val assistantId = Uuid.random()
-        snapshot = startAt(snapshot, assistantId, stableCandidate(1))
+        val assistantMessageId = Uuid.random()
+        snapshot = startAt(snapshot, assistantMessageId, stableCandidate(1))
         // 因果 anchor 是 owner 之前最后一条 USER variant：v2。
         assertEquals(newAnchor.id, snapshot.modelContextEntries.single().anchorMessageId)
 
         // 删除仍被引用的 anchor variant → entry 以 anchor 消失收口。
         val mutation = plan(snapshot, DeleteMessage(newAnchor.id))
-        assertEquals(listOf(assistantId), mutation.deletedModelContextEntries.map { it.ownerMessageId })
+        assertEquals(listOf(assistantMessageId), mutation.deletedModelContextEntries.map { it.ownerMessageId })
         val after = ConversationTransition.apply(snapshot, DeleteMessage(newAnchor.id))
         assertTrue(after.modelContextEntries.isEmpty())
     }
@@ -425,13 +426,13 @@ class ConversationModelContextTransitionTest {
     fun `deleting the owner node prunes via existence and reports its entry for deletion`() {
         var snapshot = Conversation.ofId(Uuid.random())
             .copy(messageNodes = listOf(userNode("u1"))).toSnapshot()
-        val assistantId = Uuid.random()
-        snapshot = startAt(snapshot, assistantId, stableCandidate(1))
-        snapshot = finalize(snapshot, assistantId)
+        val assistantMessageId = Uuid.random()
+        snapshot = startAt(snapshot, assistantMessageId, stableCandidate(1))
+        snapshot = finalize(snapshot, assistantMessageId)
 
         val assistantNode = snapshot.nodes.last()
         val mutation = plan(snapshot, DeleteMessage(assistantNode.currentMessage.id))
-        assertEquals(listOf(assistantId), mutation.deletedModelContextEntries.map { it.ownerMessageId })
+        assertEquals(listOf(assistantMessageId), mutation.deletedModelContextEntries.map { it.ownerMessageId })
         assertEquals(listOf(assistantNode.id), mutation.deletedNodeIds)
     }
 

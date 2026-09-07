@@ -1,9 +1,10 @@
 package net.weero.measix.pilot.service.runtime
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
 import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
-import kotlin.uuid.Uuid
 
 /**
  * runtime / 命令测试共享的最小 canonical candidate：与真实 START 捕获同源，直接由
@@ -17,7 +18,7 @@ internal fun disclosureCandidate(
     seed: Long = 1L,
 ): String {
     val assistant = Assistant(
-        id = Uuid.parse("dddd0000-0000-0000-0000-00000000%04x".format(seed)),
+        id = ConfigurationReference.parse("dddd0000-0000-0000-0000-00000000%04x".format(seed)),
         name = "Disclosure Test Assistant",
         localTools = emptyList(),
     )

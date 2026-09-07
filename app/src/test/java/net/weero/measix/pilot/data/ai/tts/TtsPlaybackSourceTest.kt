@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.data.ai.tts
 
-import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
+
 import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -9,7 +10,7 @@ import org.junit.Test
 class TtsPlaybackSourceTest {
     @Test
     fun `context converts to source without changing turn identity`() {
-        val assistantId = Uuid.random()
+        val assistantId = ConfigurationReference.random()
         val context = TtsToolPlaybackContext(
             sessionId = "master-turn-42",
             assistantId = assistantId,
@@ -32,13 +33,13 @@ class TtsPlaybackSourceTest {
         val sessionId = "master-turn-1"
         val masterContext = TtsToolPlaybackContext(
             sessionId = sessionId,
-            assistantId = Uuid.random(),
+            assistantId = ConfigurationReference.random(),
             assistantName = "Master",
             sourceType = TtsPlaybackSource.SourceType.NORMAL,
         )
         val targetContext = TtsToolPlaybackContext(
             sessionId = sessionId,
-            assistantId = Uuid.random(),
+            assistantId = ConfigurationReference.random(),
             assistantName = "Target",
             sourceType = TtsPlaybackSource.SourceType.SUB_ASSISTANT,
         )
@@ -52,7 +53,7 @@ class TtsPlaybackSourceTest {
 
     @Test
     fun `different master turns have different queue identities`() {
-        val assistantId = Uuid.random()
+        val assistantId = ConfigurationReference.random()
         val first = TtsToolPlaybackContext(
             sessionId = "turn-1",
             assistantId = assistantId,

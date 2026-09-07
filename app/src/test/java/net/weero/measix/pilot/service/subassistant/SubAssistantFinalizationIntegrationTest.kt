@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.service.subassistant
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runTest
@@ -87,8 +90,8 @@ class SubAssistantFinalizationIntegrationTest {
 
     private val json = JsonInstant
     private val masterId = Uuid.random()
-    private val callerId = Uuid.random()
-    private val targetId = Uuid.random()
+    private val callerId = ConfigurationReference.random()
+    private val targetId = ConfigurationReference.random()
     private val childId = Uuid.random()
     private val task = UIMessage(
         role = MessageRole.USER,
@@ -264,7 +267,7 @@ class SubAssistantFinalizationIntegrationTest {
     }
 
     private fun validSettings(): Settings {
-        val model = Model(id = Uuid.random(), displayName = "model", type = ModelType.CHAT)
+        val model = Model(id = ConfigurationReference.random(), displayName = "model", type = ModelType.CHAT)
         val caller = Assistant(
             id = callerId,
             chatModelId = model.id,

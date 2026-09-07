@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.paging.PagingData
 import androidx.paging.map
 import kotlinx.coroutines.flow.Flow
@@ -28,7 +29,7 @@ import kotlin.uuid.Uuid
 /** Stable list/read model; message trees never cross the query port for list rendering. */
 data class ConversationSummary(
     val id: Uuid,
-    val assistantId: Uuid,
+    val assistantId: ConfigurationReference,
     val title: String,
     val folderId: Uuid?,
     val isPinned: Boolean,
@@ -120,19 +121,19 @@ class ConversationQueryService(
         mergeConversationActivities(turnPresentations, titleGenerationIds)
     }
 
-    fun unfiledPaging(assistantId: Uuid): Flow<PagingData<ConversationSummary>> =
+    fun unfiledPaging(assistantId: ConfigurationReference): Flow<PagingData<ConversationSummary>> =
         repository.getUnfiledConversationsOfAssistantPaging(assistantId).map { paging -> paging.map { it.toSummary() } }
 
     fun folderPaging(folderId: Uuid): Flow<PagingData<ConversationSummary>> =
         repository.getConversationsOfFolderPaging(folderId).map { paging -> paging.map { it.toSummary() } }
 
-    fun conversationsOfAssistant(assistantId: Uuid): Flow<List<ConversationSummary>> =
+    fun conversationsOfAssistant(assistantId: ConfigurationReference): Flow<List<ConversationSummary>> =
         repository.getConversationsOfAssistant(assistantId).map { list -> list.map { it.toSummary() } }
 
     fun pinnedConversations(): Flow<List<ConversationSummary>> =
         repository.getPinnedConversations().map { list -> list.map { it.toSummary() } }
 
-    fun foldersOfAssistant(assistantId: Uuid): Flow<List<Folder>> =
+    fun foldersOfAssistant(assistantId: ConfigurationReference): Flow<List<Folder>> =
         folderRepository.getFoldersOfAssistant(assistantId)
 
     /**
@@ -151,11 +152,11 @@ class ConversationQueryService(
     suspend fun searchMessages(keyword: String, sort: MessageSearchSort) =
         repository.searchMessages(keyword, sort)
 
-    suspend fun recentConversations(assistantId: Uuid, limit: Int): List<ConversationSummary> =
+    suspend fun recentConversations(assistantId: ConfigurationReference, limit: Int): List<ConversationSummary> =
         repository.getRecentConversationRecords(assistantId, limit).map { it.toSummary() }
 
     suspend fun searchMessagesOfAssistant(
-        assistantId: Uuid,
+        assistantId: ConfigurationReference,
         keyword: String,
         sort: MessageSearchSort,
     ) = repository.searchMessagesOfAssistant(assistantId, keyword, sort)

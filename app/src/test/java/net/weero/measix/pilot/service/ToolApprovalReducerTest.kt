@@ -1,4 +1,7 @@
 package net.weero.measix.pilot.service
+
+import me.rerere.common.configuration.ConfigurationReference
+
 import net.weero.measix.pilot.service.turn.finishInterruptedToolAfterGenerationStop
 
 import me.rerere.ai.core.MessageRole
@@ -158,7 +161,7 @@ class ToolApprovalReducerTest {
 
     @Test
     fun `stopping master generation closes running sub-assistant card`() {
-        val targetId = Uuid.random()
+        val targetId = ConfigurationReference.random()
         val metadata = buildInitialSubAssistantCallMetadata(
             runId = "run-1",
             targetAssistantId = targetId,
@@ -250,7 +253,7 @@ class ToolApprovalReducerTest {
     private fun runningCallWithAskUser(interactionId: String): UIMessagePart.Tool {
         val metadata = buildInitialSubAssistantCallMetadata(
             runId = "run-ask",
-            targetAssistantId = Uuid.random(),
+            targetAssistantId = ConfigurationReference.random(),
             targetNameSnapshot = "Reviewer",
         ).copy(
             state = SubAssistantCallState.RUNNING,
@@ -274,7 +277,7 @@ class ToolApprovalReducerTest {
     private fun runningAssistantCall(input: String): UIMessagePart.Tool {
         val metadata = buildInitialSubAssistantCallMetadata(
             runId = "run-1",
-            targetAssistantId = Uuid.random(),
+            targetAssistantId = ConfigurationReference.random(),
             targetNameSnapshot = "Reviewer",
         ).copy(
             state = SubAssistantCallState.RUNNING,

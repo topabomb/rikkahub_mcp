@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.ai
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
@@ -34,7 +35,6 @@ import net.weero.measix.pilot.service.balanceRequestFingerprint
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.utils.toDp
 import org.koin.androidx.compose.koinViewModel
-import kotlin.uuid.Uuid
 
 @Composable
 fun ProviderBalanceText(
@@ -82,11 +82,11 @@ fun ProviderBalanceText(
 class ProviderBalanceVM(
     private val providerSettings: ProviderSettingsApplicationService,
 ) : ViewModel() {
-    private val _balances = MutableStateFlow<Map<Uuid, ProviderBalanceUiState>>(emptyMap())
+    private val _balances = MutableStateFlow<Map<ConfigurationReference, ProviderBalanceUiState>>(emptyMap())
     val balances = _balances.asStateFlow()
-    private val jobs = mutableMapOf<Uuid, Job>()
-    private val revisions = mutableMapOf<Uuid, Long>()
-    private val requestFingerprints = mutableMapOf<Uuid, String>()
+    private val jobs = mutableMapOf<ConfigurationReference, Job>()
+    private val revisions = mutableMapOf<ConfigurationReference, Long>()
+    private val requestFingerprints = mutableMapOf<ConfigurationReference, String>()
 
     fun request(provider: ProviderSetting.OpenAI) {
         val providerId = provider.id

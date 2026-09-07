@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.imggen
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import io.mockk.every
 import io.mockk.mockk
 import me.rerere.ai.provider.Model
@@ -11,10 +13,9 @@ import net.weero.measix.pilot.data.datastore.Settings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class ImageGenerationSelectionResolverTest {
-    private val modelId = Uuid.random()
+    private val modelId = ConfigurationReference.random()
     private val imageModel = Model(
         id = modelId,
         modelId = "gpt-image-1",
@@ -25,7 +26,7 @@ class ImageGenerationSelectionResolverTest {
     @Test
     fun `missing model is unavailable`() {
         val resolver = ImageGenerationSelectionResolver(mockk(relaxed = true))
-        val result = resolver.resolve(Settings(imageGenerationModelId = Uuid.random()))
+        val result = resolver.resolve(Settings(imageGenerationModelId = ConfigurationReference.random()))
         assertTrue(result is ImageGenerationSelection.Unavailable)
     }
 

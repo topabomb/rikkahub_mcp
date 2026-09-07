@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.tools
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -34,8 +36,8 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class AssistantCallToolTest {
-    private val callerId = Uuid.random()
-    private val targetId = Uuid.random()
+    private val callerId = ConfigurationReference.random()
+    private val targetId = ConfigurationReference.random()
     private val masterConversationId = Uuid.random()
 
     private val caller = Assistant(

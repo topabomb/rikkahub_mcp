@@ -1,6 +1,6 @@
 package net.weero.measix.pilot.data.datastore
 
-import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.asr.ASRProviderSetting
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.search.SearchServiceOptions
@@ -31,7 +31,7 @@ internal data class SettingsAccessIndex(
     private val sources: Map<String, SettingsValueSource> = emptyMap(),
     private val lockReasons: Map<String, String> = emptyMap(),
 ) {
-    fun sourceOf(kind: ManagedConfigurationRecordKind, id: Uuid): SettingsValueSource {
+    fun sourceOf(kind: ManagedConfigurationRecordKind, id: ConfigurationReference): SettingsValueSource {
         return sources[recordPath(kind, id)] ?: if (id in builtInIds(kind)) {
             SettingsValueSource.BUILT_IN
         } else {
@@ -130,7 +130,7 @@ internal object EffectiveSettingsResolver {
     private fun <T> mergeById(
         local: List<T>,
         managed: List<T>,
-        idOf: (T) -> Uuid,
+        idOf: (T) -> ConfigurationReference,
     ): List<T> {
         val managedById = managed.associateBy(idOf)
         return local.map { managedById[idOf(it)] ?: it } + managed.filter { managedValue ->
@@ -139,7 +139,7 @@ internal object EffectiveSettingsResolver {
     }
 }
 
-internal fun Settings.recordValues(): Map<ManagedConfigurationRecordKind, Map<Uuid, Any>> = mapOf(
+internal fun Settings.recordValues(): Map<ManagedConfigurationRecordKind, Map<ConfigurationReference, Any>> = mapOf(
     ManagedConfigurationRecordKind.PROVIDER to providers.associateBy(ProviderSetting::id),
     ManagedConfigurationRecordKind.ASSISTANT to assistants.associateBy(Assistant::id),
     ManagedConfigurationRecordKind.ASSISTANT_TAG to assistantTags.associateBy(Tag::id),
@@ -156,10 +156,10 @@ private fun Settings.sourcePaths(source: SettingsValueSource): Map<String, Setti
         values.keys.map { id -> recordPath(kind, id) to source }
     }.toMap()
 
-private fun recordPath(kind: ManagedConfigurationRecordKind, id: Uuid): String =
+private fun recordPath(kind: ManagedConfigurationRecordKind, id: ConfigurationReference): String =
     "records/${kind.settingsPath}/$id"
 
-private fun builtInIds(kind: ManagedConfigurationRecordKind): Set<Uuid> = when (kind) {
+private fun builtInIds(kind: ManagedConfigurationRecordKind): Set<ConfigurationReference> = when (kind) {
     ManagedConfigurationRecordKind.PROVIDER -> DEFAULT_PROVIDERS.mapTo(linkedSetOf(), ProviderSetting::id)
     ManagedConfigurationRecordKind.ASSISTANT -> DEFAULT_ASSISTANTS.mapTo(linkedSetOf(), Assistant::id)
     ManagedConfigurationRecordKind.TTS_PROVIDER -> DEFAULT_TTS_PROVIDERS.mapTo(linkedSetOf(), TTSProviderSetting::id)

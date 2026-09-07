@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.ai
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,8 +35,8 @@ import net.weero.measix.pilot.data.model.QuickMessage
 @Composable
 fun ModeInjectionsContent(
     modeInjections: List<PromptInjection.ModeInjection>,
-    selectedIds: Set<kotlin.uuid.Uuid>,
-    onToggle: (kotlin.uuid.Uuid, Boolean) -> Unit,
+    selectedIds: Set<ConfigurationReference>,
+    onToggle: (ConfigurationReference, Boolean) -> Unit,
     modifier: Modifier = Modifier,
     onManage: (() -> Unit)? = null,
 ) {
@@ -109,8 +110,8 @@ fun SkillsContent(
 @Composable
 fun QuickMessagesContent(
     quickMessages: List<QuickMessage>,
-    selectedIds: Set<kotlin.uuid.Uuid>,
-    onToggle: (kotlin.uuid.Uuid, Boolean) -> Unit,
+    selectedIds: Set<ConfigurationReference>,
+    onToggle: (ConfigurationReference, Boolean) -> Unit,
     modifier: Modifier = Modifier,
     onManage: (() -> Unit)? = null,
 ) {
@@ -118,7 +119,7 @@ fun QuickMessagesContent(
         modifier = modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        items(quickMessages, key = { it.id }) { quickMessage ->
+        items(quickMessages, key = { it.id.toString() }) { quickMessage ->
             ListItem(
                 supportingContent = if (quickMessage.content.isNotBlank()) {
                     {

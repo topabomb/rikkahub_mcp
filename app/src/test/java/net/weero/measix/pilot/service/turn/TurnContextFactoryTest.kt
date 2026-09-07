@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.service.turn
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import me.rerere.ai.provider.Model
 import net.weero.measix.pilot.data.ai.transformers.DefaultPlaceholderProvider
 import net.weero.measix.pilot.data.datastore.Settings
@@ -13,7 +16,6 @@ import org.robolectric.annotation.Config
 import kotlin.time.Instant
 import java.time.ZoneId
 import java.util.Locale
-import kotlin.uuid.Uuid
 
 /**
  * START 冻结契约：`freezeTurnPromptSnapshot` 是占位符值、模式注入资格与
@@ -30,7 +32,7 @@ class TurnContextFactoryTest {
         settings: Settings = Settings(),
         assistant: Assistant = Assistant(name = "Tester", description = "desc"),
         conversationSystemPrompt: String? = null,
-        conversationModeInjectionIds: Set<Uuid> = emptySet(),
+        conversationModeInjectionIds: Set<ConfigurationReference> = emptySet(),
     ): TurnPromptSnapshot = freezeTurnPromptSnapshot(
         settings = settings,
         assistant = assistant,
@@ -92,8 +94,8 @@ class TurnContextFactoryTest {
 
     @Test
     fun `only enabled injections linked to the effective mode set are frozen`() {
-        val linked = Uuid.random()
-        val unlinked = Uuid.random()
+        val linked = ConfigurationReference.random()
+        val unlinked = ConfigurationReference.random()
         val assistant = Assistant(
             modeInjectionIds = setOf(linked),
             allowConversationPromptInjection = false,
@@ -106,7 +108,7 @@ class TurnContextFactoryTest {
                     priority = 1,
                 ),
                 PromptInjection.ModeInjection(id = unlinked, content = "unlinked"),
-                PromptInjection.ModeInjection(id = Uuid.random(), content = "disabled", enabled = false),
+                PromptInjection.ModeInjection(id = ConfigurationReference.random(), content = "disabled", enabled = false),
             ),
         )
         val frozen = freeze(settings = settings, assistant = assistant)
@@ -115,22 +117,22 @@ class TurnContextFactoryTest {
 
     @Test
     fun `conversation mode binding wins when the assistant allows it`() {
-        val assistantId = Uuid.random()
-        val conversationId = Uuid.random()
+        val assistantInjectionId = ConfigurationReference.random()
+        val conversationInjectionId = ConfigurationReference.random()
         val assistant = Assistant(
-            modeInjectionIds = setOf(assistantId),
+            modeInjectionIds = setOf(assistantInjectionId),
             allowConversationPromptInjection = true,
         )
         val settings = Settings().copy(
             modeInjections = listOf(
-                PromptInjection.ModeInjection(id = assistantId, content = "assistant"),
-                PromptInjection.ModeInjection(id = conversationId, content = "conversation"),
+                PromptInjection.ModeInjection(id = assistantInjectionId, content = "assistant"),
+                PromptInjection.ModeInjection(id = conversationInjectionId, content = "conversation"),
             ),
         )
         val frozen = freeze(
             settings = settings,
             assistant = assistant,
-            conversationModeInjectionIds = setOf(conversationId),
+            conversationModeInjectionIds = setOf(conversationInjectionId),
         )
         assertEquals(listOf("conversation"), frozen.promptInjections.map { it.content })
     }

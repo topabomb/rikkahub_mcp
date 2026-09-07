@@ -1,6 +1,6 @@
 package net.weero.measix.pilot.data.ai.tts
 
-import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
 
 /**
  * TTS 播放来源。
@@ -10,7 +10,7 @@ import kotlin.uuid.Uuid
  */
 data class TtsPlaybackSource(
     /** 来源 Assistant ID */
-    val assistantId: Uuid?,
+    val assistantId: ConfigurationReference?,
     /** 来源 Assistant 名称快照 */
     val assistantName: String,
     /** 来源类型 */

@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.repository
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -94,9 +96,28 @@ class ConversationRepositoryTreeIntegrationTest {
     }
 
     @Test
+    fun enterpriseConfigurationReferencesRoundTripWithoutChangingConversationOrMessageIds() = runBlocking {
+        val assistantId = ConfigurationReference.parse("managed~local~example~dep_example~assistant_review")
+        val modelId = ConfigurationReference.parse("managed~local~example~dep_example~mdl_chat")
+        val original = conversation(Uuid.random(), assistantId, null).let { conversation ->
+            conversation.copy(messageNodes = listOf(UIMessage(
+                role = MessageRole.ASSISTANT,
+                modelId = modelId,
+                parts = listOf(UIMessagePart.Text("reply")),
+            ).toMessageNode()))
+        }
+        repository.insertConversationTree(original.toSnapshot(), emptyList())
+        val restored = requireNotNull(repository.getConversationById(original.id))
+        assertEquals(original.id, restored.id)
+        assertEquals(assistantId, restored.assistantId)
+        assertEquals(original.messageNodes.single().messages.single().id, restored.messageNodes.single().messages.single().id)
+        assertEquals(modelId, restored.messageNodes.single().messages.single().modelId)
+    }
+
+    @Test
     fun treeInsertAndMasterDeleteKeepConversationNodesAndArtifactReferencesAtomic() = runBlocking {
         val masterId = Uuid.random()
-        val assistantId = Uuid.random()
+        val assistantId = ConfigurationReference.random()
         val owned = artifactStore.createFromBytes(
             byteArrayOf(1, 2, 3),
             "tree.txt",
@@ -143,7 +164,7 @@ class ConversationRepositoryTreeIntegrationTest {
             fileName = "race.txt",
             mime = "text/plain",
         )
-        val conversation = conversation(Uuid.random(), Uuid.random(), null, part)
+        val conversation = conversation(Uuid.random(), ConfigurationReference.random(), null, part)
         val acquired = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val holder = async(Dispatchers.Default) {
@@ -171,7 +192,7 @@ class ConversationRepositoryTreeIntegrationTest {
 
     @Test
     fun checkpointMutationDoesNotOverwriteConcurrentNarrowHeaderWrites() = runBlocking {
-        val conversation = conversation(Uuid.random(), Uuid.random(), null).copy(
+        val conversation = conversation(Uuid.random(), ConfigurationReference.random(), null).copy(
             title = "stale-title",
             chatSuggestions = listOf("stale-suggestion"),
         )
@@ -205,7 +226,7 @@ class ConversationRepositoryTreeIntegrationTest {
 
     @Test
     fun executionFactsUseInsertAndCasAndCannotReopenATerminalTurn() = runBlocking {
-        val conversation = conversation(Uuid.random(), Uuid.random(), null)
+        val conversation = conversation(Uuid.random(), ConfigurationReference.random(), null)
         repository.insertConversation(conversation)
         val turnId = Uuid.random()
         val running = turn(conversation.id, turnId, TurnExecutionStatus.RUNNING, 10L)
@@ -226,7 +247,7 @@ class ConversationRepositoryTreeIntegrationTest {
 
     @Test
     fun turnAndToolTransitionsRequireTheExactDurableOwnerAndTerminalFacts() = runBlocking {
-        val conversation = conversation(Uuid.random(), Uuid.random(), null)
+        val conversation = conversation(Uuid.random(), ConfigurationReference.random(), null)
         repository.insertConversation(conversation)
         val turnId = Uuid.random()
         val assistantMessageId = Uuid.random()
@@ -321,7 +342,7 @@ class ConversationRepositoryTreeIntegrationTest {
 
     @Test
     fun terminalTurnClosesStartedToolsInTheSameTransaction() = runBlocking {
-        val conversation = conversation(Uuid.random(), Uuid.random(), null)
+        val conversation = conversation(Uuid.random(), ConfigurationReference.random(), null)
         repository.insertConversation(conversation)
         val turnId = Uuid.random()
         val running = turn(conversation.id, turnId, TurnExecutionStatus.RUNNING, 10L)
@@ -353,7 +374,7 @@ class ConversationRepositoryTreeIntegrationTest {
 
     @Test
     fun failedTerminalTurnCasRollsBackStartedToolClosure() = runBlocking {
-        val conversation = conversation(Uuid.random(), Uuid.random(), null)
+        val conversation = conversation(Uuid.random(), ConfigurationReference.random(), null)
         repository.insertConversation(conversation)
         val turnId = Uuid.random()
         val running = turn(conversation.id, turnId, TurnExecutionStatus.RUNNING, 10L)
@@ -432,7 +453,7 @@ class ConversationRepositoryTreeIntegrationTest {
 
     private fun conversation(
         id: Uuid,
-        assistantId: Uuid,
+        assistantId: ConfigurationReference,
         parentId: Uuid?,
         part: UIMessagePart = UIMessagePart.Text("message"),
     ) = Conversation(

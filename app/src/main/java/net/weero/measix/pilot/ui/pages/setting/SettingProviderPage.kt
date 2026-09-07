@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.setting
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.net.Uri
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Camera01
@@ -88,7 +89,6 @@ import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import java.util.Locale
 import kotlinx.coroutines.launch
-import kotlin.uuid.Uuid
 
 @Composable
 fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
@@ -143,7 +143,7 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
                 },
                 actions = {
                     ImportProviderButton {
-                        val imported = it.copyProvider(Uuid.random())
+                        val imported = it.copyProvider(ConfigurationReference.random())
                         vm.updateSettings { current ->
                             current.copy(providers = listOf(imported) + current.providers)
                         }
@@ -200,10 +200,10 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 state = lazyListState,
             ) {
-                items(filteredProviders, key = { it.id }) { provider ->
+                items(filteredProviders, key = { it.id.toString() }) { provider ->
                     ReorderableItem(
                         state = reorderableState,
-                        key = provider.id
+                        key = provider.id.toString()
                     ) { isDragging ->
                         ProviderItem(
                             modifier = Modifier

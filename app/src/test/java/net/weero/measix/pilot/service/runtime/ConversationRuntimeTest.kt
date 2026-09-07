@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service.runtime
 
+
 import net.weero.measix.pilot.testkit.sampledModelResult
 
 import kotlinx.coroutines.CompletableDeferred
@@ -151,11 +152,11 @@ class ConversationRuntimeTest {
         val scope = CoroutineScope(Job())
         val rt = runtime(scope)
         val turnId = Uuid.random()
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
         // 先建一个 assistant 槽
-        val handle = rt.startTurn(turnId, assistantId)
+        val handle = rt.startTurn(turnId, assistantMessageId)
         val streamingText = UIMessage(
-            id = assistantId,
+            id = assistantMessageId,
             role = MessageRole.ASSISTANT,
             parts = listOf(UIMessagePart.Text("streamed")),
         )
@@ -164,7 +165,7 @@ class ConversationRuntimeTest {
         // currentMessages() 读取入口能看到流式内容（流式投影覆盖末节点）
         val last = rt.snapshot.value.toPresentationSnapshot().currentMessages().lastOrNull()
         assertNotNull(last)
-        assertEquals(assistantId, last?.id)
+        assertEquals(assistantMessageId, last?.id)
         assertEquals("streamed", last?.toText())
         scope.cancel()
     }
@@ -181,15 +182,15 @@ class ConversationRuntimeTest {
             onIdle = {},
         )
         val turnId = Uuid.random()
-        val assistantId = Uuid.random()
-        val handle = rt.startTurn(turnId, assistantId)
+        val assistantMessageId = Uuid.random()
+        val handle = rt.startTurn(turnId, assistantMessageId)
         assertEquals(2, rt.snapshot.value.durable.nodes.size)
         assertSame(userNode, rt.snapshot.value.durable.nodes[0])
         assertEquals(MessageRole.ASSISTANT, rt.snapshot.value.durable.nodes[1].messages.single().role)
 
         rt.applyStreamingDelta(
             handle,
-            UIMessage(id = assistantId, role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("delta"))),
+            UIMessage(id = assistantMessageId, role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("delta"))),
         )
         // currentMessages 读取入口：流式投影覆盖末节点，未污染用户节点
         val current = rt.snapshot.value.toPresentationSnapshot().currentMessages()

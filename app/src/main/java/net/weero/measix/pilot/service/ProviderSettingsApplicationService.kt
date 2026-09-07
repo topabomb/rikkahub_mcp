@@ -1,7 +1,7 @@
 package net.weero.measix.pilot.service
 
+import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.map
 import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.core.Tool
@@ -17,7 +17,6 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.utils.SimpleCache
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
-import kotlin.uuid.Uuid
 
 /**
  * Provider 设置功能访问 Provider SDK 的唯一应用边界。
@@ -34,11 +33,11 @@ class ProviderSettingsApplicationService(
         .expireAfterWrite(2, TimeUnit.MINUTES)
         .build()
 
-    fun observeProvider(id: Uuid) = settingsStore.effectiveSettings.map { it.settings }.map { settings ->
+    fun observeProvider(id: ConfigurationReference) = settingsStore.effectiveSettings.map { it.settings }.map { settings ->
         settings.providers.firstOrNull { it.id == id }
     }
 
-    suspend fun saveConfiguration(id: Uuid, edited: ProviderSetting) = updateProvider(id) { latest ->
+    suspend fun saveConfiguration(id: ConfigurationReference, edited: ProviderSetting) = updateProvider(id) { latest ->
         if (edited.id != id) return@updateProvider latest
         edited.copyProvider(
             models = latest.models,
@@ -48,30 +47,30 @@ class ProviderSettingsApplicationService(
         )
     }
 
-    suspend fun deleteProvider(id: Uuid) {
+    suspend fun deleteProvider(id: ConfigurationReference) {
         settingsStore.updateLocal { current ->
             current.copy(providers = current.providers.filterNot { it.id == id })
         }
     }
 
-    suspend fun addModel(id: Uuid, model: Model) = updateProvider(id) { it.addModel(model) }
+    suspend fun addModel(id: ConfigurationReference, model: Model) = updateProvider(id) { it.addModel(model) }
 
-    suspend fun removeModel(id: Uuid, modelId: Uuid) = updateProvider(id) { latest ->
+    suspend fun removeModel(id: ConfigurationReference, modelId: ConfigurationReference) = updateProvider(id) { latest ->
         latest.models.firstOrNull { it.id == modelId }?.let(latest::delModel) ?: latest
     }
 
-    suspend fun editModel(id: Uuid, model: Model) = updateProvider(id) { it.editModel(model) }
+    suspend fun editModel(id: ConfigurationReference, model: Model) = updateProvider(id) { it.editModel(model) }
 
-    suspend fun addModels(id: Uuid, models: List<Model>) = updateProvider(id) { latest ->
+    suspend fun addModels(id: ConfigurationReference, models: List<Model>) = updateProvider(id) { latest ->
         val additions = models.filter { model -> latest.models.none { it.modelId == model.modelId } }
         latest.copyProvider(models = latest.models + additions)
     }
 
-    suspend fun removeModelsByModelIds(id: Uuid, modelIds: Set<String>) = updateProvider(id) { latest ->
+    suspend fun removeModelsByModelIds(id: ConfigurationReference, modelIds: Set<String>) = updateProvider(id) { latest ->
         latest.copyProvider(models = latest.models.filterNot { it.modelId in modelIds })
     }
 
-    suspend fun moveModel(id: Uuid, fromModelId: Uuid, toModelId: Uuid) = updateProvider(id) { latest ->
+    suspend fun moveModel(id: ConfigurationReference, fromModelId: ConfigurationReference, toModelId: ConfigurationReference) = updateProvider(id) { latest ->
         val fromIndex = latest.models.indexOfFirst { it.id == fromModelId }
         val toIndex = latest.models.indexOfFirst { it.id == toModelId }
         if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) latest
@@ -160,7 +159,7 @@ class ProviderSettingsApplicationService(
         ?.joinToString("") { it.text }
         .orEmpty()
 
-    private suspend fun updateProvider(id: Uuid, transform: (ProviderSetting) -> ProviderSetting) {
+    private suspend fun updateProvider(id: ConfigurationReference, transform: (ProviderSetting) -> ProviderSetting) {
         settingsStore.updateLocal { current ->
             current.copy(
                 providers = current.providers.map { provider ->
@@ -178,7 +177,7 @@ class ProviderSettingsApplicationService(
     }
 
     private data class ProviderBalanceCacheKey(
-        val providerId: Uuid,
+        val providerId: ConfigurationReference,
         val requestFingerprint: String,
     )
 }

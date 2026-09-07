@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.tools
 
+import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -15,7 +16,6 @@ import net.weero.measix.pilot.data.db.fts.MessageSearchSort
 import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.utils.JsonInstantPretty
 import net.weero.measix.pilot.utils.toLocalDate
-import kotlin.uuid.Uuid
 
 /**
  * Tools that let the assistant query the user's past conversations on demand, instead of
@@ -23,7 +23,7 @@ import kotlin.uuid.Uuid
  */
 fun createConversationTools(
     conversationQueryService: ConversationQueryService,
-    assistantId: Uuid,
+    assistantId: ConfigurationReference,
 ): List<Tool> = listOf(
     Tool(
         name = "recent_chats",

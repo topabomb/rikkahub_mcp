@@ -1,11 +1,12 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class McpConfigTest {
 
@@ -344,7 +345,7 @@ class McpConfigTest {
     @Test
     fun `encodeForShare should exclude id and tools`() {
         val original = McpServerConfig.StreamableHTTPServer(
-            id = Uuid.parse("12345678-1234-1234-1234-123456789abc"),
+            id = ConfigurationReference.parse("12345678-1234-1234-1234-123456789abc"),
             commonOptions = McpCommonOptions(
                 name = "server-with-tools",
                 toolPolicies = listOf(McpToolPolicy(name = "tool_a"))

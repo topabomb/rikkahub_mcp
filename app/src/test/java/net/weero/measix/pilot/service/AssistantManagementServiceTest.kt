@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.coVerifyOrder
@@ -20,13 +22,12 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class AssistantManagementServiceTest {
     @Test
     fun `create validates input and atomically grants caller access`() = runTest {
         val caller = Assistant(
-            id = Uuid.random(),
+            id = ConfigurationReference.random(),
             name = "Caller",
             localTools = Assistant().localTools + LocalToolOption.AssistantManagement,
         )
@@ -51,12 +52,12 @@ class AssistantManagementServiceTest {
     fun `update changes only the explicitly managed fields`() = runTest {
         val caller = managementCaller()
         val target = Assistant(
-            id = Uuid.random(),
+            id = ConfigurationReference.random(),
             name = "Old",
             description = "Old description",
             systemPrompt = "Old prompt",
             enableWebSearch = true,
-            chatModelId = Uuid.random(),
+            chatModelId = ConfigurationReference.random(),
             allowAsSubAssistant = true,
         )
         val env = Env(
@@ -83,7 +84,7 @@ class AssistantManagementServiceTest {
     @Test
     fun `delete commits tombstone then removes it only after ordered cleanup succeeds`() = runTest {
         val caller = managementCaller()
-        val target = Assistant(id = Uuid.random(), name = "Target", allowAsSubAssistant = true)
+        val target = Assistant(id = ConfigurationReference.random(), name = "Target", allowAsSubAssistant = true)
         val env = Env(
             Settings(
                 assistants = listOf(caller.copy(allowedSubAssistantIds = setOf(target.id)), target),
@@ -110,7 +111,7 @@ class AssistantManagementServiceTest {
     @Test
     fun `failed cleanup keeps durable tombstone and recovery retry consumes it`() = runTest {
         val caller = managementCaller()
-        val target = Assistant(id = Uuid.random(), name = "Target", allowAsSubAssistant = true)
+        val target = Assistant(id = ConfigurationReference.random(), name = "Target", allowAsSubAssistant = true)
         val env = Env(
             Settings(
                 assistants = listOf(caller.copy(allowedSubAssistantIds = setOf(target.id)), target),
@@ -134,7 +135,7 @@ class AssistantManagementServiceTest {
 
     @Test
     fun `restored assistant identity cancels stale tombstone without deleting restored data`() = runTest {
-        val restored = Assistant(id = Uuid.random(), name = "Restored")
+        val restored = Assistant(id = ConfigurationReference.random(), name = "Restored")
         val env = Env(
             Settings(
                 assistants = listOf(restored),
@@ -153,7 +154,7 @@ class AssistantManagementServiceTest {
     }
 
     private fun managementCaller(): Assistant = Assistant(
-        id = Uuid.random(),
+        id = ConfigurationReference.random(),
         name = "Caller",
         localTools = Assistant().localTools + LocalToolOption.AssistantManagement,
     )

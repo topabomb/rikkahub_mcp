@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.sync
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
@@ -212,10 +214,10 @@ class BackupArchiveServiceTest {
         val artifactStore = mockk<ArtifactStore>()
         val generatedMediaStore = mockk<GeneratedMediaStore>()
         coEvery { settingsStore.snapshotLocal() } returns Settings(
-            chatModelId = kotlin.uuid.Uuid.parse("00000000-0000-0000-0000-000000000201"),
-            fastModelId = kotlin.uuid.Uuid.parse("00000000-0000-0000-0000-000000000202"),
-            imageGenerationModelId = kotlin.uuid.Uuid.parse("00000000-0000-0000-0000-000000000203"),
-            compressModelId = kotlin.uuid.Uuid.parse("00000000-0000-0000-0000-000000000204"),
+            chatModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000201"),
+            fastModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000202"),
+            imageGenerationModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000203"),
+            compressModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000204"),
         )
         coEvery { artifactStore.withLifecycleLock<Any>(any()) } coAnswers {
             firstArg<suspend () -> Any>().invoke()

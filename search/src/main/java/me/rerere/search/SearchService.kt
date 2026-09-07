@@ -1,5 +1,6 @@
 package me.rerere.search
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.SerialName
@@ -15,7 +16,6 @@ import okhttp3.internal.closeQuietly
 import okio.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resumeWithException
-import kotlin.uuid.Uuid
 
 interface SearchService<T : SearchServiceOptions> {
     fun parameters(options: T): JsonObject?
@@ -109,7 +109,7 @@ data class ScrapedResultMetadata(
 
 @Serializable
 sealed class SearchServiceOptions {
-    abstract val id: Uuid
+    abstract val id: ConfigurationReference
 
     open val displayName: String
         get() = providerType.displayName
@@ -128,13 +128,13 @@ sealed class SearchServiceOptions {
     @Serializable
     @SerialName("bing_local")
     class BingLocalOptions(
-        override val id: Uuid = Uuid.random()
+        override val id: ConfigurationReference = ConfigurationReference.random()
     ) : SearchServiceOptions()
 
     @Serializable
     @SerialName("tavily")
     data class TavilyOptions(
-        override val id: Uuid = Uuid.random(),
+        override val id: ConfigurationReference = ConfigurationReference.random(),
         val apiKey: String = "",
         val depth: String = "advanced",
     ) : SearchServiceOptions()
@@ -142,7 +142,7 @@ sealed class SearchServiceOptions {
     @Serializable
     @SerialName("searxng")
     data class SearXNGOptions(
-        override val id: Uuid = Uuid.random(),
+        override val id: ConfigurationReference = ConfigurationReference.random(),
         val url: String = "",
         val engines: String = "",
         val language: String = "",

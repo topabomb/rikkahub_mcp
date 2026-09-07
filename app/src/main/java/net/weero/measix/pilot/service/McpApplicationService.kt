@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import net.weero.measix.pilot.data.ai.mcp.McpRefreshReceipt
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
@@ -7,7 +8,6 @@ import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
 import net.weero.measix.pilot.data.ai.mcp.hasSameOAuthTrustBoundary
 import net.weero.measix.pilot.data.ai.mcp.toolPolicyByName
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import kotlin.uuid.Uuid
 
 /** Typed UI command boundary for MCP configuration and external lifecycle operations. */
 class McpApplicationService(
@@ -16,27 +16,27 @@ class McpApplicationService(
 ) {
     suspend fun refreshAll(): McpRefreshReceipt = coordinator.refreshAllRegisteredServers()
 
-    suspend fun restart(serverId: Uuid): McpRefreshReceipt {
+    suspend fun restart(serverId: ConfigurationReference): McpRefreshReceipt {
         val config = requireNotNull(currentConfig(serverId)) { "MCP server not found" }
         return coordinator.restartServer(config.id)
     }
 
-    fun authorize(serverId: Uuid, context: Context) {
+    fun authorize(serverId: ConfigurationReference, context: Context) {
         val config = requireNotNull(currentConfig(serverId)) { "MCP server not found" }
         coordinator.startAuthorization(config, context.applicationContext)
     }
 
-    fun cancelAuthorization(serverId: Uuid) {
+    fun cancelAuthorization(serverId: ConfigurationReference) {
         val config = currentConfig(serverId) ?: return
         coordinator.cancelAuthorization(config)
     }
 
-    suspend fun clearAuthorization(serverId: Uuid) {
+    suspend fun clearAuthorization(serverId: ConfigurationReference) {
         val config = currentConfig(serverId) ?: return
         coordinator.clearAuthorization(config)
     }
 
-    suspend fun setOAuthClientCredentials(serverId: Uuid, clientId: String, clientSecret: String?) {
+    suspend fun setOAuthClientCredentials(serverId: ConfigurationReference, clientId: String, clientSecret: String?) {
         val config = requireNotNull(currentConfig(serverId)) { "MCP server not found" }
         coordinator.setOAuthClientCredentials(config, clientId, clientSecret)
     }
@@ -99,7 +99,7 @@ class McpApplicationService(
         }
     }
 
-    suspend fun delete(serverId: Uuid) {
+    suspend fun delete(serverId: ConfigurationReference) {
         coordinator.withConfigurationMutation {
             settingsStore.updateLocal { settings ->
                 settings.copy(
@@ -112,7 +112,7 @@ class McpApplicationService(
         }
     }
 
-    private fun currentConfig(serverId: Uuid): McpServerConfig? =
+    private fun currentConfig(serverId: ConfigurationReference): McpServerConfig? =
         settingsStore.effectiveSettings.value.settings.mcpServers.firstOrNull { it.id == serverId }
 
     private fun requireUniqueName(existing: List<McpServerConfig>, candidate: McpServerConfig) {

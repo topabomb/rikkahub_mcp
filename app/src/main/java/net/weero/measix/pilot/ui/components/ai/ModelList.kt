@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.ai
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -89,10 +90,9 @@ import net.weero.measix.pilot.utils.toDp
 import org.koin.compose.koinInject
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
-import kotlin.uuid.Uuid
 
 class ModelListState internal constructor(
-    modelId: Uuid?,
+    modelId: ConfigurationReference?,
     providers: List<ProviderSetting>,
     type: ModelType,
 ) {
@@ -127,7 +127,7 @@ class ModelListState internal constructor(
     }
 
     internal fun update(
-        modelId: Uuid?,
+        modelId: ConfigurationReference?,
         providers: List<ProviderSetting>,
         type: ModelType,
     ) {
@@ -139,7 +139,7 @@ class ModelListState internal constructor(
 
 @Composable
 fun rememberModelListState(
-    modelId: Uuid?,
+    modelId: ConfigurationReference?,
     providers: List<ProviderSetting>,
     type: ModelType,
 ): ModelListState {
@@ -276,7 +276,7 @@ fun ModelListSheet(
 
 @Composable
 private fun ColumnScope.ModelList(
-    currentModel: Uuid? = null,
+    currentModel: ConfigurationReference? = null,
     providers: List<ProviderSetting>,
     modelType: ModelType,
     onSelect: (Model) -> Unit,
@@ -539,7 +539,7 @@ private fun ColumnScope.ModelList(
 
             items(
                 items = searchFilteredModelsByProvider[providerSetting.id].orEmpty(),
-                key = { it.id }
+                key = { it.id.toString() }
             ) { model ->
                 val favorite = model.id in favoriteModelIds
                 ModelItem(

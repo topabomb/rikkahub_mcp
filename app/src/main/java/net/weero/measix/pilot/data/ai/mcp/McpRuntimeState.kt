@@ -1,9 +1,9 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
-import kotlin.uuid.Uuid
 
 /** Bounded foreground acknowledgement for AppScope-owned refresh work. */
 data class McpRefreshReceipt(
@@ -36,18 +36,18 @@ data class McpRuntimeCapability(
  */
 internal class McpRuntimeStateStore {
     private val lock = Any()
-    private val runtimes = mutableMapOf<Uuid, McpServerRuntime>()
-    private val _capabilities = MutableStateFlow<Map<Uuid, McpRuntimeCapability>>(emptyMap())
+    private val runtimes = mutableMapOf<ConfigurationReference, McpServerRuntime>()
+    private val _capabilities = MutableStateFlow<Map<ConfigurationReference, McpRuntimeCapability>>(emptyMap())
 
-    val capabilities: StateFlow<Map<Uuid, McpRuntimeCapability>> = _capabilities
-    val serverIds: Set<Uuid> get() = synchronized(lock) { runtimes.keys.toSet() }
+    val capabilities: StateFlow<Map<ConfigurationReference, McpRuntimeCapability>> = _capabilities
+    val serverIds: Set<ConfigurationReference> get() = synchronized(lock) { runtimes.keys.toSet() }
     val activeRuntimes: List<McpServerRuntime> get() = synchronized(lock) { runtimes.values.toList() }
     val isEmpty: Boolean get() = synchronized(lock) { runtimes.isEmpty() }
 
-    fun find(serverId: Uuid): McpServerRuntime? = synchronized(lock) { runtimes[serverId] }
+    fun find(serverId: ConfigurationReference): McpServerRuntime? = synchronized(lock) { runtimes[serverId] }
 
     fun getOrCreate(
-        serverId: Uuid,
+        serverId: ConfigurationReference,
         create: () -> McpServerRuntime,
     ): McpServerRuntime = synchronized(lock) { runtimes.getOrPut(serverId, create) }
 

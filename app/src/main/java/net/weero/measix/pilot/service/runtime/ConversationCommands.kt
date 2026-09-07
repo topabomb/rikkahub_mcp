@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service.runtime
 
+import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefBackfill
@@ -56,7 +57,7 @@ data class UpdateHeader(
     val isPinned: Boolean? = null,
     val folderId: OptionalFolderId = OptionalFolderId.Keep,
     val customSystemPrompt: OptionalString = OptionalString.Keep,
-    val modeInjectionIds: OptionalUuidSet = OptionalUuidSet.Keep,
+    val modeInjectionIds: OptionalConfigurationReferenceSet = OptionalConfigurationReferenceSet.Keep,
     val workspaceCwd: OptionalString = OptionalString.Keep,
 ) : HeaderConversationCommand
 
@@ -67,7 +68,7 @@ data class UpdateTitleIfCurrent(
 ) : HeaderConversationCommand
 
 /** Changes the conversation owner and clears its assistant-scoped folder only when the owner changes. */
-data class MoveToAssistant(val assistantId: Uuid) : HeaderConversationCommand
+data class MoveToAssistant(val assistantId: ConfigurationReference) : HeaderConversationCommand
 
 /** Atomically flips the committed pin state inside the coordinator's per-conversation lock. */
 data object TogglePinned : HeaderConversationCommand
@@ -84,9 +85,9 @@ sealed interface OptionalString {
     data class Set(val value: String?) : OptionalString
 }
 
-sealed interface OptionalUuidSet {
-    data object Keep : OptionalUuidSet
-    data class Set(val value: kotlin.collections.Set<Uuid>) : OptionalUuidSet
+sealed interface OptionalConfigurationReferenceSet {
+    data object Keep : OptionalConfigurationReferenceSet
+    data class Set(val value: kotlin.collections.Set<ConfigurationReference>) : OptionalConfigurationReferenceSet
 }
 
 /**
@@ -135,9 +136,9 @@ data class ConversationHeaderPatch(
     val chatSuggestions: List<String>? = null,
     val isPinned: Boolean? = null,
     val folderId: OptionalFolderId = OptionalFolderId.Keep,
-    val assistantId: Uuid? = null,
+    val assistantId: ConfigurationReference? = null,
     val customSystemPrompt: OptionalString = OptionalString.Keep,
-    val modeInjectionIds: OptionalUuidSet = OptionalUuidSet.Keep,
+    val modeInjectionIds: OptionalConfigurationReferenceSet = OptionalConfigurationReferenceSet.Keep,
     val workspaceCwd: OptionalString = OptionalString.Keep,
 )
 
@@ -168,12 +169,12 @@ internal fun ConversationMutation.hasChanges(): Boolean =
 data class ConversationHeader(
     val id: Uuid,
     val title: String,
-    val assistantId: Uuid,
+    val assistantId: ConfigurationReference,
     val folderId: Uuid?,
     val isPinned: Boolean,
     val chatSuggestions: List<String>,
     val customSystemPrompt: String?,
-    val modeInjectionIds: Set<Uuid>,
+    val modeInjectionIds: Set<ConfigurationReference>,
     val workspaceCwd: String?,
     val parentConversationId: Uuid?,
     /** @Transient 运行态标记 */

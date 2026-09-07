@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.imggen
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -39,7 +40,6 @@ import net.weero.measix.pilot.service.GeneratedMediaUiModel
 import net.weero.measix.pilot.service.ManagedFileKey
 import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
-import kotlin.uuid.Uuid
 
 @Serializable
 data class GeneratedImage(
@@ -73,7 +73,7 @@ class ImgGenVM(
         .map { it.settings }
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
-    fun selectImageGenerationModel(modelId: Uuid) {
+    fun selectImageGenerationModel(modelId: ConfigurationReference) {
         viewModelScope.launch {
             try {
                 settingsStore.updateLocal { it.copy(imageGenerationModelId = modelId) }

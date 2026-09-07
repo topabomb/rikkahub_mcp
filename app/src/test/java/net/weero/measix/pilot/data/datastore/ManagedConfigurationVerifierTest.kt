@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.data.datastore
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import java.io.File
 import java.security.KeyPair
 import java.security.KeyPairGenerator
@@ -32,7 +35,7 @@ class ManagedConfigurationVerifierTest {
 
     @Test
     fun `verified aggregate accepts public records and exposes a managed overlay`() {
-        val assistant = Assistant(id = Uuid.random(), name = "Managed")
+        val assistant = Assistant(id = ConfigurationReference.random(), name = "Managed")
         val snapshot = verify(
             payload = ManagedConfigurationPayload(
                 records = listOf(
@@ -54,7 +57,7 @@ class ManagedConfigurationVerifierTest {
 
     @Test
     fun `managed records retain the existing plaintext settings fields`() {
-        val provider = ProviderSetting.OpenAI(id = Uuid.random(), apiKey = "configured-key")
+        val provider = ProviderSetting.OpenAI(id = ConfigurationReference.random(), apiKey = "configured-key")
         val snapshot = verify(
             payload = ManagedConfigurationPayload(
                 records = listOf(
@@ -72,7 +75,7 @@ class ManagedConfigurationVerifierTest {
 
     @Test
     fun `managed overlay wins source attribution over a local shadow`() {
-        val assistant = Assistant(id = Uuid.random(), name = "Managed")
+        val assistant = Assistant(id = ConfigurationReference.random(), name = "Managed")
         val verified = verify(
             payload = ManagedConfigurationPayload(
                 records = listOf(
@@ -97,7 +100,7 @@ class ManagedConfigurationVerifierTest {
 
     @Test
     fun `expired signed aggregate keeps its verified overlay and locks`() {
-        val assistant = Assistant(id = Uuid.random(), name = "Managed")
+        val assistant = Assistant(id = ConfigurationReference.random(), name = "Managed")
         val snapshot = verify(
             payload = ManagedConfigurationPayload(
                 records = listOf(assistant.asManagedRecord()),
@@ -126,7 +129,7 @@ class ManagedConfigurationVerifierTest {
 
     @Test
     fun `signed asset binding is the only way to attach managed assistant media`() {
-        val assistant = Assistant(id = Uuid.random(), name = "Managed")
+        val assistant = Assistant(id = ConfigurationReference.random(), name = "Managed")
         val snapshot = verify(
             payload = ManagedConfigurationPayload(
                 records = listOf(assistant.asManagedRecord()),
@@ -149,7 +152,7 @@ class ManagedConfigurationVerifierTest {
 
     @Test
     fun `duplicate managed asset binding is rejected`() {
-        val assistant = Assistant(id = Uuid.random(), name = "Managed")
+        val assistant = Assistant(id = ConfigurationReference.random(), name = "Managed")
         val binding = ManagedAssistantAssetBinding(
             assistantId = assistant.id,
             backgroundAssetId = "background",
@@ -223,7 +226,7 @@ class ManagedConfigurationVerifierTest {
 
     @Test
     fun `managed assistant cannot depend on a local shadow record`() {
-        val assistant = Assistant(id = Uuid.random(), mcpServers = setOf(Uuid.random()))
+        val assistant = Assistant(id = ConfigurationReference.random(), mcpServers = setOf(ConfigurationReference.random()))
 
         val error = assertThrows(IllegalArgumentException::class.java) {
             verify(ManagedConfigurationPayload(records = listOf(assistant.asManagedRecord())))

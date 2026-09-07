@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service.turn
 
+
 import net.weero.measix.pilot.testkit.sampledModelResult
 
 import me.rerere.ai.core.MessageRole
@@ -30,10 +31,10 @@ class TurnPersistenceDeltaTest {
     @Test
     fun `assistant checkpoint upserts only the changed node and keeps history identities`() {
         val conversationId = Uuid.random()
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
         val historical = (0 until 49).map { index -> MessageNode.of(UIMessage.user("history-$index")) }
         val active = UIMessage(
-            id = assistantId,
+            id = assistantMessageId,
             role = MessageRole.ASSISTANT,
             parts = listOf(net.weero.measix.pilot.service.runtime.TurnTransition.openStep(0), UIMessagePart.Text("before")),
         )
@@ -43,7 +44,7 @@ class TurnPersistenceDeltaTest {
         val updated = active.copy(parts = listOf(
             (active.parts.first() as UIMessagePart.Step).copy(modelResult = sampledModelResult("stop")), UIMessagePart.Text("after"),
         ))
-        val handle = TurnHandle(conversationId, 1L, Uuid.random(), assistantId)
+        val handle = TurnHandle(conversationId, 1L, Uuid.random(), assistantMessageId)
         val command = ModelResponseCheckpoint(
             turn = handle,
             step = StepHandle(active.parts.filterIsInstance<UIMessagePart.Step>().single().stepId),
@@ -65,10 +66,10 @@ class TurnPersistenceDeltaTest {
     @Test
     fun `terminal commit replaces only the owning assistant and keeps history identities`() {
         val conversationId = Uuid.random()
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
         val historical = (0 until 49).map { index -> MessageNode.of(UIMessage.user("history-$index")) }
         val active = UIMessage(
-            id = assistantId,
+            id = assistantMessageId,
             role = MessageRole.ASSISTANT,
             parts = listOf(net.weero.measix.pilot.service.runtime.TurnTransition.openStep(0), UIMessagePart.Text("answer")),
         )
@@ -78,7 +79,7 @@ class TurnPersistenceDeltaTest {
         val terminal = active.copy(parts = listOf(
             (active.parts.first() as UIMessagePart.Step).copy(modelResult = sampledModelResult("stop")), UIMessagePart.Text("answer final"),
         ))
-        val handle = TurnHandle(conversationId, 1L, Uuid.random(), assistantId)
+        val handle = TurnHandle(conversationId, 1L, Uuid.random(), assistantMessageId)
         val command = FinalizeTurn(
             handle = handle,
             assistantMessage = terminal,
@@ -93,7 +94,7 @@ class TurnPersistenceDeltaTest {
 
         // The terminal commit carries only the owning Assistant: it never rewrites the full tree.
         assertEquals(1, mutation.upsertedNodes.size)
-        assertEquals(assistantId, mutation.upsertedNodes.single().currentMessage.id)
+        assertEquals(assistantMessageId, mutation.upsertedNodes.single().currentMessage.id)
         assertEquals(listOf(49), mutation.upsertedNodeIndices)
         assertEquals(1, old.nodes.indices.count { old.nodes[it] !== committed.nodes[it] })
     }

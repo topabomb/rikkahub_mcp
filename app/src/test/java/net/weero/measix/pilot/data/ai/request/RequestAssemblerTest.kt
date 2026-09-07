@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.request
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import me.rerere.ai.core.MessageRole
@@ -58,7 +60,7 @@ class RequestAssemblerTest {
     @Test
     fun `assemble carries every provider-relevant field and drops durable-only identity`() {
         val metadata = buildJsonObject { put("opaque", JsonPrimitive("state")) }
-        val modelId = Uuid.random()
+        val modelId = ConfigurationReference.random()
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(step(0), UIMessagePart.Text("visible")),

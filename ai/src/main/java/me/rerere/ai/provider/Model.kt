@@ -2,13 +2,13 @@ package me.rerere.ai.provider
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
 
 @Serializable
 data class Model(
     val modelId: String = "",
     val displayName: String = "",
-    val id: Uuid = Uuid.random(),
+    val id: ConfigurationReference = ConfigurationReference.random(),
     val type: ModelType = ModelType.CHAT,
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBodies: List<CustomBody> = emptyList(),

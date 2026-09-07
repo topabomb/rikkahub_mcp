@@ -1,6 +1,7 @@
 @file:Suppress("UNNECESSARY_SAFE_CALL")
 package me.rerere.ai.provider.providers
 
+import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.ai.provider.ProviderResponseException
 import me.rerere.ai.util.ProviderTerminalStatus
 import me.rerere.ai.util.HttpException
@@ -737,7 +738,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
  */
 internal fun stripClaudeThinkingFromOtherModels(
     messages: List<ModelRequestMessage>,
-    activeModelId: Uuid,
+    activeModelId: ConfigurationReference,
 ): List<ModelRequestMessage> = messages.map { message ->
     if (message.role == MessageRole.ASSISTANT &&
         message.modelId != null &&

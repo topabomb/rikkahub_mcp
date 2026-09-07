@@ -1,4 +1,6 @@
 package net.weero.measix.pilot.service.turn
+
+import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.service.runtime.ProviderTransportLease
 import net.weero.measix.pilot.service.runtime.freezeProviderWireShape
 
@@ -13,7 +15,6 @@ import net.weero.measix.pilot.data.model.AssistantMemory
 import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
 import java.time.ZoneId
 import java.util.Locale
-import kotlin.uuid.Uuid
 
 /**
  * androidTest 共享的最小 canonical candidate 与 [TurnContext] 构造（与
@@ -25,7 +26,7 @@ internal fun disclosureCandidate(
     seed: Long = 1L,
 ): String {
     val assistant = Assistant(
-        id = Uuid.parse("dddd0000-0000-0000-0000-00000000%04x".format(seed)),
+        id = ConfigurationReference.parse("dddd0000-0000-0000-0000-00000000%04x".format(seed)),
         name = "Disclosure Test Assistant",
         localTools = emptyList(),
     )

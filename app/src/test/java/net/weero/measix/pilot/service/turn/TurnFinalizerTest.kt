@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service.turn
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -64,7 +66,7 @@ class TurnFinalizerTest {
                 registerUnpublishedResource = {},
             )
             val finalizer = TurnFinalizer(repository, mockk(relaxed = true), coordinator, Json)
-            val terminal = net.weero.measix.pilot.data.ai.subassistant.buildInitialSubAssistantCallMetadata("run", Uuid.random(), "Child")
+            val terminal = net.weero.measix.pilot.data.ai.subassistant.buildInitialSubAssistantCallMetadata("run", ConfigurationReference.random(), "Child")
                 .copy(state = net.weero.measix.pilot.data.ai.subassistant.SubAssistantCallState.STOPPED)
             val failure = runCatching {
                 finalizer.finalizeSubAssistantRun(childId, turnId, "user_stop", context, terminal)

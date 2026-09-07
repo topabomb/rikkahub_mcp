@@ -306,7 +306,7 @@ fun SettingMcpPage() {
                     bottom = innerPadding.calculateBottomPadding() + 16.dp,
                 )
             ) {
-                items(mcpConfigs, key = { it.id }) { mcpConfig ->
+                items(mcpConfigs, key = { it.id.toString() }) { mcpConfig ->
                     McpServerItem(
                         item = mcpConfig,
                         presentation = mcpPresentations.firstOrNull { it.serverId == mcpConfig.id },

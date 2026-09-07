@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.subassistant
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import kotlinx.coroutines.test.runTest
 import kotlin.uuid.Uuid
 import org.junit.Assert.assertEquals
@@ -18,7 +20,7 @@ class SubAssistantRunStateReducerTest {
     private fun makeInitial(): SubAssistantCallMetadata = SubAssistantCallMetadata(
         runId = "run-1",
         previousRunId = "run-0",
-        targetAssistantId = Uuid.random().toString(),
+        targetAssistantId = ConfigurationReference.random().toString(),
         targetNameSnapshot = "Test Assistant",
         state = SubAssistantCallState.STARTING,
     )

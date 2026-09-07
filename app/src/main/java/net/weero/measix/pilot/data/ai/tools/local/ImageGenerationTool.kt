@@ -1,7 +1,7 @@
 package net.weero.measix.pilot.data.ai.tools.local
 
+import me.rerere.common.configuration.ConfigurationReference
 import java.io.File
-import kotlin.uuid.Uuid
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -105,7 +105,7 @@ internal fun failedResult(reason: String, detail: String? = null): Nothing =
     )
 
 data class AssistantToolBuildContext(
-    val ownerAssistantId: Uuid,
+    val ownerAssistantId: ConfigurationReference,
     val settings: Settings,
 )
 
@@ -185,7 +185,7 @@ class ImageGenerationToolFactory(
 private suspend fun executeGenerateImage(
     context: ToolExecutionContext,
     args: JsonElement,
-    ownerAssistantId: Uuid,
+    ownerAssistantId: ConfigurationReference,
     capturedSelection: ImageGenerationSelection.Available,
     filesDir: File,
     settingsStore: SettingsStore,
@@ -351,7 +351,7 @@ private fun JsonElement.jsonObject(): JsonObject = this as JsonObject
 
 internal fun revalidateGenerateImage(
     settings: Settings,
-    ownerAssistantId: Uuid,
+    ownerAssistantId: ConfigurationReference,
     capturedSelection: ImageGenerationSelection.Available,
     resolver: ImageGenerationSelectionResolver,
 ): ImageGenerationFailure? {

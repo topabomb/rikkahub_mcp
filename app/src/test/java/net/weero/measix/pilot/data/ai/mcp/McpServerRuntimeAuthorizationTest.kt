@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import android.content.Context
 import io.mockk.coEvery
 import io.mockk.every
@@ -26,7 +28,6 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class McpServerRuntimeAuthorizationTest {
@@ -34,7 +35,7 @@ class McpServerRuntimeAuthorizationTest {
     fun `replacement authorization waits for cancellation and seals the previous lease`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val appScope = AppScope(dispatcher)
-        val serverId = Uuid.random()
+        val serverId = ConfigurationReference.random()
         val config = McpServerConfig.StreamableHTTPServer(
             id = serverId,
             commonOptions = McpCommonOptions(name = "oauth-server", oauth = McpOAuthState(enabled = true)),

@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.db.fts
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -124,7 +126,7 @@ class MessageFtsManagerIncrementalTest {
 
     @Test
     fun `F3 incremental result equals full rebuild`() = runTest {
-        val conversation = Conversation.ofId(Uuid.random(), assistantId = Uuid.random())
+        val conversation = Conversation.ofId(Uuid.random(), assistantId = ConfigurationReference.random())
             .copy(messageNodes = listOf(node("alpha one"), node("bravo two")), title = "t")
         val conversationId = conversation.id.toString()
         val nodeA = conversation.messageNodes[0]

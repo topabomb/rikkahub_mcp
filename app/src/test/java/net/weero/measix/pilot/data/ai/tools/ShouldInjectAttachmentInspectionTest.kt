@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.tools
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
@@ -20,11 +22,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class ShouldInjectAttachmentInspectionTest {
     private fun model(modalities: List<Modality>) = Model(
-        id = Uuid.random(),
+        id = ConfigurationReference.random(),
         modelId = "m",
         displayName = "M",
         type = ModelType.CHAT,
@@ -46,7 +47,7 @@ class ShouldInjectAttachmentInspectionTest {
     fun `not injected when inspection model is absent from providers`() {
         assertFalse(
             shouldInjectAttachmentInspection(
-                Settings(providers = emptyList(), attachmentInspectionModelId = Uuid.random()),
+                Settings(providers = emptyList(), attachmentInspectionModelId = ConfigurationReference.random()),
             ),
         )
     }

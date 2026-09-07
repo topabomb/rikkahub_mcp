@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ui
+package net.weero.measix.pilot.ui.components.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -25,7 +25,7 @@ import net.weero.measix.pilot.data.datastore.ManagedConfigurationRecordKind
 import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
 import net.weero.measix.pilot.data.datastore.SettingsValueSource
 import net.weero.measix.pilot.ui.theme.extendColors
-import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
 
 enum class TagType {
     DEFAULT,
@@ -81,7 +81,7 @@ fun Tag(
 internal fun ManagedRecordStatus(
     snapshot: EffectiveSettingsSnapshot,
     kind: ManagedConfigurationRecordKind,
-    id: Uuid,
+    id: ConfigurationReference,
     modifier: Modifier = Modifier,
 ) {
     if (snapshot.managedState == ManagedConfigurationState.ABSENT) return

@@ -19,6 +19,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":common"))
     implementation(project(":ai"))
     implementation(libs.okhttp)
     implementation(libs.kotlinx.serialization.json)

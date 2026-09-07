@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.pages.chat
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.runtime.ConversationHeader
@@ -195,7 +197,7 @@ class AppendScrollContextTest {
             header = ConversationHeader(
                 id = conversationId,
                 title = "Chat",
-                assistantId = Uuid.random(),
+                assistantId = ConfigurationReference.random(),
                 folderId = null,
                 isPinned = false,
                 chatSuggestions = emptyList(),

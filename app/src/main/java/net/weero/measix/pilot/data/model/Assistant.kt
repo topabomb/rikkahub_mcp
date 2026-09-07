@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.model
 
+import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import me.rerere.ai.core.MessageRole
@@ -10,7 +12,6 @@ import me.rerere.ai.core.ReasoningLevel
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.utils.SimpleCache
 import java.util.concurrent.TimeUnit
-import kotlin.uuid.Uuid
 
 internal const val MIN_CONTEXT_MESSAGE_LIMIT = 40
 internal const val DEFAULT_CONTEXT_MESSAGE_LIMIT = 80
@@ -48,12 +49,12 @@ You are a helpful assistant, called {{char}}, based on model {{model_name}}.
 
 @Serializable
 data class Assistant(
-    val id: Uuid = Uuid.random(),
-    val chatModelId: Uuid? = null, // 如果为null, 使用全局默认模型
+    val id: ConfigurationReference = ConfigurationReference.random(),
+    val chatModelId: ConfigurationReference? = null, // 如果为null, 使用全局默认模型
     val name: String = "",
     val avatar: Avatar = Avatar.Dummy,
     val useAssistantAvatar: Boolean = false, // 使用助手头像替代模型头像
-    val tags: List<Uuid> = emptyList(),
+    val tags: List<ConfigurationReference> = emptyList(),
     val systemPrompt: String = "",
     val temperature: Float? = null,
     val topP: Float? = null,
@@ -65,20 +66,20 @@ data class Assistant(
     val enableRecentChatsReference: Boolean = false,
     val messageTemplate: String = "{{ message }}",
     val presetMessages: List<UIMessage> = emptyList(),
-    val quickMessageIds: Set<Uuid> = emptySet(),
+    val quickMessageIds: Set<ConfigurationReference> = emptySet(),
     val regexes: List<AssistantRegex> = emptyList(),
     val reasoningLevel: ReasoningLevel = ReasoningLevel.AUTO,
     val maxTokens: Int? = null,
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBodies: List<CustomBody> = emptyList(),
-    val mcpServers: Set<Uuid> = emptySet(),
+    val mcpServers: Set<ConfigurationReference> = emptySet(),
     val localTools: List<LocalToolOption> = DEFAULT_ASSISTANT_LOCAL_TOOLS,
     val enableWebSearch: Boolean = false, // 网络搜索开关(每个助手独立)
     val workspaceId: Uuid? = null,
     val background: String? = null, // 聊天页背景图地址(本地文件 URI 或网络 URL), 为 null 时无背景
     val backgroundOpacity: Float = 1.0f, // 背景图不透明度(0~1)
     val useGradientBackground: Boolean = false, // 开启后聊天页使用动态渐变背景
-    val modeInjectionIds: Set<Uuid> = emptySet(),      // 关联的模式注入 ID
+    val modeInjectionIds: Set<ConfigurationReference> = emptySet(),      // 关联的模式注入 ID
     val enabledSkills: Set<String> = emptySet(),        // 启用的 skill 名称列表
     val enableTimeReminder: Boolean = false,            // 时间间隔提醒注入
     val allowConversationSystemPrompt: Boolean = false, // 允许对话单独重写 system prompt
@@ -86,7 +87,7 @@ data class Assistant(
     val description: String = "", // 路由描述；占位符 {{description}}；不是 System Prompt
     val allowAsSubAssistant: Boolean = false, // 允许其他助手把独立任务交给它
     val isSubAssistantGloballyVisible: Boolean = false, // 全局可见：所有启用子助手工具的助手都能发现/调用/管理
-    val allowedSubAssistantIds: Set<Uuid> = emptySet(), // 显式允许的子助手 ID；管理与调用共用
+    val allowedSubAssistantIds: Set<ConfigurationReference> = emptySet(), // 显式允许的子助手 ID；管理与调用共用
 )
 
 /**
@@ -117,7 +118,7 @@ internal fun Assistant.effectiveContextMessageLimit(): Int {
 
 @Serializable
 data class QuickMessage(
-    val id: Uuid = Uuid.random(),
+    val id: ConfigurationReference = ConfigurationReference.random(),
     val title: String = "",
     val content: String = "",
 )
@@ -136,7 +137,7 @@ enum class AssistantAffectScope {
 
 @Serializable
 data class AssistantRegex(
-    val id: Uuid,
+    val id: ConfigurationReference,
     val name: String = "",
     val enabled: Boolean = true,
     val findRegex: String = "", // 正则表达式
@@ -217,7 +218,7 @@ enum class InjectionPosition {
  */
 @Serializable
 sealed class PromptInjection {
-    abstract val id: Uuid
+    abstract val id: ConfigurationReference
     abstract val name: String
     abstract val enabled: Boolean
     abstract val priority: Int
@@ -232,7 +233,7 @@ sealed class PromptInjection {
     @Serializable
     @SerialName("mode")
     data class ModeInjection(
-        override val id: Uuid = Uuid.random(),
+        override val id: ConfigurationReference = ConfigurationReference.random(),
         override val name: String = "",
         override val enabled: Boolean = true,
         override val priority: Int = 0,

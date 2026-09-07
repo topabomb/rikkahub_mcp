@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.files
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import android.content.Context
 import androidx.core.net.toUri
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -159,7 +161,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
         database.conversationDao().insert(
             ConversationEntity(
                 id = conversationId.toString(),
-                assistantId = Uuid.random().toString(),
+                assistantId = ConfigurationReference.random().toString(),
                 title = "empty-tool-output",
                 createAt = 1,
                 updateAt = 1,
@@ -492,7 +494,7 @@ internal class ArtifactCreationTest : ArtifactStoreLifecycleTestBase() {
         database.conversationDao().insert(
             ConversationEntity(
                 id = conversationId,
-                assistantId = Uuid.random().toString(),
+                assistantId = ConfigurationReference.random().toString(),
                 title = "batch-root",
                 createAt = 1,
                 updateAt = 1,

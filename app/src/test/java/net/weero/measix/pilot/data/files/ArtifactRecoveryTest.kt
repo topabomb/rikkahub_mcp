@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.files
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import androidx.core.net.toUri
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.mockk.coEvery
@@ -191,7 +193,7 @@ internal class ArtifactRecoveryTest : ArtifactStoreLifecycleTestBase() {
         database.conversationDao().insert(
             ConversationEntity(
                 id = conversationId,
-                assistantId = Uuid.random().toString(),
+                assistantId = ConfigurationReference.random().toString(),
                 title = "rooted",
                 createAt = 1,
                 updateAt = 1,

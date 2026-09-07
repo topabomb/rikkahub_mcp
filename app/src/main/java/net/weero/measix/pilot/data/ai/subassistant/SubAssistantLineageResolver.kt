@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.subassistant
 
+import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.model.Conversation
@@ -46,7 +47,7 @@ fun findPreviousCallMetadata(
     masterMessages: List<UIMessage>,
     currentMessageId: Uuid,
     currentToolOrdinal: Int,
-    targetAssistantId: Uuid,
+    targetAssistantId: ConfigurationReference,
     json: kotlinx.serialization.json.Json,
 ): SubAssistantCallMetadata? {
     val targetIdStr = targetAssistantId.toString()
@@ -87,7 +88,7 @@ fun resolveLineage(
     previousMeta: SubAssistantCallMetadata?,
     childConversation: Conversation?,
     expectedMasterConversationId: Uuid,
-    expectedTargetAssistantId: Uuid,
+    expectedTargetAssistantId: ConfigurationReference,
 ): LineageDecision {
     // 没有前序调用：创建新 Child
     if (previousMeta == null) {

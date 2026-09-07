@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.pages.chat
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
@@ -9,13 +11,12 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class ChatSearchModeMutationTest {
     @Test
     fun `search mode updates tools on the latest model instead of a stale snapshot`() {
-        val assistantId = Uuid.random()
-        val modelId = Uuid.random()
+        val assistantId = ConfigurationReference.random()
+        val modelId = ConfigurationReference.random()
         val staleModel = Model(id = modelId, modelId = "model", displayName = "Stale")
         val latestModel = staleModel.copy(
             displayName = "Latest",
@@ -43,8 +44,8 @@ class ChatSearchModeMutationTest {
 
     @Test
     fun `disabling built-in search leaves other model fields intact`() {
-        val assistantId = Uuid.random()
-        val modelId = Uuid.random()
+        val assistantId = ConfigurationReference.random()
+        val modelId = ConfigurationReference.random()
         val latestModel = Model(
             id = modelId,
             modelId = "model",

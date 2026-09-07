@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.service
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -165,7 +168,7 @@ class ConversationTurnFeedbackTest {
 
     private fun childMetadata() = SubAssistantCallMetadata(
         runId = "child-run",
-        targetAssistantId = Uuid.random().toString(),
+        targetAssistantId = ConfigurationReference.random().toString(),
         targetNameSnapshot = "child",
         state = SubAssistantCallState.RUNNING,
         phase = SubAssistantCallPhase.AWAITING_USER,
@@ -188,7 +191,7 @@ class ConversationTurnFeedbackTest {
         phases: Map<ToolCallLocator, ToolLivePhase> = emptyMap(),
     ) = ConversationUiModel(
         snapshot = ConversationRuntimeSnapshot(
-            durable = Conversation.ofId(Uuid.random(), Uuid.random()).toSnapshot(),
+            durable = Conversation.ofId(Uuid.random(), ConfigurationReference.random()).toSnapshot(),
             stream = activeTurn,
         ).toPresentationSnapshot(),
         presentation = ConversationPresentation(requestId, phase, null, phases),

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.subassistant
 
+import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
@@ -8,7 +9,6 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getChatModel
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.DEFAULT_ASSISTANT_LOCAL_TOOLS
-import kotlin.uuid.Uuid
 
 /**
  * Target Run policy 常量
@@ -115,7 +115,7 @@ fun resolveSubAssistantRunSpec(
     )
 }
 
-fun Settings.isEnabledChatModel(modelId: Uuid): Boolean = providers.asSequence()
+fun Settings.isEnabledChatModel(modelId: ConfigurationReference): Boolean = providers.asSequence()
     .filter { it.enabled }
     .flatMap { it.models.asSequence() }
     .any { it.id == modelId && it.type == ModelType.CHAT }
@@ -128,8 +128,8 @@ fun Settings.isEnabledChatModel(modelId: Uuid): Boolean = providers.asSequence()
  */
 fun resolvePreWriteBlockReason(
     settings: Settings,
-    callerAssistantId: Uuid,
-    targetAssistantId: Uuid,
+    callerAssistantId: ConfigurationReference,
+    targetAssistantId: ConfigurationReference,
     runSpec: SubAssistantRunSpec,
 ): String? {
     val caller = settings.assistants.find { it.id == callerAssistantId }
@@ -152,8 +152,8 @@ fun resolvePreWriteBlockReason(
 /** 当前运行必须立即停止的配置变化；null 表示 RunSpec 仍可继续。 */
 fun resolveActiveRunStopReason(
     settings: Settings,
-    callerAssistantId: Uuid,
-    targetAssistantId: Uuid,
+    callerAssistantId: ConfigurationReference,
+    targetAssistantId: ConfigurationReference,
     runSpec: SubAssistantRunSpec,
 ): String? {
     val target = settings.assistants.find { it.id == targetAssistantId }
@@ -180,8 +180,8 @@ fun resolveActiveRunStopReason(
  */
 fun validateReadiness(
     targetAssistant: Assistant?,
-    callerAssistantId: kotlin.uuid.Uuid,
-    callerAllowedSubAssistantIds: Set<kotlin.uuid.Uuid>,
+    callerAssistantId: ConfigurationReference,
+    callerAllowedSubAssistantIds: Set<ConfigurationReference>,
     callerHasDelegation: Boolean,
     settingsChatModel: me.rerere.ai.provider.Model?,
     isActiveRun: Boolean,
@@ -226,7 +226,7 @@ fun buildToolCreatedAssistant(
     name: String,
     description: String,
     systemPrompt: String,
-    id: kotlin.uuid.Uuid = kotlin.uuid.Uuid.random(),
+    id: ConfigurationReference = ConfigurationReference.random(),
 ): Assistant = Assistant(
     id = id,
     name = name,

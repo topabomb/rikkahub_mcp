@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.repository
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -275,7 +277,7 @@ class ConversationStartAtomicityTest {
         database.conversationDao().insert(
             ConversationEntity(
                 id = conversationId.toString(),
-                assistantId = Uuid.random().toString(),
+                assistantId = ConfigurationReference.random().toString(),
                 title = "atomic",
                 createAt = 1,
                 updateAt = 1,

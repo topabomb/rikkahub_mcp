@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.data.ai.tools
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import io.mockk.coEvery
 import io.mockk.mockk
 import io.mockk.every
@@ -35,8 +38,8 @@ import kotlin.uuid.Uuid
 class AssistantInspectToolTest {
 
     private val json: Json = JsonInstant
-    private val callerId = Uuid.random()
-    private val targetId = Uuid.random()
+    private val callerId = ConfigurationReference.random()
+    private val targetId = ConfigurationReference.random()
 
     private fun createFactory(
         assistants: List<Assistant>,
@@ -83,7 +86,7 @@ class AssistantInspectToolTest {
         enabledSkills = enabledSkills,
     )
 
-    private fun caller(allowed: Set<Uuid> = setOf(targetId)): Assistant = Assistant(
+    private fun caller(allowed: Set<ConfigurationReference> = setOf(targetId)): Assistant = Assistant(
         id = callerId,
         name = "Caller",
         localTools = listOf(LocalToolOption.AssistantManagement),
@@ -109,7 +112,7 @@ class AssistantInspectToolTest {
     }
 
     private fun args(
-        assistantId: Uuid = targetId,
+        assistantId: ConfigurationReference = targetId,
         sections: List<String>? = null,
     ) = buildJsonObject {
         put("assistant_id", assistantId.toString())
@@ -315,7 +318,7 @@ class AssistantInspectToolTest {
     fun `caller missing returns tool_not_permitted`() = runTest {
         val target = accessibleTarget()
         val otherCaller = Assistant(
-            id = Uuid.random(),
+            id = ConfigurationReference.random(),
             name = "Other",
             localTools = listOf(LocalToolOption.AssistantManagement),
             allowedSubAssistantIds = setOf(targetId),

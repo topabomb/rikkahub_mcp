@@ -9,7 +9,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
 
 /** Canonical identity of fields that require replacing a live MCP transport. */
 internal data class McpConnectionFingerprint(
@@ -132,7 +132,7 @@ data class McpToolPolicy(
  * 使读取投影、写入以及运行时策略解析不会对同一份损坏数据采用不同胜者。
  */
 internal fun List<McpServerConfig>.normalizeMcpDefinitions(): List<McpServerConfig> {
-    val seenIds = hashSetOf<Uuid>()
+    val seenIds = hashSetOf<ConfigurationReference>()
     val seenNames = hashSetOf<String>()
     return mapNotNull { server ->
         val normalizedName = server.commonOptions.name.trim().lowercase()
@@ -150,22 +150,22 @@ internal fun McpCommonOptions.toolPolicyByName(): Map<String, McpToolPolicy> =
 
 @Serializable
 sealed class McpServerConfig {
-    abstract val id: Uuid
+    abstract val id: ConfigurationReference
     abstract val commonOptions: McpCommonOptions
 
     abstract fun clone(
-        id: Uuid = this.id,
+        id: ConfigurationReference = this.id,
         commonOptions: McpCommonOptions = this.commonOptions
     ): McpServerConfig
 
     @Serializable
     @SerialName("sse")
     data class SseTransportServer(
-        override val id: Uuid = Uuid.random(),
+        override val id: ConfigurationReference = ConfigurationReference.random(),
         override val commonOptions: McpCommonOptions = McpCommonOptions(),
         val url: String = "",
     ) : McpServerConfig() {
-        override fun clone(id: Uuid, commonOptions: McpCommonOptions): McpServerConfig {
+        override fun clone(id: ConfigurationReference, commonOptions: McpCommonOptions): McpServerConfig {
             return copy(id = id, commonOptions = commonOptions)
         }
     }
@@ -173,11 +173,11 @@ sealed class McpServerConfig {
     @Serializable
     @SerialName("streamable_http")
     data class StreamableHTTPServer(
-        override val id: Uuid = Uuid.random(),
+        override val id: ConfigurationReference = ConfigurationReference.random(),
         override val commonOptions: McpCommonOptions = McpCommonOptions(),
         val url: String = "",
     ) : McpServerConfig() {
-        override fun clone(id: Uuid, commonOptions: McpCommonOptions): McpServerConfig {
+        override fun clone(id: ConfigurationReference, commonOptions: McpCommonOptions): McpServerConfig {
             return copy(id = id, commonOptions = commonOptions)
         }
     }

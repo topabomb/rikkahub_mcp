@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -43,7 +44,7 @@ internal fun migrateLegacyMcpServersJson(encoded: String): McpLegacySettingsMigr
     if (records.size != elements.size) return null
 
     var foundLegacySchema = false
-    val seenIds = hashSetOf<kotlin.uuid.Uuid>()
+    val seenIds = hashSetOf<ConfigurationReference>()
     val seenNames = hashSetOf<String>()
     val normalizedServers = mutableListOf<McpServerConfig>()
     val candidates = mutableListOf<McpCatalogCandidate>()

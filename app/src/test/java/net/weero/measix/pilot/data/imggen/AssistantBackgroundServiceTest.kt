@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.imggen
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import android.content.Context
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -7,7 +9,6 @@ import io.mockk.every
 import io.mockk.mockk
 import java.io.File
 import kotlin.io.path.createTempDirectory
-import kotlin.uuid.Uuid
 import kotlinx.coroutines.test.runTest
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.ai.attachments.RemoteMediaFetchResult
@@ -54,7 +55,7 @@ class AssistantBackgroundServiceTest {
         env.settingsUpdateSucceeds()
         coEvery { env.store.discardUnpublished(env.owned) } returns ArtifactDeleteResult.Completed(env.owned.entity.id)
 
-        val result = env.service.replaceGeneratedBackground(Uuid.random(), env.source, "image/png")
+        val result = env.service.replaceGeneratedBackground(ConfigurationReference.random(), env.source, "image/png")
 
         assertEquals("assistant_not_found", result.reason)
         assertFalse(result.cleanupPending)

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.history
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -8,7 +9,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.data.datastore.SettingsStore
@@ -30,7 +30,7 @@ class HistoryVM(
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     val conversations = assistant.flatMapLatest { assistant ->
-        conversationQueryService.conversationsOfAssistant(assistant?.id ?: Uuid.random())
+        conversationQueryService.conversationsOfAssistant(assistant?.id ?: ConfigurationReference.random())
     }.catch {
         Log.e(TAG, "Error: ${it.message}")
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service.turn
 
+import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.ai.core.FrozenToolDefinition
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
@@ -12,7 +13,6 @@ import net.weero.measix.pilot.data.model.AssistantRegex
 import net.weero.measix.pilot.data.model.InjectionPosition
 import net.weero.measix.pilot.service.runtime.FrozenProviderWireShape
 import net.weero.measix.pilot.service.runtime.ProviderTransportLease
-import kotlin.uuid.Uuid
 
 /** One immutable, process-local source for every model-visible value used by a durable Turn. */
 internal data class TurnContext(
@@ -31,7 +31,7 @@ internal data class TurnContext(
  * START 时的 `TurnContextFactory`；任何消费者都不得从中回读 Settings 或重新求值。
  */
 data class TurnAssistantSnapshot(
-    val id: Uuid,
+    val id: ConfigurationReference,
     val name: String,
     val description: String,
     val systemPrompt: String,
@@ -55,7 +55,7 @@ internal data class TurnModelSnapshot(
 
 /** 单条模式注入在本 Turn 内的已解析投影，仅由 START 冻结。 */
 data class ResolvedPromptInjection(
-    val id: Uuid,
+    val id: ConfigurationReference,
     val priority: Int,
     val position: InjectionPosition,
     val content: String,
@@ -76,7 +76,7 @@ data class TurnPromptSnapshot(
     val localeTag: String,
     val zoneId: String,
     val conversationSystemPrompt: String?,
-    val modeInjectionIds: Set<Uuid>,
+    val modeInjectionIds: Set<ConfigurationReference>,
     val enableTimeReminder: Boolean,
     val placeholderValues: Map<String, String>,
 )

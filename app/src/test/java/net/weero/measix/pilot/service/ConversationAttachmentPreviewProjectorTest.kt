@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import android.net.Uri
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -172,7 +174,7 @@ class ConversationAttachmentPreviewProjectorTest {
             JsonInstant,
             SubAssistantCallMetadata(
                 runId = Uuid.random().toString(),
-                targetAssistantId = Uuid.random().toString(),
+                targetAssistantId = ConfigurationReference.random().toString(),
                 targetNameSnapshot = "Image assistant",
                 state = SubAssistantCallState.COMPLETED,
                 artifacts = listOf(SubAssistantCallArtifact(ref, "image", "image/png", managed)),
@@ -216,7 +218,7 @@ class ConversationAttachmentPreviewProjectorTest {
             JsonInstant,
             SubAssistantCallMetadata(
                 runId = Uuid.random().toString(),
-                targetAssistantId = Uuid.random().toString(),
+                targetAssistantId = ConfigurationReference.random().toString(),
                 targetNameSnapshot = "Image assistant",
                 state = SubAssistantCallState.COMPLETED,
                 artifacts = listOf(
@@ -368,7 +370,7 @@ class ConversationAttachmentPreviewProjectorTest {
             JsonInstant,
             SubAssistantCallMetadata(
                 runId = Uuid.random().toString(),
-                targetAssistantId = Uuid.random().toString(),
+                targetAssistantId = ConfigurationReference.random().toString(),
                 targetNameSnapshot = "Image assistant",
                 state = SubAssistantCallState.COMPLETED,
                 artifacts = listOf(SubAssistantCallArtifact(ref, "image", "image/png", managed)),

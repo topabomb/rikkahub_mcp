@@ -1,16 +1,17 @@
 package net.weero.measix.pilot.service
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class FavoriteModelServiceTest {
     @Test
     fun `move resolves stable ids against the latest list`() {
-        val first = Uuid.random()
-        val concurrent = Uuid.random()
-        val target = Uuid.random()
+        val first = ConfigurationReference.random()
+        val concurrent = ConfigurationReference.random()
+        val target = ConfigurationReference.random()
 
         val moved = moveFavoriteModel(
             current = listOf(first, concurrent, target),
@@ -23,11 +24,11 @@ class FavoriteModelServiceTest {
 
     @Test
     fun `move leaves latest list untouched when either id disappeared`() {
-        val current = listOf(Uuid.random(), Uuid.random())
+        val current = listOf(ConfigurationReference.random(), ConfigurationReference.random())
 
         val result = moveFavoriteModel(
             current = current,
-            fromModelId = Uuid.random(),
+            fromModelId = ConfigurationReference.random(),
             toModelId = current.first(),
         )
 

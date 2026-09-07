@@ -1,8 +1,9 @@
 package net.weero.measix.pilot.service
+
 import net.weero.measix.pilot.service.turn.TurnFinalizer
 import net.weero.measix.pilot.service.subassistant.SubAssistantLifecycle
 import net.weero.measix.pilot.service.subassistant.forkSubAssistantTree
-
+import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -37,7 +38,7 @@ import net.weero.measix.pilot.service.runtime.EditMessageVariant
 import net.weero.measix.pilot.service.runtime.MoveToAssistant
 import net.weero.measix.pilot.service.runtime.OptionalFolderId
 import net.weero.measix.pilot.service.runtime.OptionalString
-import net.weero.measix.pilot.service.runtime.OptionalUuidSet
+import net.weero.measix.pilot.service.runtime.OptionalConfigurationReferenceSet
 import net.weero.measix.pilot.service.runtime.SelectNodeVariant
 import net.weero.measix.pilot.service.runtime.TogglePinned
 import net.weero.measix.pilot.service.runtime.UpdateHeader
@@ -107,10 +108,10 @@ class ConversationApplicationService(
         )
     }
 
-    suspend fun updateModeInjectionIds(conversationId: Uuid, ids: Set<Uuid>) {
+    suspend fun updateModeInjectionIds(conversationId: Uuid, ids: Set<ConfigurationReference>) {
         commandCoordinator.executeOrThrow(
             conversationId,
-            UpdateHeader(modeInjectionIds = OptionalUuidSet.Set(ids)),
+            UpdateHeader(modeInjectionIds = OptionalConfigurationReferenceSet.Set(ids)),
         )
     }
 
@@ -163,7 +164,7 @@ class ConversationApplicationService(
         folderRepository.deleteEmptyFolder(folderId)
     }
 
-    suspend fun createFolder(assistantId: Uuid, name: String) {
+    suspend fun createFolder(assistantId: ConfigurationReference, name: String) {
         recoveryGate.awaitReady()
         folderRepository.createFolder(assistantId, name)
     }
@@ -175,7 +176,7 @@ class ConversationApplicationService(
 
     suspend fun createForDiagnostics(
         id: Uuid,
-        assistantId: Uuid,
+        assistantId: ConfigurationReference,
         title: String,
         nodes: List<MessageNode>,
     ) {
@@ -184,7 +185,7 @@ class ConversationApplicationService(
         )
     }
 
-    suspend fun moveToAssistant(conversationId: Uuid, assistantId: Uuid) {
+    suspend fun moveToAssistant(conversationId: Uuid, assistantId: ConfigurationReference) {
         commandCoordinator.executeOrThrow(
             conversationId,
             MoveToAssistant(assistantId),
@@ -252,16 +253,16 @@ class ConversationApplicationService(
         }
     }
 
-    suspend fun deleteOfAssistant(assistantId: Uuid) {
+    suspend fun deleteOfAssistant(assistantId: ConfigurationReference) {
         recoveryGate.awaitReady()
         deleteOfAssistantCommitted(assistantId, DeleteAuthority.APPLICATION)
     }
 
-    internal suspend fun deleteOfAssistantFromPendingCleanup(assistantId: Uuid) {
+    internal suspend fun deleteOfAssistantFromPendingCleanup(assistantId: ConfigurationReference) {
         deleteOfAssistantCommitted(assistantId, DeleteAuthority.PENDING_CLEANUP)
     }
 
-    private suspend fun deleteOfAssistantCommitted(assistantId: Uuid, authority: DeleteAuthority) {
+    private suspend fun deleteOfAssistantCommitted(assistantId: ConfigurationReference, authority: DeleteAuthority) {
         conversationRepo.getConversationsOfAssistant(assistantId).first().forEach {
             stopAndDelete(it.id, authority)
         }

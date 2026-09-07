@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.service.subassistant
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import net.weero.measix.pilot.data.ai.subassistant.normalizeSubAssistantCancellationReason
 import net.weero.measix.pilot.data.ai.subassistant.preprocessSubAssistantTask
 import net.weero.measix.pilot.data.model.AssistantAffectScope
@@ -74,8 +77,8 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class SubAssistantRunCoordinatorTest {
-    private val callerId = Uuid.random()
-    private val targetId = Uuid.random()
+    private val callerId = ConfigurationReference.random()
+    private val targetId = ConfigurationReference.random()
     private val masterId = Uuid.random()
     private val currentMessageId = Uuid.random()
     private val currentToolStepId = Uuid.random()
@@ -312,7 +315,7 @@ class SubAssistantRunCoordinatorTest {
         preparationGate: Pair<CompletableDeferred<Unit>, CompletableDeferred<Unit>>? = null,
         turnRunner: TurnRunner = mockk(relaxed = true),
     ): Harness {
-        val modelId = Uuid.random()
+        val modelId = ConfigurationReference.random()
         val model = Model(
             id = modelId,
             modelId = "target-model",
@@ -487,7 +490,7 @@ class SubAssistantRunCoordinatorTest {
         val target = Assistant(
             regexes = listOf(
                 AssistantRegex(
-                    id = Uuid.random(),
+                    id = ConfigurationReference.random(),
                     findRegex = "secret",
                     replaceString = "redacted",
                     affectingScope = setOf(AssistantAffectScope.USER),

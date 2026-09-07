@@ -1,11 +1,11 @@
 package me.rerere.ai.core
 
+import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.serialization.json.JsonObject
 import me.rerere.ai.ui.ProviderReplayProjection
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.partsAreValidToUpload
 import me.rerere.ai.ui.partsToText
-import kotlin.uuid.Uuid
 
 /**
  * The normalized, provider-facing request message — the ONLY message type a Provider consumes.
@@ -20,7 +20,7 @@ import kotlin.uuid.Uuid
 data class ModelRequestMessage(
     val role: MessageRole,
     val parts: List<UIMessagePart>,
-    val modelId: Uuid? = null,
+    val modelId: ConfigurationReference? = null,
     val providerMetadata: JsonObject? = null,
     val providerReplayProjection: ProviderReplayProjection? = null,
 ) {

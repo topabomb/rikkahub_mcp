@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.ai
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
@@ -69,7 +70,6 @@ import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
 import net.weero.measix.pilot.ui.components.ui.ToggleSurface
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.pages.setting.SearchAbilityTagLine
-import kotlin.uuid.Uuid
 
 enum class SearchMode {
     OFF,
@@ -105,7 +105,7 @@ fun SearchPickerButton(
     settings: Settings,
     modifier: Modifier = Modifier,
     onUpdateSearchMode: (SearchMode) -> Unit,
-    onUpdateSearchService: (Uuid) -> Unit,
+    onUpdateSearchService: (ConfigurationReference) -> Unit,
     model: Model?,
 ) {
     var showSearchPicker by remember { mutableStateOf(false) }
@@ -405,7 +405,7 @@ private fun SearchModeCard(
 @Composable
 private fun SearchProviderPicker(
     settings: Settings,
-    onUpdateSearchService: (Uuid) -> Unit,
+    onUpdateSearchService: (ConfigurationReference) -> Unit,
     onBack: () -> Unit,
 ) {
     Column(

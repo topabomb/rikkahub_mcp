@@ -1,4 +1,6 @@
-﻿package net.weero.measix.pilot.ui.pages.setting.components
+package net.weero.measix.pilot.ui.pages.setting.components
+
+import me.rerere.common.configuration.ConfigurationReference
 
 import me.rerere.ai.provider.BalanceOption
 import me.rerere.ai.provider.Model
@@ -9,7 +11,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class ProviderConfigureConvertToTest {
 
@@ -23,7 +24,7 @@ class ProviderConfigureConvertToTest {
     @Test
     fun `convertTo should keep common fields and switch official endpoint to target default`() {
         val model = Model(
-            id = Uuid.random(),
+            id = ConfigurationReference.random(),
             modelId = "gpt-custom",
             displayName = "GPT Custom"
         )
@@ -33,7 +34,7 @@ class ProviderConfigureConvertToTest {
             resultPath = "data.balance"
         )
         val original = ProviderSetting.OpenAI(
-            id = Uuid.random(),
+            id = ConfigurationReference.random(),
             enabled = false,
             name = "My Provider",
             models = listOf(model),

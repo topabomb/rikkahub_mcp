@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service.subassistant
 
+import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.ToolInteractionState
@@ -54,7 +55,7 @@ private data class RecoveryOccurrence(
 
 internal fun reconcileMasterSubAssistantCalls(
     masterId: Uuid,
-    masterAssistantId: Uuid,
+    masterAssistantId: ConfigurationReference,
     masterNodes: List<MessageNode>,
     settings: Settings,
     childrenById: Map<Uuid, net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot>,
@@ -170,7 +171,7 @@ internal fun resolveValidChildSnapshotLineage(
 ): net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot? {
     val childId = metadata.childConversationId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
         ?: return null
-    val targetId = runCatching { Uuid.parse(metadata.targetAssistantId) }.getOrNull() ?: return null
+    val targetId = runCatching { ConfigurationReference.parse(metadata.targetAssistantId) }.getOrNull() ?: return null
     val taskId = metadata.childTaskNodeId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
         ?: return null
     val child = childrenById[childId] ?: return null
@@ -190,7 +191,7 @@ internal fun resolveValidChildLineage(
 ): Conversation? {
     val childId = metadata.childConversationId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
         ?: return null
-    val targetId = runCatching { Uuid.parse(metadata.targetAssistantId) }.getOrNull() ?: return null
+    val targetId = runCatching { ConfigurationReference.parse(metadata.targetAssistantId) }.getOrNull() ?: return null
     val taskId = metadata.childTaskNodeId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
         ?: return null
     val child = childrenById[childId] ?: return null
@@ -204,12 +205,12 @@ internal fun resolveValidChildLineage(
 }
 
 internal fun resolveInterruptionReason(
-    masterAssistantId: Uuid,
+    masterAssistantId: ConfigurationReference,
     metadata: SubAssistantCallMetadata,
     settings: Settings,
     validChild: net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot?,
 ): String {
-    val targetId = runCatching { Uuid.parse(metadata.targetAssistantId) }.getOrNull()
+    val targetId = runCatching { ConfigurationReference.parse(metadata.targetAssistantId) }.getOrNull()
         ?: return "target_removed"
     val pendingDeletionIds = settings.pendingAssistantDeletions.mapTo(mutableSetOf()) { it.assistantId }
     val target = settings.assistants.find { it.id == targetId }

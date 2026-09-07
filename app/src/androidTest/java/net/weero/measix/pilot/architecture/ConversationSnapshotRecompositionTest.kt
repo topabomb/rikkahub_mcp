@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.architecture
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
@@ -53,7 +55,7 @@ class ConversationSnapshotRecompositionTest {
             )
         )
         val compositions = mutableMapOf<String, Int>()
-        val switchedAssistantId = Uuid.random()
+        val switchedAssistantId = ConfigurationReference.random()
         val movedFolderId = Uuid.random()
 
         compose.setContent {
@@ -119,7 +121,7 @@ class ConversationSnapshotRecompositionTest {
     private fun header(conversationId: Uuid) = ConversationHeader(
         id = conversationId,
         title = "title",
-        assistantId = Uuid.random(),
+        assistantId = ConfigurationReference.random(),
         folderId = null,
         isPinned = false,
         chatSuggestions = emptyList(),

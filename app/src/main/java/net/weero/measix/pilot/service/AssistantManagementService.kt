@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -17,7 +18,6 @@ import net.weero.measix.pilot.data.model.normalizeDescription
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
 import net.weero.measix.pilot.service.subassistant.SubAssistantRunCoordinator
-import kotlin.uuid.Uuid
 
 private const val TAG = "AssistantManagementService"
 private const val ASSISTANT_CLEANUP_STOP_TIMEOUT_MS = 5_000L
@@ -44,7 +44,7 @@ class AssistantManagementService(
         name: String,
         description: String,
         instructions: String,
-        callerAssistantId: Uuid? = null,
+        callerAssistantId: ConfigurationReference? = null,
     ): Result<Assistant> {
         recoveryGate.awaitReady()
         val trimmedName = name.trim()
@@ -103,11 +103,11 @@ class AssistantManagementService(
      * UPDATE 要求 assistant_id，且 name/description/instructions 至少提供一个。
      */
     suspend fun updateAssistant(
-        assistantId: Uuid,
+        assistantId: ConfigurationReference,
         name: String? = null,
         description: String? = null,
         instructions: String? = null,
-        callerAssistantId: Uuid? = null,
+        callerAssistantId: ConfigurationReference? = null,
     ): Result<Assistant> {
         recoveryGate.awaitReady()
         if (name == null && description == null && instructions == null) {
@@ -175,8 +175,8 @@ class AssistantManagementService(
      * - 历史 Child Conversation 保留，新调用失败。
      */
     suspend fun deleteAssistant(
-        assistantId: Uuid,
-        callerAssistantId: Uuid? = null,
+        assistantId: ConfigurationReference,
+        callerAssistantId: ConfigurationReference? = null,
     ): Result<AssistantDeletionResult> {
         recoveryGate.awaitReady()
         if (callerAssistantId != null && assistantId == callerAssistantId) {
@@ -283,7 +283,7 @@ class AssistantManagementService(
      * global 或 disabled 均返回空 rows，既不暴露共享 Global Memory，
      * 也不把当前不会生效的旧局部记录误报为该角色正在使用的记忆。
      */
-    suspend fun listAssistantMemory(assistantId: Uuid): Result<MemoryListResult> {
+    suspend fun listAssistantMemory(assistantId: ConfigurationReference): Result<MemoryListResult> {
         val settings = settingsStore.effectiveSettings.value.settings
         val assistant = settings.getAssistantById(assistantId)
             ?: return Result.failure(NoSuchElementException("assistant_not_found"))
@@ -351,7 +351,7 @@ class AssistantManagementService(
         return true
     }
 
-    private suspend fun removePendingDeletion(assistantId: Uuid) {
+    private suspend fun removePendingDeletion(assistantId: ConfigurationReference) {
         artifactStore.updateSettingsReferences { settings ->
             settings.copy(
                 pendingAssistantDeletions = settings.pendingAssistantDeletions.filterNot {
@@ -363,7 +363,7 @@ class AssistantManagementService(
 
 }
 
-class PendingAssistantCleanupException(assistantId: Uuid) :
+class PendingAssistantCleanupException(assistantId: ConfigurationReference) :
     IllegalStateException("Pending assistant cleanup did not converge: $assistantId")
 
 data class AssistantDeletionResult(

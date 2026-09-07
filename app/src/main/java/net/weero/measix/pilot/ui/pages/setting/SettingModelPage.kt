@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.setting
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -55,7 +56,6 @@ import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.utils.plus
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
-import kotlin.uuid.Uuid
 
 @Composable
 fun SettingModelPage(vm: SettingVM = koinViewModel()) {
@@ -299,7 +299,7 @@ private fun SuggestionModelSettingItem(
 private fun ModelSettingItem(
     title: String,
     description: String,
-    modelId: Uuid?,
+    modelId: ConfigurationReference?,
     providers: List<ProviderSetting>,
     effectiveSettings: EffectiveSettingsSnapshot,
     defaultPath: String,

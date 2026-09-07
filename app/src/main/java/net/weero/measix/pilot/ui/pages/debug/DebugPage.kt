@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.debug
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -61,7 +62,6 @@ import org.koin.androidx.compose.koinViewModel
 import androidx.compose.ui.res.stringResource
 import kotlin.random.Random
 import kotlin.random.nextInt
-import kotlin.uuid.Uuid
 
 @Composable
 fun DebugPage(vm: DebugVM = koinViewModel()) {
@@ -204,7 +204,7 @@ private fun MainPage(vm: DebugVM) {
         }
         Button(
             onClick = {
-                vm.updateSettings { it.copy(chatModelId = Uuid.random()) }
+                vm.updateSettings { it.copy(chatModelId = ConfigurationReference.random()) }
             }
         ) {
             Text("重置Chat模型")

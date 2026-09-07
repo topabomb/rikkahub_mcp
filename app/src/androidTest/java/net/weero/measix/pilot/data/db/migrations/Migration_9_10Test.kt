@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.db.migrations
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import android.content.Context
 import androidx.room.Room
 import androidx.room.testing.MigrationTestHelper
@@ -268,7 +270,7 @@ class Migration_9_10Test {
             seedNodes(db)
             val content = ConversationDisclosureSnapshotService.render(
                 ConversationDisclosureSnapshotService.Candidate(
-                    assistant = Assistant(id = Uuid.random(), name = "Master", enableMemory = true),
+                    assistant = Assistant(id = ConfigurationReference.random(), name = "Master", enableMemory = true),
                     allAssistants = emptyList(),
                     memories = listOf(
                         AssistantMemory(3, "用户偏好深色主题"),
@@ -463,7 +465,7 @@ class Migration_9_10Test {
 
     private fun canonicalContent(memory: String) = ConversationDisclosureSnapshotService.render(
         ConversationDisclosureSnapshotService.Candidate(
-            assistant = Assistant(id = Uuid.random(), name = "Master", enableMemory = true),
+            assistant = Assistant(id = ConfigurationReference.random(), name = "Master", enableMemory = true),
             allAssistants = emptyList(),
             memories = listOf(AssistantMemory(1, memory)),
         ),

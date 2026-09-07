@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.datastore.preferences.core.mutablePreferencesOf
@@ -31,7 +33,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import kotlin.uuid.Uuid
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -42,7 +43,7 @@ class McpCatalogStoreTest {
         val scope = AppScope(Dispatchers.Default.limitedParallelism(1))
         try {
             val context = ApplicationProvider.getApplicationContext<Context>()
-            val legacyServerId = Uuid.random()
+            val legacyServerId = ConfigurationReference.random()
             val legacyJson = """
                 [
                   {
@@ -125,7 +126,7 @@ class McpCatalogStoreTest {
             assertEquals(setOf(restoredDefinition.id), store.catalogs.value.keys)
             assertEquals(listOf("restored_tool"), store.catalogs.value.getValue(restoredDefinition.id).tools.map { it.name })
 
-            val serverId = Uuid.random()
+            val serverId = ConfigurationReference.random()
             val firstCandidate = candidate(serverId, "definition-a", "search")
 
             val first = store.commitCandidate(firstCandidate) as McpCatalogCommitResult.Committed
@@ -169,7 +170,7 @@ class McpCatalogStoreTest {
         }
     }
 
-    private fun candidate(serverId: Uuid, definition: String, toolName: String) = McpCatalogCandidate(
+    private fun candidate(serverId: ConfigurationReference, definition: String, toolName: String) = McpCatalogCandidate(
         serverId = serverId,
         definitionDigest = definition,
         tools = listOf(

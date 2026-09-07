@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.tools.local
 
+import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -21,7 +22,7 @@ import me.rerere.tts.provider.TTSManager
  */
 data class TtsToolPlaybackContext(
     val sessionId: String,
-    val assistantId: kotlin.uuid.Uuid?,
+    val assistantId: ConfigurationReference?,
     val assistantName: String,
     val sourceType: TtsPlaybackSource.SourceType,
 ) {

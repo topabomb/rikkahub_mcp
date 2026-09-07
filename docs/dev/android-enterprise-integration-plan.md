@@ -273,7 +273,15 @@ LocalEnterpriseSource（身份/配置/动态/场景）
 
 ## 10. 完整变更清单与批次
 
-初始全部待完成；有实际证据后才更新状态，不能将部分测试通过视为整期交付。
+D0 已由 `c2745a1d` 独立提交完成。C1/C2 正在实施：用户配置/偏好文档及旧键迁移、跨模块配置引用已进入代码；正式企业 source、域数据隔离、UI 与完整模拟能力尚未完成。下表保留全部交付范围，单项基础测试通过不代表 C1/C2 或整期完成。
+
+配置基础变更的已执行验证（不替代 E01–E12 整期验收）：
+
+- `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1` 通过；lint 无错误。
+- `connectedDebugAndroidTest --no-parallel --max-workers=1` 通过；App 112 项全部通过，包含旧 DataStore 迁移提交/拒绝后的实际文件重开、企业配置引用的 Room 往返、真实 Compose 列表选择与状态恢复。
+- Workspace `hardLinkedWriteTargetCannotModifyAnotherPath` 因设备策略不允许建立硬链接 fixture 而跳过，不能视为该场景已验证。
+- 模拟器实际打开 Debug 的助手选择器、提供商/搜索列表及 Bing 详情；R8 Release 冷启动与助手列表正常。当前构建仍为开发过程中的 0.0.19 基线，尚非 0.0.20 企业域交付。
+
 
 | 编号 | 变更 owner / 文件范围 | 完成要求 |
 | --- | --- | --- |

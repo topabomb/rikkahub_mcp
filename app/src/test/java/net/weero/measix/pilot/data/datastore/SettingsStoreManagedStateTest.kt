@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.datastore
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.test.core.app.ApplicationProvider
@@ -22,7 +24,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import kotlin.uuid.Uuid
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -41,7 +42,7 @@ class SettingsStoreManagedStateTest {
 
     @Test
     fun `newly applied lock rejects the immediately following local write`() = runTest {
-        val assistantId = Uuid.random()
+        val assistantId = ConfigurationReference.random()
         val environment = store { _, _, _, _, _ ->
             ManagedConfigurationSnapshot(
                 state = ManagedConfigurationState.ACTIVE,
@@ -76,7 +77,7 @@ class SettingsStoreManagedStateTest {
 
     @Test
     fun `expiry degrades the active generation without discarding its overlay or lock`() = runTest {
-        val assistantId = Uuid.random()
+        val assistantId = ConfigurationReference.random()
         val environment = store { _, _, _, _, _ ->
             ManagedConfigurationSnapshot(
                 state = ManagedConfigurationState.ACTIVE,

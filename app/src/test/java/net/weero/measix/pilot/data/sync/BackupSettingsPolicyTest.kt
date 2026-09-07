@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.data.sync
 
-import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
+
 import net.weero.measix.pilot.data.datastore.ChatFontFamily
 import net.weero.measix.pilot.data.datastore.PendingAssistantDeletion
 import net.weero.measix.pilot.data.datastore.Settings
@@ -31,7 +32,7 @@ class BackupSettingsPolicyTest {
                 chatCustomFontName = "custom.ttf",
             ),
             pendingAssistantDeletions = listOf(
-                PendingAssistantDeletion(Uuid.random(), avatarUri = "file:///files/upload/deleted.png")
+                PendingAssistantDeletion(ConfigurationReference.random(), avatarUri = "file:///files/upload/deleted.png")
             ),
         )
 

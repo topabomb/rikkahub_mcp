@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -27,7 +30,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 /** 连接生命周期：建连与重连、传输关闭、定义变更重建客户端、授权状态写入、超时与维护退避、并行准入与按服务器状态。 */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -366,7 +368,7 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
 
     @Test
     fun `two servers publish independent statuses without regressing a neighbor`() = runTest(dispatcher) {
-        val secondId = Uuid.random()
+        val secondId = ConfigurationReference.random()
         val second = McpServerConfig.StreamableHTTPServer(
             id = secondId,
             commonOptions = McpCommonOptions(name = "other"),
@@ -384,7 +386,7 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
 
     @Test
     fun `different servers start connecting in parallel`() = runTest(dispatcher) {
-        val secondId = Uuid.random()
+        val secondId = ConfigurationReference.random()
         val second = McpServerConfig.StreamableHTTPServer(
             id = secondId,
             commonOptions = McpCommonOptions(name = "other"),
@@ -410,7 +412,7 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
     fun `connection attempt timeout starts after lifecycle admission`() = runTest(dispatcher) {
         val configs = (1..5).map { index ->
             McpServerConfig.StreamableHTTPServer(
-                id = Uuid.random(),
+                id = ConfigurationReference.random(),
                 commonOptions = McpCommonOptions(name = "server_$index"),
                 url = "https://server-$index.example/mcp",
             )

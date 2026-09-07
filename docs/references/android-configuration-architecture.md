@@ -19,7 +19,7 @@ Built-in defaults + Local shadow + 已验证的 Managed overlay
 | Owner | 当前载体 | 负责的事实 | 是否进入普通本地备份 |
 |---|---|---|---|
 | Built-in | `DefaultProviders.kt`、默认 Assistant/TTS/Prompt/Theme 常量 | 安装包内默认资源和反序列化默认值 | 不单独备份；读取时补齐 |
-| Local Settings | Preferences DataStore `settings` | 全局 UI、资源目录、选择项、Assistant、Prompt、备份参数 | 是，导出为 `settings.json` |
+| 用户配置与偏好 | Preferences DataStore `settings` 的 `user_settings` JSON | UserSettingsDocument 内分开保存用户定义、公用显示偏好、按主体的选择、内部状态 | 当前仍以个人 Settings 投影导出 `settings.json` |
 | Local UI preference | SharedPreferences `MeasixPilot.preferences` | 语言、明暗、启动/布局/搜索排序等轻量偏好 | 否 |
 | Local durable resource | Room + `filesDir` | Workspace、Skill、会话级覆盖、资源文件 | 仅备份协议明确包含的域 |
 | Local runtime cache | `cacheDir/lru_key_roulette.json` 等 | 可重建的 key 轮换/发现缓存；不是配置真源 | 否 |
@@ -37,7 +37,8 @@ updateLocal(latest Local shadow transform)
 → managed lock/write rule
 → normalizeForPersistence
 → canonicalizeForDataStore
-→ one dataStore.edit
+→ UserSettingsDocument.withPersonalSettings
+→ one dataStore.edit（user_settings）
 → durable success
 → materializeForRead
 → EffectiveSettingsResolver
@@ -51,40 +52,51 @@ updateLocal(latest Local shadow transform)
 - managed mutation 必须在 Store/commit boundary 拒绝，UI disabled 只是展示；
 - Local shadow 不因 Managed 同 ID 覆盖而删除，Managed remove/disconnect 后应恢复；
 - `restoreLocal()` 和 `snapshotLocal()` 只操作 Local shadow；
-- `pendingAssistantDeletions` 虽为 `@Transient`，仍由独立 DataStore key 持久化，恢复普通 Settings 时不得清空。
+- `pendingAssistantDeletions` 在 Settings 投影中为 `@Transient`，在 UserSettingsDocument.internalState 中持久化，恢复普通 Settings 时不得清空。
+
+### 2.3 用户配置文档与迁移
+
+`UserSettingsDocument` 的 `schemaVersion`、`configuration`、`preferences`、`internalState` 为必需字段，缺失或版本不支持时拒绝读取；其 schema 与 Room、应用和备份版本独立。
+
+- `UserConfiguration` 保存现有 Provider/Model、TTS/ASR、MCP、Search、Assistant、注入/QuickMessage/标签、辅助提示词、备份连接及 UserProfile。用户昵称/头像不重复放入显示偏好。
+- `UserPreferences.common` 保存 DataStore 原有的外观、DisplayPreferences、播放速度和提醒；`scopes` 以 ConfigurationScope 保存 ResourceSelections，`gateways` 保存按来源和企业标识区分的 Gateway 偏好。SharedPreferences 表中的偏好仍由原 owner 管理。
+- `common.configuration.ConfigurationReference` 保留原用户 UUID 或企业来源/原始字符串 ID，不生成替代 UUID。个人引用的 JSON 仍是原 UUID 字符串；企业引用序列化为 `managed~来源类型~来源标识~deploymentId~资源ID`，完整保留来源和原始资源 ID。ConfigurationScope 企业身份包括 sourceNamespace/deploymentId/userId，本地与平台来源不相交。当前实际 Settings 消费链只投影个人选择，正式企业接入尚未接通。
+- `UserSettingsMigration` 在旧 OCR/Search/MCP 迁移之后，将旧键转换并在同一次 DataStore 迁移提交中移除；MCP Catalog 的 pending staging 保留给 Catalog owner。旧资源或 tombstone 解码失败会中止迁移，原输入不变。正常读写只访问新文档，没有旧键 fallback。
+- 用户定义及其配置绑定只接受 User 引用；按企业保存的选择允许 User 或同 authority 的 Enterprise 引用，拒绝外域引用。会话、Message、Turn、文件与 Workspace 的自身 ID 继续使用 UUID。
+- 已删除无功能消费者的 developerMode 字段；迁移清除旧 developer_mode 键，旧备份中的字段由 JSON codec 忽略。构建类型标记不使用此配置。
+- 写个人配置会保留其他主体的偏好；EffectiveSettingsSnapshot 仍为只读内存投影，不另落盘。
 
 ## 3. Local Settings 顶层结构
 
-下表中的“读取默认”以空 DataStore 的真实读取/物化结果为准，不以 `Settings()` 中为序列化兼容而存在的随机 UUID
+下表的 DataStore key 列记录旧迁移输入键，正常落盘已统一为 `user_settings` 的类型化结构。下表中的“读取默认”以空 DataStore 的真实迁移/读取/物化结果为准，不以 `Settings()` 中为序列化兼容而存在的随机 UUID
 占位值为准。配置演进时必须分别检查四种语义：Kotlin 构造默认、DataStore key 缺失默认、`materializeForRead()`
 后的有效默认、Managed 字段未提供；它们不能相互代替。当前 JSON codec 使用 `ignoreUnknownKeys=true` 和
 `encodeDefaults=true`。
 
-### 3.1 外观、显示与开发选项
+### 3.1 外观与显示
 
 | `Settings` 字段 | 类型 | DataStore key | 读取默认 | 说明 |
 |---|---|---|---|---|
 | `dynamicColor` | `Boolean` | `dynamic_color` | `true` | Android 动态色 |
 | `themeId` | `String` | `theme_id` | 首个预设主题 ID | 非动态色时的主题 |
 | `customThemes` | `List<CustomTheme>` | `custom_themes` | `[]` | 用户自定义主题 |
-| `developerMode` | `Boolean` | `developer_mode` | `false` | 当前仅持久化读写，无功能消费者；不控制 Debug 标记或入口 |
 | `displaySetting` | `DisplaySetting` | `display_setting` | `DisplaySetting()` | 聊天显示、通知、TTS 播放和输入偏好 |
 
 ### 3.2 模型选择、提示与派生任务
 
 | `Settings` 字段 | 类型 | DataStore key | 读取默认 | 引用/用途 |
 |---|---|---|---|---|
-| `favoriteModels` | `List<Uuid>` | `favorite_models` | `[]` | 引用 `providers[].models[].id`；失效 ID 在读取模型过滤 |
-| `chatModelId` | `Uuid` | `chat_model` | `DEFAULT_AUTO_MODEL_ID` | 全局 Chat 默认；Assistant 可覆盖 |
-| `fastModelId` | `Uuid` | `fast_model` | `DEFAULT_AUTO_MODEL_ID` | 快速任务默认 |
-| `titleModelId` | `Uuid?` | `title_model` | `null` | 标题生成显式选择 |
-| `imageGenerationModelId` | `Uuid` | `image_generation_model` | `DEFAULT_AUTO_MODEL_ID` | Local standalone image generation |
+| `favoriteModels` | `List<ConfigurationReference>` | `favorite_models` | `[]` | 引用 `providers[].models[].id`；失效 ID 在读取模型过滤 |
+| `chatModelId` | `ConfigurationReference` | `chat_model` | `DEFAULT_AUTO_MODEL_ID` | 全局 Chat 默认；Assistant 可覆盖 |
+| `fastModelId` | `ConfigurationReference` | `fast_model` | `DEFAULT_AUTO_MODEL_ID` | 快速任务默认 |
+| `titleModelId` | `ConfigurationReference?` | `title_model` | `null` | 标题生成显式选择 |
+| `imageGenerationModelId` | `ConfigurationReference` | `image_generation_model` | `DEFAULT_AUTO_MODEL_ID` | Local standalone image generation |
 | `titlePrompt` | `String` | `title_prompt` | `DEFAULT_TITLE_PROMPT` | 标题生成 prompt |
 | `enableSuggestion` | `Boolean` | `enable_suggestion` | `true` | 是否生成后续建议 |
-| `suggestionModelId` | `Uuid?` | `suggestion_model` | `null` | 建议生成显式模型 |
+| `suggestionModelId` | `ConfigurationReference?` | `suggestion_model` | `null` | 建议生成显式模型 |
 | `suggestionPrompt` | `String` | `suggestion_prompt` | `DEFAULT_SUGGESTION_PROMPT` | 建议生成 prompt |
-| `attachmentInspectionModelId` | `Uuid?` | `attachment_inspection_model` | `null` | 文本模型无法原生看图时的配置化视觉模型 |
-| `compressModelId` | `Uuid` | `compress_model` | `DEFAULT_AUTO_MODEL_ID` | 历史压缩模型 |
+| `attachmentInspectionModelId` | `ConfigurationReference?` | `attachment_inspection_model` | `null` | 文本模型无法原生看图时的配置化视觉模型 |
+| `compressModelId` | `ConfigurationReference` | `compress_model` | `DEFAULT_AUTO_MODEL_ID` | 历史压缩模型 |
 | `compressPrompt` | `String` | `compress_prompt` | `DEFAULT_COMPRESS_PROMPT` | 历史压缩 prompt |
 
 旧 `ocr_model` / `ocr_prompt` 只存在于一次性迁移：合法的 image-input 模型迁移到
@@ -99,17 +111,17 @@ updateLocal(latest Local shadow transform)
 |---|---|---|---|---|
 | `providers` | `List<ProviderSetting>` | `providers` | 读取后补齐 `DEFAULT_PROVIDERS` | Local Provider + Model 目录 |
 | `assistants` | `List<Assistant>` | `assistants` | 读取后补齐 `DEFAULT_ASSISTANTS` | Assistant 定义目录 |
-| `assistantId` | `Uuid` | `select_assistant` | `DEFAULT_ASSISTANT_ID` | 新会话/全局入口当前选择，不覆盖已有会话归属 |
+| `assistantId` | `ConfigurationReference` | `select_assistant` | `DEFAULT_ASSISTANT_ID` | 新会话/全局入口当前选择，不覆盖已有会话归属 |
 | `assistantTags` | `List<Tag>` | `assistant_tags` | `[]` | Assistant 分组标签 |
 | `searchServices` | `List<SearchServiceOptions>` | `search_services` | 至少物化 `SearchServiceOptions.DEFAULT` | Local Search provider 目录 |
 | `searchCommonOptions` | `SearchCommonOptions` | `search_common` | `resultSize=10` | 公共搜索参数 |
-| `selectedSearchServiceId` | `Uuid?` | `selected_search_service_id` | 缺失时由选择规范化/消费者回退 | 稳定 ID 选择；旧 index key 已迁移 |
+| `selectedSearchServiceId` | `ConfigurationReference?` | `selected_search_service_id` | 缺失时由选择规范化/消费者回退 | 稳定 ID 选择；旧 index key 已迁移 |
 | `mcpServers` | `List<McpServerConfig>` | `mcp_servers` | `[]` | Local MCP definition、headers、OAuth、工具策略；远端目录独立持久化 |
 | `ttsProviders` | `List<TTSProviderSetting>` | `tts_providers` | 读取后补齐 System TTS | Local TTS 目录 |
-| `selectedTTSProviderId` | `Uuid` | `selected_tts_provider` | `DEFAULT_SYSTEM_TTS_ID` | 当前 TTS 选择 |
+| `selectedTTSProviderId` | `ConfigurationReference` | `selected_tts_provider` | `DEFAULT_SYSTEM_TTS_ID` | 当前 TTS 选择 |
 | `defaultTTSPlaybackSpeed` | `Float` | `default_tts_playback_speed` | `1.0`，持久化限制 `0.5..2.0` | 公共播放速度 |
 | `asrProviders` | `List<ASRProviderSetting>` | `asr_providers` | `[]` | 当前只有 Local realtime ASR 类型 |
-| `selectedASRProviderId` | `Uuid?` | `selected_asr_provider` | 首个有效项或 `null` | 当前 ASR 选择 |
+| `selectedASRProviderId` | `ConfigurationReference?` | `selected_asr_provider` | 首个有效项或 `null` | 当前 ASR 选择 |
 | `modeInjections` | `List<ModeInjection>` | `mode_injections` | `[]` | Prompt Injection 目录 |
 | `quickMessages` | `List<QuickMessage>` | `quick_messages` | `[]` | 快捷消息目录 |
 
@@ -194,7 +206,7 @@ Local `ProviderSetting` 是三种密封类型：
 Model
   modelId: String                    # provider upstream selector
   displayName: String
-  id: Uuid                           # Local stable reference
+  id: ConfigurationReference         # stable definition reference
   type: CHAT | IMAGE | EMBEDDING
   customHeaders: CustomHeader[]
   customBodies: CustomBody[]

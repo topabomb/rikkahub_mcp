@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.data.model
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import kotlinx.serialization.json.Json
 import net.weero.measix.pilot.data.datastore.PendingAssistantDeletion
@@ -7,7 +10,6 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.normalizeForPersistence
 import net.weero.measix.pilot.data.datastore.withInternalStateFrom
 import net.weero.measix.pilot.ui.pages.assistant.detail.mergeAssistantDelta
-import kotlin.uuid.Uuid
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -38,7 +40,7 @@ class AssistantConfigCompatibilityTest {
 
     @Test
     fun `sub-assistant with all fields - decodes correctly`() {
-        val targetId = Uuid.random()
+        val targetId = ConfigurationReference.random()
         val subJson = """{"id":"00000000-0000-0000-0000-000000000002","name":"Sub","description":"Helper","allowAsSubAssistant":true,"isSubAssistantGloballyVisible":true,"allowedSubAssistantIds":["$targetId"]}"""
         val assistant = json.decodeFromString<Assistant>(subJson)
         assertTrue(assistant.allowAsSubAssistant)
@@ -50,7 +52,7 @@ class AssistantConfigCompatibilityTest {
     @Test
     fun `normalization - non-sub-assistant forces globally visible false`() {
         val assistant = Assistant(
-            id = Uuid.random(),
+            id = ConfigurationReference.random(),
             name = "Test",
             allowAsSubAssistant = false,
             isSubAssistantGloballyVisible = true,
@@ -89,9 +91,9 @@ class AssistantConfigCompatibilityTest {
 
     @Test
     fun `clone resets globally visible and allowed list`() {
-        val targetId = Uuid.random()
+        val targetId = ConfigurationReference.random()
         val original = Assistant(
-            id = Uuid.random(),
+            id = ConfigurationReference.random(),
             name = "Original",
             description = "test",
             allowAsSubAssistant = true,
@@ -100,7 +102,7 @@ class AssistantConfigCompatibilityTest {
         )
         // 模拟 clone 逻辑
         val cloned = original.copy(
-            id = Uuid.random(),
+            id = ConfigurationReference.random(),
             name = "${original.name} (Clone)",
             isSubAssistantGloballyVisible = false,
             allowedSubAssistantIds = emptySet(),
@@ -113,13 +115,13 @@ class AssistantConfigCompatibilityTest {
     @Test
     fun `clone does not auto-add to any allowed list`() {
         val original = Assistant(
-            id = Uuid.random(),
+            id = ConfigurationReference.random(),
             name = "Original",
             description = "test",
             allowAsSubAssistant = true,
         )
         val cloned = original.copy(
-            id = Uuid.random(),
+            id = ConfigurationReference.random(),
             name = "${original.name} (Clone)",
             isSubAssistantGloballyVisible = false,
             allowedSubAssistantIds = emptySet(),
@@ -130,7 +132,7 @@ class AssistantConfigCompatibilityTest {
 
     @Test
     fun `pending deletion is persisted separately and excluded from settings export`() {
-        val pending = PendingAssistantDeletion(assistantId = Uuid.random(), avatarUri = "file:///avatar.png")
+        val pending = PendingAssistantDeletion(assistantId = ConfigurationReference.random(), avatarUri = "file:///avatar.png")
         val settings = Settings(pendingAssistantDeletions = listOf(pending))
 
         val encoded = json.encodeToString(settings)
@@ -140,7 +142,7 @@ class AssistantConfigCompatibilityTest {
 
     @Test
     fun `persistence normalization deduplicates tombstones and normalizes descriptions`() {
-        val assistantId = Uuid.random()
+        val assistantId = ConfigurationReference.random()
         val pending = PendingAssistantDeletion(assistantId)
         val normalized = Settings(
             assistants = listOf(Assistant(description = "  routing\n  description  ")),
@@ -153,7 +155,7 @@ class AssistantConfigCompatibilityTest {
 
     @Test
     fun `ordinary settings update preserves internal deletion tombstones`() {
-        val pending = PendingAssistantDeletion(Uuid.random())
+        val pending = PendingAssistantDeletion(ConfigurationReference.random())
         val current = Settings(pendingAssistantDeletions = listOf(pending))
 
         val merged = Settings().withInternalStateFrom(current)
@@ -163,8 +165,8 @@ class AssistantConfigCompatibilityTest {
 
     @Test
     fun `assistant page delta keeps concurrent allowed list change`() {
-        val assistantId = Uuid.random()
-        val concurrentTargetId = Uuid.random()
+        val assistantId = ConfigurationReference.random()
+        val concurrentTargetId = ConfigurationReference.random()
         val baseline = Assistant(id = assistantId, name = "Before")
         val edited = baseline.copy(name = "After")
         val current = baseline.copy(allowedSubAssistantIds = setOf(concurrentTargetId))

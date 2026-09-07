@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.tools
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -43,21 +45,20 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class AttachmentInspectionToolTest {
     private val providerManager = mockk<ProviderManager>()
     private val provider = mockk<Provider<ProviderSetting>>()
 
     private val visionModel = Model(
-        id = Uuid.random(),
+        id = ConfigurationReference.random(),
         modelId = "vision",
         displayName = "Vision",
         type = ModelType.CHAT,
         inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
     )
     private val textModel = Model(
-        id = Uuid.random(),
+        id = ConfigurationReference.random(),
         modelId = "text",
         displayName = "Text",
         type = ModelType.CHAT,

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.datastore
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import android.util.Log
 import androidx.datastore.core.DataMigration
@@ -66,7 +67,7 @@ internal fun migrateOcrPreferences(
         // 新 key 已存在，以新值为准。
         return true
     }
-    val legacyModelId = legacyModelRaw?.let { raw -> runCatching { kotlin.uuid.Uuid.parse(raw) }.getOrNull() }
+    val legacyModelId = legacyModelRaw?.let { raw -> runCatching { me.rerere.common.configuration.ConfigurationReference.parse(raw) }.getOrNull() }
     val model = legacyModelId?.let { id -> providers.findModelById(id) } ?: return false
     val providerExists = model.findProvider(providers) != null
     if (!providerExists || !model.inputModalities.contains(Modality.IMAGE)) {

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service.turn
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.os.Build
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
@@ -21,7 +22,6 @@ import java.util.TimeZone
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlin.time.toJavaInstant
-import kotlin.uuid.Uuid
 
 class TurnContextFactory(
     private val workspaceRepository: WorkspaceRepository,
@@ -42,7 +42,7 @@ class TurnContextFactory(
         providerTransportLease: ProviderTransportLease,
         mediaCapabilities: RequestMediaCapabilities,
         conversationSystemPrompt: String?,
-        conversationModeInjectionIds: Set<Uuid>,
+        conversationModeInjectionIds: Set<ConfigurationReference>,
         tools: List<me.rerere.ai.core.Tool>,
     ): TurnLaunchPlan {
         val workspaceReminder = assistant.workspaceId
@@ -121,7 +121,7 @@ fun freezeTurnPromptSnapshot(
     assistant: Assistant,
     model: Model,
     conversationSystemPrompt: String?,
-    conversationModeInjectionIds: Set<Uuid>,
+    conversationModeInjectionIds: Set<ConfigurationReference>,
     workspaceReminder: String?,
     instant: Instant,
     locale: Locale,

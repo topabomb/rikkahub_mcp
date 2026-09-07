@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.ai
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -48,12 +49,11 @@ import net.weero.measix.pilot.ui.components.ui.TagType
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.hooks.rememberAssistantState
-import kotlin.uuid.Uuid
 
 @Composable
 fun AssistantPicker(
     settings: Settings,
-    onSelectAssistant: (Uuid) -> Unit,
+    onSelectAssistant: (ConfigurationReference) -> Unit,
     modifier: Modifier = Modifier,
     onManageAssistant: () -> Unit,
 ) {
@@ -152,7 +152,7 @@ fun AssistantPickerSheet(
     val sheetTitle = title ?: stringResource(R.string.safe_mode_switch_assistant)
 
     // 标签过滤状态
-    var selectedTagIds by remember { mutableStateOf(emptySet<Uuid>()) }
+    var selectedTagIds by remember { mutableStateOf(emptySet<ConfigurationReference>()) }
     // 搜索关键词状态
     var searchQuery by remember { mutableStateOf("") }
 
@@ -205,7 +205,7 @@ fun AssistantPickerSheet(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(bottom = 8.dp),
                 ) {
-                    items(settings.assistantTags, key = { tag -> tag.id }) { tag ->
+                    items(settings.assistantTags, key = { tag -> tag.id.toString() }) { tag ->
                         FilterChip(
                             onClick = {
                                 selectedTagIds = if (tag.id in selectedTagIds) {
@@ -228,7 +228,7 @@ fun AssistantPickerSheet(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(filteredAssistants, key = { it.id }) { assistant ->
+                items(filteredAssistants, key = { it.id.toString() }) { assistant ->
                     val checked = assistant.id == currentAssistant.id
                     Card(
                         onClick = { onAssistantSelected(assistant) },

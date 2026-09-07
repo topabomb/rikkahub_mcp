@@ -2,6 +2,7 @@
 
 package net.weero.measix.pilot
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Build
@@ -448,7 +449,7 @@ class RouteActivity : ComponentActivity() {
                             }
 
                             entry<Screen.SettingProviderDetail> { key ->
-                                val id = Uuid.parse(key.providerId)
+                                val id = ConfigurationReference.parse(key.providerId)
                                 SettingProviderDetailPage(id = id)
                             }
 
@@ -465,7 +466,7 @@ class RouteActivity : ComponentActivity() {
                             }
 
                             entry<Screen.SettingSearchDetail> { key ->
-                                val id = Uuid.parse(key.serviceId)
+                                val id = ConfigurationReference.parse(key.serviceId)
                                 SettingSearchDetailPage(id)
                             }
 

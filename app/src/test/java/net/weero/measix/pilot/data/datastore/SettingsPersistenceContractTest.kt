@@ -1,29 +1,31 @@
 package net.weero.measix.pilot.data.datastore
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import androidx.datastore.preferences.core.Preferences
 import kotlinx.serialization.json.jsonObject
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class SettingsPersistenceContractTest {
     @Test
     fun `settings json top-level shape remains compatible and excludes disclosure state`() {
         val settings = Settings(
-            chatModelId = Uuid.parse("00000000-0000-0000-0000-000000000101"),
-            fastModelId = Uuid.parse("00000000-0000-0000-0000-000000000102"),
-            imageGenerationModelId = Uuid.parse("00000000-0000-0000-0000-000000000103"),
-            compressModelId = Uuid.parse("00000000-0000-0000-0000-000000000104"),
-            assistantId = Uuid.parse("00000000-0000-0000-0000-000000000105"),
+            chatModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000101"),
+            fastModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000102"),
+            imageGenerationModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000103"),
+            compressModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000104"),
+            assistantId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000105"),
         )
         val encoded = JsonInstant.encodeToString(settings)
         val keys = JsonInstant.parseToJsonElement(encoded).jsonObject.keys.toList()
 
         assertEquals(
             listOf(
-                "dynamicColor", "themeId", "customThemes", "developerMode", "displaySetting",
+                "dynamicColor", "themeId", "customThemes", "displaySetting",
                 "favoriteModels", "chatModelId", "fastModelId", "titleModelId",
                 "imageGenerationModelId", "titlePrompt", "enableSuggestion", "suggestionModelId",
                 "suggestionPrompt", "attachmentInspectionModelId", "compressModelId", "compressPrompt",
@@ -53,6 +55,8 @@ class SettingsPersistenceContractTest {
 
         val encoded = JsonInstant.encodeToString(goldenFixture())
         assertEquals(golden, encoded)
+        val legacy = golden.replaceFirst("{", "{\"developerMode\":true,")
+        assertEquals(encoded, JsonInstant.encodeToString(JsonInstant.decodeFromString<Settings>(legacy)))
         // 解码后再编码必须逐字相同；不用对象 equals，因为 search SDK 的 BingLocalOptions 非 data class。
         assertEquals(encoded, JsonInstant.encodeToString(JsonInstant.decodeFromString<Settings>(encoded)))
     }
@@ -60,28 +64,27 @@ class SettingsPersistenceContractTest {
     private fun goldenFixture(): Settings = Settings(
         dynamicColor = true,
         themeId = "theme-golden",
-        developerMode = true,
-        chatModelId = Uuid.parse("00000000-0000-0000-0000-000000000501"),
-        fastModelId = Uuid.parse("00000000-0000-0000-0000-000000000502"),
-        titleModelId = Uuid.parse("00000000-0000-0000-0000-000000000503"),
-        imageGenerationModelId = Uuid.parse("00000000-0000-0000-0000-000000000504"),
-        suggestionModelId = Uuid.parse("00000000-0000-0000-0000-000000000505"),
-        attachmentInspectionModelId = Uuid.parse("00000000-0000-0000-0000-000000000506"),
-        compressModelId = Uuid.parse("00000000-0000-0000-0000-000000000507"),
-        assistantId = Uuid.parse("00000000-0000-0000-0000-000000000508"),
+        chatModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000501"),
+        fastModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000502"),
+        titleModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000503"),
+        imageGenerationModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000504"),
+        suggestionModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000505"),
+        attachmentInspectionModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000506"),
+        compressModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000507"),
+        assistantId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000508"),
         titlePrompt = "title prompt",
         suggestionPrompt = "suggestion prompt",
         compressPrompt = "compress prompt",
         enableSuggestion = true,
         providers = listOf(
             me.rerere.ai.provider.ProviderSetting.OpenAI(
-                id = Uuid.parse("00000000-0000-0000-0000-000000000511"),
+                id = ConfigurationReference.parse("00000000-0000-0000-0000-000000000511"),
                 name = "Golden Provider",
                 baseUrl = "https://golden.example/v1",
                 apiKey = "golden-key",
                 models = listOf(
                     me.rerere.ai.provider.Model(
-                        id = Uuid.parse("00000000-0000-0000-0000-000000000512"),
+                        id = ConfigurationReference.parse("00000000-0000-0000-0000-000000000512"),
                         modelId = "golden-model",
                         displayName = "Golden Model",
                         abilities = listOf(
@@ -107,7 +110,7 @@ class SettingsPersistenceContractTest {
         ),
         assistants = listOf(
             net.weero.measix.pilot.data.model.Assistant(
-                id = Uuid.parse("00000000-0000-0000-0000-000000000521"),
+                id = ConfigurationReference.parse("00000000-0000-0000-0000-000000000521"),
                 name = "Golden Assistant",
                 description = "golden description",
                 systemPrompt = "golden system prompt",
@@ -120,9 +123,9 @@ class SettingsPersistenceContractTest {
                 useGlobalMemory = true,
                 allowConversationSystemPrompt = true,
                 useAssistantAvatar = true,
-                tags = listOf(Uuid.parse("00000000-0000-0000-0000-000000000522")),
-                modeInjectionIds = setOf(Uuid.parse("00000000-0000-0000-0000-000000000523")),
-                quickMessageIds = setOf(Uuid.parse("00000000-0000-0000-0000-000000000524")),
+                tags = listOf(ConfigurationReference.parse("00000000-0000-0000-0000-000000000522")),
+                modeInjectionIds = setOf(ConfigurationReference.parse("00000000-0000-0000-0000-000000000523")),
+                quickMessageIds = setOf(ConfigurationReference.parse("00000000-0000-0000-0000-000000000524")),
                 localTools = listOf(
                     net.weero.measix.pilot.data.ai.tools.local.LocalToolOption.AssistantDelegation,
                 ),
@@ -131,18 +134,18 @@ class SettingsPersistenceContractTest {
         // 默认搜索服务带随机 id，golden 必须钉死才能逐字比较。
         searchServices = listOf(
             me.rerere.search.SearchServiceOptions.BingLocalOptions(
-                id = Uuid.parse("00000000-0000-0000-0000-000000000541"),
+                id = ConfigurationReference.parse("00000000-0000-0000-0000-000000000541"),
             ),
         ),
         assistantTags = listOf(
             net.weero.measix.pilot.data.model.Tag(
-                id = Uuid.parse("00000000-0000-0000-0000-000000000522"),
+                id = ConfigurationReference.parse("00000000-0000-0000-0000-000000000522"),
                 name = "golden-tag",
             ),
         ),
         modeInjections = listOf(
             net.weero.measix.pilot.data.model.PromptInjection.ModeInjection(
-                id = Uuid.parse("00000000-0000-0000-0000-000000000523"),
+                id = ConfigurationReference.parse("00000000-0000-0000-0000-000000000523"),
                 name = "golden injection",
                 content = "injected content",
                 position = net.weero.measix.pilot.data.model.InjectionPosition.AT_DEPTH,
@@ -154,7 +157,7 @@ class SettingsPersistenceContractTest {
         ),
         quickMessages = listOf(
             net.weero.measix.pilot.data.model.QuickMessage(
-                id = Uuid.parse("00000000-0000-0000-0000-000000000524"),
+                id = ConfigurationReference.parse("00000000-0000-0000-0000-000000000524"),
                 title = "golden quick",
                 content = "quick content",
             ),
@@ -164,10 +167,10 @@ class SettingsPersistenceContractTest {
             bucket = "golden-bucket",
             region = "us-east-1",
         ),
-        selectedTTSProviderId = Uuid.parse("00000000-0000-0000-0000-000000000531"),
+        selectedTTSProviderId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000531"),
         defaultTTSPlaybackSpeed = 1.25f,
-        selectedASRProviderId = Uuid.parse("00000000-0000-0000-0000-000000000532"),
-        selectedSearchServiceId = Uuid.parse("00000000-0000-0000-0000-000000000541"),
+        selectedASRProviderId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000532"),
+        selectedSearchServiceId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000541"),
         backupReminderConfig = BackupReminderConfig(
             enabled = true,
             intervalDays = 3,
@@ -178,11 +181,11 @@ class SettingsPersistenceContractTest {
     )
 
     @Test
-    fun `Preferences key names and value types remain compatible`() {
+    fun `legacy migration key names and value types remain compatible`() {
         fun names(keys: List<Preferences.Key<*>>) = keys.map { it.name }
         val booleanKeys: List<Preferences.Key<Boolean>> = listOf(
             SettingsStore.DYNAMIC_COLOR,
-            SettingsStore.DEVELOPER_MODE,
+            LEGACY_DEVELOPER_MODE,
             SettingsStore.ENABLE_SUGGESTION,
         )
         val intKeys: List<Preferences.Key<Int>> = listOf(

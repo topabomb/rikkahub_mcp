@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import android.net.Uri
 import io.mockk.every
 import io.mockk.coEvery
@@ -92,7 +94,7 @@ class SubAssistantChildPartsTest {
                 if (toolName == "assistant_call") {
                     val metadata = SubAssistantCallMetadata(
                         runId = Uuid.random().toString(),
-                        targetAssistantId = Uuid.random().toString(),
+                        targetAssistantId = ConfigurationReference.random().toString(),
                         targetNameSnapshot = "Target",
                         state = SubAssistantCallState.COMPLETED,
                         artifacts = listOf(SubAssistantCallArtifact(
@@ -430,7 +432,7 @@ class SubAssistantChildPartsTest {
         } returns owned
         val metadata = SubAssistantCallMetadata(
             runId = Uuid.random().toString(),
-            targetAssistantId = Uuid.random().toString(),
+            targetAssistantId = ConfigurationReference.random().toString(),
             targetNameSnapshot = "Target",
             state = SubAssistantCallState.COMPLETED,
             artifacts = listOf(
@@ -534,7 +536,7 @@ class SubAssistantChildPartsTest {
             val stableRef = AttachmentRefs.format(Uuid.random())
             val metadata = SubAssistantCallMetadata(
                 runId = Uuid.random().toString(),
-                targetAssistantId = Uuid.random().toString(),
+                targetAssistantId = ConfigurationReference.random().toString(),
                 targetNameSnapshot = "Target",
                 state = SubAssistantCallState.COMPLETED,
                 artifacts = listOf(SubAssistantCallArtifact(stableRef, "image", "image/png", sourceRef)),
@@ -588,7 +590,7 @@ class SubAssistantChildPartsTest {
         coEvery { artifactStore.resolveManagedReference(any<File>()) } returns null
         val metadata = SubAssistantCallMetadata(
             runId = Uuid.random().toString(),
-            targetAssistantId = Uuid.random().toString(),
+            targetAssistantId = ConfigurationReference.random().toString(),
             targetNameSnapshot = "Target",
             state = SubAssistantCallState.COMPLETED,
             artifacts = listOf(
@@ -652,7 +654,7 @@ class SubAssistantChildPartsTest {
         coEvery { artifactStore.resolveManagedReference(any<File>()) } returns null
         val metadata = SubAssistantCallMetadata(
             runId = Uuid.random().toString(),
-            targetAssistantId = Uuid.random().toString(),
+            targetAssistantId = ConfigurationReference.random().toString(),
             targetNameSnapshot = "Target",
             state = SubAssistantCallState.COMPLETED,
             artifacts = listOf(

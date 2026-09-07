@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service.subassistant
 
+import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
@@ -9,13 +10,13 @@ import kotlin.uuid.Uuid
 
 internal data class SubAssistantRunKey(
     val masterConversationId: Uuid,
-    val targetAssistantId: Uuid,
+    val targetAssistantId: ConfigurationReference,
 )
 
 private data class SubAssistantRunLease(
     val runId: String,
-    val callerAssistantId: Uuid,
-    val targetAssistantId: Uuid,
+    val callerAssistantId: ConfigurationReference,
+    val targetAssistantId: ConfigurationReference,
     val job: Job,
     val completion: CompletableDeferred<Unit> = CompletableDeferred(),
 )
@@ -55,7 +56,7 @@ class SubAssistantRunGate {
     internal fun acquireLease(
         key: SubAssistantRunKey,
         runId: String,
-        callerAssistantId: Uuid,
+        callerAssistantId: ConfigurationReference,
         parentJob: Job?,
     ): LeaseHandle? {
         val job = Job(parentJob)
@@ -72,7 +73,7 @@ class SubAssistantRunGate {
         }
     }
 
-    suspend fun cancelRunsForAssistant(assistantId: Uuid) {
+    suspend fun cancelRunsForAssistant(assistantId: ConfigurationReference) {
         val matching = leases.values
             .filter { it.targetAssistantId == assistantId || it.callerAssistantId == assistantId }
             .distinct()

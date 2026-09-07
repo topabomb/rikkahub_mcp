@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.datastore
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import kotlinx.coroutines.test.runTest
 import net.weero.measix.pilot.data.model.Assistant
 import org.junit.Assert.assertEquals
@@ -7,7 +9,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class SettingsCommitTest {
     @Test
@@ -68,7 +69,7 @@ class SettingsCommitTest {
 
     @Test
     fun `managed lock protects the local shadow even when a managed record masks it`() {
-        val assistantId = Uuid.random()
+        val assistantId = ConfigurationReference.random()
         val local = Settings(
             assistants = listOf(Assistant(id = assistantId, name = "local", description = "local shadow")),
         )
@@ -100,7 +101,7 @@ class SettingsCommitTest {
 
     @Test
     fun `effective source index distinguishes local managed and built in values`() {
-        val localAssistant = Assistant(id = Uuid.random(), name = "local")
+        val localAssistant = Assistant(id = ConfigurationReference.random(), name = "local")
         val local = Settings(
             providers = emptyList(),
             assistants = listOf(localAssistant),
@@ -127,8 +128,8 @@ class SettingsCommitTest {
 
     @Test
     fun `collection lock is surfaced for every covered record and blocks reorder`() {
-        val first = Assistant(id = Uuid.random(), name = "first")
-        val second = Assistant(id = Uuid.random(), name = "second")
+        val first = Assistant(id = ConfigurationReference.random(), name = "first")
+        val second = Assistant(id = ConfigurationReference.random(), name = "second")
         val local = Settings(assistants = listOf(first, second))
         val effective = EffectiveSettingsResolver.resolve(
             local = local,

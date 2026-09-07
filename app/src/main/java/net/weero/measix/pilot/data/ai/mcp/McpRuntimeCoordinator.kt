@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import android.util.Log
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -45,7 +46,6 @@ import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.OwnedArtifact
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
-import kotlin.uuid.Uuid
 import kotlin.random.Random
 
 private const val TAG = "McpRuntimeCoordinator"
@@ -143,7 +143,7 @@ class McpRuntimeCoordinator(
     private val configurationInvocationCommitMutex = Mutex()
     /** Bounds connect/discovery and catalog refresh work; tool calls never pass through this gate. */
     private val lifecycleOperationSemaphore = Semaphore(MAX_PARALLEL_LIFECYCLE_OPERATIONS)
-    val runtimeCapabilities: StateFlow<Map<Uuid, McpRuntimeCapability>> = runtimeState.capabilities
+    val runtimeCapabilities: StateFlow<Map<ConfigurationReference, McpRuntimeCapability>> = runtimeState.capabilities
     private val runtimePolicy = McpServerRuntimePolicy(retryJitter)
 
     private fun logMcp(serverName: String, message: String) {
@@ -221,7 +221,7 @@ class McpRuntimeCoordinator(
 
     private fun captureTurnCapabilities(
         assistant: Assistant,
-        timedOutServerIds: Set<Uuid>,
+        timedOutServerIds: Set<ConfigurationReference>,
     ): TurnMcpCapabilitySnapshot {
         val settings = settingsStore.effectiveSettings.value.settings
         val selected = settings.mcpServers
@@ -306,7 +306,7 @@ class McpRuntimeCoordinator(
     }
 
     suspend fun callTool(
-        serverId: Uuid,
+        serverId: ConfigurationReference,
         toolName: String,
         expectedDefinitionDigest: String,
         expectedNeedsApproval: Boolean,
@@ -426,7 +426,7 @@ class McpRuntimeCoordinator(
         }
     }
 
-    private fun runtime(serverId: Uuid): McpServerRuntime =
+    private fun runtime(serverId: ConfigurationReference): McpServerRuntime =
         runtimeState.getOrCreate(serverId) {
             McpServerRuntime(
                 serverId = serverId,
@@ -451,7 +451,7 @@ class McpRuntimeCoordinator(
         fingerprint = config.connectionFingerprint(),
     )
 
-    suspend fun restartServer(serverId: Uuid): McpRefreshReceipt {
+    suspend fun restartServer(serverId: ConfigurationReference): McpRefreshReceipt {
         val target = runtime(serverId)
         target.reconcile(refreshTools = true, forceReconnect = true)
         return awaitUserOperationReceipt(listOf(serverId))
@@ -462,7 +462,7 @@ class McpRuntimeCoordinator(
      * owned by AppScope, so ending the foreground receipt never cancels connection or discovery.
      */
     private suspend fun awaitUserOperationReceipt(
-        serverIds: List<Uuid>,
+        serverIds: List<ConfigurationReference>,
     ): McpRefreshReceipt = coroutineScope {
         val distinctIds = serverIds.distinct()
         val waiters = distinctIds.map { serverId ->
@@ -518,7 +518,7 @@ class McpRuntimeCoordinator(
 
 /** Settings 观察链只比较连接定义，工具策略变化不会触发所有 server 的网络同步。 */
 private data class McpDesiredConnection(
-    val serverId: Uuid,
+    val serverId: ConfigurationReference,
     val enabled: Boolean,
     val fingerprint: McpConnectionFingerprint,
 )

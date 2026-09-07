@@ -211,10 +211,10 @@ private fun ModeInjectionTab(
                     }
                 }
             } else {
-                items(modeInjections, key = { it.id }) { injection ->
+                items(modeInjections, key = { it.id.toString() }) { injection ->
                     ReorderableItem(
                         state = reorderableState,
-                        key = injection.id
+                        key = injection.id.toString()
                     ) { isDragging ->
                         ModeInjectionCard(
                             injection = injection,

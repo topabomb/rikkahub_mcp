@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.service.subassistant
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
@@ -35,7 +38,7 @@ import kotlin.uuid.Uuid
 class SubAssistantLineageTest {
 
     private val json = JsonInstant
-    private val targetId = Uuid.random()
+    private val targetId = ConfigurationReference.random()
 
     // ── findPreviousCallMetadata ──
 
@@ -106,7 +109,7 @@ class SubAssistantLineageTest {
 
     @Test
     fun `skips different target`() {
-        val otherTarget = Uuid.random()
+        val otherTarget = ConfigurationReference.random()
         val meta = SubAssistantCallMetadata(
             runId = "run-1",
             targetAssistantId = otherTarget.toString(),
@@ -258,7 +261,7 @@ class SubAssistantLineageTest {
             parentConversationId = Uuid.random(),
         )
         val wrongTarget = wrongMaster.copy(
-            assistantId = Uuid.random(),
+            assistantId = ConfigurationReference.random(),
             parentConversationId = masterConvId,
         )
 
@@ -589,7 +592,7 @@ class SubAssistantLineageTest {
 
     @Test
     fun `child with no remaining valid references is deleted`() {
-        val master = Conversation(id = retentionMasterId, assistantId = Uuid.random(), messageNodes = emptyList())
+        val master = Conversation(id = retentionMasterId, assistantId = ConfigurationReference.random(), messageNodes = emptyList())
 
         val plan = planSubAssistantRetention(master.id, master.messageNodes, mapOf(retentionChild.id to retentionChild.toSnapshot()), json)
 
@@ -599,7 +602,7 @@ class SubAssistantLineageTest {
 
     private fun retentionMaster(vararg calls: UIMessagePart.Tool) = Conversation(
         id = retentionMasterId,
-        assistantId = Uuid.random(),
+        assistantId = ConfigurationReference.random(),
         messageNodes = listOf(
             UIMessage(role = MessageRole.ASSISTANT, parts = calls.toList()).toMessageNode()
         ),
@@ -633,7 +636,7 @@ class SubAssistantLineageTest {
 
     private fun masterOfTools(tools: List<UIMessagePart.Tool>) = Conversation(
         id = sourceMasterId,
-        assistantId = Uuid.random(),
+        assistantId = ConfigurationReference.random(),
         messageNodes = listOf(
             UIMessage(role = MessageRole.ASSISTANT, parts = tools).toMessageNode()
         ),

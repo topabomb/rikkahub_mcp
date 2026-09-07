@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.ui.pages.subassistant
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
@@ -23,8 +26,8 @@ import kotlin.uuid.Uuid
 class SubAssistantDetailResolverTest {
     private val json = Json { encodeDefaults = true }
     private val masterId = Uuid.random()
-    private val callerId = Uuid.random()
-    private val targetId = Uuid.random()
+    private val callerId = ConfigurationReference.random()
+    private val targetId = ConfigurationReference.random()
     private val childId = Uuid.random()
     private val task = UIMessage.user("Review this")
 
@@ -185,7 +188,7 @@ class SubAssistantDetailResolverTest {
                 masterId,
                 link,
                 childWithNodes(task).let { child ->
-                    child.copy(header = child.header.copy(assistantId = Uuid.random()))
+                    child.copy(header = child.header.copy(assistantId = ConfigurationReference.random()))
                 },
             )
         )

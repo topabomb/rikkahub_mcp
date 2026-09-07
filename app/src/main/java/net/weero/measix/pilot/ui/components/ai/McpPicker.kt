@@ -219,7 +219,7 @@ fun McpPicker(
         contentPadding = contentPadding,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        items(servers.fastFilter { it.enabled }, key = { it.serverId }) { server ->
+        items(servers.fastFilter { it.enabled }, key = { it.serverId.toString() }) { server ->
             val status = server.status
             Card {
                 Row(

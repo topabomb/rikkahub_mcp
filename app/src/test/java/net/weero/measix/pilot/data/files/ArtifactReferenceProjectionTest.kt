@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.files
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.test.runTest
@@ -50,7 +52,7 @@ internal class ArtifactReferenceProjectionTest : ArtifactStoreLifecycleTestBase(
         database.conversationDao().insert(
             ConversationEntity(
                 id = allowed.toString(),
-                assistantId = Uuid.random().toString(),
+                assistantId = ConfigurationReference.random().toString(),
                 title = "tool-output",
                 createAt = 1,
                 updateAt = 1,
@@ -123,7 +125,7 @@ internal class ArtifactReferenceProjectionTest : ArtifactStoreLifecycleTestBase(
             database.conversationDao().insert(
                 ConversationEntity(
                     id = conversationId.toString(),
-                    assistantId = Uuid.random().toString(),
+                    assistantId = ConfigurationReference.random().toString(),
                     title = "tool-output-$index",
                     createAt = 1,
                     updateAt = 1,
@@ -177,7 +179,7 @@ internal class ArtifactReferenceProjectionTest : ArtifactStoreLifecycleTestBase(
         database.conversationDao().insert(
             ConversationEntity(
                 id = conversationId.toString(),
-                assistantId = Uuid.random().toString(),
+                assistantId = ConfigurationReference.random().toString(),
                 title = "tool-output-page",
                 createAt = 1,
                 updateAt = 1,
@@ -272,7 +274,7 @@ internal class ArtifactReferenceProjectionTest : ArtifactStoreLifecycleTestBase(
         database.conversationDao().insert(
             ConversationEntity(
                 id = conversationId,
-                assistantId = Uuid.random().toString(),
+                assistantId = ConfigurationReference.random().toString(),
                 title = "corrupt",
                 createAt = 1,
                 updateAt = 1,

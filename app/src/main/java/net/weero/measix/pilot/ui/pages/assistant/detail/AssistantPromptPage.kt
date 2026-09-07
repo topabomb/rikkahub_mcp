@@ -1,7 +1,8 @@
 package net.weero.measix.pilot.ui.pages.assistant.detail
+
 import net.weero.measix.pilot.service.turn.freezeTurnPromptSnapshot
 import net.weero.measix.pilot.service.turn.resolveTurnAssistantSnapshot
-
+import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.ArrowUp01
@@ -109,7 +110,6 @@ import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import org.koin.core.parameter.parametersOf
 import sh.calvin.reorderable.ReorderableColumn
-import kotlin.uuid.Uuid
 
 @Composable
 fun AssistantPromptPage(id: String) {
@@ -606,7 +606,7 @@ private fun AssistantPromptContent(
                         onUpdate(
                             assistant.copy(
                                 regexes = assistant.regexes + AssistantRegex(
-                                    id = Uuid.random()
+                                    id = ConfigurationReference.random()
                                 )
                             )
                         )

@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.tools.local
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import io.mockk.every
 import io.mockk.mockk
 import me.rerere.ai.provider.Model
@@ -14,10 +16,9 @@ import net.weero.measix.pilot.data.model.Assistant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class ImageGenerationRevalidationTest {
-    private val ownerId = Uuid.random()
+    private val ownerId = ConfigurationReference.random()
     private val model = Model(modelId = "gpt-image-1", displayName = "GPT Image", type = ModelType.IMAGE)
     private val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
 
@@ -60,7 +61,7 @@ class ImageGenerationRevalidationTest {
     @Test
     fun `changed default model is a stable failure`() {
         val latest = available().copy(
-            model = model.copy(id = Uuid.random()),
+            model = model.copy(id = ConfigurationReference.random()),
         )
         val resolver = mockk<ImageGenerationSelectionResolver>()
         every { resolver.resolve(any()) } returns latest

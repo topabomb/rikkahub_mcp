@@ -1,8 +1,8 @@
 package net.weero.measix.pilot.service
+
 import net.weero.measix.pilot.service.turn.TurnFinalizer
 import net.weero.measix.pilot.service.subassistant.SubAssistantLifecycle
 import net.weero.measix.pilot.service.turn.TurnContextFactory
-
 import android.app.Application
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
@@ -690,7 +690,7 @@ class ConversationTurnService(
         // 用户可见地开始或继续本会话生成后，请求平台保活；何时停止由 service 依据
         // conversationActivities 投影自决，这里只做单向请求，不读取任何运行结果。
         GenerationForegroundLifetime.ensureStarted(context)
-        var inFlightAssistantId: Uuid? = null
+        var inFlightAssistantMessageId: Uuid? = null
         var senderName: String? = null
         var generationSoundEnabled = false
         var turnCommitter: TurnCommitter? = null
@@ -720,7 +720,7 @@ class ConversationTurnService(
             } else {
                 snapshot.currentMessages()
             }
-            inFlightAssistantId = null
+            inFlightAssistantMessageId = null
             var startDisclosureCandidate: String? = null
             val worker = requireNotNull(kotlinx.coroutines.currentCoroutineContext()[Job])
             // START 先做一次性 prepareLaunch（唯一允许 IO、可失败，此时尚无 Turn）。
@@ -905,7 +905,7 @@ class ConversationTurnService(
                 }
             }
             val activeTurnCommitter = started.turnCommitter
-            inFlightAssistantId = started.assistantMessageId
+            inFlightAssistantMessageId = started.assistantMessageId
             val modelContextProjection = when (entry) {
                 TurnEntry.START -> {
                     snapshot = liveSnapshot(conversationId)
@@ -947,7 +947,7 @@ class ConversationTurnService(
                     // 提交协议唯一实现——流式 delta 只动投影（永不落库），随后做 turn-owned 呈现。
                     onStreamDelta = { lastMessage ->
                         activeTurnCommitter.publishStream(lastMessage)
-                        inFlightAssistantId = lastMessage.id
+                        inFlightAssistantMessageId = lastMessage.id
 
                         // 通知等边缘副作用由 ChatNotificationManager 消费；
                         // tryEmit 不挂起，事件丢失只影响单次通知更新，不能反压生成链
@@ -990,7 +990,7 @@ class ConversationTurnService(
             applyTurnSideEffects(
                 conversationId = conversationId,
                 result = turnResult,
-                inFlightAssistantId = inFlightAssistantId,
+                inFlightAssistantMessageId = inFlightAssistantMessageId,
                 senderName = senderName.orEmpty(),
             )
             if (!shouldLaunchCompletionSideEffects(turnResult)) {
@@ -1026,7 +1026,7 @@ class ConversationTurnService(
             applyTurnSideEffects(
                 conversationId = conversationId,
                 result = outcome,
-                inFlightAssistantId = inFlightAssistantId,
+                inFlightAssistantMessageId = inFlightAssistantMessageId,
                 senderName = senderName.orEmpty(),
             )
             throw e
@@ -1050,7 +1050,7 @@ class ConversationTurnService(
             applyTurnSideEffects(
                 conversationId = conversationId,
                 result = outcome,
-                inFlightAssistantId = inFlightAssistantId,
+                inFlightAssistantMessageId = inFlightAssistantMessageId,
                 senderName = senderName.orEmpty(),
             )
         }
@@ -1070,23 +1070,23 @@ class ConversationTurnService(
     private suspend fun applyTurnSideEffects(
         conversationId: Uuid,
         result: TurnRunResult,
-        inFlightAssistantId: Uuid? = null,
+        inFlightAssistantMessageId: Uuid? = null,
         senderName: String,
     ) {
         withContext(NonCancellable) {
             val finalMessage = liveSnapshot(conversationId).currentMessages()
-                .firstOrNull { it.id == inFlightAssistantId }
+                .firstOrNull { it.id == inFlightAssistantMessageId }
             val terminalStatus = when (result) {
                 is TurnOutcome.Failed -> MessageTerminalStatus.FAILED
                 is TurnOutcome.Incomplete -> MessageTerminalStatus.INCOMPLETE
                 else -> null
             }
-            if (terminalStatus != null && inFlightAssistantId != null) {
+            if (terminalStatus != null && inFlightAssistantMessageId != null) {
                 val outcome = result as TurnOutcome
                 terminalChatError(
                     context = context,
                     conversationId = conversationId,
-                    messageId = inFlightAssistantId,
+                    messageId = inFlightAssistantMessageId,
                     status = finalMessage?.terminalStatus ?: terminalStatus,
                     reason = finalMessage?.terminalReason ?: outcome.terminalReason,
                     detail = finalMessage?.terminalDetail ?: outcome.terminalDetail,

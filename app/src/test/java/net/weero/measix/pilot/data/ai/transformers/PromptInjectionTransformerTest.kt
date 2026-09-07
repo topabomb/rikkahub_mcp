@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.transformers
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -19,7 +21,7 @@ class PromptInjectionTransformerTest {
         depth: Int = 1,
         role: MessageRole = MessageRole.USER,
     ) = ResolvedPromptInjection(
-        id = Uuid.random(),
+        id = ConfigurationReference.random(),
         priority = priority,
         position = position,
         content = content,

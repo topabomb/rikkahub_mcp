@@ -2,22 +2,22 @@ package me.rerere.asr
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
 
 @Serializable
 sealed class ASRProviderSetting {
-    abstract val id: Uuid
+    abstract val id: ConfigurationReference
     abstract val name: String
 
     abstract fun copyProvider(
-        id: Uuid = this.id,
+        id: ConfigurationReference = this.id,
         name: String = this.name,
     ): ASRProviderSetting
 
     @Serializable
     @SerialName("openai_realtime")
     data class OpenAIRealtime(
-        override val id: Uuid = Uuid.random(),
+        override val id: ConfigurationReference = ConfigurationReference.random(),
         override val name: String = "OpenAI Realtime ASR",
         val apiKey: String = "",
         val websocketUrl: String = "wss://api.openai.com/v1/realtime?intent=transcription",
@@ -30,7 +30,7 @@ sealed class ASRProviderSetting {
         val silenceDurationMs: Int = 500,
     ) : ASRProviderSetting() {
         override fun copyProvider(
-            id: Uuid,
+            id: ConfigurationReference,
             name: String,
         ): ASRProviderSetting {
             return this.copy(
@@ -43,7 +43,7 @@ sealed class ASRProviderSetting {
     @Serializable
     @SerialName("dashscope")
     data class DashScope(
-        override val id: Uuid = Uuid.random(),
+        override val id: ConfigurationReference = ConfigurationReference.random(),
         override val name: String = "DashScope ASR",
         val apiKey: String = "",
         val websocketUrl: String = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
@@ -54,7 +54,7 @@ sealed class ASRProviderSetting {
         val silenceDurationMs: Int = 400,
     ) : ASRProviderSetting() {
         override fun copyProvider(
-            id: Uuid,
+            id: ConfigurationReference,
             name: String,
         ): ASRProviderSetting {
             return this.copy(

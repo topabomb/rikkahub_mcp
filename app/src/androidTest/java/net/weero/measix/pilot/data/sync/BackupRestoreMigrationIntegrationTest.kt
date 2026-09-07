@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.sync
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import androidx.room.testing.MigrationTestHelper
@@ -63,7 +65,7 @@ class BackupRestoreMigrationIntegrationTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val sourceName = "restore-source-v9"
     private val conversationId = Uuid.parse("00000000-0000-0000-0000-000000000301")
-    private val assistantId = Uuid.parse("00000000-0000-0000-0000-000000000302")
+    private val assistantId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000302")
     private val anchorNodeId = Uuid.parse("00000000-0000-0000-0000-000000000303")
     private val ownerNodeId = Uuid.parse("00000000-0000-0000-0000-000000000304")
     private val anchorMessageId = Uuid.parse("00000000-0000-0000-0000-000000000305")
@@ -302,10 +304,10 @@ class BackupRestoreMigrationIntegrationTest {
 
     private fun createDurableV4Archive(database: File, target: File) {
         val settings = JsonInstant.encodeToString(Settings(
-            chatModelId = Uuid.parse("00000000-0000-0000-0000-000000000311"),
-            fastModelId = Uuid.parse("00000000-0000-0000-0000-000000000312"),
-            imageGenerationModelId = Uuid.parse("00000000-0000-0000-0000-000000000313"),
-            compressModelId = Uuid.parse("00000000-0000-0000-0000-000000000314"),
+            chatModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000311"),
+            fastModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000312"),
+            imageGenerationModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000313"),
+            compressModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000314"),
         )).encodeToByteArray()
         val catalogs = "[]".encodeToByteArray()
         val dbBytes = database.readBytes()

@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.activity
+package net.weero.measix.pilot.ui.activity
 
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -60,7 +60,7 @@ import net.weero.measix.pilot.ui.theme.MeasixTheme
 import net.weero.measix.pilot.RouteActivity
 import net.weero.measix.pilot.utils.CrashHandler
 import org.koin.android.ext.android.inject
-import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
 
 class SafeModeActivity : ComponentActivity() {
     private val settingsStore by inject<SettingsStore>()
@@ -196,12 +196,12 @@ class SafeModeActivity : ComponentActivity() {
 @Composable
 private fun AssistantPickerSheet(
     settings: Settings,
-    onAssistantSelected: (Uuid) -> Unit,
+    onAssistantSelected: (ConfigurationReference) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
     val scope = rememberCoroutineScope()
-    var selectedTagIds by remember { mutableStateOf(emptySet<Uuid>()) }
+    var selectedTagIds by remember { mutableStateOf(emptySet<ConfigurationReference>()) }
     val filteredAssistants = remember(settings.assistants, selectedTagIds) {
         if (selectedTagIds.isEmpty()) settings.assistants
         else settings.assistants.filter { it.tags.any { id -> id in selectedTagIds } }
@@ -229,7 +229,7 @@ private fun AssistantPickerSheet(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(bottom = 8.dp)
                 ) {
-                    items(settings.assistantTags, key = { it.id }) { tag ->
+                    items(settings.assistantTags, key = { it.id.toString() }) { tag ->
                         FilterChip(
                             onClick = {
                                 selectedTagIds = if (tag.id in selectedTagIds) {
@@ -250,7 +250,7 @@ private fun AssistantPickerSheet(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(filteredAssistants, key = { it.id }) { assistant ->
+                items(filteredAssistants, key = { it.id.toString() }) { assistant ->
                     val checked = assistant.id == settings.assistantId
                     Card(
                         onClick = {

@@ -1,12 +1,11 @@
 package net.weero.measix.pilot.data.datastore
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import android.util.Log
 import androidx.datastore.core.DataMigration
-import androidx.datastore.core.IOException
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.Preferences
@@ -17,7 +16,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
@@ -53,12 +51,10 @@ import net.weero.measix.pilot.data.sync.s3.S3Config
 import net.weero.measix.pilot.ui.theme.CustomTheme
 import net.weero.measix.pilot.ui.theme.PresetThemes
 import net.weero.measix.pilot.utils.JsonInstant
-import net.weero.measix.pilot.utils.decodeListLenient
 import net.weero.measix.pilot.utils.toMutableStateFlow
 import me.rerere.search.SearchCommonOptions
 import me.rerere.search.SearchServiceOptions
 import me.rerere.tts.provider.TTSProviderSetting
-import kotlin.uuid.Uuid
 
 private const val TAG = "SettingsStore"
 
@@ -69,32 +65,11 @@ private val Context.settingsStore by preferencesDataStore(
             OcrSettingsMigration(context),
             SearchSelectionMigration(),
             McpLegacyCatalogSettingsMigration(),
+            UserSettingsMigration(),
         )
     },
 )
 
-private inline fun <reified T> Preferences.json(key: Preferences.Key<String>, default: T): T =
-    this[key]?.let(JsonInstant::decodeFromString) ?: default
-
-private inline fun <reified T> Preferences.lenientList(key: Preferences.Key<String>): List<T> =
-    this[key]?.let(JsonInstant::decodeListLenient) ?: emptyList()
-
-private fun Preferences.uuid(key: Preferences.Key<String>): Uuid? =
-    this[key]?.let { runCatching { Uuid.parse(it) }.getOrNull() }
-
-private inline fun <reified T> androidx.datastore.preferences.core.MutablePreferences.writeJson(
-    key: Preferences.Key<String>,
-    value: T,
-) {
-    this[key] = JsonInstant.encodeToString(value)
-}
-
-private fun androidx.datastore.preferences.core.MutablePreferences.writeUuid(
-    key: Preferences.Key<String>,
-    value: Uuid?,
-) {
-    value?.let { this[key] = it.toString() } ?: remove(key)
-}
 
 private data class SettingsDefaultPath(
     val path: String,
@@ -115,8 +90,6 @@ private val SETTINGS_DEFAULT_PATHS = listOf(
     SettingsDefaultPath("defaults/selectedASRProviderId", SettingsStore.SELECTED_ASR_PROVIDER) { it.selectedASRProviderId != null },
 )
 
-private fun Preferences.explicitDefaultPaths(): Set<String> =
-    SETTINGS_DEFAULT_PATHS.filterTo(linkedSetOf()) { contains(it.key) }.mapTo(linkedSetOf()) { it.path }
 
 private data class LocalSettingsSnapshot(
     val settings: Settings,
@@ -172,12 +145,13 @@ class SettingsStore private constructor(
             runtime: ManagedConfigurationRuntime,
         ): SettingsStore = SettingsStore(appContext, scope, runtime)
 
+        internal val USER_SETTINGS = stringPreferencesKey("user_settings")
+
         // UI设置
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
         val THEME_ID = stringPreferencesKey("theme_id")
         val CUSTOM_THEMES = stringPreferencesKey("custom_themes")
         val DISPLAY_SETTING = stringPreferencesKey("display_setting")
-        val DEVELOPER_MODE = booleanPreferencesKey("developer_mode")
 
         // 模型选择
         val FAVORITE_MODELS = stringPreferencesKey("favorite_models")
@@ -252,67 +226,26 @@ class SettingsStore private constructor(
     private val updateMutex = Mutex()
 
     private val localSettingsRaw = dataStore.data
-        .catch { exception ->
-            if (exception is IOException) {
-                emit(emptyPreferences())
-            } else {
-                throw exception
-            }
-        }.map { preferences ->
+        .map { preferences ->
+            val encoded = requireNotNull(preferences[USER_SETTINGS]) { "user_settings_migration_incomplete" }
+            val document = JsonInstant.decodeFromString<UserSettingsDocument>(encoded)
+            val selected = document.preferences.forScope(
+                net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal,
+            )
             LocalSettingsSnapshot(
-                settings = Settings(
-                favoriteModels = preferences.json(FAVORITE_MODELS, emptyList()),
-                chatModelId = preferences[SELECT_MODEL]?.let { Uuid.parse(it) }
-                    ?: DEFAULT_AUTO_MODEL_ID,
-                fastModelId = preferences[FAST_MODEL]?.let { Uuid.parse(it) }
-                    ?: DEFAULT_AUTO_MODEL_ID,
-                titleModelId = preferences[TITLE_MODEL]?.let { Uuid.parse(it) },
-                enableSuggestion = preferences[ENABLE_SUGGESTION] != false,
-                suggestionModelId = preferences[SUGGESTION_MODEL]?.let { Uuid.parse(it) },
-                imageGenerationModelId = preferences[IMAGE_GENERATION_MODEL]?.let { Uuid.parse(it) }
-                    ?: DEFAULT_AUTO_MODEL_ID,
-                titlePrompt = preferences[TITLE_PROMPT] ?: DEFAULT_TITLE_PROMPT,
-                suggestionPrompt = preferences[SUGGESTION_PROMPT] ?: DEFAULT_SUGGESTION_PROMPT,
-                attachmentInspectionModelId = preferences[ATTACHMENT_INSPECTION_MODEL]?.let { Uuid.parse(it) },
-                compressModelId = preferences[COMPRESS_MODEL]?.let { Uuid.parse(it) } ?: DEFAULT_AUTO_MODEL_ID,
-                compressPrompt = preferences[COMPRESS_PROMPT] ?: DEFAULT_COMPRESS_PROMPT,
-                assistantId = preferences[SELECT_ASSISTANT]?.let { Uuid.parse(it) }
-                    ?: DEFAULT_ASSISTANT_ID,
-                assistantTags = preferences.json(ASSISTANT_TAGS, emptyList()),
-                providers = preferences.json(PROVIDERS, emptyList()),
-                assistants = preferences.json(ASSISTANTS, emptyList()),
-                dynamicColor = preferences[DYNAMIC_COLOR] != false,
-                themeId = preferences[THEME_ID] ?: PresetThemes[0].id,
-                customThemes = preferences.json(CUSTOM_THEMES, emptyList()),
-                developerMode = preferences[DEVELOPER_MODE] == true,
-                displaySetting = preferences.json(DISPLAY_SETTING, DisplaySetting()),
-                searchServices = preferences.lenientList(SEARCH_SERVICES),
-                searchCommonOptions = preferences.json(SEARCH_COMMON, SearchCommonOptions()),
-                selectedSearchServiceId = preferences.uuid(SELECTED_SEARCH_SERVICE_ID),
-                mcpServers = preferences.json(MCP_SERVERS, emptyList()),
-                webDavConfig = preferences.json(WEBDAV_CONFIG, WebDavConfig()),
-                s3Config = preferences.json(S3_CONFIG, S3Config()),
-                ttsProviders = preferences.lenientList(TTS_PROVIDERS),
-                selectedTTSProviderId = preferences[SELECTED_TTS_PROVIDER]?.let { Uuid.parse(it) }
-                    ?: DEFAULT_SYSTEM_TTS_ID,
-                defaultTTSPlaybackSpeed = preferences[DEFAULT_TTS_PLAYBACK_SPEED]?.coerceIn(0.5f, 2.0f) ?: 1.0f,
-                asrProviders = preferences.lenientList(ASR_PROVIDERS),
-                selectedASRProviderId = preferences[SELECTED_ASR_PROVIDER]?.let { Uuid.parse(it) },
-                modeInjections = preferences.json(MODE_INJECTIONS, emptyList()),
-                quickMessages = preferences.json(QUICK_MESSAGES, emptyList()),
-                backupReminderConfig = preferences.json(BACKUP_REMINDER_CONFIG, BackupReminderConfig()),
-                launchCount = preferences[LAUNCH_COUNT] ?: 0,
-                ignoredUpdateVersion = preferences[IGNORED_UPDATE_VERSION] ?: "",
-                pendingAssistantDeletions = preferences[PENDING_ASSISTANT_DELETIONS]?.let { encoded ->
-                    runCatching {
-                        JsonInstant.decodeFromString<List<PendingAssistantDeletion>>(encoded)
-                    }.getOrElse { error ->
-                        Log.e(TAG, "Unable to decode pending assistant deletions", error)
-                        emptyList()
-                    }
-                } ?: emptyList(),
-                ),
-                explicitDefaultPaths = preferences.explicitDefaultPaths(),
+                settings = document.personalSettings(),
+                explicitDefaultPaths = buildSet {
+                    if (selected.chatModelId != null) add("defaults/chatModelId")
+                    if (selected.fastModelId != null) add("defaults/fastModelId")
+                    if (selected.titleModelId != null) add("defaults/titleModelId")
+                    if (selected.imageGenerationModelId != null) add("defaults/imageGenerationModelId")
+                    if (selected.attachmentInspectionModelId != null) add("defaults/attachmentInspectionModelId")
+                    if (selected.compressModelId != null) add("defaults/compressModelId")
+                    if (selected.assistantId != null) add("defaults/assistantId")
+                    if (selected.selectedSearchServiceId != null) add("defaults/selectedSearchServiceId")
+                    if (selected.selectedTTSProviderId != null) add("defaults/selectedTTSProviderId")
+                    if (selected.selectedASRProviderId != null) add("defaults/selectedASRProviderId")
+                },
             )
         }
 
@@ -477,44 +410,12 @@ class SettingsStore private constructor(
             proposed = proposed,
             persist = { normalizedSettings ->
                 dataStore.edit { preferences ->
-                    preferences[DYNAMIC_COLOR] = normalizedSettings.dynamicColor
-                    preferences[THEME_ID] = normalizedSettings.themeId
-                    preferences.writeJson(CUSTOM_THEMES, normalizedSettings.customThemes)
-                    preferences[DEVELOPER_MODE] = normalizedSettings.developerMode
-                    preferences.writeJson(DISPLAY_SETTING, normalizedSettings.displaySetting)
-                    preferences.writeJson(FAVORITE_MODELS, normalizedSettings.favoriteModels)
-                    preferences[SELECT_MODEL] = normalizedSettings.chatModelId.toString()
-                    preferences[FAST_MODEL] = normalizedSettings.fastModelId.toString()
-                    preferences.writeUuid(TITLE_MODEL, normalizedSettings.titleModelId)
-                    preferences[ENABLE_SUGGESTION] = normalizedSettings.enableSuggestion
-                    preferences.writeUuid(SUGGESTION_MODEL, normalizedSettings.suggestionModelId)
-                    preferences[IMAGE_GENERATION_MODEL] = normalizedSettings.imageGenerationModelId.toString()
-                    preferences[TITLE_PROMPT] = normalizedSettings.titlePrompt
-                    preferences[SUGGESTION_PROMPT] = normalizedSettings.suggestionPrompt
-                    preferences.writeUuid(ATTACHMENT_INSPECTION_MODEL, normalizedSettings.attachmentInspectionModelId)
-                    preferences[COMPRESS_MODEL] = normalizedSettings.compressModelId.toString()
-                    preferences[COMPRESS_PROMPT] = normalizedSettings.compressPrompt
-                    preferences.writeJson(PROVIDERS, normalizedSettings.providers)
-                    preferences.writeJson(ASSISTANTS, normalizedSettings.assistants)
-                    preferences[SELECT_ASSISTANT] = normalizedSettings.assistantId.toString()
-                    preferences.writeJson(ASSISTANT_TAGS, normalizedSettings.assistantTags)
-                    preferences.writeJson(SEARCH_SERVICES, normalizedSettings.searchServices)
-                    preferences.writeJson(SEARCH_COMMON, normalizedSettings.searchCommonOptions)
-                    preferences.writeUuid(SELECTED_SEARCH_SERVICE_ID, normalizedSettings.selectedSearchServiceId)
-                    preferences.writeJson(MCP_SERVERS, normalizedSettings.mcpServers)
-                    preferences.writeJson(WEBDAV_CONFIG, normalizedSettings.webDavConfig)
-                    preferences.writeJson(S3_CONFIG, normalizedSettings.s3Config)
-                    preferences.writeJson(TTS_PROVIDERS, normalizedSettings.ttsProviders)
-                    preferences.writeUuid(SELECTED_TTS_PROVIDER, normalizedSettings.selectedTTSProviderId)
-                    preferences[DEFAULT_TTS_PLAYBACK_SPEED] = normalizedSettings.defaultTTSPlaybackSpeed
-                    preferences.writeJson(ASR_PROVIDERS, normalizedSettings.asrProviders)
-                    preferences.writeUuid(SELECTED_ASR_PROVIDER, normalizedSettings.selectedASRProviderId)
-                    preferences.writeJson(MODE_INJECTIONS, normalizedSettings.modeInjections)
-                    preferences.writeJson(QUICK_MESSAGES, normalizedSettings.quickMessages)
-                    preferences.writeJson(BACKUP_REMINDER_CONFIG, normalizedSettings.backupReminderConfig)
-                    preferences[LAUNCH_COUNT] = normalizedSettings.launchCount
-                    preferences[IGNORED_UPDATE_VERSION] = normalizedSettings.ignoredUpdateVersion
-                    preferences.writeJson(PENDING_ASSISTANT_DELETIONS, normalizedSettings.pendingAssistantDeletions)
+                    val currentDocument = JsonInstant.decodeFromString<UserSettingsDocument>(
+                        requireNotNull(preferences[USER_SETTINGS]) { "user_settings_migration_incomplete" },
+                    )
+                    preferences[USER_SETTINGS] = JsonInstant.encodeToString(
+                        currentDocument.withPersonalSettings(normalizedSettings),
+                    )
                 }
             },
             // persist 正常返回后才发布，避免写盘失败时内存状态领先于持久化状态。
@@ -543,7 +444,7 @@ internal data class PendingMcpCatalogMigration(
  */
 @Serializable
 data class PendingAssistantDeletion(
-    val assistantId: Uuid,
+    val assistantId: ConfigurationReference,
     val avatarUri: String? = null,
     val backgroundUri: String? = null,
 )
@@ -555,35 +456,34 @@ data class Settings(
     val dynamicColor: Boolean = true,
     val themeId: String = PresetThemes[0].id,
     val customThemes: List<CustomTheme> = emptyList(),
-    val developerMode: Boolean = false,
     val displaySetting: DisplaySetting = DisplaySetting(),
-    val favoriteModels: List<Uuid> = emptyList(),
-    val chatModelId: Uuid = Uuid.random(),
-    val fastModelId: Uuid = Uuid.random(),
-    val titleModelId: Uuid? = null,
-    val imageGenerationModelId: Uuid = Uuid.random(),
+    val favoriteModels: List<ConfigurationReference> = emptyList(),
+    val chatModelId: ConfigurationReference = ConfigurationReference.random(),
+    val fastModelId: ConfigurationReference = ConfigurationReference.random(),
+    val titleModelId: ConfigurationReference? = null,
+    val imageGenerationModelId: ConfigurationReference = ConfigurationReference.random(),
     val titlePrompt: String = DEFAULT_TITLE_PROMPT,
     val enableSuggestion: Boolean = true,
-    val suggestionModelId: Uuid? = null,
+    val suggestionModelId: ConfigurationReference? = null,
     val suggestionPrompt: String = DEFAULT_SUGGESTION_PROMPT,
-    val attachmentInspectionModelId: Uuid? = null,
-    val compressModelId: Uuid = Uuid.random(),
+    val attachmentInspectionModelId: ConfigurationReference? = null,
+    val compressModelId: ConfigurationReference = ConfigurationReference.random(),
     val compressPrompt: String = DEFAULT_COMPRESS_PROMPT,
-    val assistantId: Uuid = DEFAULT_ASSISTANT_ID,
+    val assistantId: ConfigurationReference = DEFAULT_ASSISTANT_ID,
     val providers: List<ProviderSetting> = DEFAULT_PROVIDERS,
     val assistants: List<Assistant> = DEFAULT_ASSISTANTS,
     val assistantTags: List<Tag> = emptyList(),
     val searchServices: List<SearchServiceOptions> = listOf(SearchServiceOptions.DEFAULT),
     val searchCommonOptions: SearchCommonOptions = SearchCommonOptions(),
-    val selectedSearchServiceId: Uuid? = null,
+    val selectedSearchServiceId: ConfigurationReference? = null,
     val mcpServers: List<McpServerConfig> = emptyList(),
     val webDavConfig: WebDavConfig = WebDavConfig(),
     val s3Config: S3Config = S3Config(),
     val ttsProviders: List<TTSProviderSetting> = DEFAULT_TTS_PROVIDERS,
-    val selectedTTSProviderId: Uuid = DEFAULT_SYSTEM_TTS_ID,
+    val selectedTTSProviderId: ConfigurationReference = DEFAULT_SYSTEM_TTS_ID,
     val defaultTTSPlaybackSpeed: Float = 1.0f,
     val asrProviders: List<ASRProviderSetting> = emptyList(),
-    val selectedASRProviderId: Uuid? = null,
+    val selectedASRProviderId: ConfigurationReference? = null,
     val modeInjections: List<PromptInjection.ModeInjection> = DEFAULT_MODE_INJECTIONS,
     val quickMessages: List<QuickMessage> = emptyList(),
     val backupReminderConfig: BackupReminderConfig = BackupReminderConfig(),
@@ -707,13 +607,13 @@ fun Settings.isNotConfigured() = providers.none { provider ->
     provider.enabled && provider.models.isNotEmpty()
 }
 
-fun Settings.findModelById(uuid: Uuid?, fallback: Uuid? = null): Model? {
+fun Settings.findModelById(uuid: ConfigurationReference?, fallback: ConfigurationReference? = null): Model? {
     if (uuid == null && fallback == null) return null
     return uuid?.let { this.providers.findModelById(it) }
         ?: fallback?.let { this.providers.findModelById(it) }
 }
 
-fun List<ProviderSetting>.findModelById(uuid: Uuid): Model? {
+fun List<ProviderSetting>.findModelById(uuid: ConfigurationReference): Model? {
     this.forEach { setting ->
         setting.models.forEach { model ->
             if (model.id == uuid) {
@@ -739,12 +639,12 @@ fun Settings.getCurrentAssistant(): Assistant {
     return this.assistants.find { it.id == assistantId } ?: this.assistants.first()
 }
 
-fun Settings.getAssistantById(id: Uuid): Assistant? {
+fun Settings.getAssistantById(id: ConfigurationReference): Assistant? {
     return this.assistants.find { it.id == id }
 }
 
 /** Resolves the assistant owned by a conversation, falling back only if it was deleted. */
-fun Settings.getConversationAssistant(assistantId: Uuid): Assistant =
+fun Settings.getConversationAssistant(assistantId: ConfigurationReference): Assistant =
     getAssistantById(assistantId) ?: getCurrentAssistant()
 
 fun Settings.getQuickMessagesOfAssistant(assistant: Assistant) =
@@ -782,7 +682,7 @@ private fun Model.findModelProviderFromList(providers: List<ProviderSetting>): P
     return null
 }
 
-internal val DEFAULT_ASSISTANT_ID = Uuid.parse("0950e2dc-9bd5-4801-afa3-aa887aa36b4e")
+internal val DEFAULT_ASSISTANT_ID = ConfigurationReference.parse("0950e2dc-9bd5-4801-afa3-aa887aa36b4e")
 internal val DEFAULT_ASSISTANTS = listOf(
     Assistant(
         id = DEFAULT_ASSISTANT_ID,
@@ -791,7 +691,7 @@ internal val DEFAULT_ASSISTANTS = listOf(
     ),
 )
 
-val DEFAULT_SYSTEM_TTS_ID = Uuid.parse("026a01a2-c3a0-4fd5-8075-80e03bdef200")
+val DEFAULT_SYSTEM_TTS_ID = ConfigurationReference.parse("026a01a2-c3a0-4fd5-8075-80e03bdef200")
 internal val DEFAULT_TTS_PROVIDERS = listOf(
     TTSProviderSetting.SystemTTS(
         id = DEFAULT_SYSTEM_TTS_ID,
@@ -803,7 +703,7 @@ internal val DEFAULT_ASSISTANTS_IDS = DEFAULT_ASSISTANTS.map { it.id }
 
 val DEFAULT_MODE_INJECTIONS = listOf(
     PromptInjection.ModeInjection(
-        id = Uuid.parse("b87eaf16-f5cd-4ac1-9e4f-b11ae3a61d74"),
+        id = ConfigurationReference.parse("b87eaf16-f5cd-4ac1-9e4f-b11ae3a61d74"),
         content = LEARNING_MODE_PROMPT,
         position = InjectionPosition.AFTER_SYSTEM_PROMPT,
         name = "Learning Mode"

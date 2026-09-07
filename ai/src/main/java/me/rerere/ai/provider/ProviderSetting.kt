@@ -4,7 +4,7 @@ import androidx.compose.runtime.Composable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
-import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
 
 @Serializable
 data class BalanceOption(
@@ -24,7 +24,7 @@ enum class ClaudePromptCacheTtl(val apiValue: String?) {
 
 @Serializable
 sealed class ProviderSetting {
-    abstract val id: Uuid
+    abstract val id: ConfigurationReference
     abstract val enabled: Boolean
     abstract val name: String
     abstract val models: List<Model>
@@ -39,7 +39,7 @@ sealed class ProviderSetting {
     abstract fun delModel(model: Model): ProviderSetting
     abstract fun moveMove(from: Int, to: Int): ProviderSetting
     abstract fun copyProvider(
-        id: Uuid = this.id,
+        id: ConfigurationReference = this.id,
         enabled: Boolean = this.enabled,
         name: String = this.name,
         models: List<Model> = this.models,
@@ -52,7 +52,7 @@ sealed class ProviderSetting {
     @Serializable
     @SerialName("openai")
     data class OpenAI(
-        override var id: Uuid = Uuid.random(),
+        override var id: ConfigurationReference = ConfigurationReference.random(),
         override var enabled: Boolean = true,
         override var name: String = "OpenAI",
         override var models: List<Model> = emptyList(),
@@ -89,7 +89,7 @@ sealed class ProviderSetting {
         }
 
         override fun copyProvider(
-            id: Uuid,
+            id: ConfigurationReference,
             enabled: Boolean,
             name: String,
             models: List<Model>,
@@ -114,7 +114,7 @@ sealed class ProviderSetting {
     @Serializable
     @SerialName("google")
     data class Google(
-        override var id: Uuid = Uuid.random(),
+        override var id: ConfigurationReference = ConfigurationReference.random(),
         override var enabled: Boolean = true,
         override var name: String = "Google",
         override var models: List<Model> = emptyList(),
@@ -154,7 +154,7 @@ sealed class ProviderSetting {
         }
 
         override fun copyProvider(
-            id: Uuid,
+            id: ConfigurationReference,
             enabled: Boolean,
             name: String,
             models: List<Model>,
@@ -179,7 +179,7 @@ sealed class ProviderSetting {
     @Serializable
     @SerialName("claude")
     data class Claude(
-        override var id: Uuid = Uuid.random(),
+        override var id: ConfigurationReference = ConfigurationReference.random(),
         override var enabled: Boolean = true,
         override var name: String = "Claude",
         override var models: List<Model> = emptyList(),
@@ -215,7 +215,7 @@ sealed class ProviderSetting {
         }
 
         override fun copyProvider(
-            id: Uuid,
+            id: ConfigurationReference,
             enabled: Boolean,
             name: String,
             models: List<Model>,

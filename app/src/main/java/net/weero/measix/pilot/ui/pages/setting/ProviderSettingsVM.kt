@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.setting
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -15,10 +16,9 @@ import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.service.ProviderSettingsApplicationService
 import net.weero.measix.pilot.service.ProviderToolProbeResult
 import net.weero.measix.pilot.utils.UiState
-import kotlin.uuid.Uuid
 
 class ProviderSettingsVM(
-    private val providerId: Uuid,
+    private val providerId: ConfigurationReference,
     private val service: ProviderSettingsApplicationService,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(ProviderSettingsUiState())
@@ -70,7 +70,7 @@ class ProviderSettingsVM(
         )
     }
 
-    fun selectConnectionModel(id: Uuid?) {
+    fun selectConnectionModel(id: ConfigurationReference?) {
         connectionJob?.cancel()
         connectionRun++
         mutableState.value = mutableState.value.copy(
@@ -128,7 +128,7 @@ class ProviderSettingsVM(
 
     fun addModel(model: Model) = launchMutation { service.addModel(providerId, model) }
 
-    fun removeModel(modelId: Uuid) = launchMutation { service.removeModel(providerId, modelId) }
+    fun removeModel(modelId: ConfigurationReference) = launchMutation { service.removeModel(providerId, modelId) }
 
     fun editModel(model: Model) = launchMutation { service.editModel(providerId, model) }
 
@@ -138,7 +138,7 @@ class ProviderSettingsVM(
         service.removeModelsByModelIds(providerId, modelIds)
     }
 
-    fun moveModel(fromModelId: Uuid, toModelId: Uuid) = launchMutation {
+    fun moveModel(fromModelId: ConfigurationReference, toModelId: ConfigurationReference) = launchMutation {
         service.moveModel(providerId, fromModelId, toModelId)
     }
 
@@ -199,7 +199,7 @@ data class ProviderSettingsUiState(
     val provider: ProviderSetting? = null,
     val modelCatalog: UiState<List<Model>> = UiState.Idle,
     val showConnectionTest: Boolean = false,
-    val selectedConnectionModelId: Uuid? = null,
+    val selectedConnectionModelId: ConfigurationReference? = null,
     val connectionTest: ProviderConnectionTestState = ProviderConnectionTestState(),
     val mutationFailed: Boolean = false,
 )

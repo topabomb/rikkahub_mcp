@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.ui
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,13 +27,11 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.files.SkillMetadata
 import net.weero.measix.pilot.data.model.Assistant
-import kotlin.uuid.Uuid
 import net.weero.measix.pilot.ui.components.ai.ExtensionEmptyState
 import net.weero.measix.pilot.ui.components.ai.ModeInjectionsContent
 import net.weero.measix.pilot.ui.components.ai.QuickMessagesContent
 import net.weero.measix.pilot.ui.components.ai.SkillsContent
 import org.koin.compose.koinInject
-
 
 @Composable
 fun ExtensionSelector(
@@ -40,8 +39,8 @@ fun ExtensionSelector(
     assistant: Assistant,
     settings: Settings,
     onUpdate: (Assistant) -> Unit,
-    conversationModeInjectionIds: Set<Uuid>? = null,
-    onUpdateConversationModeInjectionIds: ((Set<Uuid>) -> Unit)? = null,
+    conversationModeInjectionIds: Set<ConfigurationReference>? = null,
+    onUpdateConversationModeInjectionIds: ((Set<ConfigurationReference>) -> Unit)? = null,
     onNavigateToQuickMessages: () -> Unit = {},
     onNavigateToPrompts: () -> Unit = {},
     onNavigateToSkills: () -> Unit = {},

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.ai
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -86,14 +87,14 @@ import kotlin.uuid.Uuid
 
 @Composable
 internal fun FilesPicker(
-    conversationModeInjectionIds: Set<Uuid>,
+    conversationModeInjectionIds: Set<ConfigurationReference>,
     messageNodeCount: Int,
     workspaceCwd: String?,
     assistant: Assistant,
     state: ChatInputState,
     onCompressContext: (additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int) -> Job,
     onUpdateAssistant: (Assistant) -> Unit,
-    onUpdateConversationModeInjectionIds: (Set<Uuid>) -> Unit,
+    onUpdateConversationModeInjectionIds: (Set<ConfigurationReference>) -> Unit,
     onUpdateWorkspaceCwd: (String?) -> Unit,
     showInjectionSheet: Boolean,
     onShowInjectionSheetChange: (Boolean) -> Unit,
@@ -389,11 +390,11 @@ private fun WorkspacePickerListItem(
 
 @Composable
 private fun InjectionQuickConfigSheet(
-    conversationModeInjectionIds: Set<Uuid>,
+    conversationModeInjectionIds: Set<ConfigurationReference>,
     assistant: Assistant,
     settings: Settings,
     onUpdateAssistant: (Assistant) -> Unit,
-    onUpdateConversationModeInjectionIds: (Set<Uuid>) -> Unit,
+    onUpdateConversationModeInjectionIds: (Set<ConfigurationReference>) -> Unit,
     onDismiss: () -> Unit,
     onDismissAll: () -> Unit,
 ) {

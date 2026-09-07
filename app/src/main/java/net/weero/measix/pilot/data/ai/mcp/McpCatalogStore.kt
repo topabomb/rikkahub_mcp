@@ -24,7 +24,7 @@ import kotlinx.serialization.json.JsonObject
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.utils.JsonInstant
-import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
 
 private val Context.mcpCatalogDataStore by preferencesDataStore(name = "mcp_catalog")
 private const val TAG = "McpCatalogStore"
@@ -38,7 +38,7 @@ data class McpCatalogTool(
 
 @Serializable
 data class McpCatalogSnapshot(
-    val serverId: Uuid,
+    val serverId: ConfigurationReference,
     val revision: Long,
     val definitionDigest: String,
     val catalogDigest: String,
@@ -47,13 +47,13 @@ data class McpCatalogSnapshot(
 
 @Serializable
 data class McpCatalogCandidate(
-    val serverId: Uuid,
+    val serverId: ConfigurationReference,
     val definitionDigest: String,
     val tools: List<McpCatalogTool>,
 )
 
 data class McpAvailableTool(
-    val serverId: Uuid,
+    val serverId: ConfigurationReference,
     val serverName: String,
     val catalogRevision: Long,
     val definitionDigest: String,
@@ -82,7 +82,7 @@ enum class McpServerCapabilityState {
 }
 
 data class McpServerCapabilityOutcome(
-    val serverId: Uuid,
+    val serverId: ConfigurationReference,
     val serverName: String,
     val state: McpServerCapabilityState,
     val toolCount: Int,
@@ -111,11 +111,11 @@ class McpCatalogStore(
 ) {
     private val dataStore = context.mcpCatalogDataStore
     private val commitMutex = Mutex()
-    private val headTokens = mutableMapOf<Uuid, Long>()
+    private val headTokens = mutableMapOf<ConfigurationReference, Long>()
     private val legacyMigrationComplete = CompletableDeferred<Unit>()
 
-    private val _catalogs = MutableStateFlow<Map<Uuid, McpCatalogSnapshot>>(emptyMap())
-    val catalogs: StateFlow<Map<Uuid, McpCatalogSnapshot>> = _catalogs.asStateFlow()
+    private val _catalogs = MutableStateFlow<Map<ConfigurationReference, McpCatalogSnapshot>>(emptyMap())
+    val catalogs: StateFlow<Map<ConfigurationReference, McpCatalogSnapshot>> = _catalogs.asStateFlow()
 
     init {
         scope.launch {
@@ -218,7 +218,7 @@ class McpCatalogStore(
     }
 
     /** Removes the catalog only when the server definition has been explicitly removed. */
-    suspend fun remove(serverId: Uuid) = commitMutex.withLock {
+    suspend fun remove(serverId: ConfigurationReference) = commitMutex.withLock {
         val current = readCurrentCatalogs()
         if (serverId !in current) return@withLock
         val updated = current - serverId
@@ -271,11 +271,11 @@ class McpCatalogStore(
         val CATALOGS = stringPreferencesKey("catalogs")
     }
 
-    private suspend fun readCurrentCatalogs(): Map<Uuid, McpCatalogSnapshot> = dataStore.data
+    private suspend fun readCurrentCatalogs(): Map<ConfigurationReference, McpCatalogSnapshot> = dataStore.data
         .first()
         .let(::decodeCatalogs)
 
-    private suspend fun writeCatalogs(catalogs: Map<Uuid, McpCatalogSnapshot>) {
+    private suspend fun writeCatalogs(catalogs: Map<ConfigurationReference, McpCatalogSnapshot>) {
         dataStore.edit { preferences ->
             preferences[CATALOGS] = JsonInstant.encodeToString(
                 catalogs.values.sortedBy { it.serverId.toString() }
@@ -285,7 +285,7 @@ class McpCatalogStore(
 
     private fun decodeCatalogs(
         preferences: androidx.datastore.preferences.core.Preferences,
-    ): Map<Uuid, McpCatalogSnapshot> = preferences[CATALOGS]
+    ): Map<ConfigurationReference, McpCatalogSnapshot> = preferences[CATALOGS]
         ?.let { encoded ->
             runCatching { JsonInstant.decodeFromString<List<McpCatalogSnapshot>>(encoded) }
                 .getOrElse { emptyList() }

@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.pages.chat
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderSetting
@@ -42,7 +44,7 @@ class ConversationReadinessTest {
     @Test
     fun `configured models with an unresolved selection require model selection`() {
         val model = Model(modelId = "chat-model", displayName = "Chat Model")
-        val assistant = Assistant(chatModelId = Uuid.random())
+        val assistant = Assistant(chatModelId = ConfigurationReference.random())
         val readiness = Settings(
             providers = listOf(ProviderSetting.OpenAI(models = listOf(model))),
             assistants = listOf(assistant),

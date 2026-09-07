@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.imggen
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import android.net.Uri
 import android.util.Log
@@ -8,7 +9,6 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Base64
 import kotlin.coroutines.cancellation.CancellationException
-import kotlin.uuid.Uuid
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -36,14 +36,14 @@ class AssistantBackgroundService(
     private val appContext = context.applicationContext
 
     suspend fun replaceUserSelectedBackground(
-        assistantId: Uuid,
+        assistantId: ConfigurationReference,
         imageUrl: String,
     ): BackgroundUpdateResult = replaceBackground(assistantId) {
         createUserSelectedCopy(imageUrl)
     }
 
     suspend fun replaceGeneratedBackground(
-        assistantId: Uuid,
+        assistantId: ConfigurationReference,
         source: File,
         mimeType: String,
     ): BackgroundUpdateResult = replaceBackground(assistantId) {
@@ -57,7 +57,7 @@ class AssistantBackgroundService(
 
     /** 复制背景为设置域 artifact，并以同一 Settings 引用事务发布。 */
     private suspend fun replaceBackground(
-        assistantId: Uuid,
+        assistantId: ConfigurationReference,
         createCopy: suspend () -> OwnedArtifact?,
     ): BackgroundUpdateResult {
         val copy = try {

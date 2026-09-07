@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.datastore
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import androidx.core.net.toUri
 import java.io.File
@@ -28,7 +29,6 @@ import net.weero.measix.pilot.data.model.PromptInjection
 import net.weero.measix.pilot.data.model.QuickMessage
 import net.weero.measix.pilot.data.model.Tag
 import net.weero.measix.pilot.utils.JsonInstant
-import kotlin.uuid.Uuid
 
 private val MANAGED_ASSET_ID = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 private const val MAX_MANAGED_ENVELOPE_BYTES = 2 * 1024 * 1024
@@ -93,16 +93,16 @@ internal enum class ManagedConfigurationRecordKind(val settingsPath: String) {
 
 @Serializable
 internal data class ManagedConfigurationDefaults(
-    val chatModelId: Uuid? = null,
-    val fastModelId: Uuid? = null,
-    val titleModelId: Uuid? = null,
-    val imageGenerationModelId: Uuid? = null,
-    val attachmentInspectionModelId: Uuid? = null,
-    val compressModelId: Uuid? = null,
-    val assistantId: Uuid? = null,
-    val selectedSearchServiceId: Uuid? = null,
-    val selectedTTSProviderId: Uuid? = null,
-    val selectedASRProviderId: Uuid? = null,
+    val chatModelId: ConfigurationReference? = null,
+    val fastModelId: ConfigurationReference? = null,
+    val titleModelId: ConfigurationReference? = null,
+    val imageGenerationModelId: ConfigurationReference? = null,
+    val attachmentInspectionModelId: ConfigurationReference? = null,
+    val compressModelId: ConfigurationReference? = null,
+    val assistantId: ConfigurationReference? = null,
+    val selectedSearchServiceId: ConfigurationReference? = null,
+    val selectedTTSProviderId: ConfigurationReference? = null,
+    val selectedASRProviderId: ConfigurationReference? = null,
 )
 
 @Serializable
@@ -119,7 +119,7 @@ private fun ManagedConfigurationAsset.decode(): ByteArray = try {
 
 @Serializable
 internal data class ManagedAssistantAssetBinding(
-    val assistantId: Uuid,
+    val assistantId: ConfigurationReference,
     val avatarAssetId: String? = null,
     val backgroundAssetId: String? = null,
 )
@@ -480,11 +480,11 @@ internal object ManagedConfigurationVerifier {
 
     private inline fun <reified T> List<ManagedConfigurationRecord>.decode(
         kind: ManagedConfigurationRecordKind,
-        idOf: (T) -> Uuid,
+        idOf: (T) -> ConfigurationReference,
         validate: (T) -> Unit = {},
     ): List<T> = filter { it.kind == kind }.map { record ->
         val value = JsonInstant.decodeFromJsonElement<T>(record.value)
-        require(idOf(value) == Uuid.parse(record.id)) { "Managed ${kind.name} id mismatch" }
+        require(idOf(value) == ConfigurationReference.parse(record.id)) { "Managed ${kind.name} id mismatch" }
         validate(value)
         value
     }
@@ -533,11 +533,11 @@ internal object ManagedConfigurationVerifier {
         }
     }
 
-    private fun Uuid?.requireKnown(known: Collection<Uuid>, error: String) {
+    private fun ConfigurationReference?.requireKnown(known: Collection<ConfigurationReference>, error: String) {
         if (this != null) require(this in known) { error }
     }
 
-    private fun Iterable<Uuid>.requireKnown(known: Collection<Uuid>, error: String) {
+    private fun Iterable<ConfigurationReference>.requireKnown(known: Collection<ConfigurationReference>, error: String) {
         require(all(known::contains)) { error }
     }
 

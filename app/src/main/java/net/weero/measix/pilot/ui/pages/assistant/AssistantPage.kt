@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.assistant
 
+import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Copy01
 import me.rerere.hugeicons.stroke.Add01
@@ -89,7 +90,6 @@ import net.weero.measix.pilot.ui.theme.CustomColors
 import org.koin.androidx.compose.koinViewModel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
-import kotlin.uuid.Uuid
 import androidx.compose.foundation.lazy.items as lazyItems
 
 internal fun reorderVisibleAssistants(
@@ -127,7 +127,7 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
     // 搜索关键词状态
     var searchQuery by remember { mutableStateOf("") }
     // 标签过滤状态
-    var selectedTagIds by remember { mutableStateOf(emptySet<Uuid>()) }
+    var selectedTagIds by remember { mutableStateOf(emptySet<ConfigurationReference>()) }
     // 操作菜单状态
     var actionSheetAssistant by remember { mutableStateOf<Assistant?>(null) }
 
@@ -269,10 +269,10 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
                         }
                     }
                 }
-                lazyItems(filteredAssistants, key = { assistant -> assistant.id }) { assistant ->
+                lazyItems(filteredAssistants, key = { assistant -> assistant.id.toString() }) { assistant ->
                     ReorderableItem(
                         state = reorderableState,
-                        key = assistant.id,
+                        key = assistant.id.toString(),
                     ) { isDragging ->
                         val memories by vm.getMemories(assistant).collectAsStateWithLifecycle(
                             initialValue = emptyList(),
@@ -337,8 +337,8 @@ private fun AssistantTagFiltersRow(
     settings: Settings,
     effectiveSettings: EffectiveSettingsSnapshot,
     vm: AssistantVM,
-    selectedTagIds: Set<Uuid>,
-    onUpdateSelectedTagIds: (Set<Uuid>) -> Unit
+    selectedTagIds: Set<ConfigurationReference>,
+    onUpdateSelectedTagIds: (Set<ConfigurationReference>) -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
     val tagsListState = rememberLazyListState()
@@ -356,10 +356,10 @@ private fun AssistantTagFiltersRow(
         contentPadding = PaddingValues(horizontal = 16.dp),
         state = tagsListState,
     ) {
-        lazyItems(items = settings.assistantTags, key = { tag -> tag.id }) { tag ->
+        lazyItems(items = settings.assistantTags, key = { tag -> tag.id.toString() }) { tag ->
                 ReorderableItem(
                     state = tagsReorderableState,
-                    key = tag.id,
+                    key = tag.id.toString(),
                 ) { isDragging ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,

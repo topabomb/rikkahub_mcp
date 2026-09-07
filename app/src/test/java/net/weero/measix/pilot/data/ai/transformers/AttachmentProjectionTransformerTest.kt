@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.transformers
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import net.weero.measix.pilot.service.turn.resolveTurnAssistantSnapshot
 
 import net.weero.measix.pilot.test.testPromptInputs
@@ -46,14 +48,14 @@ class AttachmentProjectionTransformerTest {
     private val artifactStore = mockk<ArtifactStore>()
     private val transformer = AttachmentProjectionTransformer(artifactStore)
     private val visionModel = Model(
-        id = Uuid.random(),
+        id = ConfigurationReference.random(),
         modelId = "vision",
         displayName = "Vision",
         type = ModelType.CHAT,
         inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
     )
     private val textModel = Model(
-        id = Uuid.random(),
+        id = ConfigurationReference.random(),
         modelId = "text",
         displayName = "Text",
         type = ModelType.CHAT,

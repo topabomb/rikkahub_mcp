@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.tools
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import io.mockk.every
 import io.mockk.mockk
 import me.rerere.ai.core.ToolInteractionRequirement
@@ -24,10 +26,9 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
-import kotlin.uuid.Uuid
 
 class ImageGenerationToolFactoryTest {
-    private val ownerId = Uuid.random()
+    private val ownerId = ConfigurationReference.random()
     private val model = Model(modelId = "gpt-image-1", displayName = "GPT Image", type = ModelType.IMAGE)
     private val providerSetting = ProviderSetting.OpenAI(name = "OpenAI", models = listOf(model))
 

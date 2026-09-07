@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -34,7 +36,6 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.files.ArtifactStore
 import org.junit.After
 import org.junit.Before
-import kotlin.uuid.Uuid
 
 /**
  * 用受控 transport/client seam 驱动真实 [McpRuntimeCoordinator] 状态机，覆盖 slot 互斥、
@@ -47,9 +48,9 @@ internal abstract class McpRuntimeCoordinatorTestBase {
     protected val createdClients = mutableListOf<Client>()
     protected val createdTransports = mutableListOf<FakeTransport>()
     protected var connectFailure: Throwable? = null
-    protected val connectGates = mutableMapOf<Uuid, CompletableDeferred<Unit>>()
-    protected val connectStarted = linkedSetOf<Uuid>()
-    protected val toolListChangedHandlers = mutableMapOf<Uuid, (ToolListChangedNotification) -> Deferred<Unit>>()
+    protected val connectGates = mutableMapOf<ConfigurationReference, CompletableDeferred<Unit>>()
+    protected val connectStarted = linkedSetOf<ConfigurationReference>()
+    protected val toolListChangedHandlers = mutableMapOf<ConfigurationReference, (ToolListChangedNotification) -> Deferred<Unit>>()
     protected var callToolGate: CompletableDeferred<Unit>? = null
     protected var callToolResponder: suspend () -> CallToolResult = {
         CallToolResult(content = listOf(TextContent("tool-result")))
@@ -58,7 +59,7 @@ internal abstract class McpRuntimeCoordinatorTestBase {
         ListToolsResult(tools = listOf(serverTool("search")))
     }
     protected val settingsStore = mockk<SettingsStore>()
-    protected val catalogs = MutableStateFlow<Map<Uuid, McpCatalogSnapshot>>(emptyMap())
+    protected val catalogs = MutableStateFlow<Map<ConfigurationReference, McpCatalogSnapshot>>(emptyMap())
     protected val catalogStore = mockk<McpCatalogStore>()
     protected lateinit var networkOnline: MutableStateFlow<Boolean>
     protected var foregroundAction: (() -> Unit)? = null
@@ -217,7 +218,7 @@ internal abstract class McpRuntimeCoordinatorTestBase {
     )
 
     companion object {
-        val SERVER_ID = Uuid.random()
+        val SERVER_ID = ConfigurationReference.random()
     }
 }
 
@@ -260,4 +261,4 @@ internal class MutableStateFlowHolder {
 internal val McpRuntimeCoordinator.syncingStatus: TestStatusSnapshot
     get() = TestStatusSnapshot(runtimeCapabilities.value.mapValues { it.value.status })
 
-internal data class TestStatusSnapshot(val value: Map<Uuid, McpStatus>)
+internal data class TestStatusSnapshot(val value: Map<ConfigurationReference, McpStatus>)

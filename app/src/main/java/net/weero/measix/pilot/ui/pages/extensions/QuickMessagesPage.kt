@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.pages.extensions
+package net.weero.measix.pilot.ui.pages.extensions
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -127,7 +127,7 @@ fun QuickMessagesPage(vm: QuickMessagesVM = koinViewModel()) {
                 }
             }
 
-            items(settings.quickMessages, key = { it.id }) { quickMessage ->
+            items(settings.quickMessages, key = { it.id.toString() }) { quickMessage ->
                 QuickMessageCard(
                     quickMessage = quickMessage,
                     effectiveSettings = effectiveSettings,

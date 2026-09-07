@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import androidx.annotation.VisibleForTesting
 import kotlinx.coroutines.CancellationException
@@ -15,7 +16,6 @@ import kotlinx.coroutines.withTimeout
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import kotlin.time.Duration.Companion.minutes
-import kotlin.uuid.Uuid
 
 /**
  * 浏览器授权期间对 loopback 回调 socket 的保活平台端口。
@@ -105,7 +105,7 @@ internal class McpOAuthCoordinator(
     }
 
     suspend fun setClientCredentials(
-        serverId: Uuid,
+        serverId: ConfigurationReference,
         clientId: String,
         clientSecret: String?,
     ) {
@@ -114,7 +114,7 @@ internal class McpOAuthCoordinator(
         }
     }
 
-    suspend fun clearAuthorization(serverId: Uuid) {
+    suspend fun clearAuthorization(serverId: ConfigurationReference) {
         mutateState(serverId) { existing ->
             existing?.copy(
                 accessToken = null,
@@ -125,7 +125,7 @@ internal class McpOAuthCoordinator(
     }
 
     /** Advances the OAuth revision without changing values, sealing a cancelled browser operation. */
-    suspend fun touchState(serverId: Uuid) {
+    suspend fun touchState(serverId: ConfigurationReference) {
         mutateState(serverId) { it }
     }
 
@@ -302,7 +302,7 @@ internal class McpOAuthCoordinator(
     }
 
     private suspend fun mutateState(
-        serverId: Uuid,
+        serverId: ConfigurationReference,
         transform: (McpOAuthState?) -> McpOAuthState?,
     ) {
         settingsStore.updateLocal { old ->
@@ -320,7 +320,7 @@ internal class McpOAuthCoordinator(
     @VisibleForTesting
     internal suspend fun persistStateFor(
         expectedTrustBoundary: McpOAuthTrustBoundary,
-        serverId: Uuid,
+        serverId: ConfigurationReference,
         expectedRevision: Long,
         oauth: McpOAuthState?,
     ): Boolean {
@@ -344,7 +344,7 @@ internal class McpOAuthCoordinator(
         return applied
     }
 
-    private fun currentConfig(serverId: Uuid): McpServerConfig? =
+    private fun currentConfig(serverId: ConfigurationReference): McpServerConfig? =
         settingsStore.effectiveSettings.value.settings.mcpServers.find { it.id == serverId }
 
     private fun computeExpiry(expiresIn: Long?): Long =
@@ -356,7 +356,7 @@ internal class McpOAuthCoordinator(
 }
 
 private data class McpOAuthRefreshLeaseKey(
-    val serverId: Uuid,
+    val serverId: ConfigurationReference,
     val trustBoundary: McpOAuthTrustBoundary,
     val revision: Long,
 )

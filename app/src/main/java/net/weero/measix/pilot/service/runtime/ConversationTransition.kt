@@ -137,8 +137,8 @@ internal object ConversationTransition {
                 is OptionalString.Set -> command.customSystemPrompt.value
             },
             modeInjectionIds = when (command.modeInjectionIds) {
-                is OptionalUuidSet.Keep -> old.modeInjectionIds
-                is OptionalUuidSet.Set -> command.modeInjectionIds.value
+                is OptionalConfigurationReferenceSet.Keep -> old.modeInjectionIds
+                is OptionalConfigurationReferenceSet.Set -> command.modeInjectionIds.value
             },
             workspaceCwd = when (command.workspaceCwd) {
                 is OptionalString.Keep -> old.workspaceCwd
@@ -371,8 +371,8 @@ internal object ConversationTransition {
                 is OptionalString.Set -> if (prompt.value == oldHeader.customSystemPrompt) OptionalString.Keep else prompt
             },
             modeInjectionIds = when (val ids = command.modeInjectionIds) {
-                OptionalUuidSet.Keep -> OptionalUuidSet.Keep
-                is OptionalUuidSet.Set -> if (ids.value == oldHeader.modeInjectionIds) OptionalUuidSet.Keep else ids
+                OptionalConfigurationReferenceSet.Keep -> OptionalConfigurationReferenceSet.Keep
+                is OptionalConfigurationReferenceSet.Set -> if (ids.value == oldHeader.modeInjectionIds) OptionalConfigurationReferenceSet.Keep else ids
             },
             workspaceCwd = when (val cwd = command.workspaceCwd) {
                 OptionalString.Keep -> OptionalString.Keep
@@ -395,7 +395,7 @@ internal object ConversationTransition {
             folderId is OptionalFolderId.Keep &&
             assistantId == null &&
             customSystemPrompt is OptionalString.Keep &&
-            modeInjectionIds is OptionalUuidSet.Keep &&
+            modeInjectionIds is OptionalConfigurationReferenceSet.Keep &&
             workspaceCwd is OptionalString.Keep
 
     private fun appendUser(current: ConversationAggregateSnapshot, command: AppendUserMessage): ConversationAggregateSnapshot =

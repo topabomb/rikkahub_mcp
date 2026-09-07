@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.data.ai.tools
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import io.mockk.Called
 import io.mockk.coEvery
 import io.mockk.every
@@ -36,8 +39,8 @@ import kotlin.uuid.Uuid
 class AssistantManageToolTest {
 
     private val json: Json = JsonInstant
-    private val callerId = Uuid.random()
-    private val targetId = Uuid.random()
+    private val callerId = ConfigurationReference.random()
+    private val targetId = ConfigurationReference.random()
 
     private fun createFactory(
         assistants: List<Assistant>,
@@ -241,7 +244,7 @@ class AssistantManageToolTest {
     @Test
     fun `CREATE result is action and id only`() = runTest {
         val created = Assistant(
-            id = Uuid.random(),
+            id = ConfigurationReference.random(),
             name = "New helper",
             description = "Should not appear",
         )

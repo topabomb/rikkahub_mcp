@@ -1,9 +1,9 @@
 package net.weero.measix.pilot.data.datastore
 
+import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.search.SearchServiceOptions
 import net.weero.measix.pilot.data.ai.mcp.normalizeMcpDefinitions
-import kotlin.uuid.Uuid
 
 /**
  * 把 DataStore 中的持久化快照物化为应用实际消费的 Settings。
@@ -74,6 +74,6 @@ internal fun Settings.materializeForRead(): Settings {
 
 private fun <T> List<T>.mergeDefaults(
     defaults: List<T>,
-    idOf: (T) -> Uuid,
+    idOf: (T) -> ConfigurationReference,
     materialize: (T) -> T,
 ): List<T> = (ifEmpty { defaults } + defaults).distinctBy(idOf).map(materialize)

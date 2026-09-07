@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.subassistant
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -34,7 +35,7 @@ data class SubAssistantDetailLink(
     val request: String,
     val childConversationId: Uuid,
     val childTaskMessageId: Uuid,
-    val targetAssistantId: Uuid,
+    val targetAssistantId: ConfigurationReference,
     val failureDetail: String? = null,
 )
 
@@ -95,7 +96,7 @@ internal fun resolveSubAssistantDetailLink(
     val childTaskMessageIdRaw = metadata.childTaskNodeId ?: return missingLink()
     val childTaskMessageId = runCatching { Uuid.parse(childTaskMessageIdRaw) }.getOrNull()
         ?: return SubAssistantDetailLinkResult.Unavailable
-    val targetAssistantId = runCatching { Uuid.parse(metadata.targetAssistantId) }.getOrNull()
+    val targetAssistantId = runCatching { ConfigurationReference.parse(metadata.targetAssistantId) }.getOrNull()
         ?: return SubAssistantDetailLinkResult.Unavailable
     val request = runCatching {
         val input = json.parseToJsonElement(tool.input).jsonObject

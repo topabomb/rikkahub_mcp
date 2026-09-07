@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.subassistant
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -116,7 +118,7 @@ class SubAssistantCallMetadataTest {
 
         val patch = SubAssistantCallMetadata(
             runId = "new-run",
-            targetAssistantId = Uuid.random().toString(),
+            targetAssistantId = ConfigurationReference.random().toString(),
             targetNameSnapshot = "Test Assistant",
             state = SubAssistantCallState.RUNNING,
         )
@@ -145,7 +147,7 @@ class SubAssistantCallMetadataTest {
 
         val patch = SubAssistantCallMetadata(
             runId = "run-1",
-            targetAssistantId = Uuid.random().toString(),
+            targetAssistantId = ConfigurationReference.random().toString(),
             targetNameSnapshot = "Test",
             state = SubAssistantCallState.STARTING,
         )
@@ -529,7 +531,7 @@ class SubAssistantCallMetadataTest {
     fun `initial metadata has starting state`() {
         val meta = buildInitialSubAssistantCallMetadata(
             runId = "run-1",
-            targetAssistantId = Uuid.random(),
+            targetAssistantId = ConfigurationReference.random(),
             targetNameSnapshot = "Helper",
         )
         assertEquals(SubAssistantCallState.STARTING, meta.state)
@@ -542,7 +544,7 @@ class SubAssistantCallMetadataTest {
     fun `initial metadata with previous run`() {
         val meta = buildInitialSubAssistantCallMetadata(
             runId = "run-2",
-            targetAssistantId = Uuid.random(),
+            targetAssistantId = ConfigurationReference.random(),
             targetNameSnapshot = "Helper",
             previousRunId = "run-1",
         )

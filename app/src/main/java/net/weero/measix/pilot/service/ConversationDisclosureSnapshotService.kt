@@ -19,7 +19,7 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
 import net.weero.measix.pilot.data.repository.MemoryRepository
-import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
 
 /** canonical envelope 非法：装载或提交必须失败，不得静默把模型基线降级为"没有 context"。 */
 class DisclosureContentException(message: String) : IllegalStateException(message)
@@ -312,10 +312,10 @@ object ConversationDisclosureSnapshotService {
                 throw DisclosureContentException("sub_assistant row must have ${SUB_ASSISTANT_HEADER.size} cells")
             }
             cells.forEach { cell -> cell.asStringOrThrow("sub_assistant row cell") }
-            // id 必须是规范 Uuid 文本，否则无法与 durable Assistant identity 对齐。
+            // id 必须是规范配置引用文本，否则无法与 durable Assistant identity 对齐。
             val id = cells[0].asStringOrThrow("sub_assistant id")
-            runCatching { Uuid.parse(id) }.getOrNull()
-                ?: throw DisclosureContentException("sub_assistant id is not a canonical Uuid: $id")
+            runCatching { ConfigurationReference.parse(id) }.getOrNull()?.takeIf { it.toString() == id }
+                ?: throw DisclosureContentException("sub_assistant id is not a canonical configuration reference: $id")
         }
     }
 

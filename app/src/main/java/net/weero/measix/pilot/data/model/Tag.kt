@@ -1,10 +1,10 @@
-﻿package net.weero.measix.pilot.data.model
+package net.weero.measix.pilot.data.model
 
 import kotlinx.serialization.Serializable
-import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
 
 @Serializable
 data class Tag(
-    val id: Uuid,
+    val id: ConfigurationReference,
     val name: String,
 )

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import android.util.Log
 import io.modelcontextprotocol.kotlin.sdk.client.Client
@@ -24,7 +25,6 @@ import kotlinx.coroutines.withTimeout
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import java.util.concurrent.atomic.AtomicLong
-import kotlin.uuid.Uuid
 
 private const val TAG = "McpServerRuntime"
 
@@ -85,7 +85,7 @@ internal sealed interface McpToolCallAdmission {
 }
 
 internal class McpServerRuntime(
-    val serverId: Uuid,
+    val serverId: ConfigurationReference,
     private val settingsStore: SettingsStore,
     private val catalogStore: McpCatalogStore,
     private val appScope: AppScope,

@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.export
+package net.weero.measix.pilot.data.export
 
 import android.content.Context
 import android.net.Uri
@@ -10,7 +10,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import net.weero.measix.pilot.data.model.PromptInjection
 import net.weero.measix.pilot.utils.toLocalString
-import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
 
 @Serializable
 data class ExportData(
@@ -91,7 +91,7 @@ object ModeInjectionSerializer : ExportSerializer<PromptInjection.ModeInjection>
             if (exportData.type != type) return null
             ExportSerializer.DefaultJson
                 .decodeFromJsonElement<PromptInjection.ModeInjection>(exportData.data)
-                .copy(id = Uuid.random())
+                .copy(id = ConfigurationReference.random())
         }.getOrNull()
     }
 }

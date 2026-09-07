@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.ui.pages.chat
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getConversationAssistant
 import net.weero.measix.pilot.data.model.Assistant
@@ -35,16 +38,16 @@ class ConversationAssistantSwitchTest {
             assistants = listOf(globalAssistant),
         )
 
-        val resolved = settings.getConversationAssistant(Uuid.random())
+        val resolved = settings.getConversationAssistant(ConfigurationReference.random())
 
         assertSame(globalAssistant, resolved)
     }
 
     @Test
     fun `switching assistant clears the assistant scoped folder`() {
-        val targetAssistantId = Uuid.random()
+        val targetAssistantId = ConfigurationReference.random()
         val conversation = Conversation(
-            assistantId = Uuid.random(),
+            assistantId = ConfigurationReference.random(),
             folderId = Uuid.random(),
             messageNodes = emptyList(),
         )
@@ -60,7 +63,7 @@ class ConversationAssistantSwitchTest {
 
     @Test
     fun `selecting the current assistant preserves its folder`() {
-        val assistantId = Uuid.random()
+        val assistantId = ConfigurationReference.random()
         val conversation = Conversation(
             assistantId = assistantId,
             folderId = Uuid.random(),

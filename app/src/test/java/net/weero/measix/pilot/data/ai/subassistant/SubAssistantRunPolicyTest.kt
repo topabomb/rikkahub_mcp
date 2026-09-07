@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.data.ai.subassistant
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.provider.CustomBody
@@ -16,22 +19,21 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class SubAssistantRunPolicyTest {
 
-    private val callerId = Uuid.random()
-    private val targetId = Uuid.random()
+    private val callerId = ConfigurationReference.random()
+    private val targetId = ConfigurationReference.random()
 
     private fun makeAssistant(
-        id: Uuid = targetId,
+        id: ConfigurationReference = targetId,
         allowAsSub: Boolean = true,
         description: String = "A helpful assistant",
         enableMemory: Boolean = true,
         useGlobalMemory: Boolean = false,
         localTools: List<LocalToolOption> = emptyList(),
         isGloballyVisible: Boolean = false,
-        allowedSubAssistantIds: Set<Uuid> = emptySet(),
+        allowedSubAssistantIds: Set<ConfigurationReference> = emptySet(),
     ) = Assistant(
         id = id,
         name = "Test Assistant",
@@ -45,7 +47,7 @@ class SubAssistantRunPolicyTest {
     )
 
     private fun makeModel(): Model = Model(
-        id = Uuid.random(),
+        id = ConfigurationReference.random(),
         displayName = "test-model",
         type = ModelType.CHAT,
     )
@@ -334,7 +336,7 @@ class SubAssistantRunPolicyTest {
     fun `invalid configured target model never falls back to caller`() {
         val callerModel = makeModel()
         val caller = makeAssistant(id = callerId).copy(chatModelId = callerModel.id)
-        val target = makeAssistant().copy(chatModelId = Uuid.random())
+        val target = makeAssistant().copy(chatModelId = ConfigurationReference.random())
         val settings = Settings(
             providers = listOf(ProviderSetting.OpenAI(models = listOf(callerModel))),
             assistants = listOf(caller, target),

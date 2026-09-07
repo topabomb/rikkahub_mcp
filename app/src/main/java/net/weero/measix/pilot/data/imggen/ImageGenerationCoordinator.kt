@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.imggen
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.util.Log
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
@@ -23,7 +24,7 @@ import me.rerere.ai.util.classifyProviderFailure
 sealed class ImageGenerationSource {
     data class Page(val sessionId: String) : ImageGenerationSource()
     data class Tool(
-        val ownerAssistantId: kotlin.uuid.Uuid,
+        val ownerAssistantId: ConfigurationReference,
         val revalidate: suspend (ImageGenerationSelection.Available) -> ImageGenerationFailure?,
     ) : ImageGenerationSource()
 }

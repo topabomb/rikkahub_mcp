@@ -139,10 +139,10 @@ fun SettingSearchPage(vm: SettingVM = koinViewModel()) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
             state = lazyListState
         ) {
-            items(settings.searchServices, key = { it.id }) { service ->
+            items(settings.searchServices, key = { it.id.toString() }) { service ->
                 ReorderableItem(
                     state = reorderableState,
-                    key = service.id
+                    key = service.id.toString()
                 ) { isDragging ->
                     SearchProviderCard(
                         service = service,

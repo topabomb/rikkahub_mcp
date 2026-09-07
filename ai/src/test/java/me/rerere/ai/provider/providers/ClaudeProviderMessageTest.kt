@@ -1,4 +1,6 @@
 package me.rerere.ai.provider.providers
+
+import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.ai.testsupport.executedTool
 import me.rerere.ai.testsupport.canonicalMultiRoundToolTurn
 import kotlinx.serialization.json.JsonArray
@@ -447,8 +449,8 @@ class ClaudeProviderMessageTest {
 
     @Test
     fun `thinking from a different configured model should be stripped`() {
-        val oldModelId = Uuid.random()
-        val activeModelId = Uuid.random()
+        val oldModelId = ConfigurationReference.random()
+        val activeModelId = ConfigurationReference.random()
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
             modelId = oldModelId,

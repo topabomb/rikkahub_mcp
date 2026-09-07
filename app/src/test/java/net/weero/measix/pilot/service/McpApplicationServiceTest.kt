@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -19,7 +21,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class McpApplicationServiceTest {
     private val manager = mockk<McpRuntimeCoordinator>(relaxed = true)
@@ -152,7 +153,7 @@ class McpApplicationServiceTest {
     }
 
     private fun remote(
-        id: Uuid = Uuid.random(),
+        id: ConfigurationReference = ConfigurationReference.random(),
         name: String,
         url: String = "https://example.test/mcp",
         oauth: McpOAuthState? = null,

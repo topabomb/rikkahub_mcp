@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.data.datastore
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.asr.ASRProviderSetting
@@ -12,18 +15,17 @@ import net.weero.measix.pilot.data.ai.mcp.McpToolPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class SettingsNormalizationTest {
     @Test
     fun `read materialization completes defaults and removes duplicate or dangling references`() {
-        val providerId = Uuid.random()
-        val modelId = Uuid.random()
-        val staleId = Uuid.random()
-        val assistantId = Uuid.random()
-        val modeId = Uuid.random()
-        val quickMessageId = Uuid.random()
-        val asrId = Uuid.random()
+        val providerId = ConfigurationReference.random()
+        val modelId = ConfigurationReference.random()
+        val staleId = ConfigurationReference.random()
+        val assistantId = ConfigurationReference.random()
+        val modeId = ConfigurationReference.random()
+        val quickMessageId = ConfigurationReference.random()
+        val asrId = ConfigurationReference.random()
         val model = Model(id = modelId, modelId = "model")
         val provider = ProviderSetting.OpenAI(
             id = providerId,
@@ -88,8 +90,8 @@ class SettingsNormalizationTest {
 
     @Test
     fun `MCP identity and policy normalization use the same first-wins rule for write and read`() {
-        val firstId = Uuid.random()
-        val secondId = Uuid.random()
+        val firstId = ConfigurationReference.random()
+        val secondId = ConfigurationReference.random()
         val first = McpServerConfig.StreamableHTTPServer(
             id = firstId,
             commonOptions = McpCommonOptions(

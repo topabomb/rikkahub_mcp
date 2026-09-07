@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service.subassistant
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import android.content.Context
 import io.mockk.coEvery
 import io.mockk.every
@@ -75,7 +77,7 @@ class SubAssistantTurnIntegrationTest {
             val parent = Assistant(
                 name = "Parent", chatModelId = model.id, enableMemory = false,
                 regexes = listOf(net.weero.measix.pilot.data.model.AssistantRegex(
-                    id = Uuid.random(), findRegex = "foo", replaceString = "foo!",
+                    id = ConfigurationReference.random(), findRegex = "foo", replaceString = "foo!",
                     affectingScope = setOf(net.weero.measix.pilot.data.model.AssistantAffectScope.ASSISTANT),
                 )),
                 localTools = listOf(LocalToolOption.AssistantDelegation), allowedSubAssistantIds = setOf(child.id),

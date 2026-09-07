@@ -1,10 +1,10 @@
 package net.weero.measix.pilot.service.runtime
 
+import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.ai.provider.ClaudePromptCacheTtl
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.data.datastore.Settings
-import kotlin.uuid.Uuid
 
 /** Live transport credentials are leased without allowing Settings to change the frozen wire shape. */
 internal fun interface ProviderTransportLease {
@@ -13,11 +13,11 @@ internal fun interface ProviderTransportLease {
 
 /** Immutable provider options that may affect one Turn's request wire shape. */
 internal sealed interface FrozenProviderWireShape {
-    val id: Uuid
+    val id: ConfigurationReference
     val model: Model
 
     data class OpenAI(
-        override val id: Uuid,
+        override val id: ConfigurationReference,
         override val model: Model,
         val enabled: Boolean,
         val name: String,
@@ -28,7 +28,7 @@ internal sealed interface FrozenProviderWireShape {
     ) : FrozenProviderWireShape
 
     data class Google(
-        override val id: Uuid,
+        override val id: ConfigurationReference,
         override val model: Model,
         val enabled: Boolean,
         val name: String,
@@ -40,7 +40,7 @@ internal sealed interface FrozenProviderWireShape {
     ) : FrozenProviderWireShape
 
     data class Claude(
-        override val id: Uuid,
+        override val id: ConfigurationReference,
         override val model: Model,
         val enabled: Boolean,
         val name: String,
@@ -91,11 +91,11 @@ internal fun freezeProviderWireShape(
 
 /** Exact START-selected owner of refreshable transport credentials. */
 internal sealed interface ProviderCredentialOwnerLocator {
-    data class CatalogProvider(val providerId: Uuid) : ProviderCredentialOwnerLocator
+    data class CatalogProvider(val providerId: ConfigurationReference) : ProviderCredentialOwnerLocator
     data class ModelOverwrite(
-        val catalogProviderId: Uuid,
-        val modelId: Uuid,
-        val providerId: Uuid,
+        val catalogProviderId: ConfigurationReference,
+        val modelId: ConfigurationReference,
+        val providerId: ConfigurationReference,
     ) : ProviderCredentialOwnerLocator
 }
 

@@ -1,4 +1,5 @@
 package net.weero.measix.pilot.service.subassistant
+
 import net.weero.measix.pilot.service.runtime.AppendUserMessage
 import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationCommandConflictException
@@ -21,9 +22,8 @@ import net.weero.measix.pilot.service.turn.TurnRunResult
 import net.weero.measix.pilot.service.turn.TurnPause
 import net.weero.measix.pilot.service.turn.TurnPipelineFactory
 import net.weero.measix.pilot.service.turn.TurnContextFactory
-
+import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.coroutines.flow.map
-
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CancellationException
@@ -152,7 +152,7 @@ class SubAssistantRunCoordinator(
 ) {
 
     /** 删除 Target 前取消并等待其所有正在执行的 Target Run 停止写回。 */
-    suspend fun cancelRunsForAssistant(assistantId: Uuid) {
+    suspend fun cancelRunsForAssistant(assistantId: ConfigurationReference) {
         runGate.cancelRunsForAssistant(assistantId)
     }
 
@@ -179,9 +179,9 @@ class SubAssistantRunCoordinator(
     }
 
     private suspend fun preflightCall(
-        callerAssistantId: Uuid,
+        callerAssistantId: ConfigurationReference,
         masterConversationId: Uuid,
-        targetAssistantId: Uuid,
+        targetAssistantId: ConfigurationReference,
         task: String,
         execContext: ToolExecutionContext,
     ): Preflight {
@@ -328,7 +328,7 @@ class SubAssistantRunCoordinator(
     private suspend fun materializeChild(
         preflight: Preflight.Ready,
         masterConversationId: Uuid,
-        targetAssistantId: Uuid,
+        targetAssistantId: ConfigurationReference,
         execContext: ToolExecutionContext,
         attachments: List<String>,
         extras: Set<String>,
@@ -447,9 +447,9 @@ class SubAssistantRunCoordinator(
      * @return Tool Result parts
      */
     suspend fun executeCall(
-        callerAssistantId: Uuid,
+        callerAssistantId: ConfigurationReference,
         masterConversationId: Uuid,
-        targetAssistantId: Uuid,
+        targetAssistantId: ConfigurationReference,
         task: String,
         execContext: ToolExecutionContext,
         turnTtsContext: TtsToolPlaybackContext? = null,
@@ -954,7 +954,7 @@ class SubAssistantRunCoordinator(
         settings: Settings,
         target: Assistant,
         model: me.rerere.ai.provider.Model,
-        callerAssistantId: Uuid,
+        callerAssistantId: ConfigurationReference,
         runSpec: net.weero.measix.pilot.data.ai.subassistant.SubAssistantRunSpec,
         childConversationId: Uuid,
         childTaskNodeId: Uuid,

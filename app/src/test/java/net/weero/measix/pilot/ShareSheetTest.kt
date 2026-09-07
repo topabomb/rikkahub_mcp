@@ -1,4 +1,7 @@
-﻿package net.weero.measix.pilot
+package net.weero.measix.pilot
+
+import me.rerere.common.configuration.ConfigurationReference
+
 
 import me.rerere.ai.provider.BalanceOption
 import me.rerere.ai.provider.Model
@@ -8,19 +11,18 @@ import net.weero.measix.pilot.ui.components.ui.encodeForShare
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class ShareSheetTest {
     @Test
     fun `decode should restore OpenAI provider correctly`() {
-        val originalId = Uuid.random()
+        val originalId = ConfigurationReference.random()
         val original = ProviderSetting.OpenAI(
             id = originalId,
             enabled = true,
             name = "Test OpenAI",
             models = listOf(
                 Model(
-                    id = Uuid.random(),
+                    id = ConfigurationReference.random(),
                     displayName = "gpt-4",
                 )
             ),
@@ -46,7 +48,7 @@ class ShareSheetTest {
 
     @Test
     fun `decode should restore Google provider correctly`() {
-        val originalId = Uuid.random()
+        val originalId = ConfigurationReference.random()
         val original = ProviderSetting.Google(
             id = originalId,
             enabled = true,
@@ -70,7 +72,7 @@ class ShareSheetTest {
 
     @Test
     fun `decode should restore Claude provider correctly`() {
-        val originalId = Uuid.random()
+        val originalId = ConfigurationReference.random()
         val original = ProviderSetting.Claude(
             id = originalId,
             enabled = false,
@@ -94,7 +96,7 @@ class ShareSheetTest {
     @Test
     fun `decode should handle balance option`() {
         val original = ProviderSetting.OpenAI(
-            id = Uuid.random(),
+            id = ConfigurationReference.random(),
             enabled = true,
             name = "Test with Balance",
             models = emptyList(),
@@ -163,13 +165,13 @@ class ShareSheetTest {
     @Test
     fun `encode should strip models from provider`() {
         val original = ProviderSetting.OpenAI(
-            id = Uuid.random(),
+            id = ConfigurationReference.random(),
             name = "Test",
             apiKey = "key",
             baseUrl = "url",
             models = listOf(
-                Model(id = Uuid.random(), displayName = "gpt-4"),
-                Model(id = Uuid.random(), displayName = "gpt-3.5-turbo"),
+                Model(id = ConfigurationReference.random(), displayName = "gpt-4"),
+                Model(id = ConfigurationReference.random(), displayName = "gpt-3.5-turbo"),
             )
         )
 

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.tools
 
+import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -57,7 +58,7 @@ internal enum class AssistantManageAction { CREATE, UPDATE, DELETE }
 
 internal data class AssistantManageArguments(
     val action: AssistantManageAction,
-    val assistantId: Uuid?,
+    val assistantId: ConfigurationReference?,
     val name: String?,
     val description: String?,
     val instructions: String?,
@@ -70,7 +71,7 @@ internal fun parseAssistantManageArguments(args: kotlinx.serialization.json.Json
     if (stringFields.any { it in obj && (obj[it] as? JsonPrimitive)?.isString != true }) return null
     val action = AssistantManageAction.entries.find { it.name == obj["action"]?.jsonPrimitive?.content } ?: return null
     val rawId = obj["assistant_id"]?.jsonPrimitive?.content
-    val assistantId = rawId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+    val assistantId = rawId?.let { runCatching { ConfigurationReference.parse(it) }.getOrNull() }
     if (rawId != null && assistantId == null) return null
     val name = obj["name"]?.jsonPrimitive?.content?.trim()
     val description = obj["description"]?.jsonPrimitive?.content?.let(::normalizeDescription)
@@ -135,7 +136,7 @@ class AssistantToolFactory(
     // ---- assistant_manage ----
 
     private fun buildAssistantManageTool(
-        callerAssistantId: Uuid,
+        callerAssistantId: ConfigurationReference,
     ): Tool = Tool(
         name = TOOL_ASSISTANT_MANAGE,
         description = "Create, update, or delete a sub-assistant (sub-agent). New ones join your allowed list.",
@@ -189,7 +190,7 @@ class AssistantToolFactory(
     )
 
     private suspend fun executeAssistantManage(
-        callerAssistantId: Uuid,
+        callerAssistantId: ConfigurationReference,
         args: kotlinx.serialization.json.JsonElement,
     ): List<UIMessagePart> {
         val parameters = parseAssistantManageArguments(args) ?: return errorResult("invalid_arguments")
@@ -273,7 +274,7 @@ class AssistantToolFactory(
     // ---- assistant_inspect ----
 
     private fun buildAssistantInspectTool(
-        callerAssistantId: Uuid,
+        callerAssistantId: ConfigurationReference,
         masterConversationId: Uuid,
     ): Tool = Tool(
         name = TOOL_ASSISTANT_INSPECT,
@@ -313,13 +314,13 @@ class AssistantToolFactory(
 
     private suspend fun executeAssistantInspect(
         args: kotlinx.serialization.json.JsonElement,
-        callerAssistantId: Uuid,
+        callerAssistantId: ConfigurationReference,
         masterConversationId: Uuid,
     ): List<UIMessagePart> {
         val obj = args as? JsonObject ?: return errorResult("invalid_arguments")
         val assistantIdStr = obj["assistant_id"]?.let { (it as? JsonPrimitive)?.content }
             ?: return errorResult("invalid_arguments")
-        val assistantId = runCatching { Uuid.parse(assistantIdStr) }.getOrNull()
+        val assistantId = runCatching { ConfigurationReference.parse(assistantIdStr) }.getOrNull()
             ?: return errorResult("invalid_arguments")
 
         if (assistantId == callerAssistantId) {
@@ -435,7 +436,7 @@ class AssistantToolFactory(
     // ---- assistant_call ----
 
     private fun buildAssistantCallTool(
-        callerAssistantId: Uuid,
+        callerAssistantId: ConfigurationReference,
         masterConversationId: Uuid,
         ttsPlaybackContext: TtsToolPlaybackContext? = null,
     ): Tool = Tool(
@@ -536,7 +537,7 @@ class AssistantToolFactory(
      * 通过 SubAssistantRunCoordinator 实现完整 Target 执行。
      */
     private suspend fun executeAssistantCall(
-        callerAssistantId: Uuid,
+        callerAssistantId: ConfigurationReference,
         masterConversationId: Uuid,
         context: ToolExecutionContext,
         args: kotlinx.serialization.json.JsonElement,
@@ -546,7 +547,7 @@ class AssistantToolFactory(
             ?: return callUnavailable("invalid_arguments")
         val targetIdStr = obj["assistant_id"]?.let { (it as? JsonPrimitive)?.content }
             ?: return callUnavailable("assistant_id_required")
-        val targetId = runCatching { Uuid.parse(targetIdStr) }.getOrNull()
+        val targetId = runCatching { ConfigurationReference.parse(targetIdStr) }.getOrNull()
             ?: return callUnavailable("invalid_assistant_id")
         val task = obj["request"]?.let { (it as? JsonPrimitive)?.content }
             ?: return callUnavailable("request_required")

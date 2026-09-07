@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service.runtime
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -285,7 +286,7 @@ class ConversationRuntimeRegistry(
         _runtimesVersion.value++
     }
 
-    suspend fun cancelGenerationsForAssistant(assistantId: Uuid, reason: String) {
+    suspend fun cancelGenerationsForAssistant(assistantId: ConfigurationReference, reason: String) {
         val jobs = activeRuntimes()
             .filter { it.snapshot.value.durable.header.assistantId == assistantId }
             .mapNotNull { runtime ->

@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -40,7 +42,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 /** 目录生命周期：durable catalog 增删禁用与删除、工具发现分页与 list_changed 串行化、手动刷新、启动恢复与调用结果投影。 */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -76,7 +77,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
     fun `manual catalog refresh is bounded across healthy servers`() = runTest(dispatcher) {
         val configs = (1..20).map { index ->
             McpServerConfig.StreamableHTTPServer(
-                id = Uuid.random(),
+                id = ConfigurationReference.random(),
                 commonOptions = McpCommonOptions(name = "server_$index"),
                 url = "https://server-$index.example/mcp",
             )
@@ -312,7 +313,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         val definition = serverConfig()
         val definitions = listOf(definition) + (2..20).map { index ->
             McpServerConfig.StreamableHTTPServer(
-                id = Uuid.random(),
+                id = ConfigurationReference.random(),
                 commonOptions = McpCommonOptions(name = "server_$index"),
                 url = "https://server-$index.example/mcp",
             )

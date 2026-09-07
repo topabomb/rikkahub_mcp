@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.service.runtime
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import android.content.Context
 import io.mockk.coEvery
 import io.mockk.every
@@ -96,17 +99,17 @@ class TurnStreamProjectionTest {
 
     @Test
     fun `streamed approval and output cannot advance lifecycle before a checkpoint`() {
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
         val state = TurnStreamProjection(
             epoch = 1,
             turnId = Uuid.random(),
-            assistantMessageId = assistantId,
+            assistantMessageId = assistantMessageId,
             assistantMessage = null,
         )
         val streamed = assistant(
-            assistantId,
+            assistantMessageId,
             tool(
-                assistantId, 0,
+                assistantMessageId, 0,
                 output = listOf(UIMessagePart.Text("{\"status\":\"completed\"}")),
                 interaction = ToolInteractionState.AwaitingApproval,
             ),
@@ -116,43 +119,43 @@ class TurnStreamProjectionTest {
 
         // A streamed tool part is only ever CALL_STREAMING: neither the pending interaction nor
         // the in-flight output may look like a committed lifecycle phase before a checkpoint.
-        assertEquals(ToolLivePhase.CALL_STREAMING, projected.toolLivePhases[loc(assistantId, 0)])
+        assertEquals(ToolLivePhase.CALL_STREAMING, projected.toolLivePhases[loc(assistantMessageId, 0)])
         assertSame(streamed, projected.assistantMessage)
     }
 
     @Test
     fun `model checkpoint displays immediate typed failures as failed`() {
-        val assistantId = Uuid.random()
-        val handle = TurnHandle(Uuid.random(), 1, Uuid.random(), assistantId)
-        val failed = assistant(assistantId, tool(assistantId, 0).copy(
+        val assistantMessageId = Uuid.random()
+        val handle = TurnHandle(Uuid.random(), 1, Uuid.random(), assistantMessageId)
+        val failed = assistant(assistantMessageId, tool(assistantMessageId, 0).copy(
             output = listOf(UIMessagePart.Text("invalid arguments")), resultStatus = ToolResultStatus.FAILED,
         ))
         val projection = TurnStreamProjection(
             epoch = handle.epoch, turnId = handle.turnId,
-            assistantMessageId = assistantId, assistantMessage = null,
+            assistantMessageId = assistantMessageId, assistantMessage = null,
         ).afterCheckpoint(ModelResponseCheckpoint(
             turn = handle, step = StepHandle(stepId), assistantMessage = failed,
             turnStatus = TurnExecutionStatus.RUNNING,
         ))
-        assertEquals(ToolLivePhase.FAILED, projection.toolLivePhases[loc(assistantId, 0)])
+        assertEquals(ToolLivePhase.FAILED, projection.toolLivePhases[loc(assistantMessageId, 0)])
     }
 
     @Test
     fun `result without execution advances only from typed committed result fact`() {
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
         val handle = TurnHandle(
             conversationId = Uuid.random(),
             epoch = 1L,
             turnId = Uuid.random(),
-            assistantMessageId = assistantId,
+            assistantMessageId = assistantMessageId,
         )
         val initial = TurnStreamProjection(
             epoch = handle.epoch,
             turnId = handle.turnId,
-            assistantMessageId = assistantId,
+            assistantMessageId = assistantMessageId,
             assistantMessage = null,
         )
-        val toolMessage = assistant(assistantId, tool(assistantId, 0))
+        val toolMessage = assistant(assistantMessageId, tool(assistantMessageId, 0))
         val ready = initial.withStreamingAssistant(toolMessage).afterCheckpoint(
             ModelResponseCheckpoint(
                 turn = handle,
@@ -170,7 +173,7 @@ class TurnStreamProjectionTest {
             ),
         )
         val streamed = ready.withStreamingAssistant(failedMessage)
-        val locator = loc(assistantId, 0)
+        val locator = loc(assistantMessageId, 0)
         // Streaming the failed output does not by itself mark the call FAILED.
         assertEquals(ToolLivePhase.READY, streamed.toolLivePhases[locator])
 
@@ -179,7 +182,7 @@ class TurnStreamProjectionTest {
                 turn = handle,
                 step = StepHandle(stepId),
                 assistantMessage = failedMessage,
-                toolResults = listOf(ToolResultFact(loc(assistantId, 0), ToolResultStatus.FAILED)),
+                toolResults = listOf(ToolResultFact(loc(assistantMessageId, 0), ToolResultStatus.FAILED)),
             ),
         )
         assertEquals(ToolLivePhase.FAILED, committed.toolLivePhases[locator])
@@ -208,38 +211,38 @@ class TurnStreamProjectionTest {
     fun `matches accepts only the exact epoch turn and assistant identity`() {
         val conversationId = Uuid.random()
         val turnId = Uuid.random()
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
         val projection = TurnStreamProjection(
             epoch = 7,
             turnId = turnId,
-            assistantMessageId = assistantId,
+            assistantMessageId = assistantMessageId,
             assistantMessage = null,
         )
 
-        assertTrue(projection.matches(TurnHandle(conversationId, 7L, turnId, assistantId)))
-        assertFalse(projection.matches(TurnHandle(conversationId, 8L, turnId, assistantId)))
-        assertFalse(projection.matches(TurnHandle(conversationId, 7L, Uuid.random(), assistantId)))
+        assertTrue(projection.matches(TurnHandle(conversationId, 7L, turnId, assistantMessageId)))
+        assertFalse(projection.matches(TurnHandle(conversationId, 8L, turnId, assistantMessageId)))
+        assertFalse(projection.matches(TurnHandle(conversationId, 7L, Uuid.random(), assistantMessageId)))
         assertFalse(projection.matches(TurnHandle(conversationId, 7L, turnId, Uuid.random())))
     }
 
     @Test
     fun `afterResolve aligns the draft and phase for the owning assistant`() {
-        val assistantId = Uuid.random()
-        val handle = TurnHandle(Uuid.random(), 1L, Uuid.random(), assistantId)
+        val assistantMessageId = Uuid.random()
+        val handle = TurnHandle(Uuid.random(), 1L, Uuid.random(), assistantMessageId)
         val pending = assistant(
-            assistantId,
-            tool(assistantId, 0, interaction = ToolInteractionState.AwaitingApproval),
+            assistantMessageId,
+            tool(assistantMessageId, 0, interaction = ToolInteractionState.AwaitingApproval),
         )
         val projection = TurnStreamProjection(
             epoch = handle.epoch,
             turnId = handle.turnId,
-            assistantMessageId = assistantId,
+            assistantMessageId = assistantMessageId,
             assistantMessage = null,
         ).withStreamingAssistant(pending)
 
         val resolved = projection.afterResolve(
             ResolveToolInteraction(
-                messageId = assistantId,
+                messageId = assistantMessageId,
                 stepId = stepId,
                 localCallId = stableId(0),
                 decision = ToolInteractionDecision.Approve,
@@ -247,7 +250,7 @@ class TurnStreamProjectionTest {
             ),
         )
 
-        assertEquals(ToolLivePhase.READY, resolved.toolLivePhases[loc(assistantId, 0)])
+        assertEquals(ToolLivePhase.READY, resolved.toolLivePhases[loc(assistantMessageId, 0)])
         val tool = resolved.assistantMessage!!.getTools().single()
         assertEquals(ToolInteractionState.Approved, tool.interactionState)
     }
@@ -287,9 +290,9 @@ class TurnStreamProjectionTest {
     @Test
     fun `presentation overlays only the last node with the draft and shares every history node`() {
         val conversationId = Uuid.random()
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
         val history = (0 until 5).map { MessageNode.of(UIMessage.user("history-$it")) }
-        val committedAssistant = assistant(assistantId, UIMessagePart.Text("committed"))
+        val committedAssistant = assistant(assistantMessageId, UIMessagePart.Text("committed"))
         val durable = Conversation.ofId(conversationId)
             .copy(messageNodes = history + MessageNode.of(committedAssistant))
             .toSnapshot()
@@ -297,7 +300,7 @@ class TurnStreamProjectionTest {
         val stream = TurnStreamProjection(
             epoch = 1,
             turnId = Uuid.random(),
-            assistantMessageId = assistantId,
+            assistantMessageId = assistantMessageId,
             assistantMessage = draft,
         )
 
@@ -447,7 +450,7 @@ class TurnStreamProjectionTest {
         val assistant = Assistant(
             regexes = listOf(
                 AssistantRegex(
-                    id = Uuid.random(),
+                    id = ConfigurationReference.random(),
                     findRegex = "a",
                     replaceString = "aa",
                     affectingScope = setOf(AssistantAffectScope.ASSISTANT),

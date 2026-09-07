@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.service.runtime
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import net.weero.measix.pilot.testkit.sampledModelResult
 
 import kotlinx.datetime.LocalDateTime
@@ -53,27 +56,27 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
         val userId = Uuid.random()
         val userNode = MessageNode.of(user(userId))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(userNode))
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
         val command = TurnTransition.buildStartTurnCommand(
             c.toSnapshot(),
             turnId = Uuid.random(),
             modelContextCandidate = disclosureCandidate(),
-            assistantMessageId = assistantId,
+            assistantMessageId = assistantMessageId,
         )
         assertEquals(userId, command.anchorMessageId)
         assertEquals(userNode.id, command.anchorNodeId)
         assertEquals(listOf(userId), command.expectedSelectedPrefixMessageIds)
         val r = ConversationTransition.apply(c.toSnapshot(), command)
         assertEquals(2, r.nodes.size)
-        assertEquals(assistantId, r.nodes[1].messages.single().id)
+        assertEquals(assistantMessageId, r.nodes[1].messages.single().id)
         assertEquals(MessageRole.ASSISTANT, r.nodes[1].messages.single().role)
     }
 
     @Test
     fun `START on a non-terminal assistant adds a new variant instead of reusing the slot`() {
         val userId = Uuid.random()
-        val assistantId = Uuid.random()
-        val node = MessageNode.of(assistant(assistantId))
+        val assistantMessageId = Uuid.random()
+        val node = MessageNode.of(assistant(assistantMessageId))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(MessageNode.of(user(userId)), node))
         val replacementId = Uuid.random()
         val command = TurnTransition.buildStartTurnCommand(
@@ -97,8 +100,8 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
     @Test
     fun `START on a terminal assistant regenerates in place and unselects the old variant`() {
         val userId = Uuid.random()
-        val assistantId = Uuid.random()
-        val finished = assistant(assistantId).copy(
+        val assistantMessageId = Uuid.random()
+        val finished = assistant(assistantMessageId).copy(
             terminalStatus = MessageTerminalStatus.INCOMPLETE,
             terminalReason = "user_stop",
         )
@@ -155,7 +158,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
                 semanticsVersion = CURRENT_TOKEN_USAGE_SEMANTICS_VERSION,
             ),
         )
-        val initial = Conversation.ofId(Uuid.random(), Uuid.random()).copy(
+        val initial = Conversation.ofId(Uuid.random(), ConfigurationReference.random()).copy(
             messageNodes = listOf(MessageNode.of(previous), MessageNode.of(UIMessage.user("next"))),
         ).toSnapshot()
         val assistantMessageId = Uuid.random()
@@ -366,7 +369,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
     @Test
     fun `awaiting-user checkpoint may advance tool interaction state past the durable model output`() {
         val conversationId = Uuid.random()
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
         val turnId = Uuid.random()
         val base = Conversation.ofId(conversationId).copy(
             messageNodes = listOf(MessageNode.of(user(Uuid.random()))),
@@ -377,11 +380,11 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
                 current = base,
                 turnId = turnId,
                 modelContextCandidate = disclosureCandidate(),
-                assistantMessageId = assistantId,
+                assistantMessageId = assistantMessageId,
                 epoch = 1,
             ),
         )
-        val handle = TurnHandle(conversationId, 1, turnId, assistantId)
+        val handle = TurnHandle(conversationId, 1, turnId, assistantMessageId)
         val initialAssistant = started.nodes.last().currentMessage.let { raw -> raw.copy(parts = raw.parts.map {
             if (it is UIMessagePart.Step) it.copy(modelResult = sampledModelResult()) else it
         }) }
@@ -420,13 +423,13 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
 
     @Test
     fun `finalize marks assistant terminal for failure status`() {
-        val assistantId = Uuid.random()
-        val node = MessageNode.of(assistant(assistantId))
+        val assistantMessageId = Uuid.random()
+        val node = MessageNode.of(assistant(assistantMessageId))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
         val r = ConversationTransition.apply(
             c.toSnapshot(),
             FinalizeTurn(
-                handle = handle(c.id, assistantId),
+                handle = handle(c.id, assistantMessageId),
                 assistantMessage = null,
                 terminalStatus = TurnExecutionStatus.FAILED,
                 terminalReason = "provider_error",
@@ -441,22 +444,22 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
 
     @Test
     fun `finalize completed keeps terminal null`() {
-        val assistantId = Uuid.random()
-        val node = MessageNode.of(assistant(assistantId))
+        val assistantMessageId = Uuid.random()
+        val node = MessageNode.of(assistant(assistantMessageId))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
         val r = ConversationTransition.apply(
             c.toSnapshot(),
-            FinalizeTurn(handle(c.id, assistantId), null, TurnExecutionStatus.COMPLETED, null),
+            FinalizeTurn(handle(c.id, assistantMessageId), null, TurnExecutionStatus.COMPLETED, null),
         )
         assertNull(r.nodes[0].messages.single().terminalStatus)
     }
 
     @Test
     fun `finalize overwrites intermediate step time with stable turn finish time`() {
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
         val stepFinishedAt = LocalDateTime(2026, 9, 1, 10, 0)
         val turnFinishedAt = LocalDateTime(2026, 9, 1, 10, 1)
-        val message = assistant(assistantId).copy(finishedAt = stepFinishedAt)
+        val message = assistant(assistantMessageId).copy(finishedAt = stepFinishedAt)
         val conversation = Conversation.ofId(Uuid.random()).copy(
             messageNodes = listOf(MessageNode.of(message)),
         )
@@ -464,7 +467,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
         val result = ConversationTransition.apply(
             conversation.toSnapshot(),
             FinalizeTurn(
-                handle = handle(conversation.id, assistantId),
+                handle = handle(conversation.id, assistantMessageId),
                 assistantMessage = null,
                 terminalStatus = TurnExecutionStatus.COMPLETED,
                 terminalReason = null,
@@ -512,7 +515,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
 
     @Test
     fun `finalize commits the assistant provided by the finalizer verbatim`() {
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
         // 关闭工具由 TurnFinalizer 在提交前完成，reducer 只落库并标记终态，不再自行改写工具。
         val closedTool = UIMessagePart.Tool(
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "t1",
@@ -522,13 +525,13 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
             resultStatus = me.rerere.ai.ui.ToolResultStatus.INTERRUPTED,
             interactionState = ToolInteractionState.AwaitingApproval,
         )
-        val node = MessageNode.of(assistant(assistantId, listOf(UIMessagePart.Text("pre"), closedTool)))
+        val node = MessageNode.of(assistant(assistantMessageId, listOf(UIMessagePart.Text("pre"), closedTool)))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
         val r = ConversationTransition.apply(
             c.toSnapshot(),
             FinalizeTurn(
-                handle(c.id, assistantId),
-                assistant(assistantId, listOf(UIMessagePart.Text("pre"), closedTool)),
+                handle(c.id, assistantMessageId),
+                assistant(assistantMessageId, listOf(UIMessagePart.Text("pre"), closedTool)),
                 TurnExecutionStatus.INTERRUPTED,
                 null,
             ),
@@ -575,7 +578,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
     @Test
     fun `recovery refuses a turn whose owning assistant message is missing`() {
         val conversationId = Uuid.random()
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
         val snapshot = Conversation.ofId(conversationId).copy(
             messageNodes = listOf(MessageNode.of(UIMessage.user("preserved"))),
         ).toSnapshot()
@@ -585,7 +588,7 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
                 snapshot,
                 RecoverInterruptedTurn(
                     turnId = Uuid.random(),
-                    assistantMessageId = assistantId,
+                    assistantMessageId = assistantMessageId,
                     assistantMessage = null,
                     terminalReason = "process_restarted",
                 ),
@@ -597,18 +600,18 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
 
     @Test
     fun `ResolveToolInteraction marks tool approval`() {
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
         val tool = UIMessagePart.Tool(
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "t1",
             toolName = "shell",
             input = "{}",
             interactionState = ToolInteractionState.AwaitingApproval,
         )
-        val node = MessageNode.of(assistant(assistantId, listOf(tool)))
+        val node = MessageNode.of(assistant(assistantMessageId, listOf(tool)))
         val c = Conversation.ofId(Uuid.random()).copy(messageNodes = listOf(node))
         val r = ConversationTransition.apply(
             c.toSnapshot(),
-            ResolveToolInteraction(assistantId, tool.stepId, tool.localCallId, ToolInteractionDecision.Deny("no"), handle(c.id, assistantId)),
+            ResolveToolInteraction(assistantMessageId, tool.stepId, tool.localCallId, ToolInteractionDecision.Deny("no"), handle(c.id, assistantMessageId)),
         )
         val updated = r.nodes[0].messages.single().parts.filterIsInstance<UIMessagePart.Tool>().single()
         assertEquals(ToolInteractionState.Denied("no"), updated.interactionState)
@@ -616,21 +619,21 @@ internal class TurnTransitionTest : ConversationTransitionTestBase() {
 
     @Test
     fun `approval updates the durable tool interaction state`() {
-        val assistantId = Uuid.random()
+        val assistantMessageId = Uuid.random()
         val pending = UIMessagePart.Tool(
             localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "t1",
             toolName = "shell",
             input = "{}",
             interactionState = ToolInteractionState.AwaitingApproval,
         )
-        val durableMessage = assistant(assistantId, listOf(pending))
+        val durableMessage = assistant(assistantMessageId, listOf(pending))
         val base = Conversation.ofId(Uuid.random()).copy(
             messageNodes = listOf(MessageNode.of(durableMessage)),
         ).toSnapshot()
 
         val reduced = ConversationTransition.apply(
             base,
-            ResolveToolInteraction(assistantId, pending.stepId, pending.localCallId, ToolInteractionDecision.Approve, handle(base.conversationId, assistantId)),
+            ResolveToolInteraction(assistantMessageId, pending.stepId, pending.localCallId, ToolInteractionDecision.Approve, handle(base.conversationId, assistantMessageId)),
         )
 
         assertEquals(durableMessage.parts.size, reduced.nodes.single().currentMessage.parts.size)

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.assistant
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -18,7 +19,6 @@ import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.service.AssistantManagementService
 import net.weero.measix.pilot.service.ArtifactUseCase
-import kotlin.uuid.Uuid
 
 class AssistantVM(
     private val settingsStore: SettingsStore,
@@ -32,7 +32,7 @@ class AssistantVM(
     val settings: StateFlow<Settings> = settingsStore.effectiveSettings.map { it.settings }
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
-    fun reorderAssistants(orderedIds: List<Uuid>) {
+    fun reorderAssistants(orderedIds: List<ConfigurationReference>) {
         updateSettings {
             artifactUseCase.updateSettingsReferences { current ->
                 val requestedIds = orderedIds.toSet()
@@ -45,7 +45,7 @@ class AssistantVM(
         }
     }
 
-    fun reorderAssistantTags(orderedIds: List<Uuid>) {
+    fun reorderAssistantTags(orderedIds: List<ConfigurationReference>) {
         updateSettings {
             artifactUseCase.updateSettingsReferences { current ->
                 val requestedIds = orderedIds.toSet()
@@ -75,7 +75,7 @@ class AssistantVM(
     fun copyAssistant(assistant: Assistant) {
         updateSettings {
             val copiedAssistant = assistant.copy(
-                id = Uuid.random(),
+                id = ConfigurationReference.random(),
                 name = "${assistant.name} (Clone)",
                 avatar = if(assistant.avatar is Avatar.Image) Avatar.Dummy else assistant.avatar,
                 // Clone 重置子助手授权：不继承全局可见和允许列表

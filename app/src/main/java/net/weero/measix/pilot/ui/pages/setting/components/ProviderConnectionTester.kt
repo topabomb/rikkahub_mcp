@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.setting.components
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -43,7 +44,6 @@ import net.weero.measix.pilot.ui.components.ai.rememberModelListState
 import net.weero.measix.pilot.ui.pages.setting.ProviderSettingsUiState
 import net.weero.measix.pilot.ui.theme.extendColors
 import net.weero.measix.pilot.utils.UiState
-import kotlin.uuid.Uuid
 
 @Composable
 fun ProviderConnectionTester(
@@ -51,7 +51,7 @@ fun ProviderConnectionTester(
     state: ProviderSettingsUiState,
     onOpen: () -> Unit,
     onDismiss: () -> Unit,
-    onSelectModel: (Uuid?) -> Unit,
+    onSelectModel: (ConfigurationReference?) -> Unit,
     onRun: () -> Unit,
 ) {
     IconButton(onClick = onOpen) {

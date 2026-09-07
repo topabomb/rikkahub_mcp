@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -349,7 +351,7 @@ class TurnRecoveryTest {
             val parentTurn = execution(masterId, parentMessage.id.toString())
             val parent = Conversation.ofId(masterId).copy(messageNodes = listOf(MessageNode.of(parentMessage)))
             val child = Conversation.ofId(childId).copy(parentConversationId = masterId,
-                assistantId = Uuid.parse(metadata.targetAssistantId),
+                assistantId = ConfigurationReference.parse(metadata.targetAssistantId),
                 messageNodes = listOf(MessageNode.of(task), MessageNode.of(childMessage)))
             val linked = ToolExecutionEntity("tool:${tool.localCallId}", parentTurn.turnId, parentStep.stepId.toString(),
                 tool.localCallId.toString(), ToolExecutionStatus.STARTED, null, childId.toString(), childTurn.turnId, "run", 1, 1)

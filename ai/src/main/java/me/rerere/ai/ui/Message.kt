@@ -1,5 +1,6 @@
 package me.rerere.ai.ui
 
+import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -27,7 +28,7 @@ data class UIMessage(
     val createdAt: LocalDateTime = Clock.System.now()
         .toLocalDateTime(TimeZone.currentSystemDefault()),
     val finishedAt: LocalDateTime? = null,
-    val modelId: Uuid? = null,
+    val modelId: ConfigurationReference? = null,
     val usage: TokenUsage? = null,
     val translation: String? = null,
     /** Provider protocol state used for lossless stateless replay; never rendered as user content. */

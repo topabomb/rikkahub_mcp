@@ -1,4 +1,6 @@
 package net.weero.measix.pilot.service
+
+import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.service.subassistant.SubAssistantLifecycle
 import net.weero.measix.pilot.service.turn.TurnFinalizer
 
@@ -39,7 +41,7 @@ class ConversationForkContextTest {
     @Test
     fun `initializing a managed default draft does not overwrite the local assistant shadow`() = runTest {
         val conversationId = Uuid.random()
-        val assistantId = Uuid.random()
+        val assistantId = ConfigurationReference.random()
         val settingsStore = mockk<SettingsStore>()
         every { settingsStore.effectiveSettings } returns MutableStateFlow(
             EffectiveSettingsSnapshot(
@@ -73,7 +75,7 @@ class ConversationForkContextTest {
     @Test
     fun `fork passes committed folder and workspace cwd through createTree`() = runTest {
         val sourceId = Uuid.random()
-        val assistantId = Uuid.random()
+        val assistantId = ConfigurationReference.random()
         val folderId = Uuid.random()
         val anchor = UIMessage.user("fork here")
         val owner = UIMessage.assistant("answer")

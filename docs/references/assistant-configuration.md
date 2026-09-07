@@ -8,6 +8,7 @@
 `app/src/main/java/net/weero/measix/pilot/data/model/Assistant.kt`，作为
 `Settings.assistants` 的本地 shadow 由 `SettingsStore` 写入既有 DataStore，并经同一 Store 的有效读模型提供给应用。
 
+- Assistant 身份及模型、MCP、子助手等配置引用使用 `ConfigurationReference`；个人资源序列化保持原 UUID，企业资源保留 authority 与原始资源 ID。用户定义中的引用只能指向 User，企业域使用选择由独立偏好表达。
 - `Settings.assistantId` 只是全局当前选择。
 - 已创建会话以 `Conversation.assistantId` 为助手归属权威来源。
 - `Settings.getConversationAssistant()` 优先解析会话引用；只有引用的助手已被删除时才回退到当前助手。
@@ -22,7 +23,7 @@
 
 | 字段 | 默认值 | 语义 |
 |------|--------|------|
-| `id` | 随机 `Uuid` | 持久化身份；引用、权限和数据隔离都依赖它 |
+| `id` | `ConfigurationReference.User`（随机 UUID） | 持久化身份；引用、权限和数据隔离都依赖它 |
 | `name` | `""` | UI 名称和 `{{char}}` 占位符来源 |
 | `description` | `""` | 子助手 Catalog 的路由描述和 `{{description}}` 来源，不是 System Prompt |
 | `avatar` | `Avatar.Dummy` | 助手头像配置 |

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.hooks
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -8,12 +9,11 @@ import androidx.compose.runtime.setValue
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.getCurrentAssistant
 import net.weero.measix.pilot.data.model.Assistant
-import kotlin.uuid.Uuid
 
 @Composable
 fun rememberAssistantState(
     settings: Settings,
-    onSelectAssistant: (Uuid) -> Unit,
+    onSelectAssistant: (ConfigurationReference) -> Unit,
 ): AssistantState {
     return remember(settings, onSelectAssistant) {
         AssistantState(settings, onSelectAssistant)
@@ -22,7 +22,7 @@ fun rememberAssistantState(
 
 class AssistantState(
     private val settings: Settings,
-    private val onSelectAssistant: (Uuid) -> Unit,
+    private val onSelectAssistant: (ConfigurationReference) -> Unit,
 ) {
     private var _currentAssistant by mutableStateOf(
         settings.getCurrentAssistant()

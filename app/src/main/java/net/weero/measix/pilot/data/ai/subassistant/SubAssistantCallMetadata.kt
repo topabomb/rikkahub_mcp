@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.ai.subassistant
 
+import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -14,7 +15,6 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.files.LocalArtifactRef
 import net.weero.measix.pilot.data.files.LocalToolPath
-import kotlin.uuid.Uuid
 
 @Serializable
 data class SubAssistantCallArtifact(
@@ -142,7 +142,7 @@ fun UIMessagePart.Tool.mergeSubAssistantCallMetadata(
  */
 fun buildInitialSubAssistantCallMetadata(
     runId: String,
-    targetAssistantId: Uuid,
+    targetAssistantId: ConfigurationReference,
     targetNameSnapshot: String,
     previousRunId: String? = null,
 ): SubAssistantCallMetadata = SubAssistantCallMetadata(

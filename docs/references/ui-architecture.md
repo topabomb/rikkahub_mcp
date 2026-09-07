@@ -21,6 +21,8 @@ RouteActivity (ComponentActivity)
                  └─ entry<Screen.*> (全屏逐页导航)
 ```
 
+配置列表的 `ConfigurationReference` 在 Lazy/可拖动列表边界使用 `toString()` 作为可保存 key；业务选择与命令继续传递类型化引用。Lazy item 与 `ReorderableItem` 必须使用同一 key，不能把不可放入 Bundle 的领域对象交给 SaveableStateHolder。
+
 ### 技术栈
 
 | 层面 | 技术 |

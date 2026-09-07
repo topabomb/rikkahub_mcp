@@ -1,4 +1,6 @@
 package net.weero.measix.pilot.service
+
+import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.service.turn.TurnFinalizer
 
 import net.weero.measix.pilot.test.turnRunInputsFixture
@@ -67,7 +69,7 @@ class TurnFinalizationAssistantCallTest {
     fun `parent failure cannot publish a stopped result while its linked child turn is still running`() = runTest {
         val childId = Uuid.random()
         val call = UIMessagePart.Tool(Uuid.random(), Uuid.random(), "call", "assistant_call", "{}")
-            .mergeSubAssistantCallMetadata(Json, buildInitialSubAssistantCallMetadata("run", Uuid.random(), "Child")
+            .mergeSubAssistantCallMetadata(Json, buildInitialSubAssistantCallMetadata("run", ConfigurationReference.random(), "Child")
                 .copy(state = SubAssistantCallState.RUNNING, childConversationId = childId.toString()))
         val assistant = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(call))
         val harness = harness(assistant, ToolExecutionStatus.STARTED, childId.toString())
@@ -106,7 +108,7 @@ class TurnFinalizationAssistantCallTest {
         val bareCall = UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call", toolName = "assistant_call", input = "{}")
         val mismatched = bareCall.mergeSubAssistantCallMetadata(
             Json,
-            buildInitialSubAssistantCallMetadata("run", Uuid.random(), "Target").copy(
+            buildInitialSubAssistantCallMetadata("run", ConfigurationReference.random(), "Target").copy(
                 state = SubAssistantCallState.RUNNING,
                 childConversationId = Uuid.random().toString(),
             ),

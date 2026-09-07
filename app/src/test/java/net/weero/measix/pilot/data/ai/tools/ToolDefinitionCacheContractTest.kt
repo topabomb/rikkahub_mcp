@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.data.ai.tools
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import me.rerere.ai.core.Tool
 import net.weero.measix.pilot.data.ai.mcp.McpCommonOptions
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
@@ -11,7 +14,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Test
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
-import kotlin.uuid.Uuid
 
 /**
  * 缓存契约：工具定义只在 START 装配一次，且定义里不得出现任何 live disclosure。
@@ -27,10 +29,10 @@ class ToolDefinitionCacheContractTest {
         assistants: List<Assistant>,
         mcpServers: List<McpServerConfig>,
     ): Settings = Settings(
-        chatModelId = Uuid.parse("00000000-0000-0000-0000-000000000401"),
-        fastModelId = Uuid.parse("00000000-0000-0000-0000-000000000402"),
-        imageGenerationModelId = Uuid.parse("00000000-0000-0000-0000-000000000403"),
-        compressModelId = Uuid.parse("00000000-0000-0000-0000-000000000404"),
+        chatModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000401"),
+        fastModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000402"),
+        imageGenerationModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000403"),
+        compressModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000404"),
         assistants = assistants,
         mcpServers = mcpServers,
     )
@@ -40,7 +42,7 @@ class ToolDefinitionCacheContractTest {
         url = url,
     )
 
-    private fun assistant(id: Uuid, name: String, tag: Uuid) = Assistant(
+    private fun assistant(id: ConfigurationReference, name: String, tag: ConfigurationReference) = Assistant(
         id = id,
         name = name,
         description = "$name description",
@@ -61,16 +63,16 @@ class ToolDefinitionCacheContractTest {
 
     @Test
     fun `real definitions ignore assistant and MCP catalog content across assemblies`() {
-        val tag = Uuid.random()
+        val tag = ConfigurationReference.random()
         val baseline = settingsWith(
-            assistants = listOf(assistant(Uuid.random(), "Baseline Agent", tag)),
+            assistants = listOf(assistant(ConfigurationReference.random(), "Baseline Agent", tag)),
             mcpServers = listOf(mcpServer("baseline-server", "https://baseline.example/mcp")),
         )
         val changed = settingsWith(
             assistants = listOf(
-                assistant(Uuid.random(), "Renamed Agent", tag),
-                assistant(Uuid.random(), "Created Agent", tag),
-                assistant(Uuid.random(), "Another Agent", tag),
+                assistant(ConfigurationReference.random(), "Renamed Agent", tag),
+                assistant(ConfigurationReference.random(), "Created Agent", tag),
+                assistant(ConfigurationReference.random(), "Another Agent", tag),
             ),
             mcpServers = listOf(
                 mcpServer("renamed-server", "https://other.example/mcp"),
@@ -83,8 +85,8 @@ class ToolDefinitionCacheContractTest {
 
     @Test
     fun `frozen definitions carry no assistant MCP catalog or calendar disclosure`() {
-        val assistantId = Uuid.random()
-        val tag = Uuid.random()
+        val assistantId = ConfigurationReference.random()
+        val tag = ConfigurationReference.random()
         val settings = settingsWith(
             assistants = listOf(assistant(assistantId, "Disclosure Sentinel Agent", tag)),
             mcpServers = listOf(mcpServer("sentinel-catalog-server", "https://sentinel.example/mcp")),

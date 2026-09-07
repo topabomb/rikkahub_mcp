@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.extensions
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -14,7 +15,6 @@ import net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot
 import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.model.QuickMessage
-import kotlin.uuid.Uuid
 
 class QuickMessagesVM(
     private val settingsStore: SettingsStore
@@ -49,7 +49,7 @@ class QuickMessagesVM(
         }
     }
 
-    fun deleteQuickMessage(id: Uuid) {
+    fun deleteQuickMessage(id: ConfigurationReference) {
         updateSettings {
             settingsStore.updateLocal { current ->
                 current.copy(

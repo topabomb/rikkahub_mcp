@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.service
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -23,7 +26,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class ProviderSettingsApplicationServiceTest {
     @Test
@@ -73,8 +75,8 @@ class ProviderSettingsApplicationServiceTest {
 
     @Test
     fun `configuration save preserves models from the latest atomic snapshot`() = runTest {
-        val providerId = Uuid.random()
-        val concurrentModel = Model(id = Uuid.random(), modelId = "concurrent")
+        val providerId = ConfigurationReference.random()
+        val concurrentModel = Model(id = ConfigurationReference.random(), modelId = "concurrent")
         val latest = ProviderSetting.OpenAI(
             id = providerId,
             name = "Latest",
@@ -98,9 +100,9 @@ class ProviderSettingsApplicationServiceTest {
 
     @Test
     fun `model reorder resolves stable ids against latest list and missing ids are no-op`() = runTest {
-        val first = Model(id = Uuid.random(), modelId = "a")
-        val concurrent = Model(id = Uuid.random(), modelId = "b")
-        val last = Model(id = Uuid.random(), modelId = "c")
+        val first = Model(id = ConfigurationReference.random(), modelId = "a")
+        val concurrent = Model(id = ConfigurationReference.random(), modelId = "b")
+        val last = Model(id = ConfigurationReference.random(), modelId = "c")
         val latest = ProviderSetting.OpenAI(models = listOf(first, concurrent, last))
         val store = mockk<SettingsStore>()
         var current = Settings(providers = listOf(latest))
@@ -113,14 +115,14 @@ class ProviderSettingsApplicationServiceTest {
         assertEquals(listOf(concurrent, last, first), current.providers.single().models)
 
         val afterMove = current.providers.single()
-        service.moveModel(latest.id, Uuid.random(), last.id)
+        service.moveModel(latest.id, ConfigurationReference.random(), last.id)
         assertSame(afterMove, current.providers.single())
     }
 
     @Test
     fun `bulk model removal uses catalog model ids rather than transient uuids`() = runTest {
-        val retained = Model(id = Uuid.random(), modelId = "retained")
-        val removed = Model(id = Uuid.random(), modelId = "removed")
+        val retained = Model(id = ConfigurationReference.random(), modelId = "retained")
+        val removed = Model(id = ConfigurationReference.random(), modelId = "removed")
         val latest = ProviderSetting.OpenAI(models = listOf(retained, removed))
         val store = mockk<SettingsStore>()
         var current = Settings(providers = listOf(latest))
@@ -152,7 +154,7 @@ class ProviderSettingsApplicationServiceTest {
 
     @Test
     fun `balance cache identity includes the edited endpoint and credential`() = runTest {
-        val providerId = Uuid.random()
+        val providerId = ConfigurationReference.random()
         val first = ProviderSetting.OpenAI(
             id = providerId,
             baseUrl = "https://first.example/v1",

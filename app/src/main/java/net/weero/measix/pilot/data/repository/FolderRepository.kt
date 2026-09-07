@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.repository
 
+import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import net.weero.measix.pilot.data.db.dao.ConversationDAO
@@ -13,12 +14,12 @@ class FolderRepository(
     private val folderDAO: FolderDAO,
     private val conversationDAO: ConversationDAO,
 ) {
-    fun getFoldersOfAssistant(assistantId: Uuid): Flow<List<Folder>> {
+    fun getFoldersOfAssistant(assistantId: ConfigurationReference): Flow<List<Folder>> {
         return folderDAO.getFoldersOfAssistant(assistantId.toString())
             .map { list -> list.map { it.toFolder() } }
     }
 
-    suspend fun createFolder(assistantId: Uuid, name: String): Folder {
+    suspend fun createFolder(assistantId: ConfigurationReference, name: String): Folder {
         val folder = Folder(
             assistantId = assistantId,
             name = name,
@@ -46,7 +47,7 @@ class FolderRepository(
 
 private fun FolderEntity.toFolder(): Folder = Folder(
     id = Uuid.parse(id),
-    assistantId = Uuid.parse(assistantId),
+    assistantId = ConfigurationReference.parse(assistantId),
     name = name,
     sortIndex = sortIndex,
     createAt = Instant.ofEpochMilli(createAt),

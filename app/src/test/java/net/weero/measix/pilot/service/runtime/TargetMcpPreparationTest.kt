@@ -1,4 +1,6 @@
 package net.weero.measix.pilot.service.runtime
+
+import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.service.subassistant.targetMcpPreparationFailure
 
 import net.weero.measix.pilot.data.ai.mcp.McpServerCapabilityOutcome
@@ -7,7 +9,6 @@ import net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class TargetMcpPreparationTest {
     @Test
@@ -17,7 +18,7 @@ class TargetMcpPreparationTest {
                 tools = emptyList(),
                 serverOutcomes = listOf(
                     McpServerCapabilityOutcome(
-                        serverId = Uuid.random(),
+                        serverId = ConfigurationReference.random(),
                         serverName = "measurement-server",
                         state = McpServerCapabilityState.TIMEOUT,
                         toolCount = 0,
@@ -37,7 +38,7 @@ class TargetMcpPreparationTest {
                     tools = emptyList(),
                     serverOutcomes = listOf(
                         McpServerCapabilityOutcome(
-                            serverId = Uuid.random(),
+                            serverId = ConfigurationReference.random(),
                             serverName = "measurement-server",
                             state = McpServerCapabilityState.READY,
                             toolCount = 20,

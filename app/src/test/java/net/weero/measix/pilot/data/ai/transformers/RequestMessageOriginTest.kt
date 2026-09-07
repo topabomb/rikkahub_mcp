@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.data.ai.transformers
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import net.weero.measix.pilot.service.turn.resolveTurnAssistantSnapshot
 
 import net.weero.measix.pilot.test.testPromptInputs
@@ -51,7 +54,7 @@ class RequestMessageOriginTest {
 
     private fun assistant(
         enableTimeReminder: Boolean = false,
-        modeInjectionIds: Set<Uuid> = emptySet(),
+        modeInjectionIds: Set<ConfigurationReference> = emptySet(),
         workspaceId: Uuid? = null,
     ) = Assistant(
         enableTimeReminder = enableTimeReminder,
@@ -119,7 +122,7 @@ class RequestMessageOriginTest {
     fun `prompt injections at every position are not wrapped by the template`() = runTest {
         InjectionPosition.entries.forEach { position ->
             val tracker = RequestMessageOriginTracker()
-            val injectionId = Uuid.random()
+            val injectionId = ConfigurationReference.random()
             val injection = PromptInjection.ModeInjection(
                 id = injectionId,
                 name = "inj",

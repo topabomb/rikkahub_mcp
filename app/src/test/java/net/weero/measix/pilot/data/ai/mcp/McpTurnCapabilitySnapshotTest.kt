@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -25,7 +27,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 /** 回合能力快照：prepare 与 capture 冻结、提交门与审批收紧、槽位门与调用取消边界。 */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -248,7 +249,7 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
     fun `oauth refresh during tool admission does not hold the slot gate`() = runTest(dispatcher) {
         val isolatedEffective = MutableStateFlowHolder()
         val isolatedSettingsStore = mockk<SettingsStore>()
-        val isolatedCatalogs = MutableStateFlow<Map<Uuid, McpCatalogSnapshot>>(emptyMap())
+        val isolatedCatalogs = MutableStateFlow<Map<ConfigurationReference, McpCatalogSnapshot>>(emptyMap())
         val isolatedCatalogStore = mockk<McpCatalogStore>()
         val oauthClient = mockk<McpOAuthClient>(relaxed = true)
         val isolatedClients = mutableListOf<Client>()

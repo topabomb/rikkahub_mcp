@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service
 
+import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -20,7 +21,6 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.ManagedConfigurationRecordKind
 import net.weero.measix.pilot.data.datastore.ManagedConfigurationState
 import net.weero.measix.pilot.data.datastore.SettingsValueSource
-import kotlin.uuid.Uuid
 
 data class McpToolPresentation(
     val name: String,
@@ -31,7 +31,7 @@ data class McpToolPresentation(
 )
 
 data class McpServerPresentation(
-    val serverId: Uuid,
+    val serverId: ConfigurationReference,
     val name: String,
     val enabled: Boolean,
     val definition: McpServerConfig,
@@ -73,7 +73,7 @@ class McpQueryService(
         }
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
-    fun observeServer(serverId: Uuid): Flow<McpServerPresentation?> = servers
+    fun observeServer(serverId: ConfigurationReference): Flow<McpServerPresentation?> = servers
         .map { rows -> rows.firstOrNull { it.serverId == serverId } }
         .distinctUntilChanged()
 }

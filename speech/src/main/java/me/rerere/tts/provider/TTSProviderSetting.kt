@@ -2,22 +2,22 @@ package me.rerere.tts.provider
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlin.uuid.Uuid
+import me.rerere.common.configuration.ConfigurationReference
 
 @Serializable
 sealed class TTSProviderSetting {
-    abstract val id: Uuid
+    abstract val id: ConfigurationReference
     abstract val name: String
 
     abstract fun copyProvider(
-        id: Uuid = this.id,
+        id: ConfigurationReference = this.id,
         name: String = this.name,
     ): TTSProviderSetting
 
     @Serializable
     @SerialName("openai")
     data class OpenAI(
-        override var id: Uuid = Uuid.random(),
+        override var id: ConfigurationReference = ConfigurationReference.random(),
         override var name: String = "OpenAI TTS",
         val apiKey: String = "",
         val baseUrl: String = "https://api.openai.com/v1",
@@ -25,7 +25,7 @@ sealed class TTSProviderSetting {
         val voice: String = "alloy"
     ) : TTSProviderSetting() {
         override fun copyProvider(
-            id: Uuid,
+            id: ConfigurationReference,
             name: String,
         ): TTSProviderSetting {
             return this.copy(
@@ -38,7 +38,7 @@ sealed class TTSProviderSetting {
     @Serializable
     @SerialName("gemini")
     data class Gemini(
-        override var id: Uuid = Uuid.random(),
+        override var id: ConfigurationReference = ConfigurationReference.random(),
         override var name: String = "Gemini TTS",
         val apiKey: String = "",
         val baseUrl: String = "https://generativelanguage.googleapis.com/v1beta",
@@ -46,7 +46,7 @@ sealed class TTSProviderSetting {
         val voiceName: String = "Kore"
     ) : TTSProviderSetting() {
         override fun copyProvider(
-            id: Uuid,
+            id: ConfigurationReference,
             name: String,
         ): TTSProviderSetting {
             return this.copy(
@@ -59,13 +59,13 @@ sealed class TTSProviderSetting {
     @Serializable
     @SerialName("system")
     data class SystemTTS(
-        override var id: Uuid = Uuid.random(),
+        override var id: ConfigurationReference = ConfigurationReference.random(),
         override var name: String = "System TTS",
         val speechRate: Float = 1.0f,
         val pitch: Float = 1.0f,
     ) : TTSProviderSetting() {
         override fun copyProvider(
-            id: Uuid,
+            id: ConfigurationReference,
             name: String,
         ): TTSProviderSetting {
             return this.copy(
@@ -78,7 +78,7 @@ sealed class TTSProviderSetting {
     @Serializable
     @SerialName("mimo")
     data class MiMo(
-        override var id: Uuid = Uuid.random(),
+        override var id: ConfigurationReference = ConfigurationReference.random(),
         override var name: String = "MiMo TTS",
         val apiKey: String = "",
         val baseUrl: String = "https://api.xiaomimimo.com/v1",
@@ -88,7 +88,7 @@ sealed class TTSProviderSetting {
         val voiceDesignPrompt: String = ""
     ) : TTSProviderSetting() {
         override fun copyProvider(
-            id: Uuid,
+            id: ConfigurationReference,
             name: String,
         ): TTSProviderSetting {
             return this.copy(

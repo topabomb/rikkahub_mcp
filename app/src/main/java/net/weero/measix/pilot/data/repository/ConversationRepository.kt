@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.repository
 
+import me.rerere.common.configuration.ConfigurationReference
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
@@ -43,7 +44,7 @@ import net.weero.measix.pilot.service.runtime.ExecutionFacts
 import net.weero.measix.pilot.service.runtime.hasChanges
 import net.weero.measix.pilot.service.runtime.OptionalFolderId
 import net.weero.measix.pilot.service.runtime.OptionalString
-import net.weero.measix.pilot.service.runtime.OptionalUuidSet
+import net.weero.measix.pilot.service.runtime.OptionalConfigurationReferenceSet
 import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
 import net.weero.measix.pilot.service.runtime.TurnExecutionOperation
 import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
@@ -76,21 +77,21 @@ class ConversationRepository(
     }
 
     suspend fun getRecentConversationRecords(
-        assistantId: Uuid,
+        assistantId: ConfigurationReference,
         limit: Int = 10,
     ): List<ConversationListRecord> = conversationDAO.getRecentConversationsOfAssistant(
         assistantId = assistantId.toString(),
         limit = limit,
     ).map(::conversationEntityToListRecord)
 
-    fun getConversationsOfAssistant(assistantId: Uuid): Flow<List<ConversationListRecord>> {
+    fun getConversationsOfAssistant(assistantId: ConfigurationReference): Flow<List<ConversationListRecord>> {
         return conversationDAO
             .getConversationsOfAssistant(assistantId.toString())
             .map { entities -> entities.map(::conversationEntityToListRecord) }
     }
 
     fun getUnfiledConversationsOfAssistantPaging(
-        assistantId: Uuid,
+        assistantId: ConfigurationReference,
     ): Flow<PagingData<ConversationListRecord>> = Pager(
         config = PagingConfig(
             pageSize = PAGE_SIZE,
@@ -199,7 +200,7 @@ class ConversationRepository(
         return ConversationHeader(
             id = id,
             title = entity.title,
-            assistantId = Uuid.parse(entity.assistantId),
+            assistantId = ConfigurationReference.parse(entity.assistantId),
             folderId = entity.folderId.ifEmpty { null }?.let(Uuid::parse),
             isPinned = entity.isPinned,
             chatSuggestions = JsonInstant.decodeFromString(entity.chatSuggestions),
@@ -534,8 +535,8 @@ class ConversationRepository(
             is OptionalString.Set -> conversationDAO.updateCustomSystemPrompt(id, patch.customSystemPrompt.value ?: "")
         }
         when (patch.modeInjectionIds) {
-            is OptionalUuidSet.Keep -> Unit
-            is OptionalUuidSet.Set -> conversationDAO.updateModeInjectionIds(id, JsonInstant.encodeToString(patch.modeInjectionIds.value))
+            is OptionalConfigurationReferenceSet.Keep -> Unit
+            is OptionalConfigurationReferenceSet.Set -> conversationDAO.updateModeInjectionIds(id, JsonInstant.encodeToString(patch.modeInjectionIds.value))
         }
         when (patch.workspaceCwd) {
             is OptionalString.Keep -> Unit
@@ -590,7 +591,7 @@ class ConversationRepository(
     ) = messageFtsManager.search(keyword, sort)
 
     suspend fun searchMessagesOfAssistant(
-        assistantId: Uuid,
+        assistantId: ConfigurationReference,
         keyword: String,
         sort: MessageSearchSort = MessageSearchSort.RELEVANCE,
     ) = messageFtsManager.search(keyword, sort, assistantId.toString())
@@ -683,7 +684,7 @@ class ConversationRepository(
             messageNodes = messageNodes,
             createAt = Instant.ofEpochMilli(conversationEntity.createAt),
             updateAt = Instant.ofEpochMilli(conversationEntity.updateAt),
-            assistantId = Uuid.parse(conversationEntity.assistantId),
+            assistantId = ConfigurationReference.parse(conversationEntity.assistantId),
             chatSuggestions = JsonInstant.decodeFromString(conversationEntity.chatSuggestions),
             isPinned = conversationEntity.isPinned,
             customSystemPrompt = conversationEntity.customSystemPrompt.ifEmpty { null },
@@ -703,7 +704,7 @@ class ConversationRepository(
     private fun conversationEntityToListRecord(entity: ConversationEntity): ConversationListRecord =
         ConversationListRecord(
             id = Uuid.parse(entity.id),
-            assistantId = Uuid.parse(entity.assistantId),
+            assistantId = ConfigurationReference.parse(entity.assistantId),
             title = entity.title,
             isPinned = entity.isPinned,
             createAt = Instant.ofEpochMilli(entity.createAt),
@@ -714,7 +715,7 @@ class ConversationRepository(
     private fun lightEntityToListRecord(entity: LightConversationEntity): ConversationListRecord =
         ConversationListRecord(
             id = Uuid.parse(entity.id),
-            assistantId = Uuid.parse(entity.assistantId),
+            assistantId = ConfigurationReference.parse(entity.assistantId),
             title = entity.title,
             isPinned = entity.isPinned,
             createAt = Instant.ofEpochMilli(entity.createAt),
@@ -882,7 +883,7 @@ class ConversationPayloadException(message: String, cause: Throwable? = null) :
 
 data class ConversationListRecord(
     val id: Uuid,
-    val assistantId: Uuid,
+    val assistantId: ConfigurationReference,
     val title: String,
     val folderId: Uuid?,
     val isPinned: Boolean,

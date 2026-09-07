@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service.runtime
 
+import me.rerere.common.configuration.ConfigurationReference
+
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -98,7 +100,7 @@ class RecoveryCostDecouplingTest {
         )
         val child = Conversation(
             id = childId,
-            assistantId = Uuid.random(),
+            assistantId = ConfigurationReference.random(),
             messageNodes = listOf(
                 MessageNode.of(UIMessage.assistant("partial").copy(id = assistantMessageId))
             ),
@@ -106,7 +108,7 @@ class RecoveryCostDecouplingTest {
         )
         val master = Conversation(
             id = masterId,
-            assistantId = Uuid.random(),
+            assistantId = ConfigurationReference.random(),
             messageNodes = emptyList(),
         )
         coEvery { repo.getNonTerminalTurnExecutionsWithScope() } returns listOf(

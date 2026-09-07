@@ -1,17 +1,19 @@
 package net.weero.measix.pilot.service.runtime
 
+import me.rerere.common.configuration.ConfigurationReference
+
+
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.data.datastore.Settings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
-import kotlin.uuid.Uuid
 
 class ProviderTransportLeaseTest {
     @Test
     fun `frozen OpenAI shape excludes credentials and live lease cannot change wire options`() {
-        val id = Uuid.random()
+        val id = ConfigurationReference.random()
         val start = ProviderSetting.OpenAI(
             id = id,
             apiKey = "start-secret",
@@ -58,7 +60,7 @@ class ProviderTransportLeaseTest {
 
     @Test
     fun `overwrite locator permits secret rotation only on the same exact owner`() {
-        val overwriteId = Uuid.random()
+        val overwriteId = ConfigurationReference.random()
         val startOverwrite = ProviderSetting.OpenAI(id = overwriteId, apiKey = "old")
         val model = Model(modelId = "model", displayName = "Model", providerOverwrite = startOverwrite)
         val catalog = ProviderSetting.OpenAI(models = listOf(model))
@@ -119,7 +121,7 @@ class ProviderTransportLeaseTest {
         assertThrows(IllegalStateException::class.java) {
             mergeProviderTransportCredentials(
                 frozen = frozen,
-                live = ProviderSetting.Claude(id = Uuid.random(), apiKey = "other"),
+                live = ProviderSetting.Claude(id = ConfigurationReference.random(), apiKey = "other"),
             )
         }
     }

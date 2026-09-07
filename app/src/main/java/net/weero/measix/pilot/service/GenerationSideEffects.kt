@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.service
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -124,7 +125,7 @@ class GenerationSideEffects(
      */
     private suspend fun runBackgroundGeneration(
         settings: Settings,
-        modelId: Uuid?,
+        modelId: ConfigurationReference?,
         fallbackToFastModel: Boolean,
         prompt: String,
     ): String? {

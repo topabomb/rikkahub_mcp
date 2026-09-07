@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.data.repository
 
+import me.rerere.common.configuration.ConfigurationReference
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -370,8 +371,8 @@ class WorkspaceRepository(
         }
     }
 
-    private suspend fun cleanupAssistantReferences(workspaceId: String): Map<Uuid, Uuid> {
-        var detachedWorkspaces = emptyMap<Uuid, Uuid>()
+    private suspend fun cleanupAssistantReferences(workspaceId: String): Map<ConfigurationReference, Uuid> {
+        var detachedWorkspaces = emptyMap<ConfigurationReference, Uuid>()
         settingsStore.updateLocal { settings ->
             detachedWorkspaces = settings.assistants.mapNotNull { assistant ->
                 assistant.workspaceId
@@ -407,7 +408,7 @@ class WorkspaceRepository(
     /** Reverses both owners only while no physical deletion has started. */
     private suspend fun rollbackPreparedWorkspaceDeletion(
         workspace: WorkspaceEntity,
-        detachedAssistantWorkspaces: Map<Uuid, Uuid>,
+        detachedAssistantWorkspaces: Map<ConfigurationReference, Uuid>,
     ): Boolean = withContext(NonCancellable) {
         val restored = withContext(Dispatchers.IO) {
             manager.restoreStagedWorkspaceDeletion(workspace.root)
@@ -507,7 +508,7 @@ class WorkspaceRepository(
         val bindings = buildMap {
             assistantWorkspaces.forEach { (assistantId, workspaceId) ->
                 try {
-                    put(Uuid.parse(assistantId), Uuid.parse(workspaceId))
+                    put(ConfigurationReference.parse(assistantId), Uuid.parse(workspaceId))
                 } catch (error: IllegalArgumentException) {
                     throw IllegalArgumentException("Workspace deletion journal has invalid binding IDs", error)
                 }
