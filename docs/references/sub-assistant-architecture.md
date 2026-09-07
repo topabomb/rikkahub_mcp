@@ -152,7 +152,7 @@ Child clone 创建的历史附件由 `SubAssistantRunCoordinator` 持有到关�
 再发布该批 `OwnedArtifact`。关联失败才补偿未关联 Child；关联成功后的资源发布失败保留 Child 和已有引用。
 如果 disclosure/MCP/tool/context 准备在 Child `StartTurn` 前失败，真实 USER 与 link 保留，只提交 Caller 失败 metadata，绝不伪造 Child START；
 已 START 的取消/失败则必须携带原 `childTurnId`，`TurnFinalizer` 只收口匹配的 active owner，迟到清理不能终结更新的 Child Turn。
-finally 同样只以原 `childTurnId + runJob` 释放 active request 与 context。该批资源不交给通用 Tool Result lease 作用域。
+finally 同样只以原 `childTurnId + runJob` 请求释放 active request 与 context；同 turn 的 stream 尚未关闭时保留 owner，不以 Job 已取消或显示 phase 代替终态提交。终态失败继续保留事实与原 owner，成功清空 stream 后才可释放。该批资源不交给通用 Tool Result lease 作用域。
 
 ### Lineage
 

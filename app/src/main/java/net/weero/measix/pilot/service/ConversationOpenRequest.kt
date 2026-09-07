@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.Serializable
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.data.enterprise.RealmSelection
 import kotlin.uuid.Uuid
 
 /** Navigation preserves the original principal and intent across page/process recreation. */
@@ -35,6 +36,7 @@ class ConversationViewLease internal constructor(
     internal val selectionRevision: Long,
     private val closeAction: () -> Unit,
 ) : AutoCloseable {
+    val commandTarget = ConversationCommandTarget(conversationId, RealmSelection(access, selectionRevision), ::requireOpen)
     private val closedOnce = AtomicBoolean(false)
     private val _closed = MutableStateFlow(false)
     internal val closed = _closed.asStateFlow()
@@ -49,4 +51,13 @@ class ConversationViewLease internal constructor(
             closeAction()
         }
     }
+}
+
+/** An original UI command target, never reconstructed from the currently selected realm. */
+class ConversationCommandTarget internal constructor(
+    val conversationId: Uuid,
+    internal val selection: RealmSelection,
+    private val checkOwner: () -> Unit,
+) {
+    internal fun requireOpen() = checkOwner()
 }

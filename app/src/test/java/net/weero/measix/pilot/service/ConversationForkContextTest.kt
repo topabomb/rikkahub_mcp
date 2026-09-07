@@ -5,10 +5,10 @@ import net.weero.measix.pilot.service.subassistant.SubAssistantLifecycle
 import net.weero.measix.pilot.service.turn.TurnFinalizer
 import io.mockk.coEvery
 import io.mockk.coVerify
-import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
-import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import me.rerere.ai.ui.UIMessage
@@ -20,16 +20,17 @@ import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.FolderRepository
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
-import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import net.weero.measix.pilot.service.runtime.ConversationHeader
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
-import net.weero.measix.pilot.service.runtime.ConversationRuntimeSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import kotlin.uuid.Uuid
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [34])
 class ConversationForkContextTest {
+    @get:org.junit.Rule val temporary = org.junit.rules.TemporaryFolder()
     @Test
     fun `fork passes committed folder and workspace cwd through createTree`() = runTest {
         val sourceId = Uuid.random()
@@ -85,52 +86,61 @@ class ConversationForkContextTest {
                 ),
             ),
         )
-        val runtime = mockk<ConversationRuntime>()
-        every { runtime.snapshot } returns MutableStateFlow(
-            ConversationRuntimeSnapshot(durable = snapshot, stream = null),
+        val repository = mockk<ConversationRepository>()
+        val appScope = net.weero.measix.pilot.AppScope(kotlinx.coroutines.test.StandardTestDispatcher(testScheduler))
+        val locks = net.weero.measix.pilot.service.runtime.ConversationOperationLocks()
+        val registry = ConversationRuntimeRegistry(appScope, repository, locks)
+        val gate = ApplicationRecoveryGate().apply { ready() }
+        val commandCoordinator = ConversationCommandCoordinator(registry, repository, gate, locks)
+        val sessions = net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(
+            net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(temporary.newFolder()),
         )
-        every { runtime.durable } returns snapshot
-        val commandCoordinator = mockk<ConversationCommandCoordinator>()
-        coEvery { commandCoordinator.load(sourceId) } returns runtime
+        sessions.recover()
+        registry.registerSnapshot(snapshot)
         val created = slot<ConversationAggregateSnapshot>()
-        coEvery { commandCoordinator.createTree(capture(created), any()) } returns runtime
+        coEvery { repository.getChildConversationIds(sourceId) } returns emptyList()
+        coEvery { repository.getChildConversationSnapshots(sourceId) } returns emptyList()
+        coEvery { repository.existsConversationById(any()) } returns false
+        coEvery { repository.insertConversationTree(capture(created), any()) } returns Unit
         val lifecycle = mockk<SubAssistantLifecycle>()
         coEvery { lifecycle.requireClosedRunsBeforeTreeMutation(snapshot) } returns snapshot
-        val repository = mockk<ConversationRepository>()
-        coEvery { repository.getChildConversationSnapshots(sourceId) } returns emptyList()
         val artifactStore = mockk<ArtifactStore>(relaxed = true)
 
         val service = ConversationApplicationService(
             settingsStore = mockk(relaxed = true),
             conversationRepo = repository,
             folderRepository = mockk<FolderRepository>(),
-            runtimeRegistry = mockk<ConversationRuntimeRegistry>(),
+            runtimeRegistry = registry,
             commandCoordinator = commandCoordinator,
-            recoveryGate = mockk<ApplicationRecoveryGate>(),
+            recoveryGate = gate,
             subAssistantLifecycle = lifecycle,
             sideEffects = mockk<GenerationSideEffects>(),
             artifactStore = artifactStore,
             artifactUseCase = mockk<ArtifactUseCase>(),
-            turnFinalizer = mockk<TurnFinalizer>(relaxed = true),
+            turnFinalizer = TurnFinalizer(repository, registry, commandCoordinator, Json),
             json = Json,
             toolArtifactRewriter = mockk<ToolArtifactRewriter>(),
             titleCoordinator = mockk<ConversationTitleCoordinator>(),
-            sessions = mockk(),
+            sessions = sessions,
         )
 
-        service.forkAtMessage(sourceId, owner.id)
+        try {
+            val selection = sessions.observeSelectedRealmSelection().first { it != null }!!
+            val page = ConversationViewLease(sourceId, selection.access, selection.revision) {}
+            service.forkAtMessage(page.commandTarget, owner.id)
 
-        val fork = created.captured
-        assertEquals(folderId, fork.header.folderId)
-        assertEquals("src/main", fork.header.workspaceCwd)
-        assertEquals(1, fork.modelContextEntries.size)
-        val copiedEntry = fork.modelContextEntries.single()
-        assertEquals(fork.nodes[0].id, copiedEntry.anchorNodeId)
-        assertEquals(anchor.id, copiedEntry.anchorMessageId)
-        assertEquals(fork.nodes[1].id, copiedEntry.ownerNodeId)
-        assertEquals(owner.id, copiedEntry.ownerMessageId)
-        assertEquals(copiedContent, copiedEntry.content)
-        coVerify(exactly = 1) { commandCoordinator.createTree(any(), emptyList()) }
+            val fork = created.captured
+            assertEquals(folderId, fork.header.folderId)
+            assertEquals("src/main", fork.header.workspaceCwd)
+            assertEquals(1, fork.modelContextEntries.size)
+            val copiedEntry = fork.modelContextEntries.single()
+            assertEquals(fork.nodes[0].id, copiedEntry.anchorNodeId)
+            assertEquals(anchor.id, copiedEntry.anchorMessageId)
+            assertEquals(fork.nodes[1].id, copiedEntry.ownerNodeId)
+            assertEquals(owner.id, copiedEntry.ownerMessageId)
+            assertEquals(copiedContent, copiedEntry.content)
+            coVerify(exactly = 1) { repository.insertConversationTree(any(), emptyList()) }
+        } finally { appScope.cancel() }
     }
 
 }

@@ -14,7 +14,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.AppScope
@@ -131,25 +130,10 @@ class ChatGenerationForegroundService : Service() {
     }
 
     private fun stopProjectedGenerations() {
-        // 平台配额已到：从只读投影找出 active turn，再经 application command 请求停止。
         appScope.launch {
-            val generatingIds: Set<Uuid> = try {
-                queryService.conversationActivities().first()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                Log.w(TAG, "failed to read active generations after foreground timeout", error)
-                emptyMap()
-            }
-                .filterValues { ConversationActivity.RESPONSE_GENERATION in it }
-                .keys
-            generatingIds.forEach { conversationId ->
-                runCatching { applicationService.stopGeneration(conversationId) }
-                    .onFailure { error ->
-                        if (error is kotlinx.coroutines.CancellationException) throw error
-                        Log.w(TAG, "failed to stop generation for $conversationId", error)
-                    }
-            }
+            try { applicationService.stopForForegroundTimeout() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { Log.w(TAG, "failed to stop requests after foreground timeout", error) }
         }
     }
 

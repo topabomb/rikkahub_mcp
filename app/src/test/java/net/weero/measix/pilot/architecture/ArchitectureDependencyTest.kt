@@ -61,7 +61,6 @@ class ArchitectureDependencyTest {
             "data.db.dao.",
             "FavoriteRepository",
             "FolderRepository",
-            "ConversationCommand",
             "UpdateHeader",
             "SelectNodeVariant",
             "data.model.Conversation",
@@ -72,6 +71,9 @@ class ArchitectureDependencyTest {
             "data.files.ArtifactDeleteImpact",
             "data.files.ArtifactDeleteResult",
         ).forEach { token -> assertNoHits(token, sourcesUnder("ui")) }
+        val internalCommand = Regex("\\bConversationCommand(?:Coordinator)?\\b")
+        val violations = sourcesUnder("ui").filter { internalCommand.containsMatchIn(it.readText()) }
+        assertTrue("UI cannot use internal conversation commands: $violations", violations.isEmpty())
     }
 
     @Test

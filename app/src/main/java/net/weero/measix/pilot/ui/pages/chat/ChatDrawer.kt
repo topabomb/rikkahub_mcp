@@ -342,7 +342,7 @@ fun ChatDrawerContent(
                 },
                 onDelete = {
                     scope.launch {
-                        vm.deleteConversation(it)
+                        if (!vm.deleteConversation(it)) return@launch
                         conversations.refresh()
                         if (it.id == currentConversationId) {
                             navigateFromDrawer {
@@ -737,7 +737,7 @@ fun ChatDrawerContent(
                             isCurrentAssistant = assistant.id == conversationToMove?.assistantId,
                             onClick = {
                                 conversationToMove?.let { conversation ->
-                                    vm.moveConversationToAssistant(conversation.id, assistant.id)
+                                    vm.moveConversationToAssistant(conversation, assistant.id)
                                     scope.launch {
                                         bottomSheetState.hide()
                                         showMoveToAssistantSheet = false

@@ -41,6 +41,7 @@ import net.weero.measix.pilot.service.ApplicationRecoveryGate
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationOperationLocks
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
+import net.weero.measix.pilot.service.runtime.currentTurnPresentation
 import net.weero.measix.pilot.service.runtime.ConversationWrite
 import net.weero.measix.pilot.service.runtime.TurnExecutionOperation
 import net.weero.measix.pilot.service.runtime.disclosureCandidate
@@ -68,7 +69,12 @@ import kotlin.uuid.Uuid
 /** Real parent/child runners and command reducers; only provider and transaction IO are doubles. */
 class SubAssistantTurnIntegrationTest {
     @Test(timeout = 30_000)
-    fun `child ask user resumes original turn and parent atomically retains complete execution link`() = runBlocking {
+    fun `child ask user resumes original turn and parent atomically retains complete execution link`() = runScenario(false)
+
+    @Test(timeout = 30_000)
+    fun `child terminal commit failure retains its pending runtime through actual run cleanup`() = runScenario(true)
+
+    private fun runScenario(failChildTerminal: Boolean) = runBlocking {
         val appScope = AppScope(Dispatchers.Default)
         try {
             val model = me.rerere.ai.provider.Model(modelId = "scripted-model")
@@ -90,8 +96,19 @@ class SubAssistantTurnIntegrationTest {
             every { settingsStore.effectiveSettings } returns MutableStateFlow(settings.toEffectiveSettingsSnapshot())
             val repository = mockk<ConversationRepository>(relaxed = true)
             val writes = Collections.synchronizedList(mutableListOf<ConversationWrite.Mutate>())
+            var masterId: Uuid? = null
+            var failedChildId: Uuid? = null
             coEvery { repository.commit(any()) } coAnswers {
-                (firstArg<ConversationWrite>() as? ConversationWrite.Mutate)?.let { writes += it }
+                (firstArg<ConversationWrite>() as? ConversationWrite.Mutate)?.let { write ->
+                    val terminal = write.executionFacts?.turn?.status?.let {
+                        it !in setOf(TurnExecutionStatus.RUNNING, TurnExecutionStatus.AWAITING_USER)
+                    } == true
+                    if (failChildTerminal && terminal && write.mutation.conversationId != masterId) {
+                        failedChildId = write.mutation.conversationId
+                        throw java.io.IOException("child terminal commit failed")
+                    }
+                    writes += write
+                }
                 true
             }
             val locks = ConversationOperationLocks()
@@ -129,7 +146,12 @@ class SubAssistantTurnIntegrationTest {
                 runGate = SubAssistantRunGate(),
             )
             val runtime = commands.create(Conversation(assistantId = parent.id, messageNodes = listOf(UIMessage.user("Delegate the choice").toMessageNode())))
-            coEvery { repository.getConversationHeader(runtime.id) } coAnswers { runtime.durable.header }
+            masterId = runtime.id
+            coEvery { repository.getConversationHeader(any()) } coAnswers { registry.findRuntime(firstArg())?.durable?.header }
+            coEvery { repository.getTurnExecution(any()) } coAnswers {
+                val id = firstArg<String>()
+                synchronized(writes) { writes.mapNotNull { it.executionFacts?.turn }.lastOrNull { it.turnId == id } }
+            }
             val parentTool = Tool(
                 name = "assistant_call", description = "Delegate a choice", execute = { emptyList() },
                 contextualExecute = {
@@ -139,6 +161,7 @@ class SubAssistantTurnIntegrationTest {
             val turnId = Uuid.random()
             var answered = false
             var pausedChildTurnId: Uuid? = null
+            var pausedChildWorker: kotlinx.coroutines.Job? = null
             var pausedStepId: Uuid? = null
             var pausedLocalCallId: Uuid? = null
             val worker = appScope.async(start = CoroutineStart.LAZY) {
@@ -164,6 +187,7 @@ class SubAssistantTurnIntegrationTest {
                             answered = true
                             val childRuntime = requireNotNull(registry.findRuntime(Uuid.parse(requireNotNull(metadata.childConversationId))))
                             pausedChildTurnId = childRuntime.snapshot.value.stream!!.turnId
+                            pausedChildWorker = childRuntime.currentWorker()
                             val ask = childRuntime.durable.currentMessages().last().getTools().single()
                             pausedStepId = ask.stepId
                             pausedLocalCallId = ask.localCallId
@@ -175,7 +199,19 @@ class SubAssistantTurnIntegrationTest {
                 ))
             }
             registry.installAndStartTurnWorker(runtime.id, turnId, worker)
-            assertTrue(worker.await() is TurnOutcome.Completed)
+            val result = runCatching { worker.await() }
+            if (failChildTerminal) {
+                assertFalse(result.getOrNull() is TurnOutcome.Completed)
+                val failedRuntime = requireNotNull(registry.findRuntime(requireNotNull(failedChildId)))
+                val stream = requireNotNull(failedRuntime.snapshot.value.stream)
+                val retainedWorker = requireNotNull(failedRuntime.currentWorker())
+                org.junit.Assert.assertSame(requireNotNull(pausedChildWorker), retainedWorker)
+                assertTrue(retainedWorker.isCancelled)
+                assertEquals(stream.turnId, failedRuntime.currentGenerationTurnId())
+                assertFalse(failedRuntime.currentTurnPresentation().phase == net.weero.measix.pilot.service.runtime.TurnLivePhase.STOPPING)
+                return@runBlocking
+            }
+            assertTrue(result.getOrThrow() is TurnOutcome.Completed)
             assertTrue(answered)
             assertEquals(4, provider.dispatches.size)
             assertEquals("each sampled text is transformed once and closed Step text stays unchanged",

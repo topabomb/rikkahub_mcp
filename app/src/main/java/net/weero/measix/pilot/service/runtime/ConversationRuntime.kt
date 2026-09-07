@@ -368,6 +368,13 @@ class ConversationRuntime internal constructor(
         return CapturedTurnWorker(durableTurnId, null)
     }
 
+    internal fun ownsStoppedWorker(captured: CapturedTurnWorker): Boolean {
+        val current = _activeTurn.value
+        return if (captured.worker == null) {
+            current == null && snapshot.value.stream?.turnId == captured.turnId
+        } else current?.turnId == captured.turnId && current.worker === captured.worker
+    }
+
     internal fun installTurnWorker(
         turnId: Uuid,
         worker: Job,
@@ -482,17 +489,18 @@ class ConversationRuntime internal constructor(
     internal fun releaseTurnWorker(
         turnId: Uuid,
         worker: Job? = null,
-        retainAwaitingOwner: Boolean = true,
+        retainPendingTurnOwner: Boolean = true,
     ) {
         val current = _activeTurn.value ?: return
         if (current.turnId != turnId) return
         if (worker != null && current.worker !== worker) return
         if (
-            retainAwaitingOwner &&
-            current.presentationPhase() == TurnLivePhase.AWAITING_USER &&
-            worker == null &&
+            retainPendingTurnOwner &&
             snapshot.value.stream?.turnId == turnId
-        ) return
+        ) {
+            _activeTurnRevision.value++
+            return
+        }
         if (_activeTurn.compareAndSet(current, null)) {
             ownedRequests.remove(turnId, current)
             _lastTerminatedRequestTurnId.set(turnId)
@@ -509,12 +517,7 @@ class ConversationRuntime internal constructor(
     private fun completeActiveWorker(request: ActiveTurnSession) {
         val current = _activeTurn.value
         if (current === request) {
-            when (current.presentationPhase()) {
-                TurnLivePhase.AWAITING_USER,
-                TurnLivePhase.STOPPING,
-                -> publishActive(current)
-                else -> releaseTurnWorker(current.turnId, current.worker)
-            }
+            releaseTurnWorker(current.turnId, current.worker)
             return
         }
         ownedRequests.remove(request.turnId, request)

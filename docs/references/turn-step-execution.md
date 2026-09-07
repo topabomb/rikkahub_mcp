@@ -50,7 +50,29 @@ ConversationTurnService / SubAssistantRunCoordinator
 
 删除取得完整成员锁集合，在任何 detach 前复查成员与活动 turn；任一成员仍在运行则拒绝整个操作。
 每次 detach 仍是原会话命令事务。某次提交失败时保留文件夹，重试只处理剩余成员；全部清空后才删除 metadata。
-UI 等待命令结果后关闭对话框，错误可见，取消继续传播。本协议不表示其他普通会话命令已全部接入域授权。
+UI 等待命令结果后关闭对话框，错误可见，取消继续传播。
+
+## 普通会话操作授权
+
+页面通过 `ConversationViewLease.commandTarget` 取得原会话、RealmSelection 与页面生命周期检查；目录行通过
+自身 `ConversationSummary.commandTarget` 保留原选择。工具的只读摘要不能签发 UI 命令。手工标题、系统提示词、
+注入、Workspace 路径、移动助手、置顶、消息编辑/变体选择、停止、删除与克隆都接受该目标，不在执行时重取当前域。
+原 Session/选择在最外层验证，最终会话锁内再次检查页面仍打开和 header 的完整主体/根会话身份，之后才读消息树或写入。
+企业助手的固定系统提示词不能由会话覆盖；移动目标由当前主体的配置 resolver 验证，失效助手不回退为全局当前助手。
+
+`TurnFinalizer.captureStop` 捕获具体 Runtime、turnId 与 worker，立即请求停止；等待 worker 和终态提交由
+`finishStop` 在 Session/会话锁外接手，即使调用者取消也完成已经取得的清理责任。终态提交前在会话锁内验证原 worker；
+同一 turnId 的替代 worker 不能被迟到停止影响。producer finally 与 Job completion 共用 releaseTurnWorker：
+同 turn stream 未关闭就保留原 owner，不以显示 phase 或 Job 已结束判断提交成功，Child 也不能强制提前释放。OS 前台超时由专用 application
+命令捕获当时的工作任务，UI 不使用该全局停止入口。
+
+删除、撤销删除、消息删除和克隆在停止结束后重新验证原选择，再取得完整父子锁集合，检查 lineage 未变、全部主体一致且无活动 turn。
+删除的数据库提交与 Runtime 驱逐在同一个已取得所有权的不可取消段完成。克隆只读取授权时捕获的父子快照，创建新树前再次验证原页面。
+`RestoreToken` 保留原选择和完整父子树；只可领取一次，页面关闭不影响尚有效选择内的撤销，切域/重新接入后则拒绝。
+恢复期间 discard 不能提前释放其 Artifact retention，成功或失败均由领取者释放；已有同 ID 会话导致冲突，不覆盖新对象。
+历史批量删除只处理用户打开确认框时看到的那组会话，晚到的新会话不被纳入。
+
+START/交互继续、模型生成标题/压缩和文件授权仍有独立执行链，不能以本节的普通操作检查代替其域准入。
 
 ## Turn、Step 与工具事实
 

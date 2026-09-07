@@ -12,8 +12,6 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.isEmptyInputMessage
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.getAssistantById
-import net.weero.measix.pilot.data.datastore.getCurrentAssistant
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.AttachmentCloner
 import net.weero.measix.pilot.data.files.OwnedArtifact
@@ -30,6 +28,8 @@ import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.FolderRepository
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.RealmSelection
+import java.util.concurrent.atomic.AtomicInteger
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.configuration.ConfigurationCategory
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
@@ -67,16 +67,47 @@ class ConversationApplicationService internal constructor(
     private val titleCoordinator: ConversationTitleCoordinator,
     private val sessions: EnterpriseSessionController,
 ) {
-    private enum class DeleteAuthority { APPLICATION, PENDING_CLEANUP }
-
-    /** Opaque undo capability containing the complete cascade-deleted lineage. */
+    /** One-use undo ownership. Discard cannot release retention already claimed by restore. */
     class RestoreToken internal constructor(
         internal val root: ConversationAggregateSnapshot,
         internal val children: List<ConversationAggregateSnapshot>,
+        internal val selection: RealmSelection,
         private val artifactRetention: ArtifactRetentionLease,
     ) : AutoCloseable {
-        override fun close() = artifactRetention.close()
+        private val state = AtomicInteger(0)
+        internal fun claim() { check(state.compareAndSet(0, 1)) { "conversation_restore_token_consumed" } }
+        internal fun finishRestore() {
+            check(state.compareAndSet(1, 2)) { "conversation_restore_owner_missing" }
+            artifactRetention.close()
+        }
+        override fun close() {
+            if (state.compareAndSet(0, 2)) artifactRetention.close()
+        }
     }
+
+    private suspend fun <T> withCommandTarget(target: ConversationCommandTarget, operation: suspend () -> T): T {
+        recoveryGate.awaitReady()
+        return sessions.withSelectedRealmSelection(target.selection) {
+            target.requireOpen()
+            operation()
+        }
+    }
+
+    private suspend fun <T> withRootCommand(target: ConversationCommandTarget, operation: suspend () -> T): T =
+        withCommandTarget(target) {
+            commandCoordinator.withRootHeaders(target.selection.access.scope, listOf(target.conversationId)) {
+                target.requireOpen()
+                operation()
+            }
+        }
+
+    private suspend fun <T> withTreeCommand(target: ConversationCommandTarget, operation: suspend () -> T): T =
+        withCommandTarget(target) {
+            commandCoordinator.withInactiveRootTree(target.selection.access.scope, target.conversationId) {
+                target.requireOpen()
+                operation()
+            }
+        }
 
     suspend fun newDraftRequest(
         access: RealmAccess,
@@ -123,13 +154,7 @@ class ConversationApplicationService internal constructor(
                     "conversation_assistant_unavailable"
                 }
             }
-            when (access) {
-                RealmAccess.Personal -> settingsStore.updateLocal { it.copy(assistantId = assistantId) }
-                is RealmAccess.Enterprise -> settingsStore.updateResourceSelections(
-                    access.scope,
-                    sessions.state.value as net.weero.measix.pilot.data.enterprise.EnterpriseState.Available,
-                ) { it.copy(assistantId = assistantId) }
-            }
+            writeSelectedAssistant(access, assistantId)
             val recent = if (createNew) null else conversationRepo
                 .getRecentConversationRecords(access.scope, assistantId, 1).firstOrNull()
             if (recent != null) ConversationOpenRequest.OpenExisting(recent.id, access)
@@ -160,31 +185,29 @@ class ConversationApplicationService internal constructor(
         }
     }
 
-    suspend fun updateTitle(conversationId: Uuid, title: String) {
-        titleCoordinator.commitManualTitle(conversationId, title) {
-            commandCoordinator.executeOrThrow(conversationId, UpdateHeader(title = title))
+    suspend fun updateTitle(target: ConversationCommandTarget, title: String) = withCommandTarget(target) {
+        titleCoordinator.commitManualTitle(target.conversationId, title) {
+            commandCoordinator.withRootHeaders(target.selection.access.scope, listOf(target.conversationId)) {
+                target.requireOpen()
+                commandCoordinator.executeOrThrow(target.conversationId, UpdateHeader(title = title))
+            }
         }
     }
 
-    suspend fun updateCustomSystemPrompt(conversationId: Uuid, prompt: String?) {
-        commandCoordinator.executeOrThrow(
-            conversationId,
-            UpdateHeader(customSystemPrompt = OptionalString.Set(prompt)),
-        )
+    suspend fun updateCustomSystemPrompt(target: ConversationCommandTarget, prompt: String?) = withCommandTarget(target) {
+        commandCoordinator.withRootHeaders(target.selection.access.scope, listOf(target.conversationId)) { headers ->
+            target.requireOpen()
+            check(headers.single().assistantId !is ConfigurationReference.Enterprise) { "managed_assistant_system_prompt_is_fixed" }
+            commandCoordinator.executeOrThrow(target.conversationId, UpdateHeader(customSystemPrompt = OptionalString.Set(prompt)))
+        }
     }
 
-    suspend fun updateModeInjectionIds(conversationId: Uuid, ids: Set<ConfigurationReference>) {
-        commandCoordinator.executeOrThrow(
-            conversationId,
-            UpdateHeader(modeInjectionIds = OptionalConfigurationReferenceSet.Set(ids)),
-        )
+    suspend fun updateModeInjectionIds(target: ConversationCommandTarget, ids: Set<ConfigurationReference>) = withRootCommand(target) {
+        commandCoordinator.executeOrThrow(target.conversationId, UpdateHeader(modeInjectionIds = OptionalConfigurationReferenceSet.Set(ids)))
     }
 
-    suspend fun updateWorkspaceCwd(conversationId: Uuid, cwd: String?) {
-        commandCoordinator.executeOrThrow(
-            conversationId,
-            UpdateHeader(workspaceCwd = OptionalString.Set(cwd)),
-        )
+    suspend fun updateWorkspaceCwd(target: ConversationCommandTarget, cwd: String?) = withRootCommand(target) {
+        commandCoordinator.executeOrThrow(target.conversationId, UpdateHeader(workspaceCwd = OptionalString.Set(cwd)))
     }
 
     suspend fun generateTitle(conversationId: Uuid, force: Boolean = false) {
@@ -273,31 +296,41 @@ class ConversationApplicationService internal constructor(
         )
     }
 
-    suspend fun moveToAssistant(conversationId: Uuid, assistantId: ConfigurationReference) {
-        commandCoordinator.executeOrThrow(
-            conversationId,
-            MoveToAssistant(assistantId),
-        )
+    suspend fun moveToAssistant(
+        target: ConversationCommandTarget,
+        assistantId: ConfigurationReference,
+        selectForNewChats: Boolean,
+    ) = withCommandTarget(target) {
+        settingsStore.withResolvedConfiguration(target.selection.access.scope, sessions.state.value) { configuration ->
+            check(configuration.selection(ConfigurationCategory.ASSISTANT, assistantId).isAvailable) { "conversation_assistant_unavailable" }
+            commandCoordinator.withRootHeaders(target.selection.access.scope, listOf(target.conversationId)) {
+                target.requireOpen()
+                commandCoordinator.executeOrThrow(target.conversationId, MoveToAssistant(assistantId))
+            }
+        }
+        if (selectForNewChats) writeSelectedAssistant(target.selection.access, assistantId)
     }
 
-    suspend fun delete(conversationId: Uuid) {
-        recoveryGate.awaitReady()
-        stopAndDelete(conversationId, DeleteAuthority.APPLICATION)
+    suspend fun delete(target: ConversationCommandTarget) {
+        stopGeneration(target)
+        withTreeCommand(target) {
+            val childIds = conversationRepo.getChildConversationIds(target.conversationId)
+            commandCoordinator.deleteOrThrow(target.conversationId)
+            (childIds + target.conversationId).forEach(sideEffects::clearTitleTracking)
+        }
     }
 
-    suspend fun deleteForUndo(conversationId: Uuid): RestoreToken {
-        recoveryGate.awaitReady()
-        turnFinalizer.stopTurn(conversationId)
+    suspend fun deleteForUndo(target: ConversationCommandTarget): RestoreToken {
+        stopGeneration(target)
         var retention: ArtifactRetentionLease? = null
         try {
-            val deleted = commandCoordinator.deleteCapturingTree(conversationId) { tree ->
-                retention = artifactStore.retainNodesForUndo(
-                    (listOf(tree.root) + tree.children).map { it.nodes },
-                )
+            return withTreeCommand(target) {
+                val deleted = commandCoordinator.deleteCapturingTree(target.conversationId) { tree ->
+                    retention = artifactStore.retainNodesForUndo((listOf(tree.root) + tree.children).map { it.nodes })
+                }
+                (deleted.children.map { it.conversationId } + deleted.root.conversationId).forEach(sideEffects::clearTitleTracking)
+                RestoreToken(deleted.root, deleted.children, target.selection, requireNotNull(retention))
             }
-            (deleted.children.map { it.conversationId } + deleted.root.conversationId)
-                .forEach(sideEffects::clearTitleTracking)
-            return RestoreToken(deleted.root, deleted.children, requireNotNull(retention))
         } catch (error: Throwable) {
             retention?.close()
             throw error
@@ -305,95 +338,114 @@ class ConversationApplicationService internal constructor(
     }
 
     suspend fun restore(token: RestoreToken) {
-        recoveryGate.awaitReady()
+        token.claim()
         try {
-            if (token.children.isEmpty()) {
-                commandCoordinator.createSnapshot(token.root)
-            } else {
-                commandCoordinator.createTree(token.root, token.children)
+            recoveryGate.awaitReady()
+            sessions.withSelectedRealmSelection(token.selection) {
+                check(token.root.header.scope == token.selection.access.scope && token.root.header.parentConversationId == null)
+                check(token.children.all { it.header.scope == token.root.header.scope && it.header.parentConversationId == token.root.conversationId })
+                if (token.children.isEmpty()) commandCoordinator.createSnapshot(token.root)
+                else commandCoordinator.createTree(token.root, token.children)
             }
-        } finally {
-            token.close()
-        }
+        } finally { token.finishRestore() }
     }
 
     fun discardRestoreToken(token: RestoreToken) = token.close()
 
-    private suspend fun stopAndDelete(
-        conversationId: Uuid,
-        authority: DeleteAuthority,
-    ) {
-        turnFinalizer.stopTurn(conversationId)
-        deletePersistedConversation(conversationId, authority)
-    }
-
-    private suspend fun deletePersistedConversation(
-        conversationId: Uuid,
-        authority: DeleteAuthority,
-    ) {
-        val childIds = conversationRepo.getChildConversationIds(conversationId)
-        when (authority) {
-            DeleteAuthority.APPLICATION -> commandCoordinator.deleteOrThrow(conversationId)
-            DeleteAuthority.PENDING_CLEANUP -> commandCoordinator.deleteFromPendingCleanup(conversationId)
+    /** Deletes the set the user reviewed; conversations created later are not silently included. */
+    suspend fun deleteConversations(targets: List<ConversationCommandTarget>) {
+        val first = targets.firstOrNull() ?: return
+        withCommandTarget(first) {
+            check(targets.all { it.selection == first.selection }) { "conversation_selection_mismatch" }
+            targets.forEach { it.requireOpen() }
+            commandCoordinator.withRootHeaders(first.selection.access.scope, targets.map { it.conversationId }) {}
         }
-        (childIds + conversationId).forEach { id ->
-            sideEffects.clearTitleTracking(id)
-        }
-    }
-
-    suspend fun deleteOfAssistant(assistantId: ConfigurationReference) {
-        recoveryGate.awaitReady()
-        deleteOfAssistantCommitted(sessions.captureSelectedRealmAccess().scope, assistantId, DeleteAuthority.APPLICATION)
+        targets.distinctBy { it.conversationId }.forEach { delete(it) }
     }
 
     internal suspend fun deleteOfAssistantFromPendingCleanup(assistantId: ConfigurationReference) {
-        deleteOfAssistantCommitted(ConfigurationScope.Personal, assistantId, DeleteAuthority.PENDING_CLEANUP)
-    }
-
-    private suspend fun deleteOfAssistantCommitted(scope: ConfigurationScope, assistantId: ConfigurationReference, authority: DeleteAuthority) {
-        conversationRepo.getConversationsOfAssistant(scope, assistantId).first().forEach {
-            stopAndDelete(it.id, authority)
+        conversationRepo.getConversationsOfAssistant(ConfigurationScope.Personal, assistantId).first().forEach { conversation ->
+            turnFinalizer.stopTurn(conversation.id)
+            val childIds = conversationRepo.getChildConversationIds(conversation.id)
+            commandCoordinator.deleteFromPendingCleanup(conversation.id)
+            (childIds + conversation.id).forEach(sideEffects::clearTitleTracking)
         }
     }
 
-    suspend fun stopGeneration(conversationId: Uuid) {
-        recoveryGate.awaitReady()
-        turnFinalizer.stopTurn(conversationId)
+    suspend fun stopGeneration(target: ConversationCommandTarget) = stopCapturedRequests { owned ->
+        withRootCommand(target) { turnFinalizer.captureStop(target.conversationId)?.let(owned::add) }
     }
 
-    suspend fun togglePin(conversationId: Uuid) {
-        commandCoordinator.executeOrThrow(conversationId, TogglePinned)
+    /** OS foreground timeout owns stopping the exact working requests captured at that event. */
+    internal suspend fun stopForForegroundTimeout() {
+        recoveryGate.awaitReady()
+        stopCapturedRequests { owned ->
+            val ids = runtimeRegistry.activeRuntimes().map { it.durable.conversationId }
+            ids.forEach { id ->
+                commandCoordinator.withResidentRuntime(id) { runtime ->
+                    if (runtime != null && runtime.durable.header.parentConversationId == null && runtime.currentTurnPresentation().isWorking) {
+                        turnFinalizer.captureStop(id)?.let(owned::add)
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun stopCapturedRequests(capture: suspend (MutableList<TurnFinalizer.StopRequest>) -> Unit) {
+        val owned = mutableListOf<TurnFinalizer.StopRequest>()
+        var primary: Throwable? = null
+        try { capture(owned) }
+        catch (error: Throwable) { primary = error; throw error }
+        finally {
+            withContext(NonCancellable) {
+                var failure: Throwable? = primary
+                owned.forEach { request ->
+                    try { turnFinalizer.finishStop(request) }
+                    catch (error: Throwable) {
+                        if (failure == null) failure = error else failure!!.addSuppressed(error)
+                    }
+                }
+                if (primary == null) failure?.let { throw it }
+            }
+        }
+    }
+
+    suspend fun togglePin(target: ConversationCommandTarget) = withRootCommand(target) {
+        commandCoordinator.executeOrThrow(target.conversationId, TogglePinned)
     }
 
     suspend fun editMessage(
-        conversationId: Uuid,
+        target: ConversationCommandTarget,
         messageId: Uuid,
         parts: List<UIMessagePart>,
         artifactDraftScope: ArtifactDraftScope? = null,
     ) {
         if (parts.isEmptyInputMessage()) return
-        recoveryGate.awaitReady()
-        val snapshot = liveSnapshot(conversationId)
-        val settings = settingsStore.effectiveSettings.first().settings
-        val assistant = settings.getAssistantById(snapshot.header.assistantId) ?: settings.getCurrentAssistant()
-        val target = snapshot.nodes.firstOrNull { node -> node.messages.any { it.id == messageId } } ?: return
-        val processedParts = preprocessUserInputParts(parts, assistant)
-        commandCoordinator.executeOrThrow(
-            conversationId,
-            EditMessageVariant(
-                nodeId = target.id,
-                variant = UIMessage(
-                    role = target.currentMessage.role,
-                    parts = processedParts,
-                ),
-            ),
-        )
-        artifactDraftScope?.publishCommittedReferences(processedParts)
+        withCommandTarget(target) {
+            settingsStore.withResolvedConfiguration(target.selection.access.scope, sessions.state.value) { configuration ->
+                commandCoordinator.withRootHeaders(target.selection.access.scope, listOf(target.conversationId)) {
+                    target.requireOpen()
+                    val snapshot = liveSnapshot(target.conversationId)
+                    val assistant = requireNotNull(configuration.assistants[snapshot.header.assistantId]) { "conversation_assistant_missing" }
+                    val node = snapshot.nodes.firstOrNull { node -> node.messages.any { it.id == messageId } }
+                        ?: throw NoSuchElementException("Message not found")
+                    val processedParts = preprocessUserInputParts(parts, assistant)
+                    commandCoordinator.executeOrThrow(target.conversationId, EditMessageVariant(
+                        nodeId = node.id, variant = UIMessage(role = node.currentMessage.role, parts = processedParts),
+                    ))
+                    artifactDraftScope?.publishCommittedReferences(processedParts)
+                }
+            }
+        }
     }
 
-    suspend fun forkAtMessage(conversationId: Uuid, messageId: Uuid): Uuid {
-        turnFinalizer.stopTurn(conversationId)
-        val current = subAssistantLifecycle.requireClosedRunsBeforeTreeMutation(liveSnapshot(conversationId))
+    suspend fun forkAtMessage(target: ConversationCommandTarget, messageId: Uuid): Uuid {
+        val conversationId = target.conversationId
+        stopGeneration(target)
+        val (current, sourceChildren) = withTreeCommand(target) {
+            subAssistantLifecycle.requireClosedRunsBeforeTreeMutation(liveSnapshot(conversationId)) to
+                conversationRepo.getChildConversationSnapshots(conversationId).associateBy { it.conversationId }
+        }
         val targetIndex = current.nodes.indexOfFirst { node -> node.messages.any { it.id == messageId } }
         if (targetIndex < 0) throw NoSuchElementException("Message not found")
 
@@ -411,14 +463,12 @@ class ConversationApplicationService internal constructor(
                 node.copy(
                     id = newNodeId,
                     messages = node.messages.map { message ->
-                        message.copy(parts = cloneParts(message.parts, owned, copiedArtifacts))
+                        message.copy(parts = withCommandTarget(target) { cloneParts(message.parts, owned, copiedArtifacts) })
                     },
                 )
             }
             val forkId = Uuid.random()
             forkIdForCleanup = forkId
-            val sourceChildren = conversationRepo.getChildConversationSnapshots(current.conversationId)
-                .associateBy { it.conversationId }
             val tree = forkSubAssistantTree(
                 sourceMasterId = current.conversationId,
                 copiedMasterNodes = copiedNodes,
@@ -449,19 +499,21 @@ class ConversationApplicationService internal constructor(
                 child.copy(
                     nodes = child.nodes.map { node ->
                         node.copy(messages = node.messages.map { message ->
-                            message.copy(parts = cloneParts(message.parts, owned, copiedArtifacts))
+                            message.copy(parts = withCommandTarget(target) { cloneParts(message.parts, owned, copiedArtifacts) })
                         })
                     },
                 )
             }
-            createAttempted = true
-            commandCoordinator.createTree(fork, children)
-            artifactStore.publishAllUnpublished(owned)
-            committed = true
+            withCommandTarget(target) {
+                createAttempted = true
+                commandCoordinator.createTree(fork, children, target::requireOpen)
+                artifactStore.publishAllUnpublished(owned)
+                committed = true
+            }
             return fork.conversationId
         } catch (error: Throwable) {
             primaryFailure = error
-            if (createAttempted && error !is ConversationCommandConflictException) {
+            if (!committed && createAttempted && error !is ConversationCommandConflictException) {
                 withContext(NonCancellable) {
                     try {
                         commandCoordinator.deleteOrThrow(requireNotNull(forkIdForCleanup))
@@ -485,29 +537,32 @@ class ConversationApplicationService internal constructor(
         }
     }
 
-    suspend fun selectNode(conversationId: Uuid, nodeId: Uuid, selectIndex: Int) {
-        val snapshot = liveSnapshot(conversationId)
-        val node = snapshot.nodes.firstOrNull { it.id == nodeId }
-            ?: throw NoSuchElementException("Message node not found")
+    suspend fun selectNode(target: ConversationCommandTarget, nodeId: Uuid, selectIndex: Int) = withRootCommand(target) {
+        val snapshot = liveSnapshot(target.conversationId)
+        val node = snapshot.nodes.firstOrNull { it.id == nodeId } ?: throw NoSuchElementException("Message node not found")
         require(selectIndex in node.messages.indices) { "Invalid selectIndex" }
-        commandCoordinator.executeOrThrow(conversationId, SelectNodeVariant(nodeId, selectIndex))
+        commandCoordinator.executeOrThrow(target.conversationId, SelectNodeVariant(nodeId, selectIndex))
     }
 
-    suspend fun deleteMessage(conversationId: Uuid, messageId: Uuid, failIfMissing: Boolean = true) {
-        turnFinalizer.stopTurn(conversationId)
-        subAssistantLifecycle.requireClosedRunsBeforeTreeMutation(liveSnapshot(conversationId))
-        val runtime = runtimeRegistry.requireRuntime(conversationId)
-        val before = runtime.snapshot.value
-        commandCoordinator.executeOrThrow(conversationId, DeleteMessage(messageId))
-        if (runtime.snapshot.value === before) {
-            if (failIfMissing) throw NoSuchElementException("Message not found")
-            return
+    suspend fun deleteMessage(target: ConversationCommandTarget, message: UIMessage) {
+        stopGeneration(target)
+        withTreeCommand(target) {
+            val snapshot = liveSnapshot(target.conversationId)
+            if (snapshot.nodes.none { node -> node.messages.any { it.id == message.id } }) return@withTreeCommand
+            subAssistantLifecycle.requireClosedRunsBeforeTreeMutation(snapshot)
+            commandCoordinator.executeOrThrow(target.conversationId, DeleteMessage(message.id))
+            subAssistantLifecycle.applyRetentionAfterTreeMutation(target.conversationId)
         }
-        subAssistantLifecycle.applyRetentionAfterTreeMutation(conversationId)
     }
 
-    suspend fun deleteMessage(conversationId: Uuid, message: UIMessage) =
-        deleteMessage(conversationId, message.id, failIfMissing = false)
+    private suspend fun writeSelectedAssistant(access: RealmAccess, assistantId: ConfigurationReference) {
+        when (access) {
+            RealmAccess.Personal -> settingsStore.updateLocal { it.copy(assistantId = assistantId) }
+            is RealmAccess.Enterprise -> settingsStore.updateResourceSelections(
+                access.scope, sessions.state.value as net.weero.measix.pilot.data.enterprise.EnterpriseState.Available,
+            ) { it.copy(assistantId = assistantId) }
+        }
+    }
 
     private suspend fun cloneParts(
         parts: List<UIMessagePart>,

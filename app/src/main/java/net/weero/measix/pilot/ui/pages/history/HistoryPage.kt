@@ -48,6 +48,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
@@ -64,9 +65,24 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
     val chatNavigation = rememberChatNavigation(navController)
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
-    var showDeleteAllDialog by remember { mutableStateOf(false) }
+    var deletionCandidates by remember { mutableStateOf<List<ConversationSummary>?>(null) }
+    var operationRunning by remember { mutableStateOf(false) }
+    val operationFailed = stringResource(R.string.error_title_operation)
+    val runOperation: (suspend () -> Unit) -> Unit = { operation ->
+        if (!operationRunning) {
+            operationRunning = true
+            scope.launch {
+                try { operation() }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Exception) {
+                    android.util.Log.e("HistoryPage", "Conversation command failed", error)
+                    snackbarHostState.showSnackbar(operationFailed)
+                } finally { operationRunning = false }
+            }
+        }
+    }
 
-    val conversations by vm.conversations.collectAsStateWithLifecycle()
+    val conversations = vm.conversations.collectAsStateWithLifecycle().value
 
     Scaffold(
         topBar = {
@@ -90,8 +106,9 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
                     }
                     IconButton(
                         onClick = {
-                            showDeleteAllDialog = true
-                        }
+                            deletionCandidates = conversations
+                        },
+                        enabled = !operationRunning,
                     ) {
                         Icon(HugeIcons.Delete01, contentDescription = stringResource(R.string.history_page_delete_all))
                     }
@@ -115,8 +132,8 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
                         chatNavigation.existingChat(conversation.id)
                     },
                     onDelete = {
-                        scope.launch {
-                            val restoreToken = vm.deleteForUndo(conversation.id)
+                        runOperation {
+                            val restoreToken = vm.deleteForUndo(conversation)
                             try {
                                 val result = snackbarHostState.showSnackbar(
                                     message = snackMessageDeleted,
@@ -131,7 +148,7 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
                             }
                         }
                     },
-                    onTogglePin = { vm.togglePinStatus(conversation.id) },
+                    onTogglePin = { runOperation { vm.togglePinStatus(conversation) } },
                     modifier = Modifier
                         .fillMaxWidth()
                         .animateItem()
@@ -140,24 +157,27 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
         }
     }
 
-    if (showDeleteAllDialog) {
+    deletionCandidates?.let { candidates ->
         AlertDialog(
-            onDismissRequest = { showDeleteAllDialog = false },
+            onDismissRequest = { deletionCandidates = null },
             title = { Text(stringResource(R.string.history_page_delete_all_conversations)) },
             text = { Text(stringResource(R.string.history_page_delete_all_confirmation)) },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        vm.deleteAllConversations()
-                        showDeleteAllDialog = false
-                    }
+                        runOperation {
+                            try { vm.deleteConversations(candidates) }
+                            finally { deletionCandidates = null }
+                        }
+                    },
+                    enabled = !operationRunning && candidates.isNotEmpty(),
                 ) {
                     Text(stringResource(R.string.history_page_delete))
                 }
             },
             dismissButton = {
                 TextButton(
-                    onClick = { showDeleteAllDialog = false }
+                    onClick = { deletionCandidates = null }
                 ) {
                     Text(stringResource(R.string.history_page_cancel))
                 }
@@ -186,6 +206,7 @@ private fun SwipeableConversationItem(
         when (dismissState.currentValue) {
             SwipeToDismissBoxValue.EndToStart -> {
                 onDelete()
+                dismissState.snapTo(SwipeToDismissBoxValue.Settled)
             }
 
             else -> {}

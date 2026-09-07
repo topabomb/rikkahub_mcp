@@ -52,7 +52,10 @@ data class ConversationSummary(
     val createAt: Instant,
     val updateAt: Instant,
     internal val selection: RealmSelection?,
-)
+) {
+    val commandTarget: ConversationCommandTarget
+        get() = ConversationCommandTarget(id, requireNotNull(selection) { "conversation_summary_is_read_only" }) {}
+}
 
 /** Original authority of an assistant's rendered folder directory, including an empty directory. */
 @ConsistentCopyVisibility

@@ -8,6 +8,10 @@ import io.mockk.mockk
 import io.mockk.slot
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
@@ -325,6 +329,10 @@ class TurnFinalizerTest {
             runtime.publishCommitted(captured, (change as ConversationChange.Durable).snapshot)
         }
 
+        coEvery { coordinator.withResidentRuntime<Unit>(conversationId, any()) } coAnswers {
+            secondArg<suspend (ConversationRuntime?) -> Unit>()(runtime)
+        }
+
         runtime.installTurnWorker(turnId, kotlinx.coroutines.Job())
         runtime.retainAwaitingUser(TurnHandle(conversationId, 7, turnId, assistant.id))
         assertEquals(TurnLivePhase.AWAITING_USER, runtime.currentTurnPresentation().phase)
@@ -393,6 +401,90 @@ class TurnFinalizerTest {
         assertEquals(TurnExecutionStatus.CANCELLED, finalize.terminalStatus)
         assertEquals(turnId, finalize.handle.turnId)
         assertEquals(4, finalize.handle.epoch)
+    }
+
+    @Test
+    fun `late stop cannot finalize or release a replacement worker with the same turn id`() = runTest {
+        val conversationId = Uuid.random()
+        val turnId = Uuid.random()
+        val assistant = UIMessage.assistant("partial")
+        val runtime = ConversationRuntime(conversationId,
+            Conversation.ofId(conversationId).copy(messageNodes = listOf(MessageNode.of(assistant))).toSnapshot(), this, {})
+        runtime.seedActiveTurn(1, turnId, assistant.id)
+        val repository = mockk<ConversationRepository>()
+        val coordinator = mockk<ConversationCommandCoordinator>()
+        val registry = mockk<ConversationRuntimeRegistry>()
+        io.mockk.every { registry.findRuntime(conversationId) } returns runtime
+        coEvery { coordinator.withResidentRuntime<Unit>(conversationId, any()) } coAnswers {
+            secondArg<suspend (ConversationRuntime?) -> Unit>()(runtime)
+        }
+        coEvery { repository.getTurnExecution(turnId.toString()) } returns TurnExecutionEntity(
+            turnId.toString(), conversationId.toString(), assistant.id.toString(), TurnExecutionStatus.RUNNING,
+            null, 1, 1,
+        )
+        val finalizer = TurnFinalizer(repository, registry, coordinator, Json)
+        val original = kotlinx.coroutines.Job()
+        runtime.installTurnWorker(turnId, original)
+        val stop = requireNotNull(finalizer.captureStop(conversationId))
+        val replacement = kotlinx.coroutines.Job()
+        runtime.installTurnWorker(turnId, replacement)
+        try {
+            val failure = runCatching { finalizer.finishStop(stop) }.exceptionOrNull()
+            assertTrue(failure is IllegalStateException)
+            org.junit.Assert.assertSame(replacement, runtime.currentWorker())
+            assertTrue(replacement.isActive)
+            assertEquals(turnId, runtime.snapshot.value.stream?.turnId)
+            coVerify(exactly = 0) { coordinator.load(any()) }
+            coVerify(exactly = 0) { coordinator.executeOrThrow(any(), any()) }
+        } finally { replacement.cancel() }
+    }
+
+    @Test
+    fun `failed stop terminal commit retains its original owner for recovery`() = runTest {
+        val conversationId = Uuid.random()
+        val turnId = Uuid.random()
+        val assistant = UIMessage.assistant("partial").let {
+            it.copy(parts = listOf(net.weero.measix.pilot.service.runtime.TurnTransition.openStep(0)) + it.parts)
+        }
+        val runtime = ConversationRuntime(conversationId,
+            Conversation.ofId(conversationId).copy(messageNodes = listOf(MessageNode.of(assistant))).toSnapshot(), this, {})
+        runtime.seedActiveTurn(1, turnId, assistant.id)
+        val repository = mockk<ConversationRepository>()
+        val coordinator = mockk<ConversationCommandCoordinator>()
+        val registry = mockk<ConversationRuntimeRegistry>()
+        io.mockk.every { registry.findRuntime(conversationId) } returns runtime
+        coEvery { coordinator.withResidentRuntime<Unit>(conversationId, any()) } coAnswers {
+            secondArg<suspend (ConversationRuntime?) -> Unit>()(runtime)
+        }
+        coEvery { coordinator.load(conversationId) } returns runtime
+        coEvery { repository.getTurnExecution(turnId.toString()) } returns TurnExecutionEntity(
+            turnId.toString(), conversationId.toString(), assistant.id.toString(), TurnExecutionStatus.RUNNING,
+            null, 1, 1,
+        )
+        val failure = java.io.IOException("commit failed")
+        coEvery { coordinator.executeOrThrow(conversationId, any()) } throws failure
+        val worker = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try { awaitCancellation() }
+            finally { runtime.releaseTurnWorker(turnId, coroutineContext[Job]) }
+        }
+        runtime.installTurnWorker(turnId, worker)
+        val finalizer = TurnFinalizer(repository, registry, coordinator, Json)
+        val actualFailure = runCatching { finalizer.stopTurn(conversationId) }.exceptionOrNull()
+        assertTrue(actualFailure is java.io.IOException)
+        assertEquals(failure.message, actualFailure?.message)
+        org.junit.Assert.assertSame(worker, runtime.currentWorker())
+        assertEquals(TurnLivePhase.STOPPING, runtime.currentTurnPresentation().phase)
+        assertEquals(turnId, runtime.snapshot.value.stream?.turnId)
+        assertTrue(worker.isCancelled)
+
+        coEvery { coordinator.executeOrThrow(conversationId, any()) } coAnswers {
+            val command = secondArg<ConversationCommand>()
+            val change = ConversationTransition.plan(runtime.durable, command, runtime.durable.header.updateAt)
+            runtime.publishCommitted(command, (change as ConversationChange.Durable).snapshot)
+        }
+        finalizer.stopTurn(conversationId)
+        assertNull(runtime.currentWorker())
+        assertNull(runtime.snapshot.value.stream)
     }
 
     /** 通过真实 StartTurn 提交建立当前 active Turn 的流式投影（这些用例只依赖其身份）。 */

@@ -47,6 +47,7 @@ import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.service.ConversationReadState
 import net.weero.measix.pilot.service.ConversationSummary
 import net.weero.measix.pilot.service.ConversationUiModel
+import net.weero.measix.pilot.service.ConversationCommandTarget
 import net.weero.measix.pilot.service.ConversationViewLease
 import net.weero.measix.pilot.service.ArtifactUseCase
 import net.weero.measix.pilot.service.ArtifactDraftScope
@@ -362,9 +363,8 @@ class ChatVM(
 
     fun handleMessageEdit(parts: List<UIMessagePart>, messageId: Uuid) {
         if (parts.isEmptyInputMessage()) return
-
-        viewModelScope.launch {
-            conversationApplicationService.editMessage(_conversationId, messageId, parts, artifactDraftScope)
+        launchPageCommand { opened ->
+            conversationApplicationService.editMessage(opened.lease.commandTarget, messageId, parts, opened.imports)
         }
     }
 
@@ -389,14 +389,13 @@ class ChatVM(
         }
     }
 
-    suspend fun forkMessage(message: UIMessage): Uuid {
-        return conversationApplicationService.forkAtMessage(_conversationId, message.id)
-    }
+    suspend fun forkMessage(message: UIMessage): Uuid? = try {
+        conversationApplicationService.forkAtMessage(requirePage().lease.commandTarget, message.id)
+    } catch (cancelled: CancellationException) { throw cancelled }
+    catch (error: Exception) { reportCommandError(_conversationId, error); null }
 
     fun deleteMessage(message: UIMessage) {
-        viewModelScope.launch {
-            conversationApplicationService.deleteMessage(_conversationId, message)
-        }
+        launchPageCommand { opened -> conversationApplicationService.deleteMessage(opened.lease.commandTarget, message) }
     }
 
     fun showDeleteBlockedWhileGeneratingError() {
@@ -424,42 +423,50 @@ class ChatVM(
     fun handleSubAssistantAnswer(runId: String, interactionId: String, answer: String): Boolean =
         turnService.handleSubAssistantAnswer(runId, interactionId, answer)
 
+    private fun launchCommand(target: ConversationCommandTarget, action: suspend () -> Unit): Job = viewModelScope.launch {
+        try { action() }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { reportCommandError(target.conversationId, error) }
+    }
+
+    private fun launchPageCommand(action: suspend (PageState.Open) -> Unit) {
+        val opened = page.value as? PageState.Open ?: return
+        launchCommand(opened.lease.commandTarget) { action(opened) }
+    }
+
+    private fun reportCommandError(id: Uuid, error: Exception) {
+        chatErrorStore.add(error = error, conversationId = id, title = context.getString(R.string.error_title_operation))
+    }
+
     fun stopGeneration() {
-        viewModelScope.launch {
-            conversationApplicationService.stopGeneration(_conversationId)
-        }
+        launchPageCommand { opened -> conversationApplicationService.stopGeneration(opened.lease.commandTarget) }
     }
 
     fun updateTitle(title: String) {
-        viewModelScope.launch {
-            conversationApplicationService.updateTitle(_conversationId, title)
-        }
+        launchPageCommand { opened -> conversationApplicationService.updateTitle(opened.lease.commandTarget, title) }
     }
 
-    suspend fun deleteConversation(conversation: ConversationSummary) {
-        conversationApplicationService.delete(conversation.id)
-    }
+    suspend fun deleteConversation(conversation: ConversationSummary): Boolean = try {
+        conversationApplicationService.delete(conversation.commandTarget)
+        true
+    } catch (cancelled: CancellationException) { throw cancelled }
+    catch (error: Exception) { reportCommandError(conversation.id, error); false }
 
     fun updatePinnedStatus(conversation: ConversationSummary) {
-        viewModelScope.launch {
-            conversationApplicationService.togglePin(conversation.id)
-        }
+        val target = conversation.commandTarget
+        launchCommand(target) { conversationApplicationService.togglePin(target) }
     }
 
     fun moveConversationToAssistant(targetAssistantId: ConfigurationReference) {
-        moveConversationToAssistant(_conversationId, targetAssistantId)
+        launchPageCommand { opened ->
+            conversationApplicationService.moveToAssistant(opened.lease.commandTarget, targetAssistantId, selectForNewChats = true)
+        }
     }
 
-    fun moveConversationToAssistant(conversationId: Uuid, targetAssistantId: ConfigurationReference) {
-        viewModelScope.launch {
-            conversationApplicationService.moveToAssistant(conversationId, targetAssistantId)
-            if (conversationId == _conversationId) {
-                try {
-                    settingsStore.updateLocal { settings -> settings.copy(assistantId = targetAssistantId) }
-                } catch (error: SettingsLockedException) {
-                    reportLockedSettingsChange(error)
-                }
-            }
+    fun moveConversationToAssistant(conversation: ConversationSummary, targetAssistantId: ConfigurationReference) {
+        val target = conversation.commandTarget
+        launchCommand(target) {
+            conversationApplicationService.moveToAssistant(target, targetAssistantId, selectForNewChats = conversation.id == _conversationId)
         }
     }
 
@@ -470,27 +477,19 @@ class ChatVM(
     }
 
     fun selectNode(nodeId: Uuid, selectIndex: Int) {
-        viewModelScope.launch {
-            conversationApplicationService.selectNode(_conversationId, nodeId, selectIndex)
-        }
+        launchPageCommand { opened -> conversationApplicationService.selectNode(opened.lease.commandTarget, nodeId, selectIndex) }
     }
 
     fun updateCustomSystemPrompt(prompt: String?) {
-        viewModelScope.launch {
-            conversationApplicationService.updateCustomSystemPrompt(_conversationId, prompt)
-        }
+        launchPageCommand { opened -> conversationApplicationService.updateCustomSystemPrompt(opened.lease.commandTarget, prompt) }
     }
 
     fun updateModeInjectionIds(ids: Set<ConfigurationReference>) {
-        viewModelScope.launch {
-            conversationApplicationService.updateModeInjectionIds(_conversationId, ids)
-        }
+        launchPageCommand { opened -> conversationApplicationService.updateModeInjectionIds(opened.lease.commandTarget, ids) }
     }
 
     fun updateWorkspaceCwd(cwd: String?) {
-        viewModelScope.launch {
-            conversationApplicationService.updateWorkspaceCwd(_conversationId, cwd)
-        }
+        launchPageCommand { opened -> conversationApplicationService.updateWorkspaceCwd(opened.lease.commandTarget, cwd) }
     }
 
     fun toggleMessageFavorite(node: MessageNode) {

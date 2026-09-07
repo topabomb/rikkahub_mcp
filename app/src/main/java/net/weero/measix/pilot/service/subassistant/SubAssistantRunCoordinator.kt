@@ -701,7 +701,6 @@ class SubAssistantRunCoordinator internal constructor(
                 runtimeRegistry.findRuntime(ownedChildId)?.releaseTurnWorker(
                     turnId = ownedTurnId,
                     worker = ownedWorker,
-                    retainAwaitingOwner = false,
                 )
             }
             ready.lease.close()

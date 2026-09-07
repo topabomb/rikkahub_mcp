@@ -315,6 +315,7 @@ class ConversationRuntimeTest {
         val turnId = Uuid.random()
         val worker = Job()
         rt.installTurnWorker(turnId, worker)
+        rt.startTurn(turnId, Uuid.random())
         val model = Model(modelId = "model", displayName = "Model")
         val provider = ProviderSetting.OpenAI(models = listOf(model))
         val assistant = Assistant(enableMemory = false)
@@ -327,9 +328,9 @@ class ConversationRuntimeTest {
         rt.requestCancel(turnId, "target_access_revoked")
         assertEquals(TurnLivePhase.STOPPING, rt.currentTurnPresentation().phase)
 
-        rt.releaseTurnWorker(turnId, Job(), retainAwaitingOwner = false)
+        rt.releaseTurnWorker(turnId, Job(), retainPendingTurnOwner = false)
         assertSame(context, rt.requireTurnContext(turnId, worker))
-        rt.releaseTurnWorker(turnId, worker, retainAwaitingOwner = false)
+        rt.releaseTurnWorker(turnId, worker, retainPendingTurnOwner = false)
         assertEquals(null, rt.currentWorker())
         scope.cancel()
     }
@@ -976,8 +977,8 @@ class ConversationRuntimeTest {
         rt.requestCancel(firstTurn, "user_stop")
         assertEquals(null, rt.peekCancelReason(firstTurn))
         rt.requestCancel(secondTurn, "user_stop")
-        assertEquals("user_stop", rt.peekCancelReason(secondTurn))
-        replacementJob.cancel()
+        assertEquals(null, rt.peekCancelReason(secondTurn))
+        assertEquals(null, rt.currentWorker())
     }
 
     @Test

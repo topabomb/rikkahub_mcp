@@ -772,7 +772,7 @@ private fun ChatPageContent(
                 },
                 onForkMessage = {
                     scope.launch {
-                        val fork = vm.forkMessage(message = it)
+                        val fork = vm.forkMessage(message = it) ?: return@launch
                         chatNavigation.existingChat(chatId = fork)
                     }
                 },

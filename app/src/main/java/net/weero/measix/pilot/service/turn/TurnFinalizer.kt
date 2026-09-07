@@ -28,6 +28,8 @@ import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry
+import net.weero.measix.pilot.service.runtime.ConversationRuntime
+import net.weero.measix.pilot.service.runtime.CapturedTurnWorker
 import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeSnapshot
 import net.weero.measix.pilot.service.runtime.FinalizeTurn
@@ -42,25 +44,43 @@ class TurnFinalizer(
     private val commandCoordinator: ConversationCommandCoordinator,
     private val json: Json,
 ) {
+    internal class StopRequest internal constructor(
+        internal val conversationId: Uuid,
+        internal val runtime: ConversationRuntime,
+        internal val captured: CapturedTurnWorker,
+        internal val reason: String,
+    )
+
+    /** Caller must retain this ownership across lock release and finish it even on cancellation. */
+    internal fun captureStop(conversationId: Uuid, reason: String = TurnTerminalReasons.USER_STOP): StopRequest? {
+        val runtime = runtimeRegistry.findRuntime(conversationId) ?: return null
+        val captured = runtime.captureAndRequestStop(reason) ?: return null
+        return StopRequest(conversationId, runtime, captured, reason)
+    }
+
+    /** Waits outside session/command locks and never captures a replacement worker. */
+    internal suspend fun finishStop(request: StopRequest) = withContext(NonCancellable) {
+        val job = request.captured.worker
+        if (job?.isCompleted == false) job.cancel()
+        job?.join()
+        commandCoordinator.withResidentRuntime(request.conversationId) { runtime ->
+            val execution = conversationRepository.getTurnExecution(request.captured.turnId.toString())
+            if (execution?.status in setOf(TurnExecutionStatus.RUNNING, TurnExecutionStatus.AWAITING_USER)) {
+                check(runtime === request.runtime && runtime.ownsStoppedWorker(request.captured)) { "stopped_turn_owner_changed" }
+                finalizeNonTerminalTurn(request.conversationId, request.captured.turnId, request.reason)
+            }
+            if (runtime === request.runtime && runtime.ownsStoppedWorker(request.captured)) {
+                check(runtime.snapshot.value.stream?.turnId != request.captured.turnId) { "stopped_turn_still_pending" }
+                runtime.releaseTurnWorker(request.captured.turnId, request.captured.worker, retainPendingTurnOwner = false)
+            }
+        }
+    }
+
     suspend fun stopTurn(
         conversationId: Uuid,
         reason: String = TurnTerminalReasons.USER_STOP,
     ) {
-        val runtime = runtimeRegistry.findRuntime(conversationId) ?: return
-        val captured = runtime.captureAndRequestStop(reason) ?: return
-        val job = captured.worker
-        if (job?.isCompleted == false) {
-            job.cancel()
-        }
-        withContext(NonCancellable) {
-            job?.join()
-            finalizeNonTerminalTurn(
-                conversationId = conversationId,
-                turnId = captured.turnId,
-                reason = reason,
-            )
-            runtime.releaseTurnWorker(captured.turnId, retainAwaitingOwner = false)
-        }
+        captureStop(conversationId, reason)?.let { finishStop(it) }
     }
 
     /**
@@ -205,13 +225,13 @@ class TurnFinalizer(
         turnId: Uuid,
         reason: String,
     ) {
-        val runtime = commandCoordinator.load(conversationId)
         val execution = conversationRepository.getTurnExecution(turnId.toString()) ?: return
         if (execution.status !in setOf(
                 TurnExecutionStatus.RUNNING,
                 TurnExecutionStatus.AWAITING_USER,
             )
         ) return
+        val runtime = commandCoordinator.load(conversationId)
         val active = runtime.snapshot.value.stream
             ?.takeIf { it.turnId == turnId }
             ?: error("non-terminal turn has no matching runtime owner: $turnId")

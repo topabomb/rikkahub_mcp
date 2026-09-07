@@ -27,6 +27,11 @@ class ConversationCommandCoordinator(
     suspend fun load(conversationId: Uuid): ConversationRuntime =
         operationLocks.withLock(conversationId) { registry.loadRuntime(conversationId) }
 
+    internal suspend fun <T> withResidentRuntime(
+        conversationId: Uuid,
+        operation: suspend (ConversationRuntime?) -> T,
+    ): T = operationLocks.withLock(conversationId) { operation(registry.findRuntime(conversationId)) }
+
     /** Authorize headers before loading any tree, under the same boundary used by all writes. */
     internal suspend fun <T> withRootHeaders(
         scope: ConfigurationScope,
@@ -42,6 +47,27 @@ class ConversationCommandCoordinator(
         }
         operation(headers)
     } }
+
+    /** Complete lineage locks precede reads and mutations; a changed lineage must be retried. */
+    internal suspend fun <T> withInactiveRootTree(
+        scope: ConfigurationScope,
+        conversationId: Uuid,
+        operation: suspend () -> T,
+    ): T {
+        val childIds = withRootHeaders(scope, listOf(conversationId)) { repository.getChildConversationIds(conversationId) }
+        return operationLocks.withLocks(childIds + conversationId) {
+            withRootHeaders(scope, listOf(conversationId)) {
+                check(repository.getChildConversationIds(conversationId).toSet() == childIds.toSet()) { "conversation_lineage_changed" }
+                childIds.forEach { id ->
+                    val header = registry.findRuntime(id)?.durable?.header ?: repository.getConversationHeader(id)
+                        ?: throw ConversationNotFoundException(id)
+                    check(header.scope == scope && header.parentConversationId == conversationId) { "conversation_lineage_scope_mismatch" }
+                }
+                (childIds + conversationId).forEach(::ensureNotActive)
+                operation()
+            }
+        }
+    }
 
     suspend fun create(conversation: Conversation): ConversationRuntime =
         gated { operationLocks.withLocks(conversation.lockIds()) {
@@ -97,9 +123,11 @@ class ConversationCommandCoordinator(
     internal suspend fun createTree(
         master: ConversationAggregateSnapshot,
         children: List<ConversationAggregateSnapshot>,
+        checkAccess: () -> Unit = {},
     ): ConversationRuntime = gated {
         val ids = listOf(master.conversationId) + children.map { it.conversationId }
         operationLocks.withLocks(ids) {
+            checkAccess()
             val runtime = withContext(NonCancellable) {
                 if (
                     ids.distinct().size != children.size + 1 ||
@@ -154,9 +182,12 @@ class ConversationCommandCoordinator(
             children.forEach { ensureNotActive(it.conversationId) }
             val deleted = DeletedConversationTree(root, children)
             beforeDelete(deleted)
-            repository.deleteConversation(conversationId)
-            (children.map { it.conversationId } + conversationId).forEach { id -> registry.evictRuntime(id) }
-            deleted
+            coroutineContext.ensureActive()
+            withContext(NonCancellable) {
+                repository.deleteConversation(conversationId)
+                (children.map { it.conversationId } + conversationId).forEach { id -> registry.evictRuntime(id) }
+                deleted
+            }
         }
     }
 
@@ -242,8 +273,11 @@ class ConversationCommandCoordinator(
             }
             check(childIds.all { it in lockIds }) { "conversation lineage changed outside command boundary" }
             childIds.forEach(::ensureNotActive)
-            repository.deleteConversation(conversationId)
-            (childIds + conversationId).forEach { id -> registry.evictRuntime(id) }
+            coroutineContext.ensureActive()
+            withContext(NonCancellable) {
+                repository.deleteConversation(conversationId)
+                (childIds + conversationId).forEach { id -> registry.evictRuntime(id) }
+            }
         }
     }
 

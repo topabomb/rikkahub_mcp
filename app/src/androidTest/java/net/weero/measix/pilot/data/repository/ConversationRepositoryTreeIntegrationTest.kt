@@ -12,6 +12,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
@@ -94,6 +95,7 @@ class ConversationRepositoryTreeIntegrationTest {
 
     @After
     fun tearDown() {
+        if (::appScope.isInitialized) appScope.cancel()
         if (::database.isInitialized) database.close()
     }
 
@@ -150,7 +152,7 @@ class ConversationRepositoryTreeIntegrationTest {
     }
 
     @Test
-    fun treeInsertAndMasterDeleteKeepConversationNodesAndArtifactReferencesAtomic() = runBlocking {
+    fun treeDeleteAndRestoreKeepScopedNodesAndArtifactReferencesAtomic() = runBlocking {
         val masterId = Uuid.random()
         val assistantId = ConfigurationReference.random()
         val owned = artifactStore.createFromBytes(
@@ -163,8 +165,9 @@ class ConversationRepositoryTreeIntegrationTest {
             fileName = "tree.txt",
             mime = "text/plain",
         )
-        val master = conversation(masterId, assistantId, null, part)
-        val child = conversation(Uuid.random(), assistantId, masterId, part)
+        val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "dep_example"), "alice")
+        val master = conversation(masterId, assistantId, null, part).copy(scope = scope)
+        val child = conversation(Uuid.random(), assistantId, masterId, part).copy(scope = scope)
 
         repository.insertConversationTree(master.toSnapshot(), listOf(child.toSnapshot()))
 
@@ -178,12 +181,33 @@ class ConversationRepositoryTreeIntegrationTest {
         assertTrue(postCommitDiscard is ArtifactDeleteResult.Failed)
         assertEquals("artifact_already_published", (postCommitDiscard as ArtifactDeleteResult.Failed).reason)
 
-        repository.deleteConversation(master.id)
+        val locks = net.weero.measix.pilot.service.runtime.ConversationOperationLocks()
+        val registry = net.weero.measix.pilot.service.runtime.ConversationRuntimeRegistry(appScope, repository, locks)
+        val gate = net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() }
+        val coordinator = net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator(registry, repository, gate, locks)
+        coordinator.load(master.id)
+        coordinator.load(child.id)
+        var retention: net.weero.measix.pilot.data.files.ArtifactRetentionLease? = null
+        try {
+            val deleted = coordinator.withInactiveRootTree(scope, master.id) {
+                coordinator.deleteCapturingTree(master.id) { tree ->
+                    retention = artifactStore.retainNodesForUndo((listOf(tree.root) + tree.children).map { it.nodes })
+                }
+            }
+            assertNull(repository.getConversationById(master.id))
+            assertNull(repository.getConversationById(child.id))
+            assertNull(registry.findRuntime(master.id))
+            assertNull(registry.findRuntime(child.id))
+            assertFalse(database.artifactReferenceDao().existsByArtifactId(owned.entity.id))
+            assertTrue(artifactStore.file(owned.entity).isFile)
 
-        assertNull(repository.getConversationById(master.id))
-        assertNull(repository.getConversationById(child.id))
-        assertFalse(database.artifactReferenceDao().existsByArtifactId(owned.entity.id))
-        assertTrue(artifactStore.file(owned.entity).isFile)
+            coordinator.createTree(deleted.root, deleted.children)
+            assertEquals(master.toSnapshot(), repository.getConversationSnapshotById(master.id))
+            assertEquals(child.toSnapshot(), repository.getConversationSnapshotById(child.id))
+            assertEquals(scope, registry.findRuntime(master.id)?.durable?.header?.scope)
+            assertEquals(setOf(master.id.toString(), child.id.toString()),
+                database.artifactReferenceDao().referencingConversationIds(owned.entity.id).toSet())
+        } finally { retention?.close() }
     }
 
     @Test
