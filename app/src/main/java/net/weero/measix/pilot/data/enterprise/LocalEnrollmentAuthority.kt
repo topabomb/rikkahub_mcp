@@ -54,22 +54,37 @@ internal class LocalEnrollmentAuthority(
         material
     }
 
+    /** Resolves the ticket's fixed principal without reserving or consuming the credential. */
+    suspend fun resolveIdentity(material: EnrollmentMaterial.LocalExample): EnterpriseIdentity = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            currentCoroutineContext().ensureActive()
+            validatedTicket(read(), material).identity
+        }
+    }
+
     /** Session owner holds its admission lock before this lock. Consumption is never rolled back by a client failure. */
-    suspend fun redeem(material: EnrollmentMaterial.LocalExample, installedIdentity: EnterpriseIdentity): EnterpriseIdentity = mutex.withLock {
+    suspend fun redeem(material: EnrollmentMaterial.LocalExample, expectedIdentity: EnterpriseIdentity): EnterpriseIdentity = mutex.withLock {
         currentCoroutineContext().ensureActive()
         val identity = withContext(Dispatchers.IO + NonCancellable) {
             val ledger = read()
-            val ticket = ledger.tickets.singleOrNull { it.digest == digest(material.code) }
-                ?: fail("enterprise_enrollment_rejected")
-            if (ticket.identity != installedIdentity || material.sourceNamespace != ticket.identity.authority.sourceNamespace ||
-                material.deploymentId != ticket.identity.authority.deploymentId) fail("enterprise_enrollment_rejected")
-            if (ticket.expiresAtMillis <= nowMillis()) fail("enterprise_enrollment_expired")
-            if (ticket.consumed) fail("enterprise_enrollment_consumed")
+            val ticket = validatedTicket(ledger, material)
+            if (ticket.identity != expectedIdentity) fail("enterprise_enrollment_rejected")
             write(ledger.copy(tickets = ledger.tickets.map { if (it.digest == ticket.digest) it.copy(consumed = true) else it }))
             ticket.identity
         }
         currentCoroutineContext().ensureActive()
         identity
+    }
+
+    private fun validatedTicket(ledger: LocalEnrollmentLedger, material: EnrollmentMaterial.LocalExample): LocalEnrollmentTicket {
+        val codeDigest = digest(material.code)
+        val ticket = ledger.tickets.singleOrNull { it.digest == codeDigest }
+            ?: fail("enterprise_enrollment_rejected")
+        if (material.sourceNamespace != ticket.identity.authority.sourceNamespace ||
+            material.deploymentId != ticket.identity.authority.deploymentId) fail("enterprise_enrollment_rejected")
+        if (ticket.expiresAtMillis <= nowMillis()) fail("enterprise_enrollment_expired")
+        if (ticket.consumed) fail("enterprise_enrollment_consumed")
+        return ticket
     }
 
     private fun read(): LocalEnrollmentLedger {

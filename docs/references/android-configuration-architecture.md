@@ -72,15 +72,16 @@ updateLocal(latest Local shadow transform)
 
 - `EnterprisePackageCodec` 校验 formatVersion=2 的完整本地资料：显式五项准入、资源/助手引用、默认选择与完整运行绑定，顶层可携带 feedSeed 初值。该格式独立于接入资料和平台 Snapshot；旧企业原型格式拒绝，不保留双格式兼容。定义与运行连接分开；异常不带可能含凭据的原始反序列化错误。
 - `EnterpriseAppliedStore` 在调用者指定的私有目录暂存不可变配置、绑定及独立 Feed 文件，以 schemaVersion=2 的单个 manifest 原子发布身份、版本和当前空间。Feed 指针按来源/Deployment/User 保存，退出保留且不可跨主体读取。提交显式同步文件并核验实际 manifest，不能把 AtomicFile 仅记录日志的失败当作成功。
-- `EnterpriseSessionController` 是上述存储的串行写 owner。支持待配置、就绪、离线、退出和重新认证；切换保留登录，退出撤销资格后等待在途 lease 释放。配置损坏时仍能依靠已验证身份退出；恢复不接受不闭合的活动文件。
-- 配置更新按 revision 校验旧编辑状态，定义与绑定同包校验；同会话更新保留离线状态。在途 lease 保留捕获的旧绑定直至释放；lease 不充当执行授权，运行链接入时还需统一准入门禁。
+- `EnterpriseSessionController` 是上述存储的串行写 owner。enrollLocal 处理已验证接入（配置不可用时待配置），importLocal 处理显式原生安装后的应用，synchronize 只接受原 Session 的候选。无 registerIdentity/applyPackage 通用旁路。支持待配置、就绪、离线、退出和重新认证；切换保留登录，退出撤销资格后等待在途 lease 释放。配置损坏时仍能依靠已验证身份退出；恢复不接受不闭合的活动文件。
+- LocalEnterpriseSource 通过 LocalEnterpriseConfigurationStore 唯一管理 noBackupFilesDir/local_enterprise_service 中的安装目录和来源配置。这是模拟服务的来源事实，不是第四个客户端配置区或 enterprise_local。目录按完整主体保存身份、generation 与内容摘要引用，配置使用独立不可变文件；身份读取不依赖配置可读。场景修改按来源 revision 做 CAS 并推进 generation，尚未同步时客户端 Applied 保持原值。损坏来源不能静默重置为随包示例；显式完整文件导入可以在 CAS 校验后以更高 generation 修复。
+- EnterpriseSynchronizationService 合并同一主体/Session 的同步请求，读取来源候选后交给 Session owner 复核原授权并原子应用，不创建、续期或切换 Session。成功提交同时保存 lastConfigurationSyncMillis；同版本检查复用 Applied revision，失败保留原配置和成功时间。取消等待者不会回滚或重放同步；同会话更新保留离线状态。在途 lease 保留捕获的旧绑定直至释放；lease 不充当执行授权，运行链接入时还需统一准入门禁。
 - `LocalEnterpriseSource` 统一验证一键、粘贴和扫码解析后的公开示例接入资料，并支持私有整包导入。`docs/examples/enterprise.local.example.json` 是唯一公开示例输入，通过构建任务进入 assets；根目录 `enterprise.local.json` 被 Git 忽略且不参与打包。配置内 HTML 与 EnterprisePortal 原型已删除。Portal local 消费包固定在 app/src/main/enterprisePortal，保留上游 build-identity.json；PrepareEnterprisePortalAssets 检查来源、版本、完整文件集合和 SHA256 后，为全部构建生成 enterprise_portal assets。普通构建不依赖 sibling checkout；WebView 宿主与 Bridge 尚待接通。
 
 `EnterpriseFeed` 集中管理草稿创建/编辑、发布、撤回与日期查询，EnterpriseSessionController 使用原 Session 写锁和同一 manifest 发布其结果。动态不再属于 EnterpriseConfiguration；仅改变动态不推进配置 generation 或替换 Applied。Seed 仅在该主体没有 Feed 时初始化，重复导入、同步和重入不恢复撤回内容。公开 revision 只随发布/撤回变化；草稿编辑只改变存储 revision。查询遵守 Client Feed 字段、枚举和 eup_UUIDv4 标识，按企业时区日历日界线过滤，ETag 包含主体、公开 revision、规范化日期/limit 与返回表示。Session 与当前选中空间验证先于查询；Portal document 和 304 响应门禁尚待宿主接通。
 
 原生资料使用独立 EnrollmentMaterialParser 对齐 formatVersion=1 的 PLATFORM_ENROLLMENT / LOCAL_EXAMPLE_ENROLLMENT；原文上限 2048 UTF-8 字节、严格字段与重复键验证。本地资料不包含 userId，运行时由 LocalEnrollmentAuthority 领取一次性 code；该模拟服务账本位于 noBackupFilesDir/local_enterprise_service，独立拥有消费事实，Session 仍只归 EnterpriseSessionController。详见 [接入资料契约](enrollment-material-contract.md)。真实平台资料当前只解析并返回明确不支持，不进入本地接入；完整私有配置使用自己的版本。
 
-PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.identity.json，供固定安装目录独立验证身份；配置文件缺失/损坏时，已兑换身份可发布 CONFIGURATION_PENDING，不能因读不到配置而猜测用户。同主体重新接入不回退已确认的较新 Applied 配置及绑定。
+PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.identity.json，只用于安装目录的首次初始化。原生完整文件导入可安装其他本地来源/Deployment/User；换主体必须先退出，扫码和粘贴无安装权限。票据固定登录身份，同企业的不同用户分别存储。重新接入读取来源当前发布版本，没有“旧安装包时保留较新 Applied”的特殊分支。配置文件缺失/损坏时，已兑换身份可发布 CONFIGURATION_PENDING，不能因读不到配置而猜测用户。有效导入的来源发布成功但客户端应用失败时，LocalEnterpriseImportResult 明确返回来源 revision 与失败原因，后续可重试同步；不会谎报已应用。
 
 ### 2.5 按主体解析与使用偏好
 

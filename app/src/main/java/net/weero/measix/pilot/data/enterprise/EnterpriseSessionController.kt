@@ -76,21 +76,6 @@ internal class EnterpriseSessionController(
         state.value
     }
 
-    /** Enrollment identity can exist before a valid configuration; it never implies READY. */
-    suspend fun registerIdentity(identity: EnterpriseIdentity) = mutex.withLock {
-        EnterprisePackageCodec.validateIdentity(identity)
-        val current = ensureLoaded()
-        requireSamePrincipal(current.manifest, identity)
-        val session = EnterpriseSession(Uuid.random().toString(), identity, nowMillis() + SESSION_LIFETIME_MILLIS)
-        publish(EnterpriseManifest(2, EnterpriseSessionPhase.CONFIGURATION_PENDING, session, null, ConfigurationScope.Personal, identity, current.manifest.feeds), null)
-    }
-
-    suspend fun applyPackage(bytes: ByteArray, enter: Boolean = true): EnterpriseState.Available {
-        if (bytes.size > EnterprisePackageCodec.MAX_BYTES) fail("enterprise_package_too_large")
-        val candidate = EnterprisePackageCodec.decode(bytes.copyOf())
-        return mutex.withLock { applyValidated(candidate, enter) }
-    }
-
     /** Admission conflicts precede code consumption. Only this owner publishes the resulting client session. */
     suspend fun enrollLocal(
         installedIdentity: EnterpriseIdentity,
@@ -107,41 +92,41 @@ internal class EnterpriseSessionController(
         if (candidate != null) {
             if (candidate.identity != installedIdentity) fail("enterprise_enrollment_identity_mismatch")
             EnterprisePackageCodec.validate(candidate)
-            val retained = current.manifest.applied
-            if (retained != null && current.configuration != null && candidate.configuration.generation < retained.generation) {
-                // Enrollment renews this principal; an older installed example cannot roll back an applied local update.
-                val session = EnterpriseSession(Uuid.random().toString(), installedIdentity, nowMillis() + SESSION_LIFETIME_MILLIS)
-                publish(current.manifest.copy(phase = EnterpriseSessionPhase.READY, session = session, selectedScope = installedIdentity.scope), current.configuration)
-            } else {
-                applyValidated(candidate, enter = true, replaceSession = true)
-            }
+            applyValidated(candidate, enter = true, replaceSession = true)
         } else {
             val session = EnterpriseSession(Uuid.random().toString(), installedIdentity, nowMillis() + SESSION_LIFETIME_MILLIS)
             publish(EnterpriseManifest(2, EnterpriseSessionPhase.CONFIGURATION_PENDING, session, null, ConfigurationScope.Personal, installedIdentity, current.manifest.feeds), null)
         }
     }
 
-    /** Local service changes use the same whole-package transaction and reject stale editors. */
-    suspend fun updateLocalPackage(
-        expectedRevision: String,
-        transform: (EnterprisePackage) -> EnterprisePackage,
-    ): EnterpriseState.Available = mutex.withLock {
-        val current = requireSession(allowOffline = true)
-        val manifest = current.manifest
-        if (manifest.applied?.revision != expectedRevision) fail("enterprise_configuration_changed")
-        val configuration = requireNotNull(current.configuration)
-        if (configuration.generation == Long.MAX_VALUE) fail("enterprise_generation_exhausted")
-        val previous = EnterprisePackage(
-            EnterprisePackageCodec.FORMAT_VERSION, requireNotNull(manifest.session).identity, configuration,
-            withContext(Dispatchers.IO) { store.bindings(manifest) },
-        )
-        val changed = transform(previous)
-        val candidate = changed.copy(configuration = changed.configuration.copy(generation = configuration.generation + 1))
+    /** A fetched candidate cannot renew, recreate or switch the session that requested it. */
+    suspend fun synchronize(access: RealmAccess.Enterprise, candidate: EnterprisePackage): EnterpriseState.Available = mutex.withLock {
+        val current = ensureLoaded()
+        if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
+        if (candidate.identity.scope != access.scope) fail("enterprise_principal_mismatch")
         EnterprisePackageCodec.validate(candidate)
-        applyValidated(candidate, manifest.selectedScope is ConfigurationScope.Enterprise)
+        applyValidated(candidate, current.manifest.selectedScope is ConfigurationScope.Enterprise, expectedAccess = access)
     }
 
-    private suspend fun applyValidated(candidate: EnterprisePackage, enter: Boolean, replaceSession: Boolean = false): EnterpriseState.Available {
+    /** Explicit native installation publishes source facts before applying them; application failure is observable. */
+    suspend fun importLocal(identity: EnterpriseIdentity, publishSource: suspend () -> LocalEnterpriseCandidate): LocalEnterpriseImportResult = mutex.withLock {
+        EnterprisePackageCodec.validateIdentity(identity)
+        val current = ensureLoaded()
+        requireSamePrincipal(current.manifest, identity)
+        val candidate = publishSource()
+        check(candidate.packet.identity == identity)
+        try {
+            val applied = applyValidated(candidate.packet, current.manifest.session == null || current.manifest.selectedScope is ConfigurationScope.Enterprise)
+            LocalEnterpriseImportResult(candidate.revision, applied, null)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            LocalEnterpriseImportResult(candidate.revision, null, safeReason(error))
+        }
+    }
+
+    private suspend fun applyValidated(candidate: EnterprisePackage, enter: Boolean, replaceSession: Boolean = false,
+        expectedAccess: RealmAccess.Enterprise? = null): EnterpriseState.Available {
         val current = ensureLoaded()
         val manifest = current.manifest
         if (manifest.phase == EnterpriseSessionPhase.CLOSING) fail("enterprise_exit_in_progress")
@@ -153,20 +138,26 @@ internal class EnterpriseSessionController(
             }
         }
         prune(manifest)
-        val version = withContext(Dispatchers.IO) { store.prepare(candidate) }
+        val version = withContext(Dispatchers.IO) {
+            manifest.applied?.takeIf { current.configuration == candidate.configuration &&
+                manifest.session?.identity == candidate.identity && store.bindings(manifest) == candidate.runtimeBindings }
+                ?: store.prepare(candidate)
+        }
         val feeds = if (candidate.feedSeed != null && manifest.feeds.none { it.scope == candidate.identity.scope }) {
             manifest.feeds + withContext(Dispatchers.IO) {
                 store.prepareFeed(candidate.identity.scope, EnterpriseFeed.initialize(candidate.feedSeed))
             }
         } else manifest.feeds
-        val session = manifest.session?.takeIf { !replaceSession && it.expiresAtMillis > nowMillis() }
+        if (expectedAccess != null && !allowsDataAccess(manifest, expectedAccess)) fail("enterprise_data_access_unavailable")
+        val session = if (expectedAccess != null) requireNotNull(manifest.session).copy(identity = candidate.identity)
+        else manifest.session?.takeIf { !replaceSession && it.expiresAtMillis > nowMillis() }
             ?.copy(identity = candidate.identity)
             ?: EnterpriseSession(Uuid.random().toString(), candidate.identity, nowMillis() + SESSION_LIFETIME_MILLIS)
         val next = EnterpriseManifest(
             2, if (manifest.phase == EnterpriseSessionPhase.OFFLINE && session.id == manifest.session?.id) {
                 EnterpriseSessionPhase.OFFLINE
             } else EnterpriseSessionPhase.READY, session, version,
-            if (enter) candidate.identity.scope else ConfigurationScope.Personal, candidate.identity, feeds,
+            if (enter) candidate.identity.scope else ConfigurationScope.Personal, candidate.identity, feeds, nowMillis(),
         )
         return publish(next, candidate.configuration)
     }
@@ -285,7 +276,8 @@ internal class EnterpriseSessionController(
     suspend fun beginExit(): EnterpriseExitToken? = mutex.withLock {
         val manifest = manifestForExit()
         val session = manifest.session ?: return@withLock null
-        publish(manifest.copy(phase = EnterpriseSessionPhase.CLOSING, applied = null, selectedScope = ConfigurationScope.Personal), null)
+        publish(manifest.copy(phase = EnterpriseSessionPhase.CLOSING, applied = null, selectedScope = ConfigurationScope.Personal,
+            lastConfigurationSyncMillis = null), null)
         EnterpriseExitToken(session.id, session.identity.scope)
     }
 

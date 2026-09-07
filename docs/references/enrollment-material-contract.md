@@ -4,7 +4,7 @@
 
 ## 格式与来源
 
-formatVersion=1；kind 只允许 PLATFORM_ENROLLMENT 或 LOCAL_EXAMPLE_ENROLLMENT。共同字段 code、expiresAt 必填；平台另需 platformUrl，本地另需 sourceNamespace/deploymentId。所有列出的字段必填，无额外字段。本地身份由随包来源验证确定，资料没有 userId。完整企业配置文件的 identity/runtimeBindings 与接入资料独立；完整文件当前使用 formatVersion=2，不能送入接入资料解析器。
+formatVersion=1；kind 只允许 PLATFORM_ENROLLMENT 或 LOCAL_EXAMPLE_ENROLLMENT。共同字段 code、expiresAt 必填；平台另需 platformUrl，本地另需 sourceNamespace/deploymentId。所有列出的字段必填，无额外字段。本地身份由已安装来源及票据验证确定，资料没有 userId。完整企业配置文件的 identity/runtimeBindings 与接入资料独立；完整文件当前使用 formatVersion=2，不能送入接入资料解析器。
 
 解析器先限制原始 UTF-8 为 2048 字节（包含首尾空白），再去掉首尾空白；平面对象读取在建立字段 map 前拒绝重复的解码键。错误类型、未知字段/版本/kind、缺失/null、非法 UTC 时间均拒绝，错误不带原文或底层异常。三个本地标识和平台 code 按 Unicode 字符限制为 1–128；expiresAt 采用 RFC3339 UTC，内部 Instant 比较到期。
 
@@ -12,7 +12,7 @@ formatVersion=1；kind 只允许 PLATFORM_ENROLLMENT 或 LOCAL_EXAMPLE_ENROLLMEN
 
 一键示例先领取短期随机 code，再调用与粘贴/扫码解码结果相同的 enroll。LocalEnrollmentAuthority 是模拟服务票据 owner，保存摘要、可信身份、到期与消费；不保存明文 code，不管理客户端 Session。票据读写使用独立私有 AtomicFile 与互斥锁，损坏不视为空账本，成功消费不因客户端失败撤销。Session owner 串行执行冲突检查、兑换、一次客户端发布，固定锁序 Session → Local authority；配置缺失或校验错误仅在身份验证成功后发布待配置状态。
 
-PrepareEnterpriseExampleAssets 从同一公开模板派生 enterprise.local.identity.json；身份目录不依赖运行时配置文件可读，不是另一份手工维护身份。LocalEnterpriseSource 先读固定安装目录，兑换后才读完整配置；缺文件/截断/错误配置可进入 pending，未知身份仍拒绝。同主体重新接入收到较旧的安装包配置时，沿用已确认的较新 Applied 配置与绑定，只创建新 Session，不回退策略。
+PrepareEnterpriseExampleAssets 从同一公开模板派生 enterprise.local.identity.json，首次初始化本地安装目录。原生文件导入可显式安装其他来源和主体，换主体必须先退出；短接入资料不能安装来源。目录独立保存可信身份与来源版本，配置不可读不会丢失身份；LocalEnrollmentAuthority.resolveIdentity 只读验证票据并取得其固定用户，Session 冲突检查之后由 redeem 再次验证并消费。相同 source/deployment 的多个用户不会按当前选中用户猜测身份。重新接入读取来源当前候选；没有旧 asset 与较新 Applied 的回退路径。配置缺失/损坏可进入 pending，未知身份仍拒绝。
 
 ## 平台样例与 Android 消费副本
 

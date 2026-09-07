@@ -10,6 +10,9 @@ internal fun exampleEnterprisePackage(): EnterprisePackage =
     requireNotNull(EnterprisePackageTest::class.java.getResourceAsStream("/enterprise.local.example.json"))
         .use(EnterprisePackageCodec::decode)
 
+internal suspend fun EnterpriseSessionController.enrollFixture(packet: EnterprisePackage): EnterpriseState.Available =
+    enrollLocal(packet.identity, redeem = { packet.identity }, configuration = { packet })
+
 class EnterprisePackageTest {
     @Test
     fun `bundled example is a complete credential-free graph`() {

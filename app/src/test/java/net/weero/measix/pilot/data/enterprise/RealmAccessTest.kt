@@ -23,7 +23,7 @@ class RealmAccessTest {
     fun `captured identity survives switching and offline but not exit and same principal reenrollment`() = runTest {
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
         val packet = exampleEnterprisePackage()
-        controller.applyPackage(EnterprisePackageCodec.encode(packet))
+        controller.enrollFixture(packet)
         val access = controller.captureRealmAccess(packet.identity.scope)
         val allowed = mutableListOf<Boolean>()
         backgroundScope.launch(kotlinx.coroutines.Dispatchers.Unconfined) { controller.observeRealmAccess(access).collect { allowed += it } }
@@ -32,7 +32,7 @@ class RealmAccessTest {
         controller.setOffline(true)
         assertEquals("original", controller.withRealmAccess(access) { "original" })
         controller.finishExit(requireNotNull(controller.beginExit()))
-        controller.applyPackage(EnterprisePackageCodec.encode(packet))
+        controller.enrollFixture(packet)
         runCurrent()
         assertEquals(listOf(true, false), allowed)
         expectDenied { controller.withRealmAccess(access) { fail("stale access executed") } }
@@ -45,14 +45,14 @@ class RealmAccessTest {
     fun `idle subscriptions expire without a write and an old deadline cannot revoke a renewed session`() = runTest {
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())) { 1_900_000_000_000L + testScheduler.currentTime }
         val packet = exampleEnterprisePackage()
-        controller.applyPackage(EnterprisePackageCodec.encode(packet))
+        controller.enrollFixture(packet)
         val first = controller.captureRealmAccess(packet.identity.scope)
         val old = mutableListOf<Boolean>()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { controller.observeRealmAccess(first).collect { old += it } }
         val lifetime = (controller.state.value as EnterpriseState.Available).manifest.session!!.expiresAtMillis - 1_900_000_000_000L
         advanceTimeBy(lifetime / 2)
         controller.finishExit(requireNotNull(controller.beginExit()))
-        controller.applyPackage(EnterprisePackageCodec.encode(packet))
+        controller.enrollFixture(packet)
         val fresh = controller.captureRealmAccess(packet.identity.scope)
         val live = mutableListOf<Boolean>()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { controller.observeRealmAccess(fresh).collect { live += it } }
@@ -71,7 +71,7 @@ class RealmAccessTest {
     fun `verified pending identity can access its data but another principal cannot`() = runTest {
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder()))
         val identity = exampleEnterprisePackage().identity
-        controller.registerIdentity(identity)
+        controller.enrollLocal(identity, redeem = { identity }, configuration = { null })
         val access = controller.captureRealmAccess(identity.scope)
         assertTrue(controller.withRealmAccess(access) { true })
         expectDenied { controller.captureRealmAccess(identity.scope.copy(userId = "another-user")) }

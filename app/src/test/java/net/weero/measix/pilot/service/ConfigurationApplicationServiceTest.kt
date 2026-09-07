@@ -97,9 +97,8 @@ class ConfigurationApplicationServiceTest {
             entered.await()
             val current = env.sessions.state.value as EnterpriseState.Available
             val policyUpdate = launch {
-                env.sessions.updateLocalPackage(current.manifest.applied!!.revision) {
-                    it.copy(configuration = it.configuration.copy(policy = it.configuration.policy.copy(allowLocalMcp = false)))
-                }
+                env.sessions.synchronize(RealmAccess.Enterprise(packet.identity.scope, current.manifest.session!!.id),
+                    packet.copy(configuration = packet.configuration.copy(generation = 2, policy = packet.configuration.policy.copy(allowLocalMcp = false))))
             }
             runCurrent()
             assertFalse(writer.isCompleted)
@@ -134,7 +133,7 @@ class ConfigurationApplicationServiceTest {
             }
             env.sessions.finishExit(requireNotNull(env.sessions.beginExit()))
             val bob = alice.copy(identity = alice.identity.copy(userId = "bob"))
-            env.sessions.applyPackage(EnterprisePackageCodec.encode(bob))
+            env.sessions.enrollFixture(bob)
             assertNull(env.document().preferences.assistantUsage(bob.identity.scope, env.assistant.id))
             try {
                 env.commands.updateAssistantUsage(alice.identity.scope, env.assistant.id) { null }
@@ -158,9 +157,8 @@ class ConfigurationApplicationServiceTest {
                 AssistantUsagePreferences(env.assistant.id, mcpServers = UsageValue(setOf(env.mcp.id, second.id)))
             }
             val current = env.sessions.state.value as EnterpriseState.Available
-            env.sessions.updateLocalPackage(current.manifest.applied!!.revision) {
-                it.copy(configuration = it.configuration.copy(policy = it.configuration.policy.copy(allowLocalMcp = false)))
-            }
+            env.sessions.synchronize(RealmAccess.Enterprise(packet.identity.scope, current.manifest.session!!.id),
+                packet.copy(configuration = packet.configuration.copy(generation = 2, policy = packet.configuration.policy.copy(allowLocalMcp = false))))
             env.commands.updateAssistantUsage(packet.identity.scope, env.assistant.id) { it!!.copy(mcpServers = UsageValue(setOf(second.id))) }
             assertEquals(setOf(second.id), env.document().preferences.assistantUsage(packet.identity.scope, env.assistant.id)!!.mcpServers!!.value)
             env.commands.updateAssistantUsage(packet.identity.scope, env.assistant.id) { it!!.copy(mcpServers = UsageValue(emptySet())) }
@@ -183,9 +181,8 @@ class ConfigurationApplicationServiceTest {
             commands.setModelFavorite(scope, env.model.id, true)
             val ownConfiguration = JsonInstant.encodeToString(env.document().configuration)
             val applied = env.sessions.state.value as EnterpriseState.Available
-            env.sessions.updateLocalPackage(applied.manifest.applied!!.revision) {
-                it.copy(configuration = it.configuration.copy(policy = it.configuration.policy.copy(allowLocalProviders = false)))
-            }
+            env.sessions.synchronize(RealmAccess.Enterprise(packet.identity.scope, applied.manifest.session!!.id),
+                packet.copy(configuration = packet.configuration.copy(generation = 2, policy = packet.configuration.policy.copy(allowLocalProviders = false))))
             val restricted = env.queries.observeCurrent().first()
             assertEquals(env.model.id, restricted.selection(ResourceSelectionSlot.CHAT_MODEL).reference)
             assertEquals(ConfigurationUnavailableReason.USER_CATEGORY_NOT_ALLOWED, restricted.selection(ResourceSelectionSlot.CHAT_MODEL).unavailableReason)
@@ -316,7 +313,7 @@ class ConfigurationApplicationServiceTest {
             settings.effectiveSettings.first { !it.settings.init }
             settings.updateLocal { Settings(providers = listOf(ProviderSetting.OpenAI(models = listOf(model))),
                 assistants = listOf(assistant), mcpServers = listOf(mcp), assistantId = assistant.id, chatModelId = model.id) }
-            sessions.applyPackage(EnterprisePackageCodec.encode(exampleEnterprisePackage()))
+            sessions.enrollFixture(exampleEnterprisePackage())
             gate.ready()
         }
 

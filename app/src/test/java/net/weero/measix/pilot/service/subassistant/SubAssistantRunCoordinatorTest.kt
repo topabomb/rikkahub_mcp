@@ -56,6 +56,7 @@ import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
 import me.rerere.common.configuration.EnterpriseAuthority
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.enterprise.enrollFixture
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.service.MemoryService
@@ -96,12 +97,12 @@ class SubAssistantRunCoordinatorTest {
                 net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(root),
             )
             val packet = net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage()
-            sessions.applyPackage(net.weero.measix.pilot.data.enterprise.EnterprisePackageCodec.encode(packet))
+            sessions.enrollFixture(packet)
             val queries = net.weero.measix.pilot.service.ConfigurationQueryService(mockk(), sessions,
                 net.weero.measix.pilot.service.ApplicationRecoveryGate().also { it.ready() })
             val original = queries.captureAccess(packet.identity.scope)
             sessions.finishExit(requireNotNull(sessions.beginExit()))
-            sessions.applyPackage(net.weero.measix.pilot.data.enterprise.EnterprisePackageCodec.encode(packet))
+            sessions.enrollFixture(packet)
             val harness = harness(AttachmentResolveResult.Success(emptyList()), configurationScope = packet.identity.scope, configurations = queries)
             try {
                 harness.coordinator.executeCall(callerId, masterId, original, targetId, "queued work", executionContext())

@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.data.enterprise
 
 import com.google.zxing.BarcodeFormat
+import com.google.zxing.DecodeHintType
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.MultiFormatReader
 import com.google.zxing.RGBLuminanceSource
@@ -45,7 +46,8 @@ class LocalEnterpriseSourceTest {
         val scannedText = scannedHarness.source.exampleEnrollmentText()
         val matrix = QRCodeWriter().encode(scannedText, BarcodeFormat.QR_CODE, 512, 512)
         val pixels = IntArray(matrix.width * matrix.height) { i -> if (matrix[i % matrix.width, i / matrix.width]) -0x1000000 else -1 }
-        val decoded = MultiFormatReader().decode(BinaryBitmap(HybridBinarizer(RGBLuminanceSource(matrix.width, matrix.height, pixels)))).text
+        val decoded = MultiFormatReader().decode(BinaryBitmap(HybridBinarizer(RGBLuminanceSource(matrix.width, matrix.height, pixels))),
+            mapOf(DecodeHintType.PURE_BARCODE to true)).text
         assertEquals(scannedText, decoded)
         val scanned = scannedHarness.source.enroll(decoded)
         listOf(pasted, scanned).forEach {
@@ -60,7 +62,7 @@ class LocalEnterpriseSourceTest {
         val h = harness()
         var opened = false
         val source = LocalEnterpriseSource({ opened = true; error("must not load a local source") }, h.sessions, h.authority,
-            { opened = true; error("must not load local identity") }) { now }
+            { opened = true; error("must not load local identity") }, LocalEnterpriseConfigurationStore(h.authorityRoot)) { now }
         val platform = requireNotNull(javaClass.getResourceAsStream("/contracts/enrollment/platform-v1.json")).bufferedReader().use { it.readText() }
         rejected("platform_enrollment_not_supported") { source.enroll(platform) }
         assertFalse(opened)
@@ -104,7 +106,7 @@ class LocalEnterpriseSourceTest {
         assertFalse(File(h.authorityRoot, "enrollments.json").readText().contains(code))
         h.sessions.finishExit(requireNotNull(h.sessions.beginExit()))
         val reopened = LocalEnterpriseSource({ exampleBytes().inputStream() }, EnterpriseSessionController(EnterpriseAppliedStore(h.clientRoot)) { now },
-            LocalEnrollmentAuthority(h.authorityRoot, { now }), ::identityStream, { now })
+            LocalEnrollmentAuthority(h.authorityRoot, { now }), ::identityStream, LocalEnterpriseConfigurationStore(h.authorityRoot), { now })
         rejected("enterprise_enrollment_consumed") { reopened.enroll(raw) }
         assertEquals(EnterpriseSessionPhase.READY, reopened.enrollExample().manifest.phase)
     }
@@ -114,7 +116,8 @@ class LocalEnterpriseSourceTest {
         val h = harness()
         val raw = h.source.exampleEnrollmentText()
         val otherSessions = EnterpriseSessionController(EnterpriseAppliedStore(temporary.newFolder())) { now }
-        val otherSource = LocalEnterpriseSource({ exampleBytes().inputStream() }, otherSessions, h.authority, ::identityStream) { now }
+        val otherSource = LocalEnterpriseSource({ exampleBytes().inputStream() }, otherSessions, h.authority, ::identityStream,
+            LocalEnterpriseConfigurationStore(temporary.newFolder())) { now }
         val outcomes = listOf(h.source, otherSource).map { source -> async { runCatching { source.enroll(raw) } } }.awaitAll()
         assertEquals(1, outcomes.count { it.isSuccess })
         assertEquals("enterprise_enrollment_consumed", (outcomes.single { it.isFailure }.exceptionOrNull() as EnterpriseConfigurationException).reason)
@@ -123,7 +126,8 @@ class LocalEnterpriseSourceTest {
     @Test
     fun `different principal and closing session are refused before consumption`() = runTest {
         val h = harness()
-        h.sessions.registerIdentity(packet().identity.copy(userId = "bob"))
+        val identity = packet().identity.copy(userId = "bob")
+        h.sessions.enrollLocal(identity, redeem = { identity }, configuration = { null })
         val raw = h.source.exampleEnrollmentText()
         rejected("exit_current_enterprise_first") { h.source.enroll(raw) }
         val exit = requireNotNull(h.sessions.beginExit())
@@ -195,7 +199,7 @@ class LocalEnterpriseSourceTest {
             { "{broken".byteInputStream() },
         )) {
             val h = harness()
-            val source = LocalEnterpriseSource(open, h.sessions, h.authority, ::identityStream) { now }
+            val source = LocalEnterpriseSource(open, h.sessions, h.authority, ::identityStream, LocalEnterpriseConfigurationStore(h.authorityRoot)) { now }
             val result = source.enrollExample()
             assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING, result.manifest.phase)
             assertEquals(packet().identity, result.manifest.session!!.identity)
@@ -203,14 +207,15 @@ class LocalEnterpriseSourceTest {
     }
 
     @Test
-    fun `new enrollment retains this principals newer applied policy instead of rolling back to the bundled example`() = runTest {
+    fun `published policy remains unapplied until synchronization and new enrollment reads the current source`() = runTest {
         val h = harness()
         val first = h.source.enrollExample()
-        val updated = h.source.setPolicy(first.manifest.applied!!.revision, first.configuration!!.policy.copy(allowLocalProviders = false))
+        val current = h.source.candidate(packet().identity.scope)!!
+        val updated = h.source.setPolicy(packet().identity.scope, current.revision, first.configuration!!.policy.copy(allowLocalProviders = false))
+        assertEquals(first, h.sessions.state.value)
         val renewed = h.source.enrollExample()
-        assertEquals(updated.configuration, renewed.configuration)
-        assertEquals(updated.manifest.applied, renewed.manifest.applied)
-        assertNotEquals(updated.manifest.session!!.id, renewed.manifest.session!!.id)
+        assertEquals(updated.packet.configuration, renewed.configuration)
+        assertNotEquals(first.manifest.session!!.id, renewed.manifest.session!!.id)
         assertEquals(EnterpriseSessionPhase.READY, renewed.manifest.phase)
     }
 
@@ -241,7 +246,7 @@ class LocalEnterpriseSourceTest {
             else assertEquals(previous.manifest, durable)
             assertEquals(durable, (h.sessions.state.value as EnterpriseState.Available).manifest)
             val reopenedSource = LocalEnterpriseSource({ exampleBytes().inputStream() }, h.sessions,
-                LocalEnrollmentAuthority(h.authorityRoot, { now }), ::identityStream) { now }
+                LocalEnrollmentAuthority(h.authorityRoot, { now }), ::identityStream, LocalEnterpriseConfigurationStore(h.authorityRoot)) { now }
             rejected("enterprise_enrollment_consumed") { reopenedSource.enroll(raw) }
         }
     }
@@ -253,20 +258,95 @@ class LocalEnterpriseSourceTest {
         catch (_: EnterpriseConfigurationException) { }
         assertSignedOut(h)
         val imported = h.source.importPackage(exampleBytes().inputStream())
-        assertEquals(packet().configuration, imported.configuration)
-        assertEquals(packet().identity, imported.manifest.session!!.identity)
+        assertNull(imported.failureReason)
+        assertEquals(packet().configuration, imported.applied!!.configuration)
+        assertEquals(packet().identity, imported.applied.manifest.session!!.identity)
+    }
+
+    @Test
+    fun `file installs separate users and sources while tickets select their original user`() = runTest {
+        val h = harness()
+        val alice = h.source.enrollExample()
+        val bob = packet().copy(identity = packet().identity.copy(userId = "bob"))
+        val initialDirectory = h.source.installations()
+        rejected("exit_current_enterprise_first") { h.source.importPackage(EnterprisePackageCodec.encode(bob).inputStream()) }
+        assertEquals(initialDirectory, h.source.installations())
+        h.sessions.finishExit(h.sessions.beginExit()!!)
+        assertEquals(bob.identity, h.source.importPackage(EnterprisePackageCodec.encode(bob).inputStream()).applied!!.manifest.session!!.identity)
+        val bobCode = h.source.enrollmentText(bob.identity.scope)
+        h.sessions.finishExit(h.sessions.beginExit()!!)
+        h.source.enrollExample()
+        rejected("exit_current_enterprise_first") { h.source.enroll(bobCode) }
+        h.sessions.finishExit(h.sessions.beginExit()!!)
+        assertEquals(bob.identity, h.source.enroll(bobCode).manifest.session!!.identity)
+        assertEquals(alice.configuration, h.source.candidate(packet().identity.scope)!!.packet.configuration)
+        h.sessions.finishExit(h.sessions.beginExit()!!)
+        val other = packet().copy(identity = packet().identity.copy(authority = EnterpriseAuthority("local:private", "private-deployment")))
+        assertEquals(other.identity, h.source.importPackage(EnterprisePackageCodec.encode(other).inputStream()).applied!!.manifest.session!!.identity)
+        h.sessions.finishExit(h.sessions.beginExit()!!)
+        val reopened = LocalEnterpriseSource({ exampleBytes().inputStream() }, h.sessions,
+            LocalEnrollmentAuthority(h.authorityRoot, { now }), ::identityStream, LocalEnterpriseConfigurationStore(h.authorityRoot)) { now }
+        assertEquals(3, reopened.installations().size)
+        assertEquals(other.identity, reopened.enroll(reopened.enrollmentText(other.identity.scope)).manifest.session!!.identity)
+    }
+
+    @Test
+    fun `damaged source retains installed identity and only newer explicit import can repair it`() = runTest {
+        val h = harness()
+        h.source.enrollExample()
+        val original = h.source.candidate(packet().identity.scope)!!
+        File(h.authorityRoot, "configurations/${original.revision}.json").writeText("broken")
+        assertEquals(packet().identity, h.source.installations().single().identity)
+        rejected("local_enterprise_configuration_invalid") { h.source.candidate(packet().identity.scope) }
+        rejected("local_enterprise_configuration_invalid") { h.source.importPackage(exampleBytes().inputStream()) }
+        val pending = h.source.enrollExample()
+        assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING, pending.manifest.phase)
+        val repaired = packet().copy(configuration = packet().configuration.copy(generation = 2))
+        val applied = h.source.importPackage(EnterprisePackageCodec.encode(repaired).inputStream()).applied!!
+        assertEquals(pending.manifest.session, applied.manifest.session)
+        assertEquals(repaired, h.source.candidate(repaired.identity.scope)!!.packet)
+    }
+
+    @Test
+    fun `source commit failure preserves published directory and cancellation completes owned source installation only`() = runTest {
+        var failCommit = false
+        var pause = false
+        val entered = CompletableDeferred<Unit>()
+        val release = CountDownLatch(1)
+        val h = harness(sourceCheckpoint = {
+            if (failCommit) error("source write failed")
+            if (pause) { entered.complete(Unit); check(release.await(10, TimeUnit.SECONDS)) }
+        })
+        val first = h.source.enrollExample()
+        val original = h.source.candidate(packet().identity.scope)!!
+        val updated = packet().copy(configuration = packet().configuration.copy(generation = 2))
+        failCommit = true
+        try { h.source.importPackage(EnterprisePackageCodec.encode(updated).inputStream()); fail("write must fail") }
+        catch (_: IllegalStateException) { }
+        failCommit = false
+        assertEquals(original, h.source.candidate(packet().identity.scope))
+        assertEquals(first, h.sessions.state.value)
+        pause = true
+        val job = launch(Dispatchers.Default) { h.source.importPackage(EnterprisePackageCodec.encode(updated).inputStream()) }
+        try { entered.await(); job.cancel() } finally { release.countDown() }
+        job.join()
+        assertTrue(job.isCancelled)
+        assertEquals(updated, h.source.candidate(packet().identity.scope)!!.packet)
+        assertEquals(first, h.sessions.state.value)
+        assertEquals(updated, LocalEnterpriseConfigurationStore(h.authorityRoot).let { it.read(it.installations()!!.single()) }!!.packet)
     }
 
     private data class Harness(val clientRoot: File, val authorityRoot: File, val sessions: EnterpriseSessionController,
         val authority: LocalEnrollmentAuthority, val source: LocalEnterpriseSource)
 
     private fun harness(bytes: ByteArray = exampleBytes(), authorityCheckpoint: () -> Unit = {},
-        clientCheckpoint: (EnterpriseStorageCheckpoint) -> Unit = {}): Harness {
+        clientCheckpoint: (EnterpriseStorageCheckpoint) -> Unit = {}, sourceCheckpoint: () -> Unit = {}): Harness {
         val clientRoot = temporary.newFolder()
         val authorityRoot = temporary.newFolder()
         val sessions = EnterpriseSessionController(EnterpriseAppliedStore(clientRoot, clientCheckpoint)) { now }
         val authority = LocalEnrollmentAuthority(authorityRoot, { now }, authorityCheckpoint)
-        return Harness(clientRoot, authorityRoot, sessions, authority, LocalEnterpriseSource({ bytes.inputStream() }, sessions, authority, ::identityStream) { now })
+        return Harness(clientRoot, authorityRoot, sessions, authority, LocalEnterpriseSource({ bytes.inputStream() }, sessions, authority,
+            ::identityStream, LocalEnterpriseConfigurationStore(authorityRoot, sourceCheckpoint)) { now })
     }
 
     private fun exampleBytes() = requireNotNull(javaClass.getResourceAsStream("/${LocalEnterpriseSource.EXAMPLE_ASSET}")).use { it.readBytes() }

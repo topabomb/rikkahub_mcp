@@ -50,6 +50,7 @@ internal data class EnterpriseManifest(
     val selectedScope: ConfigurationScope,
     val lastIdentity: EnterpriseIdentity?,
     val feeds: List<EnterpriseFeedVersion> = emptyList(),
+    val lastConfigurationSyncMillis: Long? = null,
 ) {
     companion object {
         fun signedOut(identity: EnterpriseIdentity? = null, feeds: List<EnterpriseFeedVersion> = emptyList()) = EnterpriseManifest(
@@ -206,6 +207,9 @@ internal class EnterpriseAppliedStore(
 
     private fun validateManifest(manifest: EnterpriseManifest) {
         if (manifest.schemaVersion != 2) throw EnterpriseStorageException("unsupported_enterprise_manifest")
+        if (manifest.lastConfigurationSyncMillis?.let { it < 0 || manifest.applied == null } == true) {
+            throw EnterpriseStorageException("invalid_enterprise_sync_time")
+        }
         if (manifest.feeds.map { it.scope }.distinct().size != manifest.feeds.size) throw EnterpriseStorageException("duplicate_enterprise_feed")
         manifest.feeds.forEach(::validateFeedVersion)
         manifest.session?.let { session ->

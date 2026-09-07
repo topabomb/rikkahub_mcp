@@ -22,7 +22,7 @@ class EnterpriseFeedAndroidTest {
         try {
             val packet = context.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
             val a = EnterpriseSessionController(EnterpriseAppliedStore(root)) { now }
-            val initial = a.applyPackage(EnterprisePackageCodec.encode(packet))
+            val initial = a.enrollLocal(packet.identity, { packet.identity }, { packet })
             val accessA = a.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
             val id = a.listFeed(accessA, EnterpriseFeedQuery()).body.items.single().enterpriseUpdateId
             a.changeFeed(accessA, initial.manifest.feeds.single().revision, EnterpriseFeedCommand.Withdraw(id))
@@ -34,7 +34,7 @@ class EnterpriseFeedAndroidTest {
             for (identity in identities) {
                 val sessions = EnterpriseSessionController(EnterpriseAppliedStore(root)) { now }
                 sessions.recover()
-                sessions.applyPackage(EnterprisePackageCodec.encode(packet.copy(identity = identity)))
+                sessions.enrollLocal(identity, { identity }, { packet.copy(identity = identity) })
                 val access = sessions.captureRealmAccess(identity.scope) as RealmAccess.Enterprise
                 assertEquals(id, sessions.listFeed(access, EnterpriseFeedQuery()).body.items.single().enterpriseUpdateId)
                 try { sessions.listFeed(accessA, EnterpriseFeedQuery()); fail("Old principal accessed another Feed") }
@@ -43,7 +43,7 @@ class EnterpriseFeedAndroidTest {
             }
             val reopened = EnterpriseSessionController(EnterpriseAppliedStore(root)) { now }
             reopened.recover()
-            val ready = reopened.applyPackage(EnterprisePackageCodec.encode(packet))
+            val ready = reopened.enrollLocal(packet.identity, { packet.identity }, { packet })
             assertEquals(3, ready.manifest.feeds.size)
             val newAccess = reopened.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
             assertTrue(reopened.listFeed(newAccess, EnterpriseFeedQuery()).body.items.isEmpty())

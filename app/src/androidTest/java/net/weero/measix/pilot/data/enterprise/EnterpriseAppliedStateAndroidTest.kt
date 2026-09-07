@@ -38,7 +38,7 @@ class EnterpriseAppliedStateAndroidTest {
             ) else it
         })
         val first = EnterpriseSessionController(EnterpriseAppliedStore(root))
-        first.applyPackage(EnterprisePackageCodec.encode(privatePacket))
+        first.enrollLocal(privatePacket.identity, { privatePacket.identity }, { privatePacket })
         first.switchToPersonal()
         val reopened = EnterpriseSessionController(EnterpriseAppliedStore(root))
         assertEquals(first.state.value, reopened.recover())
@@ -64,11 +64,12 @@ class EnterpriseAppliedStateAndroidTest {
             }
         }
         val controller = EnterpriseSessionController(store)
-        controller.applyPackage(EnterprisePackageCodec.encode(example))
+        val first = controller.enrollLocal(example.identity, { example.identity }, { example })
         val original = controller.state.value
         breakRename = true
         try {
-            controller.applyPackage(EnterprisePackageCodec.encode(example.copy(configuration = example.configuration.copy(generation = 2))))
+            controller.synchronize(RealmAccess.Enterprise(example.identity.scope, first.manifest.session!!.id),
+                example.copy(configuration = example.configuration.copy(generation = 2)))
             fail("Broken rename must reject publication")
         } catch (_: EnterpriseStorageException) { }
         assertEquals(original, controller.state.value)
@@ -78,7 +79,7 @@ class EnterpriseAppliedStateAndroidTest {
     @Test
     fun damagedConfigurationCanBeRevokedWithoutReadingItsBindings() = runBlocking {
         val controller = EnterpriseSessionController(EnterpriseAppliedStore(root))
-        controller.applyPackage(EnterprisePackageCodec.encode(example))
+        controller.enrollLocal(example.identity, { example.identity }, { example })
         val version = (controller.state.value as EnterpriseState.Available).manifest.applied!!
         File(root, "revisions/${version.revision}/bindings.json").writeText("corrupt")
         val reopened = EnterpriseSessionController(EnterpriseAppliedStore(root))

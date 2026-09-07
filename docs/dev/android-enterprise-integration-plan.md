@@ -179,10 +179,10 @@ UserConfiguration + UserPreferences + Applied Enterprise State
 - 原文最多 2048 UTF-8 字节，先计入首尾空白再去除空白；拒绝重复键（包括转义后同名）、未知字段/版本/kind、缺失/null、错误类型。旧 userId/enrollmentCode/expiresAtMillis 资料没有 fallback。
 - expiresAt 是 RFC3339 UTC 字符串，接受小写 t/z 与 +00:00，小数秒仅 1–9 位；拒绝超精度、闰秒、-00:00、非 UTC 和错误日期，输出统一大写 T/Z。只用于客户端到期预检查；来源保存的到期和消费状态仍是兑换权威。code 与本地 sourceNamespace/deploymentId 各为 1–128 个 Unicode 字符，不修改其内容。
 - platformUrl 最多 1024 字符，只接受 HTTPS origin，无 userinfo/query/fragment/非根 path；根 `/` 和默认端口可规范化。HTTP 只在明确启用的 loopback 开发/测试策略下接受，正式来源不启用该例外。本期解析后明确返回 platform_enrollment_not_supported，不加载本地示例、不联网、不建立身份；后续真实接入必须展示目标 origin，Discovery/API base/Enrollment 固定同源且禁止跨 origin 重定向，code 不进入 Discovery URL。
-- 本地资料不携带 userId/platformUrl。身份只由随包安装的本地来源提供，资料不能注册来源、加载脚本或指定网络地址。完整配置文件继续由原生文件选择器走独立 4 MiB 导入校验，不修改其身份与私有 binding 格式。
+- 本地资料不携带 userId/platformUrl。身份只由已安装本地来源与票据提供，资料不能注册来源、加载脚本或指定网络地址。安装目录来自随包初值或显式原生完整文件导入；后者继续由原生文件选择器走独立 4 MiB 导入校验，不修改其身份与私有 binding 格式。
 - 本地示例资料在运行时由 LocalEnrollmentAuthority 领取随机短期一次性 code，再序列化为上述格式；不打包固定可重用 code。模拟服务的摘要/到期/消费账本位于 noBackupFilesDir/local_enterprise_service，独立于客户端 Session，不进入普通备份。
 - 接入锁序固定为 Session owner → LocalEnrollmentAuthority。主体冲突/正在退出在消费前拒绝；成功消费后客户端落盘失败、取消或死亡不能回滚 code，需要重新领取资料。客户端一次发布 READY 或 CONFIGURATION_PENDING；后者仅用于可信身份已验证而配置缺失/错误，不把凭据或持久化失败当作待配置成功。
-- PrepareEnterpriseExampleAssets 从唯一公开完整模板派生独立身份目录，运行时先验证安装目录身份、兑换后才读取配置；配置文件缺失/截断也可进入待配置，无法读取或验证身份目录则拒绝。同主体重新接入若安装包配置版本低于已确认 Applied 版本，保留较新配置及绑定，仅更新 Session；不退回旧策略。
+- PrepareEnterpriseExampleAssets 从唯一公开完整模板派生首次安装身份。运行时先查安装目录，再只读验证票据身份，在 Session 冲突检查后重新校验并消费；之后读取来源当前配置，缺失/截断可进入待配置，无法验证安装身份则拒绝。重新接入不重读旧安装包配置，也不设置 Applied 回退分支。
 
 平台现已提供 platform-v1.json、local-v1.json 和原始 cases.json。Android 从 api/generated/android/portal 验证摘要后固定消费副本，以固定 now/installedSources 执行真实解析、到期与来源预检查；共享 code 不作为安装来源的真实登录凭据。来源清单、摘要和验证边界见 [接入资料契约](../references/enrollment-material-contract.md)。Native/Feed 案例须在对应实际消费者接通后分别验收。
 
@@ -260,7 +260,7 @@ LocalEnterpriseSource（身份/配置/动态/场景）
 
 ### 7.2 私有配置文件
 
-来源候选与客户端 Applied 是两个事实：LocalEnterpriseSource 在 local_enterprise_service 持久保存本地来源当前发布的配置，安装包仅负责初始值；场景编辑按来源 revision 做 CAS，不能直接改客户端 Applied。EnterpriseSessionController 继续唯一管理母 Session、Applied 和执行 binding lease。清理 updateLocalPackage 的混合职责及“安装包旧版本时保留 Applied”的特殊接入分支，重启/重入均读来源当前版本。
+来源候选与客户端 Applied 是两个事实：LocalEnterpriseSource 在 local_enterprise_service 持久保存本地来源当前发布的配置，安装包仅负责初始值；场景编辑按来源 revision 做 CAS，不能直接改客户端 Applied。EnterpriseSessionController 继续唯一管理母 Session、Applied 和执行 binding lease。旧 updateLocalPackage、无认证的 applyPackage/registerIdentity 与“安装包旧版本时保留 Applied”的特殊接入分支均已删除；接入、原生导入和原 Session 同步使用明确入口，重启/重入均读来源当前版本。
 
 原生同步与 Portal refresh 共用命令：捕获原主体/Session，读取来源候选，完整校验，在原 Session 内原子应用后返回。同步不得创建新 Session、续期或切域；同版本成功检查也可更新成功时间，失败保留已应用配置和上次成功时间。来源发布与客户端应用分开可观察；私有导入先完整验证再发布候选，应用失败应显示待同步。并发请求合并同步工作，取消单个等待者不回滚已提交结果。此流程仍为本地模拟，不要求真实平台网络接入。
 
@@ -268,7 +268,7 @@ LocalEnterpriseSource（身份/配置/动态/场景）
 
 本地文件使用独立 `formatVersion`，包含 source/deployment/user、完整五项 policy、资源/助手/seed/starter/gateway/动态，以及独立 `runtimeBindings`。endpoint/credential 是本地 source 私有实现，不属于平台 client-safe Managed Snapshot，不混进用户资源配置。
 
-通过“导入本地企业配置”系统文件选择器读取，限制输入大小并验证格式、ID/引用、URL 和绑定完整性，全部成功后原子应用。按明确稳定 ID 更新，不按名称。换 source/deployment/user 要先退出再接入；同主体更新保留历史。错误包无半提交。
+通过“导入本地企业配置”系统文件选择器读取，限制输入大小并验证格式、ID/引用、URL 和绑定完整性。无效文件不改变来源目录、候选或 Applied；有效文件先原子发布来源，再应用客户端，客户端失败明确显示待接入/待同步，不能回滚来源或假报已应用。按明确稳定 ID 更新，不按名称。换 source/deployment/user 要先退出再接入；同主体更新保留历史。原生完整文件可安装本地来源，短接入资料无安装权限；同 source/deployment 下由票据确定登录用户。来源目录保留 generation 与 revision；旧配置文件损坏时仅显式导入更高 generation 可修复，仍检查 revision CAS。
 
 凭据导入后由独立受保护 binding store 持有，公开配置只含引用，不进普通备份、日志、Portal 或 crash detail。默认不把私有文件编译进 APK；用户重新导入即可更新，无须改代码/重新构建。最终交付提供不进 Git 的私有文件位置与操作说明。
 
@@ -298,7 +298,12 @@ Seed 只初始化尚未建立的主体 Feed。同步、重入与重复导入不�
 
 context 从当前原生身份产生，documentId 不可预测，文档期限最多十分钟且不超过母 Session；不使用 fixture 身份或时钟。getStatus/refresh 返回真实已应用状态与实际能力，未知值为 null。context/detail 使用 no-store，动态列表 private/no-cache，所有授权先于缓存判断。原生扫码在登录前可用，一键/扫码/粘贴共用接入验证。生产 grant/Cookie/CSRF 只在后续真实接入规定，本地会话不冒充生产授权。
 
-Portal 本地读取的 frame 验收边界待确认：[Android WebResourceRequest](https://developer.android.com/reference/android/webkit/WebResourceRequest) 不提供 fetch 发起 frame，主页面和 iframe 的 fetch 均为 isForMainFrame=false；WebMessageListener 才提供 Bridge 消息的 sourceOrigin/isMainFrame。保留 GET 时可限制可信页面并实施原生 document/域/Session 授权，但不能把 CSP、Referer 或 document header 当作逐请求原生 frame 证明。若要求逐请求证明主 frame，需要架构侧认可调整本地读取传输。此问题不改变 Feed 规则或来源配置同步职责，也不能用资源打包/纯查询测试标为已验收。
+Portal 本地读取存在两项需要架构侧确认的 Android 平台限制：
+
+- [WebResourceRequest](https://developer.android.com/reference/android/webkit/WebResourceRequest) 不提供 fetch 发起 frame，主页面和 iframe 的 fetch 均为 isForMainFrame=false；WebMessageListener 提供消息的 sourceOrigin/isMainFrame。CSP、Referer 或 document header 不能作为逐请求原生 frame 证明。
+- [WebResourceResponse](https://developer.android.com/reference/android/webkit/WebResourceResponse) 的公开构造器及状态码 setter 仅接受 100–299、400–599，拒绝 304。该结论已核对官方 API 与本地 SDK 源码，尚未作为设备场景执行；不能用反射或覆盖 getter 绕过公开 API 限制。
+
+建议架构侧为本地 context/Feed 读取明确带原生来源/frame 信息的消息传输，由 Portal 消费端配套调整，保留现有 DTO、查询、revision/ETag 和先授权再判断未变化的语义，真实平台 HTTP 协议保持独立。若保留本地 GET，需明确同意两项差异：可信文档实例及内容约束授权（不宣称逐请求 frame 证明）、成功读取返回完整 200（不宣称原生拦截实现 304）。目前两种方案均未获确认，Android 不自行修改 Portal 包、增加隐藏桥接或降低验收要求。来源配置同步和 Feed 领域实现不依赖该选择；资源打包和纯查询测试不代表 Portal 接入验收。
 
 ## 9. 执行、更新、恢复不变量
 
@@ -311,6 +316,12 @@ Portal 本地读取的 frame 验收边界待确认：[Android WebResourceRequest
 - 移除旧签名 envelope/global merge/path lock 和无消费者 facade；原型文件不迁成正式身份；仅保留真实历史迁移需要的解码边界。
 
 ## 10. 完整变更清单与批次
+
+本地来源候选与统一同步已实现：安装目录独立保存来源/Deployment/User 身份、generation 和内容摘要引用，随包文件仅初始化；场景发布使用来源 revision CAS，不直接改客户端 Applied。原生完整文件可显式安装其他本地主体，短资料只查询已安装来源，由票据确定用户，消费前检查 Session 冲突。EnterpriseSynchronizationService 合并同原 Session 的同步，失败保留 Applied 和成功时间，同版本成功检查复用 Applied revision，提交期间到期不创建新 Session。有效来源发布后客户端失败返回待接入/待同步；来源文件损坏可显式导入更高 generation 修复。旧 updateLocalPackage 与安装包/Applied 回退分支已删除，未新增客户端 enterprise_local 配置区。
+
+此来源批次最终 67 项定向 JVM 测试通过，覆盖来源与 Applied 分开观察、重开、多主体票据、损坏修复、CAS、提交失败/取消、并发等待、退出后迟到结果和提交期间到期。首次二维码库测试在生成图识别阶段出现 NotFoundException，改为对无畸变生成图使用 PURE_BARCODE 后通过；仍执行真实二维码解码及接入，不算相机扫码设备验收。退休旧入口后的首次定向运行暴露记忆测试混用虚拟调度与真实时钟，修正测试收集器执行上下文后通过；未延长超时或修改产品到期逻辑。Pixel_10_Pro_Fold / Android 17 的 11 项定向 instrumentation 在 2 分 14 秒内通过，验证实际 AtomicFile 来源发布、重开、同步、退出重入、多用户安装，以及 Applied/Feed、域偏好和 Room 记忆回归。独立审查无剩余来源/同步阻塞项；正式 UI、Portal 文档授权与媒体流程尚未接通。
+
+该来源批次最终完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 7 分 57 秒内通过：App 1,881 项 JVM 测试无失败或跳过，lint 为 0 errors、272 warnings、5 hints，Debug/Release 均构建成功。Workspace 的 Windows 宿主跳过项仍不算验收。保留既有记忆/数据隔离改造，未修改其他仓库；版本仍为 0.0.19 开发基线，不代表 0.0.20、正式扫码、Portal/媒体设备验收或真实平台互操作完成。
 
 C6 的运行记忆已按域接通：MemoryAddress 固定 scope 与共享/助手 owner；MemoryService 统一编排原 Session、当前配置权限和 UI 记录上下文，Repository 持有真实 Room 事务直到提交或回滚结束。主助手、子助手、assistant_inspect、记忆编辑页和工具结果删除均使用原域；退出重登不能复活旧操作，共享模式切换不会把旧编辑写到新 namespace。企业 Seed 配置与运行记忆仍分开，没有新增配置副本或修改 schema。独立审查发现的旧查询终止订阅、子助手重取 Session、工具卡旧来源及授权拒绝后 lease 未释放均已修复并补充验证。
 

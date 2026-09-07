@@ -48,7 +48,7 @@ class ScopedConfigurationAndroidTest {
                 env.settings.updateLocal {
                     Settings(providers = listOf(provider), assistants = listOf(assistant), assistantId = assistant.id, chatModelId = model.id)
                 }
-                env.sessions.applyPackage(EnterprisePackageCodec.encode(packet))
+                env.sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
                 env.commands.selectResource(packet.identity.scope, ResourceSelectionSlot.ASSISTANT, assistant.id)
                 env.commands.selectResource(packet.identity.scope, ResourceSelectionSlot.CHAT_MODEL, packet.identity.reference("mdl_chat"))
                 env.commands.updateAssistantUsage(packet.identity.scope, assistant.id) {
@@ -72,7 +72,7 @@ class ScopedConfigurationAndroidTest {
                 assertEquals(ConfigurationScope.Personal, env.queries.observeCurrent().first().scope)
                 assertEquals(packet.identity.reference("mdl_chat"), env.document().preferences.forScope(packet.identity.scope).chatModelId)
                 val bob = packet.copy(identity = packet.identity.copy(userId = "bob"))
-                env.sessions.applyPackage(EnterprisePackageCodec.encode(bob))
+                env.sessions.enrollLocal(bob.identity, { bob.identity }, { bob })
                 assertNull(env.document().preferences.assistantUsage(bob.identity.scope, assistant.id))
                 assertEquals(model.id, env.queries.observeCurrent().first().assistantModel(assistant.id).reference)
             }

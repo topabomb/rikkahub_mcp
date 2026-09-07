@@ -142,8 +142,8 @@ class ScopedMemoryRepositoryAndroidTest {
             withDatabase { database ->
                 coroutineScope {
                     val sessions = EnterpriseSessionController(EnterpriseAppliedStore(clientRoot))
-                    val packet = context.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::readBytes)
-                    val ready = sessions.applyPackage(packet)
+                    val packet = context.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET).use(EnterprisePackageCodec::decode)
+                    val ready = sessions.enrollLocal(packet.identity, { packet.identity }, { packet })
                     val scope = requireNotNull(ready.manifest.session).identity.scope
                     val access = sessions.captureRealmAccess(scope)
                     val address = MemoryAddress(scope, assistant)

@@ -25,9 +25,10 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.UserSettingsMigration
 import net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore
-import net.weero.measix.pilot.data.enterprise.EnterprisePackageCodec
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage
+import net.weero.measix.pilot.data.enterprise.enrollFixture
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
 import net.weero.measix.pilot.data.model.MemoryAddress
@@ -72,7 +73,7 @@ class MemoryServiceTest {
     fun `logout clears old subscription and same principal login cannot revive its records or editor`() = runTest {
         environment { env ->
             val packet = exampleEnterprisePackage()
-            env.sessions.applyPackage(EnterprisePackageCodec.encode(packet))
+            env.sessions.enrollFixture(packet)
             val address = MemoryAddress(packet.identity.scope, MemoryOwner.Assistant(env.target.id))
             env.rows(address).value = listOf(AssistantMemory(10, "enterprise"))
             val view = MutableStateFlow(MemoryView.Loading)
@@ -80,10 +81,13 @@ class MemoryServiceTest {
             val old = view.first { it.records.isNotEmpty() }.records.single()
             env.sessions.finishExit(requireNotNull(env.sessions.beginExit()))
             view.first { it.unavailableReason != null }
-            env.sessions.applyPackage(EnterprisePackageCodec.encode(packet))
+            env.sessions.enrollFixture(packet)
             expectRejected { env.memory.delete(old) }
             coVerify(exactly = 0) { env.repository.delete(any(), any()) }
-            val fresh = env.memory.observe(packet.identity.scope, env.target.id).first { it.access != null }
+            // This fixture uses real IO and wall-clock sessions, as does its existing AppScope collector.
+            val fresh = kotlinx.coroutines.withContext(Dispatchers.Default) {
+                env.memory.observe(packet.identity.scope, env.target.id).first { it.access != null }
+            }
             assertEquals("enterprise", fresh.records.single().content)
             assertNotEquals(old.access, fresh.access)
             assertTrue(view.value.records.isEmpty())
@@ -95,7 +99,7 @@ class MemoryServiceTest {
     fun `inspection reads only target local memory in the captured realm and honors policy changes`() = runTest {
         environment { env ->
             val packet = exampleEnterprisePackage()
-            env.sessions.applyPackage(EnterprisePackageCodec.encode(packet))
+            env.sessions.enrollFixture(packet)
             val realm = env.configurations.captureAccess(packet.identity.scope)
             val local = MemoryAddress(packet.identity.scope, MemoryOwner.Assistant(env.target.id))
             env.rows(local).value = listOf(AssistantMemory(10, "enterprise-only"))
@@ -103,9 +107,10 @@ class MemoryServiceTest {
             assertEquals(listOf("enterprise-only"), env.memory.inspect(realm, env.caller.id, env.target.id).memories.map { it.content })
             env.settings.updateLocal { it.copy(assistants = it.assistants.map { a -> if (a.id == env.target.id) a.copy(useGlobalMemory = true) else a }) }
             assertTrue(env.memory.inspect(realm, env.caller.id, env.target.id).memories.isEmpty())
-            env.sessions.applyPackage(EnterprisePackageCodec.encode(packet.copy(configuration = packet.configuration.copy(
+            env.sessions.synchronize(realm as RealmAccess.Enterprise, packet.copy(configuration = packet.configuration.copy(
                 generation = packet.configuration.generation + 1, policy = packet.configuration.policy.copy(allowLocalAssistants = false),
-            ))))
+            )))
+            assertEquals(realm, env.sessions.captureRealmAccess(packet.identity.scope))
             expectRejected { env.memory.inspect(realm, env.caller.id, env.target.id) }
         }
     }
