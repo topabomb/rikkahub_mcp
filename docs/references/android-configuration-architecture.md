@@ -76,6 +76,10 @@ updateLocal(latest Local shadow transform)
 - 配置更新按 revision 校验旧编辑状态，定义与绑定同包校验；同会话更新保留离线状态。在途 lease 保留捕获的旧绑定直至释放；lease 不充当执行授权，运行链接入时还需统一准入门禁。
 - `LocalEnterpriseSource` 统一验证一键、粘贴和扫码解析后的公开示例接入资料，并支持私有整包导入。`docs/examples/enterprise.local.example.json` 是唯一公开示例输入，通过构建任务进入 assets；根目录 `enterprise.local.json` 被 Git 忽略且不参与打包。示例 HTML 的手机能力仍等待正式 Portal 宿主接通。
 
+原生资料使用独立 EnrollmentMaterialParser 对齐 formatVersion=1 的 PLATFORM_ENROLLMENT / LOCAL_EXAMPLE_ENROLLMENT；原文上限 2048 UTF-8 字节、严格字段与重复键验证。本地资料不包含 userId，运行时由 LocalEnrollmentAuthority 领取一次性 code；该模拟服务账本位于 noBackupFilesDir/local_enterprise_service，独立拥有消费事实，Session 仍只归 EnterpriseSessionController。详见 [接入资料契约](enrollment-material-contract.md)。真实平台资料当前只解析并返回明确不支持，不进入本地接入；完整私有配置格式不变。
+
+PrepareEnterpriseExampleAssets 从公开完整模板派生 enterprise.local.identity.json，供固定安装目录独立验证身份；配置文件缺失/损坏时，已兑换身份可发布 CONFIGURATION_PENDING，不能因读不到配置而猜测用户。同主体重新接入不回退已确认的较新 Applied 配置及绑定。
+
 ### 2.5 按主体解析与使用偏好
 
 `ConfigurationQueryService` 通过 SettingsStore 组合唯一用户文档与 EnterpriseSessionController 的已发布状态；ConfigurationResolver 纯派生当前空间或明确指定主体的 ResolvedConfiguration，不持久化第三份镜像。目录携带资源来源、显示名称、编辑权限、准入与不可用原因；企业连接和凭据不进入该目录。

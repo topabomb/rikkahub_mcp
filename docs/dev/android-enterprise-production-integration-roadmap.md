@@ -33,7 +33,7 @@
 
 ## 3. 认证、下发与 Runtime
 
-扫码/粘贴共用原生解析器，经 secure platform origin 的 Discovery/Enrollment 建立服务端身份；installation 只是关联值。Refresh Credential 安全存储，Access Token 仅内存；pending refresh key 和轮换响应遵守正式原子持久化/恢复协议。只有 authenticated Refresh 续期，不后台 heartbeat 保活。
+扫码/粘贴沿用已实现的 formatVersion=1 / PLATFORM_ENROLLMENT 原生资料解析器，将本期明确 unsupported 的分流替换为真实接入。用户确认解析后的 HTTPS origin 后，在同一 origin 执行 Discovery 和固定 Enrollment endpoint；API base 只允许同源 path，禁止跨 origin 重定向，code 不进入 Discovery URL。expiresAt 的客户端预检查不替代服务端消费/到期权威；本地 code 和身份目录不得用于平台交换。installation 只是关联值。Refresh Credential 安全存储，Access Token 仅内存；pending refresh key 和轮换响应遵守正式原子持久化/恢复协议。只有 authenticated Refresh 续期，不后台 heartbeat 保活。
 
 切域保留登录；网络失败不退出但不得绕过需权威验证的企业执行；Portal 过期不等于母 Session 失效。退出先收口本机授权/任务/网页，尝试远端撤销，失败明确报告，不以断网阻止本机退出。
 

@@ -85,6 +85,36 @@ internal class EnterpriseSessionController(
         return mutex.withLock { applyValidated(candidate, enter) }
     }
 
+    /** Admission conflicts precede code consumption. Only this owner publishes the resulting client session. */
+    suspend fun enrollLocal(
+        installedIdentity: EnterpriseIdentity,
+        redeem: suspend () -> EnterpriseIdentity,
+        configuration: suspend () -> EnterprisePackage?,
+    ): EnterpriseState.Available = mutex.withLock {
+        EnterprisePackageCodec.validateIdentity(installedIdentity)
+        val current = ensureLoaded()
+        if (current.manifest.phase == EnterpriseSessionPhase.CLOSING) fail("enterprise_exit_in_progress")
+        requireSamePrincipal(current.manifest, installedIdentity)
+        if (redeem() != installedIdentity) fail("enterprise_enrollment_identity_mismatch")
+        currentCoroutineContext().ensureActive()
+        val candidate = configuration()
+        if (candidate != null) {
+            if (candidate.identity != installedIdentity) fail("enterprise_enrollment_identity_mismatch")
+            EnterprisePackageCodec.validate(candidate)
+            val retained = current.manifest.applied
+            if (retained != null && current.configuration != null && candidate.configuration.generation < retained.generation) {
+                // Enrollment renews this principal; an older installed example cannot roll back an applied local update.
+                val session = EnterpriseSession(Uuid.random().toString(), installedIdentity, nowMillis() + SESSION_LIFETIME_MILLIS)
+                publish(current.manifest.copy(phase = EnterpriseSessionPhase.READY, session = session, selectedScope = installedIdentity.scope), current.configuration)
+            } else {
+                applyValidated(candidate, enter = true, replaceSession = true)
+            }
+        } else {
+            val session = EnterpriseSession(Uuid.random().toString(), installedIdentity, nowMillis() + SESSION_LIFETIME_MILLIS)
+            publish(EnterpriseManifest(1, EnterpriseSessionPhase.CONFIGURATION_PENDING, session, null, ConfigurationScope.Personal, installedIdentity), null)
+        }
+    }
+
     /** Local service changes use the same whole-package transaction and reject stale editors. */
     suspend fun updateLocalPackage(
         expectedRevision: String,
@@ -105,7 +135,7 @@ internal class EnterpriseSessionController(
         applyValidated(candidate, manifest.selectedScope is ConfigurationScope.Enterprise)
     }
 
-    private suspend fun applyValidated(candidate: EnterprisePackage, enter: Boolean): EnterpriseState.Available {
+    private suspend fun applyValidated(candidate: EnterprisePackage, enter: Boolean, replaceSession: Boolean = false): EnterpriseState.Available {
         val current = ensureLoaded()
         val manifest = current.manifest
         if (manifest.phase == EnterpriseSessionPhase.CLOSING) fail("enterprise_exit_in_progress")
@@ -118,7 +148,7 @@ internal class EnterpriseSessionController(
         }
         prune(manifest)
         val version = withContext(Dispatchers.IO) { store.prepare(candidate) }
-        val session = manifest.session?.takeIf { it.expiresAtMillis > nowMillis() }
+        val session = manifest.session?.takeIf { !replaceSession && it.expiresAtMillis > nowMillis() }
             ?.copy(identity = candidate.identity)
             ?: EnterpriseSession(Uuid.random().toString(), candidate.identity, nowMillis() + SESSION_LIFETIME_MILLIS)
         val next = EnterpriseManifest(

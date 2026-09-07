@@ -1,0 +1,7 @@
+{
+  "formatVersion": 1,
+  "kind": "PLATFORM_ENROLLMENT",
+  "platformUrl": "https://platform.example",
+  "code": "fixture-only-not-a-live-enrollment",
+  "expiresAt": "2030-01-01T00:00:00Z"
+}

@@ -16,6 +16,7 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.LocalEnterpriseSource
+import net.weero.measix.pilot.data.enterprise.LocalEnrollmentAuthority
 import java.io.File
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.fts.MessageFtsManager
@@ -46,8 +47,13 @@ val dataSourceModule = module {
     single { EnterpriseSessionController(get()) }
     single {
         val context = get<Context>()
-        LocalEnterpriseSource(openExample = { context.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET) }, sessions = get())
+        LocalEnterpriseSource(
+            openExample = { context.assets.open(LocalEnterpriseSource.EXAMPLE_ASSET) },
+            openIdentity = { context.assets.open(LocalEnterpriseSource.IDENTITY_ASSET) },
+            sessions = get(), enrollmentAuthority = get(),
+        )
     }
+    single { LocalEnrollmentAuthority(File(get<Context>().noBackupFilesDir, "local_enterprise_service")) }
     single {
         SettingsStore(appContext = get(), scope = get())
     }

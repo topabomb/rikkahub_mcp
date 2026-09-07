@@ -55,7 +55,9 @@ internal object EnterprisePackageCodec {
     const val MAX_BYTES = 4 * 1024 * 1024
     internal val json = Json { encodeDefaults = true }
 
-    fun decode(input: InputStream): EnterprisePackage {
+    fun decode(input: InputStream): EnterprisePackage = decode(readBytes(input))
+
+    internal fun readBytes(input: InputStream): ByteArray {
         val output = java.io.ByteArrayOutputStream()
         val buffer = ByteArray(8192)
         while (true) {
@@ -64,7 +66,7 @@ internal object EnterprisePackageCodec {
             if (output.size() + count > MAX_BYTES) fail("enterprise_package_too_large")
             output.write(buffer, 0, count)
         }
-        return decode(output.toByteArray())
+        return output.toByteArray()
     }
 
     fun decode(bytes: ByteArray): EnterprisePackage {

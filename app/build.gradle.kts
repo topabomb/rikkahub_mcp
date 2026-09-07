@@ -13,6 +13,8 @@ import org.gradle.api.tasks.TaskAction
 import java.io.File
 import java.io.FileInputStream
 import java.util.Properties
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
 
 abstract class RenameApkTask : DefaultTask() {
     @get:Input
@@ -50,6 +52,9 @@ abstract class PrepareEnterpriseExampleAssets : DefaultTask() {
         val directory = outputDirectory.get().asFile
         directory.mkdirs()
         exampleFile.get().asFile.copyTo(File(directory, "enterprise.local.example.json"), overwrite = true)
+        val example = JsonSlurper().parse(exampleFile.get().asFile) as Map<*, *>
+        val identity = requireNotNull(example["identity"]) { "Public enterprise example must declare its installed identity" }
+        File(directory, "enterprise.local.identity.json").writeText(JsonOutput.toJson(identity), Charsets.UTF_8)
     }
 }
 

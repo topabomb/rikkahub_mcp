@@ -1,0 +1,31 @@
+# 原生企业接入资料
+
+当前实现入口为 EnrollmentMaterialParser、LocalEnterpriseSource、LocalEnrollmentAuthority 和 EnterpriseSessionController.enrollLocal。格式权威是平台架构仓库的 Control Protocol §8、Portal 产品要求 §3 和 ERX-JOIN-001/002；本次消费的是未 Freeze 工作树修订，不是生产互操作认证。
+
+## 格式与来源
+
+formatVersion=1；kind 只允许 PLATFORM_ENROLLMENT 或 LOCAL_EXAMPLE_ENROLLMENT。共同字段 code、expiresAt 必填；平台另需 platformUrl，本地另需 sourceNamespace/deploymentId。所有列出的字段必填，无额外字段。本地身份由随包来源验证确定，资料没有 userId。完整企业配置文件的 identity/runtimeBindings 与其独立 formatVersion 不变。
+
+解析器先限制原始 UTF-8 为 2048 字节（包含首尾空白），再去掉首尾空白；平面对象读取在建立字段 map 前拒绝重复的解码键。错误类型、未知字段/版本/kind、缺失/null、非法 UTC 时间均拒绝，错误不带原文或底层异常。三个本地标识和平台 code 按 Unicode 字符限制为 1–128；expiresAt 采用 RFC3339 UTC，内部 Instant 比较到期。
+
+平台只接受 HTTPS origin，拒绝 userinfo、query、fragment、非根 path、非法端口；支持显式 loopback HTTP 测试策略，正式 LocalEnterpriseSource 未开启。本期平台资料返回 platform_enrollment_not_supported，无网络客户端或来源注册路径。真实接入时的目标 origin 展示、Discovery/Enrollment 同源与重定向控制仍待网络接入实现，不能用纯 URL 验证测试替代。
+
+一键示例先领取短期随机 code，再调用与粘贴/扫码解码结果相同的 enroll。LocalEnrollmentAuthority 是模拟服务票据 owner，保存摘要、可信身份、到期与消费；不保存明文 code，不管理客户端 Session。票据读写使用独立私有 AtomicFile 与互斥锁，损坏不视为空账本，成功消费不因客户端失败撤销。Session owner 串行执行冲突检查、兑换、一次客户端发布，固定锁序 Session → Local authority；配置缺失或校验错误仅在身份验证成功后发布待配置状态。
+
+PrepareEnterpriseExampleAssets 从同一公开模板派生 enterprise.local.identity.json；身份目录不依赖运行时配置文件可读，不是另一份手工维护身份。LocalEnterpriseSource 先读固定安装目录，兑换后才读完整配置；缺文件/截断/错误配置可进入 pending，未知身份仍拒绝。同主体重新接入收到较旧的安装包配置时，沿用已确认的较新 Applied 配置与绑定，只创建新 Session，不回退策略。
+
+## 平台样例与 Android 消费副本
+
+平台 canonical 正例：measix-platform-core/api/fixtures/enrollment/platform-v1.json。
+
+Android 消费副本：[platform-v1.json](../../app/src/test/resources/contracts/enrollment/platform-v1.json)。它只用于离线契约测试，不能独立演进为第二份 canonical fixture。同步时从平台原样导入并核对 Client OpenAPI 的 PlatformEnrollmentMaterial；不要求普通 Android 构建依赖另一份仓库 checkout。当前输入原始字节 SHA256 为 `3ac391412640d571dd03220fbfd88487e1d1e47a6b1d6f8a86ee09ae821d340a`（原始 LF 文件；Git checkout 换行可影响字节 hash）。
+
+本次核对的平台输入未提供本地正例及完整共享反例。交平台补齐的清单记录在 [本期实施方案](../dev/android-enterprise-integration-plan.md) 的接入资料段。
+
+Android 的代码内本地反例只证明 Android 当前行为，不算平台共享 fixture 或平台验收已完成。
+
+## 验证边界
+
+EnrollmentMaterialParserTest 消费平台正例，并测试严格字段、原始重复键、UTF-8/字符限制、UTC 与 origin。LocalEnterpriseSourceTest 覆盖一键、粘贴、二维码库编码/解码、来源分流、并发/重开后的消费、到期权威、持久化失败、冲突不消费、配置待就绪与独立文件导入。
+
+二维码库 round-trip 不是 Android 相机扫码设备验收。正式扫码/粘贴 UI、页面错误呈现、真实 Discovery/重定向/Enrollment 与平台互操作尚未交付，验收须分别报告。
