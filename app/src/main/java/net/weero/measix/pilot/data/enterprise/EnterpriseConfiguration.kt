@@ -34,8 +34,6 @@ internal data class EnterpriseConfiguration(
     val starters: List<EnterpriseStarter>,
     val gateways: List<EnterpriseGateway>,
     val defaults: EnterpriseDefaults,
-    val feed: List<EnterpriseFeedItem>,
-    val portal: EnterprisePortal,
 )
 
 @Serializable
@@ -108,12 +106,6 @@ internal data class EnterpriseDefaults(
     val ttsId: String? = null,
     val asrId: String? = null,
 )
-
-@Serializable
-internal data class EnterpriseFeedItem(val id: String, val title: String, val content: String)
-
-@Serializable
-internal data class EnterprisePortal(val title: String, val html: String)
 
 internal enum class EnterpriseResourceKind { MODEL, TTS, ASR, MCP, GATEWAY }
 

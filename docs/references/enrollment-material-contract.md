@@ -4,7 +4,7 @@
 
 ## 格式与来源
 
-formatVersion=1；kind 只允许 PLATFORM_ENROLLMENT 或 LOCAL_EXAMPLE_ENROLLMENT。共同字段 code、expiresAt 必填；平台另需 platformUrl，本地另需 sourceNamespace/deploymentId。所有列出的字段必填，无额外字段。本地身份由随包来源验证确定，资料没有 userId。完整企业配置文件的 identity/runtimeBindings 与其独立 formatVersion 不变。
+formatVersion=1；kind 只允许 PLATFORM_ENROLLMENT 或 LOCAL_EXAMPLE_ENROLLMENT。共同字段 code、expiresAt 必填；平台另需 platformUrl，本地另需 sourceNamespace/deploymentId。所有列出的字段必填，无额外字段。本地身份由随包来源验证确定，资料没有 userId。完整企业配置文件的 identity/runtimeBindings 与接入资料独立；完整文件当前使用 formatVersion=2，不能送入接入资料解析器。
 
 解析器先限制原始 UTF-8 为 2048 字节（包含首尾空白），再去掉首尾空白；平面对象读取在建立字段 map 前拒绝重复的解码键。错误类型、未知字段/版本/kind、缺失/null、非法 UTC 时间均拒绝，错误不带原文或底层异常。三个本地标识和平台 code 按 Unicode 字符限制为 1–128；expiresAt 采用 RFC3339 UTC，内部 Instant 比较到期。
 

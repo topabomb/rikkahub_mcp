@@ -1,5 +1,5 @@
 {
-  "formatVersion": 1,
+  "formatVersion": 2,
   "identity": {
     "authority": {
       "sourceNamespace": "local:example",
@@ -146,17 +146,6 @@
       "compressModelId": "mdl_chat",
       "ttsId": "tts_example",
       "asrId": "asr_example"
-    },
-    "feed": [
-      {
-        "id": "feed_welcome",
-        "title": "欢迎体验企业空间",
-        "content": "模型、工具、语音、工作台与配置规则均可通过本地示例体验。个人空间保留原配置。"
-      }
-    ],
-    "portal": {
-      "title": "示例企业工作台",
-      "html": "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>示例企业工作台</title><style>body{font:16px system-ui;margin:24px;line-height:1.6}button{margin:8px;padding:12px}#result{white-space:pre-wrap}</style><h1>示例企业工作台</h1><p>本地模拟 · 企业信息与手机能力体验</p><p>企业策略和资源来自本地企业服务。此工作台不会取得用户或企业的连接凭据。</p><div id=\"actions\"><button data-method=\"getStatus\">查看状态</button><button data-method=\"refresh\">更新配置</button><button data-method=\"capturePhoto\">拍照</button><button data-method=\"startRecording\">开始录音</button><button data-method=\"stopRecording\">停止录音</button><button data-method=\"cancelRecording\">取消录音</button><button data-method=\"requestLogout\">退出企业</button><button data-method=\"close\">关闭工作台</button></div><pre id=\"result\" role=\"status\">正在等待原生工作台连接。</pre><script>let sequence=0;document.getElementById('actions').onclick=function(event){const method=event.target.dataset.method;if(!method)return;const bridge=window.enterprise;if(!bridge){document.getElementById('result').textContent='请在 App 企业工作台中打开此页面。';return;}bridge.postMessage(JSON.stringify({requestId:String(++sequence),method:method,params:{}}));};window.onEnterpriseResponse=function(response){document.getElementById('result').textContent=JSON.stringify(response,null,2);};</script></html>"
     }
   },
   "runtimeBindings": [
@@ -188,5 +177,22 @@
       "resourceId": "gw_optional",
       "protocol": "EXAMPLE"
     }
-  ]
+  ],
+  "feedSeed": {
+    "enterpriseTimezone": "Asia/Shanghai",
+    "items": [
+      {
+        "enterpriseUpdateId": "eup_58f33c85-8f7a-4dea-99a5-a44e5a21a849",
+        "content": {
+          "title": "欢迎体验企业空间",
+          "content": "模型、工具、语音、工作台与配置规则均可通过本地示例体验。个人空间保留原配置。",
+          "contentFormat": "MARKDOWN",
+          "category": "ANNOUNCEMENT",
+          "severity": "INFO"
+        },
+        "status": "PUBLISHED",
+        "publishedAt": "2026-09-07T00:00:00Z"
+      }
+    ]
+  }
 }

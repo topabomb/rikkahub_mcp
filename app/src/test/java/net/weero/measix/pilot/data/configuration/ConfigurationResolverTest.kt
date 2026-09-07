@@ -15,7 +15,7 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 internal fun appliedConfiguration(packet: EnterprisePackage): EnterpriseState.Available = EnterpriseState.Available(
-    EnterpriseManifest(1, EnterpriseSessionPhase.READY,
+    EnterpriseManifest(2, EnterpriseSessionPhase.READY,
         EnterpriseSession(Uuid.random().toString(), packet.identity, Long.MAX_VALUE),
         EnterpriseAppliedVersion(Uuid.random().toString(), packet.configuration.generation, "0".repeat(64), "0".repeat(64)),
         packet.identity.scope, packet.identity),

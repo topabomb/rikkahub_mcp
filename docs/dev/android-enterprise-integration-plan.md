@@ -274,7 +274,7 @@ LocalEnterpriseSource（身份/配置/动态/场景）
 
 整包发布由企业应用状态提交协调者负责：先暂存不可变的定义、binding revision 和必要资源，校验闭合关系；最后一次原子持久提交 manifest 指针，包含完整 source/principal、配置 generation 与 binding revision。此提交是可见状态的唯一发布点；Session owner 只有在该主体的 manifest 可恢复后才发布企业可用状态。崩溃恢复只接受完整已提交组合，未提交资料回收；旧 binding 由在途 lease 持有，最后引用释放后清理。退出先撤销 session 执行资格，再按同一恢复协议移除活动 manifest/凭据，不允许配置已换而仍调用旧凭据。
 
-### 7.3 独立企业动态（待实现）
+### 7.3 独立企业动态
 
 按 Control Protocol §8/§10.16 将 Feed 从 EnterpriseConfiguration 移出：完整文件升为 v2，顶层 feedSeed 携带企业时区与动态初值；应用 manifest 使用独立 Feed 存储引用、摘要和公开 revision。配置/绑定与 Feed 复用同一原子 manifest 发布协议，Feed 的领域命令负责草稿、发布、撤回和查询，不增加第二写锁或状态流。仅编辑不可见草稿不推进公开 revision；发布/撤回改变可见表示时推进 Feed revision，配置 applied/generation 和配置同步时间不变。
 
@@ -298,6 +298,8 @@ Seed 只初始化尚未建立的主体 Feed。同步、重入与重复导入不�
 
 context 从当前原生身份产生，documentId 不可预测，文档期限最多十分钟且不超过母 Session；不使用 fixture 身份或时钟。getStatus/refresh 返回真实已应用状态与实际能力，未知值为 null。context/detail 使用 no-store，动态列表 private/no-cache，所有授权先于缓存判断。原生扫码在登录前可用，一键/扫码/粘贴共用接入验证。生产 grant/Cookie/CSRF 只在后续真实接入规定，本地会话不冒充生产授权。
 
+Portal 本地读取的 frame 验收边界待确认：[Android WebResourceRequest](https://developer.android.com/reference/android/webkit/WebResourceRequest) 不提供 fetch 发起 frame，主页面和 iframe 的 fetch 均为 isForMainFrame=false；WebMessageListener 才提供 Bridge 消息的 sourceOrigin/isMainFrame。保留 GET 时可限制可信页面并实施原生 document/域/Session 授权，但不能把 CSP、Referer 或 document header 当作逐请求原生 frame 证明。若要求逐请求证明主 frame，需要架构侧认可调整本地读取传输。此问题不改变 Feed 规则或来源配置同步职责，也不能用资源打包/纯查询测试标为已验收。
+
 ## 9. 执行、更新、恢复不变量
 
 - 扩展 TurnContextFactory、TurnToolSetFactory、transport lease 和既有 Conversation/Turn/Step owner，不建企业运行栈。
@@ -315,6 +317,12 @@ C6 的运行记忆已按域接通：MemoryAddress 固定 scope 与共享/助手 
 该记忆批次 87 项定向 JVM 测试全部通过；Pixel_10_Pro_Fold / Android 17 的 9 项定向 instrumentation 全部通过，涵盖实际 Room 的多主体/owner 隔离、错误地址拒绝、提交前取消回滚、提交决定后授权锁保持，以及域偏好和主子会话交互回归。删除了以假 DAO 重复 SQL 行为的旧 MemoryRepositoryOwnershipTest，替换为真实 Room 验证。会话列表/命令、文件、备份、正式企业入口和全部执行 adapters 仍未完成，本项不代表 C4、C5、C6 或 E08 整体验收通过。
 
 该记忆批次完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 11 分 38 秒内通过：App 1,820 项 JVM 测试无失败或跳过，lint 无错误，Debug/Release 均构建成功；Workspace 的 11 项 Windows 宿主测试仍跳过。独立审查无剩余阻塞项。此批不修改版本号，不作为 Release 企业页面或真实平台互操作验收。
+
+Feed 领域与持久发布已接通：完整文件和企业 manifest 使用 v2，配置内 Feed/HTML 与旧桥接示例删除；Feed 以独立主体引用、公开 revision 和内容摘要发布，草稿/发布/撤回及日期查询共用 EnterpriseFeed 规则。共享 feed-vectors.json 已执行实际查询，覆盖双边/单边日期、限额、空结果、错误范围和 DST 23 小时日；来源摘要固定在 contracts/portal/consumer-manifest.json。独立审查发现的新 Feed 指针提交前缺少内容校验已修复，并覆盖文件损坏、取消前后发布和重开。Pixel_10_Pro_Fold / Android 17 的 6 项定向设备测试通过，包含相同动态 ID 跨来源/用户隔离、退出重入保留撤回状态和旧 Session 拒绝。该批不代表 Portal 的 document/304/UI 验收。
+
+Portal dist-local 已原样固定到 app/src/main/enterprisePortal，来源 sourceHash 为 7281c1f019b61eb3bc0bbe8dd439911bf466917191fe881d3586aa4601fc28c6，build-identity.json 摘要为 5e041b9fd791db5545c2d09cd4f9ce3e6aa4ff10e1fb2991a7fb3e79db2374ba。构建任务为全部 variant 校验并生成 assets，不依赖 sibling checkout。实际 Gradle 正例通过；篡改 index.html 后被摘要校验拒绝，随后精确恢复原始字节。独立审查无资源打包阻塞项；WebView、Bridge 和手机能力尚未实现。
+
+Feed 与 Portal 资源批次完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 10 分 44 秒内通过：App 1,873 项 JVM 测试无失败或跳过，lint 无错误。逐个检查三种 ABI 组合的 Debug/Release 共六份 APK，Portal identity、全部资源及新版公开示例均与固定输入摘要一致。Workspace 的 Windows 宿主跳过项不算已验收；APK 内容校验不代表 WebView、Bridge 或媒体生命周期设备验收。版本仍为 0.0.19 开发基线。
 
 接入时间精度与共享案例已完成第二次对齐：接受 +00:00 与小写 t/z，拒绝超过 9 位小数及闰秒，不截断输入；三份 core 导出输入原样固定并校验摘要。EnrollmentMaterialParserTest、EnrollmentSharedCasesTest、LocalEnterpriseSourceTest 共 58 项定向测试通过，其中 34 项直接消费原始共享案例。没有独立的 LocalEnrollmentAuthorityTest；票据真实消费、并发、取消、重开与失败覆盖归 LocalEnterpriseSourceTest。独立审查无阻塞项。Native/Feed 消费、正式页面和真实平台互操作仍待完成。
 

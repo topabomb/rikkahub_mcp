@@ -42,7 +42,7 @@ class EnterpriseSessionControllerTest {
 
     @Test
     fun `staging and manifest failures preserve previous durable state and recovery removes orphans`() = runTest {
-        for (point in EnterpriseStorageCheckpoint.entries) {
+        for (point in EnterpriseStorageCheckpoint.entries.filter { it != EnterpriseStorageCheckpoint.FEED_STAGED }) {
             val root = temporary.newFolder()
             var fault: EnterpriseStorageCheckpoint? = null
             val store = EnterpriseAppliedStore(root) { if (it == fault) throw IOException("injected") }

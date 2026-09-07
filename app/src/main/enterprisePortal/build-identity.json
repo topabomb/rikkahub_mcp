@@ -1,0 +1,53 @@
+{
+  "repository": "measix-enterprise-portal",
+  "sourceKind": "local",
+  "bridgeVersion": 2,
+  "localReadVersion": 1,
+  "origin": "https://local.measix.invalid",
+  "version": "0.1.0",
+  "commit": null,
+  "dirty": true,
+  "sourceHash": "7281c1f019b61eb3bc0bbe8dd439911bf466917191fe881d3586aa4601fc28c6",
+  "contract": {
+    "artifacts": {
+      "generated.ts": {
+        "source": "measix-platform-core/api/client/client-control.openapi.yaml",
+        "sha256": "aed251a7e4c528152309e967dbce19563f6899fd2b66ba5ab88bc9d78450d453"
+      },
+      "native-generated.ts": {
+        "source": "measix-platform-core/api/portal/portal-contract.openapi.json",
+        "sha256": "0a844a20bf43972a63666300a05680f4129d6906276f3f97b2d7eb907675ff1a"
+      },
+      "native-contract.json": {
+        "source": "measix-platform-core/api/portal/portal-contract.openapi.json",
+        "sha256": "0a844a20bf43972a63666300a05680f4129d6906276f3f97b2d7eb907675ff1a"
+      },
+      "native-vectors.json": {
+        "source": "measix-platform-core/api/fixtures/portal/native-vectors.json",
+        "sha256": "d47073b93279185b0fe2cbda1e868c824689df76ce245e5dec647d018edf980d"
+      },
+      "local-context.json": {
+        "source": "measix-platform-core/api/fixtures/portal/local-context.json",
+        "sha256": "713fb7ee660c71b733adaf85e76ed9d3426b1f7c503dbd98715ad8870d0bb177"
+      },
+      "platform-v1.json": {
+        "source": "measix-platform-core/api/fixtures/enrollment/platform-v1.json",
+        "sha256": "3ac391412640d571dd03220fbfd88487e1d1e47a6b1d6f8a86ee09ae821d340a"
+      },
+      "local-v1.json": {
+        "source": "measix-platform-core/api/fixtures/enrollment/local-v1.json",
+        "sha256": "7f9b81d153b3b5394d54e74a1778138dabb486b7d423cba1e45c90babcf9e2b1"
+      },
+      "enrollment-cases.json": {
+        "source": "measix-platform-core/api/fixtures/enrollment/cases.json",
+        "sha256": "71e50a526bde376a3b5511564589cf9ed1cac68d0798348abded54449dbf1bf4"
+      }
+    }
+  },
+  "lockfileHash": "360c05d90896194e94082e45c265f917550887c688a5670758e7109938bae2aa",
+  "assets": {
+    "assets/index-BdXcMQag.css": "86507a9ff59603e692980627f4ddba033ef6db12d46a9c4f94fea4a24d39ac22",
+    "assets/index-RTBvF92x.js": "84082fd9444fd47e4394389e5e4fe608110c65134499a9f4f3649dcbedb8568d",
+    "index.html": "55584db16d597dd07220288c1453bb45ee055eed341f19c4a766417be4adc639"
+  }
+}

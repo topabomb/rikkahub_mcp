@@ -43,6 +43,7 @@ internal data class EnterprisePackage(
     val identity: EnterpriseIdentity,
     val configuration: EnterpriseConfiguration,
     val runtimeBindings: List<EnterpriseRuntimeBinding>,
+    val feedSeed: EnterpriseFeedSeed? = null,
 ) {
     override fun toString(): String = "EnterprisePackage(formatVersion=$formatVersion, generation=${configuration.generation})"
 }
@@ -51,7 +52,7 @@ internal data class EnterprisePackage(
 internal class EnterpriseConfigurationException(val reason: String) : IllegalArgumentException(reason)
 
 internal object EnterprisePackageCodec {
-    const val FORMAT_VERSION = 1
+    const val FORMAT_VERSION = 2
     const val MAX_BYTES = 4 * 1024 * 1024
     internal val json = Json { encodeDefaults = true }
 
@@ -105,9 +106,9 @@ internal object EnterprisePackageCodec {
         val config = value.configuration
         check(config.generation > 0, "invalid_enterprise_generation")
         val ids = config.runtimeResources().keys.toList() + config.assistants.map { it.id } +
-            config.memorySeeds.map { it.id } + config.starters.map { it.id } + config.feed.map { it.id }
+            config.memorySeeds.map { it.id } + config.starters.map { it.id }
         val expectedCount = config.models.size + config.tts.size + config.asr.size + config.mcpServers.size +
-            config.gateways.size + config.assistants.size + config.memorySeeds.size + config.starters.size + config.feed.size
+            config.gateways.size + config.assistants.size + config.memorySeeds.size + config.starters.size
         check(ids.size == expectedCount && ids.distinct().size == ids.size, "duplicate_enterprise_resource_id")
         ids.forEach { id ->
             try { identity.reference(id) } catch (_: IllegalArgumentException) { fail("invalid_enterprise_resource_id") }
@@ -158,7 +159,10 @@ internal object EnterprisePackageCodec {
         }
         defaults.ttsId?.let { check(config.tts.any { resource -> resource.id == it && resource.enabled }, "invalid_default_tts") }
         defaults.asrId?.let { check(config.asr.any { resource -> resource.id == it && resource.enabled }, "invalid_default_asr") }
-        check(config.portal.title.isNotBlank() && config.portal.html.isNotBlank(), "invalid_enterprise_portal")
+        value.feedSeed?.let { seed ->
+            try { EnterpriseFeed.initialize(seed) }
+            catch (_: EnterpriseFeedException) { fail("invalid_enterprise_feed") }
+        }
     }
 
     private fun validateBinding(binding: EnterpriseRuntimeBinding, kind: EnterpriseResourceKind) {

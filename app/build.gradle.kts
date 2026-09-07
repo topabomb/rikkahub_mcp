@@ -13,6 +13,8 @@ import org.gradle.api.tasks.TaskAction
 import java.io.File
 import java.io.FileInputStream
 import java.util.Properties
+import java.security.MessageDigest
+import java.nio.file.Files
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 
@@ -62,6 +64,55 @@ abstract class PrepareEnterpriseExampleAssets : DefaultTask() {
 val enterpriseExampleAssets = tasks.register<PrepareEnterpriseExampleAssets>("prepareEnterpriseExampleAssets") {
     exampleFile.set(rootProject.layout.projectDirectory.file("docs/examples/enterprise.local.example.json"))
     outputDirectory.set(layout.buildDirectory.dir("generated/enterpriseExampleAssets"))
+}
+
+abstract class PrepareEnterprisePortalAssets : DefaultTask() {
+    @get:InputDirectory
+    abstract val bundleDirectory: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+
+    @TaskAction
+    fun prepare() {
+        val bundle = bundleDirectory.get().asFile.canonicalFile
+        val identity = JsonSlurper().parse(File(bundle, "build-identity.json")) as Map<*, *>
+        require(identity["sourceKind"] == "local" && identity["bridgeVersion"] == 2 && identity["localReadVersion"] == 1 &&
+            identity["origin"] == "https://local.measix.invalid") { "Unsupported enterprise Portal bundle" }
+        val assets = identity["assets"] as Map<*, *>
+        require(assets.containsKey("index.html")) { "Portal entry is missing" }
+        val files = bundle.walkTopDown().onEnter {
+            require(!Files.isSymbolicLink(it.toPath())) { "Portal bundle contains a symlink" }
+            true
+        }.filter { it.isFile }.toList()
+        require(files.map { it.relativeTo(bundle).invariantSeparatorsPath }.toSet() == assets.keys + "build-identity.json") {
+            "Portal bundle has missing or unlisted files"
+        }
+        assets.forEach { (key, value) ->
+            val name = key as String
+            require(!name.startsWith('/') && '\\' !in name && ':' !in name && name.split('/').none { it in setOf("", ".", "..") }) {
+                "Unsafe Portal asset path"
+            }
+            val file = File(bundle, name)
+            require(!Files.isSymbolicLink(file.toPath()) && file.canonicalFile.toPath().startsWith(bundle.toPath())) { "Unsafe Portal asset" }
+            val digest = MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }
+            require(digest == value) { "Portal asset digest mismatch: $name" }
+        }
+        val output = outputDirectory.get().asFile
+        require(output.canonicalFile.toPath().startsWith(project.layout.buildDirectory.get().asFile.canonicalFile.toPath()))
+        if (output.exists()) check(output.deleteRecursively()) { "Cannot replace generated Portal assets" }
+        val target = File(output, "enterprise_portal")
+        files.forEach { file ->
+            val copy = File(target, file.relativeTo(bundle).path)
+            copy.parentFile.mkdirs()
+            file.copyTo(copy)
+        }
+    }
+}
+
+val enterprisePortalAssets = tasks.register<PrepareEnterprisePortalAssets>("prepareEnterprisePortalAssets") {
+    bundleDirectory.set(layout.projectDirectory.dir("src/main/enterprisePortal"))
+    outputDirectory.set(layout.buildDirectory.dir("generated/enterprisePortalAssets"))
 }
 
 android {
@@ -190,6 +241,7 @@ android {
 tasks.named("preBuild").configure { dependsOn(enterpriseExampleAssets) }
 androidComponents.onVariants { variant ->
     variant.sources.assets?.addGeneratedSourceDirectory(enterpriseExampleAssets, PrepareEnterpriseExampleAssets::outputDirectory)
+    variant.sources.assets?.addGeneratedSourceDirectory(enterprisePortalAssets, PrepareEnterprisePortalAssets::outputDirectory)
 }
 
 // Rename APK output: app-arm64-v8a-release.apk → MeasixPilot_<version>_arm64-v8a-release.apk

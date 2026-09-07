@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.data.enterprise
 
 import java.util.concurrent.atomic.AtomicBoolean
+import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -81,7 +82,7 @@ internal class EnterpriseSessionController(
         val current = ensureLoaded()
         requireSamePrincipal(current.manifest, identity)
         val session = EnterpriseSession(Uuid.random().toString(), identity, nowMillis() + SESSION_LIFETIME_MILLIS)
-        publish(EnterpriseManifest(1, EnterpriseSessionPhase.CONFIGURATION_PENDING, session, null, ConfigurationScope.Personal, identity), null)
+        publish(EnterpriseManifest(2, EnterpriseSessionPhase.CONFIGURATION_PENDING, session, null, ConfigurationScope.Personal, identity, current.manifest.feeds), null)
     }
 
     suspend fun applyPackage(bytes: ByteArray, enter: Boolean = true): EnterpriseState.Available {
@@ -116,7 +117,7 @@ internal class EnterpriseSessionController(
             }
         } else {
             val session = EnterpriseSession(Uuid.random().toString(), installedIdentity, nowMillis() + SESSION_LIFETIME_MILLIS)
-            publish(EnterpriseManifest(1, EnterpriseSessionPhase.CONFIGURATION_PENDING, session, null, ConfigurationScope.Personal, installedIdentity), null)
+            publish(EnterpriseManifest(2, EnterpriseSessionPhase.CONFIGURATION_PENDING, session, null, ConfigurationScope.Personal, installedIdentity, current.manifest.feeds), null)
         }
     }
 
@@ -153,14 +154,19 @@ internal class EnterpriseSessionController(
         }
         prune(manifest)
         val version = withContext(Dispatchers.IO) { store.prepare(candidate) }
+        val feeds = if (candidate.feedSeed != null && manifest.feeds.none { it.scope == candidate.identity.scope }) {
+            manifest.feeds + withContext(Dispatchers.IO) {
+                store.prepareFeed(candidate.identity.scope, EnterpriseFeed.initialize(candidate.feedSeed))
+            }
+        } else manifest.feeds
         val session = manifest.session?.takeIf { !replaceSession && it.expiresAtMillis > nowMillis() }
             ?.copy(identity = candidate.identity)
             ?: EnterpriseSession(Uuid.random().toString(), candidate.identity, nowMillis() + SESSION_LIFETIME_MILLIS)
         val next = EnterpriseManifest(
-            1, if (manifest.phase == EnterpriseSessionPhase.OFFLINE && session.id == manifest.session?.id) {
+            2, if (manifest.phase == EnterpriseSessionPhase.OFFLINE && session.id == manifest.session?.id) {
                 EnterpriseSessionPhase.OFFLINE
             } else EnterpriseSessionPhase.READY, session, version,
-            if (enter) candidate.identity.scope else ConfigurationScope.Personal, candidate.identity,
+            if (enter) candidate.identity.scope else ConfigurationScope.Personal, candidate.identity, feeds,
         )
         return publish(next, candidate.configuration)
     }
@@ -168,6 +174,40 @@ internal class EnterpriseSessionController(
     suspend fun switchToPersonal() = mutex.withLock {
         val current = ensureLoaded()
         publish(current.manifest.copy(selectedScope = ConfigurationScope.Personal), current.configuration)
+    }
+
+    suspend fun changeFeed(access: RealmAccess.Enterprise, expectedRevision: String, command: EnterpriseFeedCommand): EnterpriseFeedVersion = mutex.withLock {
+        val current = requireFeedSession(access)
+        val previous = current.manifest.feeds.find { it.scope == access.scope } ?: fail("enterprise_feed_not_ready")
+        if (previous.revision != expectedRevision) fail("enterprise_feed_changed")
+        prune(current.manifest)
+        val next = withContext(Dispatchers.IO) {
+            store.prepareFeed(access.scope, EnterpriseFeed.change(store.readFeed(previous), command, Instant.ofEpochMilli(nowMillis())))
+        }
+        publish(current.manifest.copy(feeds = current.manifest.feeds.map { if (it.scope == access.scope) next else it }), current.configuration)
+        next
+    }
+
+    suspend fun listFeed(access: RealmAccess.Enterprise, query: EnterpriseFeedQuery): EnterpriseFeedResult = mutex.withLock {
+        val current = requireFeedSession(access)
+        val version = current.manifest.feeds.find { it.scope == access.scope } ?: fail("enterprise_feed_not_ready")
+        withContext(Dispatchers.IO) {
+            EnterpriseFeed.list(store.readFeed(version), access.scope, query, Instant.ofEpochMilli(nowMillis()))
+        }
+    }
+
+    suspend fun feedDetail(access: RealmAccess.Enterprise, id: String): EnterpriseUpdateItem = mutex.withLock {
+        val current = requireFeedSession(access)
+        val version = current.manifest.feeds.find { it.scope == access.scope } ?: fail("enterprise_feed_not_ready")
+        withContext(Dispatchers.IO) { EnterpriseFeed.detail(store.readFeed(version), id) }
+    }
+
+    private suspend fun requireFeedSession(access: RealmAccess.Enterprise): LoadedEnterpriseState {
+        val current = requireSession(allowOffline = true)
+        if (!allowsDataAccess(current.manifest, access) || current.manifest.selectedScope != access.scope) {
+            fail("enterprise_data_access_unavailable")
+        }
+        return current
     }
 
     suspend fun captureRealmAccess(scope: ConfigurationScope): RealmAccess = when (scope) {
@@ -237,7 +277,7 @@ internal class EnterpriseSessionController(
     suspend fun requireReauthentication() = mutex.withLock {
         val manifest = manifestForExit()
         val identity = manifest.session?.identity ?: manifest.lastIdentity
-        publish(EnterpriseManifest.signedOut(identity).copy(phase = EnterpriseSessionPhase.REAUTH_REQUIRED), null)
+        publish(EnterpriseManifest.signedOut(identity, manifest.feeds).copy(phase = EnterpriseSessionPhase.REAUTH_REQUIRED), null)
         prune(requireNotNull(loaded).manifest)
     }
 
@@ -259,7 +299,7 @@ internal class EnterpriseSessionController(
         if (current.manifest.phase != EnterpriseSessionPhase.CLOSING || session == null || session.id != token.sessionId ||
             session.identity.scope != token.scope) fail("stale_enterprise_exit")
         if (leases.values.any { it.sessionId == token.sessionId }) fail("enterprise_executions_pending")
-        publish(EnterpriseManifest.signedOut(session.identity), null)
+        publish(EnterpriseManifest.signedOut(session.identity, current.manifest.feeds), null)
         prune(requireNotNull(loaded).manifest)
     }
 
@@ -285,7 +325,7 @@ internal class EnterpriseSessionController(
         val current = ensureLoaded()
         val session = current.manifest.session ?: fail("enterprise_session_required")
         if (session.expiresAtMillis <= nowMillis()) {
-            publish(EnterpriseManifest.signedOut(session.identity).copy(phase = EnterpriseSessionPhase.REAUTH_REQUIRED), null)
+            publish(EnterpriseManifest.signedOut(session.identity, current.manifest.feeds).copy(phase = EnterpriseSessionPhase.REAUTH_REQUIRED), null)
             prune(requireNotNull(loaded).manifest)
             fail("enterprise_session_expired")
         }
@@ -299,9 +339,9 @@ internal class EnterpriseSessionController(
         val manifest = withContext(Dispatchers.IO) { store.readManifest() }
         val session = manifest.session
         val terminal = when {
-            manifest.phase == EnterpriseSessionPhase.CLOSING -> EnterpriseManifest.signedOut(session?.identity)
+            manifest.phase == EnterpriseSessionPhase.CLOSING -> EnterpriseManifest.signedOut(session?.identity, manifest.feeds)
             session != null && session.expiresAtMillis <= nowMillis() ->
-                EnterpriseManifest.signedOut(session.identity).copy(phase = EnterpriseSessionPhase.REAUTH_REQUIRED)
+                EnterpriseManifest.signedOut(session.identity, manifest.feeds).copy(phase = EnterpriseSessionPhase.REAUTH_REQUIRED)
             else -> null
         }
         if (terminal != null) {
@@ -332,7 +372,10 @@ internal class EnterpriseSessionController(
     }
 
     private suspend fun prune(manifest: EnterpriseManifest) = withContext(Dispatchers.IO) {
-        store.prune(leases.values.mapTo(mutableSetOf()) { it.version.revision }.apply { manifest.applied?.let { add(it.revision) } })
+        store.prune(
+            leases.values.mapTo(mutableSetOf()) { it.version.revision }.apply { manifest.applied?.let { add(it.revision) } },
+            manifest.feeds.mapTo(mutableSetOf()) { it.revision },
+        )
     }
 
     private fun requireSamePrincipal(manifest: EnterpriseManifest, identity: EnterpriseIdentity) {

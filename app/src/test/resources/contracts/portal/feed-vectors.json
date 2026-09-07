@@ -1,0 +1,155 @@
+{
+  "formatVersion": 1,
+  "description": "Local and remote Feed domain scenarios. key is fixture-only; actual wire uses enterpriseUpdateId. Same query must retain ETag; withdrawal changes ETag and never configuration generation.",
+  "suites": [
+    {
+      "name": "shanghai",
+      "timezone": "Asia/Shanghai",
+      "now": "2026-09-07T12:00:00Z",
+      "items": [
+        {
+          "key": "before",
+          "publishedAt": "2026-09-05T15:59:59Z",
+          "status": "PUBLISHED"
+        },
+        {
+          "key": "start",
+          "publishedAt": "2026-09-05T16:00:00Z",
+          "status": "PUBLISHED"
+        },
+        {
+          "key": "end",
+          "publishedAt": "2026-09-06T15:59:59Z",
+          "status": "PUBLISHED"
+        },
+        {
+          "key": "after",
+          "publishedAt": "2026-09-06T16:00:00Z",
+          "status": "PUBLISHED"
+        },
+        {
+          "key": "draft",
+          "publishedAt": "2026-09-06T08:00:00Z",
+          "status": "DRAFT"
+        }
+      ],
+      "queries": [
+        {
+          "name": "latest",
+          "limit": 20,
+          "expected": [
+            "after",
+            "end",
+            "start",
+            "before"
+          ],
+          "truncated": false
+        },
+        {
+          "name": "inclusive",
+          "startDate": "2026-09-06",
+          "endDate": "2026-09-06",
+          "limit": 20,
+          "expected": [
+            "end",
+            "start"
+          ],
+          "truncated": false
+        },
+        {
+          "name": "start-only",
+          "startDate": "2026-09-06",
+          "limit": 20,
+          "expected": [
+            "after",
+            "end",
+            "start"
+          ],
+          "truncated": false
+        },
+        {
+          "name": "end-only",
+          "endDate": "2026-09-06",
+          "limit": 20,
+          "expected": [
+            "end",
+            "start",
+            "before"
+          ],
+          "truncated": false
+        },
+        {
+          "name": "limited",
+          "startDate": "2026-09-06",
+          "endDate": "2026-09-06",
+          "limit": 1,
+          "expected": [
+            "end"
+          ],
+          "truncated": true
+        },
+        {
+          "name": "future-range",
+          "startDate": "2030-01-01",
+          "endDate": "2030-01-02",
+          "limit": 20,
+          "expected": [],
+          "truncated": false
+        },
+        {
+          "name": "future-start",
+          "startDate": "2030-01-01",
+          "limit": 20,
+          "error": "invalid_argument"
+        },
+        {
+          "name": "reverse",
+          "startDate": "2026-09-07",
+          "endDate": "2026-09-06",
+          "limit": 20,
+          "error": "invalid_argument"
+        }
+      ]
+    },
+    {
+      "name": "new-york-dst",
+      "timezone": "America/New_York",
+      "now": "2026-03-10T12:00:00Z",
+      "items": [
+        {
+          "key": "before",
+          "publishedAt": "2026-03-08T04:59:59Z",
+          "status": "PUBLISHED"
+        },
+        {
+          "key": "start",
+          "publishedAt": "2026-03-08T05:00:00Z",
+          "status": "PUBLISHED"
+        },
+        {
+          "key": "end",
+          "publishedAt": "2026-03-09T03:59:59Z",
+          "status": "PUBLISHED"
+        },
+        {
+          "key": "after",
+          "publishedAt": "2026-03-09T04:00:00Z",
+          "status": "PUBLISHED"
+        }
+      ],
+      "queries": [
+        {
+          "name": "23-hour-day",
+          "startDate": "2026-03-08",
+          "endDate": "2026-03-08",
+          "limit": 20,
+          "expected": [
+            "end",
+            "start"
+          ],
+          "truncated": false
+        }
+      ]
+    }
+  ]
+}

@@ -47,7 +47,7 @@ class EnterprisePackageTest {
         val good = exampleEnterprisePackage()
         val config = good.configuration
         val candidates = listOf(
-            good.copy(formatVersion = 2),
+            good.copy(formatVersion = 1),
             good.copy(runtimeBindings = good.runtimeBindings.dropLast(1)),
             good.copy(runtimeBindings = good.runtimeBindings + good.runtimeBindings.first()),
             good.copy(configuration = config.copy(models = config.models + config.models.first())),

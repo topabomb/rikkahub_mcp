@@ -29,6 +29,17 @@ internal data class EnterpriseAppliedVersion(
     val bindingsHash: String,
 )
 
+@Serializable
+internal data class EnterpriseFeedVersion(
+    val scope: ConfigurationScope.Enterprise,
+    val revision: String,
+    val publicRevision: Long,
+    val hash: String,
+)
+
+@Serializable
+private data class StoredEnterpriseFeed(val scope: ConfigurationScope.Enterprise, val document: EnterpriseFeedDocument)
+
 /** The manifest is the only durable publication point for identity, definitions, and bindings. */
 @Serializable
 internal data class EnterpriseManifest(
@@ -38,10 +49,11 @@ internal data class EnterpriseManifest(
     val applied: EnterpriseAppliedVersion?,
     val selectedScope: ConfigurationScope,
     val lastIdentity: EnterpriseIdentity?,
+    val feeds: List<EnterpriseFeedVersion> = emptyList(),
 ) {
     companion object {
-        fun signedOut(identity: EnterpriseIdentity? = null) = EnterpriseManifest(
-            1, EnterpriseSessionPhase.SIGNED_OUT, null, null, ConfigurationScope.Personal, identity,
+        fun signedOut(identity: EnterpriseIdentity? = null, feeds: List<EnterpriseFeedVersion> = emptyList()) = EnterpriseManifest(
+            2, EnterpriseSessionPhase.SIGNED_OUT, null, null, ConfigurationScope.Personal, identity, feeds,
         )
     }
 }
@@ -58,7 +70,7 @@ private data class StoredEnterpriseBindings(val revision: String, val bindings: 
 
 internal data class LoadedEnterpriseState(val manifest: EnterpriseManifest, val configuration: EnterpriseConfiguration?)
 
-internal enum class EnterpriseStorageCheckpoint { CONFIGURATION_STAGED, BINDINGS_STAGED, BEFORE_MANIFEST_COMMIT, MANIFEST_WRITTEN }
+internal enum class EnterpriseStorageCheckpoint { CONFIGURATION_STAGED, BINDINGS_STAGED, FEED_STAGED, BEFORE_MANIFEST_COMMIT, MANIFEST_WRITTEN }
 
 internal class EnterpriseStorageException(val reason: String) : IOException(reason)
 
@@ -70,6 +82,7 @@ internal class EnterpriseAppliedStore(
     private val json get() = EnterprisePackageCodec.json
     private val manifestFile get() = AtomicFile(File(root, "manifest.json"))
     private val revisions get() = File(root, "revisions")
+    private val feedRevisions get() = File(root, "feed-revisions")
 
     fun load(): LoadedEnterpriseState {
         val manifest = readManifest()
@@ -104,6 +117,8 @@ internal class EnterpriseAppliedStore(
     fun commit(manifest: EnterpriseManifest) {
         validateManifest(manifest)
         manifest.applied?.let { readPackage(manifest, it) }
+        val previousFeeds = readManifest().feeds.associateBy { it.scope }
+        manifest.feeds.filter { previousFeeds[it.scope] != it }.forEach(::readFeed)
         if (!root.isDirectory && !root.mkdirs()) throw EnterpriseStorageException("enterprise_store_directory_failed")
         val bytes = json.encodeToString(manifest).toByteArray()
         checkpoint(EnterpriseStorageCheckpoint.BEFORE_MANIFEST_COMMIT)
@@ -130,13 +145,40 @@ internal class EnterpriseAppliedStore(
         return readPackage(manifest, version).runtimeBindings
     }
 
+    fun prepareFeed(scope: ConfigurationScope.Enterprise, document: EnterpriseFeedDocument): EnterpriseFeedVersion {
+        EnterpriseFeed.validate(document)
+        val revision = Uuid.random().toString()
+        val directory = File(feedRevisions, revision)
+        if (!directory.mkdirs()) throw EnterpriseStorageException("enterprise_feed_staging_failed")
+        val bytes = json.encodeToString(StoredEnterpriseFeed(scope, document)).toByteArray(Charsets.UTF_8)
+        writeSynced(File(directory, "feed.json"), bytes)
+        checkpoint(EnterpriseStorageCheckpoint.FEED_STAGED)
+        return EnterpriseFeedVersion(scope, revision, document.publicRevision, hash(bytes))
+    }
+
+    fun readFeed(version: EnterpriseFeedVersion): EnterpriseFeedDocument {
+        validateFeedVersion(version)
+        val bytes = readBounded(File(File(feedRevisions, version.revision), "feed.json"))
+        if (hash(bytes) != version.hash) throw EnterpriseStorageException("enterprise_feed_hash_mismatch")
+        val stored = decode<StoredEnterpriseFeed>(bytes)
+        if (stored.scope != version.scope || stored.document.publicRevision != version.publicRevision) {
+            throw EnterpriseStorageException("enterprise_feed_identity_mismatch")
+        }
+        return stored.document.also(EnterpriseFeed::validate)
+    }
+
     /** Keep the active revision and every in-flight lease; uncommitted staging has no authority. */
-    fun prune(retainedRevisions: Set<String>) {
-        if (!revisions.exists()) return
-        val children = revisions.listFiles() ?: throw EnterpriseStorageException("enterprise_revision_listing_failed")
+    fun prune(retainedRevisions: Set<String>, retainedFeedRevisions: Set<String>) {
+        pruneDirectory(revisions, retainedRevisions)
+        pruneDirectory(feedRevisions, retainedFeedRevisions)
+    }
+
+    private fun pruneDirectory(parent: File, retainedRevisions: Set<String>) {
+        if (!parent.exists()) return
+        val children = parent.listFiles() ?: throw EnterpriseStorageException("enterprise_revision_listing_failed")
         children.forEach { child ->
             if (child.name in retainedRevisions || !isRevision(child.name)) return@forEach
-            if (child.canonicalFile.parentFile != revisions.canonicalFile || Files.isSymbolicLink(child.toPath())) {
+            if (child.canonicalFile.parentFile != parent.canonicalFile || Files.isSymbolicLink(child.toPath())) {
                 throw EnterpriseStorageException("enterprise_revision_path_invalid")
             }
             Files.walk(child.toPath()).use { paths ->
@@ -163,7 +205,9 @@ internal class EnterpriseAppliedStore(
     }
 
     private fun validateManifest(manifest: EnterpriseManifest) {
-        if (manifest.schemaVersion != 1) throw EnterpriseStorageException("unsupported_enterprise_manifest")
+        if (manifest.schemaVersion != 2) throw EnterpriseStorageException("unsupported_enterprise_manifest")
+        if (manifest.feeds.map { it.scope }.distinct().size != manifest.feeds.size) throw EnterpriseStorageException("duplicate_enterprise_feed")
+        manifest.feeds.forEach(::validateFeedVersion)
         manifest.session?.let { session ->
             EnterprisePackageCodec.validateIdentity(session.identity)
             if (!isRevision(session.id) || session.expiresAtMillis <= 0 || !session.identity.authority.isLocal) {
@@ -193,6 +237,11 @@ internal class EnterpriseAppliedStore(
     private fun revisionDirectory(revision: String): File {
         if (!isRevision(revision)) throw EnterpriseStorageException("invalid_enterprise_revision")
         return File(revisions, revision)
+    }
+
+    private fun validateFeedVersion(version: EnterpriseFeedVersion) {
+        if (!version.scope.authority.isLocal || !isRevision(version.revision) || version.publicRevision < 0 ||
+            !version.hash.matches(Regex("[0-9a-f]{64}"))) throw EnterpriseStorageException("invalid_enterprise_feed_version")
     }
 
     private fun isRevision(value: String): Boolean = runCatching { Uuid.parse(value).toString() == value }.getOrDefault(false)
