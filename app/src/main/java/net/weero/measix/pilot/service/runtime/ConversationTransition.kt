@@ -500,4 +500,5 @@ internal fun ConversationAggregateSnapshot.materializeConversation(): Conversati
     folderId = header.folderId,
     parentConversationId = header.parentConversationId,
     newConversation = header.newConversation,
+    scope = header.scope,
 )

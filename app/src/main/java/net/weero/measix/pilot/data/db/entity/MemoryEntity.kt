@@ -4,6 +4,7 @@ import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 @Entity(indices = [Index(value = ["assistant_id"])])
 data class MemoryEntity(
@@ -13,4 +14,6 @@ data class MemoryEntity(
     val assistantId: String,
     @ColumnInfo("content")
     val content: String = "",
+    @ColumnInfo("scope", defaultValue = "personal")
+    val scope: ConfigurationScope = ConfigurationScope.Personal,
 )

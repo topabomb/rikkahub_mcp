@@ -89,6 +89,14 @@ updateLocal(latest Local shadow transform)
 
 上述 application/query ports 已注册 DI；实际页面与执行链的接入和旧 Managed 原型退休尚未完成。
 
+### 2.6 数据根记录的域身份
+
+Room 的 Conversation、Memory、Artifact、生成媒体、会话文件夹和收藏记录持有 ConfigurationScope。Migration_11_12 将既有数据归为 Personal，保留原 ID 和内容。企业 scope 编码包含 sourceNamespace、deploymentId、userId；显示名称和当前选中空间不参与持久身份，非法或非规范编码拒绝读取。
+
+Conversation、ConversationHeader、aggregate snapshot 与列表记录之间的映射保留 scope，Draft 首消息物化也沿用原 header。ConversationHeaderPatch 不提供改域操作。子会话创建继承父会话域，分支克隆校验源子会话与父主体一致；Repository 在普通创建、snapshot 创建和树导入时拒绝父子跨域。Folder 模型与 Entity 双向保留 scope。
+
+上述是持久化身份与主子关系约束。列表/按 ID 查询、记忆工具、文件访问、恢复/备份和页面授权尚未全面接入域过滤，不能据此宣称企业数据已经隔离；Workspace 仍是用户可选择的共享资源。
+
 ## 3. Local Settings 顶层结构
 
 下表的 DataStore key 列记录旧迁移输入键，正常落盘已统一为 `user_settings` 的类型化结构。下表中的“读取默认”以空 DataStore 的真实迁移/读取/物化结果为准，不以 `Settings()` 中为序列化兼容而存在的随机 UUID

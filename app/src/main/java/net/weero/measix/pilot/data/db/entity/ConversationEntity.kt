@@ -5,6 +5,7 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 /**
  * 会话表。主/子会话同构：Child 与 Master 唯一差别是关系，由 [parentConversationId]
@@ -54,4 +55,6 @@ data class ConversationEntity(
     val folderId: String = "",
     @ColumnInfo("parent_conversation_id", defaultValue = "NULL")
     val parentConversationId: String? = null,
+    @ColumnInfo("scope", defaultValue = "personal")
+    val scope: ConfigurationScope = ConfigurationScope.Personal,
 )

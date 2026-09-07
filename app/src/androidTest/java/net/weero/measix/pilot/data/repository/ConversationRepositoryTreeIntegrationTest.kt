@@ -1,6 +1,8 @@
 package net.weero.measix.pilot.data.repository
 
 import me.rerere.common.configuration.ConfigurationReference
+import me.rerere.common.configuration.EnterpriseAuthority
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 import android.content.Context
 import androidx.room.Room
@@ -97,10 +99,11 @@ class ConversationRepositoryTreeIntegrationTest {
 
     @Test
     fun enterpriseConfigurationReferencesRoundTripWithoutChangingConversationOrMessageIds() = runBlocking {
+        val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "dep_example"), "alice")
         val assistantId = ConfigurationReference.parse("managed~local~example~dep_example~assistant_review")
         val modelId = ConfigurationReference.parse("managed~local~example~dep_example~mdl_chat")
         val original = conversation(Uuid.random(), assistantId, null).let { conversation ->
-            conversation.copy(messageNodes = listOf(UIMessage(
+            conversation.copy(scope = scope, messageNodes = listOf(UIMessage(
                 role = MessageRole.ASSISTANT,
                 modelId = modelId,
                 parts = listOf(UIMessagePart.Text("reply")),
@@ -112,6 +115,38 @@ class ConversationRepositoryTreeIntegrationTest {
         assertEquals(assistantId, restored.assistantId)
         assertEquals(original.messageNodes.single().messages.single().id, restored.messageNodes.single().messages.single().id)
         assertEquals(modelId, restored.messageNodes.single().messages.single().modelId)
+        assertEquals(scope, restored.scope)
+        assertEquals(scope, repository.getConversationHeader(original.id)?.scope)
+        assertEquals(scope, repository.getConversationSnapshotById(original.id)?.header?.scope)
+    }
+
+    @Test
+    fun childInsertAndTreeImportRejectAnotherPrincipalWithoutPublishingRows() = runBlocking {
+        val authority = EnterpriseAuthority("local:example", "dep_example")
+        val alice = ConfigurationScope.Enterprise(authority, "alice")
+        val bob = ConfigurationScope.Enterprise(authority, "bob")
+        val assistantId = ConfigurationReference.random()
+        val master = conversation(Uuid.random(), assistantId, null).copy(scope = alice)
+        val child = conversation(Uuid.random(), assistantId, master.id).copy(scope = bob)
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { repository.insertConversationTree(master.toSnapshot(), listOf(child.toSnapshot())) }
+        }
+        assertNull(repository.getConversationById(master.id))
+        assertNull(repository.getConversationById(child.id))
+
+        repository.insertConversation(master)
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { repository.insertConversation(child) }
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { repository.insertConversationSnapshot(child.toSnapshot()) }
+        }
+        assertNull(repository.getConversationById(child.id))
+        assertTrue(database.messageNodeDao().getNodeHeadersOfConversation(child.id.toString()).isEmpty())
+
+        repository.insertConversation(child.copy(scope = alice))
+        assertEquals(alice, repository.getConversationById(child.id)?.scope)
+        assertEquals(master.id, repository.getConversationById(child.id)?.parentConversationId)
     }
 
     @Test

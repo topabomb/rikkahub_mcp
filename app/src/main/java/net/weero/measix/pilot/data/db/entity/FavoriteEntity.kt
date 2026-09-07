@@ -4,6 +4,7 @@ import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 @Entity(
     tableName = "favorites",
@@ -30,4 +31,6 @@ data class FavoriteEntity(
     val createdAt: Long,
     @ColumnInfo("updated_at")
     val updatedAt: Long,
+    @ColumnInfo("scope", defaultValue = "personal")
+    val scope: ConfigurationScope = ConfigurationScope.Personal,
 )

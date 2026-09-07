@@ -51,6 +51,7 @@ private fun FolderEntity.toFolder(): Folder = Folder(
     name = name,
     sortIndex = sortIndex,
     createAt = Instant.ofEpochMilli(createAt),
+    scope = scope,
 )
 
 private fun Folder.toEntity(): FolderEntity = FolderEntity(
@@ -59,4 +60,5 @@ private fun Folder.toEntity(): FolderEntity = FolderEntity(
     name = name,
     sortIndex = sortIndex,
     createAt = createAt.toEpochMilli(),
+    scope = scope,
 )

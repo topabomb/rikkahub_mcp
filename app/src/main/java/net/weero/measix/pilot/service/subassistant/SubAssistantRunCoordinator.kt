@@ -803,6 +803,8 @@ class SubAssistantRunCoordinator(
         userParts: List<UIMessagePart>,
     ): Pair<Uuid, Uuid> {
         val childId = Uuid.random()
+        val masterScope = conversationRepo.getConversationHeader(masterConversationId)?.scope
+            ?: error("Master conversation does not exist")
         // 首次创建时只写入 Target 的 preset messages
         val taskMessage = UIMessage(role = MessageRole.USER, parts = userParts)
         val conversation = Conversation(
@@ -811,6 +813,7 @@ class SubAssistantRunCoordinator(
             title = target.name,
             messageNodes = target.presetMessages.map { it.toMessageNode() } + taskMessage.toMessageNode(),
             parentConversationId = masterConversationId,
+            scope = masterScope,
         )
         createOwnedChild(conversation)
 
@@ -854,6 +857,9 @@ class SubAssistantRunCoordinator(
     ): Pair<Uuid, Uuid> {
         val sourceConversation = conversationRepo.getConversationSnapshotById(sourceChildId)
             ?: throw IllegalStateException("Source child conversation not found: $sourceChildId")
+        val masterScope = conversationRepo.getConversationHeader(masterConversationId)?.scope
+            ?: error("Master conversation does not exist")
+        require(sourceConversation.header.scope == masterScope) { "Child lineage must remain in its Master's scope" }
 
         // 只克隆所选 previous run 的前缀；源 Child 的后续 task 属于另一条分支。
         val newChildId = Uuid.random()

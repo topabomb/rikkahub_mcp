@@ -2,6 +2,8 @@ package net.weero.measix.pilot.service.runtime
 
 import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
+import me.rerere.common.configuration.EnterpriseAuthority
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -14,6 +16,16 @@ import kotlin.uuid.Uuid
  * 核心：reducer 零 IO、纯函数、未被触及节点保持同一实例引用（structural sharing）。
  */
 internal class ConversationTransitionTest : ConversationTransitionTestBase() {
+    @Test
+    fun `first user append preserves enterprise principal when materializing a draft`() {
+        val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "dep_example"), "user")
+        val draft = Conversation.ofId(Uuid.random(), newConversation = true, scope = scope).toSnapshot()
+        val change = ConversationTransition.plan(draft, AppendUserMessage(user(Uuid.random())), draft.header.updateAt) as ConversationChange.Durable
+        val persisted = (change.write as ConversationWrite.MaterializeDraft).conversation
+        assertEquals(scope, persisted.scope)
+        assertEquals(scope, persisted.toSnapshot().header.scope)
+    }
+
     @Test
     fun `pin toggle does not invalidate search metadata`() {
         val old = Conversation.ofId(Uuid.random()).toSnapshot().header

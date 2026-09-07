@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.data.repository
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import me.rerere.common.configuration.ConfigurationReference
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
@@ -211,6 +213,7 @@ class ConversationRepository(
             newConversation = false,
             createAt = entity.createAt,
             updateAt = entity.updateAt,
+            scope = entity.scope,
         )
     }
 
@@ -224,6 +227,7 @@ class ConversationRepository(
         require(children.all { it.header.parentConversationId == master.conversationId }) {
             "Every forked Child must reference the new Master"
         }
+        require(children.all { it.header.scope == master.header.scope }) { "Child and Master must have the same scope" }
         val masterConversation = snapshotToConversation(master)
         val childConversations = children.associate { it.conversationId to snapshotToConversation(it) }
         artifactStore.withLifecycleLock {
@@ -654,6 +658,7 @@ class ConversationRepository(
         workspaceCwd = snapshot.header.workspaceCwd,
         folderId = snapshot.header.folderId,
         parentConversationId = snapshot.header.parentConversationId,
+        scope = snapshot.header.scope,
     )
 
     internal fun conversationToConversationEntity(conversation: Conversation): ConversationEntity {
@@ -671,6 +676,7 @@ class ConversationRepository(
             workspaceCwd = conversation.workspaceCwd ?: "",
             folderId = conversation.folderId?.toString() ?: "",
             parentConversationId = conversation.parentConversationId?.toString(),
+            scope = conversation.scope,
         )
     }
 
@@ -692,6 +698,7 @@ class ConversationRepository(
             workspaceCwd = conversationEntity.workspaceCwd.ifEmpty { null },
             folderId = conversationEntity.folderId.ifEmpty { null }?.let { Uuid.parse(it) },
             parentConversationId = conversationEntity.parentConversationId?.let { Uuid.parse(it) },
+            scope = conversationEntity.scope,
         )
     }
 
@@ -710,6 +717,7 @@ class ConversationRepository(
             createAt = Instant.ofEpochMilli(entity.createAt),
             updateAt = Instant.ofEpochMilli(entity.updateAt),
             folderId = entity.folderId.ifEmpty { null }?.let(Uuid::parse),
+            scope = entity.scope,
         )
 
     private fun lightEntityToListRecord(entity: LightConversationEntity): ConversationListRecord =
@@ -721,6 +729,7 @@ class ConversationRepository(
             createAt = Instant.ofEpochMilli(entity.createAt),
             updateAt = Instant.ofEpochMilli(entity.updateAt),
             folderId = entity.folderId.ifEmpty { null }?.let { Uuid.parse(it) },
+            scope = entity.scope,
         )
 
     /**
@@ -793,6 +802,7 @@ class ConversationRepository(
         require(parent.parentConversationId == null) {
             "Child Conversation must reference a top-level Master Conversation"
         }
+        require(parent.scope == conversation.scope) { "Child and Master must have the same scope" }
     }
 }
 
@@ -889,4 +899,5 @@ data class ConversationListRecord(
     val isPinned: Boolean,
     val createAt: Instant,
     val updateAt: Instant,
+    val scope: ConfigurationScope = ConfigurationScope.Personal,
 )

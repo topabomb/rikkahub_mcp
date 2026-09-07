@@ -6,16 +6,17 @@ import androidx.room.Insert
 import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
 import net.weero.measix.pilot.data.db.entity.ConversationEntity
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 @Dao
 interface ConversationDAO {
     @Query("SELECT * FROM conversationentity WHERE parent_conversation_id IS NULL AND assistant_id = :assistantId ORDER BY is_pinned DESC, update_at DESC")
     fun getConversationsOfAssistant(assistantId: String): Flow<List<ConversationEntity>>
 
-    @Query("SELECT id, assistant_id as assistantId, title, is_pinned as isPinned, create_at as createAt, update_at as updateAt, folder_id as folderId FROM conversationentity WHERE parent_conversation_id IS NULL AND assistant_id = :assistantId AND folder_id = '' ORDER BY is_pinned DESC, update_at DESC")
+    @Query("SELECT id, assistant_id as assistantId, title, is_pinned as isPinned, create_at as createAt, update_at as updateAt, folder_id as folderId, scope FROM conversationentity WHERE parent_conversation_id IS NULL AND assistant_id = :assistantId AND folder_id = '' ORDER BY is_pinned DESC, update_at DESC")
     fun getUnfiledConversationsOfAssistantPaging(assistantId: String): PagingSource<Int, LightConversationEntity>
 
-    @Query("SELECT id, assistant_id as assistantId, title, is_pinned as isPinned, create_at as createAt, update_at as updateAt, folder_id as folderId FROM conversationentity WHERE parent_conversation_id IS NULL AND folder_id = :folderId ORDER BY is_pinned DESC, update_at DESC")
+    @Query("SELECT id, assistant_id as assistantId, title, is_pinned as isPinned, create_at as createAt, update_at as updateAt, folder_id as folderId, scope FROM conversationentity WHERE parent_conversation_id IS NULL AND folder_id = :folderId ORDER BY is_pinned DESC, update_at DESC")
     fun getConversationsOfFolderPaging(folderId: String): PagingSource<Int, LightConversationEntity>
 
     @Query("SELECT * FROM conversationentity WHERE parent_conversation_id IS NULL AND assistant_id = :assistantId ORDER BY is_pinned DESC, update_at DESC LIMIT :limit")
@@ -95,4 +96,5 @@ data class LightConversationEntity(
     val createAt: Long,
     val updateAt: Long,
     val folderId: String,
+    val scope: ConfigurationScope = ConfigurationScope.Personal,
 )

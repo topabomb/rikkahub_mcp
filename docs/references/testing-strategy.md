@@ -61,6 +61,7 @@
 | Child run 编排 | `SubAssistantRunCoordinatorTest` |
 | V3 payload 结构与旧 payload 转换 | `V3TranscriptValidatorTest`、`LegacyTurnTranscriptMigratorTest` |
 | Room V3 migration / backup | `Migration_10_11Test`、backup restore instrumentation |
+| 域身份持久化 / 主子一致性 | `Migration_11_12Test`、`ConfigurationScopePersistenceTest`、`ConversationRepositoryTreeIntegrationTest`、`ConversationTransitionTest`；不替代查询授权、文件隔离与企业 UI 验收 |
 
 ## 4. Provider contract suite（两层）
 

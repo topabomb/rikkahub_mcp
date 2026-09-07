@@ -54,6 +54,8 @@ import net.weero.measix.pilot.data.files.LocalArtifactRef
 import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.Conversation
+import me.rerere.common.configuration.EnterpriseAuthority
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.data.repository.MemoryRepository
@@ -87,7 +89,8 @@ class SubAssistantRunCoordinatorTest {
     @Test
     fun `text target materializes durable image parts and link failure compensates the exact child`() = runTest {
         val image = UIMessagePart.Image(url = "file:///tmp/a.png")
-        val harness = harness(AttachmentResolveResult.Success(listOf(image)))
+        val realm = ConfigurationScope.Enterprise(EnterpriseAuthority("local:example", "dep_example"), "user")
+        val harness = harness(AttachmentResolveResult.Success(listOf(image)), configurationScope = realm)
         val created = slot<Conversation>()
         coEvery { harness.commandCoordinator.create(capture(created)) } returns mockk<ConversationRuntime>()
         coEvery { harness.commandCoordinator.deleteOrThrow(any()) } just Runs
@@ -107,6 +110,7 @@ class SubAssistantRunCoordinatorTest {
         )
 
         val child = created.captured
+        assertEquals(realm, child.scope)
         val user = child.currentMessages.single { it.role == MessageRole.USER }
         val initialMetadata = patches.map { patch ->
             JsonInstant.decodeFromJsonElement(
@@ -314,6 +318,7 @@ class SubAssistantRunCoordinatorTest {
         cloneArtifact: OwnedArtifact? = null,
         preparationGate: Pair<CompletableDeferred<Unit>, CompletableDeferred<Unit>>? = null,
         turnRunner: TurnRunner = mockk(relaxed = true),
+        configurationScope: ConfigurationScope = ConfigurationScope.Personal,
     ): Harness {
         val modelId = ConfigurationReference.random()
         val model = Model(
@@ -359,12 +364,15 @@ class SubAssistantRunCoordinatorTest {
         val commandCoordinator = mockk<ConversationCommandCoordinator>()
         val artifactStore = mockk<ArtifactStore>(relaxed = true)
         val conversationRepo = mockk<ConversationRepository>(relaxed = true)
+        coEvery { conversationRepo.getConversationHeader(masterId) } returns
+            Conversation.ofId(masterId, callerId, scope = configurationScope).toSnapshot().header
         if (cloneArtifact != null) {
             val sourceFile = java.io.File("D:/tmp/source.png")
             val originalTask = UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Image("file:///D:/tmp/source.png")))
             val source = Conversation(
                 assistantId = targetId,
                 parentConversationId = masterId,
+                scope = configurationScope,
                 messageNodes = listOf(originalTask.toMessageNode(), UIMessage.user("later task").toMessageNode()),
             )
             val previous = UIMessagePart.Tool(
@@ -376,6 +384,7 @@ class SubAssistantRunCoordinatorTest {
             ))
             val master = Conversation(
                 id = masterId, assistantId = callerId,
+                scope = configurationScope,
                 messageNodes = listOf(
                     UIMessage(role = MessageRole.ASSISTANT, parts = listOf(previous)).toMessageNode(),
                     UIMessage(id = currentMessageId, role = MessageRole.ASSISTANT, parts = listOf(

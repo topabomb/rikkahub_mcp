@@ -32,6 +32,8 @@
 
 `Migration_10_11` 将旧 Assistant transcript 转成显式 Step 与稳定 Tool locator，新增 `transcript_schema = 3`，重建 `tool_execution`，并转换等待用户与未开始的 turn 状态。消息按 SQLite 字符切片读取，避免大 tool output 超过 CursorWindow；转换后验证 Step/Tool 身份、顺序和终态，仅 `Continue` 可接后续 Step，Tool output 不得嵌套 Step。已转换内容只验证、不重复改写。
 
+`Migration_11_12` 给 Conversation、Memory、Artifact、生成媒体、会话文件夹和收藏六类根记录追加 `scope TEXT NOT NULL DEFAULT 'personal'`。旧行的 ID、payload、引用、索引和外键不变；消息、turn、tool 和 context 通过所属会话确定域，不重复保存。ConfigurationScopeConverter 使用规范身份编码保存企业来源、部署与用户，非法编码不能回退个人域。当前查询尚未全面按域过滤，已有索引仍对应上表的查询，不把 scope 列的存在视为已完成访问隔离。
+
 迁移由 Room 在事务内执行，新安装直接使用同构 schema。所有角色的消息均须可解码；旧字段的显式 null 按既有缺省语义处理，错误类型、未知 turn 状态或未知消息 part 必须中止迁移，不得置空后继续。备份校验接受受支持的历史数据库，在 staging 内由同一 Room migration 链升级到当前版本并验证后才发布 pending；当前版本在 staging 移除派生的 `room_master_table`，使 Room 打开时执行生成的 schema 校验并重建标记，不能仅凭既有 identity hash 信任表、列和索引。所有版本另行校验外键和 transcript；当前版本不转换 transcript，不为旧文件名引入额外读取路径。
 
 架构相关入口：`AppDatabase`、`AppDatabaseFactory`、各 `*Entity` / `*DAO`、`Migration_8_9`、`Migration_9_10`、`Migration_10_11`、`BackupArchiveService`。迁移验证覆盖历史链、新旧 schema、数据与约束保全，并用 Android SQLite 的 `EXPLAIN QUERY PLAN` 检查主要查询的索引和排序行为；查询计划验证不等于设备耗时基准。

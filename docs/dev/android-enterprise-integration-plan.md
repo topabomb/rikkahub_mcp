@@ -275,6 +275,10 @@ LocalEnterpriseSource（身份/配置/动态/场景）
 
 ## 10. 完整变更清单与批次
 
+C2 的域身份持久化已进入代码：Room schema 12 给会话、记忆、Artifact、生成媒体、文件夹、收藏追加 ConfigurationScope，旧记录按个人域保留；所有已修改的会话/文件夹映射保留主体，主子会话创建与树导入拒绝跨域关系。独立审查发现的 Draft 首消息落盘丢失 scope 已修复并增加回归测试。Pixel_10_Pro_Fold / Android 17 的 12 项定向 instrumentation 通过，覆盖旧六表内容/引用保全、失败迁移回滚与重试、数据库重开后的来源/部署/用户保全、不同主体主子关系拒绝及原事务回归。查询授权、记忆工具、文件访问、备份和正式入口尚未全面按域接通，此项不代表 C2 或 C4 完成。
+
+此批完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 通过；App 1,801 项 JVM 测试无失败，Workspace 仍有 11 项 Windows 宿主环境跳过。首次使用配置缓存的门禁在 AGP 分 ABI Debug 打包属性读取处失败，关闭配置缓存重跑后完整通过；未通过修改产品逻辑规避。上述设备证据仅覆盖该持久化批次，不代表正式企业页面、扫码或真实平台互操作验收。
+
 D0 已由 `c2745a1d` 独立提交完成。C1/C2 正在实施：用户配置/偏好文档及旧键迁移、跨模块配置引用已进入代码；正式企业 source、域数据隔离、UI 与完整模拟能力尚未完成。下表保留全部交付范围，单项基础测试通过不代表 C1/C2 或整期完成。
 
 C3/M1 的本地资料与持久状态基础已进入代码：完整公开示例、短接入资料校验、整包/绑定原子提交、会话切换/退出/损坏恢复、按 revision 更新及在途绑定 lease。19 项定向 JVM 测试和 3 项模拟器持久化测试通过，独立审查所发现的提交失败误发布、损坏配置无法退出、离线编辑误恢复在线已修复并复核。该基础批次完整 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1` 通过，lint 无错误；两种 APK 的示例内容与公开模板一致且未打包私有文件。

@@ -638,6 +638,7 @@ internal fun Conversation.toSnapshot(
         newConversation = newConversation,
         createAt = createAt.toEpochMilli(),
         updateAt = updateAt.toEpochMilli(),
+        scope = scope,
     ),
     nodes = messageNodes,
     // durable context 只进入 internal aggregate，不进入 public Conversation。

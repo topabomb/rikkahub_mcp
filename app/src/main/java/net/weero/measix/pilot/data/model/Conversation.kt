@@ -11,6 +11,7 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.InstantSerializer
 import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
 import net.weero.measix.pilot.data.db.entity.ArtifactReferenceType
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import java.time.Instant
 import kotlin.uuid.Uuid
 
@@ -34,6 +35,7 @@ data class Conversation(
     val folderId: Uuid? = null,
     // null = 普通用户会话；非 null = 子助手 Child Conversation，值为 Master Conversation ID
     val parentConversationId: Uuid? = null,
+    val scope: ConfigurationScope = ConfigurationScope.Personal,
     @Transient
     val newConversation: Boolean = false
 ) {
@@ -95,12 +97,14 @@ data class Conversation(
             id: Uuid,
             assistantId: ConfigurationReference = DEFAULT_ASSISTANT_ID,
             messages: List<MessageNode> = emptyList(),
-            newConversation: Boolean = false
+            newConversation: Boolean = false,
+            scope: ConfigurationScope = ConfigurationScope.Personal,
         ) = Conversation(
             id = id,
             assistantId = assistantId,
             messageNodes = messages,
             newConversation = newConversation,
+            scope = scope,
         )
     }
 }

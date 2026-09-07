@@ -4,6 +4,7 @@ import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 /**
  * 会话文件夹（助手内分组）。
@@ -27,4 +28,6 @@ data class FolderEntity(
     val sortIndex: Int = 0,
     @ColumnInfo("create_at")
     val createAt: Long,
+    @ColumnInfo("scope", defaultValue = "personal")
+    val scope: ConfigurationScope = ConfigurationScope.Personal,
 )

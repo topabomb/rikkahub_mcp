@@ -4,6 +4,7 @@ import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 /** 可恢复生命周期：CREATING → ACTIVE → DELETING → 行删除。 */
 enum class ArtifactState {
@@ -68,4 +69,6 @@ data class ArtifactEntity(
     /** 诞生方式（[ArtifactOrigin.name]），写入时一次确定后不变。 */
     @ColumnInfo("origin", defaultValue = "USER")
     val origin: String = ArtifactOrigin.USER.name,
+    @ColumnInfo("scope", defaultValue = "personal")
+    val scope: ConfigurationScope = ConfigurationScope.Personal,
 )

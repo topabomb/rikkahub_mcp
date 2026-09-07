@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service.runtime
 
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+
 import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.ai.core.ToolCallLocator
 import me.rerere.ai.ui.UIMessage
@@ -181,6 +183,7 @@ data class ConversationHeader(
     val newConversation: Boolean,
     val createAt: Long,
     val updateAt: Long,
+    val scope: ConfigurationScope = ConfigurationScope.Personal,
 )
 
 /**
