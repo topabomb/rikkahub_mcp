@@ -10,6 +10,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
@@ -300,6 +304,7 @@ internal class McpServerRuntime(
         detachedClient: Client?,
     ) {
         var newClient: Client? = null
+        var catalogAccepted = false
         try {
             lifecycleOperationSemaphore.withPermit {
                 withTimeout(policy.connectionOperationTimeoutMs) {
@@ -343,10 +348,10 @@ internal class McpServerRuntime(
                     if (!discovering) return@withTimeout
                     val candidate = McpCatalogDiscovery.fetchCandidate(config, createdClient)
                     if (!matchesClientLease(assignedGeneration, createdClient, config)) return@withTimeout
-                    val catalogResult = catalogStore.commitCandidate(candidate)
-                    val activated = mutex.withLock {
-                        if (!matchesClientLeaseLocked(assignedGeneration, createdClient, config)) return@withLock false
+                    commitAndActivateCatalog(candidate) { catalogResult ->
+                        if (!matchesClientLeaseLocked(assignedGeneration, createdClient, config)) return@commitAndActivateCatalog false
                         publishCatalogResultLocked(catalogResult)
+                        catalogAccepted = true
                         reconnectAttempt = 0
                         logger(
                             config.commonOptions.name,
@@ -358,11 +363,10 @@ internal class McpServerRuntime(
                         }
                         true
                     }
-                    if (!activated) rollbackStaleCommit(catalogResult)
                 }
             }
         } catch (timeout: TimeoutCancellationException) {
-            handleConnectionFailure(requestedConfig, assignedGeneration, retryAfterFailure, newClient, timeout)
+            if (!catalogAccepted) handleConnectionFailure(requestedConfig, assignedGeneration, retryAfterFailure, newClient, timeout)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
@@ -420,6 +424,22 @@ internal class McpServerRuntime(
     private suspend fun rollbackStaleCommit(result: McpCatalogCommitResult) {
         if (result !is McpCatalogCommitResult.Committed) return
         catalogStore.rollbackCommitted(result.snapshot, result.previous, result.headToken)
+    }
+
+    /** A durable receipt must be accepted or compensated before cancellation can discard it. */
+    private suspend fun commitAndActivateCatalog(
+        candidate: McpCatalogCandidate,
+        activateLocked: (McpCatalogCommitResult) -> Boolean,
+    ) {
+        catalogStore.awaitReady()
+        val caller = currentCoroutineContext()
+        caller.ensureActive()
+        withContext(NonCancellable) {
+            val result = catalogStore.commitCandidate(candidate)
+            val accepted = mutex.withLock { caller.isActive && activateLocked(result) }
+            if (!accepted) rollbackStaleCommit(result)
+        }
+        caller.ensureActive()
     }
 
     private suspend fun matchesDesiredDefinition(
@@ -812,6 +832,7 @@ internal class McpServerRuntime(
                     catalogRefreshPending = false
                     McpCatalogRefreshLease(current, live, previousStatus, previousCatalog)
                 }
+                var catalogAccepted = false
                 try {
                     lifecycleOperationSemaphore.withPermit {
                         withTimeout(policy.catalogRefreshTimeoutMs) {
@@ -822,20 +843,19 @@ internal class McpServerRuntime(
                             if (!matchesClientLease(assignedGeneration, lease.client, lease.config)) {
                                 return@withTimeout
                             }
-                            val result = catalogStore.commitCandidate(candidate)
-                            val activated = mutex.withLock {
+                            commitAndActivateCatalog(candidate) { result ->
                                 if (!matchesClientLeaseLocked(assignedGeneration, lease.client, lease.config)) {
-                                    return@withLock false
+                                    return@commitAndActivateCatalog false
                                 }
                                 publishCatalogResultLocked(result)
+                                catalogAccepted = true
                                 true
                             }
-                            if (!activated) rollbackStaleCommit(result)
                         }
                     }
                 } catch (timeout: TimeoutCancellationException) {
                     mutex.withLock {
-                        if (generation.get() != assignedGeneration || client !== lease.client) return@withLock
+                        if (catalogAccepted || generation.get() != assignedGeneration || client !== lease.client) return@withLock
                         val lastGood = lease.previousCatalog
                         setStatusLocked(
                             lastGood?.let { catalog ->
@@ -850,7 +870,7 @@ internal class McpServerRuntime(
                     }
                 } catch (cancelled: CancellationException) {
                     mutex.withLock {
-                        if (generation.get() == assignedGeneration && client === lease.client) {
+                        if (!catalogAccepted && generation.get() == assignedGeneration && client === lease.client) {
                             setStatusLocked(lease.previousStatus, lease.previousCatalog)
                         }
                     }

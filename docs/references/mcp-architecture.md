@@ -57,6 +57,11 @@ catalog staging；`McpCatalogStore` 只接收完整、非空候选，提交后�
 `mcp_catalogs.json` 作为 manifest 必需根；恢复 v3 时执行同样的一次性提取。备份恢复先让已经取得租约的旧迁移收口，再用
 备份目录整体替换 Catalog，避免旧 staging 在恢复后写回孤儿目录。
 
+Catalog 初始化只执行一次迁移、读取和发布；全部命令等待这次初始化收口。后续目录仅由 `McpCatalogStore` 的
+`commitMutex` 内提交协议发布，不再由常驻 DataStore collector 回写内存。初始化取消或迁移失败明确拒绝命令；
+目录读取失败不伪装为空备份。合法完整恢复可在同一 owner 下替换损坏的目录内容，但不能绕过未成功收口的旧迁移。
+缺少目录键或合法空数组表示空目录，格式错误、非法摘要及重复 server 均为读取失败。
+
 `McpRuntimeCoordinator.runtimeCapabilities` 是 runtime 的唯一公开状态源；底层由 `McpRuntimeStateStore` 对每个键以一个 immutable
 `McpRuntimeCapability(status, catalog)` 原子发布。Settings、Catalog DataStore flow 和 UI 不再形成第二条 runtime
 读写路径。status 可变化而 catalog 保持不变，这正是离线仍披露 LKG 工具的协议。
@@ -89,6 +94,10 @@ session 的 catalog refresh 共用一个全局 semaphore，最多 4 路并行；
 
 Catalog Store 对 commit/no-op/rejection 都推进进程内 head token。若 Server Runtime 在持久化后发现 connection lease 已过期，
 只允许在 snapshot identity 与 head token 仍匹配时精确回滚；旧 operation 不能覆盖更新的目录事实。
+
+候选校验或写盘失败不推进 head token。提交取得所有权后，Store 等待 DataStore ack、目录投影和 token 更新全部结束，
+再传播调用者取消；Runtime 对提交凭据的接收、原连接 lease 复验和必要补偿也在同一收口边界内完成。已接受的新目录
+不会因紧随其后的取消或超时被 Runtime 恢复成旧目录；尚未接受的提交仍按原 snapshot/token 精确补偿。
 
 ## 5. 明确刷新与意外失败
 

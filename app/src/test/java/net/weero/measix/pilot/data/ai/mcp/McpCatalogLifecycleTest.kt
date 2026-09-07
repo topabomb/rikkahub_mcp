@@ -48,6 +48,91 @@ import org.junit.Test
 internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
 
     @Test
+    fun `cancelled connection compensates a catalog already committed before its receipt returns`() = runTest(dispatcher) {
+        assertCancelledCommit(initiallyReady = false)
+    }
+
+    @Test
+    fun `cancelled refresh compensates a catalog already committed before its receipt returns`() = runTest(dispatcher) {
+        assertCancelledCommit(initiallyReady = true)
+    }
+
+    @Test
+    fun `cancellation after refresh activation does not restore the old runtime catalog`() = runTest(dispatcher) {
+        assertAcceptedCommitCancellation(kotlinx.coroutines.CancellationException("cancel after activation"))
+    }
+
+    @Test
+    fun `timeout after refresh activation does not restore the old runtime catalog`() = runTest(dispatcher) {
+        val timeout = try {
+            kotlinx.coroutines.withTimeout(1) { kotlinx.coroutines.awaitCancellation() }
+        } catch (error: kotlinx.coroutines.TimeoutCancellationException) { error }
+        assertAcceptedCommitCancellation(timeout)
+    }
+
+    private suspend fun kotlinx.coroutines.test.TestScope.assertAcceptedCommitCancellation(cause: kotlinx.coroutines.CancellationException) {
+        emit(listOf(serverConfig()))
+        advanceUntilIdle()
+        val previous = catalogs.value.getValue(SERVER_ID)
+        val fresh = McpCatalogCandidate(SERVER_ID, previous.definitionDigest, listOf(McpCatalogTool("fresh", inputSchema = JsonObject(emptyMap()))))
+            .initialSnapshot().copy(revision = previous.revision + 1)
+        var operation: kotlinx.coroutines.Job? = null
+        coEvery { catalogStore.awaitReady() } coAnswers {
+            operation = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
+            Unit
+        }
+        // Hold the separate Store flow delivery so this observation proves Runtime activation itself.
+        coEvery { catalogStore.commitCandidate(any()) } returns McpCatalogCommitResult.Committed(fresh, previous, 42L)
+        var cancelled = false
+        val observer = backgroundScope.async(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) {
+            manager.runtimeCapabilities.collect { views ->
+                if (!cancelled && views[SERVER_ID]?.catalog == fresh) {
+                    cancelled = true
+                    requireNotNull(operation).cancel(cause)
+                }
+            }
+        }
+        val refresh = async { manager.refreshAllRegisteredServers() }
+        advanceUntilIdle()
+        refresh.await()
+        observer.cancel()
+        assertTrue(cancelled)
+        coVerify(exactly = 0) { catalogStore.rollbackCommitted(any(), any(), any()) }
+        assertEquals(fresh, manager.runtimeCapabilities.value[SERVER_ID]?.catalog)
+    }
+
+    private suspend fun kotlinx.coroutines.test.TestScope.assertCancelledCommit(initiallyReady: Boolean) {
+        if (initiallyReady) {
+            emit(listOf(serverConfig()))
+            advanceUntilIdle()
+        }
+        val previous = catalogs.value[SERVER_ID]
+        val written = CompletableDeferred<McpCatalogCommitResult.Committed>()
+        val releaseReceipt = CompletableDeferred<Unit>()
+        coEvery { catalogStore.commitCandidate(any()) } coAnswers {
+            val candidate = firstArg<McpCatalogCandidate>()
+            val snapshot = candidate.initialSnapshot().copy(revision = (previous?.revision ?: 0L) + 1L)
+            val receipt = McpCatalogCommitResult.Committed(snapshot, previous, 42L)
+            catalogs.value = mapOf(SERVER_ID to snapshot)
+            written.complete(receipt)
+            releaseReceipt.await()
+            receipt
+        }
+        if (initiallyReady) backgroundScope.async { manager.refreshAllRegisteredServers() }
+        else emit(listOf(serverConfig()))
+        if (initiallyReady) advanceTimeBy(McpServerRuntimePolicy.CATALOG_REFRESH_DEBOUNCE_MS + 1L)
+        runCurrent()
+        assertTrue(written.isCompleted)
+        emit(listOf(serverConfig(enable = false)))
+        runCurrent()
+        releaseReceipt.complete(Unit)
+        advanceUntilIdle()
+        val receipt = written.await()
+        coVerify(exactly = 1) { catalogStore.rollbackCommitted(receipt.snapshot, previous, receipt.headToken) }
+        assertEquals(previous, catalogs.value[SERVER_ID])
+    }
+
+    @Test
     fun `deleting a cold disabled definition removes its durable catalog`() = runTest(dispatcher) {
         emit(listOf(serverConfig(enable = false)))
         advanceUntilIdle()
@@ -333,6 +418,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
             tools = (1..20).map { McpCatalogTool("tool_$it", null, JsonObject(emptyMap())) },
         )
         val isolatedCatalogStore = mockk<McpCatalogStore>()
+        coEvery { isolatedCatalogStore.awaitReady() } returns Unit
         every { isolatedCatalogStore.catalogs } returns MutableStateFlow(mapOf(SERVER_ID to durable))
         coEvery { isolatedCatalogStore.remove(any()) } returns Unit
         val isolatedNetwork = mockk<NetworkMonitor>()

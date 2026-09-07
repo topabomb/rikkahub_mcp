@@ -1,22 +1,22 @@
 package net.weero.measix.pilot.data.ai.mcp
 
 import android.content.Context
-import android.util.Log
-import androidx.datastore.core.IOException
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import java.security.MessageDigest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -27,7 +27,6 @@ import net.weero.measix.pilot.utils.JsonInstant
 import me.rerere.common.configuration.ConfigurationReference
 
 private val Context.mcpCatalogDataStore by preferencesDataStore(name = "mcp_catalog")
-private const val TAG = "McpCatalogStore"
 
 @Serializable
 data class McpCatalogTool(
@@ -104,42 +103,38 @@ sealed interface McpCatalogCommitResult {
  * Settings owns server definitions and user policy. This store owns only a complete non-empty
  * last-known-good remote catalog; a failed, partial or empty discovery never replaces it.
  */
-class McpCatalogStore(
-    context: Context,
+class McpCatalogStore internal constructor(
+    private val dataStore: DataStore<Preferences>,
     scope: AppScope,
     private val settingsStore: SettingsStore,
 ) {
-    private val dataStore = context.mcpCatalogDataStore
+    constructor(context: Context, scope: AppScope, settingsStore: SettingsStore) :
+        this(context.mcpCatalogDataStore, scope, settingsStore)
+
     private val commitMutex = Mutex()
     private val headTokens = mutableMapOf<ConfigurationReference, Long>()
-    private val legacyMigrationComplete = CompletableDeferred<Unit>()
+    private var readFailure: Exception? = null
 
     private val _catalogs = MutableStateFlow<Map<ConfigurationReference, McpCatalogSnapshot>>(emptyMap())
     val catalogs: StateFlow<Map<ConfigurationReference, McpCatalogSnapshot>> = _catalogs.asStateFlow()
 
-    init {
-        scope.launch {
-            try {
-                migrateLegacySettingsCatalogs()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                Log.e(TAG, "Unable to migrate legacy MCP catalogs", error)
-            } finally {
-                legacyMigrationComplete.complete(Unit)
-            }
-            dataStore.data
-                .catch { error ->
-                    if (error is IOException) emit(emptyPreferences()) else throw error
-                }
-                .map(::decodeCatalogs)
-                .collect { _catalogs.value = it }
+    private val initialization = scope.async {
+        migrateLegacySettingsCatalogs()
+        commitMutex.withLock {
+            try { _catalogs.value = readCurrentCatalogs() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { readFailure = error }
         }
+    }
+
+    internal suspend fun awaitReady() {
+        initialization.await()
+        commitMutex.withLock { readFailure?.let { throw it } }
     }
 
     private suspend fun migrateLegacySettingsCatalogs() {
         val pending = settingsStore.pendingMcpCatalogMigration() ?: return
-        commitMutex.withLock {
+        commitLocked {
             val current = readCurrentCatalogs()
             val updated = pending.payload.candidates.fold(current) { catalogs, candidate ->
                 if (candidate.serverId in catalogs) catalogs
@@ -152,14 +147,14 @@ class McpCatalogStore(
     }
 
     suspend fun commitCandidate(candidate: McpCatalogCandidate): McpCatalogCommitResult =
-        commitMutex.withLock {
+        commit {
             val normalizedTools = candidate.tools.sortedBy { it.name }
             val current = readCurrentCatalogs()
             _catalogs.value = current
             val headToken = (headTokens[candidate.serverId] ?: 0L) + 1L
-            headTokens[candidate.serverId] = headToken
             if (normalizedTools.isEmpty()) {
-                return@withLock McpCatalogCommitResult.RejectedEmpty(
+                headTokens[candidate.serverId] = headToken
+                return@commit McpCatalogCommitResult.RejectedEmpty(
                     current[candidate.serverId]?.takeIf { it.definitionDigest == candidate.definitionDigest }
                 )
             }
@@ -175,7 +170,8 @@ class McpCatalogStore(
                 previous.definitionDigest == candidate.definitionDigest &&
                 previous.catalogDigest == catalogDigest
             ) {
-                return@withLock McpCatalogCommitResult.Unchanged(previous)
+                headTokens[candidate.serverId] = headToken
+                return@commit McpCatalogCommitResult.Unchanged(previous)
             }
 
             val next = McpCatalogSnapshot(
@@ -188,6 +184,7 @@ class McpCatalogStore(
             val updated = current + (candidate.serverId to next)
             writeCatalogs(updated)
             _catalogs.value = updated
+            headTokens[candidate.serverId] = headToken
             McpCatalogCommitResult.Committed(next, previous, headToken)
         }
 
@@ -199,13 +196,13 @@ class McpCatalogStore(
         committed: McpCatalogSnapshot,
         previous: McpCatalogSnapshot?,
         expectedHeadToken: Long,
-    ) = commitMutex.withLock {
+    ) = commit {
         val current = readCurrentCatalogs()
         if (
             current[committed.serverId] != committed ||
             headTokens[committed.serverId] != expectedHeadToken
         ) {
-            return@withLock
+            return@commit
         }
         val updated = if (previous == null) {
             current - committed.serverId
@@ -218,9 +215,9 @@ class McpCatalogStore(
     }
 
     /** Removes the catalog only when the server definition has been explicitly removed. */
-    suspend fun remove(serverId: ConfigurationReference) = commitMutex.withLock {
+    suspend fun remove(serverId: ConfigurationReference) = commit {
         val current = readCurrentCatalogs()
-        if (serverId !in current) return@withLock
+        if (serverId !in current) return@commit
         val updated = current - serverId
         writeCatalogs(updated)
         _catalogs.value = updated
@@ -229,8 +226,9 @@ class McpCatalogStore(
 
     suspend fun snapshotForBackup(definitions: List<McpServerConfig>): List<McpCatalogSnapshot> {
         // A v4 backup cannot race the one-shot extraction and permanently export an empty catalog.
-        legacyMigrationComplete.await()
+        initialization.await()
         return commitMutex.withLock {
+            readFailure?.let { throw it }
             val expected = definitions.associate { it.id to it.mcpDefinitionDigest() }
             readCurrentCatalogs().values
                 .filter { snapshot -> expected[snapshot.serverId] == snapshot.definitionDigest }
@@ -244,8 +242,7 @@ class McpCatalogStore(
     ) {
         // A backup replacement must be ordered after any already-leased one-shot Settings
         // migration; otherwise that older payload could append an orphan after restore.
-        legacyMigrationComplete.await()
-        commitMutex.withLock {
+        commit(replaceUnreadable = true) {
             val expected = definitions.associate { it.id to it.mcpDefinitionDigest() }
             val restored = snapshots.map { snapshot ->
                 requireNotNull(snapshot.validated()) { "Backup contains an invalid MCP catalog" }
@@ -271,6 +268,22 @@ class McpCatalogStore(
         val CATALOGS = stringPreferencesKey("catalogs")
     }
 
+    private suspend fun <T> commit(replaceUnreadable: Boolean = false, operation: suspend () -> T): T {
+        initialization.await()
+        return commitLocked {
+            if (!replaceUnreadable) readFailure?.let { throw it }
+            operation().also { if (replaceUnreadable) readFailure = null }
+        }
+    }
+
+    /** The accepted commit owns disk acknowledgement, projection and head-token publication together. */
+    private suspend fun <T> commitLocked(operation: suspend () -> T): T = commitMutex.withLock {
+        currentCoroutineContext().ensureActive()
+        val result = withContext(NonCancellable) { operation() }
+        currentCoroutineContext().ensureActive()
+        result
+    }
+
     private suspend fun readCurrentCatalogs(): Map<ConfigurationReference, McpCatalogSnapshot> = dataStore.data
         .first()
         .let(::decodeCatalogs)
@@ -283,18 +296,14 @@ class McpCatalogStore(
         }
     }
 
-    private fun decodeCatalogs(
-        preferences: androidx.datastore.preferences.core.Preferences,
-    ): Map<ConfigurationReference, McpCatalogSnapshot> = preferences[CATALOGS]
-        ?.let { encoded ->
-            runCatching { JsonInstant.decodeFromString<List<McpCatalogSnapshot>>(encoded) }
-                .getOrElse { emptyList() }
+    private fun decodeCatalogs(preferences: Preferences): Map<ConfigurationReference, McpCatalogSnapshot> {
+        val encoded = preferences[CATALOGS] ?: return emptyMap()
+        val snapshots = JsonInstant.decodeFromString<List<McpCatalogSnapshot>>(encoded).map {
+            requireNotNull(it.validated()) { "Stored MCP catalog is invalid" }
         }
-        .orEmpty()
-        .mapNotNull(McpCatalogSnapshot::validated)
-        .groupBy { it.serverId }
-        .filterValues { snapshots -> snapshots.size == 1 }
-        .mapValues { (_, snapshots) -> snapshots.single() }
+        require(snapshots.map { it.serverId }.distinct().size == snapshots.size) { "Stored MCP catalogs contain duplicate servers" }
+        return snapshots.associateBy { it.serverId }
+    }
 }
 
 internal fun McpCatalogCandidate.initialSnapshot(): McpCatalogSnapshot {

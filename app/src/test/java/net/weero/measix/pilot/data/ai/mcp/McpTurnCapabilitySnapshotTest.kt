@@ -251,6 +251,7 @@ internal class McpTurnCapabilitySnapshotTest : McpRuntimeCoordinatorTestBase() {
         val isolatedSettingsStore = mockk<SettingsStore>()
         val isolatedCatalogs = MutableStateFlow<Map<ConfigurationReference, McpCatalogSnapshot>>(emptyMap())
         val isolatedCatalogStore = mockk<McpCatalogStore>()
+        coEvery { isolatedCatalogStore.awaitReady() } returns Unit
         val oauthClient = mockk<McpOAuthClient>(relaxed = true)
         val isolatedClients = mutableListOf<Client>()
         isolatedEffective.snapshot = snapshotOf(emptyList())

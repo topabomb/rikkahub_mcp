@@ -79,6 +79,7 @@ internal abstract class McpRuntimeCoordinatorTestBase {
         effective.snapshot = snapshotOf(emptyList())
         every { settingsStore.effectiveSettings } returns effective.flow
         every { catalogStore.catalogs } returns catalogs
+        coEvery { catalogStore.awaitReady() } returns Unit
         coEvery { catalogStore.commitCandidate(any()) } coAnswers {
             val candidate = firstArg<McpCatalogCandidate>()
             val previous = catalogs.value[candidate.serverId]
