@@ -783,6 +783,15 @@ class ArtifactStore(
         retainIds(ids)
     }
 
+    /** Input requests retain existing payloads independently of their editor's creation ownership. */
+    internal suspend fun retainInputUris(uris: Set<String>): ArtifactRetentionLease = withLifecycleLock {
+        val ids = uris.mapNotNull { uri ->
+            val relativePath = payloadStore.relativePathForUri(Uri.parse(uri)) ?: return@mapNotNull null
+            artifactDAO.getByPathAndState(relativePath, ArtifactState.ACTIVE.name)?.id
+        }.toSet()
+        retainIds(ids)
+    }
+
     private fun retainIds(ids: Set<Long>): ArtifactRetentionLease {
         synchronized(retentionPins) {
             ids.forEach { id -> retentionPins[id] = retentionPins.getOrDefault(id, 0) + 1 }

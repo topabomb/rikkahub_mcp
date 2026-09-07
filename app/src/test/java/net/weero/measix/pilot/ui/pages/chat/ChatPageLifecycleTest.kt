@@ -197,6 +197,30 @@ class ChatPageLifecycleTest {
         } finally { fixture.store.clear(); Dispatchers.resetMain() }
     }
 
+    @Test fun `tool decision handler awaits acceptance and keeps the original page target`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture()
+        try {
+            val vm = fixture.create()
+            runCurrent()
+            val handler = requireNotNull(vm.toolDecisionHandler())
+            val locator = me.rerere.ai.core.ToolCallLocator(Uuid.random(), Uuid.random(), Uuid.random())
+            val decision = net.weero.measix.pilot.service.runtime.ToolInteractionDecision.Approve
+            val nextLease = ConversationViewLease(fixture.request.id, fixture.request.access, 1) {}
+            coEvery { fixture.application.initialize(fixture.request) } returns nextLease
+            vm.retryConversationLoad(); runCurrent()
+            coEvery { fixture.turns.submitToolDecision(fixture.lease.commandTarget, locator, decision) } throws IllegalStateException("closed")
+            assertFalse(handler(locator, decision))
+            assertEquals(1, fixture.errors.errors.value.size)
+            coEvery { fixture.turns.submitToolDecision(nextLease.commandTarget, locator, decision) } throws kotlinx.coroutines.CancellationException("cancelled")
+            try { requireNotNull(vm.toolDecisionHandler())(locator, decision); fail("Cancellation must propagate") }
+            catch (_: kotlinx.coroutines.CancellationException) { }
+            assertEquals(1, fixture.errors.errors.value.size)
+            coEvery { fixture.turns.submitToolDecision(nextLease.commandTarget, locator, decision) } returns Unit
+            assertTrue(requireNotNull(vm.toolDecisionHandler())(locator, decision))
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
     private class Fixture(draft: Boolean = true) {
         val store = ViewModelStore()
         val request = ConversationOpenRequest.NewDraft(Uuid.random(), RealmAccess.Personal, ConfigurationReference.random())
@@ -209,6 +233,7 @@ class ChatPageLifecycleTest {
         val access = MutableStateFlow(true)
         private val settings = mockk<SettingsStore>()
         val errors = ChatErrorStore()
+        val turns = mockk<net.weero.measix.pilot.service.ConversationTurnService>()
         private val updater = mockk<UpdateChecker>()
         init {
             coEvery { application.initialize(request) } returns lease
@@ -233,7 +258,7 @@ class ChatPageLifecycleTest {
         fun create(): ChatVM = ViewModelProvider(store, object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = ChatVM(
-                request, mockk<Application> { every { getString(net.weero.measix.pilot.R.string.error_title_operation) } returns "Operation failed" }, settings, mockk(), application,
+                request, mockk<Application> { every { getString(net.weero.measix.pilot.R.string.error_title_operation) } returns "Operation failed" }, settings, turns, application,
                 query, updater, artifacts, favorites, errors,
             ) as T
         })[ChatVM::class.java]

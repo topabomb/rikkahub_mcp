@@ -82,6 +82,52 @@ class ArtifactUploadImageReadIntegrationTest {
     }
 
     @Test
+    fun replacingARequestWithTheSameInputKeepsAnIndependentRetentionPin() = runBlocking {
+        val draft = net.weero.measix.pilot.service.ArtifactUseCase(store,
+            net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() }).openDraftScope()
+        val document = draft.createTextDocument("shared input")
+        val first = draft.claimSubmission(listOf(document))
+        val second = draft.claimSubmission(listOf(document))
+        draft.close()
+        val artifact = store.list().single()
+        first.close()
+        assertTrue(store.deleteUserRequested(artifact.id) is ArtifactDeleteResult.Rejected)
+        second.close()
+        assertTrue(store.deleteUserRequested(artifact.id) is ArtifactDeleteResult.Completed)
+    }
+
+    @Test
+    fun acceptedSubmissionKeepsCreationPinAfterEditorClosesUntilRequestReleasesIt() = runBlocking {
+        val draft = net.weero.measix.pilot.service.ArtifactUseCase(store,
+            net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() }).openDraftScope()
+        val document = draft.createTextDocument("accepted input")
+        val submission = draft.claimSubmission(listOf(document))
+        draft.close()
+        val artifact = store.list().single()
+        assertTrue(store.deleteUserRequested(artifact.id) is ArtifactDeleteResult.Rejected)
+        submission.close()
+        assertTrue(store.deleteUserRequested(artifact.id) is ArtifactDeleteResult.Completed)
+    }
+
+    @Test
+    fun unacceptedSubmissionReturnsToEditorOrReleasesWhenEditorAlreadyClosed() = runBlocking {
+        for (closed in listOf(false, true)) {
+            val draft = net.weero.measix.pilot.service.ArtifactUseCase(store,
+                net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() }).openDraftScope()
+            val document = draft.createTextDocument("unaccepted input")
+            val submission = draft.claimSubmission(listOf(document))
+            val artifact = store.list().single()
+            if (closed) draft.close()
+            draft.returnUnaccepted(submission)
+            if (!closed) {
+                assertTrue(store.deleteUserRequested(artifact.id) is ArtifactDeleteResult.Rejected)
+                draft.close()
+            }
+            assertTrue(store.deleteUserRequested(artifact.id) is ArtifactDeleteResult.Completed)
+        }
+    }
+
+    @Test
     fun oldLongPathWorksWithoutConversationAndInspectionOwnsSnapshotAfterDeletion() = runBlocking {
         val entity = register("809278de-6677-4bc1-9249-d94c85b0930c.png")
         val path = "/${entity.relativePath}"

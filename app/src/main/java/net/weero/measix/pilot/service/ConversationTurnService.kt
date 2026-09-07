@@ -8,6 +8,12 @@ import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ProcessLifecycleOwner
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.service.runtime.InstalledTurnWorker
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -68,7 +74,6 @@ import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.datastore.getChatModel
-import net.weero.measix.pilot.data.datastore.getCurrentAssistant
 import net.weero.measix.pilot.data.datastore.getCurrentChatModel
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.data.model.Assistant
@@ -128,12 +133,13 @@ internal enum class TurnEntry {
 /** Carries the one Settings snapshot only for a new START; continuation has no reconstruction input. */
 private sealed interface TurnLaunch {
     val entry: TurnEntry
+    val realmAccess: RealmAccess
 
-    data class Start(val settings: Settings) : TurnLaunch {
+    data class Start(val settings: Settings, override val realmAccess: RealmAccess) : TurnLaunch {
         override val entry = TurnEntry.START
     }
 
-    data object Continue : TurnLaunch {
+    data class Continue(override val realmAccess: RealmAccess) : TurnLaunch {
         override val entry = TurnEntry.CONTINUE_USER_INTERACTION
     }
 }
@@ -291,7 +297,7 @@ class ConversationTurnService internal constructor(
     private val appEventBus: AppEventBus,
     private val settingsStore: SettingsStore,
     private val memoryService: MemoryService,
-    private val configurations: ConfigurationQueryService,
+    private val sessions: EnterpriseSessionController,
     private val turnRunner: TurnRunner,
     private val turnPipelineFactory: TurnPipelineFactory,
     private val mcpManager: McpRuntimeCoordinator,
@@ -358,323 +364,237 @@ class ConversationTurnService internal constructor(
 
     // ---- 发送消息 ----
 
+    private suspend fun <T> withUiTarget(
+        target: ConversationCommandTarget,
+        operation: suspend (ConversationRuntime) -> T,
+    ): T {
+        recoveryGate.awaitReady()
+        return sessions.withSelectedRealmSelection(target.selection) {
+            commandCoordinator.withRootHeaders(target.selection.access.scope, listOf(target.conversationId)) {
+                target.requireOpen()
+                operation(requireRuntime(target.conversationId))
+            }
+        }
+    }
+
+    private suspend fun <T> withRequest(
+        access: RealmAccess,
+        runtime: ConversationRuntime,
+        turnId: Uuid,
+        tree: Boolean = false,
+        operation: suspend () -> T,
+    ): T {
+        val worker = requireNotNull(currentCoroutineContext()[Job])
+        suspend fun execute(): T {
+            worker.ensureActive()
+            check(runtimeRegistry.findRuntime(runtime.id) === runtime && runtime.currentWorker() === worker &&
+                runtime.currentGenerationTurnId() == turnId) { "conversation_request_owner_changed" }
+            return operation()
+        }
+        return sessions.withRealmAccess(access) {
+            if (tree) commandCoordinator.withRootTree(access.scope, runtime.id, requestWorker = worker) { execute() }
+            else commandCoordinator.withRootHeaders(access.scope, listOf(runtime.id)) { execute() }
+        }
+    }
+
+    /** Installation accepts a request; the page owns only the wait, never the accepted worker. */
+    private suspend fun startRequest(
+        target: ConversationCommandTarget,
+        content: List<UIMessagePart>,
+        artifactDraftScope: ArtifactDraftScope?,
+        errorTitle: Int,
+        operation: suspend (ConversationRuntime, Uuid, ArtifactSubmission?) -> Unit,
+    ): Uuid {
+        recoveryGate.awaitReady()
+        val submission = artifactDraftScope?.claimSubmission(content)
+        val turnId = Uuid.random()
+        var accepted = false
+        val ready = CompletableDeferred<Pair<ConversationRuntime, InstalledTurnWorker>?>()
+        val job = appScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            val requestWorker = requireNotNull(coroutineContext[Job])
+            var previousCleanupAttempted = false
+            suspend fun closePrevious(runtime: ConversationRuntime, installed: InstalledTurnWorker) = withContext(NonCancellable) {
+                previousCleanupAttempted = true
+                installed.previousWorker?.join()
+                turnFinalizer.finalizeSupersededTurn(runtime.id, installed.previousTurnId)
+                installed.previousTurnId?.let { runtime.releaseTurnWorker(it, installed.previousWorker) }
+                check(runtime.snapshot.value.stream == null) { "previous_turn_still_pending" }
+            }
+            try {
+                val (runtime, installed) = ready.await() ?: return@launch
+                closePrevious(runtime, installed)
+                currentCoroutineContext().ensureActive()
+                operation(runtime, turnId, submission)
+                _generationDoneFlow.emit(runtime.id)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                chatErrorStore.add(error, target.conversationId, title = context.getString(errorTitle))
+            } finally {
+                withContext(NonCancellable) {
+                    ready.await()?.let { (runtime, installed) ->
+                        try {
+                            if (!previousCleanupAttempted) closePrevious(runtime, installed)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
+                            chatErrorStore.add(error, runtime.id, title = context.getString(errorTitle))
+                        } finally {
+                            submission?.close()
+                            runtime.releaseTurnWorker(turnId, requestWorker)
+                        }
+                    }
+                }
+            }
+        }
+        try {
+            withUiTarget(target) { runtime ->
+                currentCoroutineContext().ensureActive()
+                check(!job.isCancelled) { "conversation_request_scope_closed" }
+                withContext(NonCancellable) {
+                    val installed = runtimeRegistry.installAndStartTurnWorker(
+                        runtime.id, turnId, job, supersedeReason = TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN,
+                    )
+                    accepted = true
+                    ready.complete(runtime to installed)
+                }
+            }
+            return turnId
+        } finally {
+            if (!accepted) {
+                ready.complete(null)
+                job.cancel()
+                if (submission != null) requireNotNull(artifactDraftScope).returnUnaccepted(submission)
+            }
+        }
+    }
+
     suspend fun sendMessage(
-        conversationId: Uuid,
+        target: ConversationCommandTarget,
         content: List<UIMessagePart>,
         answer: Boolean = true,
         artifactDraftScope: ArtifactDraftScope? = null,
     ): SendMessageReceipt? {
         if (content.isEmptyInputMessage()) return null
-
-        val runtime = requireRuntime(conversationId)
-        val turnId = Uuid.random()
         val userMessageId = Uuid.random()
-        val job = appScope.launch(start = CoroutineStart.LAZY) {
-            try {
-                recoveryGate.awaitReady()
-                runtime.awaitPreviousWorker(turnId)
-                turnFinalizer.finalizeSupersededTurn(conversationId, runtime.previousTurnId(turnId))
-
-                val currentSnapshot = runtime.snapshot.value.durable
-                val settings = settingsStore.effectiveSettings.first().settings
-                val assistant = settings.getAssistantById(currentSnapshot.header.assistantId)
-                    ?: settings.getCurrentAssistant()
-                val processedContent = preprocessUserInputParts(content, assistant)
-                val userMessage = UIMessage(
-                    id = userMessageId,
-                    role = MessageRole.USER,
-                    parts = processedContent,
-                )
-                val localTitle = deriveLocalConversationTitle(userMessage)
-
-                // append 用户消息走命令协议（AppendUserMessage → reducer → delta 落库；
-                // reducer 同时清理 newConversation 运行态标记）
-                commandCoordinator.executeOrThrow(
-                    conversationId,
-                    AppendUserMessage(
-                        message = userMessage,
-                        initialTitle = localTitle,
-                    ),
-                )
-                if (currentSnapshot.header.title.isBlank()) {
-                    val committedHeader = runtime.durable.header
-                    titleCoordinator.synchronize(
-                        conversationId = conversationId,
-                        title = committedHeader.title,
-                        localFallbackTitle = localTitle,
-                    )
+        val access = target.selection.access
+        val turnId = startRequest(target, content, artifactDraftScope, R.string.error_title_send_message) { runtime, turnId, submission ->
+            val settings = settingsStore.effectiveSettings.first().settings
+            val processed = withRequest(access, runtime, turnId, tree = true) {
+                val snapshot = runtime.durable
+                val assistant = settings.getAssistantById(snapshot.header.assistantId) ?: error("conversation_assistant_unavailable")
+                val parts = preprocessUserInputParts(content, assistant)
+                val message = UIMessage(id = userMessageId, role = MessageRole.USER, parts = parts)
+                val localTitle = deriveLocalConversationTitle(message)
+                commandCoordinator.executeOrThrow(runtime.id, AppendUserMessage(message, initialTitle = localTitle))
+                if (snapshot.header.title.isBlank()) {
+                    titleCoordinator.synchronize(runtime.id, runtime.durable.header.title, localTitle)
                 }
-                artifactDraftScope?.publishCommittedReferences(processedContent)
-
-                // USER preprocessing 与 START wire 共用同一 EffectiveSettingsSnapshot。
-                if (answer) {
-                    launchRun(conversationId, turnId = turnId, launch = TurnLaunch.Start(settings))
-                }
-
-                _generationDoneFlow.emit(conversationId)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                chatErrorStore.add(e, conversationId, title = context.getString(R.string.error_title_send_message))
-            } finally {
-                if (!answer || !runtime.isAwaitingUser(turnId)) {
-                    runtime.releaseTurnWorker(turnId, coroutineContext[Job])
-                }
+                parts
             }
+            // Publication follows the message transaction, without holding Session/conversation locks.
+            submission?.publishCommittedReferences(processed)
+            if (answer) launchRun(runtime.id, turnId, launch = TurnLaunch.Start(settings, access))
         }
-        try {
-            runtimeRegistry.installAndStartTurnWorker(
-                conversationId = conversationId,
-                turnId = turnId,
-                worker = job,
-                supersedeReason = TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN,
-            )
-        } catch (e: CancellationException) {
-            job.cancel()
-            throw e
-        } catch (e: Exception) {
-            job.cancel()
-            throw e
-        }
-        return SendMessageReceipt(
-            conversationId = conversationId,
-            turnId = turnId,
-            userMessageId = userMessageId,
-        )
+        return SendMessageReceipt(target.conversationId, turnId, userMessageId)
     }
 
-    /**
-     * 编辑已有 USER 并重新发送：先截断到该 USER node、再提交新 USER variant，然后按
-     * 结构变换后的目标分支走新的 `START`。纯编辑不启动模型请求时
-     * 走 [ConversationApplicationService.editMessage]，不得调用本方法。
-     */
     suspend fun editAndResend(
-        conversationId: Uuid,
+        target: ConversationCommandTarget,
         messageId: Uuid,
         content: List<UIMessagePart>,
         artifactDraftScope: ArtifactDraftScope? = null,
     ): SendMessageReceipt? {
         if (content.isEmptyInputMessage()) return null
-
-        val runtime = requireRuntime(conversationId)
-        val turnId = Uuid.random()
         val userMessageId = Uuid.random()
-        val job = appScope.launch(start = CoroutineStart.LAZY) {
-            try {
-                recoveryGate.awaitReady()
-                runtime.awaitPreviousWorker(turnId)
-                turnFinalizer.finalizeSupersededTurn(conversationId, runtime.previousTurnId(turnId))
-
+        val access = target.selection.access
+        val turnId = startRequest(target, content, artifactDraftScope, R.string.error_title_send_message) { runtime, turnId, submission ->
+            val settings = settingsStore.effectiveSettings.first().settings
+            val processed = withRequest(access, runtime, turnId, tree = true) {
                 val snapshot = subAssistantLifecycle.requireClosedRunsBeforeTreeMutation(runtime.durable)
-                val nodeIndex = snapshot.nodes.indexOfFirst { node ->
-                    node.messages.any { it.id == messageId }
-                }
+                val nodeIndex = snapshot.nodes.indexOfFirst { node -> node.messages.any { it.id == messageId } }
                 check(nodeIndex >= 0) { "Message not found: $messageId" }
-                val target = snapshot.nodes[nodeIndex]
-                val edited = target.messages.first { it.id == messageId }
-                check(edited.role == MessageRole.USER) {
-                    "edit-and-resend requires a USER message: $messageId"
-                }
-
-                val settings = settingsStore.effectiveSettings.first().settings
-                val assistant = settings.getAssistantById(snapshot.header.assistantId)
-                    ?: settings.getCurrentAssistant()
-                val processedContent = preprocessUserInputParts(content, assistant)
-
-                commandCoordinator.executeOrThrow(
-                    conversationId,
-                    TruncateToNodeIndex(nodeIndexInclusive = nodeIndex),
-                )
-                subAssistantLifecycle.applyRetentionAfterTreeMutation(conversationId)
-                commandCoordinator.executeOrThrow(
-                    conversationId,
-                    EditMessageVariant(
-                        nodeId = target.id,
-                        variant = UIMessage(
-                            id = userMessageId,
-                            role = MessageRole.USER,
-                            parts = processedContent,
-                        ),
-                    ),
-                )
-                artifactDraftScope?.publishCommittedReferences(processedContent)
-                launchRun(conversationId, turnId = turnId, launch = TurnLaunch.Start(settings))
-                _generationDoneFlow.emit(conversationId)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                chatErrorStore.add(e, conversationId, title = context.getString(R.string.error_title_send_message))
-            } finally {
-                if (!runtime.isAwaitingUser(turnId)) {
-                    runtime.releaseTurnWorker(turnId, coroutineContext[Job])
-                }
+                val node = snapshot.nodes[nodeIndex]
+                check(node.messages.first { it.id == messageId }.role == MessageRole.USER) { "edit-and-resend requires a USER message" }
+                val assistant = settings.getAssistantById(snapshot.header.assistantId) ?: error("conversation_assistant_unavailable")
+                val parts = preprocessUserInputParts(content, assistant)
+                commandCoordinator.executeOrThrow(runtime.id, TruncateToNodeIndex(nodeIndexInclusive = nodeIndex))
+                subAssistantLifecycle.applyRetentionAfterTreeMutation(runtime.id)
+                commandCoordinator.executeOrThrow(runtime.id, EditMessageVariant(node.id,
+                    UIMessage(id = userMessageId, role = MessageRole.USER, parts = parts)))
+                parts
             }
+            submission?.publishCommittedReferences(processed)
+            launchRun(runtime.id, turnId, launch = TurnLaunch.Start(settings, access))
         }
-        try {
-            runtimeRegistry.installAndStartTurnWorker(
-                conversationId = conversationId,
-                turnId = turnId,
-                worker = job,
-                supersedeReason = TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN,
-            )
-        } catch (e: CancellationException) {
-            job.cancel()
-            throw e
-        } catch (e: Exception) {
-            job.cancel()
-            throw e
-        }
-        return SendMessageReceipt(
-            conversationId = conversationId,
-            turnId = turnId,
-            userMessageId = userMessageId,
-        )
+        return SendMessageReceipt(target.conversationId, turnId, userMessageId)
     }
 
-    // ---- 重新生成消息 ----
-
-    fun regenerateAtMessage(
-        conversationId: Uuid,
+    suspend fun regenerateAtMessage(
+        target: ConversationCommandTarget,
         message: UIMessage,
-        regenerateAssistantMsg: Boolean = true
+        regenerateAssistantMsg: Boolean = true,
     ) {
-        val runtime = requireRuntime(conversationId)
-        val turnId = Uuid.random()
-        val job = appScope.launch(start = CoroutineStart.LAZY) {
-            try {
-                recoveryGate.awaitReady()
-                runtime.awaitPreviousWorker(turnId)
-                turnFinalizer.finalizeSupersededTurn(conversationId, runtime.previousTurnId(turnId))
+        val access = target.selection.access
+        startRequest(target, emptyList(), null, R.string.error_title_regenerate_message) { runtime, turnId, _ ->
+            withRequest(access, runtime, turnId, tree = true) {
                 val snapshot = subAssistantLifecycle.requireClosedRunsBeforeTreeMutation(runtime.durable)
-
-                if (message.role == MessageRole.USER) {
-                    // 如果是用户消息，则截止到当前消息（TruncateToNodeIndex，会话树 delta 落库）
-                    val indexAt = snapshot.nodes.indexOfFirst { node ->
-                        node.messages.any { it.id == message.id }
-                    }
-                    check(indexAt >= 0) { "Message not found: ${message.id}" }
-                    commandCoordinator.executeOrThrow(conversationId, TruncateToNodeIndex(nodeIndexInclusive = indexAt))
-                    subAssistantLifecycle.applyRetentionAfterTreeMutation(conversationId)
-                    val startSettings = settingsStore.effectiveSettings.first().settings
-                    launchRun(conversationId, turnId = turnId, launch = TurnLaunch.Start(startSettings))
-                } else {
-                    if (regenerateAssistantMsg) {
-                        val nodeIndex = snapshot.nodes.indexOfFirst { node ->
-                            node.messages.any { it.id == message.id }
-                        }
-                        check(nodeIndex >= 0) { "Message not found: ${message.id}" }
-                        // 保留目标 Assistant node 以追加新 variant；其后历史先通过唯一 truncate 协议删除。
-                        commandCoordinator.executeOrThrow(
-                            conversationId,
-                            TruncateToNodeIndex(nodeIndexInclusive = nodeIndex),
-                        )
-                        subAssistantLifecycle.applyRetentionAfterTreeMutation(conversationId)
-                        val startSettings = settingsStore.effectiveSettings.first().settings
-                        launchRun(
-                            conversationId,
-                            turnId = turnId,
-                            launch = TurnLaunch.Start(startSettings),
-                        )
-                    } else {
-                        // 变更前的 stale run 已被收口，将结果树同步落库。
-                        commandCoordinator.executeOrThrow(conversationId, ReplaceMessageTree(snapshot.nodes))
-                    }
-                }
-
-                _generationDoneFlow.emit(conversationId)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                chatErrorStore.add(e, conversationId, title = context.getString(R.string.error_title_regenerate_message))
-            } finally {
-                if (!runtime.isAwaitingUser(turnId)) {
-                    runtime.releaseTurnWorker(turnId, coroutineContext[Job])
-                }
+                val nodeIndex = snapshot.nodes.indexOfFirst { node -> node.messages.any { it.id == message.id } }
+                check(nodeIndex >= 0) { "Message not found: ${message.id}" }
+                val original = snapshot.nodes[nodeIndex].messages.first { it.id == message.id }
+                check(original.role == message.role) { "regeneration_message_changed" }
+                if (original.role == MessageRole.USER || regenerateAssistantMsg) {
+                    commandCoordinator.executeOrThrow(runtime.id, TruncateToNodeIndex(nodeIndexInclusive = nodeIndex))
+                    subAssistantLifecycle.applyRetentionAfterTreeMutation(runtime.id)
+                } else commandCoordinator.executeOrThrow(runtime.id, ReplaceMessageTree(snapshot.nodes))
             }
-        }
-        appScope.launch {
-            try {
-                runtimeRegistry.installAndStartTurnWorker(
-                    conversationId = conversationId,
-                    turnId = turnId,
-                    worker = job,
-                    supersedeReason = TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN,
-                )
-            } catch (e: CancellationException) {
-                job.cancel()
-                throw e
-            } catch (e: Exception) {
-                job.cancel()
-                chatErrorStore.add(e, conversationId, title = context.getString(R.string.error_title_regenerate_message))
+            if (message.role == MessageRole.USER || regenerateAssistantMsg) {
+                val settings = settingsStore.effectiveSettings.first().settings
+                launchRun(runtime.id, turnId, launch = TurnLaunch.Start(settings, access))
             }
         }
     }
 
-    // ---- 处理工具审批与用户输入 ----
-
-    fun submitToolDecision(
-        conversationId: Uuid,
+    suspend fun submitToolDecision(
+        target: ConversationCommandTarget,
         locator: ToolCallLocator,
         decision: ToolInteractionDecision,
     ) {
-        val runtime = requireRuntime(conversationId)
-        appScope.launch {
-            try {
-                recoveryGate.awaitReady()
-                runtime.withToolApprovalLock {
+        val runtime = withUiTarget(target) { it }
+        runtime.withToolApprovalLock {
+            // Pending is published just before worker completion. Never join under Session/root locks.
+            runtime.awaitCurrentWorker()
+            withUiTarget(target) { current ->
+                check(current === runtime) { "conversation_request_owner_changed" }
+                val owner = requireNotNull(runtime.snapshot.value.stream) { "tool interaction has no active turn owner" }
+                val previousWorker = requireNotNull(runtime.currentWorker()) { "tool interaction has no worker" }
+                val original = runtime.requireTurnContext(owner.turnId, previousWorker)
+                check(original.realmAccess == target.selection.access) { "tool_interaction_session_changed" }
+                check(runtime.isAwaitingUser(owner.turnId)) { "tool interaction is not awaiting user" }
+                currentCoroutineContext().ensureActive()
+                // The decision commit and continuation installation are one accepted operation.
+                withContext(NonCancellable) {
                     applyToolInteractionDecision(
-                        locator = locator,
-                        decision = decision,
-                        // Pending is emitted immediately before the Flow terminates. Joining the
-                        // previous job guarantees its checkpoint is durable before the decision.
-                        awaitPreviousGeneration = { runtime.awaitCurrentWorker() },
-                        currentSnapshot = { runtime.snapshot.value },
-                        submit = { command -> commandCoordinator.executeOrThrow(conversationId, command) },
-                        onMoreApprovalsPending = { _generationDoneFlow.emit(conversationId) },
-                        continueTurn = { owner, entry ->
-                            val turnId = owner.turnId
-                            val handle = TurnHandle(
-                                conversationId = conversationId,
-                                epoch = owner.epoch,
-                                turnId = owner.turnId,
-                                assistantMessageId = owner.assistantMessageId,
-                            )
+                        locator, decision, awaitPreviousGeneration = {}, currentSnapshot = { runtime.snapshot.value },
+                        submit = { commandCoordinator.executeOrThrow(runtime.id, it) },
+                        onMoreApprovalsPending = {},
+                        continueTurn = { owner, _ ->
+                            val handle = TurnHandle(runtime.id, owner.epoch, owner.turnId, owner.assistantMessageId)
                             val resumeJob = appScope.launch(start = CoroutineStart.LAZY) {
                                 try {
-                                    launchRun(
-                                        conversationId = conversationId,
-                                        turnId = turnId,
-                                        launch = TurnLaunch.Continue,
-                                    )
-                                    _generationDoneFlow.emit(conversationId)
-                                } finally {
-                                    if (!runtime.isAwaitingUser(turnId)) {
-                                        runtime.releaseTurnWorker(turnId, coroutineContext[Job])
-                                    }
-                                }
+                                    launchRun(runtime.id, owner.turnId, launch = TurnLaunch.Continue(original.realmAccess))
+                                    _generationDoneFlow.emit(runtime.id)
+                                } finally { runtime.releaseTurnWorker(owner.turnId, coroutineContext[Job]) }
                             }
-                            try {
-                                runtimeRegistry.installAndStartUserInteractionContinuation(
-                                    conversationId = conversationId,
-                                    handle = handle,
-                                    worker = resumeJob,
-                                )
-                            } catch (error: Throwable) {
-                                resumeJob.cancel()
-                                throw error
-                            }
+                            try { runtimeRegistry.installAndStartUserInteractionContinuation(runtime.id, handle, resumeJob) }
+                            catch (error: Throwable) { resumeJob.cancel(); throw error }
                         },
                     )
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                chatErrorStore.add(e, conversationId, title = context.getString(R.string.error_title_tool_approval))
             }
         }
+        _generationDoneFlow.emit(runtime.id)
     }
-
-    // ---- 处理消息补全 ----
 
     private suspend fun launchRun(
         conversationId: Uuid,
@@ -696,7 +616,7 @@ class ConversationTurnService internal constructor(
             startedRuntime = runtime
             val launchPolicy = turnLaunchPolicy(entry, runtime.snapshot.value.stream, turnId, messageRange)
 
-            if (launchPolicy.runStructuralPreflight) {
+            if (launchPolicy.runStructuralPreflight) withRequest(launch.realmAccess, runtime, turnId, tree = true) {
                 // Structural maintenance belongs exclusively to START. Approval and denial both
                 // continue the existing turn and must never submit tree commands while it is active.
                 commandCoordinator.executeOrThrow(conversationId, UpdateHeader(suggestions = emptyList()))
@@ -729,7 +649,7 @@ class ConversationTurnService internal constructor(
                         ?: error("No chat model is configured for assistant ${assistant.id}")
                     val providerSetting = model.findProvider(settings.providers) ?: error("Provider not found")
                     val mediaCapabilities = turnRunner.resolveRequestMediaCapabilities(settings, model)
-                    val realmAccess = configurations.captureAccess(snapshot.header.scope)
+                    val realmAccess = launch.realmAccess
                     val memoryAccess = memoryService.captureExecution(realmAccess, assistant)
                     startDisclosureCandidate = ConversationDisclosureSnapshotService.captureCandidate(
                         settings = settings,
@@ -818,6 +738,7 @@ class ConversationTurnService internal constructor(
                         selectedProvider = providerSetting,
                     )
                     turnContextFactory.prepareLaunch(
+                        realmAccess = realmAccess,
                         settings = settings,
                         assistant = assistant,
                         model = model,
@@ -837,39 +758,42 @@ class ConversationTurnService internal constructor(
 
                 TurnEntry.CONTINUE_USER_INTERACTION -> null
             }
-            val started = when (entry) {
-                TurnEntry.START -> TurnCommitter.start(
-                    commandCoordinator = commandCoordinator,
-                    runtime = runtime,
-                    turnId = turnId,
-                    modelContextCandidate = requireNotNull(startDisclosureCandidate) {
-                        "START disclosure candidate was not captured"
-                    },
-                    turnFinalizer = turnFinalizer,
-                )
+            val started = withRequest(launch.realmAccess, runtime, turnId) {
+                withContext(NonCancellable) {
+                    when (entry) {
+                        TurnEntry.START -> TurnCommitter.start(
+                            commandCoordinator = commandCoordinator,
+                            runtime = runtime,
+                            turnId = turnId,
+                            modelContextCandidate = requireNotNull(startDisclosureCandidate) {
+                                "START disclosure candidate was not captured"
+                            },
+                            turnFinalizer = turnFinalizer,
+                        )
 
-                TurnEntry.CONTINUE_USER_INTERACTION -> {
-                    val resumableApprovalMessage = sourceMessages.lastOrNull()?.takeIf { message ->
-                        message.role == MessageRole.ASSISTANT &&
-                            message.getTools().any {
-                                !it.hasReplayResult && it.canResumeResultAssembly
+                        TurnEntry.CONTINUE_USER_INTERACTION -> {
+                            val resumableApprovalMessage = sourceMessages.lastOrNull()?.takeIf { message ->
+                                message.role == MessageRole.ASSISTANT &&
+                                    message.getTools().any {
+                                        !it.hasReplayResult && it.canResumeResultAssembly
+                                    }
                             }
-                    }
-                    check(resumableApprovalMessage != null) {
-                        "active turn does not point to a resumable approval message"
-                    }
-                    TurnCommitter.continueActive(
-                        commandCoordinator = commandCoordinator,
-                        runtime = runtime,
-                        expectedTurnId = turnId,
-                        messages = sourceMessages,
-                        turnFinalizer = turnFinalizer,
-                    )
+                            check(resumableApprovalMessage != null) {
+                                "active turn does not point to a resumable approval message"
+                            }
+                            TurnCommitter.continueActive(
+                                commandCoordinator = commandCoordinator,
+                                runtime = runtime,
+                                expectedTurnId = turnId,
+                                messages = sourceMessages,
+                                turnFinalizer = turnFinalizer,
+                            )
+                        }
+                    }.also { turnCommitter = it.turnCommitter }
                 }
             }
             // 先认领终态 owner：materialize 若失败，本 catch 收口；即便收口本身抛错，
             // 外层 launchRun catch 仍能以同一 committer 兜底，绝不留 RUNNING-without-context。
-            turnCommitter = started.turnCommitter
             // StartTurn 事务已建立 Turn；materialize 只做纯绑定并交给 durable 槽，禁止 IO / 重读 Settings。
             // 纯绑定抛错即编程错误：以专用 reason 收口已启动的 Turn，绝不留下无 TurnContext 的 RUNNING。
             val turnContext = when (entry) {

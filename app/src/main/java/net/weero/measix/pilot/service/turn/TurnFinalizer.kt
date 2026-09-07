@@ -59,10 +59,13 @@ class TurnFinalizer(
     }
 
     /** Waits outside session/command locks and never captures a replacement worker. */
-    internal suspend fun finishStop(request: StopRequest) = withContext(NonCancellable) {
+    internal suspend fun finishStop(request: StopRequest): Unit = withContext(NonCancellable) {
         val job = request.captured.worker
         if (job?.isCompleted == false) job.cancel()
         job?.join()
+        request.captured.pending?.let { pending ->
+            finishStop(StopRequest(request.conversationId, request.runtime, pending, request.reason))
+        }
         commandCoordinator.withResidentRuntime(request.conversationId) { runtime ->
             val execution = conversationRepository.getTurnExecution(request.captured.turnId.toString())
             if (execution?.status in setOf(TurnExecutionStatus.RUNNING, TurnExecutionStatus.AWAITING_USER)) {
@@ -213,11 +216,14 @@ class TurnFinalizer(
 
     /** Finalizes a previous non-terminal turn before a replacement turn starts. */
     suspend fun finalizeSupersededTurn(conversationId: Uuid, previousTurnId: Uuid?) {
-        finalizeNonTerminalTurn(
-            conversationId = conversationId,
-            turnId = previousTurnId ?: return,
-            reason = TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN,
-        )
+        if (previousTurnId == null) return
+        commandCoordinator.withResidentRuntime(conversationId) {
+            finalizeNonTerminalTurn(
+                conversationId = conversationId,
+                turnId = previousTurnId,
+                reason = TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN,
+            )
+        }
     }
 
     private suspend fun finalizeNonTerminalTurn(

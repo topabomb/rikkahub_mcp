@@ -255,6 +255,22 @@ class ArtifactDraftScope internal constructor(
         )
     }
 
+    internal suspend fun claimSubmission(parts: List<UIMessagePart>): ArtifactSubmission = withOwnershipLock {
+        val uris = parts.collectArtifactUris()
+        val retention = store.retainInputUris(uris)
+        ArtifactSubmission(store, uris.mapNotNull(owned::remove), retention)
+    }
+
+    internal suspend fun returnUnaccepted(submission: ArtifactSubmission) = withContext(NonCancellable) {
+        mutex.withLock {
+            val artifacts = submission.returnOwnership()
+            if (closeRequested.get()) artifacts.forEach(store::abandonUnpublished)
+            else artifacts.forEach { artifact ->
+                check(owned.put(artifact.uri.toString(), artifact) == null) { "artifact draft ownership duplicated" }
+            }
+        }
+    }
+
     suspend fun discard(uri: Uri) = withOwnershipLock {
         val key = uri.toString()
         val artifact = owned[key] ?: return@withOwnershipLock
@@ -318,6 +334,35 @@ class ArtifactDraftScope internal constructor(
                 }
             }
         }
+}
+
+/** Creation pins transferred from the editor to one accepted input request. */
+internal class ArtifactSubmission(
+    private val store: ArtifactStore,
+    private val artifacts: List<OwnedArtifact>,
+    private val retention: net.weero.measix.pilot.data.files.ArtifactRetentionLease,
+) : AutoCloseable {
+    private val closed = AtomicBoolean(false)
+
+    internal fun returnOwnership(): List<OwnedArtifact> {
+        check(closed.compareAndSet(false, true)) { "artifact submission ownership already released" }
+        retention.close()
+        return artifacts
+    }
+
+    suspend fun publishCommittedReferences(parts: List<UIMessagePart>) = withContext(NonCancellable) {
+        check(!closed.get()) { "artifact submission is closed" }
+        val references = parts.collectArtifactUris()
+        store.publishAllUnpublished(artifacts.filter { it.uri.toString() in references })
+        close()
+    }
+
+    override fun close() {
+        if (closed.compareAndSet(false, true)) {
+            artifacts.forEach(store::abandonUnpublished)
+            retention.close()
+        }
+    }
 }
 
 class ArtifactImportException(source: String, cause: Throwable) :

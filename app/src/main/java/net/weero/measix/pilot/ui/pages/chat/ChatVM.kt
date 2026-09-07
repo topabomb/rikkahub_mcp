@@ -359,7 +359,7 @@ class ChatVM(
      * @return 已接受请求的稳定消息身份；空输入返回 null，receipt 不代表 durable 提交已经成功
      */
     suspend fun handleMessageSend(content: List<UIMessagePart>, answer: Boolean = true) =
-        turnService.sendMessage(_conversationId, content, answer, artifactDraftScope)
+        requirePage().let { turnService.sendMessage(it.lease.commandTarget, content, answer, it.imports) }
 
     fun handleMessageEdit(parts: List<UIMessagePart>, messageId: Uuid) {
         if (parts.isEmptyInputMessage()) return
@@ -370,7 +370,7 @@ class ChatVM(
 
     /** 编辑 USER 后发送：截断到该消息并启动新的 START；receipt 身份是新的 USER variant。 */
     suspend fun handleMessageEditAndSend(parts: List<UIMessagePart>, messageId: Uuid) =
-        turnService.editAndResend(_conversationId, messageId, parts, artifactDraftScope)
+        requirePage().let { turnService.editAndResend(it.lease.commandTarget, messageId, parts, it.imports) }
 
     fun handleCompressContext(additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int): Job {
         return viewModelScope.launch {
@@ -410,14 +410,18 @@ class ChatVM(
         message: UIMessage,
         regenerateAssistantMsg: Boolean = true
     ) {
-        turnService.regenerateAtMessage(_conversationId, message, regenerateAssistantMsg)
+        launchPageCommand { turnService.regenerateAtMessage(it.lease.commandTarget, message, regenerateAssistantMsg) }
     }
 
-    fun submitToolDecision(
-        locator: ToolCallLocator,
-        decision: ToolInteractionDecision,
-    ) {
-        turnService.submitToolDecision(_conversationId, locator, decision)
+    fun toolDecisionHandler(): (suspend (ToolCallLocator, ToolInteractionDecision) -> Boolean)? {
+        val target = (page.value as? PageState.Open)?.lease?.commandTarget ?: return null
+        return { locator, decision ->
+            try {
+                turnService.submitToolDecision(target, locator, decision)
+                true
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { reportCommandError(target.conversationId, error); false }
+        }
     }
 
     fun subAssistantAnswerHandler(): (suspend (String, String, String) -> Boolean)? {

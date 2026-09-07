@@ -284,7 +284,7 @@ LocalEnterpriseSource（身份/配置/动态/场景）
 
 Seed 只初始化尚未建立的主体 Feed。同步、重入与重复导入不能覆盖已发布/撤回状态；导入结果明确提示已有 Feed 不被 seed 替换。动态保留来源/Deployment/User 归属，退出后仍保存但不可读取，重登不重新播种。
 
-公开 DTO、eup_UUIDv4 标识和枚举直接遵守 Client OpenAPI。查询统一处理日期、默认/范围 limit、truncated 和 publishedAt 降序，时间相同以稳定 ID 排序。日期使用企业时区日历的首日零点至末日下一日零点，覆盖 DST；ETag 包含主体、公开 revision、时区和规范化查询，start-only 包含本次解析的企业当前日期。主体/Session/document 授权先于内容及 304 返回；withRealmAccess 的历史数据授权不能代替 Portal 当前 selectedScope 校验。
+公开 DTO、eup_UUIDv4 标识和枚举直接遵守 Client OpenAPI。查询统一处理日期、默认/范围 limit、truncated 和 publishedAt 降序，时间相同以稳定 ID 排序。日期使用企业时区日历的首日零点至末日下一日零点，覆盖 DST；ETag 包含主体、公开 revision、时区和规范化查询，start-only 包含本次解析的企业当前日期。主体/Session/document 授权先于内容及 notModified 返回；withRealmAccess 的历史数据授权不能代替 Portal 当前 selectedScope 校验。
 
 0.0.20 是个人域/企业域的第一个入口版本。企业接入、Portal、完整配置及本地企业存储只执行本期最新契约；外部旧完整文件明确拒绝并提示使用新模板，不为分阶段开发的企业原型保留双格式解析、旧 HTML、旧桥接或专用历史迁移/归档。清理未交付的旧企业实现，以及与其绑定的临时/过时文件、旧模板、无效测试和文档；保留当前有效的共享消费契约与必要交付材料。已发布个人配置、Room 数据和个人备份的迁移与保全要求仍有效。
 
@@ -292,22 +292,23 @@ Seed 只初始化尚未建立的主体 Feed。同步、重入与重复导入不�
 
 ## 8. Portal 与手机能力
 
-本期接入已交付 Portal dist-local 包，核验并固定资源摘要，使用 https://local.measix.invalid/portal/。清理配置内 HTML 和旧桥接路径；旧企业原型文件明确拒绝，不静默丢弃旧字段或兼容执行。宿主管 document/session，普通外链和模型生成 HTML 不取得企业权限。此段为待实现要求。
+2026-09-08 上游已裁决采用 Control Protocol §8 的 **Native Bridge v3 / 本地读取 v2**。固定 https://local.measix.invalid/portal/ 只承载经过摘要校验的随包静态资源；context/Feed 通过同一个 MeasixHost 类型化消息通道读取。废止本地 GET/document header/304 方案，不保留旧 Bridge v2、CustomEvent 或另一套工作台页面。远端 Hub HTTP、Cookie、CSRF、ETag/304 协议保持独立，本期不实现真实后台接入。
 
-采用 Control Protocol Bridge v2：window.MeasixHost.postMessage 请求含 bridgeVersion=2/requestId/method/params，通过 measix:host-response 返回关联结果。支持 getStatus、refresh、close、logout、openExternal、capturePhoto、recordAudio、readMedia、releaseMedia、cancel；不保留旧方法别名。退出由原生确认，关闭仅关闭页面。固定路径拦截 context/Feed，验证主体、Session 与 document 后才返回数据或 304，不访问 DNS 或启动本地监听服务。
+当前配套状态以 Portal 的 android-alignment-handoff.md 为准：架构决定已经生效，core 工作树已出现 Bridge v3/localReadVersion=2 的 executable schema/export，需核验后固定消费；Portal dist-local 当前仍为 v2/v1，等待新版包。Android 可以实现原生入口、文档/消息 owner 和各方法消费者；新资源包到位后核验真实 bridgeVersion=3、localReadVersion=2、来源和 contract/assets 摘要再固定消费。不得修改旧包版本号、改写固定网页脚本或以旧包测试宣称 v3 联调完成。enrollment 与 context 的 formatVersion=1 不变；已完成的接入与 Feed 领域规则继续复用。
 
-每次请求绑定当前顶层 origin、document identity、企业主体和 session。导航/关闭/切域/失效/退出立即取消采集、丢弃迟到结果；并发采集明确 busy/cancel，不后台静默录音。相机真实拍摄、录音真实采集，拒绝权限可解释可恢复。
+原生在批准的顶层文档运行脚本前提供 window.MeasixPortalDocument={bridgeVersion:3,documentId}。documentId 至少具有 128 bit 随机性、非空且最多 128 字符，绑定本次文档、来源/Deployment/User、原母 Session 和期限；网页授权最多十分钟且不超过母 Session，读取不续期。不能可靠提供启动绑定或真实消息 origin/frame 能力时，明确显示宿主不可用，不降级。Android 每个批准文档独占新 WebView：先注册监听器和 document-start bootstrap，再首次加载；重开/重载先撤销旧 owner 和媒体，再创建新实例。旧实例不得加载第二份 Portal HTML，导航回调与静态主文档拦截共同拒绝；导航回调不能被当作替换当前文档启动脚本的时序保证。
 
-媒体由统一原生 owner 管理，仅用于本页预览，不自动上传或保存到聊天/Artifact。照片为 JPEG、录音为 audio/mp4，recordAudio 包含原生开始/停止 UI，时长参数 1–60 秒。单项最多 10 MiB、每文档两项/合计 20 MiB、最多保留五分钟；readMedia 只按句柄返回最多 65536 字节的 base64 分块，不暴露 URI 或路径。普通请求十秒、采集请求 120 秒的期限由原生独立保证。释放、超时、导航、切域、退出、会话失效及进程恢复均清理临时文件与迟到结果，旧文档句柄不能复活。
+请求为 {bridgeVersion:3,documentId,requestId,method,params}，params 必须是对象，信封拒绝未知字段；requestId 非空、最多 128 字符且在当前文档内唯一。使用 WebMessageListener 的 sourceOrigin/isMainFrame 逐请求验证精确可信 origin 和顶层发起 frame，并复验原文档、主体、Session、方法及参数。静态资源拦截和消息授权各负其责；iframe、外链、模型 HTML、旧文档消息不能取得权限。
 
-context 从当前原生身份产生，documentId 不可预测，文档期限最多十分钟且不超过母 Session；不使用 fixture 身份或时钟。getStatus/refresh 返回真实已应用状态与实际能力，未知值为 null。context/detail 使用 no-store，动态列表 private/no-cache，所有授权先于缓存判断。原生扫码在登录前可用，一键/扫码/粘贴共用接入验证。生产 grant/Cookie/CSRF 只在后续真实接入规定，本地会话不冒充生产授权。
+每个请求保存原 JavaScriptReplyProxy，完成时再次复核原文档，只向原消息对象返回 JSON；不向当前 WebView evaluateJavascript 派发异步结果。Portal 单一 Bridge owner 在首次请求前设置 MeasixHost.onmessage。响应携带同一 bridgeVersion/documentId/requestId，result/error 严格互斥，错误保留 code 并使用不含凭据/路径/内部诊断的 message。同源导航、刷新、关闭、切域、退出、重登和期限失效均撤销旧文档、取消等待并清理迟到媒体，旧响应不能交给新页面。
 
-Portal 本地读取存在两项需要架构侧确认的 Android 平台限制：
+本地必须支持 getLocalContext({})、listLocalUpdates({startDate?,endDate?,limit?,ifNoneMatch?})、getLocalUpdate({enterpriseUpdateId})。context 由原生真实身份生成，不使用 fixture 身份或时钟；list/detail 复用 EnterpriseFeed 的 Client DTO、日期、排序、默认 10/上限 20、truncated 和独立 revision/ETag。列表返回 {kind:"modified",etag,feed} 或 {kind:"notModified",etag}；未变化分支禁止正文，只有当前文档/主体/规范化查询的完整匹配缓存才能接受。授权先于 ETag 判断；context/detail 不缓存，列表只保留页面内存缓存。远端不声明且拒绝三个本地方法，不提供通用 HTTP 代理。缺失动态返回 enterprise_update_not_found；过期/来源拒绝进入统一网页失效清理，不冒充断网，也不自行断言母 Session 必须退出。
 
-- [WebResourceRequest](https://developer.android.com/reference/android/webkit/WebResourceRequest) 不提供 fetch 发起 frame，主页面和 iframe 的 fetch 均为 isForMainFrame=false；WebMessageListener 提供消息的 sourceOrigin/isMainFrame。CSP、Referer 或 document header 不能作为逐请求原生 frame 证明。
-- [WebResourceResponse](https://developer.android.com/reference/android/webkit/WebResourceResponse) 的公开构造器及状态码 setter 仅接受 100–299、400–599，拒绝 304。该结论已核对官方 API 与本地 SDK 源码，尚未作为设备场景执行；不能用反射或覆盖 getter 绕过公开 API 限制。
+其他方法为 getStatus、refresh、close、logout、openExternal、capturePhoto、recordAudio、readMedia、releaseMedia、cancel，按 Control Protocol 的严格 params/result 执行，不保留旧别名。getStatus/refresh 返回真实已应用状态与实际 capabilities，未知值为 null。refresh 共用原生 EnterpriseSynchronizationService，提交完成才成功；Feed 刷新独立，不改变配置 generation 或续期。close 仅关闭工作台；logout 通过原生确认和同一退出命令，完成后销毁文档，不依赖 JS 回调来撤销授权。正式原生状态与退出入口在 Portal 不可用时仍可使用。一键、扫码、粘贴共用原生接入验证，私有完整文件仍由原生文件选择器导入。
 
-建议架构侧为本地 context/Feed 读取明确带原生来源/frame 信息的消息传输，由 Portal 消费端配套调整，保留现有 DTO、查询、revision/ETag 和先授权再判断未变化的语义，真实平台 HTTP 协议保持独立。若保留本地 GET，需明确同意两项差异：可信文档实例及内容约束授权（不宣称逐请求 frame 证明）、成功读取返回完整 200（不宣称原生拦截实现 304）。目前两种方案均未获确认，Android 不自行修改 Portal 包、增加隐藏桥接或降低验收要求。来源配置同步和 Feed 领域实现不依赖该选择；资源打包和纯查询测试不代表 Portal 接入验收。
+媒体由统一原生 owner 管理，仅用于本页预览，不自动上传或保存到聊天/Artifact。照片为 JPEG、录音为 audio/mp4，recordAudio 包含原生开始/停止 UI，时长参数 1–60 秒。单项最多 10 MiB、每文档两项/合计 20 MiB、最多保留五分钟；readMedia 按不透明句柄返回最多 65536 字节的 base64 分块，不暴露 URI 或路径。普通请求十秒、采集请求 120 秒的期限由原生独立保证，页面不能靠崩溃或超时留下后台录音。释放、取消、期限、导航、切域、退出、会话失效及进程恢复都清理临时文件与迟到结果；取消未知/已结束请求无副作用，不能取消其他文档请求。
+
+验收分开记录：共享 v3 案例由真实 Android 消费者执行；文档启动、来源/frame、原回复代理、同源导航/旧文档拒绝以及权限/扫码/拍照/录音/句柄释放执行设备验证；生产 Portal 使用新包联调。浏览器替身、纯解析测试、资源打包和本地示例均不代表真实平台互操作或 S0.2 Freeze。原 GET/304 两项限制已由上游消息方案解决，不再列为待裁决事项。
 
 ## 9. 执行、更新、恢复不变量
 
@@ -320,6 +321,10 @@ Portal 本地读取存在两项需要架构侧确认的 Android 平台限制：
 - 移除旧签名 envelope/global merge/path lock 和无消费者 facade；原型文件不迁成正式身份；仅保留真实历史迁移需要的解码边界。
 
 ## 10. 完整变更清单与批次
+
+C4 的主聊天 START/继续交互已接入原页面与 Session：请求接受时交接 AppScope worker 和输入附件保护，等待前任收口期间不持有 Session 锁，退出重登拒绝旧请求。START/CONTINUE 提交与 committer 接收在同一取消安全边界；继续沿用原 TurnContext/TurnHandle。停止与替换冻结原 worker，前任终态写入失败保留其 owner，可显式重试。附件提交使用原 Artifact owner 的独立保留引用，快速重复发送不因首个请求取消丢失输入。UI 仅在实际接受工具回答后推进交互。
+
+本批独立审查通过。最终串行 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1 --no-configuration-cache` 在 10 分 26 秒内通过，App 1,953 项 JVM 测试无失败或跳过，Debug/Release 构建成功；Workspace 保留 11 项 Windows 宿主跳过。Pixel_10_Pro_Fold / Android 17 的 ArtifactUploadImageReadIntegrationTest、AskUserSubmissionTest、ConversationRepositoryTreeIntegrationTest 共 19 项设备测试在 48 秒内通过。一次前置设备运行被外部中止，未执行业务测试，最终重跑通过。该证据不代表 Portal、正式企业入口或完整域执行验收，版本仍为 0.0.19 开发基线。
 
 C4 的子助手回答已接通原页面、Master 与执行 Session：UI 回调保存原页面目标，命令复用既有选择和根会话锁；pending 仍归 SubAssistantRunGate，等待 Job 取消即拒绝新回答，finally 精确清理该登记并覆盖 metadata 发布失败。退出重登不复活旧 pending；同一 Session 切域往返后，新页面可继续回答原后台运行。已删除 TurnService 和 SubAssistantRunCoordinator 的裸 ID 回答转发。UI 等待接收结果，失败保留重试，页面移除取消未接收的提交；接收不冒充后续持久化成功。本批无持久化结构变化。最终定向回归 70 项通过；完整 test/assembleDebug/lintDebug/assembleRelease 串行门禁在 6 分 2 秒内通过：App 1,941 项无失败或跳过，lint 为 0 errors、272 warnings、5 hints，Workspace 保留 11 项 Windows 环境跳过。汇总见 app/build/reports/enterprise/child-answer-full-gate.json。Pixel_10_Pro_Fold / Android 17 的 AskUserSubmissionTest 三项 Compose 设备测试在 25 秒内通过，验证接收前等待、拒绝重试、页面移除取消及相同问题的新交互清空答案。首次设备运行因 APK 安装服务错误未执行任何测试，重启模拟器和 ADB 后重跑通过。独立审查发现的等待方取消窗口已修复并复核；恢复清理也覆盖同步 finally 重入。该证据不代替 Portal、扫码、媒体、真实平台互操作或 0.0.20 整期验收，版本保持 0.0.19。主聊天 START/继续仍需统一处理请求接受、原 Session 执行、附件保护交接、完整树锁及审批提交后的 continuation 安装，不以本次子助手回答授权代替。
 

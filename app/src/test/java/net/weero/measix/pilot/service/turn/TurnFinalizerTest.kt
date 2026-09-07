@@ -239,6 +239,9 @@ class TurnFinalizerTest {
             updatedAt = 2,
         )
         coEvery { coordinator.load(conversationId) } returns runtime
+        coEvery { coordinator.withResidentRuntime<Unit>(conversationId, any()) } coAnswers {
+            secondArg<suspend (ConversationRuntime?) -> Unit>()(runtime)
+        }
 
         TurnFinalizer(
             conversationRepository = repository,
@@ -259,6 +262,9 @@ class TurnFinalizerTest {
         val repository = mockk<ConversationRepository>()
         val coordinator = mockk<ConversationCommandCoordinator>()
         coEvery { coordinator.load(conversationId) } returns runtime
+        coEvery { coordinator.withResidentRuntime<Unit>(conversationId, any()) } coAnswers {
+            secondArg<suspend (ConversationRuntime?) -> Unit>()(runtime)
+        }
         coEvery { repository.getTurnExecution(turnId.toString()) } returns TurnExecutionEntity(
             turnId = turnId.toString(),
             conversationId = conversationId.toString(),
@@ -313,6 +319,9 @@ class TurnFinalizerTest {
         val coordinator = mockk<ConversationCommandCoordinator>()
         val command = slot<ConversationCommand>()
         coEvery { coordinator.load(conversationId) } returns runtime
+        coEvery { coordinator.withResidentRuntime<Unit>(conversationId, any()) } coAnswers {
+            secondArg<suspend (ConversationRuntime?) -> Unit>()(runtime)
+        }
         coEvery { repository.getTurnExecution(turnId.toString()) } returns TurnExecutionEntity(
             turnId = turnId.toString(),
             conversationId = conversationId.toString(),
@@ -379,6 +388,9 @@ class TurnFinalizerTest {
         val coordinator = mockk<ConversationCommandCoordinator>()
         val command = slot<ConversationCommand>()
         coEvery { coordinator.load(conversationId) } returns runtime
+        coEvery { coordinator.withResidentRuntime<Unit>(conversationId, any()) } coAnswers {
+            secondArg<suspend (ConversationRuntime?) -> Unit>()(runtime)
+        }
         coEvery { repository.getTurnExecution(turnId.toString()) } returns TurnExecutionEntity(
             turnId = turnId.toString(),
             conversationId = conversationId.toString(),
@@ -457,6 +469,9 @@ class TurnFinalizerTest {
             secondArg<suspend (ConversationRuntime?) -> Unit>()(runtime)
         }
         coEvery { coordinator.load(conversationId) } returns runtime
+        coEvery { coordinator.withResidentRuntime<Unit>(conversationId, any()) } coAnswers {
+            secondArg<suspend (ConversationRuntime?) -> Unit>()(runtime)
+        }
         coEvery { repository.getTurnExecution(turnId.toString()) } returns TurnExecutionEntity(
             turnId.toString(), conversationId.toString(), assistant.id.toString(), TurnExecutionStatus.RUNNING,
             null, 1, 1,

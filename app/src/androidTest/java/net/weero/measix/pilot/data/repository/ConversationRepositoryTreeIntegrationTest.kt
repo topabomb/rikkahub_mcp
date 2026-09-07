@@ -189,7 +189,7 @@ class ConversationRepositoryTreeIntegrationTest {
         coordinator.load(child.id)
         var retention: net.weero.measix.pilot.data.files.ArtifactRetentionLease? = null
         try {
-            val deleted = coordinator.withInactiveRootTree(scope, master.id) {
+            val deleted = coordinator.withRootTree(scope, master.id) {
                 coordinator.deleteCapturingTree(master.id) { tree ->
                     retention = artifactStore.retainNodesForUndo((listOf(tree.root) + tree.children).map { it.nodes })
                 }

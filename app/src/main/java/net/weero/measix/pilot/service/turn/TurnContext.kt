@@ -16,6 +16,7 @@ import net.weero.measix.pilot.service.runtime.ProviderTransportLease
 
 /** One immutable, process-local source for every model-visible value used by a durable Turn. */
 internal data class TurnContext(
+    val realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
     val assistant: TurnAssistantSnapshot,
     val model: TurnModelSnapshot,
     val mediaCapabilities: RequestMediaCapabilities,

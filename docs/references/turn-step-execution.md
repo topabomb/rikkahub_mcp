@@ -116,6 +116,17 @@ resident/Room header 的完整 scope 与根会话身份，之后才加载消息�
 空 Draft 不进入数据库、列表或 Turn。发送先结束旧 owner、预处理输入和稳定附件，再提交 USER。
 START 前准备失败可以留下已提交 USER，但不能伪造已经开始的 Assistant Turn。
 
+发送、编辑重发和重生成必须携带原页面 `ConversationCommandTarget`；安装 worker 前在原 selection/Session 与根会话锁下复验。
+接受后的 worker 属于 AppScope，后续 USER/结构修改和 START 仍使用原 `RealmAccess`，页面关闭或切域不会改写其来源；退出重登不能恢复旧请求权限。
+worker 在授权锁外先进入清理范围，再等待唯一 installation 结果；安装与结果交接在同一授权临界区完成。
+前驱 Job/Turn 来自冻结的 `InstalledTurnWorker`，等待在 Session/会话锁外完成；终态读取、判断与补交在原会话锁内串行。
+连续替换不能绕过仍未提交的旧终态；`ownedRequests` 保留该 stream 的原 owner，准备中后继释放时恢复它，显式 stop 可精确重试。
+捕获准备中任务的 stop 同时保留当时未完成 stream 的原 ticket，不重新捕获后来安装的任务。旧 reporter 与安装/释放使用同一进程内同步边界。
+
+输入附件通过 `ArtifactSubmission` 从编辑器转交本次请求：未接受时归还原编辑器，编辑器已经关闭则释放创建 pin；
+接受后由请求持有，USER 提交后发布实际引用，失败或取消时释放。每个请求独立持有输入 Artifact 的 retention lease，连续提交相同附件也不会因前驱结束而提前失去保护；创建 token 仍只有一个 owner。页面关闭不能提前释放已经转交的 pin。
+START 持久提交与 `TurnCommitter` 认领在同一不可取消边界内完成，提交后收到取消仍由原 committer 收口终态。
+
 同一 START 的用户预处理与模型解析使用同一份 `EffectiveSettingsSnapshot`。START 冻结
 Assistant / Model / Provider wire shape、媒体能力、prompt inputs、有序 `FrozenToolDefinition` 与 execution bindings。
 同一 Turn 的 Step 和审批继续不重读模型可见配置。凭据由 `ProviderTransportLease` 每请求从
@@ -128,7 +139,7 @@ Assistant / Model / Provider wire shape、媒体能力、prompt inputs、有序 
 `TurnEntry.START` 可执行建议清理、无效消息清理和附件引用回填；`CONTINUE_USER_INTERACTION`
 保留原 owner，不执行这些结构预检。`ResolveToolInteraction` 校验完整 locator 和等待类型，事务提交后才
 发布决定。owning Assistant 还有 Pending 就继续等待；全部解决后 `TurnCommitter.continueActive()`
-复用原 TurnContext、TurnHandle、Step 和累计 usage。
+复用原 TurnContext、TurnHandle、Step 和累计 usage。审批先在锁外等待原 worker 完成，再复验页面与冻结的 RealmAccess；决定提交和续跑安装保持同一授权边界。UI 回调等待实际接受结果，失败不假报已回答。
 
 ## 工具批次与 checkpoint
 

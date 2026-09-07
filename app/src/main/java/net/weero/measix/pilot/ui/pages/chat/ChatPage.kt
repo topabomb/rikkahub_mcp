@@ -800,7 +800,7 @@ private fun ChatPageContent(
                 onToolDecision = if (turnPresentation.phase == TurnLivePhase.STOPPING) {
                     null
                 } else {
-                    { locator, decision -> vm.submitToolDecision(locator, decision) }
+                    vm.toolDecisionHandler()
                 },
                 onSubAssistantAnswer = if (turnPresentation.phase == TurnLivePhase.STOPPING) {
                     null

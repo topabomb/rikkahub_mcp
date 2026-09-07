@@ -34,6 +34,7 @@ internal data class InstalledTurnWorker(
 internal data class CapturedTurnWorker(
     val turnId: Uuid,
     val worker: Job?,
+    val pending: CapturedTurnWorker? = null,
 )
 
 internal data class ActiveTurnPresentationFacts(
@@ -70,8 +71,6 @@ class ConversationRuntime internal constructor(
     private class ActiveTurnSession(
         val turnId: Uuid,
         val worker: Job,
-        val previousWorker: Job? = null,
-        val previousTurnId: Uuid? = null,
         handle: TurnHandle? = null,
         phase: TurnLivePhase = TurnLivePhase.PREPARING,
         turnContext: TurnContext? = null,
@@ -149,9 +148,6 @@ class ConversationRuntime internal constructor(
             _processingText.set(text)
         }
 
-        suspend fun awaitPreviousWorker() {
-            previousWorker?.join()
-        }
     }
 
     private val _activeTurn = MutableStateFlow<ActiveTurnSession?>(null)
@@ -259,18 +255,6 @@ class ConversationRuntime internal constructor(
 
     internal fun currentGenerationTurnId(): Uuid? = _activeTurn.value?.turnId
 
-    internal fun previousTurnId(turnId: Uuid): Uuid? {
-        val current = requireNotNull(_activeTurn.value) { "worker lost its active turn $turnId" }
-        check(current.turnId == turnId) { "worker lost its active turn $turnId" }
-        return current.previousTurnId
-    }
-
-    internal suspend fun awaitPreviousWorker(turnId: Uuid) {
-        val current = requireNotNull(_activeTurn.value) { "worker lost its active turn $turnId" }
-        check(current.turnId == turnId) { "worker lost its active turn $turnId" }
-        current.awaitPreviousWorker()
-    }
-
     internal fun isAwaitingUser(turnId: Uuid): Boolean {
         val current = _activeTurn.value ?: return false
         return current.turnId == turnId &&
@@ -281,6 +265,7 @@ class ConversationRuntime internal constructor(
         _activeTurn.value?.worker?.join()
     }
 
+    @Synchronized
     internal fun cancelActiveGeneration(reason: String): Job? {
         val current = _activeTurn.value ?: return null
         current.requestCancel(reason)
@@ -290,6 +275,7 @@ class ConversationRuntime internal constructor(
     internal fun currentWorker(): Job? = _activeTurn.value?.worker
 
     /** Binds the immutable request context once to the exact worker that owns this Turn. */
+    @Synchronized
     internal fun bindTurnContext(turnId: Uuid, worker: Job, context: TurnContext) {
         val current = _activeTurn.value
         check(current != null && current.turnId == turnId && current.worker === worker) {
@@ -312,6 +298,7 @@ class ConversationRuntime internal constructor(
      * transaction commits. Continuations reuse it instead of re-evaluating the
      * applicability predicate.
      */
+    @Synchronized
     internal fun bindModelContextProjection(
         turnId: Uuid,
         worker: Job,
@@ -344,6 +331,7 @@ class ConversationRuntime internal constructor(
         )
     }
 
+    @Synchronized
     internal fun requestCancel(turnId: Uuid, reason: String) {
         ownedRequests[turnId]?.requestCancel(reason)
     }
@@ -358,23 +346,32 @@ class ConversationRuntime internal constructor(
      * Captures one active-turn identity and requests its stop.
      * Job and turnId come from the same object so a concurrent START cannot mix them.
      */
+    @Synchronized
     internal fun captureAndRequestStop(reason: String): CapturedTurnWorker? {
         val current = _activeTurn.value
         if (current != null) {
             current.requestCancel(reason)
-            return CapturedTurnWorker(current.turnId, current.worker)
+            val pending = snapshot.value.stream?.turnId?.takeIf { it != current.turnId }?.let { turnId ->
+                val owner = requireNotNull(ownedRequests[turnId]) { "pending turn lost its worker owner" }
+                owner.requestCancel(reason)
+                CapturedTurnWorker(turnId, owner.worker)
+            }
+            return CapturedTurnWorker(current.turnId, current.worker, pending)
         }
         val durableTurnId = snapshot.value.stream?.turnId ?: return null
         return CapturedTurnWorker(durableTurnId, null)
     }
 
+    @Synchronized
     internal fun ownsStoppedWorker(captured: CapturedTurnWorker): Boolean {
         val current = _activeTurn.value
         return if (captured.worker == null) {
             current == null && snapshot.value.stream?.turnId == captured.turnId
-        } else current?.turnId == captured.turnId && current.worker === captured.worker
+        } else (current?.turnId == captured.turnId && current.worker === captured.worker) ||
+            (snapshot.value.stream?.turnId == captured.turnId && ownedRequests[captured.turnId]?.worker === captured.worker)
     }
 
+    @Synchronized
     internal fun installTurnWorker(
         turnId: Uuid,
         worker: Job,
@@ -393,8 +390,6 @@ class ConversationRuntime internal constructor(
         val installed = ActiveTurnSession(
             turnId = turnId,
             worker = worker,
-            previousWorker = previous?.worker,
-            previousTurnId = previous?.turnId,
             handle = handle,
             phase = phase,
             turnContext = turnContext,
@@ -408,6 +403,7 @@ class ConversationRuntime internal constructor(
         return InstalledTurnWorker(turnId, previous?.turnId, previous?.worker)
     }
 
+    @Synchronized
     internal fun markRunning(handle: TurnHandle) {
         val current = requireNotNull(_activeTurn.value) { "no active turn to mark running" }
         check(current.turnId == handle.turnId) {
@@ -417,6 +413,7 @@ class ConversationRuntime internal constructor(
         publishActive(current)
     }
 
+    @Synchronized
     internal fun retainAwaitingUser(handle: TurnHandle) {
         val current = _activeTurn.value ?: return
         if (current.turnId != handle.turnId) return
@@ -428,6 +425,7 @@ class ConversationRuntime internal constructor(
      * Replaces the completed user-paused worker with the continuation worker.
      * A mismatched owner, phase or handle is rejected without cancelling the current request.
      */
+    @Synchronized
     internal fun continueAwaitingUser(handle: TurnHandle, worker: Job): InstalledTurnWorker {
         val current = _activeTurn.value
         val stream = snapshot.value.stream
@@ -464,6 +462,7 @@ class ConversationRuntime internal constructor(
         return { text -> reportProcessingText(turnId, workerIdentity, text) }
     }
 
+    @Synchronized
     internal fun reportProcessingText(turnId: Uuid, workerIdentity: Int, text: String?) {
         val current = _activeTurn.value ?: return
         if (current.turnId != turnId || current.workerIdentity != workerIdentity) return
@@ -479,6 +478,7 @@ class ConversationRuntime internal constructor(
         return { phase -> updateLivePhase(turnId, workerIdentity, phase) }
     }
 
+    @Synchronized
     internal fun updateLivePhase(turnId: Uuid, workerIdentity: Int, phase: TurnLivePhase) {
         val current = _activeTurn.value ?: return
         if (current.turnId != turnId || current.workerIdentity != workerIdentity) return
@@ -486,13 +486,13 @@ class ConversationRuntime internal constructor(
         publishActive(current)
     }
 
+    @Synchronized
     internal fun releaseTurnWorker(
         turnId: Uuid,
         worker: Job? = null,
         retainPendingTurnOwner: Boolean = true,
     ) {
-        val current = _activeTurn.value ?: return
-        if (current.turnId != turnId) return
+        val current = ownedRequests[turnId] ?: return
         if (worker != null && current.worker !== worker) return
         if (
             retainPendingTurnOwner &&
@@ -501,8 +501,9 @@ class ConversationRuntime internal constructor(
             _activeTurnRevision.value++
             return
         }
-        if (_activeTurn.compareAndSet(current, null)) {
-            ownedRequests.remove(turnId, current)
+        val pending = snapshot.value.stream?.turnId?.takeIf { it != turnId }?.let { ownedRequests[it] }
+        ownedRequests.remove(turnId, current)
+        if (_activeTurn.compareAndSet(current, pending)) {
             _lastTerminatedRequestTurnId.set(turnId)
             _activeTurnRevision.value++
             if (!isInUse) scheduleIdleCheck()
@@ -514,13 +515,14 @@ class ConversationRuntime internal constructor(
         _activeTurnRevision.value++
     }
 
+    @Synchronized
     private fun completeActiveWorker(request: ActiveTurnSession) {
         val current = _activeTurn.value
         if (current === request) {
             releaseTurnWorker(current.turnId, current.worker)
             return
         }
-        ownedRequests.remove(request.turnId, request)
+        if (snapshot.value.stream?.turnId != request.turnId) ownedRequests.remove(request.turnId, request)
     }
 
     // 空闲检查任务
@@ -596,6 +598,7 @@ class ConversationRuntime internal constructor(
         idleCheckJob = null
     }
 
+    @Synchronized
     fun cleanup() {
         _activeTurn.value?.worker?.cancel()
         _activeTurn.value = null

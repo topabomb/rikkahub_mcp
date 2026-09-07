@@ -1023,6 +1023,7 @@ class SubAssistantRunCoordinator internal constructor(
             selectedProvider = providerSetting,
         )
         val launchPlan = turnContextFactory.prepareLaunch(
+            realmAccess = realmAccess,
             settings = settings,
             assistant = target,
             model = model,

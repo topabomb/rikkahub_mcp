@@ -18,9 +18,11 @@ internal fun testTurnContext(
     tools: List<Tool> = emptyList(),
     mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
     promptInputs: net.weero.measix.pilot.service.turn.TurnPromptSnapshot = testPromptInputs(),
+    realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
 ): TurnContext {
     val frozen = freezeToolSet(tools)
     return TurnContext(
+        realmAccess = realmAccess,
         assistant = resolveTurnAssistantSnapshot(assistant),
         model = TurnModelSnapshot(
             model = model,

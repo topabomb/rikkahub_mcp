@@ -104,7 +104,7 @@ class ConversationApplicationService internal constructor(
 
     private suspend fun <T> withTreeCommand(target: ConversationCommandTarget, operation: suspend () -> T): T =
         withCommandTarget(target) {
-            commandCoordinator.withInactiveRootTree(target.selection.access.scope, target.conversationId) {
+            commandCoordinator.withRootTree(target.selection.access.scope, target.conversationId) {
                 target.requireOpen()
                 operation()
             }

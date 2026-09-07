@@ -34,6 +34,7 @@ class TurnContextFactory(
      * [TurnLaunchPlan] 只交给 [materialize]，不得被其它消费者读取。
      */
     internal suspend fun prepareLaunch(
+        realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
         settings: Settings,
         assistant: Assistant,
         model: Model,
@@ -59,6 +60,7 @@ class TurnContextFactory(
             zoneId = zoneId(),
         )
         return TurnLaunchPlan(
+            realmAccess = realmAccess,
             assistant = assistant,
             model = model,
             providerSetting = providerSetting,
@@ -86,6 +88,7 @@ class TurnContextFactory(
             providerOverwrite = null,
         )
         return TurnContext(
+            realmAccess = plan.realmAccess,
             assistant = resolveTurnAssistantSnapshot(plan.assistant),
             model = TurnModelSnapshot(
                 model = frozenModel,
@@ -105,6 +108,7 @@ class TurnContextFactory(
  * 只保存已读取的快照与原始装配输入，不做任何冻结；唯一消费者是 [TurnContextFactory.materialize]。
  */
 internal class TurnLaunchPlan(
+    val realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,
     val assistant: Assistant,
     val model: Model,
     val providerSetting: ProviderSetting,

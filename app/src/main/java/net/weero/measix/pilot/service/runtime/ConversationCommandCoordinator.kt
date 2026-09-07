@@ -49,9 +49,10 @@ class ConversationCommandCoordinator(
     } }
 
     /** Complete lineage locks precede reads and mutations; a changed lineage must be retried. */
-    internal suspend fun <T> withInactiveRootTree(
+    internal suspend fun <T> withRootTree(
         scope: ConfigurationScope,
         conversationId: Uuid,
+        requestWorker: kotlinx.coroutines.Job? = null,
         operation: suspend () -> T,
     ): T {
         val childIds = withRootHeaders(scope, listOf(conversationId)) { repository.getChildConversationIds(conversationId) }
@@ -63,7 +64,9 @@ class ConversationCommandCoordinator(
                         ?: throw ConversationNotFoundException(id)
                     check(header.scope == scope && header.parentConversationId == conversationId) { "conversation_lineage_scope_mismatch" }
                 }
-                (childIds + conversationId).forEach(::ensureNotActive)
+                childIds.forEach(::ensureNotActive)
+                if (requestWorker == null) ensureNotActive(conversationId)
+                else check(registry.findRuntime(conversationId)?.currentWorker() === requestWorker) { "conversation_request_owner_changed" }
                 operation()
             }
         }

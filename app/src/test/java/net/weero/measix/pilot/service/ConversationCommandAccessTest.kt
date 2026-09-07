@@ -340,6 +340,239 @@ class ConversationCommandAccessTest {
         }
     }
 
+    @Test fun `start rejects old selection and closed page before installing any worker`() = runTest {
+        fixture { f ->
+            val target = f.page.commandTarget
+            f.sessions.switchToPersonal()
+            f.sessions.switchToEnterprise()
+            rejects<EnterpriseConfigurationException> { f.turns.sendMessage(target, listOf(UIMessagePart.Text("late")), false) }
+            assertNull(f.runtime.currentWorker())
+            coVerify(exactly = 0) { f.repository.commit(any()) }
+        }
+        fixture { f ->
+            f.page.close()
+            rejects<IllegalStateException> { f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("closed")), false) }
+            assertNull(f.runtime.currentWorker())
+        }
+    }
+
+    @Test fun `accepted append survives page closure and selection switch in its original realm`() = runTest {
+        fixture { f ->
+            val receipt = requireNotNull(f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("accepted")), false))
+            f.page.close()
+            f.sessions.switchToPersonal()
+            runCurrent()
+            assertEquals(receipt.userMessageId, f.runtime.durable.currentMessages().last().id)
+            assertEquals("accepted", f.runtime.durable.currentMessages().last().toText())
+            assertEquals(f.scope, f.runtime.durable.header.scope)
+            assertTrue(f.errors.errors.value.toString(), f.errors.errors.value.isEmpty())
+            assertNull(f.runtime.currentWorker())
+        }
+    }
+
+    @Test fun `closing Session after acceptance prevents an append from running under a later login`() = runTest {
+        fixture { f ->
+            f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("revoked")), false)
+            f.sessions.finishExit(requireNotNull(f.sessions.beginExit()))
+            f.sessions.enrollFixture(exampleEnterprisePackage())
+            runCurrent()
+            assertEquals("original", f.runtime.durable.currentMessages().single().toText())
+            assertNull(f.runtime.currentWorker())
+            assertEquals(1, f.errors.errors.value.size)
+            coVerify(exactly = 0) { f.repository.commit(any()) }
+        }
+    }
+
+    @Test fun `cancellation before installation does not cancel the existing worker`() = runTest {
+        fixture { f ->
+            val held = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val worker = Job()
+            f.runtime.installTurnWorker(Uuid.random(), worker)
+            val holder = launch { f.locks.withLock(f.rootId) { held.complete(Unit); release.await() } }
+            held.await()
+            val sending = launch { f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("cancelled")), false) }
+            runCurrent()
+            sending.cancel()
+            release.complete(Unit)
+            sending.join(); holder.join(); runCurrent()
+            assertSame(worker, f.runtime.currentWorker())
+            assertTrue(worker.isActive)
+            coVerify(exactly = 0) { f.repository.commit(any()) }
+            worker.cancel()
+        }
+    }
+
+    @Test fun `three accepted replacements await the entire original cleanup before appending`() = runTest {
+        fixture { f ->
+            val release = CompletableDeferred<Unit>()
+            val cleanup = CompletableDeferred<Unit>()
+            val original = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                try { awaitCancellation() }
+                finally { withContext(NonCancellable) { cleanup.complete(Unit); release.await() } }
+            }
+            f.runtime.installTurnWorker(Uuid.random(), original)
+            f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("B")), false)
+            val latest = requireNotNull(f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("C")), false))
+            cleanup.await()
+            runCurrent()
+            assertEquals("original", f.runtime.durable.currentMessages().single().toText())
+            release.complete(Unit)
+            runCurrent()
+            assertEquals(listOf("original", "C"), f.runtime.durable.currentMessages().map { it.toText() })
+            assertEquals(latest.userMessageId, f.runtime.durable.currentMessages().last().id)
+            assertNull(f.runtime.currentWorker())
+            assertTrue(f.errors.errors.value.toString(), f.errors.errors.value.isEmpty())
+        }
+    }
+
+    @Test fun `failed original terminal survives two preparing replacements and can be stopped later`() = runTest {
+        fixture { f ->
+            val originalTurn = Uuid.random()
+            val originalWorker = Job()
+            f.runtime.installTurnWorker(originalTurn, originalWorker)
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, originalTurn, disclosureCandidate(), f.finalizer)
+            f.failTerminal = true
+            f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("B")), false)
+            f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("C")), false)
+            runCurrent()
+            assertEquals(originalTurn, f.runtime.snapshot.value.stream?.turnId)
+            assertSame(originalWorker, f.runtime.currentWorker())
+            assertFalse(f.runtime.durable.currentMessages().any { it.toText() in listOf("B", "C") })
+            f.failTerminal = false
+            f.application.stopGeneration(f.page.commandTarget)
+            assertNull(f.runtime.currentWorker())
+            assertNull(f.runtime.snapshot.value.stream)
+            assertNull(f.runtime.peekCancelReason(originalTurn))
+        }
+    }
+
+    @Test fun `stop captured while replacement prepares retains the failed original terminal ticket`() = runTest {
+        fixture { f ->
+            val originalTurn = Uuid.random()
+            val originalWorker = Job()
+            f.runtime.installTurnWorker(originalTurn, originalWorker)
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, originalTurn, disclosureCandidate(), f.finalizer)
+            f.failTerminal = true
+            f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("B")), false)
+            val stop = requireNotNull(f.finalizer.captureStop(f.rootId))
+            runCurrent()
+            assertSame(originalWorker, f.runtime.currentWorker())
+            f.failTerminal = false
+            f.finalizer.finishStop(stop)
+            assertNull(f.runtime.snapshot.value.stream)
+            assertNull(f.runtime.currentWorker())
+            assertNull(f.runtime.peekCancelReason(originalTurn))
+        }
+    }
+
+    @Test fun `stop and supersede serialize one terminal commit and replacement still appends`() = runTest {
+        fixture { f ->
+            val originalTurn = Uuid.random()
+            f.runtime.installTurnWorker(originalTurn, Job())
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, originalTurn, disclosureCandidate(), f.finalizer)
+            val stop = requireNotNull(f.finalizer.captureStop(f.rootId))
+            val receipt = requireNotNull(f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("B")), false))
+            f.finalizer.finishStop(stop)
+            runCurrent()
+            assertEquals(receipt.userMessageId, f.runtime.durable.currentMessages().last().id)
+            assertNull(f.runtime.currentWorker())
+            assertNull(f.runtime.peekCancelReason(originalTurn))
+            assertEquals(1, f.terminalCommits)
+            assertTrue(f.errors.errors.value.toString(), f.errors.errors.value.isEmpty())
+        }
+    }
+
+    @Test fun `fresh page in a new Session cannot continue a turn frozen under the previous login`() = runTest {
+        fixture { f ->
+            val originalAccess = f.page.commandTarget.selection.access
+            val turnId = Uuid.random()
+            val worker = Job()
+            f.runtime.installTurnWorker(turnId, worker)
+            val started = net.weero.measix.pilot.service.turn.TurnCommitter.start(
+                f.coordinator, f.runtime, turnId, disclosureCandidate(), f.finalizer)
+            f.runtime.bindTurnContext(turnId, worker, mockk { every { realmAccess } returns originalAccess })
+            f.runtime.retainAwaitingUser(started.handle)
+            worker.complete()
+            f.sessions.finishExit(requireNotNull(f.sessions.beginExit()))
+            f.sessions.enrollFixture(exampleEnterprisePackage())
+            val selected = f.sessions.observeSelectedRealmSelection().first { it != null }!!
+            val reopened = ConversationViewLease(f.rootId, selected.access, selected.revision) {}
+            try {
+                rejects<IllegalStateException> {
+                    f.turns.submitToolDecision(reopened.commandTarget,
+                        me.rerere.ai.core.ToolCallLocator(Uuid.random(), Uuid.random(), Uuid.random()),
+                        ToolInteractionDecision.Approve)
+                }
+                assertSame(worker, f.runtime.currentWorker())
+                assertTrue(f.runtime.isAwaitingUser(turnId))
+                assertEquals(turnId, f.runtime.snapshot.value.stream?.turnId)
+            } finally { reopened.close() }
+        }
+    }
+
+    @Test fun `cancellation during real Service START commit still hands off the terminal owner`() = runTest {
+        fixture { f ->
+            f.enableGeneration()
+            f.cancelDuringStart = true
+            val receipt = requireNotNull(f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("start"))))
+            runCurrent()
+            assertEquals(net.weero.measix.pilot.data.db.entity.TurnExecutionStatus.CANCELLED,
+                f.executions[receipt.turnId.toString()]?.status)
+            assertEquals(1, f.terminalCommits)
+            assertNull(f.runtime.snapshot.value.stream)
+            assertNull(f.runtime.currentWorker())
+            coVerify(exactly = 0) { f.runner.run(any()) }
+            assertTrue(f.errors.errors.value.toString(), f.errors.errors.value.isEmpty())
+        }
+    }
+
+    @Test fun `real Service continuation reuses the original context and Turn after switching away and back`() = runTest {
+        fixture { f ->
+            f.enableGeneration()
+            val inputs = mutableListOf<net.weero.measix.pilot.service.turn.TurnRunInputs>()
+            lateinit var locator: me.rerere.ai.core.ToolCallLocator
+            coEvery { f.runner.run(any()) } coAnswers {
+                val input = firstArg<net.weero.measix.pilot.service.turn.TurnRunInputs>()
+                inputs += input
+                if (inputs.size == 1) {
+                    val assistant = input.messages.last()
+                    val parts = assistant.parts.map {
+                        if (it is UIMessagePart.Step) it.copy(modelResult = net.weero.measix.pilot.testkit.sampledModelResult()) else it
+                    }
+                    val step = parts.filterIsInstance<UIMessagePart.Step>().single()
+                    val tool = UIMessagePart.Tool(localCallId = Uuid.random(), stepId = step.stepId,
+                        providerCallId = "call", toolName = "ask_user", input = "{}",
+                        interactionState = me.rerere.ai.ui.ToolInteractionState.AwaitingInput)
+                    locator = me.rerere.ai.core.ToolCallLocator(assistant.id, step.stepId, tool.localCallId)
+                    input.onCheckpoint(ModelResponseCheckpoint(input.handle, StepHandle(step.stepId),
+                        assistant.copy(parts = parts + tool), net.weero.measix.pilot.data.db.entity.TurnExecutionStatus.AWAITING_USER))
+                    net.weero.measix.pilot.service.turn.TurnPause(listOf(
+                        net.weero.measix.pilot.data.ai.tools.PendingToolInteraction(locator, tool.interactionState)))
+                } else awaitCancellation()
+            }
+            val receipt = requireNotNull(f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("start"))))
+            runCurrent()
+            assertTrue(f.errors.errors.value.toString(), f.errors.errors.value.isEmpty())
+            assertTrue(f.runtime.isAwaitingUser(receipt.turnId))
+            f.sessions.switchToPersonal(); f.sessions.switchToEnterprise()
+            val selected = f.sessions.observeSelectedRealmSelection().first { it != null }!!
+            val reopened = ConversationViewLease(f.rootId, selected.access, selected.revision) {}
+            try {
+                f.turns.submitToolDecision(reopened.commandTarget, locator, ToolInteractionDecision.Answer("answer"))
+                runCurrent()
+                assertEquals(2, inputs.size)
+                assertSame(inputs[0].turnContext, inputs[1].turnContext)
+                assertEquals(inputs[0].handle, inputs[1].handle)
+                assertEquals(f.page.commandTarget.selection.access, inputs[1].turnContext.realmAccess)
+                assertEquals(1, f.executions.size)
+                f.application.stopGeneration(reopened.commandTarget)
+                assertNull(f.runtime.snapshot.value.stream)
+                assertNull(f.runtime.currentWorker())
+            } finally { reopened.close() }
+        }
+    }
+
     private suspend fun TestScope.fixture(action: suspend (Fixture) -> Unit) {
         val f = Fixture(this)
         try { f.initialize(); action(f) }
@@ -355,13 +588,30 @@ class ConversationCommandAccessTest {
         val artifactStore = mockk<ArtifactStore>()
         val rows = linkedMapOf<Uuid, ConversationAggregateSnapshot>()
         var retentionReleased = 0
+        val executions = linkedMapOf<String, net.weero.measix.pilot.data.db.entity.TurnExecutionEntity>()
+        var failTerminal = false
+        var cancelDuringStart = false
+        var terminalCommits = 0
         val locks = ConversationOperationLocks()
         val registry = ConversationRuntimeRegistry(appScope, repository, locks)
         val gate = ApplicationRecoveryGate().apply { ready() }
         val coordinator = ConversationCommandCoordinator(registry, repository, gate, locks)
         val finalizer = TurnFinalizer(repository, registry, coordinator, JsonInstant)
         val lifecycle = SubAssistantLifecycle(repository, registry, coordinator, JsonInstant)
-        val effects = mockk<GenerationSideEffects>()
+        val effects = mockk<GenerationSideEffects>(relaxed = true)
+        val errors = ChatErrorStore()
+        val runner = mockk<net.weero.measix.pilot.service.turn.TurnRunner>()
+        val memory = mockk<MemoryService>()
+        val mcp = mockk<net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator>()
+        val turns by lazy {
+            val context = mockk<android.app.Application>()
+            every { context.getString(any()) } returns "operation"
+            every { effects.preloadSoundEffects() } returns Unit
+            ConversationTurnService(context, appScope, mockk(relaxed = true), settings, memory, sessions, runner, mockk(relaxed = true),
+                mcp, mockk(relaxed = true), net.weero.measix.pilot.service.turn.TurnContextFactory(mockk()),
+                mockk(relaxed = true), mockk(), finalizer, lifecycle, registry, coordinator, gate,
+                errors, effects, ArtifactUseCase(artifactStore, gate), ConversationTitleCoordinator())
+        }
         val runGate = net.weero.measix.pilot.service.subassistant.SubAssistantRunGate()
         val application = ConversationApplicationService(settings, repository, mockk(), registry, coordinator, gate,
             lifecycle, effects, artifactStore, mockk(), finalizer, JsonInstant, mockk(), ConversationTitleCoordinator(), sessions, runGate)
@@ -370,6 +620,11 @@ class ConversationCommandAccessTest {
         lateinit var page: ConversationViewLease
 
         init {
+            every { settings.effectiveSettings } returns kotlinx.coroutines.flow.MutableStateFlow(
+                net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot(
+                    net.weero.measix.pilot.data.datastore.Settings.dummy(),
+                    net.weero.measix.pilot.data.datastore.SettingsAccessIndex(), 0,
+                    net.weero.measix.pilot.data.datastore.ManagedConfigurationState.ABSENT))
             coEvery { repository.getConversationHeader(any()) } answers { rows[firstArg()]?.header }
             coEvery { repository.getConversationSnapshotById(any()) } answers { rows[firstArg()] }
             coEvery { repository.getChildConversationIds(any()) } answers {
@@ -380,10 +635,24 @@ class ConversationCommandAccessTest {
                 val id = firstArg<Uuid>()
                 rows.values.filter { it.header.parentConversationId == id }
             }
-            coEvery { repository.getTurnExecution(any()) } returns null
+            coEvery { repository.getTurnExecution(any()) } answers { executions[firstArg()] }
             coEvery { repository.getTurnExecutions(any()) } returns emptyList()
+            coEvery { repository.getToolExecutions(any()) } returns emptyList()
             coEvery { repository.existsConversationById(any()) } answers { rows.containsKey(firstArg()) }
-            coEvery { repository.commit(any()) } returns true
+            coEvery { repository.commit(any()) } answers {
+                val facts = (firstArg<ConversationWrite>() as? ConversationWrite.Mutate)?.executionFacts
+                facts?.turn?.let {
+                    if (it.status == net.weero.measix.pilot.data.db.entity.TurnExecutionStatus.CANCELLED) {
+                        if (failTerminal) throw java.io.IOException("terminal disk failure")
+                        terminalCommits++
+                    }
+                    executions[it.turnId] = it
+                    if (cancelDuringStart && facts.turnOperation == TurnExecutionOperation.START) {
+                        runtime.requestCancel(Uuid.parse(it.turnId), "user_stop")
+                    }
+                }
+                true
+            }
             coEvery { repository.deleteConversation(any()) } answers {
                 val id = firstArg<Uuid>()
                 rows.entries.removeAll { it.key == id || it.value.header.parentConversationId == id }
@@ -399,6 +668,20 @@ class ConversationCommandAccessTest {
                 val configuration = ConfigurationResolver.resolve(UserSettingsDocument.empty(), firstArg(), secondArg())
                 thirdArg<suspend (ResolvedConfiguration) -> Unit>()(configuration)
             }
+        }
+
+        fun enableGeneration() {
+            val model = me.rerere.ai.provider.Model(modelId = "test")
+            val assistant = net.weero.measix.pilot.data.model.Assistant(id = DEFAULT_ASSISTANT_ID, enableMemory = false, chatModelId = model.id)
+            val config = net.weero.measix.pilot.data.datastore.Settings(assistants = listOf(assistant),
+                providers = listOf(me.rerere.ai.provider.ProviderSetting.OpenAI(models = listOf(model))), chatModelId = model.id)
+            every { settings.effectiveSettings } returns kotlinx.coroutines.flow.MutableStateFlow(
+                net.weero.measix.pilot.data.datastore.EffectiveSettingsSnapshot(config,
+                    net.weero.measix.pilot.data.datastore.SettingsAccessIndex(), 0,
+                    net.weero.measix.pilot.data.datastore.ManagedConfigurationState.ABSENT))
+            coEvery { memory.captureExecution(any(), any()) } returns null
+            every { runner.resolveRequestMediaCapabilities(any(), any()) } returns me.rerere.ai.provider.RequestMediaCapabilities.NONE
+            coEvery { mcp.prepareTurnCapabilities(any()) } returns net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot.EMPTY
         }
 
         suspend fun initialize() {

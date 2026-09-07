@@ -85,7 +85,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     tool: UIMessagePart.Tool,
     locator: ToolCallLocator,
     phase: ToolLivePhase? = null,
-    onToolDecision: ((locator: ToolCallLocator, decision: ToolInteractionDecision) -> Unit)? = null,
+    onToolDecision: (suspend (locator: ToolCallLocator, decision: ToolInteractionDecision) -> Boolean)? = null,
 ) {
     // ask_user 是交互式问答流程, 不走注册式渲染框架。这是 UI Renderer 特化；
     // 交互门控由 typed phase 决定，不在此处解释审批语义。
@@ -96,7 +96,6 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             onAnswer = onToolDecision?.let { callback ->
                 { answer ->
                     callback(locator, ToolInteractionDecision.Answer(answer))
-                    true
                 }
             },
         )
@@ -144,7 +143,9 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     }
 
     var showResult by remember { mutableStateOf(false) }
-    var showDenyDialog by remember { mutableStateOf(false) }
+    var showDenyDialog by remember(locator) { mutableStateOf(false) }
+    var submittingDecision by remember(locator) { mutableStateOf(false) }
+    val decisionScope = rememberCoroutineScope()
     var expanded by remember { mutableStateOf(true) }
     val isAwaitingApproval = resolvedPhase == ToolLivePhase.AWAITING_APPROVAL
     val isDenied = displayTool.interactionState is ToolInteractionState.Denied
@@ -198,6 +199,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                 ) {
                     FilledTonalIconButton(
                         onClick = { showDenyDialog = true },
+                        enabled = !submittingDecision,
                         modifier = Modifier.size(32.dp),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(
                             containerColor = MaterialTheme.colorScheme.errorContainer,
@@ -211,7 +213,16 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                         )
                     }
                     FilledTonalIconButton(
-                        onClick = { onToolDecision(locator, ToolInteractionDecision.Approve) },
+                        onClick = {
+                            if (!submittingDecision) {
+                                submittingDecision = true
+                                decisionScope.launch {
+                                    try { onToolDecision(locator, ToolInteractionDecision.Approve) }
+                                    finally { submittingDecision = false }
+                                }
+                            }
+                        },
+                        enabled = !submittingDecision,
                         modifier = Modifier.size(32.dp),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(
                             containerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -292,8 +303,14 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
         ToolDenyReasonDialog(
             onDismiss = { showDenyDialog = false },
             onConfirm = { reason ->
-                showDenyDialog = false
-                onToolDecision(locator, ToolInteractionDecision.Deny(reason))
+                if (!submittingDecision) {
+                    submittingDecision = true
+                    decisionScope.launch {
+                        try {
+                            if (onToolDecision(locator, ToolInteractionDecision.Deny(reason))) showDenyDialog = false
+                        } finally { submittingDecision = false }
+                    }
+                }
             }
         )
     }

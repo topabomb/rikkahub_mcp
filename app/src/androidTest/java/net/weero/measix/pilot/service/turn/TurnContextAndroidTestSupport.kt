@@ -59,6 +59,7 @@ internal fun androidTestTurnContext(
         placeholderValues = emptyMap(),
     )
     return TurnContext(
+        realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
         assistant = resolveTurnAssistantSnapshot(assistant),
         model = TurnModelSnapshot(
             model = model,
